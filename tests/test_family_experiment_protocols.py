@@ -1266,6 +1266,97 @@ def test_entity_state_observer_emits_conservation_values_from_governed_snapshots
     assert receipt["evidence"]["after_values"] == {"reserved": 20, "value": 80}
 
 
+def test_conservation_executor_evaluates_snapshot_values_through_contract_oracle(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    obligation = _idempotency_obligation()
+    obligation["obligation_id"] = "obl-conservation-runtime"
+    obligation["risk_family"] = "conservation"
+    obligation["required_observers"] = ["typed_assertion", "source_invariant", "entity_state"]
+    obligation["property"] = {
+        "operation_ref": "op-create",
+        "actor_ref": "actor-writer",
+        "template": "invariant_conservation",
+        "invariant_ref": "inv-balance",
+        "expression": {
+            "kind": "conservation",
+            "equation": {
+                "operator": "unchanged_sum",
+                "terms": ["value", "reserved"],
+            },
+        },
+    }
+    obligation["source_refs"] = [
+        {"source_id": "requirements", "locator": "rule:balance"},
+    ]
+    experiment = compile_experiment_for_obligation(
+        obligation,
+        behavior_ir=_idempotency_ir(),
+        environment_type="test",
+    )
+    experiment["fixture_dag"] = {"status": "READY", "nodes": [], "setup_order": []}
+
+    def governed_write(**kwargs):
+        if kwargs["operation_phase"] == "experiment_treatment":
+            return {
+                "accepted": True,
+                "status": "executed",
+                "method": kwargs["method"],
+                "path": kwargs["path"],
+                "before": {
+                    "status": 200,
+                    "body": {"id": "resource-1", "value": 100, "reserved": 0},
+                },
+                "write": {"status": 201, "body": {"id": "resource-1"}},
+                "after": {
+                    "status": 200,
+                    "body": {"id": "resource-1", "value": 80, "reserved": 20},
+                },
+                "audit_path": "sandbox_write_audit.jsonl",
+                "audit_record": {"phase": "treatment", "id": "resource-1"},
+            }
+        assert kwargs["operation_phase"] == "experiment_cleanup"
+        return {
+            "accepted": True,
+            "status": "executed",
+            "method": kwargs["method"],
+            "path": kwargs["path"],
+            "before": {"status": 200, "body": {"id": "resource-1"}},
+            "write": {"status": 204, "body": {}},
+            "after": {"status": 404, "body": {}},
+            "audit_path": "sandbox_write_audit.jsonl",
+            "audit_record": {"phase": "cleanup", "path": kwargs["path"]},
+        }
+
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_executor.sandbox_write_allowed",
+        lambda **_kwargs: (True, ""),
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_executor.execute_governed_control_write",
+        governed_write,
+    )
+
+    result = execute_one_experiment(
+        experiment,
+        behavior_ir=_idempotency_ir(),
+        root=tmp_path,
+        project="project",
+        base_url="http://target.invalid",
+        runtime_contract={"environment_type": "test"},
+        campaign_id="campaign",
+        execution_id="execution-conservation",
+        actor_tokens={},
+    )
+
+    assert result["status"] == "EXECUTED"
+    assert result["cleanup_failures"] == 0
+    assert result["oracle_verdict"]["status"] == "PROPERTY_HELD"
+    assert result["oracle_verdict"]["assertions"][0]["status"] == "PASS"
+    assert result["finding"] is None
+
+
 def test_write_effect_observer_uses_source_declared_body_bound_lookup() -> None:
     behavior_ir = {
         "operations": [

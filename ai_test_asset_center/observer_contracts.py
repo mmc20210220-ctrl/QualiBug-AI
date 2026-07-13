@@ -854,7 +854,60 @@ def _observe_business_effect(
     )
 
 
-def _observe_entity_state(execution_steps: list[dict[str, Any]]) -> dict[str, Any]:
+def _conservation_terms_from_experiment(experiment: dict[str, Any]) -> list[str]:
+    terms: list[str] = []
+    for assertion in _list(experiment.get("assertions")):
+        if not isinstance(assertion, dict):
+            continue
+        prop = _dict(assertion.get("property"))
+        expression = _dict(assertion.get("expression") or prop.get("expression"))
+        equation = _dict(
+            assertion.get("equation")
+            or prop.get("equation")
+            or expression.get("equation")
+        )
+        kind = _text(
+            assertion.get("kind")
+            or assertion.get("type")
+            or prop.get("kind")
+            or expression.get("kind")
+        ).lower()
+        if kind != "conservation" and not equation:
+            continue
+        for term in _list(equation.get("terms") or equation.get("fields")):
+            if _text(term):
+                terms.append(_text(term))
+    return list(dict.fromkeys(terms))
+
+
+def _numeric_snapshot_values(body: Any, terms: list[str]) -> dict[str, int | float]:
+    term_lookup = {_normalized_field_name(term): term for term in terms if _text(term)}
+    values: dict[str, int | float] = {}
+    for row in _entity_rows(body):
+        cleaned = _without_server_managed_fields(row)
+        if not isinstance(cleaned, dict):
+            continue
+        for key, child in cleaned.items():
+            normalized = _normalized_field_name(key)
+            if not normalized or normalized in {"id", "uuid", "key"} or normalized.endswith("_id"):
+                continue
+            if isinstance(child, bool) or not isinstance(child, (int, float)):
+                continue
+            if term_lookup and normalized not in term_lookup:
+                continue
+            out_key = term_lookup.get(normalized, normalized)
+            values[out_key] = values.get(out_key, 0) + child
+    return {
+        key: values[key]
+        for key in sorted(values)
+    }
+
+
+def _observe_entity_state(
+    execution_steps: list[dict[str, Any]],
+    *,
+    experiment: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     write_steps = [
         step
         for step in execution_steps
@@ -897,6 +950,31 @@ def _observe_entity_state(execution_steps: list[dict[str, Any]]) -> dict[str, An
             "after_fingerprint": window["after_fingerprint"],
             "state_changed": state_changed,
         })
+
+    conservation_terms = _conservation_terms_from_experiment(_dict(experiment))
+    if conservation_terms:
+        first_governance = _dict(write_steps[0].get("governance_receipt"))
+        last_governance = _dict(write_steps[-1].get("governance_receipt"))
+        before_values = _numeric_snapshot_values(
+            _dict(first_governance.get("before")).get("body"),
+            conservation_terms,
+        )
+        after_values = _numeric_snapshot_values(
+            _dict(last_governance.get("after")).get("body"),
+            conservation_terms,
+        )
+        evidence.update({
+            "conservation_terms": conservation_terms,
+            "before_values": before_values,
+            "after_values": after_values,
+        })
+        if set(before_values) != set(conservation_terms) or set(after_values) != set(conservation_terms):
+            return _receipt(
+                observer_id="entity_state",
+                status="INDETERMINATE",
+                reason_code="CONSERVATION_VALUES_MISSING",
+                evidence=evidence,
+            )
 
     evidence.update({
         "entity_state_observed": True,
@@ -1352,6 +1430,7 @@ def observe_experiment_requirements(
                     for step in _list(evidence.get("execution_steps"))
                     if isinstance(step, dict)
                 ],
+                experiment=exp,
             )
         elif observer_id in {"before_state", "after_state", "final_state"}:
             receipt = _observe_state_snapshot(

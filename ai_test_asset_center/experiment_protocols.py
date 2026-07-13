@@ -262,6 +262,41 @@ def compile_family_protocol(
             }],
         }
 
+    if family == "conservation":
+        if method not in {"POST", "PUT", "PATCH", "DELETE"}:
+            return {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_OPERATION",
+                "detail": "conservation_requires_write_operation",
+            }
+        body = source_request_example(operation)
+        if method in {"POST", "PUT", "PATCH"} and not body:
+            return {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_BINDING",
+                "detail": "source_request_example_missing",
+            }
+        expression = _dict(property_spec.get("expression"))
+        equation = _dict(property_spec.get("equation") or expression.get("equation"))
+        return {
+            "status": "COMPILED",
+            "control_plan": [],
+            "treatment_plan": [{
+                "step_id": "treatment_1",
+                "actor_ref": treatment_actor_ref,
+                "operation_ref": operation_ref,
+                "intent": "conservation_mutation",
+                "protocol_step": "conservation_write",
+                "body": deepcopy(body),
+                "property_template": _text(property_spec.get("template")),
+                "invariant_ref": _text(property_spec.get("invariant_ref")),
+            }],
+            "assertion": {
+                "kind": "conservation",
+                "equation": equation,
+            },
+        }
+
     if family == "validation":
         if method not in {"POST", "PUT", "PATCH"}:
             return {

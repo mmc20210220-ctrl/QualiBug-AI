@@ -515,6 +515,7 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
             observers_by_family = {
                 "idempotency": ["business_effect", "http_response"],
                 "concurrency": ["final_state", "barrier_timeline"],
+                "conservation": ["typed_assertion", "source_invariant", "entity_state"],
                 "validation": ["http_response"],
             }
             property_spec = {
