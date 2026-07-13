@@ -28,10 +28,15 @@ def _text(value: Any) -> str:
 
 _PATH_PARAMETER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _BODY_PLACEHOLDER_RE = re.compile(r"^\s*[<{]([A-Za-z_][A-Za-z0-9_]*)[>}]\s*$")
+_STATE_TARGET_PATH_RE = re.compile(r"^@state=([a-z0-9]+)@(.*)$")
 
 
 def _field_key(value: Any) -> str:
     return re.sub(r"[^a-z0-9]", "", _text(value).lower())
+
+
+def _state_token(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", _text(value).casefold())
 
 
 def _response_scalar_fields(value: Any) -> dict[str, list[Any]]:
@@ -52,6 +57,78 @@ def _response_scalar_fields(value: Any) -> dict[str, list[Any]]:
     return fields
 
 
+def _entity_rows(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        return [dict(item) for item in value if isinstance(item, dict)]
+    if not isinstance(value, dict):
+        return []
+    for key in ("records", "data", "items", "results", "rows", "content"):
+        nested = value.get(key)
+        if isinstance(nested, list):
+            return [dict(item) for item in nested if isinstance(item, dict)]
+        if isinstance(nested, dict):
+            nested_rows = _entity_rows(nested)
+            if nested_rows:
+                return nested_rows
+    return [dict(value)]
+
+
+def _entity_state_values(entity: dict[str, Any]) -> list[Any]:
+    exact_fields = {
+        "state",
+        "status",
+        "stage",
+        "lifecycle",
+        "lifecyclestatus",
+        "orderstatus",
+        "paymentstatus",
+        "refundstatus",
+        "shipmentstatus",
+        "fulfillmentstatus",
+    }
+    values: list[Any] = []
+    for key, value in entity.items():
+        normalized = _field_key(key)
+        if isinstance(value, (dict, list, bool)) or value in (None, ""):
+            continue
+        if (
+            normalized in exact_fields
+            or normalized.endswith("status")
+            or normalized.endswith("state")
+            or normalized.endswith("stage")
+        ):
+            values.append(value)
+    return values
+
+
+def _entity_identity_sort_key(entity: dict[str, Any]) -> tuple[str, str]:
+    identities = [
+        _text(value)
+        for key, value in entity.items()
+        if not isinstance(value, (dict, list))
+        and (
+            _field_key(key) in {"id", "uuid", "key"}
+            or _field_key(key).endswith("id")
+        )
+        and _text(value)
+    ]
+    return (identities[0] if identities else "", repr(sorted(entity.items())))
+
+
+def _state_selected_entity(body: Any, required_state_token: str) -> dict[str, Any]:
+    matches = [
+        row
+        for row in _entity_rows(body)
+        if any(
+            _state_token(value) == required_state_token
+            for value in _entity_state_values(row)
+        )
+    ]
+    if not matches:
+        return {}
+    return dict(sorted(matches, key=_entity_identity_sort_key)[0])
+
+
 def runtime_cleanup_bindings(
     path_template: str,
     steps: list[dict[str, Any]],
@@ -61,7 +138,10 @@ def runtime_cleanup_bindings(
         return _text(path_template), {}, []
     fields: dict[str, list[Any]] = {}
     for step in steps:
-        if not isinstance(step, dict) or _text(step.get("phase")) not in {"control", "treatment"}:
+        if (
+            not isinstance(step, dict)
+            or _text(step.get("phase")) not in {"control", "treatment"}
+        ):
             continue
         if not (200 <= int(step.get("status_code") or 0) < 300):
             continue
@@ -86,7 +166,10 @@ def runtime_cleanup_bindings(
         bindings[name] = candidates[0]
     materialized = _text(path_template)
     for name, value in bindings.items():
-        materialized = materialized.replace("{" + name + "}", quote(str(value), safe=""))
+        materialized = materialized.replace(
+            "{" + name + "}",
+            quote(str(value), safe=""),
+        )
     return materialized, bindings, missing
 
 
@@ -94,13 +177,7 @@ def runtime_cleanup_paths(
     path_template: str,
     steps: list[dict[str, Any]],
 ) -> tuple[list[tuple[str, dict[str, Any]]], list[str]]:
-    """Resolve one compensation target per accepted write response.
-
-    A multi-write experiment may create multiple resources. Aggregating every
-    response into one binding makes two distinct IDs look ambiguous and strands
-    both resources. Resolve each accepted write independently, preserve request
-    order, and deduplicate only identical materialized compensation paths.
-    """
+    """Resolve one compensation target per accepted write response."""
 
     template = _text(path_template)
     placeholders = _PATH_PARAMETER_RE.findall(template)
@@ -109,7 +186,8 @@ def runtime_cleanup_paths(
         for step in steps
         if isinstance(step, dict)
         and _text(step.get("phase")) in {"control", "treatment"}
-        and _text(step.get("method")).upper() in {"POST", "PUT", "PATCH", "DELETE"}
+        and _text(step.get("method")).upper()
+        in {"POST", "PUT", "PATCH", "DELETE"}
         and 200 <= int(step.get("status_code") or 0) < 300
     ]
     if not placeholders:
@@ -123,8 +201,12 @@ def runtime_cleanup_paths(
     for index, step in enumerate(accepted_steps):
         fields = _response_scalar_fields(step.get("body"))
         governance = _dict(step.get("governance_receipt"))
-        before_fields = _response_scalar_fields(_dict(governance.get("before")).get("body"))
-        after_fields = _response_scalar_fields(_dict(governance.get("after")).get("body"))
+        before_fields = _response_scalar_fields(
+            _dict(governance.get("before")).get("body")
+        )
+        after_fields = _response_scalar_fields(
+            _dict(governance.get("after")).get("body")
+        )
         bindings: dict[str, Any] = {}
         step_missing: list[str] = []
         for name in placeholders:
@@ -138,10 +220,14 @@ def runtime_cleanup_paths(
                     for value in values
                 ))
             if not candidates:
-                observed_after = list(dict.fromkeys(after_fields.get(normalized) or []))
+                observed_after = list(
+                    dict.fromkeys(after_fields.get(normalized) or [])
+                )
                 observed_before = set(before_fields.get(normalized) or [])
                 candidates = [
-                    value for value in observed_after if value not in observed_before
+                    value
+                    for value in observed_after
+                    if value not in observed_before
                 ]
             if not candidates and normalized == "id":
                 observed_after = list(dict.fromkeys(
@@ -157,7 +243,9 @@ def runtime_cleanup_paths(
                     for value in values
                 }
                 candidates = [
-                    value for value in observed_after if value not in observed_before
+                    value
+                    for value in observed_after
+                    if value not in observed_before
                 ]
             if len(candidates) != 1:
                 step_missing.append(name)
@@ -165,11 +253,16 @@ def runtime_cleanup_paths(
             bindings[name] = candidates[0]
         if step_missing:
             step_ref = _text(step.get("step_id")) or str(index)
-            missing.extend(f"{step_ref}:{name}" for name in step_missing)
+            missing.extend(
+                f"{step_ref}:{name}" for name in step_missing
+            )
             continue
         materialized = template
         for name, value in bindings.items():
-            materialized = materialized.replace("{" + name + "}", quote(str(value), safe=""))
+            materialized = materialized.replace(
+                "{" + name + "}",
+                quote(str(value), safe=""),
+            )
         if materialized in seen_paths:
             continue
         seen_paths.add(materialized)
@@ -236,7 +329,12 @@ def runtime_binding_contract_ready(
     }
     return all(
         target in dag_targets
-        and bool(validated_runtime_resolvers(bindings.get(target) or {}, operations))
+        and bool(
+            validated_runtime_resolvers(
+                bindings.get(target) or {},
+                operations,
+            )
+        )
         for target in targets
     )
 
@@ -247,18 +345,27 @@ def materialize_path(path: str, bindings: dict[str, Any]) -> str:
         value = bindings.get(name)
         if value in (None, "", [], {}):
             continue
-        materialized = materialized.replace("{" + name + "}", quote(str(value), safe=""))
+        materialized = materialized.replace(
+            "{" + name + "}",
+            quote(str(value), safe=""),
+        )
     return materialized
 
 
-def materialize_body_template(value: Any, token_values: dict[str, Any]) -> Any:
+def materialize_body_template(
+    value: Any,
+    token_values: dict[str, Any],
+) -> Any:
     if isinstance(value, dict):
         return {
             key: materialize_body_template(child, token_values)
             for key, child in value.items()
         }
     if isinstance(value, list):
-        return [materialize_body_template(child, token_values) for child in value]
+        return [
+            materialize_body_template(child, token_values)
+            for child in value
+        ]
     if isinstance(value, str):
         match = _BODY_PLACEHOLDER_RE.match(value)
         if match:
@@ -268,13 +375,31 @@ def materialize_body_template(value: Any, token_values: dict[str, Any]) -> Any:
     return value
 
 
-def runtime_value_from_response(body: Any, target: str, target_path: str) -> Any:
-    bindings = bind_entity_fields(body, target_path or f"/{{{target}}}")
+def runtime_value_from_response(
+    body: Any,
+    target: str,
+    target_path: str,
+) -> Any:
+    resolved_body = body
+    resolved_target_path = _text(target_path)
+    state_match = _STATE_TARGET_PATH_RE.match(resolved_target_path)
+    if state_match:
+        required_state_token = _text(state_match.group(1))
+        resolved_target_path = _text(state_match.group(2))
+        selected = _state_selected_entity(body, required_state_token)
+        if not selected:
+            return None
+        resolved_body = selected
+
+    bindings = bind_entity_fields(
+        resolved_body,
+        resolved_target_path or f"/{{{target}}}",
+    )
     value = bindings.get(target)
     if value not in (None, "", [], {}):
         return value
     normalized = _field_key(target)
-    fields = _response_scalar_fields(body)
+    fields = _response_scalar_fields(resolved_body)
     candidates = list(dict.fromkeys(fields.get(normalized) or []))
     if not candidates and normalized.endswith("id"):
         candidates = list(dict.fromkeys(fields.get("id") or []))
@@ -283,6 +408,7 @@ def runtime_value_from_response(body: Any, target: str, target_path: str) -> Any
 
 def runtime_setup_value_from_response(body: Any, target: str) -> Any:
     """Capture the created resource identity without descending into child items."""
+
     candidates = param_field_candidates(target)
     sources = [body] if isinstance(body, dict) else []
     if isinstance(body, dict):
@@ -312,7 +438,10 @@ def validated_fixture_setup(
         not operation_ref
         or method != "POST"
         or _text(operation.get("method")).upper() != method
-        or normalize_path_placeholders(_text(operation.get("path") or operation.get("raw_path"))) != path
+        or normalize_path_placeholders(
+            _text(operation.get("path") or operation.get("raw_path"))
+        )
+        != path
         or not path.startswith("/")
         or path_has_placeholders(path)
         or not isinstance(setup.get("body_template"), dict)
@@ -330,7 +459,11 @@ def validated_fixture_setup(
             },
             operations,
         )
-        if not _text(raw.get("target")) or not _text(raw.get("template_token")) or not resolvers:
+        if (
+            not _text(raw.get("target"))
+            or not _text(raw.get("template_token"))
+            or not resolvers
+        ):
             return {}
         body_bindings.append({
             "target": _text(raw.get("target")),
@@ -349,7 +482,10 @@ def validated_fixture_setup(
             cleanup_ref
             and cleanup_method in {"DELETE", "POST", "PATCH", "PUT"}
             and _text(cleanup.get("method")).upper() == cleanup_method
-            and normalize_path_placeholders(_text(cleanup.get("path") or cleanup.get("raw_path"))) == cleanup_path
+            and normalize_path_placeholders(
+                _text(cleanup.get("path") or cleanup.get("raw_path"))
+            )
+            == cleanup_path
             and cleanup_path.startswith("/")
             and path_has_placeholders(cleanup_path)
         ):
