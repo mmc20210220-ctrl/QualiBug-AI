@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from ai_test_asset_center.assertion_dsl import evaluate_assertion
 from ai_test_asset_center.experiment_compiler import compile_experiments
 from ai_test_asset_center.validation_obligation_expander import (
@@ -24,16 +26,30 @@ def _operation() -> dict:
                             "quantity",
                         ],
                         "properties": {
-                            "name": {"type": "string"},
-                            "externalRef": {"type": "string"},
-                            "quantity": {"type": "integer"},
-                            "note": {"type": "string"},
+                            "name": {
+                                "type": "string",
+                                "minLength": 3,
+                                "maxLength": 8,
+                                "pattern": "^[A-Za-z]+$",
+                            },
+                            "externalRef": {
+                                "type": "string",
+                                "enum": ["ref-1", "ref-2"],
+                            },
+                            "quantity": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 10,
+                            },
+                            "note": {
+                                "type": "string",
+                            },
                         },
                     },
                     "example": {
-                        "name": "source-declared",
+                        "name": "Widget",
                         "externalRef": "ref-1",
-                        "quantity": 1,
+                        "quantity": 5,
                         "note": "documented",
                     },
                 }
@@ -98,22 +114,38 @@ def _behavior_ir() -> dict:
     }
 
 
-def test_required_fields_expand_to_independent_validation_obligations() -> None:
+def _constraint_pairs(variants: list[dict]) -> list[tuple[str, str]]:
+    return [
+        (
+            row["property"]["field"],
+            row["property"]["validation_constraint"],
+        )
+        for row in variants
+    ]
+
+
+def test_documented_constraints_expand_to_independent_obligations() -> None:
     variants = expand_validation_obligation(
         _obligation(),
         operation=_operation(),
     )
 
-    assert [row["property"]["field"] for row in variants] == [
-        "name",
-        "externalRef",
-        "quantity",
+    assert _constraint_pairs(variants) == [
+        ("name", "required"),
+        ("name", "type:string"),
+        ("name", "minLength"),
+        ("name", "maxLength"),
+        ("name", "pattern"),
+        ("externalRef", "required"),
+        ("externalRef", "type:string"),
+        ("externalRef", "enum"),
+        ("quantity", "required"),
+        ("quantity", "type:integer"),
+        ("quantity", "minimum"),
+        ("quantity", "maximum"),
+        ("note", "type:string"),
     ]
-    assert all(
-        row["property"]["validation_constraint"] == "required"
-        for row in variants
-    )
-    assert len({row["obligation_id"] for row in variants}) == 3
+    assert len({row["obligation_id"] for row in variants}) == 13
     assert all(
         row["required_observers"]
         == ["http_response", "business_effect"]
@@ -121,7 +153,7 @@ def test_required_fields_expand_to_independent_validation_obligations() -> None:
     )
 
 
-def test_compile_experiments_preserves_one_mutation_per_required_field() -> None:
+def test_compile_experiments_emits_one_mutation_per_constraint() -> None:
     obligation = _obligation()
     result = compile_experiments(
         [obligation],
@@ -129,18 +161,23 @@ def test_compile_experiments_preserves_one_mutation_per_required_field() -> None
         environment_type="test",
     )
 
-    assert result["compiled_count"] == 3, result
+    assert result["compiled_count"] == 13, result
     assert result["blocked_count"] == 0, result
-    assert obligation["expanded_experiment_count"] == 3
-    assert obligation["compiled_experiment_count"] == 3
+    assert obligation["expanded_experiment_count"] == 13
+    assert obligation["compiled_experiment_count"] == 13
 
-    fields = [
-        experiment["treatment_plan"][0]["mutation"]["json_path"]
+    experiments = {
+        (
+            experiment["assertions"][0]["property"]["field"],
+            experiment["assertions"][0]["property"][
+                "validation_constraint"
+            ],
+        ): experiment
         for experiment in result["experiments"]
-    ]
-    assert fields == ["$.name", "$.externalRef", "$.quantity"]
+    }
+    assert len(experiments) == 13
 
-    for experiment in result["experiments"]:
+    for experiment in experiments.values():
         observer_ids = {
             row["observer_id"]
             for row in experiment["observers"]
@@ -151,8 +188,51 @@ def test_compile_experiments_preserves_one_mutation_per_required_field() -> None
         assert assertion["expected_class"] == 4
         assert assertion["expected_effect_count"] == 0
 
+    assert "name" not in experiments[
+        ("name", "required")
+    ]["treatment_plan"][0]["body"]
+    assert experiments[
+        ("name", "type:string")
+    ]["treatment_plan"][0]["body"]["name"] == {}
 
-def test_explicit_field_obligation_keeps_effect_observer() -> None:
+    min_length_value = experiments[
+        ("name", "minLength")
+    ]["treatment_plan"][0]["body"]["name"]
+    assert isinstance(min_length_value, str)
+    assert len(min_length_value) < 3
+
+    max_length_value = experiments[
+        ("name", "maxLength")
+    ]["treatment_plan"][0]["body"]["name"]
+    assert isinstance(max_length_value, str)
+    assert len(max_length_value) > 8
+
+    pattern_value = experiments[
+        ("name", "pattern")
+    ]["treatment_plan"][0]["body"]["name"]
+    assert isinstance(pattern_value, str)
+    assert re.search(r"^[A-Za-z]+$", pattern_value) is None
+    assert 3 <= len(pattern_value) <= 8
+
+    enum_value = experiments[
+        ("externalRef", "enum")
+    ]["treatment_plan"][0]["body"]["externalRef"]
+    assert enum_value not in {"ref-1", "ref-2"}
+
+    minimum_value = experiments[
+        ("quantity", "minimum")
+    ]["treatment_plan"][0]["body"]["quantity"]
+    assert isinstance(minimum_value, int)
+    assert minimum_value < 1
+
+    maximum_value = experiments[
+        ("quantity", "maximum")
+    ]["treatment_plan"][0]["body"]["quantity"]
+    assert isinstance(maximum_value, int)
+    assert maximum_value > 10
+
+
+def test_explicit_field_expands_only_its_documented_constraints() -> None:
     obligation = _obligation()
     obligation["property"]["field"] = "name"
 
@@ -161,8 +241,30 @@ def test_explicit_field_obligation_keeps_effect_observer() -> None:
         operation=_operation(),
     )
 
+    assert _constraint_pairs(variants) == [
+        ("name", "required"),
+        ("name", "type:string"),
+        ("name", "minLength"),
+        ("name", "maxLength"),
+        ("name", "pattern"),
+    ]
+
+
+def test_explicit_constraint_is_not_expanded_again() -> None:
+    obligation = _obligation()
+    obligation["property"].update({
+        "field": "name",
+        "validation_constraint": "pattern",
+        "validation_constraint_value": "^[A-Za-z]+$",
+    })
+
+    variants = expand_validation_obligation(
+        obligation,
+        operation=_operation(),
+    )
+
     assert len(variants) == 1
-    assert variants[0]["property"]["field"] == "name"
+    assert variants[0]["property"]["validation_constraint"] == "pattern"
     assert variants[0]["required_observers"] == [
         "http_response",
         "business_effect",
@@ -227,3 +329,90 @@ def test_validation_rejection_requires_zero_business_effect() -> None:
         missing_effect["reason_code"]
         == "VALIDATION_BUSINESS_EFFECT_MISSING"
     )
+
+
+def test_exclusive_numeric_and_array_boundaries_are_mutated() -> None:
+    from ai_test_asset_center.experiment_protocols import (
+        compile_family_protocol,
+    )
+
+    operation = {
+        "id": "op-boundaries",
+        "method": "POST",
+        "path": "/boundaries",
+        "read_write": "write",
+        "request_schema": {
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "score": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "exclusiveMaximum": 5,
+                            },
+                            "tags": {
+                                "type": "array",
+                                "minItems": 1,
+                                "maxItems": 2,
+                            },
+                        },
+                    },
+                    "example": {
+                        "score": 3,
+                        "tags": ["source"],
+                    },
+                }
+            }
+        },
+    }
+
+    variants = expand_validation_obligation(
+        {
+            **_obligation(),
+            "property": {
+                "operation_ref": "op-boundaries",
+                "actor_ref": "actor-public",
+            },
+            "required_operations": ["op-boundaries"],
+        },
+        operation=operation,
+    )
+    assert _constraint_pairs(variants) == [
+        ("score", "type:integer"),
+        ("score", "exclusiveMinimum"),
+        ("score", "exclusiveMaximum"),
+        ("tags", "type:array"),
+        ("tags", "minItems"),
+        ("tags", "maxItems"),
+    ]
+
+    treatments = {}
+    for variant in variants:
+        prop = variant["property"]
+        protocol = compile_family_protocol(
+            risk_family="validation",
+            operation=operation,
+            operation_ref="op-boundaries",
+            control_actor_ref="actor-public",
+            treatment_actor_ref="actor-public",
+            property_spec=prop,
+        )
+        assert protocol["status"] == "COMPILED", protocol
+        treatments[
+            (prop["field"], prop["validation_constraint"])
+        ] = protocol["treatment_plan"][0]["body"]
+
+    assert treatments[
+        ("score", "exclusiveMinimum")
+    ]["score"] == 0
+    assert treatments[
+        ("score", "exclusiveMaximum")
+    ]["score"] == 5
+    assert treatments[
+        ("tags", "minItems")
+    ]["tags"] == []
+    assert len(
+        treatments[("tags", "maxItems")]["tags"]
+    ) == 3
