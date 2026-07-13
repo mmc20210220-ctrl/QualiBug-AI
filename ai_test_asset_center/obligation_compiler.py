@@ -1,26 +1,36 @@
-"""Source-grounded actor pairing for privacy and visibility obligations.
-
-The baseline obligation compiler remains unchanged. This facade replaces
-single-actor privacy/visibility obligations with explicit permitted/denied actor
-pairs from Behavior IR. Without two distinct runtime actors, a control/treatment
-experiment cannot exercise disclosure boundaries and is recorded as a coverage
-gap instead of a misleading executable obligation.
-"""
+"""Add source-grounded privacy field obligations beside actor-pair tests."""
 from __future__ import annotations
 
 import hashlib
+import json
+import re
 from typing import Any
 
-from . import obligation_compiler_base as _base
-from .obligation_compiler_base import *  # noqa: F401,F403
+from . import obligation_compiler_privacy_pair_base as _pair
+from .obligation_compiler_privacy_pair_base import *  # noqa: F401,F403
 
 
-_original_compile = _base.compile_obligations_from_behavior_ir
-_PAIR_FAMILIES = frozenset({"privacy", "visibility"})
+_ABSENT_POLICIES = {
+    "absent", "exclude", "forbid", "forbidden", "must_hide",
+    "must_not_expose", "must_not_return", "not_expose", "omit",
+    "prohibit", "redact_remove",
+}
+_MASK_POLICIES = {
+    "mask", "masked", "must_mask", "must_redact", "redact", "redacted",
+}
+_ABSENT_MARKERS = (
+    "must not expose", "must not return", "must not include",
+    "shall not expose", "shall not return", "不得暴露", "不得返回",
+    "不应返回", "不可返回", "禁止返回", "不能返回",
+)
+_MASK_MARKERS = (
+    "must mask", "must be masked", "must redact", "redacted", "masked",
+    "脱敏", "掩码", "打码",
+)
 
 
 def __getattr__(name: str) -> Any:
-    return getattr(_base, name)
+    return getattr(_pair, name)
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -35,250 +45,262 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _actor_pair_gap(
+def _policy_token(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", _text(value).lower()).strip("_")
+
+
+def _path_tokens(value: Any) -> tuple[str | int, ...]:
+    raw = _text(value)
+    if raw.startswith("$"):
+        raw = raw[1:]
+    raw = raw.lstrip(".")
+    if not raw or not re.fullmatch(
+        r"[A-Za-z_][A-Za-z0-9_-]*(?:(?:\.[A-Za-z_][A-Za-z0-9_-]*)|(?:\[\d+\]))*",
+        raw,
+    ):
+        return ()
+    tokens: list[str | int] = []
+    for name, index in re.findall(
+        r"(?:^|\.)([A-Za-z_][A-Za-z0-9_-]*)|\[(\d+)\]",
+        raw,
+    ):
+        tokens.append(name if name else int(index))
+    return tuple(tokens)
+
+
+def _json_path(tokens: tuple[str | int, ...]) -> str:
+    path = "$"
+    for token in tokens:
+        path += f"[{token}]" if isinstance(token, int) else f".{token}"
+    return path
+
+
+def _privacy_policy(explicit: Any, fallback: Any, raw_text: Any) -> str:
+    for value in (explicit, fallback):
+        token = _policy_token(value)
+        if token in _ABSENT_POLICIES:
+            return "absent"
+        if token in _MASK_POLICIES:
+            return "masked"
+    raw = _text(raw_text).lower()
+    if any(marker in raw for marker in _ABSENT_MARKERS):
+        return "absent"
+    if any(marker in raw for marker in _MASK_MARKERS):
+        return "masked"
+    return ""
+
+
+def _privacy_targets(property_spec: dict[str, Any]) -> list[dict[str, Any]]:
+    prop = _dict(property_spec)
+    expression = _dict(prop.get("expression"))
+    default_policy = _privacy_policy(
+        prop.get("privacy_policy"),
+        expression.get("operator"),
+        expression.get("raw"),
+    )
+    targets: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for operand in _list(expression.get("operands")):
+        row = _dict(operand)
+        field = operand if isinstance(operand, str) else (
+            row.get("field") or row.get("path") or row.get("json_path")
+            or row.get("field_ref") or row.get("name")
+        )
+        tokens = _path_tokens(field)
+        if not tokens:
+            continue
+        policy = _privacy_policy(
+            row.get("policy") or row.get("operator") or row.get("mode"),
+            default_policy,
+            expression.get("raw"),
+        ) or default_policy
+        pattern = _text(
+            row.get("mask_pattern") or row.get("expected_pattern")
+            or row.get("regex") or row.get("pattern")
+        )
+        if policy == "masked":
+            if not pattern:
+                continue
+            try:
+                re.compile(pattern)
+            except re.error:
+                continue
+        if policy not in {"absent", "masked"}:
+            continue
+        target = {
+            "privacy_policy": policy,
+            "field_tokens": list(tokens),
+            "json_path": _json_path(tokens),
+            "mask_pattern": pattern,
+            "allow_absent": row.get("allow_absent") is True,
+        }
+        key = json.dumps(target, ensure_ascii=False, sort_keys=True)
+        if key not in seen:
+            seen.add(key)
+            targets.append(target)
+    return targets
+
+
+def _actor_executable(actor: dict[str, Any]) -> bool:
+    role = _text(actor.get("role")).lower()
+    if role in {"anonymous", "public"}:
+        return True
+    secret_ref = _text(actor.get("credential_secret_ref") or actor.get("secret_ref"))
+    return bool(secret_ref and not secret_ref.lower().startswith("secret_ref:actor:"))
+
+
+def _field_actor_refs(
+    obligation: dict[str, Any],
     *,
-    family: str,
-    invariant_ref: str,
+    behavior_ir: dict[str, Any],
     operation_ref: str,
-    source_refs: list[dict[str, Any]],
-) -> dict[str, Any]:
-    material = "|".join([
-        "BLOCKED_MISSING_ACTOR_PAIR",
-        family,
-        invariant_ref,
-        operation_ref,
-    ])
+) -> list[str]:
+    actors = {
+        _text(row.get("id")): row
+        for row in _list(_dict(behavior_ir).get("actors"))
+        if isinstance(row, dict) and _text(row.get("id"))
+    }
+    explicit = [
+        _text(value) for value in _list(obligation.get("required_actors"))
+        if _text(value) in actors and _actor_executable(actors[_text(value)])
+    ]
+    if explicit:
+        return list(dict.fromkeys(explicit))
+    return sorted({
+        _text(row.get("actor_ref") or row.get("from_ref"))
+        for row in _list(_dict(behavior_ir).get("relations"))
+        if isinstance(row, dict)
+        and _text(row.get("relation_type")) == "permits"
+        and _text(row.get("operation_ref")) == operation_ref
+        and _text(row.get("status")) not in {"conflicting", "unsupported", "unknown"}
+        and _text(row.get("actor_ref") or row.get("from_ref")) in actors
+        and _actor_executable(actors[_text(row.get("actor_ref") or row.get("from_ref"))])
+    })
+
+
+def _privacy_gap(obligation: dict[str, Any], operation_ref: str, reason: str) -> dict[str, Any]:
+    invariant_ref = _text(_dict(obligation.get("property")).get("invariant_ref"))
+    material = "|".join(["privacy_field", invariant_ref, operation_ref, reason])
     return {
-        "id": "compile_gap_" + hashlib.sha256(
-            material.encode("utf-8")
-        ).hexdigest()[:16],
-        "code": "BLOCKED_MISSING_ACTOR_PAIR",
+        "id": "compile_gap_" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:16],
+        "code": "BLOCKED_PRIVACY_FIELD_POLICY",
+        "gap_type": "privacy_field_policy_not_executable",
         "subject_ref": invariant_ref or operation_ref,
         "operation_ref": operation_ref,
-        "risk_family": family,
-        "required_relation_types": ["permits", "denies"],
-        "required_binding": "distinct_runtime_control_and_treatment_actors",
-        "description": (
-            "Privacy/visibility testing requires one source-permitted actor "
-            "and one source-denied actor for the same operation"
-        ),
+        "risk_family": "privacy",
+        "reason": reason,
+        "description": "Privacy rule lacks one explicit executable field policy",
         "status": "unsupported",
         "source_refs": [
-            dict(item) for item in source_refs if isinstance(item, dict)
+            dict(item) for item in _list(obligation.get("source_refs"))
+            if isinstance(item, dict)
         ][:5],
     }
 
 
-def _pair_obligations(
-    result: dict[str, Any],
+def _field_variants(
+    obligation: dict[str, Any],
+    *,
     behavior_ir: dict[str, Any],
-) -> dict[str, Any]:
-    output = dict(_dict(result))
-    ir = _dict(behavior_ir)
-    actors = _base._active_actors(
-        _base._accepted(_list(ir.get("actors")))
-    )
-    actors_by_id = {
-        _text(actor.get("id")): actor
-        for actor in actors
-        if _text(actor.get("id"))
-    }
-    relations = _base._accepted(_list(ir.get("relations")))
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    prop = _dict(obligation.get("property"))
+    operation_ref = next((
+        _text(value) for value in _list(obligation.get("required_operations"))
+        if _text(value)
+    ), "") or _text(prop.get("operation_ref"))
     operations = {
-        _text(operation.get("id")): operation
-        for operation in _base._accepted(_list(ir.get("operations")))
-        if _text(operation.get("id"))
+        _text(row.get("id")): row
+        for row in _list(_dict(behavior_ir).get("operations"))
+        if isinstance(row, dict) and _text(row.get("id"))
     }
-    invariants = {
-        _text(invariant.get("id")): invariant
-        for invariant in _base._accepted(_list(ir.get("invariants")))
-        if _text(invariant.get("id"))
-    }
+    if _text(_dict(operations.get(operation_ref)).get("method")).upper() != "GET":
+        return [], []
+    targets = _privacy_targets(prop)
+    if not targets:
+        return [], []
+    actor_refs = _field_actor_refs(
+        obligation,
+        behavior_ir=behavior_ir,
+        operation_ref=operation_ref,
+    )
+    if not actor_refs:
+        return [], [_privacy_gap(obligation, operation_ref, "privacy_runtime_actor_missing")]
 
-    paired: list[dict[str, Any]] = []
-    gaps = [
-        dict(item)
-        for item in _list(output.get("coverage_gaps"))
-        if isinstance(item, dict)
-    ]
-    gap_ids = {_text(item.get("id")) for item in gaps}
-
-    for obligation in _list(output.get("obligations")):
-        if not isinstance(obligation, dict):
-            continue
-        family = _text(obligation.get("risk_family"))
-        if family not in _PAIR_FAMILIES:
-            paired.append(dict(obligation))
-            continue
-        prop = _dict(obligation.get("property"))
-        existing_actors = [
-            _text(value)
-            for value in _list(obligation.get("required_actors"))
-            if _text(value)
-        ]
-        control_ref = _text(prop.get("control_actor_ref"))
-        treatment_ref = _text(prop.get("treatment_actor_ref"))
-        if (
-            len(set(existing_actors)) >= 2
-            and control_ref
-            and treatment_ref
-            and control_ref != treatment_ref
-        ):
-            paired.append(dict(obligation))
-            continue
-
-        operation_ref = (
-            next(
-                (
-                    _text(value)
-                    for value in _list(obligation.get("required_operations"))
-                    if _text(value)
-                ),
-                "",
-            )
-            or _text(prop.get("operation_ref"))
-        )
-        invariant_ref = _text(prop.get("invariant_ref"))
-        permit_relations = [
-            relation
-            for relation in relations
-            if _text(relation.get("operation_ref")) == operation_ref
-            and _text(relation.get("relation_type")) == "permits"
-            and _base._relation_actor_ref(relation) in actors_by_id
-        ]
-        deny_relations = [
-            relation
-            for relation in relations
-            if _text(relation.get("operation_ref")) == operation_ref
-            and _text(relation.get("relation_type")) == "denies"
-            and _base._relation_actor_ref(relation) in actors_by_id
-        ]
-        pairs = [
-            (permit, deny)
-            for permit in permit_relations
-            for deny in deny_relations
-            if _base._relation_actor_ref(permit)
-            != _base._relation_actor_ref(deny)
-        ]
-        if not pairs:
-            gap = _actor_pair_gap(
-                family=family,
-                invariant_ref=invariant_ref,
-                operation_ref=operation_ref,
-                source_refs=[
-                    dict(item)
-                    for item in _list(obligation.get("source_refs"))
-                    if isinstance(item, dict)
-                ],
-            )
-            if gap["id"] not in gap_ids:
-                gaps.append(gap)
-                gap_ids.add(gap["id"])
-            continue
-
-        for permit, deny in pairs:
-            allowed_ref = _base._relation_actor_ref(permit)
-            denied_ref = _base._relation_actor_ref(deny)
-            allowed = actors_by_id[allowed_ref]
-            denied = actors_by_id[denied_ref]
-            paired_property = dict(prop)
-            paired_property.pop("actor_ref", None)
-            paired_property.update({
-                "template": f"{family}_control_treatment",
-                "control_actor_ref": allowed_ref,
-                "treatment_actor_ref": denied_ref,
-                "operation_ref": operation_ref,
-                "require_same_resource": True,
-                "actor_pair_source": "permits_denies",
+    variants: list[dict[str, Any]] = []
+    for actor_ref in actor_refs:
+        for target in targets:
+            variant_property = dict(prop)
+            variant_property.update(target)
+            variant_property.update({
+                "actor_ref": actor_ref,
+                "privacy_test_mode": "field_policy",
+                "expanded_from_obligation_id": _text(obligation.get("obligation_id")),
+                "require_meaningful_response": True,
             })
-            observer_ids = [
-                _text(value)
-                for value in _list(obligation.get("required_observers"))
-                if _text(value)
-            ]
-            for observer_id in (
-                "http_response",
-                "actor_identity",
-                "authorization_comparison",
-            ):
-                if observer_id not in observer_ids:
-                    observer_ids.append(observer_id)
-            relation_refs = sorted({
-                *(
-                    _text(value)
-                    for value in _list(obligation.get("relation_refs"))
-                    if _text(value)
-                ),
-                _text(permit.get("id")),
-                _text(deny.get("id")),
-            })
-            source_node = {
-                "source_refs": [
-                    dict(item)
-                    for item in _list(obligation.get("source_refs"))
-                    if isinstance(item, dict)
-                ]
-            }
-            source_refs = _base._combined_source_refs(
-                source_node,
-                invariants.get(invariant_ref) or {},
-                operations.get(operation_ref) or {},
-                allowed,
-                denied,
-                permit,
-                deny,
-            )
-            confidence = min(
-                float(obligation.get("confidence") or 0.5),
-                float(allowed.get("confidence") or 0.7),
-                float(denied.get("confidence") or 0.7),
-                float(permit.get("confidence") or 0.8),
-                float(deny.get("confidence") or 0.8),
-            )
-            paired.append(_base.make_obligation(
-                risk_family=family,
-                subject_refs=[
-                    invariant_ref,
-                    operation_ref,
-                    allowed_ref,
-                    denied_ref,
-                ],
-                property_spec=paired_property,
-                required_actors=[allowed_ref, denied_ref],
+            variants.append(_pair._base.make_obligation(
+                risk_family="privacy",
+                subject_refs=[operation_ref, actor_ref, target["json_path"]],
+                property_spec=variant_property,
+                required_actors=[actor_ref],
                 required_operations=[operation_ref],
-                required_fixtures=[
-                    _text(value)
-                    for value in _list(obligation.get("required_fixtures"))
+                required_observers=["http_response", "source_invariant"],
+                cleanup_requirement={"required": False},
+                source_refs=[
+                    dict(item) for item in _list(obligation.get("source_refs"))
+                    if isinstance(item, dict)
+                ],
+                relation_refs=[
+                    _text(value) for value in _list(obligation.get("relation_refs"))
                     if _text(value)
                 ],
-                required_observers=observer_ids,
-                cleanup_requirement=dict(
-                    _dict(obligation.get("cleanup_requirement"))
-                ),
-                source_refs=source_refs,
-                relation_refs=relation_refs,
-                confidence=confidence,
+                confidence=float(obligation.get("confidence") or 0.5),
             ))
+    return variants, []
 
-    deduped = _base.dedupe_obligations(paired)
-    output["obligations"] = deduped
-    output["obligation_count"] = len(deduped)
+
+def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[str, Any]:
+    paired_result = _pair.compile_obligations_from_behavior_ir(behavior_ir)
+    original_result = _pair._base.compile_obligations_from_behavior_ir(behavior_ir)
+    additions: list[dict[str, Any]] = []
+    field_gaps: list[dict[str, Any]] = []
+    expanded_keys: set[tuple[str, str]] = set()
+    for obligation in _list(original_result.get("obligations")):
+        if not isinstance(obligation, dict) or _text(obligation.get("risk_family")) != "privacy":
+            continue
+        variants, gaps = _field_variants(obligation, behavior_ir=behavior_ir)
+        additions.extend(variants)
+        field_gaps.extend(gaps)
+        if variants:
+            prop = _dict(obligation.get("property"))
+            operation_ref = next((
+                _text(value) for value in _list(obligation.get("required_operations"))
+                if _text(value)
+            ), "") or _text(prop.get("operation_ref"))
+            expanded_keys.add((_text(prop.get("invariant_ref")), operation_ref))
+
+    output = dict(paired_result)
+    obligations = _pair._base.dedupe_obligations([
+        *[dict(item) for item in _list(output.get("obligations")) if isinstance(item, dict)],
+        *additions,
+    ])
+    gaps = []
+    for gap in _list(output.get("coverage_gaps")):
+        if not isinstance(gap, dict):
+            continue
+        key = (_text(gap.get("subject_ref")), _text(gap.get("operation_ref")))
+        if _text(gap.get("code")) == "BLOCKED_MISSING_ACTOR_PAIR" and key in expanded_keys:
+            continue
+        gaps.append(dict(gap))
+    existing_gap_ids = {_text(item.get("id")) for item in gaps}
+    for gap in field_gaps:
+        if _text(gap.get("id")) not in existing_gap_ids:
+            gaps.append(gap)
+            existing_gap_ids.add(_text(gap.get("id")))
+    output["obligations"] = obligations
+    output["obligation_count"] = len(obligations)
     output["coverage_gaps"] = gaps
     output["by_family"] = {
-        family: sum(
-            1
-            for obligation in deduped
-            if _text(obligation.get("risk_family")) == family
-        )
-        for family in _base.RISK_FAMILIES
+        family: sum(1 for item in obligations if _text(item.get("risk_family")) == family)
+        for family in _pair._base.RISK_FAMILIES
     }
     return output
-
-
-def compile_obligations_from_behavior_ir(
-    behavior_ir: dict[str, Any],
-) -> dict[str, Any]:
-    return _pair_obligations(
-        _original_compile(behavior_ir),
-        behavior_ir,
-    )
