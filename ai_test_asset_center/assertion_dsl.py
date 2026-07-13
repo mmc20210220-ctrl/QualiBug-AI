@@ -12,7 +12,6 @@ ASSERTION_RECEIPT_SCHEMA = "qualibug.assertion-receipt.v1"
 ASSERTION_STATUSES = frozenset({"PASS", "VIOLATION", "INDETERMINATE"})
 _MISSING = object()
 
-
 SUPPORTED_KINDS = {
     "http_status",
     "http_status_class",
@@ -42,6 +41,13 @@ def _list(value: Any) -> list[Any]:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _state_token(value: Any) -> str:
+    """Normalize presentation-only enum differences without changing meaning."""
+
+    normalized = _text(value).replace("-", " ").replace("_", " ")
+    return "_".join(normalized.split()).casefold()
 
 
 def _canonical(value: Any) -> str:
@@ -90,8 +96,12 @@ def _assertion_receipt(
         "expected": expected,
         "actual": actual,
         "error": _text(error),
-        "observer_receipt_ids": sorted(set(_text(item) for item in observer_receipt_ids if _text(item))),
-        "source_refs": [dict(item) for item in source_refs if isinstance(item, dict)],
+        "observer_receipt_ids": sorted(
+            set(_text(item) for item in observer_receipt_ids if _text(item))
+        ),
+        "source_refs": [
+            dict(item) for item in source_refs if isinstance(item, dict)
+        ],
         "harness_error": bool(harness_error),
     }
     return {
@@ -138,7 +148,11 @@ def validate_assertion_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
         actual=row.get("actual"),
         error=_text(row.get("error")),
         observer_receipt_ids=list(row["observer_receipt_ids"]),
-        source_refs=[dict(item) for item in row["source_refs"] if isinstance(item, dict)],
+        source_refs=[
+            dict(item)
+            for item in row["source_refs"]
+            if isinstance(item, dict)
+        ],
         harness_error=bool(row.get("harness_error")),
         campaign_id=_text(row.get("campaign_id")),
         execution_id=_text(row.get("execution_id")),
@@ -148,7 +162,9 @@ def validate_assertion_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
     return dict(expected)
 
 
-def _typed_observer_receipts(observations: dict[str, Any]) -> list[dict[str, Any]]:
+def _typed_observer_receipts(
+    observations: dict[str, Any],
+) -> list[dict[str, Any]]:
     candidates: list[Any] = []
     raw_many = observations.get("observer_receipts")
     if raw_many is not None:
@@ -176,43 +192,45 @@ def _typed_observer_receipts(observations: dict[str, Any]) -> list[dict[str, Any
 
 def _json_path(data: Any, path: str) -> Any:
     """Minimal JSON path: $.a.b[0] style without eval."""
+
     if not path or path == "$":
         return data
     cur: Any = data
     token = path[1:] if path.startswith("$") else path
     parts: list[str] = []
     buf = ""
-    i = 0
-    while i < len(token):
-        ch = token[i]
-        if ch == ".":
+    index = 0
+    while index < len(token):
+        char = token[index]
+        if char == ".":
             if buf:
                 parts.append(buf)
                 buf = ""
-            i += 1
+            index += 1
             continue
-        if ch == "[":
+        if char == "[":
             if buf:
                 parts.append(buf)
                 buf = ""
-            j = token.find("]", i)
-            if j < 0:
+            end = token.find("]", index)
+            if end < 0:
                 raise ValueError("invalid_json_path")
-            parts.append(token[i : j + 1])
-            i = j + 1
+            parts.append(token[index : end + 1])
+            index = end + 1
             continue
-        buf += ch
-        i += 1
+        buf += char
+        index += 1
     if buf:
         parts.append(buf)
+
     for part in parts:
         if not part:
             continue
         if part.startswith("[") and part.endswith("]"):
-            idx = int(part[1:-1])
-            if not isinstance(cur, list) or idx >= len(cur):
+            item_index = int(part[1:-1])
+            if not isinstance(cur, list) or item_index >= len(cur):
                 raise KeyError(part)
-            cur = cur[idx]
+            cur = cur[item_index]
         else:
             if not isinstance(cur, dict) or part not in cur:
                 raise KeyError(part)
@@ -236,7 +254,11 @@ def evaluate_assertion(
     obs = _dict(observations)
     refs = [
         dict(item)
-        for item in list(source_refs if source_refs is not None else spec.get("source_refs") or [])
+        for item in list(
+            source_refs
+            if source_refs is not None
+            else spec.get("source_refs") or []
+        )
         if isinstance(item, dict)
     ]
     expected: Any = spec.get("expected")
@@ -267,22 +289,32 @@ def evaluate_assertion(
             campaign_id=resolved_campaign_id,
             execution_id=resolved_execution_id,
         )
-    observer_ids = [_text(item.get("receipt_id")) for item in observer_receipts]
+
+    observer_ids = [
+        _text(item.get("receipt_id")) for item in observer_receipts
+    ]
     observer_lineages = {
         (
             _text(item.get("campaign_id")),
             _text(item.get("execution_id")),
         )
         for item in observer_receipts
-        if _text(item.get("campaign_id")) or _text(item.get("execution_id"))
+        if _text(item.get("campaign_id"))
+        or _text(item.get("execution_id"))
     }
     if not resolved_campaign_id and len(observer_lineages) == 1:
-        resolved_campaign_id, resolved_execution_id = next(iter(observer_lineages))
+        resolved_campaign_id, resolved_execution_id = next(
+            iter(observer_lineages)
+        )
     if (
         len(observer_lineages) > 1
-        or any(not campaign or not execution for campaign, execution in observer_lineages)
         or any(
-            campaign != resolved_campaign_id or execution != resolved_execution_id
+            not campaign or not execution
+            for campaign, execution in observer_lineages
+        )
+        or any(
+            campaign != resolved_campaign_id
+            or execution != resolved_execution_id
             for campaign, execution in observer_lineages
         )
     ):
@@ -300,8 +332,10 @@ def evaluate_assertion(
             campaign_id=resolved_campaign_id,
             execution_id=resolved_execution_id,
         )
+
     non_observed = [
-        item for item in observer_receipts
+        item
+        for item in observer_receipts
         if _text(item.get("status")).upper() != "OBSERVED"
     ]
     if non_observed:
@@ -359,7 +393,8 @@ def evaluate_assertion(
                 raise ValueError(f"unsupported_operator:{operator}")
         if effective_kind == "conservation":
             conservation_operator = _text(
-                _dict(spec.get("equation")).get("operator") or "unchanged_sum"
+                _dict(spec.get("equation")).get("operator")
+                or "unchanged_sum"
             )
             if conservation_operator not in {"eq", "unchanged_sum"}:
                 raise ValueError(
@@ -376,7 +411,10 @@ def evaluate_assertion(
                 actual = obs["status_code"]
                 passed = actual == expected
         elif effective_kind == "http_status_class":
-            expected_value = spec.get("expected", spec.get("expected_class"))
+            expected_value = spec.get(
+                "expected",
+                spec.get("expected_class"),
+            )
             if "status_code" not in obs or expected_value is None:
                 reason_code = "HTTP_STATUS_CLASS_EVIDENCE_MISSING"
             else:
@@ -418,13 +456,18 @@ def evaluate_assertion(
             }
             py_type = type_map.get(expected_type)
             if py_type is None:
-                raise ValueError(f"unsupported_json_path_type:{expected_type}")
+                raise ValueError(
+                    f"unsupported_json_path_type:{expected_type}"
+                )
             expected = expected_type
             if "body" not in obs:
                 reason_code = "HTTP_BODY_EVIDENCE_MISSING"
             else:
                 try:
-                    value = _json_path(obs["body"], _text(spec.get("path") or "$"))
+                    value = _json_path(
+                        obs["body"],
+                        _text(spec.get("path") or "$"),
+                    )
                     actual = type(value).__name__
                     passed = isinstance(value, py_type)
                 except (KeyError, IndexError, TypeError):
@@ -435,7 +478,10 @@ def evaluate_assertion(
                 reason_code = "JSON_COMPARE_EVIDENCE_MISSING"
             else:
                 try:
-                    actual = _json_path(obs["body"], _text(spec.get("path") or "$"))
+                    actual = _json_path(
+                        obs["body"],
+                        _text(spec.get("path") or "$"),
+                    )
                 except (KeyError, IndexError, TypeError):
                     actual = None
                     passed = False
@@ -448,8 +494,6 @@ def evaluate_assertion(
                         passed = actual >= expected
                     elif operator == "lte":
                         passed = actual <= expected
-                    else:
-                        raise ValueError(f"unsupported_operator:{operator}")
         elif effective_kind == "equality":
             if "value" not in obs or "expected" not in spec:
                 reason_code = "EQUALITY_EVIDENCE_MISSING"
@@ -457,7 +501,11 @@ def evaluate_assertion(
                 actual = obs["value"]
                 passed = actual == expected
         elif effective_kind == "delta":
-            if "before" not in obs or "after" not in obs or "expected" not in spec:
+            if (
+                "before" not in obs
+                or "after" not in obs
+                or "expected" not in spec
+            ):
                 reason_code = "DELTA_EVIDENCE_MISSING"
             else:
                 actual = obs["after"] - obs["before"]
@@ -467,10 +515,11 @@ def evaluate_assertion(
                 reason_code = "CARDINALITY_EVIDENCE_MISSING"
             else:
                 collection = obs["collection"]
-                if isinstance(collection, list):
-                    actual = len(collection)
-                else:
-                    actual = {"observed_type": type(collection).__name__}
+                actual = (
+                    len(collection)
+                    if isinstance(collection, list)
+                    else {"observed_type": type(collection).__name__}
+                )
                 passed = actual == expected
         elif effective_kind == "state_transition":
             if (
@@ -481,9 +530,24 @@ def evaluate_assertion(
             ):
                 reason_code = "STATE_TRANSITION_EVIDENCE_MISSING"
             else:
-                actual = {"before": obs["before_state"], "after": obs["after_state"]}
-                expected = {"before": spec["from_state"], "after": spec["to_state"]}
-                passed = actual == expected
+                actual = {
+                    "before": obs["before_state"],
+                    "after": obs["after_state"],
+                }
+                expected = {
+                    "before": spec["from_state"],
+                    "after": spec["to_state"],
+                }
+                if _state_token(obs["before_state"]) != _state_token(
+                    spec["from_state"]
+                ):
+                    # A wrong source state means the experiment precondition was
+                    # not established. It is not product-defect evidence.
+                    reason_code = "STATE_PRECONDITION_NOT_MET"
+                else:
+                    passed = _state_token(
+                        obs["after_state"]
+                    ) == _state_token(spec["to_state"])
         elif effective_kind == "owner_tenant_visibility":
             required_values = (
                 obs.get("owner_can_access"),
@@ -497,9 +561,14 @@ def evaluate_assertion(
             }
             if obs.get("control_succeeded") is not True:
                 reason_code = "AUTHORIZED_CONTROL_NOT_PROVEN"
-            elif not all(isinstance(value, bool) for value in required_values):
+            elif not all(
+                isinstance(value, bool) for value in required_values
+            ):
                 reason_code = "AUTHORIZATION_OBSERVATION_MISSING"
-            elif spec.get("require_same_resource", True) and obs.get("same_resource_proven") is not True:
+            elif (
+                spec.get("require_same_resource", True)
+                and obs.get("same_resource_proven") is not True
+            ):
                 reason_code = "SAME_RESOURCE_NOT_PROVEN"
             else:
                 actual = {
@@ -510,31 +579,63 @@ def evaluate_assertion(
                 passed = actual == expected
         elif effective_kind == "conservation":
             equation = _dict(spec.get("equation"))
-            operator = _text(equation.get("operator") or "unchanged_sum")
-            terms = [_text(item) for item in _list(equation.get("terms") or equation.get("fields")) if _text(item)]
+            operator = _text(
+                equation.get("operator")
+                or "unchanged_sum"
+            )
+            terms = [
+                _text(item)
+                for item in _list(
+                    equation.get("terms")
+                    or equation.get("fields")
+                )
+                if _text(item)
+            ]
             before_values = obs.get("before_values")
             after_values = obs.get("after_values")
             expected = {"operator": operator, "terms": terms}
-            if not isinstance(before_values, dict) or not before_values or not isinstance(after_values, dict) or not after_values:
+            if (
+                not isinstance(before_values, dict)
+                or not before_values
+                or not isinstance(after_values, dict)
+                or not after_values
+            ):
                 reason_code = "CONSERVATION_VALUES_MISSING"
             elif operator == "eq":
-                actual = {"before": before_values, "after": after_values}
+                actual = {
+                    "before": before_values,
+                    "after": after_values,
+                }
                 passed = before_values == after_values
             elif operator == "unchanged_sum":
-                selected_terms = terms or sorted(set(before_values).intersection(after_values))
+                selected_terms = terms or sorted(
+                    set(before_values).intersection(after_values)
+                )
                 if not selected_terms or any(
                     term not in before_values
                     or term not in after_values
                     or isinstance(before_values[term], bool)
                     or isinstance(after_values[term], bool)
-                    or not isinstance(before_values[term], (int, float))
-                    or not isinstance(after_values[term], (int, float))
+                    or not isinstance(
+                        before_values[term],
+                        (int, float),
+                    )
+                    or not isinstance(
+                        after_values[term],
+                        (int, float),
+                    )
                     for term in selected_terms
                 ):
                     reason_code = "CONSERVATION_VALUES_MISSING"
                 else:
-                    before_sum = sum(float(before_values[term]) for term in selected_terms)
-                    after_sum = sum(float(after_values[term]) for term in selected_terms)
+                    before_sum = sum(
+                        float(before_values[term])
+                        for term in selected_terms
+                    )
+                    after_sum = sum(
+                        float(after_values[term])
+                        for term in selected_terms
+                    )
                     actual = {
                         "before_sum": before_sum,
                         "after_sum": after_sum,
@@ -543,7 +644,9 @@ def evaluate_assertion(
                     }
                     passed = before_sum == after_sum
             else:
-                raise ValueError(f"unsupported_conservation_operator:{operator}")
+                raise ValueError(
+                    f"unsupported_conservation_operator:{operator}"
+                )
         elif effective_kind == "idempotency_effect":
             expected_count = spec.get("expected_effect_count", 1)
             expected = {"effect_count": expected_count}
@@ -567,8 +670,17 @@ def evaluate_assertion(
             else:
                 passed = obs["invariant_held"] is True
         elif effective_kind == "eventual_consistency":
-            expected = {"converged": True, "within_window": True}
-            if not isinstance(obs.get("converged"), bool) or not isinstance(obs.get("within_window"), bool):
+            expected = {
+                "converged": True,
+                "within_window": True,
+            }
+            if not isinstance(
+                obs.get("converged"),
+                bool,
+            ) or not isinstance(
+                obs.get("within_window"),
+                bool,
+            ):
                 reason_code = "EVENTUAL_CONSISTENCY_EVIDENCE_MISSING"
             else:
                 actual = {
@@ -584,8 +696,14 @@ def evaluate_assertion(
                 actual = obs["surfaces_agree"]
                 passed = actual is True
         else:
-            expected = spec.get("expected", obs.get("expected", _MISSING))
-            actual = obs.get("actual", obs.get("treatment_result", _MISSING))
+            expected = spec.get(
+                "expected",
+                obs.get("expected", _MISSING),
+            )
+            actual = obs.get(
+                "actual",
+                obs.get("treatment_result", _MISSING),
+            )
             if expected is _MISSING or actual is _MISSING:
                 expected = None if expected is _MISSING else expected
                 actual = None if actual is _MISSING else actual
@@ -634,26 +752,43 @@ def evaluate_assertions(
     for assertion in assertions:
         if not isinstance(assertion, dict):
             continue
-        obs_key = _text(assertion.get("observer_id") or assertion.get("assertion_id") or "default")
-        obs = _dict(observations_by_id.get(obs_key) or observations_by_id.get("default"))
-        results.append(evaluate_assertion(
-            assertion,
-            observations=obs,
-            campaign_id=campaign_id,
-            execution_id=execution_id,
-        ))
+        obs_key = _text(
+            assertion.get("observer_id")
+            or assertion.get("assertion_id")
+            or "default"
+        )
+        obs = _dict(
+            observations_by_id.get(obs_key)
+            or observations_by_id.get("default")
+        )
+        results.append(
+            evaluate_assertion(
+                assertion,
+                observations=obs,
+                campaign_id=campaign_id,
+                execution_id=execution_id,
+            )
+        )
     return {
         "total": len(results),
-        "passed": sum(1 for item in results if item.get("status") == "PASS"),
+        "passed": sum(
+            1 for item in results if item.get("status") == "PASS"
+        ),
         "violations": sum(
             1 for item in results if item.get("status") == "VIOLATION"
         ),
         "indeterminate": sum(
-            1 for item in results if item.get("status") == "INDETERMINATE"
+            1
+            for item in results
+            if item.get("status") == "INDETERMINATE"
         ),
         # Compatibility alias: only proven violations are assertion failures.
-        "failed": sum(1 for item in results if item.get("status") == "VIOLATION"),
-        "harness_errors": sum(1 for item in results if item.get("harness_error")),
+        "failed": sum(
+            1 for item in results if item.get("status") == "VIOLATION"
+        ),
+        "harness_errors": sum(
+            1 for item in results if item.get("harness_error")
+        ),
         "results": results,
     }
 
@@ -664,12 +799,12 @@ def materialize_assertion(
     observations: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Turn compiler templates into executable DSL specs without inventing expected values."""
+
     spec = dict(_dict(assertion))
     kind = _text(spec.get("kind") or spec.get("type"))
     prop = _dict(spec.get("property"))
     obs = _dict(observations)
 
-    # Map obligation family aliases onto typed DSL kinds.
     family_map = {
         "authorization": "owner_tenant_visibility",
         "isolation": "owner_tenant_visibility",
@@ -685,8 +820,11 @@ def materialize_assertion(
         spec["kind"] = family_map[kind]
         kind = spec["kind"]
 
-    if kind == "http_status" and spec.get("expected") is None and spec.get("expected_status") is None:
-        # Prefer explicit expected from property; otherwise leave unset (fail closed).
+    if (
+        kind == "http_status"
+        and spec.get("expected") is None
+        and spec.get("expected_status") is None
+    ):
         if prop.get("expected_status") is not None:
             spec["expected"] = prop.get("expected_status")
         elif obs.get("expected_status") is not None:
@@ -695,13 +833,24 @@ def materialize_assertion(
     if kind == "owner_tenant_visibility":
         spec.setdefault("require_control", True)
 
+    if kind == "state_transition":
+        if spec.get("from_state") is None and prop.get("from_state") is not None:
+            spec["from_state"] = prop.get("from_state")
+        if spec.get("to_state") is None and prop.get("to_state") is not None:
+            spec["to_state"] = prop.get("to_state")
+
     if kind == "conservation" and not _dict(spec.get("equation")):
         equation = _dict(prop.get("equation"))
         if equation:
             spec["equation"] = equation
 
-    if kind == "idempotency_effect" and spec.get("expected_effect_count") is None:
-        if prop.get("expected_effect_count") is not None:
-            spec["expected_effect_count"] = prop.get("expected_effect_count")
+    if (
+        kind == "idempotency_effect"
+        and spec.get("expected_effect_count") is None
+        and prop.get("expected_effect_count") is not None
+    ):
+        spec["expected_effect_count"] = prop.get(
+            "expected_effect_count"
+        )
 
     return spec
