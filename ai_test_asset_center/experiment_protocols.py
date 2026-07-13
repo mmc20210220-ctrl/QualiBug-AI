@@ -38,6 +38,19 @@ def _field_tokens(property_spec: dict[str, Any]) -> tuple[str | int, ...]:
     return tuple(part for part in field_path.split(".") if part)
 
 
+def _json_path(tokens: tuple[str | int, ...]) -> str:
+    path = "$"
+    for token in tokens:
+        if isinstance(token, int):
+            path += f"[{token}]"
+        elif re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", token):
+            path += f".{token}"
+        else:
+            escaped = token.replace("\\", "\\\\").replace("'", "\\'")
+            path += f"['{escaped}']"
+    return path
+
+
 def _schema_and_value_at(
     schema: dict[str, Any],
     value: Any,
@@ -85,24 +98,6 @@ def _parent_and_leaf(
     if isinstance(leaf, int):
         return parent, leaf, isinstance(parent, list) and 0 <= leaf < len(parent)
     return parent, leaf, isinstance(parent, dict) and leaf in parent
-
-
-def _same_declared_type(value: Any, declared_type: str) -> bool:
-    if declared_type == "string":
-        return isinstance(value, str)
-    if declared_type == "integer":
-        return isinstance(value, int) and not isinstance(value, bool)
-    if declared_type == "number":
-        return isinstance(value, (int, float)) and not isinstance(value, bool)
-    if declared_type == "boolean":
-        return isinstance(value, bool)
-    if declared_type == "array":
-        return isinstance(value, list)
-    if declared_type == "object":
-        return isinstance(value, dict)
-    if declared_type == "null":
-        return value is None
-    return False
 
 
 def _invalid_type_value(declared_type: str) -> tuple[bool, Any]:
@@ -352,8 +347,7 @@ def _source_constraint_material(
             parent[leaf] = deepcopy(invalid_value)
 
     mutation = {
-        "json_path": _text(property_spec.get("json_path"))
-        or "$.” + ".".join(str(token) for token in tokens),
+        "json_path": _text(property_spec.get("json_path")) or _json_path(tokens),
         "field_tokens": list(tokens),
         "constraint": constraint,
         "constraint_value": deepcopy(constraint_value),
