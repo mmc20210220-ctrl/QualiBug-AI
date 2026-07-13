@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ai_test_asset_center.assertion_dsl import evaluate_assertion
 from ai_test_asset_center.experiment_compiler import compile_experiments
 from ai_test_asset_center.validation_obligation_expander import (
     expand_validation_obligation,
@@ -17,7 +18,11 @@ def _operation() -> dict:
                 "application/json": {
                     "schema": {
                         "type": "object",
-                        "required": ["name", "externalRef", "quantity"],
+                        "required": [
+                            "name",
+                            "externalRef",
+                            "quantity",
+                        ],
                         "properties": {
                             "name": {"type": "string"},
                             "externalRef": {"type": "string"},
@@ -110,8 +115,8 @@ def test_required_fields_expand_to_independent_validation_obligations() -> None:
     )
     assert len({row["obligation_id"] for row in variants}) == 3
     assert all(
-        row["property"]["expanded_from_obligation_id"]
-        == "obl-create-validation"
+        row["required_observers"]
+        == ["http_response", "business_effect"]
         for row in variants
     )
 
@@ -135,18 +140,19 @@ def test_compile_experiments_preserves_one_mutation_per_required_field() -> None
     ]
     assert fields == ["$.name", "$.externalRef", "$.quantity"]
 
-    removed_fields = [
-        field
-        for experiment, field in zip(
-            result["experiments"],
-            ["name", "externalRef", "quantity"],
-        )
-        if field not in experiment["treatment_plan"][0]["body"]
-    ]
-    assert removed_fields == ["name", "externalRef", "quantity"]
+    for experiment in result["experiments"]:
+        observer_ids = {
+            row["observer_id"]
+            for row in experiment["observers"]
+        }
+        assert {"http_response", "business_effect"} <= observer_ids
+        assertion = experiment["assertions"][0]
+        assert assertion["kind"] == "validation_rejection"
+        assert assertion["expected_class"] == 4
+        assert assertion["expected_effect_count"] == 0
 
 
-def test_explicit_field_obligation_is_not_expanded_again() -> None:
+def test_explicit_field_obligation_keeps_effect_observer() -> None:
     obligation = _obligation()
     obligation["property"]["field"] = "name"
 
@@ -155,4 +161,69 @@ def test_explicit_field_obligation_is_not_expanded_again() -> None:
         operation=_operation(),
     )
 
-    assert variants == [obligation]
+    assert len(variants) == 1
+    assert variants[0]["property"]["field"] == "name"
+    assert variants[0]["required_observers"] == [
+        "http_response",
+        "business_effect",
+    ]
+
+
+def test_validation_rejection_requires_zero_business_effect() -> None:
+    assertion = {
+        "assertion_id": "assert-validation",
+        "kind": "validation_rejection",
+        "expected_class": 4,
+        "expected_effect_count": 0,
+    }
+
+    passed = evaluate_assertion(
+        assertion,
+        observations={
+            "status_code": 422,
+            "business_effect_observed": True,
+            "treatment_effect_count": 0,
+        },
+    )
+    assert passed["status"] == "PASS"
+
+    side_effect = evaluate_assertion(
+        assertion,
+        observations={
+            "status_code": 422,
+            "business_effect_observed": True,
+            "treatment_effect_count": 1,
+        },
+    )
+    assert side_effect["status"] == "VIOLATION"
+    assert (
+        side_effect["reason_code"]
+        == "VALIDATION_REJECTION_SIDE_EFFECT"
+    )
+
+    accepted_invalid = evaluate_assertion(
+        assertion,
+        observations={
+            "status_code": 200,
+            "business_effect_observed": True,
+            "treatment_effect_count": 0,
+        },
+    )
+    assert accepted_invalid["status"] == "VIOLATION"
+    assert (
+        accepted_invalid["reason_code"]
+        == "VALIDATION_REJECTION_NOT_ENFORCED"
+    )
+
+    missing_effect = evaluate_assertion(
+        assertion,
+        observations={
+            "status_code": 422,
+            "business_effect_observed": False,
+        },
+    )
+    assert missing_effect["status"] == "INDETERMINATE"
+    assert (
+        missing_effect["reason_code"]
+        == "VALIDATION_BUSINESS_EFFECT_MISSING"
+    )

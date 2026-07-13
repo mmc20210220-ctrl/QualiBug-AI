@@ -39,7 +39,9 @@ def _request_example(operation: dict[str, Any]) -> dict[str, Any]:
 
 def _body_schema(operation: dict[str, Any]) -> dict[str, Any]:
     request_schema = _dict(operation.get("request_schema"))
-    if _text(request_schema.get("type")) or _dict(request_schema.get("properties")):
+    if _text(request_schema.get("type")) or _dict(
+        request_schema.get("properties")
+    ):
         return request_schema
     for media in _dict(request_schema.get("content")).values():
         schema = _dict(_dict(media).get("schema"))
@@ -54,7 +56,10 @@ def _matches_declared_type(value: Any, declared_type: str) -> bool:
     if declared_type == "integer":
         return isinstance(value, int) and not isinstance(value, bool)
     if declared_type == "number":
-        return isinstance(value, (int, float)) and not isinstance(value, bool)
+        return (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+        )
     if declared_type == "boolean":
         return isinstance(value, bool)
     if declared_type == "array":
@@ -76,33 +81,51 @@ def _variant_id(obligation_id: str, field: str, constraint: str) -> str:
     return f"{obligation_id}__v_{digest}"
 
 
+def _with_validation_effect_observer(
+    obligation: dict[str, Any],
+) -> dict[str, Any]:
+    row = deepcopy(_dict(obligation))
+    observers = [
+        _text(value)
+        for value in _list(row.get("required_observers"))
+        if _text(value)
+    ]
+    for observer_id in ("http_response", "business_effect"):
+        if observer_id not in observers:
+            observers.append(observer_id)
+    row["required_observers"] = observers
+    return row
+
+
 def expand_validation_obligation(
     obligation: dict[str, Any],
     *,
     operation: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Return deterministic field-specific variants or the original obligation.
+    """Return deterministic field-specific variants or one guarded original.
 
     Expansion is restricted to fields explicitly present in the documented
-    request example and request schema. It never synthesizes a valid control
-    payload or guesses undocumented fields.
+    request example and request schema. Every validation experiment also
+    requires a business-effect observer so a rejected request that still writes
+    data cannot be misclassified as a passing validation check.
     """
 
     obl = _dict(obligation)
     if _text(obl.get("risk_family")) != "validation":
         return [obl]
-    prop = _dict(obl.get("property"))
+    guarded = _with_validation_effect_observer(obl)
+    prop = _dict(guarded.get("property"))
     if any(
         _text(prop.get(key))
         for key in ("field", "field_name", "field_ref", "json_path")
     ):
-        return [obl]
+        return [guarded]
 
     schema = _body_schema(_dict(operation))
     properties = _dict(schema.get("properties"))
     example = _request_example(_dict(operation))
     if not properties or not example:
-        return [obl]
+        return [guarded]
 
     required = [
         _text(value)
@@ -118,21 +141,29 @@ def expand_validation_obligation(
         ]
     else:
         for field in sorted(properties):
-            declared_type = _text(_dict(properties.get(field)).get("type")).lower()
+            declared_type = _text(
+                _dict(properties.get(field)).get("type")
+            ).lower()
             if (
                 field in example
                 and declared_type
-                and _matches_declared_type(example[field], declared_type)
+                and _matches_declared_type(
+                    example[field],
+                    declared_type,
+                )
             ):
                 targets.append((field, f"type:{declared_type}"))
 
     if len(targets) <= 1:
-        return [obl]
+        return [guarded]
 
-    original_id = _text(obl.get("obligation_id")) or "validation_obligation"
+    original_id = (
+        _text(guarded.get("obligation_id"))
+        or "validation_obligation"
+    )
     variants: list[dict[str, Any]] = []
     for field, constraint in targets:
-        variant = deepcopy(obl)
+        variant = deepcopy(guarded)
         variant["obligation_id"] = _variant_id(
             original_id,
             field,
@@ -144,6 +175,8 @@ def expand_validation_obligation(
             "json_path": f"$.{field}",
             "validation_constraint": constraint,
             "expanded_from_obligation_id": original_id,
+            "expected_rejection_status_class": 4,
+            "expected_treatment_effect_count": 0,
         })
         variant["property"] = variant_property
         variant["compile_status"] = "PENDING"
