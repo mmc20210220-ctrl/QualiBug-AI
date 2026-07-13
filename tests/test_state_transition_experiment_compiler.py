@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ai_test_asset_center.assertion_dsl import evaluate_assertion
 from ai_test_asset_center.experiment_compiler import compile_experiment_for_obligation
 
 
@@ -133,3 +134,40 @@ def test_state_transition_fails_closed_without_permitted_runtime_actor() -> None
         experiment["compile_receipt"]["detail"]
         == "state_transition_actor_unresolved"
     )
+
+
+def test_state_transition_verdict_requires_the_documented_source_state() -> None:
+    assertion = {
+        "assertion_id": "assert-state",
+        "kind": "state_transition",
+        "from_state": "PENDING_PAYMENT",
+        "to_state": "PAID",
+    }
+
+    passed = evaluate_assertion(
+        assertion,
+        observations={
+            "before_state": "pending-payment",
+            "after_state": "paid",
+        },
+    )
+    assert passed["status"] == "PASS"
+
+    wrong_precondition = evaluate_assertion(
+        assertion,
+        observations={
+            "before_state": "CANCELLED",
+            "after_state": "PAID",
+        },
+    )
+    assert wrong_precondition["status"] == "INDETERMINATE"
+    assert wrong_precondition["reason_code"] == "STATE_PRECONDITION_NOT_MET"
+
+    violated = evaluate_assertion(
+        assertion,
+        observations={
+            "before_state": "PENDING_PAYMENT",
+            "after_state": "FAILED",
+        },
+    )
+    assert violated["status"] == "VIOLATION"
