@@ -1,4 +1,4 @@
-"""Expand one source-grounded validation obligation into field-specific variants."""
+"""Expand source-grounded validation obligations across nested request schemas."""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -88,7 +88,6 @@ def _exclusive_boundary(
 
 def _constraint_targets(
     *,
-    field: str,
     field_schema: dict[str, Any],
     example_value: Any,
     required: bool,
@@ -179,9 +178,156 @@ def _constraint_targets(
     return targets
 
 
-def _variant_id(obligation_id: str, field: str, constraint: str) -> str:
+def _json_path(tokens: tuple[str | int, ...]) -> str:
+    path = "$"
+    for token in tokens:
+        if isinstance(token, int):
+            path += f"[{token}]"
+        elif re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", token):
+            path += f".{token}"
+        else:
+            escaped = token.replace("\\", "\\\\").replace("'", "\\'")
+            path += f"['{escaped}']"
+    return path
+
+
+def _display_path(tokens: tuple[str | int, ...]) -> str:
+    return _json_path(tokens).removeprefix("$.")
+
+
+def _parse_generated_json_path(value: str) -> tuple[str | int, ...]:
+    text = _text(value)
+    if not text:
+        return ()
+    if not text.startswith("$"):
+        return tuple(part for part in text.split(".") if part)
+    tokens: list[str | int] = []
+    index = 1
+    while index < len(text):
+        if text[index] == ".":
+            index += 1
+            match = re.match(r"[A-Za-z_][A-Za-z0-9_]*", text[index:])
+            if not match:
+                return ()
+            token = match.group(0)
+            tokens.append(token)
+            index += len(token)
+            continue
+        if text.startswith("['", index):
+            end = index + 2
+            escaped = False
+            chars: list[str] = []
+            while end < len(text):
+                char = text[end]
+                if escaped:
+                    chars.append(char)
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif text.startswith("']", end):
+                    break
+                else:
+                    chars.append(char)
+                end += 1
+            if end >= len(text) or not text.startswith("']", end):
+                return ()
+            tokens.append("".join(chars))
+            index = end + 2
+            continue
+        if text[index] == "[":
+            end = text.find("]", index)
+            if end < 0:
+                return ()
+            raw = text[index + 1 : end]
+            if not raw.isdigit():
+                return ()
+            tokens.append(int(raw))
+            index = end + 1
+            continue
+        return ()
+    return tuple(tokens)
+
+
+def _schema_nodes(
+    schema: dict[str, Any],
+    example: Any,
+    *,
+    tokens: tuple[str | int, ...] = (),
+    required: bool = False,
+    depth: int = 0,
+) -> list[tuple[tuple[str | int, ...], dict[str, Any], Any, bool]]:
+    if depth > 12:
+        return []
+    nodes: list[
+        tuple[tuple[str | int, ...], dict[str, Any], Any, bool]
+    ] = []
+    if tokens:
+        nodes.append((tokens, schema, example, required))
+
+    properties = _dict(schema.get("properties"))
+    if isinstance(example, dict) and properties:
+        required_fields = {
+            _text(value)
+            for value in _list(schema.get("required"))
+            if _text(value)
+        }
+        for field, field_schema_raw in properties.items():
+            field_name = str(field)
+            field_schema = _dict(field_schema_raw)
+            if field_name not in example or not field_schema:
+                continue
+            nodes.extend(_schema_nodes(
+                field_schema,
+                example[field_name],
+                tokens=(*tokens, field_name),
+                required=field_name in required_fields,
+                depth=depth + 1,
+            ))
+
+    items_schema = _dict(schema.get("items"))
+    if (
+        isinstance(example, list)
+        and example
+        and items_schema
+    ):
+        nodes.extend(_schema_nodes(
+            items_schema,
+            example[0],
+            tokens=(*tokens, 0),
+            required=False,
+            depth=depth + 1,
+        ))
+    return nodes
+
+
+def _explicit_tokens(property_spec: dict[str, Any]) -> tuple[str | int, ...]:
+    raw_tokens = property_spec.get("field_tokens")
+    if isinstance(raw_tokens, list) and raw_tokens and all(
+        isinstance(value, (str, int)) and not isinstance(value, bool)
+        for value in raw_tokens
+    ):
+        return tuple(raw_tokens)
+    json_path = _text(property_spec.get("json_path"))
+    if json_path:
+        return _parse_generated_json_path(json_path)
+    field_path = _text(
+        property_spec.get("field_path")
+        or property_spec.get("field")
+        or property_spec.get("field_name")
+        or property_spec.get("field_ref")
+    )
+    if not field_path:
+        return ()
+    return tuple(part for part in field_path.split(".") if part)
+
+
+def _variant_id(
+    obligation_id: str,
+    tokens: tuple[str | int, ...],
+    constraint: str,
+) -> str:
     material = json.dumps(
-        [obligation_id, field, constraint],
+        [obligation_id, list(tokens), constraint],
         ensure_ascii=False,
         separators=(",", ":"),
     )
@@ -210,57 +356,58 @@ def expand_validation_obligation(
     *,
     operation: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Return deterministic source-schema validation variants.
-
-    Only constraints explicitly declared in the request schema are expanded.
-    Every variant requires a business-effect observer so rejected requests that
-    still mutate persistent state cannot be misclassified as passing checks.
-    """
+    """Return deterministic validation variants for nested documented fields."""
 
     obl = _dict(obligation)
     if _text(obl.get("risk_family")) != "validation":
         return [obl]
     guarded = _with_validation_effect_observer(obl)
     prop = _dict(guarded.get("property"))
-    explicit_field = next(
-        (
-            _text(prop.get(key)).removeprefix("$.")
-            for key in ("field", "field_name", "field_ref", "json_path")
-            if _text(prop.get(key))
-        ),
-        "",
-    )
-    if explicit_field and _text(prop.get("validation_constraint")):
-        return [guarded]
+    explicit_tokens = _explicit_tokens(prop)
+    if explicit_tokens and _text(prop.get("validation_constraint")):
+        normalized = deepcopy(guarded)
+        normalized_property = dict(prop)
+        normalized_property.setdefault("field_tokens", list(explicit_tokens))
+        normalized_property.setdefault("json_path", _json_path(explicit_tokens))
+        normalized_property.setdefault(
+            "field_path",
+            _display_path(explicit_tokens),
+        )
+        normalized["property"] = normalized_property
+        return [normalized]
 
     schema = _body_schema(_dict(operation))
-    properties = _dict(schema.get("properties"))
     example = _request_example(_dict(operation))
-    if not properties or not example:
+    if not schema or not example:
         return [guarded]
 
-    required_fields = {
-        _text(value)
-        for value in _list(schema.get("required"))
-        if _text(value)
-    }
-    selected_fields = (
-        [explicit_field]
-        if explicit_field
-        else [str(field) for field in properties]
-    )
-    targets: list[tuple[str, str, Any]] = []
-    for field in selected_fields:
-        field_schema = _dict(properties.get(field))
-        if field not in example or not field_schema:
-            continue
+    nodes = _schema_nodes(schema, example)
+    if explicit_tokens:
+        exact = [node for node in nodes if node[0] == explicit_tokens]
+        if exact:
+            nodes = exact
+        elif len(explicit_tokens) == 1:
+            leaf_matches = [
+                node
+                for node in nodes
+                if node[0] and node[0][-1] == explicit_tokens[0]
+            ]
+            if len(leaf_matches) != 1:
+                return [guarded]
+            nodes = leaf_matches
+        else:
+            return [guarded]
+
+    targets: list[
+        tuple[tuple[str | int, ...], str, Any]
+    ] = []
+    for tokens, field_schema, example_value, required in nodes:
         for constraint, constraint_value in _constraint_targets(
-            field=field,
             field_schema=field_schema,
-            example_value=example[field],
-            required=field in required_fields,
+            example_value=example_value,
+            required=required,
         ):
-            targets.append((field, constraint, constraint_value))
+            targets.append((tokens, constraint, constraint_value))
 
     if not targets:
         return [guarded]
@@ -270,17 +417,20 @@ def expand_validation_obligation(
         or "validation_obligation"
     )
     variants: list[dict[str, Any]] = []
-    for field, constraint, constraint_value in targets:
+    for tokens, constraint, constraint_value in targets:
         variant = deepcopy(guarded)
         variant["obligation_id"] = _variant_id(
             original_id,
-            field,
+            tokens,
             constraint,
         )
+        leaf = tokens[-1] if tokens else ""
         variant_property = dict(prop)
         variant_property.update({
-            "field": field,
-            "json_path": f"$.{field}",
+            "field": str(leaf),
+            "field_path": _display_path(tokens),
+            "field_tokens": list(tokens),
+            "json_path": _json_path(tokens),
             "validation_constraint": constraint,
             "validation_constraint_value": deepcopy(constraint_value),
             "expanded_from_obligation_id": original_id,

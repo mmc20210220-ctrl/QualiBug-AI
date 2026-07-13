@@ -56,6 +56,174 @@ def _body_schema(operation: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _parse_json_path(value: str) -> tuple[str | int, ...]:
+    text = _text(value)
+    if not text:
+        return ()
+    if not text.startswith("$"):
+        return tuple(part for part in text.split(".") if part)
+    tokens: list[str | int] = []
+    index = 1
+    while index < len(text):
+        if text[index] == ".":
+            index += 1
+            match = re.match(r"[A-Za-z_][A-Za-z0-9_]*", text[index:])
+            if not match:
+                return ()
+            token = match.group(0)
+            tokens.append(token)
+            index += len(token)
+            continue
+        if text.startswith("['", index):
+            end = index + 2
+            escaped = False
+            chars: list[str] = []
+            while end < len(text):
+                char = text[end]
+                if escaped:
+                    chars.append(char)
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif text.startswith("']", end):
+                    break
+                else:
+                    chars.append(char)
+                end += 1
+            if end >= len(text) or not text.startswith("']", end):
+                return ()
+            tokens.append("".join(chars))
+            index = end + 2
+            continue
+        if text[index] == "[":
+            end = text.find("]", index)
+            if end < 0:
+                return ()
+            raw = text[index + 1 : end]
+            if not raw.isdigit():
+                return ()
+            tokens.append(int(raw))
+            index = end + 1
+            continue
+        return ()
+    return tuple(tokens)
+
+
+def _path_tokens(property_spec: dict[str, Any]) -> tuple[str | int, ...]:
+    raw = property_spec.get("field_tokens")
+    if isinstance(raw, list) and raw and all(
+        isinstance(value, (str, int)) and not isinstance(value, bool)
+        for value in raw
+    ):
+        return tuple(raw)
+    json_path = _text(property_spec.get("json_path"))
+    if json_path:
+        return _parse_json_path(json_path)
+    field_path = _text(
+        property_spec.get("field_path")
+        or property_spec.get("field")
+        or property_spec.get("field_name")
+        or property_spec.get("field_ref")
+    )
+    return tuple(part for part in field_path.split(".") if part)
+
+
+def _json_path(tokens: tuple[str | int, ...]) -> str:
+    path = "$"
+    for token in tokens:
+        if isinstance(token, int):
+            path += f"[{token}]"
+        elif re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", token):
+            path += f".{token}"
+        else:
+            escaped = token.replace("\\", "\\\\").replace("'", "\\'")
+            path += f"['{escaped}']"
+    return path
+
+
+def _schema_at_path(
+    schema: dict[str, Any],
+    tokens: tuple[str | int, ...],
+) -> dict[str, Any]:
+    current = _dict(schema)
+    for token in tokens:
+        if isinstance(token, int):
+            current = _dict(current.get("items"))
+        else:
+            current = _dict(_dict(current.get("properties")).get(token))
+        if not current:
+            return {}
+    return current
+
+
+def _value_at_path(
+    body: Any,
+    tokens: tuple[str | int, ...],
+) -> Any:
+    current = body
+    for token in tokens:
+        if isinstance(token, int):
+            if not isinstance(current, list) or token >= len(current):
+                return None
+            current = current[token]
+        else:
+            if not isinstance(current, dict) or token not in current:
+                return None
+            current = current[token]
+    return current
+
+
+def _parent_and_leaf(
+    body: Any,
+    tokens: tuple[str | int, ...],
+) -> tuple[Any, str | int | None]:
+    if not tokens:
+        return None, None
+    current = body
+    for token in tokens[:-1]:
+        if isinstance(token, int):
+            if not isinstance(current, list) or token >= len(current):
+                return None, None
+            current = current[token]
+        else:
+            if not isinstance(current, dict) or token not in current:
+                return None, None
+            current = current[token]
+    return current, tokens[-1]
+
+
+def _set_path_value(
+    body: Any,
+    tokens: tuple[str | int, ...],
+    value: Any,
+) -> bool:
+    parent, leaf = _parent_and_leaf(body, tokens)
+    if isinstance(leaf, int):
+        if not isinstance(parent, list) or leaf >= len(parent):
+            return False
+        parent[leaf] = value
+        return True
+    if isinstance(leaf, str):
+        if not isinstance(parent, dict) or leaf not in parent:
+            return False
+        parent[leaf] = value
+        return True
+    return False
+
+
+def _remove_required_path(
+    body: Any,
+    tokens: tuple[str | int, ...],
+) -> bool:
+    parent, leaf = _parent_and_leaf(body, tokens)
+    if not isinstance(parent, dict) or not isinstance(leaf, str):
+        return False
+    if leaf not in parent:
+        return False
+    parent.pop(leaf)
+    return True
+
+
 def _exclusive_boundary(
     field_schema: dict[str, Any],
     key: str,
@@ -265,40 +433,38 @@ def _constraint_mutation(
     control_body: dict[str, Any],
     operation: dict[str, Any],
     property_spec: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    field = _text(
-        property_spec.get("field")
-        or property_spec.get("field_name")
-        or property_spec.get("field_ref")
-        or property_spec.get("json_path")
-    ).removeprefix("$.")
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    tokens = _path_tokens(property_spec)
     constraint = _text(property_spec.get("validation_constraint"))
     schema = _body_schema(operation)
-    field_schema = _dict(_dict(schema.get("properties")).get(field))
-    if not field or not constraint or field not in control_body or not field_schema:
-        return {}, {}
+    field_schema = _schema_at_path(schema, tokens)
+    current = _value_at_path(control_body, tokens)
+    if not tokens or not constraint or not field_schema or current is None:
+        return None, None
 
     treatment = deepcopy(control_body)
     mutation: dict[str, Any] = {
-        "json_path": f"$.{field}",
+        "json_path": _json_path(tokens),
+        "field_tokens": list(tokens),
         "constraint": constraint,
         "source": "request_schema",
         "constraint_value": deepcopy(
             property_spec.get("validation_constraint_value")
         ),
     }
-    current = control_body[field]
 
     if constraint == "required":
-        treatment.pop(field, None)
+        if not _remove_required_path(treatment, tokens):
+            return None, None
         return treatment, mutation
 
     if constraint.startswith("type:"):
         declared_type = constraint.split(":", 1)[1]
         candidate = _wrong_type_value(declared_type)
         if _matches_type(candidate, declared_type):
-            return {}, {}
-        treatment[field] = candidate
+            return None, None
+        if not _set_path_value(treatment, tokens, candidate):
+            return None, None
         return treatment, mutation
 
     candidate: Any = None
@@ -373,15 +539,16 @@ def _constraint_mutation(
                 candidate.append(deepcopy(fill))
 
     if candidate is None:
-        return {}, {}
-    if _satisfies_other_constraints(
+        return None, None
+    if not _satisfies_other_constraints(
         candidate,
         field_schema,
         skip=constraint,
     ):
-        treatment[field] = candidate
-        return treatment, mutation
-    return {}, {}
+        return None, None
+    if not _set_path_value(treatment, tokens, candidate):
+        return None, None
+    return treatment, mutation
 
 
 def compile_family_protocol(
@@ -413,7 +580,7 @@ def compile_family_protocol(
         operation=operation,
         property_spec=property_spec,
     )
-    if not treatment_body or not mutation:
+    if treatment_body is None or mutation is None:
         return {
             "status": "BLOCKED",
             "reason_code": "BLOCKED_MISSING_BINDING",
