@@ -1,0 +1,8 @@
+{
+  "schema_version": "qualibug.discovery-evaluation-input.v1",
+  "project_id": "evaluation-benchmark-mall-held-in",
+  "base_url": "http://localhost:8080",
+  "api_doc_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\projects\\benchmark_mall\\input\\API_SPEC.md",
+  "prd_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\projects\\benchmark_mall\\input\\PRD.md",
+  "multi_layer": true
+}

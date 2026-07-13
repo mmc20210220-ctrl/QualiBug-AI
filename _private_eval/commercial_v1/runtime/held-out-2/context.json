@@ -1,0 +1,10 @@
+{
+  "schema_version": "qualibug.discovery-evaluation-context.v1",
+  "campaign_context": {
+    "scope_id": "evaluation-held-out-2",
+    "environment_ref": "http://localhost:8080",
+    "target_environment": "test",
+    "execution_mode": "approved_sandbox_write"
+  },
+  "test_accounts": {}
+}

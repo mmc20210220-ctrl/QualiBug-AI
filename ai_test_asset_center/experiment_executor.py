@@ -1275,6 +1275,27 @@ def execute_one_experiment(
             obs["mutation_selector"] = mutation_selector
             obs["mutation_operator"] = mutation_operator
             observed_status = int(obs.get("status_code") or 0)
+            if _text(step.get("protocol_step")) == "temporal_write":
+                temporal_elapsed = int(obs.get("duration_ms") or 0)
+                after_state = _observation_state(
+                    _dict(obs.get("governance_receipt")).get("after")
+                )
+                observations.setdefault("temporal_timeline", []).extend([
+                    {
+                        "event": "trigger",
+                        "phase": phase,
+                        "step_id": subject_id,
+                        "at_ms": 0,
+                        "status_code": observed_status,
+                    },
+                    {
+                        "event": "final_observed",
+                        "phase": phase,
+                        "step_id": subject_id,
+                        "at_ms": temporal_elapsed,
+                        "status_code": int(after_state.get("status") or 0),
+                    },
+                ])
             contract_status = (
                 "OBSERVED"
                 if phase == "control" and 200 <= observed_status < 300
@@ -2415,6 +2436,9 @@ def execute_one_experiment(
         elif observer_id == "barrier_timeline":
             observations.update(_dict(receipt.get("evidence")))
             observations["barrier_timeline_observer_receipt"] = receipt
+        elif observer_id == "temporal_window":
+            observations.update(_dict(receipt.get("evidence")))
+            observations["temporal_window_observer_receipt"] = receipt
         elif observer_id in {"typed_assertion", "source_invariant"}:
             observations.update(_dict(receipt.get("evidence")))
             observations[observer_id + "_observer_receipt"] = receipt

@@ -1,0 +1,28 @@
+{
+  "schema_version": "qualibug.discovery-evaluation-dataset.v1",
+  "dataset_id": "benchmark-mall-131-frozen",
+  "dataset_version": "v1-frozen-131-20260710",
+  "ground_truth_bug_count": 131,
+  "ground_truth_sha256": "4e5e5aecc95775e2838c3b50173bf73ec2a09aca3a33af6bc525e77718fb2212",
+  "note": "Frozen 131-bug evaluator-private manifest for champion/candidate comparison. Do not substitute the 71-bug bugs.json when comparing percentages.",
+  "targets": [
+    {
+      "target_id": "benchmark-mall-held-in-131",
+      "project_id": "evaluation-benchmark-mall-held-in-131",
+      "industry": "ecommerce",
+      "split": "held_in",
+      "expectation": "seeded_defects",
+      "runtime": {
+        "environment_ref": "http://localhost:8080",
+        "environment_type": "test",
+        "input_bundle_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\benchmark_mall_131_v1\\runtime\\held-in\\input.json",
+        "fixture_snapshot_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\benchmark_mall_131_v1\\runtime\\held-in\\fixture.json",
+        "context_artifact_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\benchmark_mall_131_v1\\runtime\\held-in\\context.json"
+      },
+      "evaluator": {
+        "ground_truth_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\_evaluator_private\\benchmark_mall_131\\bugs.json",
+        "ground_truth_bug_count": 131
+      }
+    }
+  ]
+}

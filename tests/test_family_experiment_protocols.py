@@ -1357,6 +1357,170 @@ def test_conservation_executor_evaluates_snapshot_values_through_contract_oracle
     assert result["finding"] is None
 
 
+def test_temporal_window_observer_emits_eventual_consistency_evidence() -> None:
+    receipts = observe_experiment_requirements(
+        {
+            "assertions": [{
+                "assertion_id": "assert-temporal",
+                "kind": "eventual_consistency",
+                "window_ms": 1000,
+            }],
+            "observers": [{"observer_id": "temporal_window"}],
+        },
+        observations={
+            "temporal_timeline": [
+                {"event": "trigger", "at_ms": 0, "status_code": 202},
+                {"event": "final_observed", "at_ms": 250, "status_code": 200},
+            ],
+        },
+    )
+
+    receipt = receipts[0]
+    assert receipt["observer_id"] == "temporal_window"
+    assert receipt["status"] == "OBSERVED"
+    assert receipt["evidence"]["converged"] is True
+    assert receipt["evidence"]["within_window"] is True
+    assert receipt["evidence"]["elapsed_ms"] == 250
+
+
+def test_temporal_obligation_compiles_temporal_write_protocol() -> None:
+    obligation = _idempotency_obligation()
+    obligation["obligation_id"] = "obl-temporal-protocol"
+    obligation["risk_family"] = "temporal"
+    obligation["required_observers"] = [
+        "typed_assertion",
+        "source_invariant",
+        "temporal_window",
+    ]
+    obligation["property"] = {
+        "operation_ref": "op-create",
+        "actor_ref": "actor-writer",
+        "template": "invariant_temporal",
+        "invariant_ref": "inv-eventual",
+        "expression": {
+            "kind": "temporal",
+            "window_ms": 1000,
+        },
+    }
+    obligation["source_refs"] = [
+        {"source_id": "requirements", "locator": "rule:eventual"},
+    ]
+
+    experiment = compile_experiment_for_obligation(
+        obligation,
+        behavior_ir=_idempotency_ir(),
+        environment_type="test",
+    )
+
+    assert experiment["compile_receipt"]["status"] == "COMPILED", experiment["compile_receipt"]
+    assert experiment["control_plan"] == []
+    assert experiment["treatment_plan"][0]["protocol_step"] == "temporal_write"
+    assert experiment["treatment_plan"][0]["body"] == {"externalRef": "source-ref", "value": 1}
+    assert {
+        observer["observer_id"]
+        for observer in experiment["observers"]
+    } >= {"typed_assertion", "source_invariant", "temporal_window"}
+    assert experiment["assertions"][0]["kind"] == "eventual_consistency"
+    assert experiment["assertions"][0]["window_ms"] == 1000
+
+
+def test_temporal_executor_feeds_window_evidence_to_contract_oracle(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    obligation = _idempotency_obligation()
+    obligation["obligation_id"] = "obl-temporal-runtime"
+    obligation["risk_family"] = "temporal"
+    obligation["required_observers"] = [
+        "typed_assertion",
+        "source_invariant",
+        "temporal_window",
+    ]
+    obligation["property"] = {
+        "operation_ref": "op-create",
+        "actor_ref": "actor-writer",
+        "template": "invariant_temporal",
+        "invariant_ref": "inv-eventual",
+        "expression": {
+            "kind": "temporal",
+            "window_ms": 1000,
+        },
+    }
+    obligation["source_refs"] = [
+        {"source_id": "requirements", "locator": "rule:eventual"},
+    ]
+    experiment = compile_experiment_for_obligation(
+        obligation,
+        behavior_ir=_idempotency_ir(),
+        environment_type="test",
+    )
+    experiment["fixture_dag"] = {"status": "READY", "nodes": [], "setup_order": []}
+
+    def governed_write(**kwargs):
+        if kwargs["operation_phase"] == "experiment_treatment":
+            return {
+                "accepted": True,
+                "status": "executed",
+                "method": kwargs["method"],
+                "path": kwargs["path"],
+                "before": {"status": 200, "body": []},
+                "write": {
+                    "status": 202,
+                    "body": {"id": "resource-1"},
+                    "duration_ms": 250,
+                },
+                "after": {
+                    "status": 200,
+                    "body": [{"id": "resource-1", "status": "ready"}],
+                },
+                "audit_path": "sandbox_write_audit.jsonl",
+                "audit_record": {"phase": "treatment", "id": "resource-1"},
+            }
+        assert kwargs["operation_phase"] == "experiment_cleanup"
+        return {
+            "accepted": True,
+            "status": "executed",
+            "method": kwargs["method"],
+            "path": kwargs["path"],
+            "before": {"status": 200, "body": {"id": "resource-1"}},
+            "write": {"status": 204, "body": {}},
+            "after": {"status": 404, "body": {}},
+            "audit_path": "sandbox_write_audit.jsonl",
+            "audit_record": {"phase": "cleanup", "path": kwargs["path"]},
+        }
+
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_executor.sandbox_write_allowed",
+        lambda **_kwargs: (True, ""),
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_executor.execute_governed_control_write",
+        governed_write,
+    )
+
+    result = execute_one_experiment(
+        experiment,
+        behavior_ir=_idempotency_ir(),
+        root=tmp_path,
+        project="project",
+        base_url="http://target.invalid",
+        runtime_contract={"environment_type": "test"},
+        campaign_id="campaign",
+        execution_id="execution-temporal",
+        actor_tokens={},
+    )
+
+    assert result["status"] == "EXECUTED"
+    temporal = next(
+        receipt
+        for receipt in result["observer_receipts"]
+        if receipt["observer_id"] == "temporal_window"
+    )
+    assert temporal["status"] == "OBSERVED"
+    assert result["oracle_verdict"]["status"] == "PROPERTY_HELD"
+    assert result["oracle_verdict"]["assertions"][0]["status"] == "PASS"
+
+
 def test_write_effect_observer_uses_source_declared_body_bound_lookup() -> None:
     behavior_ir = {
         "operations": [

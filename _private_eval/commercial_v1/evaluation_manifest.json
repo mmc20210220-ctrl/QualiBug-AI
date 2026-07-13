@@ -1,0 +1,90 @@
+{
+  "schema_version": "qualibug.discovery-evaluation-dataset.v1",
+  "dataset_id": "cross-industry-private-evaluation",
+  "dataset_version": "v1-frozen-20260710",
+  "targets": [
+    {
+      "target_id": "held-in-1",
+      "project_id": "evaluation-held-in-1",
+      "industry": "ecommerce",
+      "split": "held_in",
+      "expectation": "seeded_defects",
+      "runtime": {
+        "environment_ref": "http://localhost:8080",
+        "environment_type": "test",
+        "input_bundle_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\commercial_v1\\runtime\\held-in-1\\input.json",
+        "fixture_snapshot_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\commercial_v1\\runtime\\held-in-1\\fixture.json",
+        "context_artifact_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\commercial_v1\\runtime\\held-in-1\\context.json"
+      },
+      "evaluator": {
+        "ground_truth_ref": "D:\\QualiBug-AI\\benchmark_suite_v3\\QualiBug_Benchmark_Suite_v3\\projects\\01_ecommerce_order_payment_inventory\\oracle\\BUG_GROUND_TRUTH.json"
+      }
+    },
+    {
+      "target_id": "held-out-1",
+      "project_id": "evaluation-held-out-1",
+      "industry": "saas",
+      "split": "held_out",
+      "expectation": "seeded_defects",
+      "runtime": {
+        "environment_ref": "http://localhost:8080",
+        "environment_type": "test",
+        "input_bundle_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\commercial_v1\\runtime\\held-out-1\\input.json",
+        "fixture_snapshot_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\commercial_v1\\runtime\\held-out-1\\fixture.json",
+        "context_artifact_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\commercial_v1\\runtime\\held-out-1\\context.json"
+      },
+      "evaluator": {
+        "ground_truth_ref": "D:\\QualiBug-AI\\benchmark_suite_v3\\QualiBug_Benchmark_Suite_v3\\projects\\02_saas_multitenant_crm\\oracle\\BUG_GROUND_TRUTH.json"
+      }
+    },
+    {
+      "target_id": "held-out-2",
+      "project_id": "evaluation-held-out-2",
+      "industry": "mes",
+      "split": "held_out",
+      "expectation": "seeded_defects",
+      "runtime": {
+        "environment_ref": "http://localhost:8080",
+        "environment_type": "test",
+        "input_bundle_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\commercial_v1\\runtime\\held-out-2\\input.json",
+        "fixture_snapshot_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\commercial_v1\\runtime\\held-out-2\\fixture.json",
+        "context_artifact_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\commercial_v1\\runtime\\held-out-2\\context.json"
+      },
+      "evaluator": {
+        "ground_truth_ref": "D:\\QualiBug-AI\\benchmark_suite_v3\\QualiBug_Benchmark_Suite_v3\\projects\\03_mes_work_order_quality_trace\\oracle\\BUG_GROUND_TRUTH.json"
+      }
+    },
+    {
+      "target_id": "held-out-3",
+      "project_id": "evaluation-held-out-3",
+      "industry": "finance",
+      "split": "held_out",
+      "expectation": "seeded_defects",
+      "runtime": {
+        "environment_ref": "http://localhost:8080",
+        "environment_type": "test",
+        "input_bundle_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\commercial_v1\\runtime\\held-out-3\\input.json",
+        "fixture_snapshot_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\commercial_v1\\runtime\\held-out-3\\fixture.json",
+        "context_artifact_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\commercial_v1\\runtime\\held-out-3\\context.json"
+      },
+      "evaluator": {
+        "ground_truth_ref": "D:\\QualiBug-AI\\benchmark_suite_v3\\QualiBug_Benchmark_Suite_v3\\projects\\10_financial_credit_limit\\oracle\\BUG_GROUND_TRUTH.json"
+      }
+    },
+    {
+      "target_id": "clean-1",
+      "project_id": "evaluation-clean-1",
+      "industry": "healthcare",
+      "split": "held_out",
+      "expectation": "clean",
+      "runtime": {
+        "environment_ref": "http://localhost:8080",
+        "environment_type": "test",
+        "input_bundle_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\commercial_v1\\runtime\\clean-1\\input.json",
+        "fixture_snapshot_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\commercial_v1\\runtime\\clean-1\\fixture.json",
+        "context_artifact_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\commercial_v1\\runtime\\clean-1\\context.json"
+      },
+      "evaluator": {}
+    }
+  ]
+}

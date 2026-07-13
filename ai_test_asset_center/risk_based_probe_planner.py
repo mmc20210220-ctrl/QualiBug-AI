@@ -511,6 +511,22 @@ def _summarize_validated_yield_priority(candidates: list[dict[str, Any]], select
     }
 
 
+def _module_of(probe: dict[str, Any]) -> str:
+    """GT-free business-module key derived from the declared API path.
+
+    Strips the leading host/version prefix and returns the business resource
+    segment (e.g. ``/api/orders/...`` -> ``orders``). Used only to diversify
+    probe-selection coverage across source-declared modules; never derived
+    from ground truth, scores, or benchmark answers.
+    """
+    parts = [p for p in str(probe.get("path") or "/").strip("/").split("/") if p]
+    if not parts:
+        return "root"
+    if parts[0].lower() == "api" and len(parts) >= 2:
+        return parts[1].lower()
+    return parts[0].lower()
+
+
 def _select_probes_by_budget(
     combined: list[dict[str, Any]],
     *,
@@ -519,24 +535,109 @@ def _select_probes_by_budget(
     budget: dict[str, Any],
     max_count: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Select probes within the risk budget and total cap.
+
+    Selection guarantees at least one probe per declared API module (a coverage
+    floor) before filling the remaining budget by priority score. This
+    diversifies execution coverage across source-declared modules so a few
+    high-score modules cannot starve the rest of the probe budget — which is
+    exactly the failure that leaves bug-carrying paths unselected (funnel stage
+    3 / reach misses). Coverage is derived purely from the probe path, never
+    from ground truth, and never increases total cost (max_count is unchanged).
+    """
+
     per_risk_used: dict[str, int] = {}
     selected: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
-    for probe in sorted(combined, key=lambda p: (-float(p.get("priority_score") or 0), -float(p.get("validated_yield_priority_score") or 0), str(p.get("risk_type")), str(p.get("path")))):
+    skipped_ids: set[str] = set()
+    selected_ids: set[int] = set()
+
+    def _candidate_only_flow(probe: dict[str, Any]) -> bool:
+        return (
+            mode != "safe"
+            and probe.get("execution_policy") == "candidate_only"
+            and probe.get("source") == "enterprise_business_flow_graph"
+        )
+
+    def _sandbox_reasoning_candidate(probe: dict[str, Any]) -> bool:
+        return (
+            probe.get("source")
+            in {
+                "multi_source_business_reasoning",
+                "business_lifecycle_reasoning",
+                "consistency_isolation_reasoning",
+                "business_causality_conservation",
+                "business_population_constraints",
+                "business_event_chain_reasoning",
+                "business_saga_compensation_reasoning",
+                "business_assurance_coverage",
+                "multi_industry_business_reasoning",
+                "enterprise_business_knowledge_asset",
+                "enterprise_testops_journey",
+                "enterprise_testops_permission",
+                "enterprise_testops_system_state",
+                "enterprise_testops_data",
+            }
+            and probe.get("execution_policy") == "sandbox_required"
+        )
+
+    def _destructive_blocked(probe: dict[str, Any]) -> bool:
+        return (
+            _is_destructive(probe)
+            and (mode == "safe" or not allow_destructive)
+            and not _candidate_only_flow(probe)
+            and not _sandbox_reasoning_candidate(probe)
+        )
+
+    def _record_skip(probe: dict[str, Any], risk: str, reason: str) -> None:
+        probe_id = str(probe.get("probe_id"))
+        if probe_id in skipped_ids:
+            return
+        skipped_ids.add(probe_id)
+        skipped.append({"probe_id": probe_id, "reason": reason, "risk_type": risk})
+
+    def _try_select(probe: dict[str, Any]) -> bool:
         risk = _risk_from_probe(probe)
-        candidate_only_flow = mode != "safe" and probe.get("execution_policy") == "candidate_only" and probe.get("source") == "enterprise_business_flow_graph"
-        sandbox_reasoning_candidate = probe.get("source") in {"multi_source_business_reasoning", "business_lifecycle_reasoning", "consistency_isolation_reasoning", "business_causality_conservation", "business_population_constraints", "business_event_chain_reasoning", "business_saga_compensation_reasoning", "business_assurance_coverage", "multi_industry_business_reasoning", "enterprise_business_knowledge_asset", "enterprise_testops_journey", "enterprise_testops_permission", "enterprise_testops_system_state", "enterprise_testops_data"} and probe.get("execution_policy") == "sandbox_required"
-        if _is_destructive(probe) and (mode == "safe" or not allow_destructive) and not candidate_only_flow and not sandbox_reasoning_candidate:
-            skipped.append({"probe_id": probe.get("probe_id"), "reason": "destructive_blocked_by_mode", "risk_type": risk})
-            continue
+        if _destructive_blocked(probe):
+            _record_skip(probe, risk, "destructive_blocked_by_mode")
+            return False
         risk_limit = (budget.get("risk_budget") or {}).get(risk)
         if risk_limit is not None and per_risk_used.get(risk, 0) >= int(risk_limit):
-            skipped.append({"probe_id": probe.get("probe_id"), "reason": "risk_budget_exceeded", "risk_type": risk})
-            continue
+            _record_skip(probe, risk, "risk_budget_exceeded")
+            return False
         selected.append({**probe, "plan_rank": len(selected) + 1, "selected_by": "risk_based_probe_planner"})
+        selected_ids.add(id(probe))
         per_risk_used[risk] = per_risk_used.get(risk, 0) + 1
+        return True
+
+    ordered = sorted(
+        combined,
+        key=lambda p: (
+            -float(p.get("priority_score") or 0),
+            -float(p.get("validated_yield_priority_score") or 0),
+            str(p.get("risk_type")),
+            str(p.get("path")),
+        ),
+    )
+
+    covered_modules: set[str] = set()
+    # Pass 1: coverage floor — guarantee one probe per declared module.
+    for probe in ordered:
         if len(selected) >= max_count:
             break
+        module = _module_of(probe)
+        if module in covered_modules:
+            continue
+        if _try_select(probe):
+            covered_modules.add(module)
+    # Pass 2: fill the remaining budget by the original priority order.
+    for probe in ordered:
+        if len(selected) >= max_count:
+            break
+        if id(probe) in selected_ids or str(probe.get("probe_id")) in skipped_ids:
+            continue
+        _try_select(probe)
+
     return selected, skipped
 
 

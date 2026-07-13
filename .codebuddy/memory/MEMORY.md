@@ -44,3 +44,16 @@
 - 重视产品健康验证：配置不等于在线，需真实探活
 - 强调全行业通用性，绝对禁止硬编码
 - 重视"让企业领导买单"的 demo 体验和销售故事
+
+## Discovery 发现率优化方法论（2026-07-13 验证）
+- 真瓶颈在**触达（probe_selection 漏斗）**而非门控放宽。baseline 632 候选→181 选中（丢弃 71%），对应 miss_diagnosis 失败阶段 top=stage3「行为路径未触达」（44 个）+ stage2/6。基线 bug_reach_rate 仅 49.6%。
+- 用 `customer_delivery_gate.customer_delivery_rejection_reasons` 回放真实 findings 证明：被拒候选绝大多数是噪声/假阳性（bound_write 后 146 条里 96 个因 BUG_STATUS_NOT_REPRODUCED + EVIDENCE_QUALITY_NOT_VALIDATED），**门控健康严格，放宽会崩 precision**，故 stage 9「证据链不足」不是真瓶颈。
+- 已落地修复：`risk_based_probe_planner._select_probes_by_budget` 加 **GT-free 模块覆盖保底**（`_module_of` 取 API 路径业务资源段如 `/api/orders/...`→`orders`），预算内每模块至少 1 条探针。零成本（不改 max_count，baseline 已是 aggressive 上限 180）、全行业通用（仅基于 source-declared path，不碰 GT/分数）。测试 `tests/test_select_probes_coverage_floor.py`，pytest 7 passed。
+- 发现率只能靠真实执行 + evaluator-private GT 验证，不能靠调门控虚增。下一步方向是异常识别精度（减 FP 噪声、让真实异常被识别），不是继续调门控。
+
+## 全量跑批关键发现（2026-07-13，`_funnel_benchmark.py full`）
+- 跑批完成（328s），但 `pipeline_health=DEGRADED`、`formal_customer_deliverable_count=0`、`canonical_defect_count=0`。**这不是靶场干净**——漏斗标了 `empty_findings_means_no_bugs=false`。
+- 根因1（结构性死路）：默认 `mainline_authority="legacy_champion"`（`policy_registry.py:218`）。legacy 适配器在 `discovery_runtime.py:1396` 写死「无法重建 typed v2 证据包，永不合成正式交付」，故 `delivery_gate` 把 138 条已执行义务全拒（`LEGACY_RECEIPT_CHAIN_UNVERIFIABLE`）。**legacy_champion 设计上永远产不出正式 TP**。
+- 根因2（真实执行故障）：154/302 义务 `HARNESS_FAILED`(LEGACY_EXECUTION_ERROR)，因 legacy 执行视图 `view.errors` 非空（`discovery_runtime.py:1248`）。需单独 root-cause。
+- **测量真实发现率的正确路径**：把 Policy Registry `execution.mainline_authority` 切到 `experiment_candidate`（走 `experiment_executor`，产出可验证 v2 证据包）。该路径是 `continuous_evaluation.py:298`、`discovery_policy_evaluation_runner.py` 与所有交付门测试使用的路径。切权威是 AGENTS.md 的"next-run policy decision"治理动作，`context.mainline_authority` 必须与 policy 一致否则报 `mainline_authority_policy_mismatch`（`__main__.py:401`）。
+- Reasoner 层正常（756 假设、15/20 引擎 OK、真实 LLM 16 次调用）。旧 `llm_throughput.after_spc_bound_write.json` 的 38 findings 是旧版松门控产物，不可与当前硬化门控直接比较。

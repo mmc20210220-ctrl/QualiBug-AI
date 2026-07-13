@@ -1,0 +1,8 @@
+{
+  "schema_version": "qualibug.discovery-evaluation-input.v1",
+  "project_id": "evaluation-clean-healthcare",
+  "base_url": "http://localhost:8080",
+  "api_doc_ref": "D:\\QualiBug-AI\\benchmark_suite_v3\\QualiBug_Benchmark_Suite_v3\\projects\\12_healthcare_appointment_medical_records\\input\\openapi.yaml",
+  "prd_ref": "D:\\QualiBug-AI\\benchmark_suite_v3\\QualiBug_Benchmark_Suite_v3\\projects\\12_healthcare_appointment_medical_records\\input\\PRD.md",
+  "multi_layer": true
+}

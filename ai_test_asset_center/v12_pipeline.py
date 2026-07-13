@@ -3153,6 +3153,9 @@ def _run_legacy_champion_domain(project: str, root: Path, prd_text: str = "", ap
                 )
                 result["mainline_unification"] = _unify_stats
         except Exception as exc:
+            import traceback as _tb
+            print("UNIFY_REASONER_EXCEPTION:", type(exc).__name__, str(exc)[:300], flush=True)
+            print(_tb.format_exc(), flush=True)
             result.setdefault("mainline_unification", {})["error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
         _optimized_slices, _pool_opt = _optimize_behavior_slice_pool(
             [item for item in ranked_behavior_slices if isinstance(item, dict)]

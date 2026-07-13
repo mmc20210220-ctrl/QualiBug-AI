@@ -1,0 +1,2110 @@
+[
+  {
+    "bug_id": "AUTH-001",
+    "title": "禁用用户仍可登录并获得 token",
+    "module": "auth-service",
+    "type": "权限/账号状态",
+    "severity": "high",
+    "match_keywords": [
+      "disabled",
+      "禁用",
+      "login",
+      "token",
+      "status",
+      "disabled_buyer"
+    ],
+    "trigger": "使用 disabled_buyer@example.com 登录",
+    "expected": "禁用账号不可登录",
+    "actual": "返回有效 token"
+  },
+  {
+    "bug_id": "AUTH-002",
+    "title": "密码重置接口无需登录即可修改任意账号密码",
+    "module": "auth-service",
+    "type": "权限",
+    "severity": "critical",
+    "match_keywords": [
+      "password/reset",
+      "reset",
+      "无需登录",
+      "任意账号",
+      "password"
+    ],
+    "trigger": "调用 /api/auth/password/reset 修改 admin 或 buyer 密码",
+    "expected": "必须验证身份或重置 token",
+    "actual": "直接修改成功"
+  },
+  {
+    "bug_id": "AUTH-003",
+    "title": "用户状态修改接口只校验登录不校验 admin 角色",
+    "module": "auth-service",
+    "type": "越权",
+    "severity": "critical",
+    "match_keywords": [
+      "admin/users",
+      "status",
+      "role",
+      "越权",
+      "普通用户"
+    ],
+    "trigger": "buyer 调用 /api/auth/admin/users/:id/status",
+    "expected": "只有 admin 能修改状态",
+    "actual": "任意登录用户可修改"
+  },
+  {
+    "bug_id": "AUTH-004",
+    "title": "注册接口允许弱密码",
+    "module": "auth-service",
+    "type": "参数校验",
+    "severity": "medium",
+    "match_keywords": [
+      "register",
+      "weak password",
+      "弱密码",
+      "password"
+    ],
+    "trigger": "注册 password=1",
+    "expected": "应拒绝弱密码",
+    "actual": "注册成功"
+  },
+  {
+    "bug_id": "AUTH-005",
+    "title": "注册接口未限制异常邮箱格式",
+    "module": "auth-service",
+    "type": "参数校验",
+    "severity": "medium",
+    "match_keywords": [
+      "register",
+      "email",
+      "邮箱格式",
+      "invalid"
+    ],
+    "trigger": "注册 email=abc",
+    "expected": "应拒绝非法邮箱",
+    "actual": "注册成功"
+  },
+  {
+    "bug_id": "USER-001",
+    "title": "买家可通过 userId 参数查询其他用户地址",
+    "module": "user-service",
+    "type": "数据隔离",
+    "severity": "high",
+    "match_keywords": [
+      "addresses",
+      "userId",
+      "其他用户",
+      "地址",
+      "越权"
+    ],
+    "trigger": "buyer01 查询 /api/users/addresses?userId=buyer02",
+    "expected": "只能查自己的地址",
+    "actual": "返回他人地址"
+  },
+  {
+    "bug_id": "USER-002",
+    "title": "买家创建地址时可传 userId 给其他用户添加地址",
+    "module": "user-service",
+    "type": "数据隔离",
+    "severity": "high",
+    "match_keywords": [
+      "addresses",
+      "userId",
+      "添加地址",
+      "他人"
+    ],
+    "trigger": "buyer01 POST /api/users/addresses 带 userId=buyer02",
+    "expected": "只能给自己添加地址",
+    "actual": "给他人添加成功"
+  },
+  {
+    "bug_id": "USER-003",
+    "title": "用户搜索后台接口未校验后台角色",
+    "module": "user-service",
+    "type": "权限",
+    "severity": "critical",
+    "match_keywords": [
+      "admin/search",
+      "用户搜索",
+      "普通用户",
+      "越权"
+    ],
+    "trigger": "buyer 调 /api/users/admin/search",
+    "expected": "需 admin/auditor",
+    "actual": "返回用户列表"
+  },
+  {
+    "bug_id": "USER-004",
+    "title": "余额调整允许负数导致扣成负余额",
+    "module": "user-service",
+    "type": "资金",
+    "severity": "high",
+    "match_keywords": [
+      "balance",
+      "delta",
+      "负数",
+      "余额"
+    ],
+    "trigger": "finance 调整 delta=-999999",
+    "expected": "应校验余额不能为负",
+    "actual": "余额可为负"
+  },
+  {
+    "bug_id": "PRODUCT-001",
+    "title": "商品列表默认返回下架和草稿商品",
+    "module": "product-service",
+    "type": "前端/商品状态",
+    "severity": "high",
+    "match_keywords": [
+      "products",
+      "OFF_SALE",
+      "DRAFT",
+      "下架",
+      "草稿"
+    ],
+    "trigger": "GET /api/products",
+    "expected": "只返回 ON_SALE",
+    "actual": "返回 OFF_SALE/DRAFT 商品"
+  },
+  {
+    "bug_id": "PRODUCT-002",
+    "title": "商品详情可查看下架内部商品",
+    "module": "product-service",
+    "type": "商品状态",
+    "severity": "medium",
+    "match_keywords": [
+      "products",
+      "SKU-HIDDEN-005",
+      "OFF_SALE",
+      "internal"
+    ],
+    "trigger": "GET /api/products/SKU-HIDDEN-005",
+    "expected": "用户不可查看下架内部商品",
+    "actual": "返回详情"
+  },
+  {
+    "bug_id": "PRODUCT-003",
+    "title": "商品修改接口未校验角色",
+    "module": "product-service",
+    "type": "权限",
+    "severity": "critical",
+    "match_keywords": [
+      "products/admin",
+      "PATCH",
+      "role",
+      "buyer",
+      "越权"
+    ],
+    "trigger": "buyer 修改商品状态或价格",
+    "expected": "需 seller/admin",
+    "actual": "修改成功"
+  },
+  {
+    "bug_id": "PRODUCT-004",
+    "title": "seller 可修改不属于自己的商品",
+    "module": "product-service",
+    "type": "数据隔离",
+    "severity": "high",
+    "match_keywords": [
+      "seller",
+      "seller_id",
+      "其他商家",
+      "商品"
+    ],
+    "trigger": "seller 修改其他 seller 商品",
+    "expected": "只能改自己的商品",
+    "actual": "修改成功"
+  },
+  {
+    "bug_id": "PRODUCT-005",
+    "title": "商品价格可被修改为负数",
+    "module": "product-service",
+    "type": "参数校验/资金",
+    "severity": "high",
+    "match_keywords": [
+      "price",
+      "负价格",
+      "negative",
+      "PATCH"
+    ],
+    "trigger": "后台修改 price=-1",
+    "expected": "价格必须大于 0",
+    "actual": "保存成功"
+  },
+  {
+    "bug_id": "PRODUCT-006",
+    "title": "删除商品未校验角色",
+    "module": "product-service",
+    "type": "权限",
+    "severity": "critical",
+    "match_keywords": [
+      "delete",
+      "products/admin",
+      "buyer",
+      "删除商品"
+    ],
+    "trigger": "buyer DELETE /api/products/admin/:sku",
+    "expected": "需 admin/seller",
+    "actual": "删除成功"
+  },
+  {
+    "bug_id": "PRODUCT-007",
+    "title": "创建商品允许重复或异常 SKU 格式导致 500",
+    "module": "product-service",
+    "type": "参数校验",
+    "severity": "low",
+    "match_keywords": [
+      "create product",
+      "sku",
+      "重复",
+      "500"
+    ],
+    "trigger": "创建重复 SKU",
+    "expected": "应返回业务错误",
+    "actual": "数据库异常暴露"
+  },
+  {
+    "bug_id": "INV-001",
+    "title": "库存锁定未使用事务行锁导致并发超卖",
+    "module": "inventory-service",
+    "type": "并发/库存",
+    "severity": "critical",
+    "match_keywords": [
+      "reserve",
+      "并发",
+      "超卖",
+      "available_qty",
+      "库存"
+    ],
+    "trigger": "并发 POST /api/inventory/reserve 同 SKU",
+    "expected": "不得超卖",
+    "actual": "available_qty 可能为负"
+  },
+  {
+    "bug_id": "INV-002",
+    "title": "释放库存可按 SKU 批量释放其他订单锁",
+    "module": "inventory-service",
+    "type": "数据一致性",
+    "severity": "high",
+    "match_keywords": [
+      "release",
+      "orderId",
+      "OR sku",
+      "释放库存",
+      "其他订单"
+    ],
+    "trigger": "调用 release 带同 SKU",
+    "expected": "只释放当前订单锁",
+    "actual": "同 SKU 其他锁被释放"
+  },
+  {
+    "bug_id": "INV-003",
+    "title": "释放库存未校验 locked_qty 足够导致负锁定库存",
+    "module": "inventory-service",
+    "type": "库存",
+    "severity": "high",
+    "match_keywords": [
+      "release",
+      "locked_qty",
+      "负数",
+      "库存"
+    ],
+    "trigger": "重复释放同一订单",
+    "expected": "locked_qty 不得为负",
+    "actual": "locked_qty 可为负"
+  },
+  {
+    "bug_id": "INV-004",
+    "title": "消耗库存未校验 locked_qty 足够",
+    "module": "inventory-service",
+    "type": "库存",
+    "severity": "high",
+    "match_keywords": [
+      "consume",
+      "locked_qty",
+      "负数"
+    ],
+    "trigger": "重复 consume",
+    "expected": "锁定库存不能为负",
+    "actual": "locked_qty 可为负"
+  },
+  {
+    "bug_id": "INV-005",
+    "title": "库存调整接口未限制 warehouse/admin 角色",
+    "module": "inventory-service",
+    "type": "权限",
+    "severity": "critical",
+    "match_keywords": [
+      "admin/adjust",
+      "库存调整",
+      "buyer",
+      "越权"
+    ],
+    "trigger": "buyer 调整库存",
+    "expected": "只有 warehouse/admin",
+    "actual": "调整成功"
+  },
+  {
+    "bug_id": "INV-006",
+    "title": "库存调整允许 available_qty 调成负数",
+    "module": "inventory-service",
+    "type": "参数校验/库存",
+    "severity": "high",
+    "match_keywords": [
+      "adjust",
+      "available_qty",
+      "负数",
+      "delta"
+    ],
+    "trigger": "warehouse delta=-999",
+    "expected": "库存不能为负",
+    "actual": "保存负库存"
+  },
+  {
+    "bug_id": "CART-001",
+    "title": "购物车查询可用 userId 查看他人购物车",
+    "module": "cart-service",
+    "type": "数据隔离",
+    "severity": "high",
+    "match_keywords": [
+      "cart/items",
+      "userId",
+      "他人购物车",
+      "越权"
+    ],
+    "trigger": "buyer01 GET /api/cart/items?userId=buyer02",
+    "expected": "只能看自己购物车",
+    "actual": "返回他人购物车"
+  },
+  {
+    "bug_id": "CART-002",
+    "title": "添加购物车可指定 userId 给他人加商品",
+    "module": "cart-service",
+    "type": "数据隔离",
+    "severity": "high",
+    "match_keywords": [
+      "cart/items",
+      "userId",
+      "添加购物车",
+      "他人"
+    ],
+    "trigger": "buyer01 POST userId=buyer02",
+    "expected": "只能加自己的购物车",
+    "actual": "添加成功"
+  },
+  {
+    "bug_id": "CART-003",
+    "title": "购物车数量允许为 0 或负数",
+    "module": "cart-service",
+    "type": "参数校验",
+    "severity": "medium",
+    "match_keywords": [
+      "cart",
+      "qty",
+      "负数",
+      "0"
+    ],
+    "trigger": "添加 qty=-1",
+    "expected": "数量必须大于 0",
+    "actual": "添加成功"
+  },
+  {
+    "bug_id": "CART-004",
+    "title": "购物车更新未校验归属",
+    "module": "cart-service",
+    "type": "数据隔离",
+    "severity": "high",
+    "match_keywords": [
+      "cart/items/:id",
+      "PATCH",
+      "归属",
+      "越权"
+    ],
+    "trigger": "buyer01 修改 buyer02 cart item",
+    "expected": "只能修改自己的",
+    "actual": "修改成功"
+  },
+  {
+    "bug_id": "CART-005",
+    "title": "购物车可添加下架商品",
+    "module": "cart-service",
+    "type": "商品状态",
+    "severity": "medium",
+    "match_keywords": [
+      "cart",
+      "OFF_SALE",
+      "下架商品",
+      "SKU-HIDDEN"
+    ],
+    "trigger": "添加 SKU-HIDDEN-005",
+    "expected": "下架商品不可加入",
+    "actual": "添加成功"
+  },
+  {
+    "bug_id": "COUPON-001",
+    "title": "过期优惠券仍可校验通过",
+    "module": "coupon-service",
+    "type": "优惠券",
+    "severity": "high",
+    "match_keywords": [
+      "EXPIRED50",
+      "过期",
+      "expires_at",
+      "validate"
+    ],
+    "trigger": "使用 EXPIRED50",
+    "expected": "应拒绝过期券",
+    "actual": "valid=true"
+  },
+  {
+    "bug_id": "COUPON-002",
+    "title": "停用优惠券仍可使用",
+    "module": "coupon-service",
+    "type": "优惠券",
+    "severity": "high",
+    "match_keywords": [
+      "DISABLED30",
+      "停用",
+      "status",
+      "validate"
+    ],
+    "trigger": "使用 DISABLED30",
+    "expected": "应拒绝停用券",
+    "actual": "valid=true"
+  },
+  {
+    "bug_id": "COUPON-003",
+    "title": "优惠券不校验最低订单金额",
+    "module": "coupon-service",
+    "type": "优惠券/金额",
+    "severity": "medium",
+    "match_keywords": [
+      "min_order_amount",
+      "最低金额",
+      "NEW100",
+      "validate"
+    ],
+    "trigger": "低于门槛使用 NEW100",
+    "expected": "应拒绝",
+    "actual": "仍给 discount"
+  },
+  {
+    "bug_id": "COUPON-004",
+    "title": "优惠券不校验用户使用次数",
+    "module": "coupon-service",
+    "type": "优惠券/幂等",
+    "severity": "high",
+    "match_keywords": [
+      "user_limit",
+      "coupon_usage",
+      "重复使用"
+    ],
+    "trigger": "同一用户重复使用 NEW100",
+    "expected": "应拒绝第二次",
+    "actual": "重复成功"
+  },
+  {
+    "bug_id": "COUPON-005",
+    "title": "优惠券不校验全局使用次数",
+    "module": "coupon-service",
+    "type": "优惠券",
+    "severity": "medium",
+    "match_keywords": [
+      "global_limit",
+      "全局次数",
+      "重复"
+    ],
+    "trigger": "超过 global_limit",
+    "expected": "应拒绝",
+    "actual": "仍可用"
+  },
+  {
+    "bug_id": "COUPON-006",
+    "title": "类目券未校验 category_scope",
+    "module": "coupon-service",
+    "type": "优惠券/业务规则",
+    "severity": "medium",
+    "match_keywords": [
+      "category_scope",
+      "ELEC20",
+      "类目券",
+      "food"
+    ],
+    "trigger": "用电子券买食品",
+    "expected": "应拒绝",
+    "actual": "仍可抵扣"
+  },
+  {
+    "bug_id": "COUPON-007",
+    "title": "折扣券未应用 max_discount 封顶",
+    "module": "coupon-service",
+    "type": "优惠券/金额",
+    "severity": "high",
+    "match_keywords": [
+      "max_discount",
+      "封顶",
+      "ELEC20",
+      "300"
+    ],
+    "trigger": "高金额订单使用 ELEC20",
+    "expected": "最多减 300",
+    "actual": "按 20% 全额减"
+  },
+  {
+    "bug_id": "ORDER-001",
+    "title": "下单未校验商品必须 ON_SALE",
+    "module": "order-service",
+    "type": "商品状态",
+    "severity": "high",
+    "match_keywords": [
+      "order",
+      "OFF_SALE",
+      "下架",
+      "SKU-HIDDEN"
+    ],
+    "trigger": "下单 SKU-HIDDEN-005",
+    "expected": "下架商品不可下单",
+    "actual": "下单成功"
+  },
+  {
+    "bug_id": "ORDER-002",
+    "title": "下单未校验商品草稿状态",
+    "module": "order-service",
+    "type": "商品状态",
+    "severity": "high",
+    "match_keywords": [
+      "DRAFT",
+      "SKU-DRAFT",
+      "下单",
+      "草稿"
+    ],
+    "trigger": "下单 SKU-DRAFT-006",
+    "expected": "草稿不可下单",
+    "actual": "下单成功"
+  },
+  {
+    "bug_id": "ORDER-003",
+    "title": "下单数量允许负数导致金额和库存异常",
+    "module": "order-service",
+    "type": "参数校验/资金",
+    "severity": "critical",
+    "match_keywords": [
+      "order",
+      "qty",
+      "负数",
+      "金额"
+    ],
+    "trigger": "POST items qty=-1",
+    "expected": "数量必须大于 0",
+    "actual": "生成异常订单"
+  },
+  {
+    "bug_id": "ORDER-004",
+    "title": "固定优惠券计算顺序错误",
+    "module": "order-service",
+    "type": "资金计算",
+    "severity": "high",
+    "match_keywords": [
+      "NEW100",
+      "优惠券",
+      "金额",
+      "计算顺序"
+    ],
+    "trigger": "多数量订单使用 NEW100",
+    "expected": "total - discount",
+    "actual": "实际按错误顺序抵扣"
+  },
+  {
+    "bug_id": "ORDER-005",
+    "title": "订单查询未校验归属",
+    "module": "order-service",
+    "type": "数据隔离",
+    "severity": "critical",
+    "match_keywords": [
+      "GET /orders/:id",
+      "订单归属",
+      "他人订单",
+      "越权"
+    ],
+    "trigger": "buyer01 查询 buyer02 订单",
+    "expected": "只能查自己订单",
+    "actual": "返回他人订单"
+  },
+  {
+    "bug_id": "ORDER-006",
+    "title": "订单列表可用 userId 查询他人订单",
+    "module": "order-service",
+    "type": "数据隔离",
+    "severity": "high",
+    "match_keywords": [
+      "GET /orders",
+      "userId",
+      "他人订单"
+    ],
+    "trigger": "buyer01 GET /api/orders?userId=buyer02",
+    "expected": "不能查询他人",
+    "actual": "返回他人订单"
+  },
+  {
+    "bug_id": "ORDER-007",
+    "title": "取消订单未校验订单归属",
+    "module": "order-service",
+    "type": "数据隔离/状态机",
+    "severity": "critical",
+    "match_keywords": [
+      "cancel",
+      "他人订单",
+      "取消",
+      "越权"
+    ],
+    "trigger": "buyer01 取消 buyer02 订单",
+    "expected": "只能取消自己订单",
+    "actual": "取消成功"
+  },
+  {
+    "bug_id": "ORDER-008",
+    "title": "已支付订单仍可取消",
+    "module": "order-service",
+    "type": "状态机",
+    "severity": "high",
+    "match_keywords": [
+      "PAID",
+      "cancel",
+      "已支付",
+      "取消"
+    ],
+    "trigger": "支付后取消订单",
+    "expected": "已支付不可直接取消",
+    "actual": "状态变 CANCELLED"
+  },
+  {
+    "bug_id": "ORDER-009",
+    "title": "已取消订单可重复取消导致库存重复释放",
+    "module": "order-service",
+    "type": "库存/幂等",
+    "severity": "high",
+    "match_keywords": [
+      "重复取消",
+      "release",
+      "库存",
+      "CANCELLED"
+    ],
+    "trigger": "重复调用 cancel",
+    "expected": "取消幂等，不重复释放",
+    "actual": "库存重复释放"
+  },
+  {
+    "bug_id": "ORDER-010",
+    "title": "发货接口未校验 warehouse/admin 角色",
+    "module": "order-service",
+    "type": "权限",
+    "severity": "critical",
+    "match_keywords": [
+      "ship",
+      "发货",
+      "buyer",
+      "越权"
+    ],
+    "trigger": "buyer 调 /orders/:id/ship",
+    "expected": "需 warehouse/admin",
+    "actual": "发货成功"
+  },
+  {
+    "bug_id": "ORDER-011",
+    "title": "未支付订单可发货",
+    "module": "order-service",
+    "type": "状态机",
+    "severity": "high",
+    "match_keywords": [
+      "ship",
+      "PENDING_PAYMENT",
+      "未支付",
+      "发货"
+    ],
+    "trigger": "未支付订单发货",
+    "expected": "只有 PAID 可发货",
+    "actual": "状态 SHIPPED"
+  },
+  {
+    "bug_id": "ORDER-012",
+    "title": "确认收货未校验订单已发货",
+    "module": "order-service",
+    "type": "状态机",
+    "severity": "medium",
+    "match_keywords": [
+      "confirm",
+      "确认收货",
+      "未发货",
+      "COMPLETED"
+    ],
+    "trigger": "待支付或已支付直接确认",
+    "expected": "只有 SHIPPED 可确认",
+    "actual": "状态 COMPLETED"
+  },
+  {
+    "bug_id": "PAY-001",
+    "title": "已取消订单仍可支付",
+    "module": "payment-service",
+    "type": "状态机/支付",
+    "severity": "critical",
+    "match_keywords": [
+      "CANCELLED",
+      "pay",
+      "已取消",
+      "支付"
+    ],
+    "trigger": "创建订单后取消再支付",
+    "expected": "取消订单不可支付",
+    "actual": "支付成功"
+  },
+  {
+    "bug_id": "PAY-002",
+    "title": "支付金额大于应付金额也成功",
+    "module": "payment-service",
+    "type": "资金",
+    "severity": "high",
+    "match_keywords": [
+      "amount",
+      "payable_amount",
+      "支付金额",
+      "大于"
+    ],
+    "trigger": "amount > payable_amount",
+    "expected": "必须等于应付金额",
+    "actual": "支付成功"
+  },
+  {
+    "bug_id": "PAY-003",
+    "title": "重复支付未做幂等",
+    "module": "payment-service",
+    "type": "幂等/资金",
+    "severity": "critical",
+    "match_keywords": [
+      "duplicate",
+      "重复支付",
+      "idempotencyKey",
+      "payments"
+    ],
+    "trigger": "同一 order 多次 pay",
+    "expected": "只能一笔成功",
+    "actual": "多笔 SUCCESS"
+  },
+  {
+    "bug_id": "PAY-004",
+    "title": "同一 idempotencyKey 可重复生成支付流水",
+    "module": "payment-service",
+    "type": "幂等",
+    "severity": "high",
+    "match_keywords": [
+      "idempotencyKey",
+      "重复",
+      "支付流水"
+    ],
+    "trigger": "相同 key 重复 pay",
+    "expected": "应返回同一结果",
+    "actual": "生成多笔"
+  },
+  {
+    "bug_id": "PAY-005",
+    "title": "用户可支付他人订单",
+    "module": "payment-service",
+    "type": "数据隔离/资金",
+    "severity": "critical",
+    "match_keywords": [
+      "pay",
+      "他人订单",
+      "user_id",
+      "越权"
+    ],
+    "trigger": "buyer01 支付 buyer02 订单",
+    "expected": "只能支付自己的订单",
+    "actual": "支付成功"
+  },
+  {
+    "bug_id": "PAY-006",
+    "title": "手工置支付成功接口未校验财务/admin 角色",
+    "module": "payment-service",
+    "type": "权限",
+    "severity": "critical",
+    "match_keywords": [
+      "manual-success",
+      "手工",
+      "finance",
+      "buyer"
+    ],
+    "trigger": "buyer 调 manual-success",
+    "expected": "需 finance/admin",
+    "actual": "成功"
+  },
+  {
+    "bug_id": "PAY-007",
+    "title": "支付后库存消耗失败不回滚支付状态",
+    "module": "payment-service",
+    "type": "分布式一致性",
+    "severity": "high",
+    "match_keywords": [
+      "consume",
+      "库存消耗失败",
+      "PAID",
+      "回滚"
+    ],
+    "trigger": "构造 consume 失败",
+    "expected": "应回滚支付",
+    "actual": "订单仍 PAID"
+  },
+  {
+    "bug_id": "REFUND-001",
+    "title": "未支付订单可申请退款",
+    "module": "refund-service",
+    "type": "状态机/退款",
+    "severity": "high",
+    "match_keywords": [
+      "refund",
+      "PENDING_PAYMENT",
+      "未支付",
+      "退款"
+    ],
+    "trigger": "未支付订单申请退款",
+    "expected": "只有已支付/完成可退",
+    "actual": "创建退款"
+  },
+  {
+    "bug_id": "REFUND-002",
+    "title": "退款金额可超过实付金额",
+    "module": "refund-service",
+    "type": "资金",
+    "severity": "critical",
+    "match_keywords": [
+      "refund amount",
+      "超过",
+      "payable_amount",
+      "退款金额"
+    ],
+    "trigger": "amount > paid amount",
+    "expected": "应拒绝",
+    "actual": "创建成功"
+  },
+  {
+    "bug_id": "REFUND-003",
+    "title": "用户可给他人订单申请退款",
+    "module": "refund-service",
+    "type": "数据隔离",
+    "severity": "critical",
+    "match_keywords": [
+      "refund",
+      "他人订单",
+      "越权"
+    ],
+    "trigger": "buyer01 给 buyer02 订单退款",
+    "expected": "只能操作自己订单",
+    "actual": "创建成功"
+  },
+  {
+    "bug_id": "REFUND-004",
+    "title": "退款审批未校验 finance/admin 角色",
+    "module": "refund-service",
+    "type": "权限",
+    "severity": "critical",
+    "match_keywords": [
+      "approve",
+      "退款审批",
+      "buyer",
+      "越权"
+    ],
+    "trigger": "buyer 调 approve",
+    "expected": "需 finance/admin",
+    "actual": "审批成功"
+  },
+  {
+    "bug_id": "REFUND-005",
+    "title": "重复审批退款单会重复执行退款状态",
+    "module": "refund-service",
+    "type": "幂等",
+    "severity": "high",
+    "match_keywords": [
+      "approve",
+      "重复审批",
+      "REFUNDED"
+    ],
+    "trigger": "重复 approve",
+    "expected": "第二次应拒绝或幂等",
+    "actual": "仍返回成功"
+  },
+  {
+    "bug_id": "REFUND-006",
+    "title": "驳回退款未恢复订单原状态",
+    "module": "refund-service",
+    "type": "状态机",
+    "severity": "medium",
+    "match_keywords": [
+      "reject",
+      "REFUND_REQUESTED",
+      "恢复订单状态"
+    ],
+    "trigger": "退款驳回",
+    "expected": "订单回到 PAID/COMPLETED",
+    "actual": "订单仍 REFUND_REQUESTED"
+  },
+  {
+    "bug_id": "REPORT-001",
+    "title": "销售报表普通买家可访问",
+    "module": "report-service",
+    "type": "权限/敏感数据",
+    "severity": "high",
+    "match_keywords": [
+      "reports/sales",
+      "buyer",
+      "销售报表",
+      "权限"
+    ],
+    "trigger": "buyer 调销售报表",
+    "expected": "需 finance/admin/auditor",
+    "actual": "返回金额统计"
+  },
+  {
+    "bug_id": "REPORT-002",
+    "title": "用户余额汇总报表任意登录可访问",
+    "module": "report-service",
+    "type": "权限/隐私",
+    "severity": "high",
+    "match_keywords": [
+      "reports/users",
+      "balance_total",
+      "buyer",
+      "隐私"
+    ],
+    "trigger": "buyer 调 /reports/users",
+    "expected": "需 admin/finance",
+    "actual": "返回余额汇总"
+  },
+  {
+    "bug_id": "REPORT-003",
+    "title": "销售报表包含取消订单金额",
+    "module": "report-service",
+    "type": "统计口径",
+    "severity": "medium",
+    "match_keywords": [
+      "sales",
+      "CANCELLED",
+      "取消订单",
+      "统计口径"
+    ],
+    "trigger": "生成取消订单后查销售报表",
+    "expected": "取消订单不计销售",
+    "actual": "计入 amount"
+  },
+  {
+    "bug_id": "REPORT-004",
+    "title": "日期参数非法导致数据库错误信息外泄",
+    "module": "report-service",
+    "type": "参数校验",
+    "severity": "low",
+    "match_keywords": [
+      "from",
+      "to",
+      "invalid date",
+      "数据库错误"
+    ],
+    "trigger": "from=abc",
+    "expected": "返回业务错误",
+    "actual": "暴露数据库错误"
+  },
+  {
+    "bug_id": "DB-001",
+    "title": "payments.idempotency_key 未设置唯一约束",
+    "module": "database",
+    "type": "数据库约束/幂等",
+    "severity": "high",
+    "match_keywords": [
+      "idempotency_key",
+      "unique",
+      "唯一约束",
+      "重复支付"
+    ],
+    "trigger": "相同 key 插入多笔支付",
+    "expected": "唯一约束阻止",
+    "actual": "插入成功"
+  },
+  {
+    "bug_id": "DB-002",
+    "title": "orders.payable_amount 未限制非负",
+    "module": "database",
+    "type": "数据库约束/金额",
+    "severity": "medium",
+    "match_keywords": [
+      "payable_amount",
+      "非负",
+      "check",
+      "负数"
+    ],
+    "trigger": "异常优惠导致 payable < 0",
+    "expected": "DB 应阻止",
+    "actual": "可保存"
+  },
+  {
+    "bug_id": "DB-003",
+    "title": "inventory.available_qty 未设置非负约束",
+    "module": "database",
+    "type": "数据库约束/库存",
+    "severity": "high",
+    "match_keywords": [
+      "available_qty",
+      "非负",
+      "check",
+      "负库存"
+    ],
+    "trigger": "库存调成负数",
+    "expected": "DB 应阻止",
+    "actual": "可保存"
+  },
+  {
+    "bug_id": "DB-004",
+    "title": "cart_items.qty 未设置正数约束",
+    "module": "database",
+    "type": "数据库约束/参数",
+    "severity": "medium",
+    "match_keywords": [
+      "cart_items",
+      "qty",
+      "check",
+      "负数"
+    ],
+    "trigger": "购物车 qty=-1",
+    "expected": "DB 应阻止",
+    "actual": "可保存"
+  },
+  {
+    "bug_id": "UI-001",
+    "title": "用户端商品列表展示下架和草稿状态",
+    "module": "customer-web",
+    "type": "前端/UI",
+    "severity": "medium",
+    "match_keywords": [
+      "用户端",
+      "商品列表",
+      "OFF_SALE",
+      "DRAFT"
+    ],
+    "trigger": "打开用户端商品列表",
+    "expected": "不展示非在售商品",
+    "actual": "展示状态字段和商品"
+  },
+  {
+    "bug_id": "UI-002",
+    "title": "用户端支付按钮取消订单后仍可点击",
+    "module": "customer-web",
+    "type": "前端/状态机",
+    "severity": "high",
+    "match_keywords": [
+      "取消订单",
+      "支付按钮",
+      "仍可点击",
+      "pay"
+    ],
+    "trigger": "取消订单后点击支付",
+    "expected": "支付按钮禁用",
+    "actual": "仍可调用支付"
+  },
+  {
+    "bug_id": "UI-003",
+    "title": "管理端库存调整按钮直接提交 -999 无二次确认",
+    "module": "admin-web",
+    "type": "前端/危险操作",
+    "severity": "medium",
+    "match_keywords": [
+      "库存调整",
+      "-999",
+      "二次确认",
+      "管理端"
+    ],
+    "trigger": "点击库存调整 -999",
+    "expected": "危险操作需确认并校验",
+    "actual": "直接提交"
+  },
+  {
+    "bug_id": "UI-004",
+    "title": "管理端不同角色菜单不隔离",
+    "module": "admin-web",
+    "type": "前端/权限",
+    "severity": "medium",
+    "match_keywords": [
+      "财务登录",
+      "库存调整",
+      "菜单",
+      "角色"
+    ],
+    "trigger": "财务登录管理端",
+    "expected": "不显示库存/商品写操作",
+    "actual": "仍显示按钮"
+  },
+  {
+    "bug_id": "AUTH-006",
+    "title": "注册接口允许客户端指定 role 创建管理员账号",
+    "module": "auth-service",
+    "type": "权限/注册越权",
+    "severity": "critical",
+    "match_keywords": [
+      "register",
+      "role",
+      "admin",
+      "注册",
+      "提权"
+    ],
+    "trigger": "POST /api/auth/register body 包含 role=admin",
+    "expected": "注册用户只能创建 buyer",
+    "actual": "返回 role=admin 的新用户"
+  },
+  {
+    "bug_id": "AUTH-007",
+    "title": "任意登录用户可调用 impersonate 接口伪装成他人",
+    "module": "auth-service",
+    "type": "越权/令牌签发",
+    "severity": "critical",
+    "match_keywords": [
+      "token/impersonate",
+      "impersonate",
+      "伪装",
+      "token",
+      "越权"
+    ],
+    "trigger": "buyer 调用 /api/auth/token/impersonate 指定 admin/buyer02",
+    "expected": "仅 admin 且有审计授权可伪装",
+    "actual": "普通登录用户获得目标用户 token"
+  },
+  {
+    "bug_id": "AUTH-008",
+    "title": "验证码发送接口泄露账号存在性和状态",
+    "module": "auth-service",
+    "type": "信息泄露",
+    "severity": "medium",
+    "match_keywords": [
+      "otp/send",
+      "exists",
+      "status",
+      "phone",
+      "枚举"
+    ],
+    "trigger": "GET /api/auth/otp/send?email=admin@example.com",
+    "expected": "统一返回不泄露用户状态",
+    "actual": "返回 exists/status/phone"
+  },
+  {
+    "bug_id": "AUTH-009",
+    "title": "调试签名接口无需登录可签发任意 JWT",
+    "module": "auth-service",
+    "type": "后门/认证绕过",
+    "severity": "critical",
+    "match_keywords": [
+      "debug/token",
+      "jwt",
+      "role",
+      "无需登录",
+      "后门"
+    ],
+    "trigger": "POST /api/auth/debug/token body={role:'admin',id:'...'}",
+    "expected": "生产环境无此接口",
+    "actual": "返回可用签名 token"
+  },
+  {
+    "bug_id": "AUTH-010",
+    "title": "任意登录用户可修改他人角色",
+    "module": "auth-service",
+    "type": "权限/角色越权",
+    "severity": "critical",
+    "match_keywords": [
+      "admin/users",
+      "role",
+      "修改角色",
+      "普通用户"
+    ],
+    "trigger": "buyer POST /api/auth/admin/users/:id/role role=admin",
+    "expected": "仅 admin 可改角色",
+    "actual": "普通用户修改成功"
+  },
+  {
+    "bug_id": "AUTH-011",
+    "title": "手机号验证码登录只校验验证码长度",
+    "module": "auth-service",
+    "type": "认证绕过",
+    "severity": "critical",
+    "match_keywords": [
+      "login/phone",
+      "code",
+      "验证码",
+      "长度",
+      "绕过"
+    ],
+    "trigger": "POST /api/auth/login/phone phone=13800009999 code=1234",
+    "expected": "验证码必须服务端校验",
+    "actual": "任意 4 位以上 code 可登录"
+  },
+  {
+    "bug_id": "USER-005",
+    "title": "用户资料接口可查看任意用户手机号和余额",
+    "module": "user-service",
+    "type": "数据隔离/隐私泄露",
+    "severity": "high",
+    "match_keywords": [
+      "profile",
+      "phone",
+      "balance",
+      "任意用户",
+      "隐私"
+    ],
+    "trigger": "buyer GET /api/users/profile/:buyer02Id",
+    "expected": "只能查看本人或脱敏公开资料",
+    "actual": "返回他人 phone/balance"
+  },
+  {
+    "bug_id": "USER-006",
+    "title": "删除地址接口未校验地址归属",
+    "module": "user-service",
+    "type": "越权/数据破坏",
+    "severity": "high",
+    "match_keywords": [
+      "DELETE",
+      "addresses",
+      "归属",
+      "删除他人地址"
+    ],
+    "trigger": "buyer01 DELETE /api/users/addresses/:buyer02AddressId",
+    "expected": "禁止删除他人地址",
+    "actual": "删除成功"
+  },
+  {
+    "bug_id": "USER-007",
+    "title": "设置默认地址接口可修改他人默认地址",
+    "module": "user-service",
+    "type": "越权/业务状态",
+    "severity": "high",
+    "match_keywords": [
+      "default",
+      "addresses",
+      "默认地址",
+      "他人"
+    ],
+    "trigger": "buyer01 POST /api/users/addresses/:buyer02AddressId/default",
+    "expected": "只能修改自己的默认地址",
+    "actual": "修改 buyer02 默认地址"
+  },
+  {
+    "bug_id": "USER-008",
+    "title": "用户导出接口任意登录可导出密码字段",
+    "module": "user-service",
+    "type": "敏感信息泄露",
+    "severity": "critical",
+    "match_keywords": [
+      "admin/export",
+      "password",
+      "导出",
+      "敏感信息"
+    ],
+    "trigger": "buyer GET /api/users/admin/export",
+    "expected": "仅 admin 且不能包含密码",
+    "actual": "返回全量用户含 password"
+  },
+  {
+    "bug_id": "USER-009",
+    "title": "手机号检测接口无需登录泄露账号信息",
+    "module": "user-service",
+    "type": "信息泄露/账号枚举",
+    "severity": "medium",
+    "match_keywords": [
+      "phone/check",
+      "exists",
+      "status",
+      "role",
+      "无需登录"
+    ],
+    "trigger": "GET /api/users/phone/check?phone=13800009999",
+    "expected": "不泄露账号存在性和角色",
+    "actual": "返回 email/status/role"
+  },
+  {
+    "bug_id": "USER-010",
+    "title": "二号状态接口允许普通用户改状态和余额",
+    "module": "user-service",
+    "type": "权限/资金",
+    "severity": "critical",
+    "match_keywords": [
+      "status2",
+      "balance",
+      "状态",
+      "余额",
+      "越权"
+    ],
+    "trigger": "buyer POST /api/users/admin/users/:id/status2 balance=99999",
+    "expected": "仅 admin/finance 可操作",
+    "actual": "任意登录用户可改"
+  },
+  {
+    "bug_id": "PRODUCT-008",
+    "title": "首页推荐接口返回草稿和下架商品",
+    "module": "product-service",
+    "type": "商品状态/UI数据",
+    "severity": "high",
+    "match_keywords": [
+      "recommendations",
+      "DRAFT",
+      "OFF_SALE",
+      "下架",
+      "草稿"
+    ],
+    "trigger": "GET /api/products/recommendations/home",
+    "expected": "只返回 ON_SALE",
+    "actual": "返回所有状态商品"
+  },
+  {
+    "bug_id": "PRODUCT-009",
+    "title": "商家商品目录接口可查看任意商家草稿商品",
+    "module": "product-service",
+    "type": "越权/商业数据泄露",
+    "severity": "high",
+    "match_keywords": [
+      "seller",
+      "catalog",
+      "DRAFT",
+      "sellerId",
+      "草稿"
+    ],
+    "trigger": "buyer GET /api/products/seller/:sellerId/catalog",
+    "expected": "仅商家本人或 admin 可查看非上架商品",
+    "actual": "任意登录用户可查看"
+  },
+  {
+    "bug_id": "PRODUCT-010",
+    "title": "原始搜索接口拼接 SQL 存在注入风险",
+    "module": "product-service",
+    "type": "SQL注入",
+    "severity": "critical",
+    "match_keywords": [
+      "search-raw",
+      "SQL",
+      "ILIKE",
+      "注入",
+      "keyword"
+    ],
+    "trigger": "GET /api/products/search-raw?keyword=' OR '1'='1",
+    "expected": "参数化查询",
+    "actual": "keyword 被拼进 SQL"
+  },
+  {
+    "bug_id": "PRODUCT-011",
+    "title": "批量导入商品接口允许指定 sellerId 和异常库存",
+    "module": "product-service",
+    "type": "越权/参数校验",
+    "severity": "high",
+    "match_keywords": [
+      "admin/import",
+      "sellerId",
+      "stock",
+      "导入",
+      "越权"
+    ],
+    "trigger": "buyer POST /api/products/admin/import 指定 sellerId/stock=-10",
+    "expected": "校验角色、归属和库存非负",
+    "actual": "创建成功"
+  },
+  {
+    "bug_id": "PRODUCT-012",
+    "title": "批量调价接口未校验角色且可生成负价格",
+    "module": "product-service",
+    "type": "权限/价格异常",
+    "severity": "critical",
+    "match_keywords": [
+      "bulk-price",
+      "deltaPercent",
+      "负价格",
+      "调价"
+    ],
+    "trigger": "buyer POST /api/products/admin/bulk-price deltaPercent=-200",
+    "expected": "仅授权角色且价格非负",
+    "actual": "批量价格变负"
+  },
+  {
+    "bug_id": "PRODUCT-013",
+    "title": "商品状态接口任意登录用户可上下架商品",
+    "module": "product-service",
+    "type": "权限/状态机",
+    "severity": "critical",
+    "match_keywords": [
+      "admin",
+      "status",
+      "ON_SALE",
+      "OFF_SALE",
+      "上下架"
+    ],
+    "trigger": "buyer POST /api/products/admin/:sku/status status=OFF_SALE",
+    "expected": "仅商品所属商家或 admin 可改状态",
+    "actual": "普通用户修改成功"
+  },
+  {
+    "bug_id": "INV-007",
+    "title": "库存锁列表接口任意登录可查看所有订单锁",
+    "module": "inventory-service",
+    "type": "数据泄露",
+    "severity": "medium",
+    "match_keywords": [
+      "locks/list",
+      "inventory_locks",
+      "orderId",
+      "库存锁"
+    ],
+    "trigger": "buyer GET /api/inventory/locks/list",
+    "expected": "限制 warehouse/admin 或只看本人订单",
+    "actual": "返回库存锁列表"
+  },
+  {
+    "bug_id": "INV-008",
+    "title": "调拨接口允许负数导致库存方向反转",
+    "module": "inventory-service",
+    "type": "参数校验/库存",
+    "severity": "high",
+    "match_keywords": [
+      "transfer",
+      "qty",
+      "负数",
+      "调拨"
+    ],
+    "trigger": "POST /api/inventory/transfer qty=-10",
+    "expected": "qty 必须正数",
+    "actual": "负数会增加来源仓库存"
+  },
+  {
+    "bug_id": "INV-009",
+    "title": "批量锁库存部分失败不回滚",
+    "module": "inventory-service",
+    "type": "事务一致性",
+    "severity": "high",
+    "match_keywords": [
+      "bulk-reserve",
+      "partial",
+      "rollback",
+      "部分成功"
+    ],
+    "trigger": "bulk-reserve 包含一个有效 SKU 和一个无效 SKU",
+    "expected": "要么全部成功要么全部回滚",
+    "actual": "前面库存已扣，后面失败"
+  },
+  {
+    "bug_id": "INV-010",
+    "title": "库存直接设置接口未校验仓库角色",
+    "module": "inventory-service",
+    "type": "权限/库存篡改",
+    "severity": "critical",
+    "match_keywords": [
+      "admin/set",
+      "availableQty",
+      "lockedQty",
+      "库存设置"
+    ],
+    "trigger": "buyer POST /api/inventory/admin/set availableQty=99999",
+    "expected": "仅 warehouse/admin 可设置",
+    "actual": "普通用户设置成功"
+  },
+  {
+    "bug_id": "INV-011",
+    "title": "库存锁状态接口可任意修改锁状态",
+    "module": "inventory-service",
+    "type": "状态机/越权",
+    "severity": "high",
+    "match_keywords": [
+      "locks",
+      "status",
+      "CONSUMED",
+      "RELEASED",
+      "状态"
+    ],
+    "trigger": "buyer POST /api/inventory/locks/:id/status status=CONSUMED",
+    "expected": "只能由库存流程改变状态",
+    "actual": "任意登录用户修改"
+  },
+  {
+    "bug_id": "INV-012",
+    "title": "重算锁库存把已释放和已消耗锁也计入 locked_qty",
+    "module": "inventory-service",
+    "type": "数据一致性",
+    "severity": "medium",
+    "match_keywords": [
+      "recount",
+      "locked_qty",
+      "RELEASED",
+      "CONSUMED",
+      "重算"
+    ],
+    "trigger": "POST /api/inventory/recount/:sku",
+    "expected": "只统计 LOCKED 状态",
+    "actual": "统计所有库存锁"
+  },
+  {
+    "bug_id": "CART-006",
+    "title": "购物车合并接口可转移他人购物车",
+    "module": "cart-service",
+    "type": "越权/数据破坏",
+    "severity": "high",
+    "match_keywords": [
+      "merge",
+      "fromUserId",
+      "toUserId",
+      "购物车转移"
+    ],
+    "trigger": "buyer01 POST /api/cart/merge fromUserId=buyer02",
+    "expected": "只能合并自己的匿名购物车",
+    "actual": "转移 buyer02 购物车"
+  },
+  {
+    "bug_id": "CART-007",
+    "title": "结算预览相信客户端传入价格",
+    "module": "cart-service",
+    "type": "价格篡改",
+    "severity": "critical",
+    "match_keywords": [
+      "checkout-preview",
+      "price",
+      "客户端价格",
+      "total"
+    ],
+    "trigger": "POST /api/cart/checkout-preview items price=0.01",
+    "expected": "服务端按商品表价格计算",
+    "actual": "按客户端 price 计算"
+  },
+  {
+    "bug_id": "CART-008",
+    "title": "批量加购接口可给任意用户加购物车",
+    "module": "cart-service",
+    "type": "数据隔离",
+    "severity": "high",
+    "match_keywords": [
+      "items/bulk",
+      "userId",
+      "他人购物车"
+    ],
+    "trigger": "buyer01 POST /api/cart/items/bulk item.userId=buyer02",
+    "expected": "只能给自己加购",
+    "actual": "写入 buyer02 购物车"
+  },
+  {
+    "bug_id": "CART-009",
+    "title": "删除选中项接口可通过 userId 删除他人购物车",
+    "module": "cart-service",
+    "type": "越权/数据破坏",
+    "severity": "high",
+    "match_keywords": [
+      "DELETE",
+      "selected",
+      "userId",
+      "删除他人"
+    ],
+    "trigger": "buyer01 DELETE /api/cart/selected?userId=buyer02",
+    "expected": "只能删除自己的购物车",
+    "actual": "删除 buyer02 选中项"
+  },
+  {
+    "bug_id": "CART-010",
+    "title": "克隆购物车项接口未校验原购物车项归属",
+    "module": "cart-service",
+    "type": "数据泄露/越权复制",
+    "severity": "medium",
+    "match_keywords": [
+      "clone",
+      "cart_items",
+      "归属",
+      "复制"
+    ],
+    "trigger": "buyer01 POST /api/cart/clone/:buyer02CartItemId",
+    "expected": "只能克隆自己的购物车项",
+    "actual": "复制他人购物车项"
+  },
+  {
+    "bug_id": "CART-011",
+    "title": "价格同步接口可同步他人购物车价格快照",
+    "module": "cart-service",
+    "type": "越权/业务数据篡改",
+    "severity": "medium",
+    "match_keywords": [
+      "price-sync",
+      "userId",
+      "price_snapshot",
+      "他人"
+    ],
+    "trigger": "buyer01 POST /api/cart/price-sync userId=buyer02",
+    "expected": "只能同步本人购物车",
+    "actual": "更新他人价格快照"
+  },
+  {
+    "bug_id": "COUPON-008",
+    "title": "创建优惠券接口未校验管理员角色",
+    "module": "coupon-service",
+    "type": "权限/营销资金",
+    "severity": "critical",
+    "match_keywords": [
+      "admin/create",
+      "coupon",
+      "普通用户",
+      "创建优惠券"
+    ],
+    "trigger": "buyer POST /api/coupons/admin/create amount=9999",
+    "expected": "仅 admin/运营可创建",
+    "actual": "普通用户创建成功"
+  },
+  {
+    "bug_id": "COUPON-009",
+    "title": "批量校验优惠券可叠加多张互斥优惠",
+    "module": "coupon-service",
+    "type": "业务规则/优惠叠加",
+    "severity": "high",
+    "match_keywords": [
+      "batch-validate",
+      "stack",
+      "叠加",
+      "多张券"
+    ],
+    "trigger": "POST /api/coupons/batch-validate codes=[NEW100,ELEC20]",
+    "expected": "按互斥规则只取一张或最优组合",
+    "actual": "直接累加折扣"
+  },
+  {
+    "bug_id": "COUPON-010",
+    "title": "领券接口可给任意用户领券",
+    "module": "coupon-service",
+    "type": "数据隔离/营销滥用",
+    "severity": "high",
+    "match_keywords": [
+      "claim",
+      "userId",
+      "领券",
+      "他人"
+    ],
+    "trigger": "buyer01 POST /api/coupons/claim userId=buyer02",
+    "expected": "只能给自己领券",
+    "actual": "写入 buyer02 coupon_usage"
+  },
+  {
+    "bug_id": "COUPON-011",
+    "title": "优惠券状态接口普通用户可停用优惠券",
+    "module": "coupon-service",
+    "type": "权限/状态机",
+    "severity": "critical",
+    "match_keywords": [
+      "admin",
+      "status",
+      "DISABLED",
+      "停用优惠券"
+    ],
+    "trigger": "buyer POST /api/coupons/admin/NEW100/status status=DISABLED",
+    "expected": "仅 admin/运营可改状态",
+    "actual": "普通用户修改成功"
+  },
+  {
+    "bug_id": "COUPON-012",
+    "title": "优惠券详情接口返回停用和过期券完整规则",
+    "module": "coupon-service",
+    "type": "信息泄露/营销规则",
+    "severity": "medium",
+    "match_keywords": [
+      "code",
+      "DISABLED",
+      "EXPIRED",
+      "规则泄露"
+    ],
+    "trigger": "GET /api/coupons/code/DISABLED30",
+    "expected": "不可用券不暴露或脱敏",
+    "actual": "返回完整券配置"
+  },
+  {
+    "bug_id": "COUPON-013",
+    "title": "折扣模拟接口允许折扣大于订单金额产生负应付",
+    "module": "coupon-service",
+    "type": "金额计算/参数校验",
+    "severity": "high",
+    "match_keywords": [
+      "simulate-discount",
+      "payable",
+      "负数",
+      "discount"
+    ],
+    "trigger": "POST /api/coupons/simulate-discount amount=100 fixed=200",
+    "expected": "应付金额最低为 0",
+    "actual": "payable=-100"
+  },
+  {
+    "bug_id": "ORDER-013",
+    "title": "订单全量列表接口普通用户可查看全站订单",
+    "module": "order-service",
+    "type": "越权/数据泄露",
+    "severity": "critical",
+    "match_keywords": [
+      "admin/all/list",
+      "全量订单",
+      "普通用户"
+    ],
+    "trigger": "buyer GET /api/orders/admin/all/list",
+    "expected": "仅 admin/auditor 可访问",
+    "actual": "返回全站订单"
+  },
+  {
+    "bug_id": "ORDER-014",
+    "title": "订单收货地址可被任意登录用户改成他人地址",
+    "module": "order-service",
+    "type": "越权/地址篡改",
+    "severity": "high",
+    "match_keywords": [
+      "address",
+      "addressId",
+      "订单地址",
+      "他人"
+    ],
+    "trigger": "buyer01 POST /api/orders/:buyer02OrderId/address addressId=buyer01Address",
+    "expected": "只能订单本人且地址归属本人",
+    "actual": "修改成功"
+  },
+  {
+    "bug_id": "ORDER-015",
+    "title": "订单改价接口无财务权限且可改成负应付",
+    "module": "order-service",
+    "type": "权限/资金",
+    "severity": "critical",
+    "match_keywords": [
+      "price-adjust",
+      "payable_amount",
+      "负应付",
+      "改价"
+    ],
+    "trigger": "buyer POST /api/orders/:id/price-adjust delta=-99999",
+    "expected": "仅授权角色且金额非负",
+    "actual": "应付金额可被改负"
+  },
+  {
+    "bug_id": "ORDER-016",
+    "title": "批量取消接口可取消其他用户订单",
+    "module": "order-service",
+    "type": "越权/批量破坏",
+    "severity": "high",
+    "match_keywords": [
+      "batch-cancel",
+      "userId",
+      "取消他人订单"
+    ],
+    "trigger": "buyer01 POST /api/orders/batch-cancel userId=buyer02",
+    "expected": "只能操作本人订单或 admin",
+    "actual": "取消 buyer02 订单"
+  },
+  {
+    "bug_id": "ORDER-017",
+    "title": "订单状态接口可任意跳转状态",
+    "module": "order-service",
+    "type": "状态机",
+    "severity": "critical",
+    "match_keywords": [
+      "status",
+      "COMPLETED",
+      "PAID",
+      "任意跳转"
+    ],
+    "trigger": "buyer POST /api/orders/:id/status status=COMPLETED",
+    "expected": "按 CREATED→PAID→SHIPPED→COMPLETED 流转",
+    "actual": "任意状态更新"
+  },
+  {
+    "bug_id": "ORDER-018",
+    "title": "从购物车下单未过滤未选中商品且可用 userId 给他人下单",
+    "module": "order-service",
+    "type": "业务规则/数据隔离",
+    "severity": "high",
+    "match_keywords": [
+      "from-cart",
+      "selected",
+      "userId",
+      "购物车下单"
+    ],
+    "trigger": "POST /api/orders/from-cart userId=buyer02",
+    "expected": "只取本人 selected=true 商品",
+    "actual": "取指定用户全部购物车"
+  },
+  {
+    "bug_id": "PAY-008",
+    "title": "支付回调接口无签名校验可伪造支付成功",
+    "module": "payment-service",
+    "type": "支付安全/回调伪造",
+    "severity": "critical",
+    "match_keywords": [
+      "callback/mock",
+      "signature",
+      "回调",
+      "伪造支付"
+    ],
+    "trigger": "POST /api/payments/callback/mock orderId=... status=SUCCESS",
+    "expected": "必须验签和幂等",
+    "actual": "无登录无签名直接置 PAID"
+  },
+  {
+    "bug_id": "PAY-009",
+    "title": "余额支付不校验用户余额是否足够",
+    "module": "payment-service",
+    "type": "资金/余额透支",
+    "severity": "critical",
+    "match_keywords": [
+      "pay-by-balance",
+      "balance",
+      "余额不足",
+      "透支"
+    ],
+    "trigger": "buyer02 余额 300 支付 8999 订单",
+    "expected": "余额不足拒绝",
+    "actual": "支付成功且余额扣负"
+  },
+  {
+    "bug_id": "PAY-010",
+    "title": "退款到余额接口可给任意用户加钱或扣钱",
+    "module": "payment-service",
+    "type": "资金/越权",
+    "severity": "critical",
+    "match_keywords": [
+      "refund-to-balance",
+      "userId",
+      "amount",
+      "加钱",
+      "扣钱"
+    ],
+    "trigger": "buyer POST /api/payments/refund-to-balance userId=buyer01 amount=99999",
+    "expected": "仅退款流程可入账且金额正数",
+    "actual": "任意登录用户修改余额"
+  },
+  {
+    "bug_id": "PAY-011",
+    "title": "重放支付成功接口可复制历史支付流水",
+    "module": "payment-service",
+    "type": "幂等/重放攻击",
+    "severity": "high",
+    "match_keywords": [
+      "replay-success",
+      "paymentId",
+      "重复流水",
+      "重放"
+    ],
+    "trigger": "POST /api/payments/admin/replay-success paymentId=已有支付",
+    "expected": "拒绝重复支付成功事件",
+    "actual": "生成新 SUCCESS 流水"
+  },
+  {
+    "bug_id": "PAY-012",
+    "title": "支付导出接口普通用户可查看全站支付流水",
+    "module": "payment-service",
+    "type": "数据泄露",
+    "severity": "critical",
+    "match_keywords": [
+      "admin/export",
+      "payments",
+      "支付流水",
+      "普通用户"
+    ],
+    "trigger": "buyer GET /api/payments/admin/export",
+    "expected": "仅 finance/admin 可访问",
+    "actual": "返回全站支付记录"
+  },
+  {
+    "bug_id": "PAY-013",
+    "title": "支付通道测试接口泄露模拟密钥",
+    "module": "payment-service",
+    "type": "敏感信息泄露",
+    "severity": "medium",
+    "match_keywords": [
+      "channel-test",
+      "mockSecret",
+      "secret",
+      "密钥"
+    ],
+    "trigger": "POST /api/payments/channel-test",
+    "expected": "不返回通道密钥",
+    "actual": "返回 mockSecret"
+  },
+  {
+    "bug_id": "REFUND-007",
+    "title": "退款全量列表普通用户可查看所有退款单",
+    "module": "refund-service",
+    "type": "越权/数据泄露",
+    "severity": "critical",
+    "match_keywords": [
+      "admin/all",
+      "refunds",
+      "全量退款",
+      "普通用户"
+    ],
+    "trigger": "buyer GET /api/refunds/admin/all",
+    "expected": "仅 finance/admin/auditor 可查看",
+    "actual": "返回所有退款单"
+  },
+  {
+    "bug_id": "REFUND-008",
+    "title": "退款金额修改接口无权限且允许负数",
+    "module": "refund-service",
+    "type": "资金/参数校验",
+    "severity": "critical",
+    "match_keywords": [
+      "amount",
+      "refund",
+      "负数",
+      "修改退款金额"
+    ],
+    "trigger": "buyer POST /api/refunds/:id/amount amount=-100",
+    "expected": "仅授权角色且金额正数",
+    "actual": "修改成功"
+  },
+  {
+    "bug_id": "REFUND-009",
+    "title": "退货收货接口不校验物流状态即可置 RECEIVED",
+    "module": "refund-service",
+    "type": "状态机",
+    "severity": "high",
+    "match_keywords": [
+      "return-received",
+      "RECEIVED",
+      "物流",
+      "状态跳转"
+    ],
+    "trigger": "POST /api/refunds/:id/return-received",
+    "expected": "必须 RETURNING 且仓库确认",
+    "actual": "任意退款单置 RECEIVED"
+  },
+  {
+    "bug_id": "REFUND-010",
+    "title": "快速退款接口可绕过审批直接 REFUNDED",
+    "module": "refund-service",
+    "type": "审批绕过/资金",
+    "severity": "critical",
+    "match_keywords": [
+      "quick-refund",
+      "REFUNDED",
+      "审批绕过",
+      "直接退款"
+    ],
+    "trigger": "buyer POST /api/refunds/quick-refund orderId=... amount=1000",
+    "expected": "需要申请、审核、原路退款",
+    "actual": "直接生成 REFUNDED"
+  },
+  {
+    "bug_id": "REFUND-011",
+    "title": "关闭退款接口可关闭他人退款单",
+    "module": "refund-service",
+    "type": "越权/状态机",
+    "severity": "high",
+    "match_keywords": [
+      "close",
+      "CLOSED",
+      "他人退款单",
+      "关闭"
+    ],
+    "trigger": "buyer01 POST /api/refunds/:buyer02RefundId/close",
+    "expected": "只能本人取消或客服关闭",
+    "actual": "关闭成功"
+  },
+  {
+    "bug_id": "REFUND-012",
+    "title": "按订单查退款接口未校验订单归属",
+    "module": "refund-service",
+    "type": "数据隔离",
+    "severity": "high",
+    "match_keywords": [
+      "by-order",
+      "orderId",
+      "退款记录",
+      "他人"
+    ],
+    "trigger": "buyer01 GET /api/refunds/by-order/:buyer02OrderId",
+    "expected": "只能查看本人订单退款",
+    "actual": "返回他人退款记录"
+  },
+  {
+    "bug_id": "REPORT-005",
+    "title": "订单导出报表普通用户可导出手机号等 PII",
+    "module": "report-service",
+    "type": "数据泄露/报表权限",
+    "severity": "critical",
+    "match_keywords": [
+      "orders/export",
+      "phone",
+      "PII",
+      "导出"
+    ],
+    "trigger": "buyer GET /api/reports/orders/export",
+    "expected": "仅授权角色且敏感字段脱敏",
+    "actual": "返回订单和手机号"
+  },
+  {
+    "bug_id": "REPORT-006",
+    "title": "财务收入接口普通用户可查看全站支付收入",
+    "module": "report-service",
+    "type": "权限/财务数据",
+    "severity": "critical",
+    "match_keywords": [
+      "finance/revenue",
+      "paid_amount",
+      "财务收入"
+    ],
+    "trigger": "buyer GET /api/reports/finance/revenue",
+    "expected": "仅 finance/admin 可查看",
+    "actual": "普通用户可查看"
+  },
+  {
+    "bug_id": "REPORT-007",
+    "title": "调试表查询接口拼接表名存在 SQL 注入和越权读表",
+    "module": "report-service",
+    "type": "SQL注入/数据泄露",
+    "severity": "critical",
+    "match_keywords": [
+      "debug/table",
+      "table",
+      "SELECT *",
+      "SQL注入"
+    ],
+    "trigger": "GET /api/reports/debug/table?table=users",
+    "expected": "生产无调试任意表查询",
+    "actual": "返回任意表数据"
+  },
+  {
+    "bug_id": "REPORT-008",
+    "title": "慢查询报表接口可被 repeat 参数拖垮服务",
+    "module": "report-service",
+    "type": "性能/资源耗尽",
+    "severity": "high",
+    "match_keywords": [
+      "slow/orders",
+      "repeat",
+      "性能",
+      "资源耗尽"
+    ],
+    "trigger": "GET /api/reports/slow/orders?repeat=20000",
+    "expected": "限制次数/异步任务",
+    "actual": "循环执行大量 DB 查询"
+  },
+  {
+    "bug_id": "REPORT-009",
+    "title": "客户销售报表可枚举任意用户订单统计",
+    "module": "report-service",
+    "type": "数据隔离/报表越权",
+    "severity": "high",
+    "match_keywords": [
+      "customer",
+      "sales",
+      "userId",
+      "枚举"
+    ],
+    "trigger": "buyer01 GET /api/reports/customer/:buyer02Id/sales",
+    "expected": "只能查看本人或授权范围",
+    "actual": "返回 buyer02 统计"
+  },
+  {
+    "bug_id": "REPORT-010",
+    "title": "审计日志接口普通用户可读取审计记录",
+    "module": "report-service",
+    "type": "权限/审计数据泄露",
+    "severity": "high",
+    "match_keywords": [
+      "audit-logs",
+      "audit_logs",
+      "审计日志"
+    ],
+    "trigger": "buyer GET /api/reports/audit-logs",
+    "expected": "仅 auditor/admin 可访问",
+    "actual": "普通用户可读取"
+  }
+]

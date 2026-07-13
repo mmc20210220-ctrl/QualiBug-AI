@@ -1,0 +1,14 @@
+{
+  "schema_version": "qualibug.evaluation-http-fixture.v1",
+  "base_url": "http://localhost:8080",
+  "reset": {
+    "method": "POST",
+    "path": "/__qualibug/reset",
+    "body": {}
+  },
+  "observation_path": "/__qualibug/state",
+  "clean_state_assertions": {
+    "record_count": 0
+  },
+  "actor_identity": "evaluation-fixture-controller"
+}

@@ -1,0 +1,94 @@
+{
+  "schema_version": "qualibug.discovery-evaluation-dataset.v1",
+  "dataset_id": "diagnostic-benchmark-mall",
+  "dataset_version": "v1-20260710-131",
+  "ground_truth_bug_count": 131,
+  "ground_truth_sha256": "4e5e5aecc95775e2838c3b50173bf73ec2a09aca3a33af6bc525e77718fb2212",
+  "note": "Held-in uses frozen 131-bug GT. Do not compare percentages against the 71-bug bugs.json.",
+  "targets": [
+    {
+      "target_id": "benchmark-mall-held-in",
+      "project_id": "evaluation-benchmark-mall-held-in",
+      "industry": "ecommerce",
+      "split": "held_in",
+      "expectation": "seeded_defects",
+      "runtime": {
+        "environment_ref": "http://localhost:8080",
+        "environment_type": "test",
+        "input_bundle_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\diagnostic_benchmark_mall_v1\\runtime\\benchmark-mall-held-in\\input.json",
+        "fixture_snapshot_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\diagnostic_benchmark_mall_v1\\runtime\\benchmark-mall-held-in\\fixture.json",
+        "context_artifact_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\diagnostic_benchmark_mall_v1\\runtime\\benchmark-mall-held-in\\context.json"
+      },
+      "evaluator": {
+        "ground_truth_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\_evaluator_private\\benchmark_mall_131\\bugs.json",
+        "ground_truth_bug_count": 131
+      }
+    },
+    {
+      "target_id": "held-out-saas",
+      "project_id": "evaluation-held-out-saas",
+      "industry": "saas",
+      "split": "held_out",
+      "expectation": "seeded_defects",
+      "runtime": {
+        "environment_ref": "http://localhost:8080",
+        "environment_type": "test",
+        "input_bundle_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\diagnostic_benchmark_mall_v1\\runtime\\held-out-saas\\input.json",
+        "fixture_snapshot_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\diagnostic_benchmark_mall_v1\\runtime\\held-out-saas\\fixture.json",
+        "context_artifact_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\diagnostic_benchmark_mall_v1\\runtime\\held-out-saas\\context.json"
+      },
+      "evaluator": {
+        "ground_truth_ref": "D:\\QualiBug-AI\\benchmark_suite_v3\\QualiBug_Benchmark_Suite_v3\\projects\\02_saas_multitenant_crm\\oracle\\BUG_GROUND_TRUTH.json"
+      }
+    },
+    {
+      "target_id": "held-out-mes",
+      "project_id": "evaluation-held-out-mes",
+      "industry": "mes",
+      "split": "held_out",
+      "expectation": "seeded_defects",
+      "runtime": {
+        "environment_ref": "http://localhost:8080",
+        "environment_type": "test",
+        "input_bundle_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\diagnostic_benchmark_mall_v1\\runtime\\held-out-mes\\input.json",
+        "fixture_snapshot_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\diagnostic_benchmark_mall_v1\\runtime\\held-out-mes\\fixture.json",
+        "context_artifact_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\diagnostic_benchmark_mall_v1\\runtime\\held-out-mes\\context.json"
+      },
+      "evaluator": {
+        "ground_truth_ref": "D:\\QualiBug-AI\\benchmark_suite_v3\\QualiBug_Benchmark_Suite_v3\\projects\\03_mes_work_order_quality_trace\\oracle\\BUG_GROUND_TRUTH.json"
+      }
+    },
+    {
+      "target_id": "held-out-finance",
+      "project_id": "evaluation-held-out-finance",
+      "industry": "finance",
+      "split": "held_out",
+      "expectation": "seeded_defects",
+      "runtime": {
+        "environment_ref": "http://localhost:8080",
+        "environment_type": "test",
+        "input_bundle_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\diagnostic_benchmark_mall_v1\\runtime\\held-out-finance\\input.json",
+        "fixture_snapshot_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\diagnostic_benchmark_mall_v1\\runtime\\held-out-finance\\fixture.json",
+        "context_artifact_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\diagnostic_benchmark_mall_v1\\runtime\\held-out-finance\\context.json"
+      },
+      "evaluator": {
+        "ground_truth_ref": "D:\\QualiBug-AI\\benchmark_suite_v3\\QualiBug_Benchmark_Suite_v3\\projects\\10_financial_credit_limit\\oracle\\BUG_GROUND_TRUTH.json"
+      }
+    },
+    {
+      "target_id": "clean-healthcare",
+      "project_id": "evaluation-clean-healthcare",
+      "industry": "healthcare",
+      "split": "held_out",
+      "expectation": "clean",
+      "runtime": {
+        "environment_ref": "http://localhost:8080",
+        "environment_type": "test",
+        "input_bundle_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\diagnostic_benchmark_mall_v1\\runtime\\clean-healthcare\\input.json",
+        "fixture_snapshot_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\diagnostic_benchmark_mall_v1\\runtime\\clean-healthcare\\fixture.json",
+        "context_artifact_ref": "D:\\QualiBug-AI\\QualiBug-AI-main\\_private_eval\\diagnostic_benchmark_mall_v1\\runtime\\clean-healthcare\\context.json"
+      },
+      "evaluator": {}
+    }
+  ]
+}
