@@ -14,6 +14,7 @@ from .runtime_binding_graph import (
     unresolved_placeholders,
 )
 from .real_id_resolver import normalize_path_placeholders
+from .validation_obligation_expander import expand_validation_obligation
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -686,23 +687,53 @@ def compile_experiments(
 ) -> dict[str, Any]:
     compiled: list[dict[str, Any]] = []
     blocked: list[dict[str, Any]] = []
+    operations = _index_by_id(_list(_dict(behavior_ir).get("operations")))
     for obl in obligations:
         if not isinstance(obl, dict):
             continue
-        experiment = compile_experiment_for_obligation(
-            obl,
-            behavior_ir=behavior_ir,
-            environment_type=environment_type,
-            policy_version=policy_version,
+        prop = _dict(obl.get("property"))
+        operation_ref = (
+            next(
+                (
+                    _text(value)
+                    for value in _list(obl.get("required_operations"))
+                    if _text(value)
+                ),
+                "",
+            )
+            or _text(prop.get("operation_ref"))
         )
-        receipt = _dict(experiment.get("compile_receipt"))
-        if _text(receipt.get("status")) == "COMPILED":
-            compiled.append(experiment)
-            obl["compile_status"] = "COMPILED"
-        else:
-            blocked.append(experiment)
-            obl["compile_status"] = "BLOCKED"
-            obl["block_reason"] = receipt.get("reason_code")
+        variants = expand_validation_obligation(
+            obl,
+            operation=operations.get(operation_ref) or {},
+        )
+        variant_compiled = 0
+        variant_blocked = 0
+        for variant in variants:
+            experiment = compile_experiment_for_obligation(
+                variant,
+                behavior_ir=behavior_ir,
+                environment_type=environment_type,
+                policy_version=policy_version,
+            )
+            receipt = _dict(experiment.get("compile_receipt"))
+            if _text(receipt.get("status")) == "COMPILED":
+                compiled.append(experiment)
+                variant["compile_status"] = "COMPILED"
+                variant_compiled += 1
+            else:
+                blocked.append(experiment)
+                variant["compile_status"] = "BLOCKED"
+                variant["block_reason"] = receipt.get("reason_code")
+                variant_blocked += 1
+        obl["compile_status"] = "COMPILED" if variant_compiled else "BLOCKED"
+        obl["expanded_experiment_count"] = len(variants)
+        obl["compiled_experiment_count"] = variant_compiled
+        obl["blocked_experiment_count"] = variant_blocked
+        if not variant_compiled and blocked:
+            obl["block_reason"] = _dict(blocked[-1].get("compile_receipt")).get(
+                "reason_code"
+            )
     return {
         "schema_version": "qualibug.experiment-compile.v1",
         "compiled_count": len(compiled),
