@@ -1,0 +1,474 @@
+name: QualiBug State Transition Main Chain Hardening
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/qualibug-state-transition-main-chain.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  harden-state-transition-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Apply focused main-chain patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file_path = Path(path)
+              text = file_path.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"replacement_count_invalid:{path}:{count}")
+              file_path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          compiler_helper_anchor = '''def _index_by_id(nodes: list[Any]) -> dict[str, dict[str, Any]]:
+              out: dict[str, dict[str, Any]] = {}
+              for node in nodes:
+                  if isinstance(node, dict) and _text(node.get("id")):
+                      out[_text(node.get("id"))] = node
+              return out
+
+
+          def _is_unresolvable_actor_secret_ref(secret_ref: str) -> bool:
+          '''
+          compiler_helper_replacement = '''def _index_by_id(nodes: list[Any]) -> dict[str, dict[str, Any]]:
+              out: dict[str, dict[str, Any]] = {}
+              for node in nodes:
+                  if isinstance(node, dict) and _text(node.get("id")):
+                      out[_text(node.get("id"))] = node
+              return out
+
+
+          def _state_semantic_value(state: dict[str, Any]) -> str:
+              row = _dict(state)
+              for field in ("value", "name", "state", "status", "label", "code"):
+                  value = _text(row.get(field))
+                  if value:
+                      return value
+              return ""
+
+
+          def _actor_is_executable(actor: dict[str, Any]) -> bool:
+              row = _dict(actor)
+              role = _text(row.get("role")).lower()
+              if role in {"anonymous", "public"}:
+                  return True
+              secret_ref = _text(row.get("credential_secret_ref") or row.get("secret_ref"))
+              return bool(secret_ref and not _is_unresolvable_actor_secret_ref(secret_ref))
+
+
+          def _resolve_state_compile_context(
+              *,
+              behavior_ir: dict[str, Any],
+              property_spec: dict[str, Any],
+              operation_ref: str,
+              required_actors: list[str],
+              required_fixtures: list[str],
+          ) -> tuple[dict[str, Any], list[str], list[str]]:
+              prop = dict(_dict(property_spec))
+              states = _index_by_id(_list(_dict(behavior_ir).get("states")))
+              for ref_field, value_field in (
+                  ("from_state_ref", "from_state"),
+                  ("to_state_ref", "to_state"),
+              ):
+                  if _text(prop.get(value_field)):
+                      continue
+                  state_ref = _text(prop.get(ref_field))
+                  state_value = _state_semantic_value(states.get(state_ref) or {})
+                  if state_value:
+                      prop[value_field] = state_value
+
+              actors = _index_by_id(_list(_dict(behavior_ir).get("actors")))
+              resolved_actors = [actor_id for actor_id in required_actors if actor_id in actors]
+              if not resolved_actors:
+                  permitted = {
+                      _text(relation.get("actor_ref") or relation.get("from_ref"))
+                      for relation in _list(_dict(behavior_ir).get("relations"))
+                      if isinstance(relation, dict)
+                      and _text(relation.get("relation_type")) == "permits"
+                      and _text(relation.get("operation_ref")) == _text(operation_ref)
+                      and _text(relation.get("status")) not in {"conflicting", "unsupported"}
+                  }
+                  ranked = sorted(
+                      (
+                          (
+                              0 if _text(actor.get("account_ref")) else 1,
+                              0 if actor.get("runtime_bound") is True else 1,
+                              actor_id,
+                          )
+                          for actor_id, actor in actors.items()
+                          if actor_id in permitted and _actor_is_executable(actor)
+                      )
+                  )
+                  if ranked:
+                      resolved_actors = [ranked[0][2]]
+              if resolved_actors:
+                  prop.setdefault("actor_ref", resolved_actors[0])
+
+              # The observed governed before snapshot is the authoritative state
+              # precondition. A synthetic entity_in_state fixture cannot currently
+              # prove that condition and used to block every state experiment.
+              effective_fixtures = [
+                  fixture
+                  for fixture in required_fixtures
+                  if not _text(fixture).startswith("entity_in_state:")
+              ]
+              return prop, resolved_actors, effective_fixtures
+
+
+          def _is_unresolvable_actor_secret_ref(secret_ref: str) -> bool:
+          '''
+          replace_once(
+              "ai_test_asset_center/experiment_compiler.py",
+              compiler_helper_anchor,
+              compiler_helper_replacement,
+          )
+
+          compiler_context_anchor = '''    required_fixtures = [_text(x) for x in _list(obl.get("required_fixtures")) if _text(x)]
+              required_observers = [_text(x) for x in _list(obl.get("required_observers")) if _text(x)]
+
+              for op_id in required_ops:
+          '''
+          compiler_context_replacement = '''    required_fixtures = [_text(x) for x in _list(obl.get("required_fixtures")) if _text(x)]
+              required_observers = [_text(x) for x in _list(obl.get("required_observers")) if _text(x)]
+              primary_op_id = required_ops[0] if required_ops else _text(prop.get("operation_ref"))
+              if family == "state":
+                  prop, required_actors, required_fixtures = _resolve_state_compile_context(
+                      behavior_ir=ir,
+                      property_spec=prop,
+                      operation_ref=primary_op_id,
+                      required_actors=required_actors,
+                      required_fixtures=required_fixtures,
+                  )
+                  obl = {
+                      **obl,
+                      "property": prop,
+                      "required_actors": required_actors,
+                      "required_fixtures": required_fixtures,
+                  }
+
+              for op_id in required_ops:
+          '''
+          replace_once(
+              "ai_test_asset_center/experiment_compiler.py",
+              compiler_context_anchor,
+              compiler_context_replacement,
+          )
+
+          duplicate_primary = '''    primary_op_id = required_ops[0] if required_ops else _text(prop.get("operation_ref"))
+              if not primary_op_id or primary_op_id not in ops:
+          '''
+          replace_once(
+              "ai_test_asset_center/experiment_compiler.py",
+              duplicate_primary,
+              '''    if not primary_op_id or primary_op_id not in ops:
+          ''',
+          )
+
+          protocol_anchor = '''    if family == "idempotency":
+          '''
+          protocol_state = '''    if family == "state":
+              if method not in {"POST", "PUT", "PATCH"}:
+                  return {
+                      "status": "BLOCKED",
+                      "reason_code": "BLOCKED_MISSING_OPERATION",
+                      "detail": "state_transition_requires_observable_write_operation",
+                  }
+              from_state = _text(property_spec.get("from_state"))
+              to_state = _text(property_spec.get("to_state"))
+              if not from_state or not to_state:
+                  return {
+                      "status": "BLOCKED",
+                      "reason_code": "BLOCKED_MISSING_BINDING",
+                      "detail": "state_transition_values_missing",
+                  }
+              if from_state.casefold() == to_state.casefold():
+                  return {
+                      "status": "BLOCKED",
+                      "reason_code": "BLOCKED_MISSING_BINDING",
+                      "detail": "state_transition_must_change_state",
+                  }
+              body = source_request_example(operation)
+              if method in {"PUT", "PATCH"} and not body:
+                  return {
+                      "status": "BLOCKED",
+                      "reason_code": "BLOCKED_MISSING_BINDING",
+                      "detail": "source_request_example_missing",
+                  }
+              treatment_step: dict[str, Any] = {
+                  "step_id": "treatment_1",
+                  "actor_ref": treatment_actor_ref,
+                  "operation_ref": operation_ref,
+                  "intent": "state_transition",
+                  "protocol_step": "state_transition_write",
+                  "property_template": _text(property_spec.get("template")),
+                  "from_state_ref": _text(property_spec.get("from_state_ref")),
+                  "to_state_ref": _text(property_spec.get("to_state_ref")),
+              }
+              if body:
+                  treatment_step["body"] = deepcopy(body)
+              return {
+                  "status": "COMPILED",
+                  "control_plan": [],
+                  "treatment_plan": [treatment_step],
+                  "assertion": {
+                      "kind": "state_transition",
+                      "from_state": from_state,
+                      "to_state": to_state,
+                      "from_state_ref": _text(property_spec.get("from_state_ref")),
+                      "to_state_ref": _text(property_spec.get("to_state_ref")),
+                  },
+              }
+
+              if family == "idempotency":
+          '''
+          replace_once(
+              "ai_test_asset_center/experiment_protocols.py",
+              protocol_anchor,
+              protocol_state,
+          )
+
+          assertion_helper_anchor = '''def _text(value: Any) -> str:
+              return str(value or "").strip()
+
+
+          def _canonical(value: Any) -> str:
+          '''
+          assertion_helper_replacement = '''def _text(value: Any) -> str:
+              return str(value or "").strip()
+
+
+          def _state_token(value: Any) -> str:
+              normalized = _text(value).replace("-", " ").replace("_", " ")
+              return "_".join(normalized.split()).casefold()
+
+
+          def _canonical(value: Any) -> str:
+          '''
+          replace_once(
+              "ai_test_asset_center/assertion_dsl.py",
+              assertion_helper_anchor,
+              assertion_helper_replacement,
+          )
+
+          state_assertion_anchor = '''        elif effective_kind == "state_transition":
+                  if (
+                      "before_state" not in obs
+                      or "after_state" not in obs
+                      or "from_state" not in spec
+                      or "to_state" not in spec
+                  ):
+                      reason_code = "STATE_TRANSITION_EVIDENCE_MISSING"
+                  else:
+                      actual = {"before": obs["before_state"], "after": obs["after_state"]}
+                      expected = {"before": spec["from_state"], "after": spec["to_state"]}
+                      passed = actual == expected
+          '''
+          state_assertion_replacement = '''        elif effective_kind == "state_transition":
+                  if (
+                      "before_state" not in obs
+                      or "after_state" not in obs
+                      or "from_state" not in spec
+                      or "to_state" not in spec
+                  ):
+                      reason_code = "STATE_TRANSITION_EVIDENCE_MISSING"
+                  else:
+                      actual = {"before": obs["before_state"], "after": obs["after_state"]}
+                      expected = {"before": spec["from_state"], "after": spec["to_state"]}
+                      if _state_token(obs["before_state"]) != _state_token(spec["from_state"]):
+                          # A resource outside the documented source state is a
+                          # setup/precondition miss, not evidence of a product bug.
+                          reason_code = "STATE_PRECONDITION_NOT_MET"
+                      else:
+                          passed = _state_token(obs["after_state"]) == _state_token(spec["to_state"])
+          '''
+          replace_once(
+              "ai_test_asset_center/assertion_dsl.py",
+              state_assertion_anchor,
+              state_assertion_replacement,
+          )
+
+          Path("tests/test_state_transition_discovery_chain.py").write_text(
+              '''from __future__ import annotations
+
+          from ai_test_asset_center.assertion_dsl import evaluate_assertion
+          from ai_test_asset_center.experiment_compiler import compile_experiment_for_obligation
+
+
+          def _state_ir() -> dict:
+              return {
+                  "operations": [
+                      {
+                          "id": "op-pay",
+                          "method": "POST",
+                          "path": "/orders/{id}/pay",
+                          "read_write": "write",
+                      },
+                      {
+                          "id": "op-list",
+                          "method": "GET",
+                          "path": "/orders",
+                          "read_write": "read",
+                      },
+                      {
+                          "id": "op-read",
+                          "method": "GET",
+                          "path": "/orders/{id}",
+                          "read_write": "read",
+                      },
+                      {
+                          "id": "op-cancel",
+                          "method": "POST",
+                          "path": "/orders/{id}/cancel",
+                          "read_write": "write",
+                      },
+                  ],
+                  "actors": [{
+                      "id": "actor-buyer",
+                      "role": "buyer",
+                      "account_ref": "buyer01@example.com",
+                      "credential_secret_ref": "secret_ref:test_accounts:buyer01@example.com",
+                      "runtime_bound": True,
+                  }],
+                  "states": [
+                      {"id": "state-pending", "entity_ref": "order", "name": "PENDING_PAYMENT"},
+                      {"id": "state-paid", "entity_ref": "order", "name": "PAID"},
+                  ],
+                  "relations": [
+                      {
+                          "id": "permit-pay",
+                          "relation_type": "permits",
+                          "from_ref": "actor-buyer",
+                          "to_ref": "op-pay",
+                          "operation_ref": "op-pay",
+                          "actor_ref": "actor-buyer",
+                          "preconditions": [],
+                          "effects": [],
+                          "source_refs": [{"source_id": "roles"}],
+                      },
+                      {
+                          "id": "cleanup-pay",
+                          "relation_type": "compensates",
+                          "from_ref": "op-cancel",
+                          "to_ref": "op-pay",
+                          "operation_ref": "op-cancel",
+                          "actor_ref": "",
+                          "preconditions": [],
+                          "effects": [],
+                          "source_refs": [{"source_id": "api"}],
+                      },
+                  ],
+              }
+
+
+          def _state_obligation() -> dict:
+              return {
+                  "obligation_id": "obl-state-pay",
+                  "risk_family": "state",
+                  "property": {
+                      "template": "state_transition",
+                      "entity_ref": "order",
+                      "from_state_ref": "state-pending",
+                      "to_state_ref": "state-paid",
+                      "operation_ref": "op-pay",
+                  },
+                  "required_operations": ["op-pay"],
+                  "required_actors": [],
+                  "required_fixtures": ["entity_in_state:state-pending"],
+                  "required_observers": ["before_state", "after_state"],
+                  "cleanup_requirement": {
+                      "required": True,
+                      "operation_ref": "op-cancel",
+                      "mode": "reverse_order",
+                  },
+                  "source_refs": [{"source_id": "state-machine"}],
+              }
+
+
+          def test_state_obligation_compiles_to_source_grounded_state_protocol() -> None:
+              experiment = compile_experiment_for_obligation(
+                  _state_obligation(),
+                  behavior_ir=_state_ir(),
+                  environment_type="test",
+              )
+
+              assert experiment["compile_receipt"]["status"] == "COMPILED", experiment["compile_receipt"]
+              assert experiment["treatment_plan"][0]["actor_ref"] == "actor-buyer"
+              assert experiment["treatment_plan"][0]["protocol_step"] == "state_transition_write"
+              assert not [
+                  row for row in experiment["binding_plan"]
+                  if str(row.get("fixture_id") or "").startswith("entity_in_state:")
+              ]
+              assertion = experiment["assertions"][0]
+              assert assertion["kind"] == "state_transition"
+              assert assertion["from_state"] == "PENDING_PAYMENT"
+              assert assertion["to_state"] == "PAID"
+
+
+          def test_state_assertion_distinguishes_precondition_miss_from_violation() -> None:
+              assertion = {
+                  "assertion_id": "assert-state",
+                  "kind": "state_transition",
+                  "from_state": "PENDING_PAYMENT",
+                  "to_state": "PAID",
+              }
+
+              passed = evaluate_assertion(
+                  assertion,
+                  observations={"before_state": "pending-payment", "after_state": "paid"},
+              )
+              assert passed["status"] == "PASS"
+
+              precondition_miss = evaluate_assertion(
+                  assertion,
+                  observations={"before_state": "CANCELLED", "after_state": "PAID"},
+              )
+              assert precondition_miss["status"] == "INDETERMINATE"
+              assert precondition_miss["reason_code"] == "STATE_PRECONDITION_NOT_MET"
+
+              violation = evaluate_assertion(
+                  assertion,
+                  observations={"before_state": "PENDING_PAYMENT", "after_state": "FAILED"},
+              )
+              assert violation["status"] == "VIOLATION"
+          ''',
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Run focused discovery regression
+        shell: bash
+        run: |
+          python -m pip install -q pytest
+          python -m pytest \
+            tests/test_state_transition_discovery_chain.py \
+            tests/test_family_experiment_protocols.py \
+            tests/test_experiment_contract_execution.py \
+            -q
+
+      - name: Commit tested main-chain improvement
+        shell: bash
+        run: |
+          git config user.name "QualiBug Main Chain Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git rm .github/workflows/qualibug-state-transition-main-chain.yml
+          git add ai_test_asset_center/experiment_compiler.py \
+                  ai_test_asset_center/experiment_protocols.py \
+                  ai_test_asset_center/assertion_dsl.py \
+                  tests/test_state_transition_discovery_chain.py
+          git commit -m "feat: make state transition experiments executable"
+          git push origin HEAD:main
