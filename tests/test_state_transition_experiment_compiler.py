@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from ai_test_asset_center.assertion_dsl import evaluate_assertion
 from ai_test_asset_center.experiment_compiler import compile_experiment_for_obligation
+from ai_test_asset_center.runtime_binding_materializer import (
+    runtime_value_from_response,
+)
 
 
 def _state_ir() -> dict:
@@ -114,6 +117,15 @@ def test_state_transition_obligation_becomes_executable_experiment() -> None:
         for row in experiment["binding_plan"]
         if str(row.get("fixture_id") or "").startswith("entity_in_state:")
     ]
+    state_binding = next(
+        row
+        for row in experiment["binding_plan"]
+        if row.get("target") == "id"
+    )
+    assert state_binding["selection_semantics"] == "source_state_precondition"
+    assert state_binding["required_state"] == "PENDING_PAYMENT"
+    assert state_binding["target_path"].startswith("@state=pendingpayment@")
+
     observer_ids = {row["observer_id"] for row in experiment["observers"]}
     assert {"before_state", "after_state"} <= observer_ids
 
@@ -171,3 +183,32 @@ def test_state_transition_verdict_requires_the_documented_source_state() -> None
         },
     )
     assert violated["status"] == "VIOLATION"
+
+
+def test_state_binding_selects_entity_in_documented_source_state() -> None:
+    body = {
+        "data": [
+            {"id": "order-2", "status": "PAID"},
+            {"id": "order-1", "status": "PENDING_PAYMENT"},
+            {"id": "order-3", "status": "pending-payment"},
+        ]
+    }
+
+    assert runtime_value_from_response(
+        body,
+        "id",
+        "@state=pendingpayment@/orders/{id}/pay",
+    ) == "order-1"
+    assert runtime_value_from_response(
+        body,
+        "id",
+        "@state=cancelled@/orders/{id}/pay",
+    ) is None
+
+
+def test_non_state_runtime_binding_behavior_remains_unchanged() -> None:
+    assert runtime_value_from_response(
+        {"id": "order-9"},
+        "id",
+        "/orders/{id}",
+    ) == "order-9"
