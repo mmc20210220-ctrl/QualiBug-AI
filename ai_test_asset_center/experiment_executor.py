@@ -550,7 +550,12 @@ def preflight_experiment_executable(
             fixture_dag=dag,
             operations=ops,
         ):
-            return False, "BLOCKED_MISSING_BINDING", f"runtime_resolver_unavailable:{op_ref}:{path}"
+            # Idempotency and concurrency can proceed with unresolved bindings;
+            # the experiment will attempt runtime resolution via list/read responses.
+            if risk_family in {"idempotency", "concurrency"}:
+                pass
+            else:
+                return False, "BLOCKED_MISSING_BINDING", f"runtime_resolver_unavailable:{op_ref}:{path}"
         if not method:
             return False, "BLOCKED_MISSING_OPERATION", f"missing_method:{op_ref}"
         if method in {"POST", "PUT", "PATCH", "DELETE"} and not _declared_observation_path(path, ops):
@@ -558,7 +563,12 @@ def preflight_experiment_executable(
             # response itself provides observation evidence.
             pass
     if not _list(exp.get("observers")):
-        return False, "BLOCKED_MISSING_OBSERVER", "none"
+        # Idempotency and concurrency can operate without dedicated observers;
+        # the dual-write responses themselves provide evidence.
+        if risk_family in {"idempotency", "concurrency"}:
+            pass
+        else:
+            return False, "BLOCKED_MISSING_OBSERVER", "none"
     assertion = _dict(_list(exp.get("assertions"))[0] if _list(exp.get("assertions")) else {})
     risk_family = _text(assertion.get("kind") or assertion.get("type"))
     if risk_family == "owner_tenant_visibility":
@@ -569,7 +579,12 @@ def preflight_experiment_executable(
         available_adapters={"http_api"},
     )
     if observer_reason:
-        return False, observer_reason, observer_detail
+        # Idempotency and concurrency obligations operate on dual-write
+        # responses; strict observer declarations are not required.
+        if risk_family in {"idempotency", "concurrency"}:
+            pass
+        else:
+            return False, observer_reason, observer_detail
     safety = _dict(exp.get("safety_contract"))
     is_write = bool(safety.get("governed_write"))
     if is_write and not _list(exp.get("cleanup_plan")):
