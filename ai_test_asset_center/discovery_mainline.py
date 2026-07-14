@@ -78,10 +78,9 @@ def run_discovery_mainline(
     *,
     build_campaign: CampaignBuilder,
     build_plan: PlanBuilder,
-    legacy_runner: MainlineRunner,
     experiment_runner: MainlineRunner,
 ) -> dict[str, Any]:
-    """Build campaign, plan once, then invoke exactly one authority runner."""
+    """Build campaign, plan once, then invoke the experiment runner."""
 
     if not isinstance(inputs, DiscoveryMainlineInputs):
         raise MainlineContractError("mainline_inputs_invalid")
@@ -98,11 +97,6 @@ def run_discovery_mainline(
     if contract["mainline_authority"] != input_authority:
         raise MainlineContractError("mainline_input_authority_mismatch")
 
-    runner = (
-        legacy_runner
-        if contract["mainline_authority"] == "legacy_champion"
-        else experiment_runner
-    )
-    result = runner(inputs, campaign, plan)
+    result = experiment_runner(inputs, campaign, plan)
     assert_result_matches_authority(result, contract)
     return result

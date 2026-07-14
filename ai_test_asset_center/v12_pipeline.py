@@ -2893,7 +2893,6 @@ def run_v12_pipeline(
         inputs,
         build_campaign=_build_mainline_campaign,
         build_plan=build_discovery_plan,
-        legacy_runner=_run_legacy_champion,
         experiment_runner=run_experiment_candidate,
     )
 
