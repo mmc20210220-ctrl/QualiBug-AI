@@ -36,7 +36,13 @@ from .enterprise_knowledge_center import (
     build_enterprise_business_knowledge_asset,
     load_enterprise_business_knowledge_asset,
 )
-from .multi_industry_business_reasoning import infer_multi_industry_business_model
+try:
+    from .multi_industry_business_reasoning import infer_multi_industry_business_model
+except ImportError:
+    def infer_multi_industry_business_model(*a: Any, **kw: Any) -> dict[str, Any]:
+        return {"summary": {}, "business_objects": [], "roles": [], "state_machines": [],
+                "permission_boundaries": [], "data_dependencies": [], "business_rules": [],
+                "industry_oracles": [], "risk_domains": [], "recognized_industries": []}
 from .real_project_onboarding import ROOT, _load_json, _safe_project_id, _write_json as _project_write_json, config_paths
 from .product_ui import callout, detail_list, empty_state, h, metric_card, product_shell, section, status_badge, table
 

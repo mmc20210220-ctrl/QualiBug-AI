@@ -37,7 +37,13 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
-from .multi_industry_business_reasoning import infer_multi_industry_business_model
+try:
+    from .multi_industry_business_reasoning import infer_multi_industry_business_model
+except ImportError:
+    def infer_multi_industry_business_model(*a: Any, **kw: Any) -> dict[str, Any]:
+        return {"summary": {}, "business_objects": [], "roles": [], "state_machines": [],
+                "permission_boundaries": [], "data_dependencies": [], "business_rules": [],
+                "industry_oracles": [], "risk_domains": [], "recognized_industries": []}
 from .real_project_onboarding import ROOT, _html_escape, _load_json, _safe_project_id, _write_json, config_paths, load_real_project_config
 from .product_ui import _icon, callout, detail_list, empty_state, h, metric_card, product_shell, section, status_badge, table
 

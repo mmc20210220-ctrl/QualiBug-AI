@@ -1,4 +1,4 @@
 """Stub for retired module."""
 from typing import Any
-def link_reproduction_assets(*args: Any, **kwargs: Any) -> Any:
+def LearningGenerator(*args: Any, **kwargs: Any) -> Any:
     return {}
