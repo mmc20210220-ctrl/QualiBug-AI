@@ -88,6 +88,8 @@ from .pipeline_runtime import *  # noqa: F401,F403
 from .pipeline_db import *  # noqa: F401,F403
 # Canonical parameter fuzzer extracted to pipeline_fuzzer.py
 from .pipeline_fuzzer import *  # noqa: F401,F403
+# Canonical slice management extracted to pipeline_slices.py
+from .pipeline_slices import *  # noqa: F401,F403
 
 
 def _auth_value_present(value: Any) -> bool:
