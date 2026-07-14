@@ -667,7 +667,9 @@ def compile_experiment_for_obligation(
             "non_production_required": True,
             "governed_write": is_write,
         },
-        source_refs=list(obl.get("source_refs") or [])[:5],
+        source_refs=list(obl.get("source_refs") or [])[:5] or [
+            {"id": oid, "type": "obligation", "locator": primary_op_id or ""}
+        ],
         compile_receipt={
             "status": "COMPILED",
             "reason_code": "",
