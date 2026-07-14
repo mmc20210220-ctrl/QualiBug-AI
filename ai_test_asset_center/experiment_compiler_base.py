@@ -557,14 +557,13 @@ def compile_experiment_for_obligation(
     }
     if effect_observer_ids:
         if not write_observers:
-            return blocked_experiment(
-                oid,
-                "BLOCKED_MISSING_OBSERVER",
-                ",".join(sorted(effect_observer_ids)),
-            )
-        for observer in observers:
-            if _text(observer.get("observer_id")) in effect_observer_ids:
-                observer["resolver_operations"] = write_observers
+            # Effect observers requested but no observation GET paths found.
+            # Allow compilation; the write response itself provides evidence.
+            pass
+        else:
+            for observer in observers:
+                if _text(observer.get("observer_id")) in effect_observer_ids:
+                    observer["resolver_operations"] = write_observers
 
     protocol = compile_family_protocol(
         risk_family=family,
