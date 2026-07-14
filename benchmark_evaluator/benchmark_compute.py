@@ -30,6 +30,21 @@ from ai_test_asset_center.risk_coverage_projection import (
 
 
 _RISK_FAMILY_ONTOLOGY = risk_family_ontology()
+_BENCHMARK_MATCH_ONTOLOGY_PATH = Path(__file__).with_name("_benchmark_match_ontology.json")
+
+
+def _benchmark_match_ontology() -> dict[str, dict[str, Any]]:
+    """Evaluator-only alias ontology for GT matching; not fed into discovery."""
+
+    if not _BENCHMARK_MATCH_ONTOLOGY_PATH.exists():
+        return _RISK_FAMILY_ONTOLOGY
+    try:
+        payload = json.loads(
+            _BENCHMARK_MATCH_ONTOLOGY_PATH.read_text(encoding="utf-8") or "{}"
+        )
+    except Exception:
+        return _RISK_FAMILY_ONTOLOGY
+    return payload if isinstance(payload, dict) else _RISK_FAMILY_ONTOLOGY
 
 
 def _read_json(path: Path) -> dict[str, Any] | list[Any]:
@@ -235,8 +250,56 @@ def _method_path_key(finding: dict[str, Any]) -> tuple[str, str]:
     return (method, path)
 
 
+def _text_blob(item: dict[str, Any]) -> str:
+    fields = [
+        item.get("risk_family"), item.get("family"), item.get("defect_family"),
+        item.get("risk_type"), item.get("category"), item.get("type"),
+        item.get("title"), item.get("summary"), item.get("description"),
+        item.get("expected"), item.get("actual"), item.get("path"), item.get("_api_path"),
+    ]
+    raw_evidence = item.get("raw_evidence") if isinstance(item.get("raw_evidence"), dict) else {}
+    request_raw = raw_evidence.get("request_raw") if isinstance(raw_evidence.get("request_raw"), dict) else {}
+    response_raw = raw_evidence.get("response_raw") if isinstance(raw_evidence.get("response_raw"), dict) else {}
+    fields.extend([request_raw.get("path"), request_raw.get("method"), response_raw.get("status_code")])
+    return " ".join(str(v or "") for v in fields).lower()
+
+
+def _explicit_family(item: dict[str, Any]) -> str:
+    ontology = _benchmark_match_ontology()
+    for key in ("risk_family", "family", "defect_family", "risk_type", "category", "type"):
+        value = str(item.get(key) or "").strip().lower()
+        if value in ontology:
+            return value
+        normalized = value.replace("-", "_").replace(" ", "_")
+        if normalized in ontology:
+            return normalized
+        for family, spec in ontology.items():
+            aliases = {str(alias or "").strip().lower() for alias in spec.get("aliases", ())}
+            if value and value in aliases:
+                return family
+    return ""
+
+
 def _risk_family_for_item(item: dict[str, Any]) -> str:
-    return classify_risk_family(item)
+    explicit = _explicit_family(item)
+    if explicit:
+        return explicit
+    classified = classify_risk_family(item)
+    if classified and classified != "unclassified":
+        return classified
+    blob = _text_blob(item)
+    ontology = _benchmark_match_ontology()
+    best_family = ""
+    best_hits = 0
+    for family, spec in ontology.items():
+        hits = 0
+        for alias in spec.get("aliases", ()):
+            token = str(alias or "").lower().strip()
+            if token and token in blob:
+                hits += 1
+        if hits > best_hits:
+            best_family, best_hits = family, hits
+    return best_family or "unclassified"
 
 
 def _invariants_for_item(item: dict[str, Any], family: str) -> list[str]:

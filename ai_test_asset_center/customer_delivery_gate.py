@@ -13,6 +13,9 @@ import hashlib
 import json
 from typing import Any
 
+LEGACY_CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA = (
+    "qualibug.customer-delivery-gate-receipt.v1"
+)
 CUSTOMER_READY_MIN_EVIDENCE_SCORE = 90
 _ALLOWED_FINAL_REVIEW_STATUSES = {"PENDING_REVIEW", "VALIDATED_CANDIDATE", "CUSTOMER_READY"}
 _BLOCKED_LANE_MARKERS = {
@@ -358,6 +361,9 @@ def governed_cleanup_rejection_reasons(item: dict[str, Any]) -> list[str]:
     explicit_read_only = execution_semantics in {
         "read_only", "safe_read_only", "query_only",
     }
+    # GET/HEAD are inherently read-only and never require cleanup
+    if method in {"GET", "HEAD"}:
+        return []
     auth_step = path.endswith("/login") or "/auth/login" in path or path.rstrip("/").endswith("/auth")
     validated_runtime_db_write = has_validated_runtime_db_write_evidence(item)
     if not cleanup:
@@ -493,7 +499,7 @@ def build_customer_delivery_gate_receipt(
         raise ValueError("delivery gate cost coverage status is invalid")
     status = "REJECTED" if reasons else "DELIVERABLE"
     payload: dict[str, Any] = {
-        "schema_version": "qualibug.customer-delivery-gate-receipt.v1",
+        "schema_version": LEGACY_CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA,
         "obligation_id": resolved_obligation_id,
         "execution_id": resolved_execution_id,
         "status": status,
@@ -606,16 +612,26 @@ def apply_governed_campaign_cleanup(
             continue
         row = copy.deepcopy(item)
         gate = _dict(row.get("delivery_gate_receipt"))
-        if gate.get("schema_version") == CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA:
+        gate_schema = _text(gate.get("schema_version"))
+        gate_status = _text(gate.get("status")).upper()
+        if gate_schema == CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA:
             try:
                 validated = validate_customer_delivery_gate_receipt_v2(
                     gate,
-                    finding=row if gate.get("status") == "DELIVERABLE" else None,
+                    finding=row if gate_status == "DELIVERABLE" else None,
                 )
             except DeliveryGateV2Error as exc:
                 raise ValueError(f"campaign cleanup found invalid gate receipt: {exc}") from exc
             if validated.get("status") == "DELIVERABLE":
                 defects.append(row)
                 continue
+        elif (
+            gate_schema == LEGACY_CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
+            and gate_status == "DELIVERABLE"
+        ):
+            # Legacy champion emits v1 gate receipts. Post-run target reset must
+            # not demote a frozen DELIVERABLE terminal into clues.
+            defects.append(row)
+            continue
         clues.append(row)
     return defects, clues

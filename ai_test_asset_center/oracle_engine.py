@@ -647,10 +647,16 @@ class StateOracle(BaseOracle):
                         source_proven = True
                         break
             if not source_proven:
-                trace.setdefault("precondition_not_met", []).append({
+                # Evaluation-time proof gap only. Never poison the shared
+                # executor ``precondition_not_met`` channel — that field is
+                # reserved for runtime fixture/bind failures and would wrongly
+                # demote unrelated L1 HttpStatusOracle (server_5xx) findings.
+                trace.setdefault("oracle_evidence_gaps", []).append({
+                    "code": "STATE_TRANSITION_SOURCE_NOT_PROVEN",
                     "required_source_state": source_state or "UNDECLARED",
                     "target_identity_sample": sorted(target_identities)[:3],
                     "reason": "source_state_identity_not_proven",
+                    "operator_action": "bind_source_state_observer_before_transition",
                 })
                 return OracleResult(True, "StateOracle", "L3")
 
@@ -850,9 +856,32 @@ class PermissionOracle(BaseOracle):
             resp = s.get("response", {}) if isinstance(s, dict) else {}
             status = resp.get("status_code", 0) if isinstance(resp, dict) else s.get("status", 0)
             expected = s.get("expected_status", 200)
-            if expected in (401, 403) and 200 <= int(status or 0) < 300:
-                return OracleResult(False, "PermissionOracle", "L4", "unauthorized_access",
-                    f"应返回{expected}", f"HTTP {status}", "P0", 0.95, f"权限绕过: {s.get('action','?')}")
+            if not (expected in (401, 403) and 200 <= int(status or 0) < 300):
+                continue
+            # Guard: empty/null body on a 200 is not a permission bypass.
+            # A GET returning 200 with [] or {"items":[]} means "no data for you",
+            # which is correct authorization behavior.
+            body = resp.get("body") if isinstance(resp, dict) else None
+            if body is None:
+                continue
+            if isinstance(body, (list, dict)) and len(body) == 0:
+                continue
+            if isinstance(body, dict) and all(
+                isinstance(v, (list, dict)) and len(v) == 0
+                for v in body.values()
+            ):
+                continue
+            # Guard: the step must have authentication evidence (token/cookie).
+            # Unauthenticated requests returning 200 are configuration issues,
+            # not permission bypass.
+            auth_evidence = (
+                s.get("auth_used")
+                or (s.get("headers", {}) if isinstance(s.get("headers"), dict) else {}).get("Authorization")
+            )
+            if not auth_evidence:
+                continue
+            return OracleResult(False, "PermissionOracle", "L4", "unauthorized_access",
+                f"应返回{expected}", f"HTTP {status}", "P0", 0.95, f"权限绕过: {s.get('action','?')}")
         return OracleResult(True, "PermissionOracle", "L4")
 
 
@@ -897,13 +926,95 @@ class TenantIsolationOracle(BaseOracle):
     trigger_keywords = ["多租户", "租户", "隔离", "tenant", "isolation", "SaaS"]
 
     def evaluate(self, scenario, trace, snapshots=None):
-        steps = trace.get("steps", [])
+        steps = trace.get("steps", []) if isinstance(trace, dict) else []
+        scenario_signals = " ".join(
+            [
+                str(scenario.get("category") or ""),
+                str(scenario.get("behavior_slice_kind") or ""),
+                " ".join(str(item or "") for item in (scenario.get("oracle_rules") or [])),
+            ]
+        ).lower()
+        isolation_probe = "isolation" in scenario_signals or "tenantisolationoracle" in scenario_signals
+
+        owner_ids: set[str] = set()
         for s in steps:
+            if not isinstance(s, dict):
+                continue
+            action = str(s.get("action") or "").lower()
+            if not action.startswith("resolve_owner"):
+                continue
+            extracted = s.get("extracted") if isinstance(s.get("extracted"), dict) else {}
+            body = {}
+            resp = s.get("response") if isinstance(s.get("response"), dict) else {}
+            if isinstance(resp.get("body"), dict):
+                body = resp.get("body") or {}
+            for source in (extracted, body):
+                if not isinstance(source, dict):
+                    continue
+                for key in ("id", "userId", "user_id", "orderId", "order_id", "addressId", "address_id"):
+                    value = source.get(key)
+                    if value is not None and str(value).strip():
+                        owner_ids.add(str(value).strip())
+            # Collection responses may nest rows under common list keys.
+            for key in ("data", "items", "list", "results", "records", "rows"):
+                rows = body.get(key) if isinstance(body, dict) else None
+                if not isinstance(rows, list):
+                    continue
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    for field in ("id", "orderId", "order_id", "addressId", "address_id"):
+                        value = row.get(field)
+                        if value is not None and str(value).strip():
+                            owner_ids.add(str(value).strip())
+
+        for s in steps:
+            if not isinstance(s, dict) or _is_harness_support_step(s):
+                continue
             body = s.get("response", {}).get("body", {}) if isinstance(s.get("response"), dict) else {}
             if isinstance(body, dict):
                 if body.get("tenant_id") and scenario.get("actor_tenant") and body["tenant_id"] != scenario["actor_tenant"]:
                     return OracleResult(False, "TenantIsolationOracle", "L4", "cross_tenant_access",
                         "不应访问其他租户数据", f"tenant={body['tenant_id']}", "P0", 0.95)
+            if not isolation_probe:
+                continue
+            action = str(s.get("action") or "").lower()
+            if "isolation_probe" not in action:
+                continue
+            resp = s.get("response") if isinstance(s.get("response"), dict) else {}
+            status = int(resp.get("status_code") or s.get("status") or 0)
+            expected = int(s.get("expected_status") or 0)
+            if expected in (401, 403) and 200 <= status < 300:
+                # Guard: empty/null body on a 200 is not an isolation bypass.
+                # A GET returning 200 with [] or {"items":[]} means "no data for you".
+                resp_body = resp.get("body") if isinstance(resp, dict) else None
+                if resp_body is None:
+                    continue
+                if isinstance(resp_body, (list, dict)) and len(resp_body) == 0:
+                    continue
+                return OracleResult(
+                    False, "TenantIsolationOracle", "L4", "cross_user_access",
+                    f"应返回{expected}", f"HTTP {status}", "P0", 0.95,
+                    f"跨用户数据隔离绕过: {s.get('action', '?')}",
+                )
+            if expected == 200 and 200 <= status < 300 and owner_ids:
+                # Guard: use word-boundary match to avoid substring false positives.
+                # E.g., owner ID "123" should not match "uuid_12345_abc".
+                import re as _re
+                blob = str(resp.get("body") if resp else body)
+                leaked = sorted(
+                    owner_id for owner_id in owner_ids
+                    if owner_id and _re.search(
+                        r'(?:"|\')' + _re.escape(owner_id) + r'(?:"|\')', blob
+                    )
+                )
+                if leaked:
+                    return OracleResult(
+                        False, "TenantIsolationOracle", "L4", "cross_user_collection_leak",
+                        "列表响应不应包含其他用户的私有资源",
+                        f"leaked_ids={leaked[:5]}", "P0", 0.92,
+                        f"跨用户集合泄漏: {s.get('action', '?')}",
+                    )
         return OracleResult(True, "TenantIsolationOracle", "L4")
 
 
@@ -983,21 +1094,76 @@ class ConcurrencyOracle(BaseOracle):
     trigger_keywords = ["并发", "竞争", "race", "concurrency", "lock"]
 
     def evaluate(self, scenario, trace, snapshots=None):
-        if scenario.get("flags", {}).get("concurrent"):
-            successes = [s for s in trace.get("steps", []) if s.get("response", {}).get("status_code", 0) == 200]
-            if len(successes) >= 2:
-                if not _contract_activation_for_business_oracle(scenario):
-                    return OracleResult(
-                        False, "ConcurrencyOracle", "L5", "race_condition_heuristic",
-                        "并发操作应互斥", f"{len(successes)}次成功", "P2", 0.45,
-                        explanation="http_status_heuristic_insufficient_for_customer_delivery",
-                        oracle_tier="internal_clue",
-                        customer_deliverable=False,
-                        demotion_reason="heuristic_concurrency_without_contract_effect",
-                    )
-                return OracleResult(False, "ConcurrencyOracle", "L5", "race_condition",
-                    "并发操作应互斥", f"{len(successes)}次成功", "P0", 0.85)
-        return OracleResult(True, "ConcurrencyOracle", "L5")
+        if not scenario.get("flags", {}).get("concurrent"):
+            return OracleResult(True, "ConcurrencyOracle", "L5")
+
+        steps = trace.get("steps", [])
+        successes = [s for s in steps if s.get("response", {}).get("status_code", 0) == 200]
+        if len(successes) < 2:
+            return OracleResult(True, "ConcurrencyOracle", "L5")
+
+        # Guard: require barrier timeline evidence proving true concurrency.
+        # Without a barrier, sequential HTTP steps may return 200s without
+        # any race condition.  Two 200s alone are not concurrency evidence.
+        barrier_events = [
+            s for s in steps
+            if isinstance(s, dict)
+            and s.get("observer_kind") == "barrier_timeline"
+            and s.get("barrier_phase") in {"released", "completed"}
+        ]
+        if len(barrier_events) < 2:
+            # No barrier evidence → heuristic only, demote to internal clue
+            return OracleResult(
+                False, "ConcurrencyOracle", "L5", "race_condition_heuristic",
+                "并发操作应互斥", f"{len(successes)}次成功(无barrier证据)", "P2", 0.30,
+                explanation="no_barrier_timeline_evidence_for_concurrency",
+                oracle_tier="internal_clue",
+                customer_deliverable=False,
+                demotion_reason="heuristic_concurrency_without_barrier",
+            )
+
+        # Guard: require same-resource evidence. Concurrent operations on
+        # different resources succeeding is normal, not a race condition.
+        paths = list({str(s.get("path", "")) for s in successes if s.get("path")})
+        if len(paths) > 1:
+            return OracleResult(
+                False, "ConcurrencyOracle", "L5", "race_condition_heuristic",
+                "并发操作应互斥", f"{len(successes)}次成功(不同资源)", "P2", 0.35,
+                explanation="concurrent_success_on_different_resources",
+                oracle_tier="internal_clue",
+                customer_deliverable=False,
+                demotion_reason="heuristic_concurrency_different_resources",
+            )
+
+        # Guard: require conflicting outcome. Two concurrent operations that
+        # both succeed with the same result are idempotent, not a race.
+        bodies = [
+            str(s.get("response", {}).get("body", ""))
+            for s in successes
+            if isinstance(s.get("response"), dict)
+        ]
+        unique_bodies = list({b for b in bodies if b})
+        if len(unique_bodies) <= 1:
+            return OracleResult(
+                False, "ConcurrencyOracle", "L5", "race_condition_heuristic",
+                "并发操作应互斥", f"{len(successes)}次成功(结果一致)", "P2", 0.40,
+                explanation="concurrent_success_with_identical_outcome",
+                oracle_tier="internal_clue",
+                customer_deliverable=False,
+                demotion_reason="heuristic_concurrency_identical_outcome",
+            )
+
+        if not _contract_activation_for_business_oracle(scenario):
+            return OracleResult(
+                False, "ConcurrencyOracle", "L5", "race_condition_heuristic",
+                "并发操作应互斥", f"{len(successes)}次成功", "P2", 0.45,
+                explanation="http_status_heuristic_insufficient_for_customer_delivery",
+                oracle_tier="internal_clue",
+                customer_deliverable=False,
+                demotion_reason="heuristic_concurrency_without_contract_effect",
+            )
+        return OracleResult(False, "ConcurrencyOracle", "L5", "race_condition",
+            "并发操作应互斥", f"{len(successes)}次成功", "P0", 0.85)
 
 
 class PerformanceOracle(BaseOracle):

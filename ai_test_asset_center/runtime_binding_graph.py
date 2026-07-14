@@ -316,8 +316,11 @@ def _declared_reads_for_paths(
     behavior_ir: dict[str, Any],
     max_candidates: int = 2,
 ) -> list[dict[str, str]]:
+    def _normalize(p: str) -> str:
+        return normalize_path_placeholders(p).rstrip("/").lower()
+
     wanted = list(dict.fromkeys(
-        normalize_path_placeholders(path)
+        _normalize(path)
         for path in paths
         if _text(path).startswith("/")
     ))
@@ -327,21 +330,25 @@ def _declared_reads_for_paths(
         for operation in _list(_dict(behavior_ir).get("operations")):
             if not isinstance(operation, dict):
                 continue
-            declared_path = normalize_path_placeholders(
+            declared_path = _normalize(
                 _text(operation.get("path") or operation.get("raw_path"))
             )
             method = _text(operation.get("method")).upper()
             if (
                 declared_path != path
                 or method not in {"GET", "HEAD"}
-                or path_has_placeholders(declared_path)
+                or path_has_placeholders(normalize_path_placeholders(
+                    _text(operation.get("path") or operation.get("raw_path"))
+                ))
                 or not _text(operation.get("id"))
             ):
                 continue
             resolvers.append({
                 "operation_ref": _text(operation.get("id")),
                 "method": method,
-                "path": declared_path,
+                "path": normalize_path_placeholders(
+                    _text(operation.get("path") or operation.get("raw_path"))
+                ),
             })
             if len(resolvers) >= limit:
                 return resolvers
@@ -811,6 +818,8 @@ def build_binding_plan(
             "source_priority": "disposable_fixture_receipt",
             "value_fingerprint": "",
         })
+    # Enrich with cross-entity relation chains before returning
+    plan = enrich_binding_plan_with_relation_chain(plan, behavior_ir=behavior_ir)
     return plan
 
 
@@ -872,3 +881,169 @@ def unresolved_placeholders(operation: dict[str, Any], plan: list[dict[str, Any]
         )
     }
     return [name for name in needed if name not in bound]
+
+
+# ── Cross-entity relation chain resolver ─────────────────────────────────
+
+def _cross_entity_resolver_chain(
+    target_path: str,
+    *,
+    behavior_ir: dict[str, Any],
+    visited: set[str] | None = None,
+    depth: int = 0,
+) -> list[dict[str, Any]]:
+    """Build a multi-hop resolver chain by traversing Behavior IR relations.
+
+    When a path param like ``{orderId}`` cannot be resolved directly from the
+    target endpoint's ``GET /api/orders`` response, this function walks the
+    relation graph (``produces``, ``scopes``, ``owns``, ``consumes``) to find
+    parent entities whose collection list can supply the missing identity.
+
+    Returns a list of resolver steps, each with ``operation_ref``, ``path``,
+    and ``param`` fields.  The chain is ordered from outermost (first to
+    resolve) to innermost (the original target).
+    """
+    if visited is None:
+        visited = set()
+    if depth > 4:
+        return []
+
+    target_norm = normalize_path_placeholders(target_path).rstrip("/").lower()
+    if target_norm in visited:
+        return []
+    visited.add(target_norm)
+
+    # Find the entity node that maps to this collection path
+    entities = _list(_dict(behavior_ir).get("entities"))
+    target_entity = None
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        entity_paths = [
+            normalize_path_placeholders(_text(p)).rstrip("/").lower()
+            for p in (
+                [_text(entity.get("collection_path"))]
+                + _list(entity.get("alternate_paths"))
+            )
+            if _text(p)
+        ]
+        if target_norm in entity_paths:
+            target_entity = entity
+            break
+
+    if target_entity is None:
+        return []
+
+    target_entity_ref = _text(target_entity.get("id"))
+    chain: list[dict[str, Any]] = []
+
+    # Walk relations to find parent entities that scope/produce/own this one
+    relations = _list(_dict(behavior_ir).get("relations"))
+    parent_relations = [
+        rel for rel in relations
+        if isinstance(rel, dict)
+        and _text(rel.get("relation_type")) in {"produces", "scopes", "owns", "consumes"}
+        and _text(rel.get("to_ref")) == target_entity_ref
+    ]
+
+    for rel in parent_relations:
+        parent_ref = _text(rel.get("from_ref"))
+        # Find the parent entity
+        parent_entity = None
+        for entity in entities:
+            if isinstance(entity, dict) and _text(entity.get("id")) == parent_ref:
+                parent_entity = entity
+                break
+        if parent_entity is None:
+            continue
+
+        # Derive the parent's collection path
+        parent_collection = _text(parent_entity.get("collection_path"))
+        if not parent_collection:
+            parent_collection = _text(parent_entity.get("name")).lower()
+            if parent_collection:
+                parent_collection = "/api/" + parent_collection.replace(" ", "_") + "s"
+
+        # Recurse to resolve the parent's own dependencies first
+        parent_chain = _cross_entity_resolver_chain(
+            parent_collection,
+            behavior_ir=behavior_ir,
+            visited=visited,
+            depth=depth + 1,
+        )
+        chain.extend(parent_chain)
+
+        # Add a resolver step: list the parent collection to get IDs
+        parent_reads = _declared_reads_for_paths(
+            [parent_collection],
+            behavior_ir=behavior_ir,
+            max_candidates=1,
+        )
+        for parent_read in parent_reads:
+            chain.append({
+                "stage": "cross_entity_parent",
+                "depth": depth,
+                "relation_type": _text(rel.get("relation_type")),
+                "parent_entity_ref": parent_ref,
+                "child_entity_ref": target_entity_ref,
+                "operation_ref": parent_read["operation_ref"],
+                "method": parent_read["method"],
+                "path": parent_read["path"],
+                "bind_for": _text(rel.get("to_ref")),
+                "param": "id",
+            })
+            # Only take one parent resolver per depth level
+            break
+        break  # Only use the first viable parent relation
+
+    return chain
+
+
+def enrich_binding_plan_with_relation_chain(
+    plan: list[dict[str, Any]],
+    *,
+    behavior_ir: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Augment a binding plan with cross-entity resolver chains.
+
+    For each unresolved placeholder in the plan, attempts to build a relation-
+    based resolver chain and appends it as additional resolver operations.
+    """
+    if not plan:
+        return plan
+
+    enriched = list(plan)
+    for item in enriched:
+        if not isinstance(item, dict):
+            continue
+        if _text(item.get("status")) not in {"unresolved", "runtime_resolvable"}:
+            continue
+
+        target_path = normalize_path_placeholders(
+            _text(item.get("path") or item.get("target_path"))
+        )
+        if not target_path:
+            continue
+
+        chain = _cross_entity_resolver_chain(
+            target_path,
+            behavior_ir=behavior_ir,
+        )
+        if not chain:
+            continue
+
+        # Append chain steps as additional resolver operations
+        existing_resolvers = _list(item.get("resolver_operations"))
+        for step in chain:
+            existing_resolvers.append({
+                "operation_ref": step["operation_ref"],
+                "method": step.get("method", "GET"),
+                "path": step["path"],
+                "source": f"cross_entity_relation:{step.get('relation_type')}",
+            })
+        item["resolver_operations"] = existing_resolvers
+        item["cross_entity_chain"] = chain
+        if existing_resolvers:
+            item["status"] = "runtime_resolvable"
+
+    return enriched

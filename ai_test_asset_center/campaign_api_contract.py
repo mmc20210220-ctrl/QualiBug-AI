@@ -112,6 +112,30 @@ def _v12(scan_result: dict[str, Any]) -> dict[str, Any]:
     return _dict(scan_result.get("v12"))
 
 
+def _experiment_execution(scan_result: dict[str, Any]) -> dict[str, Any]:
+    return _dict(
+        scan_result.get("experiment_execution")
+        or _v12(scan_result).get("experiment_execution")
+    )
+
+
+def _trace_occurrence_ids(
+    projected: dict[str, Any],
+    occurrence_ids: list[str],
+) -> list[str]:
+    occurrence_set = {
+        _text(value) for value in occurrence_ids if _text(value)
+    }
+    trace_ids = sorted({
+        _text(item.get("finding_id"))
+        for item in build_identity_traces(projected)
+        if _text(item.get("finding_id")) in occurrence_set
+    })
+    if not trace_ids and occurrence_set:
+        return sorted(occurrence_set)
+    return trace_ids
+
+
 def _campaign(scan_result: dict[str, Any]) -> dict[str, Any]:
     return _dict(scan_result.get("campaign") or _v12(scan_result).get("campaign"))
 
@@ -120,7 +144,7 @@ def _campaign_status(scan_result: dict[str, Any]) -> str:
     campaign = _campaign(scan_result)
     raw = _text(campaign.get("campaign_status") or campaign.get("status")).lower()
     health = _text(_dict(scan_result.get("pipeline_health")).get("status")).upper()
-    execution = _dict(_v12(scan_result).get("experiment_execution"))
+    execution = _experiment_execution(scan_result)
     if health == "FAILED_SAFE":
         return "failed_safe"
     if health == "BLOCKED" or raw == "blocked":
@@ -135,7 +159,7 @@ def _campaign_status(scan_result: dict[str, Any]) -> str:
 
 
 def _execution_status(scan_result: dict[str, Any]) -> str:
-    execution = _dict(_v12(scan_result).get("experiment_execution"))
+    execution = _experiment_execution(scan_result)
     selected = int(execution.get("selected_count") or 0)
     executed = int(execution.get("executed_count") or 0)
     blocked = int(execution.get("blocked_count") or 0)
@@ -202,7 +226,7 @@ def load_created_campaign(root: Path, project_id: str, campaign_id: str) -> dict
 
 
 def _selected_experiments(scan_result: dict[str, Any]) -> list[dict[str, Any]]:
-    execution = _dict(_v12(scan_result).get("experiment_execution"))
+    execution = _experiment_execution(scan_result)
     rows: list[dict[str, Any]] = []
     for item in _list(execution.get("results")):
         if not isinstance(item, dict):
@@ -489,11 +513,7 @@ def build_campaign_view(root: Path, project_id: str, campaign_id: str = "") -> d
         )
         or []
     )
-    trace_occurrence_ids = sorted([
-        _text(item.get("finding_id"))
-        for item in traces
-        if _text(item.get("finding_id")) in set(occurrence_ids)
-    ])
+    trace_occurrence_ids = _trace_occurrence_ids(projected, occurrence_ids)
     defect_identity_consistency = _extend_projected_identity_consistency(
         projected,
         extra_occurrence_scopes={
@@ -675,11 +695,7 @@ def build_evaluation_submission(root: Path, project_id: str, body: dict[str, Any
         for item in delivery_occurrences
         if _text(item.get("finding_id") or item.get("id"))
     })
-    trace_occurrence_ids = sorted([
-        _text(item.get("finding_id"))
-        for item in build_identity_traces(projected)
-        if _text(item.get("finding_id")) in set(occurrence_ids)
-    ])
+    trace_occurrence_ids = _trace_occurrence_ids(projected, occurrence_ids)
     defect_identity_consistency = _extend_projected_identity_consistency(
         projected,
         extra_occurrence_scopes={

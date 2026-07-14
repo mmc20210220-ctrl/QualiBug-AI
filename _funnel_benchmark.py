@@ -414,21 +414,24 @@ from tools.normalize_evaluation_run_envelope import normalize_envelope
 
 _mainline_run = result.get("mainline_run") or v12.get("mainline_run")
 if not isinstance(_mainline_run, dict):
-    raise RuntimeError("benchmark_mainline_run_missing")
-_product_submission = build_evaluation_submission(
-    ROOT,
-    PROJECT,
-    {"evaluation_mode": str(_mainline_run.get("evaluation_mode") or "")},
-)
-evaluation_submission = normalize_envelope({
-    **_product_submission,
-    "pipeline_health": dict(_pipeline_health),
-    "operational_metrics": _ops_metrics,
-    "fixture_governance": {
-        "post_run_cleanup": _post_run_cleanup,
-        "post_run_cleanliness": _post_run_cleanliness,
-    },
-})
+    _err = ""
+    if isinstance(result, dict):
+        _err = str(result.get("error") or "")
+        print(
+            "MAINLINE_MISSING_DIAG:",
+            {
+                "result_keys": sorted(result.keys())[:40],
+                "success": result.get("success"),
+                "error": _err[:800],
+                "v12_type": type(v12).__name__,
+                "v12_keys": sorted(v12.keys())[:20] if isinstance(v12, dict) else [],
+            },
+            flush=True,
+        )
+    raise RuntimeError(f"benchmark_mainline_run_missing:{_err[:500]}")
+
+out_dir = ROOT / "_funnel_runs"
+out_dir.mkdir(exist_ok=True)
 
 _external = build_external_evaluation_projection(
     measurement_status="NOT_MEASURED",
@@ -467,11 +470,45 @@ summary = {
     "commercial_quality_score": result.get("commercial_quality_score"),
 }
 
-out_dir = ROOT / "_funnel_runs"
-out_dir.mkdir(exist_ok=True)
-# Never persist recoverable secrets in evaluator submissions or run dumps.
-write_json_redacted(out_dir / f"{MODE}.evaluation_submission.json", evaluation_submission)
+# Persist the scan envelope before the evaluation submission rebuild. A late
+# MemoryError must not erase a completed discovery run that already projected
+# formal counts — evaluator scoring can use this dump independently.
 write_json_redacted(out_dir / f"{MODE}.json", {"summary": summary, "full_result": result})
+
+import gc
+
+gc.collect()
+try:
+    _product_submission = build_evaluation_submission(
+        ROOT,
+        PROJECT,
+        {"evaluation_mode": str(_mainline_run.get("evaluation_mode") or "")},
+    )
+    evaluation_submission = normalize_envelope({
+        **_product_submission,
+        "pipeline_health": dict(_pipeline_health),
+        "operational_metrics": _ops_metrics,
+        "fixture_governance": {
+            "post_run_cleanup": _post_run_cleanup,
+            "post_run_cleanliness": _post_run_cleanliness,
+        },
+    })
+    # Never persist recoverable secrets in evaluator submissions or run dumps.
+    write_json_redacted(out_dir / f"{MODE}.evaluation_submission.json", evaluation_submission)
+except MemoryError:
+    summary["evaluation_submission_error"] = "MemoryError"
+    _external["submission_file"] = ""
+    _external["reason"] = "evaluation_submission_memory_error"
+    write_json_redacted(
+        out_dir / f"{MODE}.json",
+        {"summary": summary, "full_result": result},
+    )
+    print("EVALUATION_SUBMISSION: MemoryError (scan envelope already persisted)", flush=True)
+    print("=" * 70)
+    print(f"MODE={MODE}  elapsed={elapsed:.1f}s")
+    print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
+    print("=" * 70)
+    raise
 
 print("=" * 70)
 print(f"MODE={MODE}  elapsed={elapsed:.1f}s")

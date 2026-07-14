@@ -58,9 +58,35 @@ def _is_auth_endpoint(endpoint: dict[str, str]) -> bool:
 
 
 def _is_identity_mutation_endpoint(endpoint: dict[str, Any]) -> bool:
+    """True when a write can invalidate the probing actor's own session.
+
+    Admin status mutations and account-register creates remain valuable
+    authorization probes; they must not be blanket-skipped just because they
+    live under an auth path. Session/token invalidation and password reset of
+    the calling principal remain excluded without a documented compensation.
+    """
     method = str(endpoint.get("method") or "").upper()
+    if method not in _WRITE_METHODS or not _is_auth_endpoint(endpoint):
+        return False
     action = str(endpoint.get("action") or "").strip().lower()
-    return method in _WRITE_METHODS and _is_auth_endpoint(endpoint) and action not in {"login", "signin"}
+    path = str(endpoint.get("path") or "").strip().lower()
+    if action in {"login", "signin"}:
+        return False
+    # Privilege / lifecycle probes against other identities.
+    if action in {"register", "signup", "status"} or path.rstrip("/").endswith("/status"):
+        return False
+    session_tokens = (
+        "password",
+        "reset",
+        "refresh",
+        "logout",
+        "revoke",
+        "invalidate",
+        "session",
+        "token",
+    )
+    hay = f"{action} {path}"
+    return any(token in hay for token in session_tokens)
 
 
 _AUTH_ACCEPTANCE_KEY_TOKENS = (
@@ -604,6 +630,22 @@ def generate_isolation_slices(
         and str(endpoint.get("path") or "").startswith("/")
     ]
     ownership_markers = ("自己的", "本人", "归属", "own", "owner", "cross-user", "只能查询")
+    corpus_ownership_params: list[str] = []
+    seen_ownership_params: set[str] = set()
+    for endpoint in read_endpoints:
+        summary = str(endpoint.get("summary") or "")
+        if not any(marker in summary.lower() or marker in summary for marker in ownership_markers):
+            continue
+        for match in re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", summary):
+            if match not in _OWNERSHIP_QUERY_PARAMS and match.lower() not in {
+                p.lower() for p in _OWNERSHIP_QUERY_PARAMS
+            }:
+                continue
+            key = match.lower()
+            if key in seen_ownership_params:
+                continue
+            seen_ownership_params.add(key)
+            corpus_ownership_params.append(match)
     for role, role_actors in actors_by_role.items():
         if len(role_actors) < 2:
             continue
@@ -631,38 +673,74 @@ def generate_isolation_slices(
                 for match in re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", summary)
                 if match.lower().endswith("id") or match.lower().endswith("_id")
             ]
-            query_param = documented_params[0] if documented_params and not path_has_placeholders(path) else ""
-            if not path_has_placeholders(path) and not query_param:
-                continue
-            entity = str(endpoint.get("entity") or _path_entity(path))
-            slice_key = f"{path}?{query_param}" if query_param else path
-            row = {
-                "slice_id": behavior_slice_id("isolation", entity, role, slice_key),
-                "entity": entity,
-                "kind": "isolation",
-                "states": [],
-                "endpoints": [path],
-                "priority": 0.90,
-                "source_refs": [{"kind": "ownership_contract", "quote": summary[:240] or path}],
-                "evidence_gaps": [],
-                "_isolation_viewer_role": role,
-                "_isolation_viewer_email": viewer.get("email", ""),
-                "_isolation_viewer_password": viewer.get("password", ""),
-                "_isolation_owner_role": role,
-                "_isolation_owner_email": owner.get("email", ""),
-                "_isolation_owner_password": owner.get("password", ""),
-                "_isolation_path": path,
-                "_isolation_identity_path": identity_path,
-                "_isolation_oracle": "TenantIsolationOracle",
-                "_login_path": login_path,
-                "_login_body": dict(login_body or {}),
-            }
-            if query_param:
-                row["_isolation_mode"] = "query_param"
-                row["_isolation_query_param"] = query_param
-            slices.append(row)
-            if len(slices) >= max_slices:
-                return slices
+            # Prefer ownership query params already named in the endpoint summary.
+            ownership_docs = [
+                match
+                for match in documented_params
+                if match in _OWNERSHIP_QUERY_PARAMS or match.lower() in {p.lower() for p in _OWNERSHIP_QUERY_PARAMS}
+            ]
+            query_candidates: list[str] = []
+            if not path_has_placeholders(path):
+                if ownership_docs:
+                    query_candidates.append(ownership_docs[0])
+                elif documented_params:
+                    query_candidates.append(documented_params[0])
+                # Reuse ownership binders that the same API corpus already
+                # documents with ownership language (for other own-scoped
+                # collections). Do not invent binders absent from the catalog.
+                for param in corpus_ownership_params:
+                    if param not in query_candidates:
+                        query_candidates.append(param)
+            has_path_target = path_has_placeholders(path)
+            modes: list[tuple[str, str]] = []
+            if has_path_target:
+                modes.append(("path", ""))
+            for query_param in query_candidates:
+                modes.append(("query_param", query_param))
+            if not has_path_target and not query_candidates:
+                modes.append(("owned_collection", ""))
+            for mode, query_param in modes:
+                entity = str(endpoint.get("entity") or _path_entity(path))
+                slice_key = (
+                    f"{path}?{query_param}"
+                    if query_param
+                    else (f"{path}#owned_collection" if mode == "owned_collection" else path)
+                )
+                row = {
+                    "slice_id": behavior_slice_id("isolation", entity, role, slice_key),
+                    "entity": entity,
+                    "kind": "isolation",
+                    "states": [],
+                    "endpoints": [path],
+                    "priority": 0.90,
+                    "source_refs": [{"kind": "ownership_contract", "quote": summary[:240] or path}],
+                    "evidence_gaps": [],
+                    "_hypothesis_origin": "supplementary",
+                    "_isolation_viewer_role": role,
+                    "_isolation_viewer_email": viewer.get("email", ""),
+                    "_isolation_viewer_password": viewer.get("password", ""),
+                    "_isolation_owner_role": role,
+                    "_isolation_owner_email": owner.get("email", ""),
+                    "_isolation_owner_password": owner.get("password", ""),
+                    "_isolation_path": path,
+                    "_isolation_identity_path": identity_path,
+                    "_isolation_oracle": "TenantIsolationOracle",
+                    "_login_path": login_path,
+                    "_login_body": dict(login_body or {}),
+                }
+                if mode == "query_param" and query_param:
+                    row["_isolation_mode"] = "query_param"
+                    row["_isolation_query_param"] = query_param
+                    if not ownership_docs and query_param in corpus_ownership_params:
+                        row["source_refs"].append({
+                            "kind": "ownership_query_param_corpus",
+                            "quote": query_param,
+                        })
+                elif mode == "owned_collection":
+                    row["_isolation_mode"] = "owned_collection"
+                slices.append(row)
+                if len(slices) >= max_slices:
+                    return slices
     return slices
 
 

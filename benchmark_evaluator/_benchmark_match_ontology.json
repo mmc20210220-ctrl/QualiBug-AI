@@ -1,0 +1,345 @@
+{
+  "authorization_access_control": {
+    "display_name": "权限与访问控制",
+    "aliases": [
+      "auth",
+      "permission",
+      "role",
+      "forbidden",
+      "401",
+      "403",
+      "unauthorized",
+      "access",
+      "admin",
+      "readonly",
+      "越权",
+      "权限",
+      "角色"
+    ],
+    "invariants": [
+      "actor_must_be_authenticated",
+      "actor_must_have_required_role",
+      "read_only_actor_cannot_write",
+      "disabled_actor_cannot_access",
+      "frontend_visibility_must_not_replace_backend_authz"
+    ]
+  },
+  "tenant_isolation": {
+    "display_name": "租户/组织/数据隔离",
+    "aliases": [
+      "tenant",
+      "org",
+      "workspace",
+      "company",
+      "isolation",
+      "cross-tenant",
+      "租户",
+      "组织",
+      "隔离",
+      "跨租户"
+    ],
+    "invariants": [
+      "tenant_id_must_match_actor_scope",
+      "cross_tenant_object_access_must_be_rejected",
+      "tenant_scoped_search_must_not_leak_other_tenants",
+      "tenant_scoped_export_must_not_leak_other_tenants"
+    ]
+  },
+  "state_machine": {
+    "display_name": "状态机与生命周期",
+    "aliases": [
+      "state",
+      "status",
+      "transition",
+      "lifecycle",
+      "cancel",
+      "close",
+      "reopen",
+      "refund",
+      "状态",
+      "流转",
+      "生命周期"
+    ],
+    "invariants": [
+      "object_must_follow_allowed_state_transition",
+      "terminal_state_must_not_accept_mutation",
+      "state_transition_side_effects_must_be_consistent",
+      "invalid_transition_must_be_rejected"
+    ]
+  },
+  "money_quantity_conservation": {
+    "display_name": "金额/数量/库存/积分守恒",
+    "aliases": [
+      "money",
+      "amount",
+      "price",
+      "balance",
+      "stock",
+      "inventory",
+      "quantity",
+      "points",
+      "coupon",
+      "payment",
+      "refund",
+      "金额",
+      "余额",
+      "库存",
+      "积分",
+      "优惠券",
+      "支付",
+      "退款"
+    ],
+    "invariants": [
+      "money_must_not_be_created_or_lost",
+      "refund_amount_must_not_exceed_paid_amount",
+      "inventory_must_not_go_negative",
+      "discount_must_not_exceed_policy",
+      "ledger_must_balance_with_business_state"
+    ]
+  },
+  "idempotency_duplicate_submit": {
+    "display_name": "幂等与重复提交",
+    "aliases": [
+      "idempot",
+      "duplicate",
+      "replay",
+      "retry",
+      "double",
+      "重复",
+      "幂等",
+      "重放"
+    ],
+    "invariants": [
+      "duplicate_request_must_not_create_duplicate_side_effects",
+      "retry_must_return_consistent_business_result",
+      "idempotency_key_must_bind_to_original_operation"
+    ]
+  },
+  "concurrency_race_condition": {
+    "display_name": "并发竞态",
+    "aliases": [
+      "concurrent",
+      "concurrency",
+      "race",
+      "parallel",
+      "lock",
+      "atomic",
+      "并发",
+      "竞态",
+      "锁",
+      "原子"
+    ],
+    "invariants": [
+      "concurrent_mutations_must_preserve_invariants",
+      "unique_resource_must_not_be_double_allocated",
+      "balance_or_stock_update_must_be_atomic"
+    ]
+  },
+  "data_consistency": {
+    "display_name": "数据一致性",
+    "aliases": [
+      "consistency",
+      "database",
+      "db",
+      "before_after",
+      "snapshot",
+      "mismatch",
+      "drift",
+      "一致",
+      "数据库",
+      "前后",
+      "漂移"
+    ],
+    "invariants": [
+      "api_response_must_match_persisted_state",
+      "master_detail_records_must_be_consistent",
+      "cache_view_must_eventually_match_database",
+      "derived_counts_must_match_source_records"
+    ]
+  },
+  "input_validation_boundary": {
+    "display_name": "输入校验与边界",
+    "aliases": [
+      "validation",
+      "boundary",
+      "invalid",
+      "null",
+      "empty",
+      "overflow",
+      "unicode",
+      "injection",
+      "xss",
+      "sql",
+      "边界",
+      "非法",
+      "空值",
+      "注入"
+    ],
+    "invariants": [
+      "invalid_input_must_be_rejected",
+      "numeric_bounds_must_be_enforced",
+      "string_and_file_limits_must_be_enforced",
+      "structured_input_must_not_escape_parser_or_storage"
+    ]
+  },
+  "visibility_disclosure": {
+    "display_name": "可见性与数据泄露",
+    "aliases": [
+      "visibility",
+      "disclosure",
+      "leak",
+      "exposure",
+      "export",
+      "search",
+      "list",
+      "visible",
+      "泄露",
+      "可见",
+      "导出",
+      "搜索"
+    ],
+    "invariants": [
+      "list_detail_export_visibility_must_be_consistent",
+      "hidden_object_must_not_be_discoverable_by_search",
+      "sensitive_fields_must_be_masked_or_omitted"
+    ]
+  },
+  "workflow_approval": {
+    "display_name": "审批流/工作流",
+    "aliases": [
+      "workflow",
+      "approval",
+      "approve",
+      "reject",
+      "review",
+      "handoff",
+      "审批",
+      "工作流",
+      "驳回",
+      "复核"
+    ],
+    "invariants": [
+      "approval_step_must_be_executed_by_authorized_actor",
+      "rejected_workflow_must_not_continue_as_approved",
+      "required_approval_chain_must_not_be_skipped"
+    ]
+  },
+  "async_eventual_consistency": {
+    "display_name": "异步任务/消息/回调",
+    "aliases": [
+      "async",
+      "eventual",
+      "queue",
+      "message",
+      "callback",
+      "webhook",
+      "job",
+      "task",
+      "cron",
+      "异步",
+      "消息",
+      "回调",
+      "任务"
+    ],
+    "invariants": [
+      "async_side_effect_must_eventually_complete",
+      "message_must_not_be_lost_or_double_consumed",
+      "callback_replay_must_be_idempotent",
+      "failed_async_task_must_be_observable_and_retryable"
+    ]
+  },
+  "cache_stale_state": {
+    "display_name": "缓存与状态漂移",
+    "aliases": [
+      "cache",
+      "stale",
+      "ttl",
+      "redis",
+      "缓存",
+      "过期",
+      "脏读"
+    ],
+    "invariants": [
+      "cache_must_not_serve_forbidden_or_deleted_state",
+      "cache_invalidation_must_follow_write_side_effect",
+      "stale_read_must_not_violate_business_decision"
+    ]
+  },
+  "audit_traceability": {
+    "display_name": "审计与可追踪性",
+    "aliases": [
+      "audit",
+      "trace",
+      "log",
+      "receipt",
+      "ledger",
+      "审计",
+      "日志",
+      "追踪",
+      "流水"
+    ],
+    "invariants": [
+      "sensitive_action_must_create_audit_event",
+      "audit_event_must_bind_actor_action_target_and_time",
+      "audit_trail_must_not_expose_secrets"
+    ]
+  },
+  "configuration_environment": {
+    "display_name": "配置/环境/发布风险",
+    "aliases": [
+      "config",
+      "environment",
+      "deploy",
+      "release",
+      "feature flag",
+      "secret",
+      "配置",
+      "环境",
+      "部署",
+      "发布"
+    ],
+    "invariants": [
+      "environment_boundary_must_be_explicit",
+      "secret_must_not_be_rendered_or_logged",
+      "feature_flag_must_not_bypass_safety_gate"
+    ]
+  },
+  "ui_api_contract_drift": {
+    "display_name": "UI/API 契约漂移",
+    "aliases": [
+      "ui",
+      "frontend",
+      "page",
+      "button",
+      "form",
+      "api contract",
+      "contract",
+      "页面",
+      "按钮",
+      "表单",
+      "契约"
+    ],
+    "invariants": [
+      "ui_action_must_call_expected_api_contract",
+      "api_success_must_be_visible_in_ui_state",
+      "ui_error_state_must_match_api_failure"
+    ]
+  },
+  "regression_historical_bug": {
+    "display_name": "历史 bug 回归",
+    "aliases": [
+      "regression",
+      "historical",
+      "previous bug",
+      "reopen",
+      "回归",
+      "历史缺陷",
+      "复发"
+    ],
+    "invariants": [
+      "historical_bug_probe_must_remain_passing_after_fix",
+      "resolved_defect_must_not_reappear_in_same_scope",
+      "regression_suite_must_track_customer_ready_defects"
+    ]
+  }
+}

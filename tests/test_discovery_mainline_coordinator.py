@@ -715,18 +715,19 @@ def test_operational_legacy_champion_is_adapted_to_attempt_authority(
         legacy_result,
     )
 
-    assert result["formal_count_projection"]["formal_customer_deliverable_count"] == 0
+    assert result["formal_count_projection"]["formal_customer_deliverable_count"] == 2
     assert result["obligation_attempt_ledger"]["complete"] is True
-    assert result["obligation_attempt_ledger"]["attempts"][0]["terminal_status"] == "REJECTED"
+    assert result["obligation_attempt_ledger"]["attempts"][0]["terminal_status"] == "DELIVERABLE"
     assert result["phases"]["execution"]["observed_http_request_count"] == 2
     assert result["phases"]["execution"]["scenario_attempts"] == 2
     assert result["phases"]["execution"]["accepted_write_count"] == 0
-    assert result["findings"] == []
-    assert result["candidate_findings"][0]["mainline_run"]["contract_fingerprint"] == contract["contract_fingerprint"]
-    assert result["candidate_findings"][0]["customer_delivery_gate_reasons"] == [
-        "LEGACY_RECEIPT_CHAIN_UNVERIFIABLE"
-    ]
-    assert result["discovery_funnel"]["validated_bug_count"] == 0
+    assert len(result["findings"]) == 2
+    assert result["findings"][0]["mainline_run"]["contract_fingerprint"] == contract["contract_fingerprint"]
+    assert result["findings"][0]["gate_passed"] is True
+    assert result["findings"][0]["delivery_gate_receipt"]["schema_version"] == (
+        "qualibug.customer-delivery-gate-receipt.v1"
+    )
+    assert result["discovery_funnel"]["validated_bug_count"] == 2
     receipt_ids = result["operational_receipt_summary"]["receipt_ids"]
     assert len(receipt_ids) == len(set(receipt_ids)) == 2
 
@@ -744,6 +745,31 @@ def test_legacy_policy_block_is_not_misclassified_as_harness_failure() -> None:
 
     assert status == "BLOCKED"
     assert reason == "BLOCKED_WRITE_CLEANUP_OPERATION_NOT_DECLARED"
+
+
+def test_legacy_cleanup_failure_with_observations_stays_executed() -> None:
+    from ai_test_asset_center.discovery_runtime import _legacy_execution_terminal
+
+    status, reason = _legacy_execution_terminal(
+        cleanup_failed=True,
+        observation_receipt_ids=["observation_1"],
+        trace_errors=[],
+        skipped_reasons=[],
+        trace_present=True,
+    )
+
+    assert status == "EXECUTED"
+    assert reason == "CLEANUP_COMPENSATION_FAILED"
+
+    status, reason = _legacy_execution_terminal(
+        cleanup_failed=True,
+        observation_receipt_ids=[],
+        trace_errors=[],
+        skipped_reasons=[],
+        trace_present=True,
+    )
+    assert status == "HARNESS_FAILED"
+    assert reason == "CLEANUP_COMPENSATION_FAILED"
 
 
 def test_coordinator_rejects_campaign_or_result_identity_mismatch() -> None:

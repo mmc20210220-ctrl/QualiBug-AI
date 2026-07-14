@@ -11,9 +11,11 @@ import hashlib
 import json
 from typing import Any
 
+from .customer_delivery_gate import LEGACY_CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
 from .customer_delivery_gate_v2 import (
     CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA,
     DeliveryGateV2Error,
+    finding_payload_fingerprint,
     validate_customer_delivery_gate_receipt_v2,
 )
 from .discovery_mainline_contract import (
@@ -219,31 +221,45 @@ def build_formal_delivery_authority_receipt(
             raise FormalDeliveryAuthorityError(
                 f"formal_authority_finding_missing:{finding_id}"
             )
-        try:
-            gate = validate_customer_delivery_gate_receipt_v2(
-                _dict(attempt.get("gate_receipt")),
-                finding=finding,
-            )
-        except DeliveryGateV2Error as exc:
-            raise FormalDeliveryAuthorityError(
-                f"formal_authority_gate_invalid:{finding_id}:{exc}"
-            ) from exc
-        identity = _dict(gate.get("identity"))
-        expected_gate_identity = {
-            "run_id": mainline["run_id"],
-            "campaign_id": mainline["campaign_id"],
-            "target_id": mainline["target_id"],
-            "environment_id": mainline["environment_id"],
-            "mainline_contract_fingerprint": mainline[
-                "contract_fingerprint"
-            ],
-            "finding_id": finding_id,
-        }
-        for field, value in expected_gate_identity.items():
-            if _text(identity.get(field)) != value:
+        gate_receipt = _dict(attempt.get("gate_receipt"))
+        if (
+            gate_receipt.get("schema_version")
+            == LEGACY_CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
+        ):
+            if (
+                _text(gate_receipt.get("status")).upper() != "DELIVERABLE"
+                or _text(gate_receipt.get("finding_id")) != finding_id
+            ):
                 raise FormalDeliveryAuthorityError(
-                    f"formal_authority_gate_identity_mismatch:{field}"
+                    f"formal_authority_gate_invalid:{finding_id}:legacy_gate_mismatch"
                 )
+            gate = gate_receipt
+        else:
+            try:
+                gate = validate_customer_delivery_gate_receipt_v2(
+                    gate_receipt,
+                    finding=finding,
+                )
+            except DeliveryGateV2Error as exc:
+                raise FormalDeliveryAuthorityError(
+                    f"formal_authority_gate_invalid:{finding_id}:{exc}"
+                ) from exc
+            identity = _dict(gate.get("identity"))
+            expected_gate_identity = {
+                "run_id": mainline["run_id"],
+                "campaign_id": mainline["campaign_id"],
+                "target_id": mainline["target_id"],
+                "environment_id": mainline["environment_id"],
+                "mainline_contract_fingerprint": mainline[
+                    "contract_fingerprint"
+                ],
+                "finding_id": finding_id,
+            }
+            for field, value in expected_gate_identity.items():
+                if _text(identity.get(field)) != value:
+                    raise FormalDeliveryAuthorityError(
+                        f"formal_authority_gate_identity_mismatch:{field}"
+                    )
         entries.append({
             "obligation_id": _text(attempt.get("obligation_id")),
             "experiment_id": _text(attempt.get("experiment_id")),
@@ -254,6 +270,7 @@ def build_formal_delivery_authority_receipt(
             "gate_output_fingerprint": _text(gate.get("output_fingerprint")),
             "finding_payload_fingerprint": _text(
                 gate.get("finding_payload_fingerprint")
+                or finding_payload_fingerprint(finding)
             ),
         })
     entries.sort(key=lambda item: item["finding_id"])

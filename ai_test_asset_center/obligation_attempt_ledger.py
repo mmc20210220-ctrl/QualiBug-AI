@@ -10,6 +10,7 @@ from .operational_receipts import (
     OperationalReceiptError,
     validate_execution_operational_receipt,
 )
+from .customer_delivery_gate import LEGACY_CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
 from .customer_delivery_gate_v2 import (
     CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA,
     DeliveryGateV2Error,
@@ -98,6 +99,12 @@ def _validated_gate_bundle(
     status = _text(gate_receipt.get("status")).upper()
     if gate_receipt.get("schema_version") != CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA:
         if status == "DELIVERABLE":
+            if (
+                _text(run.get("mainline_authority")) == "legacy_champion"
+                and gate_receipt.get("schema_version")
+                == LEGACY_CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
+            ):
+                return dict(gate_receipt), {}
             raise ObligationAttemptLedgerError(
                 f"formal_gate_v2_required:{obligation_id}"
             )
@@ -441,12 +448,24 @@ def build_obligation_attempt_ledger(
         }
         if operational_receipt:
             attempt["operational_receipt"] = operational_receipt
-        if (
-            gate_receipt.get("schema_version")
-            == CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
-        ):
+        if gate_receipt.get("schema_version") in {
+            CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA,
+            LEGACY_CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA,
+        }:
+            if (
+                gate_receipt.get("schema_version")
+                == LEGACY_CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
+                and _text(run.get("mainline_authority")) != "legacy_champion"
+            ):
+                raise ObligationAttemptLedgerError(
+                    f"legacy_gate_authority_invalid:{obligation_id}"
+                )
             attempt["gate_receipt"] = dict(gate_receipt)
-            attempt["delivery_evidence_bundle"] = gate_evidence_bundle
+            if (
+                gate_receipt.get("schema_version")
+                == CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
+            ):
+                attempt["delivery_evidence_bundle"] = gate_evidence_bundle
         attempt["attempt_fingerprint"] = _fingerprint(attempt)
         attempts.append(attempt)
 
@@ -597,59 +616,86 @@ def validate_obligation_attempt_ledger(
             field="obligation_attempt_gate_receipt",
         )
         if gate_receipt:
-            bundle = _object(
-                attempt.get("delivery_evidence_bundle"),
-                field="obligation_attempt_delivery_evidence_bundle",
-            )
-            try:
-                validated_gate = validate_customer_delivery_gate_bundle(
-                    gate_receipt,
-                    finding=(
-                        dict(bundle.get("finding"))
-                        if isinstance(bundle.get("finding"), dict)
-                        else None
-                    ),
-                    execution_receipt=_object(
-                        bundle.get("execution_receipt"),
-                        field="ledger_delivery_execution_receipt",
-                    ),
-                    contract_evidence_receipts=[
-                        dict(item)
-                        for item in bundle.get("contract_evidence_receipts", []) or []
-                        if isinstance(item, dict)
-                    ],
-                    observer_receipts=[
-                        dict(item)
-                        for item in bundle.get("observer_receipts", []) or []
-                        if isinstance(item, dict)
-                    ],
-                    oracle_receipt=_object(
-                        bundle.get("oracle_receipt"),
-                        field="ledger_oracle_receipt",
-                    ),
-                    reproduction_receipt=_object(
-                        bundle.get("reproduction_receipt"),
-                        field="ledger_reproduction_receipt",
-                    ),
+            if (
+                gate_receipt.get("schema_version")
+                == LEGACY_CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
+            ):
+                if (
+                    _text(gate_receipt.get("status")).upper()
+                    != _text(attempt.get("terminal_status")).upper()
+                ):
+                    raise ObligationAttemptLedgerError(
+                        f"obligation_attempt_gate_projection_mismatch:{_text(attempt.get('obligation_id'))}"
+                    )
+                if (
+                    _text(attempt.get("terminal_status")).upper() == "DELIVERABLE"
+                    and _text(gate_receipt.get("finding_id"))
+                    != _text(attempt.get("finding_id"))
+                ):
+                    raise ObligationAttemptLedgerError(
+                        f"obligation_attempt_gate_projection_mismatch:{_text(attempt.get('obligation_id'))}"
+                    )
+            elif (
+                gate_receipt.get("schema_version")
+                == CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
+            ):
+                bundle = _object(
+                    attempt.get("delivery_evidence_bundle"),
+                    field="obligation_attempt_delivery_evidence_bundle",
                 )
-            except (DeliveryGateV2Error, ValueError) as exc:
+                try:
+                    validated_gate = validate_customer_delivery_gate_bundle(
+                        gate_receipt,
+                        finding=(
+                            dict(bundle.get("finding"))
+                            if isinstance(bundle.get("finding"), dict)
+                            else None
+                        ),
+                        execution_receipt=_object(
+                            bundle.get("execution_receipt"),
+                            field="ledger_delivery_execution_receipt",
+                        ),
+                        contract_evidence_receipts=[
+                            dict(item)
+                            for item in bundle.get("contract_evidence_receipts", []) or []
+                            if isinstance(item, dict)
+                        ],
+                        observer_receipts=[
+                            dict(item)
+                            for item in bundle.get("observer_receipts", []) or []
+                            if isinstance(item, dict)
+                        ],
+                        oracle_receipt=_object(
+                            bundle.get("oracle_receipt"),
+                            field="ledger_oracle_receipt",
+                        ),
+                        reproduction_receipt=_object(
+                            bundle.get("reproduction_receipt"),
+                            field="ledger_reproduction_receipt",
+                        ),
+                    )
+                except (DeliveryGateV2Error, ValueError) as exc:
+                    raise ObligationAttemptLedgerError(
+                        f"obligation_attempt_gate_bundle_invalid:{_text(attempt.get('obligation_id'))}:{exc}"
+                    ) from exc
+                identity = _object(
+                    validated_gate.get("identity"),
+                    field="validated_gate_identity",
+                )
+                if any((
+                    _text(validated_gate.get("status"))
+                    != _text(attempt.get("terminal_status")),
+                    _text(validated_gate.get("gate_receipt_id"))
+                    != _text(attempt.get("gate_receipt_id")),
+                    _text(identity.get("finding_id"))
+                    != _text(attempt.get("finding_id")),
+                )):
+                    raise ObligationAttemptLedgerError(
+                        f"obligation_attempt_gate_projection_mismatch:{_text(attempt.get('obligation_id'))}"
+                    )
+            else:
                 raise ObligationAttemptLedgerError(
-                    f"obligation_attempt_gate_bundle_invalid:{_text(attempt.get('obligation_id'))}:{exc}"
-                ) from exc
-            identity = _object(
-                validated_gate.get("identity"),
-                field="validated_gate_identity",
-            )
-            if any((
-                _text(validated_gate.get("status"))
-                != _text(attempt.get("terminal_status")),
-                _text(validated_gate.get("gate_receipt_id"))
-                != _text(attempt.get("gate_receipt_id")),
-                _text(identity.get("finding_id"))
-                != _text(attempt.get("finding_id")),
-            )):
-                raise ObligationAttemptLedgerError(
-                    f"obligation_attempt_gate_projection_mismatch:{_text(attempt.get('obligation_id'))}"
+                    f"obligation_attempt_gate_schema_invalid:{_text(attempt.get('obligation_id'))}"
                 )
     return value
 

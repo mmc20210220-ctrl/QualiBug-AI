@@ -454,41 +454,54 @@ def extract_first_entity_id(body: Any, param_name: str) -> str | None:
 
 
 def bind_entity_fields(body: Any, path: str = "") -> dict[str, str]:
-    """Extract a binding map from a list/detail response for path placeholders."""
+    """Extract a binding map from a list/detail response for path placeholders.
+
+    Scans ALL entity candidates (not just the first) to find matching fields.
+    When multiple entities match different params, bindings are merged.
+    """
     entities = _extract_entity_candidates(body)
-    source: dict[str, Any] = {}
-    if entities and isinstance(entities[0], dict):
-        source = entities[0]
-    elif isinstance(body, dict):
-        source = body
-    if not source:
+    if not entities and isinstance(body, dict):
+        entities = [body]
+    if not entities:
         return {}
     bindings: dict[str, str] = {}
     params = infer_path_params(path) or ["id"]
     has_multiple_path_identities = len(params) > 1
     generic_identity_fallbacks = {"id", "uuid", "pk", "code", "sku"}
-    for param in params:
-        for field_name in param_field_candidates(param):
-            if (
-                has_multiple_path_identities
-                and field_name.lower() in generic_identity_fallbacks
-                and param.lower() not in generic_identity_fallbacks
-            ):
+    unmatched_params = set(params)
+
+    # Scan all entities for each unmatched param
+    for param in list(unmatched_params):
+        for source in entities:
+            if not isinstance(source, dict):
                 continue
+            for field_name in param_field_candidates(param):
+                if (
+                    has_multiple_path_identities
+                    and field_name.lower() in generic_identity_fallbacks
+                    and param.lower() not in generic_identity_fallbacks
+                ):
+                    continue
+                value = source.get(field_name)
+                if value not in {None, ""}:
+                    text = str(value)
+                    bindings[param] = text
+                    bindings[field_name] = text
+                    if param.lower() in {"id", "sku", "code"} or field_name.lower() in {"id", "sku"}:
+                        bindings.setdefault("id", text)
+                    unmatched_params.discard(param)
+                    break
+            if param not in unmatched_params:
+                break
+
+    # Gather common identity fields from all entities
+    for source in entities:
+        if not isinstance(source, dict):
+            continue
+        for field_name in ("id", "sku", "code", "order_id", "orderId", "user_id", "userId"):
             value = source.get(field_name)
             if value not in {None, ""}:
-                text = str(value)
-                bindings[param] = text
-                bindings[field_name] = text
-                # Keep a generic id alias when the param is the primary key style.
-                if param.lower() in {"id", "sku", "code"} or field_name.lower() in {"id", "sku"}:
-                    bindings.setdefault("id", text)
-                break
-    # Also capture common identity fields even when not in the path.
-    for field_name in ("id", "sku", "code", "order_id", "orderId", "user_id", "userId"):
-        value = source.get(field_name)
-        if value not in {None, ""}:
-            bindings.setdefault(field_name, str(value))
+                bindings.setdefault(field_name, str(value))
     # When the response only exposes ``id`` but the path asks for a sibling
     # identity param (orderId, paymentId, …), mirror ``id`` onto that param
     # if ``id`` is an accepted candidate for it. Scoped to path params only —

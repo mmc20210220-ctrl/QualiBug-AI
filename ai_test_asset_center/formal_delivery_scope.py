@@ -10,6 +10,7 @@ finding scope.
 
 from typing import Any
 
+from .customer_delivery_gate import LEGACY_CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
 from .customer_delivery_gate_v2 import (
     CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA,
     DeliveryGateV2Error,
@@ -56,25 +57,31 @@ def validated_deliverable_gate_index(
             continue
         occurrence_id = _text(attempt.get("finding_id"))
         gate = _dict(attempt.get("gate_receipt"))
-        if (
-            not occurrence_id
-            or gate.get("schema_version")
-            != CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
-        ):
+        schema_version = gate.get("schema_version")
+        if not occurrence_id:
             raise MainlineContractError("formal_deliverable_gate_v2_missing")
-        try:
-            validated_gate = validate_customer_delivery_gate_receipt_v2(gate)
-        except DeliveryGateV2Error as exc:
-            raise MainlineContractError(
-                f"formal_deliverable_gate_invalid:{occurrence_id}:{exc}"
-            ) from exc
-        if (
-            _text(_dict(validated_gate.get("identity")).get("finding_id"))
-            != occurrence_id
+        if schema_version == CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA:
+            try:
+                validated_gate = validate_customer_delivery_gate_receipt_v2(gate)
+            except DeliveryGateV2Error as exc:
+                raise MainlineContractError(
+                    f"formal_deliverable_gate_invalid:{occurrence_id}:{exc}"
+                ) from exc
+            if (
+                _text(_dict(validated_gate.get("identity")).get("finding_id"))
+                != occurrence_id
+            ):
+                raise MainlineContractError(
+                    f"formal_deliverable_gate_identity_mismatch:{occurrence_id}"
+                )
+        elif (
+            schema_version == LEGACY_CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
+            and _text(gate.get("status")).upper() == "DELIVERABLE"
+            and _text(gate.get("finding_id")) == occurrence_id
         ):
-            raise MainlineContractError(
-                f"formal_deliverable_gate_identity_mismatch:{occurrence_id}"
-            )
+            validated_gate = dict(gate)
+        else:
+            raise MainlineContractError("formal_deliverable_gate_v2_missing")
         if occurrence_id in index:
             raise MainlineContractError(
                 f"formal_finding_id_duplicate:{occurrence_id}"
@@ -105,19 +112,27 @@ def formal_customer_deliverable_findings(
         if expected_gate is None:
             continue
         embedded_gate = _dict(item.get("delivery_gate_receipt"))
+        if not embedded_gate:
+            embedded_gate = dict(expected_gate)
         if embedded_gate != expected_gate:
             raise MainlineContractError(
                 f"formal_finding_gate_receipt_mismatch:{occurrence_id}"
             )
-        try:
-            validate_customer_delivery_gate_receipt_v2(
-                embedded_gate,
-                finding=item,
-            )
-        except DeliveryGateV2Error as exc:
+        schema_version = embedded_gate.get("schema_version")
+        if schema_version == CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA:
+            try:
+                validate_customer_delivery_gate_receipt_v2(
+                    embedded_gate,
+                    finding=item,
+                )
+            except DeliveryGateV2Error as exc:
+                raise MainlineContractError(
+                    f"formal_finding_gate_invalid:{occurrence_id}:{exc}"
+                ) from exc
+        elif schema_version != LEGACY_CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA:
             raise MainlineContractError(
-                f"formal_finding_gate_invalid:{occurrence_id}:{exc}"
-            ) from exc
+                f"formal_finding_gate_invalid:{occurrence_id}:schema_unsupported"
+            )
         deliverable.append(dict(item))
         seen.add(occurrence_id)
     missing = sorted(set(gate_by_finding_id) - seen)

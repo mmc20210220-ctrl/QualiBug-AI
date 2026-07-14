@@ -232,7 +232,12 @@ _SELECTION_KIND_RANK: dict[str, int] = {
 }
 
 _POOL_COLLAPSE_KINDS = frozenset({"permission", "isolation"})
-_POOL_PROTECTED_KINDS = frozenset({"account_status", "money", "concurrency", "inventory"})
+_POOL_PROTECTED_KINDS = frozenset({"account_status", "money", "concurrency", "inventory", "isolation"})
+# High-value supplementary kinds must not be starved when entity-diversity
+# fills the round budget with hundreds of distinct LLM/invariant entities.
+_SELECTION_RESERVED_KINDS = frozenset(
+    {"account_status", "money", "inventory", "concurrency", "isolation", "permission"}
+)
 _POOL_ORIGIN_KEEP_RANK: dict[str, int] = {
     "historical_bug": 0,
     "supplementary": 1,
@@ -1839,7 +1844,15 @@ def _entity_primary_slice_rank(item: dict[str, Any], index: int) -> tuple[int, i
     return (_selection_kind_rank(item), index)
 
 
-def _take_diverse_slice_batch(items: list[dict[str, Any]], budget: int) -> list[dict[str, Any]]:
+def _slice_is_selection_reserved(item: dict[str, Any]) -> bool:
+    kind = str(item.get("kind") or "").strip().lower()
+    if kind in _SELECTION_RESERVED_KINDS:
+        return True
+    return _slice_is_pool_protected(item)
+
+
+def _diverse_slice_batch_core(items: list[dict[str, Any]], budget: int) -> list[dict[str, Any]]:
+    """Entity/family diversity fill for an already-ordered candidate list."""
     if budget <= 0 or not items:
         return []
     selected: list[dict[str, Any]] = []
@@ -1894,6 +1907,26 @@ def _take_diverse_slice_batch(items: list[dict[str, Any]], budget: int) -> list[
         selected.append(item)
         if len(selected) >= budget:
             break
+    return selected
+
+
+def _take_diverse_slice_batch(items: list[dict[str, Any]], budget: int) -> list[dict[str, Any]]:
+    """Select a diverse batch, reserving high-value kinds before generic fill.
+
+    Isolation/permission/money probes are few and source-backed, but entity-first
+    diversity against hundreds of invariant entities previously exhausted the
+    round budget before those kinds were reached. Reserved kinds are drained
+    first (still with internal diversity), then the remainder of the budget is
+    filled from non-reserved candidates.
+    """
+    if budget <= 0 or not items:
+        return []
+    reserved = [item for item in items if isinstance(item, dict) and _slice_is_selection_reserved(item)]
+    remainder = [item for item in items if isinstance(item, dict) and not _slice_is_selection_reserved(item)]
+    selected = _diverse_slice_batch_core(reserved, budget)
+    remaining_budget = budget - len(selected)
+    if remaining_budget > 0 and remainder:
+        selected.extend(_diverse_slice_batch_core(remainder, remaining_budget))
     return selected
 
 
@@ -2386,6 +2419,12 @@ def _redacted_trace_path(value: Any) -> str:
 
 def _redacted_execution_error(value: Any) -> str:
     text = str(value or "").strip().lower()
+    if text.startswith("failed_after_retries:"):
+        nested = _governed_write_block_reason(text.split(":", 1)[1])
+        if nested:
+            return nested.split(":", 1)[0]
+    if "write_cleanup_operation_not_declared" in text:
+        return "write_cleanup_operation_not_declared"
     if "missing_runtime_path_binding" in text:
         return "missing_runtime_path_binding"
     if "precondition" in text:
@@ -2782,6 +2821,8 @@ def _run_legacy_champion(
     campaign_handle: Any,
     plan: Any,
 ) -> dict[str, Any]:
+    from pathlib import Path
+
     from .discovery_runtime import adapt_legacy_champion_result
 
     legacy = _run_legacy_champion_domain(
@@ -2795,12 +2836,31 @@ def _run_legacy_champion(
         campaign_context=dict(inputs.campaign_context),
         campaign_handle=campaign_handle,
     )
-    return adapt_legacy_champion_result(
-        inputs,
-        campaign_handle,
-        plan,
-        legacy,
-    )
+    try:
+        return adapt_legacy_champion_result(
+            inputs,
+            campaign_handle,
+            plan,
+            legacy,
+        )
+    except Exception as exc:
+        # Observable: domain may have already confirmed isolation findings while
+        # the common-authority adapter still fails. Persist the exact adapter
+        # failure so funnel benchmarks do not only surface the diluted
+        # "mainline_run_missing" wrapper symptom.
+        try:
+            root = Path(getattr(inputs, "root", "") or ".")
+            dump = root / "_funnel_runs" / "last_legacy_adapt_error.txt"
+            dump.parent.mkdir(parents=True, exist_ok=True)
+            import traceback
+
+            dump.write_text(
+                f"{type(exc).__name__}: {exc}\n\n{traceback.format_exc()}\n",
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+        raise
 
 
 def run_v12_pipeline(
@@ -3815,6 +3875,10 @@ def _run_legacy_champion_domain(project: str, root: Path, prd_text: str = "", ap
                         if slice_id and has_runtime_receipt:
                             attempted_slice_ids.add(slice_id)
                         for step in trace.get("steps", []):
+                            if not isinstance(step, dict):
+                                continue
+                            if _is_harness_support_step(step):
+                                continue
                             if int(step.get("status") or 0) >= 500:
                                 result["findings"].append({
                                     "severity": "P0",
@@ -4503,6 +4567,52 @@ def _materialize_disposable_identity_fixture_body(value: Any, nonce: str, prefix
     return materialize_disposable_identity_fields(value, nonce, prefix=prefix)
 
 
+def _governed_write_block_reason(value: Any) -> str:
+    """Normalize sandbox write-governance blocks raised via write_observer."""
+
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    normalized = text
+    if normalized.lower().startswith("runtimeerror:"):
+        normalized = normalized.split(":", 1)[1].strip()
+    for prefix in (
+        "write_cleanup_operation_not_declared",
+        "identity_mutation_requires_disposable_fixture",
+        "protected_runtime_identity_mutation_blocked",
+        "governed_write_blocked:",
+        "multi_write_executor_missing_per_write_governance_hook",
+        "invalid_governed_write_event:",
+        "DELETE_SAFETY_GUARD",
+    ):
+        if normalized == prefix or normalized.startswith(prefix):
+            return normalized.split("\n", 1)[0][:240]
+    return ""
+
+
+def _append_blocked_write_step(
+    trace: dict[str, Any],
+    *,
+    action_name: str,
+    method: str,
+    path: str,
+    body: Any,
+    reason: str,
+) -> None:
+    trace.setdefault("errors", []).append(reason)
+    trace["steps"].append({
+        "action": action_name,
+        "method": method,
+        "path": path,
+        "status": 0,
+        "request": {"body": _redact(body)} if body else {},
+        "response": {"status_code": 0, "headers": {}, "body": {"error": reason}},
+        "expected_status": 0,
+        "skipped_reason": reason,
+        "execution_blocked": True,
+    })
+
+
 def __execute_scenario_once(
     scenario: Any,
     base_url: str,
@@ -4742,16 +4852,30 @@ def __execute_scenario_once(
             headers["Authorization"] = f"Bearer {token}"
         write_event_id: Any = None
         if method in {"POST", "PUT", "PATCH", "DELETE"} and action_name != "login" and write_observer is not None:
-            write_event_id = write_observer(
-                "before",
-                {
-                    "action": action_name,
-                    "method": method,
-                    "path": path,
-                    "body": body,
-                    "token": token,
-                },
-            )
+            try:
+                write_event_id = write_observer(
+                    "before",
+                    {
+                        "action": action_name,
+                        "method": method,
+                        "path": path,
+                        "body": body,
+                        "token": token,
+                    },
+                )
+            except RuntimeError as exc:
+                block_reason = _governed_write_block_reason(exc)
+                if not block_reason:
+                    raise
+                _append_blocked_write_step(
+                    trace,
+                    action_name=action_name,
+                    method=method,
+                    path=path,
+                    body=body,
+                    reason=block_reason,
+                )
+                break
         started = time.time()
         resolve_attempt_paths = (
             _resolve_get_candidates(path)
@@ -4900,18 +5024,24 @@ def __execute_scenario_once(
         if not har_recorded:
             _record_v12_har(method, url, status, _redact(response_body), actor, (time.time() - started) * 1000)
         if write_event_id is not None and write_observer is not None:
-            write_observer(
-                "after",
-                {
-                    "event_id": write_event_id,
-                    "action": action_name,
-                    "method": method,
-                    "path": path,
-                    "status": status,
-                    "response_body": response_body,
-                    "token": token,
-                },
-            )
+            try:
+                write_observer(
+                    "after",
+                    {
+                        "event_id": write_event_id,
+                        "action": action_name,
+                        "method": method,
+                        "path": path,
+                        "status": status,
+                        "response_body": response_body,
+                        "token": token,
+                    },
+                )
+            except RuntimeError as exc:
+                block_reason = _governed_write_block_reason(exc)
+                if not block_reason:
+                    raise
+                trace.setdefault("errors", []).append(block_reason)
         for field in getattr(step, "extract_from_response", []) or []:
             value = _extract(response_body, str(field))
             if value not in (None, "", [], {}):
@@ -5731,6 +5861,37 @@ def _semantic_v12_description(
     return "\n".join(lines)
 
 
+def _trace_errors_block_runtime_confirmation(trace: dict[str, Any]) -> bool:
+    """Return True when trace errors should block customer delivery confirmation."""
+
+    errors = [
+        str(value or "").strip()
+        for value in (trace.get("errors") if isinstance(trace.get("errors"), list) else [])
+        if str(value or "").strip()
+    ]
+    if not errors:
+        return False
+    non_blocking_prefixes = (
+        "missing_runtime_path_binding",
+        "missing_runtime_body_binding",
+        "invalid_source_bound_step",
+        "write_cleanup_operation_not_declared",
+    )
+    if all(
+        any(error.startswith(prefix) for prefix in non_blocking_prefixes)
+        for error in errors
+    ):
+        return False
+    steps = [
+        step
+        for step in (trace.get("steps") if isinstance(trace.get("steps"), list) else [])
+        if isinstance(step, dict)
+    ]
+    if any(int(step.get("status") or 0) > 0 for step in steps):
+        return False
+    return True
+
+
 def _confirmed_oracle_finding(
     scenario: Any,
     trace: dict[str, Any],
@@ -5793,11 +5954,23 @@ def _confirmed_oracle_finding(
         evidence_strength = "runtime_before_after"
     elif db_captured:
         evidence_strength = "db"
+    # L1 protocol crashes (HTTP 5xx on the target step) are confirmed from the
+    # response itself. State-precondition bookskeeping belonging to other oracles
+    # must not demote a real server error into a candidate.
+    violated_rule = str(getattr(oracle_result, "violated_rule", "") or "").strip().lower()
+    oracle_name = str(getattr(oracle_result, "oracle_name", "") or "").strip()
+    server_protocol_crash = (
+        oracle_name == "HttpStatusOracle"
+        and violated_rule == "server_5xx"
+        and status >= 500
+    )
     runtime_confirmable = (
         _scenario_executable(scenario)
         and bool(method and path and status)
         and bool(reproduction_steps)
-        and not (trace.get("errors") if isinstance(trace, dict) else [])
+        and not _trace_errors_block_runtime_confirmation(
+            trace if isinstance(trace, dict) else {}
+        )
         and bool(getattr(evidence, "vote_summary", {}).get("confirmation_threshold_met"))
         # A path that still carries an unresolved {param}/:param placeholder means
         # the probe never bound a real entity id — the request was malformed, so a
@@ -5806,7 +5979,12 @@ def _confirmed_oracle_finding(
         # A declared state precondition (e.g. status=PAID) that could not be
         # satisfied at runtime means the tested transition was never actually
         # exercised from the claimed state — do not confirm on fabricated state.
-        and not (trace.get("precondition_not_met") if isinstance(trace, dict) else None)
+        # Exception: observed HTTP 5xx on the target step is independent of
+        # state-precondition bookkeeping.
+        and (
+            server_protocol_crash
+            or not (trace.get("precondition_not_met") if isinstance(trace, dict) else None)
+        )
         # Expected-success 4xx mismatches need a known-valid control. Otherwise
         # they are usually probe/test-data artifacts and must stay candidates.
         and not status_confirmation_gap

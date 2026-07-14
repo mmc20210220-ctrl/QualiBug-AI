@@ -734,6 +734,36 @@ def test_accepted_patch_with_unchanged_observer_needs_no_restore(tmp_path: Path,
     }
 
 
+def test_hyphenated_verb_terminal_post_is_action_style() -> None:
+    from ai_test_asset_center.sandbox_write_executor import _cleanup_after_write
+    from ai_test_asset_center.sandbox_write_executor_base import (
+        _is_action_style_write_path,
+        _write_cleanup_preflight_reason,
+    )
+
+    path = "/api/payments/admin/manual-success"
+    assert _is_action_style_write_path(path) is True
+    assert _write_cleanup_preflight_reason("POST", path, None) == ""
+    # Collection creates remain blocked when compensation is undeclared.
+    assert _is_action_style_write_path("/api/auth/register") is False
+    assert (
+        _write_cleanup_preflight_reason("POST", "/api/auth/register", None)
+        == "write_cleanup_operation_not_declared"
+    )
+
+    result = _cleanup_after_write(
+        method="POST",
+        path=path,
+        base_url="https://target.invalid",
+        token="test-token",
+        before_body={},
+        write_body={"ok": True},
+        documented_routes=[{"method": "POST", "path": path}],
+    )
+    assert result["status"] == "not_required"
+    assert result["strategy"] == "action_post_on_existing_resource"
+
+
 def test_verb_terminal_post_is_action_style_not_create_without_identity() -> None:
     from ai_test_asset_center.sandbox_write_executor import _cleanup_after_write
 

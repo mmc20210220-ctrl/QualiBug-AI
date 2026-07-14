@@ -14,6 +14,7 @@ import re
 from collections import defaultdict
 from typing import Any
 
+from .customer_delivery_gate import LEGACY_CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
 from .discovery_mainline_contract import (
     MainlineContractError,
     validate_mainline_run_contract,
@@ -490,6 +491,143 @@ def _validated_identity_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
+def derive_legacy_champion_canonical_identity_evidence(
+    finding: dict[str, Any],
+    attempt: dict[str, Any],
+) -> dict[str, Any]:
+    """Derive canonical identity from legacy v1 deliverables without a v2 bundle."""
+
+    row = _dict(finding)
+    signature = _dict(row.get("semantic_signature"))
+    reproduction = _dict(row.get("reproduction"))
+    oracle = _dict(row.get("oracle"))
+    method = _text(reproduction.get("method") or row.get("method")).upper()
+    path = _text(reproduction.get("path") or row.get("path"))
+    if not method or not path:
+        raise _incomplete("legacy.operation")
+    locator = _normalized_locator(path)
+    assertion_kind = _normalized_text(
+        signature.get("assertion_kind")
+        or oracle.get("violated_rule")
+        or row.get("category")
+        or "http_status_class"
+    )
+    if assertion_kind in {
+        "server_5xx",
+        "expected_status_mismatch",
+        "wrong_create_status",
+        "200_with_error",
+        "invariant",
+    }:
+        assertion_kind = "http_status_class"
+    source_refs = _source_ref_projection(
+        row.get("source_refs")
+        or signature.get("source_refs")
+        or [{
+            "kind": "legacy_runtime",
+            "source_id": _text(row.get("source") or "legacy_champion"),
+            "locator": f"{method} {locator}",
+        }]
+    )
+    expected = (
+        row.get("expected")
+        or oracle.get("expected")
+        or signature.get("expected_behavior")
+    )
+    actual = (
+        row.get("actual")
+        or oracle.get("actual")
+        or signature.get("actual_behavior")
+    )
+    request_material = _canonical({
+        "method": method,
+        "path": path,
+        "body": _dict(_dict(row.get("raw_evidence")).get("request_raw")).get("body"),
+    })
+    body_fp = hashlib.sha256(request_material.encode("utf-8")).hexdigest()
+    semantics_fp = hashlib.sha256(
+        _canonical({
+            "method": method,
+            "path_template": locator,
+            "mutation_class": "legacy_treatment",
+        }).encode("utf-8")
+    ).hexdigest()
+    gate = _dict(attempt.get("gate_receipt"))
+    gate_receipt_id = _text(gate.get("gate_receipt_id") or gate.get("receipt_id"))
+    if not gate_receipt_id:
+        raise _incomplete("legacy.gate_receipt_id")
+    treatment = {
+        "method": method,
+        "path_template": locator,
+        "status_code": int(
+            _dict(_dict(row.get("raw_evidence")).get("response_raw")).get("status_code")
+            or _dict(reproduction.get("har_evidence")).get("status_code")
+            or 0
+        ),
+        "mutation_class": "legacy_treatment",
+        "mutation_selector": "",
+        "mutation_operator": "",
+    }
+    identity = {
+        "operation": {
+            "adapter": "http",
+            "verb": method,
+            "operation_ref": _normalized_text(signature.get("operation_ref") or locator),
+            "source_locator": locator,
+        },
+        "property": {
+            "assertion_kind": assertion_kind,
+            "expected_signature": _semantic_value(
+                expected,
+                assertion_kind=assertion_kind,
+            ),
+            "source_refs": source_refs,
+        },
+        "actor_relation": _canonical_actor_relation(
+            assertion_kind=assertion_kind,
+            control_actor_class="",
+            treatment_actor_class=_normalized_text(
+                _dict(_dict(row.get("raw_evidence")).get("request_raw")).get("actor")
+                or row.get("actor")
+                or "runtime"
+            ),
+        ),
+        "resource_identity_class": {
+            "source_locators": sorted({locator, *[item["locator"] for item in source_refs]}),
+        },
+        "mutation": {
+            "class": "legacy_treatment",
+            "selector": "",
+            "operator": "",
+        },
+        "observed_outcome": {
+            "assertion_kind": assertion_kind,
+            "expected_signature": _semantic_value(
+                expected,
+                assertion_kind=assertion_kind,
+            ),
+            "actual_signature": _semantic_value(
+                actual,
+                assertion_kind=assertion_kind,
+            ),
+            "control_observation_class": "not_observed",
+            "treatment_observation_class": _observation_class(treatment),
+            "observer_kinds": ["http_response"],
+        },
+    }
+    return {
+        "schema_version": CANONICAL_IDENTITY_EVIDENCE_SCHEMA,
+        **identity,
+        "proof": {
+            "assertion_receipt_id": gate_receipt_id,
+            "oracle_receipt_id": gate_receipt_id,
+            "reproduction_receipt_id": gate_receipt_id,
+            "request_body_fingerprint": body_fp,
+            "request_semantics_fingerprint": semantics_fp,
+        },
+    }
+
+
 def build_canonical_defect_identity(
     *,
     target_id: str,
@@ -583,7 +721,18 @@ def build_canonical_defect_registry(
             raise CanonicalDefectRegistryError(
                 f"CANONICAL_OCCURRENCE_AUTHORITY_MISSING:{occurrence_id}"
             )
-        evidence = derive_canonical_identity_evidence(attempt)
+        gate_receipt = _dict(attempt.get("gate_receipt"))
+        if (
+            gate_receipt.get("schema_version")
+            == LEGACY_CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
+            and not _dict(attempt.get("delivery_evidence_bundle"))
+        ):
+            evidence = derive_legacy_champion_canonical_identity_evidence(
+                occurrence,
+                attempt,
+            )
+        else:
+            evidence = derive_canonical_identity_evidence(attempt)
         canonical = build_canonical_defect_identity(
             target_id=mainline["target_id"],
             evidence=evidence,

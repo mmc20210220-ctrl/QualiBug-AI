@@ -207,6 +207,33 @@ def test_rejected_write_with_observer_unchanged_proof_allows_not_required() -> N
     assert is_customer_deliverable_defect(finding) is True
 
 
+def test_governed_campaign_reset_preserves_legacy_v1_deliverable_receipt() -> None:
+    finding = _valid_finding()
+    finding["evidence"] = {
+        "cleanup": {"status": "completed", "receipt_ref": "cleanup-receipt-1"}
+    }
+    finding["delivery_gate_receipt"] = build_customer_delivery_gate_receipt(
+        finding,
+        obligation_id="obligation-1",
+        execution_id="execution-1",
+    )
+    assert finding["delivery_gate_receipt"]["status"] == "DELIVERABLE"
+
+    defects, clues = apply_governed_campaign_cleanup(
+        [finding],
+        {
+            "status": "SUCCEEDED",
+            "dirty_environment": False,
+            "audit_receipt_id": "campaign-cleanup-audit-1",
+            "after_cleanup_observation_ref": "state:clean",
+        },
+    )
+
+    assert len(defects) == 1
+    assert defects[0]["finding_id"] == "finding-1"
+    assert clues == []
+
+
 def test_governed_campaign_reset_does_not_readjudicate_cleanup_failure() -> None:
     finding = _valid_finding()
     finding["evidence"] = {"cleanup": {"status": "failed", "receipt_ref": ""}}

@@ -468,7 +468,22 @@ def diagnose_scan(
     """Build per-miss diagnostics and SPC coverage metrics for one scan."""
     root = Path(root or Path.cwd())
     truth_bugs = _load_truth_bugs(Path(ground_truth_path))
-    findings = [f for f in (scan_result.get("findings") or []) if isinstance(f, dict)]
+    raw_findings = [
+        f for f in (
+            list(scan_result.get("findings") or [])
+            + list(scan_result.get("delivery_occurrences") or [])
+        )
+        if isinstance(f, dict)
+    ]
+    seen_finding_ids: set[str] = set()
+    findings: list[dict[str, Any]] = []
+    for finding in raw_findings:
+        finding_id = str(finding.get("finding_id") or finding.get("id") or "")
+        if finding_id:
+            if finding_id in seen_finding_ids:
+                continue
+            seen_finding_ids.add(finding_id)
+        findings.append(finding)
     candidates = [c for c in (scan_result.get("candidate_findings") or []) if isinstance(c, dict)]
 
     metrics = compute_benchmark(

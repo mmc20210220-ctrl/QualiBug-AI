@@ -1786,6 +1786,96 @@ class SemanticScenarioGenerator:
         return steps, order
 
     @staticmethod
+    def _is_identity_body_key(key: str) -> bool:
+        token = re.sub(r"[^a-z0-9_]+", "", str(key or "").lower())
+        if not token:
+            return False
+        if token in {"id", "uuid", "sku", "code", "pk"}:
+            return True
+        return bool(
+            token.endswith("id")
+            or token.endswith("uuid")
+            or token.endswith("sku")
+            or token.endswith("code")
+        )
+
+    @staticmethod
+    def _sibling_identity_body_bindings(
+        api_doc: str,
+        path: str,
+        *,
+        root: Any = None,
+        project: str = "",
+    ) -> tuple[dict[str, Any], str]:
+        """Inherit bindable identity keys from sibling writes under the same prefix.
+
+        Action-style admin routes often omit a request example while a nearby
+        documented write in the same service already names the entity binder
+        (``orderId``, ``resourceId``, …). Copy only identity-shaped keys so the
+        probe can reach an authorization decision instead of a missing-payload
+        transport error. Never invent keys or copy non-identity business fields.
+        """
+        normalized = normalize_path_placeholders(str(path or "")).split("?", 1)[0]
+        parts = [part for part in normalized.strip("/").split("/") if part]
+        if len(parts) < 2:
+            return {}, ""
+        prefixes = ["/" + "/".join(parts[:depth]) for depth in range(len(parts) - 1, 0, -1)]
+        try:
+            _, _, endpoints = _api_facts(api_doc, re.compile(r"", re.I))
+        except Exception:
+            endpoints = []
+        write_methods = {"POST", "PUT", "PATCH"}
+        best_body: dict[str, Any] = {}
+        best_provenance = ""
+        best_score = -1
+        for prefix in prefixes:
+            for endpoint in endpoints:
+                method = str(endpoint.get("method") or "").strip().upper()
+                if method not in write_methods:
+                    continue
+                sibling_path = normalize_path_placeholders(str(endpoint.get("path") or ""))
+                if not sibling_path.startswith("/") or sibling_path == normalized:
+                    continue
+                if not (
+                    sibling_path == prefix
+                    or sibling_path.startswith(prefix + "/")
+                ):
+                    continue
+                sibling_body, provenance = SemanticScenarioGenerator._runtime_body_template_with_provenance(
+                    api_doc,
+                    method,
+                    sibling_path,
+                    root=root,
+                    project=project,
+                )
+                if not isinstance(sibling_body, dict) or not sibling_body:
+                    continue
+                identity_body: dict[str, Any] = {}
+                for key, value in sibling_body.items():
+                    key_text = str(key)
+                    if not SemanticScenarioGenerator._is_identity_body_key(key_text):
+                        continue
+                    if isinstance(value, str) and value.startswith("{") and value.endswith("}"):
+                        identity_body[key_text] = value
+                    else:
+                        identity_body[key_text] = "{" + key_text + "}"
+                if not identity_body:
+                    continue
+                shared = len(set(parts) & set(sibling_path.strip("/").split("/")))
+                score = (len(identity_body) * 10) + shared
+                if score > best_score:
+                    best_score = score
+                    best_body = identity_body
+                    best_provenance = (
+                        f"sibling_identity_binding:{method} {sibling_path}"
+                        if provenance
+                        else "sibling_identity_binding"
+                    )
+            if best_body:
+                return best_body, best_provenance
+        return {}, ""
+
+    @staticmethod
     def _append_write_probe_step(
         steps: list[ScenarioStep],
         *,
@@ -1813,6 +1903,27 @@ class SemanticScenarioGenerator:
                 root=root,
                 project=project,
             )
+        # Action-style admin writes often document no body (e.g. "mark success")
+        # while sibling routes in the same service document the entity binder
+        # (orderId / resourceId). Pull those bindable id fields so the probe can
+        # reach the role-boundary decision instead of a missing-payload 500.
+        # Only action-style paths qualify: generic creates must remain
+        # source-documented (never invent body fields from siblings).
+        if (not body) and method in {"POST", "PUT", "PATCH"}:
+            from .sandbox_write_executor_base import _is_action_style_write_path
+
+            if _is_action_style_write_path(path):
+                sibling_body, sibling_provenance = (
+                    SemanticScenarioGenerator._sibling_identity_body_bindings(
+                        api_doc,
+                        path,
+                        root=root,
+                        project=project,
+                    )
+                )
+                if sibling_body:
+                    body = sibling_body
+                    body_provenance = sibling_provenance or "sibling_identity_binding"
         # Drop optional top-level promo/demo string literals that commonly
         # exhaust or FK-fail on fresh DBs. Keep placeholders, numbers, arrays.
         if isinstance(body, dict) and body:
@@ -2338,7 +2449,7 @@ class SemanticScenarioGenerator:
             id=self._id(entity, state, invariant, title_suffix),
             title=f"[来源约束不变量] {entity}: {state} -> {title_suffix}",
             description=invariant[:300],
-            category=str(action_plan.get("category") or "state_machine"),
+            category=str(action_plan.get("category") or "invariant"),
             severity="P1",
             entity=entity,
             preconditions=[f"需要 {entity} 的来源可追溯运行时样本", f"约束: {invariant[:120]}"],
@@ -3130,6 +3241,11 @@ class SemanticScenarioGenerator:
         query_param = str(slice_meta.get("_isolation_query_param") or "").strip()
         if not viewer_label or not path.startswith("/"):
             return None
+        # Isolation without a concrete foreign identity binder is a owned-collection
+        # probe: the viewer may list their own resources (HTTP 200) while
+        # TenantIsolationOracle checks for foreign-id leakage.
+        if mode in {"", "path"} and not path_has_placeholders(normalize_path_placeholders(path)) and not query_param:
+            mode = "owned_collection"
         steps: list[ScenarioStep] = []
         login_path = str(slice_meta.get("_login_path") or "").strip()
         login_body = dict(slice_meta.get("_login_body") or {})
@@ -3154,6 +3270,17 @@ class SemanticScenarioGenerator:
                         actor=owner_label or owner_email,
                     ))
                     order += 1
+            elif mode == "owned_collection":
+                steps.append(ScenarioStep(
+                    order=order,
+                    action="resolve_owner_collection_ids",
+                    api_method="GET",
+                    api_path=path,
+                    extract_from_response=["id", "orderId", "order_id", "addressId", "address_id"],
+                    expected_status=200,
+                    actor=owner_label or owner_email,
+                ))
+                order += 1
             elif path_has_placeholders(normalize_path_placeholders(path)):
                 resolve_steps, _ = SemanticScenarioGenerator._resolve_entity_steps(
                     path, actor=owner_label or owner_email, start_order=order, api_doc=api_doc,
@@ -3176,10 +3303,15 @@ class SemanticScenarioGenerator:
             steps.append(viewer_login)
             order += 1
         probe_path = path
-        expected_status = 403
+        # Owned collection lists are allowed for the viewer; leakage is decided
+        # by TenantIsolationOracle against owner-seeded identities. Cross-user
+        # path/query probes still expect an authz denial.
+        expected_status = 200 if mode == "owned_collection" else 403
         if mode == "query_param" and query_param:
             owner_binding = "id"
             probe_path = f"{path}?{query_param}={{{owner_binding}}}"
+        elif mode == "owned_collection":
+            probe_path = path
         elif path_has_placeholders(normalize_path_placeholders(path)):
             probe_path = normalize_path_placeholders(path)
         steps.append(ScenarioStep(

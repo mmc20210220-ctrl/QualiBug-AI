@@ -944,7 +944,10 @@ def execute_governed_fixture_lifecycle(
     cleanup_needed = setup_attempted and not rejected_without_observed_mutation
     cleanup_receipts = list(cleanup_execute_fn() or []) if cleanup_needed else []
     after_cleanup = observe()
-    cleanup_ok = setup_ok and _fixture_receipts_accepted(cleanup_receipts)
+    cleanup_ok = (
+        not cleanup_needed  # skipped correctly when setup rejected w/o mutation
+        or (setup_ok and _fixture_receipts_accepted(cleanup_receipts))
+    )
     cleanup_status = "completed" if cleanup_ok else (
         "not_required" if rejected_without_observed_mutation else (
             "failed" if setup_attempted else "not_applicable"
@@ -1163,6 +1166,8 @@ def _write_cleanup_preflight_reason(
     """
     if _text(method).upper() != "POST":
         return ""
+    if _is_action_style_write_path(path):
+        return ""
     cleanup_method, cleanup_path = _documented_compensate_cleanup_operation(
         path,
         "__qualibug_pending_resource_id__",
@@ -1181,6 +1186,10 @@ def _is_action_style_write_path(path: str) -> bool:
     new deletable resource identity even if the response echoes ``id``.
     Verb-terminal collection actions such as ``/api/payments/pay`` are also
     treated as actions (no created resource to DELETE).
+
+    Hyphenated terminals (``manual-success``, ``force-cancel``) are compound
+    action verbs, not collection names — require depth ≥ 3 so
+    ``POST /api/foo-bar`` alone is still treated as a potential create.
     """
     normalized = normalize_path_placeholders(_text(path)).split("?", 1)[0]
     parts = [p for p in normalized.strip("/").split("/") if p]
@@ -1196,8 +1205,15 @@ def _is_action_style_write_path(path: str) -> bool:
             or re.fullmatch(r"\d+", part)
         ):
             return True
+    terminal = parts[-1]
     # Verb-terminal path without an identity segment: action, not create.
-    if len(parts) >= 3 and _ACTION_TERMINAL_RE.match(parts[-1]):
+    if len(parts) >= 3 and _ACTION_TERMINAL_RE.match(terminal):
+        return True
+    # Compound action verb phrases: alphanumeric words joined by hyphen/underscore.
+    if len(parts) >= 3 and re.fullmatch(
+        r"[A-Za-z][A-Za-z0-9]*(?:[-_][A-Za-z][A-Za-z0-9]*)+",
+        terminal,
+    ):
         return True
     return False
 
