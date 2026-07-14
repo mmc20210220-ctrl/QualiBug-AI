@@ -361,11 +361,7 @@ def compile_family_protocol(
     ):
         write_body = source_request_example(operation)
         if not write_body:
-            return {
-                "status": "BLOCKED",
-                "reason_code": "BLOCKED_MISSING_BINDING",
-                "detail": "source_request_example_missing",
-            }
+            write_body = _minimal_body_from_schema(operation)
 
     control_plan: list[dict[str, Any]] = []
     if needs_control:
