@@ -1344,7 +1344,28 @@ def _derive_invariant_relations(model: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(invariant, dict):
             continue
         relation_type = _invariant_relation_type(invariant)
-        for hint in _list(invariant.get("operation_refs")):
+        op_refs = _list(invariant.get("operation_refs"))
+
+        # Fallback: when no explicit operation_refs, match by token overlap
+        # with operation paths and field dictionaries.
+        if not op_refs:
+            inv_tokens = set(_text(invariant.get("description") or "").lower().split())
+            for op in operations:
+                op_path = _text(op.get("path") or op.get("raw_path") or "").lower()
+                op_fields = " ".join(
+                    _text(f.get("field") or f.get("name") or "") if isinstance(f, dict) else _text(f)
+                    for f in _list(op.get("field_dictionary"))
+                ).lower()
+                op_text = f"{op_path} {op_fields}"
+                overlap = sum(1 for t in inv_tokens if t and t in op_text)
+                if overlap >= 2 or (
+                    overlap >= 1 and _text(op.get("read_write") or op.get("side_effect_class")) == "write"
+                ):
+                    op_refs.append(_text(op.get("id")))
+                    if len(op_refs) >= 5:
+                        break
+
+        for hint in op_refs:
             operation = _resolve_operation(operations, {"operation_ref": hint})
             if not operation:
                 continue
