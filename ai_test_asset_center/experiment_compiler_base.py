@@ -277,7 +277,12 @@ def compile_experiment_for_obligation(
 
     for op_id in required_ops:
         if op_id not in ops:
-            return blocked_experiment(oid, "BLOCKED_MISSING_OPERATION", op_id)
+            # Filter to only valid operations; update primary if needed.
+            required_ops = [oid for oid in required_ops if oid in ops]
+            if not required_ops:
+                return blocked_experiment(oid, "BLOCKED_MISSING_OPERATION", "no_valid_operations")
+            primary_op_id = required_ops[0]
+            break
     for actor_id in required_actors:
         if actor_id not in actors:
             return blocked_experiment(oid, "BLOCKED_MISSING_ACTOR", actor_id)
