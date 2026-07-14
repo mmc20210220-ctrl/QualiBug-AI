@@ -2409,6 +2409,28 @@ def execute_one_experiment(
         execution_id=resolved_execution_id,
     )
     observations["observer_receipts"] = observer_receipts
+    # Synthesize observer receipts from HTTP steps when no typed observers ran
+    if not observer_receipts:
+        for s in steps_out:
+            if not isinstance(s, dict):
+                continue
+            sc = s.get("status_code")
+            if not isinstance(sc, int) or sc <= 0:
+                continue
+            observer_receipts.append({
+                "observer_id": "http_response",
+                "receipt_id": _stable_id("synth_obs", eid, s.get("phase",""), s.get("method",""), s.get("path","")),
+                "status": "OBSERVED" if 200 <= sc < 300 else "FAILED",
+                "schema_version": "qualibug.observer-receipt.v1",
+                "evidence": {
+                    "status_code": sc,
+                    "phase": s.get("phase"),
+                    "method": s.get("method"),
+                    "path": s.get("path"),
+                    "duration_ms": s.get("duration_ms"),
+                },
+            })
+        observations["observer_receipts"] = observer_receipts
     observed_ids: list[str] = []
     for receipt in observer_receipts:
         observer_id = _text(receipt.get("observer_id"))
