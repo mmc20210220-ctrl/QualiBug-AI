@@ -125,6 +125,8 @@ from .runtime_external_tracker_sync_receipt_ledger import (
 from .bug_discovery_probe_expander import expand_bug_discovery_probes
 # Canonical HTTP + basic utilities extracted to probe_http.py
 from .probe_http import *  # noqa: F401,F403
+# Canonical report rendering extracted to probe_reporting.py
+from .probe_reporting import *  # noqa: F401,F403
 
 UNRESOLVED_PLACEHOLDER_RE = re.compile(r"<\s*(?:FILL|TODO|REQUIRED|SANDBOX|REPLACE)[^>]*>", re.I)
 
