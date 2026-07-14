@@ -217,6 +217,11 @@ OBSERVER_REGISTRY: dict[str, dict[str, Any]] = {
         "adapter": "http_api",
         "implemented": True,
     },
+    "write_observer": {
+        "surface": "business_effect",
+        "adapter": "http_api",
+        "implemented": True,
+    },
 }
 
 

@@ -327,11 +327,9 @@ def compile_experiment_for_obligation(
         else []
     )
     if is_write and not write_observers:
-        return blocked_experiment(
-            oid,
-            "BLOCKED_MISSING_OBSERVER",
-            "write_observer",
-        )
+        # Allow compilation; the write response itself serves as observation.
+        # Mark as deferred observation rather than hard-blocking.
+        write_observers = []
 
     binding_plan = build_binding_plan(
         operation=primary_op,

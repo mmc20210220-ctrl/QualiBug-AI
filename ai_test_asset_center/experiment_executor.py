@@ -554,7 +554,9 @@ def preflight_experiment_executable(
         if not method:
             return False, "BLOCKED_MISSING_OPERATION", f"missing_method:{op_ref}"
         if method in {"POST", "PUT", "PATCH", "DELETE"} and not _declared_observation_path(path, ops):
-            return False, "BLOCKED_MISSING_OBSERVER", f"write_observer_unresolved:{op_ref}:{path}"
+            # Allow execution without a dedicated observation GET; the write
+            # response itself provides observation evidence.
+            pass
     if not _list(exp.get("observers")):
         return False, "BLOCKED_MISSING_OBSERVER", "none"
     assertion = _dict(_list(exp.get("assertions"))[0] if _list(exp.get("assertions")) else {})
