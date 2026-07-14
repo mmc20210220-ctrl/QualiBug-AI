@@ -1,4 +1,0 @@
-QualiBug scan: benchmark_mall
-Confirmed: 0 | Candidates: 0 | Execution: blocked
-Release gate: fail
-Campaign:  (blocked)
