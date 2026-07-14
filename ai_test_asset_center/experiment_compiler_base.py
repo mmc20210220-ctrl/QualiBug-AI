@@ -401,12 +401,6 @@ def compile_experiment_for_obligation(
     cleanup_req = _dict(obl.get("cleanup_requirement"))
     cleanup_plan: list[dict[str, Any]] = []
     if is_write:
-        if cleanup_req.get("required") is False:
-            return blocked_experiment(
-                oid,
-                "BLOCKED_NON_REVERSIBLE_WRITE",
-                primary_op_id,
-            )
         primary_method = _text(primary_op.get("method")).upper()
         primary_path = normalize_path_placeholders(
             _text(primary_op.get("path") or primary_op.get("raw_path"))
@@ -479,11 +473,15 @@ def compile_experiment_for_obligation(
                 or cleanup_method not in {"POST", "PUT", "PATCH", "DELETE"}
                 or not cleanup_path.startswith("/")
             ):
-                return blocked_experiment(
-                    oid,
-                    "BLOCKED_NON_REVERSIBLE_WRITE",
-                    f"cleanup_unresolved:{cleanup_op}",
-                )
+                if cleanup_req.get("required") is False:
+                    # Cleanup explicitly not required; proceed without it.
+                    cleanup_plan = []
+                else:
+                    return blocked_experiment(
+                        oid,
+                        "BLOCKED_NON_REVERSIBLE_WRITE",
+                        f"cleanup_unresolved:{cleanup_op}",
+                    )
             cleanup_plan = [{
                 "action": "reverse_order_compensation",
                 "mode": _text(cleanup_req.get("mode") or "reverse_order"),

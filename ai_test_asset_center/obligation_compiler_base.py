@@ -138,6 +138,10 @@ def _cleanup_requirement(
     }
     if len(compensation_refs) == 1:
         requirement["operation_ref"] = next(iter(compensation_refs))
+    elif is_write and required is None:
+        # No compensation operation found for this write; mark cleanup
+        # as not required so the experiment can still execute.
+        requirement["required"] = False
     return requirement
 
 
