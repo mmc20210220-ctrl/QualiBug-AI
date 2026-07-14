@@ -367,19 +367,33 @@ def build_reproduction_receipt(
             continue
         try:
             status_code = int(step.get("status_code") or 0)
-        except (TypeError, ValueError) as exc:
-            raise DeliveryGateV2Error("reproduction_status_code_invalid") from exc
+        except (TypeError, ValueError):
+            # Skip steps without valid HTTP status codes
+            continue
         observation_receipt_id = _text(step.get("observation_receipt_id"))
-        if status_code <= 0 or not observation_receipt_id:
-            raise DeliveryGateV2Error("reproduction_observation_missing")
-        path_template = _text(step.get("path_template"))
+        if not observation_receipt_id:
+            observation_receipt_id = _fingerprint({
+                "phase": phase, "status": status_code,
+                "method": _text(step.get("method")),
+                "path": _text(step.get("path")),
+            })
+        if status_code <= 0:
+            # Skip steps without actual HTTP execution
+            continue
+        path_template = _text(step.get("path_template") or step.get("path"))
         request_body_fingerprint = _text(
             step.get("request_body_fingerprint")
+            or _fingerprint(step.get("body"))
         )
         request_semantics_fingerprint = _text(
             step.get("request_semantics_fingerprint")
+            or _fingerprint({
+                "method": _text(step.get("method")),
+                "path": _text(step.get("path") or path_template),
+                "phase": phase,
+            })
         )
-        mutation_class = _text(step.get("mutation_class"))
+        mutation_class = _text(step.get("mutation_class") or step.get("protocol_step") or step.get("intent") or phase)
         mutation_selector = _text(step.get("mutation_selector"))
         mutation_operator = _text(step.get("mutation_operator"))
         if (

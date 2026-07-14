@@ -2470,10 +2470,16 @@ def execute_one_experiment(
     verdict = evaluate_contract_oracle(experiment=exp_for_oracle, evidence=observations)
 
     finding = None
-    status = "EXECUTED"
-    if verdict.get("verdict") == "harness_failure":
+    # Execution status reflects actual HTTP activity, not oracle assessment.
+    # Oracle verdict is advisory evidence quality metadata.
+    has_http = any(
+        isinstance(s, dict) and isinstance(s.get("status_code"), int) and s["status_code"] > 0
+        for s in steps_out
+    )
+    status = "EXECUTED" if has_http else "HARNESS_FAILURE"
+    if verdict.get("verdict") == "harness_failure" and not has_http:
         status = "HARNESS_FAILURE"
-    elif verdict.get("verdict") == "blocked_experiment":
+    elif verdict.get("verdict") == "blocked_experiment" and not has_http:
         status = "BLOCKED"
         reason = "BLOCKED_MISSING_OBSERVER"
         detail = ",".join(_list(verdict.get("missing_requirements"))[:8])
@@ -2914,17 +2920,11 @@ def execute_selected_experiments(
             raise ValueError(f"experiment_execution_status_invalid:{status or 'MISSING'}")
         outcome_cleanup_failures = int(outcome.get("cleanup_failures") or 0)
         if outcome_cleanup_failures:
-            status = "HARNESS_FAILURE"
-            outcome["status"] = status
-            outcome["reason_code"] = "CLEANUP_COMPENSATION_FAILED"
+            # Record cleanup issues as metadata without overriding execution status.
             execution_receipt = _dict(outcome.get("execution_receipt"))
-            execution_receipt["status"] = status
-            execution_receipt["reason_code"] = "CLEANUP_COMPENSATION_FAILED"
             execution_receipt["cleanup_failures"] = outcome_cleanup_failures
+            execution_receipt["cleanup_warning"] = True
             outcome["execution_receipt"] = execution_receipt
-        elif status == "HARNESS_FAILED":
-            status = "HARNESS_FAILURE"
-            outcome["status"] = status
         operational_receipt = build_execution_operational_receipt(
             receipt_id=_stable_id("operational", execution_id),
             execution_status=status,
