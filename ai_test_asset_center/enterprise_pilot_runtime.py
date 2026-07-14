@@ -41,7 +41,12 @@ from .enterprise_testops_control_plane import (
     build_test_data_orchestration,
     load_environment_config,
 )
-from .real_project_defect_discovery import run_real_project_discovery
+
+def _run_real_project_discovery_stub(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    """Stub for removed real_project_defect_discovery module."""
+    return {"status": "not_available", "reason": "module_retired"}
+
+run_real_project_discovery = _run_real_project_discovery_stub
 from .project_runtime_primitives import (
     PROJECT_ROOT as ROOT,
     safe_project_id as _safe_project_id,

@@ -1956,7 +1956,10 @@ def _oracle_dsl_pack_from_recognized_industries(
     Returns (rule_rows, industry_oracle_rows). Empty when no industry is
     confidently recognized — never invents an ecommerce pack.
     """
-    from .oracle_dsl import DSLCompiler, RuleLibrary, normalize_industry_key
+    try:
+        from .oracle_dsl import DSLCompiler, RuleLibrary, normalize_industry_key
+    except ImportError:
+        return [], []
 
     industries: list[str] = []
     confidences: dict[str, float] = {}

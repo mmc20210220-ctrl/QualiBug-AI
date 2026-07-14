@@ -19,7 +19,12 @@ from pathlib import Path
 from typing import Any
 
 from .real_project_onboarding import ROOT, _html_escape, _safe_project_id, load_real_project_config
-from .real_project_defect_discovery import run_real_project_discovery
+
+def _run_real_project_discovery_stub(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    """Stub for removed real_project_defect_discovery module."""
+    return {"status": "not_available", "reason": "module_retired"}
+
+run_real_project_discovery = _run_real_project_discovery_stub
 from .issue_sync_exporter import build_issue_export_bundle
 from .fix_verification_loop import run_fix_verification
 # NOTE: regression_runner is imported lazily inside _load_regression_run()
