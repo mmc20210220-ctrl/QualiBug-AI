@@ -319,10 +319,11 @@ def compile_experiment_for_obligation(
             )
 
     if not primary_op_id or primary_op_id not in ops:
-        return blocked_experiment(
-            oid,
-            "BLOCKED_MISSING_OPERATION",
-            primary_op_id or "none",
+        # Skip obligations whose primary operation is not available
+        return make_experiment(
+            obligation_id=oid,
+            risk_family=family,
+            compile_receipt={"status": "DEFERRED", "reason_code": "MISSING_PRIMARY_OPERATION", "detail": primary_op_id or "none"},
         )
     primary_op = ops[primary_op_id]
     is_write = _text(primary_op.get("read_write")) == "write"
