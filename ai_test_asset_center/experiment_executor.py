@@ -58,6 +58,9 @@ from .sandbox_write_executor import (
     sandbox_write_allowed,
 )
 
+# Canonical cleanup utilities extracted to executor_cleanup.py
+from .executor_cleanup import *  # noqa: F401,F403
+
 
 def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
