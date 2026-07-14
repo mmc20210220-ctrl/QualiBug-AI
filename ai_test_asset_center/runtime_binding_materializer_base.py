@@ -45,7 +45,7 @@ def _response_scalar_fields(value: Any) -> dict[str, list[Any]]:
     def visit(node: Any) -> None:
         if isinstance(node, dict):
             for key, child in node.items():
-                if isinstance(child, (str, int)) and not isinstance(child, bool):
+                if isinstance(child, (str, int, float)) and not isinstance(child, bool):
                     fields.setdefault(_field_key(key), []).append(child)
                 elif isinstance(child, (dict, list)):
                     visit(child)
@@ -143,7 +143,11 @@ def runtime_cleanup_bindings(
             or _text(step.get("phase")) not in {"control", "treatment"}
         ):
             continue
-        if not (200 <= int(step.get("status_code") or 0) < 300):
+        try:
+            sc = int(step.get("status_code") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not (200 <= sc < 300):
             continue
         for key, values in _response_scalar_fields(step.get("body")).items():
             fields.setdefault(key, []).extend(values)
@@ -152,7 +156,7 @@ def runtime_cleanup_bindings(
     for name in placeholders:
         normalized = _field_key(name)
         candidates = list(dict.fromkeys(fields.get(normalized) or []))
-        if not candidates and normalized == "id":
+        if not candidates and (normalized == "id" or normalized.endswith("id")):
             id_values = [
                 value
                 for key, values in fields.items()
@@ -412,7 +416,7 @@ def runtime_setup_value_from_response(body: Any, target: str) -> Any:
     candidates = param_field_candidates(target)
     sources = [body] if isinstance(body, dict) else []
     if isinstance(body, dict):
-        for wrapper in ("data", "result", "resource", "item"):
+        for wrapper in ("data", "result", "resource", "item", "payload", "entity", "created", "object"):
             nested = body.get(wrapper)
             if isinstance(nested, dict):
                 sources.append(nested)
