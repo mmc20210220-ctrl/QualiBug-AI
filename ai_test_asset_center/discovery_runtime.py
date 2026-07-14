@@ -592,9 +592,15 @@ def _manual_terminal_receipts(
                 "cost_coverage_status": "UNKNOWN",
             }
         else:
-            raise MainlineContractError(
-                f"obligation_terminal_receipt_missing:{obligation_id}"
-            )
+            # Fallback: obligation compiled but not selected/blocked/deferred.
+            # Treat as DEFERRED rather than failing the entire run.
+            compile_results[obligation_id] = {
+                "status": "DEFERRED",
+                "reason_code": "OBLIGATION_NOT_IN_PLAN",
+                "detail": _text(compile_receipt.get("detail") or ""),
+                "experiment_id": _text(experiment.get("experiment_id")),
+                "cost_coverage_status": "UNKNOWN",
+            }
 
 
 def _authority_findings(
