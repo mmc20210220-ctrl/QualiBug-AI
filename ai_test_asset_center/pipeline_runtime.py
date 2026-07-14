@@ -127,6 +127,20 @@ def _evidence_chain_path(root: Path, project: str, evidence_id: str) -> Path:
     return root / "platform_workspace" / str(project) / "defect_discovery" / "evidence_chains" / f"{evidence_id}.json"
 
 
+def source_snapshot_hash(prd_text: str, api_spec_text: str, db_schema_text: str, scope_id: str, environment_ref: str) -> str:
+    import hashlib
+    material = "|".join([prd_text, api_spec_text, db_schema_text, scope_id, environment_ref])
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _active_policy_version() -> str:
+    try:
+        from .policy_wiring import get_policy_value
+        return str(get_policy_value("discovery", "policy_version", "v1.0.0-baseline"))
+    except Exception:
+        return "v1.0.0-baseline"
+
+
 def _persist_evidence_chain(root: Path, project: str, evidence: dict[str, Any]) -> str:
     evidence_id = str(evidence.get("evidence_id") or "").strip()
     if not evidence_id:
