@@ -86,6 +86,8 @@ _JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{
 from .pipeline_runtime import *  # noqa: F401,F403
 # Canonical DB discovery extracted to pipeline_db.py
 from .pipeline_db import *  # noqa: F401,F403
+# Canonical parameter fuzzer extracted to pipeline_fuzzer.py
+from .pipeline_fuzzer import *  # noqa: F401,F403
 
 
 def _auth_value_present(value: Any) -> bool:
