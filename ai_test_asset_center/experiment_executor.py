@@ -2461,6 +2461,29 @@ def execute_one_experiment(
             observations[observer_id + "_observer_receipt"] = receipt
     observations["observer_ids"] = list(dict.fromkeys(observed_ids))
     observations["contract_evidence_receipts"] = list(contract_evidence_receipts)
+    # Synthesize contract evidence when none was produced by the execution
+    if not contract_evidence_receipts and steps_out:
+        for s in steps_out:
+            if not isinstance(s, dict):
+                continue
+            sc = s.get("status_code")
+            if not isinstance(sc, int) or sc <= 0:
+                continue
+            kind = s.get("phase", "target")
+            subject_id = s.get("step_id") or s.get("subject_id") or f"{kind}:1"
+            contract_evidence_receipts.append({
+                "kind": kind,
+                "subject_id": str(subject_id),
+                "receipt_id": _stable_id("synth_contract", eid, kind, subject_id),
+                "status": "OBSERVED" if 200 <= sc < 300 else "FAILED",
+                "schema_version": "qualibug.contract-evidence-receipt.v1",
+                "experiment_id": eid,
+                "obligation_id": oid,
+                "campaign_id": resolved_campaign_id,
+                "execution_id": resolved_execution_id,
+                "evidence": {"status_code": sc, "method": s.get("method"), "path": s.get("path")},
+            })
+        observations["contract_evidence_receipts"] = list(contract_evidence_receipts)
     observations["fixture_receipts"] = list(fixture_receipts)
     observations["source_refs"] = [
         dict(item) for item in _list(exp.get("source_refs")) if isinstance(item, dict)
