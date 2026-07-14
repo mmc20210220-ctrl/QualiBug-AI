@@ -71,6 +71,22 @@ def diag(scan_path: str = None):
     print(f"Formal deliverables: {fcp.get('formal_customer_deliverable_count', 0)}")
     print(f"Canonical defects: {fcp.get('canonical_defect_count', 0)}")
     print()
+    
+    # Findings detail
+    findings = data.get("findings", [])
+    if findings:
+        print(f"=== Findings ({len(findings)}) ===")
+        cats = Counter(f.get("category", "?") for f in findings)
+        for cat, count in cats.most_common():
+            print(f"  {cat}: {count}")
+        print()
+        for f in findings[:5]:
+            sev = f.get("severity", "?")
+            title = f.get("title", "?")[:100]
+            print(f"  [{sev}] {title}")
+        if len(findings) > 5:
+            print(f"  ... and {len(findings)-5} more")
+        print()
 
 if __name__ == "__main__":
     diag(sys.argv[1] if len(sys.argv) > 1 else None)
