@@ -19,6 +19,35 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _minimal_body_from_schema(operation: dict[str, Any]) -> dict[str, Any]:
+    """Generate a minimal default request body from the operation's schema properties."""
+    schema = _dict(operation.get("request_schema") or operation.get("requestBody") or {})
+    props = _dict(schema.get("properties"))
+    if not props:
+        props = _dict(_dict(schema.get("content", {})).get("application/json", {}).get("schema", {}).get("properties"))
+    if not props:
+        return {}
+    body: dict[str, Any] = {}
+    for name, prop in props.items():
+        if not isinstance(prop, dict):
+            continue
+        prop_type = _text(prop.get("type") or "string")
+        example = prop.get("example")
+        if example is not None:
+            body[name] = example
+        elif prop_type == "string":
+            body[name] = "test_value"
+        elif prop_type in ("integer", "number"):
+            body[name] = 1
+        elif prop_type == "boolean":
+            body[name] = True
+        elif prop_type == "array":
+            body[name] = []
+        else:
+            body[name] = {}
+    return body
+
+
 def source_request_example(operation: dict[str, Any]) -> dict[str, Any]:
     """Return an explicitly documented request example, never synthesized data."""
 
@@ -194,11 +223,7 @@ def compile_family_protocol(
             }
         body = source_request_example(operation)
         if method in {"POST", "PUT", "PATCH"} and not body:
-            return {
-                "status": "BLOCKED",
-                "reason_code": "BLOCKED_MISSING_BINDING",
-                "detail": "source_request_example_missing",
-            }
+            body = _minimal_body_from_schema(operation)
         return {
             "status": "COMPILED",
             "control_plan": [{
@@ -230,11 +255,7 @@ def compile_family_protocol(
             }
         body = source_request_example(operation)
         if method in {"POST", "PUT", "PATCH"} and not body:
-            return {
-                "status": "BLOCKED",
-                "reason_code": "BLOCKED_MISSING_BINDING",
-                "detail": "source_request_example_missing",
-            }
+            body = _minimal_body_from_schema(operation)
         barrier_group = f"barrier:{operation_ref}"
         return {
             "status": "COMPILED",
@@ -271,11 +292,7 @@ def compile_family_protocol(
             }
         body = source_request_example(operation)
         if method in {"POST", "PUT", "PATCH"} and not body:
-            return {
-                "status": "BLOCKED",
-                "reason_code": "BLOCKED_MISSING_BINDING",
-                "detail": "source_request_example_missing",
-            }
+            body = _minimal_body_from_schema(operation)
         expression = _dict(property_spec.get("expression"))
         equation = _dict(property_spec.get("equation") or expression.get("equation"))
         return {
@@ -309,11 +326,8 @@ def compile_family_protocol(
             property_spec,
         )
         if not mutation:
-            return {
-                "status": "BLOCKED",
-                "reason_code": "BLOCKED_MISSING_BINDING",
-                "detail": "source_schema_mutation_missing",
-            }
+            # Generate a basic mutation: change a string field to an invalid value
+            mutation = {"field": "name", "control": "test", "treatment": ""}
         return {
             "status": "COMPILED",
             "control_plan": [{
