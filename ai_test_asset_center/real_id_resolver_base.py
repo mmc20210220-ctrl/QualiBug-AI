@@ -5,7 +5,7 @@ from typing import Any, Callable, Iterable
 
 QUALIBUG_UNRESOLVED_ID = "QUALIBUG_UNRESOLVED_ID"
 
-_LIST_FIELDS = ("records", "data", "items", "results", "list", "rows")
+_LIST_FIELDS = ("records", "data", "items", "results", "list", "rows", "content")
 _PAGINATION_SUFFIXES = (
     "?page=1&size=1",
     "?pageNum=1&pageSize=1",
@@ -138,7 +138,7 @@ def bind_path_params_from_documented_body(
             for index, child in enumerate(value):
                 walk(child, f"{dotted}[{index}]")
             return
-        if value in (None, "") or not dotted:
+        if value in (None, "") or isinstance(value, bool) or not dotted:
             return
         leaf = re.sub(r"\[\d+\]$", "", dotted.rsplit(".", 1)[-1])
         scalar_fields.append((dotted, leaf, value))
@@ -165,7 +165,10 @@ def bind_path_params_from_documented_body(
                 for item in param_field_candidates(param)
             }:
                 score = 90
-            elif param_key == "id" and field_key.endswith("id"):
+            elif param_key == "id" and (
+                field_key == "id"
+                or field_key.endswith("_id")
+                or (len(field_key) > 2 and field_key[-2:] == "Id" and field_key[-3].isalpha())):
                 stem = field_key[:-2]
                 score = 70 if stem in {"entity", "object", "resource"} else 45
                 if any(token in stem for token in context_identity_stems):
@@ -447,8 +450,12 @@ def extract_first_entity_id(body: Any, param_name: str) -> str | None:
             value = body.get(field_name)
             if value not in {None, ""}:
                 return str(value)
-        for value in body.values():
-            if isinstance(value, (int, float)) and value > 0:
+        # Only fall back to numeric values in identity-like fields
+        for field_name, value in body.items():
+            if not isinstance(value, (int, float)) or value <= 0:
+                continue
+            name = str(field_name).lower()
+            if name.endswith("id") or name in ("pk", "uuid", "code", "sku", "key", "no", "number"):
                 return str(int(value))
     return None
 
@@ -502,12 +509,10 @@ def bind_entity_fields(body: Any, path: str = "") -> dict[str, str]:
             value = source.get(field_name)
             if value not in {None, ""}:
                 bindings.setdefault(field_name, str(value))
-    # When the response only exposes ``id`` but the path asks for a sibling
-    # identity param (orderId, paymentId, …), mirror ``id`` onto that param
-    # if ``id`` is an accepted candidate for it. Scoped to path params only —
-    # never broadcast one resource id onto unrelated *Id names.
+    # Mirror ``id`` onto unresolved sibling identity params (e.g., orderId)
+    # when ``id`` is an accepted candidate for them.
     primary = bindings.get("id")
-    if primary and len(params) == 1:
+    if primary:
         for param in params:
             if bindings.get(param) not in {None, ""}:
                 continue
