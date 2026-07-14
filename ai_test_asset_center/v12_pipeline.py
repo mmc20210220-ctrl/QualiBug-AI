@@ -82,6 +82,9 @@ _AUTH_PRINCIPAL_KEYS = {"user", "account", "principal", "profile", "identity"}
 _AUTH_ACCEPTANCE_HEADER_TOKENS = {"authorization", "set-cookie", "x-auth-token", "x-session-id"}
 _JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\b")
 
+# Canonical runtime contract + evidence persistence extracted to pipeline_runtime.py
+from .pipeline_runtime import *  # noqa: F401,F403
+
 
 def _auth_value_present(value: Any) -> bool:
     if isinstance(value, bool):
