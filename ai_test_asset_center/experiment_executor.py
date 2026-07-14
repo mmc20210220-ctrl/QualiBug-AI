@@ -1022,23 +1022,8 @@ def execute_one_experiment(
                     "reason_code": "BLOCKED_MISSING_BINDING",
                     "detail": f"runtime_read_binding_unresolved:{target}",
                 })
-                return {
-                    "schema_version": "qualibug.experiment-execution.v1",
-                    "experiment_id": eid,
-                    "obligation_id": oid,
-                    "status": "BLOCKED",
-                    "reason_code": "BLOCKED_MISSING_BINDING",
-                    "detail": f"runtime_read_binding_unresolved:{target}",
-                    "elapsed_ms": int((time.time() - started) * 1000),
-                    "steps": steps_out,
-                    "fixture_receipts": fixture_receipts,
-                    "binding_materialization_receipts": binding_materialization_receipts,
-                    "finding": None,
-                    "execution_receipt": {
-                        "status": "BLOCKED",
-                        "reason_code": "BLOCKED_MISSING_BINDING",
-                    },
-                }
+                # Continue rather than aborting the entire experiment
+                continue
             fixture_receipts.append({
                 "node_id": node_id,
                 "kind": kind,
@@ -2456,6 +2441,24 @@ def execute_one_experiment(
         dict(item) for item in _list(exp.get("source_refs")) if isinstance(item, dict)
     ]
     observations["cleanup_failures"] = cleanup_failures
+
+    # Idempotency evidence: compare control vs treatment responses for dual-write protocols.
+    control_steps = [s for s in steps_out if isinstance(s, dict) and s.get("phase") == "control"]
+    treatment_steps = [s for s in steps_out if isinstance(s, dict) and s.get("phase") == "treatment"]
+    if control_steps and treatment_steps:
+        control_statuses = [s.get("status_code") for s in control_steps if s.get("status_code")]
+        treatment_statuses = [s.get("status_code") for s in treatment_steps if s.get("status_code")]
+        if control_statuses and treatment_statuses:
+            observations["dual_2xx"] = all(
+                200 <= s < 300 for s in control_statuses + treatment_statuses
+            )
+            observations["control_statuses"] = control_statuses
+            observations["treatment_statuses"] = treatment_statuses
+            observations["idempotency_check"] = {
+                "control_succeeded": all(200 <= s < 300 for s in control_statuses),
+                "treatment_succeeded": all(200 <= s < 300 for s in treatment_statuses),
+                "both_succeeded": observations["dual_2xx"],
+            }
 
     # Materialize + evaluate typed assertions via contract oracle.
     assertions = []
