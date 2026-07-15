@@ -943,7 +943,10 @@ def unresolved_placeholders(operation: dict[str, Any], plan: list[dict[str, Any]
         if _text(item.get("status")) == "bound"
         or (
             _text(item.get("status")) == "runtime_resolvable"
-            and bool(_list(item.get("resolver_operations")))
+            and (
+                bool(_list(item.get("resolver_operations")))
+                or item.get("synthetic_value") is not None
+            )
         )
     }
     return [name for name in needed if name not in bound]

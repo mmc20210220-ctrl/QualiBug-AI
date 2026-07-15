@@ -354,6 +354,61 @@ def compile_family_protocol(
             },
         }
 
+    if family == "state":
+        return {
+            "status": "COMPILED",
+            "control_plan": [{
+                "step_id": "control_1",
+                "actor_ref": control_actor_ref or treatment_actor_ref,
+                "operation_ref": operation_ref,
+                "intent": "state_transition_control",
+                "protocol_step": "positive_control",
+            }],
+            "treatment_plan": [{
+                "step_id": "treatment_1",
+                "actor_ref": treatment_actor_ref,
+                "operation_ref": operation_ref,
+                "intent": "state_transition_treatment",
+                "protocol_step": "treatment",
+            }],
+            "observers": [
+                {"observer_id": "before_state"},
+                {"observer_id": "after_state"},
+            ],
+            "assertion": {
+                "kind": "state_transition",
+                "from_state": _text(property_spec.get("from_state_ref")),
+                "to_state": _text(property_spec.get("to_state_ref")),
+            },
+        }
+
+    if family == "conservation":
+        return {
+            "status": "COMPILED",
+            "control_plan": [{
+                "step_id": "control_1",
+                "actor_ref": control_actor_ref or treatment_actor_ref,
+                "operation_ref": operation_ref,
+                "intent": "conservation_control",
+                "protocol_step": "positive_control",
+            }],
+            "treatment_plan": [{
+                "step_id": "treatment_1",
+                "actor_ref": treatment_actor_ref,
+                "operation_ref": operation_ref,
+                "intent": "conservation_treatment",
+                "protocol_step": "treatment",
+            }],
+            "observers": [
+                {"observer_id": "business_effect"},
+                {"observer_id": "entity_state"},
+            ],
+            "assertion": {
+                "kind": "conservation",
+                "equation": _dict(property_spec.get("equation") or property_spec),
+            },
+        }
+
     write_body: dict[str, Any] = {}
     if (
         family in {"authorization", "isolation", "visibility"}
