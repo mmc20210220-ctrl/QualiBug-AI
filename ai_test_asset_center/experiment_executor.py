@@ -872,6 +872,11 @@ def execute_one_experiment(
                     dependency_target = _text(_dict(dependency).get("target"))
                     dependency_token = _text(_dict(dependency).get("template_token"))
                     dependency_value: Any = None
+                    # Use synthetic fallback when no resolver operations exist
+                    _fallback = _dict(dependency).get("fallback_value")
+                    if _fallback is not None:
+                        token_values[dependency_token] = _fallback
+                        continue
                     for index, resolver in enumerate(_list(_dict(dependency).get("resolver_operations"))):
                         if not isinstance(resolver, dict):
                             continue

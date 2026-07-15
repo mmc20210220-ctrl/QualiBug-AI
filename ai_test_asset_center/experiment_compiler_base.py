@@ -162,6 +162,27 @@ def _source_request_example(operation: dict[str, Any]) -> dict[str, Any]:
             value = _dict(row).get("value")
             if isinstance(value, dict) and value:
                 return dict(value)
+    # Fallback: inherit request example from sibling operations sharing the
+    # same path prefix. Many endpoints omit body schemas in documentation
+    # but accept the same fields as sibling POST endpoints.
+    op_path = normalize_path_placeholders(
+        _text(operation.get("path") or operation.get("raw_path"))
+    ).rstrip("/")
+    op_prefix = op_path.rsplit("/", 1)[0] if "/" in op_path else ""
+    if op_prefix:
+        for candidate in _list(operation.get("_ir_operations") or []):
+            if not isinstance(candidate, dict):
+                continue
+            c_path = normalize_path_placeholders(
+                _text(candidate.get("path") or candidate.get("raw_path"))
+            ).rstrip("/")
+            if c_path == op_path:
+                continue
+            c_prefix = c_path.rsplit("/", 1)[0] if "/" in c_path else ""
+            if c_prefix == op_prefix:
+                c_example = _dict(candidate.get("request_example"))
+                if c_example:
+                    return dict(c_example)
     return {}
 
 

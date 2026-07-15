@@ -221,7 +221,7 @@ def declared_effect_observers(
     return resolvers
 
 
-def _request_example(operation: dict[str, Any]) -> dict[str, Any]:
+def _request_example(operation: dict[str, Any], *, sibling_ops: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     direct = _dict(operation).get("request_example")
     if isinstance(direct, dict) and direct:
         return dict(direct)
@@ -238,6 +238,25 @@ def _request_example(operation: dict[str, Any]) -> dict[str, Any]:
             value = _dict(row).get("value")
             if isinstance(value, dict) and value:
                 return dict(value)
+    # Inherit from sibling POST operations sharing the same path prefix
+    op_path = normalize_path_placeholders(
+        _text(operation.get("path") or operation.get("raw_path"))
+    ).rstrip("/")
+    op_prefix = op_path.rsplit("/", 1)[0] if "/" in op_path else ""
+    if op_prefix and sibling_ops:
+        for candidate in sibling_ops:
+            if not isinstance(candidate, dict):
+                continue
+            if _text(candidate.get("method")).upper() != "POST":
+                continue
+            c_path = normalize_path_placeholders(
+                _text(candidate.get("path") or candidate.get("raw_path"))
+            ).rstrip("/")
+            c_prefix = c_path.rsplit("/", 1)[0] if "/" in c_path else ""
+            if c_prefix == op_prefix and c_path != op_path:
+                c_example = _dict(candidate.get("request_example"))
+                if c_example:
+                    return dict(c_example)
     return {}
 
 
@@ -604,7 +623,7 @@ def _declared_fixture_setup(
         ), None)
         if not isinstance(create, dict):
             continue
-        body_template = _request_example(create)
+        body_template = _request_example(create, sibling_ops=operations)
         if not body_template:
             continue
         body_bindings: list[dict[str, Any]] = []
@@ -618,8 +637,22 @@ def _declared_fixture_setup(
                 behavior_ir=behavior_ir,
             )
             if not resolvers:
-                unresolved_body = True
-                break
+                # Use synthetic fallback values for unresolvable fields
+                # so the fixture can still be created. The POST endpoint
+                # may accept partial data or have server-side defaults.
+                import uuid as _uuid
+                _fallback = (
+                    str(_uuid.uuid4())
+                    if field.lower().endswith("id")
+                    else "test_value"
+                )
+                body_bindings.append({
+                    "target": _text(row.get("target")),
+                    "template_token": token,
+                    "resolver_operations": [],
+                    "fallback_value": _fallback,
+                })
+                continue
             body_bindings.append({
                 "target": _text(row.get("target")),
                 "template_token": token,
@@ -657,7 +690,8 @@ def build_binding_plan(
     obl = _dict(obligation)
     values = dict(available_values or {})
     body_placeholder_paths: dict[str, list[str]] = {}
-    for row in _body_placeholder_rows(_request_example(op)):
+    _ir_ops = _list(_dict(behavior_ir).get("operations"))
+    for row in _body_placeholder_rows(_request_example(op, sibling_ops=_ir_ops)):
         token = _text(row.get("template_token"))
         body_path = _text(row.get("target"))
         if token and body_path:
