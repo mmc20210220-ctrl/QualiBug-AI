@@ -706,93 +706,6 @@ def _run_http_step(
     }
 
 
-def _try_create_dependency_resource(
-    *,
-    dependency_leaf: str,
-    ops: dict[str, dict[str, Any]],
-    base_url: str,
-    fixture_token: str,
-    fixture_actor_identity: str,
-    root: Path,
-    project: str,
-    runtime_contract: dict[str, Any],
-    campaign_id: str,
-    execution_id: str,
-) -> str:
-    """Try to create a dependency resource via POST and return its ID.
-
-    When a fixture dependency (e.g. addressId for order creation) can't
-    be resolved from existing data, find a POST endpoint that creates
-    that resource type and execute it with minimal body, then extract
-    the created ID from the response.
-    """
-    import uuid as _uuid
-    # Map common field suffixes to their collection endpoints
-    _leaf_lower = dependency_leaf.lower().removesuffix("id").removesuffix("_")
-    _create_candidates = [op for op in ops.values() if isinstance(op, dict)
-        and _text(op.get("method")).upper() == "POST"
-        and _leaf_lower in normalize_path_placeholders(
-            _text(op.get("path") or op.get("raw_path"))
-        ).lower()
-    ]
-    if not _create_candidates:
-        # Try looser match: any POST in the same service area
-        _create_candidates = [op for op in ops.values() if isinstance(op, dict)
-            and _text(op.get("method")).upper() == "POST"
-            and not path_has_placeholders(
-                normalize_path_placeholders(_text(op.get("path") or op.get("raw_path")))
-            )
-            and _leaf_lower in _text(op.get("path") or "").lower()
-        ]
-    for create_op in _create_candidates[:1]:
-        create_path = normalize_path_placeholders(
-            _text(create_op.get("path") or create_op.get("raw_path"))
-        )
-        # Build minimal body — use request_example with synthetic values
-        body = {}
-        example = _dict(create_op.get("request_example"))
-        if example:
-            import re
-            _token_re = re.compile(r"<([^>]+)>")
-            for key, val in example.items():
-                if isinstance(val, str):
-                    token_match = _token_re.search(val)
-                    if token_match:
-                        token_name = token_match.group(1)
-                        body[key] = (
-                            str(_uuid.uuid4()) if "id" in token_name.lower()
-                            else "test_value"
-                        )
-                    else:
-                        body[key] = val
-                elif isinstance(val, (int, float)):
-                    body[key] = val
-                elif isinstance(val, list):
-                    body[key] = val
-                else:
-                    body[key] = str(val)
-        if not body:
-            body = {"name": f"auto_{_uuid.uuid4().hex[:8]}"}
-        # Execute POST
-        obs = _run_http_step(
-            base_url=base_url,
-            method="POST",
-            path=create_path,
-            token=fixture_token,
-            body=body,
-        )
-        sc = int(obs.get("status_code") or 0)
-        if 200 <= sc < 300:
-            # Extract ID from response
-            resp_body = obs.get("body")
-            created_id = _runtime_value_from_response(resp_body, "id", "")
-            if created_id and created_id not in (None, "", [], {}):
-                return str(created_id)
-            # Fallback: scan all *Id fields
-            for key, val in _response_scalar_fields(resp_body).items():
-                if key.lower().endswith("id") and val:
-                    return str(val[0])
-    return ""
 
 
 def execute_one_experiment(
@@ -1014,31 +927,11 @@ def execute_one_experiment(
                         if dependency_value not in (None, "", [], {}):
                             token_values[dependency_token] = dependency_value
                             break
-                    # Fall back: try to create the dependency resource first,
-                    # then use its ID. This handles multi-level dependency
-                    # chains (address → order → payment).
+                    # When a fixture dependency cannot be resolved from observed
+                    # data, the fixture setup is blocked — never fabricate IDs
+                    # or auto-create resources via hidden writes.
                     if dependency_value in (None, "", [], {}):
-                        _created_id = _try_create_dependency_resource(
-                            dependency_leaf=dependency_leaf,
-                            ops=ops,
-                            base_url=base_url,
-                            fixture_token=fixture_token,
-                            fixture_actor_identity=_text(fixture_actor.get("role") or fixture_actor_ref),
-                            root=root,
-                            project=project,
-                            runtime_contract=runtime_contract,
-                            campaign_id=campaign_id,
-                            execution_id=resolved_execution_id,
-                        )
-                        if _created_id:
-                            token_values[dependency_token] = _created_id
-                        else:
-                            import uuid as _uuid
-                            token_values[dependency_token] = (
-                                str(_uuid.uuid4())
-                                if dependency_leaf.lower().endswith("id")
-                                else "test_value"
-                            )
+                        dependency_blocked = True
                 if fixture_setup and not dependency_blocked:
                     setup_body = _materialize_body_template(
                         fixture_setup.get("body_template"),

@@ -1713,62 +1713,12 @@ def build_behavior_ir_from_knowledge_asset(
                     break
 
     # ── Synthetic request bodies for undocumented POST endpoints ──────
-    # Some POST endpoints have no documented request_example and no sibling
-    # to inherit from. Generate minimal bodies from entity field schemas
-    # or common patterns so the experiment compiler has something to work with.
+    # When a POST endpoint has no documented request_example and no sibling
+    # to inherit from, the Behavior IR leaves request_example unset rather
+    # than fabricating industry-specific test data. The experiment compiler
+    # handles missing bodies through path-parameter inference and generic
+    # field placeholders derived from declared schemas.
     # ───────────────────────────────────────────────────────────────────
-    if isinstance(_ops, list):
-        for _op in _ops:
-            if not isinstance(_op, dict):
-                continue
-            if _dict(_op.get("request_example")):
-                continue
-            if _text(_op.get("method")).upper() != "POST":
-                continue
-            _op_path = _norm_path(_text(_op.get("path") or _op.get("raw_path")))
-            _segments = [s for s in _op_path.strip("/").split("/") if s and not s.startswith(":")]
-            # Use the last non-admin, non-action segment as entity type
-            _action_suffixes = {"admin", "manual-success", "approve", "reject", "cancel", "confirm", "ship", "pay", "validate", "adjust", "consume", "release", "reserve", "reset"}
-            _entity = "resource"
-            for _seg in reversed(_segments):
-                if _seg not in _action_suffixes:
-                    _entity = _seg
-                    break
-            # Generate minimal body from entity name
-            _synthetic: dict[str, Any] = {}
-            # Basic fields for CRUD POST
-            _synthetic["name"] = f"auto_{_entity}_test"
-            if _entity in ("products", "product"):
-                import uuid as _uuid
-                _synthetic.update({
-                    "sku": f"QB-AUTO-{_uuid.uuid4().hex[:8].upper()}",
-                    "title": "Auto Test Product",
-                    "price": 99.99,
-                    "stock": 100,
-                    "category": "test",
-                })
-            elif _entity in ("users", "user"):
-                _synthetic.update({
-                    "email": "auto_test@example.com",
-                    "password": "Test@123456",
-                    "name": "Auto Test User",
-                })
-            elif _entity in ("addresses", "address"):
-                _synthetic.update({
-                    "street": "123 Test St",
-                    "city": "Test City",
-                    "zipCode": "000000",
-                })
-            elif _entity in ("coupons", "coupon"):
-                _synthetic.update({
-                    "code": "AUTO_TEST_COUPON",
-                    "discount": 10,
-                })
-            else:
-                _synthetic["title"] = f"Auto {_entity} Test"
-                _synthetic["description"] = "Auto-generated test resource"
-            _op["request_example"] = _synthetic
-    # exposes business_objects/data_tables, while other callers may use the
     # shorter objects/entities/tables aliases; merge them instead of choosing
     # only the first non-empty collection.
     entity_rows: list[Any] = []
