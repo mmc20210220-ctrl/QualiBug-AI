@@ -493,7 +493,7 @@ def build_discovery_plan(
     obligation_plan = plan_obligation_round(
         obligations,
         experiments_by_obligation=by_obligation,
-        budget=max(budget, 95),  # Ensure all obligations get a chance
+        budget=max(budget, 200),  # Cover all obligations
     )
     return DiscoveryPlanningBundle(
         mainline_run=contract,
