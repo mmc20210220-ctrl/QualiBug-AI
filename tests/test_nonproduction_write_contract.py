@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from ai_test_asset_center.sandbox_write_executor import execute_with_sandbox_write
+from ai_test_asset_center.experiment_executor import _cleanup_restores_governed_write
 
 
 def _scenario() -> SimpleNamespace:
@@ -602,6 +603,42 @@ def test_post_cleanup_uses_documented_compensate_action_when_delete_missing(monk
     assert result["strategy"] == "compensate_created_resource"
     assert result["receipt_ref"] == "/api/orders/ord-42/cancel"
     assert calls == [("POST", "https://target.invalid/api/orders/ord-42/cancel")]
+
+
+def test_compensation_identity_prefers_created_entity_over_shared_foreign_keys() -> None:
+    existing = {
+        "id": "ord-existing",
+        "user_id": "buyer-1",
+        "status": "CANCELLED",
+    }
+    pending = {
+        "id": "ord-new",
+        "user_id": "buyer-1",
+        "status": "PENDING_PAYMENT",
+    }
+    cancelled = {**pending, "status": "CANCELLED"}
+    original = {
+        "accepted": True,
+        "method": "POST",
+        "path": "/api/orders",
+        "audit_path": "sandbox_write_audit.jsonl",
+        "audit_record": {"phase": "treatment"},
+        "before": {"status": 200, "body": [existing]},
+        "write": {"status": 201, "body": pending},
+        "after": {"status": 200, "body": [pending, existing]},
+    }
+    cleanup = {
+        "accepted": True,
+        "method": "POST",
+        "path": "/api/orders/ord-new/cancel",
+        "audit_path": "sandbox_write_audit.jsonl",
+        "audit_record": {"phase": "cleanup"},
+        "before": {"status": 200, "body": [pending, existing]},
+        "write": {"status": 200, "body": cancelled},
+        "after": {"status": 200, "body": [cancelled, existing]},
+    }
+
+    assert _cleanup_restores_governed_write(original, cleanup) is True
 
 
 def test_patch_cleanup_restores_only_mutated_fields_from_collection_snapshot(monkeypatch) -> None:

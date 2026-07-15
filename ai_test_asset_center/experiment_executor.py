@@ -141,6 +141,27 @@ def _resource_identity_candidates(value: Any) -> set[str]:
     return identities
 
 
+def _primary_resource_identity_candidates(value: Any) -> set[str]:
+    row = _dict(value)
+    primary = {
+        _text(child)
+        for key, child in row.items()
+        if "".join(ch for ch in str(key).lower() if ch.isalnum())
+        in {"id", "uuid", "key"}
+        and not isinstance(child, (dict, list))
+        and _text(child)
+    }
+    if primary:
+        return primary
+    for envelope_key in ("data", "result", "resource", "item", "record"):
+        nested = row.get(envelope_key)
+        if isinstance(nested, dict):
+            nested_primary = _primary_resource_identity_candidates(nested)
+            if nested_primary:
+                return nested_primary
+    return _resource_identity_candidates(value)
+
+
 def _server_managed_field(value: Any) -> bool:
     normalized = "".join(ch for ch in str(value or "").lower() if ch.isalnum())
     return normalized in {
@@ -229,7 +250,7 @@ def _cleanup_restores_mutated_fields(
     write_body = _dict(_dict(original).get("write")).get("body")
     if not isinstance(write_body, dict):
         return False
-    identities = _resource_identity_candidates(write_body)
+    identities = _primary_resource_identity_candidates(write_body)
     before_entity = _single_entity_for_restoration(
         original_before.get("body"),
         identities,
@@ -265,7 +286,7 @@ def _cleanup_compensates_created_resource(
     if _text(original_row.get("method")).upper() != "POST":
         return False
     cleanup_path = _text(cleanup_row.get("path"))
-    created_identities = _resource_identity_candidates(
+    created_identities = _primary_resource_identity_candidates(
         _dict(original_row.get("write")).get("body")
     )
     if not created_identities or not any(
@@ -330,7 +351,7 @@ def _cleanup_restores_governed_write(
         return True
     original_method = _text(original_row.get("method")).upper()
     cleanup_path = _text(cleanup_row.get("path"))
-    created_identities = _resource_identity_candidates(
+    created_identities = _primary_resource_identity_candidates(
         _dict(original_row.get("write")).get("body")
     )
     identity_bound = any(
@@ -377,7 +398,7 @@ def _governed_write_changed_state(attempt: dict[str, Any]) -> bool:
 
     write_body = _dict(row.get("write")).get("body")
     if isinstance(write_body, dict):
-        identities = _resource_identity_candidates(write_body)
+        identities = _primary_resource_identity_candidates(write_body)
         before_entity = _single_entity_for_restoration(
             before_state.get("body"),
             identities,
@@ -1770,84 +1791,6 @@ def execute_one_experiment(
         phase="treatment",
     ))
 
-    for pending in reversed(pending_fixture_cleanups):
-        cleanup = _dict(pending.get("cleanup"))
-        cleanup_bindings = dict(runtime_bindings)
-        cleanup_placeholders = infer_path_params(_text(cleanup.get("path")))
-        if len(cleanup_placeholders) == 1:
-            cleanup_bindings.setdefault(cleanup_placeholders[0], pending.get("value"))
-        cleanup_path = _materialize_path(_text(cleanup.get("path")), cleanup_bindings)
-        governed_cleanup = execute_governed_control_write(
-            root=root,
-            project=project,
-            base_url=base_url,
-            runtime_contract=runtime_contract,
-            campaign_id=campaign_id,
-            operation_phase="experiment_fixture_cleanup",
-            actor_identity=_text(pending.get("actor_identity")),
-            actor_token=_text(pending.get("actor_token")),
-            method=_text(cleanup.get("method")).upper(),
-            path=cleanup_path,
-            body=None,
-            observation_path=_text(pending.get("observation_path")),
-        )
-        cleanup_write = _dict(governed_cleanup.get("write"))
-        cleanup_status = int(cleanup_write.get("status") or 0)
-        governed_setup = _dict(pending.get("governed_setup"))
-        restoration_verified = _cleanup_restores_governed_write(
-            governed_setup,
-            governed_cleanup,
-        )
-        audit_receipt_ids = sorted({
-            receipt_id
-            for receipt_id in (
-                _governance_audit_receipt_id(governed_setup),
-                _governance_audit_receipt_id(governed_cleanup),
-            )
-            if receipt_id
-        })
-        completed = bool(
-            200 <= cleanup_status < 300
-            and restoration_verified
-            and audit_receipt_ids
-        )
-        _dict(pending.get("receipt"))["fixture_cleanup_status"] = (
-            "completed" if completed else "failed"
-        )
-        if not completed:
-            cleanup_failures += 1
-        contract_evidence_receipts.append(build_contract_evidence_receipt(
-            kind="cleanup",
-            experiment_id=eid,
-            obligation_id=oid,
-            campaign_id=resolved_campaign_id,
-            execution_id=resolved_execution_id,
-            subject_id=f"fixture_cleanup:{_text(pending.get('target'))}",
-            status="COMPLETED" if completed else "FAILED",
-            evidence={
-                "method": _text(cleanup.get("method")).upper(),
-                "path": cleanup_path,
-                "status_code": cleanup_status,
-                "operation_ref": _text(cleanup.get("operation_ref")),
-                "accepted_write_count": 1,
-                "cleanup_write_count": 1 if governed_cleanup.get("accepted") is True else 0,
-                "restoration_verified": restoration_verified,
-                "state_unchanged": restoration_verified,
-                "audit_receipt_ids": audit_receipt_ids,
-            },
-        ))
-        steps_out.append({
-            "phase": "fixture_cleanup",
-            "cleanup_subject_id": f"fixture_cleanup:{_text(pending.get('target'))}",
-            "method": _text(cleanup.get("method")).upper(),
-            "path": cleanup_path,
-            "status_code": cleanup_status,
-            "operation_ref": _text(cleanup.get("operation_ref")),
-            "governance_receipt": governed_cleanup,
-        })
-    if pending_fixture_cleanups:
-        observations["cleanup_status"] = "failed" if cleanup_failures else "completed"
-
     # Cleanup compensation in reverse order for write experiments.
     safety = _dict(exp.get("safety_contract"))
     governed_write_attempts = _governed_write_attempts(steps_out)
@@ -2339,6 +2282,89 @@ def execute_one_experiment(
                     observations["cleanup_status"] = "failed"
                 elif not cleanup_failures:
                     observations["cleanup_status"] = "completed"
+
+    # Fixture setup precedes experiment writes, so its compensation must run
+    # after every experiment-write compensation to preserve global reverse
+    # order.  Complete it before aggregating cleanup subjects so the Oracle
+    # sees one authoritative fixture-cleanup receipt rather than a synthetic
+    # missing receipt followed by the real one.
+    for pending in reversed(pending_fixture_cleanups):
+        cleanup = _dict(pending.get("cleanup"))
+        cleanup_bindings = dict(runtime_bindings)
+        cleanup_placeholders = infer_path_params(_text(cleanup.get("path")))
+        if len(cleanup_placeholders) == 1:
+            cleanup_bindings.setdefault(cleanup_placeholders[0], pending.get("value"))
+        cleanup_path = _materialize_path(_text(cleanup.get("path")), cleanup_bindings)
+        governed_cleanup = execute_governed_control_write(
+            root=root,
+            project=project,
+            base_url=base_url,
+            runtime_contract=runtime_contract,
+            campaign_id=campaign_id,
+            operation_phase="experiment_fixture_cleanup",
+            actor_identity=_text(pending.get("actor_identity")),
+            actor_token=_text(pending.get("actor_token")),
+            method=_text(cleanup.get("method")).upper(),
+            path=cleanup_path,
+            body=None,
+            observation_path=_text(pending.get("observation_path")),
+        )
+        cleanup_write = _dict(governed_cleanup.get("write"))
+        cleanup_status = int(cleanup_write.get("status") or 0)
+        governed_setup = _dict(pending.get("governed_setup"))
+        restoration_verified = _cleanup_restores_governed_write(
+            governed_setup,
+            governed_cleanup,
+        )
+        audit_receipt_ids = sorted({
+            receipt_id
+            for receipt_id in (
+                _governance_audit_receipt_id(governed_setup),
+                _governance_audit_receipt_id(governed_cleanup),
+            )
+            if receipt_id
+        })
+        completed = bool(
+            200 <= cleanup_status < 300
+            and restoration_verified
+            and audit_receipt_ids
+        )
+        _dict(pending.get("receipt"))["fixture_cleanup_status"] = (
+            "completed" if completed else "failed"
+        )
+        if not completed:
+            cleanup_failures += 1
+        contract_evidence_receipts.append(build_contract_evidence_receipt(
+            kind="cleanup",
+            experiment_id=eid,
+            obligation_id=oid,
+            campaign_id=resolved_campaign_id,
+            execution_id=resolved_execution_id,
+            subject_id=f"fixture_cleanup:{_text(pending.get('target'))}",
+            status="COMPLETED" if completed else "FAILED",
+            evidence={
+                "method": _text(cleanup.get("method")).upper(),
+                "path": cleanup_path,
+                "status_code": cleanup_status,
+                "operation_ref": _text(cleanup.get("operation_ref")),
+                "accepted_write_count": 1,
+                "cleanup_write_count": 1 if governed_cleanup.get("accepted") is True else 0,
+                "restoration_verified": restoration_verified,
+                "state_unchanged": restoration_verified,
+                "audit_receipt_ids": audit_receipt_ids,
+            },
+        ))
+        steps_out.append({
+            "phase": "fixture_cleanup",
+            "cleanup_subject_id": f"fixture_cleanup:{_text(pending.get('target'))}",
+            "method": _text(cleanup.get("method")).upper(),
+            "path": cleanup_path,
+            "status_code": cleanup_status,
+            "operation_ref": _text(cleanup.get("operation_ref")),
+            "governance_receipt": governed_cleanup,
+        })
+    if pending_fixture_cleanups:
+        observations["cleanup_status"] = "failed" if cleanup_failures else "completed"
 
     recorded_cleanup_subjects = {
         _text(receipt.get("subject_id"))

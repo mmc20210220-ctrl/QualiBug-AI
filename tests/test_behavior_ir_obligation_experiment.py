@@ -21,6 +21,7 @@ from ai_test_asset_center.contract_oracles import (
 )
 from ai_test_asset_center.experiment_compiler import compile_experiment_for_obligation, compile_experiments
 from ai_test_asset_center.obligation_compiler import compile_obligations_from_behavior_ir
+from ai_test_asset_center.obligation_compiler_base import _cleanup_requirement
 from ai_test_asset_center.runtime_binding_graph import (
     apply_binding,
     build_binding_plan,
@@ -1694,6 +1695,77 @@ def test_experiment_compiler_uses_unique_source_declared_action_compensator() ->
         "body_from_original_request": True,
         "runtime_response_binding_required": False,
     }]
+
+
+def test_write_without_concrete_compensation_is_blocked_before_execution() -> None:
+    operation = {
+        "id": "consume_capacity",
+        "method": "POST",
+        "path": "/api/capacity/consume",
+        "read_write": "write",
+        "request_example": {"resourceId": "resource-1", "units": 1},
+        "request_schema": {
+            "type": "object",
+            "required": ["resourceId", "units"],
+            "properties": {
+                "resourceId": {"type": "string"},
+                "units": {"type": "integer"},
+            },
+        },
+    }
+    obligation = {
+        "obligation_id": "obl_non_reversible_write",
+        "risk_family": "validation",
+        "property": {
+            "operation_ref": "consume_capacity",
+            "actor_ref": "operator",
+        },
+        "required_actors": ["operator"],
+        "required_operations": ["consume_capacity"],
+        "required_fixtures": [],
+        "required_observers": ["http_response"],
+        "cleanup_requirement": {"required": True},
+    }
+
+    experiment = compile_experiment_for_obligation(
+        obligation,
+        behavior_ir={
+            "operations": [
+                operation,
+                {
+                    "id": "read_capacity",
+                    "method": "GET",
+                    "path": "/api/capacity/{resourceId}",
+                    "read_write": "read",
+                },
+            ],
+            "actors": [{"id": "operator", "role": "public"}],
+            "relations": [],
+            "conflicts": [],
+        },
+        environment_type="test",
+    )
+
+    assert experiment["compile_receipt"]["status"] == "BLOCKED"
+    assert (
+        experiment["compile_receipt"]["reason_code"]
+        == "BLOCKED_NON_REVERSIBLE_WRITE"
+    )
+
+
+def test_missing_compensator_never_downgrades_required_write_cleanup() -> None:
+    requirement = _cleanup_requirement(
+        {
+            "id": "write_resource",
+            "method": "POST",
+            "path": "/resources",
+            "read_write": "write",
+        },
+        [],
+        [],
+    )
+
+    assert requirement == {"required": True, "mode": "reverse_order"}
 
 
 def test_action_shape_and_cleanup_name_do_not_invent_compensation_relation() -> None:

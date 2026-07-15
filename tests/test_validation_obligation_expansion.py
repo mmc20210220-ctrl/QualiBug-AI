@@ -294,6 +294,10 @@ def test_typed_invariant_operand_targets_exact_source_constraint() -> None:
     assert variants[0]["property"]["field_tokens"] == ["quantity"]
     assert variants[0]["property"]["validation_constraint"] == "exclusiveMinimum"
     assert variants[0]["property"]["validation_constraint_value"] == 0
+    assert (
+        variants[0]["property"]["validation_constraint_source"]
+        == "source_invariant"
+    )
 
 
 def test_validation_rejection_requires_zero_business_effect() -> None:

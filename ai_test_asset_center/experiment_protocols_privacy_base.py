@@ -336,6 +336,11 @@ def _source_constraint_material(
     if not exists:
         return {}, {}, {}, "source_constraint_field_unresolved"
     constraint_value = property_spec.get("validation_constraint_value")
+    constraint_source = _text(
+        property_spec.get("validation_constraint_source") or "request_schema"
+    )
+    if constraint_source not in {"request_schema", "source_invariant"}:
+        return {}, {}, {}, "source_constraint_lineage_invalid"
     if constraint == "required":
         if not isinstance(parent, dict) or not isinstance(leaf, str):
             return {}, {}, {}, "required_constraint_parent_invalid"
@@ -364,7 +369,7 @@ def _source_constraint_material(
         "field_tokens": list(tokens),
         "constraint": constraint,
         "constraint_value": deepcopy(constraint_value),
-        "source": "request_schema",
+        "source": constraint_source,
         "operator": operator,
     }
     return control, treatment, mutation, ""

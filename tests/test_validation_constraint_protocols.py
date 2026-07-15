@@ -112,6 +112,19 @@ def test_enum_and_numeric_boundaries_compile_to_exact_mutations() -> None:
     assert maximum_protocol["treatment_plan"][0]["body"]["quantity"] > 5
 
 
+def test_mutation_receipt_preserves_constraint_source_lineage() -> None:
+    property_spec = _property(["quantity"], "exclusiveMinimum", 0)
+    property_spec["validation_constraint_source"] = "source_invariant"
+
+    protocol = _compile(property_spec)
+
+    assert protocol["status"] == "COMPILED"
+    assert (
+        protocol["treatment_plan"][0]["mutation"]["source"]
+        == "source_invariant"
+    )
+
+
 def test_nested_required_and_string_constraints_mutate_the_nested_leaf() -> None:
     required_protocol = _compile(
         _property(["profile", "name"], "required", True)

@@ -842,6 +842,164 @@ def test_isolation_executor_forces_owned_fixture_and_emits_ownership_receipt(
     assert result["finding"] is not None
 
 
+def test_fixture_cleanup_runs_after_experiment_write_compensations(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    ir = _isolation_ir()
+    ir["operations"].extend([
+        {
+            "id": "op-reserve",
+            "operation_id": "reserve_capacity",
+            "method": "POST",
+            "path": "/capacity/reserve",
+            "read_write": "write",
+        },
+        {
+            "id": "op-release",
+            "operation_id": "release_capacity",
+            "method": "POST",
+            "path": "/capacity/release",
+            "read_write": "write",
+        },
+        {
+            "id": "op-capacity-state",
+            "operation_id": "get_capacity",
+            "method": "GET",
+            "path": "/capacity/reserve",
+            "read_write": "read",
+        },
+    ])
+    experiment = compile_experiment_for_obligation(
+        _isolation_obligation(),
+        behavior_ir=ir,
+        environment_type="test",
+    )
+    experiment["fixture_dag"] = build_fixture_dag_for_experiment(
+        experiment,
+        behavior_ir=ir,
+    )
+    experiment["control_plan"] = [{
+        "step_id": "control_1",
+        "operation_ref": "op-reserve",
+        "actor_ref": "actor-owner",
+        "body": {"amount": 1},
+    }]
+    experiment["treatment_plan"] = [{
+        "step_id": "treatment_1",
+        "operation_ref": "op-reserve",
+        "actor_ref": "actor-viewer",
+        "body": {"amount": 1},
+    }]
+    experiment["cleanup_plan"] = [{
+        "action": "source_declared_compensation",
+        "operation_ref": "op-release",
+        "compensates_operation_ref": "op-reserve",
+        "path": "/capacity/release",
+        "method": "POST",
+        "body_from_original_request": True,
+    }]
+    experiment["safety_contract"] = {
+        **experiment.get("safety_contract", {}),
+        "governed_write": True,
+    }
+    phases: list[str] = []
+    capacity = 2
+
+    def governed_write(**kwargs):
+        nonlocal capacity
+        phase = kwargs["operation_phase"]
+        phases.append(phase)
+        if phase == "experiment_fixture_setup":
+            return {
+                "accepted": True,
+                "status": "executed",
+                "method": kwargs["method"],
+                "path": kwargs["path"],
+                "before": {"status": 200, "body": []},
+                "write": {"status": 201, "body": {"id": "r-owned"}},
+                "after": {"status": 200, "body": [{"id": "r-owned"}]},
+                "audit_path": "audit.jsonl",
+                "audit_record": {"phase": phase},
+            }
+        if phase in {"experiment_control", "experiment_treatment"}:
+            before = capacity
+            capacity -= 1
+            return {
+                "accepted": True,
+                "before": {"status": 200, "body": {"value": before}},
+                "write": {"status": 200, "body": {"value": capacity}},
+                "after": {"status": 200, "body": {"value": capacity}},
+                "audit_path": "audit.jsonl",
+                "audit_record": {"phase": phase},
+            }
+        if phase == "experiment_cleanup":
+            before = capacity
+            capacity += 1
+            return {
+                "accepted": True,
+                "before": {"status": 200, "body": {"value": before}},
+                "write": {"status": 200, "body": {"value": capacity}},
+                "after": {"status": 200, "body": {"value": capacity}},
+                "audit_path": "audit.jsonl",
+                "audit_record": {"phase": phase},
+            }
+        assert phase == "experiment_fixture_cleanup"
+        return {
+            "accepted": True,
+            "status": "executed",
+            "method": kwargs["method"],
+            "path": kwargs["path"],
+            "before": {"status": 200, "body": {"id": "r-owned"}},
+            "write": {"status": 204, "body": {}},
+            "after": {"status": 404, "body": {}},
+            "audit_path": "audit.jsonl",
+            "audit_record": {"phase": phase},
+        }
+
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_executor.sandbox_write_allowed",
+        lambda **_kwargs: (True, ""),
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_executor.execute_governed_control_write",
+        governed_write,
+    )
+
+    result = execute_one_experiment(
+        experiment,
+        behavior_ir=ir,
+        root=tmp_path,
+        project="project",
+        base_url="http://target.invalid",
+        runtime_contract={"environment_type": "test"},
+        campaign_id="campaign",
+        execution_id="execution-global-cleanup-order",
+        actor_tokens={},
+    )
+
+    assert result.get("cleanup_failures") == 0, (
+        phases,
+        [
+            (
+                receipt.get("subject_id"),
+                receipt.get("status"),
+                receipt.get("evidence"),
+            )
+            for receipt in result.get("contract_evidence_receipts", [])
+            if receipt.get("kind") == "cleanup"
+        ],
+    )
+    assert phases == [
+        "experiment_fixture_setup",
+        "experiment_control",
+        "experiment_treatment",
+        "experiment_cleanup",
+        "experiment_cleanup",
+        "experiment_fixture_cleanup",
+    ]
+
+
 def test_accepted_fixture_without_identity_is_visible_cleanup_failure(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,

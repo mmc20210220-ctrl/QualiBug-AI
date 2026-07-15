@@ -349,6 +349,7 @@ def _typed_expression_constraint(
         "validation_constraint_value": deepcopy(
             operand.get("validation_constraint_value")
         ),
+        "validation_constraint_source": "source_invariant",
     }
 
 
@@ -468,6 +469,7 @@ def expand_validation_obligation(
             "json_path": _json_path(tokens),
             "validation_constraint": constraint,
             "validation_constraint_value": deepcopy(constraint_value),
+            "validation_constraint_source": "request_schema",
             "expanded_from_obligation_id": original_id,
             "expected_rejection_status_class": 4,
             "expected_treatment_effect_count": 0,
