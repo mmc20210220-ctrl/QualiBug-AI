@@ -905,8 +905,17 @@ def _numeric_snapshot_values(body: Any, terms: list[str]) -> dict[str, int | flo
             normalized = _normalized_field_name(key)
             if not normalized or normalized in {"id", "uuid", "key"} or normalized.endswith("_id"):
                 continue
-            if isinstance(child, bool) or not isinstance(child, (int, float)):
+            if isinstance(child, bool):
                 continue
+            if not isinstance(child, (int, float)):
+                # Try to parse string numbers (common in JSON APIs)
+                if isinstance(child, str):
+                    try:
+                        child = float(child) if "." in child else int(child)
+                    except (ValueError, TypeError):
+                        continue
+                else:
+                    continue
             if term_lookup and normalized not in term_lookup:
                 continue
             out_key = term_lookup.get(normalized, normalized)
@@ -983,13 +992,20 @@ def _observe_entity_state(
             "after_values": after_values,
         })
     elif conservation_terms:
-        # Terms specified but values not found in governance snapshots
+        # Terms specified but not found in snapshots
         return _receipt(
             observer_id="entity_state",
             status="INDETERMINATE",
             reason_code="CONSERVATION_VALUES_MISSING",
             evidence=evidence,
         )
+    else:
+        # No terms specified and no values extracted — still provide empty dicts
+        evidence.update({
+            "conservation_terms": [],
+            "before_values": {},
+            "after_values": {},
+        })
 
     evidence.update({
         "entity_state_observed": True,
