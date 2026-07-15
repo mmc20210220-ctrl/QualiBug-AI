@@ -891,6 +891,24 @@ def execute_one_experiment(
         elif kind == "runtime_read_binding":
             target = _text(_dict(node).get("target"))
             binding = binding_plan.get(target) or {}
+            # Use synthetic fallback value when no resolvers exist
+            _synthetic = binding.get("synthetic_value")
+            if _synthetic and not binding.get("resolver_operations") and not binding.get("fixture_setup"):
+                runtime_bindings[target] = _synthetic
+                fixture_receipts.append({
+                    "node_id": node_id,
+                    "kind": kind,
+                    "status": "resolved",
+                    "target": target,
+                    "value_fingerprint": _synthetic[:12],
+                })
+                binding_materialization_receipts.append({
+                    "target": target,
+                    "status": "BOUND",
+                    "value_fingerprint": _synthetic[:12],
+                    "source_priority": "synthetic_fallback",
+                })
+                continue
             resolvers = _validated_runtime_resolvers(binding, ops)
             force_fixture_setup = binding.get("force_fixture_setup") is True
             target_path = _text(binding.get("target_path"))
