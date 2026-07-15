@@ -168,6 +168,7 @@ def execute_governed_control_write(
     path: str,
     body: Any,
     observation_path: str,
+    runtime_body_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     import sys
 
@@ -190,6 +191,7 @@ def execute_governed_control_write(
             path=path,
             body=body,
             observation_path=observation_path,
+            runtime_body_plan=runtime_body_plan,
         )
     finally:
         _base._http_request = saved_http

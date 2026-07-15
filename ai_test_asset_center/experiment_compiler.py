@@ -191,6 +191,88 @@ def _privacy_field_mode(obligation: dict[str, Any]) -> bool:
     )
 
 
+def _mutable_entity_field(value: Any) -> bool:
+    normalized = "".join(ch for ch in _text(value).lower() if ch.isalnum() or ch == "_")
+    if not normalized:
+        return False
+    if normalized in {"id", "uuid", "key"} or normalized.endswith("_id"):
+        return False
+    return normalized not in {
+        "created_at", "updated_at", "deleted_at", "createdat", "updatedat",
+        "deletedat", "password", "token", "secret", "credential",
+    }
+
+
+def _source_observed_mutation_plan(
+    operation_ref: str,
+    behavior_ir: dict[str, Any],
+) -> dict[str, Any]:
+    entities = {
+        _text(entity.get("id")): entity
+        for entity in _list(_dict(behavior_ir).get("entities"))
+        if isinstance(entity, dict) and _text(entity.get("id"))
+    }
+    entity_refs: set[str] = set()
+    relation_refs: set[str] = set()
+    for relation in _list(_dict(behavior_ir).get("relations")):
+        if not isinstance(relation, dict):
+            continue
+        if _text(relation.get("operation_ref")) != operation_ref:
+            continue
+        target = _text(relation.get("to_ref"))
+        if target not in entities:
+            continue
+        entity_refs.add(target)
+        if _text(relation.get("id")):
+            relation_refs.add(_text(relation.get("id")))
+    candidate_fields = sorted({
+        _text(field)
+        for entity_ref in entity_refs
+        for field in _list(_dict(entities.get(entity_ref)).get("fields"))
+        if _mutable_entity_field(field)
+    })
+    if not candidate_fields:
+        return {}
+    return {
+        "schema_version": "qualibug.source-observed-mutation-plan.v1",
+        "candidate_fields": candidate_fields,
+        "source_entity_refs": sorted(entity_refs),
+        "source_relation_refs": sorted(relation_refs),
+    }
+
+
+def _attach_source_observed_mutations(
+    experiment: dict[str, Any],
+    behavior_ir: dict[str, Any],
+) -> dict[str, Any]:
+    receipt = _dict(experiment.get("compile_receipt"))
+    if _text(receipt.get("status")).upper() != "COMPILED":
+        return experiment
+    operations = {
+        _text(operation.get("id")): operation
+        for operation in _list(_dict(behavior_ir).get("operations"))
+        if isinstance(operation, dict) and _text(operation.get("id"))
+    }
+    for step in _list(experiment.get("control_plan")) + _list(experiment.get("treatment_plan")):
+        if not isinstance(step, dict):
+            continue
+        operation_ref = _text(step.get("operation_ref"))
+        operation = _dict(operations.get(operation_ref))
+        method = _text(operation.get("method")).upper()
+        body = step.get("body") if "body" in step else operation.get("request_example")
+        if method not in {"PATCH", "PUT"} or body not in (None, {}):
+            continue
+        plan = _source_observed_mutation_plan(operation_ref, behavior_ir)
+        if not plan:
+            return _base._base.blocked_experiment(
+                _text(experiment.get("obligation_id")) or "unknown_obligation",
+                "BLOCKED_MISSING_BINDING",
+                f"runtime_mutation_source_fields_unresolved:{operation_ref}",
+            )
+        step["runtime_body_plan"] = deepcopy(plan)
+    return experiment
+
+
 def compile_experiment_for_obligation(
     obligation: dict[str, Any],
     *,
@@ -212,13 +294,14 @@ def compile_experiment_for_obligation(
                 f"runtime_actor_pair_not_distinct:{problem}",
             )
 
-    return _original_compile_experiment(
+    experiment = _original_compile_experiment(
         obligation,
         behavior_ir=_scoped_behavior_ir(behavior_ir, obligation),
         environment_type=environment_type,
         policy_version=policy_version,
         available_adapters=available_adapters,
     )
+    return _attach_source_observed_mutations(experiment, behavior_ir)
 
 
 # Batch compilation is implemented in the stable base module and resolves this

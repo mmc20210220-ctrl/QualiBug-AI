@@ -8,6 +8,7 @@ actor/fixture/observer/cleanup compensation.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from copy import deepcopy
 import json
 import hashlib
 import threading
@@ -72,6 +73,45 @@ def _list(value: Any) -> list[Any]:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _select_fixture_actor(
+    fixture_setup: dict[str, Any],
+    *,
+    control_plan: list[Any],
+    treatment_plan: list[Any],
+    actors: dict[str, dict[str, Any]],
+    tokens: dict[str, Any],
+) -> tuple[str, dict[str, Any], str]:
+    """Select a declared fixture actor aligned with the experiment control.
+
+    A fixture create operation may list several permitted actors.  Selecting
+    the first actor is not semantically safe: the created resource can then be
+    invisible to the control/treatment actors that the experiment is meant to
+    compare.  Prefer the control actor, then treatment, but only when the
+    source-declared fixture actor list contains that identity.  Fall back to
+    the first executable declared actor when neither plan actor is allowed.
+    """
+    declared_refs = [
+        _text(actor_ref)
+        for actor_ref in _list(fixture_setup.get("actor_refs"))
+        if _text(actor_ref)
+    ]
+    preferred_refs = [
+        _text(_dict(step).get("actor_ref"))
+        for step in [*control_plan, *treatment_plan]
+        if isinstance(step, dict) and _text(_dict(step).get("actor_ref"))
+    ]
+    ordered_refs = list(dict.fromkeys([
+        *[ref for ref in preferred_refs if ref in declared_refs],
+        *declared_refs,
+    ]))
+    for actor_ref in ordered_refs:
+        actor = actors.get(actor_ref) or {}
+        token = _resolve_token(actor, tokens)
+        if _text(actor.get("role")).lower() in {"anonymous", "public"} or token:
+            return actor_ref, actor, token
+    return "", {}, ""
 
 
 def _stable_id(prefix: str, *parts: Any) -> str:
@@ -698,6 +738,64 @@ def _declared_observation_path(
     return ""
 
 
+def _runtime_entity_candidates(value: Any) -> list[dict[str, Any]]:
+    """Extract source-observed entity rows without assuming a domain schema."""
+    if isinstance(value, list):
+        return [row for row in value if isinstance(row, dict)]
+    if not isinstance(value, dict):
+        return []
+    rows: list[dict[str, Any]] = []
+    for key in ("data", "result", "items", "records", "results", "list", "rows", "content"):
+        child = value.get(key)
+        if isinstance(child, list):
+            rows.extend(row for row in child if isinstance(row, dict))
+        elif isinstance(child, dict):
+            rows.append(child)
+    return rows or [value]
+
+
+def _select_runtime_binding(
+    body: Any,
+    target_path: str,
+    *,
+    preferred_body: Any = None,
+) -> dict[str, str]:
+    """Choose an observed entity that can actually receive the planned write.
+
+    A collection resolver must not blindly bind the first row when the source
+    operation declares a state/value transition.  Prefer the first observed
+    entity whose declared mutation fields differ from the planned request;
+    otherwise preserve the canonical structural resolver result.
+    """
+    default = bind_entity_fields(body, target_path)
+    desired = _scalar_body_bindings(preferred_body)
+    if not default or not desired:
+        return default
+    target_params = infer_path_params(target_path) or ["id"]
+    target_param = target_params[0]
+    default_value = _text(default.get(target_param) or default.get("id"))
+    if not default_value:
+        return default
+    for entity in _runtime_entity_candidates(body):
+        identity = _text(
+            entity.get(target_param)
+            or entity.get("id")
+            or entity.get("uuid")
+            or entity.get("key")
+        )
+        if not identity:
+            continue
+        if any(
+            field in entity
+            and entity.get(field) != desired_value
+            for field, desired_value in desired.items()
+        ):
+            selected = bind_entity_fields(entity, target_path)
+            if selected.get(target_param) or selected.get("id"):
+                return selected
+    return default
+
+
 def _run_http_step(
     *,
     base_url: str,
@@ -774,6 +872,7 @@ def execute_one_experiment(
     activation_requirements = contract_activation_requirements(exp)
     contract_evidence_receipts: list[dict[str, Any]] = []
     cleanup_failures = 0
+    pre_transport_block_reasons: list[str] = []
     fixture_receipts: list[dict[str, Any]] = []
     binding_materialization_receipts: list[dict[str, Any]] = []
     runtime_bindings: dict[str, Any] = {}
@@ -839,6 +938,27 @@ def execute_one_experiment(
             resolvers = _validated_runtime_resolvers(binding, ops)
             force_fixture_setup = binding.get("force_fixture_setup") is True
             target_path = _text(binding.get("target_path"))
+            preferred_binding_body: Any = None
+            normalized_target_path = normalize_path_placeholders(target_path)
+            for planned_step in [
+                *_list(exp.get("control_plan")),
+                *_list(exp.get("treatment_plan")),
+            ]:
+                if not isinstance(planned_step, dict):
+                    continue
+                planned_op = ops.get(_text(planned_step.get("operation_ref"))) or {}
+                planned_path = normalize_path_placeholders(
+                    _text(planned_op.get("path") or planned_op.get("raw_path"))
+                )
+                if planned_path != normalized_target_path:
+                    continue
+                preferred_binding_body = (
+                    planned_step.get("body")
+                    if planned_step.get("body")
+                    else _request_example(planned_op)
+                )
+                if preferred_binding_body:
+                    break
             value: Any = None
             fixture_setup_accepted = False
             receipt: dict[str, Any] = {
@@ -873,7 +993,11 @@ def execute_one_experiment(
                     if int(obs.get("status_code") or 0) == 0:
                         break
                     continue
-                extracted = bind_entity_fields(obs.get("body"), target_path)
+                extracted = _select_runtime_binding(
+                    obs.get("body"),
+                    target_path,
+                    preferred_body=preferred_binding_body,
+                )
                 value = extracted.get(target)
                 if value in (None, "", [], {}):
                     continue
@@ -887,17 +1011,13 @@ def execute_one_experiment(
                 break
             if value in (None, "", [], {}):
                 fixture_setup = _validated_fixture_setup(binding, ops, actors)
-                fixture_actor_ref = ""
-                fixture_actor: dict[str, Any] = {}
-                fixture_token = ""
-                for actor_ref in _list(fixture_setup.get("actor_refs")):
-                    actor = actors.get(_text(actor_ref)) or {}
-                    token = _resolve_token(actor, tokens)
-                    if _text(actor.get("role")).lower() in {"anonymous", "public"} or token:
-                        fixture_actor_ref = _text(actor_ref)
-                        fixture_actor = actor
-                        fixture_token = token
-                        break
+                fixture_actor_ref, fixture_actor, fixture_token = _select_fixture_actor(
+                    fixture_setup,
+                    control_plan=_list(exp.get("control_plan")),
+                    treatment_plan=_list(exp.get("treatment_plan")),
+                    actors=actors,
+                    tokens=tokens,
+                )
                 if fixture_setup and not fixture_actor_ref:
                     fixture_setup = {}
                 token_values: dict[str, Any] = {}
@@ -1147,6 +1267,8 @@ def execute_one_experiment(
             },
         ))
 
+    source_observed_control_bodies: dict[str, Any] = {}
+
     def _exec_plan(plan: list[Any], *, phase: str) -> list[dict[str, Any]]:
         nonlocal cleanup_failures
         results = []
@@ -1195,6 +1317,18 @@ def execute_one_experiment(
                 request_body,
                 runtime_bindings,
             )
+            runtime_body_plan = deepcopy(_dict(step.get("runtime_body_plan")))
+            if runtime_body_plan:
+                identity_fields = infer_path_params(path_template)
+                runtime_body_plan["identity_bindings"] = {
+                    field: runtime_bindings[field]
+                    for field in identity_fields
+                    if field in runtime_bindings
+                    and runtime_bindings[field] not in (None, "")
+                }
+                if phase == "treatment" and op_ref in source_observed_control_bodies:
+                    request_body = deepcopy(source_observed_control_bodies[op_ref])
+                    runtime_body_plan = {}
             mutation = _dict(step.get("mutation"))
             mutation_class = _text(
                 mutation.get("class")
@@ -1224,8 +1358,8 @@ def execute_one_experiment(
             })
             token = _resolve_token(actor, tokens)
             is_write = method in {"POST", "PUT", "PATCH", "DELETE"}
+            runtime_body_blocked = False
             if is_write:
-                request_bodies_for_cleanup[subject_id] = request_body
                 allowed, reason = sandbox_write_allowed(
                     root=root,
                     project=project,
@@ -1282,7 +1416,34 @@ def execute_one_experiment(
                     path=path,
                     body=request_body,
                     observation_path=observation_path,
+                    runtime_body_plan=runtime_body_plan or None,
                 )
+                runtime_body_receipt = _dict(governed.get("runtime_body_receipt"))
+                runtime_body_blocked = (
+                    _text(runtime_body_receipt.get("status")).upper() == "BLOCKED"
+                )
+                if runtime_body_blocked:
+                    reason_code = _text(
+                        runtime_body_receipt.get("reason_code")
+                        or governed.get("reason")
+                    ) or "runtime_body_materialization_blocked"
+                    pre_transport_block_reasons.append(reason_code)
+                materialized_body = governed.get("materialized_request_body")
+                if isinstance(materialized_body, dict) and materialized_body:
+                    request_body = deepcopy(materialized_body)
+                    request_body_fingerprint = _sha256(request_body)
+                    request_semantics_fingerprint = _sha256({
+                        "operation_ref": op_ref,
+                        "method": method,
+                        "path_template": path_template,
+                        "mutation_class": mutation_class,
+                        "mutation_selector": mutation_selector,
+                        "mutation_operator": mutation_operator,
+                        "request_body_fingerprint": request_body_fingerprint,
+                    })
+                    if phase == "control":
+                        source_observed_control_bodies[op_ref] = deepcopy(request_body)
+                request_bodies_for_cleanup[subject_id] = request_body
                 write_receipt = _dict(governed.get("write"))
                 obs = {
                     "method": method,
@@ -1309,6 +1470,11 @@ def execute_one_experiment(
             obs["mutation_class"] = mutation_class
             obs["mutation_selector"] = mutation_selector
             obs["mutation_operator"] = mutation_operator
+            if runtime_body_blocked:
+                obs["status"] = "blocked_write"
+                obs["reason"] = _text(
+                    _dict(obs.get("governance_receipt")).get("reason")
+                ) or "runtime_body_materialization_blocked"
             observed_status = int(obs.get("status_code") or 0)
             if _text(step.get("protocol_step")) == "temporal_write":
                 temporal_elapsed = int(obs.get("duration_ms") or 0)
@@ -1332,7 +1498,9 @@ def execute_one_experiment(
                     },
                 ])
             contract_status = (
-                "OBSERVED"
+                "BLOCKED"
+                if runtime_body_blocked
+                else "OBSERVED"
                 if phase == "control" and 200 <= observed_status < 300
                 else "BLOCKED"
                 if phase == "control" and observed_status > 0
@@ -1816,12 +1984,25 @@ def execute_one_experiment(
             and _text(_dict(step).get("status")) == "blocked_write"
             and not isinstance(_dict(step).get("governance_receipt"), dict)
         ]
-        if pre_transport_blocks and not governed_write_attempts:
-            block_reasons = sorted({
-                _text(_dict(step).get("reason"))
-                for step in pre_transport_blocks
-                if _text(_dict(step).get("reason"))
-            })
+        runtime_body_blocks = [
+            step
+            for step in steps_out
+            if _text(_dict(step).get("phase")) in {"control", "treatment"}
+            and _text(_dict(
+                _dict(
+                    _dict(step).get("governance_receipt")
+                ).get("runtime_body_receipt")
+            ).get("status")).upper() == "BLOCKED"
+        ]
+        if (pre_transport_blocks or runtime_body_blocks) and not accepted_governed_writes:
+            block_reasons = sorted(set(
+                [
+                    _text(_dict(step).get("reason"))
+                    for step in pre_transport_blocks
+                    if _text(_dict(step).get("reason"))
+                ]
+                + pre_transport_block_reasons
+            ))
             for cleanup_subject in activation_requirements["cleanup"]:
                 contract_evidence_receipts.append(build_contract_evidence_receipt(
                     kind="cleanup",
@@ -2582,6 +2763,32 @@ def execute_one_experiment(
         for s in steps_out
     )
     status = "EXECUTED" if has_http else "HARNESS_FAILURE"
+    if pre_transport_block_reasons and not accepted_governed_writes:
+        status = "BLOCKED"
+        reason = "BLOCKED_MISSING_BINDING"
+        detail = ",".join(dict.fromkeys(pre_transport_block_reasons))
+        return {
+            "schema_version": "qualibug.experiment-execution.v1",
+            "experiment_id": eid,
+            "obligation_id": oid,
+            "status": status,
+            "reason_code": reason,
+            "detail": detail,
+            "elapsed_ms": int((time.time() - started) * 1000),
+            "steps": steps_out,
+            "fixture_receipts": fixture_receipts,
+            "binding_materialization_receipts": binding_materialization_receipts,
+            "observer_receipts": observer_receipts,
+            "contract_evidence_receipts": contract_evidence_receipts,
+            "oracle_verdict": verdict,
+            "finding": None,
+            "cleanup_failures": cleanup_failures,
+            "execution_receipt": {
+                "status": status,
+                "reason_code": reason,
+                "detail": detail,
+            },
+        }
     if verdict.get("verdict") == "harness_failure" and not has_http:
         status = "HARNESS_FAILURE"
     elif (

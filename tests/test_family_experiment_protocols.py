@@ -5,7 +5,11 @@ import threading
 import pytest
 
 from ai_test_asset_center.experiment_compiler import compile_experiment_for_obligation
-from ai_test_asset_center.experiment_executor import execute_one_experiment
+from ai_test_asset_center.experiment_executor import (
+    _select_fixture_actor,
+    _select_runtime_binding,
+    execute_one_experiment,
+)
 from ai_test_asset_center.fixture_dag import build_fixture_dag_for_experiment
 from ai_test_asset_center.behavior_ir import empty_behavior_ir
 from ai_test_asset_center.obligation_compiler import compile_obligations_from_behavior_ir
@@ -716,6 +720,53 @@ def _isolation_obligation() -> dict:
     }
 
 
+def test_fixture_actor_selection_prefers_control_actor_from_declared_refs() -> None:
+    actor_ref, actor, token = _select_fixture_actor(
+        {"actor_refs": ["actor-other", "actor-treatment", "actor-control"]},
+        control_plan=[{"actor_ref": "actor-control"}],
+        treatment_plan=[{"actor_ref": "actor-treatment"}],
+        actors={
+            "actor-other": {
+                "id": "actor-other",
+                "role": "writer",
+                "credential_secret_ref": "secret:other",
+            },
+            "actor-treatment": {
+                "id": "actor-treatment",
+                "role": "writer",
+                "credential_secret_ref": "secret:treatment",
+            },
+            "actor-control": {
+                "id": "actor-control",
+                "role": "writer",
+                "credential_secret_ref": "secret:control",
+            },
+        },
+        tokens={
+            "secret:other": "token-other",
+            "secret:treatment": "token-treatment",
+            "secret:control": "token-control",
+        },
+    )
+
+    assert actor_ref == "actor-control"
+    assert actor["id"] == "actor-control"
+    assert token == "token-control"
+
+
+def test_runtime_binding_prefers_entity_that_differs_from_declared_mutation() -> None:
+    binding = _select_runtime_binding(
+        [
+            {"id": "already-disabled", "status": "DISABLED"},
+            {"id": "active-user", "status": "ACTIVE"},
+        ],
+        "/api/users/{id}/status",
+        preferred_body={"status": "DISABLED"},
+    )
+
+    assert binding["id"] == "active-user"
+
+
 def test_isolation_compiles_source_grounded_owned_fixture_proof() -> None:
     experiment = compile_experiment_for_obligation(
         _isolation_obligation(),
@@ -998,6 +1049,296 @@ def test_fixture_cleanup_runs_after_experiment_write_compensations(
         "experiment_cleanup",
         "experiment_fixture_cleanup",
     ]
+
+
+def test_empty_patch_uses_source_linked_entity_fields_for_runtime_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    ir = {
+        "operations": [
+            {
+                "id": "op-update-settings",
+                "method": "PATCH",
+                "path": "/settings",
+                "read_write": "write",
+                "request_schema": {},
+                "request_example": {},
+            },
+            {
+                "id": "op-read-settings",
+                "method": "GET",
+                "path": "/settings",
+                "read_write": "read",
+            },
+        ],
+        "actors": [
+            {"id": "actor-owner", "role": "public", "account_ref": "owner"},
+            {"id": "actor-viewer", "role": "public", "account_ref": "viewer"},
+        ],
+        "entities": [{
+            "id": "entity-settings",
+            "name": "settings",
+            "fields": ["id", "selected", "quota", "updated_at"],
+        }],
+        "relations": [
+            {
+                "id": "rel-update-settings",
+                "relation_type": "transitions",
+                "operation_ref": "op-update-settings",
+                "from_ref": "op-update-settings",
+                "to_ref": "entity-settings",
+            },
+            {
+                "id": "rel-read-settings",
+                "relation_type": "observes",
+                "operation_ref": "op-read-settings",
+                "from_ref": "op-read-settings",
+                "to_ref": "entity-settings",
+            },
+        ],
+        "conflicts": [],
+    }
+    obligation = {
+        "obligation_id": "obl-runtime-patch",
+        "risk_family": "authorization",
+        "property": {
+            "template": "authorization_control_treatment",
+            "control_actor_ref": "actor-owner",
+            "treatment_actor_ref": "actor-viewer",
+            "operation_ref": "op-update-settings",
+            "require_same_resource": True,
+        },
+        "required_operations": ["op-update-settings"],
+        "required_actors": ["actor-owner", "actor-viewer"],
+        "required_fixtures": [],
+        "required_observers": ["http_response", "actor_identity"],
+        "cleanup_requirement": {"required": True, "mode": "snapshot_restore"},
+    }
+
+    experiment = compile_experiment_for_obligation(
+        obligation,
+        behavior_ir=ir,
+        environment_type="test",
+    )
+
+    assert experiment["compile_receipt"]["status"] == "COMPILED", experiment
+    plans = [
+        step["runtime_body_plan"]
+        for step in experiment["control_plan"] + experiment["treatment_plan"]
+    ]
+    assert plans == [
+        {
+            "schema_version": "qualibug.source-observed-mutation-plan.v1",
+            "candidate_fields": ["quota", "selected"],
+            "source_entity_refs": ["entity-settings"],
+            "source_relation_refs": ["rel-update-settings"],
+        },
+        {
+            "schema_version": "qualibug.source-observed-mutation-plan.v1",
+            "candidate_fields": ["quota", "selected"],
+            "source_entity_refs": ["entity-settings"],
+            "source_relation_refs": ["rel-update-settings"],
+        },
+    ]
+
+    experiment["fixture_dag"] = {
+        "status": "READY",
+        "nodes": [],
+        "setup_order": [],
+    }
+    governed_calls: list[dict] = []
+
+    def governed_write(**kwargs):
+        governed_calls.append(dict(kwargs))
+        phase = kwargs["operation_phase"]
+        if phase == "experiment_control":
+            assert kwargs["body"] is None
+            assert kwargs["runtime_body_plan"]["candidate_fields"] == [
+                "quota", "selected"
+            ]
+            return {
+                "accepted": True,
+                "before": {
+                    "status": 200,
+                    "body": {"id": "settings", "selected": False, "quota": 1},
+                },
+                "write": {"status": 200, "body": {"selected": True}},
+                "after": {
+                    "status": 200,
+                    "body": {"id": "settings", "selected": True, "quota": 1},
+                },
+                "materialized_request_body": {"selected": True},
+                "runtime_body_receipt": {"status": "MATERIALIZED"},
+                "audit_path": "audit.jsonl",
+                "audit_record": {"phase": phase},
+            }
+        if phase == "experiment_treatment":
+            assert kwargs["runtime_body_plan"] is None
+            assert kwargs["body"] == {"selected": True}
+            return {
+                "accepted": True,
+                "before": {
+                    "status": 200,
+                    "body": {"id": "settings", "selected": True, "quota": 1},
+                },
+                "write": {"status": 200, "body": {"selected": True}},
+                "after": {
+                    "status": 200,
+                    "body": {"id": "settings", "selected": True, "quota": 1},
+                },
+                "audit_path": "audit.jsonl",
+                "audit_record": {"phase": phase},
+            }
+        assert phase == "experiment_cleanup"
+        return {
+            "accepted": True,
+            "before": {
+                "status": 200,
+                "body": {"id": "settings", "selected": True, "quota": 1},
+            },
+            "write": {"status": 200, "body": {"selected": False}},
+            "after": {
+                "status": 200,
+                "body": {"id": "settings", "selected": False, "quota": 1},
+            },
+            "audit_path": "audit.jsonl",
+            "audit_record": {"phase": phase},
+        }
+
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_executor.sandbox_write_allowed",
+        lambda **_kwargs: (True, ""),
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_executor.execute_governed_control_write",
+        governed_write,
+    )
+
+    result = execute_one_experiment(
+        experiment,
+        behavior_ir=ir,
+        root=tmp_path,
+        project="project",
+        base_url="http://target.invalid",
+        runtime_contract={"environment_type": "test"},
+        campaign_id="campaign",
+        execution_id="execution-runtime-patch",
+        actor_tokens={},
+    )
+
+    assert result["status"] == "EXECUTED"
+    assert result["cleanup_failures"] == 0
+    assert [call["operation_phase"] for call in governed_calls] == [
+        "experiment_control",
+        "experiment_treatment",
+        "experiment_cleanup",
+    ]
+
+
+def test_runtime_mutation_block_is_blocked_before_transport_without_cleanup_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    behavior_ir = {
+        "operations": [
+            {
+                "id": "op-patch",
+                "method": "PATCH",
+                "path": "/settings",
+                "read_write": "write",
+            },
+            {
+                "id": "op-read",
+                "method": "GET",
+                "path": "/settings",
+                "read_write": "read",
+            },
+        ],
+        "actors": [{"id": "actor-control", "role": "public"}],
+    }
+    experiment = {
+        "experiment_id": "exp-runtime-block",
+        "obligation_id": "obl-runtime-block",
+        "compile_receipt": {"status": "COMPILED"},
+        "control_plan": [{
+            "step_id": "control",
+            "operation_ref": "op-patch",
+            "actor_ref": "actor-control",
+            "runtime_body_plan": {
+                "schema_version": "qualibug.source-observed-mutation-plan.v1",
+                "candidate_fields": ["selected"],
+            },
+        }],
+        "treatment_plan": [{
+            "step_id": "treatment",
+            "operation_ref": "op-patch",
+            "actor_ref": "actor-control",
+            "runtime_body_plan": {
+                "schema_version": "qualibug.source-observed-mutation-plan.v1",
+                "candidate_fields": ["selected"],
+            },
+        }],
+        "cleanup_plan": [{
+            "action": "restore_before_snapshot",
+            "operation_ref": "op-patch",
+            "method": "PATCH",
+            "path": "/settings",
+        }],
+        "safety_contract": {"governed_write": True},
+        "fixture_dag": {"status": "READY", "nodes": [], "setup_order": []},
+        "observers": [{"observer_id": "http_response"}],
+        "assertions": [],
+    }
+    governed_calls: list[str] = []
+
+    def governed_write(**kwargs):
+        governed_calls.append(kwargs["operation_phase"])
+        return {
+            "accepted": False,
+            "status": "blocked",
+            "reason": "runtime_mutation_target_ambiguous",
+            "before": {"status": 200, "body": []},
+            "write": {
+                "status": 0,
+                "body": "",
+                "error": "runtime_mutation_target_ambiguous",
+            },
+            "after": {},
+            "runtime_body_receipt": {
+                "status": "BLOCKED",
+                "reason_code": "runtime_mutation_target_ambiguous",
+            },
+            "audit_path": "audit.jsonl",
+            "audit_record": {"phase": kwargs["operation_phase"]},
+        }
+
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_executor.sandbox_write_allowed",
+        lambda **_kwargs: (True, ""),
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_executor.execute_governed_control_write",
+        governed_write,
+    )
+
+    result = execute_one_experiment(
+        experiment,
+        behavior_ir=behavior_ir,
+        root=tmp_path,
+        project="project",
+        base_url="http://target.invalid",
+        runtime_contract={"environment_type": "test"},
+        campaign_id="campaign",
+        execution_id="execution-runtime-block",
+        actor_tokens={},
+    )
+
+    assert result["status"] == "BLOCKED"
+    assert result["reason_code"] == "BLOCKED_MISSING_BINDING"
+    assert "runtime_mutation_target_ambiguous" in result["detail"]
+    assert result["cleanup_failures"] == 0
+    assert governed_calls == ["experiment_control", "experiment_treatment"]
 
 
 def test_accepted_fixture_without_identity_is_visible_cleanup_failure(

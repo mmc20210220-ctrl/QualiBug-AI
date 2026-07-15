@@ -12,6 +12,7 @@ normal executor cannot expose the required per-write hook.
 from __future__ import annotations
 
 import base64
+from decimal import Decimal
 import inspect
 import json
 import os
@@ -400,6 +401,94 @@ def _append_audit(root: Path, project: str, record: dict[str, Any]) -> Path:
     return path
 
 
+def _runtime_mutation_rows(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        return [dict(row) for row in value if isinstance(row, dict)]
+    if not isinstance(value, dict):
+        return []
+    for key in ("data", "items", "records", "results", "rows"):
+        nested = value.get(key)
+        if isinstance(nested, list):
+            return [dict(row) for row in nested if isinstance(row, dict)]
+        if isinstance(nested, dict):
+            return [dict(nested)]
+    return [dict(value)]
+
+
+def _materialize_source_observed_mutation(
+    before_body: Any,
+    plan: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], str]:
+    """Derive one bounded PATCH/PUT body from an observed source-linked entity."""
+
+    if _text(plan.get("schema_version")) != "qualibug.source-observed-mutation-plan.v1":
+        return {}, {}, "runtime_mutation_plan_schema_invalid"
+    candidates = [
+        _text(field)
+        for field in plan.get("candidate_fields") or []
+        if _text(field)
+    ]
+    if not candidates:
+        return {}, {}, "runtime_mutation_candidate_fields_missing"
+    bindings = {
+        _text(key): value
+        for key, value in (plan.get("identity_bindings") or {}).items()
+        if _text(key) and value not in (None, "")
+    }
+    rows = _runtime_mutation_rows(before_body)
+    if bindings:
+        rows = [
+            row
+            for row in rows
+            if all(str(row.get(key)) == str(value) for key, value in bindings.items())
+        ]
+    if len(rows) != 1:
+        return {}, {}, "runtime_mutation_target_ambiguous"
+    row = rows[0]
+    supported: list[tuple[int, str, Any, str]] = []
+    for field in candidates:
+        if field not in row:
+            continue
+        value = row.get(field)
+        if isinstance(value, bool):
+            supported.append((0, field, not value, "bool"))
+        elif isinstance(value, int) and not isinstance(value, bool):
+            supported.append((1, field, value + 1, "int"))
+        elif isinstance(value, float):
+            supported.append((2, field, value + 1.0, "float"))
+        elif isinstance(value, str) and re.fullmatch(r"[+-]?\d+(?:\.\d+)?", value.strip()):
+            normalized = value.strip()
+            mutated_decimal = Decimal(normalized) + Decimal(1)
+            if "." in normalized:
+                decimal_places = len(normalized.rsplit(".", 1)[1])
+                mutated_value = f"{mutated_decimal:.{decimal_places}f}"
+            else:
+                mutated_value = str(mutated_decimal.quantize(Decimal(1)))
+            supported.append((3, field, mutated_value, "str_decimal"))
+    if not supported:
+        return {}, {}, "runtime_mutation_supported_field_missing"
+    derived_field_markers = ("original", "snapshot", "computed", "derived")
+    _, field, mutated, value_type = sorted(
+        supported,
+        key=lambda item: (
+            item[0],
+            sum(marker in item[1].lower() for marker in derived_field_markers),
+            len(item[1]),
+            item[1],
+        ),
+    )[0]
+    body = {field: mutated}
+    receipt = {
+        "schema_version": "qualibug.source-observed-mutation-receipt.v1",
+        "status": "MATERIALIZED",
+        "selected_field": field,
+        "candidate_field_count": len(candidates),
+        "identity_binding_fields": sorted(bindings),
+        "value_type": value_type,
+    }
+    return body, receipt, ""
+
+
 def execute_governed_control_write(
     *,
     root: Path,
@@ -414,6 +503,7 @@ def execute_governed_control_write(
     path: str,
     body: Any,
     observation_path: str,
+    runtime_body_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Execute one explicitly declared non-production control write.
 
@@ -470,6 +560,53 @@ def execute_governed_control_write(
     )
     base = _text(base_url).rstrip("/")
     before = _http_request("GET", base + observation_path, token=actor_token) if allowed else {}
+    runtime_body_receipt: dict[str, Any] = {}
+    if allowed and runtime_body_plan:
+        body, runtime_body_receipt, mutation_reason = _materialize_source_observed_mutation(
+            before.get("body"),
+            runtime_body_plan,
+        )
+        if mutation_reason:
+            runtime_body_receipt = {
+                "schema_version": "qualibug.source-observed-mutation-receipt.v1",
+                "status": "BLOCKED",
+                "reason_code": mutation_reason,
+            }
+            record = {
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "actor_role": actor_identity,
+                "method": method,
+                "path": path,
+                "before_ref": f"control_before:{observation_path}:{before.get('status', 0)}",
+                "after_ref": "",
+                "cleanup_status": "not_applicable",
+                "cleanup_reason": mutation_reason,
+                "operation_phase": phase,
+                "operation_accepted": False,
+                "campaign_id": campaign_id,
+                "slice_id": "evaluation_fixture_control",
+                "environment_kind": resolve_environment_kind(root, project, runtime_contract),
+                "approved_base_url": _text(runtime_contract.get("approved_base_url")),
+                "http_status": 0,
+            }
+            audit_path = _append_audit(root, project, record)
+            return {
+                "status": "blocked",
+                "reason": mutation_reason,
+                "accepted": False,
+                "method": method,
+                "path": path,
+                "before": before,
+                "write": {"status": 0, "body": "", "headers": {}, "error": mutation_reason},
+                "after": {},
+                "before_ref": record["before_ref"],
+                "after_ref": "",
+                "audit_path": str(audit_path),
+                "audit_record": record,
+                "http_attempt_count": 1,
+                "production_http_requests": 0,
+                "runtime_body_receipt": runtime_body_receipt,
+            }
     write = _http_request(method, base + path, token=actor_token, body=body) if allowed else {}
     after = _http_request("GET", base + observation_path, token=actor_token) if allowed else {}
     accepted = allowed and 200 <= int(write.get("status") or 0) < 300
@@ -491,7 +628,7 @@ def execute_governed_control_write(
         "http_status": int(write.get("status") or 0),
     }
     audit_path = _append_audit(root, project, record)
-    return {
+    result = {
         "status": "executed" if accepted else "blocked" if not allowed else "failed",
         "reason": "accepted" if accepted else record["cleanup_reason"],
         "accepted": accepted,
@@ -507,6 +644,10 @@ def execute_governed_control_write(
         "http_attempt_count": 3 if allowed else 0,
         "production_http_requests": 0,
     }
+    if runtime_body_receipt:
+        result["materialized_request_body"] = body
+        result["runtime_body_receipt"] = runtime_body_receipt
+    return result
 
 
 def _is_authentication_step(step: Any) -> bool:
