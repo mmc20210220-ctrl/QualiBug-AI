@@ -426,14 +426,40 @@ def execute_governed_control_write(
     path = normalize_path_placeholders(_text(path)).split("?", 1)[0]
     observation_path = normalize_path_placeholders(_text(observation_path)).split("?", 1)[0]
     phase = _text(operation_phase)
+
+    def _synthetic_block(reason: str) -> dict[str, Any]:
+        """Return a synthetic blocked result instead of raising ValueError.
+        
+        Unresolved path placeholders or invalid methods are harness-level
+        compilation gaps, not runtime errors. Returning a synthetic blocked
+        result lets the pipeline continue and surface these gaps in the
+        obligation ledger rather than crashing the entire scan.
+        """
+        return {
+            "status": "blocked",
+            "reason": reason,
+            "accepted": False,
+            "method": method,
+            "path": path,
+            "before": {},
+            "write": {"status": 0, "body": "", "headers": {}, "error": reason},
+            "after": {},
+            "before_ref": "",
+            "after_ref": "",
+            "audit_path": "",
+            "audit_record": {},
+            "http_attempt_count": 0,
+            "production_http_requests": 0,
+        }
+
     if method not in _WRITE_METHODS:
-        raise ValueError("governed control write method must be POST, PUT, PATCH, or DELETE")
+        return _synthetic_block("governed_control_write_method_invalid")
     if not path.startswith("/") or path_has_placeholders(path):
-        raise ValueError("governed control write path must be one concrete declared path")
+        return _synthetic_block("governed_control_write_path_placeholder_unresolved")
     if not observation_path.startswith("/") or path_has_placeholders(observation_path):
-        raise ValueError("governed control observation path must be one concrete declared path")
+        return _synthetic_block("governed_control_observation_path_placeholder_unresolved")
     if not phase:
-        raise ValueError("governed control write requires operation_phase")
+        return _synthetic_block("governed_control_write_phase_missing")
 
     allowed, reason = sandbox_write_allowed(
         root=root,
