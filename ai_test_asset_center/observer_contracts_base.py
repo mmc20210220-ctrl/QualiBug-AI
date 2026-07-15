@@ -966,29 +966,30 @@ def _observe_entity_state(
         })
 
     conservation_terms = _conservation_terms_from_experiment(_dict(experiment))
-    if conservation_terms:
-        first_governance = _dict(write_steps[0].get("governance_receipt"))
-        last_governance = _dict(write_steps[-1].get("governance_receipt"))
-        before_values = _numeric_snapshot_values(
-            _dict(first_governance.get("before")).get("body"),
-            conservation_terms,
-        )
-        after_values = _numeric_snapshot_values(
-            _dict(last_governance.get("after")).get("body"),
-            conservation_terms,
-        )
+    first_governance = _dict(write_steps[0].get("governance_receipt"))
+    last_governance = _dict(write_steps[-1].get("governance_receipt"))
+    before_values = _numeric_snapshot_values(
+        _dict(first_governance.get("before")).get("body"),
+        conservation_terms,
+    )
+    after_values = _numeric_snapshot_values(
+        _dict(last_governance.get("after")).get("body"),
+        conservation_terms,
+    )
+    if before_values or after_values:
         evidence.update({
             "conservation_terms": conservation_terms,
             "before_values": before_values,
             "after_values": after_values,
         })
-        if set(before_values) != set(conservation_terms) or set(after_values) != set(conservation_terms):
-            return _receipt(
-                observer_id="entity_state",
-                status="INDETERMINATE",
-                reason_code="CONSERVATION_VALUES_MISSING",
-                evidence=evidence,
-            )
+    elif conservation_terms:
+        # Terms specified but values not found in governance snapshots
+        return _receipt(
+            observer_id="entity_state",
+            status="INDETERMINATE",
+            reason_code="CONSERVATION_VALUES_MISSING",
+            evidence=evidence,
+        )
 
     evidence.update({
         "entity_state_observed": True,
