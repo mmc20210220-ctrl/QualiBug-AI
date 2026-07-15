@@ -539,7 +539,16 @@ def observe_authorization_comparison(
                 evidence=base_evidence,
             )
         if _response_status(treatment_row) in {401, 403, 404} and int(treatment_effect or 0) == 0:
+            control_path = _text(control_row.get("path")).split("?", 1)[0]
+            treatment_path = _text(treatment_row.get("path")).split("?", 1)[0]
+            same_path = bool(control_path and control_path == treatment_path)
             base_evidence.update({
+                "same_resource_proven": same_path,
+                "resource_match_basis": (
+                    "same_requested_resource_path_and_explicit_deny"
+                    if same_path
+                    else "explicit_deny_different_resource"
+                ),
                 "owner_can_access": True,
                 "viewer_can_access": False,
                 "leak_detected": False,
