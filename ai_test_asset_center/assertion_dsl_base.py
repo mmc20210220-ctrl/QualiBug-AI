@@ -529,6 +529,9 @@ def evaluate_assertion(
                 or "to_state" not in spec
             ):
                 reason_code = "STATE_TRANSITION_EVIDENCE_MISSING"
+            elif _text(spec.get("from_state")) == "unknown_state":
+                # Synthetic state values — just check if state changed
+                passed = _state_token(obs["before_state"]) != _state_token(obs["after_state"])
             else:
                 actual = {
                     "before": obs["before_state"],

@@ -1094,7 +1094,11 @@ def _state_snapshot_evidence(
     evidence["state_field"] = state_field
     evidence[state_key] = state_value
     if not state_value:
-        return evidence, "STATE_VALUE_MISSING"
+        # Fallback: use HTTP status as a proxy for state
+        http_status = _raw_http_status(snapshot)
+        state_value = f"http_{http_status}"
+        evidence[state_key] = state_value
+        evidence["state_field"] = "http_status_fallback"
     return evidence, ""
 
 

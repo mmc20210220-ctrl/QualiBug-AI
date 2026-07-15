@@ -643,6 +643,12 @@ def compile_experiment_for_obligation(
         treatment_actor_ref=treatment_actor,
         property_spec=prop,
     )
+    # Merge protocol-level observers (e.g. before_state, after_state)
+    for pobs in _list(protocol.get("observers")):
+        if isinstance(pobs, dict) and _text(pobs.get("observer_id")) not in {
+            _text(o.get("observer_id")) for o in observers if isinstance(o, dict)
+        }:
+            observers.append(dict(pobs))
     if _text(protocol.get("status")) != "COMPILED":
         return blocked_experiment(
             oid,
