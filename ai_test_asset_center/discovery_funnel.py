@@ -53,6 +53,26 @@ def _int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _is_execution_approval_gate(runtime_contract: dict[str, Any]) -> bool:
+    """True when the runtime-contract block is an execution-approval gate.
+
+    An execution-approval gate (missing/stale approval, campaign mismatch) means
+    the scan was stopped *before* execution. It is NOT an execution-phase block.
+    """
+    approval = _dict(runtime_contract.get("execution_approval"))
+    if approval:
+        code = str(approval.get("code") or "").strip().upper()
+        if code.startswith("EXECUTION_APPROVAL"):
+            return True
+        if str(approval.get("approval_id") or "").strip():
+            return True
+    for item in _list(runtime_contract.get("missing_requirements")):
+        if str(item).strip().upper().startswith("EXECUTION_APPROVAL"):
+            return True
+    reason = str(runtime_contract.get("reason") or "").strip().lower()
+    return "execution_approval" in reason
+
+
 def _attempt_ledger(result: dict[str, Any] | None) -> dict[str, Any]:
     value = _dict(result)
     nested = _dict(value.get("v12"))
@@ -72,7 +92,23 @@ def effective_execution_status(v12_result: dict[str, Any] | None) -> str:
     selected = _int(ledger.get("selected_count"))
     terminal = _int(ledger.get("terminal_count"))
     if selected == 0:
-        return "not_executed"
+        # No obligations reached the attempt ledger. The honest execution status
+        # depends on WHY nothing executed:
+        #  - An *execution-approval gate* block (missing/stale approval, campaign
+        #    mismatch) means the scan was stopped *before* execution. Nothing was
+        #    attempted, so the status is "not_executed", never "blocked".
+        #  - Any other block (source provenance, discovery-evolution, runtime
+        #    contract, obligation-plan) means execution was attempted and blocked
+        #    at the execution phase; that surfaces as "blocked" via
+        #    phases.execution.status. A genuinely empty (approved, nothing-to-run)
+        #    plan with no block falls back to "not_executed".
+        result = _dict(v12_result)
+        runtime_contract = _dict(result.get("runtime_contract"))
+        if str(runtime_contract.get("status") or "").strip().lower() == "blocked" and _is_execution_approval_gate(runtime_contract):
+            return "not_executed"
+        execution_phase = _dict(_dict(result.get("phases")).get("execution"))
+        legacy = execution_phase.get("status")
+        return str(legacy or "not_executed").strip().lower()
     if bool(ledger.get("complete")) and selected == terminal:
         attempts = [
             _dict(attempt) for attempt in _list(ledger.get("attempts"))

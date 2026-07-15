@@ -749,6 +749,26 @@ def compile_experiments(
             )
             or _text(prop.get("operation_ref"))
         )
+        # Resolve mismatched operation IDs by method+path from source locators
+        if operation_ref and operation_ref not in operations:
+            _src_locators = [
+                _text(s.get("locator")) for s in _list(obl.get("source_refs"))
+                if isinstance(s, dict) and _text(s.get("kind")) == "api_operation"
+                and _text(s.get("locator"))
+            ]
+            for loc in _src_locators:
+                parts = loc.split(None, 1)
+                if len(parts) == 2:
+                    loc_method, loc_path = parts[0].upper(), parts[1].strip()
+                    for ir_id, ir_op in operations.items():
+                        if (isinstance(ir_op, dict)
+                            and _text(ir_op.get("method")).upper() == loc_method
+                            and normalize_path_placeholders(_text(ir_op.get("path") or ir_op.get("raw_path")))
+                            == normalize_path_placeholders(loc_path)):
+                            operation_ref = ir_id
+                            break
+                if operation_ref in operations:
+                    break
         variants = expand_validation_obligation(
             obl,
             operation=operations.get(operation_ref) or {},

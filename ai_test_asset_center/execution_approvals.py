@@ -178,3 +178,67 @@ def verify_execution_approval(
     if _parse_expiry(str(approval.get("expires_at_utc") or "")) <= datetime.now(timezone.utc):
         return {"valid": False, "code": "EXECUTION_APPROVAL_EXPIRED"}
     return {"valid": True, "approval": dict(approval)}
+
+
+def resolve_execution_approval_for_campaign(
+    project_id: str,
+    *,
+    root: Path,
+    scope_id: str,
+    environment_ref: str,
+    source_hash: str,
+    target_base_url: str,
+    execution_mode: str = "",
+) -> dict[str, Any]:
+    """Resolve a registered, time-valid approval matching the campaign bindings.
+
+    A scan may omit an explicit ``execution_approval_id`` yet still be covered by
+    a pre-issued approval that binds the same immutable campaign identity
+    (scope, environment, source hash, target origin). Matching ignores the
+    ``campaign_id`` because each scan run receives a fresh campaign identity;
+    what matters is the stable binding tuple. ``execution_mode`` is NOT used as a
+    hard filter: the stored approval's own ``execution_mode`` is authoritative
+    and is surfaced to the caller.
+
+    Returns ``{"found": True, "approval": {...}}`` or
+    ``{"found": False, "code": "EXECUTION_APPROVAL_NOT_FOUND"}``.
+    """
+    try:
+        registry = _read_registry(Path(root), project_id)
+    except ExecutionApprovalError as exc:
+        return {"found": False, "code": f"EXECUTION_APPROVAL_REGISTRY_UNREADABLE:{exc}"}
+    scope = _text(scope_id, 160)
+    environment = _text(environment_ref, 160)
+    source = _text(source_hash, 128).lower()
+    try:
+        target_origin = _origin(target_base_url)
+    except ExecutionApprovalError:
+        return {"found": False, "code": "EXECUTION_APPROVAL_TARGET_INVALID"}
+    mode = _text(execution_mode, 80)
+    candidates: list[dict[str, Any]] = []
+    for approval in (registry.get("approvals") or {}).values():
+        if not isinstance(approval, dict):
+            continue
+        if scope and _text(approval.get("scope_id"), 160) != scope:
+            continue
+        if environment and _text(approval.get("environment_ref"), 160) != environment:
+            continue
+        if source and _text(approval.get("source_hash"), 128).lower() != source:
+            continue
+        if _text(approval.get("target_origin"), 200) != target_origin:
+            continue
+        if mode and _text(approval.get("execution_mode"), 80) != mode:
+            continue
+        expected_hash = _hash({key: value for key, value in approval.items() if key != "approval_hash"})
+        if str(approval.get("approval_hash") or "") != expected_hash:
+            continue
+        try:
+            if _parse_expiry(str(approval.get("expires_at_utc") or "")) <= datetime.now(timezone.utc):
+                continue
+        except ValueError:
+            continue
+        candidates.append(dict(approval))
+    if not candidates:
+        return {"found": False, "code": "EXECUTION_APPROVAL_NOT_FOUND"}
+    candidates.sort(key=lambda a: str(a.get("issued_at_utc") or ""), reverse=True)
+    return {"found": True, "approval": candidates[0]}

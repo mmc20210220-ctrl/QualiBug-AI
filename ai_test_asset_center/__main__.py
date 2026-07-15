@@ -4159,9 +4159,9 @@ def _blocked_result(project: str, root: Path, started: float, gaps: list[dict[st
         _write_json(report_path, {"project": project, "real_findings": [], "risk_clues": [], "campaign": campaign, "coverage_gaps": coverage_gaps, "runtime_contract": runtime_contract, "test_data_plan": test_data_plan, "execution_status": "blocked", "evidence_bundle": evidence_bundle, "release_gate": release_gate})
         result["report_path"] = str(report_path)
     output_root = root / "platform_outputs" / _safe_project(project)
-    _persist_customer_ready_static_artifacts(project, root, result)
     _write_json(output_root / "scan_result.json", result)
     increment_scan_counter(output_root / "scan_counter.json")
+    _persist_customer_ready_static_artifacts(project, root, result)
 
     # ── Phase 108R: Auto-generate Issue Lifecycle Center after scan ──
     # Acceptance Criterion 12: lifecycle center aggregates discovery + regression
@@ -4491,6 +4491,45 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
     phases = _as_dict(v12.get("phases"))
     execution = _as_dict(phases.get("execution"))
     campaign = _as_dict(v12.get("campaign"))
+
+    # Resolve a pre-registered execution approval by the campaign's stable
+    # bindings (scope / environment / source hash / target origin). Each scan
+    # run receives a fresh campaign_id, so matching must ignore campaign_id and
+    # rely on the immutable binding tuple. This backfills runtime_contract so a
+    # scan that omitted an explicit execution_approval_id still surfaces the
+    # governing approval for audit, WITHOUT silently auto-issuing a new one.
+    if not isinstance(runtime_contract.get("execution_approval"), dict) or not runtime_contract.get("execution_approval"):
+        _rc_scope = str(campaign.get("scope_id") or context.get("scope_id") or "").strip()
+        _rc_env = str(
+            runtime_contract.get("environment_ref")
+            or context.get("environment_ref")
+            or context.get("target_environment")
+            or ""
+        ).strip()
+        _rc_source = str(
+            _as_dict(runtime_contract.get("source_manifest")).get("source_hash")
+            or manifest.get("source_hash")
+            or ""
+        ).strip().lower()
+        _rc_target = str(runtime_contract.get("approved_base_url") or approved_base_url or "").strip()
+        if _rc_scope and _rc_env and _rc_source and _rc_target:
+            try:
+                from .execution_approvals import resolve_execution_approval_for_campaign
+
+                _resolved = resolve_execution_approval_for_campaign(
+                    project,
+                    root=root,
+                    scope_id=_rc_scope,
+                    environment_ref=_rc_env,
+                    source_hash=_rc_source,
+                    target_base_url=_rc_target,
+                )
+                if _resolved.get("found"):
+                    runtime_contract = dict(runtime_contract)
+                    runtime_contract["execution_approval"] = _resolved["approval"]
+            except Exception:
+                pass
+
     from .discovery_funnel import effective_execution_status
 
     execution_status = effective_execution_status(v12)
@@ -4691,7 +4730,14 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
         diagnostics=diagnostics,
         runtime_observed=str(_as_dict(v12.get("auto_har")).get("status") or "") == "captured",
     )
-    grade = "blocked" if str(runtime_contract.get("status") or "") == "blocked" or execution_status == "blocked" else ("inconclusive" if not confirmed else "evidence_ready")
+    # A scan whose execution status is "plan_only" (no runtime target supplied,
+    # so nothing was attempted) cannot complete and grades as "blocked", not a
+    # clean "inconclusive". Note we key on the derived *execution_status*, not
+    # runtime_contract.status: a discovery that planned-but-skipped (e.g. a
+    # stubbed pipeline returning phases.execution.status == "skipped") still
+    # grades "inconclusive" unless execution was genuinely blocked/plan_only.
+    _rc_status = str(runtime_contract.get("status") or "")
+    grade = "blocked" if _rc_status == "blocked" or execution_status == "blocked" or execution_status == "plan_only" else ("inconclusive" if not confirmed else "evidence_ready")
     # ── 主链 4/5 覆盖诚实性守卫: never report a clean completion while high-value
     # (permission/isolation/money/concurrency) slices were silently unexecuted. ──
     coverage_honesty, grade = _apply_coverage_honesty_guard(v12, grade, execution_status)
@@ -4957,9 +5003,9 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
         _write_json(report_path, {"project": project, "generated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "real_findings": confirmed, "findings": confirmed, "candidate_findings": candidates, "risk_clues": candidates, "mainline_run": v12.get("mainline_run"), "obligation_attempt_ledger": v12.get("obligation_attempt_ledger"), "canonical_defect_registry": canonical_registry, "formal_delivery_authority": v12.get("formal_delivery_authority"), "formal_count_projection": result.get("formal_count_projection"), "defect_identity_consistency": result.get("defect_identity_consistency"), "delivery_occurrences": delivery_occurrences, "campaign": campaign, "coverage_gaps": coverage_gaps, "scan_preflight_guide": preflight_guide, "runtime_contract": runtime_contract, "test_data_plan": test_data_plan, "test_data_bootstrap": test_data_bootstrap, "behavior_slice_ledger": result["behavior_slice_ledger"], "execution_status": execution_status, "coverage_honesty": coverage_honesty, "evidence_bundle": evidence_bundle, "release_gate": release_gate, "ui_execution_summary": ui_execution_summary, "execution_evidence_summary": ui_execution_summary, "ui_followup_assets": ui_followup_assets, "external_reproduction_assets": external_reproduction_assets, "external_commercial_assets": external_commercial_assets})
         result["report_path"] = str(report_path)
     output_root = root / "platform_outputs" / _safe_project(project)
-    _persist_customer_ready_static_artifacts(project, root, result)
     _write_json(output_root / "scan_result.json", result)
     increment_scan_counter(output_root / "scan_counter.json")
+    _persist_customer_ready_static_artifacts(project, root, result)
 
     # ── Phase 108R: Auto-generate Issue Lifecycle Center after scan ──
     # Acceptance Criterion 12: lifecycle center aggregates discovery + regression

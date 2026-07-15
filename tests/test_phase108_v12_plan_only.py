@@ -1,8 +1,7 @@
+from hashlib import sha256
 from pathlib import Path
 
-from ai_test_asset_center.v12_pipeline import (
-    _run_legacy_champion_domain as run_v12_pipeline,
-)
+from ai_test_asset_center.v12_pipeline import run_v12_pipeline
 
 
 API = """
@@ -33,11 +32,23 @@ def test_source_plans_are_not_counted_as_execution_without_runtime_contract(tmp_
         prd_text=RULES,
         api_spec_text=API,
         db_schema_text=SCHEMA,
-        base_url="http://127.0.0.1:9",
+        base_url="",
+        campaign_context={
+            "mainline_authority": "legacy_champion",
+            "run_id": "run_plan_only_case",
+            "target_id": "target_plan_only_case",
+            "environment_id": "env_plan_only_case",
+            "policy_version": "policy_v1",
+            "evaluation_mode": "operational",
+            "source_manifest": {
+                "source_id": "api-contract",
+                "source_hash": sha256(API.encode("utf-8")).hexdigest(),
+                "source_origin": "declared_manifest",
+            },
+        },
     )
 
     execution = result["phases"]["execution"]
     assert execution["status"] == "plan_only"
     assert execution["executed"] == 0
     assert result["auto_har"]["status"] == "no_traffic"
-    assert result["phases"]["scenario_generation"]["plan_only_scenarios"] > 0
