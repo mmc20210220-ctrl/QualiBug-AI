@@ -1357,6 +1357,9 @@ def _derive_invariant_relations(model: dict[str, Any]) -> list[dict[str, Any]]:
                 return cjk | ascii_words
             inv_tokens = _tokens(_text(invariant.get("description") or ""))
             if inv_tokens:
+                # Prefer write operations for better protocol compatibility
+                _write_matches = []
+                _read_matches = []
                 for op in operations:
                     op_path = _text(op.get("path") or op.get("raw_path") or "").lower()
                     op_summary = _text(op.get("summary") or op.get("description") or "").lower()
@@ -1367,10 +1370,11 @@ def _derive_invariant_relations(model: dict[str, Any]) -> list[dict[str, Any]]:
                     op_text = f"{op_path} {op_summary} {op_fields}"
                     op_tokens = _tokens(op_text)
                     overlap = len(inv_tokens & op_tokens)
-                    if overlap >= 1:  # Relaxed: one matching token is enough for CJK
-                        op_refs.append(_text(op.get("id")))
-                        if len(op_refs) >= 5:
-                            break
+                    if overlap >= 1:
+                        is_write = _text(op.get("read_write") or op.get("side_effect_class")) == "write"
+                        (_write_matches if is_write else _read_matches).append(_text(op.get("id")))
+                # Prefer write ops, fall back to read ops
+                op_refs.extend((_write_matches or _read_matches)[:5])
             # Write back to the invariant so downstream consumers see the match
             if op_refs:
                 invariant["operation_refs"] = list(op_refs)
