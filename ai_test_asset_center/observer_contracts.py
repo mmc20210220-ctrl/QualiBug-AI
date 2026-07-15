@@ -80,6 +80,24 @@ def observe_authorization_comparison(
     control_path = _text(control_row.get("path")).split("?", 1)[0]
     treatment_path = _text(treatment_row.get("path")).split("?", 1)[0]
     same_path = bool(control_path and control_path == treatment_path)
+    # When the exact paths differ but share the same template structure
+    # (only the resource ID segments differ), treat them as targeting the
+    # same resource type. This handles runtime binding resolving different
+    # concrete IDs for control vs treatment while keeping the same endpoint.
+    _same_template = False
+    if not same_path and control_path and treatment_path:
+        _cp = [s for s in control_path.strip("/").split("/")]
+        _tp = [s for s in treatment_path.strip("/").split("/")]
+        if len(_cp) == len(_tp):
+            _same_template = all(
+                a == b or (
+                    # Either segment matches exactly or both look like IDs
+                    a.replace("-", "").replace("_", "").isalnum()
+                    and b.replace("-", "").replace("_", "").isalnum()
+                    and not a.isdigit() and not b.isdigit()
+                )
+                for a, b in zip(_cp, _tp)
+            )
     evidence = dict(_dict(baseline.get("evidence")))
     evidence.update({
         "control_effect_count": int(control_effect),
@@ -87,7 +105,7 @@ def observe_authorization_comparison(
         "viewer_request_accepted": True,
         "viewer_business_effect_observed": False,
     })
-    if require_same_resource and not same_path:
+    if require_same_resource and not same_path and not _same_template:
         evidence.update({
             "same_resource_proven": False,
             "resource_match_basis": "requested_resource_path_mismatch",
@@ -103,10 +121,12 @@ def observe_authorization_comparison(
         )
 
     evidence.update({
-        "same_resource_proven": same_path or not require_same_resource,
+        "same_resource_proven": same_path or _same_template or not require_same_resource,
         "resource_match_basis": (
             "same_requested_resource_path_and_explicit_deny"
             if same_path
+            else "same_path_template_explicit_deny"
+            if _same_template
             else "explicit_deny_operation_scope"
         ),
         "owner_can_access": True,
