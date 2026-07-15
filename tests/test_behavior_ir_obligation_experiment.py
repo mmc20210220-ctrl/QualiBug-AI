@@ -1184,6 +1184,172 @@ def test_validation_invariant_does_not_compile_body_mutation_against_read_operat
     )
 
 
+def test_permission_boundary_invariant_builds_visibility_actor_pair() -> None:
+    ir = empty_behavior_ir(project_id="permission-boundary-pair-test")
+    ir.update({
+        "operations": [
+            {
+                "id": "op-read-addresses",
+                "method": "GET",
+                "path": "/api/users/addresses",
+                "read_write": "read",
+            },
+        ],
+        "actors": [
+            {
+                "id": "actor-owner",
+                "role": "owner",
+                "account_ref": "owner@example.test",
+                "credential_secret_ref": "secret_ref:test_accounts:owner",
+                "account_status": "active",
+                "runtime_bound": True,
+            },
+            {
+                "id": "actor-outsider",
+                "role": "outsider",
+                "account_ref": "outsider@example.test",
+                "credential_secret_ref": "secret_ref:test_accounts:outsider",
+                "account_status": "active",
+                "runtime_bound": True,
+            },
+        ],
+        "invariants": [{
+            "id": "invariant-permission-boundary",
+            "expression": {
+                "kind": "permission_boundary",
+                "operator": "must_hold",
+                "raw": "Only the owning user may query addresses",
+            },
+            "confidence": 0.9,
+        }],
+        "relations": [
+            _relation(
+                "relation-observes-boundary",
+                "observes",
+                "op-read-addresses",
+                "invariant-permission-boundary",
+                operation_ref="op-read-addresses",
+            ),
+            _relation(
+                "relation-permit-owner",
+                "permits",
+                "actor-owner",
+                "op-read-addresses",
+                operation_ref="op-read-addresses",
+                actor_ref="actor-owner",
+            ),
+            _relation(
+                "relation-deny-outsider",
+                "denies",
+                "actor-outsider",
+                "op-read-addresses",
+                operation_ref="op-read-addresses",
+                actor_ref="actor-outsider",
+            ),
+        ],
+    })
+
+    compiled = compile_obligations_from_behavior_ir(ir)
+
+    assert not any(
+        item["risk_family"] == "validation"
+        and item["property"].get("invariant_ref") == "invariant-permission-boundary"
+        for item in compiled["obligations"]
+    )
+    visibility = next(
+        item
+        for item in compiled["obligations"]
+        if item["risk_family"] == "visibility"
+        and item["property"].get("invariant_ref") == "invariant-permission-boundary"
+    )
+    assert visibility["required_actors"] == ["actor-owner", "actor-outsider"]
+    assert visibility["property"]["control_actor_ref"] == "actor-owner"
+    assert visibility["property"]["treatment_actor_ref"] == "actor-outsider"
+    assert {
+        "http_response",
+        "actor_identity",
+        "authorization_comparison",
+        "typed_assertion",
+        "source_invariant",
+    } <= set(visibility["required_observers"])
+
+    experiment = compile_experiment_for_obligation(
+        visibility,
+        behavior_ir=ir,
+        environment_type="test",
+    )
+
+    assert experiment["compile_receipt"]["status"] == "COMPILED", experiment
+    assert experiment["control_plan"][0]["actor_ref"] == "actor-owner"
+    assert experiment["treatment_plan"][0]["actor_ref"] == "actor-outsider"
+    assert experiment["assertions"][0]["kind"] == "visibility"
+
+
+def test_permission_boundary_without_denied_actor_becomes_actor_pair_gap() -> None:
+    ir = empty_behavior_ir(project_id="permission-boundary-gap-test")
+    ir.update({
+        "operations": [
+            {
+                "id": "op-read-addresses",
+                "method": "GET",
+                "path": "/api/users/addresses",
+                "read_write": "read",
+            },
+        ],
+        "actors": [
+            {
+                "id": "actor-owner",
+                "role": "owner",
+                "account_ref": "owner@example.test",
+                "credential_secret_ref": "secret_ref:test_accounts:owner",
+                "account_status": "active",
+                "runtime_bound": True,
+            },
+        ],
+        "invariants": [{
+            "id": "invariant-permission-boundary",
+            "expression": {
+                "kind": "permission_boundary",
+                "operator": "must_hold",
+                "raw": "Only the owning user may query addresses",
+            },
+            "confidence": 0.9,
+        }],
+        "relations": [
+            _relation(
+                "relation-observes-boundary",
+                "observes",
+                "op-read-addresses",
+                "invariant-permission-boundary",
+                operation_ref="op-read-addresses",
+            ),
+            _relation(
+                "relation-permit-owner",
+                "permits",
+                "actor-owner",
+                "op-read-addresses",
+                operation_ref="op-read-addresses",
+                actor_ref="actor-owner",
+            ),
+        ],
+    })
+
+    compiled = compile_obligations_from_behavior_ir(ir)
+
+    assert not any(
+        item["risk_family"] == "validation"
+        and item["property"].get("invariant_ref") == "invariant-permission-boundary"
+        for item in compiled["obligations"]
+    )
+    gap = next(
+        gap
+        for gap in compiled["coverage_gaps"]
+        if gap.get("code") == "BLOCKED_MISSING_ACTOR_PAIR"
+    )
+    assert gap["risk_family"] == "visibility"
+    assert gap["operation_ref"] == "op-read-addresses"
+
+
 def test_entity_validation_uses_explicit_relation_operation() -> None:
     ir = empty_behavior_ir(project_id="entity-relation-test")
     ir.update({

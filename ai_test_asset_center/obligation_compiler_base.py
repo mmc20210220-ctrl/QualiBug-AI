@@ -456,7 +456,21 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
             family = "privacy"
         elif any(token in kind for token in ("time", "expir", "temporal", "过期")):
             family = "temporal"
-        elif any(token in kind for token in ("visib", "scope", "可见")):
+        elif any(
+            token in kind
+            for token in (
+                "permission",
+                "access_control",
+                "authorization",
+                "authorisation",
+                "authz",
+                "acl",
+                "rbac",
+                "visib",
+                "scope",
+                "可见",
+            )
+        ):
             family = "visibility"
         elif any(token in kind for token in ("state_machine", "state", "状态", "status_")):
             family = "state"
