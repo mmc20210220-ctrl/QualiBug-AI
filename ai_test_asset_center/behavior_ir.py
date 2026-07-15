@@ -1664,6 +1664,40 @@ def build_behavior_ir_from_knowledge_asset(
 
     _canonicalize_duplicate_operation_ids(model)
 
+    # ── Inherit request examples from sibling POST operations ───────────
+    # Many API docs omit request bodies for some POST endpoints (especially
+    # admin/internal ones). When an operation has no request_example, copy
+    # from the nearest sibling POST operation sharing the same service
+    # prefix (first 3 path segments: /api/{service}/...).
+    # ───────────────────────────────────────────────────────────────────
+    import re as _re
+    _PARAM_RE = _re.compile(r"\{[^}]+\}")
+    def _norm_path(p: str) -> str:
+        return _PARAM_RE.sub(":p", str(p or ""))
+    def _svc_prefix(p: str) -> str:
+        segs = [s for s in _norm_path(p).strip("/").split("/") if s]
+        return "/".join(segs[:2]) if len(segs) >= 2 else _norm_path(p)
+    _ops = model.get("operations") or []
+    if isinstance(_ops, list):
+        for _op in _ops:
+            if not isinstance(_op, dict):
+                continue
+            if _dict(_op.get("request_example")):
+                continue
+            _op_svc = _svc_prefix(_text(_op.get("path") or _op.get("raw_path")))
+            for _sib in _ops:
+                if not isinstance(_sib, dict) or _sib is _op:
+                    continue
+                if _text(_sib.get("method")).upper() != "POST":
+                    continue
+                _sib_example = _dict(_sib.get("request_example"))
+                if not _sib_example:
+                    continue
+                _sib_svc = _svc_prefix(_text(_sib.get("path") or _sib.get("raw_path")))
+                if _sib_svc == _op_svc:
+                    _op["request_example"] = dict(_sib_example)
+                    break
+
     # Entities from every structured asset vocabulary. The knowledge asset
     # exposes business_objects/data_tables, while other callers may use the
     # shorter objects/entities/tables aliases; merge them instead of choosing

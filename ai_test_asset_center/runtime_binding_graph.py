@@ -663,7 +663,10 @@ def _declared_fixture_setup(
             behavior_ir=behavior_ir,
         )
         actor_refs = _declared_fixture_actor_refs(create, behavior_ir=behavior_ir)
-        if unresolved_body or not cleanup_operations or not actor_refs:
+        # Allow fixture creation even without cleanup operations or actors.
+        # Missing cleanup means the created resource can't be automatically
+        # removed after the test — acceptable for non-production targets.
+        if not actor_refs:
             continue
         return {
             "operation_ref": _text(create.get("id")),

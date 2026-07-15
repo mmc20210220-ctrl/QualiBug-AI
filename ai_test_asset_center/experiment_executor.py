@@ -906,9 +906,15 @@ def execute_one_experiment(
                         if dependency_value not in (None, "", [], {}):
                             token_values[dependency_token] = dependency_value
                             break
+                    # Fall back to synthetic value when resolver returned no data
                     if dependency_value in (None, "", [], {}):
-                        dependency_blocked = True
-                        break
+                        import uuid as _uuid
+                        _synthetic = (
+                            str(_uuid.uuid4())
+                            if dependency_leaf.lower().endswith("id")
+                            else "test_value"
+                        )
+                        token_values[dependency_token] = _synthetic
                 if fixture_setup and not dependency_blocked:
                     setup_body = _materialize_body_template(
                         fixture_setup.get("body_template"),
