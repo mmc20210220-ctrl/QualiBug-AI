@@ -468,11 +468,25 @@ def build_discovery_plan(
         )
         if isinstance(row, dict)
     ]
-    by_obligation = {
-        _text(row.get("obligation_id")): row
-        for row in all_experiments
-        if _text(row.get("obligation_id"))
-    }
+    by_obligation = {}
+    import re as _re
+    _VARIANT_RE = _re.compile(r"^(.+?)__v_[a-f0-9]+$")
+    for row in all_experiments:
+        if not isinstance(row, dict):
+            continue
+        oid = _text(row.get("obligation_id"))
+        if oid:
+            by_obligation[oid] = row
+        # Variant experiments use IDs like obl_xxx__v_yyy; also index by original
+        _expanded_from = _text(row.get("expanded_from_obligation_id"))
+        if _expanded_from and _expanded_from not in by_obligation:
+            by_obligation[_expanded_from] = row
+        # Also parse variant ID pattern to extract original
+        _vm = _VARIANT_RE.match(oid) if oid else None
+        if _vm:
+            _original = _vm.group(1)
+            if _original not in by_obligation:
+                by_obligation[_original] = row
     budget = int(getattr(campaign, "slice_budget", 0) or 0)
     if budget <= 0:
         raise MainlineContractError("obligation_budget_invalid")
@@ -546,6 +560,15 @@ def _manual_terminal_receipts(
     for row in selected_rows:
         obligation_id = _text(row.get("obligation_id"))
         if obligation_id in compile_results:
+            continue
+        # Check variant obligation_ids and map them to the original
+        _variant_result = None
+        for _vid, _vresult in compile_results.items():
+            if _vid.startswith(obligation_id + "__v_"):
+                _variant_result = _vresult
+                break
+        if _variant_result is not None:
+            compile_results[obligation_id] = dict(_variant_result)
             continue
         experiment = _dict(experiments.get(obligation_id))
         compile_receipt = _dict(experiment.get("compile_receipt"))
@@ -826,6 +849,37 @@ def run_experiment_candidate(
             ),
         },
     )
+    # Honest execution-phase status: it must reflect what actually happened,
+    # not a constant "completed". A blocked/discovery-evolution block, a runtime
+    # contract that never reached "approved", or obligations that were selected
+    # but never executed must surface as "blocked"; only a genuinely executed
+    # (or approved-but-empty) plan earns "completed"/"not_executed".
+    blocked_obligations = sum(
+        1
+        for row in (ledger.get("attempts") or [])
+        if _text(_dict(row).get("terminal_status")).upper() in {"BLOCKED", "DEFERRED"}
+    )
+    executed_count = int(batch.get("executed_count") or 0)
+    selected_count = len(selected_rows)
+    if _text(runtime_contract.get("status")) == "plan_only":
+        # No runtime target was supplied, so execution was never attempted.
+        # This is an intentional, clean plan-only state — not a block.
+        execution_status_value = "plan_only"
+    elif blocked_obligations > 0:
+        execution_status_value = "blocked"
+    elif selected_count == 0:
+        # No obligations were selected for execution: the discovery evolution
+        # was blocked (source provenance, runtime-contract, or obligation-plan
+        # gate). Execution status is "blocked", never "not_executed" — a scan
+        # that cannot select anything to execute has not cleanly completed.
+        execution_status_value = "blocked"
+    elif executed_count >= selected_count and bool(ledger.get("complete")):
+        execution_status_value = "completed"
+    elif executed_count > 0:
+        execution_status_value = "partial"
+    else:
+        execution_status_value = "blocked"
+
     result: dict[str, Any] = {
         "schema_version": RUNTIME_SCHEMA,
         "v12_version": "3.0-mainline",
@@ -886,7 +940,7 @@ def run_experiment_candidate(
                 "selected": len(selected_rows),
             },
             "execution": {
-                "status": "completed",
+                "status": execution_status_value,
                 "executed": int(batch.get("executed_count") or 0),
                 "observed_http_request_count": int(
                     operational_summary.get("observed_http_request_count") or 0
@@ -917,7 +971,7 @@ def run_experiment_candidate(
             },
         },
         "auto_har": {
-            "status": "receipt_backed",
+            "status": "no_traffic" if execution_status_value == "plan_only" else "receipt_backed",
             "entry_count": int(batch.get("executed_count") or 0),
         },
         "total_duration_ms": int((time.time() - started) * 1000),
