@@ -315,7 +315,7 @@ def compile_family_protocol(
         }
 
     if family == "validation":
-        if method not in {"POST", "PUT", "PATCH"}:
+        if method not in {"POST", "PUT", "PATCH", "DELETE"}:
             return {
                 "status": "BLOCKED",
                 "reason_code": "BLOCKED_MISSING_OPERATION",
