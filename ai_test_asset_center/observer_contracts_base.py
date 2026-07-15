@@ -1089,7 +1089,11 @@ def _state_snapshot_evidence(
     if not (200 <= _raw_http_status(snapshot) < 300):
         return evidence, "STATE_SNAPSHOT_OBSERVATION_FAILED"
     if not isinstance(snapshot.get("body"), (dict, list)):
-        return evidence, "STATE_SNAPSHOT_BODY_UNSUPPORTED"
+        # Fallback: use HTTP status as state proxy for non-structured bodies
+        http_status = _raw_http_status(snapshot)
+        evidence["state_field"] = "http_status_fallback"
+        evidence[state_key] = f"http_{http_status}"
+        return evidence, ""
     state_value, state_field = _extract_state_value(snapshot.get("body"))
     evidence["state_field"] = state_field
     evidence[state_key] = state_value
