@@ -592,7 +592,15 @@ def _declared_fixture_actor_refs(
             continue
         secret = _text(actor.get("credential_secret_ref"))
         ranked.append((0 if "test_accounts" in secret or "context" in secret else 1, index, _text(actor.get("id"))))
-    return [actor_ref for _, _, actor_ref in sorted(ranked)]
+    result = [actor_ref for _, _, actor_ref in sorted(ranked)]
+    if not result:
+        # Fallback: use the first admin actor when no explicit permissions
+        # are declared for this operation. Admin role should have universal
+        # access in most enterprise systems.
+        for actor in _list(_dict(behavior_ir).get("actors")):
+            if isinstance(actor, dict) and _text(actor.get("role")).lower() == "admin":
+                return [_text(actor.get("id"))]
+    return result
 
 
 def _declared_fixture_setup(
@@ -783,6 +791,22 @@ def build_binding_plan(
                 if fixture_setup:
                     binding["fixture_setup"] = fixture_setup
                 plan.append(binding)
+                continue
+            # When no read resolvers exist, check if we can create the resource
+            _create_only = _declared_fixture_setup(
+                op,
+                target=name,
+                behavior_ir=_dict(behavior_ir),
+            )
+            if _create_only:
+                plan.append({
+                    "target": name,
+                    "status": "runtime_resolvable",
+                    "source_priority": "fixture_create_only",
+                    "resolver_operations": [],
+                    "fixture_setup": _create_only,
+                    "value_fingerprint": "",
+                })
                 continue
             # Prefer disposable fixture for identity-like placeholders
             preferred = "disposable_fixture_receipt" if name.lower().endswith("id") or name.lower() == "id" else "schema_generated"
