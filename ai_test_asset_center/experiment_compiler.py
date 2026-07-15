@@ -74,9 +74,18 @@ def _conflict_is_relevant(
     conflict: dict[str, Any],
     *,
     obligation_refs: set[str],
+    obligation_actor_roles: set[str] | None,
 ) -> bool:
     if _text(conflict.get("status")) != "conflicting":
         return True
+    if _text(conflict.get("conflict_type")) == "permission_decision_conflict":
+        conflict_role = _text(conflict.get("role_key")).lower()
+        if (
+            conflict_role
+            and obligation_actor_roles is not None
+            and conflict_role not in obligation_actor_roles
+        ):
+            return False
     conflict_refs = _refs_from_mapping(_dict(conflict))
     # An unscoped conflict is global and remains fail-closed. Only conflicts
     # that explicitly identify other IR nodes are safe to remove here.
@@ -85,12 +94,31 @@ def _conflict_is_relevant(
     return bool(conflict_refs.intersection(obligation_refs))
 
 
+def _obligation_actor_roles(
+    behavior_ir: dict[str, Any],
+    obligation: dict[str, Any],
+) -> set[str] | None:
+    actors = {
+        _text(actor.get("id")): _text(
+            actor.get("role_key") or actor.get("role")
+        ).lower()
+        for actor in _list(_dict(behavior_ir).get("actors"))
+        if isinstance(actor, dict) and _text(actor.get("id"))
+    }
+    actor_refs = _refs_from_mapping(_dict(obligation)).intersection(actors)
+    if not actor_refs:
+        return None
+    roles = {actors[actor_ref] for actor_ref in actor_refs if actors[actor_ref]}
+    return roles or None
+
+
 def _scoped_behavior_ir(
     behavior_ir: dict[str, Any],
     obligation: dict[str, Any],
 ) -> dict[str, Any]:
     ir = deepcopy(_dict(behavior_ir))
     obligation_refs = _obligation_scope_refs(obligation)
+    obligation_actor_roles = _obligation_actor_roles(behavior_ir, obligation)
     ir["conflicts"] = [
         dict(conflict)
         for conflict in _list(ir.get("conflicts"))
@@ -98,6 +126,7 @@ def _scoped_behavior_ir(
         and _conflict_is_relevant(
             conflict,
             obligation_refs=obligation_refs,
+            obligation_actor_roles=obligation_actor_roles,
         )
     ]
     return ir

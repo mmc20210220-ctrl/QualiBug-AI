@@ -4,6 +4,7 @@ from pathlib import Path
 
 from ai_test_asset_center.enterprise_knowledge_center import (
     _classify_source,
+    _links_by_exact_source_section,
     _links_by_overlap,
     _parse_source,
     build_enterprise_business_knowledge_asset,
@@ -15,6 +16,7 @@ MARKDOWN_API_DOC = """# API Docs
 
 ### POST `/orders`
 Create an order.
+The amount must be positive.
 
 | Field | Type | Description |
 | --- | --- | --- |
@@ -289,6 +291,12 @@ def test_build_asset_includes_new_extracted_structures(tmp_path: Path) -> None:
     assert asset["summary"]["source_type_distribution"]["db_field_dictionary"] == 1
     assert asset["summary"]["source_type_distribution"]["uiux_svg"] == 1
     assert any(row["relation"] == "source_to_asset" for row in asset["relationships"])
+    assert any(
+        row.get("relation") == "rule_to_interface"
+        and row.get("derivation") == "exact_source_section"
+        and row.get("status") == "accepted"
+        for row in asset["relationships"]
+    )
 
 
 def test_token_overlap_relationships_are_candidate_only() -> None:
@@ -316,3 +324,40 @@ def test_token_overlap_relationships_are_candidate_only() -> None:
     assert edge["status"] == "candidate"
     assert edge["derivation"] == "token_overlap"
     assert edge["evidence_gate"] == "token_overlap_only_requires_explicit_source_relation"
+
+
+def test_exact_markdown_endpoint_section_is_authoritative_rule_lineage() -> None:
+    parsed = _parse_source(
+        MARKDOWN_API_DOC.encode("utf-8"),
+        "API_DOCS.md",
+        "markdown_api",
+        "src_api",
+    )
+
+    edges = _links_by_exact_source_section(parsed["rules"], parsed["operations"])
+
+    assert len(edges) == 1
+    edge = edges[0]
+    assert edge["relation"] == "rule_to_interface"
+    assert edge["status"] == "accepted"
+    assert edge["derivation"] == "exact_source_section"
+    assert edge["evidence"]["operation_locator"] == "POST /orders"
+
+
+def test_explicit_positive_integer_rule_is_extracted_as_typed_constraint() -> None:
+    parsed = _parse_source(
+        b"# API\n\n### POST `/items`\n`quantity` must be a positive integer.\n",
+        "API_DOCS.md",
+        "markdown_api",
+        "src_api",
+    )
+
+    rule = parsed["rules"][0]
+    assert rule["operator"] == "field_constraint"
+    assert rule["operands"] == [
+        {
+            "field_tokens": ["quantity"],
+            "validation_constraint": "exclusiveMinimum",
+            "validation_constraint_value": 0,
+        }
+    ]

@@ -11,6 +11,7 @@ import hashlib
 import json
 import re
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 
@@ -142,6 +143,30 @@ _CLEANUP_ACTION_RE = re.compile(
     r"abandon|discard|retire|freeze|reset|clear|purge)$",
     re.I,
 )
+_ENDPOINT_ACTION_MARKERS: frozenset[str] | None = None
+
+
+def _endpoint_action_markers() -> frozenset[str]:
+    global _ENDPOINT_ACTION_MARKERS
+    if _ENDPOINT_ACTION_MARKERS is not None:
+        return _ENDPOINT_ACTION_MARKERS
+    path = Path(__file__).resolve().parent / "policies" / "semantic_lexicon.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise BehaviorIRError(f"semantic_lexicon_unreadable:{type(exc).__name__}") from exc
+    raw_markers = payload.get("endpoint_action_markers") if isinstance(payload, dict) else None
+    if not isinstance(raw_markers, list) or not raw_markers:
+        raise BehaviorIRError("semantic_lexicon_endpoint_action_markers_missing")
+    markers = frozenset(
+        _normalize_action(marker)
+        for marker in raw_markers
+        if _normalize_action(marker)
+    )
+    if not markers:
+        raise BehaviorIRError("semantic_lexicon_endpoint_action_markers_empty")
+    _ENDPOINT_ACTION_MARKERS = markers
+    return markers
 
 
 def _path_shape(value: Any) -> str:
@@ -542,15 +567,6 @@ def _actions_match_operation(actions: list[Any], operation: dict[str, Any]) -> b
     if normalized.intersection(_UNIVERSAL_ACTIONS):
         return True
     method = _text(operation.get("method")).upper()
-    if normalized.intersection(_METHOD_ACTIONS.get(method, {method.lower()})):
-        return True
-    if method in {"POST", "PUT", "PATCH", "DELETE"} and normalized.intersection({
-        "modify",
-        "write",
-    }):
-        return True
-    if method not in {"POST", "PUT", "PATCH", "DELETE"}:
-        return False
     path_segments = [
         segment
         for segment in _text(operation.get("path")).split("?", 1)[0].strip("/").split("/")
@@ -564,9 +580,31 @@ def _actions_match_operation(actions: list[Any], operation: dict[str, Any]) -> b
     endpoint_action_tokens: set[str] = set()
     if path_segments:
         final_segment = _normalize_action(path_segments[-1])
+        meaningful_segments = [
+            segment
+            for segment in path_segments
+            if _normalize_action(segment) != "api"
+            and not re.fullmatch(r"v\d+", _normalize_action(segment))
+        ]
+        if (
+            final_segment in _endpoint_action_markers()
+            and len(meaningful_segments) >= 2
+        ):
+            if normalized.intersection({"modify", "write"}):
+                return method in {"POST", "PUT", "PATCH", "DELETE"}
+            return final_segment in normalized
         endpoint_action_tokens.add(final_segment)
         if final_segment.endswith("s") and len(final_segment) > 3:
             endpoint_action_tokens.add(final_segment[:-1])
+    if normalized.intersection(_METHOD_ACTIONS.get(method, {method.lower()})):
+        return True
+    if method in {"POST", "PUT", "PATCH", "DELETE"} and normalized.intersection({
+        "modify",
+        "write",
+    }):
+        return True
+    if method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return False
     for field in ("action", "intent"):
         explicit_action = _normalize_action(operation.get(field))
         if explicit_action:

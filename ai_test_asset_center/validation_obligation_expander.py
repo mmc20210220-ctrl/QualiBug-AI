@@ -321,6 +321,37 @@ def _explicit_tokens(property_spec: dict[str, Any]) -> tuple[str | int, ...]:
     return tuple(part for part in field_path.split(".") if part)
 
 
+def _typed_expression_constraint(
+    property_spec: dict[str, Any],
+) -> dict[str, Any]:
+    expression = _dict(property_spec.get("expression"))
+    if _text(expression.get("operator")) != "field_constraint":
+        return {}
+    operands = _list(expression.get("operands"))
+    if len(operands) != 1 or not isinstance(operands[0], dict):
+        raise ValueError("field_constraint_requires_exactly_one_typed_operand")
+    operand = _dict(operands[0])
+    tokens = operand.get("field_tokens")
+    constraint = _text(operand.get("validation_constraint"))
+    if (
+        not isinstance(tokens, list)
+        or not tokens
+        or not all(
+            isinstance(token, (str, int)) and not isinstance(token, bool)
+            for token in tokens
+        )
+        or not constraint
+    ):
+        raise ValueError("field_constraint_operand_invalid")
+    return {
+        "field_tokens": list(tokens),
+        "validation_constraint": constraint,
+        "validation_constraint_value": deepcopy(
+            operand.get("validation_constraint_value")
+        ),
+    }
+
+
 def _variant_id(
     obligation_id: str,
     tokens: tuple[str | int, ...],
@@ -363,6 +394,10 @@ def expand_validation_obligation(
         return [obl]
     guarded = _with_validation_effect_observer(obl)
     prop = _dict(guarded.get("property"))
+    typed_constraint = _typed_expression_constraint(prop)
+    if typed_constraint:
+        prop = {**prop, **typed_constraint}
+        guarded["property"] = prop
     explicit_tokens = _explicit_tokens(prop)
     if explicit_tokens and _text(prop.get("validation_constraint")):
         normalized = deepcopy(guarded)

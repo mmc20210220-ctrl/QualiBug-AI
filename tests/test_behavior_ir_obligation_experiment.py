@@ -340,6 +340,12 @@ def test_permission_actions_match_explicit_operation_action_not_only_http_method
                     "actions": ["adjust"],
                     "decision": "allow",
                 },
+                {
+                    "role": "requester",
+                    "resource": "refund",
+                    "actions": ["request", "create"],
+                    "decision": "allow",
+                },
             ],
             "operations": [
                 {
@@ -362,6 +368,21 @@ def test_permission_actions_match_explicit_operation_action_not_only_http_method
                     "method": "GET",
                     "path": "/inventory/{sku}",
                 },
+                {
+                    "operation_id": "create_refund",
+                    "method": "POST",
+                    "path": "/refunds",
+                },
+                {
+                    "operation_id": "approve_refund",
+                    "method": "POST",
+                    "path": "/refunds/{id}/approve",
+                },
+                {
+                    "operation_id": "create_singular_refund",
+                    "method": "POST",
+                    "path": "/api/refund",
+                },
             ],
         },
         project_id="permission-operation-actions",
@@ -380,6 +401,9 @@ def test_permission_actions_match_explicit_operation_action_not_only_http_method
     assert ("denies", actors["auditor"], operations["read_inventory"]) not in decisions
     assert ("permits", actors["warehouse"], operations["adjust_inventory"]) in decisions
     assert ("permits", actors["warehouse"], operations["reserve_inventory"]) not in decisions
+    assert ("permits", actors["requester"], operations["create_refund"]) in decisions
+    assert ("permits", actors["requester"], operations["create_singular_refund"]) in decisions
+    assert ("permits", actors["requester"], operations["approve_refund"]) not in decisions
 
 
 def test_behavior_ir_derives_explicit_role_restriction_from_source_contract() -> None:

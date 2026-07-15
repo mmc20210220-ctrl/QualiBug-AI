@@ -271,6 +271,31 @@ def test_explicit_constraint_is_not_expanded_again() -> None:
     ]
 
 
+def test_typed_invariant_operand_targets_exact_source_constraint() -> None:
+    obligation = _obligation()
+    obligation["property"]["expression"] = {
+        "kind": "business_rule",
+        "operator": "field_constraint",
+        "operands": [
+            {
+                "field_tokens": ["quantity"],
+                "validation_constraint": "exclusiveMinimum",
+                "validation_constraint_value": 0,
+            }
+        ],
+    }
+
+    variants = expand_validation_obligation(
+        obligation,
+        operation=_operation(),
+    )
+
+    assert len(variants) == 1
+    assert variants[0]["property"]["field_tokens"] == ["quantity"]
+    assert variants[0]["property"]["validation_constraint"] == "exclusiveMinimum"
+    assert variants[0]["property"]["validation_constraint_value"] == 0
+
+
 def test_validation_rejection_requires_zero_business_effect() -> None:
     assertion = {
         "assertion_id": "assert-validation",

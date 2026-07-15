@@ -131,6 +131,49 @@ def test_relevant_scoped_conflict_still_blocks_fail_closed() -> None:
     assert experiment["compile_receipt"]["detail"] == "conflict-op-a"
 
 
+def test_permission_conflict_for_other_role_does_not_block_actor_experiment() -> None:
+    ir = _behavior_ir([
+        {
+            "id": "conflict-seller-op-a",
+            "status": "conflicting",
+            "conflict_type": "permission_decision_conflict",
+            "role_key": "seller",
+            "operation_ref": "op-a",
+            "decisions": ["DENY", "PERMIT"],
+        }
+    ])
+
+    experiment = compile_experiment_for_obligation(
+        _privacy_field_obligation(),
+        behavior_ir=ir,
+        environment_type="test",
+    )
+
+    assert experiment["compile_receipt"]["status"] == "COMPILED", experiment
+
+
+def test_permission_conflict_for_same_role_remains_fail_closed() -> None:
+    ir = _behavior_ir([
+        {
+            "id": "conflict-auditor-op-a",
+            "status": "conflicting",
+            "conflict_type": "permission_decision_conflict",
+            "role_key": "auditor",
+            "operation_ref": "op-a",
+            "decisions": ["DENY", "PERMIT"],
+        }
+    ])
+
+    experiment = compile_experiment_for_obligation(
+        _privacy_field_obligation(),
+        behavior_ir=ir,
+        environment_type="test",
+    )
+
+    assert experiment["compile_receipt"]["status"] == "BLOCKED"
+    assert experiment["compile_receipt"]["detail"] == "conflict-auditor-op-a"
+
+
 def test_unscoped_conflict_remains_global_fail_closed() -> None:
     ir = _behavior_ir([
         {

@@ -1336,6 +1336,37 @@ def _risk_type_from_text(text: str) -> str:
     return "business_rule"
 
 
+def _typed_validation_constraint(text: str) -> dict[str, Any]:
+    fields = [
+        value.strip()
+        for value in re.findall(r"`([^`]+)`", text)
+        if value.strip()
+    ]
+    if len(fields) != 1:
+        return {}
+    norm = _norm(text)
+    positive_integer_markers = _lexicon_list("positive_integer_markers")
+    if not positive_integer_markers:
+        return {}
+    if not any(_norm(marker) in norm for marker in positive_integer_markers):
+        return {}
+    field_tokens = [
+        token
+        for token in re.split(r"[.\[\]]+", fields[0])
+        if token
+    ]
+    if not field_tokens:
+        return {}
+    return {
+        "operator": "field_constraint",
+        "operands": [{
+            "field_tokens": field_tokens,
+            "validation_constraint": "exclusiveMinimum",
+            "validation_constraint_value": 0,
+        }],
+    }
+
+
 def _rules_from_text(text: str, source_id: str, source_type: str) -> list[dict[str, Any]]:
     rules: list[dict[str, Any]] = []
     allow_relaxed_async_rules = source_type == "collaboration_document"
@@ -1355,7 +1386,7 @@ def _rules_from_text(text: str, source_id: str, source_type: str) -> list[dict[s
             if key in seen_statements:
                 continue
             seen_statements.add(key)
-        rules.append({
+        rule = {
             "rule_id": f"rule:{source_id}:{idx+1}",
             "source_id": source_id,
             "source_type": source_type,
@@ -1364,7 +1395,9 @@ def _rules_from_text(text: str, source_id: str, source_type: str) -> list[dict[s
             "risk_type": _risk_type_from_text(line),
             "severity": "P0" if rule_type in {"conservation", "permission"} and any(x in norm for x in ("资金", "余额", "账本", "payment", "balance", "tenant", "租户", "病历")) else "P1" if rule_type in {"conservation", "permission", "reconciliation"} else "P2",
             "tokens": sorted(_tokens(line)),
-        })
+        }
+        rule.update(_typed_validation_constraint(line))
+        rules.append(rule)
     return rules[:180]
 
 
@@ -2074,6 +2107,57 @@ def _links_by_overlap(left: Iterable[dict[str, Any]], right: Iterable[dict[str, 
     return _dedupe_by_id(edges, "edge_id")
 
 
+def _links_by_exact_source_section(
+    rules: Iterable[dict[str, Any]],
+    interfaces: Iterable[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Bind a rule only to the exact Markdown endpoint section containing it."""
+
+    edges: list[dict[str, Any]] = []
+    interface_rows = [row for row in interfaces if isinstance(row, dict)]
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        statement = str(rule.get("statement") or "").strip()
+        source_id = str(rule.get("source_id") or "").strip()
+        rule_id = str(rule.get("rule_id") or "").strip()
+        if not statement or not source_id or not rule_id:
+            continue
+        for interface in interface_rows:
+            if str(interface.get("source_id") or "").strip() != source_id:
+                continue
+            excerpt = str(interface.get("source_excerpt") or "")
+            if statement not in excerpt:
+                continue
+            interface_id = str(interface.get("interface_id") or "").strip()
+            if not interface_id:
+                continue
+            operation_locator = (
+                f"{str(interface.get('method') or '').upper()} "
+                f"{str(interface.get('path') or '')}"
+            ).strip()
+            edges.append({
+                "edge_id": f"edge:{_short_hash({
+                    'rule': rule_id,
+                    'interface': interface_id,
+                    'derivation': 'exact_source_section',
+                })}",
+                "from": rule_id,
+                "to": interface_id,
+                "relation": "rule_to_interface",
+                "confidence": 1.0,
+                "status": "accepted",
+                "derivation": "exact_source_section",
+                "evidence_gate": "exact_source_section",
+                "evidence": {
+                    "source_id": source_id,
+                    "operation_locator": operation_locator,
+                    "statement_hash": _short_hash(statement),
+                },
+            })
+    return _dedupe_by_id(edges, "edge_id")
+
+
 def _module_tree(interfaces: list[dict[str, Any]], rules: list[dict[str, Any]], tables: list[dict[str, Any]], objects: list[dict[str, Any]]) -> list[dict[str, Any]]:
     modules: dict[str, dict[str, Any]] = {}
     for interface in interfaces:
@@ -2469,11 +2553,28 @@ def build_enterprise_business_knowledge_asset(project_id: str = "real_project_de
         if isinstance(row, dict):
             dependencies.append({"dependency_id": f"industrydep:{_short_hash(row)}", "source_id": "industry_inference", "from": row.get("from") or row.get("source"), "to": row.get("to") or row.get("target"), "relation": row.get("relation") or "business_dependency"})
     dependencies = _dedupe_by_id(dependencies, "dependency_id")
-    relation_edges = [
+    exact_section_edges = _links_by_exact_source_section(rules, interfaces)
+    exact_section_keys = {
+        (str(edge.get("from")), str(edge.get("to")), str(edge.get("relation")))
+        for edge in exact_section_edges
+    }
+    overlap_edges = [
         *_links_by_overlap(rules, interfaces, "rule_id", "interface_id", relation="rule_to_interface"),
         *_links_by_overlap(rules, tables, "rule_id", "table_id", relation="rule_to_table"),
         *_links_by_overlap(interfaces, tables, "interface_id", "table_id", relation="interface_to_table"),
         *_links_by_overlap(ui_specs, interfaces, "ui_spec_id", "interface_id", relation="ui_to_interface"),
+    ]
+    relation_edges = [
+        *exact_section_edges,
+        *[
+            edge
+            for edge in overlap_edges
+            if (
+                str(edge.get("from")),
+                str(edge.get("to")),
+                str(edge.get("relation")),
+            ) not in exact_section_keys
+        ],
     ]
     for source in active:
         sid = str(source.get("source_id"))
