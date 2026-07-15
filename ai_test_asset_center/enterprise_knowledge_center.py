@@ -1309,21 +1309,123 @@ def _roles_from_text(text: str, source_id: str) -> list[dict[str, Any]]:
 
 
 def _state_machines_from_text(text: str, source_id: str) -> list[dict[str, Any]]:
+    token_pattern = r"[A-Za-z0-9_\-\u4e00-\u9fff]{2,32}"
+    separator_pattern = r"(?:->|→|到|至)"
+    chain_pattern = re.compile(
+        rf"{token_pattern}(?:\s*{separator_pattern}\s*{token_pattern})+"
+    )
+
+    allowed_markers = _lexicon_list("allowed_transition_markers")
+    forbidden_markers = _lexicon_list("forbidden_transition_markers")
+
+    def classified_transitions_in(
+        section_text: str,
+    ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+        allowed: list[tuple[str, str]] = []
+        forbidden: list[tuple[str, str]] = []
+        mode = "allowed"
+        for line in section_text.splitlines():
+            line_norm = _norm(line)
+            if any(_norm(marker) in line_norm for marker in forbidden_markers):
+                mode = "forbidden"
+            elif any(_norm(marker) in line_norm for marker in allowed_markers):
+                mode = "allowed"
+            target = forbidden if mode == "forbidden" else allowed
+            for chain_match in chain_pattern.finditer(line):
+                raw_tokens = re.split(rf"\s*{separator_pattern}\s*", chain_match.group(0))
+                normalized = [_normalize_state_token(token) for token in raw_tokens]
+                for src, dst in zip(normalized, normalized[1:]):
+                    if src and dst and _norm(src) != _norm(dst):
+                        pair = (src, dst)
+                        if pair not in target:
+                            target.append(pair)
+        return allowed, forbidden
+
+    heading_markers = _lexicon_list("state_machine_heading_markers")
+    heading_matches = list(re.finditer(r"(?m)^(#{1,6})\s+(.+?)\s*$", text))
+    recognized_heading_indexes = {
+        index
+        for index, heading_match in enumerate(heading_matches)
+        if any(
+            _norm(marker) in _norm(heading_match.group(2))
+            for marker in heading_markers
+        )
+    }
+    sections: list[tuple[str, str]] = []
+    for index, heading_match in enumerate(heading_matches):
+        if index not in recognized_heading_indexes:
+            continue
+        heading = heading_match.group(2).strip().strip("`# ")
+        level = len(heading_match.group(1))
+        section_end = len(text)
+        for next_heading in heading_matches[index + 1:]:
+            if len(next_heading.group(1)) <= level:
+                section_end = next_heading.start()
+                break
+        direct_parts: list[str] = []
+        cursor = heading_match.end()
+        for nested_index in sorted(recognized_heading_indexes):
+            if nested_index <= index:
+                continue
+            nested_heading = heading_matches[nested_index]
+            if nested_heading.start() >= section_end:
+                break
+            if len(nested_heading.group(1)) <= level:
+                continue
+            direct_parts.append(text[cursor:nested_heading.start()])
+            nested_level = len(nested_heading.group(1))
+            nested_end = section_end
+            for after_nested in heading_matches[nested_index + 1:]:
+                if len(after_nested.group(1)) <= nested_level:
+                    nested_end = min(after_nested.start(), section_end)
+                    break
+            cursor = max(cursor, nested_end)
+        direct_parts.append(text[cursor:section_end])
+        sections.append((heading, "\n".join(direct_parts)))
+
+    def object_from_heading(heading: str) -> str:
+        candidate = heading
+        for marker in sorted(heading_markers, key=len, reverse=True):
+            candidate = re.sub(re.escape(marker), " ", candidate, flags=re.IGNORECASE)
+        candidate = re.sub(r"[^\w.\-]+", "_", candidate, flags=re.UNICODE).strip("_.-")
+        aliases = _permission_resource_aliases(candidate)
+        return aliases[0] if aliases else candidate.lower() or "document_workflow"
+
+    scoped = [
+        (object_from_heading(heading), *classified_transitions_in(section_text))
+        for heading, section_text in sections
+    ]
+    scoped = [row for row in scoped if row[1] or row[2]]
+    if not scoped:
+        fallback_allowed, fallback_forbidden = classified_transitions_in(text)
+        if fallback_allowed or fallback_forbidden:
+            scoped = [("document_workflow", fallback_allowed, fallback_forbidden)]
+
     out: list[dict[str, Any]] = []
-    transitions: list[tuple[str, str]] = []
-    for match in re.finditer(r"([A-Za-z0-9_\-\u4e00-\u9fff]{2,32})\s*(?:->|→|到|至)\s*([A-Za-z0-9_\-\u4e00-\u9fff]{2,32})", text):
-        src = _normalize_state_token(match.group(1))
-        dst = _normalize_state_token(match.group(2))
-        if src and dst and _norm(src) != _norm(dst):
-            transitions.append((src, dst))
-    if transitions:
-        states = []
-        for src, dst in transitions:
+    for index, (object_name, transitions, forbidden_transitions) in enumerate(scoped, start=1):
+        states: list[str] = []
+        for src, dst in [*transitions, *forbidden_transitions]:
             if src not in states:
                 states.append(src)
             if dst not in states:
                 states.append(dst)
-        out.append({"state_machine_id": f"state:{source_id}:1", "source_id": source_id, "object": "document_workflow", "states": states[:24], "transitions": [{"from": s, "to": t} for s, t in transitions[:40]], "evidence": _redact_text("; ".join(f"{s}->{t}" for s, t in transitions), 700)})
+        out.append({
+            "state_machine_id": f"state:{source_id}:{index}",
+            "source_id": source_id,
+            "object": object_name,
+            "states": states[:24],
+            "transitions": [{"from": src, "to": dst} for src, dst in transitions[:40]],
+            "forbidden_transitions": [
+                {"from": src, "to": dst} for src, dst in forbidden_transitions[:40]
+            ],
+            "evidence": _redact_text(
+                "; ".join([
+                    *(f"allowed:{src}->{dst}" for src, dst in transitions),
+                    *(f"forbidden:{src}->{dst}" for src, dst in forbidden_transitions),
+                ]),
+                700,
+            ),
+        })
     return out
 
 

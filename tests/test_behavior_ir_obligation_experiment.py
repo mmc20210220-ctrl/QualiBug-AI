@@ -743,6 +743,39 @@ def test_behavior_ir_extracts_yaml_and_curl_request_examples() -> None:
     assert curl_ir["operations"][0]["request_example"] == {"sku": "SKU-2", "qty": 1}
 
 
+def test_behavior_ir_never_inherits_request_body_from_sibling_operation() -> None:
+    ir = build_behavior_ir_from_knowledge_asset(
+        {
+            "operations": [
+                {
+                    "operation_id": "change_user_status",
+                    "method": "POST",
+                    "path": "/api/auth/admin/users/{id}/status",
+                    "request_example": {"status": "DISABLED"},
+                },
+                {
+                    "operation_id": "current_user",
+                    "method": "GET",
+                    "path": "/api/auth/me",
+                },
+                {
+                    "operation_id": "refresh_session",
+                    "method": "POST",
+                    "path": "/api/auth/refresh",
+                },
+            ],
+        },
+        project_id="operation-request-lineage",
+    )
+
+    by_id = {row["operation_id"]: row for row in ir["operations"]}
+    assert by_id["change_user_status"]["request_example"] == {
+        "status": "DISABLED",
+    }
+    assert by_id["current_user"]["request_example"] == {}
+    assert by_id["refresh_session"]["request_example"] == {}
+
+
 def test_behavior_ir_merges_structural_entity_aliases_and_binds_operation_path() -> None:
     ir = build_behavior_ir_from_knowledge_asset(
         {

@@ -102,7 +102,83 @@ CREATED -> PAID -> SHIPPED -> FINISHED
     assert machine["states"] == ["CREATED", "PAID", "SHIPPED", "FINISHED"]
     assert machine["transitions"] == [
         {"from": "CREATED", "to": "PAID"},
+        {"from": "PAID", "to": "SHIPPED"},
         {"from": "SHIPPED", "to": "FINISHED"},
+    ]
+
+
+def test_parse_source_keeps_state_machines_bound_to_their_sections() -> None:
+    workflow_doc = """# Workflow
+
+## Purchase state machine
+CREATED -> APPROVED -> CLOSED
+
+## Refund state machine
+REQUESTED -> APPROVED -> REFUNDED
+
+## Notes
+The two workflows are independent.
+"""
+    parsed = _parse_source(
+        workflow_doc.encode("utf-8"),
+        "PRD.md",
+        "prd",
+        "src_sectioned_workflows",
+    )
+
+    machines = {row["object"]: row for row in parsed["state_machines"]}
+    assert set(machines) == {"purchase", "refund"}
+    assert machines["purchase"]["transitions"] == [
+        {"from": "CREATED", "to": "APPROVED"},
+        {"from": "APPROVED", "to": "CLOSED"},
+    ]
+    assert machines["refund"]["transitions"] == [
+        {"from": "REQUESTED", "to": "APPROVED"},
+        {"from": "APPROVED", "to": "REFUNDED"},
+    ]
+
+
+def test_parse_source_resolves_state_machine_object_through_semantic_lexicon() -> None:
+    workflow_doc = """# Product behavior
+
+## 订单状态机
+CREATED -> PAID
+"""
+    parsed = _parse_source(
+        workflow_doc.encode("utf-8"),
+        "PRD.md",
+        "prd",
+        "src_localized_workflow",
+    )
+
+    assert parsed["state_machines"][0]["object"] == "order"
+
+
+def test_parse_source_separates_forbidden_from_allowed_state_transitions() -> None:
+    workflow_doc = """# Product behavior
+
+## Order state machine
+CREATED -> PAID -> COMPLETED
+
+Forbidden transitions:
+- COMPLETED -> PAID
+- COMPLETED -> CREATED
+"""
+    parsed = _parse_source(
+        workflow_doc.encode("utf-8"),
+        "PRD.md",
+        "prd",
+        "src_forbidden_transitions",
+    )
+
+    machine = parsed["state_machines"][0]
+    assert machine["transitions"] == [
+        {"from": "CREATED", "to": "PAID"},
+        {"from": "PAID", "to": "COMPLETED"},
+    ]
+    assert machine["forbidden_transitions"] == [
+        {"from": "COMPLETED", "to": "PAID"},
+        {"from": "COMPLETED", "to": "CREATED"},
     ]
 
 
