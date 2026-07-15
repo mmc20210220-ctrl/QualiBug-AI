@@ -1238,6 +1238,18 @@ def execute_one_experiment(
             )
             actor = actors.get(actor_ref) or {}
             op = ops.get(op_ref) or {}
+            # If op_ref doesn't match, try to find by method+path_template
+            if not op and op_ref:
+                path_template_candidate = _text(step.get("path") or step.get("path_template"))
+                method_candidate = _text(step.get("method") or "POST").upper()
+                for _oid, _op in ops.items():
+                    if isinstance(_op, dict) and _text(_op.get("method","")).upper() == method_candidate:
+                        _op_path = normalize_path_placeholders(_text(_op.get("path") or _op.get("raw_path")))
+                        _step_path = normalize_path_placeholders(path_template_candidate)
+                        if _op_path == _step_path:
+                            op = _op
+                            op_ref = _oid
+                            break
             method = _text(op.get("method") or "GET").upper()
             path_template = _text(op.get("path") or op.get("raw_path"))
             path = _materialize_path(
@@ -1246,9 +1258,11 @@ def execute_one_experiment(
             )
             request_body = (
                 step.get("body")
-                if "body" in step
+                if "body" in step and step.get("body")
                 else op.get("request_example")
-                if method in {"POST", "PUT", "PATCH", "DELETE"}
+                if method in {"POST", "PUT", "PATCH", "DELETE"} and op.get("request_example")
+                else step.get("body")
+                if "body" in step
                 else None
             )
             request_body = _materialize_body_template(
