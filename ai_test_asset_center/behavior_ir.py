@@ -1371,6 +1371,9 @@ def _derive_invariant_relations(model: dict[str, Any]) -> list[dict[str, Any]]:
                         op_refs.append(_text(op.get("id")))
                         if len(op_refs) >= 5:
                             break
+            # Write back to the invariant so downstream consumers see the match
+            if op_refs:
+                invariant["operation_refs"] = list(op_refs)
 
         for hint in op_refs:
             operation = _resolve_operation(operations, {"operation_ref": hint})
