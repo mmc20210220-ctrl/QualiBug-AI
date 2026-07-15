@@ -90,6 +90,10 @@ def _resolve_state_compile_context(
         if _text(prop.get(value_field)):
             continue
         state_ref = _text(prop.get(ref_field))
+        if not state_ref:
+            # Invariant-based state obligations don't have explicit state refs
+            prop[value_field] = "unknown_state"
+            continue
         state_value = _state_semantic_value(states.get(state_ref) or {})
         if not state_value:
             # Fallback: use the state ref itself as value
@@ -101,7 +105,8 @@ def _resolve_state_compile_context(
         prop[value_field] = state_value
 
     if _text(prop.get("from_state")).casefold() == _text(prop.get("to_state")).casefold():
-        return prop, required_actors, required_fixtures, "state_transition_no_change"
+        if _text(prop.get("from_state")) != "unknown_state":
+            return prop, required_actors, required_fixtures, "state_transition_no_change"
 
     actors = _index_by_id(_list(_dict(behavior_ir).get("actors")))
     resolved_actors = [
