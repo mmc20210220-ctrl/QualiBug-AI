@@ -77,6 +77,40 @@ def _write_runtime_test_accounts(root: Path, project: str) -> None:
     )
 
 
+def test_runtime_actor_uses_authenticated_role_for_source_lineage(tmp_path: Path) -> None:
+    from ai_test_asset_center.discovery_runtime import _runtime_actors
+
+    _write_runtime_test_accounts(tmp_path, "PROJECT-1")
+    account_path = tmp_path / "platform_inputs" / "PROJECT-1" / "test_accounts.json"
+    account_path.write_text(
+        json.dumps(
+            {
+                "accounts": [
+                    {
+                        "role": "localized display label",
+                        "authenticated_role": "source-role",
+                        "account_ref": "account-1",
+                        "status": "active",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    actors = _runtime_actors(tmp_path, "PROJECT-1", {})
+
+    assert actors == [
+        {
+            "role": "source-role",
+            "account_ref": "account-1",
+            "tenant": None,
+            "secret_ref": "secret_ref:test_accounts:account-1",
+            "status": "active",
+        }
+    ]
+
+
 def test_v12_wrapper_delegates_once_and_has_no_runtime_fallback() -> None:
     source = Path("ai_test_asset_center/v12_pipeline.py").read_text(encoding="utf-8")
 

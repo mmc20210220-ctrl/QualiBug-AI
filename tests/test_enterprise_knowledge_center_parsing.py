@@ -252,6 +252,33 @@ Permission constraints:
         and row.get("decision") == "deny"
         for row in permissions
     )
+    assert not any(
+        row.get("role") == "finance"
+        and row.get("resource") == "refund"
+        and row.get("decision") == "deny"
+        for row in permissions
+    )
+
+
+def test_permission_scope_extracts_own_and_other_owner_from_narrative() -> None:
+    doc = """# Role permissions
+
+| Role | Permissions |
+| --- | --- |
+| seller | create and modify own products |
+
+- seller cannot modify other seller products.
+"""
+    parsed = _parse_source(
+        doc.encode("utf-8"),
+        "permissions.md",
+        "permission_matrix",
+        "src_scoped_permissions",
+    )
+
+    seller_rows = [row for row in parsed["permissions"] if row.get("role") == "seller"]
+    assert any(row.get("scope") == "own" and row.get("decision") == "allow" for row in seller_rows)
+    assert any(row.get("scope") == "other_owner" and row.get("decision") == "deny" for row in seller_rows)
 
 
 def test_parse_source_extracts_back_in_stock_and_inventory_sync_as_async_event_rules() -> None:

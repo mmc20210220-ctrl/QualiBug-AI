@@ -1113,13 +1113,38 @@ def _permission_action_aliases(value: Any) -> list[str]:
 
 def _permission_scope(value: Any) -> str:
     normalized = _norm(value)
-    if any(token in normalized for token in ("自己的", "本人", "own", "self", "owned")):
+    if any(token in normalized for token in ("自己的", "自己", "本人", "own", "self", "owned")):
         return "own"
+    if any(token in normalized for token in (
+        "other", "another", "different", "other_owner",
+        "其他", "他人", "别人的", "非本人",
+    )):
+        return "other_owner"
     if any(token in normalized for token in ("tenant", "租户", "organization", "组织")):
         return "tenant"
     if any(token in normalized for token in ("所有", "全部", "all", "global")):
         return "all"
     return "unspecified"
+
+
+def _negative_permission_clause(line: str) -> str:
+    """Keep only the clause governed by a negative permission marker."""
+
+    text = str(line or "").strip()
+    if not text:
+        return ""
+    marker = re.compile(
+        r"(?i)(?:cannot|can't|must\s+not|not\s+allowed|forbidden|"
+        r"不得|不能|禁止|不允许)"
+    )
+    matches = list(marker.finditer(text))
+    if not matches:
+        return text
+    clause = text[matches[-1].end():].strip(" \t:-：")
+    if not clause:
+        return text
+    clause = re.split(r"[,;，；。！？]", clause, maxsplit=1)[0].strip()
+    return clause or text
 
 
 def _permission_entries(text: str, payload: Any, source_id: str) -> list[dict[str, Any]]:
@@ -1213,6 +1238,7 @@ def _permission_entries(text: str, payload: Any, source_id: str) -> list[dict[st
         if _permission_decision({}, line) != "deny":
             continue
         line_norm = _norm(line)
+        negative_clause = _negative_permission_clause(line)
         roles = [
             role
             for role, aliases in role_words.items()
@@ -1221,10 +1247,10 @@ def _permission_entries(text: str, payload: Any, source_id: str) -> list[dict[st
                 for alias in [role, *aliases]
             )
         ]
-        resource_aliases = _permission_resource_aliases(line)
+        resource_aliases = _permission_resource_aliases(negative_clause)
         if not roles or not resource_aliases:
             continue
-        action_values = _permission_action_aliases(line) or ["*"]
+        action_values = _permission_action_aliases(negative_clause) or ["*"]
         for role in roles:
             role_aliases = [role, *role_words.get(role, [])]
             role_resource_aliases = set(
@@ -1247,7 +1273,7 @@ def _permission_entries(text: str, payload: Any, source_id: str) -> list[dict[st
                     "resource_aliases": scoped_resource_aliases,
                     "actions": action_values,
                     "decision": "deny",
-                    "scope": _permission_scope(line),
+                    "scope": _permission_scope(negative_clause),
                     "evidence": _redact_text(line, 280),
                 })
     if rows:

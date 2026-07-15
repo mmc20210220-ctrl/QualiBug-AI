@@ -177,7 +177,8 @@ def _source_request_example(operation: dict[str, Any]) -> dict[str, Any]:
         _text(operation.get("path") or operation.get("raw_path"))
     ).rstrip("/")
     op_prefix = op_path.rsplit("/", 1)[0] if "/" in op_path else ""
-    if op_prefix:
+    op_prefix_parts = [part for part in op_prefix.strip("/").split("/") if part]
+    if len(op_prefix_parts) >= 2:
         for candidate in _list(operation.get("_ir_operations") or []):
             if not isinstance(candidate, dict):
                 continue
@@ -334,6 +335,33 @@ def compile_experiment_for_obligation(
                 return blocked_experiment(oid, "BLOCKED_MISSING_OPERATION", "no_valid_operations")
             primary_op_id = required_ops[0]
             break
+    if not required_actors and primary_op_id and family not in {"authorization", "isolation", "visibility"}:
+        permitted_actor_ids = {
+            _text(relation.get("actor_ref") or relation.get("from_ref"))
+            for relation in _list(ir.get("relations"))
+            if isinstance(relation, dict)
+            and _text(relation.get("relation_type")) == "permits"
+            and _text(relation.get("operation_ref")) == _text(primary_op_id)
+            and _text(relation.get("status")) == "accepted"
+            and _text(relation.get("actor_ref") or relation.get("from_ref"))
+        }
+        ranked_actors = sorted(
+            (
+                (
+                    0 if _text(actors[actor_id].get("account_ref")) else 1,
+                    0 if actors[actor_id].get("runtime_bound") is True else 1,
+                    actor_id,
+                )
+                for actor_id in permitted_actor_ids
+                if actor_id in actors and _actor_is_executable(actors[actor_id])
+            )
+        )
+        if ranked_actors:
+            required_actors = [ranked_actors[0][2]]
+            prop = {
+                **prop,
+                "actor_ref": required_actors[0],
+            }
     for actor_id in required_actors:
         if actor_id not in actors:
             return blocked_experiment(oid, "BLOCKED_MISSING_ACTOR", actor_id)

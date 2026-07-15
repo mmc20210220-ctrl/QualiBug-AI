@@ -667,6 +667,30 @@ def _permission_row_decision(
     return "PERMIT" if _actions_match_operation(actions, operation) else "UNKNOWN"
 
 
+def _permission_scope(row: dict[str, Any]) -> str:
+    """Normalize a permission row's data scope for conflict analysis."""
+
+    scope = _text(row.get("scope")).lower().replace("-", "_").replace(" ", "_")
+    return scope or "unspecified"
+
+
+def _permission_scopes_disjoint(left: str, right: str) -> bool:
+    """Return whether two explicit scopes describe disjoint populations."""
+
+    left = _text(left).lower().replace("-", "_").replace(" ", "_") or "unspecified"
+    right = _text(right).lower().replace("-", "_").replace(" ", "_") or "unspecified"
+    if left == right or "unspecified" in {left, right} or "all" in {left, right}:
+        return False
+    if "role_access" in {left, right}:
+        other = right if left == "role_access" else left
+        return other in {"own", "other_owner", "tenant", "other_tenant", "own_tenant"}
+    return {left, right} in (
+        {"own", "other_owner"},
+        {"tenant", "other_tenant"},
+        {"own_tenant", "other_tenant"},
+    )
+
+
 def _relation_node(
     *,
     relation_type: str,
@@ -682,9 +706,10 @@ def _relation_node(
     status: str = "accepted",
     permission_decision: str = "",
     source_relationship_ref: str = "",
+    scope: str = "",
 ) -> dict[str, Any]:
     return _fact_node(
-        node_id=_stable_id("rel", relation_type, from_ref, to_ref, operation_ref, actor_ref),
+        node_id=_stable_id("rel", relation_type, from_ref, to_ref, operation_ref, actor_ref, scope),
         typed_fields={
             "relation_type": relation_type,
             "from_ref": from_ref,
@@ -774,97 +799,117 @@ def _derive_permission_relations(
             ]
             if not matching_rows:
                 continue
-            row_decisions = {
-                _permission_row_decision(row, operation)
-                for row in matching_rows
+            grouped_rows: dict[tuple[str, str], list[dict[str, Any]]] = {}
+            for row in matching_rows:
+                decision = _permission_row_decision(row, operation)
+                scope = _permission_scope(row)
+                grouped_rows.setdefault((decision, scope), []).append(row)
+            explicit_groups = {
+                (decision, scope): rows
+                for (decision, scope), rows in grouped_rows.items()
+                if decision in {"PERMIT", "DENY"}
             }
-            explicit_decisions = row_decisions.intersection({"PERMIT", "DENY"})
-            if len(explicit_decisions) > 1:
-                permission_decision = "UNKNOWN"
-                relation_type = "permission_unknown"
-                relation_status = "conflicting"
-            elif explicit_decisions:
-                permission_decision = next(iter(explicit_decisions))
-                relation_type = "permits" if permission_decision == "PERMIT" else "denies"
-                relation_status = "accepted"
-            elif closed_world:
-                permission_decision = "DENY"
-                relation_type = "denies"
-                relation_status = "accepted"
-            else:
-                permission_decision = "UNKNOWN"
-                relation_type = "permission_unknown"
-                relation_status = "unknown"
-            source_refs = [
-                _source_ref(
-                    _text(row.get("source_id")) or "permission_matrix",
-                    locator=f"{role_key}->{_text(row.get('resource'))}",
-                    kind="permission_matrix",
+            explicit_decisions = {decision for decision, _ in explicit_groups}
+            conflicting_scopes = any(
+                left_decision != right_decision
+                and not _permission_scopes_disjoint(left_scope, right_scope)
+                for left_decision, left_scope in explicit_groups
+                for right_decision, right_scope in explicit_groups
+            )
+            if conflicting_scopes:
+                grouped_rows = {
+                    ("UNKNOWN", "unspecified"): matching_rows,
+                }
+            elif not explicit_groups and closed_world:
+                grouped_rows = {
+                    ("DENY", "unspecified"): matching_rows,
+                }
+            for (permission_decision, scope), scoped_rows in grouped_rows.items():
+                relation_type = (
+                    "permits"
+                    if permission_decision == "PERMIT"
+                    else "denies"
+                    if permission_decision == "DENY"
+                    else "permission_unknown"
                 )
-                for row in matching_rows
-            ]
-            actions = sorted({
-                _text(action)
-                for row in matching_rows
-                for action in _list(row.get("actions"))
-                if _text(action)
-            })
-            for actor in actors:
-                actor_ref = _text(actor.get("id"))
-                operation_ref = _text(operation.get("id"))
-                relations.append(_relation_node(
-                    relation_type=relation_type,
-                    from_ref=actor_ref,
-                    to_ref=operation_ref,
-                    operation_ref=operation_ref,
-                    actor_ref=actor_ref,
-                    effects=[{"allowed_actions": actions}],
-                    source_refs=source_refs,
-                    confidence=(
-                        0.82
-                        if permission_decision == "PERMIT"
-                        else 0.8 if permission_decision == "DENY" else 0.55
-                    ),
-                    derivation=(
-                        "schema-derived"
-                        if closed_world and not explicit_decisions
-                        else "explicit"
-                    ),
-                    status=relation_status,
-                    permission_decision=permission_decision,
-                ))
-                owns_scope = permission_decision == "PERMIT" and any(
-                    "own" in _text(row.get("scope")).lower()
-                    for row in matching_rows
+                relation_status = (
+                    "conflicting"
+                    if conflicting_scopes
+                    else "accepted"
+                    if permission_decision in {"PERMIT", "DENY"}
+                    else "unknown"
                 )
-                if owns_scope:
+                source_refs = [
+                    _source_ref(
+                        _text(row.get("source_id")) or "permission_matrix",
+                        locator=f"{role_key}->{_text(row.get('resource'))}",
+                        kind="permission_matrix",
+                    )
+                    for row in scoped_rows
+                ]
+                actions = sorted({
+                    _text(action)
+                    for row in scoped_rows
+                    for action in _list(row.get("actions"))
+                    if _text(action)
+                })
+                preconditions = ([{"scope": scope}] if scope != "unspecified" else [])
+                for actor in actors:
+                    actor_ref = _text(actor.get("id"))
+                    operation_ref = _text(operation.get("id"))
                     relations.append(_relation_node(
-                        relation_type="owns",
+                        relation_type=relation_type,
                         from_ref=actor_ref,
                         to_ref=operation_ref,
                         operation_ref=operation_ref,
                         actor_ref=actor_ref,
-                        preconditions=[{"scope": "own"}],
+                        preconditions=preconditions,
+                        effects=[{"allowed_actions": actions}],
                         source_refs=source_refs,
-                        confidence=0.78,
-                        derivation="explicit",
+                        confidence=(
+                            0.82
+                            if permission_decision == "PERMIT"
+                            else 0.8 if permission_decision == "DENY" else 0.55
+                        ),
+                        derivation=(
+                            "schema-derived"
+                            if closed_world and not explicit_decisions
+                            else "explicit"
+                        ),
+                        status=relation_status,
+                        permission_decision=permission_decision,
+                        scope=scope,
                     ))
-            if permission_decision == "UNKNOWN":
+                    if permission_decision == "PERMIT" and scope == "own":
+                        relations.append(_relation_node(
+                            relation_type="owns",
+                            from_ref=actor_ref,
+                            to_ref=operation_ref,
+                            operation_ref=operation_ref,
+                            actor_ref=actor_ref,
+                            preconditions=[{"scope": "own"}],
+                            source_refs=source_refs,
+                            confidence=0.78,
+                            derivation="explicit",
+                            scope="own",
+                        ))
+                if permission_decision == "UNKNOWN":
+                    gap_id = _stable_id("gap", "permission_unknown", role_key, operation.get("id"))
+                    model["coverage_gaps"].append(_fact_node(
+                        node_id=gap_id,
+                        typed_fields={
+                            "gap_type": "permission_decision_unknown",
+                            "description": "No explicit source fact permits or denies this role-operation pair",
+                            "role_key": role_key,
+                            "operation_ref": _text(operation.get("id")),
+                        },
+                        source_refs=source_refs,
+                        confidence=1.0,
+                        derivation="explicit",
+                        status="unsupported" if relation_status != "conflicting" else "conflicting",
+                    ))
+            if conflicting_scopes:
                 gap_id = _stable_id("gap", "permission_unknown", role_key, operation.get("id"))
-                model["coverage_gaps"].append(_fact_node(
-                    node_id=gap_id,
-                    typed_fields={
-                        "gap_type": "permission_decision_unknown",
-                        "description": "No explicit source fact permits or denies this role-operation pair",
-                        "role_key": role_key,
-                        "operation_ref": _text(operation.get("id")),
-                    },
-                    source_refs=source_refs,
-                    confidence=1.0,
-                    derivation="explicit",
-                    status="unsupported" if relation_status != "conflicting" else "conflicting",
-                ))
-            if relation_status == "conflicting":
                 model["conflicts"].append(_fact_node(
                     node_id=_stable_id("conflict", "permission", role_key, operation.get("id")),
                     typed_fields={
@@ -969,6 +1014,13 @@ def _permission_conflict_node(
     )
 
 
+def _relation_scope(relation: dict[str, Any]) -> str:
+    for precondition in _list(relation.get("preconditions")):
+        if isinstance(precondition, dict) and _text(precondition.get("scope")):
+            return _text(precondition.get("scope"))
+    return "unspecified"
+
+
 def _derive_source_role_restriction_relations(model: dict[str, Any]) -> list[dict[str, Any]]:
     actors_by_role: dict[str, list[dict[str, Any]]] = {}
     for actor in _list(model.get("actors")):
@@ -1016,6 +1068,10 @@ def _derive_source_role_restriction_relations(model: dict[str, Any]) -> list[dic
                     row for row in existing
                     if _text(row.get("relation_type")) == opposite_type
                     and _text(row.get("status")) not in {"unsupported", "unknown"}
+                    and not _permission_scopes_disjoint(
+                        "role_access",
+                        _relation_scope(row),
+                    )
                 ]
                 same = [
                     row for row in existing
@@ -1041,11 +1097,13 @@ def _derive_source_role_restriction_relations(model: dict[str, Any]) -> list[dic
                     to_ref=operation_ref,
                     operation_ref=operation_ref,
                     actor_ref=actor_ref,
+                    preconditions=[{"scope": "role_access"}],
                     source_refs=source_refs,
                     confidence=0.84,
                     derivation="explicit",
                     status=relation_status,
                     permission_decision=permission_decision,
+                    scope="role_access",
                 ))
     return derived
 

@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 import json
 import hashlib
+import re
 import threading
 import time
 from pathlib import Path
@@ -73,6 +74,41 @@ def _list(value: Any) -> list[Any]:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+_BODY_PLACEHOLDER_RE = re.compile(r"^\s*[<{]([A-Za-z_][A-Za-z0-9_]*)[>}]\s*$")
+
+
+def _unresolved_body_placeholders(
+    value: Any,
+    bindings: dict[str, Any],
+) -> list[str]:
+    """Return source body tokens that remain unbound before a write."""
+
+    unresolved: list[str] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for child in node.values():
+                walk(child)
+            return
+        if isinstance(node, list):
+            for child in node:
+                walk(child)
+            return
+        if not isinstance(node, str):
+            return
+        match = _BODY_PLACEHOLDER_RE.match(node)
+        if not match:
+            return
+        token = _text(match.group(1))
+        if token and bindings.get(token) not in (None, "", [], {}):
+            return
+        if token and token not in unresolved:
+            unresolved.append(token)
+
+    walk(value)
+    return unresolved
 
 
 def _select_fixture_actor(
@@ -1268,9 +1304,10 @@ def execute_one_experiment(
         ))
 
     source_observed_control_bodies: dict[str, Any] = {}
+    source_body_control_blocked = False
 
     def _exec_plan(plan: list[Any], *, phase: str) -> list[dict[str, Any]]:
-        nonlocal cleanup_failures
+        nonlocal cleanup_failures, source_body_control_blocked
         results = []
         planned_subjects = activation_requirements.get(phase) or []
         for index, step in enumerate(plan):
@@ -1284,6 +1321,33 @@ def execute_one_experiment(
                 else _text(step.get("step_id"))
                 or f"{phase}:{op_ref or 'operation'}:{index + 1}"
             )
+            if phase == "treatment" and source_body_control_blocked:
+                reason = "control_body_binding_blocked"
+                pre_transport_block_reasons.append(reason)
+                contract_evidence_receipts.append(build_contract_evidence_receipt(
+                    kind=phase,
+                    experiment_id=eid,
+                    obligation_id=oid,
+                    campaign_id=resolved_campaign_id,
+                    execution_id=resolved_execution_id,
+                    subject_id=subject_id,
+                    status="BLOCKED",
+                    evidence={
+                        "write_reached_transport": False,
+                        "reason_code": reason,
+                    },
+                ))
+                results.append({
+                    "phase": phase,
+                    "step_id": subject_id,
+                    "status": "blocked_write",
+                    "reason": "BLOCKED_MISSING_BINDING",
+                    "detail": reason,
+                    "method": _text(step.get("method") or "POST").upper(),
+                    "path": _text(step.get("path") or step.get("path_template")),
+                    "status_code": 0,
+                })
+                continue
             actor = actors.get(actor_ref) or {}
             op = ops.get(op_ref) or {}
             # If op_ref doesn't match, try to find by method+path_template
@@ -1317,6 +1381,43 @@ def execute_one_experiment(
                 request_body,
                 runtime_bindings,
             )
+            unresolved_body_tokens = _unresolved_body_placeholders(
+                request_body,
+                runtime_bindings,
+            )
+            if method in {"POST", "PUT", "PATCH", "DELETE"} and unresolved_body_tokens:
+                reason = (
+                    "body_placeholder_unresolved:"
+                    + ",".join(unresolved_body_tokens)
+                )
+                pre_transport_block_reasons.append(reason)
+                if phase == "control":
+                    source_body_control_blocked = True
+                contract_evidence_receipts.append(build_contract_evidence_receipt(
+                    kind=phase,
+                    experiment_id=eid,
+                    obligation_id=oid,
+                    campaign_id=resolved_campaign_id,
+                    execution_id=resolved_execution_id,
+                    subject_id=subject_id,
+                    status="BLOCKED",
+                    evidence={
+                        "write_reached_transport": False,
+                        "reason_code": "BLOCKED_MISSING_BINDING",
+                        "unresolved_body_tokens": unresolved_body_tokens,
+                    },
+                ))
+                results.append({
+                    "phase": phase,
+                    "step_id": subject_id,
+                    "status": "blocked_write",
+                    "reason": "BLOCKED_MISSING_BINDING",
+                    "detail": reason,
+                    "method": method,
+                    "path": path,
+                    "status_code": 0,
+                })
+                continue
             runtime_body_plan = deepcopy(_dict(step.get("runtime_body_plan")))
             if runtime_body_plan:
                 identity_fields = infer_path_params(path_template)

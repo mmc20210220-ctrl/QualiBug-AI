@@ -365,7 +365,17 @@ def _runtime_actors(root: Path, project: str, context: dict[str, Any]) -> list[d
     for row in rows:
         if not isinstance(row, dict):
             raise MainlineContractError("test_actor_catalog_row_invalid")
-        role = _text(row.get("role") or row.get("name") or row.get("id"))
+        # Prefer the role observed from the authenticated identity over a
+        # display/localized role label.  Permission relations are keyed by the
+        # source role identity; using only a translated display label severs
+        # the source-permitted actor -> runtime credential lineage and leaves
+        # otherwise executable obligations blocked on a missing actor.
+        role = _text(
+            row.get("authenticated_role")
+            or row.get("role")
+            or row.get("name")
+            or row.get("id")
+        )
         if not role:
             raise MainlineContractError("test_actor_role_missing")
         account_ref = _text(

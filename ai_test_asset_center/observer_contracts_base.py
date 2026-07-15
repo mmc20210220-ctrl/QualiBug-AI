@@ -346,14 +346,25 @@ def _identity_fingerprints(value: Any) -> set[str]:
             for key, child in node.items():
                 normalized_key = re.sub(r"[^a-z0-9]+", "_", str(key).lower()).strip("_")
                 if isinstance(child, (str, int, float)) and str(child).strip():
-                    if normalized_key in {"id", "uuid", "key"}:
+                    if (
+                        normalized_key in {
+                            "id", "uuid", "key", "sku", "code", "slug",
+                            "ref", "reference", "number",
+                        }
+                        or normalized_key.endswith(("_code", "_ref", "_number"))
+                    ):
                         scalar_identities.append((normalized_key, child))
             if not scalar_identities:
                 fallback_identities = []
                 for key, child in node.items():
                     normalized_key = re.sub(r"[^a-z0-9]+", "_", str(key).lower()).strip("_")
                     if (
-                        normalized_key.endswith("_id")
+                        (
+                            normalized_key.endswith(("_id", "_code", "_ref", "_number"))
+                            or normalized_key in {
+                                "sku", "code", "slug", "ref", "reference", "number",
+                            }
+                        )
                         and isinstance(child, (str, int, float))
                         and str(child).strip()
                     ):

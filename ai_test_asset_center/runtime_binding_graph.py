@@ -243,7 +243,13 @@ def _request_example(operation: dict[str, Any], *, sibling_ops: list[dict[str, A
         _text(operation.get("path") or operation.get("raw_path"))
     ).rstrip("/")
     op_prefix = op_path.rsplit("/", 1)[0] if "/" in op_path else ""
-    if op_prefix and sibling_ops:
+    # A root API prefix (for example ``/api``) is shared by unrelated
+    # resources.  Inheriting a sibling body at that level fabricates path/body
+    # placeholders on read operations and later blocks otherwise executable
+    # experiments.  Only inherit when the shared prefix names a concrete
+    # resource domain.
+    op_prefix_parts = [part for part in op_prefix.strip("/").split("/") if part]
+    if len(op_prefix_parts) >= 2 and sibling_ops:
         for candidate in sibling_ops:
             if not isinstance(candidate, dict):
                 continue

@@ -55,6 +55,19 @@ def test_same_nonempty_resource_is_observed_authorization_violation() -> None:
     assert receipt["evidence"]["leak_detected"] is True
 
 
+def test_business_key_identity_proves_same_resource() -> None:
+    payload = {"sku": "SKU-1", "state": "active"}
+    receipt = observe_authorization_comparison(
+        control=_http_observation(status=200, body=payload, phase="control"),
+        treatment=_http_observation(status=200, body=payload, phase="treatment"),
+        require_same_resource=True,
+    )
+
+    assert receipt["status"] == "OBSERVED"
+    assert receipt["evidence"]["same_resource_proven"] is True
+    assert receipt["evidence"]["leak_detected"] is True
+
+
 def test_shared_foreign_key_does_not_prove_same_resource() -> None:
     receipt = observe_authorization_comparison(
         control=_http_observation(

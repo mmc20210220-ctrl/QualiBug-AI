@@ -23,6 +23,7 @@ from ai_test_asset_center.experiment_compiler import compile_experiment_for_obli
 from ai_test_asset_center.obligation_compiler import compile_obligations_from_behavior_ir
 from ai_test_asset_center.obligation_compiler_base import _cleanup_requirement
 from ai_test_asset_center.runtime_binding_graph import (
+    _request_example,
     apply_binding,
     build_binding_plan,
     declared_action_compensators,
@@ -960,6 +961,25 @@ def test_behavior_ir_never_inherits_request_body_from_sibling_operation() -> Non
     assert by_id["refresh_session"]["request_example"] == {}
 
 
+def test_runtime_binding_does_not_inherit_unrelated_root_api_body() -> None:
+    example = _request_example(
+        {
+            "method": "GET",
+            "path": "/api/products",
+            "request_example": {},
+        },
+        sibling_ops=[
+            {
+                "method": "POST",
+                "path": "/api/orders",
+                "request_example": {"addressId": "<address_id>"},
+            }
+        ],
+    )
+
+    assert example == {}
+
+
 def test_behavior_ir_merges_structural_entity_aliases_and_binds_operation_path() -> None:
     ir = build_behavior_ir_from_knowledge_asset(
         {
@@ -1212,6 +1232,67 @@ def test_entity_validation_uses_explicit_relation_operation() -> None:
         "relation-permits-writer",
         "relation-produces-resource",
     ]
+
+
+def test_validation_experiment_resolves_source_permitted_actor_when_obligation_omits_one() -> None:
+    operation = {
+        "id": "op-resource-write",
+        "method": "POST",
+        "path": "/resources",
+        "read_write": "write",
+        "request_example": {"quantity": 1},
+        "request_schema": {
+            "type": "object",
+            "required": ["quantity"],
+            "properties": {"quantity": {"type": "integer"}},
+        },
+    }
+    ir = {
+        "operations": [
+            operation,
+            {"id": "op-resource-list", "method": "GET", "path": "/resources", "read_write": "read"},
+        ],
+        "actors": [{
+            "id": "actor-writer",
+            "role": "writer",
+            "account_ref": "writer_a",
+            "credential_secret_ref": "secret_ref:test_accounts:writer_a",
+            "runtime_bound": True,
+        }],
+        "relations": [{
+            "id": "relation-permit-writer",
+            "relation_type": "permits",
+            "from_ref": "actor-writer",
+            "to_ref": "op-resource-write",
+            "operation_ref": "op-resource-write",
+            "actor_ref": "actor-writer",
+            "status": "accepted",
+            "source_refs": [],
+        }],
+        "conflicts": [],
+    }
+    obligation = {
+        "obligation_id": "obl-validation-source-actor",
+        "risk_family": "validation",
+        "property": {
+            "template": "schema_constraint",
+            "operation_ref": "op-resource-write",
+        },
+        "required_actors": [],
+        "required_operations": ["op-resource-write"],
+        "required_fixtures": [],
+        "required_observers": ["http_response"],
+        "cleanup_requirement": {"required": False},
+    }
+
+    experiment = compile_experiment_for_obligation(
+        obligation,
+        behavior_ir=ir,
+        environment_type="test",
+    )
+
+    assert experiment["compile_receipt"]["status"] == "COMPILED", experiment["compile_receipt"]
+    assert experiment["treatment_plan"][0]["actor_ref"] == "actor-writer"
 
 
 def test_cleanup_binding_requires_explicit_compensates_relation() -> None:

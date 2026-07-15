@@ -1341,6 +1341,80 @@ def test_runtime_mutation_block_is_blocked_before_transport_without_cleanup_fail
     assert governed_calls == ["experiment_control", "experiment_treatment"]
 
 
+def test_unresolved_body_placeholder_blocks_before_any_write_transport(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    behavior_ir = {
+        "operations": [{
+            "id": "op-create",
+            "method": "POST",
+            "path": "/resources",
+            "read_write": "write",
+        }, {
+            "id": "op-list",
+            "method": "GET",
+            "path": "/resources",
+            "read_write": "read",
+        }],
+        "actors": [{"id": "actor-control", "role": "public"}],
+    }
+    experiment = {
+        "experiment_id": "exp-body-binding-block",
+        "obligation_id": "obl-body-binding-block",
+        "compile_receipt": {"status": "COMPILED"},
+        "control_plan": [{
+            "step_id": "control",
+            "operation_ref": "op-create",
+            "actor_ref": "actor-control",
+            "body": {"resource_id": "<missing_id>"},
+        }],
+        "treatment_plan": [{
+            "step_id": "treatment",
+            "operation_ref": "op-create",
+            "actor_ref": "actor-control",
+            "body": {"resource_id": "<missing_id>"},
+        }],
+        "cleanup_plan": [{
+            "operation_ref": "op-create",
+            "method": "POST",
+            "path": "/resources",
+        }],
+        "safety_contract": {"governed_write": True},
+        "fixture_dag": {"status": "READY", "nodes": [], "setup_order": []},
+        "observers": [
+            {"observer_id": "http_response"},
+            {"observer_id": "business_effect"},
+            {"observer_id": "entity_state"},
+        ],
+        "assertions": [],
+    }
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_executor.sandbox_write_allowed",
+        lambda **_kwargs: (True, ""),
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_executor.execute_governed_control_write",
+        lambda **_kwargs: pytest.fail("unresolved body binding reached transport"),
+    )
+
+    result = execute_one_experiment(
+        experiment,
+        behavior_ir=behavior_ir,
+        root=tmp_path,
+        project="project",
+        base_url="http://target.invalid",
+        runtime_contract={"environment_type": "test"},
+        campaign_id="campaign",
+        execution_id="execution-body-binding-block",
+        actor_tokens={},
+    )
+
+    assert result["status"] == "BLOCKED"
+    assert result["reason_code"] == "BLOCKED_MISSING_BINDING"
+    assert "missing_id" in result["detail"]
+
+
 def test_accepted_fixture_without_identity_is_visible_cleanup_failure(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,

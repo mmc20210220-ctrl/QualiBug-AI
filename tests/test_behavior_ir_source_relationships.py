@@ -236,3 +236,104 @@ def test_explicit_permission_deny_generates_authorization_obligation() -> None:
         if obligation["risk_family"] == "authorization"
     )
     assert authorization["property"]["operation_ref"] == operation_ref
+
+
+def test_scoped_own_and_other_permissions_are_not_treated_as_conflicting() -> None:
+    asset = {
+        "permission_matrix": [
+            {
+                "role": "seller",
+                "resource": "product",
+                "actions": ["update"],
+                "decision": "allow",
+                "scope": "own",
+            },
+            {
+                "role": "seller",
+                "resource": "product",
+                "actions": ["update"],
+                "decision": "deny",
+                "scope": "other_owner",
+            },
+        ],
+        "operations": [{
+            "operation_id": "update_product",
+            "method": "PATCH",
+            "path": "/products/{id}",
+        }],
+    }
+
+    ir = build_behavior_ir_from_knowledge_asset(
+        asset,
+        project_id="scoped-permissions",
+        runtime_actors=[
+            {
+                "role": "seller",
+                "account_ref": "seller_a",
+                "secret_ref": "secret_ref:test_accounts:seller_a",
+            },
+            {
+                "role": "seller",
+                "account_ref": "seller_b",
+                "secret_ref": "secret_ref:test_accounts:seller_b",
+            },
+        ],
+    )
+    operation_ref = _operation_ref(ir, "update_product")
+    seller_relations = [
+        relation
+        for relation in ir["relations"]
+        if relation.get("operation_ref") == operation_ref
+        and relation.get("relation_type") in {"permits", "denies"}
+    ]
+
+    assert not any(
+        conflict.get("conflict_type") == "permission_decision_conflict"
+        and conflict.get("operation_ref") == operation_ref
+        for conflict in ir["conflicts"]
+    )
+    assert {relation["relation_type"] for relation in seller_relations} == {"permits", "denies"}
+    assert {row.get("scope") for relation in seller_relations for row in relation.get("preconditions", [])} == {
+        "own",
+        "other_owner",
+    }
+
+    obligations = compile_obligations_from_behavior_ir(ir)["obligations"]
+    assert any(
+        obligation["risk_family"] == "authorization"
+        and obligation["property"]["operation_ref"] == operation_ref
+        for obligation in obligations
+    )
+
+
+def test_unscoped_permission_allow_and_deny_still_fail_closed() -> None:
+    asset = {
+        "permission_matrix": [
+            {
+                "role": "operator",
+                "resource": "resource",
+                "actions": ["update"],
+                "decision": "allow",
+            },
+            {
+                "role": "operator",
+                "resource": "resource",
+                "actions": ["update"],
+                "decision": "deny",
+            },
+        ],
+        "operations": [{
+            "operation_id": "update_resource",
+            "method": "PATCH",
+            "path": "/resources/{id}",
+        }],
+    }
+
+    ir = build_behavior_ir_from_knowledge_asset(asset, project_id="unscoped-permissions")
+    operation_ref = _operation_ref(ir, "update_resource")
+
+    assert any(
+        conflict.get("conflict_type") == "permission_decision_conflict"
+        and conflict.get("operation_ref") == operation_ref
+        for conflict in ir["conflicts"]
+    )
