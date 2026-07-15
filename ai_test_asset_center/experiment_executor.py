@@ -979,6 +979,7 @@ def execute_one_experiment(
                     dependency_target = _text(_dict(dependency).get("target"))
                     dependency_token = _text(_dict(dependency).get("template_token"))
                     dependency_value: Any = None
+                    dependency_leaf = dependency_target.split(".")[-1].split("[")[0]
                     # Use synthetic fallback when no resolver operations exist
                     _fallback = _dict(dependency).get("fallback_value")
                     if _fallback is not None:
@@ -2604,15 +2605,6 @@ def execute_one_experiment(
             observations["invariant_held"] = (
                 _barrier.get("status") == "OBSERVED"
             )
-    # Synthesize business_effect evidence for validation experiments
-    if observations.get("business_effect_observed") is not True:
-        if observations.get("control_succeeded") is True or any(
-            isinstance(s, dict) and s.get("phase") == "control"
-            and 200 <= int(s.get("status_code") or 0) < 300
-            for s in steps_out
-        ):
-            observations["business_effect_observed"] = True
-            observations.setdefault("control_effect_count", 1)
     observations["contract_evidence_receipts"] = list(contract_evidence_receipts)
     # Synthesize contract evidence when none was produced by the execution
     if not contract_evidence_receipts and steps_out:
