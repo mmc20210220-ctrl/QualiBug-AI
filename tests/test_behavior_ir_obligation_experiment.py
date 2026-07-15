@@ -318,6 +318,70 @@ def test_behavior_ir_canonicalizes_duplicate_source_operation_ids() -> None:
     )
 
 
+def test_permission_actions_match_explicit_operation_action_not_only_http_method() -> None:
+    ir = build_behavior_ir_from_knowledge_asset(
+        {
+            "permission_matrix": [
+                {
+                    "role": "buyer",
+                    "resource": "order",
+                    "actions": ["cancel"],
+                    "decision": "allow",
+                },
+                {
+                    "role": "auditor",
+                    "resource": "inventory",
+                    "actions": ["modify"],
+                    "decision": "deny",
+                },
+                {
+                    "role": "warehouse",
+                    "resource": "inventory",
+                    "actions": ["adjust"],
+                    "decision": "allow",
+                },
+            ],
+            "operations": [
+                {
+                    "operation_id": "cancel_order",
+                    "method": "POST",
+                    "path": "/orders/{id}/cancel",
+                },
+                {
+                    "operation_id": "reserve_inventory",
+                    "method": "POST",
+                    "path": "/inventory/reserve",
+                },
+                {
+                    "operation_id": "adjust_inventory",
+                    "method": "POST",
+                    "path": "/inventory/admin/adjust",
+                },
+                {
+                    "operation_id": "read_inventory",
+                    "method": "GET",
+                    "path": "/inventory/{sku}",
+                },
+            ],
+        },
+        project_id="permission-operation-actions",
+    )
+
+    actors = {row["role"]: row["id"] for row in ir["actors"]}
+    operations = {row["operation_id"]: row["id"] for row in ir["operations"]}
+    decisions = {
+        (row["relation_type"], row["actor_ref"], row["operation_ref"])
+        for row in ir["relations"]
+        if row.get("relation_type") in {"permits", "denies"}
+    }
+    assert ("permits", actors["buyer"], operations["cancel_order"]) in decisions
+    assert ("denies", actors["auditor"], operations["reserve_inventory"]) in decisions
+    assert ("denies", actors["auditor"], operations["adjust_inventory"]) in decisions
+    assert ("denies", actors["auditor"], operations["read_inventory"]) not in decisions
+    assert ("permits", actors["warehouse"], operations["adjust_inventory"]) in decisions
+    assert ("permits", actors["warehouse"], operations["reserve_inventory"]) not in decisions
+
+
 def test_behavior_ir_derives_explicit_role_restriction_from_source_contract() -> None:
     ir = build_behavior_ir_from_knowledge_asset(
         {
@@ -555,6 +619,7 @@ def test_behavior_ir_emits_gap_for_unbound_state_transition() -> None:
         {
             "operations": [{"method": "PATCH", "path": "/orders/{id}", "operation_id": "update_order"}],
             "state_machines": [{
+                "source_id": "workflow-source",
                 "entity": "order",
                 "states": ["draft", "active"],
                 "transitions": [{"from": "draft", "to": "active"}],
@@ -568,6 +633,100 @@ def test_behavior_ir_emits_gap_for_unbound_state_transition() -> None:
         row.get("gap_type") == "state_transition_operation_unresolved"
         and row.get("from_state") == "draft"
         and row.get("to_state") == "active"
+        and row.get("source_refs", [{}])[0].get("source_id") == "workflow-source"
+        for row in ir["coverage_gaps"]
+    )
+
+
+def test_behavior_ir_preserves_forbidden_state_transition_as_typed_invariant() -> None:
+    ir = build_behavior_ir_from_knowledge_asset(
+        {
+            "operations": [
+                {
+                    "method": "POST",
+                    "path": "/resources/{id}/reopen",
+                    "operation_id": "reopen_resource",
+                },
+            ],
+            "state_machines": [{
+                "source_id": "workflow-source",
+                "state_machine_id": "resource-workflow",
+                "entity": "resource",
+                "states": ["active"],
+                "forbidden_transitions": [
+                    {"from": "closed", "to": "active"},
+                ],
+            }],
+        },
+        project_id="forbidden-state-transition",
+    )
+
+    invariant = next(
+        row
+        for row in ir["invariants"]
+        if row.get("expression", {}).get("kind") == "forbidden_state_transition"
+    )
+    assert invariant["expression"]["operator"] == "must_not_transition"
+    assert invariant["expression"]["operands"] == [{
+        "entity_ref": "resource",
+        "from_state": "closed",
+        "to_state": "active",
+    }]
+    assert invariant["source_refs"][0]["source_id"] == "workflow-source"
+    assert {row["name"] for row in ir["states"]} >= {"closed", "active"}
+    assert not any(
+        row.get("relation_type") == "transitions"
+        and row.get("from_ref") == next(
+            state["id"] for state in ir["states"] if state["name"] == "closed"
+        )
+        for row in ir["relations"]
+    )
+    assert any(
+        row.get("gap_type") == "forbidden_state_transition_operation_unresolved"
+        and row.get("source_refs", [{}])[0].get("source_id") == "workflow-source"
+        for row in ir["coverage_gaps"]
+    )
+
+
+def test_behavior_ir_binds_forbidden_transition_only_from_explicit_operation_ref() -> None:
+    ir = build_behavior_ir_from_knowledge_asset(
+        {
+            "operations": [
+                {
+                    "method": "POST",
+                    "path": "/resources/{id}/reopen",
+                    "operation_id": "reopen_resource",
+                },
+            ],
+            "state_machines": [{
+                "source_id": "workflow-source",
+                "entity": "resource",
+                "states": ["closed", "active"],
+                "forbidden_transitions": [{
+                    "from": "closed",
+                    "to": "active",
+                    "operation_ref": "reopen_resource",
+                }],
+            }],
+        },
+        project_id="bound-forbidden-state-transition",
+    )
+
+    invariant = next(
+        row
+        for row in ir["invariants"]
+        if row.get("expression", {}).get("kind") == "forbidden_state_transition"
+    )
+    operation = next(row for row in ir["operations"] if row["operation_id"] == "reopen_resource")
+    assert invariant["operation_refs"] == [operation["id"]]
+    assert any(
+        row.get("relation_type") == "observes"
+        and row.get("to_ref") == invariant["id"]
+        and row.get("operation_ref") == operation["id"]
+        for row in ir["relations"]
+    )
+    assert not any(
+        row.get("gap_type") == "forbidden_state_transition_operation_unresolved"
         for row in ir["coverage_gaps"]
     )
 

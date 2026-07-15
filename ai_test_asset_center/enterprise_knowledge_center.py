@@ -1029,7 +1029,8 @@ def _permission_decision(item: dict[str, Any], narrative: str) -> str:
         {"decision", "effect", "outcome", "access", "policy_effect"},
     )
     normalized = _norm(raw or narrative).replace("-", " ").replace("_", " ")
-    if any(marker in normalized for marker in (
+    decision_markers = _lexicon_dict("permission_decision_markers")
+    deny_markers = decision_markers.get("deny") or [
         "deny",
         "denied",
         "forbid",
@@ -1039,16 +1040,36 @@ def _permission_decision(item: dict[str, Any], narrative: str) -> str:
         "prohibit",
         "\u4e0d\u5f97",
         "\u7981\u6b62",
-    )):
+    ]
+    if any(_norm(marker) in normalized for marker in deny_markers):
         return "deny"
-    if raw and any(marker in normalized for marker in (
+    allow_markers = decision_markers.get("allow") or [
         "allow",
         "allowed",
         "grant",
         "permit",
         "\u5141\u8bb8",
         "\u6388\u6743",
-    )):
+    ]
+    if raw and any(_norm(marker) in normalized for marker in allow_markers):
+        return "allow"
+    positive_permission_fields = {
+        "action",
+        "actions",
+        "allowed_actions",
+        "capability",
+        "capabilities",
+        "permission",
+        "permissions",
+        "\u6743\u9650",
+        "\u6743\u9650\u8bf4\u660e",
+        "\u64cd\u4f5c",
+        "\u80fd\u529b",
+    }
+    if item.get("__permission_declaration_table") is True and narrative and any(
+        _norm(key).replace(" ", "_") in positive_permission_fields
+        for key in item
+    ):
         return "allow"
     return ""
 
@@ -1112,8 +1133,16 @@ def _permission_entries(text: str, payload: Any, source_id: str) -> list[dict[st
     elif isinstance(payload, list):
         candidates.extend([item for item in payload if isinstance(item, dict)])
     candidates.extend(_csv_rows(text))
-    candidates.extend(_markdown_table_rows(text))
+    candidates.extend([
+        {**row, "__permission_declaration_table": True}
+        for row in _markdown_table_rows(text)
+    ])
     for idx, item in enumerate(candidates):
+        evidence_item = {
+            key: value
+            for key, value in item.items()
+            if not str(key).startswith("__")
+        }
         role = str(_permission_field(item, {"role", "actor", "user_role", "principal", "角色", "用户角色"}) or "").strip()
         resource = str(_permission_field(item, {"resource", "module", "object", "path", "endpoint", "资源", "模块", "对象", "接口"}) or "").strip()
         actions = _permission_field(item, {"actions", "action", "permissions", "permission", "operation", "allowed_actions", "权限", "权限说明", "操作", "能力"})
@@ -1139,7 +1168,7 @@ def _permission_entries(text: str, payload: Any, source_id: str) -> list[dict[st
                 **({"decision": permission_decision} if permission_decision else {}),
                 **({"denied_actions": denied_action_values} if denied_action_values else {}),
                 "scope": "all",
-                "evidence": _redact_text(str(item), 280),
+                "evidence": _redact_text(str(evidence_item), 280),
             })
             continue
         clauses = [part.strip() for part in re.split(r"[,;，；、。]", narrative) if part.strip()]
@@ -1177,7 +1206,49 @@ def _permission_entries(text: str, payload: Any, source_id: str) -> list[dict[st
                     **({"decision": permission_decision} if permission_decision else {}),
                     **({"denied_actions": denied_action_values} if denied_action_values else {}),
                     "scope": str(scope_value or "").strip() or _permission_scope(clause),
-                    "evidence": _redact_text(str(item), 280),
+                    "evidence": _redact_text(str(evidence_item), 280),
+                })
+    role_words = _lexicon_dict("role_words") or ROLE_WORDS
+    for line_index, line in enumerate(text.splitlines()):
+        if _permission_decision({}, line) != "deny":
+            continue
+        line_norm = _norm(line)
+        roles = [
+            role
+            for role, aliases in role_words.items()
+            if any(
+                _norm(alias) and _norm(alias) in line_norm
+                for alias in [role, *aliases]
+            )
+        ]
+        resource_aliases = _permission_resource_aliases(line)
+        if not roles or not resource_aliases:
+            continue
+        action_values = _permission_action_aliases(line) or ["*"]
+        for role in roles:
+            role_aliases = [role, *role_words.get(role, [])]
+            role_resource_aliases = set(
+                _permission_resource_aliases(" ".join(role_aliases))
+            )
+            scoped_resource_aliases = [
+                resource_alias
+                for resource_alias in resource_aliases
+                if resource_alias not in role_resource_aliases
+            ]
+            for resource_index, resource_alias in enumerate(scoped_resource_aliases):
+                rows.append({
+                    "permission_id": (
+                        f"perm:{source_id}:narrative:{line_index+1}:"
+                        f"{role}:{resource_index+1}"
+                    ),
+                    "source_id": source_id,
+                    "role": role,
+                    "resource": resource_alias,
+                    "resource_aliases": scoped_resource_aliases,
+                    "actions": action_values,
+                    "decision": "deny",
+                    "scope": _permission_scope(line),
+                    "evidence": _redact_text(line, 280),
                 })
     if rows:
         return _dedupe_by_id(rows, "permission_id")

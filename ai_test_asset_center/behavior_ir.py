@@ -513,10 +513,22 @@ def _resource_matches_operation(resource: Any, operation: dict[str, Any]) -> boo
         return True
     if resource_text.startswith("/"):
         return _path_shape(resource_text) == _path_shape(operation_path)
-    resource_tokens = set(re.findall(r"[a-z0-9_]+", resource_text))
-    operation_tokens = set(re.findall(r"[a-z0-9_]+", operation_path.lower()))
+    resource_tokens = {
+        _singular_token(token)
+        for token in re.findall(r"[a-z0-9_]+", resource_text)
+        if _singular_token(token)
+    }
+    operation_tokens = {
+        _singular_token(token)
+        for token in re.findall(r"[a-z0-9_]+", operation_path.lower())
+        if _singular_token(token)
+    }
     for value in _list(operation.get("tags")) + _list(operation.get("entity_refs")):
-        operation_tokens.update(re.findall(r"[a-z0-9_]+", _text(value).lower()))
+        operation_tokens.update(
+            _singular_token(token)
+            for token in re.findall(r"[a-z0-9_]+", _text(value).lower())
+            if _singular_token(token)
+        )
     return bool(resource_tokens and resource_tokens.intersection(operation_tokens))
 
 
@@ -530,7 +542,36 @@ def _actions_match_operation(actions: list[Any], operation: dict[str, Any]) -> b
     if normalized.intersection(_UNIVERSAL_ACTIONS):
         return True
     method = _text(operation.get("method")).upper()
-    return bool(normalized.intersection(_METHOD_ACTIONS.get(method, {method.lower()})))
+    if normalized.intersection(_METHOD_ACTIONS.get(method, {method.lower()})):
+        return True
+    if method in {"POST", "PUT", "PATCH", "DELETE"} and normalized.intersection({
+        "modify",
+        "write",
+    }):
+        return True
+    if method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return False
+    path_segments = [
+        segment
+        for segment in _text(operation.get("path")).split("?", 1)[0].strip("/").split("/")
+        if segment
+        and not (
+            (segment.startswith("{") and segment.endswith("}"))
+            or segment.startswith(":")
+            or segment == "*"
+        )
+    ]
+    endpoint_action_tokens: set[str] = set()
+    if path_segments:
+        final_segment = _normalize_action(path_segments[-1])
+        endpoint_action_tokens.add(final_segment)
+        if final_segment.endswith("s") and len(final_segment) > 3:
+            endpoint_action_tokens.add(final_segment[:-1])
+    for field in ("action", "intent"):
+        explicit_action = _normalize_action(operation.get(field))
+        if explicit_action:
+            endpoint_action_tokens.add(explicit_action)
+    return bool(normalized.intersection(endpoint_action_tokens))
 
 
 def _declared_permission_polarity(row: dict[str, Any]) -> str:
@@ -1131,6 +1172,7 @@ def _derive_state_transition_relations(
         if not isinstance(machine, dict):
             continue
         entity = _text(machine.get("entity") or machine.get("object") or "entity").lower()
+        machine_source_id = _text(machine.get("source_id")) or "state_machine"
         for transition in _list(machine.get("transitions")):
             if not isinstance(transition, dict):
                 continue
@@ -1166,7 +1208,7 @@ def _derive_state_transition_relations(
                             "description": "State transition has no unique source-bound operation",
                         },
                         source_refs=[_source_ref(
-                            _text(transition.get("source_id")) or "state_machine",
+                            _text(transition.get("source_id")) or machine_source_id,
                             locator=f"{entity}:{from_name}->{to_name}",
                             kind="state_transition",
                         )],
@@ -1184,7 +1226,7 @@ def _derive_state_transition_relations(
                 preconditions=_list(transition.get("preconditions")),
                 effects=_list(transition.get("effects")),
                 source_refs=[_source_ref(
-                    _text(transition.get("source_id")) or "state_machine",
+                    _text(transition.get("source_id")) or machine_source_id,
                     locator=f"{entity}:{_text(from_state.get('name'))}->{_text(to_state.get('name'))}",
                     kind="state_transition",
                 )],
@@ -1894,10 +1936,26 @@ def build_behavior_ir_from_knowledge_asset(
         if not isinstance(sm, dict):
             continue
         entity = _text(sm.get("entity") or sm.get("object") or "entity")
-        for state_name in _list(sm.get("states") or ([sm.get("name")] if sm.get("name") else [])):
+        declared_states = _list(sm.get("states"))
+        state_names = list(
+            declared_states
+            or ([sm.get("name")] if sm.get("name") else [])
+        )
+        for transition_key in ("transitions", "forbidden_transitions"):
+            for transition in _list(sm.get(transition_key)):
+                if not isinstance(transition, dict):
+                    continue
+                state_names.extend([
+                    transition.get("from") or transition.get("from_state"),
+                    transition.get("to") or transition.get("to_state"),
+                ])
+        seen_state_names: set[str] = set()
+        for state_name in state_names:
             name = _text(state_name)
-            if not name:
+            state_key = name.lower()
+            if not name or state_key in seen_state_names:
                 continue
+            seen_state_names.add(state_key)
             model["states"].append(_fact_node(
                 node_id=_stable_id("state", entity, name),
                 typed_fields={"entity_ref": entity, "name": name},
@@ -1905,6 +1963,94 @@ def build_behavior_ir_from_knowledge_asset(
                 confidence=0.75,
                 derivation="explicit",
             ))
+
+    # Forbidden transitions are source constraints, never allowed transition
+    # relations. Preserve them as typed invariants and bind an operation only
+    # when the transition contains an exact source operation hint.
+    operations = [row for row in _list(model.get("operations")) if isinstance(row, dict)]
+    seen_forbidden_invariant_ids: set[str] = set()
+    for sm in _list(data.get("state_machines") or data.get("states")):
+        if not isinstance(sm, dict):
+            continue
+        entity = _text(sm.get("entity") or sm.get("object") or "entity").lower()
+        machine_source_id = _text(sm.get("source_id")) or "state_machine"
+        machine_ref = _text(sm.get("state_machine_id") or sm.get("id"))
+        for transition in _list(sm.get("forbidden_transitions")):
+            if not isinstance(transition, dict):
+                continue
+            from_name = _text(transition.get("from") or transition.get("from_state"))
+            to_name = _text(transition.get("to") or transition.get("to_state"))
+            if not from_name or not to_name:
+                continue
+            source_id = _text(transition.get("source_id")) or machine_source_id
+            source_refs = [_source_ref(
+                source_id,
+                locator=f"{entity}:{from_name}-/->{to_name}",
+                kind="forbidden_state_transition",
+            )]
+            operation_binding = any(
+                _text(transition.get(key))
+                for key in ("operation_ref", "operation_id", "operation", "method", "path")
+            )
+            operation = _resolve_operation(operations, transition) if operation_binding else None
+            operation_refs = [_text(operation.get("id"))] if operation else []
+            invariant_id = _stable_id(
+                "inv",
+                "forbidden_state_transition",
+                machine_ref or source_id,
+                entity,
+                from_name,
+                to_name,
+            )
+            if invariant_id in seen_forbidden_invariant_ids:
+                continue
+            seen_forbidden_invariant_ids.add(invariant_id)
+            model["invariants"].append(_fact_node(
+                node_id=invariant_id,
+                typed_fields={
+                    "description": f"{entity} must not transition from {from_name} to {to_name}",
+                    "expression": {
+                        "kind": "forbidden_state_transition",
+                        "operator": "must_not_transition",
+                        "operands": [{
+                            "entity_ref": entity,
+                            "from_state": from_name,
+                            "to_state": to_name,
+                        }],
+                        "raw": f"{from_name} -/-> {to_name}",
+                    },
+                    "operation_refs": operation_refs,
+                    "source_rule_refs": [machine_ref] if machine_ref else [],
+                },
+                source_refs=source_refs,
+                confidence=float(transition.get("confidence") or sm.get("confidence") or 0.8),
+                derivation="explicit",
+            ))
+            if not operation:
+                model["coverage_gaps"].append(_fact_node(
+                    node_id=_stable_id(
+                        "gap",
+                        "forbidden_state_transition_operation_unresolved",
+                        invariant_id,
+                    ),
+                    typed_fields={
+                        "gap_type": "forbidden_state_transition_operation_unresolved",
+                        "invariant_ref": invariant_id,
+                        "entity_ref": entity,
+                        "from_state": from_name,
+                        "to_state": to_name,
+                        "operation_hint": _text(
+                            transition.get("operation_ref")
+                            or transition.get("operation_id")
+                            or transition.get("operation")
+                        ),
+                        "description": "Forbidden state transition has no unique source-bound operation",
+                    },
+                    source_refs=source_refs,
+                    confidence=1.0,
+                    derivation="explicit",
+                    status="unsupported",
+                ))
 
     # Invariants from rule library (typed expression + description)
     for rule in _list(data.get("rule_library") or data.get("rules")):

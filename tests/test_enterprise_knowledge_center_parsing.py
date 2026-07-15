@@ -203,6 +203,55 @@ def test_parse_source_extracts_async_event_rule_without_must_keywords() -> None:
     assert any(row.get("risk_type") == "async_event" for row in parsed.get("rules") or [])
 
 
+def test_permission_table_rows_are_explicit_grants_and_keep_narrative_denials() -> None:
+    doc = """# Role permissions
+
+| Role | Permissions |
+| --- | --- |
+| buyer | view products, manage own cart |
+| finance | view reports |
+
+Permission constraints:
+- finance 不能修改商品和库存。
+- auditor cannot modify any business data.
+"""
+    parsed = _parse_source(
+        doc.encode("utf-8"),
+        "permissions.md",
+        "permission_matrix",
+        "src_permissions",
+    )
+
+    permissions = parsed["permissions"]
+    assert any(
+        row.get("role") == "buyer"
+        and row.get("resource") == "product"
+        and row.get("decision") == "allow"
+        for row in permissions
+    )
+    assert any(
+        row.get("role") == "finance"
+        and row.get("resource") == "product"
+        and row.get("decision") == "deny"
+        and "update" in row.get("actions", [])
+        for row in permissions
+    )
+    assert not any(
+        row.get("decision") == "deny"
+        and (
+            (row.get("role") == "finance" and row.get("resource") == "finance")
+            or (row.get("role") == "auditor" and row.get("resource") == "audit")
+        )
+        for row in permissions
+    )
+    assert any(
+        row.get("role") == "finance"
+        and row.get("resource") == "inventory"
+        and row.get("decision") == "deny"
+        for row in permissions
+    )
+
+
 def test_parse_source_extracts_back_in_stock_and_inventory_sync_as_async_event_rules() -> None:
     doc = """# Scenarios
 

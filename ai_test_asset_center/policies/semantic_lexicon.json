@@ -58,6 +58,10 @@
   "state_machine_heading_markers": ["state machine", "state-machine", "state_machine", "workflow", "lifecycle", "\u72b6\u6001\u673a", "\u72b6\u6001\u6d41\u8f6c", "\u5de5\u4f5c\u6d41", "\u751f\u547d\u5468\u671f"],
   "allowed_transition_markers": ["allowed transitions", "valid transitions", "legal transitions", "\u5141\u8bb8\u72b6\u6001\u6d41\u8f6c", "\u5408\u6cd5\u72b6\u6001\u6d41\u8f6c"],
   "forbidden_transition_markers": ["forbidden transitions", "prohibited transitions", "invalid transitions", "illegal transitions", "\u7981\u6b62\u72b6\u6001\u6d41\u8f6c", "\u4e0d\u5141\u8bb8\u72b6\u6001\u6d41\u8f6c", "\u975e\u6cd5\u72b6\u6001\u6d41\u8f6c"],
+  "permission_decision_markers": {
+    "allow": ["allow", "allowed", "grant", "permit", "\u5141\u8bb8", "\u6388\u6743", "\u53ef\u4ee5", "\u53ef"],
+    "deny": ["deny", "denied", "forbid", "forbidden", "not allowed", "cannot", "prohibit", "\u4e0d\u5f97", "\u7981\u6b62", "\u4e0d\u80fd", "\u4e0d\u5141\u8bb8"]
+  },
   "entity_alias_groups": [["address", "addresse", "addresses"], ["cart", "cart_item", "cart_items", "item", "items"], ["coupon", "coupons", "coupon_usage"], ["payment", "payments"], ["refund", "refunds"], ["order", "orders", "order_item", "order_items"], ["product", "products", "inventory"]],
   "observation_action_markers": ["validate", "query", "search", "list", "detail", "lookup", "report", "check", "verify", "\u67e5\u8be2", "\u6821\u9a8c", "\u9a8c\u8bc1", "\u62a5\u8868", "\u5217\u8868", "\u8be6\u60c5"],
   "binding_stop_words": ["must", "shall", "cannot", "equal", "only", "true", "false", "with", "from", "that", "this", "where", "when", "then", "status", "state", "type", "name", "code", "date", "time", "value", "count", "total", "amount", "identifier"],
