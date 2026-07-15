@@ -488,7 +488,7 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
         ]
         if not joined_relations:
             # Fallback: match invariant to operations by description token overlap
-            _desc_tokens = set(re.findall(r"[\w\u4e00-\u9fff]+", _text(inv.get("description") or "").lower()))
+            _desc_tokens = set(re.findall(r"[\u4e00-\u9fff]{1,2}|[a-z0-9_]+", _text(inv.get("description") or "").lower()))
             _op_ids_from_inv = {
                 _text(ref) for ref in _list(inv.get("operation_refs"))
                 if _text(ref) and _text(ref) in operations_by_id
@@ -497,11 +497,11 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
                 for oid in _op_ids_from_inv:
                     joined_relations.append({"operation_ref": oid, "relation_type": "observes"})
             elif _desc_tokens:
-                # Match by entity name tokens
+                # Match by entity name tokens (CJK + ASCII)
                 for op in operations:
-                    op_path_tokens = set(re.findall(r"[\w\u4e00-\u9fff]+",
+                    op_path_tokens = set(re.findall(r"[\u4e00-\u9fff]{1,2}|[a-z0-9_]+",
                         normalize_path_placeholders(_text(op.get("path") or op.get("raw_path"))).lower()))
-                    op_desc_tokens = set(re.findall(r"[\w\u4e00-\u9fff]+",
+                    op_desc_tokens = set(re.findall(r"[\u4e00-\u9fff]{1,2}|[a-z0-9_]+",
                         _text(op.get("summary") or op.get("description") or "").lower()))
                     if _desc_tokens & (op_path_tokens | op_desc_tokens):
                         joined_relations.append({

@@ -1349,21 +1349,28 @@ def _derive_invariant_relations(model: dict[str, Any]) -> list[dict[str, Any]]:
         # Fallback: when no explicit operation_refs, match by token overlap
         # with operation paths and field dictionaries.
         if not op_refs:
-            inv_tokens = set(_text(invariant.get("description") or "").lower().split())
-            for op in operations:
-                op_path = _text(op.get("path") or op.get("raw_path") or "").lower()
-                op_fields = " ".join(
-                    _text(f.get("field") or f.get("name") or "") if isinstance(f, dict) else _text(f)
-                    for f in _list(op.get("field_dictionary"))
-                ).lower()
-                op_text = f"{op_path} {op_fields}"
-                overlap = sum(1 for t in inv_tokens if t and t in op_text)
-                if overlap >= 2 or (
-                    overlap >= 1 and _text(op.get("read_write") or op.get("side_effect_class")) == "write"
-                ):
-                    op_refs.append(_text(op.get("id")))
-                    if len(op_refs) >= 5:
-                        break
+            import re as _re
+            # Tokenize both CJK characters and ASCII words
+            def _tokens(text: str) -> set[str]:
+                cjk = set(_re.findall(r'[\u4e00-\u9fff]{1,2}', text.lower()))
+                ascii_words = set(_re.findall(r'[a-z0-9_]+', text.lower()))
+                return cjk | ascii_words
+            inv_tokens = _tokens(_text(invariant.get("description") or ""))
+            if inv_tokens:
+                for op in operations:
+                    op_path = _text(op.get("path") or op.get("raw_path") or "").lower()
+                    op_summary = _text(op.get("summary") or op.get("description") or "").lower()
+                    op_fields = " ".join(
+                        _text(f.get("field") or f.get("name") or "") if isinstance(f, dict) else _text(f)
+                        for f in _list(op.get("field_dictionary"))
+                    ).lower()
+                    op_text = f"{op_path} {op_summary} {op_fields}"
+                    op_tokens = _tokens(op_text)
+                    overlap = len(inv_tokens & op_tokens)
+                    if overlap >= 1:  # Relaxed: one matching token is enough for CJK
+                        op_refs.append(_text(op.get("id")))
+                        if len(op_refs) >= 5:
+                            break
 
         for hint in op_refs:
             operation = _resolve_operation(operations, {"operation_ref": hint})
