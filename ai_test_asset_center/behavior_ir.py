@@ -1725,7 +1725,9 @@ def build_behavior_ir_from_knowledge_asset(
             # Basic fields for CRUD POST
             _synthetic["name"] = f"auto_{_entity}_test"
             if _entity in ("products", "product"):
+                import uuid as _uuid
                 _synthetic.update({
+                    "sku": f"QB-AUTO-{_uuid.uuid4().hex[:8].upper()}",
                     "title": "Auto Test Product",
                     "price": 99.99,
                     "stock": 100,
