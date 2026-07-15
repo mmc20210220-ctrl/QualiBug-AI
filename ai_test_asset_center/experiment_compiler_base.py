@@ -296,6 +296,28 @@ def compile_experiment_for_obligation(
             "required_fixtures": required_fixtures,
         }
 
+    # Resolve operation IDs that don't match IR IDs by method+path lookup
+    _source_locators = [
+        _text(s.get("locator")) for s in _list(obl.get("source_refs"))
+        if isinstance(s, dict) and _text(s.get("kind")) == "api_operation"
+        and _text(s.get("locator"))
+    ]
+    for i, op_id in enumerate(list(required_ops)):
+        if op_id not in ops:
+            # Try to find by method+path from source locators
+            for loc in _source_locators:
+                parts = loc.split(None, 1)
+                if len(parts) == 2:
+                    loc_method, loc_path = parts[0].upper(), parts[1].strip()
+                    for ir_id, ir_op in ops.items():
+                        if (isinstance(ir_op, dict)
+                            and _text(ir_op.get("method")).upper() == loc_method
+                            and normalize_path_placeholders(_text(ir_op.get("path") or ir_op.get("raw_path")))
+                            == normalize_path_placeholders(loc_path)):
+                            required_ops[i] = ir_id
+                            break
+                if required_ops[i] != op_id:
+                    break
     for op_id in required_ops:
         if op_id not in ops:
             # Filter to only valid operations; update primary if needed.
