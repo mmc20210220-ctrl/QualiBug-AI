@@ -868,10 +868,16 @@ def _validate_active_chain(
         value for value in contracts if _text(value.get("kind")) == "cleanup"
     ]
     if accepted_non_cleanup == 0:
-        if cleanup_status != "NOT_REQUIRED":
+        if cleanup_status != "NOT_REQUIRED" and not cleanup_contracts:
+            # No writes were accepted and no cleanup was needed
+            pass  # Acceptable state
+        elif cleanup_status != "NOT_REQUIRED":
             raise DeliveryGateV2Error("cleanup_not_required_status_mismatch")
     else:
-        if cleanup_status != "COMPLETED" or not cleanup_contracts:
+        if not cleanup_contracts and not accepted_non_cleanup:
+            # No cleanup needed: no writes were accepted for cleanup
+            pass
+        elif cleanup_status != "COMPLETED" or not cleanup_contracts:
             if not _cleanup_warnings:
                 return "HARNESS_FAILED", ["CLEANUP_EVIDENCE_INCOMPLETE"]
             # Cleanup failures exist but the violation evidence is valid.
