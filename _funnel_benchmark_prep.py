@@ -13,11 +13,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Callable, Mapping
-
-DEFAULT_BENCHMARK_TARGET_ROOT = Path(
-    r"C:\Users\Test\Desktop\qualibug_enterprise_benchmark_v0_5_windows_native_stable"
-    r"\qualibug_enterprise_benchmark_v0_5_windows_native_stable"
-)
+from urllib.parse import urlsplit
 
 RunFn = Callable[..., subprocess.CompletedProcess]
 
@@ -59,7 +55,50 @@ def _combined_output(completed: subprocess.CompletedProcess) -> str:
 def resolve_benchmark_target_root(env: Mapping[str, str] | None = None) -> Path:
     env = os.environ if env is None else env
     raw = str(env.get("QUALIBUG_BENCHMARK_TARGET_ROOT") or "").strip()
-    return Path(raw) if raw else DEFAULT_BENCHMARK_TARGET_ROOT
+    if not raw:
+        raise RuntimeError(
+            "QUALIBUG_BENCHMARK_TARGET_ROOT is required; target assets must come "
+            "from an explicit evaluator-local profile path"
+        )
+    return Path(raw)
+
+
+def resolve_benchmark_runtime_input_root(target_root: Path | str) -> Path:
+    """Expose only the target's documented runtime materials to discovery."""
+    root = Path(target_root).resolve()
+    docs = (root / "docs").resolve()
+    hidden = (root / "hidden_ground_truth").resolve()
+    if not docs.is_dir():
+        raise FileNotFoundError(f"benchmark visible docs directory missing: {docs}")
+    if docs == hidden or hidden in docs.parents:
+        raise RuntimeError("benchmark runtime input must exclude hidden_ground_truth")
+    return docs
+
+
+def load_benchmark_runtime_config(
+    env: Mapping[str, str] | None = None,
+) -> dict[str, object]:
+    """Load evaluator-local target configuration without product defaults."""
+    env = os.environ if env is None else env
+    target_root = resolve_benchmark_target_root(env)
+    required = {
+        "project": "QUALIBUG_BENCHMARK_PROJECT",
+        "base_url": "QUALIBUG_TARGET_BASE_URL",
+        "db_dsn": "QUALIBUG_DB_DSN",
+        "jwt_secret": "QUALIBUG_JWT_SECRET",
+    }
+    values: dict[str, str] = {}
+    for field, name in required.items():
+        value = str(env.get(name) or "").strip()
+        if not value:
+            raise RuntimeError(f"{name} is required for benchmark execution")
+        values[field] = value
+    parsed = urlsplit(values["base_url"])
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise RuntimeError("QUALIBUG_TARGET_BASE_URL must be an absolute HTTP(S) URL")
+    if not values["db_dsn"].lower().startswith(("postgres://", "postgresql://")):
+        raise RuntimeError("QUALIBUG_DB_DSN must be a PostgreSQL DSN")
+    return {"target_root": target_root, **values}
 
 
 def should_skip_target_db_reset(env: Mapping[str, str] | None = None) -> bool:

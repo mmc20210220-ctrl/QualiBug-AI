@@ -332,6 +332,29 @@ class EvidenceCollector:
             "error": error,
         }
 
+    def capture(self, step_id: Any, intent: str, payload: Dict[str, Any], page: Any | None) -> Dict[str, Any]:
+        record = {
+            "step_id": step_id,
+            "intent": intent,
+            "payload": payload if isinstance(payload, dict) else {"value": payload},
+            "current_url": page.url if page is not None else "",
+            "captured_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        cap_dir = self.output / "ui" / "captures"
+        cap_dir.mkdir(parents=True, exist_ok=True)
+        cap_path = cap_dir / f"{intent}.json"
+        existing: list = []
+        if cap_path.exists():
+            try:
+                existing = json.loads(cap_path.read_text(encoding="utf-8") or "[]")
+            except Exception:
+                existing = []
+        if not isinstance(existing, list):
+            existing = []
+        existing.append(record)
+        write_json(cap_path, existing)
+        return record
+
     def bundle(self, execution_result: Dict[str, Any], page_map: Dict[str, Any], element_map: Dict[str, Any]) -> Dict[str, Any]:
         bundle = {
             "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -392,7 +415,7 @@ class IntentExecutor:
             for i, step in enumerate(steps, start=1):
                 intent = step.get("intent", "unknown")
                 try:
-                    self.perform_intent(page, intent, step, config, element_map, healer)
+                    self.perform_intent(page, intent, step, config, element_map, healer, collector, i)
                     step_results.append(collector.step_evidence(journey["journey_id"], i, intent, page, "passed"))
                 except Exception as exc:
                     err = f"{type(exc).__name__}: {exc}"
@@ -405,7 +428,7 @@ class IntentExecutor:
         write_json(workspace / "ui_execution" / "ui_execution_result.json", result)
         return result
 
-    def perform_intent(self, page: Any, intent: str, step: Dict[str, Any], config: UIJourneyConfig, element_map: Dict[str, Any], healer: SelfHealingLocator) -> None:
+    def perform_intent(self, page: Any, intent: str, step: Dict[str, Any], config: UIJourneyConfig, element_map: Dict[str, Any], healer: SelfHealingLocator, collector: "EvidenceCollector", step_id: Any) -> None:
         if intent == "open_home_page":
             page.goto(config.base_url, wait_until="domcontentloaded", timeout=10000)
             return

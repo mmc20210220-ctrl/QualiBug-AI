@@ -894,8 +894,8 @@ def _cross_entity_resolver_chain(
 ) -> list[dict[str, Any]]:
     """Build a multi-hop resolver chain by traversing Behavior IR relations.
 
-    When a path param like ``{orderId}`` cannot be resolved directly from the
-    target endpoint's ``GET /api/orders`` response, this function walks the
+    When a path param like ``{resourceId}`` cannot be resolved directly from the
+    target endpoint's collection list response, this function walks the
     relation graph (``produces``, ``scopes``, ``owns``, ``consumes``) to find
     parent entities whose collection list can supply the missing identity.
 

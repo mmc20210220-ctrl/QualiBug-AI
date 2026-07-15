@@ -55,6 +55,9 @@ _e2e_stage/
 _diag_*.py
 _gs*.txt
 _tmp_*.py
+_tmp_*.txt
+_tmp_*.json
+_tmp_*.log
 _explore_*.py
 debug-*.md
 .dbg/

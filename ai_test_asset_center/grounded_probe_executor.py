@@ -43,6 +43,7 @@ bodies remain an advanced override.  Runtime reports keep secrets redacted.
 
 import hashlib
 import json
+import logging
 import os
 import re
 import time
@@ -53,6 +54,8 @@ import urllib.request
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from .real_id_resolver import infer_path_params, normalize_path_placeholders
 from .enterprise_project_config import match_production_data_exclusion
@@ -76,6 +79,15 @@ try:
     from .runtime_finding_lifecycle_registry import apply_lifecycle_registry
 except ImportError: apply_lifecycle_registry = lambda *a, **kw: {}
 from .bug_discovery_probe_expander import expand_bug_discovery_probes
+from .runtime_onboarding_preflight import run_runtime_onboarding_preflight
+from .runtime_probe_capability_matrix import (
+    annotate_decisions_with_capability,
+    build_runtime_probe_capability_matrix,
+)
+from .runtime_onboarding_remediation_kit import (
+    build_onboarding_remediation_kit,
+    render_onboarding_remediation_markdown,
+)
 # Canonical HTTP + basic utilities extracted to probe_http.py
 from .probe_http import *  # noqa: F401,F403
 # Canonical report rendering extracted to probe_reporting.py
@@ -5780,9 +5792,16 @@ def run_grounded_probe_executor(
                             "body": {"code": str(mismatched.get("code") or ""), "items": [{"sku": str(prod.get("sku") or ""), "qty": _qty(float(mismatched.get("min_order_amount") or 0), float(prod.get("price") or 0)), "price": float(prod.get("price") or 0)}], "totalAmount": round(_qty(float(mismatched.get("min_order_amount") or 0), float(prod.get("price") or 0)) * float(prod.get("price") or 0), 2)},
                             "coupon_code": str(mismatched.get("code") or ""),
                         }
-                try: conn.close()
-                except Exception: pass
-            except Exception:
+                try:
+                    conn.close()
+                except Exception as _close_exc:
+                    logger.warning("coupon probe: failed to close DB connection: %s: %s", type(_close_exc).__name__, _close_exc)
+            except Exception as _coupon_exc:
+                logger.error(
+                    "coupon probe generation failed; dropping coupon_cases to avoid poisoning the plan. error=%s: %s",
+                    type(_coupon_exc).__name__,
+                    _coupon_exc,
+                )
                 coupon_cases = {}
             for label, case in coupon_cases.items():
                 if not isinstance(case, dict) or not case.get("body"):

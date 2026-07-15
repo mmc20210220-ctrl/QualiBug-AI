@@ -519,17 +519,16 @@ def test_campaign_identity_exists_before_planning_and_execution() -> None:
     from ai_test_asset_center.discovery_mainline import run_discovery_mainline
 
     events: list[str] = []
-    contract = _contract("legacy_champion")
+    contract = _contract("experiment_candidate")
 
     result = run_discovery_mainline(
-        _inputs("legacy_champion"),
+        _inputs("experiment_candidate"),
         build_campaign=lambda _: events.append("campaign") or SimpleNamespace(campaign_id="CMP-1"),
         build_plan=lambda *_: events.append("plan") or SimpleNamespace(mainline_run=contract),
-        legacy_runner=lambda *_: events.append("legacy") or {"mainline_run": contract},
         experiment_runner=lambda *_: events.append("experiment") or {"mainline_run": contract},
     )
 
-    assert events == ["campaign", "plan", "legacy"]
+    assert events == ["campaign", "plan", "experiment"]
     assert result["mainline_run"]["campaign_id"] == "CMP-1"
 
 
@@ -543,7 +542,6 @@ def test_one_run_never_invokes_both_runners() -> None:
         _inputs("experiment_candidate"),
         build_campaign=lambda _: SimpleNamespace(campaign_id="CMP-1"),
         build_plan=lambda *_: SimpleNamespace(mainline_run=contract),
-        legacy_runner=lambda *_: calls.__setitem__("legacy", calls["legacy"] + 1) or {"mainline_run": contract},
         experiment_runner=lambda *_: calls.__setitem__("experiment", calls["experiment"] + 1) or {"mainline_run": contract},
     )
 
@@ -565,171 +563,10 @@ def test_runner_failure_never_falls_back_to_other_authority() -> None:
             _inputs("experiment_candidate"),
             build_campaign=lambda _: SimpleNamespace(campaign_id="CMP-1"),
             build_plan=lambda *_: SimpleNamespace(mainline_run=contract),
-            legacy_runner=lambda *_: calls.__setitem__("legacy", calls["legacy"] + 1) or {"mainline_run": contract},
             experiment_runner=fail_experiment,
         )
 
     assert calls == {"legacy": 0, "experiment": 1}
-
-
-@pytest.mark.parametrize(
-    "trace_actor_roles",
-    [("buyer",), ("buyer", "admin")],
-    ids=["unmatched_finding_does_not_reuse_trace", "actor_specific_attempts"],
-)
-def test_operational_legacy_champion_is_adapted_to_attempt_authority(
-    trace_actor_roles: tuple[str, ...],
-) -> None:
-    from ai_test_asset_center.discovery_mainline import DiscoveryPlanningBundle
-    from ai_test_asset_center.discovery_runtime import adapt_legacy_champion_result
-
-    contract = build_mainline_run_contract(
-        mainline_authority="legacy_champion",
-        run_id="RUN-LEGACY-OPERATIONAL",
-        campaign_id="CMP-LEGACY-OPERATIONAL",
-        target_id="TARGET-LEGACY-OPERATIONAL",
-        environment_id="ENV-LEGACY-OPERATIONAL",
-        policy_version="policy-legacy-operational",
-        evaluation_mode="operational",
-    )
-
-    class Campaign:
-        campaign_id = "CMP-LEGACY-OPERATIONAL"
-
-        def record_obligation_attempt_ledger(self, ledger):
-            self.ledger = ledger
-
-        def public_contract(self):
-            return {
-                "campaign_id": self.campaign_id,
-                "campaign_status": "completed",
-            }
-
-    class Store:
-        def save(self, campaign):
-            self.saved = campaign
-
-    finding = {
-        "title": "Observed declared response-contract violation",
-        "behavior_slice_id": "BHV-LEGACY-1",
-        "gate_passed": True,
-        "execution_status": "executed",
-        "confirmation_status": "confirmed",
-        "customer_delivery_status": "defect",
-        "bug_status": "reproduced",
-        "expected": "HTTP 403",
-        "actual": "HTTP 200",
-        "timestamp": "2026-07-12T00:00:00Z",
-        "evidence_quality": {
-            "level": "validated",
-            "score": 95,
-            "can_reproduce": True,
-        },
-        "evidence_status": {
-            "semantic_verdict": "SEMANTIC_CONFIRMED",
-            "business_evidence_status": "VALIDATED",
-            "final_review_status": "CUSTOMER_READY",
-            "missing_requirements": [],
-        },
-        "raw_evidence": {
-            "has_real_evidence": True,
-            "timestamp": "2026-07-12T00:00:00Z",
-            "request_raw": {"method": "GET", "path": "/resources/1"},
-            "response_raw": {"status_code": 200, "body": {"visible": True}},
-        },
-        "reproduction": {
-            "method": "GET",
-            "path": "/resources/1",
-            "is_synthetic": False,
-            "har_evidence": {"status_code": 200},
-        },
-    }
-    second_finding = deepcopy(finding)
-    second_finding["title"] = "Second observed response-contract violation"
-    second_finding["raw_evidence"]["request_raw"]["path"] = "/resources/2"
-    second_finding["reproduction"]["path"] = "/resources/2"
-    legacy_result = {
-        "campaign": {"campaign_id": "CMP-LEGACY-OPERATIONAL"},
-        "behavior_slices": [
-            {
-                "slice_id": "BHV-LEGACY-1",
-                "kind": "authorization",
-                "source_refs": [
-                    {
-                        "source_id": "api-contract",
-                        "locator": "GET /resources/{id}",
-                    }
-                ],
-            }
-        ],
-        "behavior_slice_ledger": {
-            "selected_slice_ids": ["BHV-LEGACY-1"],
-        },
-        "execution_trace_summaries": [
-            {
-                "scenario": {
-                    "id": "SCN-LEGACY-1",
-                    "behavior_slice_id": "BHV-LEGACY-1",
-                    "discovery_round": 1,
-                },
-                "execution_trace": {
-                    "steps": [
-                        {
-                            "method": "GET",
-                            "path": "/resources/1",
-                            "status": 200,
-                            "skipped_reason": "",
-                        }
-                    ],
-                    "errors": [],
-                    "sandbox_write": {
-                        "status": "not_executed",
-                        "cleanup": {"status": "not_applicable"},
-                        "audit_record_count": 0,
-                    },
-                },
-                "oracle_results": [
-                    {"oracle_name": "PermissionOracle", "passed": False}
-                ],
-            }
-        ],
-        "findings": [finding, second_finding],
-    }
-    trace_template = legacy_result["execution_trace_summaries"][0]
-    legacy_result["execution_trace_summaries"] = []
-    for actor_role in trace_actor_roles:
-        actor_trace = deepcopy(trace_template)
-        actor_trace["execution_trace"]["actor_role"] = actor_role
-        legacy_result["execution_trace_summaries"].append(actor_trace)
-    plan = DiscoveryPlanningBundle(
-        mainline_run=contract,
-        behavior_ir={},
-        obligations={"obligations": []},
-        experiments={},
-    )
-
-    result = adapt_legacy_champion_result(
-        _inputs("legacy_champion"),
-        {"campaign": Campaign(), "store": Store(), "mode": "created"},
-        plan,
-        legacy_result,
-    )
-
-    assert result["formal_count_projection"]["formal_customer_deliverable_count"] == 2
-    assert result["obligation_attempt_ledger"]["complete"] is True
-    assert result["obligation_attempt_ledger"]["attempts"][0]["terminal_status"] == "DELIVERABLE"
-    assert result["phases"]["execution"]["observed_http_request_count"] == 2
-    assert result["phases"]["execution"]["scenario_attempts"] == 2
-    assert result["phases"]["execution"]["accepted_write_count"] == 0
-    assert len(result["findings"]) == 2
-    assert result["findings"][0]["mainline_run"]["contract_fingerprint"] == contract["contract_fingerprint"]
-    assert result["findings"][0]["gate_passed"] is True
-    assert result["findings"][0]["delivery_gate_receipt"]["schema_version"] == (
-        "qualibug.customer-delivery-gate-receipt.v1"
-    )
-    assert result["discovery_funnel"]["validated_bug_count"] == 2
-    receipt_ids = result["operational_receipt_summary"]["receipt_ids"]
-    assert len(receipt_ids) == len(set(receipt_ids)) == 2
 
 
 def test_legacy_policy_block_is_not_misclassified_as_harness_failure() -> None:
@@ -775,24 +612,22 @@ def test_legacy_cleanup_failure_with_observations_stays_executed() -> None:
 def test_coordinator_rejects_campaign_or_result_identity_mismatch() -> None:
     from ai_test_asset_center.discovery_mainline import run_discovery_mainline
 
-    contract = _contract("legacy_champion")
+    contract = _contract("experiment_candidate")
     with pytest.raises(MainlineContractError, match="mainline_campaign_identity_mismatch"):
         run_discovery_mainline(
-            _inputs("legacy_champion"),
+            _inputs("experiment_candidate"),
             build_campaign=lambda _: SimpleNamespace(campaign_id="CMP-OTHER"),
             build_plan=lambda *_: SimpleNamespace(mainline_run=contract),
-            legacy_runner=lambda *_: {"mainline_run": contract},
             experiment_runner=lambda *_: {"mainline_run": contract},
         )
 
-    wrong_result = _contract("legacy_champion", campaign_id="CMP-OTHER")
+    wrong_result = _contract("experiment_candidate", campaign_id="CMP-OTHER")
     with pytest.raises(MainlineContractError, match="mainline_result_authority_mismatch"):
         run_discovery_mainline(
-            _inputs("legacy_champion"),
+            _inputs("experiment_candidate"),
             build_campaign=lambda _: SimpleNamespace(campaign_id="CMP-1"),
             build_plan=lambda *_: SimpleNamespace(mainline_run=contract),
-            legacy_runner=lambda *_: {"mainline_run": wrong_result},
-            experiment_runner=lambda *_: {"mainline_run": contract},
+            experiment_runner=lambda *_: {"mainline_run": wrong_result},
         )
 
 

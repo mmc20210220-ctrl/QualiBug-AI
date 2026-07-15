@@ -7,6 +7,7 @@ finding can become DELIVERABLE.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from typing import Any
@@ -26,6 +27,15 @@ REPRODUCTION_RECEIPT_SCHEMA = "qualibug.execution-reproduction-receipt.v1"
 DELIVERY_LINEAGE_RECEIPT_SCHEMA = "qualibug.delivery-lineage-receipt.v1"
 CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA = (
     "qualibug.customer-delivery-gate-receipt.v2"
+)
+# Historical v1 receipts emitted by the retired legacy champion. Kept for
+# backward-compatible handling of frozen DELIVERABLE terminals in old data.
+# The full v2 builder (build_customer_delivery_gate_receipt_v2) emits
+# CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA; the minimal helper
+# build_customer_delivery_gate_receipt emits this legacy v1 shape on purpose
+# because it omits the v2-required identity/fingerprint/adjudication fields.
+LEGACY_CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA = (
+    "qualibug.customer-delivery-gate-receipt.v1"
 )
 
 _GATE_STATUSES = frozenset({"DELIVERABLE", "REJECTED", "BLOCKED", "HARNESS_FAILED"})
@@ -1356,15 +1366,15 @@ REJECTION_REASON_EXPLANATIONS: dict[str, dict[str, str]] = {
 
 
 
-def _v1_v1_upper(value: Any) -> str:
+def _v1_upper(value: Any) -> str:
     return _text(value).upper()
 
 
-def _v1_v1_lower(value: Any) -> str:
+def _v1_lower(value: Any) -> str:
     return _text(value).lower()
 
 
-def _v1_v1_number(value: Any, default: float = 0.0) -> float:
+def _v1_number(value: Any, default: float = 0.0) -> float:
     try:
         parsed = float(value)
     except Exception:

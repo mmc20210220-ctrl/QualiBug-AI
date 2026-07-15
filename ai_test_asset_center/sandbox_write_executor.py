@@ -27,6 +27,30 @@ def __getattr__(name: str) -> Any:
     return getattr(_base, name)
 
 
+def execute_with_sandbox_write(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    """Facade over the governed base implementation.
+
+    The safety implementation in ``sandbox_write_executor_base`` references
+    ``_http_request`` / ``_cleanup_after_write`` as module globals. Tests
+    monkeypatch the facade's copies (e.g. to simulate transports and cleanups)
+    so the governance contract stays observable. We route those facade bindings
+    into the base module for the duration of the call, then restore them, so the
+    monkeypatch is honored without duplicating the implementation.
+    """
+    import sys
+
+    _self = sys.modules[__name__]
+    saved_http = _base._http_request
+    saved_cleanup = _base._cleanup_after_write
+    try:
+        _base._http_request = getattr(_self, "_http_request")
+        _base._cleanup_after_write = getattr(_self, "_cleanup_after_write")
+        return _base.execute_with_sandbox_write(*args, **kwargs)
+    finally:
+        _base._http_request = saved_http
+        _base._cleanup_after_write = saved_cleanup
+
+
 def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
