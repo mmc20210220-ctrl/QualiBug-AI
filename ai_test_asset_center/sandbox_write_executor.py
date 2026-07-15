@@ -21,10 +21,40 @@ from .sandbox_write_executor_base import *  # noqa: F401,F403
 # Private compatibility exports used by the main experiment executor.
 _http_request = _base._http_request
 _restore_payload = _base._restore_payload
+_base_cleanup_after_write = _base._cleanup_after_write
+_base_execute_governed_fixture_lifecycle = _base.execute_governed_fixture_lifecycle
 
 
 def __getattr__(name: str) -> Any:
     return getattr(_base, name)
+
+
+def _cleanup_after_write(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    """Run cleanup with the facade transport binding used by callers/tests."""
+
+    import sys
+
+    self_module = sys.modules[__name__]
+    saved_http = _base._http_request
+    try:
+        _base._http_request = getattr(self_module, "_http_request")
+        return _base_cleanup_after_write(*args, **kwargs)
+    finally:
+        _base._http_request = saved_http
+
+
+def execute_governed_fixture_lifecycle(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    """Run fixture governance with the facade transport binding."""
+
+    import sys
+
+    self_module = sys.modules[__name__]
+    saved_http = _base._http_request
+    try:
+        _base._http_request = getattr(self_module, "_http_request")
+        return _base_execute_governed_fixture_lifecycle(*args, **kwargs)
+    finally:
+        _base._http_request = saved_http
 
 
 def execute_with_sandbox_write(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -139,20 +169,31 @@ def execute_governed_control_write(
     body: Any,
     observation_path: str,
 ) -> dict[str, Any]:
-    original = _base.execute_governed_control_write(
-        root=root,
-        project=project,
-        base_url=base_url,
-        runtime_contract=runtime_contract,
-        campaign_id=campaign_id,
-        operation_phase=operation_phase,
-        actor_identity=actor_identity,
-        actor_token=actor_token,
-        method=method,
-        path=path,
-        body=body,
-        observation_path=observation_path,
-    )
+    import sys
+
+    self_module = sys.modules[__name__]
+    saved_http = _base._http_request
+    saved_allowed = _base.sandbox_write_allowed
+    try:
+        _base._http_request = getattr(self_module, "_http_request")
+        _base.sandbox_write_allowed = getattr(self_module, "sandbox_write_allowed")
+        original = _base.execute_governed_control_write(
+            root=root,
+            project=project,
+            base_url=base_url,
+            runtime_contract=runtime_contract,
+            campaign_id=campaign_id,
+            operation_phase=operation_phase,
+            actor_identity=actor_identity,
+            actor_token=actor_token,
+            method=method,
+            path=path,
+            body=body,
+            observation_path=observation_path,
+        )
+    finally:
+        _base._http_request = saved_http
+        _base.sandbox_write_allowed = saved_allowed
     receipt = deepcopy(_dict(original))
     transport_accepted = receipt.get("accepted") is True
     receipt["transport_accepted"] = transport_accepted

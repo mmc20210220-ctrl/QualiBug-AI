@@ -20,6 +20,7 @@
     "test:brand-canvas": "npm run test:login-radar",
     "test:brand-mark": "node scripts/brand/brand-mark-contract.mjs",
     "test:login-contract": "node scripts/login-page-contract.mjs",
+    "ci:gate": "node scripts/ci-gate.mjs",
     "dev:vite": "vite --host"
   },
   "dependencies": {

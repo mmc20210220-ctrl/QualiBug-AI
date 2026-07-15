@@ -173,7 +173,9 @@ def _match_finding_to_gt(
     """Keyword + API-path + semantic match (post-scan scoring only — never fed into discovery)."""
     blob = _finding_text_blob(finding)
     f_paths = _finding_paths(finding)
-    finding_family = _risk_family_for_item(finding)
+    finding_family = classify_risk_family(finding)
+    if not finding_family or finding_family == "unclassified":
+        finding_family = _risk_family_for_item(finding)
     best: tuple[float, dict[str, Any]] | None = None
 
     for gt in truth_bugs:
@@ -200,7 +202,9 @@ def _match_finding_to_gt(
             # permission/concurrency oracles cannot earn a true positive merely
             # by touching every documented endpoint.
             score += 0.30
-        ground_truth_family = _risk_family_for_item(gt)
+        ground_truth_family = classify_risk_family(gt)
+        if not ground_truth_family or ground_truth_family == "unclassified":
+            ground_truth_family = _risk_family_for_item(gt)
         family_matches = (
             finding_family != "unclassified"
             and ground_truth_family != "unclassified"
@@ -499,7 +503,7 @@ def _truth_paths(truth: dict[str, Any]) -> set[str]:
 
 
 def _trace_family(value: Any) -> str:
-    return classify_risk_family({"risk_family": value})
+    return _risk_family_for_item({"risk_family": value})
 
 
 def _trace_paths(trace: dict[str, Any]) -> set[str]:

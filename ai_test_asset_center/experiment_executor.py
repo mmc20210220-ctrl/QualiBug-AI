@@ -553,18 +553,13 @@ def preflight_experiment_executable(
             fixture_dag=dag,
             operations=ops,
         ):
-            # Allow unresolved bindings; runtime will attempt resolution.
-            pass
+            return False, "BLOCKED_MISSING_BINDING", f"unresolved_path:{op_ref}:{path}"
         if not method:
             return False, "BLOCKED_MISSING_OPERATION", f"missing_method:{op_ref}"
         if method in {"POST", "PUT", "PATCH", "DELETE"} and not _declared_observation_path(path, ops):
-            # Allow execution without a dedicated observation GET; the write
-            # response itself provides observation evidence.
-            pass
+            return False, "BLOCKED_MISSING_OBSERVER", f"write_observer:{op_ref}"
     if not _list(exp.get("observers")):
-        # Allow experiments without observers to execute; the delivery gate
-        # will filter out findings with insufficient evidence.
-        pass
+        return False, "BLOCKED_MISSING_OBSERVER", "none"
     assertion = _dict(_list(exp.get("assertions"))[0] if _list(exp.get("assertions")) else {})
     risk_family = _text(assertion.get("kind") or assertion.get("type"))
     if risk_family == "owner_tenant_visibility":
@@ -575,9 +570,7 @@ def preflight_experiment_executable(
         available_adapters={"http_api"},
     )
     if observer_reason:
-        # Allow experiments to execute even when observer declarations
-        # don't perfectly match; the delivery gate handles evidence quality.
-        pass
+        return False, observer_reason, observer_detail
     safety = _dict(exp.get("safety_contract"))
     is_write = bool(safety.get("governed_write"))
     if is_write and not _list(exp.get("cleanup_plan")):
@@ -2565,7 +2558,10 @@ def execute_one_experiment(
     status = "EXECUTED" if has_http else "HARNESS_FAILURE"
     if verdict.get("verdict") == "harness_failure" and not has_http:
         status = "HARNESS_FAILURE"
-    elif verdict.get("verdict") == "blocked_experiment" and not has_http:
+    elif (
+        verdict.get("verdict") == "blocked_experiment"
+        or verdict.get("status") == "INDETERMINATE"
+    ):
         status = "BLOCKED"
         reason = "BLOCKED_MISSING_OBSERVER"
         detail = ",".join(_list(verdict.get("missing_requirements"))[:8])

@@ -18,6 +18,7 @@ from ai_test_asset_center.autonomous_evolution_orchestrator import EvolutionOrch
 from ai_test_asset_center.discovery_harness_proposer import apply_bounded_harness_edit  # noqa: E402
 from ai_test_asset_center.discovery_policy_evaluation_runner import DiscoveryPolicyEvaluationRunner  # noqa: E402
 from ai_test_asset_center.evaluation_fixture_controller import GovernedHttpResetFixtureController  # noqa: E402
+from ai_test_asset_center.evaluator_receipt_auth import resolve_evaluator_hmac_key  # noqa: E402
 from ai_test_asset_center.observed_product_scan_executor import ObservedProductScanExecutor  # noqa: E402
 from ai_test_asset_center.policy_registry import PolicyRecord, PolicyRegistry  # noqa: E402
 from ai_test_asset_center.scan_operational_metrics import collect_observed_scan_operational_metrics  # noqa: E402
@@ -65,6 +66,7 @@ def main() -> int:
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--output-root", required=True)
     parser.add_argument("--registry", required=True)
+    parser.add_argument("--trusted-observation-root", required=True)
     parser.add_argument("--workspace-root", default=str(REPO_ROOT))
     parser.add_argument("--evaluation-id")
     parser.add_argument("--edit-path", required=True)
@@ -72,6 +74,7 @@ def main() -> int:
     parser.add_argument("--edit-value", required=True)
     parser.add_argument("--activate", action="store_true")
     args = parser.parse_args()
+    resolve_evaluator_hmac_key()
 
     workspace_root = Path(args.workspace_root).resolve()
     registry = PolicyRegistry(Path(args.registry).resolve())

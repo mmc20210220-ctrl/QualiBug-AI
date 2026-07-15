@@ -56,6 +56,14 @@ jobs:
             tests/test_phase103s_command_center_api.py \
             tests/test_phase104c_api_contract_acceptance.py \
             tests/test_core_engine_evidence_truthfulness.py \
+            tests/test_observer_evidence_truthfulness.py \
+            tests/test_customer_delivery_gate_v2_cleanup.py \
+            tests/test_family_experiment_protocols.py \
+            tests/test_typed_observer_authorization.py \
+            tests/test_nonproduction_write_contract.py \
+            tests/test_behavior_ir_source_relationships.py \
+            tests/test_behavior_ir_obligation_experiment.py \
+            tests/test_discovery_evaluation_contract.py \
             tests/test_reasoner_hypothesis_guardrail.py \
             tests/test_phase109_incremental_behavior_slices.py \
             tests/test_phase109_behavior_slice_policy_registry.py \

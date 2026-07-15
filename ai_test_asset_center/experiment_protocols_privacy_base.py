@@ -268,6 +268,19 @@ def _invalid_constraint_value(
         if not isinstance(current, str):
             return False, None, ""
         ok, value = _invalid_pattern_value(_text(constraint_value), current)
+        min_length = field_schema.get("minLength")
+        max_length = field_schema.get("maxLength")
+        lower = min_length if isinstance(min_length, int) and min_length >= 0 else 0
+        upper = max_length if isinstance(max_length, int) and max_length >= lower else max(lower, len(value))
+        if ok and not lower <= len(value) <= upper:
+            candidate = "!" * max(lower, 1)
+            try:
+                if len(candidate) <= upper and re.search(_text(constraint_value), candidate) is None:
+                    value = candidate
+                else:
+                    return False, None, ""
+            except re.error:
+                return False, None, ""
         return ok, value, "replace_with_pattern_mismatch"
     if constraint == "minItems":
         if (
@@ -416,6 +429,9 @@ def compile_family_protocol(
             "control_plan": control_plan,
             "treatment_plan": treatment_plan,
         }
+
+    if not constraint and not _text(property_spec.get("field")):
+        return result
 
     assertion = dict(result.get("assertion") or {})
     assertion.update({

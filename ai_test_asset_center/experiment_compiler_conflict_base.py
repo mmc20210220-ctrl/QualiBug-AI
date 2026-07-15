@@ -126,7 +126,12 @@ def _runtime_pair_problem(
     treatment_proven = bool(
         treatment["account"] or treatment["secret"] or treatment["subject"]
     )
-    if control_public and treatment_public:
+    if (
+        control_public
+        and treatment_public
+        and not control_proven
+        and not treatment_proven
+    ):
         return "shared_anonymous_runtime_context"
     if not control_proven and not control_public:
         return "control_principal_not_proven"

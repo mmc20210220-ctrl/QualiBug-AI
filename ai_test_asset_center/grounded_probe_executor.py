@@ -59,25 +59,12 @@ logger = logging.getLogger(__name__)
 
 from .real_id_resolver import infer_path_params, normalize_path_placeholders
 from .enterprise_project_config import match_production_data_exclusion
-# ── Retired module imports (wrapped for graceful degradation) ──────────
-try:
-    from .runtime_finding_evidence_packager import package_runtime_finding_evidence
-except ImportError: package_runtime_finding_evidence = lambda *a, **kw: {}
-try:
-    from .runtime_finding_customer_triage import triage_runtime_finding
-except ImportError: triage_runtime_finding = lambda *a, **kw: {}
-try:
-    from .runtime_customer_report_builder import build_customer_delivery_index
-except ImportError: build_customer_delivery_index = lambda *a, **kw: {}
-try:
-    from .runtime_reproduction_asset_linker import link_reproduction_assets
-except ImportError: link_reproduction_assets = lambda *a, **kw: {}
-try:
-    from .runtime_fix_verification_loop import attach_fix_verification_loop
-except ImportError: attach_fix_verification_loop = lambda *a, **kw: {}
-try:
-    from .runtime_finding_lifecycle_registry import apply_lifecycle_registry
-except ImportError: apply_lifecycle_registry = lambda *a, **kw: {}
+from .runtime_finding_evidence_packager import package_runtime_finding_evidence
+from .runtime_finding_customer_triage import triage_runtime_finding
+from .runtime_customer_report_builder import build_customer_delivery_index
+from .runtime_reproduction_asset_linker import link_reproduction_assets
+from .runtime_fix_verification_loop import attach_fix_verification_loop
+from .runtime_finding_lifecycle_registry import apply_lifecycle_registry
 from .bug_discovery_probe_expander import expand_bug_discovery_probes
 from .runtime_onboarding_preflight import run_runtime_onboarding_preflight
 from .runtime_probe_capability_matrix import (
@@ -87,6 +74,108 @@ from .runtime_probe_capability_matrix import (
 from .runtime_onboarding_remediation_kit import (
     build_onboarding_remediation_kit,
     render_onboarding_remediation_markdown,
+)
+from .runtime_execution_runbook import (
+    build_runtime_execution_runbook,
+    render_runtime_execution_runbook_markdown,
+)
+from .runtime_evidence_readiness_sla_gate import (
+    build_runtime_evidence_readiness_sla_gate,
+    render_runtime_evidence_readiness_markdown,
+)
+from .runtime_onboarding_patch_safety_validator import (
+    render_onboarding_patch_safety_markdown,
+    validate_onboarding_patch_safety,
+)
+from .runtime_remediation_artifact_builder import (
+    build_remediation_verification_artifact,
+    render_remediation_markdown,
+)
+from .runtime_sla_execution_policy import (
+    build_runtime_sla_execution_policy,
+    render_runtime_sla_execution_policy_markdown,
+)
+from .runtime_sla_gap_prioritizer import (
+    build_runtime_sla_gap_prioritizer,
+    render_runtime_sla_gap_prioritizer_markdown,
+)
+from .runtime_write_sandbox_approval_packet import (
+    build_write_sandbox_approval_packet,
+    render_write_sandbox_approval_markdown,
+)
+from .runtime_commercial_handoff_bundle import (
+    build_commercial_handoff_bundle,
+    render_commercial_handoff_markdown,
+)
+from .runtime_commercial_handoff_acceptance_gate import (
+    render_commercial_handoff_acceptance_markdown,
+    validate_commercial_handoff_acceptance,
+)
+from .runtime_handoff_secret_audit import (
+    audit_commercial_handoff_secrets,
+    build_handoff_secret_redaction_plan,
+    build_handoff_redacted_runtime_evidence_pack,
+    render_handoff_redacted_runtime_evidence_markdown,
+    render_handoff_secret_audit_markdown,
+    render_handoff_secret_redaction_plan_markdown,
+)
+from .runtime_handoff_archive_manifest import (
+    build_handoff_archive_manifest,
+    render_handoff_archive_manifest_markdown,
+    render_immutable_run_receipt_markdown,
+)
+from .runtime_handoff_receipt_comparator import (
+    compare_immutable_run_receipts,
+    render_handoff_receipt_comparison_markdown,
+)
+from .runtime_handoff_rerun_audit_gate import (
+    build_handoff_rerun_audit_gate,
+    render_handoff_rerun_audit_gate_markdown,
+)
+from .runtime_commercial_evidence_lineage_dashboard import (
+    build_commercial_evidence_lineage_dashboard,
+    render_commercial_evidence_lineage_dashboard_markdown,
+)
+from .runtime_commercial_lineage_reviewer_signoff import (
+    build_commercial_lineage_reviewer_signoff_packet,
+    render_commercial_lineage_reviewer_signoff_markdown,
+)
+from .runtime_commercial_closure_acceptance_ledger import (
+    build_commercial_closure_acceptance_ledger,
+    render_commercial_closure_acceptance_ledger_markdown,
+)
+from .runtime_commercial_audit_event_stream import (
+    build_commercial_audit_event_stream,
+    render_commercial_audit_event_stream_markdown,
+)
+from .runtime_commercial_audit_export_adapters import (
+    build_commercial_audit_export_adapters,
+    render_commercial_audit_exports_markdown,
+    render_csv_audit_ledger,
+)
+from .runtime_commercial_audit_export_import_gate import (
+    build_commercial_audit_export_import_gate,
+    render_commercial_audit_import_gate_markdown,
+)
+from .runtime_commercial_external_tracker_reconciliation import (
+    build_commercial_external_tracker_reconciliation,
+    render_commercial_external_tracker_reconciliation_markdown,
+)
+from .runtime_external_tracker_closure_sync_policy import (
+    build_external_tracker_closure_sync_policy,
+    render_external_tracker_closure_sync_policy_markdown,
+)
+from .runtime_external_tracker_sync_payload_builder import (
+    build_external_tracker_sync_payloads,
+    render_external_tracker_sync_payloads_markdown,
+)
+from .runtime_external_tracker_sync_payload_gate import (
+    render_external_tracker_sync_payload_gate_markdown,
+    validate_external_tracker_sync_payloads,
+)
+from .runtime_external_tracker_sync_receipt_ledger import (
+    build_external_tracker_sync_receipt_ledger,
+    render_external_tracker_sync_receipt_ledger_markdown,
 )
 # Canonical HTTP + basic utilities extracted to probe_http.py
 from .probe_http import *  # noqa: F401,F403

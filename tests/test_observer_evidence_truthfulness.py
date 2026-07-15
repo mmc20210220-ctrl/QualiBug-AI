@@ -359,6 +359,27 @@ def test_privacy_gate_sufficient_control_effect_passes(monkeypatch):
     assert result["status"] == "PASS"
 
 
+def test_privacy_gate_http_success_never_replaces_business_effect(monkeypatch):
+    """A 2xx control response is transport evidence, not business-effect proof."""
+    monkeypatch.setattr(_vbase, "evaluate_assertion", lambda *a, **kw: _mock_base_pass())
+    assertion = {
+        "kind": "validation_rejection",
+        "expected_control_effect_min": 1,
+        "property": {},
+    }
+    observations = {
+        "business_effect_observed": False,
+        "control_effect_count": None,
+        "control_succeeded": True,
+        "authorized_control": True,
+    }
+
+    result = _priv.evaluate_assertion(assertion, observations=observations)
+
+    assert result["status"] == "INDETERMINATE"
+    assert result["reason_code"] == "VALIDATION_CONTROL_EFFECT_MISSING"
+
+
 # ── no Oracle PASS from fabricated evidence ──────────────────────────────
 
 def test_business_effect_not_observed_prevents_oracle_pass():

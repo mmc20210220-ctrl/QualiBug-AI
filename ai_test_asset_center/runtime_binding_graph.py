@@ -645,22 +645,8 @@ def _declared_fixture_setup(
                 behavior_ir=behavior_ir,
             )
             if not resolvers:
-                # Use synthetic fallback values for unresolvable fields
-                # so the fixture can still be created. The POST endpoint
-                # may accept partial data or have server-side defaults.
-                import uuid as _uuid
-                _fallback = (
-                    str(_uuid.uuid4())
-                    if field.lower().endswith("id")
-                    else "test_value"
-                )
-                body_bindings.append({
-                    "target": _text(row.get("target")),
-                    "template_token": token,
-                    "resolver_operations": [],
-                    "fallback_value": _fallback,
-                })
-                continue
+                unresolved_body = True
+                break
             body_bindings.append({
                 "target": _text(row.get("target")),
                 "template_token": token,
@@ -674,7 +660,7 @@ def _declared_fixture_setup(
         # Allow fixture creation even without cleanup operations or actors.
         # Missing cleanup means the created resource can't be automatically
         # removed after the test — acceptable for non-production targets.
-        if not actor_refs:
+        if unresolved_body or not cleanup_operations or not actor_refs:
             continue
         return {
             "operation_ref": _text(create.get("id")),
@@ -808,18 +794,12 @@ def build_binding_plan(
                     "value_fingerprint": "",
                 })
                 continue
-            # Last resort: use synthetic value so the experiment can execute.
-            # The fixture executor or binding materializer will create the
-            # resource on-the-fly if needed.
-            import uuid as _uuid
-            _synthetic = str(_uuid.uuid4()) if name.lower().endswith("id") or name.lower() == "id" else "test_value"
             plan.append({
                 "target": name,
-                "status": "runtime_resolvable",
-                "source_priority": "synthetic_fallback",
+                "status": "unresolved",
+                "source_priority": "",
                 "resolver_operations": [],
-                "value_fingerprint": _synthetic,
-                "synthetic_value": _synthetic,
+                "value_fingerprint": "",
             })
 
     for actor in actors or []:

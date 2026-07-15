@@ -232,10 +232,35 @@ def _pattern(
     industries = sorted({str(item.get("industry") or "") for item in rows if str(item.get("industry") or "")})
     families = sorted(
         {
-            str((item.get("generation") or {}).get("family") or "unclassified")
+            str(
+                item.get("risk_family")
+                or (item.get("generation") or {}).get("family")
+                or "unclassified"
+            )
             for item in rows
         }
     )
+    operation_refs = sorted({
+        str(operation_ref)
+        for item in rows
+        for operation_ref in (item.get("operation_refs") or [])
+        if str(operation_ref).strip()
+    })
+    adapters = sorted({
+        str(item.get("adapter"))
+        for item in rows
+        if str(item.get("adapter") or "").strip()
+    })
+    execution_reason_codes = sorted({
+        str(item.get("execution_reason_code") or item.get("reason_code"))
+        for item in rows
+        if str(item.get("execution_reason_code") or item.get("reason_code") or "").strip()
+    })
+    terminal_statuses = sorted({
+        str(item.get("terminal_status"))
+        for item in rows
+        if str(item.get("terminal_status") or "").strip()
+    })
     outcomes: dict[str, int] = {}
     for item in rows:
         outcome = str(item.get("outcome") or "unresolved")
@@ -265,9 +290,16 @@ def _pattern(
         "recurrence_rate": recurrence_rate,
         "affected_run_count": len(run_ids),
         "affected_industry_count": len(industries),
-        "affected_families": families,
+        "affected_risk_families": families,
+        "affected_operation_refs": operation_refs,
+        "affected_adapters": adapters,
+        "execution_reason_codes": execution_reason_codes,
+        "terminal_statuses": terminal_statuses,
         "outcome_counts": dict(sorted(outcomes.items())),
-        "example_trace_ids": [str(item.get("trace_id") or "") for item in rows[:5]],
+        "example_trace_ids": [
+            str(item.get("attempt_id") or item.get("trace_id") or "")
+            for item in rows[:5]
+        ],
         "preserved_good_trace_ids": preserved_good.get(catalog["surface"], [])[:5],
         "verifier_grounded": bool(rows),
         "proposal_eligible": proposal_eligible,
@@ -288,7 +320,7 @@ def mine_discovery_weaknesses(ledgers: list[dict[str, Any]]) -> dict[str, Any]:
     traces = [
         item
         for ledger in ledgers
-        for item in (ledger.get("traces") or [])
+        for item in (ledger.get("attempts") or [])
         if isinstance(item, dict)
     ]
     if not traces:

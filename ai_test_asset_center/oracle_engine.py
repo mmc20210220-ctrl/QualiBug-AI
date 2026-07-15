@@ -967,12 +967,47 @@ class TenantIsolationOracle(BaseOracle):
 
     def evaluate(self, scenario, trace, snapshots=None):
         steps = trace.get("steps", [])
+        owner_ids: set[str] = set()
+
+        def collect_ids(value):
+            collected: set[str] = set()
+            if isinstance(value, dict):
+                identity = value.get("id")
+                if identity not in (None, ""):
+                    collected.add(str(identity))
+                for child in value.values():
+                    collected.update(collect_ids(child))
+            elif isinstance(value, list):
+                for child in value:
+                    collected.update(collect_ids(child))
+            return collected
+
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            if str(step.get("action") or "").startswith("resolve_owner_"):
+                response = step.get("response") if isinstance(step.get("response"), dict) else {}
+                owner_ids.update(collect_ids(response.get("body")))
         for s in steps:
             body = s.get("response", {}).get("body", {}) if isinstance(s.get("response"), dict) else {}
             if isinstance(body, dict):
                 if body.get("tenant_id") and scenario.get("actor_tenant") and body["tenant_id"] != scenario["actor_tenant"]:
                     return OracleResult(False, "TenantIsolationOracle", "L4", "cross_tenant_access",
                         "不应访问其他租户数据", f"tenant={body['tenant_id']}", "P0", 0.95)
+            action = str(s.get("action") or "")
+            if owner_ids and "isolation_probe" in action:
+                leaked_ids = sorted(owner_ids & collect_ids(body))
+                if leaked_ids:
+                    return OracleResult(
+                        False,
+                        "TenantIsolationOracle",
+                        "L4",
+                        "cross_user_collection_leak",
+                        "restricted actor must not observe owner-scoped identities",
+                        f"overlapping_identity_count={len(leaked_ids)}",
+                        "P0",
+                        0.95,
+                    )
         return OracleResult(True, "TenantIsolationOracle", "L4")
 
 

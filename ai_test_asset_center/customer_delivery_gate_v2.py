@@ -692,6 +692,77 @@ def _validate_receipt_collections(
     return contracts, observers, oracle, reproduction
 
 
+def _cleanup_gate_decision(
+    *,
+    execution: dict[str, Any],
+    contracts: list[dict[str, Any]],
+) -> tuple[str, list[str], str]:
+    """Return gate status, reason codes, and honest cleanup adjudication."""
+
+    operational = _dict(execution.get("operational_receipt"))
+    cleanup = _dict(operational.get("cleanup_outcome"))
+    accepted_non_cleanup = int(
+        operational.get("accepted_non_cleanup_write_count") or 0
+    )
+    cleanup_status = _text(cleanup.get("status")).upper()
+    cleanup_failures = int(cleanup.get("failure_count") or 0)
+    cleanup_contracts = [
+        value for value in contracts if _text(value.get("kind")) == "cleanup"
+    ]
+
+    if cleanup_failures or cleanup_status == "FAILED":
+        return "HARNESS_FAILED", ["CLEANUP_COMPENSATION_FAILED"], "FAILED"
+
+    covered = sum(
+        int(_dict(value.get("evidence")).get("accepted_write_count") or 0)
+        for value in cleanup_contracts
+    )
+    if accepted_non_cleanup == 0:
+        if cleanup_status != "NOT_REQUIRED":
+            return "HARNESS_FAILED", ["CLEANUP_EVIDENCE_INCOMPLETE"], "INCOMPLETE"
+        if covered:
+            return "HARNESS_FAILED", ["CLEANUP_WRITE_COVERAGE_MISMATCH"], "INCOMPLETE"
+        return "DELIVERABLE", [], "NOT_REQUIRED"
+
+    if not cleanup_contracts:
+        return "HARNESS_FAILED", ["CLEANUP_EVIDENCE_INCOMPLETE"], "INCOMPLETE"
+    if covered != accepted_non_cleanup:
+        return "HARNESS_FAILED", ["CLEANUP_WRITE_COVERAGE_MISMATCH"], "INCOMPLETE"
+
+    completed_seen = False
+    for contract in cleanup_contracts:
+        status = _text(contract.get("status")).upper()
+        evidence = _dict(contract.get("evidence"))
+        audit_ids = [
+            _text(value)
+            for value in _list(evidence.get("audit_receipt_ids"))
+            if _text(value)
+        ]
+        if status == "COMPLETED":
+            completed_seen = True
+            if not (
+                evidence.get("restoration_verified") is True
+                and evidence.get("state_unchanged") is True
+                and int(evidence.get("cleanup_write_count") or 0) > 0
+                and audit_ids
+            ):
+                return "HARNESS_FAILED", ["CLEANUP_EVIDENCE_INCOMPLETE"], "INCOMPLETE"
+        elif status == "NOT_REQUIRED":
+            if not (
+                evidence.get("state_unchanged") is True
+                and int(evidence.get("cleanup_write_count") or 0) == 0
+                and audit_ids
+            ):
+                return "HARNESS_FAILED", ["CLEANUP_EVIDENCE_INCOMPLETE"], "INCOMPLETE"
+        else:
+            return "HARNESS_FAILED", ["CLEANUP_COMPENSATION_FAILED"], "FAILED"
+
+    expected_operational = "COMPLETED" if completed_seen else "NOT_REQUIRED"
+    if cleanup_status != expected_operational:
+        return "HARNESS_FAILED", ["CLEANUP_EVIDENCE_INCOMPLETE"], "INCOMPLETE"
+    return "DELIVERABLE", [], expected_operational
+
+
 def _validate_active_chain(
     *,
     execution: dict[str, Any],
@@ -860,31 +931,14 @@ def _validate_active_chain(
         ):
             raise DeliveryGateV2Error("delivery_fixture_binding_proof_missing")
 
-    operational = _dict(execution.get("operational_receipt"))
-    cleanup = _dict(operational.get("cleanup_outcome"))
-    accepted_non_cleanup = int(
-        operational.get("accepted_non_cleanup_write_count") or 0
+    cleanup_gate_status, cleanup_reasons, _cleanup_adjudication = (
+        _cleanup_gate_decision(execution=execution, contracts=contracts)
     )
-    cleanup_failures = int(cleanup.get("failure_count") or 0)
-    _cleanup_warnings: list[str] = []
-    if cleanup_failures:
-        _cleanup_warnings.append("CLEANUP_COMPENSATION_FAILED")
-    cleanup_status = _text(cleanup.get("status")).upper()
-    cleanup_contracts = [
-        value for value in contracts if _text(value.get("kind")) == "cleanup"
-    ]
-    if accepted_non_cleanup == 0:
-        if cleanup_status != "NOT_REQUIRED" and not cleanup_contracts:
-            # No writes were accepted and no cleanup was needed
-            pass  # Acceptable state
-        elif cleanup_status != "NOT_REQUIRED":
-            raise DeliveryGateV2Error("cleanup_not_required_status_mismatch")
-    else:
-        # Accept all cleanup states — violation evidence is sufficient
-        pass
+    if cleanup_gate_status != "DELIVERABLE":
+        return cleanup_gate_status, cleanup_reasons
     if _text(reproduction.get("status")) != "REPRODUCED":
         return "BLOCKED", ["REPRODUCTION_NOT_PROVEN"]
-    return "DELIVERABLE", []  # cleanup warnings are informational only
+    return "DELIVERABLE", []
 
 
 def _build_lineage_receipt(
@@ -947,6 +1001,10 @@ def build_customer_delivery_gate_receipt_v2(
         observers=observers,
         oracle=oracle,
         reproduction=reproduction,
+    )
+    _, _, cleanup_adjudication = _cleanup_gate_decision(
+        execution=execution,
+        contracts=contracts,
     )
     deliverable = status == "DELIVERABLE"
     finding_row = _dict(finding)
@@ -1047,7 +1105,7 @@ def build_customer_delivery_gate_receipt_v2(
         ),
         "oracle": _text(oracle.get("status")),
         "reproduction": _text(reproduction.get("status")),
-        "cleanup": "COMPLETED" if refs["cleanup"] else "NOT_REQUIRED",
+        "cleanup": cleanup_adjudication,
         "lineage": "CONSISTENT",
     }
     reasons = sorted(set(_text(value) for value in reason_codes if _text(value)))
@@ -1179,16 +1237,21 @@ def validate_customer_delivery_gate_receipt_v2(
         "lineage",
     }:
         raise DeliveryGateV2Error("delivery_gate_adjudication_invalid")
-    if deliverable and adjudication != {
-        "execution": "EXECUTED",
-        "activation": "ACTIVE",
-        "assertion": "VIOLATION",
-        "oracle": "VIOLATION",
-        "reproduction": "REPRODUCED",
-        "cleanup": "COMPLETED" if refs["cleanup"] else "NOT_REQUIRED",
-        "lineage": "CONSISTENT",
-    }:
-        raise DeliveryGateV2Error("deliverable_gate_adjudication_invalid")
+    if deliverable:
+        expected_adjudication = {
+            "execution": "EXECUTED",
+            "activation": "ACTIVE",
+            "assertion": "VIOLATION",
+            "oracle": "VIOLATION",
+            "reproduction": "REPRODUCED",
+            "cleanup": _text(adjudication.get("cleanup")),
+            "lineage": "CONSISTENT",
+        }
+        if adjudication != expected_adjudication or adjudication["cleanup"] not in {
+            "COMPLETED",
+            "NOT_REQUIRED",
+        }:
+            raise DeliveryGateV2Error("deliverable_gate_adjudication_invalid")
     cost_status = _text(row.get("cost_coverage_status"))
     if cost_status not in _COST_COVERAGE_STATUSES:
         raise DeliveryGateV2Error("delivery_gate_cost_coverage_invalid")

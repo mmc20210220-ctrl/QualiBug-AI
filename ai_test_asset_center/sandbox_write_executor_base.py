@@ -984,6 +984,9 @@ def execute_governed_fixture_lifecycle(
             "fixture_cleanup_not_accepted" if setup_attempted else "fixture_setup_not_accepted"
         )
     )
+    if rejected_without_observed_mutation:
+        cleanup_status = "not_required"
+        cleanup_reason = "setup_rejected_observer_unchanged"
 
     observer_ref = documented_observer or "documented_observer_missing"
     before_ref = f"sandbox_before:{observer_ref}:{before.get('status')}"
@@ -1025,9 +1028,10 @@ def execute_governed_fixture_lifecycle(
     audit_path = ""
     for record in audit_records:
         audit_path = str(_append_audit(root, project, record))
+    lifecycle_complete = setup_ok and cleanup_ok
     return {
-        "status": "completed" if cleanup_ok else "cleanup_incomplete",
-        "reason": "fixture_lifecycle_completed" if cleanup_ok else cleanup_reason,
+        "status": "completed" if lifecycle_complete else "cleanup_incomplete",
+        "reason": "fixture_lifecycle_completed" if lifecycle_complete else cleanup_reason,
         "setup_receipts": setup_receipts,
         "cleanup_receipts": cleanup_receipts,
         "before": before,
@@ -1829,10 +1833,12 @@ def execute_with_sandbox_write(
         path=path,
         body=_body,
     )
+    protected_identity_scrubbed = False
     if identity_block == "protected_runtime_identity_mutation_blocked":
         protected = _protected_runtime_identity_values(root, project)
         scrubbed_body = _scrub_protected_identities_from_body(_body, protected)
         if scrubbed_body != _body:
+            protected_identity_scrubbed = True
             _apply_body_to_primary_write_step(scenario, scrubbed_body if isinstance(scrubbed_body, dict) else {})
             _body = scrubbed_body if isinstance(scrubbed_body, dict) else {}
             write_meta = (method, path, _body)
@@ -1846,6 +1852,12 @@ def execute_with_sandbox_write(
             )
     if identity_block:
         return _blocked_write_trace(scenario, identity_block, write_meta)
+    if protected_identity_scrubbed and not documented_routes:
+        return _blocked_write_trace(
+            scenario,
+            "write_cleanup_operation_not_declared",
+            write_meta,
+        )
     if safety_boundary:
         excl = match_production_data_exclusion(safety_boundary, path, "")
         if excl:

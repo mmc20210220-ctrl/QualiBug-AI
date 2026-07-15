@@ -217,6 +217,11 @@ OBSERVER_REGISTRY: dict[str, dict[str, Any]] = {
         "adapter": "http_api",
         "implemented": True,
     },
+    "temporal_window": {
+        "surface": "temporal_convergence",
+        "adapter": "http_api",
+        "implemented": True,
+    },
     "write_observer": {
         "surface": "business_effect",
         "adapter": "http_api",
@@ -762,31 +767,12 @@ def _effect_window(steps: list[dict[str, Any]]) -> tuple[dict[str, Any], str]:
     last_governance = _dict(steps[-1].get("governance_receipt"))
     before = _dict(first_governance.get("before"))
     after = _dict(last_governance.get("after"))
-    # Fallback: when observation GETs fail, use write response as evidence
-    before_ok = 200 <= _raw_http_status(before) < 300
-    after_ok = 200 <= _raw_http_status(after) < 300
-    if not (before_ok and after_ok):
-        # Use write responses as fallback evidence
-        write_first = _dict(first_governance.get("write"))
-        write_last = _dict(last_governance.get("write"))
-        if 200 <= _raw_http_status(write_first) < 300:
-            return {
-                "before_identity_count": 0, "after_identity_count": 1,
-                "identity_effect_count": 1, "business_field_change_count": 1,
-                "effect_count": 2, "before_fingerprint": "", "after_fingerprint": "",
-                "observation_fallback": "write_only",
-            }, ""
+    if not (
+        200 <= _raw_http_status(before) < 300
+        and 200 <= _raw_http_status(after) < 300
+    ):
         return {}, "BUSINESS_EFFECT_OBSERVATION_FAILED"
     if not isinstance(before.get("body"), (dict, list)) or not isinstance(after.get("body"), (dict, list)):
-        # Use write response count as evidence
-        write_last = _dict(last_governance.get("write"))
-        if 200 <= _raw_http_status(write_last) < 300:
-            return {
-                "before_identity_count": 0, "after_identity_count": 1,
-                "identity_effect_count": 1, "business_field_change_count": 1,
-                "effect_count": 2, "before_fingerprint": "", "after_fingerprint": "",
-                "observation_fallback": "write_count_only",
-            }, ""
         return {}, "BUSINESS_EFFECT_BODY_UNSUPPORTED"
     before_ids = _identity_fingerprints(before.get("body"))
     after_ids = _identity_fingerprints(after.get("body"))
@@ -1124,20 +1110,12 @@ def _state_snapshot_evidence(
     if not (200 <= _raw_http_status(snapshot) < 300):
         return evidence, "STATE_SNAPSHOT_OBSERVATION_FAILED"
     if not isinstance(snapshot.get("body"), (dict, list)):
-        # Fallback: use HTTP status as state proxy for non-structured bodies
-        http_status = _raw_http_status(snapshot)
-        evidence["state_field"] = "http_status_fallback"
-        evidence[state_key] = f"http_{http_status}"
-        return evidence, ""
+        return evidence, "STATE_SNAPSHOT_BODY_UNSUPPORTED"
     state_value, state_field = _extract_state_value(snapshot.get("body"))
     evidence["state_field"] = state_field
     evidence[state_key] = state_value
     if not state_value:
-        # Fallback: use HTTP status as a proxy for state
-        http_status = _raw_http_status(snapshot)
-        state_value = f"http_{http_status}"
-        evidence[state_key] = state_value
-        evidence["state_field"] = "http_status_fallback"
+        return evidence, "STATE_SNAPSHOT_VALUE_MISSING"
     return evidence, ""
 
 
@@ -1279,6 +1257,110 @@ def _observe_barrier_timeline(observations: dict[str, Any]) -> dict[str, Any]:
         )
     return _receipt(
         observer_id="barrier_timeline",
+        status="OBSERVED",
+        evidence=evidence,
+    )
+
+
+def _observe_temporal_window(
+    observations: dict[str, Any],
+    *,
+    assertion: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Observe convergence only from explicit, source-bounded timeline facts."""
+
+    timeline = _list(observations.get("temporal_timeline"))
+    evidence: dict[str, Any] = {
+        "timeline_event_count": len(timeline),
+        "converged": False,
+        "within_window": None,
+        "elapsed_ms": None,
+        "window_ms": None,
+    }
+    if not timeline:
+        return _receipt(
+            observer_id="temporal_window",
+            status="INDETERMINATE",
+            reason_code="TEMPORAL_TIMELINE_MISSING",
+            evidence=evidence,
+        )
+
+    assertion_row = _dict(assertion)
+    prop = _dict(assertion_row.get("property"))
+    window_ms: int | None = None
+    for key in ("window_ms", "max_ms", "timeout_ms", "convergence_window_ms"):
+        raw = prop.get(key) if prop.get(key) is not None else assertion_row.get(key)
+        if raw is None:
+            continue
+        try:
+            window_ms = int(raw)
+        except (TypeError, ValueError):
+            return _receipt(
+                observer_id="temporal_window",
+                status="FAILED",
+                reason_code="TEMPORAL_WINDOW_INVALID",
+                evidence=evidence,
+            )
+        break
+    if window_ms is None or window_ms <= 0:
+        return _receipt(
+            observer_id="temporal_window",
+            status="INDETERMINATE",
+            reason_code="TEMPORAL_WINDOW_NOT_SPECIFIED",
+            evidence=evidence,
+        )
+    evidence["window_ms"] = window_ms
+
+    trigger_events = [
+        row for row in timeline
+        if isinstance(row, dict) and _text(row.get("event")) == "trigger"
+    ]
+    final_events = [
+        row for row in timeline
+        if isinstance(row, dict) and _text(row.get("event")) == "final_observed"
+    ]
+    if not trigger_events:
+        return _receipt(
+            observer_id="temporal_window",
+            status="INDETERMINATE",
+            reason_code="TEMPORAL_TRIGGER_EVENT_MISSING",
+            evidence=evidence,
+        )
+    if not final_events:
+        return _receipt(
+            observer_id="temporal_window",
+            status="INDETERMINATE",
+            reason_code="TEMPORAL_FINAL_EVENT_MISSING",
+            evidence=evidence,
+        )
+    try:
+        trigger_at = min(int(_dict(row).get("at_ms")) for row in trigger_events)
+        final_at = max(int(_dict(row).get("at_ms")) for row in final_events)
+    except (TypeError, ValueError):
+        return _receipt(
+            observer_id="temporal_window",
+            status="FAILED",
+            reason_code="TEMPORAL_TIMELINE_INVALID",
+            evidence=evidence,
+        )
+    if final_at < trigger_at:
+        return _receipt(
+            observer_id="temporal_window",
+            status="FAILED",
+            reason_code="TEMPORAL_TIMELINE_ORDER_INVALID",
+            evidence=evidence,
+        )
+
+    elapsed_ms = final_at - trigger_at
+    evidence.update({
+        "elapsed_ms": elapsed_ms,
+        "trigger_at_ms": trigger_at,
+        "final_at_ms": final_at,
+        "converged": True,
+        "within_window": elapsed_ms <= window_ms,
+    })
+    return _receipt(
+        observer_id="temporal_window",
         status="OBSERVED",
         evidence=evidence,
     )
@@ -1501,6 +1583,8 @@ def observe_experiment_requirements(
             )
         elif observer_id == "barrier_timeline":
             receipt = _observe_barrier_timeline(evidence)
+        elif observer_id == "temporal_window":
+            receipt = _observe_temporal_window(evidence, assertion=assertion)
         elif observer_id == "typed_assertion":
             receipt = _observe_typed_assertion(exp)
         elif observer_id == "source_invariant":
@@ -1570,15 +1654,15 @@ def observe_authorization_comparison(
             and control_effect is not None
             and int(control_effect) > 0
         )
-        proven_zero_treatment_effect = (
+        proven_treatment_effect = (
             treatment_effect is not None
-            and int(treatment_effect) == 0
+            and int(treatment_effect) > 0
         )
     except (TypeError, ValueError):
         return baseline
     if not (
         proven_control
-        and proven_zero_treatment_effect
+        and proven_treatment_effect
         and 200 <= _status_obs(treatment_row) < 300
     ):
         return baseline
@@ -1591,7 +1675,7 @@ def observe_authorization_comparison(
         "control_effect_count": int(control_effect),
         "treatment_effect_count": int(treatment_effect),
         "viewer_request_accepted": True,
-        "viewer_business_effect_observed": False,
+        "viewer_business_effect_observed": True,
     })
     if require_same_resource and not same_path:
         evidence.update({

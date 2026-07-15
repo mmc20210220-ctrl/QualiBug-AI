@@ -417,23 +417,16 @@ def compile_experiment_for_obligation(
                 binding["required_state"] = _text(prop.get("from_state"))
     unresolved = unresolved_placeholders(primary_op, binding_plan)
     if unresolved:
-        # Add synthetic bindings for any unresolved placeholders
-        import uuid as _uuid
-        for name in unresolved:
-            binding_plan.append({
-                "target": name,
-                "status": "runtime_resolvable",
-                "source_priority": "synthetic_fallback",
-                "resolver_operations": [],
-                "synthetic_value": str(_uuid.uuid4()) if name.lower().endswith("id") or name.lower() == "id" else "test_value",
-                "value_fingerprint": "",
-            })
-        unresolved = unresolved_placeholders(primary_op, binding_plan)
-    if unresolved:
         return blocked_experiment(
             oid,
             "BLOCKED_MISSING_BINDING",
             ",".join(unresolved[:8]),
+        )
+    if is_write and not write_observers:
+        return blocked_experiment(
+            oid,
+            "BLOCKED_MISSING_OBSERVER",
+            "write_observer",
         )
 
     for fixture in required_fixtures:
@@ -627,9 +620,11 @@ def compile_experiment_for_obligation(
     }
     if effect_observer_ids:
         if not write_observers:
-            # Effect observers requested but no observation GET paths found.
-            # Allow compilation; the write response itself provides evidence.
-            pass
+            return blocked_experiment(
+                oid,
+                "BLOCKED_MISSING_OBSERVER",
+                ",".join(sorted(effect_observer_ids)),
+            )
         else:
             for observer in observers:
                 if _text(observer.get("observer_id")) in effect_observer_ids:

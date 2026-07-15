@@ -314,6 +314,48 @@ def compile_family_protocol(
             },
         }
 
+    if family == "temporal":
+        if method not in {"POST", "PUT", "PATCH", "DELETE"}:
+            return {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_OPERATION",
+                "detail": "temporal_requires_write_operation",
+            }
+        body = source_request_example(operation)
+        if method in {"POST", "PUT", "PATCH"} and not body:
+            return {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_FIXTURE",
+                "detail": "temporal_requires_source_request_example",
+            }
+        expression = _dict(property_spec.get("expression"))
+        window_ms = expression.get("window_ms") or property_spec.get("window_ms")
+        if not isinstance(window_ms, (int, float)) or isinstance(window_ms, bool) or window_ms <= 0:
+            return {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_ASSERTION",
+                "detail": "temporal_requires_positive_source_window_ms",
+            }
+        return {
+            "status": "COMPILED",
+            "control_plan": [],
+            "treatment_plan": [{
+                "step_id": "treatment_1",
+                "actor_ref": treatment_actor_ref,
+                "operation_ref": operation_ref,
+                "intent": "temporal_mutation",
+                "protocol_step": "temporal_write",
+                "body": deepcopy(body),
+                "property_template": _text(property_spec.get("template")),
+                "invariant_ref": _text(property_spec.get("invariant_ref")),
+            }],
+            "observers": [{"observer_id": "temporal_window"}],
+            "assertion": {
+                "kind": "eventual_consistency",
+                "window_ms": window_ms,
+            },
+        }
+
     if family == "validation":
         if method not in {"POST", "PUT", "PATCH", "DELETE"}:
             return {
@@ -326,8 +368,11 @@ def compile_family_protocol(
             property_spec,
         )
         if not mutation:
-            # Generate a basic mutation: change a string field to an invalid value
-            mutation = {"field": "name", "control": "test", "treatment": ""}
+            return {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_FIXTURE",
+                "detail": "validation_requires_source_example_and_request_schema",
+            }
         return {
             "status": "COMPILED",
             "control_plan": [{

@@ -54,6 +54,30 @@ def observe_authorization_comparison(
     treatment_row = _dict(treatment)
     if _text(control_row.get("method")).upper() == "GET":
         return baseline
+    control_path = _text(control_row.get("path")).split("?", 1)[0]
+    treatment_path = _text(treatment_row.get("path")).split("?", 1)[0]
+    same_path = bool(control_path and control_path == treatment_path)
+    control_template = _text(control_row.get("path_template"))
+    treatment_template = _text(treatment_row.get("path_template"))
+    _same_template = bool(
+        control_template
+        and control_template == treatment_template
+    )
+    if require_same_resource and not same_path and not _same_template:
+        evidence = dict(_dict(baseline.get("evidence")))
+        evidence.update({
+            "same_resource_proven": False,
+            "resource_match_basis": "requested_resource_path_mismatch",
+            "owner_can_access": True,
+            "viewer_can_access": None,
+            "leak_detected": None,
+        })
+        return _base._receipt(
+            observer_id="authorization_comparison",
+            status="INDETERMINATE",
+            reason_code="SAME_RESOURCE_NOT_PROVEN",
+            evidence=evidence,
+        )
 
     effect = _dict(business_effect)
     control_effect = effect.get("control_effect_count")
@@ -74,30 +98,11 @@ def observe_authorization_comparison(
         proven_control
         and proven_zero_treatment_effect
         and 200 <= _status(treatment_row) < 300
+        and isinstance(control_row.get("governance_receipt"), dict)
+        and isinstance(treatment_row.get("governance_receipt"), dict)
     ):
         return baseline
 
-    control_path = _text(control_row.get("path")).split("?", 1)[0]
-    treatment_path = _text(treatment_row.get("path")).split("?", 1)[0]
-    same_path = bool(control_path and control_path == treatment_path)
-    # When the exact paths differ but share the same template structure
-    # (only the resource ID segments differ), treat them as targeting the
-    # same resource type. This handles runtime binding resolving different
-    # concrete IDs for control vs treatment while keeping the same endpoint.
-    _same_template = False
-    if not same_path and control_path and treatment_path:
-        _cp = [s for s in control_path.strip("/").split("/")]
-        _tp = [s for s in treatment_path.strip("/").split("/")]
-        if len(_cp) == len(_tp):
-            _same_template = all(
-                a == b or (
-                    # Either segment matches exactly or both look like IDs
-                    a.replace("-", "").replace("_", "").isalnum()
-                    and b.replace("-", "").replace("_", "").isalnum()
-                    and not a.isdigit() and not b.isdigit()
-                )
-                for a, b in zip(_cp, _tp)
-            )
     evidence = dict(_dict(baseline.get("evidence")))
     evidence.update({
         "control_effect_count": int(control_effect),

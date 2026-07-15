@@ -539,7 +539,20 @@ def _select_probes_by_budget(
     per_risk_used: dict[str, int] = {}
     selected: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
-    for probe in sorted(combined, key=lambda p: (-float(p.get("priority_score") or 0), -float(p.get("validated_yield_priority_score") or 0), str(p.get("risk_type")), str(p.get("path")))):
+    ranked = sorted(combined, key=lambda p: (-float(p.get("priority_score") or 0), -float(p.get("validated_yield_priority_score") or 0), str(p.get("risk_type")), str(p.get("path"))))
+    module_representatives: list[dict[str, Any]] = []
+    represented_modules: set[str] = set()
+    for probe in ranked:
+        module = _module_of(probe)
+        if module not in represented_modules:
+            represented_modules.add(module)
+            module_representatives.append(probe)
+    representative_ids = {id(probe) for probe in module_representatives}
+    coverage_first = [
+        *module_representatives,
+        *[probe for probe in ranked if id(probe) not in representative_ids],
+    ]
+    for probe in coverage_first:
         risk = _risk_from_probe(probe)
         candidate_only_flow = mode != "safe" and probe.get("execution_policy") == "candidate_only" and probe.get("source") == "enterprise_business_flow_graph"
         sandbox_reasoning_candidate = probe.get("source") in {"multi_source_business_reasoning", "business_lifecycle_reasoning", "consistency_isolation_reasoning", "business_causality_conservation", "business_population_constraints", "business_event_chain_reasoning", "business_saga_compensation_reasoning", "business_assurance_coverage", "multi_industry_business_reasoning", "enterprise_business_knowledge_asset", "enterprise_testops_journey", "enterprise_testops_permission", "enterprise_testops_system_state", "enterprise_testops_data"} and probe.get("execution_policy") == "sandbox_required"

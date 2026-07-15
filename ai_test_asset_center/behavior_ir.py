@@ -1346,39 +1346,6 @@ def _derive_invariant_relations(model: dict[str, Any]) -> list[dict[str, Any]]:
         relation_type = _invariant_relation_type(invariant)
         op_refs = _list(invariant.get("operation_refs"))
 
-        # Fallback: when no explicit operation_refs, match by token overlap
-        # with operation paths and field dictionaries.
-        if not op_refs:
-            import re as _re
-            # Tokenize both CJK characters and ASCII words
-            def _tokens(text: str) -> set[str]:
-                cjk = set(_re.findall(r'[\u4e00-\u9fff]{1,2}', text.lower()))
-                ascii_words = set(_re.findall(r'[a-z0-9_]+', text.lower()))
-                return cjk | ascii_words
-            inv_tokens = _tokens(_text(invariant.get("description") or ""))
-            if inv_tokens:
-                # Prefer write operations for better protocol compatibility
-                _write_matches = []
-                _read_matches = []
-                for op in operations:
-                    op_path = _text(op.get("path") or op.get("raw_path") or "").lower()
-                    op_summary = _text(op.get("summary") or op.get("description") or "").lower()
-                    op_fields = " ".join(
-                        _text(f.get("field") or f.get("name") or "") if isinstance(f, dict) else _text(f)
-                        for f in _list(op.get("field_dictionary"))
-                    ).lower()
-                    op_text = f"{op_path} {op_summary} {op_fields}"
-                    op_tokens = _tokens(op_text)
-                    overlap = len(inv_tokens & op_tokens)
-                    if overlap >= 1:
-                        is_write = _text(op.get("read_write") or op.get("side_effect_class")) == "write"
-                        (_write_matches if is_write else _read_matches).append(_text(op.get("id")))
-                # Prefer write ops, fall back to read ops
-                op_refs.extend((_write_matches or _read_matches)[:5])
-            # Write back to the invariant so downstream consumers see the match
-            if op_refs:
-                invariant["operation_refs"] = list(op_refs)
-
         for hint in op_refs:
             operation = _resolve_operation(operations, {"operation_ref": hint})
             if not operation:
@@ -1798,39 +1765,6 @@ def build_behavior_ir_from_knowledge_asset(
         )
         entities_by_canonical_name[canonical_name] = entity
         model["entities"].append(entity)
-
-    # ── Infer entity_refs for operations without explicit entity mapping ──
-    # Operations that lack entity_refs (e.g., report endpoints) can't
-    # participate in authorization/isolation obligations. Infer entity
-    # from path segments so the obligation compiler can generate tests.
-    if isinstance(_ops, list):
-        for _op in _ops:
-            if not isinstance(_op, dict):
-                continue
-            if _list(_op.get("entity_refs")):
-                continue
-            _op_path = _norm_path(_text(_op.get("path") or _op.get("raw_path")))
-            _segments = [s for s in _op_path.strip("/").split("/") if s and not s.startswith(":")]
-            _skip = {"admin", "manual-success", "approve", "reject", "cancel", "confirm", "ship", "pay", "validate", "adjust", "consume", "release", "reserve", "reset", "use"}
-            _entity = None
-            for _seg in reversed(_segments):
-                if _seg not in _skip:
-                    _entity = _seg
-                    break
-            if _entity and _entity not in ("api", "v1", "v2", "v3"):
-                _entity_id = f"bir_{hashlib.sha256(f'entity:{_entity}'.encode()).hexdigest()[:16]}"
-                _op["entity_refs"] = [_entity_id]
-                # Ensure the entity exists in the model
-                _existing = {_text(e.get("id")): e for e in _list(model.get("entities")) if isinstance(e, dict)}
-                if _entity_id not in _existing:
-                    model.setdefault("entities", []).append({
-                        "id": _entity_id,
-                        "name": _entity,
-                        "kind": "resource",
-                        "source_refs": [{"source_id": "api_spec", "locator": _entity}],
-                        "confidence": 0.6,
-                        "derivation": "model-inferred",
-                    })
 
     # Actors from permission matrix / roles / runtime actors (secret_ref only)
     actor_names: set[str] = set()
