@@ -347,6 +347,47 @@ def validate_delivery_execution_receipt(
     return dict(expected)
 
 
+def _reproduction_decision(
+    *,
+    oracle: dict[str, Any],
+    observed_phases: set[str],
+    observation_count: int,
+) -> tuple[bool, str]:
+    """Evaluate reproduction against the oracle's declared phase contract."""
+
+    oracle_status = _text(oracle.get("status"))
+    non_violation_reasons = {
+        "PROPERTY_HELD": "ORACLE_NOT_VIOLATED",
+        "BLOCKED": "CONTRACT_ORACLE_BLOCKED",
+        "HARNESS_FAILED": "CONTRACT_ORACLE_HARNESS_FAILED",
+        "INDETERMINATE": "ASSERTION_INDETERMINATE",
+    }
+    if oracle_status in non_violation_reasons:
+        return False, non_violation_reasons[oracle_status]
+    if oracle_status != "VIOLATION":
+        raise DeliveryGateV2Error(
+            f"reproduction_oracle_status_invalid:{oracle_status or 'missing'}"
+        )
+    required = _dict(_dict(oracle.get("activation_receipt")).get("required"))
+    required_treatment = {
+        _text(value)
+        for value in _list(required.get("treatment"))
+        if _text(value)
+    }
+    if not required_treatment:
+        return False, "REPRODUCTION_TREATMENT_REQUIREMENT_MISSING"
+    if observation_count <= 0 or "treatment" not in observed_phases:
+        return False, "REPRODUCTION_TREATMENT_MISSING"
+    required_control = {
+        _text(value)
+        for value in _list(required.get("control"))
+        if _text(value)
+    }
+    if required_control and "control" not in observed_phases:
+        return False, "REPRODUCTION_CONTROL_MISSING"
+    return True, ""
+
+
 def build_reproduction_receipt(
     *,
     execution_receipt: dict[str, Any],
@@ -458,10 +499,10 @@ def build_reproduction_receipt(
         for value in summaries
     ):
         raise DeliveryGateV2Error("reproduction_observation_lineage_mismatch")
-    reproduced = (
-        _text(oracle.get("status")) == "VIOLATION"
-        and phases == {"control", "treatment"}
-        and bool(summaries)
+    reproduced, reproduction_reason = _reproduction_decision(
+        oracle=oracle,
+        observed_phases=phases,
+        observation_count=len(summaries),
     )
     payload = {
         "schema_version": REPRODUCTION_RECEIPT_SCHEMA,
@@ -476,7 +517,7 @@ def build_reproduction_receipt(
             )
         },
         "status": "REPRODUCED" if reproduced else "NOT_REPRODUCED",
-        "reason_code": "" if reproduced else "ORACLE_NOT_VIOLATED",
+        "reason_code": reproduction_reason,
         "oracle_receipt_id": _text(oracle.get("receipt_id")),
         "step_observations": summaries,
         "source_refs": refs,
@@ -595,7 +636,7 @@ def validate_reproduction_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
     if (
         status == "REPRODUCED"
         and (
-            phases != {"control", "treatment"}
+            "treatment" not in phases
             or _text(row.get("reason_code"))
         )
     ):

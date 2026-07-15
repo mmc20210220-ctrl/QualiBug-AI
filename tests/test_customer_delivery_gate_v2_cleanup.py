@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from ai_test_asset_center.customer_delivery_gate_v2 import _cleanup_gate_decision
+import pytest
+
+from ai_test_asset_center.customer_delivery_gate_v2 import (
+    _cleanup_gate_decision,
+    _reproduction_decision,
+)
 
 
 def _execution(
@@ -117,3 +122,61 @@ def test_read_only_execution_requires_not_required_cleanup() -> None:
     )
 
     assert decision == ("DELIVERABLE", [], "NOT_REQUIRED")
+
+
+def test_treatment_only_violation_is_reproduced_when_control_is_not_required() -> None:
+    reproduced, reason = _reproduction_decision(
+        oracle={
+            "status": "VIOLATION",
+            "activation_receipt": {
+                "required": {"control": [], "treatment": ["treatment-1"]},
+            },
+        },
+        observed_phases={"treatment"},
+        observation_count=1,
+    )
+
+    assert reproduced is True
+    assert reason == ""
+
+
+def test_missing_required_control_is_not_reported_as_oracle_not_violated() -> None:
+    reproduced, reason = _reproduction_decision(
+        oracle={
+            "status": "VIOLATION",
+            "activation_receipt": {
+                "required": {
+                    "control": ["control-1"],
+                    "treatment": ["treatment-1"],
+                },
+            },
+        },
+        observed_phases={"treatment"},
+        observation_count=1,
+    )
+
+    assert reproduced is False
+    assert reason == "REPRODUCTION_CONTROL_MISSING"
+
+
+@pytest.mark.parametrize(
+    ("oracle_status", "expected_reason"),
+    [
+        ("PROPERTY_HELD", "ORACLE_NOT_VIOLATED"),
+        ("BLOCKED", "CONTRACT_ORACLE_BLOCKED"),
+        ("HARNESS_FAILED", "CONTRACT_ORACLE_HARNESS_FAILED"),
+        ("INDETERMINATE", "ASSERTION_INDETERMINATE"),
+    ],
+)
+def test_reproduction_preserves_non_violation_oracle_reason(
+    oracle_status: str,
+    expected_reason: str,
+) -> None:
+    reproduced, reason = _reproduction_decision(
+        oracle={"status": oracle_status},
+        observed_phases={"treatment"},
+        observation_count=1,
+    )
+
+    assert reproduced is False
+    assert reason == expected_reason
