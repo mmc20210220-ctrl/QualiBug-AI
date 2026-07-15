@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from itertools import permutations
 from typing import Any
 
 from .behavior_ir import BehaviorIRError, SCHEMA_VERSION as BEHAVIOR_IR_SCHEMA, validate_behavior_ir
+from .real_id_resolver import normalize_path_placeholders
 from .test_obligation import RISK_FAMILIES, dedupe_obligations, make_obligation
 
 
@@ -461,6 +463,8 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
             family = "temporal"
         elif any(token in kind for token in ("visib", "scope", "可见")):
             family = "visibility"
+        elif any(token in kind for token in ("state_machine", "state", "状态", "status_")):
+            family = "state"
         relation_types = {
             "idempotency": {"observes", "produces", "consumes", "transitions"},
             "concurrency": {"observes", "produces", "consumes", "transitions"},
@@ -469,6 +473,7 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
             "temporal": {"transitions", "observes"},
             "visibility": {"scopes", "observes"},
             "validation": {"produces", "consumes", "transitions", "observes"},
+            "state": {"transitions", "observes"},
         }[family]
         invariant_ref = _text(inv.get("id"))
         joined_relations = [
@@ -482,11 +487,33 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
             and _text(relation.get("operation_ref")) in operations_by_id
         ]
         if not joined_relations:
-            coverage_gaps.append(_compile_gap(
-                subject_ref=invariant_ref,
-                relation_types=relation_types,
-            ))
-            continue
+            # Fallback: match invariant to operations by description token overlap
+            _desc_tokens = set(re.findall(r"[\w\u4e00-\u9fff]+", _text(inv.get("description") or "").lower()))
+            _op_ids_from_inv = {
+                _text(ref) for ref in _list(inv.get("operation_refs"))
+                if _text(ref) and _text(ref) in operations_by_id
+            }
+            if _op_ids_from_inv:
+                for oid in _op_ids_from_inv:
+                    joined_relations.append({"operation_ref": oid, "relation_type": "observes"})
+            elif _desc_tokens:
+                # Match by entity name tokens
+                for op in operations:
+                    op_path_tokens = set(re.findall(r"[\w\u4e00-\u9fff]+",
+                        normalize_path_placeholders(_text(op.get("path") or op.get("raw_path"))).lower()))
+                    op_desc_tokens = set(re.findall(r"[\w\u4e00-\u9fff]+",
+                        _text(op.get("summary") or op.get("description") or "").lower()))
+                    if _desc_tokens & (op_path_tokens | op_desc_tokens):
+                        joined_relations.append({
+                            "operation_ref": _text(op.get("id")),
+                            "relation_type": "observes",
+                        })
+            if not joined_relations:
+                coverage_gaps.append(_compile_gap(
+                    subject_ref=invariant_ref,
+                    relation_types=relation_types,
+                ))
+                continue
         relations_by_operation: dict[str, list[dict[str, Any]]] = {}
         for relation in joined_relations:
             relations_by_operation.setdefault(_text(relation.get("operation_ref")), []).append(relation)
