@@ -580,10 +580,6 @@ def install_customer_delivery_gate_patch() -> None:
     original_partition = getattr(_service, "_partition_delivery_tracks", None)
     original_normalizer = getattr(_service, "_normalize_command_center_envelope", None)
 
-    def _strict_partition_delivery_tracks(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        safe_items = [item for item in items if isinstance(item, dict)]
-        return split_customer_delivery_tracks(safe_items)
-
     def _strict_normalize_command_center_envelope(payload: dict[str, Any]) -> dict[str, Any]:
         normalized = original_normalizer(payload) if callable(original_normalizer) else payload
         normalized = _inject_delivery_gate_patch_status(normalized)
@@ -592,7 +588,7 @@ def install_customer_delivery_gate_patch() -> None:
 
     _service._ORIGINAL_PARTITION_DELIVERY_TRACKS = original_partition  # type: ignore[attr-defined]
     _service._ORIGINAL_NORMALIZE_COMMAND_CENTER_ENVELOPE = original_normalizer  # type: ignore[attr-defined]
-    _service._partition_delivery_tracks = _strict_partition_delivery_tracks  # type: ignore[attr-defined]
+    _service._partition_delivery_tracks = split_customer_delivery_tracks  # type: ignore[attr-defined]
     _service._normalize_command_center_envelope = _strict_normalize_command_center_envelope  # type: ignore[attr-defined]
     _service._CUSTOMER_DELIVERY_GATE_PATCHED = True  # type: ignore[attr-defined]
     _service._CUSTOMER_DELIVERY_GATE_PATCH_SOURCE = PATCH_SOURCE  # type: ignore[attr-defined]

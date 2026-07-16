@@ -27,9 +27,35 @@ def test_command_center_service_calls_existing_envelope_normalizer_before_respon
     assert "return self._json(payload)" in service_source
 
 
-def test_command_center_service_normalizer_is_the_remaining_gate_integration_point() -> None:
-    service_source = SERVICE.read_text(encoding="utf-8")
+def test_command_center_service_imports_the_canonical_gate_directly() -> None:
+    from ai_test_asset_center import private_pilot_service
+    from ai_test_asset_center.customer_delivery_gate import split_customer_delivery_tracks
 
-    assert "def _partition_delivery_tracks" in service_source
-    assert "def _normalize_command_center_envelope" in service_source
-    assert "def _is_customer_delivery_risk" in service_source
+    assert private_pilot_service._partition_delivery_tracks is split_customer_delivery_tracks
+
+
+def test_command_center_normalizer_rechecks_prefilled_defects() -> None:
+    from ai_test_asset_center.private_pilot_service import _normalize_command_center_envelope
+
+    candidate = {
+        "title": "Prefilled defect without traceable customer evidence",
+        "bug_status": "reproduced",
+        "gate_passed": True,
+        "repro_method": "GET",
+        "repro_path": "/api/resources",
+        "reproduction": {
+            "method": "GET",
+            "path": "/api/resources",
+            "is_synthetic": False,
+            "har_evidence": {"status_code": 500},
+        },
+        "raw_evidence": {"has_real_evidence": True},
+    }
+
+    normalized = _normalize_command_center_envelope({
+        "data": {"defects": [candidate], "clues": [], "risks": [candidate]},
+    })
+
+    assert normalized["data"]["defects"] == []
+    assert normalized["data"]["risks"] == []
+    assert normalized["data"]["clues"][0]["customer_delivery_gate_reasons"]

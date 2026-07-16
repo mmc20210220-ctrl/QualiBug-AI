@@ -31,7 +31,7 @@ connector export
 cp deploy/private.env.example deploy/private.env
 # Set QUALIBUG_JWT_SECRET to a unique high-entropy value and edit
 # QUALIBUG_PRIVATE_ROOT for the enterprise workspace path.
-python -m ai_test_asset_center.private_pilot_service
+python -m ai_test_asset_center.private_pilot_entrypoint
 ```
 
 Open:

@@ -48,7 +48,7 @@ npm run ci:gate
 ## 反向代理与私有化部署
 
 - 建议在企业网关/反向代理后部署，并显式注入 `QUALIBUG_API_BASE_URL` 指向后端服务入口；未配置时会尝试基于 `Host/X-Forwarded-*` 推导，但在多域名/多级代理场景容易出错。
-- 本地前端开发默认通过 Vite `/api` 代理接入 `python -m ai_test_asset_center.private_pilot_service`，默认端口为 `8088`；如需显式配置，请保持 `QUALIBUG_API_BASE_URL=http://127.0.0.1:8088`。
+- 本地前端开发默认通过 Vite `/api` 代理接入 `python -m ai_test_asset_center.private_pilot_entrypoint`，默认端口为 `8088`；如需显式配置，请保持 `QUALIBUG_API_BASE_URL=http://127.0.0.1:8088`。
 - `AUTH_MODE` 只控制登录体验；真实数据是否接入旧后端由 `QUALIBUG_DATA_MODE` 与 `QUALIBUG_API_BASE_URL` 决定。
 - `AUTH_MODE=oidc` 时需要确保 `/auth/callback` 回调地址可从 IdP 访问；session cookie 为 `httpOnly`，建议开启 HTTPS，并由网关统一处理 `X-Forwarded-Proto/Host`。
 - 静态资源由 Next.js 生成与托管（`/_next/*`），网关需要允许该路径通过；建议开启缓存但注意版本化路径。

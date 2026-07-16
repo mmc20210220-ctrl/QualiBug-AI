@@ -215,7 +215,7 @@ def check_qualibug() -> WatchdogEvent:
             return WatchdogEvent(
                 ts=time.time(), level="WARN", category="qualibug",
                 detail="QualiBug 端口 {} 未监听".format(QUALIBUG_PORT),
-                suggestion="启动 QualiBug: python -m ai_test_asset_center.private_pilot_service"
+                suggestion="启动 QualiBug: python -m ai_test_asset_center.private_pilot_entrypoint"
             )
     except Exception as e:
         return WatchdogEvent(

@@ -50,7 +50,7 @@ Shared UI shell
 
 ```bash
 set QUALIBUG_PRIVATE_ROOT=C:\path\to\qualibug
-python -m ai_test_asset_center.private_pilot_service
+python -m ai_test_asset_center.private_pilot_entrypoint
 ```
 
 Open:

@@ -36,7 +36,7 @@ setup(
     entry_points={
         "console_scripts": [
             "qualibug=aitestops.cli:main",
-            "qualibug-server=ai_test_asset_center.private_pilot_service:run_server",
+            "qualibug-server=ai_test_asset_center.private_pilot_entrypoint:run_server",
         ],
     },
     classifiers=PROJECT.get("classifiers", []),

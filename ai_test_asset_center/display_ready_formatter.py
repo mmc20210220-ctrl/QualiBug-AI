@@ -1255,28 +1255,61 @@ def _build_repro_steps_display(finding: dict, enterprise_ctx: dict | None = None
     if not path:
         method = ""
 
-    # 复现步骤（优先用已有的 reproduction_steps）
+    # 复现步骤只有在显式执行来源可追溯时才算真实；仅有文本列表不构成执行证据。
     real_steps = finding.get("reproduction_steps") or finding.get("reproduce_steps_business") or []
     if not isinstance(real_steps, list):
         real_steps = []
     real_steps = [str(s) for s in real_steps if s]
+    provenance = finding.get("reproduction_steps_provenance") if isinstance(finding.get("reproduction_steps_provenance"), dict) else {}
+    reproduction_record = finding.get("reproduction") if isinstance(finding.get("reproduction"), dict) else {}
+    raw_evidence = finding.get("raw_evidence") if isinstance(finding.get("raw_evidence"), dict) else {}
+    request_raw = raw_evidence.get("request_raw") if isinstance(raw_evidence.get("request_raw"), dict) else {}
+    response_raw = raw_evidence.get("response_raw") if isinstance(raw_evidence.get("response_raw"), dict) else {}
+    captured_execution_steps = bool(
+        real_steps
+        and reproduction_record.get("is_synthetic") is False
+        and raw_evidence.get("has_real_evidence")
+        and request_raw.get("method")
+        and request_raw.get("path")
+        and (response_raw.get("status_code") or response_raw.get("body") or _has_runtime_response(finding))
+        and (raw_evidence.get("timestamp") or finding.get("timestamp"))
+    )
 
-    # 如果有真实步骤，用真实步骤；否则用合成指引（但标记为 synthetic）
-    is_synthetic = False
+    is_synthetic = True
     if real_steps:
         steps = real_steps
+        if provenance:
+            is_synthetic = not (
+                provenance.get("is_synthetic") is False
+                and _clean(provenance.get("status")).lower() in {"observed", "executed", "captured"}
+            )
+        else:
+            is_synthetic = not captured_execution_steps
     else:
-        steps = _generate_default_repro_steps(finding, path, method, ctx)
-        is_synthetic = True  # 标记为合成指引，非真实执行步骤
+        guidance = finding.get("reproduction_guidance") if isinstance(finding.get("reproduction_guidance"), dict) else {}
+        guidance_steps = guidance.get("steps") if isinstance(guidance.get("steps"), list) else []
+        steps = [str(step) for step in guidance_steps if str(step)] or _generate_default_repro_steps(finding, path, method, ctx)
 
+    har = finding.get("har_evidence") if isinstance(finding.get("har_evidence"), dict) else {}
+    request_body = runtime_obs.get("request_body") or request_raw.get("body") or ""
+    if har.get("request_body_truncated"):
+        request_body_status = "truncated"
+    elif request_body not in (None, "") and (
+        har.get("request_body_observed") is True or bool(request_raw.get("body"))
+    ):
+        request_body_status = "observed"
+    else:
+        request_body_status = "missing"
     curl_command = ""
     if path:
         base_url = ctx.get("base_url", "")
         full_url = f"{base_url}{path}" if path.startswith("/") and base_url else (path if path.startswith("http") else f"${{BASE_URL}}{path}")
-        body_part = ""
-        if method in ("POST", "PUT", "PATCH"):
-            body_part = ' -H "Content-Type: application/json" -d \'{"...":"根据业务场景填写"}\''
-        curl_command = f'curl -X {method or "GET"} "{full_url}" -H "Authorization: Bearer <TOKEN>"{body_part} -v'
+        if method not in {"POST", "PUT", "PATCH"} or request_body_status == "observed":
+            body_part = ""
+            if method in {"POST", "PUT", "PATCH"}:
+                body_text = _runtime_body_excerpt(request_body, 20_000)
+                body_part = f" -H \"Content-Type: application/json\" -d '{body_text}'"
+            curl_command = f'curl -X {method or "GET"} "{full_url}"{body_part} -v'
 
     har_evidence_out = None
     if runtime_obs and not _path_mismatch_reasons(finding):
@@ -1294,6 +1327,7 @@ def _build_repro_steps_display(finding: dict, enterprise_ctx: dict | None = None
         "steps": steps,
         "is_synthetic": is_synthetic,
         "curl_command": curl_command,
+        "request_body_status": request_body_status,
         "har_evidence": har_evidence_out,
     }
 
@@ -2332,14 +2366,14 @@ def _build_business_summary(finding: dict, business_impact: dict, bug_status: di
     """生成一句话业务影响摘要。"""
     severity = _clean(finding.get("severity")) or "P2"
     biz_summary = _strip_internal_tags(_clean(business_impact.get("summary") or finding.get("actual_behavior") or finding.get("actual")))
-    module = _clean(business_impact.get("module") or finding.get("source_entity") or "核心业务")
+    module = _clean(business_impact.get("module") or finding.get("source_entity") or "未绑定业务域")
 
     if biz_summary:
         # 截断到合理长度
         if len(biz_summary) > 150:
             biz_summary = biz_summary[:147] + "..."
         return f"【{bug_status['label']}·{severity}】{module}：{biz_summary}"
-    return f"【{bug_status['label']}·{severity}】{module}存在潜在风险，需进一步确认业务影响"
+    return f"【{bug_status['label']}·{severity}】{module}：缺少企业资料支持的业务影响结论"
 
 
 def _build_test_summary(finding: dict, reproduction: dict, bug_status: dict) -> str:
@@ -2475,22 +2509,22 @@ def _format_single_finding(finding: dict, enterprise_ctx: dict | None = None) ->
         affected_scope_parts.append(f"接口 {repro_method} {repro_path}")
     if taxonomy.get("defect_family_label"):
         affected_scope_parts.append(taxonomy["defect_family_label"])
-    affected_scope = "、".join(affected_scope_parts) if affected_scope_parts else "核心业务"
+    affected_scope = "、".join(affected_scope_parts) if affected_scope_parts else "未绑定影响范围"
 
     # 业务影响
     business_impact_raw = finding.get("business_impact")
     if isinstance(business_impact_raw, dict):
         business_impact = {
-            "summary": _strip_internal_tags(_clean(business_impact_raw.get("summary") or finding.get("actual_behavior") or finding.get("actual"))) or "该缺陷可能导致业务流程异常，影响用户体验和业务数据一致性。",
-            "urgency": _clean(business_impact_raw.get("urgency")) or ("高" if severity == "P0" else "中高" if severity == "P1" else "中"),
-            "module": _clean(business_impact_raw.get("module")) or _clean(finding.get("source_entity")) or "核心业务",
+            "summary": _strip_internal_tags(_clean(business_impact_raw.get("summary"))) or "缺少企业资料支持的业务影响结论。",
+            "urgency": _clean(business_impact_raw.get("urgency")) or "待评估",
+            "module": _clean(business_impact_raw.get("module")) or _clean(finding.get("source_entity")) or "未绑定业务域",
         }
     else:
-        biz_text = _strip_internal_tags(_clean(business_impact_raw) or _clean(finding.get("actual_behavior") or finding.get("actual") or finding.get("description")))
+        biz_text = _strip_internal_tags(_clean(business_impact_raw))
         business_impact = {
-            "summary": biz_text or "该缺陷可能导致业务流程异常，影响用户体验和业务数据一致性。",
-            "urgency": "高" if severity == "P0" else "中高" if severity == "P1" else "中",
-            "module": _clean(finding.get("source_entity")) or "核心业务",
+            "summary": biz_text or "缺少企业资料支持的业务影响结论。",
+            "urgency": "待评估",
+            "module": _clean(finding.get("source_entity")) or "未绑定业务域",
         }
 
     # 四层证据状态（透传）

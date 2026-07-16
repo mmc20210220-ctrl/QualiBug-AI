@@ -6,7 +6,7 @@
 
 当前商业化主链路以以下路径为准：
 
-1. 后端入口：`ai_test_asset_center/private_pilot_service.py`
+1. 后端正式入口：`ai_test_asset_center/private_pilot_entrypoint.py`（核心服务实现位于 `private_pilot_service.py`）
 2. Command Center 汇聚：`private_pilot_service.py::_build_command_center()`
 3. Display-ready 统一格式化：`ai_test_asset_center/display_ready_formatter.py::format_findings_display_ready()`
 4. 最终响应兜底清洗：`display_ready_formatter.py::sanitize_customer_evidence_payload()`
@@ -44,7 +44,7 @@ npm run typecheck
 后端：
 
 ```bash
-python -m ai_test_asset_center.private_pilot_service
+python -m ai_test_asset_center.private_pilot_entrypoint
 ```
 
 前端：

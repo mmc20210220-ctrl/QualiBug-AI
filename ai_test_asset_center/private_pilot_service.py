@@ -32,6 +32,8 @@ from .real_id_resolver import normalize_path_placeholders
 from .real_project_onboarding import ROOT, _safe_project_id
 from .scan_counter import increment_scan_counter
 from .campaign_api_contract import CampaignContractError, structured_error
+from .command_center_delivery_contract import normalize_command_center_delivery
+from .customer_delivery_gate import split_customer_delivery_tracks as _partition_delivery_tracks
 
 
 CONFIG_MANAGER_ROLES = {"project_owner", "qa_lead", "security_owner", "testops_admin", "admin"}
@@ -1832,79 +1834,6 @@ def _load_real_project_discovery_payload(root: Path, project_id: str) -> dict[st
     return None
 
 
-def _has_customer_facing_hard_evidence(item: dict[str, Any]) -> bool:
-    raw_evidence = item.get("raw_evidence") if isinstance(item.get("raw_evidence"), dict) else {}
-    reproduction = item.get("reproduction") if isinstance(item.get("reproduction"), dict) else {}
-    har = reproduction.get("har_evidence") if isinstance(reproduction.get("har_evidence"), dict) else {}
-    response_raw = raw_evidence.get("response_raw") if isinstance(raw_evidence.get("response_raw"), dict) else {}
-    db_snapshot = raw_evidence.get("db_snapshot") if isinstance(raw_evidence.get("db_snapshot"), dict) else {}
-    return bool(
-        raw_evidence.get("has_real_evidence")
-        or response_raw
-        or raw_evidence.get("db_snapshot")
-        or raw_evidence.get("logs")
-        or raw_evidence.get("execution_trace")
-        or har
-    )
-
-
-def _has_customer_replay_asset(item: dict[str, Any]) -> bool:
-    raw_evidence = item.get("raw_evidence") if isinstance(item.get("raw_evidence"), dict) else {}
-    reproduction = item.get("reproduction") if isinstance(item.get("reproduction"), dict) else {}
-    db_snapshot = raw_evidence.get("db_snapshot") if isinstance(raw_evidence.get("db_snapshot"), dict) else {}
-    har = reproduction.get("har_evidence") if isinstance(reproduction.get("har_evidence"), dict) else {}
-    request_raw = raw_evidence.get("request_raw") if isinstance(raw_evidence.get("request_raw"), dict) else {}
-    method = str(reproduction.get("method") or item.get("repro_method") or request_raw.get("method") or "").strip().upper()
-    path = str(reproduction.get("path") or item.get("repro_path") or request_raw.get("path") or "").strip()
-    if not method or not path:
-        return False
-    if bool(reproduction.get("is_synthetic")):
-        return False
-    if bool(har):
-        return True
-    return bool(
-        (db_snapshot.get("before") and db_snapshot.get("after"))
-        or db_snapshot.get("assertion")
-    )
-
-
-def _is_customer_delivery_risk(item: dict[str, Any]) -> bool:
-    if not isinstance(item, dict):
-        return False
-    if str(item.get("bug_status") or "") != "reproduced":
-        return False
-    if not bool(item.get("gate_passed")):
-        return False
-    return _has_customer_facing_hard_evidence(item) and _has_customer_replay_asset(item)
-
-
-def _partition_delivery_tracks(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    defects: list[dict[str, Any]] = []
-    clues: list[dict[str, Any]] = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        if _is_customer_delivery_risk(item):
-            defects.append(_annotate_ui_risk_item({
-                **item,
-                "delivery_track": "defect",
-                "customer_delivery_status": "defect",
-                "customer_delivery_label": "客户可交付缺陷",
-                "customer_visible": True,
-            }))
-        else:
-            clues.append(_annotate_ui_risk_item({
-                **item,
-                "delivery_track": "clue",
-                "customer_delivery_status": "clue",
-                "customer_delivery_label": "内部待验证线索",
-                "customer_visible": False,
-            }))
-    defects.sort(key=lambda item: (-float(item.get("priority_score") or 0.0), str(item.get("title") or "")))
-    clues.sort(key=lambda item: (-float(item.get("priority_score") or 0.0), str(item.get("title") or "")))
-    return defects, clues
-
-
 def _collect_track_counts(items: list[dict[str, Any]]) -> tuple[dict[str, int], dict[str, int]]:
     status_counts: dict[str, int] = {}
     severity_counts: dict[str, int] = {}
@@ -2280,6 +2209,7 @@ def _normalize_execution_evidence_summary(*values: Any) -> dict[str, Any]:
 def _normalize_command_center_envelope(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return payload
+    payload = normalize_command_center_delivery(payload)
     data = payload.get("data")
     if not isinstance(data, dict):
         return payload
@@ -5494,66 +5424,39 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             print(f"[CLEANUP] WARNING: {_remaining} internal name fields remain after cleanup", flush=True)
 
         # ── HAR Bridge: enrich findings with real HTTP call evidence ──
-        try:
-            from .har_bridge import enrich_findings_batch_with_har, load_har_entries
-            # Load scan_result.json for HAR entries
-            scan_result_path = root / "platform_outputs" / project_id / "scan_result.json"
-            if scan_result_path.exists():
-                scan_result = self._read_json_dict(scan_result_path)
-                har_entries = load_har_entries(scan_result) if scan_result else []
-                if har_entries:
-                    risks = enrich_findings_batch_with_har(risks, har_entries)
-            # Also check if the current report has auto_har
-            if isinstance(report, dict):
-                har_entries_rpt = load_har_entries(report)
-                if har_entries_rpt:
-                    risks = enrich_findings_batch_with_har(risks, har_entries_rpt)
-        except Exception:
-            pass  # HAR enrichment is best-effort
+        from .har_bridge import enrich_findings_batch_with_har, load_har_entries
+        scan_result_path = root / "platform_outputs" / project_id / "scan_result.json"
+        if scan_result_path.exists():
+            scan_result = self._read_json_dict(scan_result_path)
+            har_entries = load_har_entries(scan_result) if scan_result else []
+            if har_entries:
+                risks = enrich_findings_batch_with_har(risks, har_entries)
+        if isinstance(report, dict):
+            har_entries_rpt = load_har_entries(report)
+            if har_entries_rpt:
+                risks = enrich_findings_batch_with_har(risks, har_entries_rpt)
 
         # ── V3 Evidence Enrichment: three-perspective evidence chain ──
-        # guaranteed mode: never silently drop enrichment, always produce display-ready evidence
-        try:
-            from .evidence_enricher_v3 import enrich_findings_batch, load_enterprise_context
-            enterprise_ctx = load_enterprise_context(project_id, root)
-            risks = enrich_findings_batch(risks, enterprise_ctx)
-        except Exception as e:
-            # Fallback: ensure every finding has at least basic evidence fields
-            _dbg_report(hypothesis_id="E", msg="[WARN] evidence enrichment fallback", data={"error": str(e)})
-            for r in risks:
-                if isinstance(r, dict):
-                    r.setdefault("evidence", {})
-                    r.setdefault("reproduction_steps", [])
-                    r.setdefault("business_impact", {"summary": str(r.get("actual") or r.get("title") or ""), "urgency": "中", "module": "核心业务"})
-                    r.setdefault("investigation_guidance", {"primary_area": "", "relevant_apis": [], "relevant_tables": [], "log_search": "", "sql_verify": "", "trace_id": ""})
+        from .evidence_enricher_v3 import enrich_findings_batch, load_enterprise_context
+        enterprise_ctx = load_enterprise_context(project_id, root)
+        risks = enrich_findings_batch(risks, enterprise_ctx)
 
         # ── Display-Ready Formatting: unify all findings into display-ready JSON ──
-        try:
-            from .display_ready_formatter import (
-                _build_display_contract,
-                _compute_commercial_value,
-                _compute_scores,
-                format_findings_display_ready,
-                sanitize_customer_evidence_payload,
-            )
-            enterprise_ctx_for_fmt = {}
-            try:
-                from .evidence_enricher_v3 import load_enterprise_context as _lec
-                enterprise_ctx_for_fmt = _lec(project_id, root) or {}
-            except Exception:
-                pass
-            raw_display_risks, _display_metrics = format_findings_display_ready(risks, enterprise_ctx_for_fmt, report)
-            sanitized_display_risks = sanitize_customer_evidence_payload(raw_display_risks)
-            display_risks = sanitized_display_risks if isinstance(sanitized_display_risks, list) else []
-            display_metrics = {
-                "scores": _compute_scores(display_risks, report),
-                "commercial_value": _compute_commercial_value(display_risks, report),
-                "display_contract": _build_display_contract(display_risks, report),
-            }
-        except Exception as e:
-            _dbg_report(hypothesis_id="F", msg="[WARN] display_ready_formatter fallback", data={"error": str(e)})
-            display_risks = risks
-            display_metrics = {}
+        from .display_ready_formatter import (
+            _build_display_contract,
+            _compute_commercial_value,
+            _compute_scores,
+            format_findings_display_ready,
+            sanitize_customer_evidence_payload,
+        )
+        raw_display_risks, _display_metrics = format_findings_display_ready(risks, enterprise_ctx, report)
+        sanitized_display_risks = sanitize_customer_evidence_payload(raw_display_risks)
+        display_risks = sanitized_display_risks if isinstance(sanitized_display_risks, list) else []
+        display_metrics = {
+            "scores": _compute_scores(display_risks, report),
+            "commercial_value": _compute_commercial_value(display_risks, report),
+            "display_contract": _build_display_contract(display_risks, report),
+        }
 
         all_display_risks = [
             item for item in display_risks

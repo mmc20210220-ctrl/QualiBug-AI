@@ -75,7 +75,7 @@ platform_outputs/<project>/enterprise_pilot_runtime/
 入口：
 
 ```bash
-python -m ai_test_asset_center.private_pilot_service
+python -m ai_test_asset_center.private_pilot_entrypoint
 ```
 
 - `GET /health`

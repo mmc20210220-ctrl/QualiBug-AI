@@ -14,10 +14,73 @@ from __future__ import annotations
 
 import re
 import json
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from .artifact_redactor import redact_artifact
 from .real_id_resolver import normalize_path_placeholders
+
+
+MAX_REQUEST_BODY_CHARS = 20_000
+
+
+def _serialize_redacted_request_body(value: Any) -> tuple[str, bool]:
+    """Serialize a captured request body without leaking credential values."""
+    parsed = value
+    if isinstance(value, str) and value.strip().startswith(("{", "[")):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            parsed = value
+    redacted, _receipt = redact_artifact(parsed)
+    if isinstance(redacted, str):
+        text = redacted
+    else:
+        text = json.dumps(redacted, ensure_ascii=False, separators=(",", ":"))
+    if len(text) <= MAX_REQUEST_BODY_CHARS:
+        return text, False
+    return text[:MAX_REQUEST_BODY_CHARS], True
+
+
+def _observed_request_body(request: dict[str, Any]) -> dict[str, Any]:
+    """Return request-body evidence only when it came from a captured request."""
+    post_data = request.get("postData") if isinstance(request.get("postData"), dict) else {}
+    if post_data.get("text") not in (None, ""):
+        body, truncated = _serialize_redacted_request_body(post_data["text"])
+        return {
+            "request_body": body,
+            "request_body_observed": True,
+            "request_body_source": "har.request.postData.text",
+            "request_body_truncated": truncated,
+        }
+
+    if request.get("body_observed") is True and request.get("body") not in (None, ""):
+        body, truncated = _serialize_redacted_request_body(request["body"])
+        return {
+            "request_body": body,
+            "request_body_observed": True,
+            "request_body_source": str(request.get("body_source") or "har.request.body"),
+            "request_body_truncated": truncated,
+        }
+
+    # auto_har runtime rows predate the explicit body_observed flag. Their
+    # request.body value is still a captured transport value, not an example.
+    if request.get("body") not in (None, ""):
+        body, truncated = _serialize_redacted_request_body(request["body"])
+        return {
+            "request_body": body,
+            "request_body_observed": True,
+            "request_body_source": "har.request.body",
+            "request_body_truncated": truncated,
+        }
+
+    return {
+        "request_body": "",
+        "request_body_observed": False,
+        "request_body_source": "",
+        "request_body_truncated": False,
+    }
 
 
 def _extract_api_path(url: str) -> str:
@@ -204,6 +267,7 @@ def enrich_finding_with_har(
     best = matches[0]
     req = best.get("request", {})
     resp = best.get("response", {})
+    request_body_evidence = _observed_request_body(req)
     
     har_evidence = {
         "method": req.get("method", ""),
@@ -213,6 +277,7 @@ def enrich_finding_with_har(
         "response_body": resp.get("body", "")[:500],
         "actor": best.get("_actor", ""),
         "duration_ms": best.get("time", 0),
+        **request_body_evidence,
     }
     
     enriched["har_evidence"] = har_evidence
@@ -243,6 +308,7 @@ def enrich_finding_with_har(
             "method": m.get("request", {}).get("method", ""),
             "url": m.get("request", {}).get("url", ""),
             "status": m.get("response", {}).get("status", 0),
+            "request_body_observed": _observed_request_body(m.get("request", {}))["request_body_observed"],
         }
         for m in matches[:5]
     ]
@@ -274,31 +340,43 @@ def load_playwright_har(har_file_path: str | Path) -> list[dict[str, Any]]:
     """Load a Playwright-generated HAR file (standard HAR 1.2 format).
 
     Extracts entries into the same format used by match_finding_to_har()
-    and enrich_finding_with_har(). Returns empty list on missing/corrupt files.
+    and enrich_finding_with_har(). A missing optional file returns no entries;
+    a present but malformed artifact raises so evidence loss stays observable.
     """
     path = Path(har_file_path)
     if not path.exists() or not path.is_file():
         return []
     try:
         raw = json.loads(path.read_text(encoding="utf-8", errors="replace") or "{}")
-    except Exception:
-        return []
-    log = raw.get("log") if isinstance(raw, dict) else {}
-    entries = log.get("entries") if isinstance(log, dict) else []
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid HAR JSON: {path}") from exc
+    if not isinstance(raw, dict) or not isinstance(raw.get("log"), dict):
+        raise ValueError(f"HAR root must contain a log object: {path}")
+    log = raw["log"]
+    entries = log.get("entries")
     if not isinstance(entries, list):
-        return []
+        raise ValueError(f"HAR log.entries must be a list: {path}")
     # Normalize each entry to the format expected by match_finding_to_har
     normalized: list[dict[str, Any]] = []
-    for entry in entries:
+    for index, entry in enumerate(entries):
         if not isinstance(entry, dict):
-            continue
+            raise ValueError(f"HAR entry {index} must be an object: {path}")
         request = entry.get("request") if isinstance(entry.get("request"), dict) else {}
         response = entry.get("response") if isinstance(entry.get("response"), dict) else {}
+        request_body_evidence = _observed_request_body(request)
+        normalized_request: dict[str, Any] = {
+            "method": str(request.get("method") or "GET").upper(),
+            "url": str(request.get("url") or ""),
+        }
+        if request_body_evidence["request_body_observed"]:
+            normalized_request.update({
+                "body": request_body_evidence["request_body"],
+                "body_observed": True,
+                "body_source": request_body_evidence["request_body_source"],
+                "body_truncated": request_body_evidence["request_body_truncated"],
+            })
         normalized.append({
-            "request": {
-                "method": str(request.get("method") or "GET").upper(),
-                "url": str(request.get("url") or ""),
-            },
+            "request": normalized_request,
             "response": {
                 "status": int(response.get("status") or 0),
                 "body": str(response.get("content", {}).get("text", "") if isinstance(response.get("content"), dict) else ""),
