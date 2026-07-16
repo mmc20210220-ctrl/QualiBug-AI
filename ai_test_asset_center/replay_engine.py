@@ -19,6 +19,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
+from .credential_crypto import (
+    decrypt as _decrypt_credential,
+    is_encrypted as _is_encrypted_credential,
+)
+
 
 class ReplayEngine:
     """实时复现引擎：真实调用被测系统接口重新触发 Bug。"""
@@ -27,6 +32,7 @@ class ReplayEngine:
         self.root = root
         self.project_id = project_id
         self._config: dict | None = None
+        self._connector_config: dict | None = None
 
     # ── 配置加载 ──────────────────────────────────────────────────────
 
@@ -39,10 +45,42 @@ class ReplayEngine:
             self._config = {}
             return self._config
         try:
-            self._config = json.loads(config_path.read_text(encoding="utf-8"))
-        except Exception:
-            self._config = {}
+            parsed = json.loads(config_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"invalid replay service config: {config_path}") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError(f"replay service config must be an object: {config_path}")
+        services = parsed.get("services", [])
+        if not isinstance(services, list) or any(not isinstance(item, dict) for item in services):
+            raise ValueError(f"replay service config services must be a list of objects: {config_path}")
+        self._config = parsed
         return self._config
+
+    def _load_connector_config(self) -> dict:
+        """Load and validate the connector registry used by replay."""
+        if self._connector_config is not None:
+            return self._connector_config
+        connector_path = (
+            self.root
+            / "platform_workspace"
+            / self.project_id
+            / "enterprise_pilot_runtime"
+            / "connector_registry.json"
+        )
+        if not connector_path.exists():
+            self._connector_config = {}
+            return self._connector_config
+        try:
+            parsed = json.loads(connector_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"invalid replay connector config: {connector_path}") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError(f"replay connector config must be an object: {connector_path}")
+        connectors = parsed.get("connectors", [])
+        if not isinstance(connectors, list) or any(not isinstance(item, dict) for item in connectors):
+            raise ValueError(f"replay connector config connectors must be a list of objects: {connector_path}")
+        self._connector_config = parsed
+        return self._connector_config
 
     def _get_base_url(self) -> str:
         """获取被测系统的 base_url：优先 multi_service_config.json，其次 connector_registry.json"""
@@ -54,17 +92,12 @@ class ReplayEngine:
                 return str(svc["base_url"]).rstrip("/")
 
         # 2. 从 connector_registry.json 获取（endpoint_ref 字段）
-        connector_path = self.root / "platform_workspace" / self.project_id / "enterprise_pilot_runtime" / "connector_registry.json"
-        if connector_path.exists():
-            try:
-                conn_data = json.loads(connector_path.read_text(encoding="utf-8"))
-                for conn in (conn_data.get("connectors") or []):
-                    if isinstance(conn, dict) and conn.get("enabled", True):
-                        endpoint = str(conn.get("endpoint_ref") or "").strip().rstrip("/")
-                        if endpoint and endpoint.startswith("http"):
-                            return endpoint
-            except Exception:
-                pass
+        conn_data = self._load_connector_config()
+        for conn in (conn_data.get("connectors") or []):
+            if conn.get("enabled", True):
+                endpoint = str(conn.get("endpoint_ref") or "").strip().rstrip("/")
+                if endpoint and endpoint.startswith("http"):
+                    return endpoint
 
         # 3. Fallback: 本地开发默认地址
         return ""
@@ -80,43 +113,24 @@ class ReplayEngine:
             auth = svc.get("auth") or {}
             bearer = auth.get("bearer_token") or ""
             if bearer:
-                try:
-                    from .credential_crypto import decrypt as _dec, is_encrypted as _is_enc
-                    if _is_enc(bearer):
-                        bearer = _dec(bearer)
-                except Exception:
-                    pass
+                if _is_encrypted_credential(bearer):
+                    bearer = _decrypt_credential(bearer)
                 return "Authorization", f"Bearer {bearer}"
             api_key = auth.get("api_key") or ""
             if api_key:
-                try:
-                    from .credential_crypto import decrypt as _dec, is_encrypted as _is_enc
-                    if _is_enc(api_key):
-                        api_key = _dec(api_key)
-                except Exception:
-                    pass
+                if _is_encrypted_credential(api_key):
+                    api_key = _decrypt_credential(api_key)
                 return "X-API-Key", api_key
 
         # 2. 从 connector_registry.json 获取凭证
-        connector_path = self.root / "platform_workspace" / self.project_id / "enterprise_pilot_runtime" / "connector_registry.json"
-        if connector_path.exists():
-            try:
-                conn_data = json.loads(connector_path.read_text(encoding="utf-8"))
-                for conn in (conn_data.get("connectors") or []):
-                    if not isinstance(conn, dict) or not conn.get("enabled", True):
-                        continue
-                    cred_ref = str(conn.get("credential_ref") or "").strip()
-                    if cred_ref:
-                        # 尝试从 credentials store 读取
-                        try:
-                            from .credential_crypto import decrypt as _dec, is_encrypted as _is_enc
-                            if _is_enc(cred_ref):
-                                token = _dec(cred_ref)
-                                return "Authorization", f"Bearer {token}"
-                        except Exception:
-                            pass
-            except Exception:
-                pass
+        conn_data = self._load_connector_config()
+        for conn in (conn_data.get("connectors") or []):
+            if not conn.get("enabled", True):
+                continue
+            cred_ref = str(conn.get("credential_ref") or "").strip()
+            if cred_ref and _is_encrypted_credential(cred_ref):
+                token = _decrypt_credential(cred_ref)
+                return "Authorization", f"Bearer {token}"
 
         return "Authorization", ""
 

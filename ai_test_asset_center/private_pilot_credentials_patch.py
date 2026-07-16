@@ -21,6 +21,10 @@ CREDENTIAL_KEY_ENV = "QUALIBUG_CRED_ENC_KEY"
 MASKED_SECRET = "********"
 
 
+class CredentialEncryptionUnavailableError(RuntimeError):
+    """Credential persistence cannot guarantee encryption at rest."""
+
+
 def text(value: Any) -> str:
     return str(value or "").strip()
 
@@ -45,17 +49,22 @@ def ensure_local_credential_encryption_key(root: Path) -> str:
             key = key_path.read_text(encoding="utf-8").strip()
         else:
             key = secrets.token_urlsafe(48)
-            key_path.write_text(key, encoding="utf-8")
             try:
-                key_path.chmod(0o600)
-            except Exception:
-                pass
-        if key:
-            os.environ[CREDENTIAL_KEY_ENV] = key
-            return "local_private_key_file"
-    except Exception:
-        pass
-    return "missing"
+                with key_path.open("x", encoding="utf-8") as handle:
+                    handle.write(key)
+            except FileExistsError:
+                key = key_path.read_text(encoding="utf-8").strip()
+            key_path.chmod(0o600)
+    except Exception as exc:
+        raise CredentialEncryptionUnavailableError(
+            f"credential encryption key provisioning failed: {exc}"
+        ) from exc
+    if not key:
+        raise CredentialEncryptionUnavailableError(
+            f"credential encryption key file is empty: {key_path}"
+        )
+    os.environ[CREDENTIAL_KEY_ENV] = key
+    return "local_private_key_file"
 
 
 def mask_secret_field(container: dict[str, Any], key: str, project: str, service: str, ref_path: str) -> None:
@@ -108,8 +117,8 @@ def mask_service_credentials_for_frontend(project: str, services: list[Any]) -> 
     return masked_services
 
 
-def credential_storage_status(root: Path) -> dict[str, Any]:
-    source = ensure_local_credential_encryption_key(root)
+def credential_storage_status(root: Path, *, key_source: str | None = None) -> dict[str, Any]:
+    source = key_source or ensure_local_credential_encryption_key(root)
     return {
         "mode": "encrypted_at_rest",
         "key_source": source,
@@ -142,8 +151,22 @@ def install_service_credentials_patch(*, patch_source: str) -> None:
     original_get_credentials = getattr(_service.PrivatePilotHandler, "_handle_get_service_credentials")
     original_save_credentials = getattr(_service.PrivatePilotHandler, "_handle_save_service_credentials")
 
+    def _encryption_unavailable(self: Any, project: str, exc: Exception) -> Any:
+        return self._json(
+            {
+                "ok": False,
+                "error": "CREDENTIAL_ENCRYPTION_UNAVAILABLE",
+                "message": str(exc),
+                "project": project,
+            },
+            503,
+        )
+
     def _handle_get_service_credentials_masked(self: Any, project: str, root: Path) -> Any:
-        ensure_local_credential_encryption_key(root)
+        try:
+            key_source = ensure_local_credential_encryption_key(root)
+        except CredentialEncryptionUnavailableError as exc:
+            return _encryption_unavailable(self, project, exc)
         try:
             services = load_services_config(root, project)
         except Exception as exc:
@@ -160,7 +183,7 @@ def install_service_credentials_patch(*, patch_source: str) -> None:
             {
                 "project": project,
                 "services": mask_service_credentials_for_frontend(project, services),
-                "credential_storage": credential_storage_status(root),
+                "credential_storage": credential_storage_status(root, key_source=key_source),
             }
         )
 
@@ -170,7 +193,10 @@ def install_service_credentials_patch(*, patch_source: str) -> None:
         root: Path,
         body: dict[str, Any],
     ) -> Any:
-        ensure_local_credential_encryption_key(root)
+        try:
+            ensure_local_credential_encryption_key(root)
+        except CredentialEncryptionUnavailableError as exc:
+            return _encryption_unavailable(self, project, exc)
         return original_save_credentials(self, project, root, body)
 
     _service.PrivatePilotHandler._handle_get_service_credentials = _handle_get_service_credentials_masked

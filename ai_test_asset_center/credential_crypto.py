@@ -29,6 +29,10 @@ _PBKDF2_ITER = 100_000
 _PREFIX = "enc$v1$"
 
 
+class CredentialDecryptionError(ValueError):
+    """An encrypted credential cannot be authenticated or decrypted."""
+
+
 def _master_key() -> bytes | None:
     raw = os.environ.get(_MASTER_KEY_ENV, "").strip()
     return raw.encode("utf-8") if raw else None
@@ -83,34 +87,39 @@ def decrypt(value: str) -> str:
     """Decrypt a value produced by :func:`encrypt`.
 
     Non-encrypted (plaintext) values are returned unchanged so that legacy
-    config files keep working. Returns an empty string if the value is
-    encrypted but no key is configured or the MAC verification fails.
+    config files keep working. Encrypted values fail closed when their key is
+    unavailable, their envelope is malformed, or authentication fails.
     """
     if not isinstance(value, str) or not value:
         return value or ""
     if not value.startswith(_PREFIX):
         return value  # plaintext — backward compatibility
+    rest = value[len(_PREFIX):]
+    parts = rest.split("$")
+    if len(parts) != 4:
+        raise CredentialDecryptionError("encrypted credential envelope is malformed")
     try:
-        rest = value[len(_PREFIX):]
-        parts = rest.split("$")
-        if len(parts) != 4:
-            return ""
-        salt = base64.b64decode(parts[0])
-        nonce = base64.b64decode(parts[1])
-        tag = base64.b64decode(parts[2])
-        ct = base64.b64decode(parts[3])
-        master = _master_key()
-        if not master:
-            return ""  # encrypted value but no key available
-        enc_key, mac_key = _derive_keys(master, salt)
-        expected_tag = hmac.new(mac_key, nonce + ct, hashlib.sha256).digest()
-        if not hmac.compare_digest(tag, expected_tag):
-            return ""  # tampered or wrong key
-        ks = _keystream(enc_key, nonce, len(ct))
-        pt = bytes(a ^ b for a, b in zip(ct, ks))
+        salt = base64.b64decode(parts[0], validate=True)
+        nonce = base64.b64decode(parts[1], validate=True)
+        tag = base64.b64decode(parts[2], validate=True)
+        ct = base64.b64decode(parts[3], validate=True)
+    except Exception as exc:
+        raise CredentialDecryptionError("encrypted credential envelope is malformed") from exc
+    if len(salt) != 16 or len(nonce) != 16 or len(tag) != hashlib.sha256().digest_size:
+        raise CredentialDecryptionError("encrypted credential envelope has invalid field sizes")
+    master = _master_key()
+    if not master:
+        raise CredentialDecryptionError("encrypted credential master key is unavailable")
+    enc_key, mac_key = _derive_keys(master, salt)
+    expected_tag = hmac.new(mac_key, nonce + ct, hashlib.sha256).digest()
+    if not hmac.compare_digest(tag, expected_tag):
+        raise CredentialDecryptionError("encrypted credential authentication failed")
+    ks = _keystream(enc_key, nonce, len(ct))
+    pt = bytes(a ^ b for a, b in zip(ct, ks))
+    try:
         return pt.decode("utf-8")
-    except Exception:
-        return ""
+    except UnicodeDecodeError as exc:
+        raise CredentialDecryptionError("encrypted credential payload is not valid UTF-8") from exc
 
 
 def is_encrypted(value: str) -> bool:
