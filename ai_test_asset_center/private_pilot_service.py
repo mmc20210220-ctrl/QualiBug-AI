@@ -1298,15 +1298,28 @@ def _issue_runtime_approval_for_result(
         return ""
     return str(approval.get("approval_id") or "").strip()
 
-def _tenant_from_headers(headers: dict) -> str:
-    """Resolve tenant from request headers (Bearer JWT, Cookie, or API key)."""
-    # 1. Bearer JWT
-    auth = headers.get("Authorization") or headers.get("authorization") or ""
-    if auth.startswith("Bearer "):
-        from . import jwt_auth as _ja
-        payload = _ja.verify_token(auth[7:])
-        if payload:
-            return str(payload.get("sub", ""))
+class TenantAuthenticationError(Exception):
+    """An explicitly supplied tenant credential could not be authenticated."""
+
+
+def _tenant_from_headers(headers: dict, *, root: Path | None = None) -> str:
+    """Resolve tenant identity, rejecting invalid explicit credentials."""
+    # Credential precedence is fail-closed: once a caller supplies a higher-
+    # priority credential, it must authenticate and cannot fall through to a
+    # lower-priority credential or the local development tenant.
+    auth_present = "Authorization" in headers or "authorization" in headers
+    auth = str(headers.get("Authorization") or headers.get("authorization") or "").strip()
+    if auth_present:
+        if not auth.startswith("Bearer ") or not auth[7:].strip():
+            raise TenantAuthenticationError("invalid bearer token")
+        try:
+            payload = jwt_auth.verify_token(auth[7:].strip())
+        except Exception as exc:
+            raise TenantAuthenticationError(f"bearer token verification failed: {exc}") from exc
+        tenant_id = str(payload.get("sub") or "").strip() if isinstance(payload, dict) else ""
+        if not tenant_id:
+            raise TenantAuthenticationError("invalid bearer token")
+        return tenant_id
     # 2. HttpOnly Cookie (set by /api/auth/login) — preferred over localStorage
     #    because it is not readable by JavaScript, mitigating XSS token theft.
     cookie = headers.get("Cookie") or headers.get("cookie") or ""
@@ -1317,22 +1330,28 @@ def _tenant_from_headers(headers: dict) -> str:
             ck.load(cookie)
             morsel = ck.get("qualibug_token")
             if morsel:
-                from . import jwt_auth as _ja
-                payload = _ja.verify_token(morsel.value)
-                if payload:
-                    return str(payload.get("sub", ""))
-        except Exception:
-            pass
+                payload = jwt_auth.verify_token(morsel.value)
+                tenant_id = str(payload.get("sub") or "").strip() if isinstance(payload, dict) else ""
+                if not tenant_id:
+                    raise TenantAuthenticationError("invalid cookie token")
+                return tenant_id
+        except TenantAuthenticationError:
+            raise
+        except Exception as exc:
+            raise TenantAuthenticationError(f"cookie token verification failed: {exc}") from exc
     # 3. API Key
-    api_key = headers.get("X-API-Key") or headers.get("x-api-key") or ""
-    if api_key:
-        from . import db_persistence as _dp
+    api_key_present = "X-API-Key" in headers or "x-api-key" in headers
+    api_key = str(headers.get("X-API-Key") or headers.get("x-api-key") or "").strip()
+    if api_key_present:
+        if not api_key:
+            raise TenantAuthenticationError("invalid API key")
         try:
-            root = _root()
-            tid = _dp.verify_api_key(root, api_key)
-            if tid: return tid
-        except Exception:
-            pass
+            tenant_id = str(db_persist.verify_api_key(root or _root(), api_key) or "").strip()
+        except Exception as exc:
+            raise TenantAuthenticationError(f"API key verification failed: {exc}") from exc
+        if not tenant_id:
+            raise TenantAuthenticationError("invalid API key")
+        return tenant_id
     return _current_tenant()
 
 _TENANT = _current_tenant()
@@ -2694,7 +2713,28 @@ class PrivatePilotHandler(BaseHTTPRequestHandler):
         return _safe_project_id((query.get("project") or [""])[0])
 
     def _request_tenant(self) -> str:
-        return _tenant_from_headers(dict(self.headers))
+        tenant_id = str(getattr(self, "_validated_tenant_id", "") or "").strip()
+        if tenant_id:
+            return tenant_id
+        tenant_id = _tenant_from_headers(dict(self.headers), root=self._root())
+        self._validated_tenant_id = tenant_id
+        return tenant_id
+
+    def _require_tenant(self, root: Path) -> str | None:
+        try:
+            tenant_id = _tenant_from_headers(dict(self.headers), root=root)
+        except TenantAuthenticationError as exc:
+            self._json(
+                {
+                    "ok": False,
+                    "error": "INVALID_TENANT_CREDENTIAL",
+                    "message": str(exc),
+                },
+                401,
+            )
+            return None
+        self._validated_tenant_id = tenant_id
+        return tenant_id
 
     def _body(self) -> dict[str, Any]:
         size = int(self.headers.get("Content-Length", "0") or 0)
@@ -3010,6 +3050,8 @@ class PrivatePilotHandler(BaseHTTPRequestHandler):
         actor = self._require_actor()
         if actor is None:
             return
+        if self._require_tenant(root) is None:
+            return
         _route_parts = [urllib.parse.unquote(part) for part in parsed.path.split("/") if part]
         _route_project = (
             _route_parts[3]
@@ -3048,7 +3090,7 @@ class PrivatePilotHandler(BaseHTTPRequestHandler):
             return self._render_findings(project, root)
         if parsed.path == "/api/v1/projects":
             # Merge DB projects + filesystem-discovered projects (dedup by project_id)
-            tenant_id = _tenant_from_headers(dict(self.headers))
+            tenant_id = self._request_tenant()
             try:
                 db_persist.init_db(root)
                 items = db_persist.list_projects(root, tenant_id)
@@ -3443,6 +3485,8 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         actor = self._require_actor()
         if actor is None:
             return
+        if self._require_tenant(root) is None:
+            return
         try:
             body = self._body()
             route_project = ""
@@ -3814,7 +3858,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             state.pop("termination", None)
             _write_json_object_atomic(state_file, state)
 
-        tenant_id = _tenant_from_headers(dict(self.headers))
+        tenant_id = self._request_tenant()
         thread_entry = {"stop": False, "round": 0, "converged": False, "started_at": time.time()}
         _continuous_threads[key] = thread_entry
 
@@ -5202,7 +5246,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         # ── 2. 从数据库加载（补充源，用真实 tenant_id 保证租户隔离）──
         try:
             from . import db_persistence as dbp
-            tenant_id = _tenant_from_headers(dict(self.headers))
+            tenant_id = self._request_tenant()
             db_docs = dbp.get_knowledge_docs(root, tenant_id, project_id)
             for d in db_docs:
                 content = ""
@@ -5398,7 +5442,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         # 这是"bug 货架"模型的核心：只要 bug 没修复（status='open'），
         # 就一直保留在列表里，即使本次扫描没触发也要展示。
         # 注意：只加载不在当前 report findings 中的（避免双重计算）
-        tenant_id = _tenant_from_headers(dict(self.headers))
+        tenant_id = self._request_tenant()
         cumulative = db_persist.get_cumulative_findings(root, tenant_id, project_id)
         if cumulative:
             import re as _re2
@@ -5938,7 +5982,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         if spectrum:
             data["spectrum"] = spectrum
         # ── 累积 findings 统计 + continuous 状态 ──
-        tenant_id = _tenant_from_headers(dict(self.headers))
+        tenant_id = self._request_tenant()
         data["cumulative_stats"] = db_persist.get_finding_stats(root, tenant_id, project_id)
         if commercial_assets:
             data["commercial_assets"] = commercial_assets
