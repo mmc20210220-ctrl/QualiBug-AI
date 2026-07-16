@@ -30,6 +30,68 @@ def _confirmed_findings(value: Any) -> list[dict[str, Any]]:
     return results
 
 
+def reconcile_release_gate_with_run_readiness(
+    release_gate: dict[str, Any] | None,
+    run_delivery_readiness: dict[str, Any],
+) -> dict[str, Any]:
+    """Qualify the legacy gate with canonical current-run publication readiness."""
+
+    gate = dict(_record(release_gate))
+    readiness = _record(run_delivery_readiness)
+    if readiness.get("schema_version") != "qualibug.run-delivery-readiness.v1":
+        raise ValueError("run_delivery_readiness_schema_invalid")
+    release_ready = readiness.get("release_ready")
+    if not isinstance(release_ready, bool):
+        raise ValueError("run_delivery_readiness_release_ready_invalid")
+    status = _text(readiness.get("status")).upper()
+    if release_ready != (status == "READY"):
+        identities = _record(readiness.get("identities"))
+        raise ValueError(
+            "run_delivery_readiness_contradiction:"
+            f"campaign={_text(identities.get('campaign_id'))}:"
+            f"run={_text(identities.get('run_id'))}:status={status}:"
+            f"release_ready={release_ready}"
+        )
+
+    previous = {
+        "verdict": _text(gate.get("verdict")) or "not_ready",
+        "status": _text(gate.get("status")) or "inconclusive",
+    }
+    reasons = [dict(item) for item in _list(gate.get("reasons")) if isinstance(item, dict)]
+    existing_codes = {_text(item.get("code")) for item in reasons}
+    for code in _list(readiness.get("reason_codes")):
+        normalized = _text(code)
+        if normalized and normalized not in existing_codes:
+            reasons.append({
+                "code": normalized,
+                "detail": "current_run_formal_finding_publication_not_ready",
+                "source": "run_delivery_readiness",
+            })
+            existing_codes.add(normalized)
+
+    if not release_ready:
+        if previous["verdict"] == "fail":
+            gate["verdict"] = "fail"
+            gate["status"] = "blocked"
+        else:
+            gate["verdict"] = "not_ready"
+            gate["status"] = "inconclusive"
+    else:
+        gate.setdefault("verdict", previous["verdict"])
+        gate.setdefault("status", previous["status"])
+    gate.update({
+        "schema_version": _text(gate.get("schema_version")) or "qualibug-release-gate-v1",
+        "scope": "current_run_formal_finding_publication",
+        "release_ready": release_ready and gate["verdict"] == "pass",
+        "eligibility_status": status,
+        "pre_reconciliation": previous,
+        "run_delivery_readiness_schema_version": readiness["schema_version"],
+        "reasons": reasons,
+        "identities": dict(_record(readiness.get("identities"))),
+    })
+    return gate
+
+
 def evaluate_release_gate(
     *,
     campaign: dict[str, Any] | None,

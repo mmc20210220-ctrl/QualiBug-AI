@@ -419,6 +419,215 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _non_negative_int(value: Any, *, field: str, identities: dict[str, str]) -> int:
+    if isinstance(value, bool):
+        raise MainlineContractError(
+            f"run_delivery_projection_invalid:{field}:identities={identities}"
+        )
+    try:
+        parsed = int(value or 0)
+    except (TypeError, ValueError) as exc:
+        raise MainlineContractError(
+            f"run_delivery_projection_invalid:{field}:identities={identities}"
+        ) from exc
+    if parsed < 0:
+        raise MainlineContractError(
+            f"run_delivery_projection_invalid:{field}:identities={identities}"
+        )
+    return parsed
+
+
+def build_coverage_gap_projection(scan_result: dict[str, Any]) -> dict[str, Any]:
+    """Aggregate explicit gaps from each discovery stage without inventing coverage."""
+
+    result = _dict(scan_result)
+    v12 = _dict(result.get("v12"))
+    stage_values = {
+        "input": result.get("input_gaps"),
+        "legacy_scan": result.get("coverage_gaps"),
+        "behavior_ir": _dict(result.get("behavior_ir") or v12.get("behavior_ir")).get("coverage_gaps"),
+        "test_obligations": _dict(
+            result.get("test_obligations") or v12.get("test_obligations")
+        ).get("coverage_gaps"),
+    }
+    by_stage: dict[str, int] = {}
+    for stage, value in stage_values.items():
+        if value is None:
+            continue
+        if not isinstance(value, list):
+            raise MainlineContractError(f"coverage_gap_projection_invalid:{stage}")
+        if value:
+            by_stage[stage] = len(value)
+    pipeline = _dict(result.get("pipeline_health") or v12.get("pipeline_health"))
+    terminal_reasons = {
+        _text(code): int(count)
+        for code, count in _dict(pipeline.get("terminal_reason_counts")).items()
+        if _text(code) and int(count or 0) > 0
+    }
+    blocker_reasons = {
+        code: count
+        for code, count in terminal_reasons.items()
+        if code.startswith("BLOCKED_")
+    }
+    return {
+        "schema_version": "qualibug.discovery-coverage-gap-projection.v1",
+        "total": sum(by_stage.values()),
+        "by_stage": by_stage,
+        "terminal_reason_counts": terminal_reasons,
+        "blocked_reason_counts": blocker_reasons,
+    }
+
+
+def build_run_delivery_readiness_projection(
+    scan_result: dict[str, Any],
+    *,
+    formal_count_projection: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Decide current-run formal publication eligibility from runtime SSOTs."""
+
+    result = _dict(scan_result)
+    v12 = _dict(result.get("v12"))
+    pipeline = _dict(result.get("pipeline_health") or v12.get("pipeline_health"))
+    ledger = _dict(
+        result.get("obligation_attempt_ledger") or v12.get("obligation_attempt_ledger")
+    )
+    mainline = _dict(result.get("mainline_run") or v12.get("mainline_run"))
+    campaign = _dict(result.get("campaign"))
+    slice_ledger = _dict(result.get("behavior_slice_ledger") or v12.get("behavior_slice_ledger"))
+    evidence_bundle = _dict(result.get("evidence_bundle"))
+    identities = {
+        key: value
+        for key, value in {
+            "campaign_id": _text(
+                campaign.get("campaign_id")
+                or mainline.get("campaign_id")
+                or ledger.get("campaign_id")
+            ),
+            "run_id": _text(mainline.get("run_id") or ledger.get("run_id")),
+            "mainline_authority": _text(mainline.get("mainline_authority")),
+            "mainline_contract_fingerprint": _text(mainline.get("contract_fingerprint")),
+            "attempt_ledger_fingerprint": _text(ledger.get("ledger_fingerprint")),
+            "behavior_slice_ledger_fingerprint": _text(
+                slice_ledger.get("ledger_fingerprint")
+                or slice_ledger.get("source_snapshot_hash")
+            ),
+            "evidence_bundle_id": _text(evidence_bundle.get("bundle_id")),
+        }.items()
+        if value
+    }
+    counts = _dict(formal_count_projection or result.get("formal_count_projection"))
+    selected = _non_negative_int(
+        pipeline.get("selected_obligation_count"), field="selected_obligation_count", identities=identities
+    )
+    terminal = _non_negative_int(
+        pipeline.get("terminal_obligation_count"), field="terminal_obligation_count", identities=identities
+    )
+    executed = _non_negative_int(
+        pipeline.get("executed_obligation_count"), field="executed_obligation_count", identities=identities
+    )
+    blocked = _non_negative_int(
+        pipeline.get("blocked_obligation_count"), field="blocked_obligation_count", identities=identities
+    )
+    cleanup_failures = _non_negative_int(
+        pipeline.get("cleanup_failure_count"), field="cleanup_failure_count", identities=identities
+    )
+
+    if ledger:
+        ledger_selected = _non_negative_int(
+            ledger.get("selected_count"), field="ledger.selected_count", identities=identities
+        )
+        ledger_terminal = _non_negative_int(
+            ledger.get("terminal_count"), field="ledger.terminal_count", identities=identities
+        )
+        contradictions = []
+        if pipeline and selected != ledger_selected:
+            contradictions.append(f"selected:{selected}!={ledger_selected}")
+        if pipeline and terminal != ledger_terminal:
+            contradictions.append(f"terminal:{terminal}!={ledger_terminal}")
+        for name, left, right in (
+            ("campaign", mainline.get("campaign_id"), ledger.get("campaign_id")),
+            (
+                "authority",
+                mainline.get("contract_fingerprint"),
+                ledger.get("mainline_contract_fingerprint"),
+            ),
+        ):
+            if _text(left) and _text(right) and _text(left) != _text(right):
+                contradictions.append(f"{name}:{_text(left)}!={_text(right)}")
+        if contradictions:
+            raise MainlineContractError(
+                "run_delivery_projection_contradiction:"
+                + ",".join(contradictions)
+                + f":identities={identities}"
+            )
+
+    gaps = build_coverage_gap_projection(result)
+    pipeline_status = _text(pipeline.get("status")).upper()
+    reasons: list[str] = []
+    if not pipeline:
+        reasons.append("PIPELINE_HEALTH_MISSING")
+    elif pipeline_status != "OK":
+        reasons.append(f"PIPELINE_{pipeline_status or 'STATUS_MISSING'}")
+    if not ledger:
+        reasons.append("ATTEMPT_LEDGER_MISSING")
+    elif ledger.get("complete") is not True:
+        reasons.append("ATTEMPT_LEDGER_INCOMPLETE")
+    if not mainline:
+        reasons.append("MAINLINE_RUN_MISSING")
+    elif not _text(mainline.get("mainline_authority")) or not _text(
+        mainline.get("contract_fingerprint")
+    ):
+        reasons.append("MAINLINE_AUTHORITY_IDENTITY_MISSING")
+    if ledger and (
+        not _text(ledger.get("run_id"))
+        or not _text(ledger.get("campaign_id"))
+        or not _text(ledger.get("ledger_fingerprint"))
+    ):
+        reasons.append("ATTEMPT_LEDGER_IDENTITY_MISSING")
+    if selected == 0:
+        reasons.append("ZERO_SELECTED_OBLIGATIONS")
+    if executed == 0:
+        reasons.append("NO_REAL_EXECUTION")
+    if selected > 0 and executed == 0 and blocked >= selected:
+        reasons.append("ALL_OBLIGATIONS_BLOCKED")
+    elif blocked > 0 or (selected > 0 and executed < selected):
+        reasons.append("PARTIAL_OBLIGATION_EXECUTION")
+    if cleanup_failures:
+        reasons.append("CLEANUP_FAILURE")
+    if gaps["total"]:
+        reasons.append("COVERAGE_GAPS_REMAIN")
+    if counts.get("schema_version") != SCHEMA_VERSION:
+        reasons.append("FORMAL_COUNT_PROJECTION_MISSING")
+    elif _text(counts.get("authority_status")).upper() != "VERIFIED":
+        reasons.append("FORMAL_DELIVERY_AUTHORITY_NOT_VERIFIED")
+    if mainline and mainline.get("customer_outputs_published") is not True:
+        reasons.append("CUSTOMER_OUTPUTS_NOT_PUBLISHED")
+
+    release_ready = not reasons
+    eligible_count = _non_negative_int(
+        counts.get("formal_customer_deliverable_count"),
+        field="formal_customer_deliverable_count",
+        identities=identities,
+    )
+    return {
+        "schema_version": "qualibug.run-delivery-readiness.v1",
+        "scope": "current_run_formal_finding_publication",
+        "status": "READY" if release_ready else "NOT_READY",
+        "release_ready": release_ready,
+        "reason_codes": reasons,
+        "pipeline_health_status": pipeline_status or "MISSING",
+        "selected_obligation_count": selected,
+        "terminal_obligation_count": terminal,
+        "executed_obligation_count": executed,
+        "blocked_obligation_count": blocked,
+        "cleanup_failure_count": cleanup_failures,
+        "coverage_gap_projection": gaps,
+        "eligible_formal_deliverable_count": eligible_count,
+        "published_formal_deliverable_count": eligible_count if release_ready else 0,
+        "identities": identities,
+    }
+
+
 def attach_quality_projection_to_scan_result(scan_result: dict[str, Any]) -> dict[str, Any]:
     """Mutate-safe: return a copy of scan_result with SSOT quality projection."""
     result = dict(scan_result or {})
@@ -463,6 +672,30 @@ def attach_quality_projection_to_scan_result(scan_result: dict[str, Any]) -> dic
     for key, value in existing_external.items():
         if key not in external:
             external[key] = value
+    run_delivery = build_run_delivery_readiness_projection(
+        result,
+        formal_count_projection=counts,
+    )
+    from .release_gate import reconcile_release_gate_with_run_readiness
+
+    result["run_delivery_readiness"] = run_delivery
+    result["release_gate"] = reconcile_release_gate_with_run_readiness(
+        _dict(result.get("release_gate")),
+        run_delivery,
+    )
+    external_reason_code = (
+        _text(external.get("reason")).upper()
+        if _text(external.get("reason"))
+        else "EXTERNAL_EVALUATOR_RECEIPT_REQUIRED"
+    )
+    result["commercial_readiness"] = {
+        "schema_version": "qualibug.commercial-readiness.v1",
+        "scope": "commercial_product_readiness",
+        "status": _text(external.get("claim_status")).upper() or "NOT_MEASURED",
+        "reason_code": external_reason_code,
+        "external_evaluation_schema_version": external["schema_version"],
+        "commercial_promotion_evidence": external["commercial_promotion_evidence"],
+    }
     obligation_proj = build_obligation_execution_projection(result)
     canonical_deliverables = (
         [
@@ -475,6 +708,9 @@ def attach_quality_projection_to_scan_result(scan_result: dict[str, Any]) -> dic
     )
     finding_classification = {
         "schema_version": SCHEMA_VERSION,
+        "scope": "canonical_formal_delivery_eligibility",
+        "publication_scope": "current_run_formal_finding_publication",
+        "publication_status": run_delivery["status"],
         "deliverable": [
             {**dict(item), "finding_class": "deliverable"}
             for item in canonical_deliverables
@@ -558,7 +794,16 @@ def attach_quality_projection_to_scan_result(scan_result: dict[str, Any]) -> dic
     result["scope_counts"] = {
         "current_run_formal_deliverable": counts["formal_customer_deliverable_count"],
         "current_campaign_formal_deliverable": counts["formal_customer_deliverable_count"],
+        "current_run_published_formal_deliverable": run_delivery[
+            "published_formal_deliverable_count"
+        ],
         "project_open_formal_deliverable": None,
+        "semantics": {
+            "current_run_formal_deliverable": "canonical_eligible_audit_count",
+            "current_campaign_formal_deliverable": "canonical_eligible_audit_count",
+            "current_run_published_formal_deliverable": "publication_count_after_run_delivery_readiness",
+            "project_open_formal_deliverable": "not_projected_by_current_run",
+        },
     }
     # Internal evidence-strength score must never be presented as quality when
     # external evaluation is incomplete.

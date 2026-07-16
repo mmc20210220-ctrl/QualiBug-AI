@@ -5036,7 +5036,40 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
     if save_report:
         output = Path(output_dir) if output_dir else root / "platform_outputs" / _safe_project(project)
         report_path = output / "intelligence_report.json"
-        _write_json(report_path, {"project": project, "generated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "real_findings": confirmed, "findings": confirmed, "candidate_findings": candidates, "risk_clues": candidates, "mainline_run": v12.get("mainline_run"), "obligation_attempt_ledger": v12.get("obligation_attempt_ledger"), "canonical_defect_registry": canonical_registry, "formal_delivery_authority": v12.get("formal_delivery_authority"), "formal_count_projection": result.get("formal_count_projection"), "defect_identity_consistency": result.get("defect_identity_consistency"), "delivery_occurrences": delivery_occurrences, "campaign": campaign, "coverage_gaps": coverage_gaps, "scan_preflight_guide": preflight_guide, "runtime_contract": runtime_contract, "test_data_plan": test_data_plan, "test_data_bootstrap": test_data_bootstrap, "behavior_slice_ledger": result["behavior_slice_ledger"], "execution_status": execution_status, "coverage_honesty": coverage_honesty, "evidence_bundle": evidence_bundle, "release_gate": release_gate, "ui_execution_summary": ui_execution_summary, "execution_evidence_summary": ui_execution_summary, "ui_followup_assets": ui_followup_assets, "external_reproduction_assets": external_reproduction_assets, "external_commercial_assets": external_commercial_assets})
+        _write_json(report_path, {
+            "project": project,
+            "generated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "real_findings": confirmed,
+            "findings": confirmed,
+            "candidate_findings": candidates,
+            "risk_clues": candidates,
+            "mainline_run": v12.get("mainline_run"),
+            "obligation_attempt_ledger": v12.get("obligation_attempt_ledger"),
+            "canonical_defect_registry": canonical_registry,
+            "formal_delivery_authority": v12.get("formal_delivery_authority"),
+            "formal_count_projection": result.get("formal_count_projection"),
+            "run_delivery_readiness": result.get("run_delivery_readiness"),
+            "commercial_readiness": result.get("commercial_readiness"),
+            "external_evaluation": result.get("external_evaluation"),
+            "defect_identity_consistency": result.get("defect_identity_consistency"),
+            "delivery_occurrences": delivery_occurrences,
+            "campaign": campaign,
+            "coverage_gaps": coverage_gaps,
+            "scan_preflight_guide": preflight_guide,
+            "runtime_contract": runtime_contract,
+            "test_data_plan": test_data_plan,
+            "test_data_bootstrap": test_data_bootstrap,
+            "behavior_slice_ledger": result["behavior_slice_ledger"],
+            "execution_status": execution_status,
+            "coverage_honesty": coverage_honesty,
+            "evidence_bundle": evidence_bundle,
+            "release_gate": result.get("release_gate"),
+            "ui_execution_summary": ui_execution_summary,
+            "execution_evidence_summary": ui_execution_summary,
+            "ui_followup_assets": ui_followup_assets,
+            "external_reproduction_assets": external_reproduction_assets,
+            "external_commercial_assets": external_commercial_assets,
+        })
         result["report_path"] = str(report_path)
     output_root = root / "platform_outputs" / _safe_project(project)
     _write_json(output_root / "scan_result.json", result)

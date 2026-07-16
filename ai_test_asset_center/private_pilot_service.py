@@ -6021,6 +6021,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 attach_quality_projection_to_scan_result,
                 suppress_benchmark_quality_when_not_measured,
             )
+            from .discovery_mainline_contract import MainlineContractError
 
             _scan_for_quality: dict[str, Any] = {}
             for source in (current_scan_report, report, real_discovery_payload):
@@ -6088,7 +6089,20 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 if isinstance(_projected.get("obligation_execution_projection"), dict)
                 else {}
             )
+            _run_delivery = (
+                _projected.get("run_delivery_readiness")
+                if isinstance(_projected.get("run_delivery_readiness"), dict)
+                else {}
+            )
+            _commercial_readiness = (
+                _projected.get("commercial_readiness")
+                if isinstance(_projected.get("commercial_readiness"), dict)
+                else {}
+            )
             data["external_evaluation"] = _external
+            data["commercial_readiness"] = _commercial_readiness
+            data["run_delivery_readiness"] = _run_delivery
+            data["release_gate"] = _projected.get("release_gate") or {}
             data["formal_count_projection"] = _counts
             data["finding_classification"] = _classification
             data["scope_counts"] = _scope_counts
@@ -6100,14 +6114,29 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             data["scan_meta"]["quality_claim_status"] = data["quality_claim_status"]
             data["scan_meta"]["commercial_quality_score"] = data["commercial_quality_score"]
             data["scan_meta"]["formal_customer_deliverable_count"] = _counts.get("formal_customer_deliverable_count")
+            data["scan_meta"]["published_formal_deliverable_count"] = _run_delivery.get(
+                "published_formal_deliverable_count"
+            )
+            data["scan_meta"]["run_delivery_readiness"] = _run_delivery
+            data["scan_meta"]["commercial_readiness"] = _commercial_readiness
             data["scan_meta"]["obligation_execution_projection"] = _obl
             # The formal delivery gate is the only source for customer-facing
             # defect lists and counts.  Legacy readiness/campaign counters are
             # retained only as diagnostics below, never as commercial defects.
-            _formal_deliverables = list(_classification.get("deliverable") or [])
+            _eligible_formal_deliverables = list(_classification.get("deliverable") or [])
+            _formal_deliverables = (
+                _eligible_formal_deliverables
+                if _run_delivery.get("release_ready") is True
+                else []
+            )
             _candidate_findings = list(_classification.get("candidate") or [])
             _rejected_findings = list(_classification.get("rejected") or [])
-            _formal_count = int(_counts.get("formal_customer_deliverable_count") or 0)
+            _eligible_formal_count = int(
+                _counts.get("formal_customer_deliverable_count") or 0
+            )
+            _formal_count = int(
+                _run_delivery.get("published_formal_deliverable_count") or 0
+            )
             _legacy_count_diagnostics = {
                 "current_report_readiness_count": data["scan_meta"].get("current_report_customer_ready_defect_count"),
                 "current_campaign_readiness_count": data["scan_meta"].get("current_campaign_customer_ready_defect_count"),
@@ -6115,6 +6144,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 "semantics": "diagnostic_only_not_formal_customer_deliverables",
             }
             data["deliverable_findings"] = _formal_deliverables
+            data["eligible_formal_deliverable_findings"] = _eligible_formal_deliverables
             data["candidate_findings"] = _candidate_findings
             data["rejected_findings"] = _rejected_findings
             data["defects"] = _formal_deliverables
@@ -6129,8 +6159,9 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             }
             data["scope_counts"] = {
                 **_scope_counts,
-                "current_run_formal_deliverable": _formal_count,
-                "current_campaign_formal_deliverable": _formal_count,
+                "current_run_formal_deliverable": _eligible_formal_count,
+                "current_campaign_formal_deliverable": _eligible_formal_count,
+                "current_run_published_formal_deliverable": _formal_count,
                 "project_open_formal_deliverable": None,
                 "project_open_measurement_status": "NOT_MEASURED",
             }
@@ -6158,6 +6189,8 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                     data["scan_meta"]["benchmark_metrics"],
                     _external,
                 )
+        except MainlineContractError:
+            raise
         except Exception as _quality_exc:
             data["external_evaluation"] = {
                 "measurement_status": "NOT_MEASURED",
