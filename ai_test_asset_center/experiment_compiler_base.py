@@ -8,6 +8,7 @@ from typing import Any
 from .experiment_protocols import compile_family_protocol
 from .observer_contracts_base import compile_observer_requirements
 from .runtime_binding_graph import (
+    _declared_fixture_setup,
     build_binding_plan,
     declared_action_compensators,
     declared_effect_observers,
@@ -192,6 +193,161 @@ def _source_request_example(operation: dict[str, Any]) -> dict[str, Any]:
                 c_example = _dict(candidate.get("request_example"))
                 if c_example:
                     return dict(c_example)
+    return {}
+
+
+def _operation_entity_refs(
+    *,
+    behavior_ir: dict[str, Any],
+    operation_ref: str,
+    relation_types: set[str],
+) -> set[str]:
+    refs: set[str] = set()
+    for relation in _list(_dict(behavior_ir).get("relations")):
+        if not isinstance(relation, dict):
+            continue
+        if _text(relation.get("status")) in {"conflicting", "unsupported"}:
+            continue
+        if _text(relation.get("operation_ref")) != _text(operation_ref):
+            continue
+        if _text(relation.get("relation_type")) not in relation_types:
+            continue
+        for field in ("from_ref", "to_ref"):
+            ref = _text(relation.get(field))
+            if ref and ref != _text(operation_ref):
+                refs.add(ref)
+    return refs
+
+
+def _compensates_create_operation(
+    *,
+    behavior_ir: dict[str, Any],
+    cleanup_ref: str,
+    create_ref: str,
+) -> bool:
+    for relation in _list(_dict(behavior_ir).get("relations")):
+        if not isinstance(relation, dict):
+            continue
+        if _text(relation.get("status")) in {"conflicting", "unsupported"}:
+            continue
+        if _text(relation.get("relation_type")) != "compensates":
+            continue
+        if _text(relation.get("operation_ref") or relation.get("from_ref")) != _text(cleanup_ref):
+            continue
+        if _text(relation.get("to_ref")) == _text(create_ref):
+            return True
+        for effect in _list(relation.get("effects")):
+            if (
+                isinstance(effect, dict)
+                and _text(effect.get("cleanup_target_operation_ref")) == _text(create_ref)
+            ):
+                return True
+    return False
+
+
+def _source_declared_control_fixture_binding(
+    *,
+    operation: dict[str, Any],
+    operation_ref: str,
+    control_actor_ref: str,
+    behavior_ir: dict[str, Any],
+) -> dict[str, Any]:
+    if (
+        _text(operation.get("method")).upper() not in {"GET", "HEAD"}
+        or not control_actor_ref
+    ):
+        return {}
+    collection_path = normalize_path_placeholders(
+        _text(operation.get("path") or operation.get("raw_path"))
+    ).rstrip("/")
+    if (
+        not collection_path.startswith("/")
+        or "{" in collection_path
+        or ":" in collection_path
+        or not _list(operation.get("source_refs"))
+    ):
+        return {}
+
+    read_entities = _operation_entity_refs(
+        behavior_ir=behavior_ir,
+        operation_ref=operation_ref,
+        relation_types={"observes", "scopes"},
+    )
+    if not read_entities:
+        return {}
+
+    cleanup_targets: list[str] = []
+    for candidate in _list(_dict(behavior_ir).get("operations")):
+        if not isinstance(candidate, dict):
+            continue
+        candidate_path = normalize_path_placeholders(
+            _text(candidate.get("path") or candidate.get("raw_path"))
+        ).rstrip("/")
+        if not (
+            _text(candidate.get("method")).upper() in {"DELETE", "POST", "PATCH", "PUT"}
+            and candidate_path.startswith(collection_path + "/")
+            and ("{" in candidate_path or ":" in candidate_path)
+        ):
+            continue
+        cleanup_targets.extend(
+            re.findall(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", candidate_path)
+        )
+        cleanup_targets.extend(
+            re.findall(r":([A-Za-z_][A-Za-z0-9_]*)", candidate_path)
+        )
+    for target in list(dict.fromkeys([*cleanup_targets, "id"])):
+        detail_operation = {
+            **operation,
+            "path": f"{collection_path}/{{{target}}}",
+            "raw_path": f"{collection_path}/{{{target}}}",
+        }
+        setup = _declared_fixture_setup(
+            detail_operation,
+            target=target,
+            behavior_ir=behavior_ir,
+        )
+        create_ref = _text(setup.get("operation_ref"))
+        if not create_ref or control_actor_ref not in set(_list(setup.get("actor_refs"))):
+            continue
+        create_entities = _operation_entity_refs(
+            behavior_ir=behavior_ir,
+            operation_ref=create_ref,
+            relation_types={"produces", "transitions"},
+        )
+        if not (read_entities & create_entities):
+            continue
+        cleanup_operations = [
+            dict(row)
+            for row in _list(setup.get("cleanup_operations"))
+            if isinstance(row, dict)
+        ]
+        if not cleanup_operations:
+            continue
+        if not any(
+            _compensates_create_operation(
+                behavior_ir=behavior_ir,
+                cleanup_ref=_text(row.get("operation_ref")),
+                create_ref=create_ref,
+            )
+            for row in cleanup_operations
+        ):
+            continue
+        return {
+            "target": target,
+            "target_path": f"/{{{target}}}",
+            "status": "runtime_resolvable",
+            "source_priority": "source_declared_control_fixture",
+            "resolver_operations": [{
+                "operation_ref": operation_ref,
+                "method": _text(operation.get("method")).upper(),
+                "path": collection_path,
+            }],
+            "fixture_setup": setup,
+            "force_fixture_setup": True,
+            "required_fixture_id": "control_resource",
+            "fixture_owner_actor_ref": control_actor_ref,
+            "value_fingerprint": "",
+        }
     return {}
 
 
@@ -422,6 +578,28 @@ def compile_experiment_for_obligation(
         actors=[actors[a] for a in required_actors if a in actors],
         behavior_ir=ir,
     )
+    if (
+        not is_write
+        and family in {"authorization", "isolation", "visibility"}
+        and prop.get("require_same_resource") is True
+    ):
+        control_fixture_binding = _source_declared_control_fixture_binding(
+            operation=primary_op,
+            operation_ref=primary_op_id,
+            control_actor_ref=_text(
+                prop.get("control_actor_ref")
+                or prop.get("owner_actor_ref")
+                or prop.get("actor_ref")
+                or (required_actors[0] if required_actors else "")
+            ),
+            behavior_ir=ir,
+        )
+        if control_fixture_binding and not any(
+            _text(row.get("target")) == _text(control_fixture_binding.get("target"))
+            for row in binding_plan
+            if isinstance(row, dict)
+        ):
+            binding_plan.append(control_fixture_binding)
     if family == "state":
         state_token = _state_match_token(prop.get("from_state"))
         normalized_path = normalize_path_placeholders(

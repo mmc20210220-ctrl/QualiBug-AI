@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -124,6 +125,46 @@ def test_html_success_payload_is_not_protected_resource_evidence() -> None:
 
     assert receipt["status"] == "INDETERMINATE"
     assert receipt["reason_code"] == "TREATMENT_RESOURCE_EVIDENCE_MISSING"
+
+
+def test_source_declared_control_fixture_absence_is_observed_no_leak() -> None:
+    control = {
+        **_http_observation(
+            status=200,
+            body=[{"id": "r-1", "state": "active"}],
+            phase="control",
+        ),
+        "path": "/resources",
+        "actor_ref": "actor-control",
+    }
+    treatment = {
+        **_http_observation(status=200, body=[], phase="treatment"),
+        "path": "/resources",
+    }
+
+    receipt = observe_authorization_comparison(
+        control=control,
+        treatment=treatment,
+        require_same_resource=True,
+        binding_materialization_receipts=[{
+            "status": "BOUND",
+            "fixture_id": "control_resource",
+            "fixture_setup_status": "completed",
+            "fixture_cleanup_status": "completed",
+            "ownership_proof_status": "OBSERVED",
+            "owner_actor_ref": "actor-control",
+            "value_fingerprint": hashlib.sha256(b"r-1").hexdigest()[:12],
+        }],
+    )
+
+    assert receipt["status"] == "OBSERVED"
+    assert receipt["evidence"]["same_resource_proven"] is True
+    assert receipt["evidence"]["viewer_can_access"] is False
+    assert receipt["evidence"]["leak_detected"] is False
+    assert (
+        receipt["evidence"]["resource_match_basis"]
+        == "source_declared_control_fixture_absent_from_treatment_collection"
+    )
 
 
 def test_write_status_pair_requires_business_effect_evidence() -> None:

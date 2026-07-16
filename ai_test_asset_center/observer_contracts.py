@@ -43,12 +43,14 @@ def observe_authorization_comparison(
     treatment: dict[str, Any],
     require_same_resource: bool,
     business_effect: dict[str, Any] | None = None,
+    binding_materialization_receipts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     baseline = _original_authorization_comparison(
         control=control,
         treatment=treatment,
         require_same_resource=require_same_resource,
         business_effect=business_effect,
+        binding_materialization_receipts=binding_materialization_receipts,
     )
     control_row = _dict(control)
     treatment_row = _dict(treatment)

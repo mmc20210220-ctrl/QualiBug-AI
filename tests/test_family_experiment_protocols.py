@@ -1236,6 +1236,156 @@ def test_empty_patch_uses_source_linked_entity_fields_for_runtime_mutation(
     ]
 
 
+def test_authorization_collection_read_forces_source_declared_control_fixture() -> None:
+    behavior_ir = {
+        "operations": [
+            {
+                "id": "op-list-cart",
+                "operation_id": "list_cart_items",
+                "method": "GET",
+                "path": "/cart/items",
+                "read_write": "read",
+                "source_refs": [{"source_id": "api", "kind": "api_operation"}],
+            },
+            {
+                "id": "op-add-cart",
+                "operation_id": "add_cart_item",
+                "method": "POST",
+                "path": "/cart/items",
+                "read_write": "write",
+                "request_example": {"sku": "SKU-1", "qty": 1},
+                "source_refs": [{"source_id": "api", "kind": "api_operation"}],
+            },
+            {
+                "id": "op-delete-cart",
+                "operation_id": "delete_cart_item",
+                "method": "DELETE",
+                "path": "/cart/items/{id}",
+                "read_write": "write",
+                "source_refs": [{"source_id": "api", "kind": "api_operation"}],
+            },
+        ],
+        "actors": [
+            {
+                "id": "actor-buyer",
+                "role": "buyer",
+                "account_ref": "buyer@example.test",
+                "credential_secret_ref": "secret_ref:test_accounts:buyer",
+                "account_status": "active",
+                "runtime_bound": True,
+            },
+            {
+                "id": "actor-warehouse",
+                "role": "warehouse",
+                "account_ref": "warehouse@example.test",
+                "credential_secret_ref": "secret_ref:test_accounts:warehouse",
+                "account_status": "active",
+                "runtime_bound": True,
+            },
+        ],
+        "relations": [
+            {
+                "id": "rel-buyer-read-cart",
+                "relation_type": "permits",
+                "from_ref": "actor-buyer",
+                "to_ref": "op-list-cart",
+                "operation_ref": "op-list-cart",
+                "actor_ref": "actor-buyer",
+            },
+            {
+                "id": "rel-buyer-add-cart",
+                "relation_type": "permits",
+                "from_ref": "actor-buyer",
+                "to_ref": "op-add-cart",
+                "operation_ref": "op-add-cart",
+                "actor_ref": "actor-buyer",
+            },
+            {
+                "id": "rel-warehouse-deny-cart",
+                "relation_type": "denies",
+                "from_ref": "actor-warehouse",
+                "to_ref": "op-list-cart",
+                "operation_ref": "op-list-cart",
+                "actor_ref": "actor-warehouse",
+            },
+            {
+                "id": "rel-add-produces-cart",
+                "relation_type": "produces",
+                "from_ref": "op-add-cart",
+                "to_ref": "entity-cart-item",
+                "operation_ref": "op-add-cart",
+            },
+            {
+                "id": "rel-list-observes-cart",
+                "relation_type": "observes",
+                "from_ref": "op-list-cart",
+                "to_ref": "entity-cart-item",
+                "operation_ref": "op-list-cart",
+            },
+            {
+                "id": "rel-delete-consumes-cart",
+                "relation_type": "consumes",
+                "from_ref": "op-delete-cart",
+                "to_ref": "entity-cart-item",
+                "operation_ref": "op-delete-cart",
+            },
+            {
+                "id": "rel-delete-compensates-add",
+                "relation_type": "compensates",
+                "from_ref": "op-delete-cart",
+                "to_ref": "op-add-cart",
+                "operation_ref": "op-delete-cart",
+            },
+        ],
+    }
+    obligation = {
+        "obligation_id": "obl-cart-read-auth",
+        "risk_family": "authorization",
+        "property": {
+            "template": "authorization_control_treatment",
+            "control_actor_ref": "actor-buyer",
+            "treatment_actor_ref": "actor-warehouse",
+            "operation_ref": "op-list-cart",
+            "require_same_resource": True,
+        },
+        "required_operations": ["op-list-cart"],
+        "required_actors": ["actor-buyer", "actor-warehouse"],
+        "required_observers": ["http_response", "actor_identity"],
+        "cleanup_requirement": {"required": False},
+    }
+
+    experiment = compile_experiment_for_obligation(
+        obligation,
+        behavior_ir=behavior_ir,
+        environment_type="test",
+    )
+
+    assert experiment["compile_receipt"]["status"] == "COMPILED", experiment
+    fixture_binding = next(
+        row
+        for row in experiment["binding_plan"]
+        if row.get("required_fixture_id") == "control_resource"
+    )
+    assert fixture_binding["force_fixture_setup"] is True
+    assert fixture_binding["fixture_owner_actor_ref"] == "actor-buyer"
+    assert fixture_binding["fixture_setup"]["operation_ref"] == "op-add-cart"
+    assert fixture_binding["fixture_setup"]["cleanup_operations"] == [{
+        "operation_ref": "op-delete-cart",
+        "method": "DELETE",
+        "path": "/cart/items/{id}",
+    }]
+
+    dag = build_fixture_dag_for_experiment(experiment, behavior_ir=behavior_ir)
+
+    assert dag["status"] == "READY", dag
+    assert any(
+        node["kind"] == "runtime_read_binding"
+        and node["target"] == fixture_binding["target"]
+        and node["constructible"] is True
+        for node in dag["nodes"]
+    )
+
+
 def test_runtime_mutation_block_is_blocked_before_transport_without_cleanup_failure(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,

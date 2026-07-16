@@ -457,6 +457,93 @@ def _entity_identity_key(entity: dict[str, Any]) -> str:
     return _fingerprint({"key": key, "value": child})
 
 
+def _identity_value_fingerprints(value: Any) -> set[str]:
+    """Return runtime binding fingerprints for source-visible identity scalars."""
+
+    result: set[str] = set()
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for key, child in node.items():
+                normalized_key = re.sub(r"[^a-z0-9]+", "_", str(key).lower()).strip("_")
+                if (
+                    isinstance(child, (str, int, float))
+                    and str(child).strip()
+                    and (
+                        normalized_key in {
+                            "id", "uuid", "key", "sku", "code", "slug",
+                            "ref", "reference", "number",
+                        }
+                        or normalized_key.endswith(("_id", "_code", "_ref", "_number"))
+                    )
+                ):
+                    result.add(
+                        hashlib.sha256(str(child).encode("utf-8")).hexdigest()[:12]
+                    )
+            for child in node.values():
+                if isinstance(child, (dict, list)):
+                    walk(child)
+        elif isinstance(node, list):
+            for child in node:
+                walk(child)
+
+    walk(value)
+    return result
+
+
+def _empty_collection_body(value: Any) -> bool:
+    return isinstance(value, list) and not value
+
+
+def _source_declared_control_fixture_absence(
+    *,
+    control: dict[str, Any],
+    treatment: dict[str, Any],
+    binding_materialization_receipts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    control_actor_ref = _text(control.get("actor_ref"))
+    control_path = _text(control.get("path")).split("?", 1)[0]
+    treatment_path = _text(treatment.get("path")).split("?", 1)[0]
+    if (
+        _text(control.get("method")).upper() != "GET"
+        or _text(treatment.get("method")).upper() != "GET"
+        or not control_path
+        or control_path != treatment_path
+        or not _empty_collection_body(treatment.get("body"))
+    ):
+        return {}
+    control_identity_hashes = _identity_value_fingerprints(control.get("body"))
+    if not control_identity_hashes:
+        return {}
+    treatment_identity_hashes = _identity_value_fingerprints(treatment.get("body"))
+    for receipt in binding_materialization_receipts:
+        row = _dict(receipt)
+        value_fingerprint = _text(row.get("value_fingerprint"))
+        if not (
+            _text(row.get("status")).upper() == "BOUND"
+            and _text(row.get("fixture_id")) == "control_resource"
+            and _text(row.get("fixture_setup_status")) == "completed"
+            and _text(row.get("ownership_proof_status")) == "OBSERVED"
+            and value_fingerprint
+            and value_fingerprint in control_identity_hashes
+            and value_fingerprint not in treatment_identity_hashes
+        ):
+            continue
+        owner_actor_ref = _text(row.get("owner_actor_ref"))
+        if control_actor_ref and owner_actor_ref and owner_actor_ref != control_actor_ref:
+            continue
+        cleanup_status = _text(row.get("fixture_cleanup_status")).lower()
+        if cleanup_status and cleanup_status not in {"pending", "completed"}:
+            continue
+        return {
+            "fixture_id": _text(row.get("fixture_id")),
+            "fixture_value_fingerprint": value_fingerprint,
+            "fixture_owner_actor_ref": owner_actor_ref,
+            "fixture_cleanup_status": cleanup_status,
+        }
+    return {}
+
+
 def _business_field_change_count(before_body: Any, after_body: Any) -> int:
     before_rows = {
         key: _without_server_managed_fields(row)
@@ -496,6 +583,7 @@ def observe_authorization_comparison(
     treatment: dict[str, Any],
     require_same_resource: bool,
     business_effect: dict[str, Any] | None = None,
+    binding_materialization_receipts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Compare authorized and restricted observations without status-only proof."""
 
@@ -636,6 +724,31 @@ def observe_authorization_comparison(
             evidence=base_evidence,
         )
     if not _meaningful_resource_body(treatment_row):
+        fixture_absence = _source_declared_control_fixture_absence(
+            control=control_row,
+            treatment=treatment_row,
+            binding_materialization_receipts=[
+                dict(row)
+                for row in _list(binding_materialization_receipts)
+                if isinstance(row, dict)
+            ],
+        )
+        if require_same_resource and fixture_absence:
+            base_evidence.update({
+                "same_resource_proven": True,
+                "resource_match_basis": (
+                    "source_declared_control_fixture_absent_from_treatment_collection"
+                ),
+                "owner_can_access": True,
+                "viewer_can_access": False,
+                "leak_detected": False,
+                **fixture_absence,
+            })
+            return _receipt(
+                observer_id="authorization_comparison",
+                status="OBSERVED",
+                evidence=base_evidence,
+            )
         return _receipt(
             observer_id="authorization_comparison",
             status="INDETERMINATE",
@@ -1571,6 +1684,11 @@ def observe_experiment_requirements(
                 treatment=treatment,
                 require_same_resource=bool(prop.get("require_same_resource", True)),
                 business_effect=business_effect_evidence,
+                binding_materialization_receipts=[
+                    row
+                    for row in _list(evidence.get("binding_materialization_receipts"))
+                    if isinstance(row, dict)
+                ],
             )
         elif observer_id == "business_effect":
             receipt = business_effect_receipt
@@ -1644,12 +1762,14 @@ def observe_authorization_comparison(
     treatment: dict[str, Any],
     require_same_resource: bool,
     business_effect: dict[str, Any] | None = None,
+    binding_materialization_receipts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     baseline = _original_authorization_comparison(
         control=control,
         treatment=treatment,
         require_same_resource=require_same_resource,
         business_effect=business_effect,
+        binding_materialization_receipts=binding_materialization_receipts,
     )
     control_row = _dict_obs(control)
     treatment_row = _dict_obs(treatment)
