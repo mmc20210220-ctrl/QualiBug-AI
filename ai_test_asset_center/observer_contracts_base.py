@@ -891,10 +891,45 @@ def _effect_window(steps: list[dict[str, Any]]) -> tuple[dict[str, Any], str]:
     last_governance = _dict(steps[-1].get("governance_receipt"))
     before = _dict(first_governance.get("before"))
     after = _dict(last_governance.get("after"))
+    write = _dict(last_governance.get("write"))
+    write_status = _raw_http_status(write)
+    response_bound_after = _dict(last_governance.get("response_bound_after"))
     if not (
         200 <= _raw_http_status(before) < 300
         and 200 <= _raw_http_status(after) < 300
     ):
+        if write_status > 0 and not (200 <= write_status < 300):
+            return {
+                "before_identity_count": 0,
+                "after_identity_count": 0,
+                "identity_effect_count": 0,
+                "business_field_change_count": 0,
+                "effect_count": 0,
+                "before_fingerprint": _fingerprint(before.get("body")),
+                "after_fingerprint": _fingerprint(after.get("body")),
+                "effect_basis": "write_not_accepted",
+            }, ""
+        if (
+            200 <= write_status < 300
+            and 200 <= _raw_http_status(response_bound_after) < 300
+            and _identity_value_fingerprints(write.get("body")).intersection(
+                _identity_value_fingerprints(response_bound_after.get("body"))
+            )
+        ):
+            after_ids = _identity_fingerprints(response_bound_after.get("body"))
+            return {
+                "before_identity_count": 0,
+                "after_identity_count": len(after_ids),
+                "identity_effect_count": 1,
+                "business_field_change_count": 0,
+                "effect_count": 1,
+                "before_fingerprint": _fingerprint(before.get("body")),
+                "after_fingerprint": _fingerprint(response_bound_after.get("body")),
+                "effect_basis": "response_bound_create_observer",
+                "response_bound_after_ref": _text(
+                    last_governance.get("response_bound_after_ref")
+                ),
+            }, ""
         return {}, "BUSINESS_EFFECT_OBSERVATION_FAILED"
     if not isinstance(before.get("body"), (dict, list)) or not isinstance(after.get("body"), (dict, list)):
         return {}, "BUSINESS_EFFECT_BODY_UNSUPPORTED"
@@ -990,6 +1025,12 @@ def _observe_business_effect(
         "after_fingerprint": selected["after_fingerprint"],
         "business_effect_observed": True,
     })
+    if _text(selected.get("effect_basis")):
+        evidence["effect_basis"] = _text(selected.get("effect_basis"))
+    if _text(selected.get("response_bound_after_ref")):
+        evidence["response_bound_after_ref"] = _text(
+            selected.get("response_bound_after_ref")
+        )
     return _receipt(
         observer_id="business_effect",
         status="OBSERVED",

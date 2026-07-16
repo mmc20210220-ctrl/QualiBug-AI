@@ -371,7 +371,9 @@ def _cleanup_compensates_created_resource(
         return False
 
     original_before = _observation_state(original_row.get("before"))
-    original_after = _observation_state(original_row.get("after"))
+    original_after = _observation_state(
+        original_row.get("response_bound_after") or original_row.get("after")
+    )
     cleanup_before = _observation_state(cleanup_row.get("before"))
     cleanup_after = _observation_state(cleanup_row.get("after"))
     if not (
@@ -468,7 +470,7 @@ def _governed_write_changed_state(attempt: dict[str, Any]) -> bool:
     if row.get("accepted") is not True:
         return False
     before_state = _observation_state(row.get("before"))
-    after_state = _observation_state(row.get("after"))
+    after_state = _observation_state(row.get("response_bound_after") or row.get("after"))
     if before_state.get("status") != after_state.get("status"):
         return True
 
@@ -505,7 +507,9 @@ def _governed_write_changed_state(attempt: dict[str, Any]) -> bool:
         if identities and bool(before_entity) != bool(after_entity):
             return True
 
-    return _meaningful_observation_state(row.get("before")) != _meaningful_observation_state(row.get("after"))
+    return _meaningful_observation_state(row.get("before")) != _meaningful_observation_state(
+        row.get("response_bound_after") or row.get("after")
+    )
 
 
 def _body_contains_scalar(value: Any, expected: Any) -> bool:
@@ -653,7 +657,11 @@ def preflight_experiment_executable(
             return False, "BLOCKED_MISSING_BINDING", f"unresolved_path:{op_ref}:{path}"
         if not method:
             return False, "BLOCKED_MISSING_OPERATION", f"missing_method:{op_ref}"
-        if method in {"POST", "PUT", "PATCH", "DELETE"} and not _declared_observation_path(path, ops):
+        if (
+            method in {"POST", "PUT", "PATCH", "DELETE"}
+            and not _declared_observation_path(path, ops)
+            and not _declared_effect_observer_available(op, ops)
+        ):
             return False, "BLOCKED_MISSING_OBSERVER", f"write_observer:{op_ref}"
     if not _list(exp.get("observers")):
         return False, "BLOCKED_MISSING_OBSERVER", "none"
@@ -772,6 +780,60 @@ def _declared_observation_path(
         if materialized.startswith("/") and not path_has_placeholders(materialized):
             return materialized
     return ""
+
+
+def _declared_effect_observer_available(
+    operation: dict[str, Any],
+    operations: dict[str, dict[str, Any]],
+) -> bool:
+    return bool(
+        declared_effect_observers(
+            operation,
+            behavior_ir={"operations": list(operations.values())},
+            max_candidates=5,
+        )
+    )
+
+
+def _response_bound_observation_path(
+    operation: dict[str, Any],
+    operations: dict[str, dict[str, Any]],
+    write_body: Any,
+) -> dict[str, str]:
+    if not isinstance(write_body, (dict, list)):
+        return {}
+    observers = declared_effect_observers(
+        operation,
+        behavior_ir={"operations": list(operations.values())},
+        max_candidates=5,
+    )
+    for observer in observers:
+        path = normalize_path_placeholders(_text(observer.get("path")))
+        if not path.startswith("/") or not path_has_placeholders(path):
+            continue
+        values: dict[str, Any] = {}
+        for name in infer_path_params(path):
+            value = _runtime_setup_value_from_response(write_body, name)
+            if value in (None, "", [], {}):
+                values = {}
+                break
+            values[name] = value
+        if not values:
+            continue
+        materialized = path
+        for name, value in values.items():
+            materialized = materialized.replace(
+                "{" + name + "}",
+                quote(str(value), safe=""),
+            )
+        if materialized.startswith("/") and not path_has_placeholders(materialized):
+            return {
+                "operation_ref": _text(observer.get("operation_ref")),
+                "method": _text(observer.get("method")).upper() or "GET",
+                "path": materialized,
+                "path_template": path,
+            }
+    return {}
 
 
 def _runtime_entity_candidates(value: Any) -> list[dict[str, Any]]:
@@ -1370,11 +1432,9 @@ def execute_one_experiment(
             )
             request_body = (
                 step.get("body")
-                if "body" in step and step.get("body")
+                if "body" in step
                 else op.get("request_example")
                 if method in {"POST", "PUT", "PATCH", "DELETE"} and op.get("request_example")
-                else step.get("body")
-                if "body" in step
                 else None
             )
             request_body = _materialize_body_template(
@@ -1459,6 +1519,7 @@ def execute_one_experiment(
             })
             token = _resolve_token(actor, tokens)
             is_write = method in {"POST", "PUT", "PATCH", "DELETE"}
+            response_bound_observation: dict[str, Any] = {}
             runtime_body_blocked = False
             if is_write:
                 allowed, reason = sandbox_write_allowed(
@@ -1546,6 +1607,49 @@ def execute_one_experiment(
                         source_observed_control_bodies[op_ref] = deepcopy(request_body)
                 request_bodies_for_cleanup[subject_id] = request_body
                 write_receipt = _dict(governed.get("write"))
+                if 200 <= int(write_receipt.get("status") or 0) < 300:
+                    response_bound_path = _response_bound_observation_path(
+                        op,
+                        ops,
+                        write_receipt.get("body"),
+                    )
+                    if response_bound_path:
+                        response_bound_raw = _http_request(
+                            _text(response_bound_path.get("method") or "GET"),
+                            base_url.rstrip("/") + _text(response_bound_path.get("path")),
+                            token=token,
+                        )
+                        response_bound_observation = {
+                            "method": _text(response_bound_path.get("method") or "GET"),
+                            "path": _text(response_bound_path.get("path")),
+                            "path_template": _text(response_bound_path.get("path_template")),
+                            "status_code": int(response_bound_raw.get("status") or 0),
+                            "status": int(response_bound_raw.get("status") or 0),
+                            "body": response_bound_raw.get("body"),
+                            "headers": response_bound_raw.get("headers") or {},
+                            "duration_ms": response_bound_raw.get("duration_ms"),
+                            "phase": f"{phase}_response_bound_effect_observation",
+                            "step_id": f"{subject_id}:response_bound_effect",
+                            "actor_ref": actor_ref,
+                            "operation_ref": _text(response_bound_path.get("operation_ref")),
+                            "source_operation_ref": op_ref,
+                        }
+                        governed["response_bound_after"] = {
+                            "method": _text(response_bound_path.get("method") or "GET"),
+                            "url": base_url.rstrip("/") + _text(response_bound_path.get("path")),
+                            "status": int(response_bound_raw.get("status") or 0),
+                            "body": response_bound_raw.get("body"),
+                            "headers": response_bound_raw.get("headers") or {},
+                            "duration_ms": response_bound_raw.get("duration_ms"),
+                        }
+                        governed["response_bound_after_ref"] = (
+                            "response_bound_after:"
+                            f"{_text(response_bound_path.get('path'))}:"
+                            f"{int(response_bound_raw.get('status') or 0)}"
+                        )
+                        governed["response_bound_observer_operation_ref"] = _text(
+                            response_bound_path.get("operation_ref")
+                        )
                 obs = {
                     "method": method,
                     "path": path,
@@ -1557,6 +1661,8 @@ def execute_one_experiment(
                     "governance_receipt": governed,
                     "observation_path": observation_path,
                 }
+                if response_bound_observation:
+                    obs["response_bound_observation"] = response_bound_observation
             else:
                 obs = _run_http_step(base_url=base_url, method=method, path=path, token=token)
             obs["phase"] = phase
@@ -1639,6 +1745,8 @@ def execute_one_experiment(
                 },
             ))
             results.append(obs)
+            if response_bound_observation:
+                results.append(response_bound_observation)
             if phase == "control":
                 observations["control_observation"] = obs
                 observations["control_actor_ref"] = actor_ref

@@ -8,6 +8,7 @@ import pytest
 
 from ai_test_asset_center.experiment_compiler import compile_experiment_for_obligation
 from ai_test_asset_center.experiment_executor import (
+    _cleanup_restores_governed_write,
     execute_one_experiment,
     execute_selected_experiments,
     preflight_experiment_executable,
@@ -297,7 +298,13 @@ def test_executor_does_not_emit_finding_for_empty_2xx_pair(
         root=tmp_path,
         project="project",
         base_url="http://target.invalid",
-        runtime_contract={"environment_type": "test"},
+        runtime_contract={
+            "environment_type": "test",
+            "environment_ref": "test-env",
+            "execution_mode": "approved_sandbox_write",
+            "approved_base_url": "http://target.invalid",
+            "status": "approved",
+        },
         campaign_id="campaign",
         execution_id="execution-readable-denial",
         actor_tokens={
@@ -437,6 +444,190 @@ def test_authorization_write_blocks_without_business_effect_observer() -> None:
     assert experiment["compile_receipt"]["status"] == "BLOCKED"
     assert experiment["compile_receipt"]["reason_code"] == "BLOCKED_MISSING_OBSERVER"
     assert experiment["compile_receipt"]["detail"] == "write_observer"
+
+
+def test_executor_materializes_response_bound_write_observer_from_create_response(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    behavior_ir = {
+        "operations": [
+            {
+                "id": "op-create",
+                "operation_id": "create_resource",
+                "method": "POST",
+                "path": "/resources",
+                "read_write": "write",
+                "request_example": {"name": "valid"},
+            },
+            {
+                "id": "op-read-created",
+                "operation_id": "read_created_resource",
+                "method": "GET",
+                "path": "/resources/{id}",
+                "read_write": "read",
+            },
+            {
+                "id": "op-delete",
+                "operation_id": "delete_resource",
+                "method": "DELETE",
+                "path": "/resources/{id}",
+                "read_write": "write",
+            },
+        ],
+        "actors": [{
+            "id": "actor-control",
+            "role": "owner",
+            "credential_secret_ref": "secret_ref:owner",
+            "account_status": "active",
+        }],
+    }
+    experiment = {
+        "schema_version": "qualibug.experiment.v1",
+        "experiment_id": "exp-response-bound-create",
+        "obligation_id": "obl-response-bound-create",
+        "control_plan": [{
+            "step_id": "control_1",
+            "actor_ref": "actor-control",
+            "operation_ref": "op-create",
+            "body": {"name": "valid"},
+        }],
+        "treatment_plan": [{
+            "step_id": "treatment_1",
+            "actor_ref": "actor-control",
+            "operation_ref": "op-create",
+            "body": {},
+        }],
+        "binding_plan": [],
+        "fixture_dag": {"status": "READY", "nodes": [], "setup_order": []},
+        "assertions": [{
+            "assertion_id": "assert-validation",
+            "kind": "validation_rejection",
+            "expected_class": 4,
+            "expected_effect_count": 0,
+            "expected_control_effect_min": 1,
+        }],
+        "observers": [
+            {"observer_id": "http_response", "surface": "http_api"},
+            {
+                "observer_id": "business_effect",
+                "surface": "business_effect",
+                "resolver_operations": [{
+                    "operation_ref": "op-read-created",
+                    "method": "GET",
+                    "path": "/resources/{id}",
+                }],
+            },
+        ],
+        "cleanup_plan": [{
+            "action": "reverse_order_compensation",
+            "mode": "reverse_order",
+            "operation_ref": "op-delete",
+            "path": "/resources/{id}",
+            "method": "DELETE",
+            "runtime_response_binding_required": True,
+        }],
+        "safety_contract": {"environment_type": "test", "governed_write": True},
+        "source_refs": [{"source_id": "api", "kind": "api_operation"}],
+        "compile_receipt": {"status": "COMPILED", "reason_code": ""},
+    }
+    resources: dict[str, dict[str, object]] = {}
+
+    def fake_http(method: str, url: str, **kwargs):
+        path = "/" + url.split("://", 1)[1].split("/", 1)[1]
+        body = kwargs.get("body")
+        if method == "GET" and path == "/resources":
+            return {"status": 404, "body": {"error": "not_found"}, "headers": {}}
+        if method == "POST" and path == "/resources":
+            if isinstance(body, dict) and body.get("name"):
+                resources["r-1"] = {"id": "r-1", "name": body["name"]}
+                return {"status": 201, "body": dict(resources["r-1"]), "headers": {}}
+            return {"status": 422, "body": {"error": "name_required"}, "headers": {}}
+        if method == "GET" and path == "/resources/r-1":
+            if "r-1" in resources:
+                return {"status": 200, "body": dict(resources["r-1"]), "headers": {}}
+            return {"status": 404, "body": {"error": "not_found"}, "headers": {}}
+        if method == "DELETE" and path == "/resources/r-1":
+            resources.pop("r-1", None)
+            return {"status": 200, "body": {"deleted": True}, "headers": {}}
+        raise AssertionError(f"unexpected request: {method} {path}")
+
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_executor._http_request",
+        fake_http,
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.sandbox_write_executor._http_request",
+        fake_http,
+    )
+
+    result = execute_one_experiment(
+        experiment,
+        behavior_ir=behavior_ir,
+        root=tmp_path,
+        project="project",
+        base_url="http://target.invalid",
+        runtime_contract={
+            "environment_type": "test",
+            "environment_ref": "test-env",
+            "execution_mode": "approved_sandbox_write",
+            "approved_base_url": "http://target.invalid",
+            "status": "approved",
+        },
+        campaign_id="campaign",
+        execution_id="execution-response-bound-create",
+        actor_tokens={"secret_ref:owner": "owner-token"},
+    )
+
+    assert result["status"] == "EXECUTED", result
+    assert result["finding"] is None
+    effect_receipt = next(
+        receipt
+        for receipt in result["observer_receipts"]
+        if receipt["observer_id"] == "business_effect"
+    )
+    assert effect_receipt["status"] == "OBSERVED"
+    assert effect_receipt["evidence"]["control_effect_count"] == 1
+    assert effect_receipt["evidence"]["treatment_effect_count"] == 0
+    assert any(
+        step.get("phase") == "control_response_bound_effect_observation"
+        and step.get("path") == "/resources/r-1"
+        for step in result["steps"]
+    )
+    assert resources == {}
+
+
+def test_cleanup_compensation_uses_response_bound_created_state() -> None:
+    original = {
+        "accepted": True,
+        "method": "POST",
+        "path": "/resources",
+        "before": {"status": 404, "body": {"error": "not_found"}},
+        "after": {"status": 404, "body": {"error": "not_found"}},
+        "response_bound_after": {
+            "status": 200,
+            "body": {"id": "r-1", "state": "PENDING"},
+        },
+        "write": {"status": 201, "body": {"id": "r-1", "state": "PENDING"}},
+        "before_ref": "control_before:/resources:404",
+        "after_ref": "control_after:/resources:404",
+        "audit_path": "audit.jsonl",
+        "audit_record": {"operation_phase": "experiment_control"},
+    }
+    cleanup = {
+        "accepted": True,
+        "method": "POST",
+        "path": "/resources/r-1/reject",
+        "before": {"status": 200, "body": {"id": "r-1", "state": "PENDING"}},
+        "after": {"status": 200, "body": {"id": "r-1", "state": "REJECTED"}},
+        "write": {"status": 200, "body": {"id": "r-1", "state": "REJECTED"}},
+        "before_ref": "control_before:/resources/r-1:200",
+        "after_ref": "control_after:/resources/r-1:200",
+        "audit_path": "audit.jsonl",
+        "audit_record": {"operation_phase": "experiment_cleanup"},
+    }
+
+    assert _cleanup_restores_governed_write(original, cleanup) is True
 
 
 def test_executor_uses_same_resource_receipt_for_violation(
