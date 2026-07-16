@@ -215,6 +215,23 @@ def _read_json_safe(path: Path, default: Any) -> Any:
     return default
 
 
+def _read_json_artifact(path: Path) -> Any:
+    """Read a present JSON artifact or fail with its identity in the error."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid JSON artifact: {path}") from exc
+
+
+def _read_json_object(path: Path, *, missing: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not path.exists() or not path.is_file():
+        return dict(missing or {})
+    payload = _read_json_artifact(path)
+    if not isinstance(payload, dict):
+        raise ValueError(f"JSON artifact must be an object: {path}")
+    return payload
+
+
 def _regression_lookup_keys(*values: Any) -> set[str]:
     keys: set[str] = set()
     for value in values:
@@ -1824,13 +1841,9 @@ def _load_real_project_discovery_payload(root: Path, project_id: str) -> dict[st
     for candidate in candidates:
         if not candidate.exists():
             continue
-        try:
-            payload = json.loads(candidate.read_text(encoding="utf-8") or "null")
-        except Exception:
-            continue
-        if isinstance(payload, dict):
-            payload.setdefault("report_source_path", candidate.relative_to(root).as_posix() if candidate.is_relative_to(root) else str(candidate))
-            return payload
+        payload = _read_json_object(candidate)
+        payload.setdefault("report_source_path", candidate.relative_to(root).as_posix() if candidate.is_relative_to(root) else str(candidate))
+        return payload
     return None
 
 
@@ -4276,13 +4289,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
 
     @staticmethod
     def _read_json_dict(path: Path) -> dict[str, Any]:
-        if not path.exists() or not path.is_file():
-            return {}
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8") or "{}")
-        except Exception:
-            return {}
-        return payload if isinstance(payload, dict) else {}
+        return _read_json_object(path)
 
     @staticmethod
     def _mtime_utc(path: Path) -> str:
@@ -5324,38 +5331,31 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         # 这是"bug 货架"模型的核心：只要 bug 没修复（status='open'），
         # 就一直保留在列表里，即使本次扫描没触发也要展示。
         # 注意：只加载不在当前 report findings 中的（避免双重计算）
-        try:
-            tenant_id = _tenant_from_headers(dict(self.headers))
-            cumulative = db_persist.get_cumulative_findings(root, tenant_id, project_id)
-            if cumulative:
-                # Build dedupe keys from current report findings to avoid double-counting
-                import re as _re2
-                current_keys: set[str] = set()
-                for r in risks:
-                    t = str(r.get("title") or "")[:200].strip().lower()
-                    t = _re2.sub(r'^(\[[^\]]*\]\s*)+', '', t)
-                    t = _re2.sub(r'\s+', ' ', t).strip()
-                    m = str(r.get("_api_method") or (r.get("evidence") or {}).get("method") or "").upper()
-                    p = str(r.get("_api_path") or (r.get("evidence") or {}).get("path") or "").strip()
-                    current_keys.add(f"{t}|{m}|{p}")
-                # Only add cumulative findings NOT already in current report
-                added_count = 0
-                for f in cumulative:
-                    t = str(f.get("title") or "")[:200].strip().lower()
-                    t = _re2.sub(r'^(\[[^\]]*\]\s*)+', '', t)
-                    t = _re2.sub(r'\s+', ' ', t).strip()
-                    m = str(f.get("_api_method") or (f.get("evidence") or {}).get("method") or "").upper()
-                    p = str(f.get("_api_path") or (f.get("evidence") or {}).get("path") or "").strip()
-                    key = f"{t}|{m}|{p}"
-                    if key not in current_keys:
-                        f.setdefault("risk_type", f.get("category") or "累积发现")
-                        f.setdefault("defect_family", "cumulative")
-                        f.setdefault("_cumulative", True)
-                        risks.append(f)
-                        current_keys.add(key)
-                        added_count += 1
-        except Exception:
-            pass
+        tenant_id = _tenant_from_headers(dict(self.headers))
+        cumulative = db_persist.get_cumulative_findings(root, tenant_id, project_id)
+        if cumulative:
+            import re as _re2
+            current_keys: set[str] = set()
+            for r in risks:
+                t = str(r.get("title") or "")[:200].strip().lower()
+                t = _re2.sub(r'^(\[[^\]]*\]\s*)+', '', t)
+                t = _re2.sub(r'\s+', ' ', t).strip()
+                m = str(r.get("_api_method") or (r.get("evidence") or {}).get("method") or "").upper()
+                p = str(r.get("_api_path") or (r.get("evidence") or {}).get("path") or "").strip()
+                current_keys.add(f"{t}|{m}|{p}")
+            for f in cumulative:
+                t = str(f.get("title") or "")[:200].strip().lower()
+                t = _re2.sub(r'^(\[[^\]]*\]\s*)+', '', t)
+                t = _re2.sub(r'\s+', ' ', t).strip()
+                m = str(f.get("_api_method") or (f.get("evidence") or {}).get("method") or "").upper()
+                p = str(f.get("_api_path") or (f.get("evidence") or {}).get("path") or "").strip()
+                key = f"{t}|{m}|{p}"
+                if key not in current_keys:
+                    f.setdefault("risk_type", f.get("category") or "累积发现")
+                    f.setdefault("defect_family", "cumulative")
+                    f.setdefault("_cumulative", True)
+                    risks.append(f)
+                    current_keys.add(key)
         risks = self._dedupe_risks([item for item in risks if isinstance(item, dict)])
 
         # ── 为所有未关联文档的 finding 补充文档匹配（通用，非 v12 finding 也需要）──
@@ -5607,12 +5607,12 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             evidence_trust = scores.get("evidence_trust_score", evidence_trust)
         try:
             evidence_trust = max(0.0, min(100.0, float(evidence_trust or 0)))
-        except Exception:
-            evidence_trust = 0.0
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid evidence_trust_score in command-center projection") from exc
         try:
             ai_points = max(int(report.get("raw_total") or 0), int(report.get("total_findings") or 0), raw_candidate_total, canonical_total)
-        except Exception:
-            ai_points = max(raw_candidate_total, canonical_total)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid finding count in command-center report") from exc
         if canonical_total <= 0:
             evidence_grade = "C"
         elif evidence_trust >= 85:
@@ -5679,12 +5679,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         benchmark_data: dict[str, Any] = {}
         _bm_path = root / "platform_outputs" / project_id / "benchmark" / "benchmark_metrics.json"
         if _bm_path.exists():
-            try:
-                benchmark_data = json.loads(_bm_path.read_text(encoding="utf-8") or "{}")
-                if not isinstance(benchmark_data, dict):
-                    benchmark_data = {}
-            except Exception:
-                pass
+            benchmark_data = _read_json_object(_bm_path)
         if benchmark_data:
             scan_meta["benchmark_metrics"] = benchmark_data
         if campaign_scope:
@@ -5876,11 +5871,8 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         if spectrum:
             data["spectrum"] = spectrum
         # ── 累积 findings 统计 + continuous 状态 ──
-        try:
-            tenant_id = _tenant_from_headers(dict(self.headers))
-            data["cumulative_stats"] = db_persist.get_finding_stats(root, tenant_id, project_id)
-        except Exception:
-            pass
+        tenant_id = _tenant_from_headers(dict(self.headers))
+        data["cumulative_stats"] = db_persist.get_finding_stats(root, tenant_id, project_id)
         if commercial_assets:
             data["commercial_assets"] = commercial_assets
             data["scan_meta"]["commercial_handoff_status"] = _first_text((commercial_assets.get("commercial_handoff") or {}).get("status"))
@@ -5891,11 +5883,8 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             data["executive_summary"]["commercial_handoff_status"] = _first_text((commercial_assets.get("commercial_handoff") or {}).get("status"))
             data["executive_summary"]["delivery_package_status"] = _first_text((commercial_assets.get("delivery_package") or {}).get("status"))
         # ── Rounds Summary (Round 1-4 data for dashboard) ──
-        try:
-            from .rounds_summary import build_rounds_summary
-            data["rounds_summary"] = build_rounds_summary(project_id, root)
-        except Exception:
-            data["rounds_summary"] = {"available": False}
+        from .rounds_summary import build_rounds_summary
+        data["rounds_summary"] = build_rounds_summary(project_id, root)
 
         # ── 主链 8: 测试任务看板 ──
         # Surface the per-task lifecycle status board (主链 4), the production-data
@@ -5913,10 +5902,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             data["coverage_honesty"] = _coverage_honesty
             if _test_task_board:
                 data["test_task_board"]["coverage_honesty"] = _coverage_honesty
-        try:
-            data["continuous_state"] = _get_continuous_state(root, project_id)
-        except Exception:
-            pass
+        data["continuous_state"] = _get_continuous_state(root, project_id)
         # External evaluation / commercial quality projection (Phase 0 SSOT).
         # NOT_MEASURED must never surface as a quality score of 100 or 0.
         try:
@@ -6121,85 +6107,100 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         report = root / "platform_outputs" / project_id / "scan_result.json"
         if not report.exists():
             return []
-        try:
-            data = json.loads(report.read_text(encoding="utf-8"))
-            db_findings = data.get("db_verification", {}).get("findings", [])
-            for f in db_findings:
-                f.setdefault("risk_type", "db_snapshot")
-                f.setdefault("defect_family", "data_integrity")
-                f.setdefault("confidence_score", 0.95)
-                # 从 evidence.db_row 提取业务主键和表名（通用，不硬编码）
-                ev_row = f.get("evidence", {}).get("db_row") if isinstance(f.get("evidence"), dict) else None
-                if isinstance(ev_row, dict) and ev_row:
-                    # 第一个值作为业务主键（通用：db_row 通常只存一行数据的字段）
-                    for k, v in ev_row.items():
-                        if v is not None and str(v).strip():
-                            f.setdefault("source_value", str(v))
-                            break
-                # 从 description 提取实际行为（通用：description 是 DB 查询结果的文本描述）
-                desc = str(f.get("description") or "").strip()
-                if desc:
-                    f.setdefault("actual_behavior", desc)
-                # 预期行为：DB 验证的预期是"数据应符合业务约束"
-                f.setdefault("expected_behavior", "数据应符合业务一致性约束")
-            return db_findings
-        except Exception:
+        data = _read_json_object(report)
+        db_verification = data.get("db_verification")
+        if db_verification is None:
             return []
+        if not isinstance(db_verification, dict):
+            raise ValueError(f"db_verification must be an object: {report}")
+        db_findings = db_verification.get("findings", [])
+        if not isinstance(db_findings, list):
+            raise ValueError(f"db_verification.findings must be a list: {report}")
+        for index, finding in enumerate(db_findings):
+            if not isinstance(finding, dict):
+                raise ValueError(f"db_verification.findings[{index}] must be an object: {report}")
+            finding.setdefault("risk_type", "db_snapshot")
+            finding.setdefault("defect_family", "data_integrity")
+            ev_row = finding.get("evidence", {}).get("db_row") if isinstance(finding.get("evidence"), dict) else None
+            if isinstance(ev_row, dict) and ev_row:
+                for value in ev_row.values():
+                    if value is not None and str(value).strip():
+                        finding.setdefault("source_value", str(value))
+                        break
+            description = str(finding.get("description") or "").strip()
+            if description:
+                finding.setdefault("actual_behavior", description)
+        return db_findings
 
     @staticmethod
     def _load_perf_regressions(root: Path, project_id: str) -> list[dict]:
         perf_file = root / "platform_outputs" / project_id / "performance" / "baseline.json"
         if not perf_file.exists():
             return []
-        try:
-            history = json.loads(perf_file.read_text(encoding="utf-8"))
-            if not isinstance(history, list) or len(history) < 2:
-                return []
-            regressions = history[-1].get("regressions", []) if history else []
-            findings = []
-            for r in (regressions if isinstance(regressions, list) else []):
-                if isinstance(r, dict):
-                    findings.append({
-                        "risk_id": "perf_reg_" + r.get("metric", "unknown"),
-                        "title": r.get("detail", ""),
-                        "severity": r.get("severity", "P2"),
-                        "risk_type": "performance_regression",
-                        "defect_family": "performance",
-                        "confidence_score": 0.90,
-                        "source": "performance_baseline",
-                    })
-            return findings
-        except Exception:
+        history = _read_json_artifact(perf_file)
+        if not isinstance(history, list):
+            raise ValueError(f"performance baseline must be a list: {perf_file}")
+        if len(history) < 2:
             return []
+        latest = history[-1]
+        if not isinstance(latest, dict):
+            raise ValueError(f"latest performance baseline must be an object: {perf_file}")
+        regressions = latest.get("regressions", [])
+        if not isinstance(regressions, list):
+            raise ValueError(f"performance regressions must be a list: {perf_file}")
+        findings: list[dict[str, Any]] = []
+        for index, regression in enumerate(regressions):
+            if not isinstance(regression, dict):
+                raise ValueError(f"performance regressions[{index}] must be an object: {perf_file}")
+            finding = {
+                "risk_id": "perf_reg_" + str(regression.get("metric") or "unknown"),
+                "title": regression.get("detail", ""),
+                "severity": regression.get("severity", "P2"),
+                "risk_type": "performance_regression",
+                "defect_family": "performance",
+                "source": "performance_baseline",
+            }
+            if regression.get("confidence") is not None:
+                finding["confidence_score"] = float(regression["confidence"])
+            findings.append(finding)
+        return findings
 
     @staticmethod
     def _load_spectrum_findings(root: Path, project_id: str) -> list[dict]:
         spectrum = root / "platform_outputs" / project_id / "spectrum" / "spectrum_result.json"
         if not spectrum.exists():
             return []
-        try:
-            data = json.loads(spectrum.read_text(encoding="utf-8"))
-            findings = []
-            caps = data.get("capabilities", [])
-            for cap in (caps if isinstance(caps, list) else []):
-                # Skip test_gen — these are test case templates, not real bugs
-                if cap.get("id") == "test_gen":
+        data = _read_json_object(spectrum)
+        capabilities = data.get("capabilities", [])
+        if not isinstance(capabilities, list):
+            raise ValueError(f"spectrum capabilities must be a list: {spectrum}")
+        findings: list[dict[str, Any]] = []
+        for cap_index, capability in enumerate(capabilities):
+            if not isinstance(capability, dict):
+                raise ValueError(f"spectrum capabilities[{cap_index}] must be an object: {spectrum}")
+            if capability.get("id") == "test_gen":
+                continue
+            capability_findings = capability.get("findings", [])
+            if not isinstance(capability_findings, list):
+                raise ValueError(f"spectrum capability findings must be a list: {spectrum}")
+            for finding_index, source_finding in enumerate(capability_findings):
+                if not isinstance(source_finding, dict):
+                    raise ValueError(f"spectrum finding {cap_index}:{finding_index} must be an object: {spectrum}")
+                if not source_finding.get("bug_id"):
                     continue
-                for f in (cap.get("findings", []) if isinstance(cap, dict) else []):
-                    if isinstance(f, dict) and f.get("bug_id"):
-                        findings.append({
-                            "risk_id": f.get("bug_id", ""),
-                            "title": f"[全频谱] {f.get('title', '')}",
-                            "severity": f.get("severity", "P2"),
-                            "risk_type": f"spectrum_{cap.get('id', 'unknown')}",
-                            "defect_family": "spectrum",
-                            "confidence_score": float(f.get("confidence", 0.85)),
-                            "summary": str(f.get("description", f.get("title", ""))),
-                            "source": "full_spectrum",
-                        })
-            return findings
-        except Exception:
-            return []
+                finding = {
+                    "risk_id": source_finding.get("bug_id", ""),
+                    "title": f"[全频谱] {source_finding.get('title', '')}",
+                    "severity": source_finding.get("severity", "P2"),
+                    "risk_type": f"spectrum_{capability.get('id', 'unknown')}",
+                    "defect_family": "spectrum",
+                    "summary": str(source_finding.get("description", source_finding.get("title", ""))),
+                    "source": "full_spectrum",
+                }
+                if source_finding.get("confidence") is not None:
+                    finding["confidence_score"] = float(source_finding["confidence"])
+                findings.append(finding)
+        return findings
 
     @staticmethod
     def _load_spectrum_status_payload(root: Path, project_id: str) -> dict:
@@ -6207,71 +6208,59 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         ts_file = root / "platform_outputs" / project_id / "spectrum" / "spectrum_timestamp.txt"
         if not result_file.exists():
             return {"status": "not_run", "message": "尚未运行全频谱检测", "summary": {"total_findings": 0}, "capabilities": []}
-        try:
-            result = json.loads(result_file.read_text(encoding="utf-8"))
-            capabilities = result.get("capabilities")
-            summary = result.get("summary")
-            return {
-                "status": "completed",
-                "last_run": ts_file.read_text(encoding="utf-8").strip() if ts_file.exists() else "",
-                "summary": summary if isinstance(summary, dict) else {"total_findings": 0},
-                "capabilities": capabilities if isinstance(capabilities, list) else [],
-            }
-        except Exception:
-            return {"status": "error", "message": "无法读取检测结果", "summary": {"total_findings": 0}, "capabilities": []}
+        result = _read_json_object(result_file)
+        capabilities = result.get("capabilities")
+        summary = result.get("summary")
+        if capabilities is not None and not isinstance(capabilities, list):
+            raise ValueError(f"spectrum capabilities must be a list: {result_file}")
+        if summary is not None and not isinstance(summary, dict):
+            raise ValueError(f"spectrum summary must be an object: {result_file}")
+        return {
+            "status": "completed",
+            "last_run": ts_file.read_text(encoding="utf-8").strip() if ts_file.exists() else "",
+            "summary": summary or {"total_findings": 0},
+            "capabilities": capabilities or [],
+        }
 
-    @staticmethod
     @staticmethod
     def _load_multi_layer_findings(root: Path, project_id: str) -> list[dict]:
         scan_file = root / "platform_outputs" / project_id / "scan_result.json"
         if not scan_file.exists():
             return []
-        try:
-            data = json.loads(scan_file.read_text(encoding="utf-8"))
-            layers = data.get("layers", {})
-            findings = []
-            for layer_name, layer_data in layers.items():
-                if not isinstance(layer_data, dict):
-                    continue
-                details = layer_data.get("findings_details", [])
-                if details:
-                    for i, fd in enumerate(details):
-                        findings.append({
-                            "risk_id": f"layer_{layer_name}_{i}",
-                            "title": f"[{layer_name.upper()}] {fd.get('title', '')}",
-                            "severity": fd.get("severity", "P2"),
-                            "risk_type": f"multi_layer_{layer_name}",
-                            "defect_family": "multi_layer",
-                            "confidence_score": 0.85,
-                            "summary": fd.get("description", ""),
-                            "source": f"multi_layer_{layer_name}",
-                        })
-                else:
-                    count = layer_data.get("findings", 0)
-                    if count > 0:
-                        findings.append({
-                            "risk_id": f"layer_{layer_name}",
-                            "title": f"[{layer_name.upper()}] {count} 个{layer_name}层发现（详情需运行扫描获取）",
-                            "severity": "P2",
-                            "risk_type": f"multi_layer_{layer_name}",
-                            "defect_family": "multi_layer",
-                            "confidence_score": 0.70,
-                            "source": "multi_layer",
-                            "_summary_only": True,
-                        })
-            return findings
-        except Exception:
-            return []
+        data = _read_json_object(scan_file)
+        layers = data.get("layers", {})
+        if not isinstance(layers, dict):
+            raise ValueError(f"scan layers must be an object: {scan_file}")
+        findings: list[dict[str, Any]] = []
+        for layer_name, layer_data in layers.items():
+            if not isinstance(layer_data, dict):
+                raise ValueError(f"scan layer {layer_name} must be an object: {scan_file}")
+            details = layer_data.get("findings_details", [])
+            if not isinstance(details, list):
+                raise ValueError(f"scan layer {layer_name}.findings_details must be a list: {scan_file}")
+            for index, source_finding in enumerate(details):
+                if not isinstance(source_finding, dict):
+                    raise ValueError(f"scan layer {layer_name} finding {index} must be an object: {scan_file}")
+                finding = {
+                    "risk_id": f"layer_{layer_name}_{index}",
+                    "title": f"[{str(layer_name).upper()}] {source_finding.get('title', '')}",
+                    "severity": source_finding.get("severity", "P2"),
+                    "risk_type": f"multi_layer_{layer_name}",
+                    "defect_family": "multi_layer",
+                    "summary": source_finding.get("description", ""),
+                    "source": f"multi_layer_{layer_name}",
+                }
+                if source_finding.get("confidence") is not None:
+                    finding["confidence_score"] = float(source_finding["confidence"])
+                findings.append(finding)
+        return findings
 
     def _scan_counter(self, project_id: str, root: Path) -> dict:
         """Track how many times V12 scan has run for this project."""
-        import json, time
+        import time
         counter_path = root / "platform_outputs" / project_id / "scan_counter.json"
         if counter_path.exists():
-            try:
-                return json.loads(counter_path.read_text(encoding="utf-8"))
-            except Exception:
-                pass
+            return _read_json_object(counter_path)
         return {"count": 1, "first_scan_at": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
 
     def _auto_discovery_payload(self, project_id: str, root: Path, report: dict[str, Any]) -> dict:
@@ -7017,28 +7006,27 @@ def _get_continuous_state(root: Path, project: str) -> dict[str, Any]:
             "total_runs": 0,
             "message": "尚未运行过持续检测。上传文档后将自动开始。"
         }
-    try:
-        state = json.loads(state_file.read_text(encoding="utf-8"))
-        runs = state.get("runs", [])
-        last_run = runs[-1] if runs else {}
-        return {
-            "status": state.get("status", "idle"),
-            "converged": state.get("converged", False),
-            "runs": runs[-10:],
-            "total_runs": state.get("total_runs", len(runs)),
-            "last_scan": state.get("last_scan", ""),
-            "last_findings": last_run.get("findings", 0),
-            "last_coverage": last_run.get("coverage", 0),
-            "message": (
-                "持续检测覆盖已收敛，系统自动暂停。上传新文档后将自动恢复。"
-                if state.get("converged") else
-                "持续检测进行中，系统检测到新的覆盖空间。"
-                if runs else
-                "等待首次扫描..."
-            ),
-        }
-    except Exception:
-        return {"status": "error", "message": "无法读取持续检测状态。"}
+    state = _read_json_object(state_file)
+    runs = state.get("runs", [])
+    if not isinstance(runs, list) or any(not isinstance(run, dict) for run in runs):
+        raise ValueError(f"continuous discovery runs must be a list of objects: {state_file}")
+    last_run = runs[-1] if runs else {}
+    return {
+        "status": state.get("status", "idle"),
+        "converged": state.get("converged", False),
+        "runs": runs[-10:],
+        "total_runs": state.get("total_runs", len(runs)),
+        "last_scan": state.get("last_scan", ""),
+        "last_findings": last_run.get("findings", 0),
+        "last_coverage": last_run.get("coverage", 0),
+        "message": (
+            "持续检测覆盖已收敛，系统自动暂停。上传新文档后将自动恢复。"
+            if state.get("converged") else
+            "持续检测进行中，系统检测到新的覆盖空间。"
+            if runs else
+            "等待首次扫描..."
+        ),
+    }
 
 
 def main() -> int:
