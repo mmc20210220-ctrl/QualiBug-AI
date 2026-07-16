@@ -240,11 +240,26 @@ _benchmark_environment_id = (
     os.environ.get("QUALIBUG_BENCHMARK_ENVIRONMENT_ID", "").strip()
     or "benchmark_mall_test"
 )
+_evaluation_mode = (
+    os.environ.get("QUALIBUG_BENCHMARK_EVALUATION_MODE", "").strip()
+    or "operational"
+)
+_semantic_flag = os.environ.get(
+    "QUALIBUG_AGENT_SEMANTIC_LINKING_ENABLED",
+    "0",
+).strip().lower()
+if _semantic_flag not in {"0", "1", "false", "true", "off", "on"}:
+    raise SystemExit(
+        "QUALIBUG_AGENT_SEMANTIC_LINKING_ENABLED must be boolean"
+    )
 context = {
     "target_id": _benchmark_target_id,
     "scope_id": _benchmark_target_id,
+    "environment_id": _benchmark_environment_id,
     "environment_ref": _benchmark_environment_id,
     "environment_kind": "test",
+    "evaluation_mode": _evaluation_mode,
+    "agent_semantic_linking_enabled": _semantic_flag in {"1", "true", "on"},
     "source_manifest": {
         "source_id": "benchmark_mall/API_SPEC.md",
         "source_hash": source_hash,

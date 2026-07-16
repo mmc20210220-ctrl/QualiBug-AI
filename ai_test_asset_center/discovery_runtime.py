@@ -578,7 +578,13 @@ def _selected_rows(plan: DiscoveryPlanningBundle) -> list[dict[str, Any]]:
             **obligation,
             "candidate_id": _text(obligation.get("candidate_id")) or obligation_id,
             "experiment_id": _text(experiment.get("experiment_id")),
-            "adapter": adapters[0] if len(adapters) == 1 else "multi_surface",
+            "adapter": (
+                adapters[0]
+                if len(adapters) == 1
+                else "multi_surface"
+                if adapters
+                else "unavailable"
+            ),
             "execution_adapters": adapters,
             "agent_intent_id": _text(intent.get("intent_id")),
             "planning_round": 1,

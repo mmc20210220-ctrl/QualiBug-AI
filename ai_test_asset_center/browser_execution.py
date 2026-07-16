@@ -19,6 +19,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
+from .multimodal_locator import (
+    MultimodalLocatorError,
+    resolve_multimodal_locator,
+    validate_locator_intent,
+)
+
 
 _READ_ONLY_ACTIONS = {"goto", "expect_text", "expect_url", "wait_for_load", "screenshot"}
 _INTERACTIVE_ACTIONS = {"click", "fill", "check", "select_option", "press"}
@@ -96,8 +102,21 @@ def validate_browser_plan(plan: dict[str, Any], runtime_contract: dict[str, Any]
                 raise BrowserExecutionError("browser_target_outside_approved_base_url")
             raw["url"] = resolved
         elif action in _INTERACTIVE_ACTIONS | {"expect_text"}:
-            if not str(raw.get("selector") or "").strip():
-                raise BrowserExecutionError(f"browser_selector_missing:{action}")
+            selector = str(raw.get("selector") or "").strip()
+            locator_intent = raw.get("locator_intent")
+            if not selector and not isinstance(locator_intent, dict):
+                raise BrowserExecutionError(f"browser_locator_missing:{action}")
+            if selector and locator_intent:
+                raise BrowserExecutionError(
+                    f"browser_locator_authority_ambiguous:{action}"
+                )
+            if isinstance(locator_intent, dict):
+                try:
+                    raw["locator_intent"] = validate_locator_intent(
+                        locator_intent
+                    )
+                except MultimodalLocatorError as exc:
+                    raise BrowserExecutionError(str(exc)) from exc
         elif action == "expect_url" and not str(raw.get("pattern") or raw.get("url") or "").strip():
             raise BrowserExecutionError("browser_url_expectation_missing")
         raw["action"] = action
@@ -185,11 +204,25 @@ def execute_browser_plan(
         for step in validated["steps"]:
             action = step["action"]
             receipt: dict[str, Any] = {"step_index": step["step_index"], "action": action, "started_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+            locator = None
+            if action in _INTERACTIVE_ACTIONS | {"expect_text"}:
+                if isinstance(step.get("locator_intent"), dict):
+                    locator, locator_receipt = resolve_multimodal_locator(
+                        page,
+                        step["locator_intent"],
+                        artifact_dir=artifact_dir,
+                        step_index=step["step_index"],
+                    )
+                    receipt["multimodal_locator"] = locator_receipt
+                else:
+                    locator = page.locator(step["selector"])
             if action == "goto":
                 response = page.goto(step["url"], wait_until=str(step.get("wait_until") or "networkidle"), timeout=int(step.get("timeout_ms") or 30_000))
                 receipt.update({"url": _redact_url(step["url"]), "status": response.status if response else 0})
             elif action == "expect_text":
-                page.locator(step["selector"]).filter(has_text=str(step.get("text") or "")).first.wait_for(timeout=int(step.get("timeout_ms") or 10_000))
+                locator.filter(
+                    has_text=str(step.get("text") or "")
+                ).first.wait_for(timeout=int(step.get("timeout_ms") or 10_000))
             elif action == "expect_url":
                 page.wait_for_url(str(step.get("pattern") or step.get("url")), timeout=int(step.get("timeout_ms") or 10_000))
             elif action == "wait_for_load":
@@ -199,15 +232,15 @@ def execute_browser_plan(
                 page.screenshot(path=str(output), full_page=bool(step.get("full_page", True)))
                 receipt["screenshot"] = output.name
             elif action == "click":
-                page.locator(step["selector"]).click(timeout=int(step.get("timeout_ms") or 10_000))
+                locator.click(timeout=int(step.get("timeout_ms") or 10_000))
             elif action == "fill":
-                page.locator(step["selector"]).fill(str(step.get("value") or ""), timeout=int(step.get("timeout_ms") or 10_000))
+                locator.fill(str(step.get("value") or ""), timeout=int(step.get("timeout_ms") or 10_000))
             elif action == "check":
-                page.locator(step["selector"]).check(timeout=int(step.get("timeout_ms") or 10_000))
+                locator.check(timeout=int(step.get("timeout_ms") or 10_000))
             elif action == "select_option":
-                page.locator(step["selector"]).select_option(str(step.get("value") or ""), timeout=int(step.get("timeout_ms") or 10_000))
+                locator.select_option(str(step.get("value") or ""), timeout=int(step.get("timeout_ms") or 10_000))
             elif action == "press":
-                page.locator(step["selector"]).press(str(step.get("key") or "Enter"), timeout=int(step.get("timeout_ms") or 10_000))
+                locator.press(str(step.get("key") or "Enter"), timeout=int(step.get("timeout_ms") or 10_000))
             receipts.append(receipt)
         page.screenshot(path=str(screenshot_path), full_page=True)
         context.tracing.stop(path=str(trace_path))
