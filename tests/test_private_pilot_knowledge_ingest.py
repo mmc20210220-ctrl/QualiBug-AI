@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -138,6 +139,241 @@ def test_handle_ingest_returns_failure_when_knowledge_center_rejects_upload(monk
         "message": "资料导入失败：parser exploded",
     }
     assert list((tmp_path / "platform_workspace" / project / "input").glob("*")) == []
+
+
+def test_handle_ingest_does_not_report_success_when_knowledge_center_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project = "demo"
+    _ensure_known_project(tmp_path, project)
+    monkeypatch.setattr(
+        "ai_test_asset_center.document_change_watcher.ingest_document",
+        lambda path: {"ok": True, "path": path},
+    )
+
+    def fail_knowledge_ingest(*args, **kwargs):
+        raise RuntimeError("knowledge index unavailable")
+
+    monkeypatch.setattr(
+        "ai_test_asset_center.enterprise_knowledge_center.ingest_enterprise_knowledge_documents",
+        fail_knowledge_ingest,
+    )
+    handler = _JsonCaptureHandler()
+
+    with pytest.raises(RuntimeError, match="knowledge index unavailable"):
+        private_pilot_service.PrivatePilotHandler._handle_ingest(
+            handler,
+            project,
+            {"filename": "spec.md", "content": base64.b64encode(b"# PRD").decode("ascii")},
+            tmp_path,
+            {"name": "tester", "role": "project_owner"},
+        )
+
+    assert handler.payload is None
+    receipt = json.loads(
+        (tmp_path / "platform_outputs" / project / "knowledge_ingest_last_error.json").read_text(encoding="utf-8")
+    )
+    assert receipt["phase"] == "knowledge_center"
+    assert receipt["knowledge_updated"] is False
+    assert receipt["error"] == "knowledge index unavailable"
+
+
+def test_handle_ingest_stops_when_document_intelligence_reports_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project = "demo"
+    _ensure_known_project(tmp_path, project)
+    monkeypatch.setattr(
+        "ai_test_asset_center.document_change_watcher.ingest_document",
+        lambda path: {"ok": False, "error": "document parser failed", "path": path},
+    )
+
+    def reject_knowledge_ingest(*args, **kwargs):
+        raise AssertionError("knowledge center must not receive a failed document")
+
+    monkeypatch.setattr(
+        "ai_test_asset_center.enterprise_knowledge_center.ingest_enterprise_knowledge_documents",
+        reject_knowledge_ingest,
+    )
+    handler = _JsonCaptureHandler()
+
+    private_pilot_service.PrivatePilotHandler._handle_ingest(
+        handler,
+        project,
+        {"filename": "spec.md", "content": base64.b64encode(b"# PRD").decode("ascii")},
+        tmp_path,
+        {"name": "tester", "role": "project_owner"},
+    )
+
+    assert handler.status_code == 500
+    assert handler.payload == {
+        "ok": False,
+        "error": "DOCUMENT_INGEST_FAILED",
+        "message": "document parser failed",
+    }
+    assert list((tmp_path / "platform_workspace" / project / "input").glob("*")) == []
+
+
+def test_handle_ingest_rejects_malformed_knowledge_center_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project = "demo"
+    _ensure_known_project(tmp_path, project)
+    monkeypatch.setattr(
+        "ai_test_asset_center.document_change_watcher.ingest_document",
+        lambda path: {"ok": True, "path": path},
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.enterprise_knowledge_center.ingest_enterprise_knowledge_documents",
+        lambda *args, **kwargs: {"created": []},
+    )
+    handler = _JsonCaptureHandler()
+
+    with pytest.raises(ValueError, match="missing ok=true"):
+        private_pilot_service.PrivatePilotHandler._handle_ingest(
+            handler,
+            project,
+            {"filename": "spec.md", "content": base64.b64encode(b"# PRD").decode("ascii")},
+            tmp_path,
+            {"name": "tester", "role": "project_owner"},
+        )
+
+    receipt = json.loads(
+        (tmp_path / "platform_outputs" / project / "knowledge_ingest_last_error.json").read_text(encoding="utf-8")
+    )
+    assert receipt["phase"] == "knowledge_center"
+    assert receipt["error_type"] == "ValueError"
+
+
+def test_handle_ingest_does_not_hide_source_registry_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project = "demo"
+    _ensure_known_project(tmp_path, project)
+    monkeypatch.setattr(
+        "ai_test_asset_center.document_change_watcher.ingest_document",
+        lambda path: {"ok": True, "path": path},
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.enterprise_knowledge_center.ingest_enterprise_knowledge_documents",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "created": [{"source_id": "source-1"}],
+            "duplicates": [],
+        },
+    )
+
+    def fail_manifest(*args, **kwargs):
+        raise RuntimeError("source registry unavailable")
+
+    monkeypatch.setattr(
+        "ai_test_asset_center.enterprise_source_registry.resolve_source_manifest",
+        fail_manifest,
+    )
+    handler = _JsonCaptureHandler()
+
+    with pytest.raises(RuntimeError, match="source registry unavailable"):
+        private_pilot_service.PrivatePilotHandler._handle_ingest(
+            handler,
+            project,
+            {"filename": "spec.md", "content": base64.b64encode(b"# PRD").decode("ascii")},
+            tmp_path,
+            {"name": "tester", "role": "project_owner"},
+        )
+
+    assert handler.payload is None
+    receipt = json.loads(
+        (tmp_path / "platform_outputs" / project / "knowledge_ingest_last_error.json").read_text(encoding="utf-8")
+    )
+    assert receipt["phase"] == "source_registry"
+    assert receipt["knowledge_updated"] is True
+    assert receipt["source_id"] == "source-1"
+
+
+def test_invalid_api_document_skips_auto_scan_instead_of_launching_it(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project = "demo"
+    _ensure_known_project(tmp_path, project)
+    monkeypatch.setattr(
+        "ai_test_asset_center.document_change_watcher.ingest_document",
+        lambda path: {"ok": True, "path": path},
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.enterprise_knowledge_center.ingest_enterprise_knowledge_documents",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "created": [{"source_id": "source-1"}],
+            "duplicates": [],
+        },
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.enterprise_source_registry.resolve_source_manifest",
+        lambda *args, **kwargs: {"source_id": "source-1", "source_hash": "a" * 64},
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.universal_api_parser.parse_to_openapi",
+        lambda path: (_ for _ in ()).throw(ValueError("invalid OpenAPI document")),
+    )
+
+    def reject_thread(*args, **kwargs):
+        raise AssertionError("auto scan thread must not start for an invalid API document")
+
+    monkeypatch.setattr("threading.Thread", reject_thread)
+    handler = _JsonCaptureHandler()
+
+    private_pilot_service.PrivatePilotHandler._handle_ingest(
+        handler,
+        project,
+        {
+            "type": "openapi",
+            "filename": "openapi.yaml",
+            "content": base64.b64encode(b"not: valid: openapi").decode("ascii"),
+        },
+        tmp_path,
+        {"name": "tester", "role": "project_owner"},
+    )
+
+    assert handler.status_code == 200
+    assert handler.payload is not None
+    assert handler.payload["auto_scan"] == "skipped"
+    assert handler.payload["ingest_status"] == "created_scan_skipped"
+    assert "invalid OpenAPI document" in handler.payload["auto_scan_reason"]
+
+
+def test_ingest_auto_scan_failure_emits_receipt_and_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from ai_test_asset_center import __main__ as main_module
+
+    monkeypatch.setattr(
+        main_module,
+        "scan",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("scan provider unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="scan provider unavailable"):
+        private_pilot_service._run_ingest_auto_scan(
+            root=tmp_path,
+            project="demo",
+            body={},
+            raw=b"# PRD",
+            doc_type="prd",
+            source_manifest={"source_id": "source-1", "source_hash": "a" * 64},
+        )
+
+    receipt_path = tmp_path / "platform_outputs" / "demo" / "auto_scan_last_error.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["schema"] == "qualibug.auto-scan-failure.v1"
+    assert receipt["phase"] == "scan"
+    assert receipt["error_type"] == "RuntimeError"
+    assert receipt["error"] == "scan provider unavailable"
 
 
 def test_knowledge_asset_sources_align_with_ingested_inventory(tmp_path: Path) -> None:

@@ -1013,6 +1013,59 @@ def _prepare_v12_scan_body(project: str, root: Path, actor: dict[str, str], body
     return prepared
 
 
+def _run_ingest_auto_scan(
+    *,
+    root: Path,
+    project: str,
+    body: dict[str, Any],
+    raw: bytes,
+    doc_type: str,
+    source_manifest: dict[str, Any],
+) -> None:
+    """Run an ingest-triggered scan and persist a failure receipt before raising."""
+    phase = "runtime_defaults"
+    try:
+        scan_context: dict[str, Any] = {}
+        if source_manifest.get("source_id") and source_manifest.get("source_hash"):
+            scan_context["source_manifest"] = dict(source_manifest)
+        defaults = _resolve_scan_runtime_defaults(project, root, body)
+        if defaults.get("scope_id"):
+            scan_context["scope_id"] = defaults["scope_id"]
+        if defaults.get("environment_ref"):
+            scan_context["environment_ref"] = defaults["environment_ref"]
+        api_text = raw.decode("utf-8", errors="replace") if doc_type in {"openapi", "markdown_api"} else ""
+
+        phase = "scan"
+        from .__main__ import scan as scan_project
+
+        scan_result = scan_project(
+            project,
+            root,
+            api_doc_text=api_text,
+            campaign_context=scan_context,
+            save_report=True,
+        )
+        if not isinstance(scan_result, dict):
+            raise TypeError("ingest auto-scan result must be an object")
+
+        phase = "state_update"
+        _update_continuous_state(root, project, scan_result)
+    except Exception as exc:
+        _write_json_object_atomic(
+            root / "platform_outputs" / project / "auto_scan_last_error.json",
+            {
+                "schema": "qualibug.auto-scan-failure.v1",
+                "project": project,
+                "doc_type": doc_type,
+                "phase": phase,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            },
+        )
+        raise
+
+
 def _load_followup_ui_execution_requests(project: str, root: Path, body: dict[str, Any]) -> list[dict[str, Any]]:
     if body.get("disable_ui_execution_autogen") is True:
         return []
@@ -3540,23 +3593,42 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         # Run document intelligence pipeline
         from .document_change_watcher import ingest_document as _ingest
         doc_info = _ingest(str(out_path))
+        if not isinstance(doc_info, dict) or doc_info.get("ok") is not True:
+            message = str(doc_info.get("error") or "document intelligence returned an invalid result") if isinstance(doc_info, dict) else "document intelligence result must be an object"
+            out_path.unlink(missing_ok=True)
+            return self._json(
+                {"ok": False, "error": "DOCUMENT_INGEST_FAILED", "message": message},
+                500,
+            )
 
         # Ingest into knowledge center 鈥?must pass document envelope dicts
         source_manifest: dict[str, Any] = {}
+        knowledge_updated = False
+        source_id = ""
+        ingest_status = "pending"
+        auto_scan_reason = ""
+        ingest_phase = "knowledge_center"
         try:
             ingest_result = ingest_enterprise_knowledge_documents(project, [{"file_path": str(out_path), "filename": filename, "source_type": doc_type}], root=root, actor=actor)
-            if isinstance(ingest_result, dict) and ingest_result.get("ok") is False:
-                try:
-                    out_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
+            if not isinstance(ingest_result, dict):
+                raise TypeError("knowledge ingest result must be an object")
+            if "ok" not in ingest_result:
+                raise ValueError("knowledge ingest result missing ok=true")
+            if ingest_result.get("ok") is not True and ingest_result.get("ok") is not False:
+                raise ValueError("knowledge ingest result ok must be a boolean")
+            if ingest_result.get("ok") is False:
+                out_path.unlink(missing_ok=True)
                 errors = ingest_result.get("errors") if isinstance(ingest_result.get("errors"), list) else []
                 first_error = errors[0].get("error") if errors and isinstance(errors[0], dict) else "unknown"
                 message = "资料导入失败：" + str(first_error)
                 return self._json({"ok": False, "error": "INGEST_FAILED", "message": message}, 500)
             knowledge_updated = True
-            created = ingest_result.get("created") if isinstance(ingest_result, dict) and isinstance(ingest_result.get("created"), list) else []
-            duplicates = ingest_result.get("duplicates") if isinstance(ingest_result, dict) and isinstance(ingest_result.get("duplicates"), list) else []
+            created = ingest_result.get("created", [])
+            duplicates = ingest_result.get("duplicates", [])
+            if not isinstance(created, list):
+                raise ValueError("knowledge ingest result created must be a list")
+            if not isinstance(duplicates, list):
+                raise ValueError("knowledge ingest result duplicates must be a list")
             source_id = ""
             ingest_status = "created"
             if created and isinstance(created[0], dict):
@@ -3564,44 +3636,47 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             elif duplicates and isinstance(duplicates[0], dict):
                 source_id = str(duplicates[0].get("source_id") or "")
                 ingest_status = "duplicate"
-            try:
-                from .enterprise_source_registry import register_source_asset, resolve_source_manifest
+            ingest_phase = "source_registry"
+            from .enterprise_source_registry import register_source_asset, resolve_source_manifest
 
-                source_asset_id = source_id or f"{doc_type}:{filename}"
-                text_content = raw.decode("utf-8", errors="replace")
-                source_manifest = resolve_source_manifest(project, text_content, root=root)
-                if not source_manifest:
-                    source_manifest = register_source_asset(
-                        project,
-                        source_asset_id,
-                        text_content,
-                        source_type=doc_type,
-                        root=root,
-                        actor=actor,
-                        origin="knowledge_ingest",
-                        filename=filename,
-                        metadata={
-                            "knowledge_source_id": source_id,
-                            "storage_mode": "verbatim_bytes",
-                            "input_path": str(out_path.relative_to(root)) if str(out_path).startswith(str(root)) else str(out_path),
-                        },
-                    )
-            except Exception as exc:
-                source_manifest = {"status": "unavailable", "reason": type(exc).__name__}
+            source_asset_id = source_id or f"{doc_type}:{filename}"
+            text_content = raw.decode("utf-8", errors="replace")
+            source_manifest = resolve_source_manifest(project, text_content, root=root)
+            if not source_manifest:
+                source_manifest = register_source_asset(
+                    project,
+                    source_asset_id,
+                    text_content,
+                    source_type=doc_type,
+                    root=root,
+                    actor=actor,
+                    origin="knowledge_ingest",
+                    filename=filename,
+                    metadata={
+                        "knowledge_source_id": source_id,
+                        "storage_mode": "verbatim_bytes",
+                        "input_path": str(out_path.relative_to(root)) if str(out_path).startswith(str(root)) else str(out_path),
+                    },
+                )
+            if not isinstance(source_manifest, dict):
+                raise TypeError("source manifest must be an object")
+            manifest_source_id = str(source_manifest.get("source_id") or "").strip()
+            manifest_source_hash = str(source_manifest.get("source_hash") or "").strip().lower().removeprefix("sha256:")
+            if not manifest_source_id or re.fullmatch(r"[0-9a-f]{64}", manifest_source_hash) is None:
+                raise ValueError("source manifest missing valid source_id/source_hash")
             # Clear caches so dashboard picks up new data
-            try:
-                knowledge_cache = root / "platform_workspace" / project / "defect_discovery" / "enterprise_business_knowledge_asset.json"
-                if knowledge_cache.exists():
-                    knowledge_cache.unlink()
-                dash_html = root / "platform_outputs" / project / "enterprise_pilot_runtime" / "enterprise_pilot_center.html"
-                if dash_html.exists():
-                    dash_html.unlink()
-            except Exception:
-                pass
+            ingest_phase = "cache_invalidation"
+            knowledge_cache = root / "platform_workspace" / project / "defect_discovery" / "enterprise_business_knowledge_asset.json"
+            if knowledge_cache.exists():
+                knowledge_cache.unlink()
+            dash_html = root / "platform_outputs" / project / "enterprise_pilot_runtime" / "enterprise_pilot_center.html"
+            if dash_html.exists():
+                dash_html.unlink()
 
             # ── Validate before auto-scan ──
             # Trigger auto-scan for ALL meaningful project documents
             # (PRD, DB schema, business rules, configs etc. all contain bug-relevant info)
+            ingest_phase = "auto_scan_validation"
             auto_scan_types = {"openapi", "prd", "markdown_api", "db_design", "business_rules",
                               "test_data", "config", "deploy", "ui_design", "collaboration_document",
                               "mobile_android", "mobile_ios"}
@@ -3617,8 +3692,9 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                         should_auto_scan = False
                         auto_scan_reason = "文件未检测到有效的API端点定义，跳过自动检测。请确认文件格式正确。"
                     # Even a single endpoint is valid — always trigger if parseable
-                except Exception:
-                    auto_scan_reason = "文件解析失败，跳过自动检测。"
+                except Exception as exc:
+                    should_auto_scan = False
+                    auto_scan_reason = f"文件解析失败，跳过自动检测：{exc}"
 
             if should_auto_scan and doc_type == "prd":
                 # PRD changes of any size can introduce bugs (e.g., a single
@@ -3627,71 +3703,40 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
 
             # ── Auto-trigger scan (validated) ──
             if should_auto_scan:
+                ingest_phase = "auto_scan_schedule"
                 import threading as _threading
-                _scan_root = root
-                _scan_project = project
-                def _auto_scan():
-                    try:
-                        import time as _time
-                        _time.sleep(2)  # brief delay for file system sync
-                        from .__main__ import scan as _scan_fn
-                        scan_context: dict[str, Any] = {}
-                        if isinstance(source_manifest, dict) and source_manifest.get("source_id") and source_manifest.get("source_hash"):
-                            scan_context["source_manifest"] = source_manifest
-                        defaults = _resolve_scan_runtime_defaults(_scan_project, _scan_root, body)
-                        if defaults.get("scope_id"):
-                            scan_context["scope_id"] = defaults["scope_id"]
-                        if defaults.get("environment_ref"):
-                            scan_context["environment_ref"] = defaults["environment_ref"]
-                        api_text = raw.decode("utf-8", errors="replace") if doc_type in {"openapi", "markdown_api"} else ""
-                        _scan_result = _scan_fn(
-                            _scan_project,
-                            _scan_root,
-                            api_doc_text=api_text,
-                            campaign_context=scan_context,
-                            save_report=True,
-                        )
-                        _update_continuous_state(_scan_root, _scan_project, _scan_result)
-                    except Exception as _auto_exc:
-                        # Fail loud & observable: never let an auto-scan die silently.
-                        # A swallowed failure makes ingest look successful while the
-                        # main chain produced no scan side-effects.
-                        import sys as _sys
-                        _tb_text = traceback.format_exc()
-                        try:
-                            _sys.stderr.write(
-                                f"[auto_scan] project={_scan_project} failed: {_auto_exc}\n{_tb_text}\n"
-                            )
-                            _sys.stderr.flush()
-                        except Exception:
-                            pass
-                        try:
-                            _marker_dir = _scan_root / "platform_outputs" / _scan_project
-                            _marker_dir.mkdir(parents=True, exist_ok=True)
-                            (_marker_dir / "auto_scan_last_error.json").write_text(
-                                json.dumps(
-                                    {
-                                        "project": _scan_project,
-                                        "doc_type": doc_type,
-                                        "error": str(_auto_exc),
-                                        "traceback": _tb_text,
-                                        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                                    },
-                                    ensure_ascii=False,
-                                    indent=2,
-                                ),
-                                encoding="utf-8",
-                            )
-                        except Exception:
-                            pass
-                _threading.Thread(target=_auto_scan, daemon=True).start()
+                _threading.Thread(
+                    target=_run_ingest_auto_scan,
+                    kwargs={
+                        "root": root,
+                        "project": project,
+                        "body": dict(body),
+                        "raw": raw,
+                        "doc_type": doc_type,
+                        "source_manifest": dict(source_manifest),
+                    },
+                    daemon=True,
+                ).start()
                 ingest_status = f"{ingest_status}_auto_scanning"
             elif auto_scan_reason:
                 ingest_status = f"{ingest_status}_scan_skipped"
-        except Exception:
-            knowledge_updated = False
-            source_id = ""
-            ingest_status = "saved_only"
+        except Exception as exc:
+            _write_json_object_atomic(
+                root / "platform_outputs" / project / "knowledge_ingest_last_error.json",
+                {
+                    "schema": "qualibug.knowledge-ingest-failure.v1",
+                    "project": project,
+                    "filename": filename,
+                    "doc_type": doc_type,
+                    "phase": ingest_phase,
+                    "knowledge_updated": knowledge_updated,
+                    "source_id": source_id,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                    "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                },
+            )
+            raise
 
         return self._json({
             "ok": True,
