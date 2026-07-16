@@ -66,7 +66,7 @@ from ai_test_asset_center.private_pilot_scan_result_repair_patch import (
     install_scan_result_repair_patch,
     restore_scan_result_repair_patch,
 )
-from ai_test_asset_center.private_pilot_server import install_customer_delivery_gate_patch
+from ai_test_asset_center.private_pilot_server import install_command_center_runtime_support
 from ai_test_asset_center.private_pilot_system_behavior_space_patch import (
     install_system_behavior_space_patch,
     restore_system_behavior_space_patch,
@@ -150,7 +150,7 @@ def restore_deployment_contract_patch() -> None:
 
 
 def install_runtime_patches() -> None:
-    install_customer_delivery_gate_patch()
+    install_command_center_runtime_support()
     install_extracted_scan_campaign_context_patch()
     install_extracted_credential_safety_patch()
     install_scan_result_repair_patch(patch_source=PATCH_SOURCE)

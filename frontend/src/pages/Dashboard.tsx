@@ -402,7 +402,7 @@ export function Dashboard() {
   const benchmarkActive = Boolean(benchmarkMetrics.benchmark_active) && !qualitySuppressed;
   const benchmarkFailed = asText(benchmarkMetrics.status) === 'FAILED_SAFE';
   const gatePatch = getGatePatchStatus(record);
-  const gatePatchEnabled = Boolean(gatePatch.patched);
+  const gatePatchEnabled = Boolean(gatePatch.core_gate_direct);
   const gatePatchSource = asText(gatePatch.source) || '未上报';
   const activePartitionName = asText(gatePatch.active_partition_name) || '未上报';
   const mainChainContract = getMainChainContract(record);
@@ -595,11 +595,11 @@ export function Dashboard() {
       <article className={`customer-secondary-card${gatePatchEnabled ? '' : ' muted'}`}>
         <span className="customer-value-kicker">交付 Gate 诊断</span>
         <h3>{gatePatchLabel(gatePatchEnabled)}</h3>
-        <p>{gatePatchEnabled ? '客户缺陷列表已通过严格后端 Gate 分流，未达标结果会进入内部线索池。' : '当前返回体未确认严格 Gate 状态，建议检查后端是否通过 qualibug-server 启动。'}</p>
+        <p>{gatePatchEnabled ? '核心服务已直接绑定严格交付 Gate，未达标结果会进入内部线索池。' : '当前返回体未确认核心交付 Gate 绑定，请检查后端版本与启动入口。'}</p>
         <div className="customer-secondary-meta">
           <span><em>来源</em><b>{gatePatchSource}</b></span>
           <span><em>分流函数</em><b>{activePartitionName}</b></span>
-          <span><em>原函数保留</em><b>{gatePatch.has_original_partition ? '是' : '否'}</b></span>
+          <span><em>核心直连</em><b>{gatePatch.core_gate_direct ? '是' : '否'}</b></span>
         </div>
       </article>
       {campaignStatus && (

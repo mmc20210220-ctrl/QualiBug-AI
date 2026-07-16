@@ -184,7 +184,7 @@ def test_private_pilot_server_uses_extracted_credential_safety_authority() -> No
     private_pilot_server.restore_customer_delivery_gate_patch()
     credential_patch.restore_service_credentials_patch()
     try:
-        private_pilot_server.install_customer_delivery_gate_patch()
+        private_pilot_server.install_command_center_runtime_support()
 
         assert service._SERVICE_CREDENTIALS_PATCH_SOURCE == private_pilot_server.PATCH_SOURCE
     finally:

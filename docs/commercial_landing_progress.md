@@ -65,9 +65,9 @@ Current commercial rule:
 
 Current service integration:
 
-- `qualibug-server` now starts through `ai_test_asset_center.private_pilot_server:run_server`.
-- The wrapper installs the strict backend customer-delivery gate before delegating to the original private pilot service.
-- The wrapper exposes patch status and restore helpers for operational diagnostics and isolated tests.
+- `qualibug-server` starts only through `ai_test_asset_center.private_pilot_entrypoint:run_server`.
+- `private_pilot_service` is the core HTTP implementation and imports the canonical customer-delivery gate directly; delivery classification does not depend on runtime patch installation.
+- The canonical entrypoint composes auxiliary runtime adapters and exposes their status for operational diagnostics and isolated tests.
 - Command-center responses now include `customer_delivery_gate_patch` at the top level and under `data`, `data_contract`, and `delivery_tracks`.
 - Command-center responses now include `main_chain_contract` and `main_chain_contract_summary` loaded from backend output/workspace artifacts.
 - Command-center responses now include `evidence_bundle_normalization_report` and a compact summary of normalized and blocked evidence items.
@@ -83,5 +83,4 @@ Current service integration:
 Next engineering step:
 
 - Move the per-item evidence actions into the dedicated evidence page so operators can review the full blocked-evidence list, not only the dashboard top three.
-- Replace the legacy `_partition_delivery_tracks()` implementation inside `private_pilot_service.py` directly when a safe small patch path is available.
-- Keep the wrapper as a compatibility safety net for default startup.
+- Continue extracting auxiliary runtime adapters behind `private_pilot_entrypoint` while preserving one launch authority and direct core correctness.

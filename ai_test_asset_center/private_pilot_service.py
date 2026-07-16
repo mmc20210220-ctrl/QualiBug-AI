@@ -7338,28 +7338,8 @@ def _get_continuous_state(root: Path, project: str) -> dict[str, Any]:
     }
 
 
-def main() -> int:
-    server = run_private_pilot_service()
-    print(f"QualiBug private pilot service: http://{server.server_address[0]}:{server.server_address[1]}")
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        server.server_close()
-    return 0
-
-
 if __name__ == "__main__":
-    # Load .env and .env.local for LLM configuration
-    try:
-        from dotenv import load_dotenv
-        from pathlib import Path as _P
-        _proj_root = _P(__file__).resolve().parent.parent
-        for _name in (".env", ".env.local"):
-            _ep = _proj_root / _name
-            if _ep.exists():
-                load_dotenv(_ep, override=True)
-    except ImportError:
-        pass
-    raise SystemExit(main())
+    raise SystemExit(
+        "Unsupported launch path. Use qualibug-server "
+        "(ai_test_asset_center.private_pilot_entrypoint:run_server)."
+    )

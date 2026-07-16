@@ -23,6 +23,7 @@ except RuntimeError as exc:
     _SERVICE_IMPORT_ERROR = str(exc)[:300]
 else:
     _SERVICE_IMPORT_ERROR = ""
+from ai_test_asset_center.customer_delivery_gate import split_customer_delivery_tracks
 from ai_test_asset_center.private_pilot_health_contract import build_private_pilot_health_payload
 from ai_test_asset_center.version import (
     CANONICAL_HEALTH_PATH,
@@ -136,10 +137,16 @@ def _credential_key_status(root: Path) -> dict[str, Any]:
 
 
 def _runtime_patch_status() -> dict[str, Any]:
+    core_gate_direct = (
+        _service is not None
+        and getattr(_service, "_partition_delivery_tracks", None) is split_customer_delivery_tracks
+    )
     return {
         "customer_delivery_gate": {
-            "patched": bool(getattr(_service, "_CUSTOMER_DELIVERY_GATE_PATCHED", False)),
-            "source": str(getattr(_service, "_CUSTOMER_DELIVERY_GATE_PATCH_SOURCE", "")),
+            "patched": core_gate_direct,
+            "source": "ai_test_asset_center.private_pilot_service" if core_gate_direct else "",
+            "core_gate_direct": core_gate_direct,
+            "runtime_partition_override": False,
         },
         "scan_campaign_context": {
             "patched": bool(getattr(_service, "_SCAN_CAMPAIGN_CONTEXT_PATCHED", False)),

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -174,6 +176,36 @@ def test_service_core_uses_the_canonical_customer_delivery_gate() -> None:
     assert clues[0]["customer_delivery_gate_reasons"]
 
 
+def test_runtime_installation_does_not_override_the_core_delivery_gate() -> None:
+    from ai_test_asset_center import private_pilot_server, private_pilot_service
+    from ai_test_asset_center.customer_delivery_gate import split_customer_delivery_tracks
+
+    private_pilot_server.restore_customer_delivery_gate_patch()
+    try:
+        private_pilot_server.install_command_center_runtime_support()
+        status = private_pilot_server.customer_delivery_gate_patch_status()
+
+        assert private_pilot_service._partition_delivery_tracks is split_customer_delivery_tracks
+        assert getattr(private_pilot_service, "_ORIGINAL_PARTITION_DELIVERY_TRACKS", None) is None
+        assert status["core_gate_direct"] is True
+        assert status["runtime_partition_override"] is False
+        assert status["source"] == "ai_test_asset_center.private_pilot_service"
+        assert status["diagnostics_installed"] is True
+    finally:
+        private_pilot_server.restore_customer_delivery_gate_patch()
+
+
+def test_doctor_reports_core_delivery_gate_without_runtime_patch_dependency() -> None:
+    from ai_test_asset_center import private_pilot_doctor, private_pilot_server
+
+    private_pilot_server.restore_customer_delivery_gate_patch()
+    status = private_pilot_doctor._runtime_patch_status()["customer_delivery_gate"]
+
+    assert status["patched"] is True
+    assert status["core_gate_direct"] is True
+    assert status["runtime_partition_override"] is False
+
+
 def test_packaging_has_one_server_entrypoint() -> None:
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     setup_source = (ROOT / "setup.py").read_text(encoding="utf-8")
@@ -191,3 +223,34 @@ def test_packaging_has_one_server_entrypoint() -> None:
         ROOT / "ai_test_asset_center" / "loop_watchdog.py",
     ):
         assert legacy_command not in path.read_text(encoding="utf-8")
+
+
+def test_core_and_legacy_wrapper_do_not_expose_server_launch_authorities() -> None:
+    from ai_test_asset_center import private_pilot_server, private_pilot_service
+
+    assert not hasattr(private_pilot_service, "main")
+    assert not hasattr(private_pilot_server, "run_server")
+
+
+def test_unsupported_core_module_launch_fails_with_canonical_entrypoint_guidance() -> None:
+    for module in (
+        "ai_test_asset_center.private_pilot_service",
+        "ai_test_asset_center.private_pilot_server",
+    ):
+        completed = subprocess.run(
+            [sys.executable, "-m", module],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert completed.returncode != 0
+        assert "ai_test_asset_center.private_pilot_entrypoint:run_server" in completed.stderr
+
+
+def test_commercial_landing_documentation_names_the_canonical_server_entrypoint() -> None:
+    progress = (ROOT / "docs" / "commercial_landing_progress.md").read_text(encoding="utf-8")
+
+    assert "ai_test_asset_center.private_pilot_entrypoint:run_server" in progress
+    assert "ai_test_asset_center.private_pilot_server:run_server" not in progress

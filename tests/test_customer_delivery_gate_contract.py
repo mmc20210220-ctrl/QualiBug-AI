@@ -84,7 +84,8 @@ def test_dashboard_surfaces_delivery_gate_patch_status() -> None:
     assert "严格 Gate 已启用" in page
     assert "严格 Gate 未确认" in page
     assert "active_partition_name" in page
-    assert "has_original_partition" in page
+    assert "core_gate_direct" in page
+    assert "has_original_partition" not in page
 
 
 def test_dashboard_surfaces_main_chain_contract_status() -> None:

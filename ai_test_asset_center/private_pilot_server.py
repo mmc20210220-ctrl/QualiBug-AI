@@ -3,9 +3,10 @@ from __future__ import annotations
 """Patched private pilot server entrypoint.
 
 The legacy private pilot service is intentionally kept stable because it is a
-large HTTP entrypoint. This wrapper installs the stricter backend customer
-delivery gate, the scan campaign-context bridge, and private-pilot credential
-safety guards before delegating to the original server runner.
+large HTTP implementation. This module supplies command-center diagnostics,
+the scan campaign-context bridge, and credential safety adapters to the one
+supported launch authority in ``private_pilot_entrypoint``. Customer-delivery
+classification itself is bound directly in the core service.
 """
 
 import contextvars
@@ -439,14 +440,13 @@ def _install_scan_campaign_context_patch() -> None:
     _service._SCAN_CAMPAIGN_CONTEXT_PATCH_SOURCE = PATCH_SOURCE  # type: ignore[attr-defined]
 
 
-def install_customer_delivery_gate_patch() -> None:
-    """Route legacy delivery-track partitioning and scan context through backend gates."""
+def install_command_center_runtime_support() -> None:
+    """Install command-center diagnostics and auxiliary runtime adapters."""
     _install_scan_campaign_context_patch()
     install_service_credentials_patch(patch_source=PATCH_SOURCE)
     if getattr(_service, "_CUSTOMER_DELIVERY_GATE_PATCHED", False):
         return
 
-    original_partition = getattr(_service, "_partition_delivery_tracks", None)
     original_normalizer = getattr(_service, "_normalize_command_center_envelope", None)
 
     def _strict_normalize_command_center_envelope(payload: dict[str, Any]) -> dict[str, Any]:
@@ -455,9 +455,7 @@ def install_customer_delivery_gate_patch() -> None:
         normalized = _inject_evidence_normalization_report(normalized)
         return _inject_main_chain_contract(normalized)
 
-    _service._ORIGINAL_PARTITION_DELIVERY_TRACKS = original_partition  # type: ignore[attr-defined]
     _service._ORIGINAL_NORMALIZE_COMMAND_CENTER_ENVELOPE = original_normalizer  # type: ignore[attr-defined]
-    _service._partition_delivery_tracks = split_customer_delivery_tracks  # type: ignore[attr-defined]
     _service._normalize_command_center_envelope = _strict_normalize_command_center_envelope  # type: ignore[attr-defined]
     _service._CUSTOMER_DELIVERY_GATE_PATCHED = True  # type: ignore[attr-defined]
     _service._CUSTOMER_DELIVERY_GATE_PATCH_SOURCE = PATCH_SOURCE  # type: ignore[attr-defined]
@@ -465,10 +463,15 @@ def install_customer_delivery_gate_patch() -> None:
 
 def customer_delivery_gate_patch_status() -> dict[str, Any]:
     """Return runtime diagnostics for the delivery-gate and scan-context patches."""
+    core_gate_direct = getattr(_service, "_partition_delivery_tracks", None) is split_customer_delivery_tracks
+    diagnostics_installed = bool(getattr(_service, "_CUSTOMER_DELIVERY_GATE_PATCHED", False))
     return {
-        "patched": bool(getattr(_service, "_CUSTOMER_DELIVERY_GATE_PATCHED", False)),
-        "source": str(getattr(_service, "_CUSTOMER_DELIVERY_GATE_PATCH_SOURCE", "")),
-        "has_original_partition": bool(getattr(_service, "_ORIGINAL_PARTITION_DELIVERY_TRACKS", None)),
+        "patched": core_gate_direct,
+        "source": "ai_test_asset_center.private_pilot_service" if core_gate_direct else "",
+        "core_gate_direct": core_gate_direct,
+        "runtime_partition_override": False,
+        "diagnostics_installed": diagnostics_installed,
+        "diagnostics_source": str(getattr(_service, "_CUSTOMER_DELIVERY_GATE_PATCH_SOURCE", "")),
         "has_original_normalizer": bool(getattr(_service, "_ORIGINAL_NORMALIZE_COMMAND_CENTER_ENVELOPE", None)),
         "active_partition_name": getattr(getattr(_service, "_partition_delivery_tracks", None), "__name__", ""),
         "active_normalizer_name": getattr(getattr(_service, "_normalize_command_center_envelope", None), "__name__", ""),
@@ -484,10 +487,7 @@ def customer_delivery_gate_patch_status() -> dict[str, Any]:
 def restore_customer_delivery_gate_patch() -> None:
     """Restore the original partition, normalizer, scan, handler and loop functions for tests."""
     restore_service_credentials_patch()
-    original_partition = getattr(_service, "_ORIGINAL_PARTITION_DELIVERY_TRACKS", None)
     original_normalizer = getattr(_service, "_ORIGINAL_NORMALIZE_COMMAND_CENTER_ENVELOPE", None)
-    if original_partition is not None:
-        _service._partition_delivery_tracks = original_partition  # type: ignore[attr-defined]
     if original_normalizer is not None:
         _service._normalize_command_center_envelope = original_normalizer  # type: ignore[attr-defined]
 
@@ -508,7 +508,6 @@ def restore_customer_delivery_gate_patch() -> None:
 
     _service._CUSTOMER_DELIVERY_GATE_PATCHED = False  # type: ignore[attr-defined]
     _service._CUSTOMER_DELIVERY_GATE_PATCH_SOURCE = ""  # type: ignore[attr-defined]
-    _service._ORIGINAL_PARTITION_DELIVERY_TRACKS = None  # type: ignore[attr-defined]
     _service._ORIGINAL_NORMALIZE_COMMAND_CENTER_ENVELOPE = None  # type: ignore[attr-defined]
     _service._SCAN_CAMPAIGN_CONTEXT_PATCHED = False  # type: ignore[attr-defined]
     _service._SCAN_CAMPAIGN_CONTEXT_PATCH_SOURCE = ""  # type: ignore[attr-defined]
@@ -519,10 +518,8 @@ def restore_customer_delivery_gate_patch() -> None:
     _CONTINUOUS_CAMPAIGN_CONTEXTS.clear()
 
 
-def run_server() -> None:
-    install_customer_delivery_gate_patch()
-    server = _service.run_private_pilot_service()
-    try:
-        server.serve_forever()
-    finally:
-        server.server_close()
+if __name__ == "__main__":
+    raise SystemExit(
+        "Unsupported launch path. Use qualibug-server "
+        "(ai_test_asset_center.private_pilot_entrypoint:run_server)."
+    )
