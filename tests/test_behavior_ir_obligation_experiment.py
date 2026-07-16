@@ -105,6 +105,72 @@ def test_request_body_placeholder_without_declared_resolver_stays_unresolved() -
     assert unresolved_placeholders(operation, plan) == ["order_id"]
 
 
+def test_source_declared_fixture_create_satisfies_path_placeholder_binding() -> None:
+    operation = {
+        "id": "reject_refund",
+        "method": "POST",
+        "path": "/api/refunds/{id}/reject",
+        "read_write": "write",
+        "request_example": {},
+    }
+    create_refund = {
+        "id": "create_refund",
+        "method": "POST",
+        "path": "/api/refunds",
+        "read_write": "write",
+        "request_example": {
+            "orderId": "<order_id>",
+            "amount": 100,
+            "reason": "customer_requested",
+        },
+    }
+    behavior_ir = {
+        "operations": [
+            operation,
+            create_refund,
+            {
+                "id": "read_refund",
+                "method": "GET",
+                "path": "/api/refunds/{id}",
+                "read_write": "read",
+            },
+            {
+                "id": "list_orders",
+                "method": "GET",
+                "path": "/api/orders",
+                "read_write": "read",
+            },
+        ],
+        "actors": [{
+            "id": "actor-admin",
+            "role": "admin",
+            "credential_secret_ref": "secret_ref:admin",
+        }],
+    }
+
+    plan = build_binding_plan(
+        operation=operation,
+        obligation={},
+        behavior_ir=behavior_ir,
+    )
+
+    binding = next(row for row in plan if row.get("target") == "id")
+    assert binding["status"] == "runtime_resolvable"
+    assert binding["source_priority"] == "fixture_create_only"
+    assert binding["resolver_operations"] == []
+    assert binding["fixture_setup"]["operation_ref"] == "create_refund"
+    assert binding["fixture_setup"]["body_bindings"] == [{
+        "target": "orderId",
+        "template_token": "order_id",
+        "resolver_operations": [{
+            "operation_ref": "list_orders",
+            "method": "GET",
+            "path": "/api/orders",
+        }],
+    }]
+    assert unresolved_placeholders(operation, plan) == []
+
+
 def _sample_asset() -> dict:
     return {
         "sources": [{"source_id": "src-api", "filename": "api.md", "source_type": "api"}],

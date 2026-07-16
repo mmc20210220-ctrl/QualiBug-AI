@@ -232,9 +232,18 @@ for _state_dir in (
 api_doc_text = (INPUT / "API_SPEC.md").read_text(encoding="utf-8")
 source_hash = hashlib.sha256(api_doc_text.encode("utf-8")).hexdigest()
 
+_benchmark_target_id = (
+    os.environ.get("QUALIBUG_BENCHMARK_TARGET_ID", "").strip()
+    or "benchmark_mall_local_scope"
+)
+_benchmark_environment_id = (
+    os.environ.get("QUALIBUG_BENCHMARK_ENVIRONMENT_ID", "").strip()
+    or "benchmark_mall_test"
+)
 context = {
-    "scope_id": "benchmark_mall_local_scope",
-    "environment_ref": "benchmark_mall_test",
+    "target_id": _benchmark_target_id,
+    "scope_id": _benchmark_target_id,
+    "environment_ref": _benchmark_environment_id,
     "environment_kind": "test",
     "source_manifest": {
         "source_id": "benchmark_mall/API_SPEC.md",
