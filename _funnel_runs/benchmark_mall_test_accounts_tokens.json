@@ -1,0 +1,90 @@
+{
+  "buyer01@example.com": {
+    "role": "普通买家",
+    "email": "buyer01@example.com",
+    "password": "Test@123456",
+    "status": "ACTIVE",
+    "note": "余额充足，有默认地址",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6ImYzZDU5MTNjLTExYjItNGYxMy05OGYyLTFlNjAzM2Y3NzljZiIsImVtYWlsIjoiYnV5ZXIwMUBleGFtcGxlLmNvbSIsInJvbGUiOiJidXllciIsInN0YXR1cyI6IkFDVElWRSIsIm5hbWUiOiLkubDlrrbkuIDlj7ciLCJpYXQiOjE3ODQxNzExNjcsImV4cCI6MTc4NDE5OTk2N30.n5KVetRk0G292Zrv2pZxZC6irVcr2_MstibzRIXAjC8",
+    "authenticated_role": "buyer",
+    "authenticated_status": "ACTIVE",
+    "identity_observation_source": "login_response"
+  },
+  "buyer02@example.com": {
+    "role": "普通买家",
+    "email": "buyer02@example.com",
+    "password": "Test@123456",
+    "status": "ACTIVE",
+    "note": "余额较少",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6Ijg2ZjY1ZWM5LTBhZmYtNDA4YS04M2M0LTUxZWJkM2Q1ZTkxMyIsImVtYWlsIjoiYnV5ZXIwMkBleGFtcGxlLmNvbSIsInJvbGUiOiJidXllciIsInN0YXR1cyI6IkFDVElWRSIsIm5hbWUiOiLkubDlrrbkuozlj7ciLCJpYXQiOjE3ODQxNzExNjcsImV4cCI6MTc4NDE5OTk2N30.ZOo9DEMDAt2D0Z5GL0PcUQHNC7exHl9P2g6gXuZRFng",
+    "authenticated_role": "buyer",
+    "authenticated_status": "ACTIVE",
+    "identity_observation_source": "login_response"
+  },
+  "disabled_buyer@example.com": {
+    "role": "禁用买家",
+    "email": "disabled_buyer@example.com",
+    "password": "Test@123456",
+    "status": "DISABLED",
+    "note": "状态为 DISABLED，原则上不能登录和下单",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjAxYjE3OWMxLTJmMzEtNDg5Yy1iNGQzLTBmZjYwNDJhOWYwYyIsImVtYWlsIjoiZGlzYWJsZWRfYnV5ZXJAZXhhbXBsZS5jb20iLCJyb2xlIjoiYnV5ZXIiLCJzdGF0dXMiOiJESVNBQkxFRCIsIm5hbWUiOiLnpoHnlKjkubDlrrYiLCJpYXQiOjE3ODQxNzExNjcsImV4cCI6MTc4NDE5OTk2N30.FOpjZP3rNLNlBWYAA0WWDpqUXVKLQNhYvepvjvk-3us",
+    "authenticated_role": "buyer",
+    "authenticated_status": "DISABLED",
+    "identity_observation_source": "login_response"
+  },
+  "seller01@example.com": {
+    "role": "商家",
+    "email": "seller01@example.com",
+    "password": "Test@123456",
+    "status": "ACTIVE",
+    "note": "可维护商品，但不能操作财务和退款",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6Ijk5NTY2NjMzLTE5YTktNGUwMC1hM2I4LWNkMmZkZWRhMjEyMiIsImVtYWlsIjoic2VsbGVyMDFAZXhhbXBsZS5jb20iLCJyb2xlIjoic2VsbGVyIiwic3RhdHVzIjoiQUNUSVZFIiwibmFtZSI6IuWVhuWutuS4gOWPtyIsImlhdCI6MTc4NDE3MTE2NywiZXhwIjoxNzg0MTk5OTY3fQ.x3JV0SfSkMy7n2-CTbVCK9vG6iSHSSiiKlJgrGzU7wg",
+    "authenticated_role": "seller",
+    "authenticated_status": "ACTIVE",
+    "identity_observation_source": "login_response"
+  },
+  "warehouse01@example.com": {
+    "role": "仓库",
+    "email": "warehouse01@example.com",
+    "password": "Test@123456",
+    "status": "ACTIVE",
+    "note": "可调整库存和发货",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6ImE5ZTY5NjdjLTg1ZWQtNDFjZi05NzNlLTc0NmYyYTg4ZDI4NyIsImVtYWlsIjoid2FyZWhvdXNlMDFAZXhhbXBsZS5jb20iLCJyb2xlIjoid2FyZWhvdXNlIiwic3RhdHVzIjoiQUNUSVZFIiwibmFtZSI6IuS7k-W6k-S4gOWPtyIsImlhdCI6MTc4NDE3MTE2NywiZXhwIjoxNzg0MTk5OTY3fQ.sApl07MDVRnyuPM916YieR6RYLVSYLjdTZeGgC8qnb8",
+    "authenticated_role": "warehouse",
+    "authenticated_status": "ACTIVE",
+    "identity_observation_source": "login_response"
+  },
+  "finance01@example.com": {
+    "role": "财务",
+    "email": "finance01@example.com",
+    "password": "Test@123456",
+    "status": "ACTIVE",
+    "note": "可查看支付和退款",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjJhMTJmYzk4LTQ3MTEtNGViNy1iYjU3LThjZWFiMjNkNmJjOSIsImVtYWlsIjoiZmluYW5jZTAxQGV4YW1wbGUuY29tIiwicm9sZSI6ImZpbmFuY2UiLCJzdGF0dXMiOiJBQ1RJVkUiLCJuYW1lIjoi6LSi5Yqh5LiA5Y-3IiwiaWF0IjoxNzg0MTcxMTY3LCJleHAiOjE3ODQxOTk5Njd9.y23IsaLiR5F6dRqJqX80oMdAEp0lqQuwfoqiUGY9X54",
+    "authenticated_role": "finance",
+    "authenticated_status": "ACTIVE",
+    "identity_observation_source": "login_response"
+  },
+  "auditor01@example.com": {
+    "role": "审计",
+    "email": "auditor01@example.com",
+    "password": "Test@123456",
+    "status": "ACTIVE",
+    "note": "只读审计权限",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjJiOTQ0YWY2LTU3NWItNDNlNy1iZDcwLTE5YjgyMDlkMzdjYiIsImVtYWlsIjoiYXVkaXRvcjAxQGV4YW1wbGUuY29tIiwicm9sZSI6ImF1ZGl0b3IiLCJzdGF0dXMiOiJBQ1RJVkUiLCJuYW1lIjoi5a6h6K6h5LiA5Y-3IiwiaWF0IjoxNzg0MTcxMTY3LCJleHAiOjE3ODQxOTk5Njd9.nhqCR-Pyv9TN8dbnw6wq1HFZ8QmJqTyOvn-HWO2r9Rc",
+    "authenticated_role": "auditor",
+    "authenticated_status": "ACTIVE",
+    "identity_observation_source": "login_response"
+  },
+  "admin@example.com": {
+    "role": "管理员",
+    "email": "admin@example.com",
+    "password": "Admin@123456",
+    "status": "ACTIVE",
+    "note": "后台最高权限",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjYzZDJkNDg0LWMyOTMtNGM3ZC05MmVjLTQxM2ZmNjk5ZTc3NiIsImVtYWlsIjoiYWRtaW5AZXhhbXBsZS5jb20iLCJyb2xlIjoiYWRtaW4iLCJzdGF0dXMiOiJBQ1RJVkUiLCJuYW1lIjoi57O757uf566h55CG5ZGYIiwiaWF0IjoxNzg0MTcxMTY3LCJleHAiOjE3ODQxOTk5Njd9.LtaOZ9Nk8EiHL0ZmAWx0GBmk29aeIqtCIOWDmApPa58",
+    "authenticated_role": "admin",
+    "authenticated_status": "ACTIVE",
+    "identity_observation_source": "login_response"
+  }
+}

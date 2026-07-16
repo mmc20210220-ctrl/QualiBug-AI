@@ -289,7 +289,7 @@ class ObservedProductScanExecutor:
             "source_version_id": f"evaluation-{source_hash[:24]}",
             "source_origin": "evaluator_frozen_runtime_input",
         }
-        campaign_id = str(kwargs.get("campaign_id") or "").strip()
+        evaluation_campaign_id = str(kwargs.get("campaign_id") or "").strip()
         policy_id = str(kwargs.get("policy_id") or "").strip()
         policy_version = str(kwargs.get("policy_version") or "").strip()
         evaluation_mode = str(kwargs.get("evaluation_mode") or "").strip()
@@ -303,12 +303,19 @@ class ObservedProductScanExecutor:
             )
         target_id = str(target.get("target_id") or "").strip()
         run_id = "RUN_" + hashlib.sha256(
-            f"{campaign_id}:{target_id}:{policy_id}:{evaluation_mode}".encode("utf-8")
+            (
+                f"{evaluation_campaign_id}:{target_id}:"
+                f"{policy_id}:{evaluation_mode}"
+            ).encode("utf-8")
         ).hexdigest()[:24]
         strategy = get_effective_policy_strategy()
         context.update({
             "run_id": run_id,
-            "campaign_id": campaign_id,
+            # The evaluator fixture campaign and product campaign are distinct
+            # authorities. EnterpriseCampaign derives the latter from frozen
+            # source/scope/environment identity; injecting the evaluator id as
+            # campaign_id would corrupt that identity and fail the mainline.
+            "evaluation_campaign_id": evaluation_campaign_id,
             "target_id": target_id,
             "environment_id": str(runtime.get("environment_ref") or ""),
             "environment_ref": str(runtime.get("environment_ref") or ""),
@@ -357,7 +364,13 @@ class ObservedProductScanExecutor:
                 base_url=transport_base_url,
                 ci_gate=False,
                 multi_layer=bool(input_bundle.get("multi_layer", True)),
-                output_dir=self.workspace_root / "platform_outputs" / project_id / "evaluation_runs" / campaign_id,
+                output_dir=(
+                    self.workspace_root
+                    / "platform_outputs"
+                    / project_id
+                    / "evaluation_runs"
+                    / evaluation_campaign_id
+                ),
                 save_report=False,
                 campaign_context=context,
             )
@@ -374,11 +387,22 @@ class ObservedProductScanExecutor:
         wall_clock_seconds = round(time.monotonic() - started, 6)
         if not isinstance(scan_result, dict):
             raise PolicyEvaluationRunnerError("product scan did not return a result object")
+        if scan_result.get("success") is not True:
+            failure_stage = str(scan_result.get("failure_stage") or "scan").strip()
+            failure_reason = str(
+                scan_result.get("error")
+                or scan_result.get("reason")
+                or "product_scan_unsuccessful"
+            ).strip()
+            raise PolicyEvaluationRunnerError(
+                "product scan failed before evaluator projection: "
+                f"stage={failure_stage or 'scan'} reason={failure_reason[:1000]}"
+            )
         operational = self.operational_metrics_collector(
             scan_result=scan_result,
             wall_clock_seconds=wall_clock_seconds,
             runtime_view=runtime_view,
-            campaign_id=campaign_id,
+            campaign_id=evaluation_campaign_id,
             policy_id=policy_id,
             evaluation_mode=evaluation_mode,
         )
@@ -441,7 +465,7 @@ class ObservedProductScanExecutor:
             "schema_version": SCAN_RESULT_SCHEMA,
             "run_id": resolved_run_id,
             "target_id": target_id,
-            "campaign_id": campaign_id,
+            "campaign_id": evaluation_campaign_id,
             "policy_id": policy_id,
             "policy_version": policy_version,
             "evaluation_mode": evaluation_mode,

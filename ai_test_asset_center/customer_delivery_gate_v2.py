@@ -13,6 +13,7 @@ import json
 from typing import Any
 
 from .assertion_dsl import validate_assertion_receipt
+from .assertion_control_policy import assertion_requires_control
 from .contract_oracles import (
     validate_contract_evidence_receipt,
     validate_contract_oracle_receipt,
@@ -68,6 +69,8 @@ _DERIVED_FINDING_FIELDS = frozenset({
     "delivery_track",
     "finding_class",
     "gate_passed",
+    "semantic_delivery_gate_status",
+    "shadow_origin",
 })
 
 
@@ -848,6 +851,13 @@ def _validate_active_chain(
     contract_ids = {_text(value.get("receipt_id")) for value in contracts}
     observer_ids = {_text(value.get("receipt_id")) for value in observers}
     required = _dict(activation.get("required"))
+    if (
+        assertion_requires_control(violations[0].get("kind"))
+        and not [
+            value for value in _list(required.get("control")) if _text(value)
+        ]
+    ):
+        return "BLOCKED", ["ACTOR_SENSITIVE_CONTROL_MISSING"]
     verified = _dict(activation.get("verified_receipt_ids"))
     for kind in ("control", "treatment", "actor", "fixture", "cleanup"):
         required_subjects = {

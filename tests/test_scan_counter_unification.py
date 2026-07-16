@@ -132,7 +132,9 @@ def test_scan_updates_shared_scan_counter_before_customer_ready_snapshot(monkeyp
     assert counter["last_scan_at"]
     assert first["customer_ready_snapshot"]["scan_meta"]["run_count"] == 1
     assert second["customer_ready_snapshot"]["scan_meta"]["run_count"] == 2
+    assert second["dedupe_report"]["input_count"] == 0
     assert saved_scan["customer_ready_snapshot"]["scan_meta"]["run_count"] == 2
+    assert saved_scan["dedupe_report"]["input_count"] == 0
     assert saved_scan["customer_ready_snapshot"]["scan_meta"]["last_scan_at"] == counter["last_scan_at"]
 
 

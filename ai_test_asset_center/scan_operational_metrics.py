@@ -55,30 +55,91 @@ def _cleanup_failure_count(value: Any) -> int:
     return len(failures)
 
 
+def _usage_metrics(
+    usage: dict[str, Any],
+    *,
+    prefix: str,
+    request_fallback: Any = None,
+) -> tuple[int, int, float]:
+    requests = int(_number(
+        usage.get("request_count", request_fallback),
+        f"{prefix}.model_request_count",
+    ))
+    responses_with_cost = int(_number(
+        usage.get("responses_with_cost"),
+        f"{prefix}.responses_with_cost",
+    ))
+    if responses_with_cost > requests:
+        raise OperationalMetricsNotMeasured(
+            f"{prefix}.responses_with_cost exceeds observed requests"
+        )
+    cost = _number(usage.get("cost_usd"), f"{prefix}.cost_usd")
+    return requests, responses_with_cost, cost
+
+
 def _llm_metrics(scan_result: dict[str, Any]) -> tuple[int, float, float | None]:
     v12 = _dict(scan_result.get("v12"))
+    model_requests = 0
+    responses_with_cost = 0
+    observed_cost = 0.0
+    total_engines = 0
+    successful_engines = 0
+
+    agent = _dict(v12.get("agent_semantic_link_receipt"))
+    agent_status = str(agent.get("status") or "").strip().upper()
+    if agent_status in {"VERIFIED", "VERIFIED_WITH_REJECTIONS"}:
+        usage = _dict(agent.get("usage"))
+        if not usage:
+            raise OperationalMetricsNotMeasured(
+                "agent usage is missing from a verified semantic-link receipt"
+            )
+        requests, cost_responses, cost = _usage_metrics(
+            usage,
+            prefix="agent",
+        )
+        if requests <= 0:
+            raise OperationalMetricsNotMeasured(
+                "verified agent semantic linking has no observed model request"
+            )
+        model_requests += requests
+        responses_with_cost += cost_responses
+        observed_cost += cost
+        total_engines += 1
+        successful_engines += 1
+    elif agent_status not in {"", "NOT_REQUESTED"}:
+        raise OperationalMetricsNotMeasured(
+            f"agent semantic-link status is not operationally measurable: {agent_status}"
+        )
+
     unification = _dict(v12.get("mainline_unification")) or _dict(
         _dict(scan_result.get("discovery_funnel")).get("mainline_unification")
     )
     llm = _dict(unification.get("llm_reasoner"))
-    if not llm or str(llm.get("status") or "").lower() == "provider_unavailable":
-        return 0, 1.0, 0.0
-    model_usage = _dict(llm.get("model_usage"))
-    model_requests = int(_number(
-        model_usage.get("request_count", llm.get("observed_model_request_count")),
-        "llm.model_request_count",
-    ))
-    total_engines = int(_number(llm.get("total_engines"), "llm.total_engines"))
-    successful_engines = int(_number(llm.get("successful_engine_count"), "llm.successful_engine_count"))
-    if total_engines <= 0 or successful_engines > total_engines:
-        raise OperationalMetricsNotMeasured("LLM engine success counts are invalid")
-    engine_rate = successful_engines / total_engines
-    responses_with_cost = int(_number(model_usage.get("responses_with_cost"), "llm.responses_with_cost"))
-    if responses_with_cost != model_requests:
-        raise OperationalMetricsNotMeasured(
-            "provider did not report cost_usd for every observed model request"
+    if llm:
+        model_usage = _dict(llm.get("model_usage"))
+        requests, cost_responses, cost = _usage_metrics(
+            model_usage,
+            prefix="llm",
+            request_fallback=llm.get("observed_model_request_count"),
         )
-    cost = _number(model_usage.get("cost_usd"), "llm.cost_usd")
+        reasoner_total = int(_number(
+            llm.get("total_engines"),
+            "llm.total_engines",
+        ))
+        reasoner_successful = int(_number(
+            llm.get("successful_engine_count"),
+            "llm.successful_engine_count",
+        ))
+        if reasoner_total <= 0 or reasoner_successful > reasoner_total:
+            raise OperationalMetricsNotMeasured("LLM engine success counts are invalid")
+        model_requests += requests
+        responses_with_cost += cost_responses
+        observed_cost += cost
+        total_engines += reasoner_total
+        successful_engines += reasoner_successful
+
+    engine_rate = successful_engines / total_engines if total_engines else 1.0
+    cost = observed_cost if responses_with_cost == model_requests else None
     return model_requests, engine_rate, cost
 
 
@@ -110,8 +171,6 @@ def collect_observed_scan_operational_metrics(
         raise OperationalMetricsNotMeasured("execution success counts are invalid")
     execution_rate = executed / attempts if attempts else 0.0
     model_requests, engine_rate, observed_cost = _llm_metrics(scan_result)
-    if observed_cost is None:
-        raise OperationalMetricsNotMeasured("scan cost was not measured")
     dedupe = _dict(scan_result.get("dedupe_report"))
     dedupe_input = int(_number(dedupe.get("input_count"), "dedupe.input_count"))
     dedupe_collapsed = int(_number(dedupe.get("collapsed_count"), "dedupe.collapsed_count"))
@@ -124,7 +183,13 @@ def collect_observed_scan_operational_metrics(
         raise OperationalMetricsNotMeasured("operational metrics require explicit non-production environment")
     return {
         "wall_clock_seconds": round(_number(wall_clock_seconds, "wall_clock_seconds"), 6),
-        "estimated_cost_usd": round(observed_cost, 6),
+        "estimated_cost_usd": (
+            round(observed_cost, 6) if observed_cost is not None else None
+        ),
+        "model_request_count": model_requests,
+        "model_cost_status": (
+            "MEASURED" if observed_cost is not None else "NOT_REPORTED"
+        ),
         "request_count": target_requests + model_requests,
         "production_http_requests": production_requests,
         "cleanup_failures": cleanup_failures,

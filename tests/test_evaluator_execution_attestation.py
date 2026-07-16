@@ -10,6 +10,7 @@ from ai_test_asset_center.discovery_mainline_contract import (
 from ai_test_asset_center.evaluator_execution_attestation import (
     ExecutionAttestationError,
     PROCESS_BOUNDARY_SCHEMA,
+    _expected_request_attempts,
     build_execution_attestation,
     validate_execution_attestation,
 )
@@ -119,6 +120,36 @@ def test_runtime_receipts_without_independent_observation_cannot_be_attested() -
         match="trusted_observation_coverage_incomplete",
     ):
         build_execution_attestation(**inputs, signing_key=SIGNING_KEY)
+
+
+def test_compile_blocked_attempt_without_execution_is_not_request_bearing() -> None:
+    expected = _expected_request_attempts({
+        "attempts": [{
+            "obligation_id": "obligation-blocked",
+            "execution_id": "",
+            "terminal_stage": "compile",
+            "terminal_status": "BLOCKED",
+            "operational_receipt": {},
+        }],
+    })
+
+    assert expected == {}
+
+
+def test_execution_stage_attempt_without_operational_receipt_fails_closed() -> None:
+    with pytest.raises(
+        ExecutionAttestationError,
+        match="operational_receipt_missing",
+    ):
+        _expected_request_attempts({
+            "attempts": [{
+                "obligation_id": "obligation-executed",
+                "execution_id": "execution-1",
+                "terminal_stage": "execution",
+                "terminal_status": "BLOCKED",
+                "operational_receipt": {},
+            }],
+        })
 
 
 def test_attestation_tampering_is_rejected() -> None:

@@ -144,7 +144,19 @@ def enrich_knowledge_asset_with_agent_relationships(
     }
     accepted: list[dict[str, Any]] = []
     rejected_low_confidence = 0
-    duplicates = 0
+    rejected_invalid_identity = 0
+    rejected_duplicates = 0
+    rejected_rule_limit = 0
+    existing_count = 0
+    rejections: list[dict[str, Any]] = []
+
+    def reject(index: int, raw: dict[str, Any], reason_code: str) -> None:
+        rejections.append({
+            "proposal_index": index,
+            "reason_code": reason_code,
+            "proposal_fingerprint": _fingerprint(raw),
+        })
+
     seen: set[tuple[str, str]] = set()
     per_rule: dict[str, int] = {}
     for index, raw in enumerate(proposals):
@@ -160,11 +172,13 @@ def enrich_knowledge_asset_with_agent_relationships(
         rule_id = _text(raw.get("rule_id"))
         interface_id = _text(raw.get("interface_id"))
         if rule_id not in rules:
-            raise AgentSemanticLinkerError(f"unknown_rule_id:{rule_id or 'missing'}")
+            rejected_invalid_identity += 1
+            reject(index, raw, "UNKNOWN_RULE_ID")
+            continue
         if interface_id not in interfaces:
-            raise AgentSemanticLinkerError(
-                f"unknown_interface_id:{interface_id or 'missing'}"
-            )
+            rejected_invalid_identity += 1
+            reject(index, raw, "UNKNOWN_INTERFACE_ID")
+            continue
         try:
             confidence = float(raw.get("confidence"))
         except (TypeError, ValueError) as exc:
@@ -181,20 +195,21 @@ def enrich_knowledge_asset_with_agent_relationships(
             )
         pair = (rule_id, interface_id)
         if pair in seen:
-            raise AgentSemanticLinkerError(
-                f"agent_semantic_relationship_duplicate:{rule_id}:{interface_id}"
-            )
+            rejected_duplicates += 1
+            reject(index, raw, "DUPLICATE_PROPOSAL")
+            continue
         seen.add(pair)
         if confidence < MIN_CONFIDENCE:
             rejected_low_confidence += 1
+            reject(index, raw, "LOW_CONFIDENCE")
+            continue
+        if per_rule.get(rule_id, 0) >= MAX_LINKS_PER_RULE:
+            rejected_rule_limit += 1
+            reject(index, raw, "RULE_LINK_LIMIT_EXCEEDED")
             continue
         per_rule[rule_id] = per_rule.get(rule_id, 0) + 1
-        if per_rule[rule_id] > MAX_LINKS_PER_RULE:
-            raise AgentSemanticLinkerError(
-                f"agent_semantic_rule_link_limit_exceeded:{rule_id}"
-            )
         if pair in existing:
-            duplicates += 1
+            existing_count += 1
             continue
         proposal_fingerprint = _fingerprint({
             "rule_id": rule_id,
@@ -237,13 +252,20 @@ def enrich_knowledge_asset_with_agent_relationships(
     usage = resolved_client.usage_snapshot()
     receipt = {
         "schema_version": RECEIPT_SCHEMA,
-        "status": "VERIFIED",
+        "status": (
+            "VERIFIED_WITH_REJECTIONS" if rejections else "VERIFIED"
+        ),
         "knowledge_asset_id": _text(knowledge_asset.get("asset_id")),
         "semantic_authority": "source_documents_and_behavior_ir_ids",
         "proposal_count": len(proposals),
         "accepted_relationship_count": len(accepted),
+        "rejected_proposal_count": len(rejections),
         "rejected_low_confidence_count": rejected_low_confidence,
-        "existing_relationship_count": duplicates,
+        "rejected_invalid_identity_count": rejected_invalid_identity,
+        "rejected_duplicate_count": rejected_duplicates,
+        "rejected_rule_limit_count": rejected_rule_limit,
+        "existing_relationship_count": existing_count,
+        "rejections": rejections,
         "usage": dict(usage) if isinstance(usage, dict) else {},
         "accepted_edge_ids": [row["edge_id"] for row in accepted],
     }

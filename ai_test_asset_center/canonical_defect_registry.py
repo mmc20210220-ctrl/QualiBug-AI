@@ -14,6 +14,7 @@ import re
 from collections import defaultdict
 from typing import Any
 
+from .assertion_control_policy import assertion_requires_control
 from .customer_delivery_gate import LEGACY_CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
 from .discovery_mainline_contract import (
     MainlineContractError,
@@ -46,13 +47,6 @@ _EVIDENCE_FIELDS = {
     "proof",
 }
 _IDENTITY_FIELDS = _EVIDENCE_FIELDS - {"schema_version", "proof"}
-_ACTOR_INSENSITIVE_ASSERTION_KINDS = {
-    "http_status_class",
-    "status_code_class",
-    "input_validation",
-}
-
-
 class CanonicalDefectRegistryError(ValueError):
     """Canonical identity evidence is absent, ambiguous, or inconsistent."""
 
@@ -218,13 +212,23 @@ def _source_ref_projection(values: Any) -> list[dict[str, str]]:
 
 
 def _one_step(reproduction: dict[str, Any], phase: str) -> dict[str, Any]:
+    step = _optional_step(reproduction, phase)
+    if step is None:
+        raise _incomplete(f"reproduction.{phase}_step")
+    return step
+
+
+def _optional_step(
+    reproduction: dict[str, Any],
+    phase: str,
+) -> dict[str, Any] | None:
     rows = [
         _dict(raw)
         for raw in _list(reproduction.get("step_observations"))
         if _normalized_text(_dict(raw).get("phase")) == phase
     ]
     if not rows:
-        raise _incomplete(f"reproduction.{phase}_step")
+        return None
     if len(rows) != 1:
         raise _ambiguous(f"one_{phase}_step_per_occurrence_required")
     return rows[0]
@@ -299,7 +303,7 @@ def _canonical_actor_relation(
     control_actor_class: str,
     treatment_actor_class: str,
 ) -> dict[str, str]:
-    if assertion_kind in _ACTOR_INSENSITIVE_ASSERTION_KINDS:
+    if not assertion_requires_control(assertion_kind):
         return {
             "control_actor_class": "not_identity_defining",
             "treatment_actor_class": "not_identity_defining",
@@ -363,12 +367,15 @@ def derive_canonical_identity_evidence(
     bundle = _dict(row.get("delivery_evidence_bundle"))
     reproduction = _dict(bundle.get("reproduction_receipt"))
     oracle = _dict(bundle.get("oracle_receipt"))
-    control = _one_step(reproduction, "control")
     treatment = _one_step(reproduction, "treatment")
     assertion = _one_violation(oracle)
     assertion_kind = _normalized_text(assertion.get("kind"))
     if not assertion_kind:
         raise _incomplete("assertion.kind")
+    control = _optional_step(reproduction, "control")
+    requires_control = assertion_requires_control(assertion_kind)
+    if control is None and requires_control:
+        raise _incomplete("reproduction.control_step")
     method = _text(treatment.get("method")).upper()
     operation_ref = _normalized_text(treatment.get("operation_ref"))
     locator = _text(
@@ -392,13 +399,21 @@ def derive_canonical_identity_evidence(
     if not source_refs:
         raise _incomplete("property.source_refs")
     contract_receipts = _list(bundle.get("contract_evidence_receipts"))
-    control_actor = _receipted_actor_class(
-        control.get("actor_ref"),
-        contract_receipts,
+    control_actor = (
+        "not_identity_defining"
+        if not requires_control
+        else _receipted_actor_class(
+            _dict(control).get("actor_ref"),
+            contract_receipts,
+        )
     )
-    treatment_actor = _receipted_actor_class(
-        treatment.get("actor_ref"),
-        contract_receipts,
+    treatment_actor = (
+        _receipted_actor_class(
+            treatment.get("actor_ref"),
+            contract_receipts,
+        )
+        if requires_control
+        else "not_identity_defining"
     )
     mutation_class = _normalized_text(treatment.get("mutation_class"))
     if not mutation_class:
@@ -448,7 +463,9 @@ def derive_canonical_identity_evidence(
             "assertion_kind": assertion_kind,
             "expected_signature": expected_signature,
             "actual_signature": actual_signature,
-            "control_observation_class": _observation_class(control),
+            "control_observation_class": (
+                "not_observed" if control is None else _observation_class(control)
+            ),
             "treatment_observation_class": _observation_class(treatment),
             "observer_kinds": observer_kinds,
         },

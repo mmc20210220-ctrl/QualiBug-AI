@@ -198,7 +198,7 @@ def test_product_worker_preserves_the_full_formal_evaluation_authority(
     )
     mainline = {
         "run_id": "RUN-FORMAL",
-        "campaign_id": "CMP-FORMAL",
+        "campaign_id": "CMP-PRODUCT",
         "target_id": "TARGET-FORMAL",
         "environment_id": base_url,
         "policy_version": "policy-v1",
@@ -273,7 +273,93 @@ def test_product_worker_preserves_the_full_formal_evaluation_authority(
     assert captured_context["environment_id"] == base_url
     assert captured_context["policy_version"] == "policy-v1"
     assert captured_context["agent_semantic_linking_enabled"] is True
+    assert captured_context["evaluation_campaign_id"] == "CMP-FORMAL"
+    assert "campaign_id" not in captured_context
+    assert output["campaign_id"] == "CMP-FORMAL"
+    assert output["mainline_run"]["campaign_id"] == "CMP-PRODUCT"
     assert captured_base_url == ["http://127.0.0.1:19090"]
+
+
+def test_product_worker_surfaces_the_product_failure_before_metric_projection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_id = "generic-project"
+    base_url = "http://127.0.0.1:8080"
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir()
+    api_path = runtime_root / "api.md"
+    prd_path = runtime_root / "prd.md"
+    fixture_path = runtime_root / "fixture.json"
+    input_path = runtime_root / "input.json"
+    context_path = runtime_root / "context.json"
+    api_path.write_text("GET /resources", encoding="utf-8")
+    prd_path.write_text("Resources remain visible to their owner.", encoding="utf-8")
+    fixture_path.write_text("{}", encoding="utf-8")
+    input_path.write_text(
+        json.dumps({
+            "schema_version": "qualibug.discovery-evaluation-input.v1",
+            "project_id": project_id,
+            "base_url": base_url,
+            "api_doc_ref": str(api_path),
+            "prd_ref": str(prd_path),
+            "multi_layer": True,
+        }),
+        encoding="utf-8",
+    )
+    context_path.write_text(
+        json.dumps({
+            "schema_version": "qualibug.discovery-evaluation-context.v1",
+            "campaign_context": {},
+        }),
+        encoding="utf-8",
+    )
+
+    from ai_test_asset_center import __main__ as scan_module
+
+    monkeypatch.setattr(
+        scan_module,
+        "scan",
+        lambda **_: {
+            "success": False,
+            "error": "v12_pipeline_failed:MainlineContractError:source_identity_invalid",
+            "failure_stage": "v12",
+        },
+    )
+    metric_calls: list[dict[str, object]] = []
+    executor = ObservedProductScanExecutor(
+        workspace_root=tmp_path,
+        operational_metrics_collector=lambda **kwargs: metric_calls.append(kwargs) or {},
+    )
+
+    with pytest.raises(
+        PolicyEvaluationRunnerError,
+        match="product scan failed before evaluator projection.*source_identity_invalid",
+    ):
+        executor._execute_in_process(
+            runtime_view={
+                "target": {
+                    "target_id": "TARGET-FAILED",
+                    "project_id": project_id,
+                    "runtime_fingerprint": "runtime-fingerprint",
+                    "runtime": {
+                        "environment_ref": base_url,
+                        "environment_type": "test",
+                        "input_bundle_ref": str(input_path),
+                        "context_artifact_ref": str(context_path),
+                        "fixture_snapshot_ref": str(fixture_path),
+                    },
+                },
+            },
+            campaign_id="CMP-FAILED",
+            policy_id="policy-id",
+            policy_version="policy-v1",
+            evaluation_mode="replay",
+            fixture_preparation_receipt={"audit_receipt_id": "PREP-FAILED"},
+            observation_proxy_base_url="http://127.0.0.1:19090",
+        )
+
+    assert metric_calls == []
 
 
 def test_campaign_cleanup_validates_occurrences_without_rewriting_canonical_scope(
@@ -358,9 +444,10 @@ def test_runner_passes_full_authority_and_independent_attestation_to_evaluator(
         strategy=StrategyBundle(),
     )
     campaign_id = "EVAL-1:replay:champion:TARGET-1"
+    product_campaign_id = "CMP-PRODUCT"
     mainline = {
         "run_id": "RUN-1",
-        "campaign_id": campaign_id,
+        "campaign_id": product_campaign_id,
         "target_id": target.target_id,
         "environment_id": target.environment_ref,
         "policy_version": policy.policy_version,
@@ -451,7 +538,7 @@ def test_runner_passes_full_authority_and_independent_attestation_to_evaluator(
         def load(self, **identity: str) -> list[dict[str, object]]:
             assert identity == {
                 "run_id": "RUN-1",
-                "campaign_id": campaign_id,
+                "campaign_id": product_campaign_id,
                 "target_id": target.target_id,
             }
             return [{"obligation_id": "OBL-1"}]
@@ -510,3 +597,70 @@ def test_runner_passes_full_authority_and_independent_attestation_to_evaluator(
         "receipt_signing_key",
     ):
         assert field in evaluation_inputs
+
+
+def test_diagnostic_shape_bypass_cannot_be_used_for_promotion() -> None:
+    policy = PolicyRecord(
+        policy_id="policy-1",
+        policy_version="policy-v1",
+        parent_policy_version="",
+        project_scope="global",
+        status="active",
+        created_reason="test",
+        strategy=StrategyBundle(),
+    )
+    runner = DiscoveryPolicyEvaluationRunner.__new__(DiscoveryPolicyEvaluationRunner)
+    runner._commercial_shape = {
+        "commercial_shape_ready": False,
+        "checks": [{"name": "held_out_industry_count", "passed": False}],
+    }
+
+    with pytest.raises(
+        PolicyEvaluationRunnerError,
+        match="promotion evaluation requires a commercial-shape dataset",
+    ):
+        runner.run(champion=policy, challenger=policy)
+
+
+def test_target_diagnostic_runs_one_manifest_target_without_promotion_role() -> None:
+    policy = PolicyRecord(
+        policy_id="policy-1",
+        policy_version="policy-v1",
+        parent_policy_version="",
+        project_scope="global",
+        status="active",
+        created_reason="test",
+        strategy=StrategyBundle(),
+    )
+    runner = DiscoveryPolicyEvaluationRunner.__new__(DiscoveryPolicyEvaluationRunner)
+    runner.manifest = SimpleNamespace(
+        targets=[
+            SimpleNamespace(target_id="TARGET-1"),
+            SimpleNamespace(target_id="TARGET-2"),
+        ]
+    )
+    captured: dict[str, object] = {}
+
+    def fake_run_policy_mode(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {"schema_version": "report"}
+
+    runner._run_policy_mode = fake_run_policy_mode
+
+    assert runner.run_target_diagnostic(
+        policy=policy,
+        target_id="TARGET-2",
+        evaluation_mode="shadow",
+        evaluation_id="diag-1",
+    ) == {"schema_version": "report"}
+    assert captured["policy"] == policy
+    assert captured["role"] == "diagnostic"
+    assert captured["evaluation_mode"] == "shadow"
+    assert captured["evaluation_id"] == "diag-1"
+    assert captured["target_ids"] == {"TARGET-2"}
+
+    with pytest.raises(
+        PolicyEvaluationRunnerError,
+        match="diagnostic target is not in the frozen manifest",
+    ):
+        runner.run_target_diagnostic(policy=policy, target_id="TARGET-3")

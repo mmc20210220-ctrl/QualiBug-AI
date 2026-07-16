@@ -56,10 +56,10 @@ def upstream() -> str:
         thread.join(timeout=5)
 
 
-def _request(url: str, *, method: str) -> None:
+def _request(url: str, *, method: str, campaign_id: str = "CMP-1") -> None:
     headers = {
         "X-QualiBug-Run-Id": "RUN-1",
-        "X-QualiBug-Campaign-Id": "CMP-1",
+        "X-QualiBug-Campaign-Id": campaign_id,
         "X-QualiBug-Target-Id": "TARGET-1",
         "X-QualiBug-Obligation-Id": "OBL-1",
         "X-QualiBug-Execution-Id": "EXEC-1",
@@ -123,6 +123,41 @@ def test_gateway_forwards_requests_and_seals_exact_attempt_counts(
     assert len(observations[0]["audit_receipt_ids"]) == 1
 
 
+def test_gateway_binds_the_product_mainline_campaign_not_evaluation_fixture_id(
+    tmp_path: Path,
+    upstream: str,
+) -> None:
+    workspace = tmp_path / "product"
+    observation_root = tmp_path / "evaluator-observations"
+    workspace.mkdir()
+    observation_root.mkdir()
+    gateway = EvaluatorHttpObservationGateway(
+        observation_root=observation_root,
+        signing_key=_SIGNING_KEY,
+    )
+
+    with gateway.observe(
+        upstream_base_url=upstream,
+        campaign_id="EVAL-1:replay:diagnostic:TARGET-1",
+        target_id="TARGET-1",
+        environment_type="test",
+    ) as proxy_url:
+        _request(proxy_url, method="GET", campaign_id="CMP-PRODUCT")
+
+    store = TrustedObservationStore(
+        observation_root,
+        product_workspace_root=workspace,
+        verification_key=_SIGNING_KEY,
+    )
+    observations = store.load(
+        run_id="RUN-1",
+        campaign_id="CMP-PRODUCT",
+        target_id="TARGET-1",
+    )
+
+    assert observations[0]["target_request_count"] == 1
+
+
 def test_store_rejects_a_tampered_gateway_pack(
     tmp_path: Path,
     upstream: str,
@@ -173,3 +208,24 @@ def test_gateway_fails_closed_for_production() -> None:
             environment_type="production",
         ):
             pass
+
+
+def test_gateway_cleanup_does_not_mask_scan_exception(
+    tmp_path: Path,
+    upstream: str,
+) -> None:
+    observation_root = tmp_path / "evaluator-observations"
+    observation_root.mkdir()
+    gateway = EvaluatorHttpObservationGateway(
+        observation_root=observation_root,
+        signing_key=_SIGNING_KEY,
+    )
+
+    with pytest.raises(RuntimeError, match="scan-root-cause"):
+        with gateway.observe(
+            upstream_base_url=upstream,
+            campaign_id="CMP-1",
+            target_id="TARGET-1",
+            environment_type="test",
+        ):
+            raise RuntimeError("scan-root-cause")

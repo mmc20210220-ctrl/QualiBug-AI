@@ -77,8 +77,9 @@ def _identity(value: Any, field: str) -> str:
 
 
 class _ObservationSession:
-    def __init__(self, *, campaign_id: str, target_id: str) -> None:
-        self.campaign_id = campaign_id
+    def __init__(self, *, evaluation_campaign_id: str, target_id: str) -> None:
+        self.evaluation_campaign_id = evaluation_campaign_id
+        self.campaign_id = ""
         self.target_id = target_id
         self.run_id = ""
         self.events: dict[tuple[str, str], list[dict[str, Any]]] = {}
@@ -99,8 +100,6 @@ class _ObservationSession:
                 field: _identity(trace.get(field), field)
                 for field in _TRACE_HEADERS
             }
-            if normalized["campaign_id"] != self.campaign_id:
-                raise ValueError("gateway_campaign_id_mismatch")
             if normalized["target_id"] != self.target_id:
                 raise ValueError("gateway_target_id_mismatch")
             if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,240}", normalized["run_id"]):
@@ -125,9 +124,16 @@ class _ObservationSession:
             }
             key = (normalized["obligation_id"], normalized["execution_id"])
             with self.lock:
+                if (
+                    self.campaign_id
+                    and self.campaign_id != normalized["campaign_id"]
+                ):
+                    self.errors.append("gateway_campaign_id_mismatch")
+                    return
                 if self.run_id and self.run_id != normalized["run_id"]:
                     self.errors.append("gateway_run_id_mismatch")
                     return
+                self.campaign_id = normalized["campaign_id"]
                 self.run_id = normalized["run_id"]
                 self.events.setdefault(key, []).append(event)
         except ValueError as exc:
@@ -199,7 +205,7 @@ class EvaluatorHttpObservationGateway:
         if not is_nonproduction_environment(environment_type):
             raise ValueError("gateway requires an explicitly declared non-production target")
         session = _ObservationSession(
-            campaign_id=_identity(campaign_id, "campaign_id"),
+            evaluation_campaign_id=_identity(campaign_id, "campaign_id"),
             target_id=_identity(target_id, "target_id"),
         )
         handler = self._handler(upstream, session)
@@ -210,15 +216,30 @@ class EvaluatorHttpObservationGateway:
             daemon=True,
         )
         thread.start()
+        body_error: BaseException | None = None
         try:
             yield f"http://127.0.0.1:{server.server_port}"
+        except BaseException as exc:
+            body_error = exc
+            raise
         finally:
-            server.shutdown()
-            server.server_close()
-            thread.join(timeout=10)
-            if thread.is_alive():
-                raise RuntimeError("evaluator_http_gateway_shutdown_timeout")
-            self._persist(session)
+            try:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=10)
+                if thread.is_alive():
+                    raise RuntimeError("evaluator_http_gateway_shutdown_timeout")
+                self._persist(session)
+            except Exception as cleanup_error:
+                if body_error is not None:
+                    if hasattr(body_error, "add_note"):
+                        body_error.add_note(
+                            "evaluator_http_gateway_cleanup_failed:"
+                            f"{cleanup_error}"
+                        )
+                    pass
+                else:
+                    raise
 
     def _handler(
         self,

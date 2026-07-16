@@ -254,6 +254,7 @@ class DiscoveryPolicyEvaluationRunner:
         trusted_observation_gateway: EvaluatorHttpObservationGateway,
         trusted_observation_store: TrustedObservationStore,
         receipt_signing_key: str | bytes | bytearray,
+        require_commercial_shape: bool = True,
     ) -> None:
         self.manifest_path = Path(manifest_path).resolve()
         self.output_root = Path(output_root).resolve()
@@ -274,10 +275,61 @@ class DiscoveryPolicyEvaluationRunner:
         self.trusted_observation_store = trusted_observation_store
         self.receipt_signing_key = receipt_signing_key
         self.manifest = load_evaluation_manifest(self.manifest_path)
-        shape = assess_commercial_dataset_shape(self.manifest)
-        if shape.get("commercial_shape_ready") is not True:
-            failed = [item.get("name") for item in shape.get("checks") or [] if not item.get("passed")]
-            raise PolicyEvaluationRunnerError(f"evaluation dataset is not commercial-shape ready: {failed}")
+        self._commercial_shape = assess_commercial_dataset_shape(self.manifest)
+        if require_commercial_shape:
+            self._assert_commercial_shape_ready("policy evaluation")
+
+    def _assert_commercial_shape_ready(self, usage: str) -> None:
+        if self._commercial_shape.get("commercial_shape_ready") is True:
+            return
+        failed = [
+            item.get("name")
+            for item in self._commercial_shape.get("checks") or []
+            if not item.get("passed")
+        ]
+        raise PolicyEvaluationRunnerError(
+            f"{usage} requires a commercial-shape dataset: {failed}"
+        )
+
+    def run_target_diagnostic(
+        self,
+        *,
+        policy: PolicyRecord,
+        target_id: str,
+        evaluation_mode: str = "replay",
+        evaluation_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Run one authenticated target without making a promotion claim."""
+
+        resolved_target = _required_text(target_id, "diagnostic.target_id")
+        if resolved_target not in {
+            target.target_id for target in self.manifest.targets
+        }:
+            raise PolicyEvaluationRunnerError(
+                f"diagnostic target is not in the frozen manifest: {resolved_target}"
+            )
+        if evaluation_mode not in {"replay", "shadow"}:
+            raise PolicyEvaluationRunnerError(
+                "diagnostic evaluation_mode must be replay or shadow"
+            )
+        resolved_evaluation_id = str(evaluation_id or "").strip()
+        if not resolved_evaluation_id:
+            material = f"{time.time_ns()}:{policy.policy_id}:{resolved_target}"
+            resolved_evaluation_id = (
+                "diagnostic-"
+                + hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+            )
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,120}", resolved_evaluation_id):
+            raise PolicyEvaluationRunnerError(
+                "evaluation_id must be 1-120 safe filename characters"
+            )
+        return self._run_policy_mode(
+            policy=policy,
+            role="diagnostic",
+            evaluation_mode=evaluation_mode,
+            evaluation_id=resolved_evaluation_id,
+            target_ids={resolved_target},
+        )
 
     def run(
         self,
@@ -286,6 +338,7 @@ class DiscoveryPolicyEvaluationRunner:
         challenger: PolicyRecord,
         evaluation_id: str | None = None,
     ) -> dict[str, Any]:
+        self._assert_commercial_shape_ready("promotion evaluation")
         safe_evaluation_id = self._evaluation_id(evaluation_id, champion, challenger)
         try:
             return self._run_observed(
@@ -394,9 +447,12 @@ class DiscoveryPolicyEvaluationRunner:
         role: str,
         evaluation_mode: str,
         evaluation_id: str,
+        target_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         receipts: list[dict[str, Any]] = []
         for target in self.manifest.targets:
+            if target_ids is not None and target.target_id not in target_ids:
+                continue
             self._assert_manifest_frozen()
             campaign_id = f"{evaluation_id}:{evaluation_mode}:{role}:{target.target_id}"
             runtime_view = build_runtime_view(self.manifest, target.target_id)
@@ -548,7 +604,9 @@ class DiscoveryPolicyEvaluationRunner:
                 )
             trusted_observations = self.trusted_observation_store.load(
                 run_id=str(scan_output["run_id"]),
-                campaign_id=campaign_id,
+                campaign_id=str(
+                    dict(scan_output["mainline_run"]).get("campaign_id") or ""
+                ),
                 target_id=target.target_id,
             )
             execution_attestation = build_execution_attestation(
@@ -758,7 +816,6 @@ class DiscoveryPolicyEvaluationRunner:
         mainline = dict(output["mainline_run"])
         for field, value in (
             ("run_id", output["run_id"]),
-            ("campaign_id", campaign_id),
             ("target_id", target_id),
             ("policy_version", policy.policy_version),
             ("evaluation_mode", evaluation_mode),
@@ -767,6 +824,10 @@ class DiscoveryPolicyEvaluationRunner:
                 raise PolicyEvaluationRunnerError(
                     f"scan output mainline {field} mismatch for {target_id}"
                 )
+        _required_text(
+            mainline.get("campaign_id"),
+            "scan_output.mainline_run.campaign_id",
+        )
 
     @staticmethod
     def _policy_identity(policy: PolicyRecord) -> dict[str, str]:

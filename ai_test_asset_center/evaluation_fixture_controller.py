@@ -26,7 +26,7 @@ def _read_fixture(runtime_view: dict[str, Any]) -> tuple[dict[str, Any], dict[st
     if not path.is_file():
         raise PolicyEvaluationRunnerError(f"evaluation fixture snapshot not found: {path}")
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as exc:
         raise PolicyEvaluationRunnerError(f"evaluation fixture snapshot is invalid: {path}: {exc}") from exc
     if not isinstance(payload, dict) or payload.get("schema_version") != HTTP_FIXTURE_SCHEMA:
@@ -133,8 +133,16 @@ class GovernedHttpResetFixtureController:
             observation_path=str(fixture.get("observation_path") or ""),
         )
         if governed.get("accepted") is not True:
+            write = governed.get("write") if isinstance(governed.get("write"), dict) else {}
+            before = governed.get("before") if isinstance(governed.get("before"), dict) else {}
+            after = governed.get("after") if isinstance(governed.get("after"), dict) else {}
             raise PolicyEvaluationRunnerError(
-                f"governed fixture {phase} reset failed: {governed.get('reason')}"
+                f"governed fixture {phase} reset failed: {governed.get('reason')}; "
+                f"write_status={write.get('status')}; "
+                f"write_error={write.get('error') or ''}; "
+                f"before_status={before.get('status')}; "
+                f"after_status={after.get('status')}; "
+                f"audit_path={governed.get('audit_path') or ''}"
             )
         _assert_clean_state(governed, fixture)
         common = {

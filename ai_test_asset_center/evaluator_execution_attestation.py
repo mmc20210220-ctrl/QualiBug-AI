@@ -133,14 +133,21 @@ def _expected_request_attempts(ledger: dict[str, Any]) -> dict[str, dict[str, An
     for raw in _list(ledger.get("attempts")):
         attempt = _dict(raw)
         operational = _dict(attempt.get("operational_receipt"))
+        attempt_id = _text(attempt.get("obligation_id"))
+        execution_id = _text(attempt.get("execution_id"))
+        terminal_stage = _text(attempt.get("terminal_stage")).lower()
+        if not operational:
+            if not execution_id and terminal_stage == "compile":
+                continue
+            raise ExecutionAttestationError(
+                f"operational_receipt_missing:{attempt_id or 'MISSING'}"
+            )
         request_count = _non_negative_int(
             operational.get("http_request_attempt_count"),
             "operational_http_request_attempt_count",
         )
         if request_count == 0:
             continue
-        attempt_id = _text(attempt.get("obligation_id"))
-        execution_id = _text(attempt.get("execution_id"))
         if not attempt_id or not execution_id or attempt_id in expected:
             raise ExecutionAttestationError("execution_attempt_identity_invalid")
         expected[attempt_id] = {

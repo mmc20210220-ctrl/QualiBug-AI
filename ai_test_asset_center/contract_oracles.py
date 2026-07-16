@@ -17,6 +17,7 @@ from .assertion_dsl import (
     materialize_assertion,
     validate_assertion_receipt,
 )
+from .assertion_control_policy import assertion_requires_control
 from .observer_contracts_base import validate_observer_receipt
 
 
@@ -169,9 +170,10 @@ def _assertions_require_control(experiment: dict[str, Any]) -> bool:
             continue
         assertion = materialize_assertion(raw)
         kind = _text(assertion.get("kind") or assertion.get("type"))
-        if kind == "owner_tenant_visibility":
-            return True
-        if assertion.get("require_control") is True:
+        if assertion_requires_control(
+            kind,
+            explicitly_required=assertion.get("require_control") is True,
+        ):
             return True
     return False
 

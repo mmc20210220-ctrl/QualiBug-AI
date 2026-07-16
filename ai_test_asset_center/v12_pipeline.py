@@ -2893,12 +2893,53 @@ def run_v12_pipeline(
         campaign_context=context,
         existing_findings=tuple(existing_findings or ()),
     )
-    return run_discovery_mainline(
+    result = run_discovery_mainline(
         inputs,
         build_campaign=_build_mainline_campaign,
         build_plan=build_discovery_plan,
         experiment_runner=run_experiment_candidate,
     )
+    from .ui_execution_adapter import execute_ui_execution_requests
+
+    ui_execution = execute_ui_execution_requests(
+        str(project),
+        context.get("ui_execution_requests"),
+        _dict(result.get("runtime_contract")),
+        root=Path(root),
+        run_id=str(_dict(result.get("mainline_run")).get("run_id") or ""),
+        execution_context=context,
+    )
+    if not isinstance(ui_execution, dict):
+        raise MainlineContractError("ui_execution_result_not_object")
+    discovery_round = int(
+        context.get("discovery_round")
+        or _behavior_slice_settings()["round_number"]
+    )
+    normalized_ui_findings, ui_evidence_graphs = (
+        _normalize_ui_execution_findings(
+            ui_execution,
+            campaign_id=str(
+                _dict(result.get("mainline_run")).get("campaign_id") or ""
+            ),
+            discovery_round=discovery_round,
+        )
+    )
+    result["ui_execution"] = ui_execution
+    result["ui_findings"] = normalized_ui_findings
+    result.setdefault("evidence_graphs", []).extend(ui_evidence_graphs)
+    result.setdefault("phases", {})["ui_execution"] = {
+        "status": str(ui_execution.get("status") or "not_requested"),
+        "requested": int(ui_execution.get("requested") or 0),
+        "executed": int(ui_execution.get("executed") or 0),
+        "failed": int(ui_execution.get("failed") or 0),
+        "blocked": int(ui_execution.get("blocked") or 0),
+        "provider_distribution": dict(
+            ui_execution.get("provider_distribution") or {}
+        ),
+        "findings": len(normalized_ui_findings),
+        "duration_ms": int(ui_execution.get("duration_ms") or 0),
+    }
+    return result
 
 
 # NOTE: _load_execution_safety_boundary now lives in enterprise_project_config.py

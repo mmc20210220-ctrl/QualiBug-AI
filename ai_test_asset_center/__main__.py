@@ -4052,13 +4052,36 @@ def _test_data_receipt_verifier(root: Path, project: str):
 def _persist_execution_evidence(project: str, root: Path, scan_id: str, campaign: dict[str, Any], runtime_contract: dict[str, Any], execution_status: str, v12: dict[str, Any]) -> dict[str, Any]:
     from .evidence_artifact_store import persist_evidence_bundle
     findings = v12.get("findings") if isinstance(v12.get("findings"), list) else []
+    formal_projection = _as_dict(v12.get("formal_count_projection"))
+    canonical_representatives = (
+        formal_projection.get("canonical_representative_findings")
+        if isinstance(formal_projection.get("canonical_representative_findings"), list)
+        else []
+    )
     external_findings = v12.get("external_findings") if isinstance(v12.get("external_findings"), list) else []
     runtime_candidates = (
         v12.get("candidate_findings")
         if isinstance(v12.get("candidate_findings"), list)
         else []
     )
-    persisted_findings = [dict(item) for item in findings if isinstance(item, dict)]
+    registry = _as_dict(v12.get("canonical_defect_registry"))
+    registry_ids = [
+        str(value or "").strip()
+        for value in registry.get("canonical_defect_ids", [])
+    ] if isinstance(registry.get("canonical_defect_ids"), list) else []
+    representative_rows = [
+        dict(item) for item in canonical_representatives if isinstance(item, dict)
+    ]
+    representative_ids = [
+        str(item.get("canonical_defect_id") or "").strip()
+        for item in representative_rows
+    ]
+    declared_rows = [dict(item) for item in findings if isinstance(item, dict)]
+    persisted_findings = (
+        representative_rows
+        if registry_ids and representative_ids == registry_ids
+        else declared_rows
+    )
     persisted_candidates = [
         dict(item)
         for item in [*runtime_candidates, *external_findings]
@@ -4075,7 +4098,7 @@ def _persist_execution_evidence(project: str, root: Path, scan_id: str, campaign
         evidence_graphs=v12.get("evidence_graphs") if isinstance(v12.get("evidence_graphs"), list) else [],
         findings=persisted_findings,
         candidate_findings=persisted_candidates,
-        canonical_defect_registry=_as_dict(v12.get("canonical_defect_registry")),
+        canonical_defect_registry=registry,
         delivery_occurrences=(
             v12.get("delivery_occurrences")
             if isinstance(v12.get("delivery_occurrences"), list)
@@ -4542,13 +4565,25 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
     candidates = list(canonical_scope["candidates"])
     delivery_occurrences = list(canonical_scope["delivery_occurrences"])
     canonical_registry = dict(canonical_scope["canonical_defect_registry"])
+    dedupe_input_count = int(
+        canonical_registry.get("delivery_occurrence_count")
+        if canonical_registry
+        else len(delivery_occurrences)
+    )
+    dedupe_output_count = int(
+        canonical_registry.get("canonical_defect_count")
+        if canonical_registry
+        else len(confirmed)
+    )
     dedupe_report = {
         "schema_version": "qualibug.canonical-dedupe-report.v1",
         "authority": "canonical_defect_registry",
         "status": canonical_scope["status"],
-        "unique_count": len(confirmed),
-        "delivery_occurrence_count": len(delivery_occurrences),
-        "collapsed_count": max(0, len(delivery_occurrences) - len(confirmed)),
+        "input_count": dedupe_input_count,
+        "output_count": dedupe_output_count,
+        "unique_count": dedupe_output_count,
+        "delivery_occurrence_count": dedupe_input_count,
+        "collapsed_count": max(0, dedupe_input_count - dedupe_output_count),
         "title_or_path_dedupe_used": False,
     }
     external_findings = v12.get("external_findings") if isinstance(v12.get("external_findings"), list) else []
@@ -5046,7 +5081,6 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
                 })
                 result["closed_loop"]["probe_pool_path"] = str(probe_pool_path)
     except Exception as e:
-        import sys
         print(f"[scan] Closed-loop learning failed: {e}", file=sys.stderr)
         failure_code = f"CLOSED_LOOP_LEARNING_FAILED:{type(e).__name__}:{str(e)[:200]}"
         result.setdefault("stage_failures", []).append(failure_code)

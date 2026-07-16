@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import pytest
-
 from ai_test_asset_center.agent_semantic_linker import (
-    AgentSemanticLinkerError,
     enrich_knowledge_asset_with_agent_relationships,
 )
 from ai_test_asset_center.behavior_ir import build_behavior_ir_from_knowledge_asset
@@ -72,16 +69,26 @@ def test_agent_semantic_link_becomes_source_bound_runtime_obligation() -> None:
     assert any(row["risk_family"] == "conservation" for row in obligations)
 
 
-def test_agent_semantic_linker_fails_on_invented_behavior_identity() -> None:
-    with pytest.raises(AgentSemanticLinkerError, match="unknown_interface_id"):
-        enrich_knowledge_asset_with_agent_relationships(
-            _asset(),
-            client=FakeAgentClient({
-                "relationships": [{
-                    "rule_id": "rule-conservation",
-                    "interface_id": "api:POST:/invented",
-                    "confidence": 0.99,
-                    "reason": "invented",
-                }],
-            }),
-        )
+def test_agent_semantic_linker_rejects_invented_behavior_identity_visibly() -> None:
+    enriched, receipt = enrich_knowledge_asset_with_agent_relationships(
+        _asset(),
+        client=FakeAgentClient({
+            "relationships": [{
+                "rule_id": "rule-conservation",
+                "interface_id": "api:POST:/invented",
+                "confidence": 0.99,
+                "reason": "invented",
+            }],
+        }),
+    )
+
+    assert enriched["relationships"] == []
+    assert receipt["status"] == "VERIFIED_WITH_REJECTIONS"
+    assert receipt["accepted_relationship_count"] == 0
+    assert receipt["rejected_invalid_identity_count"] == 1
+    assert receipt["rejected_proposal_count"] == 1
+    assert receipt["rejections"] == [{
+        "proposal_index": 0,
+        "reason_code": "UNKNOWN_INTERFACE_ID",
+        "proposal_fingerprint": receipt["rejections"][0]["proposal_fingerprint"],
+    }]

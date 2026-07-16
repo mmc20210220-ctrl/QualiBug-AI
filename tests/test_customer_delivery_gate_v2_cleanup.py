@@ -5,7 +5,9 @@ import pytest
 from ai_test_asset_center.customer_delivery_gate_v2 import (
     _cleanup_gate_decision,
     _reproduction_decision,
+    _validate_active_chain,
 )
+from ai_test_asset_center.assertion_dsl_base import _assertion_receipt
 
 
 def _execution(
@@ -157,6 +159,40 @@ def test_missing_required_control_is_not_reported_as_oracle_not_violated() -> No
 
     assert reproduced is False
     assert reason == "REPRODUCTION_CONTROL_MISSING"
+
+
+def test_gate_blocks_actor_sensitive_violation_when_activation_omits_control() -> None:
+    assertion = _assertion_receipt(
+        assertion_id="assert-authorization",
+        kind="owner_tenant_visibility",
+        status="VIOLATION",
+        reason_code="VISIBILITY_VIOLATION",
+        expected=False,
+        actual=True,
+        error="",
+        observer_receipt_ids=[],
+        source_refs=[{"kind": "api", "locator": "GET /resources/{id}"}],
+        harness_error=False,
+        campaign_id="campaign-1",
+        execution_id="execution-1",
+    )
+
+    decision = _validate_active_chain(
+        execution={"observation_receipt_ids": []},
+        contracts=[],
+        observers=[],
+        oracle={
+            "status": "VIOLATION",
+            "assertions": [assertion],
+            "activation_receipt": {
+                "status": "ACTIVE",
+                "required": {"control": []},
+            },
+        },
+        reproduction={"status": "REPRODUCED", "step_observations": []},
+    )
+
+    assert decision == ("BLOCKED", ["ACTOR_SENSITIVE_CONTROL_MISSING"])
 
 
 @pytest.mark.parametrize(

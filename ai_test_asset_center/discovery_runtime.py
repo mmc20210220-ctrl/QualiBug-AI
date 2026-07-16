@@ -1011,10 +1011,22 @@ def run_experiment_candidate(
                         plan.experiments.get("agent_semantic_link_receipt")
                     ).get("status")
                 ).lower(),
+                "proposal_count": int(
+                    _dict(
+                        plan.experiments.get("agent_semantic_link_receipt")
+                    ).get("proposal_count")
+                    or 0
+                ),
                 "accepted_relationship_count": int(
                     _dict(
                         plan.experiments.get("agent_semantic_link_receipt")
                     ).get("accepted_relationship_count")
+                    or 0
+                ),
+                "rejected_proposal_count": int(
+                    _dict(
+                        plan.experiments.get("agent_semantic_link_receipt")
+                    ).get("rejected_proposal_count")
                     or 0
                 ),
             },

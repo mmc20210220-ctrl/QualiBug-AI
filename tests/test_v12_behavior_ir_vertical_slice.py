@@ -21,6 +21,42 @@ GET /items
 PUT /items/{id}
 """
     (root / "projects" / project / "input" / "API_SPEC.md").write_text(api, encoding="utf-8")
+    observed_ui_calls: list[dict[str, object]] = []
+
+    def fake_ui_execution(
+        project_id: str,
+        requests: object,
+        runtime_contract: dict[str, object],
+        **kwargs: object,
+    ) -> dict[str, object]:
+        observed_ui_calls.append({
+            "project_id": project_id,
+            "requests": requests,
+            "runtime_contract": runtime_contract,
+            **kwargs,
+        })
+        return {
+            "status": "completed",
+            "requested": 1,
+            "executed": 1,
+            "failed": 0,
+            "blocked": 0,
+            "provider_distribution": {"playwright_browser_plan": 1},
+            "results": [{
+                "request_id": "UI-1",
+                "provider": "playwright_browser_plan",
+                "status": "executed",
+                "artifacts": [{"artifact_type": "locator", "ref": "locator.png"}],
+            }],
+            "findings": [],
+            "artifacts": [{"artifact_type": "locator", "ref": "locator.png"}],
+            "duration_ms": 12,
+        }
+
+    monkeypatch.setattr(
+        "ai_test_asset_center.ui_execution_adapter.execute_ui_execution_requests",
+        fake_ui_execution,
+    )
 
     # Avoid network / long execution: block approved base URL via empty runtime.
     result = run_v12_pipeline(
@@ -44,6 +80,11 @@ PUT /items/{id}
                 "source_id": "api",
                 "source_hash": hashlib.sha256(api.encode("utf-8")).hexdigest(),
             },
+            "ui_execution_requests": [{
+                "request_id": "UI-1",
+                "provider": "playwright_browser_plan",
+                "browser_plan": {"steps": [{"action": "goto", "url": "/"}]},
+            }],
         },
     )
     assert isinstance(result, dict)
@@ -60,7 +101,22 @@ PUT /items/{id}
     assert result["agent_semantic_link_receipt"]["status"] == "NOT_REQUESTED"
     assert result["phases"]["agent_semantic_linking"] == {
         "status": "not_requested",
+        "proposal_count": 0,
         "accepted_relationship_count": 0,
+        "rejected_proposal_count": 0,
+    }
+    assert len(observed_ui_calls) == 1
+    assert observed_ui_calls[0]["project_id"] == project
+    assert result["ui_execution"]["status"] == "completed"
+    assert result["phases"]["ui_execution"] == {
+        "status": "completed",
+        "requested": 1,
+        "executed": 1,
+        "failed": 0,
+        "blocked": 0,
+        "provider_distribution": {"playwright_browser_plan": 1},
+        "findings": 0,
+        "duration_ms": 12,
     }
     blob = str(result.get("behavior_ir"))
     assert "bugs.json" not in blob.lower()
