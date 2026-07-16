@@ -261,6 +261,10 @@ def test_candidate_plans_source_derived_runtime_interface_discovery(
     assert surface["status"] == "PLANNED"
     assert surface["plan"]["candidate_count"] > 0
     assert surface["execution"]["selected_count"] == 0
+    serialized = json.dumps(result, ensure_ascii=False)
+    assert "_knowledge_asset" not in serialized
+    assert "_documented_operations" not in serialized
+    assert "_runtime_actors" not in serialized
 
 
 def test_v12_validates_primary_source_before_using_enriched_api_document(
