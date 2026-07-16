@@ -1,7 +1,18 @@
 """Adaptive discovery planner — obligation coverage and information gain."""
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
+
+from .observed_product_scan_protocol import find_evaluator_private_context_paths
+
+
+AGENT_INTENT_PLAN_SCHEMA = "qualibug.agent-intent-plan.v1"
+
+
+class AgentIntentError(ValueError):
+    """An Agent proposed intent outside the compiled Behavior IR authority."""
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -121,3 +132,185 @@ def plan_obligation_round(
         "family_coverage": family_counts,
         "stop_condition": "budget_exhausted" if pending else "in_scope_obligations_scheduled",
     }
+
+
+def _source_refs(*values: Any) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for value in values:
+        for raw in _list(value):
+            if not isinstance(raw, dict):
+                continue
+            row = dict(raw)
+            key = json.dumps(
+                row,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(row)
+    return result
+
+
+def build_agent_intent_plan(
+    adaptive_plan: dict[str, Any],
+    *,
+    obligations: list[dict[str, Any]],
+    experiments_by_obligation: dict[str, dict[str, Any]],
+    behavior_ir: dict[str, Any],
+) -> dict[str, Any]:
+    """Bind planner intent to existing IR nodes and compiled experiment receipts."""
+
+    private_paths = find_evaluator_private_context_paths({
+        "adaptive_plan": adaptive_plan,
+        "obligations": obligations,
+        "experiments": experiments_by_obligation,
+        "behavior_ir": behavior_ir,
+    })
+    if private_paths:
+        raise AgentIntentError(
+            "evaluator_private_context_forbidden:" + ",".join(private_paths)
+        )
+    if adaptive_plan.get("schema_version") != "qualibug.adaptive-obligation-plan.v1":
+        raise AgentIntentError("adaptive_plan_schema_invalid")
+    obligations_by_id: dict[str, dict[str, Any]] = {}
+    for row in obligations:
+        oid = _text(_dict(row).get("obligation_id"))
+        if not oid or oid in obligations_by_id:
+            raise AgentIntentError(f"obligation_identity_invalid:{oid or 'missing'}")
+        obligations_by_id[oid] = dict(row)
+    operations = {
+        _text(_dict(row).get("id")): dict(row)
+        for row in _list(behavior_ir.get("operations"))
+        if isinstance(row, dict) and _text(row.get("id"))
+    }
+    actors = {
+        _text(_dict(row).get("id"))
+        for row in _list(behavior_ir.get("actors"))
+        if isinstance(row, dict) and _text(row.get("id"))
+    }
+    relations = {
+        _text(_dict(row).get("id"))
+        for row in _list(behavior_ir.get("relations"))
+        if isinstance(row, dict) and _text(row.get("id"))
+    }
+    intents: list[dict[str, Any]] = []
+    for planned in _list(adaptive_plan.get("selected")):
+        row = _dict(planned)
+        obligation_id = _text(row.get("obligation_id"))
+        obligation = obligations_by_id.get(obligation_id)
+        if obligation is None:
+            raise AgentIntentError(f"unknown_obligation:{obligation_id or 'missing'}")
+        experiment = _dict(experiments_by_obligation.get(obligation_id))
+        experiment_id = _text(experiment.get("experiment_id"))
+        if (
+            not experiment_id
+            or experiment_id != _text(row.get("experiment_id"))
+            or _text(_dict(experiment.get("compile_receipt")).get("status"))
+            != "COMPILED"
+        ):
+            raise AgentIntentError(
+                f"compiled_experiment_mismatch:{obligation_id}"
+            )
+        operation_refs = sorted({
+            _text(value)
+            for value in _list(obligation.get("required_operations"))
+            if _text(value)
+        })
+        actor_refs = sorted({
+            _text(value)
+            for value in _list(obligation.get("required_actors"))
+            if _text(value)
+        })
+        relation_refs = sorted({
+            _text(value)
+            for value in _list(obligation.get("relation_refs"))
+            if _text(value)
+        })
+        unknown_operations = sorted(set(operation_refs) - set(operations))
+        unknown_actors = sorted(set(actor_refs) - actors)
+        unknown_relations = sorted(set(relation_refs) - relations)
+        if unknown_operations or unknown_actors or unknown_relations:
+            raise AgentIntentError(
+                "behavior_ir_reference_invalid:"
+                + json.dumps({
+                    "operations": unknown_operations,
+                    "actors": unknown_actors,
+                    "relations": unknown_relations,
+                }, sort_keys=True)
+            )
+        observers = [
+            dict(value)
+            for value in _list(experiment.get("observers"))
+            if isinstance(value, dict)
+        ]
+        observer_refs = sorted({
+            _text(value.get("observer_id")) for value in observers
+            if _text(value.get("observer_id"))
+        })
+        adapters = sorted({
+            _text(value.get("adapter")) for value in observers
+            if _text(value.get("adapter"))
+        })
+        if not observer_refs or not adapters:
+            raise AgentIntentError(f"observer_authority_missing:{obligation_id}")
+        source_refs = _source_refs(
+            obligation.get("source_refs"),
+            experiment.get("source_refs"),
+            *[operations[ref].get("source_refs") for ref in operation_refs],
+        )
+        if not source_refs:
+            raise AgentIntentError(f"source_authority_missing:{obligation_id}")
+        material = f"{obligation_id}:{experiment_id}:{','.join(operation_refs)}"
+        intents.append({
+            "intent_id": "intent_" + hashlib.sha256(
+                material.encode("utf-8")
+            ).hexdigest()[:20],
+            "status": "VERIFIED",
+            "semantic_authority": "behavior_ir",
+            "obligation_id": obligation_id,
+            "experiment_id": experiment_id,
+            "risk_family": _text(obligation.get("risk_family")),
+            "operation_refs": operation_refs,
+            "actor_refs": actor_refs,
+            "relation_refs": relation_refs,
+            "observer_refs": observer_refs,
+            "execution_adapters": adapters,
+            "source_refs": source_refs,
+            "planner_score": _num(row.get("score")),
+        })
+    pending_ids = [
+        _text(_dict(row).get("obligation_id"))
+        for row in _list(adaptive_plan.get("pending_next_round"))
+        if _text(_dict(row).get("obligation_id"))
+    ]
+    unknown_pending = sorted(set(pending_ids) - set(obligations_by_id))
+    if unknown_pending:
+        raise AgentIntentError(
+            "unknown_pending_obligation:" + ",".join(unknown_pending)
+        )
+    payload = {
+        "schema_version": AGENT_INTENT_PLAN_SCHEMA,
+        "status": "VERIFIED",
+        "generator": "adaptive_discovery_agent",
+        "behavior_ir_model_id": _text(behavior_ir.get("model_id")),
+        "semantic_authority": "behavior_ir",
+        "intent_count": len(intents),
+        "pending_count": len(pending_ids),
+        "pending_obligation_ids": pending_ids,
+        "intents": intents,
+    }
+    payload["intent_plan_fingerprint"] = hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    return payload

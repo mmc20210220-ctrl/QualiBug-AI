@@ -8,7 +8,14 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .adaptive_discovery_planner import plan_obligation_round
+from .adaptive_discovery_planner import (
+    build_agent_intent_plan,
+    plan_obligation_round,
+)
+from .agent_semantic_linker import (
+    RECEIPT_SCHEMA as AGENT_SEMANTIC_LINK_RECEIPT_SCHEMA,
+    enrich_knowledge_asset_with_agent_relationships,
+)
 from .behavior_ir import build_behavior_ir_from_knowledge_asset
 from .canonical_defect_registry import (
     CanonicalDefectRegistryError,
@@ -431,6 +438,22 @@ def build_discovery_plan(
     from .enterprise_knowledge_center import build_enterprise_business_knowledge_asset
 
     asset = build_enterprise_business_knowledge_asset(inputs.project, inputs.root)
+    agent_semantic_link_receipt: dict[str, Any] = {
+        "schema_version": AGENT_SEMANTIC_LINK_RECEIPT_SCHEMA,
+        "status": "NOT_REQUESTED",
+        "reason_code": "agent_semantic_linking_disabled",
+        "accepted_relationship_count": 0,
+    }
+    semantic_linking_enabled = inputs.campaign_context.get(
+        "agent_semantic_linking_enabled",
+        False,
+    )
+    if not isinstance(semantic_linking_enabled, bool):
+        raise MainlineContractError("agent_semantic_linking_enabled_not_boolean")
+    if semantic_linking_enabled:
+        asset, agent_semantic_link_receipt = (
+            enrich_knowledge_asset_with_agent_relationships(asset)
+        )
     operations = _api_operations(
         inputs.api_spec_text,
         submitted_source_text=_text(
@@ -505,6 +528,12 @@ def build_discovery_plan(
         experiments_by_obligation=by_obligation,
         budget=max(budget, 200),  # Cover all obligations
     )
+    agent_intent_plan = build_agent_intent_plan(
+        obligation_plan,
+        obligations=obligations,
+        experiments_by_obligation=by_obligation,
+        behavior_ir=behavior_ir,
+    )
     return DiscoveryPlanningBundle(
         mainline_run=contract,
         behavior_ir=behavior_ir,
@@ -514,6 +543,8 @@ def build_discovery_plan(
             "all_experiments": all_experiments,
             "by_obligation": by_obligation,
             "obligation_plan": obligation_plan,
+            "agent_intent_plan": agent_intent_plan,
+            "agent_semantic_link_receipt": agent_semantic_link_receipt,
             "runtime_contract": dict(
                 _dict(inputs.campaign_context.get("_runtime_contract"))
             ),
@@ -524,17 +555,32 @@ def build_discovery_plan(
 
 def _selected_rows(plan: DiscoveryPlanningBundle) -> list[dict[str, Any]]:
     experiments = _dict(plan.experiments.get("by_obligation"))
+    intents = {
+        _text(_dict(row).get("obligation_id")): dict(row)
+        for row in _list(
+            _dict(plan.experiments.get("agent_intent_plan")).get("intents")
+        )
+        if isinstance(row, dict) and _text(row.get("obligation_id"))
+    }
     rows: list[dict[str, Any]] = []
     for obligation in _list(plan.obligations.get("obligations")):
         if not isinstance(obligation, dict):
             continue
         obligation_id = _text(obligation.get("obligation_id"))
         experiment = _dict(experiments.get(obligation_id))
+        intent = _dict(intents.get(obligation_id))
+        adapters = [
+            _text(value)
+            for value in _list(intent.get("execution_adapters"))
+            if _text(value)
+        ]
         rows.append({
             **obligation,
             "candidate_id": _text(obligation.get("candidate_id")) or obligation_id,
             "experiment_id": _text(experiment.get("experiment_id")),
-            "adapter": "http_api",
+            "adapter": adapters[0] if len(adapters) == 1 else "multi_surface",
+            "execution_adapters": adapters,
+            "agent_intent_id": _text(intent.get("intent_id")),
             "planning_round": 1,
             "operation_refs": list(obligation.get("required_operations") or []),
             "actor_refs": list(obligation.get("required_actors") or []),
@@ -727,9 +773,10 @@ def run_experiment_candidate(
     started = time.time()
     runtime_contract = dict(_dict(plan.experiments.get("runtime_contract")))
     obligation_plan = _dict(plan.experiments.get("obligation_plan"))
+    agent_intent_plan = _dict(plan.experiments.get("agent_intent_plan"))
     scheduled = [
         dict(row)
-        for row in _list(obligation_plan.get("selected"))
+        for row in _list(agent_intent_plan.get("intents"))
         if isinstance(row, dict)
     ]
     runtime_approved = (
@@ -905,6 +952,10 @@ def run_experiment_candidate(
             if key not in {"by_obligation", "runtime_contract"}
         },
         "obligation_plan": dict(obligation_plan),
+        "agent_intent_plan": dict(agent_intent_plan),
+        "agent_semantic_link_receipt": dict(
+            _dict(plan.experiments.get("agent_semantic_link_receipt"))
+        ),
         "experiment_execution": {
             "selected_count": len(selected_rows),
             "scheduled_count": len(scheduled),
@@ -941,6 +992,26 @@ def run_experiment_candidate(
         "execution_trace_summaries": [],
         "behavior_slice_ledger": {},
         "phases": {
+            "agent_intent": {
+                "status": _text(agent_intent_plan.get("status")).lower(),
+                "generated": int(agent_intent_plan.get("intent_count") or 0),
+                "semantic_authority": _text(
+                    agent_intent_plan.get("semantic_authority")
+                ),
+            },
+            "agent_semantic_linking": {
+                "status": _text(
+                    _dict(
+                        plan.experiments.get("agent_semantic_link_receipt")
+                    ).get("status")
+                ).lower(),
+                "accepted_relationship_count": int(
+                    _dict(
+                        plan.experiments.get("agent_semantic_link_receipt")
+                    ).get("accepted_relationship_count")
+                    or 0
+                ),
+            },
             "behavior_ir": {
                 "status": "completed",
                 "operation_count": len(_list(plan.behavior_ir.get("operations"))),

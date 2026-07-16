@@ -52,6 +52,16 @@ PUT /items/{id}
     assert result["behavior_ir"]["schema_version"] == "qualibug.behavior-ir.v2"
     assert "test_obligations" in result
     assert "experiment_compile" in result
+    assert result["agent_intent_plan"]["schema_version"] == (
+        "qualibug.agent-intent-plan.v1"
+    )
+    assert result["agent_intent_plan"]["semantic_authority"] == "behavior_ir"
+    assert result["phases"]["agent_intent"]["status"] == "verified"
+    assert result["agent_semantic_link_receipt"]["status"] == "NOT_REQUESTED"
+    assert result["phases"]["agent_semantic_linking"] == {
+        "status": "not_requested",
+        "accepted_relationship_count": 0,
+    }
     blob = str(result.get("behavior_ir"))
     assert "bugs.json" not in blob.lower()
     assert "ground_truth" not in blob.lower()

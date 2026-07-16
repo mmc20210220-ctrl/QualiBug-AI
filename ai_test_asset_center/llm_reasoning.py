@@ -1117,6 +1117,16 @@ class ReasoningClient:
         raw = self._chat(user_prompt) if system_prompt is None else self._chat(user_prompt, system_prompt=system_prompt)
         return self._parse_json(raw)
 
+    def complete_json(
+        self,
+        *,
+        user_prompt: str,
+        system_prompt: str | None = None,
+    ) -> dict[str, Any]:
+        """Expose the fail-fast JSON contract used by constrained Agent planners."""
+
+        return self.chat_json(user_prompt, system_prompt=system_prompt)
+
     def health_check(self) -> dict[str, Any]:
         """Perform a bounded provider check without storing credentials or prompts."""
         result = self.chat_json('Return only this JSON object: {"ok":true}.')
