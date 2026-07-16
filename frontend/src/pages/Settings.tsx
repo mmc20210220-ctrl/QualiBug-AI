@@ -491,13 +491,16 @@ export function Settings() {
         });
         const authCheck = asRecord(asRecord(authResponse).auth_check);
         const roles = asRecord(authCheck.roles);
+        const authVerified = authCheck.all_ok === true;
         const failedRoles = Object.entries(roles)
           .filter(([, ok]) => ok === false)
           .map(([role]) => role);
-        if (failedRoles.length > 0) {
-          authStatusNote = `，但以下测试账号登录失败：${failedRoles.join('、')}`;
-        } else if (Object.keys(roles).length > 0) {
+        if (authVerified) {
           authStatusNote = '，测试账号已校验通过';
+        } else if (failedRoles.length > 0) {
+          authStatusNote = `，但以下测试账号登录失败：${failedRoles.join('、')}`;
+        } else {
+          authStatusNote = '，凭据已保存但尚未通过在线验证';
         }
         setEditingServiceConfigName(serviceConfigName);
       }

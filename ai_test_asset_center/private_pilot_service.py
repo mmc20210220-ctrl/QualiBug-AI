@@ -6479,69 +6479,127 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
         base_url_override = str(body.get("base_url") or "").strip()
         if not finding_id:
             return self._json({"ok": False, "error": "MISSING_FINDING_ID", "message": "finding_id is required"}, 400)
+        phase = "command_center"
+        target_status = ""
+        result: dict[str, Any] = {}
         try:
-            # Load command-center risks to find the finding
             command_center = self._build_command_center(project, root)
-            risks = command_center.get("data", {}).get("risks") or []
-            # Use replay engine
+            if not isinstance(command_center, dict):
+                raise TypeError("command-center replay source must be an object")
+            command_data = command_center.get("data")
+            if not isinstance(command_data, dict):
+                raise ValueError("command-center replay data must be an object")
+            risks = command_data.get("risks") or []
+            if not isinstance(risks, list) or any(not isinstance(risk, dict) for risk in risks):
+                raise ValueError("command-center replay risks must be a list of objects")
+
+            phase = "replay_execution"
             from .replay_engine import ReplayEngine
             engine = ReplayEngine(root, project)
             result = engine.replay(finding_id, risks, base_url_override)
-            # If replay confirmed bug is gone, mark finding as resolved
-            if isinstance(result, dict) and result.get("ok") and result.get("success") is False:
-                try:
-                    db_persist.update_finding_status(root, finding_id, "resolved")
-                    result["finding_status"] = "resolved"
-                    result["message"] = "复现失败：Bug 已不再触发，标记为已修复。"
-                except Exception:
-                    pass
-            elif isinstance(result, dict) and result.get("ok") and result.get("success") is True:
-                try:
-                    # Bug still reproduces — ensure it stays open
-                    db_persist.update_finding_status(root, finding_id, "open")
-                    result["finding_status"] = "open"
-                    result["message"] = "复现成功：Bug 仍然存在。"
-                except Exception:
-                    pass
+            if not isinstance(result, dict):
+                raise TypeError("replay result must be an object")
+
+            if result.get("ok") is True and result.get("success") is False:
+                phase = "status_persistence"
+                target_status = "resolved"
+                status_updated = db_persist.update_finding_status(root, finding_id, target_status)
+                if status_updated is not True:
+                    raise RuntimeError(f"finding status persistence did not update finding: {finding_id}")
+                result["finding_status"] = target_status
+                result["message"] = "复现失败：Bug 已不再触发，标记为已修复。"
+            elif result.get("ok") is True and result.get("success") is True:
+                phase = "status_persistence"
+                target_status = "open"
+                status_updated = db_persist.update_finding_status(root, finding_id, target_status)
+                if status_updated is not True:
+                    raise RuntimeError(f"finding status persistence did not update finding: {finding_id}")
+                result["finding_status"] = target_status
+                result["message"] = "复现成功：Bug 仍然存在。"
             return self._json(result)
-        except Exception as e:
-            return self._json({"ok": False, "finding_id": finding_id, "error": f"复现失败: {e}"}, 500)
+        except Exception as exc:
+            _write_json_object_atomic(
+                root / "platform_outputs" / project / "replay_last_error.json",
+                {
+                    "schema": "qualibug.replay-failure.v1",
+                    "project": project,
+                    "finding_id": finding_id,
+                    "phase": phase,
+                    "target_status": target_status,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                    "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                },
+            )
+            error_code = "REPLAY_STATUS_PERSIST_FAILED" if phase == "status_persistence" else "REPLAY_FAILED"
+            response: dict[str, Any] = {
+                "ok": False,
+                "finding_id": finding_id,
+                "error": error_code,
+                "message": str(exc),
+            }
+            if result:
+                response["replay_result"] = result
+            return self._json(response, 500)
 
     # ── Multi-Service Credential Management ──
 
     def _handle_get_service_credentials(self, project: str, root: Path) -> None:
         """Return current multi-service credential configuration."""
         config_path = root / "platform_workspace" / project / "multi_service_config.json"
-        services = []
         try:
-            if config_path.exists():
-                data = json.loads(config_path.read_text(encoding="utf-8"))
-                services = data.get("services", [])
-        except Exception:
-            pass
+            data = _read_json_object(config_path)
+            services = data.get("services", [])
+            if not isinstance(services, list) or any(not isinstance(item, dict) for item in services):
+                raise ValueError(f"credential config services must be a list of objects: {config_path}")
+        except Exception as exc:
+            return self._json(
+                {
+                    "ok": False,
+                    "error": "CREDENTIAL_CONFIG_INVALID",
+                    "message": str(exc),
+                    "project": project,
+                },
+                500,
+            )
         return self._json({"project": project, "services": services})
 
     def _handle_save_service_credentials(self, project: str, root: Path, body: dict) -> None:
         """Save credentials for a single service, merging into multi_service_config.json."""
         service_data = body.get("service", {})
-        if not isinstance(service_data, dict) or not service_data.get("name"):
+        if not isinstance(service_data, dict) or not str(service_data.get("name") or "").strip():
             return self._json({"ok": False, "error": "MISSING_NAME",
                               "message": "service.name is required"}, 400)
         previous_name = str(body.get("previous_name") or "").strip()
         config_path = root / "platform_workspace" / project / "multi_service_config.json"
-        config: dict = {}
-        if config_path.exists():
-            try:
-                config = json.loads(config_path.read_text(encoding="utf-8")) or {}
-            except Exception:
-                pass
+        try:
+            config = _read_json_object(config_path)
+            services = config.get("services", [])
+            if not isinstance(services, list) or any(not isinstance(item, dict) for item in services):
+                raise ValueError(f"credential config services must be a list of objects: {config_path}")
+        except Exception as exc:
+            return self._json(
+                {
+                    "ok": False,
+                    "error": "CREDENTIAL_CONFIG_INVALID",
+                    "message": str(exc),
+                    "project": project,
+                },
+                500,
+            )
         config.setdefault("services", [])
         config.setdefault("project_name", project)
         config.setdefault("cross_service_contracts", [])
         config.setdefault("external_integrations", [])
 
         # Upsert: update existing or append new
-        name = service_data["name"]
+        name = str(service_data["name"]).strip()
+        role_accounts = service_data.get("role_accounts") or []
+        if not isinstance(role_accounts, list) or any(not isinstance(account, dict) for account in role_accounts):
+            return self._json(
+                {"ok": False, "error": "INVALID_ROLE_ACCOUNTS", "message": "service.role_accounts must be a list of objects"},
+                400,
+            )
         updated = False
         for i, svc in enumerate(config["services"]):
             if svc.get("name") in {name, previous_name}:
@@ -6556,12 +6614,14 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                     "login_api": service_data.get("login_api", "/auth/login"),
                 }
                 # Multi-role accounts (new)
-                role_accounts = service_data.get("role_accounts") or []
                 for ra in role_accounts:
                     if isinstance(ra, dict) and ra.get("role") and ra.get("username"):
-                        auth.setdefault(ra["role"], {})
-                        auth[ra["role"]]["username"] = ra["username"]
-                        auth[ra["role"]]["password"] = ra.get("password", "")
+                        role = str(ra["role"])
+                        previous_role = previous_auth.get(role) if isinstance(previous_auth.get(role), dict) else {}
+                        password = _credential_update_value(ra.get("password"), previous_role.get("password"))
+                        auth[role] = {"username": ra["username"]}
+                        if password:
+                            auth[role]["password"] = password
                 # Legacy single admin (backward compat)
                 if not role_accounts:
                     if service_data.get("admin_user"):
@@ -6604,23 +6664,25 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 "login_api": service_data.get("login_api", "/auth/login"),
             }
             # Multi-role accounts
-            role_accounts = service_data.get("role_accounts") or []
             for ra in role_accounts:
                 if isinstance(ra, dict) and ra.get("role") and ra.get("username"):
-                    auth[ra["role"]] = {
-                        "username": ra["username"],
-                        "password": ra.get("password", ""),
-                    }
+                    role = str(ra["role"])
+                    auth[role] = {"username": ra["username"]}
+                    password = _credential_update_value(ra.get("password"))
+                    if password:
+                        auth[role]["password"] = password
             # Legacy single admin fallback
             if not role_accounts and service_data.get("admin_user"):
                 auth["admin"] = {
                     "username": service_data["admin_user"],
                     "password": service_data.get("admin_pass", ""),
                 }
-            if service_data.get("bearer_token"):
-                auth["bearer_token"] = service_data["bearer_token"]
-            if service_data.get("api_key"):
-                auth["api_key"] = service_data["api_key"]
+            bearer_token = _credential_update_value(service_data.get("bearer_token"))
+            if bearer_token:
+                auth["bearer_token"] = bearer_token
+            api_key = _credential_update_value(service_data.get("api_key"))
+            if api_key:
+                auth["api_key"] = api_key
             svc = {
                 "name": name, "base_url": service_data.get("base_url", ""),
                 "enabled": service_data.get("enabled", True),
@@ -6633,7 +6695,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                     "port": int(service_data.get("db_port", 3306)),
                     "name": service_data.get("db_name", ""),
                     "user": service_data.get("db_user", ""),
-                    "password": service_data.get("db_pass", ""),
+                    "password": _credential_update_value(service_data.get("db_pass")),
                 }
             config["services"].append(svc)
 
@@ -6660,27 +6722,88 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
                 _db_pw = _db_cfg.get("password")
                 if _db_pw and not _is_enc(_db_pw):
                     _db_cfg["password"] = _enc_secret(_db_pw)
-        config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+        _write_json_object_atomic(config_path, config)
 
-        # Reload credential manager if running
-        auth_check: dict[str, Any] = {}
+        # Reload credentials and perform a real password-login health check.
+        # Static bearer/API-key configuration remains unverified because the
+        # credential manager cannot prove it against a protected endpoint.
         try:
             from .enterprise_credential_manager import EnterpriseCredentialManager
             mgr = EnterpriseCredentialManager(project, root)
             mgr.load_from_file(config_path)
             mgr.load_from_env()
             login_results = mgr.login_all_services()
+            if not isinstance(login_results, dict):
+                raise TypeError("credential login results must be an object")
             auth_roles = login_results.get(name) or {}
+            if not isinstance(auth_roles, dict) or any(type(ok) is not bool for ok in auth_roles.values()):
+                raise ValueError("credential role health results must be boolean values")
+            target_service = next(
+                (item for item in config["services"] if isinstance(item, dict) and item.get("name") == name),
+                None,
+            )
+            if target_service is None:
+                raise ValueError(f"saved service missing from credential config: {name}")
+            target_auth = target_service.get("auth") if isinstance(target_service.get("auth"), dict) else {}
+            role_credentials = [
+                value
+                for value in target_auth.values()
+                if isinstance(value, dict) and (value.get("username") or value.get("password"))
+            ]
+            static_token_only = bool(target_auth.get("bearer_token") or target_auth.get("api_key")) and not role_credentials
+            verified = bool(auth_roles) and all(ok is True for ok in auth_roles.values()) and not static_token_only
             auth_check = {
                 "service": name,
                 "roles": auth_roles,
-                "all_ok": bool(auth_roles) and all(bool(ok) for ok in auth_roles.values()),
+                "all_ok": verified,
+                "status": "verified" if verified else "configured_unverified" if static_token_only else "failed",
             }
-        except Exception:
-            pass
+            if static_token_only:
+                auth_check["reason"] = "static credential configured without a live protected-endpoint health check"
+        except Exception as exc:
+            auth_check = {
+                "service": name,
+                "roles": {},
+                "all_ok": False,
+                "status": "failed",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
+
+        target_service = next(
+            (item for item in config["services"] if isinstance(item, dict) and item.get("name") == name),
+            None,
+        )
+        if target_service is None:
+            raise ValueError(f"saved service missing from credential config: {name}")
+        target_service["auth_check"] = auth_check
+        _write_json_object_atomic(config_path, config)
+
+        if not auth_check["all_ok"]:
+            _write_json_object_atomic(
+                root / "platform_outputs" / project / "credential_verification_last_error.json",
+                {
+                    "schema": "qualibug.credential-verification-failure.v1",
+                    "project": project,
+                    "service": name,
+                    "status": auth_check["status"],
+                    "error_type": auth_check.get("error_type", ""),
+                    "error": auth_check.get("error") or auth_check.get("reason") or "credential health check failed",
+                    "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                },
+            )
+            return self._json({
+                "ok": False,
+                "saved": True,
+                "error": "CREDENTIAL_VERIFICATION_FAILED",
+                "service": name,
+                "services_count": len(config["services"]),
+                "auth_check": auth_check,
+            }, 207)
 
         return self._json({
             "ok": True,
+            "saved": True,
             "service": name,
             "services_count": len(config["services"]),
             "auth_check": auth_check,

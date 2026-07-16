@@ -121,14 +121,18 @@ def credential_storage_status(root: Path) -> dict[str, Any]:
 
 def load_services_config(root: Path, project: str) -> list[Any]:
     config_path = root / "platform_workspace" / project / "multi_service_config.json"
-    try:
-        if config_path.exists():
-            data = json.loads(config_path.read_text(encoding="utf-8") or "{}")
-            raw_services = data.get("services", []) if isinstance(data, dict) else []
-            return raw_services if isinstance(raw_services, list) else []
-    except Exception:
+    if not config_path.exists():
         return []
-    return []
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid credential config: {config_path}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"credential config must be an object: {config_path}")
+    raw_services = data.get("services", [])
+    if not isinstance(raw_services, list) or any(not isinstance(item, dict) for item in raw_services):
+        raise ValueError(f"credential config services must be a list of objects: {config_path}")
+    return raw_services
 
 
 def install_service_credentials_patch(*, patch_source: str) -> None:
@@ -140,7 +144,18 @@ def install_service_credentials_patch(*, patch_source: str) -> None:
 
     def _handle_get_service_credentials_masked(self: Any, project: str, root: Path) -> Any:
         ensure_local_credential_encryption_key(root)
-        services = load_services_config(root, project)
+        try:
+            services = load_services_config(root, project)
+        except Exception as exc:
+            return self._json(
+                {
+                    "ok": False,
+                    "error": "CREDENTIAL_CONFIG_INVALID",
+                    "message": str(exc),
+                    "project": project,
+                },
+                500,
+            )
         return self._json(
             {
                 "project": project,
