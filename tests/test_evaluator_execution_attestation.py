@@ -152,6 +152,25 @@ def test_execution_stage_attempt_without_operational_receipt_fails_closed() -> N
         })
 
 
+def test_attestation_uses_write_attempt_count_not_only_accepted_writes() -> None:
+    inputs = _inputs()
+    attempt = inputs["obligation_attempt_ledger"]["attempts"][0]
+    operational = attempt["operational_receipt"]
+    operational["write_request_attempt_count"] = (
+        operational["accepted_write_count"] + 1
+    )
+    inputs["trusted_observations"][0]["write_count"] = operational[
+        "write_request_attempt_count"
+    ]
+
+    attestation = build_execution_attestation(
+        **inputs,
+        signing_key=SIGNING_KEY,
+    )
+
+    assert attestation["write_count"] == operational["write_request_attempt_count"]
+
+
 def test_attestation_tampering_is_rejected() -> None:
     inputs = _inputs()
     attestation = build_execution_attestation(
