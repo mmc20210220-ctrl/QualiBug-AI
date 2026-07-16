@@ -154,8 +154,8 @@ def _expected_request_attempts(ledger: dict[str, Any]) -> dict[str, dict[str, An
             "execution_id": execution_id,
             "target_request_count": request_count,
             "write_count": _non_negative_int(
-                operational.get("accepted_write_count"),
-                "operational_accepted_write_count",
+                operational.get("write_request_attempt_count"),
+                "operational_write_request_attempt_count",
             ),
             "production_request_count": _non_negative_int(
                 operational.get("production_http_request_count"),
@@ -231,7 +231,10 @@ def _validated_observations(
         ):
             if normalized[field] != expected_row[field]:
                 raise ExecutionAttestationError(
-                    f"trusted_observation_{field}_mismatch"
+                    f"trusted_observation_{field}_mismatch:"
+                    f"obligation={attempt_id}:"
+                    f"expected={expected_row[field]}:"
+                    f"observed={normalized[field]}"
                 )
         if normalized["production_request_count"]:
             raise ExecutionAttestationError(

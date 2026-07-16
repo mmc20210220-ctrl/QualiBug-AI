@@ -101,6 +101,8 @@ def test_build_observed_diagnostic_manifest_writes_windows_fixture_contract(
             "retail",
             "--base-url",
             "http://127.0.0.1:8080/",
+            "--environment-type",
+            "test",
             "--api-doc",
             str(api_doc),
             "--prd",
@@ -125,3 +127,42 @@ def test_build_observed_diagnostic_manifest_writes_windows_fixture_contract(
     assert target["runtime"]["environment_ref"] == "http://127.0.0.1:8080"
     assert fixture["schema_version"] == WINDOWS_BENCHMARK_FIXTURE_SCHEMA
     assert fixture["target_root"] == str(target_root.resolve())
+
+
+def test_build_observed_diagnostic_manifest_requires_environment_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_observed_diagnostic_manifest.py",
+            "--output-dir",
+            "diagnostic",
+            "--product-workspace",
+            "workspace",
+            "--dataset-id",
+            "dataset-1",
+            "--dataset-version",
+            "v1",
+            "--target-id",
+            "TARGET-1",
+            "--project-id",
+            "generic-project",
+            "--industry",
+            "retail",
+            "--base-url",
+            "http://127.0.0.1:8080/",
+            "--api-doc",
+            "api.md",
+            "--prd",
+            "prd.md",
+            "--ground-truth",
+            "bugs.json",
+            "--target-root",
+            "target",
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="2"):
+        build_observed_diagnostic_manifest.main()

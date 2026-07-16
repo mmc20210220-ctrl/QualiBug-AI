@@ -5,7 +5,7 @@
     "password": "Test@123456",
     "status": "ACTIVE",
     "note": "余额充足，有默认地址",
-    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6ImYzZDU5MTNjLTExYjItNGYxMy05OGYyLTFlNjAzM2Y3NzljZiIsImVtYWlsIjoiYnV5ZXIwMUBleGFtcGxlLmNvbSIsInJvbGUiOiJidXllciIsInN0YXR1cyI6IkFDVElWRSIsIm5hbWUiOiLkubDlrrbkuIDlj7ciLCJpYXQiOjE3ODQxNzExNjcsImV4cCI6MTc4NDE5OTk2N30.n5KVetRk0G292Zrv2pZxZC6irVcr2_MstibzRIXAjC8",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjkzNWUwZjJjLWQ1YzItNDVkMC05ZjkwLTkzNmQyODBlMTMwMiIsImVtYWlsIjoiYnV5ZXIwMUBleGFtcGxlLmNvbSIsInJvbGUiOiJidXllciIsInN0YXR1cyI6IkFDVElWRSIsIm5hbWUiOiLkubDlrrbkuIDlj7ciLCJpYXQiOjE3ODQxNzMzNjcsImV4cCI6MTc4NDIwMjE2N30.O0Hg4tqVBRt53OkYRAXtt4tM2F2tB-d7u9YJzbGQ1YA",
     "authenticated_role": "buyer",
     "authenticated_status": "ACTIVE",
     "identity_observation_source": "login_response"
@@ -16,7 +16,7 @@
     "password": "Test@123456",
     "status": "ACTIVE",
     "note": "余额较少",
-    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6Ijg2ZjY1ZWM5LTBhZmYtNDA4YS04M2M0LTUxZWJkM2Q1ZTkxMyIsImVtYWlsIjoiYnV5ZXIwMkBleGFtcGxlLmNvbSIsInJvbGUiOiJidXllciIsInN0YXR1cyI6IkFDVElWRSIsIm5hbWUiOiLkubDlrrbkuozlj7ciLCJpYXQiOjE3ODQxNzExNjcsImV4cCI6MTc4NDE5OTk2N30.ZOo9DEMDAt2D0Z5GL0PcUQHNC7exHl9P2g6gXuZRFng",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjA1ZjllOWIxLTEzOGQtNGIxMS1iOGNiLWU1YTcwMzI2OTgzNiIsImVtYWlsIjoiYnV5ZXIwMkBleGFtcGxlLmNvbSIsInJvbGUiOiJidXllciIsInN0YXR1cyI6IkFDVElWRSIsIm5hbWUiOiLkubDlrrbkuozlj7ciLCJpYXQiOjE3ODQxNzMzNjcsImV4cCI6MTc4NDIwMjE2N30.nr3gp7rlvmA-NeAFQLG_Awdz3433LLqW61OoiagHuYo",
     "authenticated_role": "buyer",
     "authenticated_status": "ACTIVE",
     "identity_observation_source": "login_response"
@@ -27,7 +27,7 @@
     "password": "Test@123456",
     "status": "DISABLED",
     "note": "状态为 DISABLED，原则上不能登录和下单",
-    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjAxYjE3OWMxLTJmMzEtNDg5Yy1iNGQzLTBmZjYwNDJhOWYwYyIsImVtYWlsIjoiZGlzYWJsZWRfYnV5ZXJAZXhhbXBsZS5jb20iLCJyb2xlIjoiYnV5ZXIiLCJzdGF0dXMiOiJESVNBQkxFRCIsIm5hbWUiOiLnpoHnlKjkubDlrrYiLCJpYXQiOjE3ODQxNzExNjcsImV4cCI6MTc4NDE5OTk2N30.FOpjZP3rNLNlBWYAA0WWDpqUXVKLQNhYvepvjvk-3us",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjJmZWE4OWIwLWUwZmEtNDBjMS1iMDU0LWZkOTZmYzIxZTkxOCIsImVtYWlsIjoiZGlzYWJsZWRfYnV5ZXJAZXhhbXBsZS5jb20iLCJyb2xlIjoiYnV5ZXIiLCJzdGF0dXMiOiJESVNBQkxFRCIsIm5hbWUiOiLnpoHnlKjkubDlrrYiLCJpYXQiOjE3ODQxNzMzNjcsImV4cCI6MTc4NDIwMjE2N30.g8z-TYNBeO_CdUqRwrs9U5uIrw40qLN5aSkii9rWvaA",
     "authenticated_role": "buyer",
     "authenticated_status": "DISABLED",
     "identity_observation_source": "login_response"
@@ -38,7 +38,7 @@
     "password": "Test@123456",
     "status": "ACTIVE",
     "note": "可维护商品，但不能操作财务和退款",
-    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6Ijk5NTY2NjMzLTE5YTktNGUwMC1hM2I4LWNkMmZkZWRhMjEyMiIsImVtYWlsIjoic2VsbGVyMDFAZXhhbXBsZS5jb20iLCJyb2xlIjoic2VsbGVyIiwic3RhdHVzIjoiQUNUSVZFIiwibmFtZSI6IuWVhuWutuS4gOWPtyIsImlhdCI6MTc4NDE3MTE2NywiZXhwIjoxNzg0MTk5OTY3fQ.x3JV0SfSkMy7n2-CTbVCK9vG6iSHSSiiKlJgrGzU7wg",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjFlNWRkNWE5LTJhMGYtNDYyOC05OWU4LTY4ZDU1YzBlY2FjYiIsImVtYWlsIjoic2VsbGVyMDFAZXhhbXBsZS5jb20iLCJyb2xlIjoic2VsbGVyIiwic3RhdHVzIjoiQUNUSVZFIiwibmFtZSI6IuWVhuWutuS4gOWPtyIsImlhdCI6MTc4NDE3MzM2NywiZXhwIjoxNzg0MjAyMTY3fQ.EpA2uoo-WuByKBhyWaurNkAI08Zyg4cH18qTXqyAVCE",
     "authenticated_role": "seller",
     "authenticated_status": "ACTIVE",
     "identity_observation_source": "login_response"
@@ -49,7 +49,7 @@
     "password": "Test@123456",
     "status": "ACTIVE",
     "note": "可调整库存和发货",
-    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6ImE5ZTY5NjdjLTg1ZWQtNDFjZi05NzNlLTc0NmYyYTg4ZDI4NyIsImVtYWlsIjoid2FyZWhvdXNlMDFAZXhhbXBsZS5jb20iLCJyb2xlIjoid2FyZWhvdXNlIiwic3RhdHVzIjoiQUNUSVZFIiwibmFtZSI6IuS7k-W6k-S4gOWPtyIsImlhdCI6MTc4NDE3MTE2NywiZXhwIjoxNzg0MTk5OTY3fQ.sApl07MDVRnyuPM916YieR6RYLVSYLjdTZeGgC8qnb8",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6ImRiYmFhZDUyLWVmZmYtNDcyNy1iMTM4LWRmNTMwNzlkMGY0NiIsImVtYWlsIjoid2FyZWhvdXNlMDFAZXhhbXBsZS5jb20iLCJyb2xlIjoid2FyZWhvdXNlIiwic3RhdHVzIjoiQUNUSVZFIiwibmFtZSI6IuS7k-W6k-S4gOWPtyIsImlhdCI6MTc4NDE3MzM2NywiZXhwIjoxNzg0MjAyMTY3fQ.OHI7Kx3Iw38fz8cb7j8_l-yxRV7qnFEn546dr40BnT0",
     "authenticated_role": "warehouse",
     "authenticated_status": "ACTIVE",
     "identity_observation_source": "login_response"
@@ -60,7 +60,7 @@
     "password": "Test@123456",
     "status": "ACTIVE",
     "note": "可查看支付和退款",
-    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjJhMTJmYzk4LTQ3MTEtNGViNy1iYjU3LThjZWFiMjNkNmJjOSIsImVtYWlsIjoiZmluYW5jZTAxQGV4YW1wbGUuY29tIiwicm9sZSI6ImZpbmFuY2UiLCJzdGF0dXMiOiJBQ1RJVkUiLCJuYW1lIjoi6LSi5Yqh5LiA5Y-3IiwiaWF0IjoxNzg0MTcxMTY3LCJleHAiOjE3ODQxOTk5Njd9.y23IsaLiR5F6dRqJqX80oMdAEp0lqQuwfoqiUGY9X54",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6ImEwZjcxZWIzLThlMWEtNGYxOS04MTIzLTgzODY3NjA3YmZjZSIsImVtYWlsIjoiZmluYW5jZTAxQGV4YW1wbGUuY29tIiwicm9sZSI6ImZpbmFuY2UiLCJzdGF0dXMiOiJBQ1RJVkUiLCJuYW1lIjoi6LSi5Yqh5LiA5Y-3IiwiaWF0IjoxNzg0MTczMzY3LCJleHAiOjE3ODQyMDIxNjd9.NsYsKbJIDZ1vV6PD8MgOb5DyGthlGY4rJFbd2f9lfsM",
     "authenticated_role": "finance",
     "authenticated_status": "ACTIVE",
     "identity_observation_source": "login_response"
@@ -71,7 +71,7 @@
     "password": "Test@123456",
     "status": "ACTIVE",
     "note": "只读审计权限",
-    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjJiOTQ0YWY2LTU3NWItNDNlNy1iZDcwLTE5YjgyMDlkMzdjYiIsImVtYWlsIjoiYXVkaXRvcjAxQGV4YW1wbGUuY29tIiwicm9sZSI6ImF1ZGl0b3IiLCJzdGF0dXMiOiJBQ1RJVkUiLCJuYW1lIjoi5a6h6K6h5LiA5Y-3IiwiaWF0IjoxNzg0MTcxMTY3LCJleHAiOjE3ODQxOTk5Njd9.nhqCR-Pyv9TN8dbnw6wq1HFZ8QmJqTyOvn-HWO2r9Rc",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjgyZGYwZDhjLWVjNWMtNDIxOC04N2Q4LTFkNTMwZDk1YWMzYyIsImVtYWlsIjoiYXVkaXRvcjAxQGV4YW1wbGUuY29tIiwicm9sZSI6ImF1ZGl0b3IiLCJzdGF0dXMiOiJBQ1RJVkUiLCJuYW1lIjoi5a6h6K6h5LiA5Y-3IiwiaWF0IjoxNzg0MTczMzY3LCJleHAiOjE3ODQyMDIxNjd9.IGL1IWgi4tMtbKz7L01tgRTr3oprE_qqs_mLkj3ZhQE",
     "authenticated_role": "auditor",
     "authenticated_status": "ACTIVE",
     "identity_observation_source": "login_response"
@@ -82,7 +82,7 @@
     "password": "Admin@123456",
     "status": "ACTIVE",
     "note": "后台最高权限",
-    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjYzZDJkNDg0LWMyOTMtNGM3ZC05MmVjLTQxM2ZmNjk5ZTc3NiIsImVtYWlsIjoiYWRtaW5AZXhhbXBsZS5jb20iLCJyb2xlIjoiYWRtaW4iLCJzdGF0dXMiOiJBQ1RJVkUiLCJuYW1lIjoi57O757uf566h55CG5ZGYIiwiaWF0IjoxNzg0MTcxMTY3LCJleHAiOjE3ODQxOTk5Njd9.LtaOZ9Nk8EiHL0ZmAWx0GBmk29aeIqtCIOWDmApPa58",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjE5YzdkY2VkLWFkMGUtNGQwNy1iNzQxLTg5Y2ZhMDc2ZDE0ZSIsImVtYWlsIjoiYWRtaW5AZXhhbXBsZS5jb20iLCJyb2xlIjoiYWRtaW4iLCJzdGF0dXMiOiJBQ1RJVkUiLCJuYW1lIjoi57O757uf566h55CG5ZGYIiwiaWF0IjoxNzg0MTczMzY3LCJleHAiOjE3ODQyMDIxNjd9.ibTv2PwRfhHlBf1zAQV4-H_IVIcfptDVrAohIbNGPsg",
     "authenticated_role": "admin",
     "authenticated_status": "ACTIVE",
     "identity_observation_source": "login_response"

@@ -40,7 +40,7 @@ def main() -> int:
     parser.add_argument("--project-id", required=True)
     parser.add_argument("--industry", required=True)
     parser.add_argument("--base-url", required=True)
-    parser.add_argument("--environment-type", default="test")
+    parser.add_argument("--environment-type", required=True)
     parser.add_argument("--api-doc", required=True)
     parser.add_argument("--prd", required=True)
     parser.add_argument("--ground-truth", required=True)

@@ -8,6 +8,7 @@ def _governed(*, accepted: bool, http_attempts: int = 3) -> dict:
         "status": "executed" if accepted else "failed",
         "accepted": accepted,
         "http_attempt_count": http_attempts,
+        "write_request_attempt_count": 1 if http_attempts else 0,
         "production_http_requests": 0,
         "audit_record": {"operation_accepted": accepted},
     }
@@ -42,6 +43,7 @@ def test_execution_operational_receipt_counts_only_explicit_request_receipts() -
                 "status": "blocked_write",
                 "method": "POST",
                 "path": "/forbidden",
+                "status_code": 0,
             },
         ],
         cleanup_failures=0,
@@ -49,7 +51,7 @@ def test_execution_operational_receipt_counts_only_explicit_request_receipts() -
 
     assert receipt["scenario_attempt_count"] == 1
     assert receipt["http_request_attempt_count"] == 7
-    assert receipt["write_request_attempt_count"] == 6
+    assert receipt["write_request_attempt_count"] == 2
     assert receipt["production_http_request_count"] == 0
     assert receipt["accepted_write_count"] == 2
     assert receipt["accepted_non_cleanup_write_count"] == 1
@@ -117,7 +119,7 @@ def test_aggregate_operational_receipts_preserves_terminal_cleanup_truth() -> No
     assert aggregate["scenario_attempts"] == 2
     assert aggregate["executed_scenarios"] == 1
     assert aggregate["observed_http_request_count"] == 4
-    assert aggregate["write_request_attempt_count"] == 3
+    assert aggregate["write_request_attempt_count"] == 1
     assert aggregate["accepted_write_count"] == 1
     assert aggregate["cleanup_failures"] == 1
     assert aggregate["execution_success_rate"] == 0.5
@@ -139,6 +141,7 @@ def test_operational_receipt_requires_content_fingerprint() -> None:
             "execution_status": "EXECUTED",
             "scenario_attempt_count": 1,
             "http_request_attempt_count": 1,
+            "write_request_attempt_count": 0,
             "production_http_request_count": 0,
             "accepted_write_count": 0,
             "accepted_non_cleanup_write_count": 0,

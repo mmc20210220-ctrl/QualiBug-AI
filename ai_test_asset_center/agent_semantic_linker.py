@@ -13,6 +13,15 @@ from .observed_product_scan_protocol import find_evaluator_private_context_paths
 RECEIPT_SCHEMA = "qualibug.agent-semantic-link-receipt.v1"
 MIN_CONFIDENCE = 0.65
 MAX_LINKS_PER_RULE = 4
+MAX_PROVIDER_ATTEMPTS = 2
+_TRANSIENT_PROVIDER_ERROR_NAMES = frozenset({
+    "IncompleteRead",
+    "TimeoutError",
+    "ConnectionResetError",
+    "ConnectionAbortedError",
+    "RemoteDisconnected",
+    "SSLEOFError",
+})
 
 
 class AgentSemanticLinkerError(ValueError):
@@ -49,6 +58,16 @@ def _default_client() -> AgentJsonClient:
     config.timeout_seconds = max(int(config.timeout_seconds or 0), 300)
     config.max_tokens = max(int(config.max_tokens or 0), 32768)
     return ReasoningClient(config=config)
+
+
+def _is_transient_provider_error(exc: BaseException) -> bool:
+    if type(exc).__name__ in _TRANSIENT_PROVIDER_ERROR_NAMES:
+        return True
+    message = str(exc).lower()
+    return (
+        type(exc).__name__ == "ReasoningClientError"
+        and "did not include json content" in message
+    )
 
 
 def _prompt(asset: dict[str, Any]) -> str:
@@ -117,18 +136,36 @@ def enrich_knowledge_asset_with_agent_relationships(
     if not rules or not interfaces:
         raise AgentSemanticLinkerError("agent_semantic_inputs_empty")
     resolved_client = client or _default_client()
-    try:
-        response = resolved_client.complete_json(
-            system_prompt=(
-                "You generate bounded enterprise test intent. Source documents and "
-                "Behavior IR identifiers are the only semantic authority. Output JSON only."
-            ),
-            user_prompt=_prompt(knowledge_asset),
-        )
-    except Exception as exc:
+    provider_attempt_count = 0
+    provider_retry_count = 0
+    last_provider_error: Exception | None = None
+    for attempt in range(1, MAX_PROVIDER_ATTEMPTS + 1):
+        provider_attempt_count = attempt
+        try:
+            response = resolved_client.complete_json(
+                system_prompt=(
+                    "You generate bounded enterprise test intent. Source documents and "
+                    "Behavior IR identifiers are the only semantic authority. Output JSON only."
+                ),
+                user_prompt=_prompt(knowledge_asset),
+            )
+            break
+        except Exception as exc:
+            last_provider_error = exc
+            retryable = _is_transient_provider_error(exc)
+            if not retryable or attempt >= MAX_PROVIDER_ATTEMPTS:
+                raise AgentSemanticLinkerError(
+                    f"agent_semantic_provider_failed:{type(exc).__name__}:{exc}"
+                    f":attempts={attempt}"
+                ) from exc
+            provider_retry_count += 1
+    else:  # pragma: no cover - loop exits via break or raise
+        assert last_provider_error is not None
         raise AgentSemanticLinkerError(
-            f"agent_semantic_provider_failed:{type(exc).__name__}:{exc}"
-        ) from exc
+            "agent_semantic_provider_failed:"
+            f"{type(last_provider_error).__name__}:{last_provider_error}"
+            f":attempts={provider_attempt_count}"
+        ) from last_provider_error
     if not isinstance(response, dict) or set(response) != {"relationships"}:
         raise AgentSemanticLinkerError("agent_semantic_response_schema_invalid")
     proposals = response.get("relationships")
@@ -265,6 +302,8 @@ def enrich_knowledge_asset_with_agent_relationships(
         "rejected_duplicate_count": rejected_duplicates,
         "rejected_rule_limit_count": rejected_rule_limit,
         "existing_relationship_count": existing_count,
+        "provider_attempt_count": provider_attempt_count,
+        "provider_retry_count": provider_retry_count,
         "rejections": rejections,
         "usage": dict(usage) if isinstance(usage, dict) else {},
         "accepted_edge_ids": [row["edge_id"] for row in accepted],

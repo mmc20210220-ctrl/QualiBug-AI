@@ -25,6 +25,7 @@ _EXECUTION_STATUSES = frozenset({
 })
 _CLEANUP_PHASES = frozenset({"cleanup", "fixture_cleanup"})
 _CLEANUP_STATUSES = frozenset({"COMPLETED", "FAILED", "NOT_REQUIRED"})
+_WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
 class OperationalReceiptError(ValueError):
@@ -80,6 +81,7 @@ def validate_execution_operational_receipt(
     for field in (
         "scenario_attempt_count",
         "http_request_attempt_count",
+        "write_request_attempt_count",
         "production_http_request_count",
         "accepted_write_count",
         "accepted_non_cleanup_write_count",
@@ -90,6 +92,10 @@ def validate_execution_operational_receipt(
         raise OperationalReceiptError("scenario_attempt_count_must_equal_one")
     if value["production_http_request_count"] > value["http_request_attempt_count"]:
         raise OperationalReceiptError("production_http_request_count_exceeds_attempts")
+    if value["write_request_attempt_count"] > value["http_request_attempt_count"]:
+        raise OperationalReceiptError("write_request_attempt_count_exceeds_attempts")
+    if value["accepted_write_count"] > value["write_request_attempt_count"]:
+        raise OperationalReceiptError("accepted_write_count_exceeds_write_attempts")
     if (
         value["accepted_non_cleanup_write_count"]
         + value["accepted_cleanup_write_count"]
@@ -137,6 +143,7 @@ def build_execution_operational_receipt(
     if normalized_status not in _EXECUTION_STATUSES:
         raise OperationalReceiptError("operational_execution_status_invalid")
     http_attempts = 0
+    write_request_attempts = 0
     production_requests = 0
     accepted_non_cleanup = 0
     accepted_cleanup = 0
@@ -160,7 +167,16 @@ def build_execution_operational_receipt(
                 raise OperationalReceiptError(
                     "governance_production_http_requests_exceed_attempts"
                 )
+            write_attempts = _non_negative_int(
+                governance.get("write_request_attempt_count"),
+                "governance_write_request_attempt_count",
+            )
+            if write_attempts > attempts:
+                raise OperationalReceiptError(
+                    "governance_write_request_attempts_exceed_http_attempts"
+                )
             http_attempts += attempts
+            write_request_attempts += write_attempts
             production_requests += production
             accepted = governance.get("accepted") is True
             if phase in _CLEANUP_PHASES:
@@ -175,12 +191,11 @@ def build_execution_operational_receipt(
 
         # A direct HTTP adapter step is one request attempt.  A blocked or
         # unresolved plan row has no status_code field and therefore no request.
-        if (
-            _text(step.get("method"))
-            and _text(step.get("path"))
-            and "status_code" in step
-        ):
+        status_code = int(step.get("status_code") or 0)
+        if _text(step.get("method")) and _text(step.get("path")) and status_code > 0:
             http_attempts += 1
+            if _text(step.get("method")).upper() in _WRITE_METHODS:
+                write_request_attempts += 1
 
     failure_count = _non_negative_int(cleanup_failures, "cleanup_failures")
     if failure_count:
@@ -194,6 +209,7 @@ def build_execution_operational_receipt(
         execution_status=normalized_status,
         scenario_attempt_count=1,
         http_request_attempt_count=http_attempts,
+        write_request_attempt_count=write_request_attempts,
         production_http_request_count=production_requests,
         accepted_non_cleanup_write_count=accepted_non_cleanup,
         accepted_cleanup_write_count=accepted_cleanup,
@@ -210,6 +226,7 @@ def build_execution_operational_receipt_from_counts(
     execution_status: str,
     scenario_attempt_count: int,
     http_request_attempt_count: int,
+    write_request_attempt_count: int,
     production_http_request_count: int,
     accepted_non_cleanup_write_count: int,
     accepted_cleanup_write_count: int,
@@ -239,6 +256,10 @@ def build_execution_operational_receipt_from_counts(
         "http_request_attempt_count": _non_negative_int(
             http_request_attempt_count,
             "http_request_attempt_count",
+        ),
+        "write_request_attempt_count": _non_negative_int(
+            write_request_attempt_count,
+            "write_request_attempt_count",
         ),
         "production_http_request_count": _non_negative_int(
             production_http_request_count,
@@ -296,6 +317,9 @@ def aggregate_execution_operational_receipts(
         "executed_scenarios": executed,
         "observed_http_request_count": sum(
             row["http_request_attempt_count"] for row in rows
+        ),
+        "write_request_attempt_count": sum(
+            row["write_request_attempt_count"] for row in rows
         ),
         "production_http_requests": sum(
             row["production_http_request_count"] for row in rows

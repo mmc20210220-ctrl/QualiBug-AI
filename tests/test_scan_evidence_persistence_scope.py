@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from ai_test_asset_center.__main__ import _persist_execution_evidence
 from ai_test_asset_center.canonical_defect_registry import (
     CANONICAL_DEFECT_REGISTRY_SCHEMA,
@@ -65,3 +67,39 @@ def test_replay_evidence_bundle_uses_canonical_representatives_not_customer_find
     assert [row["canonical_defect_id"] for row in persisted_findings] == [
         "canonical-1"
     ]
+
+
+def test_replay_evidence_bundle_rejects_canonical_representative_scope_mismatch(
+    tmp_path: Path,
+) -> None:
+    registry = {
+        "schema_version": CANONICAL_DEFECT_REGISTRY_SCHEMA,
+        "status": "VERIFIED",
+        "authority_scope": "private_evaluator",
+        "canonical_defect_count": 1,
+        "delivery_occurrence_count": 0,
+        "canonical_defect_ids": ["canonical-1"],
+        "delivery_occurrence_finding_ids": [],
+    }
+
+    with pytest.raises(ValueError, match="canonical_representative_scope_mismatch"):
+        _persist_execution_evidence(
+            "enterprise-project",
+            tmp_path,
+            "scan-1",
+            {"campaign_id": "campaign-1"},
+            {"source_manifest": {"source_id": "api", "source_hash": "a" * 64}},
+            "executed",
+            {
+                "findings": [],
+                "formal_count_projection": {
+                    "canonical_representative_findings": [
+                        {"canonical_defect_id": "canonical-other"}
+                    ],
+                },
+                "candidate_findings": [],
+                "external_findings": [],
+                "canonical_defect_registry": registry,
+                "delivery_occurrences": [],
+            },
+        )

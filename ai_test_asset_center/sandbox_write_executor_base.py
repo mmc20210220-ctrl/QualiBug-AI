@@ -578,6 +578,7 @@ def execute_governed_control_write(
             "audit_path": "",
             "audit_record": {},
             "http_attempt_count": 0,
+            "write_request_attempt_count": 0,
             "production_http_requests": 0,
         }
 
@@ -643,6 +644,7 @@ def execute_governed_control_write(
                 "audit_path": str(audit_path),
                 "audit_record": record,
                 "http_attempt_count": 1,
+                "write_request_attempt_count": 0,
                 "production_http_requests": 0,
                 "runtime_body_receipt": runtime_body_receipt,
             }
@@ -681,6 +683,7 @@ def execute_governed_control_write(
         "audit_path": str(audit_path),
         "audit_record": record,
         "http_attempt_count": 3 if allowed else 0,
+        "write_request_attempt_count": 1 if allowed else 0,
         "production_http_requests": 0,
     }
     if runtime_body_receipt:

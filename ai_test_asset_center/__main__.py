@@ -4077,11 +4077,12 @@ def _persist_execution_evidence(project: str, root: Path, scan_id: str, campaign
         for item in representative_rows
     ]
     declared_rows = [dict(item) for item in findings if isinstance(item, dict)]
-    persisted_findings = (
-        representative_rows
-        if registry_ids and representative_ids == registry_ids
-        else declared_rows
-    )
+    if registry:
+        if representative_ids != registry_ids:
+            raise ValueError("canonical_representative_scope_mismatch")
+        persisted_findings = representative_rows
+    else:
+        persisted_findings = declared_rows
     persisted_candidates = [
         dict(item)
         for item in [*runtime_candidates, *external_findings]
