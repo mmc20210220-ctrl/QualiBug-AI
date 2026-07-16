@@ -79,6 +79,16 @@ def _text(value: Any) -> str:
 
 
 _BODY_PLACEHOLDER_RE = re.compile(r"^\s*[<{]([A-Za-z_][A-Za-z0-9_]*)[>}]\s*$")
+_WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def _unresolved_path_placeholders(path: str) -> list[str]:
+    """Return path tokens that are still present after runtime materialization."""
+
+    normalized = normalize_path_placeholders(path)
+    if not path_has_placeholders(normalized):
+        return []
+    return list(dict.fromkeys(infer_path_params(normalized)))
 
 
 def _unresolved_body_placeholders(
@@ -660,7 +670,7 @@ def preflight_experiment_executable(
         if not method:
             return False, "BLOCKED_MISSING_OPERATION", f"missing_method:{op_ref}"
         if (
-            method in {"POST", "PUT", "PATCH", "DELETE"}
+            method in _WRITE_METHODS
             and not _declared_observation_path(path, ops)
             and not _declared_effect_observer_available(op, ops)
         ):
@@ -1111,6 +1121,13 @@ def execute_one_experiment(
                 break
             if value in (None, "", [], {}):
                 fixture_setup = _validated_fixture_setup(binding, ops, actors)
+                _fs_diag = {
+                    "generated": bool(fixture_setup),
+                    "blocked_reason": "" if fixture_setup else "fixture_setup_not_generated",
+                    "create_path": "",
+                    "create_status": 0,
+                    "dependency": "",
+                }
                 fixture_actor_ref, fixture_actor, fixture_token = _select_fixture_actor(
                     fixture_setup,
                     control_plan=_list(exp.get("control_plan")),
@@ -1120,6 +1137,7 @@ def execute_one_experiment(
                 )
                 if fixture_setup and not fixture_actor_ref:
                     fixture_setup = {}
+                    _fs_diag["blocked_reason"] = "fixture_setup_no_actor"
                 token_values: dict[str, Any] = {}
                 dependency_blocked = False
                 for dependency in _list(fixture_setup.get("body_bindings")):
@@ -1166,6 +1184,8 @@ def execute_one_experiment(
                     # or auto-create resources via hidden writes.
                     if dependency_value in (None, "", [], {}):
                         dependency_blocked = True
+                        _fs_diag["blocked_reason"] = f"dependency_unresolved:{dependency_leaf}"
+                        _fs_diag["dependency"] = dependency_leaf
                 if fixture_setup and not dependency_blocked:
                     setup_body = _materialize_body_template(
                         fixture_setup.get("body_template"),
@@ -1203,11 +1223,17 @@ def execute_one_experiment(
                     receipt["fixture_setup_status"] = (
                         "completed" if 200 <= setup_status < 300 else "failed"
                     )
+                    _fs_diag["create_path"] = _text(fixture_setup.get("path"))
+                    _fs_diag["create_status"] = setup_status
+                    if not (200 <= setup_status < 300):
+                        _fs_diag["blocked_reason"] = f"create_failed_status_{setup_status}"
                     if 200 <= setup_status < 300:
                         value = _runtime_setup_value_from_response(
                             setup_write.get("body"),
                             target,
                         )
+                    if value in (None, "", [], {}) and 200 <= setup_status < 300:
+                        _fs_diag["blocked_reason"] = "create_2xx_no_value_extracted"
                     if value not in (None, "", [], {}):
                         ownership_required = force_fixture_setup and bool(
                             _text(binding.get("fixture_owner_actor_ref"))
@@ -1280,15 +1306,55 @@ def execute_one_experiment(
                             "cleanup_failures": cleanup_failures,
                         },
                     }
+                _resolver_status = int(_dict(receipt).get("status_code") or 0)
+                _resolver_path = _text(_dict(receipt).get("resolver_path"))
+                _bind_detail = f"runtime_read_binding_unresolved:{target}"
+                if _resolver_path:
+                    if _resolver_status == 0:
+                        _bind_detail = (
+                            f"runtime_read_binding_unresolved:{target}:"
+                            f"resolver_no_http_response:{_resolver_path}"
+                        )
+                    else:
+                        _bind_detail = (
+                            f"runtime_read_binding_unresolved:{target}:"
+                            f"resolver_status_{_resolver_status}:{_resolver_path}"
+                        )
                 fixture_receipts.append({
                     "node_id": node_id,
                     "kind": kind,
                     "status": "BLOCKED",
                     "reason_code": "BLOCKED_MISSING_BINDING",
-                    "detail": f"runtime_read_binding_unresolved:{target}",
+                    "detail": _bind_detail,
+                    "resolver_path": _resolver_path,
+                    "resolver_operation_ref": _text(_dict(receipt).get("resolver_operation_ref")),
+                    "resolver_status_code": _resolver_status,
+                    "fixture_setup_generated": _fs_diag.get("generated"),
+                    "fixture_setup_blocked_reason": _fs_diag.get("blocked_reason"),
+                    "fixture_setup_create_path": _fs_diag.get("create_path"),
+                    "fixture_setup_create_status": _fs_diag.get("create_status"),
+                    "fixture_setup_dependency": _fs_diag.get("dependency"),
                 })
-                # Continue rather than aborting the entire experiment
-                continue
+                return {
+                    "schema_version": "qualibug.experiment-execution.v1",
+                    "experiment_id": eid,
+                    "obligation_id": oid,
+                    "status": "BLOCKED",
+                    "reason_code": "BLOCKED_MISSING_BINDING",
+                    "detail": _bind_detail,
+                    "elapsed_ms": int((time.time() - started) * 1000),
+                    "steps": steps_out,
+                    "fixture_receipts": fixture_receipts,
+                    "binding_materialization_receipts": binding_materialization_receipts,
+                    "finding": None,
+                    "cleanup_failures": cleanup_failures,
+                    "execution_receipt": {
+                        "status": "BLOCKED",
+                        "reason_code": "BLOCKED_MISSING_BINDING",
+                        "detail": _bind_detail,
+                        "cleanup_failures": cleanup_failures,
+                    },
+                }
             fixture_receipts.append({
                 "node_id": node_id,
                 "kind": kind,
@@ -1364,6 +1430,16 @@ def execute_one_experiment(
                 "value_fingerprint": _text(
                     _dict(fixture).get("value_fingerprint")
                 ),
+                "binding_status": _text(_dict(fixture).get("status")),
+                "binding_reason_code": _text(_dict(fixture).get("reason_code")),
+                "binding_detail": _text(_dict(fixture).get("detail")),
+                "resolver_path": _text(_dict(fixture).get("resolver_path")),
+                "resolver_status_code": int(_dict(fixture).get("resolver_status_code") or 0),
+                "fixture_setup_generated": bool(_dict(fixture).get("fixture_setup_generated")),
+                "fixture_setup_blocked_reason": _text(_dict(fixture).get("fixture_setup_blocked_reason")),
+                "fixture_setup_create_path": _text(_dict(fixture).get("fixture_setup_create_path")),
+                "fixture_setup_create_status": int(_dict(fixture).get("fixture_setup_create_status") or 0),
+                "fixture_setup_dependency": _text(_dict(fixture).get("fixture_setup_dependency")),
             },
         ))
 
@@ -1432,11 +1508,53 @@ def execute_one_experiment(
                 path_template,
                 runtime_bindings,
             )
+            unresolved_path_tokens = _unresolved_path_placeholders(path)
+            if unresolved_path_tokens:
+                reason = (
+                    "path_placeholder_unresolved:"
+                    + ",".join(unresolved_path_tokens)
+                )
+                pre_transport_block_reasons.append(reason)
+                if phase == "control":
+                    source_body_control_blocked = True
+                evidence: dict[str, Any] = {
+                    "request_reached_transport": False,
+                    "reason_code": "BLOCKED_MISSING_BINDING",
+                    "unresolved_path_tokens": unresolved_path_tokens,
+                }
+                if method in _WRITE_METHODS:
+                    evidence["write_reached_transport"] = False
+                contract_evidence_receipts.append(build_contract_evidence_receipt(
+                    kind=phase,
+                    experiment_id=eid,
+                    obligation_id=oid,
+                    campaign_id=resolved_campaign_id,
+                    execution_id=resolved_execution_id,
+                    subject_id=subject_id,
+                    status="BLOCKED",
+                    evidence=evidence,
+                ))
+                results.append({
+                    "phase": phase,
+                    "step_id": subject_id,
+                    "status": "blocked_write"
+                    if method in _WRITE_METHODS
+                    else "blocked_request",
+                    "reason": "BLOCKED_MISSING_BINDING",
+                    "detail": reason,
+                    "method": method,
+                    "path": path,
+                    "path_template": path_template,
+                    "status_code": 0,
+                    "actor_ref": actor_ref,
+                    "operation_ref": op_ref,
+                })
+                continue
             request_body = (
                 step.get("body")
                 if "body" in step
                 else op.get("request_example")
-                if method in {"POST", "PUT", "PATCH", "DELETE"} and op.get("request_example")
+                if method in _WRITE_METHODS and op.get("request_example")
                 else None
             )
             request_body = _materialize_body_template(
@@ -1447,7 +1565,7 @@ def execute_one_experiment(
                 request_body,
                 runtime_bindings,
             )
-            if method in {"POST", "PUT", "PATCH", "DELETE"} and unresolved_body_tokens:
+            if method in _WRITE_METHODS and unresolved_body_tokens:
                 reason = (
                     "body_placeholder_unresolved:"
                     + ",".join(unresolved_body_tokens)
@@ -1520,7 +1638,7 @@ def execute_one_experiment(
                 "request_body_fingerprint": request_body_fingerprint,
             })
             token = _resolve_token(actor, tokens)
-            is_write = method in {"POST", "PUT", "PATCH", "DELETE"}
+            is_write = method in _WRITE_METHODS
             response_bound_observation: dict[str, Any] = {}
             runtime_body_blocked = False
             if is_write:
@@ -1798,7 +1916,7 @@ def execute_one_experiment(
             step.get("body")
             if "body" in step
             else op.get("request_example")
-            if method in {"POST", "PUT", "PATCH", "DELETE"}
+            if method in _WRITE_METHODS
             else None
         )
         request_body = _materialize_body_template(request_body, runtime_bindings)
@@ -1830,7 +1948,7 @@ def execute_one_experiment(
             "request_body_fingerprint": request_body_fingerprint,
         })
         token = _resolve_token(actor, tokens)
-        if method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        if method not in _WRITE_METHODS:
             return {
                 "harness_error": True,
                 "contract_receipt": build_contract_evidence_receipt(
@@ -2073,6 +2191,118 @@ def execute_one_experiment(
                 consumed.add(id(step))
         return items, consumed
 
+    def _barrier_block_row(
+        item: dict[str, Any],
+        *,
+        reason: str,
+        unresolved_path_tokens: list[str] | None = None,
+        unresolved_body_tokens: list[str] | None = None,
+    ) -> dict[str, Any]:
+        step = _dict(item.get("step"))
+        phase = _text(item.get("phase"))
+        subject_id = _text(item.get("subject_id"))
+        actor_ref = _text(step.get("actor_ref"))
+        op_ref = _text(step.get("operation_ref"))
+        op = ops.get(op_ref) or {}
+        method = _text(op.get("method") or "GET").upper()
+        path_template = _text(op.get("path") or op.get("raw_path"))
+        path = _materialize_path(path_template, runtime_bindings)
+        participant = _text(step.get("barrier_participant") or subject_id)
+        evidence: dict[str, Any] = {
+            "method": method,
+            "path": path,
+            "status_code": 0,
+            "operation_ref": op_ref,
+            "path_template": path_template,
+            "response_observed": False,
+            "request_reached_transport": False,
+            "reason_code": "BLOCKED_MISSING_BINDING",
+            "detail": reason,
+            "barrier_group": _text(item.get("barrier_group")),
+            "barrier_participant": participant,
+        }
+        if method in _WRITE_METHODS:
+            evidence["write_reached_transport"] = False
+        if unresolved_path_tokens:
+            evidence["unresolved_path_tokens"] = unresolved_path_tokens
+        if unresolved_body_tokens:
+            evidence["unresolved_body_tokens"] = unresolved_body_tokens
+        return {
+            "harness_error": False,
+            "contract_receipt": build_contract_evidence_receipt(
+                kind=phase,
+                experiment_id=eid,
+                obligation_id=oid,
+                campaign_id=resolved_campaign_id,
+                execution_id=resolved_execution_id,
+                subject_id=subject_id,
+                status="BLOCKED",
+                evidence=evidence,
+            ),
+            "step": {
+                "phase": phase,
+                "step_id": subject_id,
+                "status": "blocked_write"
+                if method in _WRITE_METHODS
+                else "blocked_request",
+                "reason": "BLOCKED_MISSING_BINDING",
+                "detail": reason,
+                "method": method,
+                "path": path,
+                "path_template": path_template,
+                "status_code": 0,
+                "actor_ref": actor_ref,
+                "operation_ref": op_ref,
+                "protocol_step": _text(step.get("protocol_step")),
+                "barrier_group": _text(item.get("barrier_group")),
+                "barrier_participant": participant,
+            },
+        }
+
+    def _barrier_pretransport_block(item: dict[str, Any]) -> dict[str, Any] | None:
+        step = _dict(item.get("step"))
+        op = ops.get(_text(step.get("operation_ref"))) or {}
+        method = _text(op.get("method") or "GET").upper()
+        path = _materialize_path(
+            _text(op.get("path") or op.get("raw_path")),
+            runtime_bindings,
+        )
+        request_body = (
+            step.get("body")
+            if "body" in step
+            else op.get("request_example")
+            if method in _WRITE_METHODS
+            else None
+        )
+        request_body = _materialize_body_template(request_body, runtime_bindings)
+        unresolved_path_tokens = _unresolved_path_placeholders(path)
+        unresolved_body_tokens = (
+            _unresolved_body_placeholders(request_body, runtime_bindings)
+            if method in _WRITE_METHODS
+            else []
+        )
+        reasons: list[str] = []
+        if unresolved_path_tokens:
+            reasons.append(
+                "path_placeholder_unresolved:"
+                + ",".join(unresolved_path_tokens)
+            )
+        if unresolved_body_tokens:
+            reasons.append(
+                "body_placeholder_unresolved:"
+                + ",".join(unresolved_body_tokens)
+            )
+        if not reasons:
+            return None
+        reason = ";".join(reasons)
+        pre_transport_block_reasons.append(reason)
+        return _barrier_block_row(
+            item,
+            reason=reason,
+            unresolved_path_tokens=unresolved_path_tokens,
+            unresolved_body_tokens=unresolved_body_tokens,
+        )
+
     def _exec_barrier_groups(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         grouped: dict[str, list[dict[str, Any]]] = {}
         for item in items:
@@ -2094,22 +2324,37 @@ def execute_one_experiment(
                     int(item.get("index") or 0),
                 ),
             )
-            with ThreadPoolExecutor(max_workers=len(ordered_items)) as pool:
-                futures = [
-                    pool.submit(
-                        contextvars.copy_context().run,
-                        _execute_barrier_step,
-                        step=_dict(item.get("step")),
-                        phase=_text(item.get("phase")),
-                        subject_id=_text(item.get("subject_id")),
-                        barrier=release_barrier,
-                        timeline=timeline,
-                        timeline_lock=timeline_lock,
-                        started_at=barrier_started,
-                    )
+            preblocked_by_subject = {
+                _text(item.get("subject_id")): row
+                for item in ordered_items
+                for row in [_barrier_pretransport_block(item)]
+                if row is not None
+            }
+            if preblocked_by_subject:
+                group_reason = f"barrier_group_pretransport_blocked:{group_id}"
+                pre_transport_block_reasons.append(group_reason)
+                completed = [
+                    preblocked_by_subject.get(_text(item.get("subject_id")))
+                    or _barrier_block_row(item, reason=group_reason)
                     for item in ordered_items
                 ]
-                completed = [future.result() for future in as_completed(futures)]
+            else:
+                with ThreadPoolExecutor(max_workers=len(ordered_items)) as pool:
+                    futures = [
+                        pool.submit(
+                            contextvars.copy_context().run,
+                            _execute_barrier_step,
+                            step=_dict(item.get("step")),
+                            phase=_text(item.get("phase")),
+                            subject_id=_text(item.get("subject_id")),
+                            barrier=release_barrier,
+                            timeline=timeline,
+                            timeline_lock=timeline_lock,
+                            started_at=barrier_started,
+                        )
+                        for item in ordered_items
+                    ]
+                    completed = [future.result() for future in as_completed(futures)]
             completed_by_subject = {
                 _text(_dict(row.get("step")).get("step_id")): row
                 for row in completed

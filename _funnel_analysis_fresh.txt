@@ -1,0 +1,49 @@
+========================================================================
+MODE=full  (file: full.json, 30114 KB)
+========================================================================
+elapsed_sec          : 64.6
+success / grade      : True / evidence_ready
+execution_status     : completed
+total_findings       : 20
+total_candidates     : 0
+formal_deliverable   : 20
+input_gaps           : []
+
+--- discovery_funnel ---
+schema_version       : qualibug.discovery-funnel.v2
+pipeline_health      : {"status": "DEGRADED", "execution_status": "completed", "selected_obligation_count": 129, "terminal_obligation_count": 129, "executed_obligation_count": 54, "blocked_obligation_count": 75, "harness_failure_count": 15, "cleanup_failure_count": 0, "observation_receipt_missing_count": 0, "empty_findings_means_no_bugs": false, "usage_cost_unknown": true, "reasoner_status": "", "reasoner_failure_count": 0, "reasoner_error_class_counts": {}, "secret_scan_failed": false, "formal_id_mismatch": false, "observability_gap_count": 0, "observability_gaps": [], "terminal_reason_counts": {"BLOCKED_MISSING_BINDING": 8, "BLOCKED_MISSING_FIXTURE": 3, "BLOCKED_MISSING_OBSERVER": 28, "BLOCKED_NON_REVERSIBLE_WRITE": 36, "CONTRACT_ORACLE_HARNESS_FAILED": 15, "ORACLE_NOT_VIOLATED": 16}, "formal_customer_deliverable_count": 20, "canonical_defect_count": 20, "canonical_defect_ids": ["cdef_0401d7e59d2692334bd087349492db3f", "cdef_07008c8411e817c4220ee5033050bf83", "cdef_23c22c43aa511b906e7597ac74bbfcd4", "cdef_29e23d551efb1d3e9a6b782c2de78d27", "cdef_2d5cb515e51d9ff83968f79ffe8b86c1", "cdef_439c185021eff364e9f4322c2cb3fa86", "cdef_5217f9e37dfeca5a1d444eac748c0541", "cdef_534a70b54fbe256dbb26512a964ab203", "cdef_5cb88c40be38d001ee4c857f65d47ffb", "cdef_5fe80773f46180a8123a12d2b01e4c29", "cdef_76cd9da58c84d25d9b5983a1f56b5aa7", "cdef_7983e60e821c78b2bdacaa20abc5b9e5", "cdef_8cc6828a3ac60b2886ac710153fb4c65", "cdef_b952b9fa8d7174bb2d51ba1b81e67997", "cdef_c0b14425a5811c4e39293d2a9e01d8c6", "cdef_d0c0f33bee0981d8047b2a549fc5fe18", "cdef_d0fdf6d3118b91cb26c6ceaa3dc1a53e", "cdef_e3fcde42853482e146a2de7a5c9b569d", "cdef_e81b3c7ccb1f0c9c4bad0eed30fc1f86", "cdef_efd6cdabcd18fae50633690d3a2fa91c"], "delivery_occurrence_count": 23, "delivery_occurrence_finding_ids": ["finding_078adcfa6794d0b126a2", "finding_0c7cab78f060f9f02fe5", "finding_0eb21e63ec9b26bd23dd", "finding_0f286e7410fd40b3177b", "finding_1193921a5c9bb8caff55", "finding_2c44cf5ea1a204a19355", "finding_3135b2a8c3b84fc4b8b9", "finding_3704efd832bbe67a112c", "finding_3bbfcc69ea7d1e1f75b1", "finding_41dc2562010512c96e11", "finding_5682d6c299ead6165456", "finding_62d9525ccddd9bc82127", "finding_6c909d8968d54c059824", "finding_6f5dfe9c3ace7b4336e7", "finding_7237c7b764d5a642e289", "finding_7c9785ad18586812fdd4", "finding_a5eecb8d1f5f2bbef427", "finding_abf77585aa37c8118089", "finding_b6a5f9f26be8b5ab43b2", "finding_bc145939e4100e00ab7c", "finding_e119e54812a1dd77e2ad", "finding_e4349d082a7f6ecf4860", "finding_ff9051ab0cecfe81c419"], "shadow_attempt_deliverable_count": 0, "planning_gap_reason": "", "operator_note": "Attempt receipts expose incomplete, blocked, failed, or unmeasured discovery work; empty findings must not be interpreted as a defect-free target. Health flags: usage/cost_coverage_unknown, blocked_or_deferred_obligations. Terminal reasons: blocked_missing_binding=8, blocked_missing_fixture=3, blocked_missing_observer=28, blocked_non_reversible_write=36, contract_oracle_harness_failed=15, oracle_not_violated=16.", "execution_reason": "preflight_health_failed", "preflight": {"present": true, "ready": true, "all_checks_passed": false, "errors": 0, "warnings": 1}}
+validated_bug_count  : 20
+canonical_defect_count: 20
+candidate_count      : 129
+
+--- 阶段级漏斗 (按 input 降序看掉量) ---
+stage                         input success blocked failed  elapsed(p50/p95)
+----------------------------------------------------------------------------
+obligation_generation           129     129       0      0  None/None
+experiment_compile              129      83      46      0  None/None
+binding_materialization         129      83      46      0  None/None
+formal_projection               129     129       0      0  None/None
+fixture_setup                    83      83       0      0  None/None
+    ^ 上一阶段到本阶段掉量: 46 (36%)
+governed_execution               83      54      29      0  177/324
+observation                      54      54       0      0  None/None
+    ^ 上一阶段到本阶段掉量: 29 (35%)
+assertion                        54      54       0      0  None/None
+oracle_resolution                54      54       0      0  None/None
+delivery_gate                    54      39       0     15  None/None
+cleanup                          54      54       0      0  None/None
+
+--- top blocking reasons (义务被拦死的原因分布) ---
+  BLOCKED_NON_REVERSIBLE_WRITE     x36
+  BLOCKED_MISSING_OBSERVER         x28
+  ORACLE_NOT_VIOLATED              x16
+  CONTRACT_ORACLE_HARNESS_FAILED   x15
+  BLOCKED_MISSING_BINDING          x8
+  BLOCKED_MISSING_FIXTURE          x3
+
+--- 瓶颈结论 (自动判定) ---
+  选中义务 129 -> 执行 54 / 阻塞 75
+  执行率 = 42%，阻塞率 = 58%
+  => 瓶颈在 [执行/义务落地] 段：多数义务被治理/预算拦死，未进入验证。
+  最大阶段掉量发生在 [formal_projection] 之后，掉量 46。
+========================================================================

@@ -12,6 +12,9 @@ from .adaptive_discovery_planner import (
     build_agent_intent_plan,
     plan_obligation_round,
 )
+from .adaptive_behavior_ir_expansion import (
+    expand_behavior_ir_from_runtime_observations,
+)
 from .agent_semantic_linker import (
     RECEIPT_SCHEMA as AGENT_SEMANTIC_LINK_RECEIPT_SCHEMA,
     enrich_knowledge_asset_with_agent_relationships,
@@ -51,6 +54,12 @@ from .obligation_compiler import compile_obligations_from_behavior_ir
 from .operational_receipts import (
     aggregate_execution_operational_receipts,
     build_execution_operational_receipt_from_counts,
+)
+from .runtime_interface_discovery import (
+    execute_runtime_interface_discovery,
+    load_runtime_interface_confirmation_tokens,
+    load_runtime_interface_discovery_budget,
+    plan_runtime_interface_candidates,
 )
 
 
@@ -304,11 +313,6 @@ def _api_operations(
                     "summary": _text(operation.get("summary")),
                     "description": _text(operation.get("description")),
                     "tags": list(operation.get("tags") or []),
-                    "side_effect_class": (
-                        "write"
-                        if normalized_method in {"POST", "PUT", "PATCH", "DELETE"}
-                        else "read"
-                    ),
                     "parameters": list(operation.get("parameters") or []),
                     "request_schema": _dict(operation.get("requestBody")),
                     "response_schema": _dict(operation.get("responses")),
@@ -328,9 +332,6 @@ def _api_operations(
                 "summary": "",
                 "description": "",
                 "tags": [],
-                "side_effect_class": (
-                    "write" if method in {"POST", "PUT", "PATCH", "DELETE"} else "read"
-                ),
                 "parameters": [],
                 "request_schema": {},
                 "response_schema": {},
@@ -460,6 +461,42 @@ def build_discovery_plan(
             inputs.campaign_context.get("_source_verification_text")
         ),
     )
+    runtime_interface_discovery_enabled = inputs.campaign_context.get(
+        "runtime_interface_discovery_enabled",
+        False,
+    )
+    if not isinstance(runtime_interface_discovery_enabled, bool):
+        raise MainlineContractError(
+            "runtime_interface_discovery_enabled_not_boolean"
+        )
+    runtime_interface_discovery_plan: dict[str, Any] = {}
+    if runtime_interface_discovery_enabled:
+        configured_budget = inputs.campaign_context.get(
+            "runtime_interface_discovery_budget"
+        )
+        budget_value = (
+            load_runtime_interface_discovery_budget()
+            if configured_budget is None
+            else configured_budget
+        )
+        if (
+            isinstance(budget_value, bool)
+            or not isinstance(budget_value, int)
+            or not 1 <= budget_value <= 1000
+        ):
+            raise MainlineContractError(
+                "runtime_interface_discovery_budget_invalid"
+            )
+        runtime_interface_discovery_plan = plan_runtime_interface_candidates(
+            operations,
+            action_markers=None,
+            max_candidates=budget_value,
+        )
+    runtime_actors = _runtime_actors(
+        inputs.root,
+        inputs.project,
+        inputs.campaign_context,
+    )
     behavior_ir = build_behavior_ir_from_knowledge_asset(
         asset,
         project_id=inputs.project,
@@ -467,11 +504,7 @@ def build_discovery_plan(
             _dict(inputs.campaign_context.get("source_manifest")).get("source_hash")
         ),
         api_operations=operations,
-        runtime_actors=_runtime_actors(
-            inputs.root,
-            inputs.project,
-            inputs.campaign_context,
-        ),
+        runtime_actors=runtime_actors,
     )
     obligation_pack = compile_obligations_from_behavior_ir(behavior_ir)
     obligations = [
@@ -545,10 +578,23 @@ def build_discovery_plan(
             "obligation_plan": obligation_plan,
             "agent_intent_plan": agent_intent_plan,
             "agent_semantic_link_receipt": agent_semantic_link_receipt,
+            "runtime_interface_discovery_enabled": (
+                runtime_interface_discovery_enabled
+            ),
+            "runtime_interface_discovery_plan": (
+                runtime_interface_discovery_plan
+            ),
             "runtime_contract": dict(
                 _dict(inputs.campaign_context.get("_runtime_contract"))
             ),
             "knowledge_asset_id": _text(asset.get("asset_id")),
+            # Immutable in-memory inputs for observation-driven round 2. These
+            # private keys are intentionally excluded from product artifacts.
+            "_knowledge_asset": asset,
+            "_documented_operations": operations,
+            "_runtime_actors": runtime_actors,
+            "_environment_type": environment_type,
+            "_planning_budget": max(budget, 200),
         },
     )
 
@@ -598,13 +644,14 @@ def _selected_rows(plan: DiscoveryPlanningBundle) -> list[dict[str, Any]]:
 def _manual_terminal_receipts(
     *,
     selected_rows: list[dict[str, Any]],
-    plan: DiscoveryPlanningBundle,
+    experiments_by_obligation: dict[str, dict[str, Any]],
+    obligation_plan: dict[str, Any],
     runtime_contract: dict[str, Any],
     compile_results: dict[str, dict[str, Any]],
     execution_results: dict[str, dict[str, Any]],
 ) -> None:
-    experiments = _dict(plan.experiments.get("by_obligation"))
-    obligation_plan = _dict(plan.experiments.get("obligation_plan"))
+    experiments = _dict(experiments_by_obligation)
+    obligation_plan = _dict(obligation_plan)
     scheduled_ids = {
         _text(row.get("obligation_id"))
         for row in _list(obligation_plan.get("selected"))
@@ -769,6 +816,22 @@ def _finalize_campaign(handle: Any, ledger: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _empty_execution_batch() -> dict[str, Any]:
+    return {
+        "selected_count": 0,
+        "executed_count": 0,
+        "blocked_count": 0,
+        "harness_failure_count": 0,
+        "cleanup_failures": 0,
+        "findings": [],
+        "results": [],
+        "compile_results": {},
+        "execution_results": {},
+        "gate_results": {},
+        "every_experiment_has_receipt": True,
+    }
+
+
 def run_experiment_candidate(
     inputs: DiscoveryMainlineInputs,
     campaign_handle: Any,
@@ -789,6 +852,82 @@ def run_experiment_candidate(
         _text(runtime_contract.get("status")) == "approved"
         and bool(_text(runtime_contract.get("approved_base_url")))
     )
+    surface_plan = _dict(
+        plan.experiments.get("runtime_interface_discovery_plan")
+    )
+    surface_execution: dict[str, Any] = {
+        "selected_count": 0,
+        "executed_count": 0,
+        "blocked_count": 0,
+        "harness_failure_count": 0,
+        "cleanup_failures": 0,
+        "selected_rows": [],
+        "compile_results": {},
+        "execution_results": {},
+        "gate_results": {},
+        "observation_receipts": [],
+        "discovered_operations": [],
+        "findings": [],
+    }
+    if runtime_approved and surface_plan:
+        actor_tokens = load_runtime_interface_confirmation_tokens(
+            inputs.root,
+            inputs.project,
+        )
+        surface_execution = execute_runtime_interface_discovery(
+            surface_plan,
+            base_url=_text(runtime_contract.get("approved_base_url")),
+            mainline_run=plan.mainline_run,
+            confirmation_tokens=actor_tokens,
+        )
+    expansion: dict[str, Any] = {
+        "status": "NOT_REQUESTED",
+        "behavior_ir": dict(plan.behavior_ir),
+        "delta_obligations": [],
+        "by_obligation": {},
+        "obligation_plan": {},
+        "agent_intent_plan": {},
+        "selected_rows": [],
+        "round_receipt": {},
+    }
+    if runtime_approved and surface_plan:
+        expansion = expand_behavior_ir_from_runtime_observations(
+            initial_behavior_ir=plan.behavior_ir,
+            existing_obligation_ids={
+                _text(row.get("obligation_id"))
+                for row in _list(plan.obligations.get("obligations"))
+                if isinstance(row, dict) and _text(row.get("obligation_id"))
+            },
+            knowledge_asset=_dict(plan.experiments.get("_knowledge_asset")),
+            documented_operations=[
+                dict(row)
+                for row in _list(plan.experiments.get("_documented_operations"))
+                if isinstance(row, dict)
+            ],
+            observation_receipts=[
+                dict(row)
+                for row in _list(surface_execution.get("observation_receipts"))
+                if isinstance(row, dict)
+            ],
+            project_id=inputs.project,
+            source_snapshot_hash=_text(
+                _dict(inputs.campaign_context.get("source_manifest")).get(
+                    "source_hash"
+                )
+            ),
+            runtime_actors=[
+                dict(row)
+                for row in _list(plan.experiments.get("_runtime_actors"))
+                if isinstance(row, dict)
+            ],
+            environment_type=_text(
+                plan.experiments.get("_environment_type")
+            ),
+            policy_version=_text(inputs.campaign_context.get("policy_version")),
+            budget=int(plan.experiments.get("_planning_budget") or 0),
+            planning_round=2,
+        )
+
     if runtime_approved and scheduled:
         batch = execute_selected_experiments(
             scheduled,
@@ -804,42 +943,122 @@ def run_experiment_candidate(
             campaign_id=plan.mainline_run["campaign_id"],
         )
     else:
-        batch = {
-            "selected_count": 0,
-            "executed_count": 0,
-            "blocked_count": 0,
-            "harness_failure_count": 0,
-            "cleanup_failures": 0,
-            "findings": [],
-            "results": [],
-            "compile_results": {},
-            "execution_results": {},
-            "gate_results": {},
-            "every_experiment_has_receipt": True,
-        }
+        batch = _empty_execution_batch()
+
+    round_two_scheduled = [
+        dict(row)
+        for row in _list(
+            _dict(expansion.get("agent_intent_plan")).get("intents")
+        )
+        if isinstance(row, dict)
+    ]
+    if runtime_approved and round_two_scheduled:
+        round_two_batch = execute_selected_experiments(
+            round_two_scheduled,
+            experiments_by_obligation=dict(
+                _dict(expansion.get("by_obligation"))
+            ),
+            behavior_ir=_dict(expansion.get("behavior_ir")),
+            root=inputs.root,
+            project=inputs.project,
+            base_url=_text(runtime_contract.get("approved_base_url")),
+            runtime_contract=runtime_contract,
+            mainline_run=plan.mainline_run,
+            campaign_id=plan.mainline_run["campaign_id"],
+        )
+    else:
+        round_two_batch = _empty_execution_batch()
     compile_results = {
         _text(key): dict(value)
         for key, value in _dict(batch.get("compile_results")).items()
         if _text(key) and isinstance(value, dict)
     }
+    compile_results.update({
+        _text(key): dict(value)
+        for key, value in _dict(
+            round_two_batch.get("compile_results")
+        ).items()
+        if _text(key) and isinstance(value, dict)
+    })
+    compile_results.update({
+        _text(key): dict(value)
+        for key, value in _dict(
+            surface_execution.get("compile_results")
+        ).items()
+        if _text(key) and isinstance(value, dict)
+    })
     execution_results = {
         _text(key): dict(value)
         for key, value in _dict(batch.get("execution_results")).items()
         if _text(key) and isinstance(value, dict)
     }
+    execution_results.update({
+        _text(key): dict(value)
+        for key, value in _dict(
+            round_two_batch.get("execution_results")
+        ).items()
+        if _text(key) and isinstance(value, dict)
+    })
+    execution_results.update({
+        _text(key): dict(value)
+        for key, value in _dict(
+            surface_execution.get("execution_results")
+        ).items()
+        if _text(key) and isinstance(value, dict)
+    })
     gate_results = {
         _text(key): dict(value)
         for key, value in _dict(batch.get("gate_results")).items()
         if _text(key) and isinstance(value, dict)
     }
+    gate_results.update({
+        _text(key): dict(value)
+        for key, value in _dict(round_two_batch.get("gate_results")).items()
+        if _text(key) and isinstance(value, dict)
+    })
+    gate_results.update({
+        _text(key): dict(value)
+        for key, value in _dict(
+            surface_execution.get("gate_results")
+        ).items()
+        if _text(key) and isinstance(value, dict)
+    })
     gate_results = _project_gate_results_for_authority(
         gate_results=gate_results,
         contract=plan.mainline_run,
     )
-    selected_rows = _selected_rows(plan)
+    initial_selected_rows = _selected_rows(plan)
+    expansion_selected_rows = [
+        dict(row)
+        for row in _list(expansion.get("selected_rows"))
+        if isinstance(row, dict)
+    ]
+    surface_selected_rows = [
+        dict(row)
+        for row in _list(surface_execution.get("selected_rows"))
+        if isinstance(row, dict)
+    ]
+    selected_rows = (
+        initial_selected_rows
+        + expansion_selected_rows
+        + surface_selected_rows
+    )
     _manual_terminal_receipts(
-        selected_rows=selected_rows,
-        plan=plan,
+        selected_rows=initial_selected_rows,
+        experiments_by_obligation=dict(
+            _dict(plan.experiments.get("by_obligation"))
+        ),
+        obligation_plan=obligation_plan,
+        runtime_contract=runtime_contract,
+        compile_results=compile_results,
+        execution_results=execution_results,
+    )
+    _manual_terminal_receipts(
+        selected_rows=expansion_selected_rows,
+        experiments_by_obligation=dict(
+            _dict(expansion.get("by_obligation"))
+        ),
+        obligation_plan=_dict(expansion.get("obligation_plan")),
         runtime_contract=runtime_contract,
         compile_results=compile_results,
         execution_results=execution_results,
@@ -855,7 +1074,10 @@ def run_experiment_candidate(
     deliverable, candidates, shadow = _authority_findings(
         raw_findings=[
             dict(row)
-            for row in _list(batch.get("findings"))
+            for row in (
+                _list(batch.get("findings"))
+                + _list(round_two_batch.get("findings"))
+            )
             if isinstance(row, dict)
         ],
         gate_results=gate_results,
@@ -892,24 +1114,30 @@ def run_experiment_candidate(
     )
     occurrence_ids = list(formal["delivery_occurrence_finding_ids"])
     canonical_ids = list(formal["canonical_defect_ids"])
+    representative_canonical_ids = sorted(
+        _text(item.get("canonical_defect_id"))
+        for item in canonical_findings
+        if _text(item.get("canonical_defect_id"))
+    )
     defect_identity_consistency = build_defect_identity_consistency(
         occurrence_scopes={
             "delivery_gate_ids": validated_delivery_gate_finding_ids(ledger),
+            "formal_authority_occurrence_ids": list(
+                formal_delivery_authority["delivery_occurrence_finding_ids"]
+            ),
             "registry_occurrence_ids": list(
                 canonical_registry["delivery_occurrence_finding_ids"]
             ),
             "formal_projection_occurrence_ids": occurrence_ids,
+            "evaluator_submission_occurrence_ids": occurrence_ids,
         },
         canonical_scopes={
             "canonical_registry_ids": list(
                 canonical_registry["canonical_defect_ids"]
             ),
             "formal_projection_ids": canonical_ids,
-            "product_projection_ids": sorted(
-                _text(item.get("canonical_defect_id"))
-                for item in canonical_findings
-                if _text(item.get("canonical_defect_id"))
-            ),
+            "product_projection_ids": representative_canonical_ids,
+            "evaluator_submission_ids": representative_canonical_ids,
         },
     )
     # Honest execution-phase status: it must reflect what actually happened,
@@ -922,7 +1150,11 @@ def run_experiment_candidate(
         for row in (ledger.get("attempts") or [])
         if _text(_dict(row).get("terminal_status")).upper() in {"BLOCKED", "DEFERRED"}
     )
-    executed_count = int(batch.get("executed_count") or 0)
+    executed_count = (
+        int(batch.get("executed_count") or 0)
+        + int(round_two_batch.get("executed_count") or 0)
+        + int(surface_execution.get("executed_count") or 0)
+    )
     selected_count = len(selected_rows)
     if _text(runtime_contract.get("status")) == "plan_only":
         # No runtime target was supplied, so execution was never attempted.
@@ -950,28 +1182,81 @@ def run_experiment_candidate(
         "mainline_run": dict(plan.mainline_run),
         "runtime_contract": runtime_contract,
         "campaign": _finalize_campaign(campaign_handle, ledger),
-        "behavior_ir": dict(plan.behavior_ir),
-        "test_obligations": dict(plan.obligations),
+        "behavior_ir": dict(_dict(expansion.get("behavior_ir"))),
+        "test_obligations": {
+            **dict(plan.obligations),
+            "obligations": (
+                [
+                    dict(row)
+                    for row in _list(plan.obligations.get("obligations"))
+                    if isinstance(row, dict)
+                ]
+                + [
+                    dict(row)
+                    for row in _list(expansion.get("delta_obligations"))
+                    if isinstance(row, dict)
+                ]
+            ),
+        },
         "experiment_compile": {
             key: value
             for key, value in plan.experiments.items()
             if key not in {"by_obligation", "runtime_contract"}
+            and not str(key).startswith("_")
         },
         "obligation_plan": dict(obligation_plan),
         "agent_intent_plan": dict(agent_intent_plan),
         "agent_semantic_link_receipt": dict(
             _dict(plan.experiments.get("agent_semantic_link_receipt"))
         ),
+        "runtime_interface_discovery": {
+            "status": (
+                "EXECUTED"
+                if int(surface_execution.get("selected_count") or 0) > 0
+                else "PLANNED"
+                if surface_plan
+                else "NOT_REQUESTED"
+            ),
+            "plan": surface_plan,
+            "execution": surface_execution,
+        },
+        "behavior_ir_expansion": {
+            "status": _text(expansion.get("status")),
+            "round_receipt": dict(_dict(expansion.get("round_receipt"))),
+            "obligation_plan": dict(_dict(expansion.get("obligation_plan"))),
+            "agent_intent_plan": dict(
+                _dict(expansion.get("agent_intent_plan"))
+            ),
+        },
         "experiment_execution": {
             "selected_count": len(selected_rows),
-            "scheduled_count": len(scheduled),
-            "executed_count": int(batch.get("executed_count") or 0),
-            "blocked_count": int(batch.get("blocked_count") or 0),
-            "harness_failure_count": int(batch.get("harness_failure_count") or 0),
-            "cleanup_failures": int(batch.get("cleanup_failures") or 0),
+            "scheduled_count": (
+                len(scheduled)
+                + len(round_two_scheduled)
+                + int(surface_execution.get("selected_count") or 0)
+            ),
+            "executed_count": executed_count,
+            "blocked_count": (
+                int(batch.get("blocked_count") or 0)
+                + int(round_two_batch.get("blocked_count") or 0)
+                + int(surface_execution.get("blocked_count") or 0)
+            ),
+            "harness_failure_count": (
+                int(batch.get("harness_failure_count") or 0)
+                + int(round_two_batch.get("harness_failure_count") or 0)
+                + int(surface_execution.get("harness_failure_count") or 0)
+            ),
+            "cleanup_failures": (
+                int(batch.get("cleanup_failures") or 0)
+                + int(round_two_batch.get("cleanup_failures") or 0)
+                + int(surface_execution.get("cleanup_failures") or 0)
+            ),
             "every_experiment_has_receipt": bool(ledger.get("complete")),
             "operational_receipt_summary": operational_summary,
-            "results": list(batch.get("results") or []),
+            "results": (
+                list(batch.get("results") or [])
+                + list(round_two_batch.get("results") or [])
+            ),
         },
         "operational_receipt_summary": operational_summary,
         "obligation_attempt_ledger": ledger,
@@ -1000,7 +1285,10 @@ def run_experiment_candidate(
         "phases": {
             "agent_intent": {
                 "status": _text(agent_intent_plan.get("status")).lower(),
-                "generated": int(agent_intent_plan.get("intent_count") or 0),
+                "generated": (
+                    int(agent_intent_plan.get("intent_count") or 0)
+                    + len(round_two_scheduled)
+                ),
                 "semantic_authority": _text(
                     agent_intent_plan.get("semantic_authority")
                 ),
@@ -1032,7 +1320,9 @@ def run_experiment_candidate(
             },
             "behavior_ir": {
                 "status": "completed",
-                "operation_count": len(_list(plan.behavior_ir.get("operations"))),
+                "operation_count": len(
+                    _list(_dict(expansion.get("behavior_ir")).get("operations"))
+                ),
             },
             "obligation_generation": {
                 "status": "completed",
@@ -1040,7 +1330,7 @@ def run_experiment_candidate(
             },
             "execution": {
                 "status": execution_status_value,
-                "executed": int(batch.get("executed_count") or 0),
+                "executed": executed_count,
                 "observed_http_request_count": int(
                     operational_summary.get("observed_http_request_count") or 0
                 ),
@@ -1071,7 +1361,9 @@ def run_experiment_candidate(
         },
         "auto_har": {
             "status": "no_traffic" if execution_status_value == "plan_only" else "receipt_backed",
-            "entry_count": int(batch.get("executed_count") or 0),
+            "entry_count": int(
+                operational_summary.get("observed_http_request_count") or 0
+            ),
         },
         "total_duration_ms": int((time.time() - started) * 1000),
     }

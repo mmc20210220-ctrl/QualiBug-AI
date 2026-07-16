@@ -1,0 +1,281 @@
+"""Observation-driven Behavior IR expansion between immutable planning rounds."""
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from typing import Any
+
+from .adaptive_discovery_planner import build_agent_intent_plan, plan_obligation_round
+from .behavior_ir import build_behavior_ir_from_knowledge_asset
+from .experiment_compiler import compile_experiments
+from .fixture_dag import attach_fixture_dag_to_experiments
+from .obligation_compiler import compile_obligations_from_behavior_ir
+from .runtime_interface_discovery import merge_runtime_discovered_operations
+
+
+ROUND_RECEIPT_SCHEMA = "qualibug.behavior-ir-expansion-round.v1"
+_VARIANT_RE = re.compile(r"^(.+?)__v_[a-f0-9]+$")
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _fingerprint(value: Any) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _operation_key(operation: dict[str, Any]) -> tuple[str, str]:
+    return _text(operation.get("method")).upper(), _text(operation.get("path"))
+
+
+def _experiments_by_obligation(
+    experiment_pack: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    experiments = [
+        dict(row)
+        for row in (
+            _list(experiment_pack.get("experiments"))
+            + _list(experiment_pack.get("blocked_experiments"))
+        )
+        if isinstance(row, dict)
+    ]
+    indexed: dict[str, dict[str, Any]] = {}
+    for experiment in experiments:
+        obligation_id = _text(experiment.get("obligation_id"))
+        if obligation_id:
+            indexed[obligation_id] = experiment
+        expanded_from = _text(experiment.get("expanded_from_obligation_id"))
+        if expanded_from:
+            indexed.setdefault(expanded_from, experiment)
+        variant = _VARIANT_RE.match(obligation_id)
+        if variant:
+            indexed.setdefault(variant.group(1), experiment)
+    return experiments, indexed
+
+
+def _selected_rows(
+    obligations: list[dict[str, Any]],
+    *,
+    experiments_by_obligation: dict[str, dict[str, Any]],
+    agent_intent_plan: dict[str, Any],
+    planning_round: int,
+) -> list[dict[str, Any]]:
+    intents = {
+        _text(row.get("obligation_id")): dict(row)
+        for row in _list(agent_intent_plan.get("intents"))
+        if isinstance(row, dict) and _text(row.get("obligation_id"))
+    }
+    rows: list[dict[str, Any]] = []
+    for obligation in obligations:
+        obligation_id = _text(obligation.get("obligation_id"))
+        experiment = _dict(experiments_by_obligation.get(obligation_id))
+        intent = _dict(intents.get(obligation_id))
+        adapters = [
+            _text(value)
+            for value in _list(intent.get("execution_adapters"))
+            if _text(value)
+        ]
+        rows.append({
+            **obligation,
+            "candidate_id": _text(obligation.get("candidate_id")) or obligation_id,
+            "experiment_id": _text(experiment.get("experiment_id")),
+            "adapter": (
+                adapters[0]
+                if len(adapters) == 1
+                else "multi_surface"
+                if adapters
+                else "unavailable"
+            ),
+            "execution_adapters": adapters,
+            "agent_intent_id": _text(intent.get("intent_id")),
+            "planning_round": planning_round,
+            "operation_refs": list(obligation.get("required_operations") or []),
+            "actor_refs": list(obligation.get("required_actors") or []),
+            "behavior_ir_refs": list(obligation.get("relation_refs") or []),
+        })
+    return rows
+
+
+def _round_receipt(
+    *,
+    planning_round: int,
+    input_behavior_ir_id: str,
+    output_behavior_ir_id: str,
+    observation_receipts: list[dict[str, Any]],
+    discovered_operations: list[dict[str, Any]],
+    new_obligation_count: int,
+    selected_count: int,
+    stop_reason: str,
+) -> dict[str, Any]:
+    receipt = {
+        "schema_version": ROUND_RECEIPT_SCHEMA,
+        "planning_round": planning_round,
+        "input_behavior_ir_id": input_behavior_ir_id,
+        "output_behavior_ir_id": output_behavior_ir_id,
+        "observation_receipt_fingerprints": sorted(
+            _text(row.get("receipt_fingerprint"))
+            for row in observation_receipts
+            if _text(row.get("receipt_fingerprint"))
+        ),
+        "discovered_operations": [
+            {"method": key[0], "path": key[1]}
+            for key in sorted(_operation_key(row) for row in discovered_operations)
+        ],
+        "discovered_operation_count": len(discovered_operations),
+        "new_obligation_count": new_obligation_count,
+        "selected_count": selected_count,
+        "stop_reason": stop_reason,
+    }
+    receipt["receipt_fingerprint"] = _fingerprint(receipt)
+    return receipt
+
+
+def expand_behavior_ir_from_runtime_observations(
+    *,
+    initial_behavior_ir: dict[str, Any],
+    existing_obligation_ids: set[str],
+    knowledge_asset: dict[str, Any],
+    documented_operations: list[dict[str, Any]],
+    observation_receipts: list[dict[str, Any]],
+    project_id: str,
+    source_snapshot_hash: str,
+    runtime_actors: list[dict[str, Any]],
+    environment_type: str,
+    policy_version: str,
+    budget: int,
+    planning_round: int,
+) -> dict[str, Any]:
+    """Rebuild IR from proven runtime facts and compile only new obligations."""
+
+    if isinstance(budget, bool) or budget <= 0:
+        raise ValueError("behavior_ir_expansion_budget_invalid")
+    if isinstance(planning_round, bool) or planning_round < 2:
+        raise ValueError("behavior_ir_expansion_round_invalid")
+    initial_id = _text(initial_behavior_ir.get("model_id"))
+    if not initial_id:
+        raise ValueError("behavior_ir_expansion_input_model_id_missing")
+
+    merged_operations = merge_runtime_discovered_operations(
+        documented_operations,
+        observation_receipts,
+    )
+    documented_keys = {
+        _operation_key(row)
+        for row in documented_operations
+        if isinstance(row, dict)
+    }
+    discovered_operations = [
+        dict(row)
+        for row in merged_operations
+        if _operation_key(row) not in documented_keys
+    ]
+    if not discovered_operations:
+        receipt = _round_receipt(
+            planning_round=planning_round,
+            input_behavior_ir_id=initial_id,
+            output_behavior_ir_id=initial_id,
+            observation_receipts=observation_receipts,
+            discovered_operations=[],
+            new_obligation_count=0,
+            selected_count=0,
+            stop_reason="no_new_runtime_operations",
+        )
+        return {
+            "status": "STAGNATED",
+            "behavior_ir": dict(initial_behavior_ir),
+            "delta_obligations": [],
+            "experiment_pack": {"experiments": [], "blocked_experiments": []},
+            "all_experiments": [],
+            "by_obligation": {},
+            "obligation_plan": {},
+            "agent_intent_plan": {},
+            "selected_rows": [],
+            "round_receipt": receipt,
+        }
+
+    behavior_ir = build_behavior_ir_from_knowledge_asset(
+        knowledge_asset,
+        project_id=project_id,
+        source_snapshot_hash=source_snapshot_hash,
+        api_operations=merged_operations,
+        runtime_actors=runtime_actors,
+    )
+    obligation_pack = compile_obligations_from_behavior_ir(behavior_ir)
+    delta_obligations = [
+        dict(row)
+        for row in _list(obligation_pack.get("obligations"))
+        if isinstance(row, dict)
+        and _text(row.get("obligation_id")) not in existing_obligation_ids
+    ]
+    experiment_pack = compile_experiments(
+        delta_obligations,
+        behavior_ir=behavior_ir,
+        environment_type=environment_type,
+        policy_version=policy_version,
+    )
+    experiment_pack = attach_fixture_dag_to_experiments(
+        experiment_pack,
+        behavior_ir=behavior_ir,
+    )
+    all_experiments, by_obligation = _experiments_by_obligation(experiment_pack)
+    obligation_plan = plan_obligation_round(
+        delta_obligations,
+        experiments_by_obligation=by_obligation,
+        budget=budget,
+    )
+    agent_intent_plan = build_agent_intent_plan(
+        obligation_plan,
+        obligations=delta_obligations,
+        experiments_by_obligation=by_obligation,
+        behavior_ir=behavior_ir,
+    )
+    selected_rows = _selected_rows(
+        delta_obligations,
+        experiments_by_obligation=by_obligation,
+        agent_intent_plan=agent_intent_plan,
+        planning_round=planning_round,
+    )
+    stop_reason = (
+        "round_ready"
+        if delta_obligations
+        else "runtime_operations_created_no_new_obligations"
+    )
+    receipt = _round_receipt(
+        planning_round=planning_round,
+        input_behavior_ir_id=initial_id,
+        output_behavior_ir_id=_text(behavior_ir.get("model_id")),
+        observation_receipts=observation_receipts,
+        discovered_operations=discovered_operations,
+        new_obligation_count=len(delta_obligations),
+        selected_count=int(obligation_plan.get("selected_count") or 0),
+        stop_reason=stop_reason,
+    )
+    return {
+        "status": "EXPANDED",
+        "behavior_ir": behavior_ir,
+        "delta_obligations": delta_obligations,
+        "experiment_pack": experiment_pack,
+        "all_experiments": all_experiments,
+        "by_obligation": by_obligation,
+        "obligation_plan": obligation_plan,
+        "agent_intent_plan": agent_intent_plan,
+        "selected_rows": selected_rows,
+        "round_receipt": receipt,
+    }

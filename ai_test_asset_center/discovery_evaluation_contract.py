@@ -25,6 +25,7 @@ from benchmark_evaluator.benchmark_compute import (
 )
 from .canonical_defect_registry import (
     CanonicalDefectRegistryError,
+    build_defect_identity_consistency,
     canonical_representative_findings,
     validate_canonical_defect_registry,
     validate_defect_identity_consistency,
@@ -784,43 +785,44 @@ def evaluate_completed_scan(
         raise EvaluationContractError(
             "formal_count_projection_mismatch"
         )
+    allowed_occurrence_scopes = {
+        "delivery_gate_ids",
+        "formal_authority_occurrence_ids",
+        "registry_occurrence_ids",
+        "formal_projection_occurrence_ids",
+        "product_projection_occurrence_ids",
+        "evaluator_submission_occurrence_ids",
+        "trace_ledger_occurrence_ids",
+    }
+    allowed_canonical_scopes = {
+        "canonical_registry_ids",
+        "formal_projection_ids",
+        "product_projection_ids",
+        "evaluator_projection_ids",
+        "evaluator_submission_ids",
+    }
     try:
-        validated_identity_consistency = validate_defect_identity_consistency(
+        submitted_identity_consistency = validate_defect_identity_consistency(
             dict(defect_identity_consistency or {}),
             required_occurrence_scopes={
                 "delivery_gate_ids",
-                "formal_authority_occurrence_ids",
                 "registry_occurrence_ids",
-                "evaluator_submission_occurrence_ids",
+                "formal_projection_occurrence_ids",
             },
             required_canonical_scopes={
                 "canonical_registry_ids",
                 "formal_projection_ids",
-                "evaluator_submission_ids",
-            },
-            allowed_occurrence_scopes={
-                "delivery_gate_ids",
-                "formal_authority_occurrence_ids",
-                "registry_occurrence_ids",
-                "formal_projection_occurrence_ids",
-                "product_projection_occurrence_ids",
-                "evaluator_submission_occurrence_ids",
-                "trace_ledger_occurrence_ids",
-            },
-            allowed_canonical_scopes={
-                "canonical_registry_ids",
-                "formal_projection_ids",
                 "product_projection_ids",
-                "evaluator_projection_ids",
-                "evaluator_submission_ids",
             },
+            allowed_occurrence_scopes=allowed_occurrence_scopes,
+            allowed_canonical_scopes=allowed_canonical_scopes,
         )
     except CanonicalDefectRegistryError as exc:
         raise EvaluationContractError(
             f"defect_identity_consistency_invalid:{exc}"
         ) from exc
-    occurrence_scope = validated_identity_consistency["occurrence_scopes"]
-    canonical_scope = validated_identity_consistency["canonical_scopes"]
+    occurrence_scope = submitted_identity_consistency["occurrence_scopes"]
+    canonical_scope = submitted_identity_consistency["canonical_scopes"]
     if any(
         ids != validated_formal_authority["delivery_occurrence_finding_ids"]
         for ids in occurrence_scope.values()
@@ -835,6 +837,50 @@ def evaluate_completed_scan(
         raise EvaluationContractError(
             "defect_identity_canonical_scope_mismatch"
         )
+    evaluator_identity_consistency = build_defect_identity_consistency(
+        occurrence_scopes={
+            **{
+                name: list(values)
+                for name, values in occurrence_scope.items()
+            },
+            "formal_authority_occurrence_ids": list(
+                validated_formal_authority["delivery_occurrence_finding_ids"]
+            ),
+            "evaluator_submission_occurrence_ids": list(
+                validated_formal_authority["delivery_occurrence_finding_ids"]
+            ),
+        },
+        canonical_scopes={
+            **{
+                name: list(values)
+                for name, values in canonical_scope.items()
+            },
+            "evaluator_submission_ids": list(
+                validated_canonical_registry["canonical_defect_ids"]
+            ),
+        },
+    )
+    try:
+        validated_identity_consistency = validate_defect_identity_consistency(
+            evaluator_identity_consistency,
+            required_occurrence_scopes={
+                "delivery_gate_ids",
+                "formal_authority_occurrence_ids",
+                "registry_occurrence_ids",
+                "evaluator_submission_occurrence_ids",
+            },
+            required_canonical_scopes={
+                "canonical_registry_ids",
+                "formal_projection_ids",
+                "evaluator_submission_ids",
+            },
+            allowed_occurrence_scopes=allowed_occurrence_scopes,
+            allowed_canonical_scopes=allowed_canonical_scopes,
+        )
+    except CanonicalDefectRegistryError as exc:
+        raise EvaluationContractError(
+            f"evaluator_identity_consistency_invalid:{exc}"
+        ) from exc
     if validated_trace_ledger is not None:
         trace_expected = {
             "campaign_id": validated_attempt_ledger["campaign_id"],
@@ -2292,7 +2338,7 @@ def validate_authenticated_policy_comparison(
 
 
 def _atomic_write_json(destination: Path, payload: dict[str, Any]) -> None:
-    """Atomically write JSON without extending the final Windows path name."""
+    """Atomically write JSON, including Windows MAX_PATH boundary paths."""
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None
@@ -2311,10 +2357,19 @@ def _atomic_write_json(destination: Path, payload: dict[str, Any]) -> None:
             os.fsync(handle.fileno())
         if temporary is None:
             raise RuntimeError("atomic JSON temporary path was not created")
-        os.replace(temporary, destination)
+        os.replace(_filesystem_path(temporary), _filesystem_path(destination))
     finally:
         if temporary is not None and temporary.exists():
             temporary.unlink()
+
+
+def _filesystem_path(path: Path) -> str:
+    resolved = str(path.resolve())
+    if os.name != "nt" or resolved.startswith("\\\\?\\"):
+        return resolved
+    if resolved.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + resolved.lstrip("\\")
+    return "\\\\?\\" + resolved
 
 
 def persist_evaluation_receipt(

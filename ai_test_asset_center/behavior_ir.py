@@ -143,30 +143,138 @@ _CLEANUP_ACTION_RE = re.compile(
     r"abandon|discard|retire|freeze|reset|clear|purge)$",
     re.I,
 )
+_READ_EFFECT_DECLARATIONS = frozenset({
+    "read",
+    "read_only",
+    "readonly",
+    "query",
+    "safe",
+    "none",
+    "no_side_effect",
+    "no_side_effects",
+    "non_mutating",
+    "non_mutation",
+    "validation",
+    "validate",
+    "check",
+    "preview",
+    "calculation",
+    "calculate",
+    "quote",
+    "estimate",
+    "search",
+    "lookup",
+})
+_WRITE_EFFECT_DECLARATIONS = frozenset({
+    "write",
+    "mutation",
+    "mutating",
+    "side_effect",
+    "side_effecting",
+    "state_change",
+    "stateful",
+})
+_WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _ENDPOINT_ACTION_MARKERS: frozenset[str] | None = None
+_SEMANTIC_MARKER_CACHE: dict[str, frozenset[str]] = {}
 
 
-def _endpoint_action_markers() -> frozenset[str]:
-    global _ENDPOINT_ACTION_MARKERS
-    if _ENDPOINT_ACTION_MARKERS is not None:
-        return _ENDPOINT_ACTION_MARKERS
+def _semantic_marker_set(key: str) -> frozenset[str]:
+    cached = _SEMANTIC_MARKER_CACHE.get(key)
+    if cached is not None:
+        return cached
     path = Path(__file__).resolve().parent / "policies" / "semantic_lexicon.json"
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise BehaviorIRError(f"semantic_lexicon_unreadable:{type(exc).__name__}") from exc
-    raw_markers = payload.get("endpoint_action_markers") if isinstance(payload, dict) else None
+    raw_markers = payload.get(key) if isinstance(payload, dict) else None
     if not isinstance(raw_markers, list) or not raw_markers:
-        raise BehaviorIRError("semantic_lexicon_endpoint_action_markers_missing")
+        raise BehaviorIRError(f"semantic_lexicon_{key}_missing")
     markers = frozenset(
         _normalize_action(marker)
         for marker in raw_markers
         if _normalize_action(marker)
     )
     if not markers:
-        raise BehaviorIRError("semantic_lexicon_endpoint_action_markers_empty")
-    _ENDPOINT_ACTION_MARKERS = markers
+        raise BehaviorIRError(f"semantic_lexicon_{key}_empty")
+    _SEMANTIC_MARKER_CACHE[key] = markers
     return markers
+
+
+def _endpoint_action_markers() -> frozenset[str]:
+    global _ENDPOINT_ACTION_MARKERS
+    if _ENDPOINT_ACTION_MARKERS is not None:
+        return _ENDPOINT_ACTION_MARKERS
+    _ENDPOINT_ACTION_MARKERS = _semantic_marker_set("endpoint_action_markers")
+    return _ENDPOINT_ACTION_MARKERS
+
+
+def _operation_semantic_text(operation: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for field in (
+        "operation_id",
+        "id",
+        "action",
+        "intent",
+        "summary",
+        "title",
+        "description",
+        "path",
+    ):
+        value = _text(operation.get(field))
+        if value:
+            parts.append(value)
+    for field in ("tags", "entity_refs", "source_operation_refs"):
+        parts.extend(_text(value) for value in _list(operation.get(field)) if _text(value))
+    raw = " ".join(parts)
+    raw = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", raw)
+    raw = raw.lower()
+    normalized = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "_", raw)
+    return re.sub(r"_+", "_", normalized).strip("_")
+
+
+def _operation_has_semantic_marker(operation: dict[str, Any], markers: frozenset[str]) -> bool:
+    semantic_text = _operation_semantic_text(operation)
+    if not semantic_text:
+        return False
+    for marker in markers:
+        if not marker:
+            continue
+        if re.fullmatch(r"[a-z0-9_]+", marker):
+            if re.search(rf"(?<![a-z0-9]){re.escape(marker)}(?![a-z0-9])", semantic_text):
+                return True
+            continue
+        if marker in semantic_text:
+            return True
+    return False
+
+
+def _declared_operation_effect(value: Any) -> str:
+    normalized = _normalize_action(value)
+    if normalized in _READ_EFFECT_DECLARATIONS:
+        return "read"
+    if normalized in _WRITE_EFFECT_DECLARATIONS:
+        return "write"
+    return ""
+
+
+def _infer_operation_effect(operation: dict[str, Any], method: str) -> str:
+    declared_read_write = _declared_operation_effect(operation.get("read_write"))
+    if declared_read_write:
+        return declared_read_write
+    declared_side_effect = _declared_operation_effect(operation.get("side_effect_class"))
+    if declared_side_effect:
+        return declared_side_effect
+    if method not in _WRITE_METHODS:
+        return "read"
+    if method != "POST":
+        return "write"
+    if _operation_has_semantic_marker(operation, _semantic_marker_set("mutating_action_markers")):
+        return "write"
+    if _operation_has_semantic_marker(operation, _semantic_marker_set("read_like_post_action_markers")):
+        return "read"
+    return "write"
 
 
 def _path_shape(value: Any) -> str:
@@ -1655,7 +1763,7 @@ def build_behavior_ir_from_knowledge_asset(
             continue
         service = _text(op.get("service") or op.get("service_name") or op.get("server"))
         op_id = _text(op.get("operation_id") or op.get("operationId") or op.get("id")) or _stable_id("op", method, path)
-        side_effect = "write" if method in {"POST", "PUT", "PATCH", "DELETE"} else "read"
+        side_effect = _infer_operation_effect(op, method)
         field_dictionary = _merge_unique_sorted(
             _list(op.get("field_dictionary")),
         )
@@ -1690,7 +1798,7 @@ def build_behavior_ir_from_knowledge_asset(
                 "summary": _text(op.get("summary") or op.get("title")),
                 "description": _text(op.get("description")),
                 "tags": _list(op.get("tags")),
-                "side_effect_class": _text(op.get("side_effect_class") or side_effect),
+                "side_effect_class": side_effect,
                 "read_write": side_effect,
                 "entity_refs": [_text(x) for x in _list(op.get("entity_refs")) if _text(x)],
                 "examples": _list(op.get("examples")),

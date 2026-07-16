@@ -45,6 +45,11 @@ def main() -> int:
     parser.add_argument("--prd", required=True)
     parser.add_argument("--ground-truth", required=True)
     parser.add_argument("--target-root", required=True)
+    parser.add_argument(
+        "--enable-runtime-interface-discovery",
+        action="store_true",
+        help="Enable governed, read-only runtime interface surface probes.",
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir).resolve()
@@ -91,6 +96,9 @@ def main() -> int:
             "environment_ref": base_url,
             "target_environment": args.environment_type,
             "execution_mode": "approved_sandbox_write",
+            "runtime_interface_discovery_enabled": bool(
+                args.enable_runtime_interface_discovery
+            ),
         },
     })
     _write_immutable(manifest_path, {

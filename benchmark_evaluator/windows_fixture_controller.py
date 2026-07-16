@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -56,6 +57,29 @@ def _observe_target(base_url: str) -> str:
         "status": status,
         "body_sha256": hashlib.sha256(body).hexdigest(),
     })[:24]
+
+
+def _resolve_login_path(target_root: Path) -> str:
+    api_spec_path = target_root / "docs" / "API_SPEC.md"
+    if not api_spec_path.is_file():
+        raise PolicyEvaluationRunnerError(
+            f"windows benchmark API spec not found: {api_spec_path}"
+        )
+    api_spec = api_spec_path.read_text(encoding="utf-8-sig", errors="replace")
+    matches = sorted({
+        match.group(1).strip()
+        for match in re.finditer(
+            r"(?im)^\s*(?:#+\s*)?POST\s+([^\s`]+login[^\s`]*)\s*$",
+            api_spec,
+        )
+        if match.group(1).strip().startswith("/")
+    })
+    if len(matches) != 1:
+        raise PolicyEvaluationRunnerError(
+            "windows benchmark login path must resolve to exactly one "
+            f"visible POST login operation; observed={matches}"
+        )
+    return matches[0]
 
 
 class WindowsBenchmarkFixtureController:
@@ -148,11 +172,33 @@ class WindowsBenchmarkFixtureController:
             )
         db_dsn = str(os.environ.get("QUALIBUG_DB_DSN") or "").strip()
         jwt_secret = str(os.environ.get("QUALIBUG_JWT_SECRET") or "").strip()
-        if not db_dsn or not jwt_secret:
+        missing_configuration = [
+            name
+            for name, value in (
+                ("QUALIBUG_DB_DSN", db_dsn),
+                ("QUALIBUG_JWT_SECRET", jwt_secret),
+            )
+            if not value
+        ]
+        if missing_configuration:
             raise PolicyEvaluationRunnerError(
-                "windows benchmark fixture requires evaluator DB and JWT configuration"
+                "missing_evaluator_fixture_configuration:"
+                + ",".join(missing_configuration)
             )
         before_ref = _observe_target(base_url)
+        login_path = _resolve_login_path(target_root)
+        test_accounts_source = target_root / "docs" / "TEST_ACCOUNTS.md"
+        if not test_accounts_source.is_file():
+            raise PolicyEvaluationRunnerError(
+                "windows benchmark test accounts source not found: "
+                f"{test_accounts_source}"
+            )
+        test_accounts_output = (
+            self.workspace_root
+            / "platform_inputs"
+            / project
+            / "test_accounts.json"
+        )
         evaluator_environment = dict(os.environ)
         evaluator_environment.update({
             "QUALIBUG_BENCHMARK_TARGET_ROOT": str(target_root),
@@ -160,6 +206,9 @@ class WindowsBenchmarkFixtureController:
             "QUALIBUG_TARGET_BASE_URL": base_url,
             "QUALIBUG_DB_DSN": db_dsn,
             "QUALIBUG_JWT_SECRET": jwt_secret,
+            "QUALIBUG_LOGIN_PATH": login_path,
+            "QUALIBUG_TEST_ACCOUNTS_SOURCE": str(test_accounts_source),
+            "QUALIBUG_TEST_ACCOUNTS_PATH": str(test_accounts_output),
         })
         reset = prepare_funnel_benchmark_target(
             root=self.workspace_root,

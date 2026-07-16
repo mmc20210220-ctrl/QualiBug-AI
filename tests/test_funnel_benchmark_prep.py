@@ -151,6 +151,37 @@ def test_prepare_funnel_benchmark_target_resets_db_then_refreshes_tokens(tmp_pat
     assert result["reset_receipt"]["status"] == "completed"
 
 
+def test_prepare_funnel_benchmark_target_passes_evaluator_env_to_token_refresh(
+    tmp_path: Path,
+) -> None:
+    script = tmp_path / "scripts" / "init_db_windows.ps1"
+    script.parent.mkdir(parents=True)
+    script.write_text("# noop", encoding="utf-8")
+    (tmp_path / "_refresh_tokens.py").write_text("print('ok')", encoding="utf-8")
+    captured_token_env: list[dict[str, str] | None] = []
+    evaluator_env = {
+        "QUALIBUG_BENCHMARK_TARGET_ROOT": str(tmp_path),
+        "QUALIBUG_SKIP_TARGET_DB_RESET": "0",
+        "QUALIBUG_TARGET_BASE_URL": "http://127.0.0.1:8080",
+        "QUALIBUG_DB_DSN": "postgresql://user:pass@localhost/db",
+        "QUALIBUG_JWT_SECRET": "fixture-secret",
+    }
+
+    def fake_run(cmd, **kwargs):
+        joined = " ".join(str(c) for c in cmd)
+        if "_refresh_tokens.py" in joined:
+            captured_token_env.append(kwargs.get("env"))
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+    prepare_funnel_benchmark_target(
+        root=tmp_path,
+        env=evaluator_env,
+        runner=fake_run,
+    )
+
+    assert captured_token_env == [evaluator_env]
+
+
 def test_funnel_runtime_never_loads_or_scores_evaluator_private_ground_truth() -> None:
     runner = Path(__file__).resolve().parents[1] / "_funnel_benchmark.py"
     source = runner.read_text(encoding="utf-8")

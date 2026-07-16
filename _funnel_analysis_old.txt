@@ -1,0 +1,49 @@
+========================================================================
+MODE=full  (file: full.json, 9083 KB)
+========================================================================
+elapsed_sec          : 17.6
+success / grade      : True / evidence_ready
+execution_status     : completed
+total_findings       : 7
+total_candidates     : 0
+formal_deliverable   : 7
+input_gaps           : []
+
+--- discovery_funnel ---
+schema_version       : qualibug.discovery-funnel.v2
+pipeline_health      : {"status": "DEGRADED", "execution_status": "completed", "selected_obligation_count": 54, "terminal_obligation_count": 54, "executed_obligation_count": 11, "blocked_obligation_count": 44, "harness_failure_count": 0, "cleanup_failure_count": 0, "observation_receipt_missing_count": 0, "empty_findings_means_no_bugs": false, "usage_cost_unknown": true, "reasoner_status": "", "reasoner_failure_count": 0, "reasoner_error_class_counts": {}, "secret_scan_failed": false, "formal_id_mismatch": false, "observability_gap_count": 0, "observability_gaps": [], "terminal_reason_counts": {"ASSERTION_INDETERMINATE": 1, "BLOCKED_MISSING_BINDING": 7, "BLOCKED_MISSING_OBSERVER": 9, "BLOCKED_NON_REVERSIBLE_WRITE": 11, "OBLIGATION_BUDGET_REACHED": 16, "ORACLE_NOT_VIOLATED": 2}, "formal_customer_deliverable_count": 7, "canonical_defect_count": 7, "canonical_defect_ids": ["cdef_13b05bb3aee4479a63c02fe5583fe757", "cdef_39b874217a5a7a30d5c65a95a8980999", "cdef_3bde3f1efa2aa7b4ab329e08c96386e6", "cdef_9cca0906772d7fe530dc92cc0a7e35b8", "cdef_cc6aa4ecf2df388f671e9ba5258463ed", "cdef_d5fd5b15907444dcfd7570d6637a897a", "cdef_f4cf1c25617311da3f117464261c9e4c"], "delivery_occurrence_count": 8, "delivery_occurrence_finding_ids": ["finding_02ac72bc74fddba22227", "finding_0423f8988ef969b78ed1", "finding_275c8fbb462a4d02ff44", "finding_48e658880cc5af1067cf", "finding_5c9b9592feff18fc32f0", "finding_7a5d92ea57c7b3bc8450", "finding_91ebf3499e55ef1b91ad", "finding_dec44ce0918cf8fee14a"], "shadow_attempt_deliverable_count": 0, "planning_gap_reason": "", "operator_note": "Attempt receipts expose incomplete, blocked, failed, or unmeasured discovery work; empty findings must not be interpreted as a defect-free target. Health flags: usage/cost_coverage_unknown, blocked_or_deferred_obligations. Terminal reasons: assertion_indeterminate=1, blocked_missing_binding=7, blocked_missing_observer=9, blocked_non_reversible_write=11, obligation_budget_reached=16, oracle_not_violated=2.", "execution_reason": "preflight_health_failed", "preflight": {"present": true, "ready": true, "all_checks_passed": false, "errors": 0, "warnings": 1}}
+validated_bug_count  : 7
+canonical_defect_count: 7
+candidate_count      : 54
+
+--- 阶段级漏斗 (按 input 降序看掉量) ---
+stage                         input success blocked failed  elapsed(p50/p95)
+----------------------------------------------------------------------------
+obligation_generation            54      54       0      0  None/None
+experiment_compile               54      15      39      0  None/None
+binding_materialization          54      15      39      0  None/None
+formal_projection                54      54       0      0  None/None
+fixture_setup                    15      15       0      0  None/None
+    ^ 上一阶段到本阶段掉量: 39 (72%)
+governed_execution               15      11       4      0  125/256
+observation                      11      11       0      0  None/None
+    ^ 上一阶段到本阶段掉量: 4 (27%)
+assertion                        11      11       0      0  None/None
+oracle_resolution                11      11       0      0  None/None
+delivery_gate                    11      10       1      0  None/None
+cleanup                          11      11       0      0  None/None
+
+--- top blocking reasons (义务被拦死的原因分布) ---
+  OBLIGATION_BUDGET_REACHED        x16
+  BLOCKED_NON_REVERSIBLE_WRITE     x11
+  BLOCKED_MISSING_OBSERVER         x9
+  BLOCKED_MISSING_BINDING          x7
+  ORACLE_NOT_VIOLATED              x2
+  ASSERTION_INDETERMINATE          x1
+
+--- 瓶颈结论 (自动判定) ---
+  选中义务 54 -> 执行 11 / 阻塞 44
+  执行率 = 20%，阻塞率 = 81%
+  => 瓶颈在 [执行/义务落地] 段：多数义务被治理/预算拦死，未进入验证。
+  最大阶段掉量发生在 [formal_projection] 之后，掉量 39。
+========================================================================

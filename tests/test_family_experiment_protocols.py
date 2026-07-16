@@ -1565,6 +1565,251 @@ def test_unresolved_body_placeholder_blocks_before_any_write_transport(
     assert "missing_id" in result["detail"]
 
 
+def test_unresolved_read_path_placeholder_blocks_before_target_transport(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    behavior_ir = {
+        "operations": [{
+            "id": "op-read",
+            "method": "GET",
+            "path": "/resources/{id}",
+            "read_write": "read",
+        }, {
+            "id": "op-list",
+            "method": "GET",
+            "path": "/resources",
+            "read_write": "read",
+        }],
+        "actors": [{"id": "actor-reader", "role": "public"}],
+    }
+    experiment = {
+        "experiment_id": "exp-path-binding-block",
+        "obligation_id": "obl-path-binding-block",
+        "compile_receipt": {"status": "COMPILED"},
+        "control_plan": [],
+        "treatment_plan": [{
+            "step_id": "treatment",
+            "operation_ref": "op-read",
+            "actor_ref": "actor-reader",
+        }],
+        "binding_plan": [{
+            "target": "id",
+            "status": "runtime_resolvable",
+            "target_path": "/resources/{id}",
+            "resolver_operations": [{
+                "operation_ref": "op-list",
+                "method": "GET",
+                "path": "/resources",
+            }],
+        }],
+        "fixture_dag": {
+            "status": "READY",
+            "nodes": [{"node_id": "bind-id", "kind": "runtime_read_binding", "target": "id"}],
+            "setup_order": ["bind-id"],
+        },
+        "observers": [{"observer_id": "http_response"}],
+        "assertions": [],
+    }
+    requested_urls: list[str] = []
+
+    def http_request(method: str, url: str, **_kwargs):
+        requested_urls.append(url)
+        if url.endswith("/resources/{id}"):
+            pytest.fail("unresolved path binding reached target transport")
+        return {"status": 200, "body": [], "headers": {}, "duration_ms": 1}
+
+    monkeypatch.setattr("ai_test_asset_center.experiment_executor._http_request", http_request)
+
+    result = execute_one_experiment(
+        experiment,
+        behavior_ir=behavior_ir,
+        root=tmp_path,
+        project="project",
+        base_url="http://target.invalid",
+        runtime_contract={"environment_type": "test"},
+        campaign_id="campaign",
+        execution_id="execution-path-binding-block",
+        actor_tokens={},
+    )
+
+    assert result["status"] == "BLOCKED"
+    assert result["reason_code"] == "BLOCKED_MISSING_BINDING"
+    assert "runtime_read_binding_unresolved:id" in result["detail"]
+    assert requested_urls == ["http://target.invalid/resources"]
+
+
+def test_unresolved_required_runtime_fixture_blocks_before_control_transport(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    behavior_ir = {
+        "operations": [{
+            "id": "op-read-collection",
+            "method": "GET",
+            "path": "/cart/items",
+            "read_write": "read",
+        }, {
+            "id": "op-list-fixtures",
+            "method": "GET",
+            "path": "/fixtures",
+            "read_write": "read",
+        }],
+        "actors": [
+            {"id": "actor-owner", "role": "public"},
+            {"id": "actor-viewer", "role": "public"},
+        ],
+    }
+    experiment = {
+        "experiment_id": "exp-required-fixture-binding-block",
+        "obligation_id": "obl-required-fixture-binding-block",
+        "compile_receipt": {"status": "COMPILED"},
+        "control_plan": [{
+            "step_id": "control_1",
+            "operation_ref": "op-read-collection",
+            "actor_ref": "actor-owner",
+        }],
+        "treatment_plan": [{
+            "step_id": "treatment_1",
+            "operation_ref": "op-read-collection",
+            "actor_ref": "actor-viewer",
+        }],
+        "binding_plan": [{
+            "target": "id",
+            "status": "runtime_resolvable",
+            "resolver_operations": [{
+                "operation_ref": "op-list-fixtures",
+                "method": "GET",
+                "path": "/fixtures",
+            }],
+        }],
+        "fixture_dag": {
+            "status": "READY",
+            "nodes": [{"node_id": "fix-required-id", "kind": "runtime_read_binding", "target": "id"}],
+            "setup_order": ["fix-required-id"],
+        },
+        "activation_requirements": {
+            "fixture": ["fix-required-id"],
+            "control": ["control_1"],
+            "treatment": ["treatment_1"],
+            "actor": ["actor-owner", "actor-viewer"],
+            "observer": ["http_response"],
+        },
+        "observers": [{"observer_id": "http_response"}],
+        "assertions": [],
+    }
+    requested_urls: list[str] = []
+
+    def http_request(method: str, url: str, **_kwargs):
+        requested_urls.append(url)
+        if url.endswith("/cart/items"):
+            pytest.fail("control/treatment reached transport after required fixture binding failed")
+        return {"status": 200, "body": [], "headers": {}, "duration_ms": 1}
+
+    monkeypatch.setattr("ai_test_asset_center.experiment_executor._http_request", http_request)
+
+    result = execute_one_experiment(
+        experiment,
+        behavior_ir=behavior_ir,
+        root=tmp_path,
+        project="project",
+        base_url="http://target.invalid",
+        runtime_contract={"environment_type": "test"},
+        campaign_id="campaign",
+        execution_id="execution-required-fixture-binding-block",
+        actor_tokens={},
+    )
+
+    assert result["status"] == "BLOCKED"
+    assert result["reason_code"] == "BLOCKED_MISSING_BINDING"
+    assert "runtime_read_binding_unresolved:id" in result["detail"]
+    assert requested_urls == ["http://target.invalid/fixtures"]
+
+
+def test_barrier_unresolved_body_placeholder_blocks_before_write_transport(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    behavior_ir = {
+        "operations": [{
+            "id": "op-create",
+            "method": "POST",
+            "path": "/resources",
+            "read_write": "write",
+        }, {
+            "id": "op-list",
+            "method": "GET",
+            "path": "/resources",
+            "read_write": "read",
+        }, {
+            "id": "op-delete",
+            "method": "DELETE",
+            "path": "/resources/{id}",
+            "read_write": "write",
+        }],
+        "actors": [{"id": "actor-control", "role": "public"}],
+    }
+    experiment = {
+        "experiment_id": "exp-barrier-body-binding-block",
+        "obligation_id": "obl-barrier-body-binding-block",
+        "compile_receipt": {"status": "COMPILED"},
+        "control_plan": [{
+            "step_id": "control",
+            "operation_ref": "op-create",
+            "actor_ref": "actor-control",
+            "body": {"resource_id": "<missing_id>"},
+            "barrier_group": "group-1",
+            "barrier_participant": "control",
+        }],
+        "treatment_plan": [{
+            "step_id": "treatment",
+            "operation_ref": "op-create",
+            "actor_ref": "actor-control",
+            "body": {"resource_id": "<missing_id>"},
+            "barrier_group": "group-1",
+            "barrier_participant": "treatment",
+        }],
+        "cleanup_plan": [{
+            "operation_ref": "op-delete",
+            "method": "DELETE",
+            "path": "/resources/{id}",
+        }],
+        "safety_contract": {"governed_write": True},
+        "fixture_dag": {"status": "READY", "nodes": [], "setup_order": []},
+        "observers": [
+            {"observer_id": "http_response"},
+            {"observer_id": "business_effect"},
+            {"observer_id": "barrier_timeline"},
+        ],
+        "assertions": [],
+    }
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_executor.sandbox_write_allowed",
+        lambda **_kwargs: (True, ""),
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_executor.execute_governed_control_write",
+        lambda **_kwargs: pytest.fail("unresolved barrier body reached write transport"),
+    )
+
+    result = execute_one_experiment(
+        experiment,
+        behavior_ir=behavior_ir,
+        root=tmp_path,
+        project="project",
+        base_url="http://target.invalid",
+        runtime_contract={"environment_type": "test"},
+        campaign_id="campaign",
+        execution_id="execution-barrier-body-binding-block",
+        actor_tokens={},
+    )
+
+    assert result["status"] == "BLOCKED"
+    assert result["reason_code"] == "BLOCKED_MISSING_BINDING"
+    assert "body_placeholder_unresolved:missing_id" in result["detail"]
+    assert result["cleanup_failures"] == 0
+
+
 def test_accepted_fixture_without_identity_is_visible_cleanup_failure(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,

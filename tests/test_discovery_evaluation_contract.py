@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pytest
 
+from ai_test_asset_center.canonical_defect_registry import (
+    build_defect_identity_consistency,
+)
 from ai_test_asset_center.discovery_evaluation_contract import (
     EvaluationContractError,
     MANIFEST_SCHEMA,
@@ -33,6 +37,13 @@ from tests.phase3_gate_support import (
 
 
 TEST_EVALUATOR_HMAC_KEY = "evaluation-contract-test-key-0123456789abcdef"
+
+
+def _windows_extended_path(path: Path) -> str:
+    resolved = str(path.resolve())
+    if not resolved.startswith("\\\\?\\"):
+        return "\\\\?\\" + resolved
+    return resolved
 
 
 @pytest.fixture(autouse=True)
@@ -176,6 +187,7 @@ def _receipt(
     policy_id: str = "policy-champion",
     policy_version: str | None = None,
     evaluation_mode: str = "replay",
+    product_only_identity: bool = False,
 ) -> dict:
     target = manifest.target(target_id)
     run_id = f"run-{target_id}"
@@ -203,6 +215,26 @@ def _receipt(
         findings=formal_findings,
         obligation_attempt_ledger=attempt_ledger,
     )
+    if product_only_identity:
+        consistency = formal_scope["defect_identity_consistency"]
+        formal_scope["defect_identity_consistency"] = (
+            build_defect_identity_consistency(
+                occurrence_scopes={
+                    name: list(values)
+                    for name, values in consistency["occurrence_scopes"].items()
+                    if name
+                    not in {
+                        "formal_authority_occurrence_ids",
+                        "evaluator_submission_occurrence_ids",
+                    }
+                },
+                canonical_scopes={
+                    name: list(values)
+                    for name, values in consistency["canonical_scopes"].items()
+                    if name != "evaluator_submission_ids"
+                },
+            )
+        )
     policy_strategy_fingerprint = hashlib.sha256(
         f"{policy_id}:{frozen_policy_version}".encode("utf-8")
     ).hexdigest()
@@ -249,6 +281,32 @@ def _receipt(
     )
 
 
+def test_evaluator_binds_its_identity_scopes_from_verified_submission(
+    tmp_path: Path,
+) -> None:
+    manifest = load_evaluation_manifest(_manifest(tmp_path))
+
+    receipt = _receipt(
+        manifest,
+        "held-in",
+        [_matched_finding("held-in")],
+        product_only_identity=True,
+    )
+
+    consistency = receipt["defect_identity_consistency"]
+    occurrence_ids = consistency["occurrence_scopes"]["registry_occurrence_ids"]
+    canonical_ids = consistency["canonical_scopes"]["canonical_registry_ids"]
+    assert consistency["occurrence_scopes"][
+        "formal_authority_occurrence_ids"
+    ] == occurrence_ids
+    assert consistency["occurrence_scopes"][
+        "evaluator_submission_occurrence_ids"
+    ] == occurrence_ids
+    assert consistency["canonical_scopes"][
+        "evaluator_submission_ids"
+    ] == canonical_ids
+
+
 def test_aggregate_rejects_mixed_policy_versions_with_valid_hmac(
     tmp_path: Path,
 ) -> None:
@@ -270,6 +328,33 @@ def test_aggregate_rejects_mixed_policy_versions_with_valid_hmac(
 
     with pytest.raises(EvaluationContractError, match="one policy identity"):
         aggregate_evaluation_receipts(manifest, [first, second])
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows path boundary only")
+def test_persist_evaluation_receipt_handles_windows_max_path_boundary(
+    tmp_path: Path,
+) -> None:
+    manifest = load_evaluation_manifest(_manifest(tmp_path))
+    receipt = _receipt(manifest, "held-in", [_matched_finding("held-in")])
+    final_tail = (
+        Path(str(receipt["dataset_id"]))
+        / str(receipt["dataset_version"])
+        / str(receipt["policy_id"])
+        / f"{receipt['target_id']}_{receipt['run_id']}.json"
+    )
+    padding = max(1, 260 - len(str(tmp_path / final_tail)))
+    output_root = tmp_path / ("x" * padding)
+
+    path = persist_evaluation_receipt(
+        receipt,
+        output_root,
+        receipt_signing_key=TEST_EVALUATOR_HMAC_KEY,
+    )
+
+    with open(_windows_extended_path(path), encoding="utf-8") as handle:
+        assert json.load(handle)["receipt_fingerprint"] == receipt[
+            "receipt_fingerprint"
+        ]
 
 
 def _empty_scope(

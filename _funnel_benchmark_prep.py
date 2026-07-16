@@ -167,6 +167,7 @@ def reset_benchmark_target_db(
 def refresh_test_account_tokens(
     *,
     root: Path,
+    env: Mapping[str, str] | None = None,
     runner: RunFn = subprocess.run,
     retries: int = 5,
     retry_delay_seconds: float = 3.0,
@@ -192,6 +193,7 @@ def refresh_test_account_tokens(
             check=False,
             capture_output=True,
             text=False,
+            env=dict(env) if env is not None else None,
         )
         out = _combined_output(completed)
         last_out = out
@@ -243,7 +245,7 @@ def prepare_funnel_benchmark_target(
     from datetime import datetime, timezone
 
     db = reset_benchmark_target_db(env=env, runner=runner)
-    tokens = refresh_test_account_tokens(root=root, runner=runner)
+    tokens = refresh_test_account_tokens(root=root, env=env, runner=runner)
     receipt_dir = Path(root) / "_funnel_runs"
     receipt_dir.mkdir(parents=True, exist_ok=True)
     receipt_path = receipt_dir / f"{project}_target_reset_receipt.json"

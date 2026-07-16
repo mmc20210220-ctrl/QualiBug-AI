@@ -12,6 +12,7 @@ import re
 from collections import Counter
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from .benchmark_compute import (
     _extract_api_paths,
@@ -87,8 +88,16 @@ def _read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _path_from_url_or_path(value: Any) -> str:
+    text = str(value or "").strip()
+    parsed = urlparse(text)
+    if parsed.scheme and parsed.netloc:
+        return parsed.path or ""
+    return text
+
+
 def _normalize_path(path: str) -> str:
-    cleaned = str(path or "").split("?", 1)[0].rstrip("/").lower()
+    cleaned = _path_from_url_or_path(path).split("?", 1)[0].rstrip("/").lower()
     cleaned = re.sub(r"/[0-9a-f]{8}-[0-9a-f-]{27,}", "/*", cleaned)
     cleaned = re.sub(r":[a-zA-Z_][a-zA-Z0-9_]*", "/*", cleaned)
     cleaned = re.sub(r"\{[^}]+\}", "/*", cleaned)
@@ -223,6 +232,23 @@ def _collect_executed_paths(scan_result: dict[str, Any]) -> set[str]:
         repro = item.get("reproduction") if isinstance(item.get("reproduction"), dict) else {}
         if repro.get("path"):
             paths.add(_normalize_path(str(repro.get("path"))))
+    for step in _iter_v12_execution_steps(scan_result):
+        if _http_status(step) <= 0:
+            continue
+        if step.get("path"):
+            paths.add(_normalize_path(str(step.get("path"))))
+        if step.get("observation_path"):
+            paths.add(_normalize_path(str(step.get("observation_path"))))
+        response_bound = step.get("response_bound_observation")
+        if isinstance(response_bound, dict) and _http_status(response_bound) > 0:
+            if response_bound.get("path"):
+                paths.add(_normalize_path(str(response_bound.get("path"))))
+        governance = step.get("governance_receipt")
+        if isinstance(governance, dict):
+            for key in ("before", "write", "after", "response_bound_after"):
+                row = governance.get(key)
+                if isinstance(row, dict) and _http_status(row) > 0 and row.get("url"):
+                    paths.add(_normalize_path(str(row.get("url"))))
     return {p for p in paths if p.startswith("/")}
 
 
@@ -237,7 +263,53 @@ def _collect_execution_blobs(scan_result: dict[str, Any]) -> list[str]:
         blobs.append(json.dumps(request, ensure_ascii=False, default=str).lower())
         repro = item.get("reproduction") if isinstance(item.get("reproduction"), dict) else {}
         blobs.append(json.dumps(repro, ensure_ascii=False, default=str).lower())
+    for step in _iter_v12_execution_steps(scan_result):
+        if _http_status(step) <= 0:
+            continue
+        blobs.append(json.dumps({
+            "method": step.get("method"),
+            "path": step.get("path"),
+            "phase": step.get("phase"),
+            "status_code": step.get("status_code"),
+            "body": step.get("body"),
+            "observation_path": step.get("observation_path"),
+        }, ensure_ascii=False, default=str).lower())
+        governance = step.get("governance_receipt")
+        if isinstance(governance, dict):
+            blobs.append(json.dumps({
+                key: governance.get(key)
+                for key in ("before", "write", "after", "response_bound_after")
+                if isinstance(governance.get(key), dict)
+            }, ensure_ascii=False, default=str).lower())
     return blobs
+
+
+def _http_status(row: dict[str, Any]) -> int:
+    try:
+        return int(row.get("status_code") or row.get("status") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _iter_v12_execution_steps(scan_result: dict[str, Any]) -> list[dict[str, Any]]:
+    steps: list[dict[str, Any]] = []
+    containers = [scan_result]
+    v12 = scan_result.get("v12")
+    if isinstance(v12, dict):
+        containers.append(v12)
+    for container in containers:
+        execution = (
+            container.get("experiment_execution")
+            if isinstance(container.get("experiment_execution"), dict)
+            else {}
+        )
+        for result in execution.get("results") or []:
+            if not isinstance(result, dict):
+                continue
+            for step in result.get("steps") or []:
+                if isinstance(step, dict):
+                    steps.append(step)
+    return steps
 
 
 def _keyword_hits(keywords: list[str], text: str) -> int:

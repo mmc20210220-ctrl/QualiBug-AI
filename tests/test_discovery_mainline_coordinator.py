@@ -111,6 +111,53 @@ def test_runtime_actor_uses_authenticated_role_for_source_lineage(tmp_path: Path
     ]
 
 
+def test_api_operation_extraction_does_not_invent_post_write_side_effect() -> None:
+    from ai_test_asset_center.behavior_ir import build_behavior_ir_from_knowledge_asset
+    from ai_test_asset_center.discovery_runtime import _api_operations
+    from ai_test_asset_center.v12_pipeline import _extract_api_operations_for_ir
+
+    api_spec = json.dumps({
+        "openapi": "3.0.0",
+        "paths": {
+            "/api/discounts/validate": {
+                "post": {
+                    "operationId": "validateDiscount",
+                    "summary": "Validate a discount and calculate eligibility.",
+                }
+            },
+            "/api/discounts/redeem": {
+                "post": {
+                    "operationId": "redeemDiscount",
+                    "summary": "Redeem and consume a discount.",
+                }
+            },
+        },
+    })
+
+    for extractor in (_api_operations, _extract_api_operations_for_ir):
+        operations = (
+            extractor(api_spec, submitted_source_text="")
+            if extractor is _api_operations
+            else extractor(api_spec)
+        )
+        by_path = {operation["path"]: operation for operation in operations}
+
+        assert "side_effect_class" not in by_path["/api/discounts/validate"]
+        assert "side_effect_class" not in by_path["/api/discounts/redeem"]
+
+        ir = build_behavior_ir_from_knowledge_asset(
+            {},
+            api_operations=operations,
+            project_id="api-extraction-side-effect-semantics",
+        )
+        by_operation = {operation["operation_id"]: operation for operation in ir["operations"]}
+
+        assert by_operation["validateDiscount"]["read_write"] == "read"
+        assert by_operation["validateDiscount"]["side_effect_class"] == "read"
+        assert by_operation["redeemDiscount"]["read_write"] == "write"
+        assert by_operation["redeemDiscount"]["side_effect_class"] == "write"
+
+
 def test_v12_wrapper_delegates_once_and_has_no_runtime_fallback() -> None:
     source = Path("ai_test_asset_center/v12_pipeline.py").read_text(encoding="utf-8")
 
@@ -176,6 +223,44 @@ def test_experiment_candidate_returns_attempt_authoritative_result(tmp_path: Pat
     assert result["obligation_attempt_ledger"]["complete"] is True
     assert result["discovery_funnel"]["receipt_authority"] == "obligation_attempt_ledger"
     assert result["formal_count_projection"]["canonical_defect_ids"] == []
+
+
+def test_candidate_plans_source_derived_runtime_interface_discovery(
+    tmp_path: Path,
+) -> None:
+    from ai_test_asset_center.enterprise_source_registry import register_source_asset
+    from ai_test_asset_center.v12_pipeline import run_v12_pipeline
+
+    manifest = register_source_asset(
+        "project-runtime-surface-plan",
+        "api-contract",
+        API_SPEC,
+        source_type="openapi",
+        root=tmp_path,
+    )
+    result = run_v12_pipeline(
+        "project-runtime-surface-plan",
+        tmp_path,
+        api_spec_text=API_SPEC,
+        campaign_context={
+            "mainline_authority": "experiment_candidate",
+            "run_id": "RUN-RUNTIME-SURFACE-PLAN",
+            "target_id": "TARGET-RUNTIME-SURFACE-PLAN",
+            "environment_id": "ENV-RUNTIME-SURFACE-PLAN",
+            "environment_ref": "ENV-RUNTIME-SURFACE-PLAN",
+            "environment_type": "test",
+            "scope_id": "scope-runtime-surface-plan",
+            "policy_version": "policy-runtime-surface-plan",
+            "evaluation_mode": "operational",
+            "source_manifest": manifest,
+            "runtime_interface_discovery_enabled": True,
+        },
+    )
+
+    surface = result["runtime_interface_discovery"]
+    assert surface["status"] == "PLANNED"
+    assert surface["plan"]["candidate_count"] > 0
+    assert surface["execution"]["selected_count"] == 0
 
 
 def test_v12_validates_primary_source_before_using_enriched_api_document(
@@ -293,7 +378,8 @@ def test_manual_candidate_terminal_receipt_preserves_compile_detail() -> None:
 
     _manual_terminal_receipts(
         selected_rows=[{"obligation_id": "obl-1"}],
-        plan=plan,
+        experiments_by_obligation=dict(plan.experiments["by_obligation"]),
+        obligation_plan=dict(plan.experiments["obligation_plan"]),
         runtime_contract={},
         compile_results=compile_results,
         execution_results={},
@@ -372,7 +458,7 @@ def test_candidate_accounts_for_compiled_obligation_when_runtime_is_plan_only(
     assert result["discovery_funnel"]["pipeline_health"]["status"] == "BLOCKED"
 
 
-def test_candidate_invokes_only_experiment_executor_for_approved_runtime(
+def test_candidate_keeps_runtime_interface_discovery_inside_attempt_authority(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -443,7 +529,7 @@ def test_candidate_invokes_only_experiment_executor_for_approved_runtime(
                     "oracle_receipt_id": "oracle-approved",
                     "cost_coverage_status": "MEASURED",
                         "operational_receipt": build_execution_operational_receipt(
-                            receipt_id="operational-approved",
+                            receipt_id=f"operational-approved-{obligation_id}",
                             execution_status="EXECUTED",
                             steps=[{
                                 "method": "GET",
@@ -469,6 +555,126 @@ def test_candidate_invokes_only_experiment_executor_for_approved_runtime(
         "ai_test_asset_center.discovery_runtime.execute_selected_experiments",
         fake_execute,
     )
+
+    def fake_surface_execute(*_args, **_kwargs):
+        calls.append("surface")
+        obligation_id = "surfobl-test"
+        return {
+            "selected_count": 1,
+            "executed_count": 1,
+            "blocked_count": 0,
+            "harness_failure_count": 0,
+            "cleanup_failures": 0,
+            "selected_rows": [{
+                "obligation_id": obligation_id,
+                "candidate_id": "surface-test",
+                "risk_family": "interface_discovery",
+                "source_refs": [{"source_id": "api-contract"}],
+                "required_operations": [],
+                "required_actors": [],
+                "relation_refs": [],
+                "operation_refs": [],
+                "actor_refs": [],
+                "behavior_ir_refs": [],
+                "adapter": "http_api_discovery",
+                "planning_round": 0,
+                "experiment_id": "surfexp-test",
+            }],
+            "compile_results": {
+                obligation_id: {
+                    "status": "COMPILED",
+                    "experiment_id": "surfexp-test",
+                    "cost_coverage_status": "MEASURED",
+                }
+            },
+            "execution_results": {
+                obligation_id: {
+                    "status": "EXECUTED",
+                    "execution_id": "surfexec-test",
+                    "experiment_id": "surfexp-test",
+                    "observation_receipt_ids": ["surface-observation"],
+                    "cost_coverage_status": "MEASURED",
+                    "operational_receipt": build_execution_operational_receipt(
+                        receipt_id="surface-operational",
+                        execution_status="EXECUTED",
+                        steps=[{
+                            "method": "GET",
+                            "path": "/resources/export",
+                            "status_code": 404,
+                        }],
+                        cleanup_failures=0,
+                    ),
+                }
+            },
+            "gate_results": {
+                obligation_id: {
+                    "status": "REJECTED",
+                    "reason_code": "SURFACE_DISCOVERY_OBSERVATION_ONLY",
+                    "gate_receipt_id": "surface-gate",
+                    "cost_coverage_status": "MEASURED",
+                }
+            },
+            "observation_receipts": [],
+            "discovered_operations": [],
+            "findings": [],
+        }
+
+    monkeypatch.setattr(
+        "ai_test_asset_center.discovery_runtime.execute_runtime_interface_discovery",
+        fake_surface_execute,
+    )
+
+    def fake_expand(**kwargs):
+        calls.append("expand")
+        delta_obligation = {
+            "obligation_id": "obl-runtime-round-2",
+            "candidate_id": "obl-runtime-round-2",
+            "risk_family": "authorization",
+            "source_refs": [{"source_id": "surface-observation"}],
+            "required_operations": [],
+            "required_actors": [],
+            "relation_refs": [],
+            "operation_refs": [],
+            "actor_refs": [],
+            "behavior_ir_refs": [],
+            "adapter": "http_api",
+            "execution_adapters": ["http_api"],
+            "planning_round": 2,
+            "experiment_id": "exp-runtime-round-2",
+        }
+        return {
+            "status": "EXPANDED",
+            "behavior_ir": kwargs["initial_behavior_ir"],
+            "delta_obligations": [delta_obligation],
+            "experiment_pack": {},
+            "all_experiments": [],
+            "by_obligation": {
+                "obl-runtime-round-2": {
+                    "obligation_id": "obl-runtime-round-2",
+                    "experiment_id": "exp-runtime-round-2",
+                    "compile_receipt": {"status": "COMPILED"},
+                }
+            },
+            "obligation_plan": {
+                "selected": [{"obligation_id": "obl-runtime-round-2"}],
+                "pending_next_round": [],
+            },
+            "agent_intent_plan": {
+                "intents": [{"obligation_id": "obl-runtime-round-2"}],
+            },
+            "selected_rows": [delta_obligation],
+            "round_receipt": {
+                "schema_version": "qualibug.behavior-ir-expansion-round.v1",
+                "planning_round": 2,
+                "new_obligation_count": 1,
+                "receipt_fingerprint": "a" * 64,
+            },
+        }
+
+    monkeypatch.setattr(
+        "ai_test_asset_center.discovery_runtime.expand_behavior_ir_from_runtime_observations",
+        fake_expand,
+    )
     result = run_v12_pipeline(
         "project-execution",
         tmp_path,
@@ -486,16 +692,37 @@ def test_candidate_invokes_only_experiment_executor_for_approved_runtime(
             "policy_version": "policy-execution",
             "evaluation_mode": "operational",
             "source_manifest": manifest,
+            "runtime_interface_discovery_enabled": True,
         },
     )
 
-    assert calls == ["experiment"]
-    assert result["obligation_attempt_ledger"]["attempts"][0]["terminal_status"] == "REJECTED"
-    assert result["phases"]["execution"]["observed_http_request_count"] == 1
+    assert calls == ["surface", "expand", "experiment", "experiment"]
+    assert len(result["obligation_attempt_ledger"]["attempts"]) == 3
+    assert all(
+        row["terminal_status"] == "REJECTED"
+        for row in result["obligation_attempt_ledger"]["attempts"]
+    )
+    assert result["phases"]["execution"]["observed_http_request_count"] == 3
     assert result["phases"]["execution"]["production_http_requests"] == 0
-    assert result["phases"]["execution"]["scenario_attempts"] == 1
+    assert result["phases"]["execution"]["scenario_attempts"] == 3
     assert result["phases"]["execution"]["accepted_write_count"] == 0
     assert result["discovery_funnel"]["pipeline_health"]["status"] == "OK"
+    assert result["behavior_ir_expansion"]["status"] == "EXPANDED"
+    assert result["behavior_ir_expansion"]["round_receipt"]["planning_round"] == 2
+    consistency = result["defect_identity_consistency"]
+    assert set(consistency["occurrence_scopes"]) >= {
+        "delivery_gate_ids",
+        "formal_authority_occurrence_ids",
+        "registry_occurrence_ids",
+        "formal_projection_occurrence_ids",
+        "evaluator_submission_occurrence_ids",
+    }
+    assert set(consistency["canonical_scopes"]) >= {
+        "canonical_registry_ids",
+        "formal_projection_ids",
+        "product_projection_ids",
+        "evaluator_submission_ids",
+    }
 
 
 def test_shadow_projection_never_mutates_semantic_gate_receipt() -> None:

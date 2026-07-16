@@ -127,7 +127,7 @@ are prohibited from reusable discovery behavior.
 | Strategy guardrails | `validate_strategy_guardrails` + `policy_wiring.py` | Implemented |
 | Evaluator-private contract | `discovery_evaluation_contract.py` | Implemented |
 | External scoring CLI | `tools/discovery_evaluation.py` | Implemented (`inspect` / `evaluate` / `aggregate` / `goal-status`) |
-| Observed champion/challenger runner | `discovery_policy_evaluation_runner.py` | Implemented (requires commercial-shape private manifest + fixture controller + scan executor) |
+| Observed champion/challenger runner | `discovery_policy_evaluation_runner.py` | Implemented; authenticated one-target replay proven on 2026-07-16, commercial paired shape still missing |
 | Promotion gate | `policy_evaluation_gate.py` | Implemented (non-regressive + hard blockers) |
 | Evolution orchestration | `autonomous_evolution_orchestrator.py` | Partial: observed promote path exists; default `run_evolution_orchestrated` still stops at `AWAITING_OBSERVED_REPLAY_SHADOW` unless `evaluation_manifest_path` / `QUALIBUG_EVALUATION_MANIFEST` is supplied |
 | Absolute Goal gate assessment | `assess_discovery_goal_status` in `discovery_evaluation_contract.py` | Implemented |
@@ -147,7 +147,43 @@ held-in, three-industry held-out, intentionally clean, replay, and shadow run
 receipts. Therefore no commercial discovery-rate, precision, reproduction, or
 unit-cost claim may be published from this checkout alone.
 
-The latest completed `llm_throughput` artifact is a real single-target
+### Authenticated 131-Bug checkpoint (2026-07-16)
+
+The evaluator-owned one-target replay `observed-131-agent-20260716-14` completed
+against manifest `v0.6-windows-native-stable-131bugs-20260716`. The independent
+report (`qualibug.discovery-evaluation-report.v2`), target receipt
+(`qualibug.discovery-evaluation-receipt.v3`), and trusted observation pack
+(`qualibug.evaluator-trusted-observation-pack.v1`) all passed fingerprint and
+HMAC verification. The immutable report fingerprint is
+`2c1dcafc31caf88e380926a564acf0996a5f76bf18219cd291c3fa7475eba200`;
+the run identity is `RUN_da5b8649335d29996d7920ad`.
+
+This is real held-in diagnostic evidence, not a commercial promotion result:
+
+- hidden-GT outcome: TP `3`, FP `48`, FN `128`, Recall `0.0229`, Precision
+  `0.0588`, micro F1 `0.033`;
+- evaluator-observed transport: `1518` target requests, `446` writes, `0`
+  production requests; cleanup failures, safety incidents, and dirty test
+  environments were all `0`;
+- execution: `311` obligations selected, `121` executed, `190` blocked,
+  execution success `0.7961`, engine success `1.0`, duplicate rate `0.2609`;
+- evaluator-private first-loss diagnosis: `104` at hypothesis generation, `23`
+  diagnostically ambiguous, `1` at execution, and `3` delivered; these labels
+  are post-run evaluator evidence and must never enter product runtime inputs;
+- dominant terminal losses: `101` non-reversible writes, `72` missing
+  observers, `10` missing bindings, and `7` missing fixtures;
+- wall time was `335.625s`; provider cost was not reported, so unit cost remains
+  unknown; reproduction success was `0` and pipeline health was `DEGRADED`.
+
+The engineering loop is therefore proven end to end for this target, including
+external network attestation and hidden-GT scoring. Its current effect is weak
+and must not be described as production-ready discovery quality. Machine gate
+assessment passes implementation Gates A-C but keeps Gate D, controlled pilot,
+and GA at `NOT_MEASURED`: there is no held-out seeded target, no intentionally
+clean target, no three-industry held-out set, no frozen unit-cost baseline, and
+no required sequence of paired non-regressive windows.
+
+The older completed `llm_throughput` artifact is also a real single-target
 diagnostic run, but it is not a promotion baseline: it contains 91 saved
 findings, and a post-run evaluation with the current customer-delivery gate
 accepts only 34 after failing closed on missing, failed, not-applicable, or
@@ -454,11 +490,11 @@ Bug discovery.
 
 ## Next engineering priorities (impact order)
 
-1. **Freeze an evaluator-private commercial-shape GT dataset** (held-in + ≥3 held-out industries + clean) outside the discovery runtime; without this, Gate D stays NOT_MEASURED and discovery-rate claims are blocked.
-2. **Close the governed write cleanup / multi-write receipt gap** that currently degrades pipeline health and rejects otherwise-real findings at the customer-delivery gate — highest leverage on effective deliverable recall and FP control.
-3. **Deploy/configure the evaluator-owned trusted observation gateway** and wire its atomic observation packs into `DiscoveryPolicyEvaluationRunner` (fixture controller + isolated scan executor + private manifest + trusted observation root). Without this independent I/O authority, runs correctly remain `NOT_MEASURED`.
-4. **Raise runtime path binding / precondition / evidence-completion conversion** using weakness-miner signatures (`RUNTIME_PATH_BINDING_MISSING`, `PRECONDITION_NOT_MET`, `EVIDENCE_GATE_INCOMPLETE`, `REPLAY_EVIDENCE_MISSING`) — direct impact on discovery rate and reproduction rate.
-5. **Instrument unit-cost and wall-clock into every evaluation envelope** so Gate D cost improvement and promotion cost bounds are measurable rather than omitted.
+1. **Raise source-backed hypothesis coverage generically**; evaluator-private first-loss diagnosis attributes `104/131` known defects to hypothesis generation, so the dominant recall loss occurs before execution. Hidden labels remain evaluator-only and cannot become prompts, rules, or detectors.
+2. **Raise single-target execution conversion** by eliminating the measured `BLOCKED_NON_REVERSIBLE_WRITE`, missing-observer, missing-binding, and missing-fixture root causes without benchmark-specific rules.
+3. **Reduce externally measured false positives and make reproduction executable**; the authenticated checkpoint measured Precision `0.0588`, duplicate rate `0.2609`, and reproduction success `0`, so internal finding counts are not an optimization target.
+4. **Instrument provider cost into every evaluation envelope**; wall time and request volume are measured, but missing cost keeps unit-cost and cost-improvement gates unknown.
+5. **Freeze the commercial external evidence shape and run paired policies**: held-in, at least three held-out industries, and clean targets followed by authenticated champion/challenger replay and shadow reports. Until then Gate D stays `NOT_MEASURED`.
 
 ## Non-negotiable product constraints
 

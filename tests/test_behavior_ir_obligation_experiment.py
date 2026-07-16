@@ -1027,6 +1027,53 @@ def test_behavior_ir_never_inherits_request_body_from_sibling_operation() -> Non
     assert by_id["refresh_session"]["request_example"] == {}
 
 
+def test_behavior_ir_classifies_source_declared_read_like_post_without_cleanup_pressure() -> None:
+    ir = build_behavior_ir_from_knowledge_asset(
+        {
+            "operations": [
+                {
+                    "operation_id": "validate_discount",
+                    "method": "POST",
+                    "path": "/api/discounts/validate",
+                    "summary": "Validate a discount and calculate eligibility without changing state.",
+                    "description": "Returns eligibility and estimated amount; no redemption is recorded.",
+                    "request_example": {"code": "SAVE10", "amount": 100},
+                },
+                {
+                    "operation_id": "redeem_discount",
+                    "method": "POST",
+                    "path": "/api/discounts/redeem",
+                    "summary": "Redeem and consume a discount for an order.",
+                    "request_example": {"code": "SAVE10", "orderId": "order-1"},
+                },
+                {
+                    "operation_id": "query_report",
+                    "method": "POST",
+                    "path": "/api/reports/query",
+                    "read_write": "read",
+                    "summary": "Query a report with a complex filter body.",
+                    "request_example": {"from": "2026-01-01", "to": "2026-01-31"},
+                },
+            ],
+        },
+        project_id="read-like-post-semantics",
+    )
+
+    by_id = {row["operation_id"]: row for row in ir["operations"]}
+
+    assert by_id["validate_discount"]["read_write"] == "read"
+    assert by_id["validate_discount"]["side_effect_class"] == "read"
+    assert _cleanup_requirement(by_id["validate_discount"], ir["operations"], ir["relations"])["required"] is False
+
+    assert by_id["redeem_discount"]["read_write"] == "write"
+    assert by_id["redeem_discount"]["side_effect_class"] == "write"
+    assert _cleanup_requirement(by_id["redeem_discount"], ir["operations"], ir["relations"])["required"] is True
+
+    assert by_id["query_report"]["read_write"] == "read"
+    assert by_id["query_report"]["side_effect_class"] == "read"
+    assert _cleanup_requirement(by_id["query_report"], ir["operations"], ir["relations"])["required"] is False
+
+
 def test_runtime_binding_does_not_inherit_unrelated_root_api_body() -> None:
     example = _request_example(
         {

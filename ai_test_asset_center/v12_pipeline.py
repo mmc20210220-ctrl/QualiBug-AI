@@ -2689,7 +2689,6 @@ def _extract_api_operations_for_ir(api_spec_text: str) -> list[dict[str, Any]]:
             "path": path,
             "operation_id": f"{method.lower()}:{path}",
             "source_id": "api_spec_text",
-            "side_effect_class": "write" if method in {"POST", "PUT", "PATCH", "DELETE"} else "read",
         })
     if not cleaned:
         # Also accept OpenAPI paths blocks via parse_to_openapi when available.
@@ -2715,7 +2714,6 @@ def _extract_api_operations_for_ir(api_spec_text: str) -> list[dict[str, Any]]:
                             "summary": str(op_dict.get("summary") or ""),
                             "description": str(op_dict.get("description") or ""),
                             "tags": list(op_dict.get("tags") or []),
-                            "side_effect_class": "write" if m in {"POST", "PUT", "PATCH", "DELETE"} else "read",
                             "parameters": list(op_dict.get("parameters") or []),
                             "request_schema": op_dict.get("requestBody"),
                             "response_schema": op_dict.get("responses"),

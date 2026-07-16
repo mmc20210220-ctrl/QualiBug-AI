@@ -111,6 +111,7 @@ def test_build_observed_diagnostic_manifest_writes_windows_fixture_contract(
             str(ground_truth),
             "--target-root",
             str(target_root),
+            "--enable-runtime-interface-discovery",
         ],
     )
 
@@ -122,11 +123,15 @@ def test_build_observed_diagnostic_manifest_writes_windows_fixture_contract(
     fixture = json.loads(
         (output_dir / "fixture.json").read_text(encoding="utf-8")
     )
+    context = json.loads(
+        (output_dir / "context.json").read_text(encoding="utf-8")
+    )
     target = manifest["targets"][0]
     assert target["target_id"] == "TARGET-1"
     assert target["runtime"]["environment_ref"] == "http://127.0.0.1:8080"
     assert fixture["schema_version"] == WINDOWS_BENCHMARK_FIXTURE_SCHEMA
     assert fixture["target_root"] == str(target_root.resolve())
+    assert context["campaign_context"]["runtime_interface_discovery_enabled"] is True
 
 
 def test_build_observed_diagnostic_manifest_requires_environment_type(
