@@ -3,11 +3,17 @@ from __future__ import annotations
 """In-process adapter from evaluator runtime artifacts to the real scan entrypoint."""
 
 import hashlib
+import ipaddress
 import json
 import os
+import subprocess
+import sys
+import tempfile
 import time
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 from .discovery_policy_evaluation_runner import (
     SCAN_RESULT_SCHEMA,
@@ -15,10 +21,120 @@ from .discovery_policy_evaluation_runner import (
     strategy_fingerprint,
 )
 from .policy_wiring import get_effective_policy_strategy
+from .target_policy import normalize_base_url
+from .evaluator_execution_attestation import PROCESS_BOUNDARY_SCHEMA
+from .observed_product_scan_protocol import (
+    PRODUCT_SCAN_WORKER_REQUEST_SCHEMA,
+    find_evaluator_private_context_paths,
+    is_evaluator_secret_environment_name,
+)
 
 
 PRODUCT_SCAN_INPUT_SCHEMA = "qualibug.discovery-evaluation-input.v1"
 PRODUCT_SCAN_CONTEXT_SCHEMA = "qualibug.discovery-evaluation-context.v1"
+
+
+def _sanitized_worker_environment(
+    environment: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Remove evaluator-owned authority before starting product code."""
+
+    source = os.environ if environment is None else environment
+    return {
+        str(name): str(value)
+        for name, value in source.items()
+        if not is_evaluator_secret_environment_name(str(name))
+    }
+
+
+def _fingerprint(value: Any) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _run_isolated_product_worker(
+    request: dict[str, Any],
+    *,
+    workspace_root: Path | str,
+    timeout_seconds: int,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Execute product scanning without evaluator secrets or in-process state."""
+
+    if request.get("schema_version") != PRODUCT_SCAN_WORKER_REQUEST_SCHEMA:
+        raise PolicyEvaluationRunnerError("product scan worker request schema is invalid")
+    private_paths = find_evaluator_private_context_paths(request)
+    if private_paths:
+        raise PolicyEvaluationRunnerError(
+            "product scan worker request contains evaluator-private fields: "
+            + ",".join(private_paths)
+        )
+    root = Path(workspace_root).resolve()
+    if not root.is_dir():
+        raise PolicyEvaluationRunnerError(f"product workspace not found: {root}")
+    timeout = int(timeout_seconds)
+    if timeout <= 0:
+        raise PolicyEvaluationRunnerError("product scan worker timeout must be positive")
+    with tempfile.TemporaryDirectory(prefix="qualibug-observed-scan-") as directory:
+        request_path = Path(directory) / "request.json"
+        output_path = Path(directory) / "result.json"
+        request_path.write_text(
+            json.dumps(request, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        command = [
+            sys.executable,
+            "-m",
+            "ai_test_asset_center.observed_product_scan_worker",
+            "--request",
+            str(request_path),
+            "--output",
+            str(output_path),
+        ]
+        completed = subprocess.run(
+            command,
+            cwd=str(root),
+            env=_sanitized_worker_environment(),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout or "").strip()[-2000:]
+            raise PolicyEvaluationRunnerError(
+                f"isolated product scan worker failed with exit code "
+                f"{completed.returncode}: {detail}"
+            )
+        if not output_path.is_file():
+            raise PolicyEvaluationRunnerError(
+                "isolated product scan worker did not persist a result"
+            )
+        try:
+            result = json.loads(output_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise PolicyEvaluationRunnerError(
+                f"isolated product scan worker result is invalid: {exc}"
+            ) from exc
+        if not isinstance(result, dict):
+            raise PolicyEvaluationRunnerError(
+                "isolated product scan worker result must be an object"
+            )
+    boundary = {
+        "schema_version": PROCESS_BOUNDARY_SCHEMA,
+        "isolation": "isolated_subprocess",
+        "worker_protocol_schema": PRODUCT_SCAN_WORKER_REQUEST_SCHEMA,
+        "evaluator_secrets_removed": True,
+        "request_fingerprint": _fingerprint(request),
+        "result_fingerprint": _fingerprint(result),
+        "exit_code": 0,
+    }
+    return result, boundary
 
 
 class OperationalMetricsCollector(Protocol):
@@ -82,13 +198,45 @@ class ObservedProductScanExecutor:
         *,
         workspace_root: Path | str,
         operational_metrics_collector: OperationalMetricsCollector,
+        worker_timeout_seconds: int = 7200,
     ) -> None:
         if not callable(operational_metrics_collector):
             raise TypeError("operational_metrics_collector must be callable")
         self.workspace_root = Path(workspace_root).resolve()
         self.operational_metrics_collector = operational_metrics_collector
+        self.worker_timeout_seconds = int(worker_timeout_seconds)
+        if self.worker_timeout_seconds <= 0:
+            raise ValueError("worker_timeout_seconds must be positive")
 
     def __call__(self, **kwargs: Any) -> dict[str, Any]:
+        collector_module = str(
+            getattr(self.operational_metrics_collector, "__module__", "") or ""
+        ).strip()
+        collector_name = str(
+            getattr(self.operational_metrics_collector, "__qualname__", "") or ""
+        ).strip()
+        if not collector_module or not collector_name or "<locals>" in collector_name:
+            raise PolicyEvaluationRunnerError(
+                "operational metrics collector must be an importable module callable"
+            )
+        request = {
+            "schema_version": PRODUCT_SCAN_WORKER_REQUEST_SCHEMA,
+            "workspace_root": str(self.workspace_root),
+            "operational_metrics_collector": {
+                "module": collector_module,
+                "qualname": collector_name,
+            },
+            "strategy": asdict(get_effective_policy_strategy()),
+            "invocation": kwargs,
+        }
+        result, boundary = _run_isolated_product_worker(
+            request,
+            workspace_root=self.workspace_root,
+            timeout_seconds=self.worker_timeout_seconds,
+        )
+        return {**result, "process_boundary": boundary}
+
+    def _execute_in_process(self, **kwargs: Any) -> dict[str, Any]:
         runtime_view = kwargs.get("runtime_view")
         if not isinstance(runtime_view, dict) or _has_private_key(runtime_view):
             raise PolicyEvaluationRunnerError("product scan runtime view is invalid or leaks evaluator data")
@@ -110,6 +258,22 @@ class ObservedProductScanExecutor:
         environment_ref = str(runtime.get("environment_ref") or "").strip().rstrip("/")
         if not base_url or base_url != environment_ref:
             raise PolicyEvaluationRunnerError("product scan input base_url must match runtime environment_ref")
+        transport_base_url = base_url
+        proxy_value = str(kwargs.get("observation_proxy_base_url") or "").strip()
+        if proxy_value:
+            normalized_proxy = normalize_base_url(proxy_value)
+            parsed_proxy = urlsplit(normalized_proxy)
+            try:
+                loopback = ipaddress.ip_address(
+                    str(parsed_proxy.hostname or "")
+                ).is_loopback
+            except ValueError:
+                loopback = False
+            if parsed_proxy.scheme != "http" or not loopback:
+                raise PolicyEvaluationRunnerError(
+                    "observation proxy must be a loopback HTTP endpoint"
+                )
+            transport_base_url = normalized_proxy
         api_doc_path = _resolve_ref(input_bundle.get("api_doc_ref"), input_path, "api_doc_ref")
         api_doc_text = api_doc_path.read_text(encoding="utf-8")
         source_hash = hashlib.sha256(api_doc_text.encode("utf-8")).hexdigest()
@@ -125,45 +289,88 @@ class ObservedProductScanExecutor:
             "source_version_id": f"evaluation-{source_hash[:24]}",
             "source_origin": "evaluator_frozen_runtime_input",
         }
-        test_accounts = context_bundle.get("test_accounts")
-        if test_accounts is not None:
-            if not isinstance(test_accounts, dict):
-                raise PolicyEvaluationRunnerError("product scan context test_accounts must be an object")
-            accounts_path = self.workspace_root / "platform_inputs" / project_id / "test_accounts.json"
-            accounts_path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = accounts_path.with_suffix(accounts_path.suffix + f".{os.getpid()}.tmp")
-            temporary.write_text(json.dumps(test_accounts, ensure_ascii=False, indent=2), encoding="utf-8")
-            os.replace(temporary, accounts_path)
         campaign_id = str(kwargs.get("campaign_id") or "").strip()
         policy_id = str(kwargs.get("policy_id") or "").strip()
+        policy_version = str(kwargs.get("policy_version") or "").strip()
         evaluation_mode = str(kwargs.get("evaluation_mode") or "").strip()
+        agent_semantic_linking_enabled = kwargs.get(
+            "agent_semantic_linking_enabled",
+            False,
+        )
+        if not isinstance(agent_semantic_linking_enabled, bool):
+            raise PolicyEvaluationRunnerError(
+                "agent_semantic_linking_enabled must be boolean"
+            )
+        target_id = str(target.get("target_id") or "").strip()
+        run_id = "RUN_" + hashlib.sha256(
+            f"{campaign_id}:{target_id}:{policy_id}:{evaluation_mode}".encode("utf-8")
+        ).hexdigest()[:24]
+        strategy = get_effective_policy_strategy()
         context.update({
+            "run_id": run_id,
             "campaign_id": campaign_id,
+            "target_id": target_id,
+            "environment_id": str(runtime.get("environment_ref") or ""),
             "environment_ref": str(runtime.get("environment_ref") or ""),
+            "environment_type": str(runtime.get("environment_type") or ""),
             "target_environment": str(runtime.get("environment_type") or ""),
             "environment_kind": str(runtime.get("environment_type") or ""),
             "policy_id": policy_id,
+            "policy_version": policy_version,
             "evaluation_mode": evaluation_mode,
+            "mainline_authority": str(
+                getattr(getattr(strategy, "execution", None), "mainline_authority", "")
+                or ""
+            ),
+            "agent_semantic_linking_enabled": (
+                agent_semantic_linking_enabled
+            ),
             "fixture_audit_receipt_id": str(
                 (kwargs.get("fixture_preparation_receipt") or {}).get("audit_receipt_id") or ""
             ),
         })
 
+        test_accounts = context_bundle.get("test_accounts")
+        accounts_path: Path | None = None
+        previous_accounts: bytes | None = None
+        accounts_existed = False
+        if test_accounts is not None:
+            if not isinstance(test_accounts, dict):
+                raise PolicyEvaluationRunnerError("product scan context test_accounts must be an object")
+            accounts_path = self.workspace_root / "platform_inputs" / project_id / "test_accounts.json"
+            accounts_path.parent.mkdir(parents=True, exist_ok=True)
+            accounts_existed = accounts_path.is_file()
+            previous_accounts = accounts_path.read_bytes() if accounts_existed else None
+            temporary = accounts_path.with_suffix(accounts_path.suffix + f".{os.getpid()}.tmp")
+            temporary.write_text(json.dumps(test_accounts, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(temporary, accounts_path)
+
         from .__main__ import scan
 
         started = time.monotonic()
-        scan_result = scan(
-            project=project_id,
-            root=self.workspace_root,
-            prd_text=prd_text,
-            api_doc_path=str(api_doc_path),
-            base_url=base_url,
-            ci_gate=False,
-            multi_layer=bool(input_bundle.get("multi_layer", True)),
-            output_dir=self.workspace_root / "platform_outputs" / project_id / "evaluation_runs" / campaign_id,
-            save_report=False,
-            campaign_context=context,
-        )
+        try:
+            scan_result = scan(
+                project=project_id,
+                root=self.workspace_root,
+                prd_text=prd_text,
+                api_doc_path=str(api_doc_path),
+                base_url=transport_base_url,
+                ci_gate=False,
+                multi_layer=bool(input_bundle.get("multi_layer", True)),
+                output_dir=self.workspace_root / "platform_outputs" / project_id / "evaluation_runs" / campaign_id,
+                save_report=False,
+                campaign_context=context,
+            )
+        finally:
+            if accounts_path is not None:
+                if accounts_existed:
+                    restore = accounts_path.with_suffix(
+                        accounts_path.suffix + f".{os.getpid()}.restore"
+                    )
+                    restore.write_bytes(previous_accounts or b"")
+                    os.replace(restore, accounts_path)
+                elif accounts_path.exists():
+                    accounts_path.unlink()
         wall_clock_seconds = round(time.monotonic() - started, 6)
         if not isinstance(scan_result, dict):
             raise PolicyEvaluationRunnerError("product scan did not return a result object")
@@ -192,24 +399,74 @@ class ObservedProductScanExecutor:
             ).hexdigest(),
             "context_fingerprint": hashlib.sha256(context_path.read_bytes()).hexdigest(),
         }
+        v12 = scan_result.get("v12") if isinstance(scan_result.get("v12"), dict) else {}
+        mainline = scan_result.get("mainline_run")
+        if not isinstance(mainline, dict):
+            mainline = v12.get("mainline_run") if isinstance(v12.get("mainline_run"), dict) else {}
+        required_authority: dict[str, Any] = {}
+        for field in (
+            "obligation_attempt_ledger",
+            "canonical_defect_registry",
+            "formal_delivery_authority",
+            "formal_count_projection",
+            "defect_identity_consistency",
+        ):
+            value = scan_result.get(field)
+            if not isinstance(value, dict):
+                value = v12.get(field)
+            if not isinstance(value, dict):
+                raise PolicyEvaluationRunnerError(
+                    f"product scan did not emit required evaluation authority: {field}"
+                )
+            required_authority[field] = dict(value)
+        delivery_occurrences = scan_result.get("delivery_occurrences")
+        if not isinstance(delivery_occurrences, list):
+            delivery_occurrences = v12.get("delivery_occurrences")
+        if not isinstance(delivery_occurrences, list):
+            raise PolicyEvaluationRunnerError(
+                "product scan did not emit required evaluation authority: delivery_occurrences"
+            )
+        evaluator_findings = v12.get("evaluator_canonical_findings")
+        findings = (
+            evaluator_findings
+            if isinstance(evaluator_findings, list)
+            else scan_result.get("findings")
+        )
+        if not isinstance(findings, list):
+            raise PolicyEvaluationRunnerError("product scan findings must be a list")
+        resolved_run_id = str(mainline.get("run_id") or "").strip()
+        if not resolved_run_id:
+            raise PolicyEvaluationRunnerError("product scan mainline run_id is missing")
         return {
             "schema_version": SCAN_RESULT_SCHEMA,
-            "run_id": str(scan_result.get("scan_id") or campaign_id),
-            "target_id": str(target.get("target_id") or ""),
+            "run_id": resolved_run_id,
+            "target_id": target_id,
             "campaign_id": campaign_id,
             "policy_id": policy_id,
-            "policy_version": str(kwargs.get("policy_version") or ""),
+            "policy_version": policy_version,
             "evaluation_mode": evaluation_mode,
             "execution_kind": "observed",
             "estimated_metrics_used": False,
-            "customer_outputs_published": False,
-            "effective_strategy_fingerprint": strategy_fingerprint(get_effective_policy_strategy()),
+            "customer_outputs_published": bool(
+                mainline.get("customer_outputs_published")
+            ),
+            "effective_strategy_fingerprint": strategy_fingerprint(strategy),
             "fixture_audit_receipt_id": str(
                 (kwargs.get("fixture_preparation_receipt") or {}).get("audit_receipt_id") or ""
             ),
             "runtime_fingerprint": str(target.get("runtime_fingerprint") or ""),
             **fingerprints,
-            "findings": list(scan_result.get("findings") or []),
+            "mainline_run": dict(mainline),
+            **required_authority,
+            "delivery_occurrences": [
+                dict(row) for row in delivery_occurrences if isinstance(row, dict)
+            ],
+            "trace_ledger": (
+                dict(scan_result.get("trace_ledger"))
+                if isinstance(scan_result.get("trace_ledger"), dict)
+                else None
+            ),
+            "findings": [dict(row) for row in findings if isinstance(row, dict)],
             "candidates": list(scan_result.get("candidate_findings") or []),
             "pipeline_health": pipeline_health,
             "operational_metrics": operational,
@@ -225,12 +482,22 @@ class ObservedProductScanExecutor:
 
         from .customer_delivery_gate import apply_governed_campaign_cleanup
 
-        defects, cleanup_residual = apply_governed_campaign_cleanup(
-            list(scan_output.get("findings") or []),
+        delivery_occurrences = list(scan_output.get("delivery_occurrences") or [])
+        validated_occurrences, cleanup_residual = apply_governed_campaign_cleanup(
+            delivery_occurrences,
             cleanup_receipt,
         )
+        if cleanup_residual or validated_occurrences != delivery_occurrences:
+            raise PolicyEvaluationRunnerError(
+                "campaign cleanup cannot rewrite the immutable formal delivery scope"
+            )
+        defects = [
+            dict(item)
+            for item in list(scan_output.get("findings") or [])
+            if isinstance(item, dict)
+        ]
         candidates = [
-            item for item in list(scan_output.get("candidates") or []) + cleanup_residual
+            item for item in list(scan_output.get("candidates") or [])
             if isinstance(item, dict)
         ]
         deduped_candidates: list[dict[str, Any]] = []

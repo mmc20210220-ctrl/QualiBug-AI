@@ -8,6 +8,7 @@ actor/fixture/observer/cleanup compensation.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import contextvars
 from copy import deepcopy
 import json
 import hashlib
@@ -59,6 +60,7 @@ from .sandbox_write_executor import (
     execute_governed_control_write,
     sandbox_write_allowed,
 )
+from .sandbox_write_executor_base import evaluator_request_trace
 
 # Canonical cleanup utilities extracted to executor_cleanup.py
 from .executor_cleanup import *  # noqa: F401,F403
@@ -2095,6 +2097,7 @@ def execute_one_experiment(
             with ThreadPoolExecutor(max_workers=len(ordered_items)) as pool:
                 futures = [
                     pool.submit(
+                        contextvars.copy_context().run,
                         _execute_barrier_step,
                         step=_dict(item.get("step")),
                         phase=_text(item.get("phase")),
@@ -3350,17 +3353,24 @@ def execute_selected_experiments(
             or _stable_id("compile", project, campaign_id, oid, batch_nonce),
             "input_fingerprint": _text(compile_receipt.get("input_fingerprint")),
         }
-        outcome = execute_one_experiment(
-            exp,
-            behavior_ir=behavior_ir,
-            root=root,
-            project=project,
-            base_url=base_url,
-            runtime_contract=runtime_contract,
-            campaign_id=campaign_id,
-            execution_id=execution_id,
-            actor_tokens=tokens,
-        )
+        with evaluator_request_trace({
+            "run_id": _text(run_contract.get("run_id")),
+            "campaign_id": campaign_id,
+            "target_id": _text(run_contract.get("target_id")),
+            "obligation_id": oid,
+            "execution_id": execution_id,
+        }):
+            outcome = execute_one_experiment(
+                exp,
+                behavior_ir=behavior_ir,
+                root=root,
+                project=project,
+                base_url=base_url,
+                runtime_contract=runtime_contract,
+                campaign_id=campaign_id,
+                execution_id=execution_id,
+                actor_tokens=tokens,
+            )
         eid = _text(outcome.get("experiment_id")) or eid
         outcome.update({
             "candidate_id": candidate_id,

@@ -399,6 +399,9 @@ class EvolutionOrchestrator:
         output_root: str,
         fixture_controller: object,
         scan_executor: object,
+        trusted_observation_gateway: object,
+        trusted_observation_store: object,
+        receipt_signing_key: str | bytes | bytearray,
         evaluation_id: str | None = None,
     ) -> dict:
         """Execute the evaluator-owned four-pass contract, then apply its gate.
@@ -420,6 +423,9 @@ class EvolutionOrchestrator:
             output_root=output_root,
             fixture_controller=fixture_controller,
             scan_executor=scan_executor,
+            trusted_observation_gateway=trusted_observation_gateway,
+            trusted_observation_store=trusted_observation_store,
+            receipt_signing_key=receipt_signing_key,
         )
         comparison = runner.run(
             champion=champion,

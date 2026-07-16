@@ -12,6 +12,7 @@ normal executor cannot expose the required per-write hook.
 from __future__ import annotations
 
 import base64
+import contextvars
 from decimal import Decimal
 import inspect
 import json
@@ -20,6 +21,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable
 
@@ -38,6 +40,16 @@ from .target_policy import (
 )
 
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_REQUEST_TRACE_HEADERS = {
+    "run_id": "X-QualiBug-Run-Id",
+    "campaign_id": "X-QualiBug-Campaign-Id",
+    "target_id": "X-QualiBug-Target-Id",
+    "obligation_id": "X-QualiBug-Obligation-Id",
+    "execution_id": "X-QualiBug-Execution-Id",
+}
+_REQUEST_TRACE_CONTEXT: contextvars.ContextVar[dict[str, str]] = (
+    contextvars.ContextVar("qualibug_request_trace", default={})
+)
 # Non-production environment kinds where read+write probing is the product's
 # intended mode of operation (customer test / pre-release / staging systems).
 _TEST_ENV_TOKENS = frozenset({
@@ -51,6 +63,30 @@ _TEST_ENV_TOKENS = frozenset({
 _PRODUCTION_ENV_TOKENS = frozenset({
     "prod", "production", "live", "prd", "release", "生产", "线上", "正式",
 })
+
+
+@contextmanager
+def evaluator_request_trace(values: dict[str, Any]):
+    """Attach correlation identities for an independent evaluator gateway.
+
+    These values are not trust evidence by themselves. They only let an
+    evaluator-controlled network hop join observed requests to the immutable
+    run and attempt ledgers.
+    """
+
+    if not isinstance(values, dict) or set(values) != set(_REQUEST_TRACE_HEADERS):
+        raise ValueError("request_trace_fields_invalid")
+    normalized: dict[str, str] = {}
+    for field, header in _REQUEST_TRACE_HEADERS.items():
+        value = str(values.get(field) or "").strip()
+        if not value or len(value) > 240 or "\r" in value or "\n" in value:
+            raise ValueError(f"request_trace_value_invalid:{field}")
+        normalized[header] = value
+    token = _REQUEST_TRACE_CONTEXT.set(normalized)
+    try:
+        yield
+    finally:
+        _REQUEST_TRACE_CONTEXT.reset(token)
 
 
 def _truthy(value: str) -> bool:
@@ -299,7 +335,10 @@ def _http_request(
     body: Any = None,
     timeout: float = 10.0,
 ) -> dict[str, Any]:
-    headers = {"Accept": "application/json"}
+    headers = {
+        "Accept": "application/json",
+        **_REQUEST_TRACE_CONTEXT.get(),
+    }
     data = None
     if body is not None and method.upper() not in {"GET", "HEAD"}:
         data = json.dumps(body, ensure_ascii=False).encode("utf-8")

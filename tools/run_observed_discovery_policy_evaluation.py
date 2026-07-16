@@ -16,12 +16,18 @@ if str(REPO_ROOT) not in sys.path:
 
 from ai_test_asset_center.autonomous_evolution_orchestrator import EvolutionOrchestrator  # noqa: E402
 from ai_test_asset_center.discovery_harness_proposer import apply_bounded_harness_edit  # noqa: E402
-from ai_test_asset_center.discovery_policy_evaluation_runner import DiscoveryPolicyEvaluationRunner  # noqa: E402
+from ai_test_asset_center.discovery_policy_evaluation_runner import (  # noqa: E402
+    DiscoveryPolicyEvaluationRunner,
+    TrustedObservationStore,
+)
 from ai_test_asset_center.evaluation_fixture_controller import GovernedHttpResetFixtureController  # noqa: E402
 from ai_test_asset_center.evaluator_receipt_auth import resolve_evaluator_hmac_key  # noqa: E402
 from ai_test_asset_center.observed_product_scan_executor import ObservedProductScanExecutor  # noqa: E402
 from ai_test_asset_center.policy_registry import PolicyRecord, PolicyRegistry  # noqa: E402
 from ai_test_asset_center.scan_operational_metrics import collect_observed_scan_operational_metrics  # noqa: E402
+from benchmark_evaluator.http_observation_gateway import (  # noqa: E402
+    EvaluatorHttpObservationGateway,
+)
 
 
 def _edit(args: argparse.Namespace) -> dict[str, Any]:
@@ -74,9 +80,18 @@ def main() -> int:
     parser.add_argument("--edit-value", required=True)
     parser.add_argument("--activate", action="store_true")
     args = parser.parse_args()
-    resolve_evaluator_hmac_key()
+    signing_key = resolve_evaluator_hmac_key()
 
     workspace_root = Path(args.workspace_root).resolve()
+    trusted_observation_store = TrustedObservationStore(
+        Path(args.trusted_observation_root).resolve(),
+        product_workspace_root=workspace_root,
+        verification_key=signing_key,
+    )
+    trusted_observation_gateway = EvaluatorHttpObservationGateway(
+        observation_root=Path(args.trusted_observation_root).resolve(),
+        signing_key=signing_key,
+    )
     registry = PolicyRegistry(Path(args.registry).resolve())
     champion, challenger = _candidate(registry, _edit(args))
     controller = GovernedHttpResetFixtureController(workspace_root=workspace_root)
@@ -93,6 +108,9 @@ def main() -> int:
             output_root=str(Path(args.output_root).resolve()),
             fixture_controller=controller,
             scan_executor=executor,
+            trusted_observation_gateway=trusted_observation_gateway,
+            trusted_observation_store=trusted_observation_store,
+            receipt_signing_key=signing_key,
             evaluation_id=args.evaluation_id,
         )
     else:
@@ -101,6 +119,9 @@ def main() -> int:
             output_root=Path(args.output_root).resolve(),
             fixture_controller=controller,
             scan_executor=executor,
+            trusted_observation_gateway=trusted_observation_gateway,
+            trusted_observation_store=trusted_observation_store,
+            receipt_signing_key=signing_key,
         ).run(
             champion=champion,
             challenger=challenger,
