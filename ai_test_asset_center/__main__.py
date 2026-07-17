@@ -350,8 +350,12 @@ def _bind_discovery_mainline_identity(
     """Bind one immutable run identity before V12 planning or execution."""
 
     normalized = dict(context or {})
-    from .policy_registry import get_policy_registry
-    from .policy_wiring import get_policy_value
+    submitted_policy_id = str(normalized.get("policy_id") or "").strip()
+    submitted_policy_version = str(
+        normalized.get("policy_version") or ""
+    ).strip()
+    from .policy_registry import get_policy_registry, strategy_fingerprint
+    from .policy_wiring import get_effective_policy_strategy, get_policy_value
 
     active_policy = get_policy_registry().get_active()
     policy_version = str(
@@ -390,6 +394,37 @@ def _bind_discovery_mainline_identity(
     normalized.setdefault("target_id", target_id)
     normalized.setdefault("environment_id", environment_id)
     normalized.setdefault("policy_version", policy_version)
+    policy_id = str(
+        normalized.get("policy_id")
+        or getattr(active_policy, "policy_id", "")
+        or policy_version
+    ).strip()
+    if not policy_id:
+        raise RuntimeError("discovery_mainline_policy_id_missing")
+    effective_strategy_fingerprint = strategy_fingerprint(
+        get_effective_policy_strategy()
+    )
+    active_strategy_fingerprint = (
+        strategy_fingerprint(active_policy.strategy)
+        if active_policy is not None
+        else ""
+    )
+    if (
+        active_strategy_fingerprint
+        and effective_strategy_fingerprint != active_strategy_fingerprint
+        and (not submitted_policy_id or not submitted_policy_version)
+    ):
+        raise RuntimeError("discovery_mainline_override_policy_identity_missing")
+    submitted_strategy_fingerprint = str(
+        normalized.get("strategy_fingerprint") or ""
+    ).strip()
+    if (
+        submitted_strategy_fingerprint
+        and submitted_strategy_fingerprint != effective_strategy_fingerprint
+    ):
+        raise RuntimeError("discovery_mainline_strategy_fingerprint_mismatch")
+    normalized["policy_id"] = policy_id
+    normalized["strategy_fingerprint"] = effective_strategy_fingerprint
     policy_authority = str(
         get_policy_value(
             "execution",

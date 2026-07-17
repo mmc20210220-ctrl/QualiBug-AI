@@ -47,6 +47,12 @@ def _full_strategy_signature(strategy: "StrategyBundle") -> str:
     ).hexdigest()
 
 
+def strategy_fingerprint(strategy: "StrategyBundle") -> str:
+    """Return the canonical full fingerprint used in policy/run receipts."""
+
+    return _full_strategy_signature(strategy)
+
+
 @dataclass
 class ReasonerPolicy:
     enabled_engines: list[str] = field(default_factory=lambda: [

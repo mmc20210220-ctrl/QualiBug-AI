@@ -37,7 +37,17 @@ def _inputs(authority: str):
         api_spec_text="GET /resources",
         db_schema_text="",
         approved_base_url="http://127.0.0.1:8080",
-        campaign_context={"mainline_authority": authority},
+        campaign_context={
+            "mainline_authority": authority,
+            "run_id": "RUN-1",
+            "campaign_id": "CMP-1",
+            "target_id": "TARGET-1",
+            "environment_id": "ENV-1",
+            "policy_id": "policy-1",
+            "policy_version": "v1" if authority == "legacy_champion" else "v2",
+            "strategy_fingerprint": "a" * 64,
+            "evaluation_mode": "replay",
+        },
     )
 
 
@@ -797,20 +807,100 @@ def test_campaign_identity_exists_before_planning_and_execution() -> None:
     assert result["mainline_run"]["campaign_id"] == "CMP-1"
 
 
-def test_one_run_never_invokes_both_runners() -> None:
+@pytest.mark.parametrize("authority", ["legacy_champion", "experiment_candidate"])
+def test_frozen_authority_invokes_only_its_matching_runner(authority: str) -> None:
     from ai_test_asset_center.discovery_mainline import run_discovery_mainline
 
     calls = {"legacy": 0, "experiment": 0}
-    contract = _contract("experiment_candidate")
+    contract = _contract(authority)
+
+    def legacy(*_):
+        calls["legacy"] += 1
+        return {"mainline_run": contract}
+
+    def experiment(*_):
+        calls["experiment"] += 1
+        return {"mainline_run": contract}
 
     run_discovery_mainline(
+        _inputs(authority),
+        build_campaign=lambda _: SimpleNamespace(campaign_id="CMP-1"),
+        build_plan=lambda *_: SimpleNamespace(mainline_run=contract),
+        legacy_runner=legacy,
+        experiment_runner=experiment,
+    )
+
+    assert calls == (
+        {"legacy": 1, "experiment": 0}
+        if authority == "legacy_champion"
+        else {"legacy": 0, "experiment": 1}
+    )
+
+
+def test_missing_selected_runner_fails_before_campaign_creation() -> None:
+    from ai_test_asset_center.discovery_mainline import run_discovery_mainline
+
+    events: list[str] = []
+    with pytest.raises(
+        MainlineContractError,
+        match="mainline_runner_unavailable:legacy_champion",
+    ):
+        run_discovery_mainline(
+            _inputs("legacy_champion"),
+            build_campaign=lambda _: events.append("campaign"),
+            build_plan=lambda *_: events.append("plan"),
+            legacy_runner=None,
+            experiment_runner=lambda *_: events.append("candidate") or {},
+        )
+
+    assert events == []
+
+
+def test_runner_binding_receipt_preserves_policy_authority_and_code_identity() -> None:
+    from ai_test_asset_center.discovery_mainline import run_discovery_mainline
+
+    contract = _contract("experiment_candidate")
+
+    def candidate(*_):
+        return {"mainline_run": contract}
+
+    result = run_discovery_mainline(
         _inputs("experiment_candidate"),
         build_campaign=lambda _: SimpleNamespace(campaign_id="CMP-1"),
         build_plan=lambda *_: SimpleNamespace(mainline_run=contract),
-        experiment_runner=lambda *_: calls.__setitem__("experiment", calls["experiment"] + 1) or {"mainline_run": contract},
+        experiment_runner=candidate,
     )
 
-    assert calls == {"legacy": 0, "experiment": 1}
+    receipt = result["mainline_runner_receipt"]
+    assert receipt["schema_version"] == "qualibug.discovery-mainline-runner.v1"
+    assert receipt["mainline_authority"] == "experiment_candidate"
+    assert receipt["policy_id"] == "policy-1"
+    assert receipt["policy_version"] == "v2"
+    assert receipt["strategy_fingerprint"] == "a" * 64
+    assert receipt["mainline_contract_fingerprint"] == contract["contract_fingerprint"]
+    assert len(receipt["runner_fingerprint"]) == 64
+    assert len(receipt["receipt_fingerprint"]) == 64
+
+
+def test_runner_fingerprint_mismatch_fails_before_campaign_creation() -> None:
+    from ai_test_asset_center.discovery_mainline import run_discovery_mainline
+
+    inputs = _inputs("experiment_candidate")
+    inputs.campaign_context["mainline_runner_fingerprint"] = "0" * 64
+    events: list[str] = []
+
+    with pytest.raises(
+        MainlineContractError,
+        match="mainline_runner_fingerprint_mismatch:experiment_candidate",
+    ):
+        run_discovery_mainline(
+            inputs,
+            build_campaign=lambda _: events.append("campaign"),
+            build_plan=lambda *_: events.append("plan"),
+            experiment_runner=lambda *_: events.append("candidate") or {},
+        )
+
+    assert events == []
 
 
 def test_runner_failure_never_falls_back_to_other_authority() -> None:

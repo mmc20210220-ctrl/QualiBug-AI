@@ -2122,7 +2122,7 @@ def _campaign_identity_defaults(project: str, root: Path) -> dict[str, str]:
     return defaults
 
 
-def _campaign_context(project: str, prd_text: str, api_spec_text: str, db_schema_text: str, base_url: str, settings: dict[str, int], context: dict[str, Any], root: Path, submitted_api_spec_text: Any) -> tuple[EnterpriseCampaign, EnterpriseCampaignStore, str]:
+def _campaign_candidate(project: str, prd_text: str, api_spec_text: str, db_schema_text: str, base_url: str, settings: dict[str, int], context: dict[str, Any], root: Path, submitted_api_spec_text: Any) -> EnterpriseCampaign:
     policy_version = str(context.get("policy_version") or _active_policy_version())[:120]
     defaults = _campaign_identity_defaults(project, root)
     scope_id = str(
@@ -2141,7 +2141,7 @@ def _campaign_context(project: str, prd_text: str, api_spec_text: str, db_schema
     snapshot = source_snapshot_hash(prd_text, api_spec_text, db_schema_text, scope_id, environment_ref)
     verification_text = context.get("_source_verification_text", submitted_api_spec_text)
     source_manifest, source_issues = _source_manifest_details(context, verification_text)
-    candidate = EnterpriseCampaign.create(
+    return EnterpriseCampaign.create(
         project,
         scope_id,
         environment_ref,
@@ -2153,6 +2153,20 @@ def _campaign_context(project: str, prd_text: str, api_spec_text: str, db_schema
         rerun_reason=rerun_reason,
         slice_budget=settings["slice_budget"],
         automatic_round_limit=settings["round_limit"],
+    )
+
+
+def _campaign_context(project: str, prd_text: str, api_spec_text: str, db_schema_text: str, base_url: str, settings: dict[str, int], context: dict[str, Any], root: Path, submitted_api_spec_text: Any) -> tuple[EnterpriseCampaign, EnterpriseCampaignStore, str]:
+    candidate = _campaign_candidate(
+        project,
+        prd_text,
+        api_spec_text,
+        db_schema_text,
+        base_url,
+        settings,
+        context,
+        root,
+        submitted_api_spec_text,
     )
     store = EnterpriseCampaignStore(root, project)
     campaign, mode = store.open_or_create(candidate)
@@ -2828,15 +2842,17 @@ def _run_legacy_champion(
     campaign_handle: Any,
     plan: Any,
 ) -> dict[str, Any]:
-    """Retired. Legacy champion path removed per mainline unification."""
-    raise NotImplementedError(
-        "legacy_champion has been retired. Use experiment_candidate."
-    )
+    """Fail closed: the frozen legacy implementation is not installed."""
+    from .discovery_mainline_contract import MainlineContractError
+
+    raise MainlineContractError("mainline_runner_unavailable:legacy_champion")
 
 
 def _run_legacy_champion_domain(*args: Any, **kwargs: Any) -> dict[str, Any]:
-    """Retired. Legacy domain engine removed per mainline unification."""
-    raise NotImplementedError("legacy_champion_domain retired.")
+    """Fail closed without redirecting legacy authority into candidate code."""
+    from .discovery_mainline_contract import MainlineContractError
+
+    raise MainlineContractError("mainline_runner_unavailable:legacy_champion")
 
 
 def run_v12_pipeline(
@@ -2881,6 +2897,30 @@ def run_v12_pipeline(
         )
     runtime_contract = _runtime_contract(context, base_url, submitted_api_spec_text)
     context["_runtime_contract"] = runtime_contract
+    if not str(context.get("policy_id") or "").strip():
+        context["policy_id"] = str(context.get("policy_version") or "").strip()
+    if not str(context.get("strategy_fingerprint") or "").strip():
+        from .policy_registry import strategy_fingerprint
+        from .policy_wiring import get_effective_policy_strategy
+
+        context["strategy_fingerprint"] = strategy_fingerprint(
+            get_effective_policy_strategy()
+        )
+    campaign_candidate = _campaign_candidate(
+        str(project),
+        str(prd_text or ""),
+        str(context["_campaign_api_spec_text"]),
+        str(db_schema_text or ""),
+        str(runtime_contract.get("approved_base_url") or ""),
+        _behavior_slice_settings(),
+        context,
+        Path(root),
+        submitted_api_spec_text,
+    )
+    submitted_campaign_id = str(context.get("campaign_id") or "").strip()
+    if submitted_campaign_id and submitted_campaign_id != campaign_candidate.campaign_id:
+        raise MainlineContractError("mainline_campaign_identity_mismatch")
+    context["campaign_id"] = campaign_candidate.campaign_id
     inputs = DiscoveryMainlineInputs(
         project=str(project),
         root=Path(root),
@@ -2895,6 +2935,7 @@ def run_v12_pipeline(
         inputs,
         build_campaign=_build_mainline_campaign,
         build_plan=build_discovery_plan,
+        legacy_runner=None,
         experiment_runner=run_experiment_candidate,
     )
     from .ui_execution_adapter import execute_ui_execution_requests

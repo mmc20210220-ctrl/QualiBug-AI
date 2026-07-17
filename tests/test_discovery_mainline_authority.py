@@ -72,7 +72,11 @@ def test_mainline_contract_fingerprint_detects_tampering() -> None:
 
 def test_product_run_authority_comes_from_execution_policy() -> None:
     from ai_test_asset_center.__main__ import _bind_discovery_mainline_identity
-    from ai_test_asset_center.policy_registry import ExecutionPolicy, StrategyBundle
+    from ai_test_asset_center.policy_registry import (
+        ExecutionPolicy,
+        StrategyBundle,
+        strategy_fingerprint,
+    )
     from ai_test_asset_center.policy_wiring import policy_strategy_override
 
     strategy = StrategyBundle(
@@ -85,6 +89,9 @@ def test_product_run_authority_comes_from_execution_policy() -> None:
                 "scope_id": "SCOPE-1",
                 "environment_ref": "ENV-1",
                 "source_manifest": {"source_hash": "a" * 64},
+                "policy_id": "legacy-test-policy",
+                "policy_version": "legacy-test-v1",
+                "strategy_fingerprint": strategy_fingerprint(strategy),
             },
             started=1.0,
         )
@@ -94,7 +101,11 @@ def test_product_run_authority_comes_from_execution_policy() -> None:
 
 def test_product_run_rejects_context_authority_that_bypasses_policy() -> None:
     from ai_test_asset_center.__main__ import _bind_discovery_mainline_identity
-    from ai_test_asset_center.policy_registry import ExecutionPolicy, StrategyBundle
+    from ai_test_asset_center.policy_registry import (
+        ExecutionPolicy,
+        StrategyBundle,
+        strategy_fingerprint,
+    )
     from ai_test_asset_center.policy_wiring import policy_strategy_override
 
     strategy = StrategyBundle(
@@ -109,6 +120,9 @@ def test_product_run_rejects_context_authority_that_bypasses_policy() -> None:
                     "environment_ref": "ENV-1",
                     "source_manifest": {"source_hash": "a" * 64},
                     "mainline_authority": "experiment_candidate",
+                    "policy_id": "legacy-test-policy",
+                    "policy_version": "legacy-test-v1",
+                    "strategy_fingerprint": strategy_fingerprint(strategy),
                 },
                 started=1.0,
             )

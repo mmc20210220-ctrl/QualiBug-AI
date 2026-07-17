@@ -1,6 +1,9 @@
 """Focused coordinator for one immutable discovery authority."""
 from __future__ import annotations
 
+import hashlib
+import inspect
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -8,6 +11,7 @@ from typing import Any, Callable, Sequence
 from .discovery_mainline_contract import (
     MainlineContractError,
     MainlineRunContract,
+    build_mainline_run_contract,
     validate_mainline_run_contract,
 )
 
@@ -62,6 +66,81 @@ def _plan_contract(plan: Any) -> MainlineRunContract:
     return validate_mainline_run_contract(value)
 
 
+def _freeze_contract(inputs: DiscoveryMainlineInputs) -> MainlineRunContract:
+    context = inputs.campaign_context
+    return build_mainline_run_contract(
+        mainline_authority=_text(context.get("mainline_authority")),
+        run_id=_text(context.get("run_id")),
+        campaign_id=_text(context.get("campaign_id")),
+        target_id=_text(context.get("target_id")),
+        environment_id=_text(context.get("environment_id")),
+        policy_version=_text(context.get("policy_version")),
+        evaluation_mode=_text(context.get("evaluation_mode")),
+    )
+
+
+def _fingerprint_runner(runner: MainlineRunner) -> tuple[str, str]:
+    identity = f"{runner.__module__}:{runner.__qualname__}"
+    try:
+        source = inspect.getsource(runner)
+    except (OSError, TypeError) as exc:
+        raise MainlineContractError(
+            f"mainline_runner_fingerprint_unavailable:{identity}"
+        ) from exc
+    material = f"{identity}\n{source}".encode("utf-8")
+    return identity, hashlib.sha256(material).hexdigest()
+
+
+def _runner_receipt(
+    *,
+    inputs: DiscoveryMainlineInputs,
+    contract: MainlineRunContract,
+    runner: MainlineRunner,
+) -> dict[str, Any]:
+    context = inputs.campaign_context
+    runner_identity, runner_fingerprint = _fingerprint_runner(runner)
+    expected_fingerprint = _text(context.get("mainline_runner_fingerprint"))
+    if expected_fingerprint and expected_fingerprint != runner_fingerprint:
+        raise MainlineContractError(
+            f"mainline_runner_fingerprint_mismatch:{contract['mainline_authority']}"
+        )
+    required_identity = {
+        "policy_id": _text(context.get("policy_id")),
+        "policy_version": _text(context.get("policy_version")),
+        "strategy_fingerprint": _text(context.get("strategy_fingerprint")),
+    }
+    missing = [key for key, value in required_identity.items() if not value]
+    if missing:
+        raise MainlineContractError(
+            "mainline_runner_policy_identity_missing:" + ",".join(missing)
+        )
+    strategy_fingerprint = required_identity["strategy_fingerprint"]
+    if len(strategy_fingerprint) != 64 or any(
+        character not in "0123456789abcdef"
+        for character in strategy_fingerprint.lower()
+    ):
+        raise MainlineContractError("mainline_strategy_fingerprint_invalid")
+    receipt: dict[str, Any] = {
+        "schema_version": "qualibug.discovery-mainline-runner.v1",
+        "status": "BOUND",
+        "mainline_authority": contract["mainline_authority"],
+        **required_identity,
+        "mainline_contract_fingerprint": contract["contract_fingerprint"],
+        "runner_identity": runner_identity,
+        "runner_fingerprint": runner_fingerprint,
+    }
+    canonical = json.dumps(
+        receipt,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    receipt["receipt_fingerprint"] = hashlib.sha256(
+        canonical.encode("utf-8")
+    ).hexdigest()
+    return receipt
+
+
 def assert_result_matches_authority(
     result: dict[str, Any],
     contract: MainlineRunContract,
@@ -78,15 +157,31 @@ def run_discovery_mainline(
     *,
     build_campaign: CampaignBuilder,
     build_plan: PlanBuilder,
-    experiment_runner: MainlineRunner,
+    legacy_runner: MainlineRunner | None = None,
+    experiment_runner: MainlineRunner | None = None,
 ) -> dict[str, Any]:
-    """Build campaign, plan once, then invoke the experiment runner."""
+    """Freeze authority, then build a campaign and invoke exactly one runner."""
 
     if not isinstance(inputs, DiscoveryMainlineInputs):
         raise MainlineContractError("mainline_inputs_invalid")
     input_authority = _text(inputs.campaign_context.get("mainline_authority"))
     if not input_authority:
         raise MainlineContractError("mainline_input_authority_missing")
+    frozen_contract = _freeze_contract(inputs)
+    runner = (
+        legacy_runner
+        if frozen_contract["mainline_authority"] == "legacy_champion"
+        else experiment_runner
+    )
+    if runner is None:
+        raise MainlineContractError(
+            f"mainline_runner_unavailable:{frozen_contract['mainline_authority']}"
+        )
+    receipt = _runner_receipt(
+        inputs=inputs,
+        contract=frozen_contract,
+        runner=runner,
+    )
 
     campaign = build_campaign(inputs)
     campaign_id = _campaign_id(campaign)
@@ -96,7 +191,10 @@ def run_discovery_mainline(
         raise MainlineContractError("mainline_campaign_identity_mismatch")
     if contract["mainline_authority"] != input_authority:
         raise MainlineContractError("mainline_input_authority_mismatch")
+    if contract["contract_fingerprint"] != frozen_contract["contract_fingerprint"]:
+        raise MainlineContractError("mainline_plan_contract_mismatch")
 
-    result = experiment_runner(inputs, campaign, plan)
+    result = runner(inputs, campaign, plan)
     assert_result_matches_authority(result, contract)
+    result["mainline_runner_receipt"] = receipt
     return result
