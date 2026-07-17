@@ -19,9 +19,17 @@ from collections import Counter, defaultdict, deque
 from pathlib import Path
 from typing import Any, Iterable
 
+from .evaluator_receipt_auth import (
+    EvaluatorReceiptAuthError,
+    verify_evaluator_artifact,
+)
+
 
 ARCHITECTURE_ROOTS_SCHEMA = "qualibug.architecture-roots.v1"
 IMPORT_TRACE_SCHEMA = "qualibug.python-import-trace.v1"
+IMPORT_TRACE_AUTH_DOMAIN = "qualibug.python-import-trace.authentication.v1"
+IMPORT_TRACE_FINGERPRINT_FIELD = "trace_fingerprint"
+IMPORT_TRACE_AUTHENTICATION_FIELD = "trace_authentication"
 INVENTORY_SCHEMA = "qualibug.architecture-inventory.v1"
 RESPONSIBILITY_CLASSES = frozenset({
     "core",
@@ -754,6 +762,7 @@ def _trace_root(
 def _runtime_trace(
     path: Path | None,
     *,
+    signing_key: str | bytes | bytearray | None,
     source_fingerprint: str,
     config_fingerprint: str,
     project_scripts_fingerprint: str,
@@ -780,6 +789,20 @@ def _runtime_trace(
         ) from exc
     if not isinstance(value, dict) or value.get("schema_version") != IMPORT_TRACE_SCHEMA:
         raise ArchitectureInventoryError("runtime_trace_schema_invalid")
+    authenticated = IMPORT_TRACE_AUTHENTICATION_FIELD in value
+    if authenticated:
+        try:
+            value = verify_evaluator_artifact(
+                value,
+                signing_key=signing_key,
+                domain=IMPORT_TRACE_AUTH_DOMAIN,
+                fingerprint_field=IMPORT_TRACE_FINGERPRINT_FIELD,
+                authentication_field=IMPORT_TRACE_AUTHENTICATION_FIELD,
+            )
+        except EvaluatorReceiptAuthError as exc:
+            raise ArchitectureInventoryError(
+                f"runtime_trace_authentication_invalid:{exc}"
+            ) from exc
     coverage = _text(value.get("coverage_status")).upper()
     if coverage not in {"COMPLETE", "PARTIAL"}:
         raise ArchitectureInventoryError("runtime_trace_coverage_invalid")
@@ -877,16 +900,27 @@ def _runtime_trace(
         )
     return {
         "status": (
-            "UNAUTHENTICATED_COMPLETE"
-            if coverage == "COMPLETE"
-            else "UNAUTHENTICATED_PARTIAL"
+            ("AUTHENTICATED_" if authenticated else "UNAUTHENTICATED_")
+            + coverage
         ),
         "coverage_status": coverage,
-        "trusted_for_deletion": False,
-        "authentication": {
-            "status": "NOT_PROVIDED",
-            "reason_code": "authenticated_import_trace_collector_required",
-        },
+        "trusted_for_deletion": authenticated,
+        "authentication": (
+            {
+                "status": "VERIFIED",
+                "key_id": _text(
+                    _dict(value.get(IMPORT_TRACE_AUTHENTICATION_FIELD)).get(
+                        "key_id"
+                    )
+                ),
+                "domain": IMPORT_TRACE_AUTH_DOMAIN,
+            }
+            if authenticated
+            else {
+                "status": "NOT_PROVIDED",
+                "reason_code": "authenticated_import_trace_collector_required",
+            }
+        ),
         "source_fingerprint": source_fingerprint,
         "config_fingerprint": config_fingerprint,
         "project_scripts_fingerprint": project_scripts_fingerprint,
@@ -1094,6 +1128,7 @@ def build_architecture_inventory(
     repo_root: Path | str,
     config_path: Path | str,
     runtime_trace_path: Path | str | None = None,
+    runtime_trace_signing_key: str | bytes | bytearray | None = None,
 ) -> dict[str, Any]:
     """Build a deterministic architecture inventory without mutating sources."""
 
@@ -1256,6 +1291,7 @@ def build_architecture_inventory(
     )
     trace = _runtime_trace(
         Path(runtime_trace_path).resolve() if runtime_trace_path is not None else None,
+        signing_key=runtime_trace_signing_key,
         source_fingerprint=_text(source_identity.get("python_source_fingerprint")),
         config_fingerprint=_text(source_identity.get("config_fingerprint")),
         project_scripts_fingerprint=_text(

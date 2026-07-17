@@ -9,6 +9,9 @@ from pathlib import Path
 import pytest
 
 
+TEST_IMPORT_TRACE_KEY = "architecture-trace-test-key-0123456789abcdef"
+
+
 def _write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
@@ -248,6 +251,93 @@ def test_complete_runtime_trace_advances_but_never_auto_approves_deletion(
         "BLOCKED_RUNTIME_TRACE_AUTHENTICATION_REQUIRED"
     )
     assert inventory["auto_delete_performed"] is False
+
+
+def test_evaluator_signed_complete_trace_is_trusted_but_still_manual(
+    tmp_path: Path,
+) -> None:
+    from ai_test_asset_center.architecture_inventory import (
+        build_architecture_inventory,
+    )
+    from benchmark_evaluator.architecture_import_trace import (
+        seal_architecture_import_trace,
+    )
+
+    root = _sample_repo(tmp_path)
+    config = _config(root)
+    baseline = build_architecture_inventory(
+        repo_root=root,
+        config_path=config,
+    )
+    payload = _runtime_trace_payload(
+        baseline,
+        modules=[
+            "samplepkg",
+            *[row["module"] for row in baseline["trace_roots"]],
+        ],
+    )
+    signed = seal_architecture_import_trace(
+        payload,
+        signing_key=TEST_IMPORT_TRACE_KEY,
+    )
+    trace = root / "runtime_trace.signed.json"
+    trace.write_text(json.dumps(signed), encoding="utf-8")
+
+    inventory = build_architecture_inventory(
+        repo_root=root,
+        config_path=config,
+        runtime_trace_path=trace,
+        runtime_trace_signing_key=TEST_IMPORT_TRACE_KEY,
+    )
+
+    assert inventory["runtime_trace"]["status"] == "AUTHENTICATED_COMPLETE"
+    assert inventory["runtime_trace"]["trusted_for_deletion"] is True
+    assert inventory["runtime_trace"]["authentication"]["status"] == "VERIFIED"
+    assert _by_module(inventory)["samplepkg.dead_module"]["removal_gate"] == (
+        "MANUAL_DELETION_REVIEW_REQUIRED"
+    )
+    assert inventory["auto_delete_performed"] is False
+
+
+def test_signed_runtime_trace_tampering_fails_closed(tmp_path: Path) -> None:
+    from ai_test_asset_center.architecture_inventory import (
+        ArchitectureInventoryError,
+        build_architecture_inventory,
+    )
+    from benchmark_evaluator.architecture_import_trace import (
+        seal_architecture_import_trace,
+    )
+
+    root = _sample_repo(tmp_path)
+    config = _config(root)
+    baseline = build_architecture_inventory(
+        repo_root=root,
+        config_path=config,
+    )
+    signed = seal_architecture_import_trace(
+        _runtime_trace_payload(
+            baseline,
+            modules=[
+                "samplepkg",
+                *[row["module"] for row in baseline["trace_roots"]],
+            ],
+        ),
+        signing_key=TEST_IMPORT_TRACE_KEY,
+    )
+    signed["modules"].append("samplepkg.unused")
+    trace = root / "runtime_trace.tampered.json"
+    trace.write_text(json.dumps(signed), encoding="utf-8")
+
+    with pytest.raises(
+        ArchitectureInventoryError,
+        match="runtime_trace_authentication_invalid",
+    ):
+        build_architecture_inventory(
+            repo_root=root,
+            config_path=config,
+            runtime_trace_path=trace,
+            runtime_trace_signing_key=TEST_IMPORT_TRACE_KEY,
+        )
 
 
 def test_dynamic_import_uncertainty_blocks_retirement_even_with_complete_trace(
@@ -598,6 +688,125 @@ def test_inventory_cli_returns_structured_nonzero_failure(tmp_path: Path) -> Non
     )
     assert failure["status"] == "FAILED"
     assert "architecture_roots_invalid" in failure["detail"]
+
+
+def test_external_seal_cli_produces_inventory_trusted_trace(tmp_path: Path) -> None:
+    from ai_test_asset_center.architecture_inventory import (
+        build_architecture_inventory,
+    )
+
+    repository_root = Path(__file__).resolve().parents[1]
+    product = _sample_repo(tmp_path / "product")
+    config = _config(product)
+    baseline = build_architecture_inventory(
+        repo_root=product,
+        config_path=config,
+    )
+    evaluator = tmp_path / "evaluator"
+    evaluator.mkdir()
+    observed = evaluator / "observed.json"
+    observed.write_text(
+        json.dumps(
+            _runtime_trace_payload(
+                baseline,
+                modules=[
+                    "samplepkg",
+                    *[row["module"] for row in baseline["trace_roots"]],
+                ],
+            )
+        ),
+        encoding="utf-8",
+    )
+    key = evaluator / "trace.key"
+    key.write_bytes(TEST_IMPORT_TRACE_KEY.encode("utf-8"))
+    signed = evaluator / "runtime_trace.signed.json"
+
+    sealed = subprocess.run(
+        [
+            sys.executable,
+            str(repository_root / "tools" / "seal_architecture_import_trace.py"),
+            "--input",
+            str(observed),
+            "--output",
+            str(signed),
+            "--key-file",
+            str(key),
+            "--product-workspace",
+            str(product),
+        ],
+        cwd=repository_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert sealed.returncode == 0, sealed.stderr
+    assert json.loads(sealed.stdout)["status"] == "SEALED"
+
+    output = product / "inventory.json"
+    inventoried = subprocess.run(
+        [
+            sys.executable,
+            str(repository_root / "tools" / "architecture_inventory.py"),
+            "--root",
+            str(product),
+            "--config",
+            str(config),
+            "--runtime-trace",
+            str(signed),
+            "--evaluator-key-file",
+            str(key),
+            "--output",
+            str(output),
+        ],
+        cwd=repository_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert inventoried.returncode == 0, inventoried.stderr
+    summary = json.loads(inventoried.stdout)
+    assert summary["runtime_trace"]["authentication"]["status"] == "VERIFIED"
+    assert summary["runtime_trace"]["trusted_for_deletion"] is True
+    inventory = json.loads(output.read_text(encoding="utf-8"))
+    assert inventory["runtime_trace"]["status"] == "AUTHENTICATED_COMPLETE"
+    assert inventory["runtime_trace"]["trusted_for_deletion"] is True
+    assert inventory["auto_delete_performed"] is False
+
+
+def test_inventory_cli_rejects_product_owned_evaluator_key(tmp_path: Path) -> None:
+    repository_root = Path(__file__).resolve().parents[1]
+    product = _sample_repo(tmp_path / "product")
+    config = _config(product)
+    key = product / "trace.key"
+    key.write_bytes(TEST_IMPORT_TRACE_KEY.encode("utf-8"))
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(repository_root / "tools" / "architecture_inventory.py"),
+            "--root",
+            str(product),
+            "--config",
+            str(config),
+            "--evaluator-key-file",
+            str(key),
+            "--output",
+            str(product / "inventory.json"),
+        ],
+        cwd=repository_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    failure = json.loads(completed.stderr)
+    assert failure["status"] == "FAILED"
+    assert failure["detail"] == (
+        "evaluator_key_file_must_be_outside_product_workspace"
+    )
 
 
 def test_repository_inventory_reports_architecture_metrics_not_quality() -> None:

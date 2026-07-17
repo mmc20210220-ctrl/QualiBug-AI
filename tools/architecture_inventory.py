@@ -45,6 +45,14 @@ def _parser() -> argparse.ArgumentParser:
         help="optional complete/partial Python import trace receipt",
     )
     parser.add_argument(
+        "--evaluator-key-file",
+        type=Path,
+        help=(
+            "evaluator HMAC key outside the product workspace; required "
+            "to trust a signed runtime trace"
+        ),
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=(
@@ -58,10 +66,37 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _load_external_evaluator_key(
+    path: Path | None,
+    *,
+    product_workspace: Path,
+) -> bytes | None:
+    if path is None:
+        return None
+    resolved = path.resolve()
+    if resolved == product_workspace or product_workspace in resolved.parents:
+        raise ArchitectureInventoryError(
+            "evaluator_key_file_must_be_outside_product_workspace"
+        )
+    try:
+        key = resolved.read_bytes()
+    except OSError as exc:
+        raise ArchitectureInventoryError(
+            f"evaluator_key_file_unreadable:{type(exc).__name__}"
+        ) from exc
+    if len(key) < 32:
+        raise ArchitectureInventoryError("evaluator_key_file_invalid")
+    return key
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     root = args.root.resolve()
     try:
+        evaluator_key = _load_external_evaluator_key(
+            args.evaluator_key_file,
+            product_workspace=root,
+        )
         inventory = build_architecture_inventory(
             repo_root=root,
             config_path=args.config.resolve(),
@@ -70,6 +105,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if args.runtime_trace is not None
                 else None
             ),
+            runtime_trace_signing_key=evaluator_key,
         )
         output = persist_architecture_inventory(
             inventory,
@@ -106,6 +142,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "runtime_trace": {
                     "status": runtime_trace["status"],
                     "coverage_status": runtime_trace["coverage_status"],
+                    "trusted_for_deletion": runtime_trace["trusted_for_deletion"],
+                    "authentication": runtime_trace["authentication"],
                     "covered_root_count": len(runtime_trace["covered_roots"]),
                     "missing_required_root_count": len(
                         runtime_trace["missing_required_roots"]

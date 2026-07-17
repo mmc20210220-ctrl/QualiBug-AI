@@ -22,3 +22,17 @@ The restored command reports:
 These are architecture diagnostics only. No module is approved for deletion
 until the complete runtime-trace, dynamic-import review, passing-test, and
 manual-review gates in `docs/DISCOVERY_MODULE_STRANGLER.md` all pass.
+
+## Evaluator-owned import-trace authentication
+
+Runtime import observations are sealed outside the product workspace with
+`tools/seal_architecture_import_trace.py`. The sealing key must remain outside
+the product workspace, and `tools/architecture_inventory.py` accepts it only
+through `--evaluator-key-file`. Missing keys, product-owned key paths, invalid
+signatures, content tampering, source/config drift, incomplete root coverage,
+and dynamic-import uncertainty all fail closed.
+
+Authentication proves evaluator ownership and trace integrity; it does not
+prove safe deletion by itself. A complete authenticated trace changes an
+otherwise eligible module only to `MANUAL_DELETION_REVIEW_REQUIRED`, while
+`auto_delete_performed` remains `false`.
