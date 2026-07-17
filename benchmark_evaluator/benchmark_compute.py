@@ -173,9 +173,7 @@ def _match_finding_to_gt(
     """Keyword + API-path + semantic match (post-scan scoring only — never fed into discovery)."""
     blob = _finding_text_blob(finding)
     f_paths = _finding_paths(finding)
-    finding_family = classify_risk_family(finding)
-    if not finding_family or finding_family == "unclassified":
-        finding_family = _risk_family_for_item(finding)
+    finding_family = _canonical_match_family(finding)
     best: tuple[float, dict[str, Any]] | None = None
 
     for gt in truth_bugs:
@@ -202,9 +200,7 @@ def _match_finding_to_gt(
             # permission/concurrency oracles cannot earn a true positive merely
             # by touching every documented endpoint.
             score += 0.30
-        ground_truth_family = classify_risk_family(gt)
-        if not ground_truth_family or ground_truth_family == "unclassified":
-            ground_truth_family = _risk_family_for_item(gt)
+        ground_truth_family = _canonical_match_family(gt)
         family_matches = (
             finding_family != "unclassified"
             and ground_truth_family != "unclassified"
@@ -284,12 +280,38 @@ def _explicit_family(item: dict[str, Any]) -> str:
     return ""
 
 
+def _canonical_match_family(item: dict[str, Any]) -> str:
+    """Map product and GT family labels onto the evaluator match ontology.
+
+    Product ontology uses short ids such as ``concurrency``; the evaluator match
+    ontology uses ``concurrency_race_condition`` with ``concurrency`` as an
+    alias. Matching must resolve both sides through that alias table so a real
+    concurrency deliverable is not rejected as a family mismatch.
+    """
+    explicit = _explicit_family(item)
+    if explicit:
+        return explicit
+    classified = classify_risk_family(item)
+    if classified and classified != "unclassified":
+        aliased = _explicit_family({"risk_family": classified})
+        if aliased:
+            return aliased
+        ontology = _benchmark_match_ontology()
+        if classified in ontology:
+            return classified
+        return classified
+    return _risk_family_for_item(item)
+
+
 def _risk_family_for_item(item: dict[str, Any]) -> str:
     explicit = _explicit_family(item)
     if explicit:
         return explicit
     classified = classify_risk_family(item)
     if classified and classified != "unclassified":
+        aliased = _explicit_family({"risk_family": classified})
+        if aliased:
+            return aliased
         return classified
     blob = _text_blob(item)
     ontology = _benchmark_match_ontology()

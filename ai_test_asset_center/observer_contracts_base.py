@@ -1244,6 +1244,42 @@ def _extract_state_value(value: Any) -> tuple[str, str]:
     return selected[2], selected[1]
 
 
+def _final_entity_snapshot_marker(value: Any) -> tuple[str, str]:
+    """Observe a final entity snapshot when no lifecycle state/status field exists.
+
+    Concurrency final invariants often bind quantity-bearing resources (stock,
+    balance, quota) whose effect reads return numeric business fields rather than
+    workflow status. Prefer a deterministic fingerprint of observed numeric
+    business fields; otherwise a single stable scalar business field.
+    Lifecycle before/after observers must not use this fallback.
+    """
+
+    numeric_values = _numeric_snapshot_values(value, [])
+    if numeric_values:
+        fingerprint = _fingerprint(numeric_values)
+        return fingerprint, "entity_numeric_snapshot"
+    scalar_fields: list[tuple[str, str]] = []
+    for row in _entity_rows(value):
+        cleaned = _without_server_managed_fields(row)
+        if not isinstance(cleaned, dict):
+            continue
+        for key, child in cleaned.items():
+            normalized = _normalized_field_name(key)
+            if (
+                not normalized
+                or normalized in {"id", "uuid", "key"}
+                or normalized.endswith("_id")
+            ):
+                continue
+            if isinstance(child, bool):
+                continue
+            if isinstance(child, (str, int, float)) and _text(child):
+                scalar_fields.append((str(key), _text(child)))
+    if len(scalar_fields) != 1:
+        return "", ""
+    return scalar_fields[0][1], scalar_fields[0][0]
+
+
 def _main_governed_write_steps(execution_steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         step
@@ -1279,6 +1315,19 @@ def _state_snapshot_evidence(
     state_value, state_field = _extract_state_value(snapshot.get("body"))
     evidence["state_field"] = state_field
     evidence[state_key] = state_value
+    if not state_value and state_key == "final_state":
+        state_value, state_field = _final_entity_snapshot_marker(snapshot.get("body"))
+        if state_value:
+            evidence["state_field"] = state_field
+            evidence[state_key] = state_value
+            evidence["final_state_kind"] = "entity_snapshot"
+            before_body = _dict(governance.get("before")).get("body")
+            after_body = snapshot.get("body")
+            before_values = _numeric_snapshot_values(before_body, [])
+            after_values = _numeric_snapshot_values(after_body, [])
+            if before_values or after_values:
+                evidence["before_values"] = before_values
+                evidence["after_values"] = after_values
     if not state_value:
         return evidence, "STATE_SNAPSHOT_VALUE_MISSING"
     return evidence, ""

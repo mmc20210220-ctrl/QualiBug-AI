@@ -416,14 +416,67 @@ def compile_experiment_for_obligation(
                         "BLOCKED_NON_REVERSIBLE_WRITE",
                         f"cleanup_unresolved:{cleanup_op}",
                     )
-            cleanup_plan = [{
-                "action": "reverse_order_compensation",
-                "mode": _text(cleanup_req.get("mode") or "reverse_order"),
-                "operation_ref": cleanup_op,
-                "path": cleanup_path,
-                "method": cleanup_method,
-                "runtime_response_binding_required": "{" in cleanup_path,
-            }]
+            cleanup_mode = _text(cleanup_req.get("mode") or "reverse_order")
+            primary_body = _source_request_example(primary_op)
+            cleanup_body = _source_request_example(_dict(ops.get(cleanup_op)))
+            if (
+                cleanup_mode == "recreate_compensated_resource"
+                and cleanup_method in {"POST", "PUT", "PATCH"}
+                and primary_body
+            ):
+                # Compensator primary (release/cancel) → recreate via the unique
+                # compensated write. Reuse each accepted primary request body
+                # (already runtime-bound) rather than a static example that still
+                # contains `<order_id>`-style tokens.
+                cleanup_plan = [{
+                    "action": "source_declared_compensation",
+                    "mode": cleanup_mode,
+                    "operation_ref": cleanup_op,
+                    "compensates_operation_ref": primary_op_id,
+                    "path": cleanup_path,
+                    "method": cleanup_method,
+                    "body_from_original_request": True,
+                    "runtime_response_binding_required": "{" in cleanup_path,
+                }]
+            elif cleanup_mode == "recreate_compensated_resource":
+                # DELETE/empty-body primary: recreate from the create operation's
+                # source example; executor must materialize runtime tokens.
+                cleanup_plan = [{
+                    "action": "reverse_order_compensation",
+                    "mode": cleanup_mode,
+                    "operation_ref": cleanup_op,
+                    "path": cleanup_path,
+                    "method": cleanup_method,
+                    "body": cleanup_body or None,
+                    "runtime_response_binding_required": "{" in cleanup_path,
+                }]
+            elif cleanup_method == "DELETE":
+                # Identity-bound create→DELETE: no cleanup body. Emit reverse-order
+                # DELETE so the executor binds each accepted create id and does not
+                # route through the body-oriented source_declared_compensation arm.
+                cleanup_plan = [{
+                    "action": "reverse_order_compensation",
+                    "mode": cleanup_mode,
+                    "operation_ref": cleanup_op,
+                    "compensates_operation_ref": primary_op_id,
+                    "path": cleanup_path,
+                    "method": cleanup_method,
+                    "runtime_response_binding_required": "{" in cleanup_path,
+                }]
+            else:
+                # Relation-bound POST/PUT/PATCH compensators (reserve→release)
+                # must reuse the original write body. Empty cleanup bodies
+                # previously produced target-side NaN/500.
+                cleanup_plan = [{
+                    "action": "source_declared_compensation",
+                    "mode": cleanup_mode,
+                    "operation_ref": cleanup_op,
+                    "compensates_operation_ref": primary_op_id,
+                    "path": cleanup_path,
+                    "method": cleanup_method,
+                    "body_from_original_request": True,
+                    "runtime_response_binding_required": "{" in cleanup_path,
+                }]
 
     control_actor = _text(
         prop.get("control_actor_ref")

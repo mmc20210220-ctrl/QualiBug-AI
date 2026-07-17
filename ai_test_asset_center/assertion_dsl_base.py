@@ -668,6 +668,15 @@ def evaluate_assertion(
                 "invariant_held": obs.get("invariant_held"),
                 "dual_2xx": obs.get("dual_2xx"),
             }
+            # Surface observed entity numerics (e.g. available_qty) when the
+            # final_state observer captured them — fingerprint-only actuals hide
+            # the concrete invariant breach from delivery/scoring blobs.
+            before_values = obs.get("before_values")
+            after_values = obs.get("after_values")
+            if isinstance(before_values, dict) and before_values:
+                actual["before_values"] = dict(before_values)
+            if isinstance(after_values, dict) and after_values:
+                actual["after_values"] = dict(after_values)
             if not isinstance(obs.get("invariant_held"), bool):
                 reason_code = "FINAL_INVARIANT_MISSING"
             else:

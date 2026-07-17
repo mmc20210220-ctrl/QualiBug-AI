@@ -238,6 +238,26 @@ def test_state_snapshot_value_missing_returns_indeterminate():
     assert evidence.get("state_field") != "http_status_fallback"
 
 
+def test_final_state_accepts_entity_numeric_snapshot_without_lifecycle_field():
+    """final_state may observe quantity-bearing entities without status fields."""
+    step = _governed_step(
+        phase="treatment",
+        before_status=200,
+        before_body={"sku": "SKU-1", "available_qty": 2, "locked_qty": 0},
+        after_status=200,
+        after_body={"sku": "SKU-1", "available_qty": -1, "locked_qty": 3},
+    )
+    evidence, reason = _state_snapshot_evidence(
+        step, snapshot_key="after", state_key="final_state",
+    )
+    assert reason == ""
+    assert evidence["final_state_kind"] == "entity_snapshot"
+    assert evidence["state_field"] == "entity_numeric_snapshot"
+    assert evidence["final_state"]
+    assert evidence["before_values"]["available_qty"] == 2
+    assert evidence["after_values"]["available_qty"] == -1
+
+
 def test_state_snapshot_real_state_value_returns_success():
     """Real state field found → success with real value."""
     step = _governed_step(

@@ -32,6 +32,7 @@ from .experiment_runtime_support import (
 )
 from .real_id_resolver import (
     infer_path_params,
+    normalize_path_placeholders,
     path_has_placeholders,
 )
 from .runtime_binding_materializer import (
@@ -85,10 +86,46 @@ def execute_experiment_cleanup_compensation(
         for attempt in governed_write_attempts
         if attempt.get("accepted") is True
     ]
+    delete_cleanup_templates = [
+        normalize_path_placeholders(
+            _text(
+                _dict(item).get("path")
+                or _dict(ops.get(_text(_dict(item).get("operation_ref")))).get("path")
+                or _dict(ops.get(_text(_dict(item).get("operation_ref")))).get("raw_path")
+            )
+        )
+        for item in _list(exp.get("cleanup_plan"))
+        if _text(
+            _dict(item).get("method")
+            or _dict(ops.get(_text(_dict(item).get("operation_ref")))).get("method")
+        ).upper()
+        == "DELETE"
+    ]
+
+    def _accepted_write_needs_cleanup(attempt: dict[str, Any]) -> bool:
+        if _governed_write_changed_state(attempt):
+            return True
+        # Identity-bound DELETE cleanup: an accepted create may only expose the
+        # new id on the write response while collection snapshots stay empty.
+        if not delete_cleanup_templates:
+            return False
+        synthetic_step = {
+            "phase": "treatment",
+            "operation_ref": _text(attempt.get("operation_ref")),
+            "governance_receipt": attempt,
+            "body": _dict(attempt.get("write")).get("body"),
+            "status_code": int(_dict(attempt.get("write")).get("status") or 0),
+        }
+        for path_template in delete_cleanup_templates:
+            targets, missing = _runtime_cleanup_paths(path_template, [synthetic_step])
+            if targets and not missing:
+                return True
+        return False
+
     accepted_governed_writes_requiring_cleanup = [
         attempt
         for attempt in accepted_governed_writes
-        if _governed_write_changed_state(attempt)
+        if _accepted_write_needs_cleanup(attempt)
     ]
     if (
         safety.get("governed_write")
@@ -234,21 +271,36 @@ def execute_experiment_cleanup_compensation(
             op_ref = _text(_dict(cleanup).get("operation_ref"))
             op = ops.get(op_ref) or {}
             path_template = _text(_dict(cleanup).get("path") or op.get("path") or op.get("raw_path"))
-            method = _text(op.get("method") or "").upper()
+            method = _text(
+                _dict(cleanup).get("method") or op.get("method") or ""
+            ).upper()
             cleanup_action = _text(_dict(cleanup).get("action"))
             if cleanup_action == "source_declared_compensation":
                 source_operation_ref = _text(
                     _dict(cleanup).get("compensates_operation_ref")
                 )
-                source_steps = [
-                    step for step in steps_out
-                    if _text(_dict(step).get("phase")) in {"control", "treatment"}
-                    and _text(_dict(step).get("operation_ref")) == source_operation_ref
-                    and isinstance(_dict(step).get("governance_receipt"), dict)
-                    and _governed_write_changed_state(
-                        _dict(step.get("governance_receipt"))
-                    )
-                ]
+                source_steps = []
+                for step in steps_out:
+                    if _text(_dict(step).get("phase")) not in {"control", "treatment"}:
+                        continue
+                    if _text(_dict(step).get("operation_ref")) != source_operation_ref:
+                        continue
+                    receipt = _dict(step.get("governance_receipt"))
+                    if not receipt:
+                        continue
+                    if _governed_write_changed_state(receipt):
+                        source_steps.append(step)
+                        continue
+                    # Identity-bound DELETE: accepted creates may only expose the
+                    # new id on the write response while collection snapshots stay
+                    # empty — still require a concrete cleanup path binding.
+                    if method == "DELETE" and receipt.get("accepted") is True:
+                        bound_targets, bound_missing = _runtime_cleanup_paths(
+                            path_template,
+                            [step],
+                        )
+                        if bound_targets and not bound_missing:
+                            source_steps.append(step)
                 if not source_steps:
                     cleanup_failures += 1
                     observations["cleanup_status"] = "failed"
@@ -288,31 +340,35 @@ def execute_experiment_cleanup_compensation(
                         )
                         continue
                     path, target_bindings = cleanup_targets[0]
-                    original_body = request_bodies_for_cleanup.get(
-                        _text(source_step.get("step_id"))
-                    )
-                    if original_body is None:
-                        cleanup_failures += 1
-                        observations["cleanup_status"] = "failed"
-                        observations["cleanup_reason"] = "cleanup_original_request_missing"
-                        continue
                     cleanup_bindings = {**runtime_bindings, **target_bindings}
-                    cleanup_body = _materialize_body_template(
-                        original_body,
-                        cleanup_bindings,
-                    )
-                    unresolved_cleanup_tokens = _unresolved_body_placeholders(
-                        cleanup_body,
-                        cleanup_bindings,
-                    )
-                    if unresolved_cleanup_tokens:
-                        cleanup_failures += 1
-                        observations["cleanup_status"] = "failed"
-                        observations["cleanup_reason"] = (
-                            "cleanup_body_placeholder_unresolved:"
-                            + ",".join(unresolved_cleanup_tokens)
+                    cleanup_body = None
+                    if method in {"POST", "PUT", "PATCH"}:
+                        original_body = request_bodies_for_cleanup.get(
+                            _text(source_step.get("step_id"))
                         )
-                        continue
+                        if original_body is None:
+                            cleanup_failures += 1
+                            observations["cleanup_status"] = "failed"
+                            observations["cleanup_reason"] = (
+                                "cleanup_original_request_missing"
+                            )
+                            continue
+                        cleanup_body = _materialize_body_template(
+                            original_body,
+                            cleanup_bindings,
+                        )
+                        unresolved_cleanup_tokens = _unresolved_body_placeholders(
+                            cleanup_body,
+                            cleanup_bindings,
+                        )
+                        if unresolved_cleanup_tokens:
+                            cleanup_failures += 1
+                            observations["cleanup_status"] = "failed"
+                            observations["cleanup_reason"] = (
+                                "cleanup_body_placeholder_unresolved:"
+                                + ",".join(unresolved_cleanup_tokens)
+                            )
+                            continue
                     observation_path = _text(
                         _dict(source_step).get("observation_path")
                     ) or _declared_observation_path(
@@ -324,7 +380,7 @@ def execute_experiment_cleanup_compensation(
                     if (
                         not path.startswith("/")
                         or path_has_placeholders(path)
-                        or method not in {"POST", "PUT", "PATCH"}
+                        or method not in {"POST", "PUT", "PATCH", "DELETE"}
                         or not observation_path
                     ):
                         cleanup_failures += 1
@@ -342,7 +398,7 @@ def execute_experiment_cleanup_compensation(
                         actor_token=token,
                         method=method,
                         path=path,
-                        body=cleanup_body,
+                        body=cleanup_body if method in {"POST", "PUT", "PATCH"} else None,
                         observation_path=observation_path,
                     )
                     cleanup_write = _dict(governed_cleanup.get("write"))
@@ -555,6 +611,25 @@ def execute_experiment_cleanup_compensation(
                     runtime_bindings=cleanup_bindings,
                     request_body=_dict(cleanup).get("body"),
                 )
+                if not observation_path:
+                    # Reuse the governed write's already-declared effect observer
+                    # when the cleanup op itself has no separate GET mapping
+                    # (common for create→DELETE identity cleanup).
+                    compensates_ref = _text(
+                        _dict(cleanup).get("compensates_operation_ref")
+                    )
+                    for step in reversed(steps_out):
+                        if _text(step.get("phase")) not in {"control", "treatment"}:
+                            continue
+                        if compensates_ref and _text(step.get("operation_ref")) != compensates_ref:
+                            continue
+                        candidate = _text(step.get("observation_path"))
+                        if (
+                            candidate.startswith("/")
+                            and not path_has_placeholders(candidate)
+                        ):
+                            observation_path = candidate
+                            break
                 if not observation_path:
                     cleanup_failures += 1
                     observations["cleanup_status"] = "failed"

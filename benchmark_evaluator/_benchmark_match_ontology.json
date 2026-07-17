@@ -3,6 +3,8 @@
     "display_name": "权限与访问控制",
     "aliases": [
       "auth",
+      "authorization",
+      "owner_tenant_visibility",
       "permission",
       "role",
       "forbidden",

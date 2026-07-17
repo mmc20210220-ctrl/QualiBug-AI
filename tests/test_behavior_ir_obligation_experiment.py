@@ -2057,6 +2057,185 @@ def test_experiment_compiler_uses_unique_source_declared_action_compensator() ->
     }]
 
 
+def test_recreate_cleanup_reuses_compensator_primary_request_body() -> None:
+    """release primary → reserve cleanup must reuse bound primary bodies."""
+    request_example = {"sku": "SKU-1", "qty": 1, "orderId": "<order_id>"}
+    request_schema = {
+        "type": "object",
+        "required": ["sku", "qty", "orderId"],
+        "properties": {
+            "sku": {"type": "string"},
+            "qty": {"type": "integer"},
+            "orderId": {"type": "string"},
+        },
+    }
+    operations = [
+        {
+            "id": "reserve_stock",
+            "method": "POST",
+            "path": "/api/inventory/reserve",
+            "read_write": "write",
+            "request_example": request_example,
+            "request_schema": request_schema,
+            "source_refs": [{"source_id": "api", "locator": "POST /api/inventory/reserve"}],
+        },
+        {
+            "id": "release_stock",
+            "method": "POST",
+            "path": "/api/inventory/release",
+            "read_write": "write",
+            "request_example": request_example,
+            "request_schema": request_schema,
+            "source_refs": [{"source_id": "api", "locator": "POST /api/inventory/release"}],
+        },
+        {
+            "id": "read_stock",
+            "method": "GET",
+            "path": "/api/inventory/{sku}",
+            "read_write": "read",
+            "source_refs": [{"source_id": "api", "locator": "GET /api/inventory/{sku}"}],
+        },
+        {
+            "id": "list_orders",
+            "method": "GET",
+            "path": "/api/orders",
+            "read_write": "read",
+            "source_refs": [{"source_id": "api", "locator": "GET /api/orders"}],
+        },
+        {
+            "id": "create_order",
+            "method": "POST",
+            "path": "/api/orders",
+            "read_write": "write",
+            "request_example": {"sku": "SKU-1", "qty": 1},
+            "source_refs": [{"source_id": "api", "locator": "POST /api/orders"}],
+        },
+    ]
+    obligation = {
+        "obligation_id": "obl_recreate_release",
+        "risk_family": "validation",
+        "property": {
+            "template": "schema_constraint",
+            "operation_ref": "release_stock",
+            "actor_ref": "operator",
+        },
+        "required_actors": ["operator"],
+        "required_operations": ["release_stock"],
+        "required_fixtures": [],
+        "required_observers": ["http_response"],
+        "cleanup_requirement": {
+            "required": True,
+            "mode": "recreate_compensated_resource",
+            "operation_ref": "reserve_stock",
+        },
+        "source_refs": [{"source_id": "rule", "locator": "inventory release"}],
+    }
+
+    experiment = compile_experiment_for_obligation(
+        obligation,
+        behavior_ir={
+            "operations": operations,
+            "actors": [{"id": "operator", "role": "public"}],
+            "relations": [],
+        },
+        environment_type="test",
+    )
+
+    assert experiment["compile_receipt"]["status"] == "COMPILED", experiment["compile_receipt"]
+    assert experiment["cleanup_plan"] == [{
+        "action": "source_declared_compensation",
+        "mode": "recreate_compensated_resource",
+        "operation_ref": "reserve_stock",
+        "compensates_operation_ref": "release_stock",
+        "path": "/api/inventory/reserve",
+        "method": "POST",
+        "body_from_original_request": True,
+        "runtime_response_binding_required": False,
+    }]
+
+
+def test_relation_bound_compensation_reuses_original_request_body() -> None:
+    """cleanup_requirement.operation_ref must not emit empty-body reverse_order."""
+    request_example = {"resourceId": "resource-1", "units": 1}
+    request_schema = {
+        "type": "object",
+        "required": ["resourceId", "units"],
+        "properties": {
+            "resourceId": {"type": "string"},
+            "units": {"type": "integer"},
+        },
+    }
+    operations = [
+        {
+            "id": "reserve_capacity",
+            "method": "POST",
+            "path": "/api/capacity/reserve",
+            "read_write": "write",
+            "request_example": request_example,
+            "request_schema": request_schema,
+            "source_refs": [{"source_id": "api", "locator": "POST /api/capacity/reserve"}],
+        },
+        {
+            "id": "release_capacity",
+            "method": "POST",
+            "path": "/api/capacity/release",
+            "read_write": "write",
+            "request_example": request_example,
+            "request_schema": request_schema,
+            "source_refs": [{"source_id": "api", "locator": "POST /api/capacity/release"}],
+        },
+        {
+            "id": "read_capacity",
+            "method": "GET",
+            "path": "/api/capacity/{resourceId}",
+            "read_write": "read",
+            "source_refs": [{"source_id": "api", "locator": "GET /api/capacity/{resourceId}"}],
+        },
+    ]
+    obligation = {
+        "obligation_id": "obl_relation_compensation",
+        "risk_family": "concurrency",
+        "property": {
+            "template": "concurrent_final_invariant",
+            "operation_ref": "reserve_capacity",
+            "actor_ref": "operator",
+            "insufficient_signal": "dual_2xx_alone",
+        },
+        "required_actors": ["operator"],
+        "required_operations": ["reserve_capacity"],
+        "required_fixtures": [],
+        "required_observers": ["final_state", "barrier_timeline"],
+        "cleanup_requirement": {
+            "required": True,
+            "mode": "reverse_order",
+            "operation_ref": "release_capacity",
+        },
+        "source_refs": [{"source_id": "rule", "locator": "capacity reservation"}],
+    }
+
+    experiment = compile_experiment_for_obligation(
+        obligation,
+        behavior_ir={
+            "operations": operations,
+            "actors": [{"id": "operator", "role": "public"}],
+            "relations": [],
+        },
+        environment_type="test",
+    )
+
+    assert experiment["compile_receipt"]["status"] == "COMPILED", experiment["compile_receipt"]
+    assert experiment["cleanup_plan"] == [{
+        "action": "source_declared_compensation",
+        "mode": "reverse_order",
+        "operation_ref": "release_capacity",
+        "compensates_operation_ref": "reserve_capacity",
+        "path": "/api/capacity/release",
+        "method": "POST",
+        "body_from_original_request": True,
+        "runtime_response_binding_required": False,
+    }]
+
+
 def test_write_without_concrete_compensation_is_blocked_before_execution() -> None:
     operation = {
         "id": "consume_capacity",
