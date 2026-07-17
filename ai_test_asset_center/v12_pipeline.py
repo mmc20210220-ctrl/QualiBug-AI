@@ -2906,6 +2906,14 @@ def run_v12_pipeline(
         context["strategy_fingerprint"] = strategy_fingerprint(
             get_effective_policy_strategy()
         )
+    if "adaptive_planning_history_receipt" not in context:
+        from .adaptive_planning_history import (
+            load_prior_planning_history_receipt,
+        )
+
+        context["adaptive_planning_history_receipt"] = (
+            load_prior_planning_history_receipt(Path(root), str(project))
+        )
     campaign_candidate = _campaign_candidate(
         str(project),
         str(prd_text or ""),

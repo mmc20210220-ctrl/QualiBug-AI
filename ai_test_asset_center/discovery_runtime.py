@@ -12,6 +12,12 @@ from .adaptive_discovery_planner import (
     build_agent_intent_plan,
     plan_obligation_round,
 )
+from .adaptive_planning_history import (
+    build_planning_budget_receipt,
+    build_planning_history_receipt,
+    finalize_planning_budget_receipt,
+    select_matching_historical_yield,
+)
 from .adaptive_behavior_ir_expansion import (
     expand_behavior_ir_from_runtime_observations,
 )
@@ -579,10 +585,47 @@ def build_discovery_plan(
     budget = int(getattr(campaign, "slice_budget", 0) or 0)
     if budget <= 0:
         raise MainlineContractError("obligation_budget_invalid")
+    budget_receipt = build_planning_budget_receipt(budget)
+    policy_identity = {
+        "policy_id": _text(inputs.campaign_context.get("policy_id")),
+        "policy_version": _text(inputs.campaign_context.get("policy_version")),
+        "strategy_fingerprint": _text(
+            inputs.campaign_context.get("strategy_fingerprint")
+        ),
+    }
+    history_receipt = _dict(
+        inputs.campaign_context.get("adaptive_planning_history_receipt")
+    )
+    historical_yield, history_match_status = (
+        select_matching_historical_yield(
+            history_receipt,
+            expected_policy_identity=policy_identity,
+        )
+        if history_receipt
+        else ({}, "NO_MATCHING_HISTORY")
+    )
+    if history_match_status == "MATCHED" and not historical_yield:
+        history_match_status = "MATCHED_HISTORY_HAS_NO_FAMILY_METRICS"
     obligation_plan = plan_obligation_round(
         obligations,
         experiments_by_obligation=by_obligation,
-        budget=max(budget, 200),  # Cover all obligations
+        budget=budget,
+        historical_yield=historical_yield,
+        historical_receipt_ids=(
+            [_text(history_receipt.get("receipt_id"))]
+            if (
+                history_match_status
+                in {"MATCHED", "MATCHED_HISTORY_HAS_NO_FAMILY_METRICS"}
+                and _text(history_receipt.get("receipt_id"))
+            )
+            else []
+        ),
+        cold_start_reason=history_match_status,
+    )
+    budget_receipt = finalize_planning_budget_receipt(
+        budget_receipt,
+        consumed_budget=int(obligation_plan.get("selected_count") or 0),
+        stop_condition=_text(obligation_plan.get("stop_condition")),
     )
     agent_intent_plan = build_agent_intent_plan(
         obligation_plan,
@@ -599,6 +642,7 @@ def build_discovery_plan(
             "all_experiments": all_experiments,
             "by_obligation": by_obligation,
             "obligation_plan": obligation_plan,
+            "planning_budget_receipt": budget_receipt,
             "agent_intent_plan": agent_intent_plan,
             "agent_semantic_link_receipt": agent_semantic_link_receipt,
             "runtime_source_overlay_receipt": dict(
@@ -621,7 +665,8 @@ def build_discovery_plan(
             "_documented_operations": operations,
             "_runtime_actors": runtime_actors,
             "_environment_type": environment_type,
-            "_planning_budget": max(budget, 200),
+            "_planning_budget": budget,
+            "_planning_policy_identity": policy_identity,
         },
     )
 
@@ -1098,6 +1143,16 @@ def run_experiment_candidate(
         gate_results=gate_results,
     )
     operational_summary = _operational_summary_from_attempt_ledger(ledger)
+    planning_history_receipt = build_planning_history_receipt(
+        policy_identity=_dict(
+            plan.experiments.get("_planning_policy_identity")
+        ),
+        attempts=[
+            dict(row)
+            for row in _list(ledger.get("attempts"))
+            if isinstance(row, dict)
+        ],
+    )
     deliverable, candidates, shadow = _authority_findings(
         raw_findings=[
             dict(row)
@@ -1232,6 +1287,10 @@ def run_experiment_candidate(
             and not str(key).startswith("_")
         },
         "obligation_plan": dict(obligation_plan),
+        "planning_budget_receipt": dict(
+            _dict(plan.experiments.get("planning_budget_receipt"))
+        ),
+        "adaptive_planning_history_receipt": planning_history_receipt,
         "agent_intent_plan": dict(agent_intent_plan),
         "agent_semantic_link_receipt": dict(
             _dict(plan.experiments.get("agent_semantic_link_receipt"))
@@ -1399,6 +1458,31 @@ def run_experiment_candidate(
             ),
         },
         "total_duration_ms": int((time.time() - started) * 1000),
+    }
+    result["adaptive_planning_cost_metrics"] = {
+        "schema_version": "qualibug.adaptive-planning-cost.v1",
+        "request_count": int(
+            operational_summary.get("observed_http_request_count") or 0
+        ),
+        "request_count_status": (
+            "MEASURED"
+            if operational_summary.get("complete") is True
+            else "NOT_MEASURED"
+        ),
+        "write_request_count": int(
+            operational_summary.get("write_request_attempt_count") or 0
+        ),
+        "elapsed_ms": result["total_duration_ms"],
+        "elapsed_status": "MEASURED",
+        "model_token_count": None,
+        "model_token_status": "NOT_MEASURED",
+        "estimated_cost_usd": None,
+        "cost_status": "NOT_MEASURED",
+        "unit_formal_deliverable_cost_usd": None,
+        "unit_cost_status": "NOT_MEASURED",
+        "formal_customer_deliverable_count": int(
+            formal.get("formal_customer_deliverable_count") or 0
+        ),
     }
     result["discovery_funnel"] = build_funnel(result)
     return result

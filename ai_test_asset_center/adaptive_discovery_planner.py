@@ -54,19 +54,35 @@ def score_obligation(
     key = f"{family}|{','.join(_list(obl.get('subject_refs'))[:3])}"
     novelty = 1.0 if key not in covered_keys else 0.15
     source_confidence = min(0.95, max(0.05, _num(obl.get("confidence"), 0.5)))
-    predicted_compile = _num(hist.get(f"compile:{family}"), 0.7)
-    predicted_exec = _num(hist.get(f"exec:{family}"), 0.6)
-    predicted_yield = _num(hist.get(f"formal_yield:{family}"), 0.2)
-    # Do not treat model confidence as formal yield.
-    information_gain = novelty * (0.4 + 0.6 * predicted_yield)
-    expected_cost = max(0.05, _num(hist.get(f"cost:{family}"), 0.2))
+    predicted_compile = _num(hist.get(f"compile:{family}"), 1.0)
+    predicted_exec = _num(hist.get(f"exec:{family}"), 1.0)
+    measured_yield = hist.get(f"formal_yield:{family}")
+    measured_cost = hist.get(f"cost:{family}")
+    # Cold start intentionally omits yield and cost factors. Neutral factors
+    # preserve source risk, confidence, novelty, and observed executability
+    # without fabricating commercial yield or spend.
+    yield_factor = (
+        max(0.05, _num(measured_yield))
+        if measured_yield is not None
+        else 1.0
+    )
+    information_gain = (
+        novelty * (0.4 + 0.6 * _num(measured_yield))
+        if measured_yield is not None
+        else novelty
+    )
+    expected_cost = (
+        max(0.05, _num(measured_cost))
+        if measured_cost is not None
+        else 1.0
+    )
     return (
         risk_priority
         * novelty
         * source_confidence
         * predicted_compile
         * predicted_exec
-        * max(0.05, predicted_yield)
+        * yield_factor
         * information_gain
         / expected_cost
     )
@@ -78,9 +94,13 @@ def plan_obligation_round(
     experiments_by_obligation: dict[str, dict[str, Any]] | None = None,
     budget: int = 20,
     historical_yield: dict[str, float] | None = None,
+    historical_receipt_ids: list[str] | None = None,
+    cold_start_reason: str = "NO_MATCHING_HISTORY",
     covered_keys: set[str] | None = None,
 ) -> dict[str, Any]:
     """Select obligations that are compiled and maximize information gain."""
+    if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0:
+        raise ValueError("obligation_budget_invalid")
     experiments = dict(experiments_by_obligation or {})
     covered = set(covered_keys or [])
     ranked: list[dict[str, Any]] = []
@@ -125,6 +145,21 @@ def plan_obligation_round(
     return {
         "schema_version": "qualibug.adaptive-obligation-plan.v1",
         "budget": budget,
+        "history_status": "OBSERVED" if historical_yield else "COLD_START",
+        "cold_start_reason": "" if historical_yield else _text(cold_start_reason),
+        "formal_yield_status": (
+            "MEASURED"
+            if any(
+                str(key).startswith("formal_yield:")
+                for key in _dict(historical_yield)
+            )
+            else "NOT_MEASURED"
+        ),
+        "historical_receipt_ids": [
+            _text(value)
+            for value in _list(historical_receipt_ids)
+            if _text(value)
+        ],
         "selected": selected,
         "pending_next_round": pending[:200],
         "selected_count": len(selected),
