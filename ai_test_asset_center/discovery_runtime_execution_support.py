@@ -437,3 +437,147 @@ def _empty_execution_batch() -> dict[str, Any]:
     }
 
 
+def _consume_pending_obligation_rounds(
+    *,
+    obligation_plan: dict[str, Any],
+    obligations: list[dict[str, Any]],
+    experiments_by_obligation: dict[str, dict[str, Any]],
+    behavior_ir: dict[str, Any],
+    root: Any,
+    project: str,
+    base_url: str,
+    runtime_contract: dict[str, Any],
+    mainline_run: dict[str, Any],
+    campaign_id: str,
+    automatic_round_limit: int,
+    execute_batch,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Consume ``pending_next_round`` with the same per-round budget.
+
+    Does not raise ``configured_budget``. Each additional campaign round re-runs
+    ``plan_obligation_round`` on still-pending COMPILED obligations until the
+    pending queue is empty or ``automatic_round_limit`` is reached. Remaining
+    pending stay visible as ``OBLIGATION_BUDGET_REACHED`` via manual terminals.
+    """
+
+    from .adaptive_discovery_planner import (
+        build_agent_intent_plan,
+        plan_obligation_round,
+    )
+
+    plan_row = dict(_dict(obligation_plan))
+    budget = int(plan_row.get("budget") or 0)
+    if budget <= 0:
+        return [], plan_row
+    round_limit = max(1, int(automatic_round_limit or 1))
+    pending_rows = [
+        dict(row)
+        for row in _list(plan_row.get("pending_next_round"))
+        if isinstance(row, dict) and _text(row.get("obligation_id"))
+    ]
+    if not pending_rows or round_limit <= 1:
+        return [], plan_row
+
+    obligation_by_id = {
+        _text(row.get("obligation_id")): dict(row)
+        for row in obligations
+        if isinstance(row, dict) and _text(row.get("obligation_id"))
+    }
+    experiments = {
+        _text(key): dict(value)
+        for key, value in _dict(experiments_by_obligation).items()
+        if _text(key) and isinstance(value, dict)
+    }
+    follow_on_batches: list[dict[str, Any]] = []
+    follow_on_receipts: list[dict[str, Any]] = []
+    # Round 1 already ran; additional rounds are 2..round_limit inclusive.
+    for planning_round in range(2, round_limit + 1):
+        pending_ids = [
+            _text(row.get("obligation_id"))
+            for row in pending_rows
+            if _text(row.get("obligation_id"))
+        ]
+        remaining_obligations = [
+            obligation_by_id[oid]
+            for oid in pending_ids
+            if oid in obligation_by_id
+        ]
+        remaining_experiments = {
+            oid: experiments[oid]
+            for oid in pending_ids
+            if oid in experiments
+            and _text(
+                _dict(_dict(experiments[oid]).get("compile_receipt")).get("status")
+            ).upper()
+            == "COMPILED"
+        }
+        if not remaining_experiments:
+            break
+        next_plan = plan_obligation_round(
+            remaining_obligations,
+            experiments_by_obligation=remaining_experiments,
+            behavior_ir=behavior_ir,
+            budget=budget,
+            cold_start_reason="PENDING_NEXT_ROUND_CONTINUATION",
+        )
+        next_intents = build_agent_intent_plan(
+            next_plan,
+            obligations=remaining_obligations,
+            experiments_by_obligation=remaining_experiments,
+            behavior_ir=behavior_ir,
+        )
+        next_scheduled = [
+            dict(row)
+            for row in _list(next_intents.get("intents"))
+            if isinstance(row, dict)
+        ]
+        if not next_scheduled:
+            pending_rows = [
+                dict(row)
+                for row in _list(next_plan.get("pending_next_round"))
+                if isinstance(row, dict)
+            ]
+            plan_row = {
+                **plan_row,
+                "pending_next_round": pending_rows[:200],
+                "pending_count": len(pending_rows),
+                "stop_condition": _text(next_plan.get("stop_condition"))
+                or plan_row.get("stop_condition"),
+            }
+            break
+        next_batch = execute_batch(
+            next_scheduled,
+            experiments_by_obligation=remaining_experiments,
+            behavior_ir=behavior_ir,
+            root=root,
+            project=project,
+            base_url=base_url,
+            runtime_contract=runtime_contract,
+            mainline_run=mainline_run,
+            campaign_id=campaign_id,
+        )
+        follow_on_batches.append(dict(_dict(next_batch)))
+        follow_on_receipts.append({
+            "planning_round": planning_round,
+            "selected_count": int(next_plan.get("selected_count") or 0),
+            "pending_count": int(next_plan.get("pending_count") or 0),
+            "executed_count": int(_dict(next_batch).get("executed_count") or 0),
+            "budget": budget,
+        })
+        pending_rows = [
+            dict(row)
+            for row in _list(next_plan.get("pending_next_round"))
+            if isinstance(row, dict)
+        ]
+        plan_row = {
+            **plan_row,
+            "pending_next_round": pending_rows[:200],
+            "pending_count": len(pending_rows),
+            "stop_condition": _text(next_plan.get("stop_condition"))
+            or plan_row.get("stop_condition"),
+            "follow_on_round_receipts": follow_on_receipts,
+        }
+        if not pending_rows:
+            break
+    return follow_on_batches, plan_row
+

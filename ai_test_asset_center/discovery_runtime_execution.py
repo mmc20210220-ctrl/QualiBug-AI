@@ -30,6 +30,7 @@ from .discovery_quality_projection import (
 )
 from .discovery_runtime_execution_support import (  # noqa: F401
     _authority_findings,
+    _consume_pending_obligation_rounds,
     _dict,
     _empty_execution_batch,
     _finalize_campaign,
@@ -168,6 +169,34 @@ def run_experiment_candidate(
     else:
         batch = _empty_execution_batch()
 
+    follow_on_batches: list[dict[str, Any]] = []
+    if runtime_approved:
+        follow_on_batches, obligation_plan = _consume_pending_obligation_rounds(
+            obligation_plan=obligation_plan,
+            obligations=[
+                dict(row)
+                for row in _list(plan.obligations.get("obligations"))
+                if isinstance(row, dict)
+            ],
+            experiments_by_obligation=dict(
+                _dict(plan.experiments.get("by_obligation"))
+            ),
+            behavior_ir=plan.behavior_ir,
+            root=inputs.root,
+            project=inputs.project,
+            base_url=_text(runtime_contract.get("approved_base_url")),
+            runtime_contract=runtime_contract,
+            mainline_run=plan.mainline_run,
+            campaign_id=plan.mainline_run["campaign_id"],
+            automatic_round_limit=int(
+                getattr(campaign_handle, "automatic_round_limit", 3) or 3
+            ),
+            execute_batch=execute_selected_experiments,
+        )
+        # Keep the live plan view aligned with drained pending for terminals.
+        if isinstance(plan.experiments, dict):
+            plan.experiments["obligation_plan"] = obligation_plan
+
     round_two_scheduled = [
         dict(row)
         for row in _list(
@@ -196,6 +225,12 @@ def run_experiment_candidate(
         for key, value in _dict(batch.get("compile_results")).items()
         if _text(key) and isinstance(value, dict)
     }
+    for follow_on in follow_on_batches:
+        compile_results.update({
+            _text(key): dict(value)
+            for key, value in _dict(follow_on.get("compile_results")).items()
+            if _text(key) and isinstance(value, dict)
+        })
     compile_results.update({
         _text(key): dict(value)
         for key, value in _dict(
@@ -215,6 +250,12 @@ def run_experiment_candidate(
         for key, value in _dict(batch.get("execution_results")).items()
         if _text(key) and isinstance(value, dict)
     }
+    for follow_on in follow_on_batches:
+        execution_results.update({
+            _text(key): dict(value)
+            for key, value in _dict(follow_on.get("execution_results")).items()
+            if _text(key) and isinstance(value, dict)
+        })
     execution_results.update({
         _text(key): dict(value)
         for key, value in _dict(
@@ -234,6 +275,12 @@ def run_experiment_candidate(
         for key, value in _dict(batch.get("gate_results")).items()
         if _text(key) and isinstance(value, dict)
     }
+    for follow_on in follow_on_batches:
+        gate_results.update({
+            _text(key): dict(value)
+            for key, value in _dict(follow_on.get("gate_results")).items()
+            if _text(key) and isinstance(value, dict)
+        })
     gate_results.update({
         _text(key): dict(value)
         for key, value in _dict(round_two_batch.get("gate_results")).items()
@@ -309,6 +356,11 @@ def run_experiment_candidate(
             dict(row)
             for row in (
                 _list(batch.get("findings"))
+                + [
+                    item
+                    for follow_on in follow_on_batches
+                    for item in _list(follow_on.get("findings"))
+                ]
                 + _list(round_two_batch.get("findings"))
             )
             if isinstance(row, dict)
@@ -385,6 +437,7 @@ def run_experiment_candidate(
     )
     executed_count = (
         int(batch.get("executed_count") or 0)
+        + sum(int(follow_on.get("executed_count") or 0) for follow_on in follow_on_batches)
         + int(round_two_batch.get("executed_count") or 0)
         + int(surface_execution.get("executed_count") or 0)
     )

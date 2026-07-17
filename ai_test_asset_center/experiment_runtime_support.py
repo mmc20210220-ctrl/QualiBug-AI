@@ -44,6 +44,34 @@ def _text(value: Any) -> str:
 
 _BODY_PLACEHOLDER_RE = re.compile(r"^\s*[<{]([A-Za-z_][A-Za-z0-9_]*)[>}]\s*$")
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_PERMITTED_OPERATION_INVOCATION = "permitted_operation_invocation"
+
+
+def _is_permitted_operation_invocation(experiment: dict[str, Any]) -> bool:
+    """True when compile already treated this experiment as permit-only.
+
+    Permit-only reversible writes observe via ``http_response`` and must not be
+    re-blocked at preflight solely for lacking an independent effect-read GET.
+    """
+
+    for assertion in _list(experiment.get("assertions")):
+        if not isinstance(assertion, dict):
+            continue
+        if _text(assertion.get("template")) == _PERMITTED_OPERATION_INVOCATION:
+            return True
+        if (
+            _text(_dict(assertion.get("property")).get("template"))
+            == _PERMITTED_OPERATION_INVOCATION
+        ):
+            return True
+    for step in _list(experiment.get("treatment_plan")):
+        if not isinstance(step, dict):
+            continue
+        if _text(step.get("intent")) == _PERMITTED_OPERATION_INVOCATION:
+            return True
+        if _text(step.get("property_template")) == _PERMITTED_OPERATION_INVOCATION:
+            return True
+    return False
 
 
 def _unresolved_path_placeholders(path: str) -> list[str]:
@@ -317,8 +345,12 @@ def preflight_experiment_executable(
             return False, "BLOCKED_MISSING_BINDING", f"unresolved_path:{op_ref}:{path}"
         if not method:
             return False, "BLOCKED_MISSING_OPERATION", f"missing_method:{op_ref}"
+        # Align with experiment compile: permit-only reversible writes may rely
+        # on http_response alone. Non-permit writes still require a declared
+        # effect-read observer path (fail closed).
         if (
             method in _WRITE_METHODS
+            and not _is_permitted_operation_invocation(exp)
             and not _declared_observation_path(path, ops)
             and not _declared_effect_observer_available(op, ops)
         ):
