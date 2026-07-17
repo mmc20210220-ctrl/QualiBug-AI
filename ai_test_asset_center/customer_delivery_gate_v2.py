@@ -1297,9 +1297,15 @@ def validate_customer_delivery_gate_receipt_v2(
     }:
         raise DeliveryGateV2Error("delivery_gate_adjudication_invalid")
     if deliverable:
+        expected_activation = (
+            "BLOCKED"
+            if _text(adjudication.get("oracle")) == "VIOLATION"
+            and _text(adjudication.get("activation")) == "BLOCKED"
+            else "ACTIVE"
+        )
         expected_adjudication = {
             "execution": "EXECUTED",
-            "activation": "ACTIVE",
+            "activation": expected_activation,
             "assertion": "VIOLATION",
             "oracle": "VIOLATION",
             "reproduction": "REPRODUCED",
