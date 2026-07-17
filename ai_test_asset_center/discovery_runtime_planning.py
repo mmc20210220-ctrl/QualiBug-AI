@@ -429,6 +429,7 @@ def build_discovery_plan(
     obligation_plan = plan_obligation_round(
         obligations,
         experiments_by_obligation=by_obligation,
+        behavior_ir=behavior_ir,
         budget=budget,
         historical_yield=historical_yield,
         historical_receipt_ids=(

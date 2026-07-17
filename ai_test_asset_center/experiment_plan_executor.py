@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
+import re
 from typing import Any
+from urllib.parse import urlencode
 
 from .contract_oracles import build_contract_evidence_receipt
 from .experiment_runtime_support import (
@@ -139,6 +141,38 @@ def execute_non_barrier_plans(
                 runtime_bindings,
             )
             unresolved_path_tokens = _unresolved_path_placeholders(path)
+            query_spec = _dict(step.get("query"))
+            if query_spec and not unresolved_path_tokens:
+                materialized_query: dict[str, str] = {}
+                unresolved_query_tokens: list[str] = []
+                for key, raw_value in query_spec.items():
+                    name = _text(key)
+                    if not name:
+                        continue
+                    value = raw_value
+                    if isinstance(raw_value, str):
+                        token_match = re.fullmatch(
+                            r"\s*\{([A-Za-z_][A-Za-z0-9_]*)\}\s*",
+                            raw_value,
+                        )
+                        if token_match:
+                            token = _text(token_match.group(1))
+                            bound = runtime_bindings.get(token)
+                            if bound in (None, "", [], {}):
+                                unresolved_query_tokens.append(token)
+                                continue
+                            value = bound
+                    if value in (None, "", [], {}):
+                        unresolved_query_tokens.append(name)
+                        continue
+                    materialized_query[name] = str(value)
+                if unresolved_query_tokens:
+                    unresolved_path_tokens = list(dict.fromkeys(
+                        [*unresolved_path_tokens, *unresolved_query_tokens]
+                    ))
+                elif materialized_query:
+                    separator = "&" if "?" in path else "?"
+                    path = f"{path}{separator}{urlencode(materialized_query)}"
             if unresolved_path_tokens:
                 reason = (
                     "path_placeholder_unresolved:"

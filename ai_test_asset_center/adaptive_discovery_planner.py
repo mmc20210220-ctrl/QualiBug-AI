@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 from .observed_product_scan_protocol import find_evaluator_private_context_paths
+from .real_id_resolver import normalize_path_placeholders
 
 
 AGENT_INTENT_PLAN_SCHEMA = "qualibug.agent-intent-plan.v1"
@@ -32,6 +33,82 @@ def _num(value: Any, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _path_prefix_from_path(path: str) -> str:
+    normalized = normalize_path_placeholders(_text(path)).split("?", 1)[0].rstrip("/")
+    parts = [part for part in normalized.split("/") if part]
+    if len(parts) >= 2:
+        return "/" + "/".join(parts[:2])
+    if parts:
+        return "/" + parts[0]
+    return ""
+
+
+def _operation_key(method: str, path: str) -> str:
+    method_text = _text(method).upper() or "GET"
+    normalized = normalize_path_placeholders(_text(path)).split("?", 1)[0]
+    if not normalized:
+        return ""
+    return f"{method_text} {normalized}"
+
+
+def _resolve_operation_path(
+    obligation: dict[str, Any],
+    *,
+    experiments_by_obligation: dict[str, dict[str, Any]],
+    operations_by_id: dict[str, dict[str, Any]],
+) -> tuple[str, str, str]:
+    """Return (path_prefix, operation_key, resolved_path) from IR or experiment plans."""
+
+    obl = _dict(obligation)
+    prop = _dict(obl.get("property"))
+    path_prefix = _text(prop.get("operation_path_prefix"))
+    method = ""
+    path = ""
+
+    oid = _text(obl.get("obligation_id"))
+    experiment = _dict(experiments_by_obligation.get(oid))
+    for plan_key in ("treatment_plan", "control_plan"):
+        for step in _list(experiment.get(plan_key)):
+            if not isinstance(step, dict):
+                continue
+            candidate_path = _text(step.get("path") or step.get("raw_path"))
+            if candidate_path.startswith("/"):
+                path = candidate_path
+                method = _text(step.get("method"))
+                break
+        if path:
+            break
+
+    if not path:
+        for ref in _list(obl.get("required_operations")):
+            ref_text = _text(ref)
+            op = _dict(operations_by_id.get(ref_text))
+            candidate = _text(op.get("path") or op.get("raw_path"))
+            if candidate.startswith("/"):
+                path = candidate
+                method = _text(op.get("method"))
+                break
+            # Fallback: derive a coarse prefix from refs that already embed a path.
+            if "/api/" in ref_text:
+                path_part = "/api/" + ref_text.split("/api/", 1)[1]
+                parts = [part for part in path_part.split("/") if part]
+                if len(parts) >= 2:
+                    path_prefix = path_prefix or ("/" + "/".join(parts[:2]))
+                    break
+
+    if path and not path_prefix:
+        path_prefix = _path_prefix_from_path(path)
+    operation_key = _operation_key(method, path) if path else ""
+    if not operation_key:
+        op_ref = _text(prop.get("operation_ref"))
+        if not op_ref:
+            refs = [_text(value) for value in _list(obl.get("required_operations")) if _text(value)]
+            op_ref = refs[0] if refs else ""
+        if op_ref:
+            operation_key = f"op:{op_ref}"
+    return path_prefix, operation_key, path
 
 
 def score_obligation(
@@ -92,6 +169,7 @@ def plan_obligation_round(
     obligations: list[dict[str, Any]],
     *,
     experiments_by_obligation: dict[str, dict[str, Any]] | None = None,
+    behavior_ir: dict[str, Any] | None = None,
     budget: int = 20,
     historical_yield: dict[str, float] | None = None,
     historical_receipt_ids: list[str] | None = None,
@@ -102,6 +180,11 @@ def plan_obligation_round(
     if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0:
         raise ValueError("obligation_budget_invalid")
     experiments = dict(experiments_by_obligation or {})
+    operations_by_id = {
+        _text(_dict(row).get("id")): dict(row)
+        for row in _list(_dict(behavior_ir).get("operations"))
+        if isinstance(row, dict) and _text(_dict(row).get("id"))
+    }
     covered = set(covered_keys or [])
     ranked: list[dict[str, Any]] = []
     for obl in obligations:
@@ -112,36 +195,31 @@ def plan_obligation_round(
         receipt = _dict(exp.get("compile_receipt"))
         if _text(receipt.get("status")) != "COMPILED" and _text(obl.get("compile_status")) != "COMPILED":
             continue
-        prop = _dict(obl.get("property"))
-        path_prefix = _text(prop.get("operation_path_prefix"))
-        if not path_prefix:
-            # Fallback: derive a coarse prefix from required operation refs that
-            # already embed a path (industry-neutral; no module name table).
-            for ref in _list(obl.get("required_operations")):
-                ref_text = _text(ref)
-                if "/api/" in ref_text:
-                    path_part = "/api/" + ref_text.split("/api/", 1)[1]
-                    parts = [part for part in path_part.split("/") if part]
-                    if len(parts) >= 2:
-                        path_prefix = "/" + "/".join(parts[:2])
-                        break
+        path_prefix, operation_key, _resolved_path = _resolve_operation_path(
+            obl,
+            experiments_by_obligation=experiments,
+            operations_by_id=operations_by_id,
+        )
         score = score_obligation(obl, covered_keys=covered, historical_yield=historical_yield)
         ranked.append({
             "obligation_id": oid,
             "risk_family": _text(obl.get("risk_family")),
             "path_prefix": path_prefix,
+            "operation_key": operation_key,
             "score": round(score, 6),
             "experiment_id": _text(exp.get("experiment_id")),
         })
     ranked.sort(key=lambda item: (-item["score"], item["obligation_id"]))
 
-    # Family-fair + path-prefix-fair selection within the fixed budget: do not
-    # let abundant authorization/validation (or one API prefix) monopolize a
-    # cold-start window. Soft-cap is floor(budget / distinct_buckets).
+    # Family-fair + path-prefix-fair + operation-fair selection within the fixed
+    # budget: do not let abundant authorization/validation (or one API prefix /
+    # one operation) monopolize a cold-start window.
     families_present: list[str] = []
     seen_families: set[str] = set()
     prefixes_present: list[str] = []
     seen_prefixes: set[str] = set()
+    operations_present: list[str] = []
+    seen_operations: set[str] = set()
     for item in ranked:
         family = item["risk_family"]
         if family and family not in seen_families:
@@ -151,35 +229,57 @@ def plan_obligation_round(
         if prefix and prefix not in seen_prefixes:
             seen_prefixes.add(prefix)
             prefixes_present.append(prefix)
+        op_key = item["operation_key"]
+        if op_key and op_key not in seen_operations:
+            seen_operations.add(op_key)
+            operations_present.append(op_key)
     family_soft_cap = max(1, budget // max(1, len(families_present)))
     prefix_soft_cap = max(1, budget // max(1, len(prefixes_present) or 1))
+    operation_soft_cap = max(1, budget // max(1, len(operations_present) or 1))
 
     selected: list[dict[str, Any]] = []
     selected_ids: set[str] = set()
     family_counts: dict[str, int] = {}
     prefix_counts: dict[str, int] = {}
+    operation_counts: dict[str, int] = {}
 
-    def _try_add(item: dict[str, Any]) -> bool:
+    def _try_add(item: dict[str, Any], *, respect_soft_caps: bool = True) -> bool:
         oid = item["obligation_id"]
         if len(selected) >= budget or oid in selected_ids:
             return False
+        family = item["risk_family"]
+        prefix = item["path_prefix"]
+        op_key = item["operation_key"]
+        if respect_soft_caps:
+            if family and family_counts.get(family, 0) >= family_soft_cap:
+                return False
+            if prefix and prefix_counts.get(prefix, 0) >= prefix_soft_cap:
+                return False
+            if op_key and operation_counts.get(op_key, 0) >= operation_soft_cap:
+                return False
         selected.append(item)
         selected_ids.add(oid)
-        family = item["risk_family"]
-        family_counts[family] = family_counts.get(family, 0) + 1
-        prefix = item["path_prefix"]
+        if family:
+            family_counts[family] = family_counts.get(family, 0) + 1
         if prefix:
             prefix_counts[prefix] = prefix_counts.get(prefix, 0) + 1
+        if op_key:
+            operation_counts[op_key] = operation_counts.get(op_key, 0) + 1
         return True
 
     for item in ranked:
         if family_counts.get(item["risk_family"], 0) < 1:
-            _try_add(item)
+            _try_add(item, respect_soft_caps=False)
 
     for item in ranked:
         prefix = item["path_prefix"]
         if prefix and prefix_counts.get(prefix, 0) < 1:
-            _try_add(item)
+            _try_add(item, respect_soft_caps=False)
+
+    for item in ranked:
+        op_key = item["operation_key"]
+        if op_key and operation_counts.get(op_key, 0) < 1:
+            _try_add(item, respect_soft_caps=False)
 
     progressed = True
     while len(selected) < budget and progressed:
@@ -192,9 +292,6 @@ def plan_obligation_round(
             for item in ranked:
                 if item["risk_family"] != family or item["obligation_id"] in selected_ids:
                     continue
-                prefix = item["path_prefix"]
-                if prefix and prefix_counts.get(prefix, 0) >= prefix_soft_cap:
-                    continue
                 if _try_add(item):
                     progressed = True
                 break
@@ -206,16 +303,62 @@ def plan_obligation_round(
             for item in ranked:
                 if item["path_prefix"] != prefix or item["obligation_id"] in selected_ids:
                     continue
-                if family_counts.get(item["risk_family"], 0) >= family_soft_cap:
+                if _try_add(item):
+                    progressed = True
+                break
+        for op_key in operations_present:
+            if len(selected) >= budget:
+                break
+            if operation_counts.get(op_key, 0) >= operation_soft_cap:
+                continue
+            for item in ranked:
+                if item["operation_key"] != op_key or item["obligation_id"] in selected_ids:
                     continue
                 if _try_add(item):
                     progressed = True
                 break
 
+    # Final fill prefers uncovered operations/prefixes under soft-caps, then
+    # remaining slots still under soft-caps. Soft-caps are never fully ignored:
+    # over-budget monopoly of one prefix/operation is a planning bug.
+    for prefer_uncovered_only in (True, False):
+        for item in ranked:
+            if len(selected) >= budget:
+                break
+            op_key = item["operation_key"]
+            prefix = item["path_prefix"]
+            uncovered = (
+                (op_key and operation_counts.get(op_key, 0) < 1)
+                or (prefix and prefix_counts.get(prefix, 0) < 1)
+            )
+            if prefer_uncovered_only and not uncovered:
+                continue
+            _try_add(item, respect_soft_caps=True)
+
+    # Last resort: fill remaining budget while still respecting operation and
+    # prefix soft-caps (family soft-cap may relax so mixed-family windows can
+    # exhaust budget without starving rare prefixes).
     for item in ranked:
         if len(selected) >= budget:
             break
-        _try_add(item)
+        oid = item["obligation_id"]
+        if oid in selected_ids:
+            continue
+        prefix = item["path_prefix"]
+        op_key = item["operation_key"]
+        if prefix and prefix_counts.get(prefix, 0) >= prefix_soft_cap:
+            continue
+        if op_key and operation_counts.get(op_key, 0) >= operation_soft_cap:
+            continue
+        selected.append(item)
+        selected_ids.add(oid)
+        family = item["risk_family"]
+        if family:
+            family_counts[family] = family_counts.get(family, 0) + 1
+        if prefix:
+            prefix_counts[prefix] = prefix_counts.get(prefix, 0) + 1
+        if op_key:
+            operation_counts[op_key] = operation_counts.get(op_key, 0) + 1
 
     pending = [item for item in ranked if item["obligation_id"] not in selected_ids]
     return {
@@ -242,6 +385,7 @@ def plan_obligation_round(
         "pending_count": len(pending),
         "family_coverage": family_counts,
         "path_prefix_coverage": prefix_counts,
+        "operation_coverage": operation_counts,
         "stop_condition": "budget_exhausted" if pending else "in_scope_obligations_scheduled",
     }
 

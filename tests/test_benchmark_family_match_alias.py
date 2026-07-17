@@ -38,7 +38,37 @@ def test_product_concurrency_aliases_to_match_ontology_race_family() -> None:
     assert float(matched["__match_score"]) >= 0.58
 
 
-def test_owner_tenant_visibility_aliases_to_authorization_access_control() -> None:
+def test_isolation_owner_tenant_visibility_aliases_to_tenant_isolation() -> None:
+    """Same-role isolation obligations must not be scored as generic authz."""
+    finding = {
+        "title": "[ContractOracle] owner_tenant_visibility: buyer GET /api/cart/items?userId=peer-id",
+        "category": "owner_tenant_visibility",
+        "risk_family": "isolation",
+        "description": "control=buyer succeeded; treatment=buyer violated the typed assertion",
+        "failed_assertions": [{"assertion_id": "assert_isolation", "kind": "owner_tenant_visibility"}],
+        "actual": {
+            "owner_can_access": True,
+            "viewer_can_access": True,
+            "leak_detected": True,
+        },
+        "path": "/api/cart/items",
+        "reproduction": {"method": "GET", "path": "/api/cart/items?userId=peer-id"},
+    }
+    assert _canonical_match_family(finding) == "tenant_isolation"
+
+    gt = {
+        "bug_id": "SYNTH-CART-001",
+        "title": "购物车查询传入 userId 查看别人购物车",
+        "type": "数据隔离",
+        "match_keywords": ["cart/items", "userId", "别人购物车", "越权"],
+        "trigger": "buyer01 GET /api/cart/items?userId=buyer02",
+    }
+    assert _canonical_match_family(gt) == "tenant_isolation"
+    matched = _match_finding_to_gt(finding, [gt], set())
+    assert matched is not None
+    assert matched["bug_id"] == "SYNTH-CART-001"
+    assert float(matched["__match_score"]) >= 0.58
+
     """Role-denied owner_tenant_visibility is authz, not field visibility leak."""
     search_finding = {
         "title": "[ContractOracle] owner_tenant_visibility: seller GET /api/users/admin/search",

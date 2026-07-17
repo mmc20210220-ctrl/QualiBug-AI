@@ -266,6 +266,11 @@ def _text_blob(item: dict[str, Any]) -> str:
 
 def _explicit_family(item: dict[str, Any]) -> str:
     ontology = _benchmark_match_ontology()
+    # Isolation experiments reuse assertion kind owner_tenant_visibility, but
+    # their obligation/assertion identity is isolation. Prefer that over the
+    # authorization alias on the shared assertion kind / category label.
+    if _isolation_owner_visibility_signal(item):
+        return "tenant_isolation"
     for key in ("risk_family", "family", "defect_family", "risk_type", "category", "type"):
         value = str(item.get(key) or "").strip().lower()
         if value in ontology:
@@ -278,6 +283,39 @@ def _explicit_family(item: dict[str, Any]) -> str:
             if value and value in aliases:
                 return family
     return ""
+
+
+def _isolation_owner_visibility_signal(item: dict[str, Any]) -> bool:
+    """True when owner_tenant_visibility evidence came from an isolation obligation."""
+
+    risk = str(item.get("risk_family") or "").strip().lower()
+    if risk == "isolation":
+        return True
+    template = str(
+        item.get("property_template")
+        or _dict(item.get("property")).get("template")
+        or ""
+    ).strip().lower()
+    if template == "owner_viewer_isolation":
+        return True
+    assertion_ids: list[str] = []
+    for key in ("assertion_id",):
+        value = str(item.get(key) or "").strip().lower()
+        if value:
+            assertion_ids.append(value)
+    for row in item.get("failed_assertions") or []:
+        if isinstance(row, dict):
+            value = str(row.get("assertion_id") or "").strip().lower()
+            if value:
+                assertion_ids.append(value)
+    evidence = item.get("evidence") if isinstance(item.get("evidence"), dict) else {}
+    assertion = evidence.get("assertion") if isinstance(evidence.get("assertion"), dict) else {}
+    assertion_ids.append(str(assertion.get("assertion_id") or "").strip().lower())
+    return any(value == "assert_isolation" for value in assertion_ids if value)
+
+
+def _dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
 
 def _canonical_match_family(item: dict[str, Any]) -> str:

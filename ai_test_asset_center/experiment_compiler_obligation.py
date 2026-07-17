@@ -246,7 +246,13 @@ def compile_experiment_for_obligation(
     if (
         not is_write
         and family in {"authorization", "isolation", "visibility"}
-        and prop.get("require_same_resource") is True
+        and (
+            prop.get("require_same_resource") is True
+            or (
+                family == "isolation"
+                and _text(prop.get("ownership_param"))
+            )
+        )
     ):
         control_fixture_binding = _source_declared_control_fixture_binding(
             operation=primary_op,
@@ -265,6 +271,44 @@ def compile_experiment_for_obligation(
             if isinstance(row, dict)
         ):
             binding_plan.append(control_fixture_binding)
+    if family == "isolation" and _text(prop.get("ownership_param")):
+        identity_target = _text(prop.get("identity_binding_target")) or "user_id"
+        if identity_target and not any(
+            _text(row.get("target")) == identity_target
+            for row in binding_plan
+            if isinstance(row, dict)
+        ):
+            identity_resolvers = [
+                {
+                    "operation_ref": _text(candidate.get("id")),
+                    "method": "GET",
+                    "path": normalize_path_placeholders(
+                        _text(candidate.get("path") or candidate.get("raw_path"))
+                    ),
+                }
+                for candidate in _list(ir.get("operations"))
+                if isinstance(candidate, dict)
+                and _text(candidate.get("method")).upper() in {"GET", "HEAD"}
+                and normalize_path_placeholders(
+                    _text(candidate.get("path") or candidate.get("raw_path"))
+                ).rstrip("/").endswith("/me")
+                and _text(candidate.get("id"))
+            ]
+            if identity_resolvers:
+                binding_plan.append({
+                    "target": identity_target,
+                    "target_path": "/{" + identity_target + "}",
+                    "status": "runtime_resolvable",
+                    "source_priority": "owner_identity_read",
+                    "resolver_operations": identity_resolvers[:2],
+                    "value_fingerprint": "",
+                })
+            else:
+                return blocked_experiment(
+                    oid,
+                    "BLOCKED_MISSING_BINDING",
+                    "owner_identity_resolver",
+                )
     if family == "state":
         state_token = _state_match_token(prop.get("from_state"))
         normalized_path = normalize_path_placeholders(
@@ -293,7 +337,13 @@ def compile_experiment_for_obligation(
             "BLOCKED_MISSING_BINDING",
             ",".join(unresolved[:8]),
         )
-    if is_write and not write_observers:
+    # Permit-only reversible writes observe via http_response; they must not be
+    # starved solely because no separate effect-read observer is declared yet.
+    if (
+        is_write
+        and not write_observers
+        and _text(prop.get("template")) != "permitted_operation_invocation"
+    ):
         return blocked_experiment(
             oid,
             "BLOCKED_MISSING_OBSERVER",
@@ -343,6 +393,36 @@ def compile_experiment_for_obligation(
             cleanup_req.get("operation_ref")
             or cleanup_req.get("compensation_operation_ref")
         )
+        if not cleanup_op:
+            # Bind unique source compensates relation when the obligation left
+            # cleanup unresolved but Behavior IR already declared it.
+            relation_compensators = {
+                _text(relation.get("operation_ref") or relation.get("from_ref"))
+                for relation in _list(ir.get("relations"))
+                if isinstance(relation, dict)
+                and _text(relation.get("relation_type")) == "compensates"
+                and (
+                    _text(relation.get("to_ref")) == primary_op_id
+                    or any(
+                        isinstance(effect, dict)
+                        and _text(effect.get("cleanup_target_operation_ref"))
+                        == primary_op_id
+                        for effect in _list(relation.get("effects"))
+                    )
+                )
+                and _text(relation.get("operation_ref") or relation.get("from_ref"))
+                in ops
+                and _text(relation.get("operation_ref") or relation.get("from_ref"))
+                != primary_op_id
+            }
+            if len(relation_compensators) == 1:
+                cleanup_op = next(iter(relation_compensators))
+                cleanup_req = {
+                    **cleanup_req,
+                    "operation_ref": cleanup_op,
+                    "required": True,
+                    "mode": _text(cleanup_req.get("mode") or "reverse_order"),
+                }
         delta_field, inverse_delta_body = _inverse_delta_cleanup_spec(primary_op)
         cleanup_op_method = _text(
             _dict(ops.get(cleanup_op)).get("method")
@@ -503,7 +583,11 @@ def compile_experiment_for_obligation(
         )
     )
     observer_requirements = list(required_observers)
-    if is_write and family in {"authorization", "isolation", "visibility"}:
+    if (
+        is_write
+        and family in {"authorization", "isolation", "visibility"}
+        and _text(prop.get("template")) != "permitted_operation_invocation"
+    ):
         observer_requirements.append("business_effect")
     observers, observer_reason, observer_detail = compile_observer_requirements(
         observer_requirements,
@@ -552,11 +636,18 @@ def compile_experiment_for_obligation(
     }
     if effect_observer_ids:
         if not write_observers:
-            return blocked_experiment(
-                oid,
-                "BLOCKED_MISSING_OBSERVER",
-                ",".join(sorted(effect_observer_ids)),
-            )
+            if _text(prop.get("template")) == "permitted_operation_invocation":
+                observers = [
+                    observer
+                    for observer in observers
+                    if _text(observer.get("observer_id")) not in effect_observer_ids
+                ]
+            else:
+                return blocked_experiment(
+                    oid,
+                    "BLOCKED_MISSING_OBSERVER",
+                    ",".join(sorted(effect_observer_ids)),
+                )
         else:
             for observer in observers:
                 if _text(observer.get("observer_id")) in effect_observer_ids:
@@ -649,6 +740,7 @@ def compile_experiment_for_obligation(
     return make_experiment(
         obligation_id=oid,
         policy_version=policy_version,
+        risk_family=family,
         control_plan=control_plan,
         treatment_plan=treatment_plan,
         binding_plan=binding_plan,
@@ -702,6 +794,7 @@ def make_experiment(
     *,
     obligation_id: str,
     policy_version: str = "",
+    risk_family: str = "",
     control_plan: list[dict[str, Any]] | None = None,
     treatment_plan: list[dict[str, Any]] | None = None,
     binding_plan: list[dict[str, Any]] | None = None,
@@ -721,6 +814,7 @@ def make_experiment(
         "experiment_id": eid,
         "obligation_id": _text(obligation_id),
         "policy_version": _text(policy_version),
+        "risk_family": _text(risk_family),
         "control_plan": list(control_plan or []),
         "treatment_plan": list(treatment_plan or []),
         "binding_plan": list(binding_plan or []),

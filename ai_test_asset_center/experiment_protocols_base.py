@@ -516,6 +516,17 @@ def compile_family_protocol(
     }
     if write_body:
         treatment_step["body"] = deepcopy(write_body)
+    ownership_param = _text(property_spec.get("ownership_param"))
+    ownership_location = _text(property_spec.get("ownership_param_location")).lower()
+    identity_target = _text(property_spec.get("identity_binding_target")) or "user_id"
+    if family == "isolation" and ownership_param and identity_target:
+        placeholder = "{" + identity_target + "}"
+        if ownership_location == "query":
+            treatment_step["query"] = {ownership_param: placeholder}
+        elif ownership_location == "body":
+            body = dict(_dict(treatment_step.get("body")))
+            body[ownership_param] = placeholder
+            treatment_step["body"] = body
     return {
         "status": "COMPILED",
         "control_plan": control_plan,

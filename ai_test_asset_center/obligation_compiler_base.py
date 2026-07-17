@@ -74,6 +74,143 @@ def _relation_actor_ref(relation: dict[str, Any]) -> str:
     return _text(relation.get("actor_ref") or relation.get("from_ref"))
 
 
+_OWNERSHIP_PARAM_NAMES = frozenset({
+    "userid",
+    "user_id",
+    "ownerid",
+    "owner_id",
+    "accountid",
+    "account_id",
+})
+_OWNERSHIP_LANGUAGE_MARKERS = (
+    "自己的",
+    "本人",
+    "归属",
+    "own",
+    "owner",
+    "cross-user",
+    "只能查询",
+)
+
+
+def _param_key(name: str) -> str:
+    return re.sub(r"[^a-z0-9_]+", "", _text(name).lower())
+
+
+def _is_ownership_param_name(name: str) -> bool:
+    return _param_key(name) in _OWNERSHIP_PARAM_NAMES
+
+
+def _path_has_resource_placeholder(path: str) -> bool:
+    normalized = normalize_path_placeholders(_text(path))
+    return "{" in normalized or "/:" in _text(path)
+
+
+def _ownership_params_declared_on_operation(operation: dict[str, Any]) -> list[str]:
+    """Return ownership identity params declared on one operation."""
+
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def _add(name: str) -> None:
+        text = _text(name)
+        key = _param_key(text)
+        if not text or key not in _OWNERSHIP_PARAM_NAMES or key in seen:
+            return
+        seen.add(key)
+        found.append(text)
+
+    for tag in _list(operation.get("tags")):
+        _add(_text(tag))
+    for parameter in _list(operation.get("parameters")):
+        if isinstance(parameter, dict):
+            _add(_text(parameter.get("name")))
+        else:
+            _add(parameter)
+    corpus = " ".join((
+        _text(operation.get("summary")),
+        _text(operation.get("description")),
+    ))
+    for match in re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", corpus):
+        _add(match)
+    for match in re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\b", corpus):
+        if _is_ownership_param_name(match):
+            _add(match)
+    schema = _dict(operation.get("request_schema"))
+    content = _dict(schema.get("content"))
+    for media in content.values():
+        properties = _dict(_dict(_dict(media).get("schema")).get("properties"))
+        for field_name in properties:
+            _add(field_name)
+    example = _dict(operation.get("request_example"))
+    for field_name in example:
+        _add(field_name)
+    return found
+
+
+def _operation_declares_ownership_language(operation: dict[str, Any]) -> bool:
+    corpus = " ".join((
+        _text(operation.get("summary")),
+        _text(operation.get("description")),
+    ))
+    lowered = corpus.lower()
+    return any(
+        marker in corpus or marker in lowered
+        for marker in _OWNERSHIP_LANGUAGE_MARKERS
+    )
+
+
+def _corpus_ownership_params(operations: list[dict[str, Any]]) -> list[str]:
+    """Reuse ownership binders already declared elsewhere in the same IR corpus."""
+
+    found: list[str] = []
+    seen: set[str] = set()
+    for operation in operations:
+        if not (
+            _ownership_params_declared_on_operation(operation)
+            or _operation_declares_ownership_language(operation)
+        ):
+            continue
+        for name in _ownership_params_declared_on_operation(operation):
+            key = _param_key(name)
+            if key in seen:
+                continue
+            seen.add(key)
+            found.append(name)
+    return found
+
+
+def _resolve_ownership_binder(
+    operation: dict[str, Any],
+    *,
+    operations: list[dict[str, Any]],
+) -> dict[str, str]:
+    """Resolve a source-grounded ownership identity binder for collection ops.
+
+    Path-param resources do not need a binder. Collection reads/writes only
+    compile isolation when an ownership param is declared on the operation or
+    transferable from another ownership-declared operation in the same IR.
+    """
+
+    path = _text(operation.get("path") or operation.get("raw_path"))
+    if _path_has_resource_placeholder(path):
+        return {}
+    declared = _ownership_params_declared_on_operation(operation)
+    candidates = list(declared)
+    for name in _corpus_ownership_params(operations):
+        if _param_key(name) not in {_param_key(item) for item in candidates}:
+            candidates.append(name)
+    if not candidates:
+        return {}
+    method = _text(operation.get("method")).upper()
+    location = "body" if method in {"POST", "PUT", "PATCH"} else "query"
+    return {
+        "name": candidates[0],
+        "location": location,
+        "identity_binding_target": "user_id",
+    }
+
+
 def _compile_gap(*, subject_ref: str, relation_types: set[str]) -> dict[str, Any]:
     relation_label = ",".join(sorted(relation_types))
     material = f"BLOCKED_MISSING_IR_RELATION|{subject_ref}|{relation_label}"
@@ -165,6 +302,17 @@ def _actor_has_runtime_binding(actor: dict[str, Any]) -> bool:
     return bool(secret_ref)
 
 
+def _cleanup_is_schedulable(requirement: dict[str, Any]) -> bool:
+    """True when a write may leave the compile pool (cleanup not required or bound)."""
+
+    req = _dict(requirement)
+    if req.get("required") is False:
+        return True
+    return bool(
+        _text(req.get("operation_ref") or req.get("compensation_operation_ref"))
+    )
+
+
 def _cleanup_requirement(
     operation: dict[str, Any],
     operations: list[dict[str, Any]],
@@ -179,6 +327,9 @@ def _cleanup_requirement(
     - compensator primary (DELETE/release/cancel/…) → unique compensated
       create/restore operation (recreate), preferring a unique POST when multiple
       targets exist
+
+    Compensator identity may appear on ``operation_ref``, ``from_ref``, or
+    ``effects[].cleanup_target_operation_ref`` (Behavior IR derivation stamps).
     """
     op = _dict(operation)
     is_write = _text(op.get("read_write")) == "write"
@@ -193,15 +344,30 @@ def _cleanup_requirement(
     }
     operation_ids = set(operations_by_id)
     op_id = _text(op.get("id"))
-    compensation_refs = {
-        _text(relation.get("operation_ref"))
-        for relation in relations
-        if _text(relation.get("relation_type")) == "compensates"
-        and _text(relation.get("to_ref")) == op_id
-        and _text(relation.get("from_ref")) == _text(relation.get("operation_ref"))
-        and _text(relation.get("operation_ref")) in operation_ids
-        and _text(relation.get("operation_ref")) != op_id
-    }
+    compensation_refs: set[str] = set()
+    for relation in relations:
+        if _text(relation.get("relation_type")) != "compensates":
+            continue
+        compensator = _text(
+            relation.get("operation_ref") or relation.get("from_ref")
+        )
+        targets_primary = _text(relation.get("to_ref")) == op_id
+        if not targets_primary:
+            for effect in _list(relation.get("effects")):
+                if not isinstance(effect, dict):
+                    continue
+                if _text(effect.get("cleanup_target_operation_ref")) == op_id:
+                    targets_primary = True
+                    compensator = compensator or _text(
+                        relation.get("operation_ref") or relation.get("from_ref")
+                    )
+                    break
+        if (
+            targets_primary
+            and compensator in operation_ids
+            and compensator != op_id
+        ):
+            compensation_refs.add(compensator)
     if len(compensation_refs) == 1:
         requirement["operation_ref"] = next(iter(compensation_refs))
         return requirement
@@ -210,8 +376,7 @@ def _cleanup_requirement(
         _text(relation.get("to_ref"))
         for relation in relations
         if _text(relation.get("relation_type")) == "compensates"
-        and _text(relation.get("operation_ref")) == op_id
-        and _text(relation.get("from_ref")) == op_id
+        and _text(relation.get("operation_ref") or relation.get("from_ref")) == op_id
         and _text(relation.get("to_ref")) in operation_ids
         and _text(relation.get("to_ref")) != op_id
     }
@@ -448,7 +613,12 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
                 ),
             )
         is_write = _text(op.get("read_write") or op.get("side_effect_class")) == "write"
-        if active_permit_refs and paired_auth == 0 and not is_write:
+        if active_permit_refs and paired_auth == 0:
+            cleanup_req = _cleanup_requirement(op, operations, relations)
+            # Writes enter the schedulable pool only when source cleanup is bound
+            # (or explicitly not required). Uncompensated writes keep the gap only.
+            if is_write and not _cleanup_is_schedulable(cleanup_req):
+                continue
             actor_ref = active_permit_refs[0]
             actor = active_actors_by_id[actor_ref]
             actor_relations = [
@@ -470,7 +640,7 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
                 required_actors=[actor_ref],
                 required_operations=[operation_ref],
                 required_observers=["http_response", "actor_identity"],
-                cleanup_requirement=_cleanup_requirement(op, operations, relations),
+                cleanup_requirement=cleanup_req,
                 source_refs=_combined_source_refs(op, actor, *actor_relations),
                 relation_refs=sorted({
                     _text(relation.get("id"))
@@ -487,11 +657,22 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
             ))
 
     # Isolation uses only account-bound actors explicitly linked by ownership.
-    owned_read_ops = [
-        op for op in read_ops
-        if ("{" in _text(op.get("path")) or "/:" in _text(op.get("path")))
+    # Path-param owned reads keep the owned_resource proof path. Owned
+    # collections (and owned writes) compile only when a source-grounded
+    # ownership identity binder is available from the same Behavior IR corpus.
+    owned_isolation_ops = [
+        op for op in [*read_ops, *write_ops]
+        if _relations_for_operation(relations, _text(op.get("id")), {"owns"})
     ]
-    for op in owned_read_ops:
+    for op in owned_isolation_ops:
+        path = _text(op.get("path") or op.get("raw_path"))
+        has_path_target = _path_has_resource_placeholder(path)
+        ownership_binder = {} if has_path_target else _resolve_ownership_binder(
+            op,
+            operations=operations,
+        )
+        if not has_path_target and not ownership_binder:
+            continue
         ownership_relations = _relations_for_operation(relations, _text(op.get("id")), {"owns"})
         relation_by_actor: dict[str, list[dict[str, Any]]] = {}
         for relation in ownership_relations:
@@ -508,20 +689,38 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
                 owner = active_actors_by_id[owner_ref]
                 viewer = active_actors_by_id[viewer_ref]
                 pair_relations = relation_by_actor[owner_ref] + relation_by_actor[viewer_ref]
+                property_spec: dict[str, Any] = {
+                    "template": "owner_viewer_isolation",
+                    "owner_actor_ref": owner_ref,
+                    "viewer_actor_ref": viewer_ref,
+                    "operation_ref": _text(op.get("id")),
+                    "operation_path_prefix": _operation_path_prefix(op),
+                    "require_same_resource": True,
+                }
+                required_fixtures: list[str] = []
+                required_observers = ["http_response", "actor_identity"]
+                if has_path_target:
+                    property_spec["require_ownership_evidence"] = True
+                    required_fixtures = ["owned_resource"]
+                    required_observers = ["http_response", "resource_ownership"]
+                else:
+                    property_spec.update({
+                        "ownership_param": _text(ownership_binder.get("name")),
+                        "ownership_param_location": _text(
+                            ownership_binder.get("location")
+                        ),
+                        "identity_binding_target": _text(
+                            ownership_binder.get("identity_binding_target")
+                        ) or "user_id",
+                    })
                 obligations.append(make_obligation(
                     risk_family="isolation",
                     subject_refs=[_text(op.get("id")), owner_ref, viewer_ref],
-                    property_spec={
-                        "template": "owner_viewer_isolation",
-                        "owner_actor_ref": owner_ref,
-                        "viewer_actor_ref": viewer_ref,
-                        "operation_ref": _text(op.get("id")),
-                        "require_ownership_evidence": True,
-                    },
+                    property_spec=property_spec,
                     required_actors=[owner_ref, viewer_ref],
                     required_operations=[_text(op.get("id"))],
-                    required_fixtures=["owned_resource"],
-                    required_observers=["http_response", "resource_ownership"],
+                    required_fixtures=required_fixtures,
+                    required_observers=required_observers,
                     source_refs=_combined_source_refs(op, owner, viewer, *pair_relations),
                     relation_refs=sorted({
                         _text(relation.get("id"))
@@ -563,6 +762,7 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
                 "from_state_ref": _text(from_state.get("id")),
                 "to_state_ref": _text(to_state.get("id")),
                 "operation_ref": _text(op.get("id")),
+                "operation_path_prefix": _operation_path_prefix(op),
             },
             required_operations=[_text(op.get("id"))],
             required_fixtures=[f"entity_in_state:{_text(from_state.get('id'))}"],
@@ -706,6 +906,7 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
                 "invariant_ref": invariant_ref,
                 "expression": expr,
                 "operation_ref": operation_ref,
+                "operation_path_prefix": _operation_path_prefix(op),
             }
             if family == "idempotency":
                 property_spec.update({
@@ -822,6 +1023,7 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
                     "entity_ref": entity_ref,
                     "operation_ref": operation_ref,
                     "actor_ref": actor_ref,
+                    "operation_path_prefix": _operation_path_prefix(op),
                     "require_control_success": True,
                 },
                 required_actors=[actor_ref],

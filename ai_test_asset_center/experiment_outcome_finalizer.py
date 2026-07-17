@@ -317,6 +317,22 @@ def finalize_experiment_execution(
             "severity": "P1",
             "title": f"[ContractOracle] {assertion_kind}: {treatment_role or 'actor'} {primary_method} {primary_path}",
             "category": assertion_kind,
+            "risk_family": (
+                _text(exp.get("risk_family"))
+                or (
+                    "isolation"
+                    if _text(first.get("assertion_id") or assertion_contract.get("assertion_id"))
+                    == "assert_isolation"
+                    or _text(property_spec.get("template") or assertion_contract.get("template"))
+                    == "owner_viewer_isolation"
+                    else ""
+                )
+                or (
+                    "authorization"
+                    if assertion_kind == "owner_tenant_visibility"
+                    else assertion_kind
+                )
+            ),
             "source": "experiment_contract_oracle",
             "description": description,
             "confidence_score": 0.85,

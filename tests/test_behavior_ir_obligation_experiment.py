@@ -2911,6 +2911,186 @@ def test_permit_only_read_emits_gap_and_permitted_invocation_obligation() -> Non
     assert experiment["treatment_plan"][0]["actor_ref"] == "actor-analyst"
 
 
+def test_permit_only_reversible_write_emits_permitted_invocation() -> None:
+    ir = empty_behavior_ir(project_id="permit-only-write")
+    ir.update({
+        "operations": [
+            {
+                "id": "op-cart-add",
+                "method": "POST",
+                "path": "/api/cart/items",
+                "read_write": "write",
+                "source_refs": [{"source_id": "api", "locator": "POST /api/cart/items"}],
+                "request_example": {"sku": "A1", "qty": 1},
+            },
+            {
+                "id": "op-cart-delete",
+                "method": "DELETE",
+                "path": "/api/cart/items/{id}",
+                "read_write": "write",
+                "source_refs": [{"source_id": "api", "locator": "DELETE /api/cart/items/{id}"}],
+            },
+        ],
+        "actors": [{
+            "id": "actor-buyer",
+            "role": "buyer",
+            "account_status": "active",
+            "credential_secret_ref": "secret_ref:test_accounts:buyer",
+        }],
+        "relations": [
+            _relation(
+                "relation-permit",
+                "permits",
+                "actor-buyer",
+                "op-cart-add",
+                operation_ref="op-cart-add",
+                actor_ref="actor-buyer",
+            ),
+            _relation(
+                "relation-compensate",
+                "compensates",
+                "op-cart-delete",
+                "op-cart-add",
+                operation_ref="op-cart-delete",
+            ),
+        ],
+    })
+
+    compiled = compile_obligations_from_behavior_ir(ir)
+    assert any(
+        item.get("code") == "BLOCKED_MISSING_ACTOR_PAIR"
+        and item.get("operation_ref") == "op-cart-add"
+        for item in compiled["coverage_gaps"]
+    )
+    permitted = next(
+        item
+        for item in compiled["obligations"]
+        if item["property"].get("template") == "permitted_operation_invocation"
+    )
+    assert permitted["cleanup_requirement"].get("operation_ref") == "op-cart-delete"
+    assert permitted["property"].get("operation_path_prefix") == "/api/cart"
+
+    experiment = compile_experiment_for_obligation(
+        permitted,
+        behavior_ir=ir,
+        environment_type="test",
+    )
+    assert experiment["compile_receipt"]["status"] == "COMPILED"
+    assert experiment["cleanup_plan"]
+
+
+def test_permit_only_write_without_cleanup_stays_gap_only() -> None:
+    ir = empty_behavior_ir(project_id="permit-only-irreversible")
+    ir.update({
+        "operations": [{
+            "id": "op-pay",
+            "method": "POST",
+            "path": "/api/payments/pay",
+            "read_write": "write",
+            "source_refs": [{"source_id": "api", "locator": "POST /api/payments/pay"}],
+        }],
+        "actors": [{
+            "id": "actor-buyer",
+            "role": "buyer",
+            "account_status": "active",
+            "credential_secret_ref": "secret_ref:test_accounts:buyer",
+        }],
+        "relations": [
+            _relation(
+                "relation-permit",
+                "permits",
+                "actor-buyer",
+                "op-pay",
+                operation_ref="op-pay",
+                actor_ref="actor-buyer",
+            ),
+        ],
+    })
+
+    compiled = compile_obligations_from_behavior_ir(ir)
+    assert not any(
+        item["property"].get("template") == "permitted_operation_invocation"
+        for item in compiled["obligations"]
+    )
+    assert any(
+        item.get("code") == "BLOCKED_MISSING_ACTOR_PAIR"
+        for item in compiled["coverage_gaps"]
+    )
+
+
+def test_adaptive_planner_resolves_empty_prefix_from_behavior_ir() -> None:
+    obligations = [{
+        "obligation_id": "obl_pay",
+        "risk_family": "conservation",
+        "subject_refs": ["pay"],
+        "confidence": 0.8,
+        "compile_status": "COMPILED",
+        "property": {},
+        "required_operations": ["op-pay"],
+    }]
+    behavior_ir = {
+        "operations": [{
+            "id": "op-pay",
+            "method": "POST",
+            "path": "/api/payments/pay",
+        }],
+    }
+    plan = plan_obligation_round(
+        obligations,
+        behavior_ir=behavior_ir,
+        budget=1,
+    )
+    assert plan["selected"][0]["path_prefix"] == "/api/payments"
+    assert plan["selected"][0]["operation_key"] == "POST /api/payments/pay"
+    assert plan["operation_coverage"].get("POST /api/payments/pay") == 1
+
+
+def test_adaptive_planner_soft_caps_operations_within_budget() -> None:
+    obligations = [
+        *[
+            {
+                "obligation_id": f"obl_status_{index}",
+                "risk_family": "authorization",
+                "subject_refs": [f"status_{index}"],
+                "confidence": 0.95,
+                "compile_status": "COMPILED",
+                "property": {"operation_path_prefix": "/api/auth"},
+                "required_operations": ["op_auth_status"],
+            }
+            for index in range(8)
+        ],
+        *[
+            {
+                "obligation_id": f"obl_login_{index}",
+                "risk_family": "authorization",
+                "subject_refs": [f"login_{index}"],
+                "confidence": 0.7,
+                "compile_status": "COMPILED",
+                "property": {"operation_path_prefix": "/api/auth"},
+                "required_operations": ["op_auth_login"],
+            }
+            for index in range(4)
+        ],
+    ]
+    behavior_ir = {
+        "operations": [
+            {"id": "op_auth_status", "method": "POST", "path": "/api/auth/admin/users/{id}/status"},
+            {"id": "op_auth_login", "method": "POST", "path": "/api/auth/login"},
+        ],
+    }
+    plan = plan_obligation_round(
+        obligations,
+        behavior_ir=behavior_ir,
+        budget=4,
+    )
+    assert plan["operation_coverage"].get("POST /api/auth/login", 0) >= 1
+    assert plan["operation_coverage"].get(
+        "POST /api/auth/admin/users/{id}/status",
+        0,
+    ) <= 2
+    assert plan["selected_count"] == 4
+
+
 def test_adaptive_planner_soft_caps_path_prefixes_within_budget() -> None:
     obligations = [
         *[
@@ -2921,7 +3101,7 @@ def test_adaptive_planner_soft_caps_path_prefixes_within_budget() -> None:
                 "confidence": 0.9,
                 "compile_status": "COMPILED",
                 "property": {"operation_path_prefix": "/api/cart"},
-                "required_operations": [f"op_cart_{index}"],
+                "required_operations": ["op_cart"],
             }
             for index in range(10)
         ],
@@ -2933,7 +3113,7 @@ def test_adaptive_planner_soft_caps_path_prefixes_within_budget() -> None:
                 "confidence": 0.8,
                 "compile_status": "COMPILED",
                 "property": {"operation_path_prefix": "/api/reports"},
-                "required_operations": [f"op_report_{index}"],
+                "required_operations": ["op_report"],
             }
             for index in range(4)
         ],
@@ -2945,7 +3125,7 @@ def test_adaptive_planner_soft_caps_path_prefixes_within_budget() -> None:
                 "confidence": 0.8,
                 "compile_status": "COMPILED",
                 "property": {"operation_path_prefix": "/api/coupons"},
-                "required_operations": [f"op_coupon_{index}"],
+                "required_operations": ["op_coupon"],
             }
             for index in range(4)
         ],
