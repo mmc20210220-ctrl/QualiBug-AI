@@ -44,28 +44,19 @@ class HttpRoutingMixin:
             if parsed.path not in _legacy_served:
                 return self._serve_frontend(parsed, root)
         if parsed.path in {"/health", "/api/health"}:
-            import platform, sys
-            llm_health = self._llm_health()
-            try:
-                from .bug_knowledge_graph import EnterprisePatternLibrary
-                lib = EnterprisePatternLibrary()
-                pattern_count = lib.stats().get("total_patterns", 0)
-            except Exception:
-                pattern_count = 0
+            from . import private_pilot_service as _service
+            from .private_pilot_health_contract import build_private_pilot_health_payload
+
+            patch_source = str(
+                getattr(_service, "_DEPLOYMENT_CONTRACT_PATCH_SOURCE", "")
+                or "ai_test_asset_center.private_pilot_http_routing"
+            )
             return self._json(
-                {
-                    "ok": True,
-                    "service": "qualibug_private_pilot",
-                    "version": "phase61",
-                    "private_root": str(root),
-                    "private_root_exists": root.exists(),
-                    "public_bind_allowed": os.environ.get("QUALIBUG_ALLOW_PUBLIC_BIND") == "1",
-                    "python_version": sys.version.split()[0],
-                    "platform": platform.system(),
-                    "llm_available": llm_health["available"],
-                    "llm_status": llm_health,
-                    "pattern_library_patterns": pattern_count,
-                }
+                build_private_pilot_health_payload(
+                    self,
+                    fallback_root=root,
+                    patch_source=patch_source,
+                )
             )
         # Every non-health route requires a trusted actor. `_require_actor()`
         # keeps the narrowly-scoped localhost development fallback, but only

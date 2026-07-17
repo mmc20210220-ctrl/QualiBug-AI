@@ -2,13 +2,13 @@ from __future__ import annotations
 
 """Refresh the regression suite after a private-pilot scan.
 
-Confirmed findings are now convertible into durable regression probes via
-``regression_suite_builder``.  This patch closes the remaining runtime gap: after
-a scan produces or updates confirmed finding artifacts, the private-pilot runtime
-refreshes the smoke/release/full regression suite immediately, so the customer's
-next "run regression" action uses the latest delivered bugs.
+Confirmed findings are convertible into durable regression probes via
+``regression_suite_builder``. After a scan produces confirmed finding artifacts,
+this module refreshes the smoke/release/full regression suite through a
+first-class ``scan`` post-hook so the next "run regression" action uses the
+latest delivered bugs.
 
-The patch is intentionally post-processing only:
+Post-processing only:
 - it does not create findings;
 - it does not execute regression requests;
 - it only rebuilds the suite manifest from existing evidence-backed sources;
@@ -149,32 +149,27 @@ def refresh_regression_suite_after_scan(
     return result
 
 
+def _regression_suite_refresh_hook(result: dict[str, Any], *, project: str, root: Path) -> dict[str, Any]:
+    return refresh_regression_suite_after_scan(result, project=project, root=root)
+
+
 def install_regression_suite_refresh_patch(*, patch_source: str = PATCH_SOURCE) -> None:
     from ai_test_asset_center import __main__ as scanner_module
+    from ai_test_asset_center.scan_post_hooks import register_scan_post_hook
 
     if getattr(scanner_module, "_REGRESSION_SUITE_REFRESH_PATCHED", False):
         return
 
-    original_scan = getattr(scanner_module, "scan")
-
-    def _scan_with_regression_suite_refresh(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        result = original_scan(*args, **kwargs)
-        try:
-            project, root = _extract_project_root(args, kwargs)
-            return refresh_regression_suite_after_scan(result, project=project, root=root)
-        except Exception:
-            return result
-
-    scanner_module.scan = _scan_with_regression_suite_refresh
-    scanner_module._ORIGINAL_REGRESSION_SUITE_REFRESH_SCAN = original_scan  # type: ignore[attr-defined]
+    register_scan_post_hook("regression_suite_refresh", _regression_suite_refresh_hook)
+    scanner_module._ORIGINAL_REGRESSION_SUITE_REFRESH_SCAN = None  # type: ignore[attr-defined]
     scanner_module._REGRESSION_SUITE_REFRESH_PATCHED = True  # type: ignore[attr-defined]
     scanner_module._REGRESSION_SUITE_REFRESH_PATCH_SOURCE = patch_source  # type: ignore[attr-defined]
 
 
 def restore_regression_suite_refresh_patch() -> None:
     from ai_test_asset_center import __main__ as scanner_module
+    from ai_test_asset_center.scan_post_hooks import register_scan_post_hook
 
-    original_scan = getattr(scanner_module, "_ORIGINAL_REGRESSION_SUITE_REFRESH_SCAN", None)
-    if callable(original_scan):
-        scanner_module.scan = original_scan
+    register_scan_post_hook("regression_suite_refresh", None)
+    scanner_module._ORIGINAL_REGRESSION_SUITE_REFRESH_SCAN = None  # type: ignore[attr-defined]
     scanner_module._REGRESSION_SUITE_REFRESH_PATCHED = False  # type: ignore[attr-defined]

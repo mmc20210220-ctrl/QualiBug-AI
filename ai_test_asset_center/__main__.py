@@ -4376,7 +4376,7 @@ def _discovery_verdict(confirmed: list[dict[str, Any]], db_verification: dict[st
     }
 
 
-def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_doc_path: str = "", api_doc_text: str = "", base_url: str = "", ci_gate: bool = False, multi_layer: bool = True, output_dir: Optional[Path] = None, save_report: bool = True, campaign_context: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_doc_path: str = "", api_doc_text: str = "", base_url: str = "", ci_gate: bool = False, multi_layer: bool = True, output_dir: Optional[Path] = None, save_report: bool = True, campaign_context: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """Run the single enterprise-safe discovery and evidence pipeline."""
     context = dict(campaign_context or {})
     # First-class merge of private-pilot ContextVar campaign context. Nested or
@@ -5193,6 +5193,28 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
             result["discovery_funnel"] = funnel
 
     return result
+
+
+
+def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_doc_path: str = "", api_doc_text: str = "", base_url: str = "", ci_gate: bool = False, multi_layer: bool = True, output_dir: Optional[Path] = None, save_report: bool = True, campaign_context: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """Public scan entry — runs core discovery then first-class post-hooks."""
+    from .scan_post_hooks import apply_scan_post_hooks
+
+    result = _scan_impl(
+        project,
+        root,
+        prd_text=prd_text,
+        api_doc_path=api_doc_path,
+        api_doc_text=api_doc_text,
+        base_url=base_url,
+        ci_gate=ci_gate,
+        multi_layer=multi_layer,
+        output_dir=output_dir,
+        save_report=save_report,
+        campaign_context=campaign_context,
+    )
+    resolved_root = Path(root or Path.cwd())
+    return apply_scan_post_hooks(result, project=str(project or "").strip(), root=resolved_root)
 
 
 def main() -> None:

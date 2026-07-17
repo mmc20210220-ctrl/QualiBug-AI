@@ -1,43 +1,24 @@
 from __future__ import annotations
 
-"""Patch installer for customer-safe private-pilot report rendering."""
+"""Customer-safe report runtime-support status for private-pilot.
 
-from pathlib import Path
-from typing import Any
+Report rendering is first-class in ``PageRenderMixin._render_report_html``.
+This module only records compatibility status for health surfaces.
+"""
 
 from ai_test_asset_center import private_pilot_service as _service
-from ai_test_asset_center.customer_delivery_guard import persist_customer_delivery_guard
-from ai_test_asset_center.customer_report_boundary import sanitize_customer_report_html
-from ai_test_asset_center.customer_safe_report import render_customer_safe_report_html
 
 
 def install_customer_report_patch(*, patch_source: str) -> None:
-    """Replace legacy customer report HTML and persist a machine-readable delivery guard."""
+    """Mark customer-safe report rendering as installed (handler is first-class)."""
     if getattr(_service, "_CUSTOMER_REPORT_PATCHED", False):
         return
-    original_renderer = getattr(_service.PrivatePilotHandler, "_render_report_html")
-
-    def _render_report_html_clean(self: Any, project: str, root: Path) -> Any:
-        html = sanitize_customer_report_html(render_customer_safe_report_html(project, root))
-        try:
-            persist_customer_delivery_guard(project, root)
-        except Exception:
-            # Report rendering must remain available; the HTML still shows the
-            # human-readable release gate and handoff boundary if guard persistence
-            # fails due to filesystem permissions or a transient write error.
-            pass
-        return self._html(html)
-
-    _service.PrivatePilotHandler._render_report_html = _render_report_html_clean
-    _service._ORIGINAL_RENDER_REPORT_HTML = original_renderer  # type: ignore[attr-defined]
+    _service._ORIGINAL_RENDER_REPORT_HTML = None  # type: ignore[attr-defined]
     _service._CUSTOMER_REPORT_PATCHED = True  # type: ignore[attr-defined]
     _service._CUSTOMER_REPORT_PATCH_SOURCE = patch_source  # type: ignore[attr-defined]
 
 
 def restore_customer_report_patch() -> None:
-    original_renderer = getattr(_service, "_ORIGINAL_RENDER_REPORT_HTML", None)
-    if original_renderer is not None:
-        _service.PrivatePilotHandler._render_report_html = original_renderer
     _service._ORIGINAL_RENDER_REPORT_HTML = None  # type: ignore[attr-defined]
     _service._CUSTOMER_REPORT_PATCHED = False  # type: ignore[attr-defined]
     _service._CUSTOMER_REPORT_PATCH_SOURCE = ""  # type: ignore[attr-defined]

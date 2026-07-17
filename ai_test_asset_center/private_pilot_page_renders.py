@@ -115,70 +115,21 @@ class PageRenderMixin:
         self._html(page)
 
     def _render_report_html(self, project: str, root: Path) -> None:
-        """Generate a standalone HTML report."""
-        import json as _json, time as _time
-        report_path = root / "platform_outputs" / project / "pipeline_reports" / "latest_pipeline_report.json"
-        history_path = root / "platform_outputs" / project / "pipeline_reports" / "scan_history.json"
-        report = {}
-        if report_path.exists():
-            try: report = _json.loads(report_path.read_text(encoding="utf-8"))
-            except: pass
-        history = []
-        if history_path.exists():
-            try: history = _json.loads(history_path.read_text(encoding="utf-8"))
-            except: pass
+        """Render the customer-safe HTML report and persist the delivery guard."""
+        from .customer_delivery_guard import persist_customer_delivery_guard
+        from .customer_report_boundary import sanitize_customer_report_html
+        from .customer_safe_report import render_customer_safe_report_html
 
-        s2 = report.get("stage2_discovery", {})
-        s1 = report.get("stage1_industry", {})
-        s3 = report.get("stage3_impact_analysis", {})
-        findings = s2.get("findings", [])
-        analyses = s3.get("analyses", [])
+        html = sanitize_customer_report_html(render_customer_safe_report_html(project, root))
+        try:
+            persist_customer_delivery_guard(project, root)
+        except Exception:
+            # Report rendering must remain available; the HTML still shows the
+            # human-readable release gate and handoff boundary if guard persistence
+            # fails due to filesystem permissions or a transient write error.
+            pass
+        return self._html(html)
 
-        # Build HTML
-        f_rows = ""
-        for f in findings:
-            sev = f.get("severity", "?")
-            sev_color = "#dc2626" if sev in ("P0","P1") else "#d97706" if sev == "P2" else "#2563eb"
-            f_rows += f"""<tr><td style="color:{sev_color};font-weight:700">{sev}</td><td>{f.get("title","-")}</td><td>{f.get("category","-")}</td><td>{f.get("confidence_score","-")}</td><td>{f.get("evidence","-")[:200]}</td></tr>"""
-
-        html = f"""<!DOCTYPE html><html lang="zh"><head><meta charset="UTF-8">
-<title>QualiBug Bug 鎵弿鎶ュ憡 - {project}</title>
-<style>body{{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:900px;margin:40px auto;padding:0 20px;color:#1e293b;background:#f8fafc}}
-h1{{font-size:24px;border-bottom:2px solid #3b82f6;padding-bottom:12px}}
-h2{{font-size:18px;margin-top:32px;color:#334155}}
-table{{width:100%;border-collapse:collapse;margin:16px 0;font-size:13px}}
-th,td{{text-align:left;padding:8px 12px;border-bottom:1px solid #e2e8f0}}
-th{{background:#f1f5f9;font-weight:700;color:#475569}}
-.metric{{display:inline-block;text-align:center;padding:16px 24px;border-radius:8px;margin:8px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.1)}}
-.metric strong{{display:block;font-size:28px;color:#3b82f6}}
-.metric span{{font-size:11px;color:#94a3b8}}
-.footer{{margin-top:32px;font-size:11px;color:#94a3b8;border-top:1px solid #e2e8f0;padding-top:12px}}</style></head><body>
-<h1>QualiBug AI 路 Bug 鎵弿鎶ュ憡</h1>
-<p>椤圭洰: <strong>{project}</strong> 路 鐢熸垚鏃堕棿: <strong>{_time.strftime("%Y-%m-%d %H:%M:%S")}</strong></p>
-<p>瀵硅薄: {s1.get("object_count",0)} 路 瀵硅薄鏁? {s1.get("object_count",0)} 路 椋庨櫓鍩? {s1.get("risk_count",0)}</p>
-<div style="margin:20px 0">
-<div class="metric"><span>鎬诲彂鐜?/span><strong>{len(findings)}</strong></div>
-<div class="metric"><span>P0/P1</span><strong>{sum(1 for f in findings if str(f.get("severity","")) in ("P0","P1"))}</strong></div>
-<div class="metric"><span>LLM 鍒嗘瀽</span><strong>{s3.get("llm_powered",0)}</strong></div>
-<div class="metric"><span>瑕嗙洊</span><strong>{s3.get("total_analyses",0)}/{max(1,len(findings))}</strong></div>
-</div>
-<h2>Bug 鍙戠幇鍒楄〃</h2>
-<table><tr><th>涓ラ噸搴?/th><th>鏍囬</th><th>绫诲埆</th><th>缃俊搴?/th><th>璇佹嵁</th></tr>{f_rows}</table>
-<h2>鎵弿鍘嗗彶 (鏈€杩?10 娆?</h2>
-<table><tr><th>鏃堕棿</th><th>鐘舵€?/th><th>鍙戠幇</th><th>P0/P1</th><th>瀵硅薄</th></tr>"""
-
-        for h in history[-10:]:
-            html += f"<tr><td>{h.get('timestamp_utc','-')}</td><td>{h.get('status','-')}</td><td>{h.get('total_findings',0)}</td><td>{h.get('p0p1_count',0)}</td><td>{h.get('industry','-')[:30]}</td></tr>"
-
-        html += f"""</table>
-<div class="footer">QualiBug AI Enterprise Edition 路 绉佹湁鍖栭儴缃?路 娴嬭瘯鐜鎵弿 路 缁濅笉瑙︾鐢熶骇鏁版嵁</div>
-</body></html>"""
-
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Disposition", "inline")
-        self.end_headers()
-        self.wfile.write(html.encode("utf-8"))
 
     def _render_settings(self, project: str, root: Path) -> None:
         """Render a minimal settings page for the private pilot server."""

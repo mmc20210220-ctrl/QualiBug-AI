@@ -2,39 +2,19 @@ from __future__ import annotations
 
 """Runtime repair for a narrow scan-result evidence downgrade failure.
 
-The canonical fix should eventually move the UI HAR bridge in ``__main__.scan``
-after ``ui_execution`` and ``result`` are defined.  Until that large file is
-safely refactored, this patch protects the private-pilot runtime from one known
-scope-order failure mode: a UI bridge ``UnboundLocalError`` raised *after* the
-evidence bundle has already been persisted, which incorrectly marks customer
-findings as evidence-persistence failures.
-
-The repair is deliberately conservative:
-- it only runs for ``evidence_bundle.status == persistence_failed`` with an
-  UnboundLocalError/NameError reason;
-- it re-persists the evidence bundle through the existing scanner helper;
-- it only restores findings that the failed path itself marked with
-  ``evidence_persistence_status == failed``;
-- it never creates new findings or upgrades arbitrary candidates.
+Registers a first-class ``scan`` post-hook instead of replacing ``__main__.scan``.
 """
 
 from pathlib import Path
 from typing import Any
+
+from ai_test_asset_center.scan_post_hooks import register_scan_post_hook
 
 PATCH_SOURCE = "ai_test_asset_center.private_pilot_scan_result_repair_patch"
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
-
-
-def _extract_project_root(args: tuple[Any, ...], kwargs: dict[str, Any]) -> tuple[str, Path]:
-    project = str(kwargs.get("project") or (args[0] if args else "") or "").strip()
-    root_value = kwargs.get("root")
-    if root_value is None and len(args) > 1:
-        root_value = args[1]
-    root = Path(root_value or Path.cwd())
-    return project, root
 
 
 def _is_known_scope_failure(result: dict[str, Any]) -> bool:
@@ -57,9 +37,6 @@ def _restore_marked_confirmed_findings(result: dict[str, Any], persisted_bundle:
             repaired["evidence_bundle_status"] = str(persisted_bundle.get("status") or "persisted")
             if persisted_bundle.get("bundle_id"):
                 repaired["evidence_bundle_id"] = str(persisted_bundle.get("bundle_id"))
-            # These items were downgraded only by the persistence-error path.
-            # Restore the customer-delivery confirmation state, but only after
-            # re-persisting the bundle above.
             if str(repaired.get("confirmation_status") or "").strip().lower() in {"", "inconclusive"}:
                 repaired["confirmation_status"] = "confirmed"
             restored.append(repaired)
@@ -132,25 +109,24 @@ def _repair_scan_result_if_needed(result: dict[str, Any], *, project: str, root:
     return result
 
 
+def _scan_result_repair_hook(result: dict[str, Any], *, project: str, root: Path) -> dict[str, Any]:
+    from ai_test_asset_center import __main__ as scanner_module
+
+    return _repair_scan_result_if_needed(
+        result,
+        project=project,
+        root=root,
+        scanner_module=scanner_module,
+    )
+
+
 def install_scan_result_repair_patch(*, patch_source: str = PATCH_SOURCE) -> None:
     from ai_test_asset_center import __main__ as scanner_module
 
     if getattr(scanner_module, "_SCAN_RESULT_REPAIR_PATCHED", False):
         return
-
-    original_scan = getattr(scanner_module, "scan")
-
-    def _scan_with_result_repair(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        result = original_scan(*args, **kwargs)
-        try:
-            project, root = _extract_project_root(args, kwargs)
-            return _repair_scan_result_if_needed(result, project=project, root=root, scanner_module=scanner_module)
-        except Exception:
-            # The patch must never mask the original scan result.
-            return result
-
-    scanner_module.scan = _scan_with_result_repair
-    scanner_module._ORIGINAL_SCAN_RESULT_REPAIR_SCAN = original_scan  # type: ignore[attr-defined]
+    register_scan_post_hook("scan_result_repair", _scan_result_repair_hook)
+    scanner_module._ORIGINAL_SCAN_RESULT_REPAIR_SCAN = None  # type: ignore[attr-defined]
     scanner_module._SCAN_RESULT_REPAIR_PATCHED = True  # type: ignore[attr-defined]
     scanner_module._SCAN_RESULT_REPAIR_PATCH_SOURCE = patch_source  # type: ignore[attr-defined]
 
@@ -158,7 +134,7 @@ def install_scan_result_repair_patch(*, patch_source: str = PATCH_SOURCE) -> Non
 def restore_scan_result_repair_patch() -> None:
     from ai_test_asset_center import __main__ as scanner_module
 
-    original_scan = getattr(scanner_module, "_ORIGINAL_SCAN_RESULT_REPAIR_SCAN", None)
-    if callable(original_scan):
-        scanner_module.scan = original_scan
+    register_scan_post_hook("scan_result_repair", None)
+    scanner_module._ORIGINAL_SCAN_RESULT_REPAIR_SCAN = None  # type: ignore[attr-defined]
     scanner_module._SCAN_RESULT_REPAIR_PATCHED = False  # type: ignore[attr-defined]
+    scanner_module._SCAN_RESULT_REPAIR_PATCH_SOURCE = ""  # type: ignore[attr-defined]
