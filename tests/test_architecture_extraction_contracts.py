@@ -216,6 +216,18 @@ def test_experiment_compiler_support_helpers_are_reexported() -> None:
     assert base._index_by_id is support._index_by_id
 
 
+def test_experiment_compiler_obligation_is_reexported() -> None:
+    from ai_test_asset_center import experiment_compiler_base as base
+    from ai_test_asset_center import experiment_compiler_obligation as obligation
+
+    assert base.compile_experiment_for_obligation is (
+        obligation.compile_experiment_for_obligation
+    )
+    assert base.make_experiment is obligation.make_experiment
+    assert base.blocked_experiment is obligation.blocked_experiment
+    assert base.stable_experiment_id is obligation.stable_experiment_id
+
+
 def test_extracted_modules_remain_under_architecture_budget_threshold() -> None:
     main_lines = sum(
         1 for _ in open(ROOT / "ai_test_asset_center" / "__main__.py", encoding="utf-8")
@@ -348,5 +360,13 @@ def test_extracted_modules_remain_under_architecture_budget_threshold() -> None:
             encoding="utf-8",
         )
     )
-    assert compiler_base_lines < 900
+    assert compiler_base_lines < 300
     assert compiler_support_lines < 500
+    compiler_obligation_lines = sum(
+        1
+        for _ in open(
+            ROOT / "ai_test_asset_center" / "experiment_compiler_obligation.py",
+            encoding="utf-8",
+        )
+    )
+    assert compiler_obligation_lines < 750
