@@ -644,7 +644,19 @@ export function Dashboard() {
           <article className="customer-secondary-card" style={{ borderLeft: '3px solid var(--primary-color, #3b82f6)' }}>
             <span className="customer-value-kicker">Rounds Pipeline ({available}/4 rounds active)</span>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '8px', marginTop: '8px' }}>
-              {r1.available ? <div style={cardS}><strong>R1 Benchmark</strong><br/>Recall: {asNum(r1.recall) > 0 ? Math.round(asNum(r1.recall)*100)+'%' : '—'}<br/>F1: {asNum(r1.f1_score) > 0 ? Math.round(asNum(r1.f1_score)*100)+'%' : '—'}</div> : null}
+              {r1.available ? (
+                <div style={cardS}>
+                  <strong>R1 Benchmark</strong><br/>
+                  {externalMeasured ? (
+                    <>
+                      Recall: {asNum(r1.recall) > 0 ? Math.round(asNum(r1.recall)*100)+'%' : '—'}<br/>
+                      F1: {asNum(r1.f1_score) > 0 ? Math.round(asNum(r1.f1_score)*100)+'%' : '—'}
+                    </>
+                  ) : (
+                    <>召回/F1：NOT_MEASURED<br/>需外部评测收据</>
+                  )}
+                </div>
+              ) : null}
               {r2.available ? <div style={cardS}><strong>R2 Gaps</strong><br/>Open: {asNum(r2.currently_open)}<br/>Resolved: {asNum(r2.resolved)}</div> : null}
               {r3.available ? <div style={cardS}><strong>R3 Learning</strong><br/>Probes: {asNum(r3.total_probes_generated)}<br/>Oracles: {asNum(r3.total_oracles_generated)}</div> : null}
               {r4.available ? <div style={cardS}><strong>R4 DSL</strong><br/>Rules: {asNum(r4.total_rules)}<br/>Industries: {asNum(r4.industry_count)}</div> : null}

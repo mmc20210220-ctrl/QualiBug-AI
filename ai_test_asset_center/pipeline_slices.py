@@ -1,21 +1,27 @@
 """Behavior slice lifecycle management.
-Extracted from v12_pipeline.py.
+
+SSOT extracted from ``v12_pipeline``; the compatibility module re-exports via
+``from .pipeline_slices import *``.
 """
 from __future__ import annotations
 
+import json
+import math
 import os
+import time
 from pathlib import Path
 from typing import Any
 
+# Absolute safety clamps — auto-scaler and env overrides stay bounded.
 _ABS_MAX_SLICE_BUDGET = 200
-_ABS_MAX_ROUND_LIMIT = 48
+_ABS_MAX_ROUND_LIMIT = 24
 
 
 def _as_int(value: Any, default: int, minimum: int, maximum: int) -> int:
     try:
         parsed = int(value)
     except (TypeError, ValueError):
-        return default
+        parsed = default
     return max(minimum, min(parsed, maximum))
 
 
@@ -27,6 +33,11 @@ def _behavior_slice_settings() -> dict[str, int]:
         round_limit = get_policy_value("execution", "incremental_discovery_round_limit", 8)
     except Exception:
         budget, round_number, round_limit = 15, 1, 8
+    # These are the PRE-POOL starting values. The real per-round budget and round
+    # limit are auto-scaled to the discovered candidate-pool size just before
+    # scheduling (see _auto_scale_slice_budget / _auto_scale_round_limit), so an
+    # operator never has to hand-tune env vars for a large enterprise system.
+    # An explicit env value still wins (power-user override).
     return {
         "slice_budget": _as_int(os.environ.get("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", budget), 15, 1, _ABS_MAX_SLICE_BUDGET),
         "round_number": _as_int(os.environ.get("QUALIBUG_DISCOVERY_ROUND", round_number), 1, 1, 24),
@@ -35,58 +46,125 @@ def _behavior_slice_settings() -> dict[str, int]:
 
 
 def _auto_scale_slice_budget(pool_size: int) -> int:
+    """Per-round slice budget that follows the business system's scale.
+
+    Small systems (few source-bound slices) keep the lean historical floor of 15.
+    Large enterprises (hundreds of slices from state graph + analyzers + LLM
+    reasoner) automatically get a proportionally larger budget so the candidate
+    pool is actually consumed instead of starving at 15/round — no env tuning.
+    Target: drain the pool in ~2 rounds, bounded by _ABS_MAX_SLICE_BUDGET.
+    """
     import math
+
     if pool_size <= 0:
         return 15
     return max(15, min(_ABS_MAX_SLICE_BUDGET, math.ceil(pool_size / 2)))
 
 
 def _auto_scale_round_limit(pool_size: int, budget: int) -> int:
+    """Automatic round count sized to actually drain ``pool_size`` at ``budget``/round."""
+    import math
+
     if pool_size <= 0 or budget <= 0:
         return 8
-    rounds = (pool_size + budget - 1) // budget
-    return max(1, min(_ABS_MAX_ROUND_LIMIT, rounds))
+    needed = math.ceil(pool_size / budget) + 1
+    return max(8, min(_ABS_MAX_ROUND_LIMIT, needed))
 
 
 def _slice_ledger_path(root: Path, project: str) -> Path:
     return root / "platform_workspace" / str(project) / "defect_discovery" / "v12_behavior_slice_ledger.json"
 
 
-def _load_persisted_slice_history(root: Path, project: str) -> list[dict[str, Any]] | None:
+def _load_persisted_slice_history(
+    root: Path,
+    project: str,
+    source_snapshot_hash: str = "",
+    source_hash: str = "",
+) -> list[dict[str, Any]]:
     path = _slice_ledger_path(root, project)
     if not path.exists():
-        return None
+        return []
     try:
-        import json
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(data, list):
-            return data
-        if isinstance(data, dict):
-            return data.get("entries") or data.get("history")
+        payload = json.loads(path.read_text(encoding="utf-8") or "{}")
     except Exception:
-        pass
-    return None
+        return []
+    if not isinstance(payload, dict):
+        return []
+    expected_snapshot = str(source_snapshot_hash or "").strip()
+    expected_source_hash = str(source_hash or "").strip()
+    persisted_snapshot = str(payload.get("source_snapshot_hash") or "").strip()
+    persisted_source_hash = str(payload.get("source_hash") or "").strip()
+    snapshot_matches = bool(expected_snapshot) and persisted_snapshot == expected_snapshot
+    source_hash_matches = bool(expected_source_hash) and persisted_source_hash == expected_source_hash
+    if expected_snapshot or expected_source_hash:
+        if not snapshot_matches and not source_hash_matches:
+            return []
+    return [{"behavior_slice_ledger": payload}]
+
+
+def _derive_slice_status(
+    attempted_ids: list[str] | set[str] | tuple[str, ...],
+    confirmed_ids: list[str] | set[str] | tuple[str, ...],
+    campaign_status: str,
+) -> dict[str, str]:
+    """主链 4: turn raw campaign progress into an explicit per-task status map so
+    the task list surfaced to the API/frontend carries pending/running/passed/blocked
+    instead of only opaque id sets.
+
+    - attempted & confirmed        -> passed
+    - attempted & not confirmed     -> running (or blocked when the campaign is blocked)
+    - not attempted (planned)       -> omitted from the map, implicitly "pending"
+    """
+    confirmed_set = set()
+    for value in confirmed_ids:
+        if value is None:
+            continue
+        s = str(value).strip()
+        if s:
+            confirmed_set.add(s)
+    status: dict[str, str] = {}
+    blocked = str(campaign_status or "").strip() == "blocked"
+    for value in attempted_ids:
+        if value is None:
+            continue
+        sid = str(value).strip()
+        if not sid:
+            continue
+        if sid in confirmed_set:
+            status[sid] = "passed"
+        else:
+            status[sid] = "blocked" if blocked else "running"
+    return status
 
 
 def _persist_slice_ledger(root: Path, project: str, ledger: dict[str, Any]) -> None:
     path = _slice_ledger_path(root, project)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    import json
-    path.write_text(json.dumps(ledger, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    attempted = [str(value) for value in ledger.get("attempted_slice_ids", []) if str(value)]
+    confirmed = [str(value) for value in ledger.get("confirmed_slice_ids", []) if str(value)]
+    # 主链 4: derive an explicit per-task status map from the campaign progress
+    # so the task list surfaced to the API/frontend carries pending/running/
+    # passed/blocked instead of only opaque id sets.
+    slice_status = _derive_slice_status(attempted, confirmed, ledger.get("campaign_status") or "")
+    safe = {
+        "campaign_id": str(ledger.get("campaign_id") or ""),
+        "campaign_status": str(ledger.get("campaign_status") or ""),
+        "scope_id": str(ledger.get("scope_id") or ""),
+        "source_snapshot_hash": str(ledger.get("source_snapshot_hash") or ""),
+        "source_id": str(ledger.get("source_id") or ""),
+        "source_hash": str(ledger.get("source_hash") or ""),
+        "project": str(project),
+        "round": int(ledger.get("round") or 0),
+        "round_limit": int(ledger.get("round_limit") or 0),
+        "slice_budget": int(ledger.get("slice_budget") or 0),
+        "selection_mode": str(ledger.get("selection_mode") or ""),
+        "selected_slice_ids": [str(value) for value in ledger.get("selected_slice_ids", []) if str(value)],
+        "attempted_slice_ids": attempted,
+        "confirmed_slice_ids": confirmed,
+        "slice_status": slice_status,
+        "next_round": ledger.get("next_round"),
+        "stop_reason": str(ledger.get("stop_reason") or ""),
+        "updated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    from .artifact_redactor import write_json_redacted
 
-
-def _slice_history(history: list[dict[str, Any]] | None) -> tuple[set[str], set[str]]:
-    attempted: set[str] = set()
-    confirmed: set[str] = set()
-    if not history:
-        return attempted, confirmed
-    for entry in history:
-        if not isinstance(entry, dict):
-            continue
-        sid = str(entry.get("slice_id") or "").strip()
-        if not sid:
-            continue
-        attempted.add(sid)
-        if str(entry.get("status") or "").lower() in {"confirmed", "deliverable"}:
-            confirmed.add(sid)
-    return attempted, confirmed
+    write_json_redacted(path, safe)

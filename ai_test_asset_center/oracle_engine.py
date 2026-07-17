@@ -1312,33 +1312,6 @@ class EvidenceOracle(BaseOracle):
 # Oracle Registry
 # ═══════════════════════════════════════════════════
 
-def _scenario_allows_ecommerce_oracles(scenario: dict[str, Any]) -> bool:
-    """True only when scenario carries ecommerce evidence — never invent it."""
-    industries: list[str] = []
-    for key in ("recognized_industries", "matched_domains"):
-        raw = scenario.get(key) or []
-        if isinstance(raw, str):
-            industries.append(raw.lower())
-        elif isinstance(raw, list):
-            for item in raw:
-                if isinstance(item, dict):
-                    industries.append(str(item.get("industry") or item.get("domain") or "").lower())
-                else:
-                    industries.append(str(item or "").lower())
-    domain = str(
-        scenario.get("business_domain")
-        or scenario.get("industry")
-        or scenario.get("domain")
-        or ""
-    ).lower()
-    if domain == "ecommerce" or "ecommerce" in industries:
-        return True
-    for rule in scenario.get("oracle_rules") or []:
-        if "coupon" in str(rule or "").lower() or "cart" in str(rule or "").lower():
-            return True
-    return False
-
-
 class OracleRegistry:
     _instance = None
 
@@ -1380,12 +1353,12 @@ class OracleRegistry:
         return layers
 
     def get_for_category(self, category: str) -> list[BaseOracle]:
+        # Industry-shaped categories (money/inventory/coupon) are not auto-mapped.
+        # Those oracles attach only from explicit source oracle_rules.
         mapping = {
             "state_machine": ["StateOracle", "WorkflowOracle"],
             "permission": ["PermissionOracle", "TenantIsolationOracle"],
             "isolation": ["TenantIsolationOracle", "PermissionOracle"],
-            "money": ["MoneyOracle", "TransactionOracle"],
-            "inventory": ["InventoryOracle", "TransactionOracle"],
             "concurrency": ["ConcurrencyOracle", "IdempotencyOracle"],
             "invariant": ["ConsistencyOracle", "DataIntegrityOracle", "VisibilityOracle"],
             "privacy": ["PrivacyOracle", "AuditOracle"],
@@ -1406,6 +1379,12 @@ class OracleRegistry:
         return matched
 
     def get_for_scenario(self, scenario: dict[str, Any]) -> list[BaseOracle]:
+        """Select oracles from category + explicit source rules only.
+
+        Path tokens, entity labels, and industry tags must never auto-attach
+        domain oracles (Money/Inventory/Coupon). Customer delivery uses
+        contract_oracles on the experiment mainline; this registry is diagnostic.
+        """
         category = str(scenario.get("category") or "").strip().lower()
         oracles = self.get_for_category(category)
         seen = {o.name for o in oracles}
@@ -1415,74 +1394,27 @@ class OracleRegistry:
             if oracle and oracle.name not in seen:
                 oracles.append(oracle)
                 seen.add(oracle.name)
-        path_signal = " ".join(
-            str(step.get("api_path") or step.get("path") or "")
-            for step in (scenario.get("steps") or [])
-            if isinstance(step, dict)
-        ).lower()
-        path_signal += " " + " ".join(str(ep or "") for ep in scenario.get("endpoints") or []).lower()
-        entity = str(scenario.get("entity") or "").lower()
-        # Cross-cutting money/state/inventory oracles may attach from path evidence.
-        # Cart/coupon oracles are ecommerce-shaped: require path/endpoint evidence of
-        # those surfaces, or an explicitly recognized ecommerce domain — never from
-        # a bare entity label alone on an unknown-industry scenario.
-        cross_cutting_keywords = (
-            ("inventory", "InventoryOracle"),
-            ("/pay", "MoneyOracle"),
-            ("/payment", "MoneyOracle"),
-            ("/refund", "MoneyOracle"),
-            ("/order", "StateOracle"),
-        )
-        ecommerce_only_keywords = (
-            ("/cart", "DataIntegrityOracle"),
-            ("coupon", "CouponOracle"),
-        )
-        for token, oracle_name in cross_cutting_keywords:
-            if token in path_signal or token.strip("/") in entity:
-                oracle = self._oracles.get(oracle_name)
-                if oracle and oracle.name not in seen:
-                    oracles.append(oracle)
-                    seen.add(oracle.name)
-        ecommerce_allowed = _scenario_allows_ecommerce_oracles(scenario)
-        for token, oracle_name in ecommerce_only_keywords:
-            path_hit = token in path_signal
-            entity_hit = token.strip("/") in entity
-            if path_hit or (entity_hit and ecommerce_allowed):
-                oracle = self._oracles.get(oracle_name)
-                if oracle and oracle.name not in seen:
-                    oracles.append(oracle)
-                    seen.add(oracle.name)
         return oracles
 
     def auto_detect(self, prd_text: str, limit: int = 15) -> list[BaseOracle]:
-        scored = []
-        for o in self._oracles.values():
-            if o.layer == "L1": continue  # L1 always included
-            score = sum(1 for kw in o.trigger_keywords if kw.lower() in prd_text.lower())
-            if score > 0: scored.append((score, o))
-        scored.sort(key=lambda x: -x[0])
-        result = [o for _, o in scored[:limit]]
+        """Source-grounded detection only — no industry keyword scoring."""
+        from .oracle_dsl import DSLParser, DSLCompiler
 
-        # ── Oracle DSL integration: boost oracles for DSL-matched rules ──
-        try:
-            from .oracle_dsl import DSLParser, DSLCompiler
-            parser = DSLParser()
-            compiler = DSLCompiler()
-            dsl_rules = parser.parse_prd(prd_text)
-            if dsl_rules:
-                dsl_oracle_families: set[str] = set()
-                for rule in dsl_rules:
-                    compiled = compiler.compile_to_oracle_object(rule)
-                    dsl_oracle_families.add(compiled.oracle_family)
-                # Boost: ensure DSL-matched oracle families are included
-                for o in self._oracles.values():
-                    o_family = getattr(o, 'oracle_family', '')
-                    if o_family in dsl_oracle_families and o not in result:
-                        result.append(o)
-        except Exception:
-            pass  # DSL is optional; keyword matching is the fallback
-
-        # Always prepend L1 oracles
+        result: list[BaseOracle] = []
+        parser = DSLParser()
+        compiler = DSLCompiler()
+        dsl_rules = parser.parse_prd(prd_text)
+        if dsl_rules:
+            dsl_oracle_families: set[str] = set()
+            for rule in dsl_rules:
+                compiled = compiler.compile_to_oracle_object(rule)
+                dsl_oracle_families.add(compiled.oracle_family)
+            for o in self._oracles.values():
+                o_family = getattr(o, "oracle_family", "")
+                if o_family in dsl_oracle_families and o not in result:
+                    result.append(o)
+                    if len(result) >= max(0, int(limit)):
+                        break
         return self.get_by_layer("L1") + result
 
     def get_all_names(self) -> list[str]:
@@ -1494,6 +1426,13 @@ class OracleRegistry:
 # ═══════════════════════════════════════════════════
 
 class OracleEngine:
+    """Diagnostic multi-oracle stack — not the customer-delivery authority.
+
+    Product experiment findings are scored by ``contract_oracles`` on the
+    discovery mainline. This engine must never invent industry oracles from
+    path/entity/domain heuristics.
+    """
+
     def __init__(self):
         self.registry = OracleRegistry()
 
@@ -1502,17 +1441,6 @@ class OracleEngine:
         _log = logging.getLogger("OracleEngine")
         results = []
         oracles = self.registry.get_for_scenario(scenario)
-        if any(str(item or "").startswith("CouponOracle.") for item in scenario.get("oracle_rules", []) or []):
-            coupon_oracle = self.registry._oracles.get("CouponOracle")
-            if coupon_oracle and coupon_oracle not in oracles:
-                oracles.append(coupon_oracle)
-        elif (
-            str(scenario.get("entity", "") or "").strip().lower() == "coupon"
-            and _scenario_allows_ecommerce_oracles(scenario)
-        ):
-            coupon_oracle = self.registry._oracles.get("CouponOracle")
-            if coupon_oracle and coupon_oracle not in oracles:
-                oracles.append(coupon_oracle)
         for oracle in oracles:
             try:
                 results.append(oracle.evaluate(scenario, trace, snapshots))

@@ -932,7 +932,6 @@ def unresolved_placeholders(operation: dict[str, Any], plan: list[dict[str, Any]
             and (
                 bool(_list(item.get("resolver_operations")))
                 or bool(_dict(item.get("fixture_setup")))
-                or item.get("synthetic_value") is not None
             )
         )
     }

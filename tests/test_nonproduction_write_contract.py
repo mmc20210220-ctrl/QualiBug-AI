@@ -1143,6 +1143,7 @@ def test_multi_write_execution_exception_still_cleans_and_audits_partial_setup(
 
 
 def test_v12_write_scenario_is_not_retried_as_a_whole(monkeypatch) -> None:
+    import ai_test_asset_center.v12_legacy_scenario_exec as scenario_exec
     import ai_test_asset_center.v12_pipeline as v12_pipeline
 
     calls: list[str] = []
@@ -1151,7 +1152,8 @@ def test_v12_write_scenario_is_not_retried_as_a_whole(monkeypatch) -> None:
         calls.append("attempted")
         raise RuntimeError("transport_outcome_unknown")
 
-    monkeypatch.setattr(v12_pipeline, "__execute_scenario_once", fail_once)
+    # Executor body lives in v12_legacy_scenario_exec; patch the owning module.
+    monkeypatch.setattr(scenario_exec, "__execute_scenario_once", fail_once)
     scenario = SimpleNamespace(
         id="write-no-retry",
         steps=[SimpleNamespace(action="create", api_method="POST", api_path="/api/resources")],

@@ -1,13 +1,17 @@
 """Parameter fuzzer integration for v12 pipeline.
-Extracted from v12_pipeline.py.
+
+SSOT extracted from ``v12_pipeline``; the compatibility module re-exports via
+``from .pipeline_fuzzer import *``.
 """
 from __future__ import annotations
 
-import hashlib, json, re, os
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
 from .pipeline_runtime import _dict
+from .real_id_resolver import normalize_path_placeholders
 
 
 def _runtime_contract_allows_parameter_fuzzer_writes(runtime_contract: dict[str, Any]) -> bool:
@@ -29,6 +33,8 @@ def _prepare_parameter_fuzzer_catalog(
     api_doc: str,
     runtime_contract: dict[str, Any],
 ) -> list[dict[str, Any]]:
+    """Attach source-derived write bodies and sandbox metadata for fuzzer routes."""
+
     writes_allowed = _runtime_contract_allows_parameter_fuzzer_writes(runtime_contract)
     prepared: list[dict[str, Any]] = []
     selected = {str(path or "") for path in selected_paths if str(path or "")}
@@ -46,6 +52,7 @@ def _prepare_parameter_fuzzer_catalog(
             if not isinstance(template, dict) or not template:
                 try:
                     from .auto_test_data_factory import build_source_grounded_request_body
+
                     built = build_source_grounded_request_body(api_doc, method, path)
                 except Exception as exc:
                     raise RuntimeError(
@@ -94,14 +101,17 @@ def _build_parameter_fuzzer_governed_write_executor(
     safety_boundary: dict[str, Any] | None,
     selected_slice_by_path: dict[str, dict[str, Any]],
 ):
-    from .real_id_resolver_base import normalize_path_placeholders
-
     def execute_governed_parameter_write(
-        *, method: str, path: str, body: dict[str, Any],
-        route: dict[str, Any], token: str,
+        *,
+        method: str,
+        path: str,
+        body: dict[str, Any],
+        route: dict[str, Any],
+        token: str,
     ) -> dict[str, Any]:
         from .sandbox_write_executor import execute_with_sandbox_write
         from .semantic_scenario_generator import ExecutableScenario, ScenarioStep
+        from .v12_legacy_scenario_exec import _execute_scenario
 
         route_source_refs = route.get("source_refs") or route.get("document_refs") or []
         slice_info = selected_slice_by_path.get(path) or selected_slice_by_path.get(normalize_path_placeholders(path)) or {}
@@ -112,34 +122,57 @@ def _build_parameter_fuzzer_governed_write_executor(
             id=f"parameter_fuzzer:{method}:{normalize_path_placeholders(path)}:{body_digest}",
             title=f"Source-bound parameter mutation {method} {path}",
             description="Parameter fuzzer mutation routed through governed sandbox write executor.",
-            category="input_validation", severity="P1",
+            category="input_validation",
+            severity="P1",
             entity=str(route.get("entity") or ""),
             actors=[str(runtime_contract.get("actor_identity") or "")] if str(runtime_contract.get("actor_identity") or "") else [],
-            steps=[ScenarioStep(order=1, action="parameter_fuzzer_mutation", api_method=method, api_path=path,
-                body_template=dict(body), expected_status=0,
-                body_provenance=str(route.get("body_template_provenance") or ""))],
+            steps=[
+                ScenarioStep(
+                    order=1,
+                    action="parameter_fuzzer_mutation",
+                    api_method=method,
+                    api_path=path,
+                    body_template=dict(body),
+                    expected_status=0,
+                    body_provenance=str(route.get("body_template_provenance") or ""),
+                )
+            ],
             oracle_rules=["HttpStatusOracle.server_error_is_defect"],
-            actor_token=str(token or ""), execution_policy="approved_sandbox_write",
+            actor_token=str(token or ""),
+            execution_policy="approved_sandbox_write",
             source_refs=list(route_source_refs) if isinstance(route_source_refs, list) else [],
             behavior_slice_id=str(slice_info.get("slice_id") or ""),
             behavior_slice_kind=str(slice_info.get("kind") or ""),
-            discovery_round=int(round_number or 1), selection_origin="parameter_fuzzer",
+            discovery_round=int(round_number or 1),
+            selection_origin="parameter_fuzzer",
             runtime_hints={"parameter_fuzzer": True},
         )
         trace = execute_with_sandbox_write(
-            scenario, approved_base_url, root=root, project=project,
-            runtime_contract=runtime_contract, campaign_id=campaign_id,
-            safety_boundary=safety_boundary, observer_token=str(token or ""),
+            scenario,
+            approved_base_url,
+            root=root,
+            project=project,
+            runtime_contract=runtime_contract,
+            campaign_id=campaign_id,
+            safety_boundary=safety_boundary,
+            observer_token=str(token or ""),
             documented_routes=documented_routes,
             execute_fn=lambda sc, bu, safety_boundary=None, write_observer=None: _execute_scenario(
-                sc, bu, max_retries=0, safety_boundary=safety_boundary, write_observer=write_observer),
+                sc,
+                bu,
+                max_retries=0,
+                safety_boundary=safety_boundary,
+                write_observer=write_observer,
+            ),
         )
         status, response = _parameter_fuzzer_trace_result(trace, method, path)
         sandbox = _dict(trace.get("sandbox_write"))
-        return {"status": status, "response": response, "duration_ms": trace.get("duration_ms") or 0,
-                "audit_path": str(sandbox.get("audit_path") or ""), "trace": trace}
+        return {
+            "status": status,
+            "response": response,
+            "duration_ms": trace.get("duration_ms") or 0,
+            "audit_path": str(sandbox.get("audit_path") or ""),
+            "trace": trace,
+        }
 
-    # _execute_scenario is imported from the enclosing module
-    from . import v12_pipeline as _v12
-    _execute_scenario = _v12._execute_scenario
     return execute_governed_parameter_write

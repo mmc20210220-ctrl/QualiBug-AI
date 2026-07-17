@@ -723,4 +723,8 @@ def derive_campaign_terminal_status(ledger: dict[str, Any]) -> str:
         raise ObligationAttemptLedgerError("obligation_terminal_status_invalid")
     if "HARNESS_FAILED" in statuses:
         return "degraded"
+    # All-blocked/deferred runs stay visibly BLOCKED — empty findings must never
+    # be read as a defect-free completed campaign.
+    if statuses and all(status in {"BLOCKED", "DEFERRED"} for status in statuses):
+        return "blocked"
     return "completed"

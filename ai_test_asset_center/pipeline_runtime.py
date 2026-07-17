@@ -123,8 +123,6 @@ def _slice_ledger_path(root: Path, project: str) -> Path:
     return root / "platform_workspace" / str(project) / "defect_discovery" / "v12_behavior_slice_ledger.json"
 
 
-def _evidence_chain_path(root: Path, project: str, evidence_id: str) -> Path:
-    return root / "platform_workspace" / str(project) / "defect_discovery" / "evidence_chains" / f"{evidence_id}.json"
 
 
 def source_snapshot_hash(prd_text: str, api_spec_text: str, db_schema_text: str, scope_id: str, environment_ref: str) -> str:
@@ -141,21 +139,8 @@ def _active_policy_version() -> str:
         return "v1.0.0-baseline"
 
 
-def _persist_evidence_chain(root: Path, project: str, evidence: dict[str, Any]) -> str:
-    evidence_id = str(evidence.get("evidence_id") or "").strip()
-    if not evidence_id:
-        raise ValueError("EVIDENCE_ID_MISSING")
-    path = _evidence_chain_path(root, project, evidence_id)
-    try:
-        from .artifact_redactor import write_json_redacted
-        write_json_redacted(path, evidence)
-    except Exception as exc:
-        raise RuntimeError(f"EVIDENCE_CHAIN_PERSIST_FAILED:{evidence_id}:{type(exc).__name__}") from exc
-    return str(path)
 
 
-def _confirmed_findings_path(root: Path, project: str) -> Path:
-    return root / "platform_workspace" / str(project) / "defect_discovery" / "confirmed_findings.json"
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -164,3 +149,35 @@ def _dict(value: Any) -> dict[str, Any]:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _evidence_chain_path(root: Path, project: str, evidence_id: str) -> Path:
+    return root / "platform_workspace" / str(project) / "defect_discovery" / "evidence_chains" / f"{evidence_id}.json"
+
+
+def _persist_evidence_chain(root: Path, project: str, evidence: dict[str, Any]) -> str:
+    """主链 7: land a collected evidence chain on disk keyed by its (stable)
+    evidence_id so it can be retrieved for regression (主链 9) and delivery
+    (主链 8). Returns the written path, or '' when the evidence has no id."""
+    evidence_id = str(evidence.get("evidence_id") or "").strip()
+    if not evidence_id:
+        raise ValueError("EVIDENCE_ID_MISSING")
+    path = _evidence_chain_path(root, project, evidence_id)
+    try:
+        from .artifact_redactor import write_json_redacted
+
+        write_json_redacted(path, evidence)
+    except Exception as exc:
+        raise RuntimeError(f"EVIDENCE_CHAIN_PERSIST_FAILED:{evidence_id}:{type(exc).__name__}") from exc
+    return str(path)
+
+
+def _confirmed_findings_path(root: Path, project: str) -> Path:
+    """主链 9 Gap B1: location of the persistable confirmed-defect ledger. The
+    regression runner reads this file to re-verify already-confirmed defects
+    after a fix — closing the loop between 主链 6/7 and 主链 9.
+
+    Uses the same ``platform_workspace/<project>/defect_discovery`` base as the
+    evidence chains (主链 7) so 主链 9 can read both products from one place.
+    """
+    return root / "platform_workspace" / str(project) / "defect_discovery" / "confirmed_findings.json"

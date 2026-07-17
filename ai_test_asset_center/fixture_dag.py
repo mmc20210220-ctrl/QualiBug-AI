@@ -97,9 +97,7 @@ def build_fixture_dag_for_experiment(
                 and ":" not in _text(resolver.get("path"))
                 for resolver in resolver_operations
             )
-            # Also accept synthetic fallback bindings as constructible
-            if not constructible and item.get("synthetic_value") is not None:
-                constructible = True
+            # synthetic_value alone is never constructible — invented ids forbidden
             if not constructible and item.get("fixture_setup"):
                 constructible = True
             nodes.append({

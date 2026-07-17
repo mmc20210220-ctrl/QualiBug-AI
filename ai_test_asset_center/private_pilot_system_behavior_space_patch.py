@@ -16,7 +16,6 @@ existing engines/writers/runners remain the execution paths, while this patch
 preserves System Behavior Space promise metadata across them.
 """
 
-import contextvars
 import json
 from pathlib import Path
 from typing import Any
@@ -26,19 +25,18 @@ from ai_test_asset_center.system_behavior_space import (
     SYSTEM_BEHAVIOR_SPACE_VERSION,
     build_system_behavior_space,
 )
+from ai_test_asset_center.system_behavior_space_context import (
+    get_behavior_space_context,
+)
 
 PATCH_SOURCE = "ai_test_asset_center.private_pilot_system_behavior_space_patch"
 _SAFE_READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 _KNOWN_HTTP_METHODS = {"GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"}
 _WRITE_METHODS = _KNOWN_HTTP_METHODS - _SAFE_READ_METHODS
-_BEHAVIOR_SPACE_CONTEXT: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
-    "qualibug_system_behavior_space_context",
-    default={},
-)
 
 
 def _load_existing_enterprise_asset() -> dict[str, Any]:
-    context = _BEHAVIOR_SPACE_CONTEXT.get({})
+    context = get_behavior_space_context()
     project = str(context.get("project") or "").strip()
     root_value = context.get("root")
     if not project or root_value is None:
@@ -1481,26 +1479,21 @@ def install_system_behavior_space_patch(*, patch_source: str = PATCH_SOURCE) -> 
 
 
 def _install_v12_behavior_space_context_patch() -> None:
+    """Mark first-class context binder readiness — do not wrap run_v12_pipeline."""
     try:
         from ai_test_asset_center import v12_pipeline as _v12
+        from ai_test_asset_center.system_behavior_space_context import (
+            FIRST_CLASS_CONTEXT_BINDER,
+        )
     except Exception:
         return
     if getattr(_v12, "_SYSTEM_BEHAVIOR_SPACE_CONTEXT_PATCHED", False):
         return
-    original = getattr(_v12, "run_v12_pipeline", None)
-    if not callable(original):
+    if not FIRST_CLASS_CONTEXT_BINDER:
         return
-
-    def _run_v12_pipeline_with_behavior_space_context(project: str, root: Path, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        token = _BEHAVIOR_SPACE_CONTEXT.set({"project": str(project or ""), "root": Path(root)})
-        try:
-            return original(project, root, *args, **kwargs)
-        finally:
-            _BEHAVIOR_SPACE_CONTEXT.reset(token)
-
-    _v12._ORIGINAL_RUN_V12_PIPELINE_SYSTEM_BEHAVIOR_SPACE_CONTEXT = original  # type: ignore[attr-defined]
-    _v12.run_v12_pipeline = _run_v12_pipeline_with_behavior_space_context  # type: ignore[assignment]
+    # Context is bound inside run_v12_pipeline; no symbol replacement.
     _v12._SYSTEM_BEHAVIOR_SPACE_CONTEXT_PATCHED = True  # type: ignore[attr-defined]
+    _v12._SYSTEM_BEHAVIOR_SPACE_CONTEXT_MODE = "first_class"  # type: ignore[attr-defined]
 
 
 def prepare_system_behavior_space_learning_context(builder: Any, *, project: str, root: Any) -> Any:
@@ -1523,10 +1516,10 @@ def restore_system_behavior_space_patch() -> None:
         _bsg.BusinessStateGraphBuilder.behavior_contract = original_contract  # type: ignore[method-assign]
     try:
         from ai_test_asset_center import v12_pipeline as _v12
-        original_v12 = getattr(_v12, "_ORIGINAL_RUN_V12_PIPELINE_SYSTEM_BEHAVIOR_SPACE_CONTEXT", None)
-        if callable(original_v12):
-            _v12.run_v12_pipeline = original_v12  # type: ignore[assignment]
+        # First-class binder owns run_v12_pipeline; only clear the readiness flag.
         _v12._SYSTEM_BEHAVIOR_SPACE_CONTEXT_PATCHED = False  # type: ignore[attr-defined]
+        if hasattr(_v12, "_SYSTEM_BEHAVIOR_SPACE_CONTEXT_MODE"):
+            delattr(_v12, "_SYSTEM_BEHAVIOR_SPACE_CONTEXT_MODE")
     except Exception:
         pass
     try:

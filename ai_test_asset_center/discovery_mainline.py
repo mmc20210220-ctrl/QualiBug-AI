@@ -174,9 +174,14 @@ def run_discovery_mainline(
         else experiment_runner
     )
     if runner is None:
-        raise MainlineContractError(
-            f"mainline_runner_unavailable:{frozen_contract['mainline_authority']}"
+        authority = frozen_contract["mainline_authority"]
+        hint = (
+            ":installed_runners=experiment_candidate_only"
+            ":select_experiment_candidate_before_next_run"
+            if authority == "legacy_champion"
+            else ""
         )
+        raise MainlineContractError(f"mainline_runner_unavailable:{authority}{hint}")
     receipt = _runner_receipt(
         inputs=inputs,
         contract=frozen_contract,

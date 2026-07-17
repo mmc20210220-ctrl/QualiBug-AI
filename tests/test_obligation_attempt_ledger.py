@@ -246,7 +246,8 @@ def test_campaign_completion_is_derived_from_attempt_ledger_and_cannot_be_overwr
         execution_results={},
         gate_results={},
     )
-    assert derive_campaign_terminal_status(ledger) == "completed"
+    # All-blocked remains visibly blocked — not a defect-free "completed" run.
+    assert derive_campaign_terminal_status(ledger) == "blocked"
 
     campaign = EnterpriseCampaign.create(
         project_id="PROJECT-1",
@@ -256,7 +257,7 @@ def test_campaign_completion_is_derived_from_attempt_ledger_and_cannot_be_overwr
     )
     campaign.campaign_id = "CMP-1"
     campaign.record_obligation_attempt_ledger(ledger)
-    assert campaign.status == "completed"
+    assert campaign.status == "blocked"
     assert campaign.public_contract()["completion_authority"] == "obligation_attempt_ledger"
     assert campaign.public_contract()["completion_is_formal"] is True
 
@@ -273,7 +274,7 @@ def test_campaign_completion_is_derived_from_attempt_ledger_and_cannot_be_overwr
         execution_status="completed",
         attempted_slice_ids=["legacy-slice"],
     )
-    assert campaign.status == "completed"
+    assert campaign.status == "blocked"
     assert campaign.audit_events[-1]["event"] == "legacy_cycle_projection"
 
     tampered = deepcopy(ledger)

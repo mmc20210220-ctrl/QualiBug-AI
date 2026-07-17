@@ -1027,24 +1027,27 @@ def execute_one_experiment(
         elif kind == "runtime_read_binding":
             target = _text(_dict(node).get("target"))
             binding = binding_plan.get(target) or {}
-            # Use synthetic fallback value when no resolvers exist
-            _synthetic = binding.get("synthetic_value")
-            if _synthetic and not binding.get("resolver_operations") and not binding.get("fixture_setup"):
-                runtime_bindings[target] = _synthetic
-                fixture_receipts.append({
-                    "node_id": node_id,
-                    "kind": kind,
-                    "status": "resolved",
-                    "target": target,
-                    "value_fingerprint": _synthetic[:12],
-                })
-                binding_materialization_receipts.append({
-                    "target": target,
-                    "status": "BOUND",
-                    "value_fingerprint": _synthetic[:12],
-                    "source_priority": "synthetic_fallback",
-                })
-                continue
+            # Invented identifiers are forbidden. A synthetic_value without a
+            # source-declared GET/HEAD resolver or fixture setup remains blocked.
+            if (
+                binding.get("synthetic_value") is not None
+                and not binding.get("resolver_operations")
+                and not binding.get("fixture_setup")
+            ):
+                return {
+                    "schema_version": "qualibug.experiment-execution.v1",
+                    "experiment_id": eid,
+                    "obligation_id": oid,
+                    "status": "BLOCKED",
+                    "reason_code": "BLOCKED_MISSING_BINDING",
+                    "detail": f"synthetic_binding_forbidden:{target}",
+                    "elapsed_ms": int((time.time() - started) * 1000),
+                    "finding": None,
+                    "execution_receipt": {
+                        "status": "BLOCKED",
+                        "reason_code": "BLOCKED_MISSING_BINDING",
+                    },
+                }
             resolvers = _validated_runtime_resolvers(binding, ops)
             force_fixture_setup = binding.get("force_fixture_setup") is True
             target_path = _text(binding.get("target_path"))

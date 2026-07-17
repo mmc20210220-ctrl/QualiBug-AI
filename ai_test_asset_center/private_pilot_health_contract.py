@@ -75,10 +75,30 @@ def system_behavior_runtime_status() -> dict[str, Any]:
         checks["behavior_contract"] = False
     try:
         from ai_test_asset_center import v12_pipeline as _v12
-        checks["v12_project_context"] = bool(getattr(_v12, "_SYSTEM_BEHAVIOR_SPACE_CONTEXT_PATCHED", False))
-        checks["confirmed_finding_contract"] = bool(getattr(_v12, "_SYSTEM_BEHAVIOR_FINDING_PATCHED", False))
-        checks["coverage_steering"] = bool(getattr(_v12, "_COVERAGE_STEERING_PATCHED", False))
-        sources["coverage_steering"] = str(getattr(_v12, "_COVERAGE_STEERING_PATCH_SOURCE", "") or "")
+        from ai_test_asset_center.system_behavior_space_context import (
+            FIRST_CLASS_CONTEXT_BINDER,
+        )
+
+        # First-class binder inside run_v12_pipeline satisfies readiness even
+        # before install_runtime_patches marks the compatibility flag.
+        checks["v12_project_context"] = bool(
+            FIRST_CLASS_CONTEXT_BINDER
+            or getattr(_v12, "_SYSTEM_BEHAVIOR_SPACE_CONTEXT_PATCHED", False)
+        )
+        checks["confirmed_finding_contract"] = bool(
+            getattr(_v12, "_SYSTEM_BEHAVIOR_FINDING_PATCHED", False)
+        )
+        checks["coverage_steering"] = bool(
+            getattr(_v12, "_COVERAGE_STEERING_PATCHED", False)
+            or getattr(_v12, "_COVERAGE_STEERING_MODE", "") == "first_class_hook"
+        )
+        sources["coverage_steering"] = str(
+            getattr(_v12, "_COVERAGE_STEERING_PATCH_SOURCE", "") or ""
+        )
+        sources["v12_project_context"] = str(
+            getattr(_v12, "_SYSTEM_BEHAVIOR_SPACE_CONTEXT_MODE", "")
+            or ("first_class" if FIRST_CLASS_CONTEXT_BINDER else "")
+        )
     except Exception:
         checks["v12_project_context"] = False
         checks["confirmed_finding_contract"] = False

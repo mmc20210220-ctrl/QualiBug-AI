@@ -4,7 +4,7 @@
 
 When evaluating product readiness or dogfooding bug-finding features, verify observable behavior from the running product and code before reporting status. Treat configured-but-unverified integrations as not online: for model providers, a saved key or endpoint only means "configured" until a real health check succeeds, and failures must be shown as failed/offline rather than healthy.
 
-- The only supported backend launch authority is `ai_test_asset_center.private_pilot_entrypoint:run_server` (including `qualibug-server`). `private_pilot_service` is the core service implementation, not a direct launch path. Customer delivery classification in that core imports `customer_delivery_gate.split_customer_delivery_tracks` directly; runtime patch installation must never be required for correctness.
+- The only supported backend launch authority is `ai_test_asset_center.private_pilot_entrypoint:run_server` (including `qualibug-server`). `private_pilot_service` is the core service implementation, not a direct launch path. Customer delivery classification in that core imports `customer_delivery_gate.split_customer_delivery_tracks` directly; runtime patch installation must never be required for correctness. `run_v12_pipeline` binds System Behavior Space project/root context first-class via `system_behavior_space_context`; coverage learning reorder registers through `v12_legacy_schedule.register_slice_reorder_hook`. Neither path may replace `v12_pipeline.run_v12_pipeline`.
 - Evidence enrichment may format captured facts and generate clearly marked operator guidance, but it must never infer request bodies, credentials, actors, business rules, entity/table names, SQL, or impact claims. Generated guidance is synthetic and cannot satisfy the customer-delivery gate.
 
 ## Syntax Check After Every Edit
@@ -80,16 +80,28 @@ assert engine.client.config.max_tokens >= 32768, "max_tokens too low"
   `v12_pipeline.run_v12_pipeline` function is a compatibility wrapper that
   invokes `discovery_mainline.run_discovery_mainline` exactly once. It must
   never retry with, fall back to, or switch to the other authority after an
-  exception.
+  exception. Legacy schedule, scenario HTTP execution, and oracle-finding
+  helpers live in `v12_legacy_schedule.py`, `v12_legacy_scenario_exec.py`, and
+  `v12_legacy_oracle_findings.py` and are re-exported from `v12_pipeline` for
+  compatibility — they are not on the `experiment_candidate` delivery path.
+  Runtime/fuzzer/slice/DB helpers SSOTs are `pipeline_runtime.py`,
+  `pipeline_fuzzer.py`, `pipeline_slices.py`, and `pipeline_db.py` (explicit
+  imports; `import *` must not be used for `_`-prefixed symbols). Industry
+  coupon DB sampling was removed from the product path.
 - `experiment_candidate` planning and execution live in
   `discovery_runtime.py`; selected experiments execute only through
-  `experiment_executor.execute_selected_experiments`. The legacy domain may
-  run only when `legacy_champion` was explicitly selected before the run. Its
-  adapter derives the common attempt ledger only from selected behavior slices,
-  redacted execution traces, and runtime-backed findings; operational output
-  still must pass the same customer-delivery gate. The execution-policy default
-  remains `legacy_champion` until external paired evidence promotes the
-  experiment candidate.
+  `experiment_executor.execute_selected_experiments`. Contract oracle evaluation
+  on that path is the customer-delivery authority; the legacy `OracleEngine`
+  registry is diagnostic only and must not auto-attach industry oracles from
+  path, entity, or domain heuristics. The legacy domain may run only when
+  `legacy_champion` was explicitly selected before the run and a gate-verifiable
+  legacy runner is installed. The product `run_v12_pipeline` wrapper currently
+  installs only `experiment_candidate`; selecting unavailable
+  `legacy_champion` fails closed with `mainline_runner_unavailable` before
+  campaign creation. The execution-policy default remains `legacy_champion`
+  until external paired evidence promotes the experiment candidate — operators
+  must explicitly select `experiment_candidate` for operational discovery runs
+  until that promotion evidence exists or a legacy runner is restored.
 - `qualibug.obligation-attempt-ledger.v1` is the completion and funnel SSOT.
   Every selected, blocked, or deferred obligation must have exactly one
   terminal attempt with a reason code. Zero selected obligations and all-

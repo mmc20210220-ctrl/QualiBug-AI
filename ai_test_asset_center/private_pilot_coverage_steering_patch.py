@@ -577,56 +577,31 @@ def _attach_coverage_steering_result(result: dict[str, Any], diagnostic: dict[st
 
 
 def install_coverage_steering_patch(*, patch_source: str = PATCH_SOURCE) -> None:
+    """Register first-class schedule reorder hook — do not wrap run_v12_pipeline."""
     from ai_test_asset_center import v12_pipeline
+    from ai_test_asset_center.v12_legacy_schedule import register_slice_reorder_hook
 
     if getattr(v12_pipeline, "_COVERAGE_STEERING_PATCHED", False):
         return
 
-    original_run = getattr(v12_pipeline, "run_v12_pipeline")
-    original_schedule = getattr(v12_pipeline, "_schedule_behavior_slices")
+    def _reorder(
+        slices: list[dict[str, Any]],
+        root: Path,
+        project: str,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        return _steer_slices(slices, root=root, project=project)
 
-    def _run_with_coverage_steering(project: str, root: Path, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        context_payload: dict[str, Any] = {"project": str(project), "root": Path(root), "last_coverage_steering": {}}
-        token = _COVERAGE_STEERING_CONTEXT.set(context_payload)
-        try:
-            result = original_run(project, root, *args, **kwargs)
-            return _attach_coverage_steering_result(result, _as_dict(context_payload.get("last_coverage_steering")))
-        finally:
-            _COVERAGE_STEERING_CONTEXT.reset(token)
-
-    def _schedule_with_coverage_steering(slices: list[dict[str, Any]], settings: dict[str, int], history: list[dict[str, Any]] | None) -> dict[str, Any]:
-        context = _COVERAGE_STEERING_CONTEXT.get() or {}
-        project = str(context.get("project") or "").strip()
-        root = Path(context.get("root") or Path.cwd())
-        diagnostic: dict[str, Any] = {"status": "not_applied", "reason": "missing_project_context"}
-        steered_slices = slices
-        if project:
-            steered_slices, diagnostic = _steer_slices(slices, root=root, project=project)
-        context["last_coverage_steering"] = diagnostic
-        selection = original_schedule(steered_slices, settings, history)
-        if isinstance(selection, dict):
-            selection["coverage_steering"] = diagnostic
-            if diagnostic.get("status") == "applied":
-                mode = str(selection.get("selection_mode") or "")
-                if "coverage_learning_steered" not in mode:
-                    selection["selection_mode"] = f"{mode}+coverage_learning_steered" if mode else "coverage_learning_steered"
-        return selection
-
-    v12_pipeline._ORIGINAL_COVERAGE_STEERING_RUN = original_run  # type: ignore[attr-defined]
-    v12_pipeline._ORIGINAL_COVERAGE_STEERING_SCHEDULE = original_schedule  # type: ignore[attr-defined]
-    v12_pipeline.run_v12_pipeline = _run_with_coverage_steering  # type: ignore[assignment]
-    v12_pipeline._schedule_behavior_slices = _schedule_with_coverage_steering  # type: ignore[assignment]
+    register_slice_reorder_hook(_reorder)
     v12_pipeline._COVERAGE_STEERING_PATCHED = True  # type: ignore[attr-defined]
     v12_pipeline._COVERAGE_STEERING_PATCH_SOURCE = patch_source  # type: ignore[attr-defined]
+    v12_pipeline._COVERAGE_STEERING_MODE = "first_class_hook"  # type: ignore[attr-defined]
 
 
 def restore_coverage_steering_patch() -> None:
     from ai_test_asset_center import v12_pipeline
+    from ai_test_asset_center.v12_legacy_schedule import clear_slice_reorder_hook
 
-    original_run = getattr(v12_pipeline, "_ORIGINAL_COVERAGE_STEERING_RUN", None)
-    original_schedule = getattr(v12_pipeline, "_ORIGINAL_COVERAGE_STEERING_SCHEDULE", None)
-    if callable(original_run):
-        v12_pipeline.run_v12_pipeline = original_run  # type: ignore[assignment]
-    if callable(original_schedule):
-        v12_pipeline._schedule_behavior_slices = original_schedule  # type: ignore[assignment]
+    clear_slice_reorder_hook()
     v12_pipeline._COVERAGE_STEERING_PATCHED = False  # type: ignore[attr-defined]
+    if hasattr(v12_pipeline, "_COVERAGE_STEERING_MODE"):
+        delattr(v12_pipeline, "_COVERAGE_STEERING_MODE")
