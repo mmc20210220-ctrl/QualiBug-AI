@@ -42,6 +42,7 @@
     "ai_test_asset_center.private_pilot_regression_projection": "core",
     "ai_test_asset_center.private_pilot_defect_summaries": "core",
     "ai_test_asset_center.private_pilot_command_center_helpers": "core",
+    "ai_test_asset_center.private_pilot_scan_prep": "core",
     "ai_test_asset_center.real_project_defect_discovery": "compatibility",
     "ai_test_asset_center.real_project_discovery_with_chain": "compatibility"
   },
