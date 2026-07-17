@@ -121,13 +121,18 @@ def score_obligation(
     obl = _dict(obligation)
     family = _text(obl.get("risk_family"))
     hist = _dict(historical_yield)
-    risk_priority = min(
-        2.0,
-        max(
-            0.05,
-            _num(hist.get(f"risk:{family}"), _num(obl.get("risk_priority"), 1.0)),
-        ),
-    )
+    hist_risk = hist.get(f"risk:{family}")
+    if hist_risk is None:
+        # Cold-start Multi-User Replay bias: isolation (+ ownership binder)
+        # outranks abundant cross-role authorization twins on the same prefix.
+        base_priority = _num(obl.get("risk_priority"), 1.0)
+        if family == "isolation":
+            base_priority = max(base_priority, 1.65)
+            if _text(_dict(obl.get("property")).get("ownership_param")):
+                base_priority = max(base_priority, 1.8)
+    else:
+        base_priority = _num(hist_risk, 1.0)
+    risk_priority = min(2.0, max(0.05, base_priority))
     key = f"{family}|{','.join(_list(obl.get('subject_refs'))[:3])}"
     novelty = 1.0 if key not in covered_keys else 0.15
     source_confidence = min(0.95, max(0.05, _num(obl.get("confidence"), 0.5)))
@@ -271,10 +276,23 @@ def plan_obligation_round(
         if family_counts.get(item["risk_family"], 0) < 1:
             _try_add(item, respect_soft_caps=False)
 
-    for item in ranked:
-        prefix = item["path_prefix"]
-        if prefix and prefix_counts.get(prefix, 0) < 1:
-            _try_add(item, respect_soft_caps=False)
+    # Prefer isolation on still-uncovered path prefixes before abundant
+    # authorization twins fill the same prefixes. Soft-caps stay in force —
+    # this only reorders first contact with a cold prefix, not budget size.
+    uncovered_prefix_candidates = [
+        item
+        for item in ranked
+        if item["path_prefix"] and prefix_counts.get(item["path_prefix"], 0) < 1
+    ]
+    uncovered_prefix_candidates.sort(
+        key=lambda item: (
+            0 if item["risk_family"] == "isolation" else 1,
+            -float(item["score"]),
+            item["obligation_id"],
+        )
+    )
+    for item in uncovered_prefix_candidates:
+        _try_add(item, respect_soft_caps=True)
 
     for item in ranked:
         op_key = item["operation_key"]

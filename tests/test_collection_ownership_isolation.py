@@ -206,3 +206,56 @@ def test_collection_isolation_experiment_binds_owner_identity_and_query() -> Non
         if isinstance(row, dict)
     }
     assert "user_id" in targets
+
+
+def test_post_isolation_carries_delete_cleanup_requirement() -> None:
+    compiled = compile_obligations_from_behavior_ir(_collection_ir())
+    isolation = next(
+        row
+        for row in compiled["obligations"]
+        if row["risk_family"] == "isolation"
+        and row["property"]["operation_ref"] == "op-cart-post"
+    )
+    cleanup = isolation.get("cleanup_requirement") or {}
+    assert cleanup.get("required") is True
+    assert cleanup.get("operation_ref") == "op-cart-delete"
+
+    experiment = compile_experiment_for_obligation(
+        isolation,
+        behavior_ir=_collection_ir(),
+        environment_type="test",
+    )
+    assert experiment["compile_receipt"]["status"] == "COMPILED"
+    cleanup_ops = {
+        row.get("operation_ref")
+        for row in experiment.get("cleanup_plan") or []
+        if isinstance(row, dict)
+    }
+    assert "op-cart-delete" in cleanup_ops
+
+
+def test_uncompensated_owned_write_isolation_stays_nrw() -> None:
+    ir = _collection_ir()
+    ir["operations"] = [
+        op for op in ir["operations"] if op["id"] != "op-cart-delete"
+    ]
+    ir["relations"] = [
+        row for row in ir["relations"] if row["id"] != "comp-del"
+    ]
+    isolation = next(
+        row
+        for row in compile_obligations_from_behavior_ir(ir)["obligations"]
+        if row["risk_family"] == "isolation"
+        and row["property"]["operation_ref"] == "op-cart-post"
+    )
+    cleanup = isolation.get("cleanup_requirement") or {}
+    assert cleanup.get("required") is True
+    assert not cleanup.get("operation_ref")
+
+    experiment = compile_experiment_for_obligation(
+        isolation,
+        behavior_ir=ir,
+        environment_type="test",
+    )
+    assert experiment["compile_receipt"]["status"] == "BLOCKED"
+    assert experiment["compile_receipt"]["reason_code"] == "BLOCKED_NON_REVERSIBLE_WRITE"

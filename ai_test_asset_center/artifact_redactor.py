@@ -234,6 +234,7 @@ def scan_for_secrets(payload: Any) -> dict[str, Any]:
 def redact_and_validate(payload: Any) -> tuple[Any, dict[str, Any]]:
     """Redact then scan. Raises ArtifactSecretLeakError on residual secrets."""
     redacted, receipt = redact_artifact(payload)
+    redacted = _reseal_attempt_ledgers(redacted)
     scan = scan_for_secrets(redacted)
     combined = {
         "schema_version": SCHEMA_VERSION,
@@ -247,6 +248,23 @@ def redact_and_validate(payload: Any) -> tuple[Any, dict[str, Any]]:
             scan_result=combined,
         )
     return redacted, combined
+
+
+def _reseal_attempt_ledgers(value: Any) -> Any:
+    """Keep sealed obligation-attempt ledgers valid after secret redaction."""
+
+    if isinstance(value, dict):
+        if value.get("schema_version") == "qualibug.obligation-attempt-ledger.v1":
+            from .obligation_attempt_ledger import reseal_obligation_attempt_ledger
+
+            return reseal_obligation_attempt_ledger(value)
+        return {
+            key: _reseal_attempt_ledgers(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_reseal_attempt_ledgers(item) for item in value]
+    return value
 
 
 def write_json_redacted(

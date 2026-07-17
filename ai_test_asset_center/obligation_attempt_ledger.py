@@ -487,6 +487,43 @@ def build_obligation_attempt_ledger(
     return ledger
 
 
+def reseal_obligation_attempt_ledger(ledger: dict[str, Any]) -> dict[str, Any]:
+    """Recompute attempt/ledger fingerprints after authorized payload transforms.
+
+    Persistence redaction may rewrite secret-bearing strings inside sealed
+    receipts. Callers must reseal nested content-addressed receipts first, then
+    reseal attempt/ledger fingerprints so reload validation remains fail-closed
+    on identity without false fingerprint mismatches.
+    """
+
+    from .sealed_receipt_reseal import reseal_obligation_attempt_nested_receipts
+
+    value = _object(ledger, field="obligation_attempt_ledger")
+    if value.get("schema_version") != OBLIGATION_ATTEMPT_LEDGER_SCHEMA:
+        raise ObligationAttemptLedgerError("obligation_attempt_ledger_schema_invalid")
+    resealed_attempts: list[dict[str, Any]] = []
+    raw_attempts = value.get("attempts")
+    if not isinstance(raw_attempts, list):
+        raise ObligationAttemptLedgerError("obligation_attempts_not_list")
+    for row in raw_attempts:
+        attempt = {
+            key: item
+            for key, item in _object(row, field="obligation_attempt").items()
+            if key != "attempt_fingerprint"
+        }
+        attempt = reseal_obligation_attempt_nested_receipts(attempt)
+        attempt["attempt_fingerprint"] = _fingerprint(attempt)
+        resealed_attempts.append(attempt)
+    resealed = {
+        key: item
+        for key, item in value.items()
+        if key not in {"attempts", "ledger_fingerprint"}
+    }
+    resealed["attempts"] = resealed_attempts
+    resealed["ledger_fingerprint"] = _fingerprint(resealed)
+    return resealed
+
+
 def validate_obligation_attempt_ledger(
     ledger: dict[str, Any],
 ) -> dict[str, Any]:

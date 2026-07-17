@@ -397,3 +397,56 @@ def test_campaign_never_retries_after_an_observation_receipt() -> None:
         reason="runtime_contract_now_approved"
     ) is False
     assert campaign.obligation_attempt_ledger_fingerprint
+
+
+def test_artifact_redaction_reseals_obligation_attempt_ledger() -> None:
+    """Secret redaction rewrites sealed strings; persistence must reseal."""
+
+    from ai_test_asset_center.artifact_redactor import redact_and_validate
+    from ai_test_asset_center.obligation_attempt_ledger import (
+        validate_obligation_attempt_ledger,
+    )
+    from ai_test_asset_center.observer_contracts_base import build_observer_receipt
+    from ai_test_asset_center.sealed_receipt_reseal import reseal_observer_receipt
+
+    ledger = build_obligation_attempt_ledger(
+        mainline_run=_mainline_run(),
+        selected=[{"obligation_id": "obl-1"}],
+        compile_results={
+            "obl-1": {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_BINDING",
+                "reason_detail": (
+                    "token Bearer "
+                    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.aaaa.bbbbccccdddd"
+                ),
+            }
+        },
+        execution_results={},
+        gate_results={},
+    )
+    validate_obligation_attempt_ledger(ledger)
+
+    redacted, _ = redact_and_validate({"obligation_attempt_ledger": ledger})
+    sealed = redacted["obligation_attempt_ledger"]
+    assert "Bearer <REDACTED_JWT>" in sealed["attempts"][0]["reason_detail"]
+    validate_obligation_attempt_ledger(sealed)
+
+    observer = build_observer_receipt(
+        observer_id="http_status",
+        status="OBSERVED",
+        evidence={
+            "note": (
+                "token Bearer "
+                "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.aaaa.bbbbccccdddd"
+            )
+        },
+        campaign_id="CMP-1",
+        execution_id="exec-1",
+    )
+    redacted_obs, _ = redact_and_validate(observer)
+    assert "Bearer <REDACTED_JWT>" in redacted_obs["evidence"]["note"]
+    # Leaf reseal restores content-addressed identity after redaction.
+    from ai_test_asset_center.observer_contracts_base import validate_observer_receipt
+
+    validate_observer_receipt(reseal_observer_receipt(redacted_obs))

@@ -5,6 +5,7 @@ prove a protected business resource was visible or a write had an effect.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
@@ -62,7 +63,9 @@ def _business_outcome_from_body(body: Any) -> dict[str, Any]:
     outcome: dict[str, Any] = {
         "business_rejected": False,
         "success_flag": None,
-        "status_token": "",
+        # Named outcome_status (not *_token) so artifact redaction does not
+        # rewrite content-addressed observer receipt evidence.
+        "outcome_status": "",
         "identity_overlap": False,
     }
     payload = body
@@ -80,24 +83,24 @@ def _business_outcome_from_body(body: Any) -> dict[str, Any]:
                     outcome["business_rejected"] = True
             break
 
-    status_token = ""
+    outcome_status = ""
     for key in ("status", "state", "code", "errorCode", "error_code", "result"):
         value = payload.get(key)
         if isinstance(value, (str, int)) and not isinstance(value, bool):
-            status_token = _text(value)
-            if status_token:
+            outcome_status = _text(value)
+            if outcome_status:
                 break
     error_obj = _dict(payload.get("error"))
-    if not status_token:
+    if not outcome_status:
         for key in ("code", "message", "type"):
             value = error_obj.get(key)
             if isinstance(value, (str, int)) and not isinstance(value, bool):
-                status_token = _text(value)
-                if status_token:
+                outcome_status = _text(value)
+                if outcome_status:
                     break
-    outcome["status_token"] = status_token
-    token_lower = status_token.lower()
-    if token_lower and any(marker in token_lower for marker in _BUSINESS_REJECT_TOKENS):
+    outcome["outcome_status"] = outcome_status
+    status_lower = outcome_status.lower()
+    if status_lower and any(marker in status_lower for marker in _BUSINESS_REJECT_TOKENS):
         outcome["business_rejected"] = True
     if error_obj and (
         outcome["success_flag"] is False
@@ -133,7 +136,8 @@ def _receipt(
     normalized_status = _text(status).upper()
     if normalized_status not in OBSERVER_STATUSES:
         raise ValueError(f"observer_status_invalid:{normalized_status}")
-    safe_evidence = dict(evidence or {})
+    # Deep-copy so later observation merges cannot mutate fingerprinted evidence.
+    safe_evidence = copy.deepcopy(evidence or {})
     receipt_id = "obs_" + _fingerprint({
         "observer_id": observer_id,
         "status": normalized_status,
@@ -909,7 +913,7 @@ def _observe_http_response(
             "business_outcomes": outcomes,
             "business_outcome": primary,
             "business_rejected": bool(primary.get("business_rejected")),
-            "status_token": _text(primary.get("status_token")),
+            "outcome_status": _text(primary.get("outcome_status")),
             "success_flag": primary.get("success_flag"),
         },
     )
@@ -1147,7 +1151,7 @@ def _observe_business_effect(
     outcome = _business_outcome_from_body(treatment_body)
     evidence["business_outcome"] = outcome
     evidence["business_rejected"] = bool(outcome.get("business_rejected"))
-    evidence["status_token"] = _text(outcome.get("status_token"))
+    evidence["outcome_status"] = _text(outcome.get("outcome_status"))
     if _text(selected.get("effect_basis")):
         evidence["effect_basis"] = _text(selected.get("effect_basis"))
     if _text(selected.get("response_bound_after_ref")):

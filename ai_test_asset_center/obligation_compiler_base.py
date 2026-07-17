@@ -815,6 +815,7 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
                     required_operations=[_text(op.get("id"))],
                     required_fixtures=required_fixtures,
                     required_observers=required_observers,
+                    cleanup_requirement=_cleanup_requirement(op, operations, relations),
                     source_refs=_combined_source_refs(op, owner, viewer, *pair_relations),
                     relation_refs=sorted({
                         _text(relation.get("id"))

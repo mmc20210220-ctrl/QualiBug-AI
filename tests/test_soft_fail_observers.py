@@ -24,6 +24,29 @@ def test_http_response_observer_surfaces_soft_reject() -> None:
     )
     assert receipt["status"] == "OBSERVED"
     assert receipt["evidence"]["business_rejected"] is True
+    assert receipt["evidence"]["outcome_status"] == "DENIED"
+
+
+def test_observer_receipt_survives_artifact_redaction() -> None:
+    """outcome_status must not match sensitive *_token keys or redaction breaks fingerprints."""
+    from ai_test_asset_center.artifact_redactor import redact_artifact
+    from ai_test_asset_center.observer_contracts_base import (
+        bind_observer_receipt_lineage,
+        validate_observer_receipt,
+    )
+
+    receipt = bind_observer_receipt_lineage(
+        _observe_http_response(
+            {"status_code": 200, "body": {"status": "ACTIVE"}},
+            {"status_code": 200, "body": {"status": "DISABLED"}},
+        ),
+        campaign_id="CMP_test",
+        execution_id="exec_test",
+    )
+    validate_observer_receipt(receipt)
+    redacted, _ = redact_artifact({"observer_receipts": [receipt]})
+    validate_observer_receipt(redacted["observer_receipts"][0])
+    assert redacted["observer_receipts"][0]["evidence"]["outcome_status"] == "DISABLED"
 
 
 def test_http_status_class_fails_on_soft_business_reject() -> None:
