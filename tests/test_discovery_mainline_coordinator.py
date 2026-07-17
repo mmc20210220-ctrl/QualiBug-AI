@@ -566,7 +566,7 @@ def test_candidate_keeps_runtime_interface_discovery_inside_attempt_authority(
         }
 
     monkeypatch.setattr(
-        "ai_test_asset_center.discovery_runtime.execute_selected_experiments",
+        "ai_test_asset_center.discovery_runtime_execution.execute_selected_experiments",
         fake_execute,
     )
 
@@ -634,7 +634,7 @@ def test_candidate_keeps_runtime_interface_discovery_inside_attempt_authority(
         }
 
     monkeypatch.setattr(
-        "ai_test_asset_center.discovery_runtime.execute_runtime_interface_discovery",
+        "ai_test_asset_center.discovery_runtime_execution.execute_runtime_interface_discovery",
         fake_surface_execute,
     )
 
@@ -686,7 +686,7 @@ def test_candidate_keeps_runtime_interface_discovery_inside_attempt_authority(
         }
 
     monkeypatch.setattr(
-        "ai_test_asset_center.discovery_runtime.expand_behavior_ir_from_runtime_observations",
+        "ai_test_asset_center.discovery_runtime_execution.expand_behavior_ir_from_runtime_observations",
         fake_expand,
     )
     result = run_v12_pipeline(

@@ -184,6 +184,16 @@ def test_discovery_planning_helpers_are_reexported() -> None:
     assert runtime._campaign_object is planning._campaign_object
 
 
+def test_discovery_execution_helpers_are_reexported() -> None:
+    from ai_test_asset_center import discovery_runtime as runtime
+    from ai_test_asset_center import discovery_runtime_execution as execution
+
+    assert runtime.run_experiment_candidate is execution.run_experiment_candidate
+    assert runtime._legacy_execution_terminal is execution._legacy_execution_terminal
+    assert runtime._manual_terminal_receipts is execution._manual_terminal_receipts
+    assert runtime._authority_findings is execution._authority_findings
+
+
 def test_extracted_modules_remain_under_architecture_budget_threshold() -> None:
     main_lines = sum(
         1 for _ in open(ROOT / "ai_test_asset_center" / "__main__.py", encoding="utf-8")
@@ -284,5 +294,13 @@ def test_extracted_modules_remain_under_architecture_budget_threshold() -> None:
             encoding="utf-8",
         )
     )
-    assert discovery_runtime_lines < 1200
+    assert discovery_runtime_lines < 100
+    discovery_execution_lines = sum(
+        1
+        for _ in open(
+            ROOT / "ai_test_asset_center" / "discovery_runtime_execution.py",
+            encoding="utf-8",
+        )
+    )
     assert discovery_planning_lines < 550
+    assert discovery_execution_lines < 1100

@@ -24,6 +24,7 @@
     "ai_test_asset_center.discovery_mainline": "core",
     "ai_test_asset_center.discovery_runtime": "core",
     "ai_test_asset_center.discovery_runtime_planning": "core",
+    "ai_test_asset_center.discovery_runtime_execution": "core",
     "ai_test_asset_center.behavior_ir": "core",
     "ai_test_asset_center.obligation_compiler": "core",
     "ai_test_asset_center.experiment_compiler": "core",
