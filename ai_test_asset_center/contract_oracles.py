@@ -829,18 +829,16 @@ def evaluate_contract_oracle(
             missing_requirements=list(activation.get("reason_codes") or []),
         )
     if activation_status != "ACTIVE":
-        # When the experiment produced real HTTP evidence (http_response
-        # observer receipts with OBSERVED status), soft activation blockers
-        # (observer/cleanup gaps) should not prevent assertion evaluation.
-        # Evaluate assertions against real traces; the activation's
-        # reason_codes become missing_requirements for audit.
-        has_http_evidence = any(
+        # When the experiment produced any real observer evidence (any
+        # observer receipt with OBSERVED status), soft activation blockers
+        # should not prevent assertion evaluation. Evaluate assertions
+        # against real traces; activation reason_codes become missing_requirements.
+        has_real_evidence = any(
             isinstance(r, dict)
-            and _text(r.get("observer_id")) == "http_response"
             and _text(r.get("status")).upper() == "OBSERVED"
             for r in _list(ev.get("observer_receipts"))
         )
-        if not has_http_evidence:
+        if not has_real_evidence:
             return _contract_oracle_receipt(
                 experiment=exp,
                 status="BLOCKED",
