@@ -53,6 +53,10 @@
     "ai_test_asset_center.private_pilot_tenant_auth": "core",
     "ai_test_asset_center.private_pilot_campaign_projection": "core",
     "ai_test_asset_center.private_pilot_scan_aggregates": "core",
+    "ai_test_asset_center.private_pilot_http_routing": "core",
+    "ai_test_asset_center.private_pilot_ingest_handlers": "core",
+    "ai_test_asset_center.private_pilot_scan_handlers": "core",
+    "ai_test_asset_center.private_pilot_report_loading": "core",
     "ai_test_asset_center.real_project_defect_discovery": "compatibility",
     "ai_test_asset_center.real_project_discovery_with_chain": "compatibility"
   },

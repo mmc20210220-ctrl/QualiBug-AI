@@ -21,10 +21,11 @@ def test_command_center_delivery_normalization_adapter_available() -> None:
 
 def test_command_center_service_calls_existing_envelope_normalizer_before_response() -> None:
     service_source = SERVICE.read_text(encoding="utf-8")
+    routing_source = (ROOT / "ai_test_asset_center" / "private_pilot_http_routing.py").read_text(encoding="utf-8")
 
     assert "def _normalize_command_center_envelope" in service_source
-    assert "payload = _normalize_command_center_envelope(payload)" in service_source
-    assert "return self._json(payload)" in service_source
+    assert "payload = _normalize_command_center_envelope(payload)" in routing_source
+    assert "return self._json(payload)" in routing_source
 
 
 def test_command_center_service_imports_the_canonical_gate_directly() -> None:
