@@ -34,6 +34,57 @@ from .runtime_binding_materializer import (
 from .sandbox_write_executor import execute_governed_control_write
 
 
+def _auto_fixture_create_for_binding_target(
+    target: str,
+    binding: dict[str, Any],
+    operations: dict[str, dict[str, Any]],
+    binding_plan: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Find a POST create operation at the same collection as the binding target path.
+
+    When a runtime read binding returns empty (no data to extract an id from),
+    this discovers a create operation that can serve as a disposable fixture to
+    produce a resource whose id can then be used as the binding value.
+    """
+    from .real_id_resolver import collection_path as _collection_path
+
+    resolver_ops = binding.get("resolver_operations") or []
+    candidate_paths = set()
+    for resolver in resolver_ops:
+        if isinstance(resolver, dict):
+            rpath = _text(resolver.get("path"))
+            if rpath.startswith("/"):
+                candidate_paths.add(rpath)
+                cp = _collection_path(rpath)
+                if cp.startswith("/"):
+                    candidate_paths.add(cp)
+
+    if not candidate_paths:
+        return None
+
+    for op_id, op in operations.items():
+        if not isinstance(op, dict):
+            continue
+        method = _text(op.get("method")).upper()
+        if method != "POST":
+            continue
+        op_path = normalize_path_placeholders(
+            _text(op.get("path") or op.get("raw_path"))
+        )
+        op_collection = normalize_path_placeholders(_collection_path(op_path))
+        if op_path in candidate_paths or op_collection in candidate_paths:
+            return {
+                "fixture_setup": True,
+                "force_fixture_setup": True,
+                "create_operation_ref": op_id,
+                "create_path": op_path,
+                "create_method": "POST",
+                "synthetic_value": None,
+            }
+
+    return None
+
+
 def materialize_experiment_fixtures(
     *,
     exp: dict[str, Any],
@@ -100,28 +151,37 @@ def materialize_experiment_fixtures(
             binding = binding_plan.get(target) or {}
             # Invented identifiers are forbidden. A synthetic_value without a
             # source-declared GET/HEAD resolver or fixture setup remains blocked.
+            # Before blocking, try to auto-discover a create operation on the
+            # same collection path that can serve as a disposable fixture setup.
             if (
                 binding.get("synthetic_value") is not None
                 and not binding.get("resolver_operations")
                 and not binding.get("fixture_setup")
             ):
-                return {
-                    "status": "terminal",
-                    "result": {
-                        "schema_version": "qualibug.experiment-execution.v1",
-                        "experiment_id": eid,
-                        "obligation_id": oid,
-                        "status": "BLOCKED",
-                        "reason_code": "BLOCKED_MISSING_BINDING",
-                        "detail": f"synthetic_binding_forbidden:{target}",
-                        "elapsed_ms": int((time.time() - started) * 1000),
-                        "finding": None,
-                        "execution_receipt": {
-                        "status": "BLOCKED",
-                        "reason_code": "BLOCKED_MISSING_BINDING",
-                        },
+                auto_create = _auto_fixture_create_for_binding_target(
+                    target, binding, ops, binding_plan
+                )
+                if auto_create:
+                    binding = {**binding, **auto_create}
+                else:
+                    return {
+                        "status": "terminal",
+                        "result": {
+                            "schema_version": "qualibug.experiment-execution.v1",
+                            "experiment_id": eid,
+                            "obligation_id": oid,
+                            "status": "BLOCKED",
+                            "reason_code": "BLOCKED_MISSING_BINDING",
+                            "detail": f"synthetic_binding_forbidden:{target}",
+                            "elapsed_ms": int((time.time() - started) * 1000),
+                            "finding": None,
+                            "execution_receipt": {
+                            "status": "BLOCKED",
+                            "reason_code": "BLOCKED_MISSING_BINDING",
+                            "detail": f"synthetic_binding_forbidden:{target}",
+                            },
+                        }
                     }
-                }
             resolvers = _validated_runtime_resolvers(binding, ops)
             force_fixture_setup = binding.get("force_fixture_setup") is True
             target_path = _text(binding.get("target_path"))
