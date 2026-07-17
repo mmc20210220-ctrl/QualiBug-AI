@@ -30,7 +30,7 @@ def _patch_http_request(monkeypatch: pytest.MonkeyPatch, http_request) -> None:
 
 
 def _patch_governed_write(monkeypatch: pytest.MonkeyPatch, governed_write) -> None:
-    """Patch governed writes on executor, fixture, and barrier modules."""
+    """Patch governed writes on executor, fixture, barrier, and cleanup modules."""
     monkeypatch.setattr(
         "ai_test_asset_center.experiment_executor.execute_governed_control_write",
         governed_write,
@@ -41,6 +41,10 @@ def _patch_governed_write(monkeypatch: pytest.MonkeyPatch, governed_write) -> No
     )
     monkeypatch.setattr(
         "ai_test_asset_center.experiment_barrier_executor.execute_governed_control_write",
+        governed_write,
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_cleanup_executor.execute_governed_control_write",
         governed_write,
     )
 
@@ -645,6 +649,10 @@ def test_idempotency_executor_observes_two_effects_and_cleans_each_write(
         "ai_test_asset_center.experiment_barrier_executor.sandbox_write_allowed",
         lambda **_kwargs: (True, ""),
     )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_cleanup_executor.sandbox_write_allowed",
+        lambda **_kwargs: (True, ""),
+    )
     _patch_governed_write(
         monkeypatch,
         governed_write,
@@ -1049,6 +1057,10 @@ def test_fixture_cleanup_runs_after_experiment_write_compensations(
         "ai_test_asset_center.experiment_barrier_executor.sandbox_write_allowed",
         lambda **_kwargs: (True, ""),
     )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_cleanup_executor.sandbox_write_allowed",
+        lambda **_kwargs: (True, ""),
+    )
     _patch_governed_write(
         monkeypatch,
         governed_write,
@@ -1249,6 +1261,10 @@ def test_empty_patch_uses_source_linked_entity_fields_for_runtime_mutation(
     )
     monkeypatch.setattr(
         "ai_test_asset_center.experiment_barrier_executor.sandbox_write_allowed",
+        lambda **_kwargs: (True, ""),
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_cleanup_executor.sandbox_write_allowed",
         lambda **_kwargs: (True, ""),
     )
     _patch_governed_write(
@@ -1512,6 +1528,10 @@ def test_runtime_mutation_block_is_blocked_before_transport_without_cleanup_fail
         "ai_test_asset_center.experiment_barrier_executor.sandbox_write_allowed",
         lambda **_kwargs: (True, ""),
     )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_cleanup_executor.sandbox_write_allowed",
+        lambda **_kwargs: (True, ""),
+    )
     _patch_governed_write(
         monkeypatch,
         governed_write,
@@ -1590,6 +1610,10 @@ def test_unresolved_body_placeholder_blocks_before_any_write_transport(
     )
     monkeypatch.setattr(
         "ai_test_asset_center.experiment_barrier_executor.sandbox_write_allowed",
+        lambda **_kwargs: (True, ""),
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_cleanup_executor.sandbox_write_allowed",
         lambda **_kwargs: (True, ""),
     )
     _patch_governed_write(
@@ -1838,6 +1862,10 @@ def test_barrier_unresolved_body_placeholder_blocks_before_write_transport(
     )
     monkeypatch.setattr(
         "ai_test_asset_center.experiment_barrier_executor.sandbox_write_allowed",
+        lambda **_kwargs: (True, ""),
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_cleanup_executor.sandbox_write_allowed",
         lambda **_kwargs: (True, ""),
     )
     _patch_governed_write(
@@ -2151,6 +2179,10 @@ def test_concurrency_executor_releases_control_and_treatment_with_barrier(
         "ai_test_asset_center.experiment_barrier_executor.sandbox_write_allowed",
         lambda **_kwargs: (True, ""),
     )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_cleanup_executor.sandbox_write_allowed",
+        lambda **_kwargs: (True, ""),
+    )
     _patch_governed_write(
         monkeypatch,
         governed_write,
@@ -2362,6 +2394,10 @@ def test_conservation_executor_evaluates_snapshot_values_through_contract_oracle
         "ai_test_asset_center.experiment_barrier_executor.sandbox_write_allowed",
         lambda **_kwargs: (True, ""),
     )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_cleanup_executor.sandbox_write_allowed",
+        lambda **_kwargs: (True, ""),
+    )
     _patch_governed_write(
         monkeypatch,
         governed_write,
@@ -2524,6 +2560,10 @@ def test_temporal_executor_feeds_window_evidence_to_contract_oracle(
     )
     monkeypatch.setattr(
         "ai_test_asset_center.experiment_barrier_executor.sandbox_write_allowed",
+        lambda **_kwargs: (True, ""),
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_cleanup_executor.sandbox_write_allowed",
         lambda **_kwargs: (True, ""),
     )
     _patch_governed_write(

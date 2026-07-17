@@ -54,6 +54,7 @@
     "ai_test_asset_center.scan_execution_outcome": "core",
     "ai_test_asset_center.scan_impl_prepare": "core",
     "ai_test_asset_center.experiment_cleanup": "core",
+    "ai_test_asset_center.experiment_cleanup_executor": "core",
     "ai_test_asset_center.experiment_runtime_support": "core",
     "ai_test_asset_center.experiment_fixture_materializer": "core",
     "ai_test_asset_center.experiment_barrier_executor": "core",
