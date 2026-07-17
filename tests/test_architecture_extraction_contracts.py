@@ -124,6 +124,25 @@ def test_source_finding_and_ui_verification_helpers_are_reexported() -> None:
     )
 
 
+def test_scan_outcome_and_cleanup_helpers_are_reexported() -> None:
+    from ai_test_asset_center import __main__ as scan_module
+    from ai_test_asset_center import experiment_cleanup as cleanup
+    from ai_test_asset_center import experiment_executor as executor
+    from ai_test_asset_center import scan_customer_ready_artifacts as ready
+    from ai_test_asset_center import scan_execution_outcome as outcome
+
+    assert scan_module._persist_customer_ready_static_artifacts is (
+        ready._persist_customer_ready_static_artifacts
+    )
+    assert scan_module._blocked_result is outcome._blocked_result
+    assert scan_module._apply_coverage_honesty_guard is (
+        outcome._apply_coverage_honesty_guard
+    )
+    assert executor._cleanup_restores_governed_write is (
+        cleanup._cleanup_restores_governed_write
+    )
+
+
 def test_extracted_modules_remain_under_architecture_budget_threshold() -> None:
     main_lines = sum(
         1 for _ in open(ROOT / "ai_test_asset_center" / "__main__.py", encoding="utf-8")
@@ -135,6 +154,14 @@ def test_extracted_modules_remain_under_architecture_budget_threshold() -> None:
             encoding="utf-8",
         )
     )
+    executor_lines = sum(
+        1
+        for _ in open(
+            ROOT / "ai_test_asset_center" / "experiment_executor.py",
+            encoding="utf-8",
+        )
+    )
 
-    assert main_lines < 1700
+    assert main_lines < 1200
     assert patch_lines < 500
+    assert executor_lines < 3700

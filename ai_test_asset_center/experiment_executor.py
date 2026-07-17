@@ -207,321 +207,22 @@ def _governance_audit_receipt_id(governed: dict[str, Any]) -> str:
     ).hexdigest()[:24]
 
 
-def _resource_identity_candidates(value: Any) -> set[str]:
-    identities: set[str] = set()
-
-    def walk(node: Any) -> None:
-        if isinstance(node, dict):
-            for key, child in node.items():
-                normalized = "".join(ch for ch in str(key).lower() if ch.isalnum())
-                if (
-                    normalized in {"id", "uuid", "key"}
-                    or normalized.endswith("id")
-                ) and not isinstance(child, (dict, list)) and _text(child):
-                    identities.add(_text(child))
-                elif isinstance(child, (dict, list)):
-                    walk(child)
-        elif isinstance(node, list):
-            for child in node:
-                walk(child)
-
-    walk(value)
-    return identities
-
-
-def _primary_resource_identity_candidates(value: Any) -> set[str]:
-    row = _dict(value)
-    primary = {
-        _text(child)
-        for key, child in row.items()
-        if "".join(ch for ch in str(key).lower() if ch.isalnum())
-        in {"id", "uuid", "key"}
-        and not isinstance(child, (dict, list))
-        and _text(child)
-    }
-    if primary:
-        return primary
-    for envelope_key in ("data", "result", "resource", "item", "record"):
-        nested = row.get(envelope_key)
-        if isinstance(nested, dict):
-            nested_primary = _primary_resource_identity_candidates(nested)
-            if nested_primary:
-                return nested_primary
-    return _resource_identity_candidates(value)
-
-
-def _server_managed_field(value: Any) -> bool:
-    normalized = "".join(ch for ch in str(value or "").lower() if ch.isalnum())
-    return normalized in {
-        "createdat",
-        "updatedat",
-        "createdtime",
-        "updatedtime",
-        "modifiedat",
-        "modifiedtime",
-        "timestamp",
-    }
-
-
-def _without_server_managed_fields(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {
-            key: _without_server_managed_fields(child)
-            for key, child in sorted(value.items())
-            if not _server_managed_field(key)
-        }
-    if isinstance(value, list):
-        return sorted(
-            (_without_server_managed_fields(child) for child in value),
-            key=_canonical_json,
-        )
-    return value
-
-
-def _meaningful_observation_state(value: Any) -> dict[str, Any]:
-    state = _observation_state(value)
-    return {
-        "status": state.get("status"),
-        "body": _without_server_managed_fields(state.get("body")),
-    }
-
-
-def _entity_rows(value: Any) -> list[dict[str, Any]]:
-    if isinstance(value, list):
-        return [dict(item) for item in value if isinstance(item, dict)]
-    if isinstance(value, dict):
-        for key in ("records", "data", "items", "results", "rows"):
-            nested = value.get(key)
-            if isinstance(nested, list):
-                return [dict(item) for item in nested if isinstance(item, dict)]
-        return [dict(value)]
-    return []
-
-
-def _entity_matches_identity(entity: dict[str, Any], identities: set[str]) -> bool:
-    if not identities:
-        return True
-    for key, value in entity.items():
-        if isinstance(value, (dict, list)):
-            continue
-        normalized = "".join(ch for ch in str(key).lower() if ch.isalnum())
-        if (
-            normalized in {"id", "uuid", "key"}
-            or normalized.endswith("id")
-        ) and _text(value) in identities:
-            return True
-    return any(
-        not isinstance(value, (dict, list)) and _text(value) in identities
-        for value in entity.values()
-    )
-
-
-def _single_entity_for_restoration(value: Any, identities: set[str]) -> dict[str, Any]:
-    matches = [
-        row for row in _entity_rows(value)
-        if _entity_matches_identity(row, identities)
-    ]
-    return dict(matches[0]) if len(matches) == 1 else {}
-
-
-def _cleanup_restores_mutated_fields(
-    original: dict[str, Any],
-    cleanup: dict[str, Any],
-) -> bool:
-    original_before = _observation_state(_dict(original).get("before"))
-    cleanup_after = _observation_state(_dict(cleanup).get("after"))
-    if not (
-        200 <= int(original_before.get("status") or 0) < 300
-        and 200 <= int(cleanup_after.get("status") or 0) < 300
-    ):
-        return False
-    write_body = _dict(_dict(original).get("write")).get("body")
-    if not isinstance(write_body, dict):
-        return False
-    identities = _primary_resource_identity_candidates(write_body)
-    before_entity = _single_entity_for_restoration(
-        original_before.get("body"),
-        identities,
-    )
-    after_entity = _single_entity_for_restoration(
-        cleanup_after.get("body"),
-        identities,
-    )
-    if not before_entity or not after_entity:
-        return False
-    mutated_fields = [
-        field
-        for field, value in write_body.items()
-        if field in before_entity
-        and field in after_entity
-        and not _server_managed_field(field)
-        and not isinstance(value, (dict, list))
-        and not isinstance(before_entity.get(field), (dict, list))
-        and before_entity.get(field) != value
-    ]
-    return bool(mutated_fields) and all(
-        after_entity.get(field) == before_entity.get(field)
-        for field in mutated_fields
-    )
-
-
-def _cleanup_compensates_created_resource(
-    original: dict[str, Any],
-    cleanup: dict[str, Any],
-) -> bool:
-    original_row = _dict(original)
-    cleanup_row = _dict(cleanup)
-    if _text(original_row.get("method")).upper() != "POST":
-        return False
-    cleanup_path = _text(cleanup_row.get("path"))
-    created_identities = _primary_resource_identity_candidates(
-        _dict(original_row.get("write")).get("body")
-    )
-    if not created_identities or not any(
-        identity and identity in cleanup_path for identity in created_identities
-    ):
-        return False
-
-    original_before = _observation_state(original_row.get("before"))
-    original_after = _observation_state(
-        original_row.get("response_bound_after") or original_row.get("after")
-    )
-    cleanup_before = _observation_state(cleanup_row.get("before"))
-    cleanup_after = _observation_state(cleanup_row.get("after"))
-    if not (
-        200 <= int(original_after.get("status") or 0) < 300
-        and 200 <= int(cleanup_before.get("status") or 0) < 300
-        and 200 <= int(cleanup_after.get("status") or 0) < 300
-    ):
-        return False
-    if _single_entity_for_restoration(original_before.get("body"), created_identities):
-        return False
-    if not _single_entity_for_restoration(original_after.get("body"), created_identities):
-        return False
-
-    before_entity = _single_entity_for_restoration(
-        cleanup_before.get("body"),
-        created_identities,
-    )
-    after_entity = _single_entity_for_restoration(
-        cleanup_after.get("body"),
-        created_identities,
-    )
-    if not before_entity or not after_entity:
-        return False
-    changed_business_fields = [
-        field
-        for field in before_entity
-        if field in after_entity
-        and not _server_managed_field(field)
-        and not isinstance(before_entity.get(field), (dict, list))
-        and not isinstance(after_entity.get(field), (dict, list))
-        and before_entity.get(field) != after_entity.get(field)
-    ]
-    return bool(changed_business_fields)
-
-
-def _cleanup_restores_governed_write(
-    original: dict[str, Any],
-    cleanup: dict[str, Any],
-) -> bool:
-    original_row = _dict(original)
-    cleanup_row = _dict(cleanup)
-    if original_row.get("accepted") is not True or cleanup_row.get("accepted") is not True:
-        return False
-    if not _governance_audit_receipt_id(original_row) or not _governance_audit_receipt_id(cleanup_row):
-        return False
-    original_before = _observation_state(original_row.get("before"))
-    cleanup_after = _observation_state(cleanup_row.get("after"))
-    if original_before == cleanup_after:
-        return True
-    if _cleanup_restores_mutated_fields(original_row, cleanup_row):
-        return True
-    if _cleanup_compensates_created_resource(original_row, cleanup_row):
-        return True
-    original_method = _text(original_row.get("method")).upper()
-    cleanup_path = _text(cleanup_row.get("path"))
-    created_identities = _primary_resource_identity_candidates(
-        _dict(original_row.get("write")).get("body")
-    )
-    identity_bound = any(
-        identity and identity in cleanup_path for identity in created_identities
-    )
-    cleanup_before = _observation_state(cleanup_row.get("before"))
-    return bool(
-        original_method == "POST"
-        and identity_bound
-        and 200 <= int(cleanup_before.get("status") or 0) < 300
-        and int(cleanup_after.get("status") or 0) in {404, 410}
-    )
-
-
-def _governed_write_attempts(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [
-        _dict(step.get("governance_receipt"))
-        for step in steps
-        if _text(step.get("phase")) in {"control", "treatment"}
-        and isinstance(step.get("governance_receipt"), dict)
-    ]
-
-
-def _rejected_writes_left_state_unchanged(
-    attempts: list[dict[str, Any]],
-) -> bool:
-    return bool(attempts) and all(
-        attempt.get("accepted") is not True
-        and bool(_governance_audit_receipt_id(attempt))
-        and _observation_state(attempt.get("before"))
-        == _observation_state(attempt.get("after"))
-        for attempt in attempts
-    )
-
-
-def _governed_write_changed_state(attempt: dict[str, Any]) -> bool:
-    row = _dict(attempt)
-    if row.get("accepted") is not True:
-        return False
-    before_state = _observation_state(row.get("before"))
-    after_state = _observation_state(row.get("response_bound_after") or row.get("after"))
-    if before_state.get("status") != after_state.get("status"):
-        return True
-
-    write_body = _dict(row.get("write")).get("body")
-    if isinstance(write_body, dict):
-        identities = _primary_resource_identity_candidates(write_body)
-        before_entity = _single_entity_for_restoration(
-            before_state.get("body"),
-            identities,
-        )
-        after_entity = _single_entity_for_restoration(
-            after_state.get("body"),
-            identities,
-        )
-        if before_entity and after_entity:
-            comparable_fields = [
-                field
-                for field in sorted(set(before_entity).intersection(after_entity))
-                if field in before_entity
-                and field in after_entity
-                and not _server_managed_field(field)
-                and not isinstance(before_entity.get(field), (dict, list))
-                and not isinstance(after_entity.get(field), (dict, list))
-            ]
-            if any(
-                before_entity.get(field) != after_entity.get(field)
-                for field in comparable_fields
-            ):
-                return True
-            return (
-                _without_server_managed_fields(before_entity)
-                != _without_server_managed_fields(after_entity)
-            )
-        if identities and bool(before_entity) != bool(after_entity):
-            return True
-
-    return _meaningful_observation_state(row.get("before")) != _meaningful_observation_state(
-        row.get("response_bound_after") or row.get("after")
-    )
+from .experiment_cleanup import (  # noqa: F401
+    _resource_identity_candidates,
+    _primary_resource_identity_candidates,
+    _server_managed_field,
+    _without_server_managed_fields,
+    _meaningful_observation_state,
+    _entity_rows,
+    _entity_matches_identity,
+    _single_entity_for_restoration,
+    _cleanup_restores_mutated_fields,
+    _cleanup_compensates_created_resource,
+    _cleanup_restores_governed_write,
+    _governed_write_attempts,
+    _rejected_writes_left_state_unchanged,
+    _governed_write_changed_state,
+)
 
 
 def _body_contains_scalar(value: Any, expected: Any) -> bool:
@@ -3146,18 +2847,27 @@ def execute_one_experiment(
             observations.update(_dict(receipt.get("evidence")))
             observations[observer_id + "_observer_receipt"] = receipt
     observations["observer_ids"] = list(dict.fromkeys(observed_ids))
-    # Compute invariant_held from final_state observer evidence
+    # Compute invariant_held from final_state + barrier evidence.
     if "invariant_held" not in observations:
         _final = _dict(observations.get("final_state_observer_receipt", {}))
-        if _final.get("status") == "OBSERVED":
-            # Conservative: when final state is observed and barrier
-            # timeline confirms concurrent execution, assume invariant
-            # holds. A proper invariant engine would compare before/after
-            # state against entity-specific rules.
-            _barrier = _dict(observations.get("barrier_timeline_observer_receipt", {}))
-            observations["invariant_held"] = (
-                _barrier.get("status") == "OBSERVED"
-            )
+        _barrier = _dict(observations.get("barrier_timeline_observer_receipt", {}))
+        if _final.get("status") == "OBSERVED" and _barrier.get("status") == "OBSERVED":
+            after_values = observations.get("after_values")
+            if not isinstance(after_values, dict):
+                after_values = _dict(_final.get("evidence")).get("after_values")
+            if isinstance(after_values, dict) and after_values:
+                # Industry-neutral quantity floor: concurrent writes must not drive
+                # observed numeric resource fields below zero (oversell / overdraw).
+                numeric_after = [
+                    value
+                    for value in after_values.values()
+                    if isinstance(value, (int, float)) and not isinstance(value, bool)
+                ]
+                observations["invariant_held"] = all(value >= 0 for value in numeric_after)
+            else:
+                # Lifecycle final_state without quantity terms: concurrent execution
+                # was observed; leave violation detection to typed assertions.
+                observations["invariant_held"] = True
     observations["contract_evidence_receipts"] = list(contract_evidence_receipts)
     # Synthesize contract evidence when none was produced by the execution
     if not contract_evidence_receipts and steps_out:
