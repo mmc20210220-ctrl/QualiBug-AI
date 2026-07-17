@@ -11,12 +11,36 @@ import json
 import re
 import urllib.parse
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 SEMANTIC_LEXICON_PATH = Path(__file__).resolve().parent / "policies" / "semantic_lexicon.json"
 _SEMANTIC_LEXICON_CACHE: dict[str, Any] | None = None
+
+# First-class System Behavior Space hooks — no method replacement on the builder.
+BsgBuildHook = Callable[[Any, str, str, str], None]
+BsgContractHook = Callable[[Any, dict[str, Any]], dict[str, Any]]
+_BSG_BUILD_HOOK: BsgBuildHook | None = None
+_BSG_CONTRACT_HOOK: BsgContractHook | None = None
+
+
+def register_bsg_build_hook(hook: BsgBuildHook | None) -> None:
+    """Post-build hook: may attach ``system_behavior_space`` on the builder."""
+    global _BSG_BUILD_HOOK
+    _BSG_BUILD_HOOK = hook
+
+
+def register_bsg_contract_hook(hook: BsgContractHook | None) -> None:
+    """Post-contract hook: may attach system-behavior slices/summary fields."""
+    global _BSG_CONTRACT_HOOK
+    _BSG_CONTRACT_HOOK = hook
+
+
+def clear_bsg_hooks() -> None:
+    register_bsg_build_hook(None)
+    register_bsg_contract_hook(None)
 
 
 def _semantic_lexicon() -> dict[str, Any]:
@@ -785,6 +809,8 @@ class BusinessStateGraphBuilder:
                 self.graphs[child].add_edge(child, "*", parent, "*", "depends_on", ref["quote"], [ref])
 
         self.behavior_slices = self.build_slices()
+        if _BSG_BUILD_HOOK is not None:
+            _BSG_BUILD_HOOK(self, prd_text, api_spec_text, db_schema_text)
         return self.graphs
 
     def _record_unbound_section(self, section: dict[str, Any]) -> None:
@@ -925,7 +951,7 @@ class BusinessStateGraphBuilder:
         by_kind: dict[str, int] = defaultdict(int)
         for item in self.behavior_slices:
             by_kind[item.kind] += 1
-        return {
+        contract: dict[str, Any] = {
             "slices": [item.to_dict() for item in self.behavior_slices],
             "coverage_gaps": list(self.coverage_gaps),
             "summary": {
@@ -935,6 +961,9 @@ class BusinessStateGraphBuilder:
                 "source_field_bound_invariant_count": len(self.bound_invariants),
             },
         }
+        if _BSG_CONTRACT_HOOK is not None:
+            contract = _BSG_CONTRACT_HOOK(self, contract)
+        return contract
 
     def _sections(self, text: str) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []

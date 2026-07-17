@@ -16,8 +16,32 @@ from __future__ import annotations
 
 import hashlib, json, re, time, uuid
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
+
+# First-class System Behavior Space hooks — no method replacement on OracleEngine.
+OracleEvaluateHook = Callable[..., list[Any]]
+EvidenceScenarioHook = Callable[..., dict[str, Any]]
+_ORACLE_EVALUATE_HOOK: OracleEvaluateHook | None = None
+_EVIDENCE_SCENARIO_HOOK: EvidenceScenarioHook | None = None
+
+
+def register_oracle_evaluate_hook(hook: OracleEvaluateHook | None) -> None:
+    """Post-evaluate hook: may annotate/add SystemPromiseOracle results."""
+    global _ORACLE_EVALUATE_HOOK
+    _ORACLE_EVALUATE_HOOK = hook
+
+
+def register_evidence_scenario_hook(hook: EvidenceScenarioHook | None) -> None:
+    """Pre-build hook: may attach system_behavior_space evidence onto scenario."""
+    global _EVIDENCE_SCENARIO_HOOK
+    _EVIDENCE_SCENARIO_HOOK = hook
+
+
+def clear_oracle_hooks() -> None:
+    register_oracle_evaluate_hook(None)
+    register_evidence_scenario_hook(None)
 
 _COLLECTION_RESPONSE_KEYS = {"items", "rows", "records", "results", "list", "series", "buckets"}
 
@@ -1455,6 +1479,8 @@ class OracleEngine:
                     actual=f"Oracle崩溃: {type(e).__name__}: {str(e)[:200]}",
                     severity="P2", confidence=0.30,
                     explanation=f"Oracle内部异常，判定降级为P2低置信度"))
+        if _ORACLE_EVALUATE_HOOK is not None:
+            results = list(_ORACLE_EVALUATE_HOOK(self, scenario, trace, snapshots, results) or results)
         return results
 
     def evaluate_all(self, scenarios: list, traces: list[dict]) -> list[OracleResult]:
@@ -1603,6 +1629,8 @@ class EvidenceGraphBuilder:
 
     def build(self, scenario: dict, trace: dict, snapshots: Any,
               oracle_results: list[OracleResult]) -> BugEvidenceGraph:
+        if _EVIDENCE_SCENARIO_HOOK is not None:
+            scenario = _EVIDENCE_SCENARIO_HOOK(scenario, trace, snapshots, oracle_results)
         sid = scenario.get("id", str(uuid.uuid4().hex[:8]))
 
         # ── Vote-based bug confirmation ──

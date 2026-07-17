@@ -6,6 +6,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
@@ -28,6 +29,38 @@ PRIVATE_MARKERS = {
 DESTRUCTIVE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 DEFAULT_MODE = "release"
 MODE_NAMES = {"smoke": "Smoke 快速回归", "release": "Release 发布回归", "full": "Full 完整回归"}
+
+# First-class System Behavior Space hooks — no symbol replacement.
+JudgeProbeHook = Callable[..., dict[str, Any]]
+ReverifyHook = Callable[..., dict[str, Any]]
+AppendHistoryHook = Callable[..., list[dict[str, Any]]]
+_JUDGE_PROBE_HOOK: JudgeProbeHook | None = None
+_REVERIFY_HOOK: ReverifyHook | None = None
+_APPEND_HISTORY_HOOK: AppendHistoryHook | None = None
+
+
+def register_judge_probe_hook(hook: JudgeProbeHook | None) -> None:
+    """Post-judge hook: may attach system-promise oracle_intent."""
+    global _JUDGE_PROBE_HOOK
+    _JUDGE_PROBE_HOOK = hook
+
+
+def register_reverify_hook(hook: ReverifyHook | None) -> None:
+    """Post-reverify hook: may attach system_promise_reverification_count."""
+    global _REVERIFY_HOOK
+    _REVERIFY_HOOK = hook
+
+
+def register_append_history_hook(hook: AppendHistoryHook | None) -> None:
+    """Post-history hook: may trigger risk-clue learning refresh."""
+    global _APPEND_HISTORY_HOOK
+    _APPEND_HISTORY_HOOK = hook
+
+
+def clear_regression_hooks() -> None:
+    register_judge_probe_hook(None)
+    register_reverify_hook(None)
+    register_append_history_hook(None)
 
 
 def _write_json(path: Path, data: Any) -> None:
@@ -248,6 +281,10 @@ def _judge_probe(probe: dict[str, Any], execution: dict[str, Any], skipped: bool
     _sb_source_family = str(probe.get("system_behavior_source_family") or "").strip()
     if _sb_source_family:
         _sb_item["system_behavior_source_family"] = _sb_source_family
+    if _JUDGE_PROBE_HOOK is not None:
+        _sb_item = _JUDGE_PROBE_HOOK(
+            probe, execution, _sb_item, skipped=skipped, skip_reason=skip_reason
+        )
     return _sb_item
 
 
@@ -273,10 +310,15 @@ def _reverify_confirmed_findings(project: str, root: Path, cfg: dict[str, Any], 
 
     Returns a dict with the per-defect verdicts and a summary count block.
     """
+    def _finish(result: dict[str, Any]) -> dict[str, Any]:
+        if _REVERIFY_HOOK is None:
+            return result
+        return _REVERIFY_HOOK(project, root, cfg, safety_boundary, timeout, dry_run, result)
+
     ws = root / "platform_workspace" / project / "defect_discovery"
     ledger = _load_json_safe(ws / "confirmed_findings.json", {})
     if not isinstance(ledger, dict) or not ledger:
-        return {"consumed": False, "verdicts": [], "counts": {"total": 0, "resolved": 0, "persisted": 0, "blocked": 0, "needs_review": 0}}
+        return _finish({"consumed": False, "verdicts": [], "counts": {"total": 0, "resolved": 0, "persisted": 0, "blocked": 0, "needs_review": 0}})
     verdicts: list[dict[str, Any]] = []
     c = {"total": 0, "resolved": 0, "persisted": 0, "blocked": 0, "needs_review": 0}
     for evidence_id, defect in ledger.items():
@@ -378,7 +420,7 @@ def _reverify_confirmed_findings(project: str, root: Path, cfg: dict[str, Any], 
             "invariant_context": invariant_ctx,
         }))
         c[status] += 1
-    return {"consumed": True, "verdicts": verdicts, "counts": c}
+    return _finish({"consumed": True, "verdicts": verdicts, "counts": c})
 
 
 def _count_by(items: list[dict[str, Any]], key: str) -> dict[str, int]:
@@ -518,6 +560,8 @@ def _append_regression_history(project: str, root: Path, result: dict[str, Any])
     history = history[-30:]
     _write_json(history_path, history)
     _write_json(root / "platform_workspace" / project / "defect_discovery" / "regression_run_history.json", history)
+    if _APPEND_HISTORY_HOOK is not None:
+        history = list(_APPEND_HISTORY_HOOK(project, root, result, history) or history)
     return history
 
 

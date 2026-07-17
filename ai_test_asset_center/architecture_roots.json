@@ -33,6 +33,7 @@
     "ai_test_asset_center.v12_legacy_schedule": "compatibility",
     "ai_test_asset_center.v12_legacy_scenario_exec": "compatibility",
     "ai_test_asset_center.v12_legacy_oracle_findings": "compatibility",
+    "ai_test_asset_center.v12_compat_helpers": "compatibility",
     "ai_test_asset_center.pipeline_runtime": "compatibility",
     "ai_test_asset_center.pipeline_fuzzer": "compatibility",
     "ai_test_asset_center.pipeline_slices": "compatibility",

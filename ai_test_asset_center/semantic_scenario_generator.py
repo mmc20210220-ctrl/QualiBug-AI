@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,20 @@ from .real_id_resolver import (
     path_has_placeholders,
     collection_path,
 )
+
+# First-class System Behavior Space scenario enricher — no method replacement.
+ScenarioEnricher = Callable[..., Any]
+_SCENARIO_ENRICHER: ScenarioEnricher | None = None
+
+
+def register_scenario_enricher(hook: ScenarioEnricher | None) -> None:
+    """Post-``_invariant_from_meta`` enricher for system-behavior slices."""
+    global _SCENARIO_ENRICHER
+    _SCENARIO_ENRICHER = hook
+
+
+def clear_scenario_enricher() -> None:
+    register_scenario_enricher(None)
 
 
 @dataclass
@@ -341,13 +356,18 @@ class SemanticScenarioGenerator:
         root: Any = None,
         project: str = "",
     ) -> ExecutableScenario | None:
+        def _finish(item: ExecutableScenario | None) -> ExecutableScenario | None:
+            if _SCENARIO_ENRICHER is None:
+                return item
+            return _SCENARIO_ENRICHER(item, slice_meta, discovery_round, api_doc=api_doc)
+
         entity = str(slice_meta.get("entity") or "").strip()
         refs = [dict(item) for item in (slice_meta.get("source_refs") or []) if isinstance(item, dict)]
         states = [str(item or "").strip() for item in (slice_meta.get("states") or []) if str(item or "").strip()]
         invariant = self._slice_meta_invariant_text(slice_meta)
         observation_path = self._preferred_read_endpoint(list(slice_meta.get("endpoints") or []))
         if not entity:
-            return None
+            return _finish(None)
 
         # ── System Behavior Space slice: generate a dimension-aware verification
         # scenario instead of a generic single-GET observation. The slice carries
@@ -360,7 +380,7 @@ class SemanticScenarioGenerator:
         if isinstance(sb_raw, list):
             sb_dimensions = [str(d) for d in sb_raw if str(d)]
         if (is_system_behavior or sb_dimensions) and observation_path:
-            return self._build_system_promise_invariant_scenario(
+            return _finish(self._build_system_promise_invariant_scenario(
                 entity=entity,
                 invariant=invariant,
                 slice_meta=slice_meta,
@@ -369,7 +389,7 @@ class SemanticScenarioGenerator:
                 observation_path=observation_path,
                 refs=refs,
                 states=states,
-            )
+            ))
 
         runtime_upgrade = self._invariant_runtime_upgrade(
             entity,
@@ -384,7 +404,7 @@ class SemanticScenarioGenerator:
             project=project,
         )
         if runtime_upgrade is not None:
-            return runtime_upgrade
+            return _finish(runtime_upgrade)
         bound_method = str(slice_meta.get("_bound_method") or "").strip().upper()
         bound_path = str(slice_meta.get("_bound_path") or "").strip()
         if (
@@ -412,7 +432,7 @@ class SemanticScenarioGenerator:
                     path=bound_path,
                 )
                 if bound_scenario is not None:
-                    return bound_scenario
+                    return _finish(bound_scenario)
             # Other source-bound mutation hypotheses may still be executable
             # when their family does not claim a lifecycle precondition. Build
             # the documented method/body directly instead of silently turning
@@ -439,12 +459,12 @@ class SemanticScenarioGenerator:
                 path=bound_path,
             )
             if bound_scenario is not None:
-                return bound_scenario
+                return _finish(bound_scenario)
             # Never convert a source-bound mutation hypothesis into a GET of the
             # same action path. Without a materialized write/precondition
             # contract that changes both the method and the tested behavior and
             # can produce false customer findings (for example Cannot GET 404).
-            return ExecutableScenario(
+            return _finish(ExecutableScenario(
                 id=self._id(entity, "bound_write_precondition_missing", bound_method, bound_path),
                 title=f"[Bound write plan gap] {entity}: {bound_method} {bound_path}",
                 description=invariant[:300],
@@ -463,7 +483,7 @@ class SemanticScenarioGenerator:
                 behavior_slice_kind="invariant",
                 discovery_round=discovery_round,
                 selection_origin="active_slice_fallback_materialized",
-            )
+            ))
         state_or_rule = states[0] if states else invariant[:120]
         steps: list[ScenarioStep] = []
         observation_path = str(observation_path or "")
@@ -486,7 +506,7 @@ class SemanticScenarioGenerator:
                 expected_status=200,
                 actor="readonly",
             ))
-            return ExecutableScenario(
+            return _finish(ExecutableScenario(
                 id=self._id(entity, state_or_rule or "invariant"),
                 title=f"[来源约束不变量] {entity}: {state_or_rule}",
                 description=invariant[:300],
@@ -506,8 +526,8 @@ class SemanticScenarioGenerator:
                 behavior_slice_kind="invariant",
                 discovery_round=discovery_round,
                 selection_origin="active_slice_fallback_materialized",
-            )
-        return None
+            ))
+        return _finish(None)
 
     def _bound_idempotency_scenario(
         self,

@@ -4,7 +4,7 @@
 
 When evaluating product readiness or dogfooding bug-finding features, verify observable behavior from the running product and code before reporting status. Treat configured-but-unverified integrations as not online: for model providers, a saved key or endpoint only means "configured" until a real health check succeeds, and failures must be shown as failed/offline rather than healthy.
 
-- The only supported backend launch authority is `ai_test_asset_center.private_pilot_entrypoint:run_server` (including `qualibug-server`). `private_pilot_service` is the core service implementation, not a direct launch path. Customer delivery classification in that core imports `customer_delivery_gate.split_customer_delivery_tracks` directly; runtime patch installation must never be required for correctness. `run_v12_pipeline` binds System Behavior Space project/root context first-class via `system_behavior_space_context`; coverage learning reorder registers through `v12_legacy_schedule.register_slice_reorder_hook`. Neither path may replace `v12_pipeline.run_v12_pipeline`.
+- The only supported backend launch authority is `ai_test_asset_center.private_pilot_entrypoint:run_server` (including `qualibug-server`). `private_pilot_service` is the core service implementation, not a direct launch path. Customer delivery classification in that core imports `customer_delivery_gate.split_customer_delivery_tracks` directly; runtime patch installation must never be required for correctness. `run_v12_pipeline` binds System Behavior Space project/root context first-class via `system_behavior_space_context`; coverage learning reorder registers through `v12_legacy_schedule.register_slice_reorder_hook`. System Behavior Space enrichment registers through first-class hooks on `business_state_graph`, `semantic_scenario_generator`, `oracle_engine`, `v12_legacy_oracle_findings`, and `regression_runner` — not by replacing those modules' methods. Neither path may replace `v12_pipeline.run_v12_pipeline`.
 - Evidence enrichment may format captured facts and generate clearly marked operator guidance, but it must never infer request bodies, credentials, actors, business rules, entity/table names, SQL, or impact claims. Generated guidance is synthetic and cannot satisfy the customer-delivery gate.
 
 ## Syntax Check After Every Edit
@@ -80,10 +80,16 @@ assert engine.client.config.max_tokens >= 32768, "max_tokens too low"
   `v12_pipeline.run_v12_pipeline` function is a compatibility wrapper that
   invokes `discovery_mainline.run_discovery_mainline` exactly once. It must
   never retry with, fall back to, or switch to the other authority after an
-  exception. Legacy schedule, scenario HTTP execution, and oracle-finding
-  helpers live in `v12_legacy_schedule.py`, `v12_legacy_scenario_exec.py`, and
-  `v12_legacy_oracle_findings.py` and are re-exported from `v12_pipeline` for
-  compatibility — they are not on the `experiment_candidate` delivery path.
+  exception.   Legacy schedule, scenario HTTP execution, oracle-finding, and other
+  compatibility helpers live in `v12_legacy_schedule.py`,
+  `v12_legacy_scenario_exec.py`, `v12_legacy_oracle_findings.py`, and
+  `v12_compat_helpers.py` and are re-exported from `v12_pipeline` — they are
+  not on the `experiment_candidate` delivery path. Finding enrichment registers
+  through `register_finding_enricher`, not by replacing `run_v12_pipeline`
+  symbols. BSG/SSG/Oracle/regression System Behavior Space installers register
+  the same first-class hook pattern (`register_bsg_*_hook`,
+  `register_scenario_enricher`, `register_oracle_*_hook`,
+  `register_*_hook` on `regression_runner`).
   Runtime/fuzzer/slice/DB helpers SSOTs are `pipeline_runtime.py`,
   `pipeline_fuzzer.py`, `pipeline_slices.py`, and `pipeline_db.py` (explicit
   imports; `import *` must not be used for `_`-prefixed symbols). Industry

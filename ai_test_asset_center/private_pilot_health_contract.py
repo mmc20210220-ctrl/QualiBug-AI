@@ -69,8 +69,15 @@ def system_behavior_runtime_status() -> dict[str, Any]:
     versions: dict[str, str] = {}
     try:
         from ai_test_asset_center import business_state_graph as _bsg
-        checks["behavior_contract"] = bool(getattr(_bsg, "_SYSTEM_BEHAVIOR_SPACE_PATCHED", False))
-        sources["behavior_contract"] = str(getattr(_bsg, "_SYSTEM_BEHAVIOR_SPACE_PATCH_SOURCE", "") or "")
+        checks["behavior_contract"] = bool(
+            getattr(_bsg, "_SYSTEM_BEHAVIOR_SPACE_PATCHED", False)
+            or getattr(_bsg, "_SYSTEM_BEHAVIOR_SPACE_MODE", "") == "first_class_hook"
+        )
+        sources["behavior_contract"] = str(
+            getattr(_bsg, "_SYSTEM_BEHAVIOR_SPACE_MODE", "")
+            or getattr(_bsg, "_SYSTEM_BEHAVIOR_SPACE_PATCH_SOURCE", "")
+            or ""
+        )
     except Exception:
         checks["behavior_contract"] = False
     try:
@@ -87,6 +94,7 @@ def system_behavior_runtime_status() -> dict[str, Any]:
         )
         checks["confirmed_finding_contract"] = bool(
             getattr(_v12, "_SYSTEM_BEHAVIOR_FINDING_PATCHED", False)
+            or getattr(_v12, "_SYSTEM_BEHAVIOR_FINDING_MODE", "") == "first_class_hook"
         )
         checks["coverage_steering"] = bool(
             getattr(_v12, "_COVERAGE_STEERING_PATCHED", False)
@@ -99,23 +107,44 @@ def system_behavior_runtime_status() -> dict[str, Any]:
             getattr(_v12, "_SYSTEM_BEHAVIOR_SPACE_CONTEXT_MODE", "")
             or ("first_class" if FIRST_CLASS_CONTEXT_BINDER else "")
         )
+        sources["confirmed_finding_contract"] = str(
+            getattr(_v12, "_SYSTEM_BEHAVIOR_FINDING_MODE", "") or ""
+        )
     except Exception:
         checks["v12_project_context"] = False
         checks["confirmed_finding_contract"] = False
         checks["coverage_steering"] = False
     try:
         from ai_test_asset_center import semantic_scenario_generator as _ssg
-        checks["scenario_runtime_hints"] = bool(getattr(_ssg, "_SYSTEM_BEHAVIOR_SCENARIO_PATCHED", False))
+        checks["scenario_runtime_hints"] = bool(
+            getattr(_ssg, "_SYSTEM_BEHAVIOR_SCENARIO_PATCHED", False)
+            or getattr(_ssg, "_SYSTEM_BEHAVIOR_SCENARIO_MODE", "") == "first_class_hook"
+        )
+        sources["scenario_runtime_hints"] = str(
+            getattr(_ssg, "_SYSTEM_BEHAVIOR_SCENARIO_MODE", "") or ""
+        )
     except Exception:
         checks["scenario_runtime_hints"] = False
     try:
         from ai_test_asset_center import oracle_engine as _oe
-        checks["oracle_evidence_linkage"] = bool(getattr(_oe, "_SYSTEM_BEHAVIOR_ORACLE_PATCHED", False))
+        checks["oracle_evidence_linkage"] = bool(
+            getattr(_oe, "_SYSTEM_BEHAVIOR_ORACLE_PATCHED", False)
+            or getattr(_oe, "_SYSTEM_BEHAVIOR_ORACLE_MODE", "") == "first_class_hook"
+        )
+        sources["oracle_evidence_linkage"] = str(
+            getattr(_oe, "_SYSTEM_BEHAVIOR_ORACLE_MODE", "") or ""
+        )
     except Exception:
         checks["oracle_evidence_linkage"] = False
     try:
         from ai_test_asset_center import regression_runner as _rr
-        checks["regression_contract_replay"] = bool(getattr(_rr, "_SYSTEM_BEHAVIOR_REGRESSION_PATCHED", False))
+        checks["regression_contract_replay"] = bool(
+            getattr(_rr, "_SYSTEM_BEHAVIOR_REGRESSION_PATCHED", False)
+            or getattr(_rr, "_SYSTEM_BEHAVIOR_REGRESSION_MODE", "") == "first_class_hook"
+        )
+        sources["regression_contract_replay"] = str(
+            getattr(_rr, "_SYSTEM_BEHAVIOR_REGRESSION_MODE", "") or ""
+        )
     except Exception:
         checks["regression_contract_replay"] = False
     try:

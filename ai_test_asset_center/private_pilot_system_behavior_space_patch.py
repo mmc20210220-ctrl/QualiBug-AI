@@ -1261,146 +1261,178 @@ def _system_behavior_learning_refresh_summary(project: str, root: Path) -> dict[
 
 
 def _install_system_behavior_scenario_patch() -> None:
+    """Register first-class scenario enricher — do not replace SSG methods."""
     try:
         from ai_test_asset_center import semantic_scenario_generator as _ssg
+        from ai_test_asset_center.semantic_scenario_generator import register_scenario_enricher
     except Exception:
         return
     if getattr(_ssg, "_SYSTEM_BEHAVIOR_SCENARIO_PATCHED", False):
         return
-    original = getattr(_ssg.SemanticScenarioGenerator, "_invariant_from_meta", None)
-    if not callable(original):
-        return
 
-    def _invariant_from_meta_with_system_behavior(self: Any, slice_meta: dict[str, Any], discovery_round: int, api_doc: str) -> Any:
-        item = original(self, slice_meta, discovery_round, api_doc)
+    def _enrich(item: Any, slice_meta: dict[str, Any], discovery_round: int, api_doc: str = "") -> Any:
         return _enrich_system_behavior_scenario(item, slice_meta, discovery_round, api_doc=api_doc)
 
-    _ssg.SemanticScenarioGenerator._ORIGINAL_INVARIANT_FROM_META_SYSTEM_BEHAVIOR = original  # type: ignore[attr-defined]
-    _ssg.SemanticScenarioGenerator._invariant_from_meta = _invariant_from_meta_with_system_behavior  # type: ignore[method-assign]
+    register_scenario_enricher(_enrich)
     _ssg._SYSTEM_BEHAVIOR_SCENARIO_PATCHED = True  # type: ignore[attr-defined]
+    _ssg._SYSTEM_BEHAVIOR_SCENARIO_MODE = "first_class_hook"  # type: ignore[attr-defined]
 
 
 def _install_system_behavior_oracle_patch() -> None:
+    """Register first-class oracle hooks — do not replace OracleEngine methods."""
     try:
         from ai_test_asset_center import oracle_engine as _oe
+        from ai_test_asset_center.oracle_engine import (
+            register_evidence_scenario_hook,
+            register_oracle_evaluate_hook,
+        )
     except Exception:
         return
     if getattr(_oe, "_SYSTEM_BEHAVIOR_ORACLE_PATCHED", False):
         return
-    original_evaluate = getattr(_oe.OracleEngine, "evaluate", None)
-    original_build = getattr(_oe.EvidenceGraphBuilder, "build", None)
-    if not callable(original_evaluate) or not callable(original_build):
-        return
 
-    def _evaluate_with_system_behavior(self: Any, scenario: dict[str, Any], trace: dict[str, Any], snapshots: Any = None) -> list[Any]:
-        results = list(original_evaluate(self, scenario, trace, snapshots) or [])
+    def _evaluate_hook(
+        self: Any,
+        scenario: dict[str, Any],
+        trace: dict[str, Any],
+        snapshots: Any,
+        results: list[Any],
+    ) -> list[Any]:
+        del self, snapshots
         hints = _scenario_system_behavior_hints(scenario)
         if not hints:
             return results
         _annotate_oracle_failures_with_system_promise(results, scenario, hints)
         direct = _direct_system_promise_oracle_result(scenario, trace, hints)
-        if direct is not None and (not bool(getattr(direct, "passed", True)) or not any(str(getattr(item, "oracle_name", "")) == "SystemPromiseOracle" for item in results)):
+        if direct is not None and (
+            not bool(getattr(direct, "passed", True))
+            or not any(str(getattr(item, "oracle_name", "")) == "SystemPromiseOracle" for item in results)
+        ):
             results.append(direct)
         return results
 
-    def _build_with_system_behavior_evidence(self: Any, scenario: dict[str, Any], trace: dict[str, Any], snapshots: Any, oracle_results: list[Any]) -> Any:
+    def _evidence_scenario_hook(
+        scenario: dict[str, Any],
+        trace: dict[str, Any],
+        snapshots: Any,
+        oracle_results: list[Any],
+    ) -> dict[str, Any]:
+        del trace, snapshots, oracle_results
         hints = _scenario_system_behavior_hints(scenario)
         if hints:
-            scenario = {**scenario, "system_behavior_space_evidence": hints, "system_promise_id": str(hints.get("promise_id") or "")}
-        return original_build(self, scenario, trace, snapshots, oracle_results)
+            return {
+                **scenario,
+                "system_behavior_space_evidence": hints,
+                "system_promise_id": str(hints.get("promise_id") or ""),
+            }
+        return scenario
 
-    _oe.OracleEngine._ORIGINAL_EVALUATE_SYSTEM_BEHAVIOR = original_evaluate  # type: ignore[attr-defined]
-    _oe.EvidenceGraphBuilder._ORIGINAL_BUILD_SYSTEM_BEHAVIOR = original_build  # type: ignore[attr-defined]
-    _oe.OracleEngine.evaluate = _evaluate_with_system_behavior  # type: ignore[method-assign]
-    _oe.EvidenceGraphBuilder.build = _build_with_system_behavior_evidence  # type: ignore[method-assign]
+    register_oracle_evaluate_hook(_evaluate_hook)
+    register_evidence_scenario_hook(_evidence_scenario_hook)
     _oe._SYSTEM_BEHAVIOR_ORACLE_PATCHED = True  # type: ignore[attr-defined]
+    _oe._SYSTEM_BEHAVIOR_ORACLE_MODE = "first_class_hook"  # type: ignore[attr-defined]
 
 
 def _install_system_behavior_finding_patch() -> None:
+    """Register first-class finding enricher — do not replace v12 symbols."""
     try:
         from ai_test_asset_center import v12_pipeline as _v12
+        from ai_test_asset_center.v12_legacy_oracle_findings import register_finding_enricher
     except Exception:
         return
     if getattr(_v12, "_SYSTEM_BEHAVIOR_FINDING_PATCHED", False):
         return
-    original_confirmed = getattr(_v12, "_confirmed_oracle_finding", None)
-    original_persist = getattr(_v12, "_persist_confirmed_findings", None)
-    if not callable(original_confirmed) or not callable(original_persist):
-        return
 
-    def _confirmed_oracle_finding_with_system_behavior(scenario: Any, trace: dict[str, Any], oracle_result: Any, evidence: Any, *, campaign_id: str, discovery_round: int, base_url: str) -> dict[str, Any]:
-        finding = original_confirmed(scenario, trace, oracle_result, evidence, campaign_id=campaign_id, discovery_round=discovery_round, base_url=base_url)
+    def _enrich_finding(
+        finding: dict[str, Any],
+        scenario: Any,
+        trace: dict[str, Any],
+        oracle_result: Any,
+        evidence: Any,
+        *,
+        campaign_id: str,
+        discovery_round: int,
+        base_url: str,
+    ) -> dict[str, Any]:
+        del trace, oracle_result, campaign_id, discovery_round, base_url
         scenario_payload = _scenario_payload(scenario)
         hints = _scenario_system_behavior_hints(scenario_payload)
         if not hints and hasattr(evidence, "to_dict"):
             try:
                 evidence_payload = evidence.to_dict()
                 if isinstance(evidence_payload, dict):
-                    hints = _scenario_system_behavior_hints(evidence_payload.get("scenario") if isinstance(evidence_payload.get("scenario"), dict) else {})
+                    hints = _scenario_system_behavior_hints(
+                        evidence_payload.get("scenario")
+                        if isinstance(evidence_payload.get("scenario"), dict)
+                        else {}
+                    )
             except Exception:
                 hints = {}
         return _attach_system_behavior_to_finding(finding, hints, scenario_payload)
 
-    def _persist_confirmed_findings_with_system_behavior(root: Path, project: str, findings: list[dict[str, Any]]) -> int:
-        # Base _persist_confirmed_findings now forwards system_promise_id,
-        # regression_contract and all system behavior metadata through the ledger.
-        # The fragile re-read/patch step from earlier versions is no longer needed.
-        return int(original_persist(root, project, findings) or 0)
-
-    _v12._ORIGINAL_CONFIRMED_ORACLE_FINDING_SYSTEM_BEHAVIOR = original_confirmed  # type: ignore[attr-defined]
-    _v12._ORIGINAL_PERSIST_CONFIRMED_FINDINGS_SYSTEM_BEHAVIOR = original_persist  # type: ignore[attr-defined]
-    _v12._confirmed_oracle_finding = _confirmed_oracle_finding_with_system_behavior  # type: ignore[assignment]
-    _v12._persist_confirmed_findings = _persist_confirmed_findings_with_system_behavior  # type: ignore[assignment]
+    register_finding_enricher(_enrich_finding)
     _v12._SYSTEM_BEHAVIOR_FINDING_PATCHED = True  # type: ignore[attr-defined]
+    _v12._SYSTEM_BEHAVIOR_FINDING_MODE = "first_class_hook"  # type: ignore[attr-defined]
 
 
 def _install_system_behavior_regression_patch() -> None:
+    """Register first-class regression hooks — do not replace runner symbols.
+
+    Confirmed-findings probe loading already forwards system-behavior metadata
+    in the base suite builder; no load hook is required.
+    """
     try:
         from ai_test_asset_center import regression_runner as _rr
-        from ai_test_asset_center import regression_suite_builder as _rsb
+        from ai_test_asset_center.regression_runner import (
+            register_append_history_hook,
+            register_judge_probe_hook,
+            register_reverify_hook,
+        )
     except Exception:
         return
     if getattr(_rr, "_SYSTEM_BEHAVIOR_REGRESSION_PATCHED", False):
         return
 
-    original_load_confirmed = getattr(_rsb, "_load_confirmed_findings_regression_probes", None)
-    original_judge = getattr(_rr, "_judge_probe", None)
-    original_reverify = getattr(_rr, "_reverify_confirmed_findings", None)
-    original_append_history = getattr(_rr, "_append_regression_history", None)
-    if not all(callable(fn) for fn in (original_load_confirmed, original_judge, original_reverify, original_append_history)):
-        return
-
-    def _load_confirmed_findings_regression_probes_with_system_behavior(project: str, root: Path) -> list[dict[str, Any]]:
-        # Base _load_confirmed_findings_regression_probes now forwards
-        # system_promise_id, regression_contract and all system behavior
-        # metadata from the ledger into each probe. No re-read needed.
-        return list(original_load_confirmed(project, root) or [])
-
-    def _judge_probe_with_system_behavior(probe: dict[str, Any], execution: dict[str, Any], skipped: bool = False, skip_reason: str = "") -> dict[str, Any]:
-        # Base _judge_probe now forwards system_promise_id and
-        # regression_contract. Only add oracle_intent here.
-        item = original_judge(probe, execution, skipped=skipped, skip_reason=skip_reason)
+    def _judge_hook(
+        probe: dict[str, Any],
+        execution: dict[str, Any],
+        item: dict[str, Any],
+        *,
+        skipped: bool = False,
+        skip_reason: str = "",
+    ) -> dict[str, Any]:
+        del execution, skipped, skip_reason
         contract = _contract_from_row(probe)
         if contract:
-            item["oracle_intent"] = [f"SystemPromiseOracle.dimension:{dim}" for dim in contract.get("dimensions") or []]
+            item["oracle_intent"] = [
+                f"SystemPromiseOracle.dimension:{dim}" for dim in contract.get("dimensions") or []
+            ]
         return item
 
-    def _reverify_confirmed_findings_with_system_behavior(project: str, root: Path, cfg: dict[str, Any], safety_boundary: dict[str, Any], timeout: float, dry_run: bool) -> dict[str, Any]:
-        # Base _reverify_confirmed_findings now forwards system_promise_id
-        # and regression_contract from the ledger into each verdict.
-        result = original_reverify(project, root, cfg, safety_boundary, timeout, dry_run)
+    def _reverify_hook(
+        project: str,
+        root: Path,
+        cfg: dict[str, Any],
+        safety_boundary: dict[str, Any],
+        timeout: float,
+        dry_run: bool,
+        result: dict[str, Any],
+    ) -> dict[str, Any]:
+        del project, root, cfg, safety_boundary, timeout, dry_run
         if isinstance(result, dict):
             result["system_promise_reverification_count"] = sum(
-                1 for item in result.get("verdicts", [])
+                1
+                for item in result.get("verdicts", [])
                 if isinstance(item, dict) and item.get("system_promise_id")
             )
         return result
 
-    def _append_regression_history_with_system_behavior(project: str, root: Path, result: dict[str, Any]) -> list[dict[str, Any]]:
-        # Base _append_regression_history now forwards system_promise_id and
-        # regression_contract into history items and writes to both locations.
-        # Patch only needs to trigger learning refresh after history is written.
-        history = list(original_append_history(project, root, result) or [])
+    def _append_history_hook(
+        project: str,
+        root: Path,
+        result: dict[str, Any],
+        history: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
         if not history:
             return history
         try:
@@ -1409,66 +1441,84 @@ def _install_system_behavior_regression_patch() -> None:
             last = history[-1]
             last["risk_clue_pool_learning_refresh"] = refresh
             history[-1] = last
-            _rr._write_json(root / "platform_outputs" / project / "regression_run" / "regression_run_history.json", history)
-            _rr._write_json(root / "platform_workspace" / project / "defect_discovery" / "regression_run_history.json", history)
+            _rr._write_json(
+                root / "platform_outputs" / project / "regression_run" / "regression_run_history.json",
+                history,
+            )
+            _rr._write_json(
+                root / "platform_workspace" / project / "defect_discovery" / "regression_run_history.json",
+                history,
+            )
         except Exception:
             return history
         return history
 
-    _rsb._ORIGINAL_LOAD_CONFIRMED_FINDINGS_REGRESSION_PROBES_SYSTEM_BEHAVIOR = original_load_confirmed  # type: ignore[attr-defined]
-    _rr._ORIGINAL_JUDGE_PROBE_SYSTEM_BEHAVIOR = original_judge  # type: ignore[attr-defined]
-    _rr._ORIGINAL_REVERIFY_CONFIRMED_FINDINGS_SYSTEM_BEHAVIOR = original_reverify  # type: ignore[attr-defined]
-    _rr._ORIGINAL_APPEND_REGRESSION_HISTORY_SYSTEM_BEHAVIOR = original_append_history  # type: ignore[attr-defined]
-    _rsb._load_confirmed_findings_regression_probes = _load_confirmed_findings_regression_probes_with_system_behavior  # type: ignore[assignment]
-    _rr._judge_probe = _judge_probe_with_system_behavior  # type: ignore[assignment]
-    _rr._reverify_confirmed_findings = _reverify_confirmed_findings_with_system_behavior  # type: ignore[assignment]
-    _rr._append_regression_history = _append_regression_history_with_system_behavior  # type: ignore[assignment]
+    register_judge_probe_hook(_judge_hook)
+    register_reverify_hook(_reverify_hook)
+    register_append_history_hook(_append_history_hook)
     _rr._SYSTEM_BEHAVIOR_REGRESSION_PATCHED = True  # type: ignore[attr-defined]
+    _rr._SYSTEM_BEHAVIOR_REGRESSION_MODE = "first_class_hook"  # type: ignore[attr-defined]
 
 
 def install_system_behavior_space_patch(*, patch_source: str = PATCH_SOURCE) -> None:
+    """Register first-class BSG hooks and the rest of the SBS chain."""
     if getattr(_bsg, "_SYSTEM_BEHAVIOR_SPACE_PATCHED", False):
         return
-    original_build = getattr(_bsg.BusinessStateGraphBuilder, "build")
-    original_contract = getattr(_bsg.BusinessStateGraphBuilder, "behavior_contract")
 
-    def _build_with_system_behavior_space(self: Any, prd_text: str = "", api_spec_text: str = "", db_schema_text: str = "") -> dict[str, Any]:
-        graphs = original_build(self, prd_text, api_spec_text, db_schema_text)
+    from ai_test_asset_center.business_state_graph import (
+        register_bsg_build_hook,
+        register_bsg_contract_hook,
+    )
+
+    def _build_hook(self: Any, prd_text: str, api_spec_text: str, db_schema_text: str) -> None:
         try:
             asset = getattr(self, "system_behavior_space_knowledge_asset", None)
             if not isinstance(asset, dict) or not asset:
                 asset = _load_existing_enterprise_asset()
-            self.system_behavior_space = build_system_behavior_space(prd_text, api_spec_text, db_schema_text, knowledge_asset=asset).to_dict()
+            self.system_behavior_space = build_system_behavior_space(
+                prd_text, api_spec_text, db_schema_text, knowledge_asset=asset
+            ).to_dict()
         except Exception as exc:
-            self.system_behavior_space = {"version": SYSTEM_BEHAVIOR_SPACE_VERSION, "status": "unavailable", "reason": f"system_behavior_space_build_failed:{type(exc).__name__}", "summary": {"object_count": 0, "promise_count": 0, "probe_candidate_count": 0, "coverage_gap_count": 1}}
-        return graphs
+            self.system_behavior_space = {
+                "version": SYSTEM_BEHAVIOR_SPACE_VERSION,
+                "status": "unavailable",
+                "reason": f"system_behavior_space_build_failed:{type(exc).__name__}",
+                "summary": {
+                    "object_count": 0,
+                    "promise_count": 0,
+                    "probe_candidate_count": 0,
+                    "coverage_gap_count": 1,
+                },
+            }
 
-    def _behavior_contract_with_system_behavior_space(self: Any) -> dict[str, Any]:
-        contract = original_contract(self)
+    def _contract_hook(self: Any, contract: dict[str, Any]) -> dict[str, Any]:
         space = getattr(self, "system_behavior_space", None)
-        if isinstance(space, dict) and space:
-            contract["system_behavior_space"] = space
-            contract = _attach_system_behavior_slices(contract, space)
-            summary = contract.get("summary") if isinstance(contract.get("summary"), dict) else {}
-            space_summary = space.get("summary") if isinstance(space.get("summary"), dict) else {}
-            summary["system_behavior_space_version"] = str(space.get("version") or SYSTEM_BEHAVIOR_SPACE_VERSION)
-            summary["system_promise_count"] = int(space_summary.get("promise_count") or 0)
-            summary["system_probe_candidate_count"] = int(space_summary.get("probe_candidate_count") or 0)
-            summary["system_behavior_object_count"] = int(space_summary.get("object_count") or 0)
-            summary["system_behavior_source_coverage"] = space_summary.get("source_coverage") if isinstance(space_summary.get("source_coverage"), dict) else {}
-            summary["system_behavior_goal"] = "open_ended_system_promise_discovery_across_all_surfaces"
-            contract["summary"] = summary
-            gaps = contract.get("coverage_gaps") if isinstance(contract.get("coverage_gaps"), list) else []
-            for gap in space.get("coverage_gaps") if isinstance(space.get("coverage_gaps"), list) else []:
-                if isinstance(gap, dict):
-                    gaps.append({**gap, "source": "system_behavior_space"})
-            contract["coverage_gaps"] = gaps
+        if not (isinstance(space, dict) and space):
+            return contract
+        contract["system_behavior_space"] = space
+        contract = _attach_system_behavior_slices(contract, space)
+        summary = contract.get("summary") if isinstance(contract.get("summary"), dict) else {}
+        space_summary = space.get("summary") if isinstance(space.get("summary"), dict) else {}
+        summary["system_behavior_space_version"] = str(space.get("version") or SYSTEM_BEHAVIOR_SPACE_VERSION)
+        summary["system_promise_count"] = int(space_summary.get("promise_count") or 0)
+        summary["system_probe_candidate_count"] = int(space_summary.get("probe_candidate_count") or 0)
+        summary["system_behavior_object_count"] = int(space_summary.get("object_count") or 0)
+        summary["system_behavior_source_coverage"] = (
+            space_summary.get("source_coverage")
+            if isinstance(space_summary.get("source_coverage"), dict)
+            else {}
+        )
+        summary["system_behavior_goal"] = "open_ended_system_promise_discovery_across_all_surfaces"
+        contract["summary"] = summary
+        gaps = contract.get("coverage_gaps") if isinstance(contract.get("coverage_gaps"), list) else []
+        for gap in space.get("coverage_gaps") if isinstance(space.get("coverage_gaps"), list) else []:
+            if isinstance(gap, dict):
+                gaps.append({**gap, "source": "system_behavior_space"})
+        contract["coverage_gaps"] = gaps
         return contract
 
-    _bsg.BusinessStateGraphBuilder._ORIGINAL_BUILD_SYSTEM_BEHAVIOR_SPACE = original_build  # type: ignore[attr-defined]
-    _bsg.BusinessStateGraphBuilder._ORIGINAL_CONTRACT_SYSTEM_BEHAVIOR_SPACE = original_contract  # type: ignore[attr-defined]
-    _bsg.BusinessStateGraphBuilder.build = _build_with_system_behavior_space  # type: ignore[method-assign]
-    _bsg.BusinessStateGraphBuilder.behavior_contract = _behavior_contract_with_system_behavior_space  # type: ignore[method-assign]
+    register_bsg_build_hook(_build_hook)
+    register_bsg_contract_hook(_contract_hook)
     _install_v12_behavior_space_context_patch()
     _install_system_behavior_scenario_patch()
     _install_system_behavior_oracle_patch()
@@ -1476,6 +1526,7 @@ def install_system_behavior_space_patch(*, patch_source: str = PATCH_SOURCE) -> 
     _install_system_behavior_regression_patch()
     _bsg._SYSTEM_BEHAVIOR_SPACE_PATCHED = True  # type: ignore[attr-defined]
     _bsg._SYSTEM_BEHAVIOR_SPACE_PATCH_SOURCE = patch_source  # type: ignore[attr-defined]
+    _bsg._SYSTEM_BEHAVIOR_SPACE_MODE = "first_class_hook"  # type: ignore[attr-defined]
 
 
 def _install_v12_behavior_space_context_patch() -> None:
@@ -1508,12 +1559,13 @@ def prepare_system_behavior_space_learning_context(builder: Any, *, project: str
 
 
 def restore_system_behavior_space_patch() -> None:
-    original_build = getattr(_bsg.BusinessStateGraphBuilder, "_ORIGINAL_BUILD_SYSTEM_BEHAVIOR_SPACE", None)
-    original_contract = getattr(_bsg.BusinessStateGraphBuilder, "_ORIGINAL_CONTRACT_SYSTEM_BEHAVIOR_SPACE", None)
-    if callable(original_build):
-        _bsg.BusinessStateGraphBuilder.build = original_build  # type: ignore[method-assign]
-    if callable(original_contract):
-        _bsg.BusinessStateGraphBuilder.behavior_contract = original_contract  # type: ignore[method-assign]
+    """Clear first-class SBS hooks and readiness flags — no method restore."""
+    try:
+        from ai_test_asset_center.business_state_graph import clear_bsg_hooks
+
+        clear_bsg_hooks()
+    except Exception:
+        pass
     try:
         from ai_test_asset_center import v12_pipeline as _v12
         # First-class binder owns run_v12_pipeline; only clear the readiness flag.
@@ -1524,51 +1576,45 @@ def restore_system_behavior_space_patch() -> None:
         pass
     try:
         from ai_test_asset_center import semantic_scenario_generator as _ssg
-        original_scenario = getattr(_ssg.SemanticScenarioGenerator, "_ORIGINAL_INVARIANT_FROM_META_SYSTEM_BEHAVIOR", None)
-        if callable(original_scenario):
-            _ssg.SemanticScenarioGenerator._invariant_from_meta = original_scenario  # type: ignore[method-assign]
+        from ai_test_asset_center.semantic_scenario_generator import clear_scenario_enricher
+
+        clear_scenario_enricher()
         _ssg._SYSTEM_BEHAVIOR_SCENARIO_PATCHED = False  # type: ignore[attr-defined]
+        if hasattr(_ssg, "_SYSTEM_BEHAVIOR_SCENARIO_MODE"):
+            delattr(_ssg, "_SYSTEM_BEHAVIOR_SCENARIO_MODE")
     except Exception:
         pass
     try:
         from ai_test_asset_center import oracle_engine as _oe
-        original_eval = getattr(_oe.OracleEngine, "_ORIGINAL_EVALUATE_SYSTEM_BEHAVIOR", None)
-        original_build = getattr(_oe.EvidenceGraphBuilder, "_ORIGINAL_BUILD_SYSTEM_BEHAVIOR", None)
-        if callable(original_eval):
-            _oe.OracleEngine.evaluate = original_eval  # type: ignore[method-assign]
-        if callable(original_build):
-            _oe.EvidenceGraphBuilder.build = original_build  # type: ignore[method-assign]
+        from ai_test_asset_center.oracle_engine import clear_oracle_hooks
+
+        clear_oracle_hooks()
         _oe._SYSTEM_BEHAVIOR_ORACLE_PATCHED = False  # type: ignore[attr-defined]
+        if hasattr(_oe, "_SYSTEM_BEHAVIOR_ORACLE_MODE"):
+            delattr(_oe, "_SYSTEM_BEHAVIOR_ORACLE_MODE")
     except Exception:
         pass
     try:
         from ai_test_asset_center import v12_pipeline as _v12
-        original_confirmed = getattr(_v12, "_ORIGINAL_CONFIRMED_ORACLE_FINDING_SYSTEM_BEHAVIOR", None)
-        original_persist = getattr(_v12, "_ORIGINAL_PERSIST_CONFIRMED_FINDINGS_SYSTEM_BEHAVIOR", None)
-        if callable(original_confirmed):
-            _v12._confirmed_oracle_finding = original_confirmed  # type: ignore[assignment]
-        if callable(original_persist):
-            _v12._persist_confirmed_findings = original_persist  # type: ignore[assignment]
+        from ai_test_asset_center.v12_legacy_oracle_findings import clear_finding_enricher
+
+        clear_finding_enricher()
         _v12._SYSTEM_BEHAVIOR_FINDING_PATCHED = False  # type: ignore[attr-defined]
+        if hasattr(_v12, "_SYSTEM_BEHAVIOR_FINDING_MODE"):
+            delattr(_v12, "_SYSTEM_BEHAVIOR_FINDING_MODE")
     except Exception:
         pass
     try:
         from ai_test_asset_center import regression_runner as _rr
-        from ai_test_asset_center import regression_suite_builder as _rsb
-        original_load_confirmed = getattr(_rsb, "_ORIGINAL_LOAD_CONFIRMED_FINDINGS_REGRESSION_PROBES_SYSTEM_BEHAVIOR", None)
-        original_judge = getattr(_rr, "_ORIGINAL_JUDGE_PROBE_SYSTEM_BEHAVIOR", None)
-        original_reverify = getattr(_rr, "_ORIGINAL_REVERIFY_CONFIRMED_FINDINGS_SYSTEM_BEHAVIOR", None)
-        original_append_history = getattr(_rr, "_ORIGINAL_APPEND_REGRESSION_HISTORY_SYSTEM_BEHAVIOR", None)
-        if callable(original_load_confirmed):
-            _rsb._load_confirmed_findings_regression_probes = original_load_confirmed  # type: ignore[assignment]
-        if callable(original_judge):
-            _rr._judge_probe = original_judge  # type: ignore[assignment]
-        if callable(original_reverify):
-            _rr._reverify_confirmed_findings = original_reverify  # type: ignore[assignment]
-        if callable(original_append_history):
-            _rr._append_regression_history = original_append_history  # type: ignore[assignment]
+        from ai_test_asset_center.regression_runner import clear_regression_hooks
+
+        clear_regression_hooks()
         _rr._SYSTEM_BEHAVIOR_REGRESSION_PATCHED = False  # type: ignore[attr-defined]
+        if hasattr(_rr, "_SYSTEM_BEHAVIOR_REGRESSION_MODE"):
+            delattr(_rr, "_SYSTEM_BEHAVIOR_REGRESSION_MODE")
     except Exception:
         pass
     _bsg._SYSTEM_BEHAVIOR_SPACE_PATCHED = False  # type: ignore[attr-defined]
     _bsg._SYSTEM_BEHAVIOR_SPACE_PATCH_SOURCE = ""  # type: ignore[attr-defined]
+    if hasattr(_bsg, "_SYSTEM_BEHAVIOR_SPACE_MODE"):
+        delattr(_bsg, "_SYSTEM_BEHAVIOR_SPACE_MODE")

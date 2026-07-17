@@ -9,6 +9,7 @@ import hashlib
 import json
 import re
 import time
+from collections.abc import Callable
 from typing import Any
 
 from .v12_legacy_scenario_exec import (
@@ -19,6 +20,19 @@ from .v12_legacy_scenario_exec import (
     _redact,
     _summarize_execution_skip_telemetry,
 )
+
+FindingEnricher = Callable[..., dict[str, Any]]
+_FINDING_ENRICHER: FindingEnricher | None = None
+
+
+def register_finding_enricher(hook: FindingEnricher | None) -> None:
+    """First-class System Behavior Space finding enricher — no monkey-patch."""
+    global _FINDING_ENRICHER
+    _FINDING_ENRICHER = hook
+
+
+def clear_finding_enricher() -> None:
+    register_finding_enricher(None)
 
 
 def _scenario_executable(scenario: Any) -> bool:
@@ -826,6 +840,19 @@ def _confirmed_oracle_finding(
         }
     if actor:
         finding["evidence"]["actor_token_present"] = True
+    if _FINDING_ENRICHER is not None:
+        finding = _FINDING_ENRICHER(
+            finding,
+            scenario,
+            trace,
+            oracle_result,
+            evidence,
+            campaign_id=campaign_id,
+            discovery_round=discovery_round,
+            base_url=base_url,
+        )
+        if not isinstance(finding, dict):
+            raise TypeError("finding_enricher_must_return_dict")
     return finding
 
 
