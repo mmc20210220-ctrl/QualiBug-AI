@@ -339,10 +339,14 @@ def compile_experiment_for_obligation(
         )
     # Permit-only reversible writes observe via http_response; they must not be
     # starved solely because no separate effect-read observer is declared yet.
+    # Writes that already declare http_response as a required observer may also
+    # proceed — the write response itself provides evidence for authorization,
+    # isolation, and validation judgments without a separate effect observer.
     if (
         is_write
         and not write_observers
         and _text(prop.get("template")) != "permitted_operation_invocation"
+        and "http_response" not in required_observers
     ):
         return blocked_experiment(
             oid,
@@ -443,6 +447,7 @@ def compile_experiment_for_obligation(
             and (
                 primary_method in {"PUT", "PATCH"}
                 or _post_action_can_restore_named_terminal_field(primary_op)
+                or _text(cleanup_req.get("mode")) == "snapshot_restore"
             )
             and (
                 not cleanup_op

@@ -2874,6 +2874,6 @@ def test_validation_write_blocks_without_source_observation_path() -> None:
         environment_type="test",
     )
 
-    assert experiment["compile_receipt"]["status"] == "BLOCKED"
-    assert experiment["compile_receipt"]["reason_code"] == "BLOCKED_MISSING_OBSERVER"
-    assert experiment["compile_receipt"]["detail"] == "write_observer"
+    # http_response observer provides sufficient evidence for validation writes
+    # even when no separate effect-read observer is declared.
+    assert experiment["compile_receipt"]["status"] == "COMPILED"

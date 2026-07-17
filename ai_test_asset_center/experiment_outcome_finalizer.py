@@ -198,6 +198,35 @@ def finalize_experiment_execution(
         for s in steps_out
     )
     status = "EXECUTED" if has_http else "HARNESS_FAILURE"
+    if pre_transport_block_reasons and not has_http:
+        # Pre-transport blocks (binding placeholders, unresolved paths) mean the
+        # request never reached the target — this is a BLOCKED outcome, not a
+        # harness failure in the evidence infrastructure.
+        status = "BLOCKED"
+        reason = "BLOCKED_MISSING_BINDING"
+        detail = ",".join(dict.fromkeys(pre_transport_block_reasons))
+        return {
+            "schema_version": "qualibug.experiment-execution.v1",
+            "experiment_id": eid,
+            "obligation_id": oid,
+            "status": status,
+            "reason_code": reason,
+            "detail": detail,
+            "elapsed_ms": int((time.time() - started) * 1000),
+            "steps": steps_out,
+            "fixture_receipts": fixture_receipts,
+            "binding_materialization_receipts": binding_materialization_receipts,
+            "observer_receipts": observer_receipts,
+            "contract_evidence_receipts": contract_evidence_receipts,
+            "oracle_verdict": verdict,
+            "finding": None,
+            "cleanup_failures": cleanup_failures,
+            "execution_receipt": {
+                "status": status,
+                "reason_code": reason,
+                "detail": detail,
+            },
+        }
     if pre_transport_block_reasons and not accepted_governed_writes:
         status = "BLOCKED"
         reason = "BLOCKED_MISSING_BINDING"

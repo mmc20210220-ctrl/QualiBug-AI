@@ -17,6 +17,7 @@ from .real_id_resolver import (
 BINDING_PRIORITY = (
     "experiment_setup_response",
     "same_actor_list_read",
+    "actor_credential_secret",
     "evaluator_frozen_fixture",
     "disposable_fixture_receipt",
     "api_doc_example",
@@ -25,6 +26,24 @@ BINDING_PRIORITY = (
 
 _PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 _BODY_PLACEHOLDER_RE = re.compile(r"^\s*[<{]([A-Za-z_][A-Za-z0-9_]*)[>}]\s*$")
+_REDACTION_PLACEHOLDER_TOKENS = frozenset({
+    "REDACTED",
+    "FILL",
+    "TODO",
+    "REPLACE",
+    "SANDBOX",
+})
+_CREDENTIAL_FIELD_TOKENS = frozenset({
+    "password",
+    "passwd",
+    "passphrase",
+    "newpassword",
+    "oldpassword",
+    "currentpassword",
+    "secret",
+    "clientsecret",
+    "apikey",
+})
 _CLEANUP_ACTION_RE = re.compile(
     r"(?:cancel|close|void|disable|archive|reject|release|rollback|revoke|remove|"
     r"delete|deactivate|suspend|expire|invalidate|terminate|withdraw|abandon|"
@@ -171,10 +190,19 @@ def declared_effect_observers(
         for row in _list(_dict(behavior_ir).get("operations"))
         if isinstance(row, dict) and _text(row.get("id"))
     }
+    entity_ids = {
+        _text(row.get("id"))
+        for row in _list(_dict(behavior_ir).get("entities"))
+        if isinstance(row, dict) and _text(row.get("id"))
+    }
+    # Entity ids produced/consumed/scoped by this write — join observers of the
+    # same entity (produces X + observes X) without inventing paths.
+    produced_entity_ids: set[str] = set()
     for relation in _list(_dict(behavior_ir).get("relations")):
         if not isinstance(relation, dict):
             continue
-        if _text(relation.get("relation_type")) not in {
+        relation_type = _text(relation.get("relation_type"))
+        if relation_type not in {
             "observes",
             "produces",
             "consumes",
@@ -185,6 +213,7 @@ def declared_effect_observers(
             _text(relation.get("operation_ref")),
             _text(relation.get("from_ref")),
             _text(relation.get("to_ref")),
+            _text(relation.get("entity_ref")),
         }
         if operation_ref and operation_ref not in related_refs:
             continue
@@ -199,6 +228,41 @@ def declared_effect_observers(
             if method in {"GET", "HEAD"} and path.startswith("/"):
                 if path not in candidate_paths:
                     candidate_paths.append(path)
+            elif (
+                relation_type in {"produces", "consumes", "scopes"}
+                and ref in entity_ids
+            ):
+                produced_entity_ids.add(ref)
+
+    if produced_entity_ids:
+        for relation in _list(_dict(behavior_ir).get("relations")):
+            if not isinstance(relation, dict):
+                continue
+            if _text(relation.get("relation_type")) not in {
+                "observes",
+                "scopes",
+            }:
+                continue
+            entity_ref = _text(
+                relation.get("entity_ref") or relation.get("to_ref")
+            )
+            if entity_ref not in produced_entity_ids:
+                continue
+            observer_refs = {
+                _text(relation.get("operation_ref")),
+                _text(relation.get("from_ref")),
+            }
+            for ref in observer_refs:
+                if not ref or ref == operation_ref or ref == entity_ref:
+                    continue
+                candidate = _dict(operations_by_id.get(ref))
+                method = _text(candidate.get("method")).upper()
+                path = normalize_path_placeholders(
+                    _text(candidate.get("path") or candidate.get("raw_path"))
+                )
+                if method in {"GET", "HEAD"} and path.startswith("/"):
+                    if path not in candidate_paths:
+                        candidate_paths.append(path)
 
     limit = max(1, min(int(max_candidates or 1), 5))
     resolvers: list[dict[str, str]] = []
@@ -318,11 +382,20 @@ def _body_placeholder_rows(value: Any, path: str = "") -> list[dict[str, str]]:
     elif isinstance(value, str):
         match = _BODY_PLACEHOLDER_RE.match(value)
         if match and path:
+            token = _text(match.group(1))
+            if token.upper() in _REDACTION_PLACEHOLDER_TOKENS:
+                leaf = path.split(".")[-1].split("[")[0]
+                token = leaf or token
             rows.append({
                 "target": path,
-                "template_token": _text(match.group(1)),
+                "template_token": token,
             })
     return rows
+
+
+def _is_credential_field_token(name: str) -> bool:
+    token = _field_token(name)
+    return token in _CREDENTIAL_FIELD_TOKENS or token.endswith("password")
 
 
 def _api_prefix(path: str) -> str:
@@ -840,6 +913,48 @@ def build_binding_plan(
                     "value_fingerprint": "",
                 })
                 continue
+            if _is_credential_field_token(name):
+                credential_actor = next(
+                    (
+                        actor
+                        for actor in (actors or [])
+                        if isinstance(actor, dict)
+                        and _text(
+                            actor.get("credential_secret_ref") or actor.get("secret_ref")
+                        )
+                        and not _text(
+                            actor.get("credential_secret_ref") or actor.get("secret_ref")
+                        )
+                        .lower()
+                        .startswith("secret_ref:actor:")
+                    ),
+                    None,
+                )
+                if credential_actor is not None:
+                    secret_ref = _text(
+                        credential_actor.get("credential_secret_ref")
+                        or credential_actor.get("secret_ref")
+                    )
+                    actor_ref = _text(credential_actor.get("id"))
+                    plan.append({
+                        "target": name,
+                        "status": "runtime_resolvable",
+                        "source_priority": "actor_credential_secret",
+                        "actor_ref": actor_ref,
+                        "credential_secret_ref": secret_ref,
+                        "resolver_operations": [],
+                        "fixture_setup": {
+                            "kind": "actor_credential_field",
+                            "field": name,
+                            "actor_ref": actor_ref,
+                            "credential_secret_ref": secret_ref,
+                        },
+                        "body_template_paths": list(dict.fromkeys(
+                            body_placeholder_paths.get(name, [])
+                        )),
+                        "value_fingerprint": "",
+                    })
+                    continue
             plan.append({
                 "target": name,
                 "status": "unresolved",

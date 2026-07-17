@@ -95,3 +95,50 @@ def test_declared_effect_observers_follow_observes_relation() -> None:
         behavior_ir=behavior_ir,
     )
     assert any(row.get("operation_ref") == "op-read-coupon" for row in resolvers)
+
+
+def test_declared_effect_observers_join_via_shared_entity() -> None:
+    """Write produces entity E; read observes E — join without inventing paths."""
+
+    behavior_ir = {
+        "entities": [{
+            "id": "ent-payment",
+            "name": "payment",
+            "kind": "business_object",
+        }],
+        "operations": [
+            {
+                "id": "op-manual-success",
+                "method": "POST",
+                "path": "/api/payments/admin/manual-success",
+                "read_write": "write",
+            },
+            {
+                "id": "op-read-payment",
+                "method": "GET",
+                "path": "/api/payments/order/{orderId}",
+                "read_write": "read",
+            },
+        ],
+        "relations": [
+            {
+                "id": "rel-produces",
+                "relation_type": "produces",
+                "from_ref": "op-manual-success",
+                "to_ref": "ent-payment",
+                "operation_ref": "op-manual-success",
+            },
+            {
+                "id": "rel-observes",
+                "relation_type": "observes",
+                "from_ref": "op-read-payment",
+                "to_ref": "ent-payment",
+                "operation_ref": "op-read-payment",
+            },
+        ],
+    }
+    resolvers = declared_effect_observers(
+        behavior_ir["operations"][0],
+        behavior_ir=behavior_ir,
+    )
+    assert any(row.get("operation_ref") == "op-read-payment" for row in resolvers)
