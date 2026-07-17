@@ -60,6 +60,7 @@
     "ai_test_asset_center.experiment_barrier_executor": "core",
     "ai_test_asset_center.experiment_plan_executor": "core",
     "ai_test_asset_center.experiment_outcome_finalizer": "core",
+    "ai_test_asset_center.experiment_batch_executor": "core",
     "ai_test_asset_center.private_pilot_regression_projection": "core",
     "ai_test_asset_center.private_pilot_defect_summaries": "core",
     "ai_test_asset_center.private_pilot_command_center_helpers": "core",
