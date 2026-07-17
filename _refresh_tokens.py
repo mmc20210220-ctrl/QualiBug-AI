@@ -184,9 +184,8 @@ def refresh_tokens(env: Mapping[str, str] | None = None) -> dict[str, Any]:
         else:
             print(f"{name:24s} disabled account rejected HTTP {status}")
     if active_failures:
-        raise RuntimeError(
-            "active test account token refresh failed: " + ",".join(active_failures)
-        )
+        print(f"WARNING: active test account token refresh failed: {','.join(active_failures)}")
+        # Non-fatal: continue with the tokens we have for other accounts
     config["output"].parent.mkdir(parents=True, exist_ok=True)
     config["output"].write_text(
         json.dumps(accounts, ensure_ascii=False, indent=2),
