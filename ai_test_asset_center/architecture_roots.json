@@ -58,6 +58,7 @@
     "ai_test_asset_center.experiment_runtime_support": "core",
     "ai_test_asset_center.experiment_fixture_materializer": "core",
     "ai_test_asset_center.experiment_barrier_executor": "core",
+    "ai_test_asset_center.experiment_plan_executor": "core",
     "ai_test_asset_center.private_pilot_regression_projection": "core",
     "ai_test_asset_center.private_pilot_defect_summaries": "core",
     "ai_test_asset_center.private_pilot_command_center_helpers": "core",
