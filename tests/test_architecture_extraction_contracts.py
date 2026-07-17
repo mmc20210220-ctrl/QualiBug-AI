@@ -204,6 +204,18 @@ def test_discovery_execution_support_helpers_are_reexported() -> None:
     assert execution._empty_execution_batch is support._empty_execution_batch
 
 
+def test_experiment_compiler_support_helpers_are_reexported() -> None:
+    from ai_test_asset_center import experiment_compiler_base as base
+    from ai_test_asset_center import experiment_compiler_support as support
+
+    assert base._resolve_state_compile_context is support._resolve_state_compile_context
+    assert base._source_declared_control_fixture_binding is (
+        support._source_declared_control_fixture_binding
+    )
+    assert base._inverse_delta_cleanup_spec is support._inverse_delta_cleanup_spec
+    assert base._index_by_id is support._index_by_id
+
+
 def test_extracted_modules_remain_under_architecture_budget_threshold() -> None:
     main_lines = sum(
         1 for _ in open(ROOT / "ai_test_asset_center" / "__main__.py", encoding="utf-8")
@@ -322,3 +334,19 @@ def test_extracted_modules_remain_under_architecture_budget_threshold() -> None:
     )
     assert discovery_execution_lines < 700
     assert discovery_execution_support_lines < 550
+    compiler_base_lines = sum(
+        1
+        for _ in open(
+            ROOT / "ai_test_asset_center" / "experiment_compiler_base.py",
+            encoding="utf-8",
+        )
+    )
+    compiler_support_lines = sum(
+        1
+        for _ in open(
+            ROOT / "ai_test_asset_center" / "experiment_compiler_support.py",
+            encoding="utf-8",
+        )
+    )
+    assert compiler_base_lines < 900
+    assert compiler_support_lines < 500
