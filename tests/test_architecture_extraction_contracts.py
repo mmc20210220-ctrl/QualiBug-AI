@@ -81,6 +81,35 @@ def test_commercial_assets_are_reexported_from_canonical_scan_entrypoint() -> No
     )
 
 
+def test_ui_and_external_followup_assets_are_reexported() -> None:
+    from ai_test_asset_center import __main__ as scan_module
+    from ai_test_asset_center import scan_external_reproduction_assets as external
+    from ai_test_asset_center import scan_ui_followup_assets as ui
+
+    assert scan_module._materialize_ui_followup_assets is (
+        ui._materialize_ui_followup_assets
+    )
+    assert scan_module._materialize_external_reproduction_assets is (
+        external._materialize_external_reproduction_assets
+    )
+
+
+def test_system_behavior_space_patch_imports_extracted_slice_helpers() -> None:
+    patch_source = (
+        ROOT
+        / "ai_test_asset_center"
+        / "private_pilot_system_behavior_space_patch.py"
+    ).read_text(encoding="utf-8")
+    slices_source = (
+        ROOT / "ai_test_asset_center" / "system_behavior_space_slices.py"
+    ).read_text(encoding="utf-8")
+
+    assert "system_behavior_space_slices" in patch_source
+    assert "def _attach_system_behavior_slices(" in slices_source
+    assert "def _attach_system_behavior_slices(" not in patch_source
+    assert "register_bsg_build_hook" in patch_source
+
+
 def test_extracted_modules_remain_under_architecture_budget_threshold() -> None:
     main_lines = sum(
         1 for _ in open(ROOT / "ai_test_asset_center" / "__main__.py", encoding="utf-8")
@@ -93,5 +122,5 @@ def test_extracted_modules_remain_under_architecture_budget_threshold() -> None:
         )
     )
 
-    assert main_lines < 4000
-    assert patch_lines < 650
+    assert main_lines < 2900
+    assert patch_lines < 500
