@@ -1,0 +1,172 @@
+"""Entity-mediated effect observers and snapshot-restore cleanup scheduling."""
+from __future__ import annotations
+
+from ai_test_asset_center.obligation_compiler_base import (
+    _cleanup_is_schedulable,
+    _cleanup_requirement,
+)
+from ai_test_asset_center.runtime_binding_graph import declared_effect_observers
+
+
+def test_cleanup_marks_put_as_snapshot_restore_when_no_compensator() -> None:
+    op = {
+        "id": "op-patch",
+        "method": "PATCH",
+        "path": "/api/resources/{id}",
+        "read_write": "write",
+    }
+    req = _cleanup_requirement(op, [op], [])
+    assert req["required"] is True
+    assert req["mode"] == "snapshot_restore"
+    assert not req.get("operation_ref")
+    assert _cleanup_is_schedulable(req) is True
+
+
+def test_cleanup_marks_post_action_with_terminal_body_field() -> None:
+    op = {
+        "id": "op-status",
+        "method": "POST",
+        "path": "/api/users/{id}/status",
+        "read_write": "write",
+        "request_example": {"status": "DISABLED", "reason": "policy"},
+    }
+    req = _cleanup_requirement(op, [op], [])
+    assert req["mode"] == "snapshot_restore"
+    assert _cleanup_is_schedulable(req) is True
+
+
+def test_cleanup_keeps_uncompensated_action_post_unschedulable() -> None:
+    op = {
+        "id": "op-pay",
+        "method": "POST",
+        "path": "/api/payments/pay",
+        "read_write": "write",
+        "request_example": {"orderId": "o1", "amount": 10},
+    }
+    req = _cleanup_requirement(op, [op], [])
+    assert req["mode"] == "reverse_order"
+    assert _cleanup_is_schedulable(req) is False
+
+
+def test_cleanup_skips_when_source_relations_declare_no_entity_mutation() -> None:
+    op = {
+        "id": "op-login",
+        "method": "POST",
+        "path": "/api/auth/login",
+        "read_write": "write",
+        "request_example": {"email": "a@b.c", "password": "x"},
+    }
+    relations = [
+        {
+            "relation_type": "permits",
+            "from_ref": "actor-buyer",
+            "to_ref": "op-login",
+            "operation_ref": "op-login",
+        }
+    ]
+    req = _cleanup_requirement(op, [op], relations)
+    assert req["required"] is False
+    assert req.get("reason") == "no_declared_entity_effect"
+    assert _cleanup_is_schedulable(req) is True
+
+
+def test_cleanup_keeps_entity_producing_write_required_without_compensator() -> None:
+    op = {
+        "id": "op-pay",
+        "method": "POST",
+        "path": "/api/payments/pay",
+        "read_write": "write",
+        "request_example": {"orderId": "o1", "amount": 10},
+    }
+    relations = [
+        {
+            "relation_type": "produces",
+            "from_ref": "op-pay",
+            "to_ref": "ent-payment",
+            "operation_ref": "op-pay",
+        },
+        {
+            "relation_type": "permits",
+            "from_ref": "actor-buyer",
+            "to_ref": "op-pay",
+            "operation_ref": "op-pay",
+        },
+    ]
+    req = _cleanup_requirement(op, [op], relations)
+    assert req["required"] is True
+    assert _cleanup_is_schedulable(req) is False
+
+
+def test_entity_join_finds_payment_order_read() -> None:
+    behavior_ir = {
+        "entities": [{"id": "ent-pay", "name": "payment", "kind": "business_object"}],
+        "operations": [
+            {
+                "id": "op-manual",
+                "method": "POST",
+                "path": "/api/payments/admin/manual-success",
+                "read_write": "write",
+            },
+            {
+                "id": "op-read",
+                "method": "GET",
+                "path": "/api/payments/order/{orderId}",
+                "read_write": "read",
+            },
+        ],
+        "relations": [
+            {
+                "relation_type": "produces",
+                "from_ref": "op-manual",
+                "to_ref": "ent-pay",
+                "operation_ref": "op-manual",
+            },
+            {
+                "relation_type": "observes",
+                "from_ref": "op-read",
+                "to_ref": "ent-pay",
+                "operation_ref": "op-read",
+            },
+        ],
+    }
+    resolvers = declared_effect_observers(
+        behavior_ir["operations"][0],
+        behavior_ir=behavior_ir,
+    )
+    assert any(row["operation_ref"] == "op-read" for row in resolvers)
+
+
+def test_redacted_password_binds_via_actor_credential_secret() -> None:
+    from ai_test_asset_center.runtime_binding_graph import build_binding_plan
+
+    op = {
+        "id": "op-login",
+        "method": "POST",
+        "path": "/api/auth/login",
+        "read_write": "write",
+        "request_example": {
+            "email": "buyer01@example.com",
+            "password": "<REDACTED>",
+        },
+    }
+    actor = {
+        "id": "actor-buyer",
+        "role": "buyer",
+        "account_status": "active",
+        "account_ref": "buyer01@example.com",
+        "credential_secret_ref": "secret_ref:test_accounts:buyer01@example.com",
+    }
+    plan = build_binding_plan(
+        operation=op,
+        obligation={
+            "obligation_id": "obl-login",
+            "required_actors": ["actor-buyer"],
+            "property": {"template": "permitted_operation_invocation"},
+        },
+        actors=[actor],
+        behavior_ir={"operations": [op], "actors": [actor], "relations": []},
+    )
+    password_binding = next(row for row in plan if row.get("target") == "password")
+    assert password_binding["status"] == "runtime_resolvable"
+    assert password_binding["source_priority"] == "actor_credential_secret"
+    assert password_binding["credential_secret_ref"].endswith("buyer01@example.com")
