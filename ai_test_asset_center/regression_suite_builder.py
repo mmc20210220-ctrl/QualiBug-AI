@@ -4,11 +4,27 @@ import json
 import os
 import re
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 from .real_project_onboarding import ROOT, _html_escape, _safe_project_id, load_real_project_config
+
+# First-class structured regression-oracle enricher — no symbol replacement.
+ProbeOracleEnricher = Callable[[dict[str, Any]], dict[str, Any]]
+_PROBE_ORACLE_ENRICHER: ProbeOracleEnricher | None = None
+
+
+def register_probe_oracle_enricher(hook: ProbeOracleEnricher | None) -> None:
+    """Enrich probes with concrete HTTP-status oracles before suite normalize."""
+    global _PROBE_ORACLE_ENRICHER
+    _PROBE_ORACLE_ENRICHER = hook
+
+
+def clear_probe_oracle_enricher() -> None:
+    register_probe_oracle_enricher(None)
+
 
 PRIVATE_MARKERS = {
     "private_ground_truth",
@@ -333,6 +349,8 @@ def _load_confirmed_findings_regression_probes(project: str, root: Path) -> list
         if buggy_status_code not in (None, ""):
             probe["buggy_status_code"] = buggy_status_code
         probes.append(probe)
+    if _PROBE_ORACLE_ENRICHER is not None:
+        probes = [_PROBE_ORACLE_ENRICHER(dict(item)) for item in probes]
     return probes
 
 
@@ -419,6 +437,8 @@ def _risk_score(probe: dict[str, Any]) -> float:
 
 
 def _normalize_probe(probe: dict[str, Any], index: int) -> dict[str, Any]:
+    if _PROBE_ORACLE_ENRICHER is not None:
+        probe = _PROBE_ORACLE_ENRICHER(dict(probe or {}))
     risk_type = _safe_text(probe.get("risk_type") or "business_risk", 100)
     method = _safe_text(probe.get("method") or "GET", 12).upper()
     path = _safe_text(probe.get("path") or probe.get("url") or "/", 300)
@@ -448,6 +468,10 @@ def _normalize_probe(probe: dict[str, Any], index: int) -> dict[str, Any]:
     }
     if isinstance(probe.get("current_campaign_scope"), dict):
         normalized["current_campaign_scope"] = dict(probe.get("current_campaign_scope") or {})
+    # Preserve structured-oracle fields that normalize would otherwise drop.
+    for key in ("expected_status_code", "buggy_status_code", "regression_oracle", "confirmed_evidence_id"):
+        if key in probe:
+            normalized[key] = probe[key]
     normalized["priority_score"] = _risk_score(normalized)
     normalized["tags"] = [normalized["severity"], normalized["risk_type"], normalized["module"]]
     return normalized

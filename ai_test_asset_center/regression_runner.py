@@ -30,11 +30,12 @@ DESTRUCTIVE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 DEFAULT_MODE = "release"
 MODE_NAMES = {"smoke": "Smoke 快速回归", "release": "Release 发布回归", "full": "Full 完整回归"}
 
-# First-class System Behavior Space hooks — no symbol replacement.
+# First-class hooks — no symbol replacement.
 JudgeProbeHook = Callable[..., dict[str, Any]]
 ReverifyHook = Callable[..., dict[str, Any]]
 AppendHistoryHook = Callable[..., list[dict[str, Any]]]
 _JUDGE_PROBE_HOOK: JudgeProbeHook | None = None
+_STRUCTURED_ORACLE_JUDGE_HOOK: JudgeProbeHook | None = None
 _REVERIFY_HOOK: ReverifyHook | None = None
 _APPEND_HISTORY_HOOK: AppendHistoryHook | None = None
 
@@ -43,6 +44,12 @@ def register_judge_probe_hook(hook: JudgeProbeHook | None) -> None:
     """Post-judge hook: may attach system-promise oracle_intent."""
     global _JUDGE_PROBE_HOOK
     _JUDGE_PROBE_HOOK = hook
+
+
+def register_structured_oracle_judge_hook(hook: JudgeProbeHook | None) -> None:
+    """Post-judge hook: may upgrade needs_review via concrete HTTP-status oracle."""
+    global _STRUCTURED_ORACLE_JUDGE_HOOK
+    _STRUCTURED_ORACLE_JUDGE_HOOK = hook
 
 
 def register_reverify_hook(hook: ReverifyHook | None) -> None:
@@ -58,9 +65,14 @@ def register_append_history_hook(hook: AppendHistoryHook | None) -> None:
 
 
 def clear_regression_hooks() -> None:
+    """Clear System Behavior Space regression hooks only."""
     register_judge_probe_hook(None)
     register_reverify_hook(None)
     register_append_history_hook(None)
+
+
+def clear_structured_oracle_judge_hook() -> None:
+    register_structured_oracle_judge_hook(None)
 
 
 def _write_json(path: Path, data: Any) -> None:
@@ -283,6 +295,10 @@ def _judge_probe(probe: dict[str, Any], execution: dict[str, Any], skipped: bool
         _sb_item["system_behavior_source_family"] = _sb_source_family
     if _JUDGE_PROBE_HOOK is not None:
         _sb_item = _JUDGE_PROBE_HOOK(
+            probe, execution, _sb_item, skipped=skipped, skip_reason=skip_reason
+        )
+    if _STRUCTURED_ORACLE_JUDGE_HOOK is not None:
+        _sb_item = _STRUCTURED_ORACLE_JUDGE_HOOK(
             probe, execution, _sb_item, skipped=skipped, skip_reason=skip_reason
         )
     return _sb_item

@@ -89,7 +89,9 @@ assert engine.client.config.max_tokens >= 32768, "max_tokens too low"
   symbols. BSG/SSG/Oracle/regression System Behavior Space installers register
   the same first-class hook pattern (`register_bsg_*_hook`,
   `register_scenario_enricher`, `register_oracle_*_hook`,
-  `register_*_hook` on `regression_runner`).
+  `register_*_hook` on `regression_runner`). Structured regression oracles
+  register through `register_probe_oracle_enricher` and
+  `register_structured_oracle_judge_hook`.
   Runtime/fuzzer/slice/DB helpers SSOTs are `pipeline_runtime.py`,
   `pipeline_fuzzer.py`, `pipeline_slices.py`, and `pipeline_db.py` (explicit
   imports; `import *` must not be used for `_`-prefixed symbols). Industry
