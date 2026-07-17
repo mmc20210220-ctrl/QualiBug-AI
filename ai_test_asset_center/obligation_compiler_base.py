@@ -588,13 +588,9 @@ def _cleanup_requirement(
             requirement["mode"] = "reverse_order"
             return requirement
 
-    # POSTs that are direct actions (no path placeholder) can use
-    # snapshot_restore when no DELETE counterpart exists.
-    if (
-        method == "POST"
-        and raw_path.startswith("/")
-        and not path_has_placeholders(raw_path)
-    ):
+    # POSTs without an explicit DELETE compensator can use snapshot_restore.
+    # Path placeholders are resolved at runtime from the binding plan.
+    if method == "POST" and raw_path.startswith("/"):
         requirement["mode"] = "snapshot_restore"
         return requirement
 
