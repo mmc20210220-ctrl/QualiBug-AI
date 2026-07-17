@@ -53,6 +53,34 @@ def test_system_behavior_space_patch_imports_extracted_oracle_helpers() -> None:
     assert "register_oracle_evaluate_hook" in patch_source
 
 
+def test_system_behavior_space_patch_imports_extracted_delivery_helpers() -> None:
+    patch_source = (
+        ROOT
+        / "ai_test_asset_center"
+        / "private_pilot_system_behavior_space_patch.py"
+    ).read_text(encoding="utf-8")
+    delivery_source = (
+        ROOT / "ai_test_asset_center" / "system_behavior_space_delivery.py"
+    ).read_text(encoding="utf-8")
+
+    assert "system_behavior_space_delivery" in patch_source
+    assert "def _attach_system_behavior_to_finding(" in delivery_source
+    assert "def _attach_system_behavior_to_finding(" not in patch_source
+    assert "register_finding_enricher" in patch_source
+
+
+def test_commercial_assets_are_reexported_from_canonical_scan_entrypoint() -> None:
+    from ai_test_asset_center import __main__ as scan_module
+    from ai_test_asset_center import scan_commercial_assets as commercial
+
+    assert scan_module._materialize_commercial_assets is (
+        commercial._materialize_commercial_assets
+    )
+    assert scan_module._materialize_external_commercial_assets is (
+        commercial._materialize_external_commercial_assets
+    )
+
+
 def test_extracted_modules_remain_under_architecture_budget_threshold() -> None:
     main_lines = sum(
         1 for _ in open(ROOT / "ai_test_asset_center" / "__main__.py", encoding="utf-8")
@@ -65,5 +93,5 @@ def test_extracted_modules_remain_under_architecture_budget_threshold() -> None:
         )
     )
 
-    assert main_lines < 5000
-    assert patch_lines < 750
+    assert main_lines < 4000
+    assert patch_lines < 650
