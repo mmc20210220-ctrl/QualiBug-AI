@@ -36,7 +36,8 @@ def finalize_finding_evidence_after_delivery_gate(
     """Align evidence pack with an independent v2 DELIVERABLE gate decision.
 
     Non-DELIVERABLE findings remain fail-closed with pending evidence status.
-    Oracle and cleanup rules are never relaxed here.
+    Oracle and cleanup rules are never relaxed here. Gate receipt ids are
+    stamped by the caller after the gate is rebuilt against this payload.
     """
 
     row = dict(_dict(finding))
@@ -59,7 +60,6 @@ def finalize_finding_evidence_after_delivery_gate(
             quality.get("evidence_strength")
             or "typed_contract_violation_gate_deliverable"
         ),
-        "delivery_gate_receipt_id": _text(gate.get("gate_receipt_id")),
     })
     if can_reproduce:
         quality["can_reproduce"] = True
@@ -76,7 +76,6 @@ def finalize_finding_evidence_after_delivery_gate(
         "final_review_status": "VALIDATED_CANDIDATE",
         "missing_requirements": missing,
         "delivery_gate_status": "DELIVERABLE",
-        "delivery_gate_receipt_id": _text(gate.get("gate_receipt_id")),
     })
     row["evidence_quality"] = quality
     row["evidence_status"] = evidence_status
@@ -85,6 +84,26 @@ def finalize_finding_evidence_after_delivery_gate(
     row["semantic_verdict"] = "SEMANTIC_CONFIRMED"
     if reproduction:
         row["reproduction_receipt"] = reproduction
+    return row
+
+
+def stamp_finding_delivery_gate_refs(
+    finding: dict[str, Any],
+    *,
+    gate_receipt: dict[str, Any],
+) -> dict[str, Any]:
+    """Attach derived gate refs excluded from finding payload fingerprints."""
+
+    row = dict(_dict(finding))
+    gate = _dict(gate_receipt)
+    row["delivery_gate_receipt"] = gate
+    row["delivery_gate_receipt_id"] = _text(gate.get("gate_receipt_id"))
+    row["gate_passed"] = _text(gate.get("status")) == "DELIVERABLE"
+    row["customer_delivery_status"] = (
+        "defect" if row["gate_passed"] else "candidate"
+    )
+    row["customer_visible"] = bool(row["gate_passed"])
+    row["customer_delivery_gate_reasons"] = list(gate.get("reason_codes") or [])
     return row
 
 
@@ -418,6 +437,34 @@ def execute_selected_experiments(
                 oracle_receipt=oracle_verdict,
                 reproduction_receipt=reproduction_receipt,
             )
+            if (
+                gate_receipt.get("status") == "DELIVERABLE"
+                and isinstance(outcome.get("finding"), dict)
+            ):
+                # Seal the deliverable payload with finalized evidence, then
+                # rebuild the gate so finding_payload_fingerprint stays consistent.
+                finalized = finalize_finding_evidence_after_delivery_gate(
+                    outcome["finding"],
+                    gate_receipt=gate_receipt,
+                    reproduction_receipt=reproduction_receipt,
+                )
+                outcome["finding"] = finalized
+                gate_receipt = build_customer_delivery_gate_receipt_v2(
+                    finding=finalized,
+                    execution_receipt=delivery_execution_receipt,
+                    contract_evidence_receipts=[
+                        dict(row)
+                        for row in _list(outcome.get("contract_evidence_receipts"))
+                        if isinstance(row, dict)
+                    ],
+                    observer_receipts=[
+                        dict(row)
+                        for row in _list(outcome.get("observer_receipts"))
+                        if isinstance(row, dict)
+                    ],
+                    oracle_receipt=oracle_verdict,
+                    reproduction_receipt=reproduction_receipt,
+                )
             executed += 1
             execution_results[oid] = {
                 "status": "EXECUTED",
@@ -446,30 +493,11 @@ def execute_selected_experiments(
             outcome["reproduction_receipt"] = reproduction_receipt
             outcome["delivery_gate_receipt"] = gate_receipt
             if isinstance(outcome.get("finding"), dict):
-                finding = outcome["finding"]
-                finding["delivery_gate_receipt"] = gate_receipt
-                finding["delivery_gate_receipt_id"] = _text(
-                    gate_receipt.get("gate_receipt_id")
+                finding = stamp_finding_delivery_gate_refs(
+                    outcome["finding"],
+                    gate_receipt=gate_receipt,
                 )
-                finding["gate_passed"] = gate_receipt.get("status") == "DELIVERABLE"
-                finding["customer_delivery_status"] = (
-                    "defect"
-                    if gate_receipt.get("status") == "DELIVERABLE"
-                    else "candidate"
-                )
-                finding["customer_visible"] = (
-                    gate_receipt.get("status") == "DELIVERABLE"
-                )
-                finding["customer_delivery_gate_reasons"] = list(
-                    gate_receipt.get("reason_codes") or []
-                )
-                if gate_receipt.get("status") == "DELIVERABLE":
-                    finding = finalize_finding_evidence_after_delivery_gate(
-                        finding,
-                        gate_receipt=gate_receipt,
-                        reproduction_receipt=reproduction_receipt,
-                    )
-                    outcome["finding"] = finding
+                outcome["finding"] = finding
                 execution_results[oid]["finding"] = dict(finding)
         cleanup_failures += outcome_cleanup_failures
         if status == "EXECUTED" and isinstance(outcome.get("finding"), dict):
