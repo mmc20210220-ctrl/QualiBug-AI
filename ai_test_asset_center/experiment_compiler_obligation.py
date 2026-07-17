@@ -583,16 +583,19 @@ def compile_experiment_for_obligation(
         )
     )
     observer_requirements = list(required_observers)
+    permit_only = _text(prop.get("template")) == "permitted_operation_invocation"
     if (
         is_write
         and family in {"authorization", "isolation", "visibility"}
-        and _text(prop.get("template")) != "permitted_operation_invocation"
+        and not permit_only
     ):
         observer_requirements.append("business_effect")
     observers, observer_reason, observer_detail = compile_observer_requirements(
         observer_requirements,
         risk_family=family,
         available_adapters=adapters,
+        # Permit-only protocols have empty control_plan; auth comparison cannot run.
+        require_authorization_comparison=not permit_only,
     )
     if observer_reason:
         return blocked_experiment(oid, observer_reason, observer_detail)

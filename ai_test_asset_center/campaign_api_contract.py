@@ -123,15 +123,26 @@ def _trace_occurrence_ids(
     projected: dict[str, Any],
     occurrence_ids: list[str],
 ) -> list[str]:
+    """Bind trace scope to formal delivery occurrences without partial subsets.
+
+    Multi-round campaigns may only expose a subset of deliverable finding ids
+    through ``build_identity_traces`` (latest-round selected experiments). A
+    partial trace scope must not be injected against the full formal occurrence
+    set — that falsely fails defect-identity consistency. Empty or incomplete
+    coverage falls back to the formal occurrence authority.
+    """
+
     occurrence_set = {
         _text(value) for value in occurrence_ids if _text(value)
     }
+    if not occurrence_set:
+        return []
     trace_ids = sorted({
         _text(item.get("finding_id"))
         for item in build_identity_traces(projected)
         if _text(item.get("finding_id")) in occurrence_set
     })
-    if not trace_ids and occurrence_set:
+    if set(trace_ids) != occurrence_set:
         return sorted(occurrence_set)
     return trace_ids
 

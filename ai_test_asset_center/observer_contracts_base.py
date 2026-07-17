@@ -325,11 +325,21 @@ def compile_observer_requirements(
     *,
     risk_family: str,
     available_adapters: set[str],
+    require_authorization_comparison: bool = True,
 ) -> tuple[list[dict[str, Any]], str, str]:
-    """Return typed requirements or one stable compile blocker."""
+    """Return typed requirements or one stable compile blocker.
+
+    Authorization/isolation/visibility normally require ``authorization_comparison``
+    (control vs treatment). Permit-only single-actor invocations compile with an
+    empty control plan and ``http_status_class`` — forcing comparison there yields
+    INDETERMINATE and falsely surfaces as ``BLOCKED_MISSING_OBSERVER``.
+    """
 
     required = [_text(value) for value in observer_ids if _text(value)]
-    if _text(risk_family) in {"authorization", "isolation", "visibility"}:
+    if (
+        require_authorization_comparison
+        and _text(risk_family) in {"authorization", "isolation", "visibility"}
+    ):
         required.append("authorization_comparison")
     required = list(dict.fromkeys(required))
     if not required:
