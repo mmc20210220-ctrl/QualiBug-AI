@@ -37,6 +37,22 @@ def test_system_behavior_space_patch_imports_extracted_scenario_enricher() -> No
     assert "register_scenario_enricher" in patch_source
 
 
+def test_system_behavior_space_patch_imports_extracted_oracle_helpers() -> None:
+    patch_source = (
+        ROOT
+        / "ai_test_asset_center"
+        / "private_pilot_system_behavior_space_patch.py"
+    ).read_text(encoding="utf-8")
+    oracle_source = (
+        ROOT / "ai_test_asset_center" / "system_behavior_space_oracle.py"
+    ).read_text(encoding="utf-8")
+
+    assert "system_behavior_space_oracle" in patch_source
+    assert "def _direct_system_promise_oracle_result(" in oracle_source
+    assert "def _direct_system_promise_oracle_result(" not in patch_source
+    assert "register_oracle_evaluate_hook" in patch_source
+
+
 def test_extracted_modules_remain_under_architecture_budget_threshold() -> None:
     main_lines = sum(
         1 for _ in open(ROOT / "ai_test_asset_center" / "__main__.py", encoding="utf-8")
@@ -50,4 +66,4 @@ def test_extracted_modules_remain_under_architecture_budget_threshold() -> None:
     )
 
     assert main_lines < 5000
-    assert patch_lines < 1100
+    assert patch_lines < 750
