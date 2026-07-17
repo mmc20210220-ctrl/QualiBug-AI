@@ -4,8 +4,9 @@ from __future__ import annotations
 
 This module owns the pure contract-building layer for private-pilot scans:
 source manifest normalization, immutable source loading, scan body preparation,
-and campaign_context construction. Runtime patch installation lives in
-``private_pilot_scan_context_patch``.
+and campaign_context construction. Callers bind ``SCAN_CAMPAIGN_CONTEXT`` /
+``CONTINUOUS_CAMPAIGN_CONTEXTS`` first-class; ``private_pilot_scan_context_patch``
+only records runtime-support status for health surfaces.
 """
 
 import contextvars

@@ -86,8 +86,23 @@ def _continuous_scan_loop(root: Path, project: str, tenant_id: str, interval_s: 
 
         phase = "scan"
         try:
-            # Run scan
-            result = _scan_fn(project, root, save_report=True)
+            from .private_pilot_scan_context_contract import (
+                CONTINUOUS_CAMPAIGN_CONTEXTS,
+                SCAN_CAMPAIGN_CONTEXT,
+                continuous_context_key,
+            )
+
+            campaign_context = CONTINUOUS_CAMPAIGN_CONTEXTS.get(continuous_context_key(root, project))
+            token = SCAN_CAMPAIGN_CONTEXT.set(campaign_context or None)
+            try:
+                result = _scan_fn(
+                    project,
+                    root,
+                    save_report=True,
+                    campaign_context=dict(campaign_context) if isinstance(campaign_context, dict) else None,
+                )
+            finally:
+                SCAN_CAMPAIGN_CONTEXT.reset(token)
             if not isinstance(result, dict):
                 raise TypeError("continuous scan result must be an object")
 

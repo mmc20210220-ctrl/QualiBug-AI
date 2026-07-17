@@ -11,6 +11,13 @@ from .private_pilot_continuous import (
     _continuous_threads,
 )
 from .private_pilot_json_io import _read_json_object, _write_json_object_atomic
+from .private_pilot_scan_context_contract import (
+    CONTINUOUS_CAMPAIGN_CONTEXTS,
+    build_campaign_context_from_scan_body,
+    continuous_context_key,
+    prepare_scan_body_for_campaign,
+)
+
 
 class ContinuousHandlersMixin:
     def _handle_continuous_start(self, project: str, root: Path, actor: dict[str, str], body: dict[str, Any]) -> None:
@@ -31,7 +38,12 @@ class ContinuousHandlersMixin:
                 "round": _continuous_threads[key].get("round", 0),
             })
 
-        interval_s = int(body.get("interval_s", 60))  # default 60s between rounds
+        prepared_body = prepare_scan_body_for_campaign(project, root, body)
+        campaign_context = build_campaign_context_from_scan_body(prepared_body)
+        if campaign_context:
+            CONTINUOUS_CAMPAIGN_CONTEXTS[continuous_context_key(root, project)] = campaign_context
+
+        interval_s = int(prepared_body.get("interval_s", body.get("interval_s", 60)))  # default 60s between rounds
         interval_s = max(10, min(interval_s, 600))  # clamp 10s–10min
 
         # Reset converged flag

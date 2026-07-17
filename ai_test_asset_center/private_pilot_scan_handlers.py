@@ -152,8 +152,16 @@ class ScanHandlersMixin:
     def _handle_v12_scan(self, project: str, root: Path, actor: dict[str, str], body: dict[str, Any]) -> None:
         try:
             from .__main__ import scan
-            from .private_pilot_scan_context_contract import build_campaign_context_from_scan_body
+            from .private_pilot_scan_context_contract import (
+                SCAN_CAMPAIGN_CONTEXT,
+                build_campaign_context_from_scan_body,
+                prepare_scan_body_for_campaign,
+            )
             trace_id = str(uuid.uuid4())
+
+            # Fill api_doc / source_manifest gaps from the immutable registry before
+            # the rest of scan prep. Never invent a source — only bind registered ones.
+            body = prepare_scan_body_for_campaign(project, root, body)
 
             # B3 (customer one-click run): when the scan body does not already carry a
             # usable source_manifest, auto-bind the project's most recently ingested
@@ -236,15 +244,19 @@ class ScanHandlersMixin:
             )
             # #endregion
 
-            result = scan(
-                project=project,
-                root=root,
-                prd_text=str(prepared_body.get("prd", "")),
-                api_doc_text=str(prepared_body.get("api_doc") or prepared_body.get("api_doc_text") or api_doc),
-                base_url=str(prepared_body.get("base_url") or base_url).strip(),
-                multi_layer=bool(str(prepared_body.get("base_url") or base_url).strip()),
-                campaign_context=campaign_context,
-            )
+            _context_token = SCAN_CAMPAIGN_CONTEXT.set(campaign_context or None)
+            try:
+                result = scan(
+                    project=project,
+                    root=root,
+                    prd_text=str(prepared_body.get("prd", "")),
+                    api_doc_text=str(prepared_body.get("api_doc") or prepared_body.get("api_doc_text") or api_doc),
+                    base_url=str(prepared_body.get("base_url") or base_url).strip(),
+                    multi_layer=bool(str(prepared_body.get("base_url") or base_url).strip()),
+                    campaign_context=campaign_context,
+                )
+            finally:
+                SCAN_CAMPAIGN_CONTEXT.reset(_context_token)
             # #region debug-point C:http-scan-result
             _dbg_report(
                 hypothesis_id="C",
@@ -280,15 +292,19 @@ class ScanHandlersMixin:
                     trace_id=trace_id,
                 )
                 # #endregion
-                result = scan(
-                    project=project,
-                    root=root,
-                    prd_text=str(prepared_body.get("prd", "")),
-                    api_doc_text=str(prepared_body.get("api_doc") or prepared_body.get("api_doc_text") or api_doc),
-                    base_url=str(prepared_body.get("base_url") or base_url).strip(),
-                    multi_layer=bool(str(prepared_body.get("base_url") or base_url).strip()),
-                    campaign_context=campaign_context,
-                )
+                _retry_token = SCAN_CAMPAIGN_CONTEXT.set(campaign_context or None)
+                try:
+                    result = scan(
+                        project=project,
+                        root=root,
+                        prd_text=str(prepared_body.get("prd", "")),
+                        api_doc_text=str(prepared_body.get("api_doc") or prepared_body.get("api_doc_text") or api_doc),
+                        base_url=str(prepared_body.get("base_url") or base_url).strip(),
+                        multi_layer=bool(str(prepared_body.get("base_url") or base_url).strip()),
+                        campaign_context=campaign_context,
+                    )
+                finally:
+                    SCAN_CAMPAIGN_CONTEXT.reset(_retry_token)
                 # #region debug-point E:retry-http-scan-result
                 _dbg_report(
                     hypothesis_id="E",

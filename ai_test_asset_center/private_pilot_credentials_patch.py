@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-"""Credential safety patch for private-pilot service configuration.
+"""Credential safety helpers for the private-pilot service.
 
-This module owns private-pilot credential masking and local encryption-key
-provisioning. It keeps service credential GET responses masked/ref-only and
-ensures saved credentials do not fall back to plaintext-compatible mode when the
-private deployment did not explicitly set QUALIBUG_CRED_ENC_KEY.
+Masking, encryption-key provisioning, and storage-status helpers live here.
+GET/SAVE handlers bind these helpers first-class in
+``CredentialsHandlerMixin``; ``install_service_credentials_patch`` only records
+runtime-support status for health/compatibility surfaces.
 """
 
 import json
@@ -145,74 +145,16 @@ def load_services_config(root: Path, project: str) -> list[Any]:
 
 
 def install_service_credentials_patch(*, patch_source: str) -> None:
-    """Patch service credential GET/SAVE handlers without leaking plaintext."""
-    if getattr(_service, "_ORIGINAL_HANDLE_GET_SERVICE_CREDENTIALS", None) is not None:
+    """Mark credential safety as installed; handlers are already first-class."""
+    if str(getattr(_service, "_SERVICE_CREDENTIALS_PATCH_SOURCE", "") or "").strip():
         return
-    original_get_credentials = getattr(_service.PrivatePilotHandler, "_handle_get_service_credentials")
-    original_save_credentials = getattr(_service.PrivatePilotHandler, "_handle_save_service_credentials")
-
-    def _encryption_unavailable(self: Any, project: str, exc: Exception) -> Any:
-        return self._json(
-            {
-                "ok": False,
-                "error": "CREDENTIAL_ENCRYPTION_UNAVAILABLE",
-                "message": str(exc),
-                "project": project,
-            },
-            503,
-        )
-
-    def _handle_get_service_credentials_masked(self: Any, project: str, root: Path) -> Any:
-        try:
-            key_source = ensure_local_credential_encryption_key(root)
-        except CredentialEncryptionUnavailableError as exc:
-            return _encryption_unavailable(self, project, exc)
-        try:
-            services = load_services_config(root, project)
-        except Exception as exc:
-            return self._json(
-                {
-                    "ok": False,
-                    "error": "CREDENTIAL_CONFIG_INVALID",
-                    "message": str(exc),
-                    "project": project,
-                },
-                500,
-            )
-        return self._json(
-            {
-                "project": project,
-                "services": mask_service_credentials_for_frontend(project, services),
-                "credential_storage": credential_storage_status(root, key_source=key_source),
-            }
-        )
-
-    def _handle_save_service_credentials_secure(
-        self: Any,
-        project: str,
-        root: Path,
-        body: dict[str, Any],
-    ) -> Any:
-        try:
-            ensure_local_credential_encryption_key(root)
-        except CredentialEncryptionUnavailableError as exc:
-            return _encryption_unavailable(self, project, exc)
-        return original_save_credentials(self, project, root, body)
-
-    _service.PrivatePilotHandler._handle_get_service_credentials = _handle_get_service_credentials_masked
-    _service.PrivatePilotHandler._handle_save_service_credentials = _handle_save_service_credentials_secure
-    _service._ORIGINAL_HANDLE_GET_SERVICE_CREDENTIALS = original_get_credentials  # type: ignore[attr-defined]
-    _service._ORIGINAL_HANDLE_SAVE_SERVICE_CREDENTIALS = original_save_credentials  # type: ignore[attr-defined]
     _service._SERVICE_CREDENTIALS_PATCH_SOURCE = patch_source  # type: ignore[attr-defined]
+    _service._ORIGINAL_HANDLE_GET_SERVICE_CREDENTIALS = None  # type: ignore[attr-defined]
+    _service._ORIGINAL_HANDLE_SAVE_SERVICE_CREDENTIALS = None  # type: ignore[attr-defined]
 
 
 def restore_service_credentials_patch() -> None:
-    original_get_credentials = getattr(_service, "_ORIGINAL_HANDLE_GET_SERVICE_CREDENTIALS", None)
-    original_save_credentials = getattr(_service, "_ORIGINAL_HANDLE_SAVE_SERVICE_CREDENTIALS", None)
-    if original_get_credentials is not None:
-        _service.PrivatePilotHandler._handle_get_service_credentials = original_get_credentials
-    if original_save_credentials is not None:
-        _service.PrivatePilotHandler._handle_save_service_credentials = original_save_credentials
+    """Clear credential-safety runtime-support status."""
     _service._ORIGINAL_HANDLE_GET_SERVICE_CREDENTIALS = None  # type: ignore[attr-defined]
     _service._ORIGINAL_HANDLE_SAVE_SERVICE_CREDENTIALS = None  # type: ignore[attr-defined]
     _service._SERVICE_CREDENTIALS_PATCH_SOURCE = ""  # type: ignore[attr-defined]

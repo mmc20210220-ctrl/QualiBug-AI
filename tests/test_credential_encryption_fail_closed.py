@@ -129,17 +129,10 @@ def test_credential_save_is_blocked_when_encryption_key_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    called = False
-
-    def original_save(self, project: str, root: Path, body: dict) -> None:
-        nonlocal called
-        called = True
-
     def fail_key(root: Path) -> str:
         raise credential_patch.CredentialEncryptionUnavailableError("key store unavailable")
 
     credential_patch.restore_service_credentials_patch()
-    monkeypatch.setattr(service.PrivatePilotHandler, "_handle_save_service_credentials", original_save)
     monkeypatch.setattr(credential_patch, "ensure_local_credential_encryption_key", fail_key)
     credential_patch.install_service_credentials_patch(patch_source="test")
     handler = _JsonCaptureHandler()
@@ -153,7 +146,6 @@ def test_credential_save_is_blocked_when_encryption_key_is_unavailable(
     finally:
         credential_patch.restore_service_credentials_patch()
 
-    assert called is False
     assert handler.status_code == 503
     assert handler.payload is not None
     assert handler.payload["error"] == "CREDENTIAL_ENCRYPTION_UNAVAILABLE"

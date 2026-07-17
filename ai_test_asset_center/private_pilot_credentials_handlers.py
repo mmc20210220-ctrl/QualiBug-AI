@@ -1,4 +1,9 @@
-"""Multi-service credential GET/SAVE handlers for PrivatePilotHandler."""
+"""Multi-service credential GET/SAVE handlers for PrivatePilotHandler.
+
+Credential masking and encryption-key provisioning are first-class here.
+``private_pilot_credentials_patch.install_service_credentials_patch`` only
+records runtime-support status for health/compatibility surfaces.
+"""
 from __future__ import annotations
 
 import time
@@ -13,13 +18,29 @@ class CredentialsHandlerMixin:
     """HTTP handlers for multi-service credential configuration."""
 
     def _handle_get_service_credentials(self, project: str, root: Path) -> None:
-        """Return current multi-service credential configuration."""
-        config_path = root / "platform_workspace" / project / "multi_service_config.json"
+        """Return masked multi-service credential configuration (refs only)."""
+        from .private_pilot_credentials_patch import (
+            CredentialEncryptionUnavailableError,
+            credential_storage_status,
+            ensure_local_credential_encryption_key,
+            load_services_config,
+            mask_service_credentials_for_frontend,
+        )
+
         try:
-            data = _read_json_object(config_path)
-            services = data.get("services", [])
-            if not isinstance(services, list) or any(not isinstance(item, dict) for item in services):
-                raise ValueError(f"credential config services must be a list of objects: {config_path}")
+            key_source = ensure_local_credential_encryption_key(root)
+        except CredentialEncryptionUnavailableError as exc:
+            return self._json(
+                {
+                    "ok": False,
+                    "error": "CREDENTIAL_ENCRYPTION_UNAVAILABLE",
+                    "message": str(exc),
+                    "project": project,
+                },
+                503,
+            )
+        try:
+            services = load_services_config(root, project)
         except Exception as exc:
             return self._json(
                 {
@@ -30,10 +51,34 @@ class CredentialsHandlerMixin:
                 },
                 500,
             )
-        return self._json({"project": project, "services": services})
+        return self._json(
+            {
+                "project": project,
+                "services": mask_service_credentials_for_frontend(project, services),
+                "credential_storage": credential_storage_status(root, key_source=key_source),
+            }
+        )
 
     def _handle_save_service_credentials(self, project: str, root: Path, body: dict) -> None:
         """Save credentials for a single service, merging into multi_service_config.json."""
+        from .private_pilot_credentials_patch import (
+            CredentialEncryptionUnavailableError,
+            ensure_local_credential_encryption_key,
+        )
+
+        try:
+            ensure_local_credential_encryption_key(root)
+        except CredentialEncryptionUnavailableError as exc:
+            return self._json(
+                {
+                    "ok": False,
+                    "error": "CREDENTIAL_ENCRYPTION_UNAVAILABLE",
+                    "message": str(exc),
+                    "project": project,
+                },
+                503,
+            )
+
         service_data = body.get("service", {})
         if not isinstance(service_data, dict) or not str(service_data.get("name") or "").strip():
             return self._json({"ok": False, "error": "MISSING_NAME",

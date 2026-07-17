@@ -4379,6 +4379,22 @@ def _discovery_verdict(confirmed: list[dict[str, Any]], db_verification: dict[st
 def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_doc_path: str = "", api_doc_text: str = "", base_url: str = "", ci_gate: bool = False, multi_layer: bool = True, output_dir: Optional[Path] = None, save_report: bool = True, campaign_context: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """Run the single enterprise-safe discovery and evidence pipeline."""
     context = dict(campaign_context or {})
+    # First-class merge of private-pilot ContextVar campaign context. Nested or
+    # continuous callers may bind pending metadata without monkey-patching scan().
+    try:
+        from .private_pilot_scan_context_contract import current_scan_campaign_context
+
+        pending_context = current_scan_campaign_context()
+    except Exception:
+        pending_context = None
+    if isinstance(pending_context, dict) and pending_context:
+        for key, value in pending_context.items():
+            if key == "base_url":
+                continue
+            if value and (key not in context or not context.get(key)):
+                context[key] = value
+        if pending_context.get("base_url") and not base_url:
+            base_url = str(pending_context["base_url"]).rstrip("/")
     _reject_evaluator_private_context(context)
     root = Path(root or Path.cwd())
     project = str(project or "").strip()
