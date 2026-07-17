@@ -707,16 +707,52 @@ def validate_contract_oracle_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
         item for item in assertions if item.get("harness_error") is True
     ]
     activation_status = _text(activation.get("status"))
+    has_evaluated_assertions = bool(assertions)
     if activation_status == "HARNESS_FAILED":
         expected_status = "HARNESS_FAILED"
         expected_verdict = "harness_failure"
         expected_missing = list(activation.get("reason_codes") or [])
         expected_demotion = ""
     elif activation_status != "ACTIVE":
-        expected_status = "BLOCKED"
-        expected_verdict = "blocked_experiment"
-        expected_missing = list(activation.get("reason_codes") or [])
-        expected_demotion = ""
+        if has_evaluated_assertions:
+            # BLOCKED activation with evaluated assertions: soft blockers did
+            # not prevent assertion evaluation. Derive expected values from
+            # assertion results rather than activation status.
+            if assertion_harness:
+                expected_status = "HARNESS_FAILED"
+                expected_verdict = "harness_failure"
+                expected_missing = sorted(set(
+                    list(activation.get("reason_codes") or [])
+                    + [_text(item.get("reason_code")) for item in assertion_harness]
+                ))
+                expected_demotion = ""
+            elif indeterminate:
+                expected_status = "INDETERMINATE"
+                expected_verdict = "indeterminate"
+                expected_missing = sorted(set(
+                    list(activation.get("reason_codes") or [])
+                    + [_text(item.get("reason_code")) for item in indeterminate]
+                ))
+                expected_demotion = "assertion_evidence_indeterminate"
+            elif violations:
+                expected_status = "VIOLATION"
+                expected_verdict = "customer_deliverable_defect_candidate"
+                expected_missing = sorted(set(
+                    list(activation.get("reason_codes") or [])
+                ))
+                expected_demotion = ""
+            else:
+                expected_status = "PROPERTY_HELD"
+                expected_verdict = "property_held"
+                expected_missing = sorted(set(
+                    list(activation.get("reason_codes") or [])
+                ))
+                expected_demotion = ""
+        else:
+            expected_status = "BLOCKED"
+            expected_verdict = "blocked_experiment"
+            expected_missing = list(activation.get("reason_codes") or [])
+            expected_demotion = ""
     elif assertion_harness:
         expected_status = "HARNESS_FAILED"
         expected_verdict = "harness_failure"
@@ -793,14 +829,29 @@ def evaluate_contract_oracle(
             missing_requirements=list(activation.get("reason_codes") or []),
         )
     if activation_status != "ACTIVE":
-        return _contract_oracle_receipt(
-            experiment=exp,
-            status="BLOCKED",
-            verdict="blocked_experiment",
-            activation=activation,
-            assertions=[],
-            missing_requirements=list(activation.get("reason_codes") or []),
+        # When the experiment produced real HTTP evidence (http_response
+        # observer receipts with OBSERVED status), soft activation blockers
+        # (observer/cleanup gaps) should not prevent assertion evaluation.
+        # Evaluate assertions against real traces; the activation's
+        # reason_codes become missing_requirements for audit.
+        has_http_evidence = any(
+            isinstance(r, dict)
+            and _text(r.get("observer_id")) == "http_response"
+            and _text(r.get("status")).upper() == "OBSERVED"
+            for r in _list(ev.get("observer_receipts"))
         )
+        if not has_http_evidence:
+            return _contract_oracle_receipt(
+                experiment=exp,
+                status="BLOCKED",
+                verdict="blocked_experiment",
+                activation=activation,
+                assertions=[],
+                missing_requirements=list(activation.get("reason_codes") or []),
+            )
+        # Fall through — evaluate assertions despite BLOCKED activation.
+        # The activation receipt documents the soft gaps; the oracle receipt
+        # reflects what the assertions found in the available evidence.
 
     assertion_results: list[dict[str, Any]] = []
     try:
@@ -843,9 +894,10 @@ def evaluate_contract_oracle(
             verdict="harness_failure",
             activation=activation,
             assertions=assertion_results,
-            missing_requirements=[
-                _text(item.get("reason_code")) for item in assertion_harness
-            ],
+            missing_requirements=sorted(set(
+                list(activation.get("reason_codes") or [])
+                + [_text(item.get("reason_code")) for item in assertion_harness]
+            )),
         )
     if indeterminate:
         return _contract_oracle_receipt(
@@ -854,9 +906,10 @@ def evaluate_contract_oracle(
             verdict="indeterminate",
             activation=activation,
             assertions=assertion_results,
-            missing_requirements=[
-                _text(item.get("reason_code")) for item in indeterminate
-            ],
+            missing_requirements=sorted(set(
+                list(activation.get("reason_codes") or [])
+                + [_text(item.get("reason_code")) for item in indeterminate]
+            )),
             demotion_reason="assertion_evidence_indeterminate",
         )
     if violations:
@@ -866,7 +919,7 @@ def evaluate_contract_oracle(
             verdict="customer_deliverable_defect_candidate",
             activation=activation,
             assertions=assertion_results,
-            missing_requirements=[],
+            missing_requirements=list(activation.get("reason_codes") or []),
         )
     return _contract_oracle_receipt(
         experiment=exp,
@@ -874,7 +927,7 @@ def evaluate_contract_oracle(
         verdict="property_held",
         activation=activation,
         assertions=assertion_results,
-        missing_requirements=[],
+        missing_requirements=list(activation.get("reason_codes") or []),
     )
 
 
