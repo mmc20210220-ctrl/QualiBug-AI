@@ -88,6 +88,13 @@ def _runtime_pair_problem(
     family = _text(_dict(obligation).get("risk_family"))
     if family not in _SENSITIVE_FAMILIES:
         return ""
+    # Single-actor permitted invocation is intentionally not a control/treatment
+    # pair — IR had permits without an executable deny counterpart.
+    if (
+        _text(_dict(_dict(obligation).get("property")).get("template"))
+        == "permitted_operation_invocation"
+    ):
+        return ""
     control_ref, treatment_ref = _pair_refs(obligation)
     if not control_ref or not treatment_ref:
         return "actor_pair_missing"

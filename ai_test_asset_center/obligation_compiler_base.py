@@ -88,6 +88,57 @@ def _compile_gap(*, subject_ref: str, relation_types: set[str]) -> dict[str, Any
     }
 
 
+def _operation_path_prefix(operation: dict[str, Any]) -> str:
+    """Stable path-prefix key for planning diversity (first two segments)."""
+
+    path = normalize_path_placeholders(
+        _text(operation.get("path") or operation.get("raw_path"))
+    ).split("?", 1)[0].rstrip("/")
+    parts = [part for part in path.split("/") if part]
+    if len(parts) >= 2:
+        return "/" + "/".join(parts[:2])
+    if parts:
+        return "/" + parts[0]
+    return ""
+
+
+def _authorization_pair_incomplete_gap(
+    *,
+    operation: dict[str, Any],
+    permit_relations: list[dict[str, Any]],
+    deny_relations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    operation_ref = _text(operation.get("id"))
+    missing = []
+    if not permit_relations:
+        missing.append("permits")
+    if not deny_relations:
+        missing.append("denies")
+    if not missing:
+        missing = ["permits", "denies"]
+    material = "|".join(
+        ["BLOCKED_MISSING_ACTOR_PAIR", operation_ref, ",".join(missing)]
+    )
+    return {
+        "id": f"compile_gap_{hashlib.sha256(material.encode('utf-8')).hexdigest()[:16]}",
+        "code": "BLOCKED_MISSING_ACTOR_PAIR",
+        "subject_ref": operation_ref,
+        "operation_ref": operation_ref,
+        "required_relation_types": ["denies", "permits"],
+        "missing_relation_types": missing,
+        "description": (
+            "Operation has source-backed actor relations but no executable "
+            "permit×deny authorization pair"
+        ),
+        "status": "unsupported",
+        "source_refs": _combined_source_refs(
+            operation,
+            *permit_relations[:2],
+            *deny_relations[:2],
+        ),
+    }
+
+
 def _boolish_true(value: Any) -> bool:
     return value is True or _text(value).lower() == "true"
 
@@ -325,12 +376,16 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
         )
 
     # Authorization joins explicit permit and deny relations for one operation.
+    # Permit-only (or unpaired) operations must not vanish: emit a visible gap
+    # and, for non-write ops, a source-grounded permitted invocation so the
+    # module path can enter the schedulable Behavior Field.
     for op in operations:
         operation_ref = _text(op.get("id"))
         permit_relations = _relations_for_operation(relations, operation_ref, {"permits"})
         deny_relations = _relations_for_operation(relations, operation_ref, {"denies"})
         for relation in [*permit_relations, *deny_relations]:
             note_unbound_actor_relation(relation, operation_ref)
+        paired_auth = 0
         for permit_relation in permit_relations:
             allowed = active_actors_by_id.get(_relation_actor_ref(permit_relation))
             if not allowed:
@@ -339,6 +394,7 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
                 denied = active_actors_by_id.get(_relation_actor_ref(deny_relation))
                 if not denied or _text(denied.get("id")) == _text(allowed.get("id")):
                     continue
+                paired_auth += 1
                 obligations.append(make_obligation(
                     risk_family="authorization",
                     subject_refs=[
@@ -351,6 +407,7 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
                         "control_actor_ref": _text(allowed.get("id")),
                         "treatment_actor_ref": _text(denied.get("id")),
                         "operation_ref": operation_ref,
+                        "operation_path_prefix": _operation_path_prefix(op),
                         "require_same_resource": True,
                     },
                     required_actors=[_text(allowed.get("id")), _text(denied.get("id"))],
@@ -376,6 +433,58 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
                         float(deny_relation.get("confidence") or 0.8),
                     ),
                 ))
+        active_permit_refs = sorted({
+            _relation_actor_ref(relation)
+            for relation in permit_relations
+            if _relation_actor_ref(relation) in active_actors_by_id
+        })
+        if permit_relations and paired_auth == 0:
+            _append_gap_once(
+                coverage_gaps,
+                _authorization_pair_incomplete_gap(
+                    operation=op,
+                    permit_relations=permit_relations,
+                    deny_relations=deny_relations,
+                ),
+            )
+        is_write = _text(op.get("read_write") or op.get("side_effect_class")) == "write"
+        if active_permit_refs and paired_auth == 0 and not is_write:
+            actor_ref = active_permit_refs[0]
+            actor = active_actors_by_id[actor_ref]
+            actor_relations = [
+                relation
+                for relation in permit_relations
+                if _relation_actor_ref(relation) == actor_ref
+            ]
+            obligations.append(make_obligation(
+                risk_family="authorization",
+                subject_refs=[operation_ref, actor_ref],
+                property_spec={
+                    "template": "permitted_operation_invocation",
+                    "actor_ref": actor_ref,
+                    "control_actor_ref": actor_ref,
+                    "treatment_actor_ref": actor_ref,
+                    "operation_ref": operation_ref,
+                    "operation_path_prefix": _operation_path_prefix(op),
+                },
+                required_actors=[actor_ref],
+                required_operations=[operation_ref],
+                required_observers=["http_response", "actor_identity"],
+                cleanup_requirement=_cleanup_requirement(op, operations, relations),
+                source_refs=_combined_source_refs(op, actor, *actor_relations),
+                relation_refs=sorted({
+                    _text(relation.get("id"))
+                    for relation in actor_relations
+                    if _text(relation.get("id"))
+                }),
+                confidence=min(
+                    float(op.get("confidence") or 0.7),
+                    float(actor.get("confidence") or 0.7),
+                    float(actor_relations[0].get("confidence") or 0.8)
+                    if actor_relations
+                    else 0.7,
+                ),
+            ))
 
     # Isolation uses only account-bound actors explicitly linked by ownership.
     owned_read_ops = [

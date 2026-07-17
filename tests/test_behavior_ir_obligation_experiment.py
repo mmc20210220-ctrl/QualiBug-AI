@@ -2853,6 +2853,116 @@ def test_adaptive_planner_reports_final_family_counts_and_reserves_breadth() -> 
     }
 
 
+def test_permit_only_read_emits_gap_and_permitted_invocation_obligation() -> None:
+    ir = empty_behavior_ir(project_id="permit-only-read")
+    ir.update({
+        "operations": [{
+            "id": "op-report-sales",
+            "method": "GET",
+            "path": "/api/reports/sales",
+            "read_write": "read",
+            "source_refs": [{"source_id": "api", "locator": "GET /api/reports/sales"}],
+        }],
+        "actors": [{
+            "id": "actor-analyst",
+            "role": "analyst",
+            "account_status": "active",
+            "credential_secret_ref": "secret_ref:test_accounts:analyst",
+        }],
+        "relations": [
+            _relation(
+                "relation-permit",
+                "permits",
+                "actor-analyst",
+                "op-report-sales",
+                operation_ref="op-report-sales",
+                actor_ref="actor-analyst",
+            ),
+        ],
+    })
+
+    compiled = compile_obligations_from_behavior_ir(ir)
+    obligations = compiled["obligations"]
+    gaps = compiled["coverage_gaps"]
+
+    assert any(
+        item.get("code") == "BLOCKED_MISSING_ACTOR_PAIR"
+        and item.get("operation_ref") == "op-report-sales"
+        for item in gaps
+    )
+    permitted = next(
+        item
+        for item in obligations
+        if item["property"].get("template") == "permitted_operation_invocation"
+    )
+    assert permitted["risk_family"] == "authorization"
+    assert permitted["required_actors"] == ["actor-analyst"]
+    assert permitted["property"].get("operation_path_prefix") == "/api/reports"
+    assert permitted["relation_refs"] == ["relation-permit"]
+
+    experiment = compile_experiment_for_obligation(
+        permitted,
+        behavior_ir=ir,
+        environment_type="test",
+    )
+    assert experiment["compile_receipt"]["status"] == "COMPILED"
+    assert experiment["control_plan"] == []
+    assert len(experiment["treatment_plan"]) == 1
+    assert experiment["treatment_plan"][0]["actor_ref"] == "actor-analyst"
+
+
+def test_adaptive_planner_soft_caps_path_prefixes_within_budget() -> None:
+    obligations = [
+        *[
+            {
+                "obligation_id": f"obl_cart_{index}",
+                "risk_family": "authorization",
+                "subject_refs": [f"cart_{index}"],
+                "confidence": 0.9,
+                "compile_status": "COMPILED",
+                "property": {"operation_path_prefix": "/api/cart"},
+                "required_operations": [f"op_cart_{index}"],
+            }
+            for index in range(10)
+        ],
+        *[
+            {
+                "obligation_id": f"obl_report_{index}",
+                "risk_family": "authorization",
+                "subject_refs": [f"report_{index}"],
+                "confidence": 0.8,
+                "compile_status": "COMPILED",
+                "property": {"operation_path_prefix": "/api/reports"},
+                "required_operations": [f"op_report_{index}"],
+            }
+            for index in range(4)
+        ],
+        *[
+            {
+                "obligation_id": f"obl_coupon_{index}",
+                "risk_family": "authorization",
+                "subject_refs": [f"coupon_{index}"],
+                "confidence": 0.8,
+                "compile_status": "COMPILED",
+                "property": {"operation_path_prefix": "/api/coupons"},
+                "required_operations": [f"op_coupon_{index}"],
+            }
+            for index in range(4)
+        ],
+    ]
+
+    plan = plan_obligation_round(obligations, budget=9)
+    selected_prefixes = {
+        item.get("path_prefix")
+        for item in plan["selected"]
+        if item.get("path_prefix")
+    }
+    assert "/api/reports" in selected_prefixes
+    assert "/api/coupons" in selected_prefixes
+    assert plan["path_prefix_coverage"].get("/api/cart", 0) <= 3
+    assert plan["selected_count"] == 9
+
+
 def test_adaptive_planner_soft_caps_abundant_families_within_budget() -> None:
     obligations = [
         *[

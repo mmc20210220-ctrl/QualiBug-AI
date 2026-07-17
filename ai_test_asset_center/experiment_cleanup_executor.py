@@ -47,6 +47,49 @@ from .sandbox_write_executor import (
 )
 
 
+def _fallback_plan_actor_ref(exp: dict[str, Any]) -> str:
+    for planned_step in _list(exp.get("control_plan")) + _list(exp.get("treatment_plan")):
+        if isinstance(planned_step, dict) and _text(planned_step.get("actor_ref")):
+            return _text(planned_step.get("actor_ref"))
+    return ""
+
+
+def _cleanup_actor_for_write_step(
+    source_step: dict[str, Any],
+    *,
+    exp: dict[str, Any],
+    actors: dict[str, dict[str, Any]],
+    tokens: dict[str, str],
+) -> tuple[str, dict[str, Any], str]:
+    """Use the write's own actor so actor-scoped collections restore correctly."""
+    actor_ref = _text(source_step.get("actor_ref")) or _fallback_plan_actor_ref(exp)
+    actor = actors.get(actor_ref) or {}
+    token = _resolve_token(actor, tokens)
+    return actor_ref, actor, token
+
+
+def _write_step_for_cleanup_path(
+    *,
+    path_template: str,
+    cleanup_path: str,
+    steps_out: list[dict[str, Any]],
+    compensates_operation_ref: str = "",
+) -> dict[str, Any]:
+    """Map a materialized cleanup path back to the write that created it."""
+    for step in reversed(steps_out):
+        if _text(step.get("phase")) not in {"control", "treatment"}:
+            continue
+        if compensates_operation_ref and _text(step.get("operation_ref")) != compensates_operation_ref:
+            continue
+        targets, missing = _runtime_cleanup_paths(path_template, [step])
+        if missing or not targets:
+            continue
+        for candidate_path, _bindings in targets:
+            if candidate_path == cleanup_path:
+                return step
+    return {}
+
+
 def execute_experiment_cleanup_compensation(
     *,
     exp: dict[str, Any],
@@ -306,26 +349,25 @@ def execute_experiment_cleanup_compensation(
                     observations["cleanup_status"] = "failed"
                     observations["cleanup_reason"] = "cleanup_accepted_write_missing"
                     continue
-                actor_ref = ""
-                for planned_step in _list(exp.get("control_plan")) + _list(exp.get("treatment_plan")):
-                    if isinstance(planned_step, dict) and _text(planned_step.get("actor_ref")):
-                        actor_ref = _text(planned_step.get("actor_ref"))
-                        break
-                actor = actors.get(actor_ref) or {}
-                token = _resolve_token(actor, tokens)
-                allowed, reason = sandbox_write_allowed(
-                    root=root,
-                    project=project,
-                    runtime_contract=runtime_contract,
-                    actor_token=token,
-                    actor_identity=_text(actor.get("role") or actor_ref),
-                )
-                if not allowed:
-                    cleanup_failures += 1
-                    observations["cleanup_status"] = "failed"
-                    observations["cleanup_reason"] = reason
-                    continue
                 for source_step in reversed(source_steps):
+                    actor_ref, actor, token = _cleanup_actor_for_write_step(
+                        source_step,
+                        exp=exp,
+                        actors=actors,
+                        tokens=tokens,
+                    )
+                    allowed, reason = sandbox_write_allowed(
+                        root=root,
+                        project=project,
+                        runtime_contract=runtime_contract,
+                        actor_token=token,
+                        actor_identity=_text(actor.get("role") or actor_ref),
+                    )
+                    if not allowed:
+                        cleanup_failures += 1
+                        observations["cleanup_status"] = "failed"
+                        observations["cleanup_reason"] = reason
+                        continue
                     cleanup_targets, missing_bindings = _runtime_cleanup_paths(
                         path_template,
                         [source_step],
@@ -415,6 +457,7 @@ def execute_experiment_cleanup_compensation(
                         "operation_ref": op_ref,
                         "cleanup_subject_id": cleanup_subject_id,
                         "compensates_step_id": _text(source_step.get("step_id")),
+                        "actor_ref": actor_ref,
                     }
                     steps_out.append(cleanup_observation)
                     if not (200 <= int(cleanup_observation.get("status_code") or 0) < 300):
@@ -424,25 +467,6 @@ def execute_experiment_cleanup_compensation(
                         observations["cleanup_status"] = "completed"
                 continue
             if cleanup_action in {"restore_before_snapshot", "inverse_delta_compensation"}:
-                actor_ref = ""
-                for step in _list(exp.get("control_plan")) + _list(exp.get("treatment_plan")):
-                    if isinstance(step, dict) and _text(step.get("actor_ref")):
-                        actor_ref = _text(step.get("actor_ref"))
-                        break
-                actor = actors.get(actor_ref) or {}
-                token = _resolve_token(actor, tokens)
-                allowed, reason = sandbox_write_allowed(
-                    root=root,
-                    project=project,
-                    runtime_contract=runtime_contract,
-                    actor_token=token,
-                    actor_identity=_text(actor.get("role") or actor_ref),
-                )
-                if not allowed:
-                    cleanup_failures += 1
-                    observations["cleanup_status"] = "failed"
-                    observations["cleanup_reason"] = reason
-                    continue
                 restore_steps = [
                     step for step in steps_out
                     if _text(_dict(step).get("phase")) in {"control", "treatment"}
@@ -460,6 +484,24 @@ def execute_experiment_cleanup_compensation(
                     observations["cleanup_reason"] = "cleanup_accepted_write_missing"
                     continue
                 for step in reversed(restore_steps):
+                    actor_ref, actor, token = _cleanup_actor_for_write_step(
+                        step,
+                        exp=exp,
+                        actors=actors,
+                        tokens=tokens,
+                    )
+                    allowed, reason = sandbox_write_allowed(
+                        root=root,
+                        project=project,
+                        runtime_contract=runtime_contract,
+                        actor_token=token,
+                        actor_identity=_text(actor.get("role") or actor_ref),
+                    )
+                    if not allowed:
+                        cleanup_failures += 1
+                        observations["cleanup_status"] = "failed"
+                        observations["cleanup_reason"] = reason
+                        continue
                     path = _text(_dict(step).get("path"))
                     if not path.startswith("/") or path_has_placeholders(path) or method not in {"POST", "PUT", "PATCH"}:
                         cleanup_failures += 1
@@ -577,59 +619,47 @@ def execute_experiment_cleanup_compensation(
                     else "cleanup_accepted_write_missing"
                 )
                 continue
-            # Prefer first control/treatment actor token for cleanup.
-            actor_ref = ""
-            for step in _list(exp.get("control_plan")) + _list(exp.get("treatment_plan")):
-                if isinstance(step, dict) and _text(step.get("actor_ref")):
-                    actor_ref = _text(step.get("actor_ref"))
-                    break
-            actor = actors.get(actor_ref) or {}
-            token = _resolve_token(actor, tokens)
             cleanup_method = method
-            allowed, reason = sandbox_write_allowed(
-                root=root,
-                project=project,
-                runtime_contract=runtime_contract,
-                actor_token=token,
-                actor_identity=_text(actor.get("role") or actor_ref),
-            )
-            if not allowed:
-                cleanup_failures += 1
-                observations["cleanup_status"] = "failed"
-                observations["cleanup_reason"] = reason
-                continue
+            compensates_ref = _text(_dict(cleanup).get("compensates_operation_ref"))
             for path, target_bindings in reversed(cleanup_targets):
                 if not path.startswith("/") or path_has_placeholders(path) or method not in {"DELETE", "POST", "PUT", "PATCH"}:
                     cleanup_failures += 1
                     observations["cleanup_status"] = "failed"
                     observations["cleanup_reason"] = "cleanup_compensation_unresolved"
                     continue
+                source_step = _write_step_for_cleanup_path(
+                    path_template=path_template,
+                    cleanup_path=path,
+                    steps_out=steps_out,
+                    compensates_operation_ref=compensates_ref,
+                )
+                actor_ref, actor, token = _cleanup_actor_for_write_step(
+                    source_step,
+                    exp=exp,
+                    actors=actors,
+                    tokens=tokens,
+                )
+                allowed, reason = sandbox_write_allowed(
+                    root=root,
+                    project=project,
+                    runtime_contract=runtime_contract,
+                    actor_token=token,
+                    actor_identity=_text(actor.get("role") or actor_ref),
+                )
+                if not allowed:
+                    cleanup_failures += 1
+                    observations["cleanup_status"] = "failed"
+                    observations["cleanup_reason"] = reason
+                    continue
                 cleanup_bindings = {**runtime_bindings, **target_bindings}
-                observation_path = _declared_observation_path(
+                observation_path = _text(
+                    source_step.get("observation_path")
+                ) or _declared_observation_path(
                     path_template,
                     ops,
                     runtime_bindings=cleanup_bindings,
                     request_body=_dict(cleanup).get("body"),
                 )
-                if not observation_path:
-                    # Reuse the governed write's already-declared effect observer
-                    # when the cleanup op itself has no separate GET mapping
-                    # (common for create→DELETE identity cleanup).
-                    compensates_ref = _text(
-                        _dict(cleanup).get("compensates_operation_ref")
-                    )
-                    for step in reversed(steps_out):
-                        if _text(step.get("phase")) not in {"control", "treatment"}:
-                            continue
-                        if compensates_ref and _text(step.get("operation_ref")) != compensates_ref:
-                            continue
-                        candidate = _text(step.get("observation_path"))
-                        if (
-                            candidate.startswith("/")
-                            and not path_has_placeholders(candidate)
-                        ):
-                            observation_path = candidate
-                            break
                 if not observation_path:
                     cleanup_failures += 1
                     observations["cleanup_status"] = "failed"
@@ -691,6 +721,8 @@ def execute_experiment_cleanup_compensation(
                     "phase": "cleanup",
                     "operation_ref": op_ref,
                     "cleanup_subject_id": cleanup_subject_id,
+                    "actor_ref": actor_ref,
+                    "compensates_step_id": _text(source_step.get("step_id")),
                 })
                 if not (200 <= int(cobs.get("status_code") or 0) < 300):
                     cleanup_failures += 1

@@ -112,30 +112,52 @@ def plan_obligation_round(
         receipt = _dict(exp.get("compile_receipt"))
         if _text(receipt.get("status")) != "COMPILED" and _text(obl.get("compile_status")) != "COMPILED":
             continue
+        prop = _dict(obl.get("property"))
+        path_prefix = _text(prop.get("operation_path_prefix"))
+        if not path_prefix:
+            # Fallback: derive a coarse prefix from required operation refs that
+            # already embed a path (industry-neutral; no module name table).
+            for ref in _list(obl.get("required_operations")):
+                ref_text = _text(ref)
+                if "/api/" in ref_text:
+                    path_part = "/api/" + ref_text.split("/api/", 1)[1]
+                    parts = [part for part in path_part.split("/") if part]
+                    if len(parts) >= 2:
+                        path_prefix = "/" + "/".join(parts[:2])
+                        break
         score = score_obligation(obl, covered_keys=covered, historical_yield=historical_yield)
         ranked.append({
             "obligation_id": oid,
             "risk_family": _text(obl.get("risk_family")),
+            "path_prefix": path_prefix,
             "score": round(score, 6),
             "experiment_id": _text(exp.get("experiment_id")),
         })
     ranked.sort(key=lambda item: (-item["score"], item["obligation_id"]))
 
-    # Family-fair selection within the fixed budget: do not let abundant
-    # authorization/validation monopolize a cold-start window. Soft-cap is
-    # floor(budget / distinct_families); remaining slots fill by score.
+    # Family-fair + path-prefix-fair selection within the fixed budget: do not
+    # let abundant authorization/validation (or one API prefix) monopolize a
+    # cold-start window. Soft-cap is floor(budget / distinct_buckets).
     families_present: list[str] = []
     seen_families: set[str] = set()
+    prefixes_present: list[str] = []
+    seen_prefixes: set[str] = set()
     for item in ranked:
         family = item["risk_family"]
         if family and family not in seen_families:
             seen_families.add(family)
             families_present.append(family)
-    soft_cap = max(1, budget // max(1, len(families_present)))
+        prefix = item["path_prefix"]
+        if prefix and prefix not in seen_prefixes:
+            seen_prefixes.add(prefix)
+            prefixes_present.append(prefix)
+    family_soft_cap = max(1, budget // max(1, len(families_present)))
+    prefix_soft_cap = max(1, budget // max(1, len(prefixes_present) or 1))
 
     selected: list[dict[str, Any]] = []
     selected_ids: set[str] = set()
     family_counts: dict[str, int] = {}
+    prefix_counts: dict[str, int] = {}
 
     def _try_add(item: dict[str, Any]) -> bool:
         oid = item["obligation_id"]
@@ -145,10 +167,18 @@ def plan_obligation_round(
         selected_ids.add(oid)
         family = item["risk_family"]
         family_counts[family] = family_counts.get(family, 0) + 1
+        prefix = item["path_prefix"]
+        if prefix:
+            prefix_counts[prefix] = prefix_counts.get(prefix, 0) + 1
         return True
 
     for item in ranked:
         if family_counts.get(item["risk_family"], 0) < 1:
+            _try_add(item)
+
+    for item in ranked:
+        prefix = item["path_prefix"]
+        if prefix and prefix_counts.get(prefix, 0) < 1:
             _try_add(item)
 
     progressed = True
@@ -157,10 +187,26 @@ def plan_obligation_round(
         for family in families_present:
             if len(selected) >= budget:
                 break
-            if family_counts.get(family, 0) >= soft_cap:
+            if family_counts.get(family, 0) >= family_soft_cap:
                 continue
             for item in ranked:
                 if item["risk_family"] != family or item["obligation_id"] in selected_ids:
+                    continue
+                prefix = item["path_prefix"]
+                if prefix and prefix_counts.get(prefix, 0) >= prefix_soft_cap:
+                    continue
+                if _try_add(item):
+                    progressed = True
+                break
+        for prefix in prefixes_present:
+            if len(selected) >= budget:
+                break
+            if prefix_counts.get(prefix, 0) >= prefix_soft_cap:
+                continue
+            for item in ranked:
+                if item["path_prefix"] != prefix or item["obligation_id"] in selected_ids:
+                    continue
+                if family_counts.get(item["risk_family"], 0) >= family_soft_cap:
                     continue
                 if _try_add(item):
                     progressed = True
@@ -195,6 +241,7 @@ def plan_obligation_round(
         "selected_count": len(selected),
         "pending_count": len(pending),
         "family_coverage": family_counts,
+        "path_prefix_coverage": prefix_counts,
         "stop_condition": "budget_exhausted" if pending else "in_scope_obligations_scheduled",
     }
 

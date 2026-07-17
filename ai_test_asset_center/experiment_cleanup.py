@@ -275,6 +275,106 @@ def _cleanup_compensates_created_resource(
     return bool(changed_business_fields)
 
 
+def _concrete_path_identity_candidates(path: str) -> set[str]:
+    """Extract concrete resource tokens from a materialized request path."""
+    identities: set[str] = set()
+    for segment in _text(path).split("/"):
+        token = _text(segment)
+        if not token or "{" in token or "}" in token:
+            continue
+        # Prefer opaque identifiers over static vocabulary segments.
+        if any(ch.isdigit() for ch in token) and len(token) >= 6:
+            identities.add(token)
+    return identities
+
+
+def _cleanup_recreates_deleted_resource(
+    original: dict[str, Any],
+    cleanup: dict[str, Any],
+) -> bool:
+    """Prove DELETE primary was reversed by an accepted recreate write.
+
+    Recreate may mint a new identity, so proof is presence removal then
+    restoration of comparable non-identity business fields (or presence alone
+    when the recreate response only returns a new id).
+    """
+    original_row = _dict(original)
+    cleanup_row = _dict(cleanup)
+    if _text(original_row.get("method")).upper() != "DELETE":
+        return False
+    if _text(cleanup_row.get("method")).upper() not in {"POST", "PUT", "PATCH"}:
+        return False
+
+    original_before = _observation_state(original_row.get("before"))
+    original_after = _observation_state(
+        original_row.get("response_bound_after") or original_row.get("after")
+    )
+    cleanup_after = _observation_state(
+        cleanup_row.get("response_bound_after") or cleanup_row.get("after")
+    )
+    if not (
+        200 <= int(original_before.get("status") or 0) < 300
+        and 200 <= int(cleanup_after.get("status") or 0) < 300
+    ):
+        return False
+
+    deleted_identities = _concrete_path_identity_candidates(
+        _text(original_row.get("path"))
+    )
+    before_entity = _single_entity_for_restoration(
+        original_before.get("body"),
+        deleted_identities,
+    )
+    after_entity = _single_entity_for_restoration(
+        original_after.get("body"),
+        deleted_identities,
+    )
+    presence_removed = bool(before_entity) and not bool(after_entity)
+    if not presence_removed:
+        presence_removed = int(original_after.get("status") or 0) in {404, 410}
+    if not presence_removed:
+        return False
+
+    recreate_identities = _primary_resource_identity_candidates(
+        _dict(cleanup_row.get("write")).get("body")
+    )
+    restored_entity = _single_entity_for_restoration(
+        cleanup_after.get("body"),
+        recreate_identities or deleted_identities,
+    )
+    if not restored_entity and recreate_identities:
+        # Collection observers may not echo the new row immediately; an accepted
+        # recreate write body still proves the compensating create landed.
+        restored_entity = {
+            key: value
+            for key, value in _dict(cleanup_row.get("write")).get("body").items()
+            if not isinstance(value, (dict, list))
+        }
+    if not restored_entity:
+        return False
+    if not before_entity:
+        return True
+
+    comparable_fields = [
+        field
+        for field in sorted(set(before_entity).intersection(restored_entity))
+        if field in before_entity
+        and field in restored_entity
+        and not _server_managed_field(field)
+        and "".join(ch for ch in str(field).lower() if ch.isalnum())
+        not in {"id", "uuid", "key"}
+        and not str(field).lower().endswith("id")
+        and not isinstance(before_entity.get(field), (dict, list))
+        and not isinstance(restored_entity.get(field), (dict, list))
+    ]
+    if not comparable_fields:
+        return True
+    return all(
+        before_entity.get(field) == restored_entity.get(field)
+        for field in comparable_fields
+    )
+
+
 def _cleanup_restores_governed_write(
     original: dict[str, Any],
     cleanup: dict[str, Any],
@@ -292,6 +392,8 @@ def _cleanup_restores_governed_write(
     if _cleanup_restores_mutated_fields(original_row, cleanup_row):
         return True
     if _cleanup_compensates_created_resource(original_row, cleanup_row):
+        return True
+    if _cleanup_recreates_deleted_resource(original_row, cleanup_row):
         return True
     original_method = _text(original_row.get("method")).upper()
     cleanup_path = _text(cleanup_row.get("path"))

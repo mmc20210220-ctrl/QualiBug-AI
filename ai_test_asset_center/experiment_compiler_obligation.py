@@ -344,6 +344,9 @@ def compile_experiment_for_obligation(
             or cleanup_req.get("compensation_operation_ref")
         )
         delta_field, inverse_delta_body = _inverse_delta_cleanup_spec(primary_op)
+        cleanup_op_method = _text(
+            _dict(ops.get(cleanup_op)).get("method")
+        ).upper() if cleanup_op else ""
         if not cleanup_op and primary_path.startswith("/") and delta_field:
             cleanup_plan = [{
                 "action": "inverse_delta_compensation",
@@ -356,11 +359,16 @@ def compile_experiment_for_obligation(
                 "runtime_response_binding_required": "{" in primary_path,
             }]
         elif (
-            not cleanup_op
-            and primary_path.startswith("/")
+            primary_path.startswith("/")
             and (
                 primary_method in {"PUT", "PATCH"}
                 or _post_action_can_restore_named_terminal_field(primary_op)
+            )
+            and (
+                not cleanup_op
+                # create→DELETE compensators must not destroy pre-existing
+                # resources that an in-place PUT/PATCH only mutated.
+                or cleanup_op_method == "DELETE"
             )
         ):
             cleanup_plan = [{

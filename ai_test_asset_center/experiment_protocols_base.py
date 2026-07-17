@@ -194,6 +194,37 @@ def compile_family_protocol(
 
     family = _text(risk_family)
     method = _text(operation.get("method")).upper()
+    template = _text(property_spec.get("template"))
+    # Source-grounded permitted invocation: one actor, observe the documented
+    # operation. Used when IR has permits but no executable deny pair — must
+    # not invent a second actor or silently drop the module from scheduling.
+    if template == "permitted_operation_invocation":
+        actor = control_actor_ref or treatment_actor_ref or _text(
+            property_spec.get("actor_ref")
+        )
+        if not actor:
+            return {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_ACTOR",
+                "detail": "permitted_actor",
+            }
+        return {
+            "status": "COMPILED",
+            "control_plan": [],
+            "treatment_plan": [{
+                "step_id": "treatment_1",
+                "actor_ref": actor,
+                "operation_ref": operation_ref,
+                "intent": "permitted_operation_invocation",
+                "protocol_step": "permitted_invocation",
+                "property_template": template,
+            }],
+            "assertion": {
+                "kind": "http_status_class",
+                "expected_class": 2,
+                "compare_field": "status_code",
+            },
+        }
     needs_control = family in {
         "authorization",
         "isolation",
