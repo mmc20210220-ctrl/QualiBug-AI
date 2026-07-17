@@ -368,6 +368,7 @@ def validate_observer_declarations(
     *,
     risk_family: str,
     available_adapters: set[str],
+    require_authorization_comparison: bool = True,
 ) -> tuple[str, str]:
     """Validate persisted/manual experiments against the current registry."""
 
@@ -380,6 +381,7 @@ def validate_observer_declarations(
         declared,
         risk_family=risk_family,
         available_adapters=available_adapters,
+        require_authorization_comparison=require_authorization_comparison,
     )
     if reason_code:
         return reason_code, detail

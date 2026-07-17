@@ -374,6 +374,7 @@ def preflight_experiment_executable(
         [row for row in _list(exp.get("observers")) if isinstance(row, dict)],
         risk_family=risk_family,
         available_adapters={"http_api"},
+        require_authorization_comparison=not _is_permitted_operation_invocation(exp),
     )
     if observer_reason:
         return False, observer_reason, observer_detail
