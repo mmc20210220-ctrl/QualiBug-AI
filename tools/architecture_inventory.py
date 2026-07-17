@@ -14,6 +14,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from ai_test_asset_center.architecture_inventory import (
+    ArchitectureInventoryError,
     build_architecture_inventory,
     persist_architecture_inventory,
 )
@@ -60,14 +61,35 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     root = args.root.resolve()
-    inventory = build_architecture_inventory(
-        repo_root=root,
-        config_path=args.config.resolve(),
-        runtime_trace_path=(
-            args.runtime_trace.resolve() if args.runtime_trace is not None else None
-        ),
-    )
-    output = persist_architecture_inventory(inventory, args.output.resolve()).resolve()
+    try:
+        inventory = build_architecture_inventory(
+            repo_root=root,
+            config_path=args.config.resolve(),
+            runtime_trace_path=(
+                args.runtime_trace.resolve()
+                if args.runtime_trace is not None
+                else None
+            ),
+        )
+        output = persist_architecture_inventory(
+            inventory,
+            args.output.resolve(),
+        ).resolve()
+    except (ArchitectureInventoryError, OSError) as exc:
+        print(
+            json.dumps(
+                {
+                    "schema_version": "qualibug.architecture-inventory-error.v1",
+                    "status": "FAILED",
+                    "error_type": type(exc).__name__,
+                    "detail": str(exc),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+        )
+        return 2
     runtime_trace = inventory["runtime_trace"]
     dynamic_uncertainty = inventory["dynamic_import_uncertainty"]
     print(
