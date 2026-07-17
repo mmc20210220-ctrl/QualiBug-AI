@@ -174,6 +174,16 @@ def test_scan_outcome_and_cleanup_helpers_are_reexported() -> None:
     )
 
 
+def test_discovery_planning_helpers_are_reexported() -> None:
+    from ai_test_asset_center import discovery_runtime as runtime
+    from ai_test_asset_center import discovery_runtime_planning as planning
+
+    assert runtime.build_discovery_plan is planning.build_discovery_plan
+    assert runtime._api_operations is planning._api_operations
+    assert runtime._runtime_actors is planning._runtime_actors
+    assert runtime._campaign_object is planning._campaign_object
+
+
 def test_extracted_modules_remain_under_architecture_budget_threshold() -> None:
     main_lines = sum(
         1 for _ in open(ROOT / "ai_test_asset_center" / "__main__.py", encoding="utf-8")
@@ -260,3 +270,19 @@ def test_extracted_modules_remain_under_architecture_budget_threshold() -> None:
     assert plan_lines < 600
     assert outcome_lines < 550
     assert batch_lines < 500
+    discovery_runtime_lines = sum(
+        1
+        for _ in open(
+            ROOT / "ai_test_asset_center" / "discovery_runtime.py",
+            encoding="utf-8",
+        )
+    )
+    discovery_planning_lines = sum(
+        1
+        for _ in open(
+            ROOT / "ai_test_asset_center" / "discovery_runtime_planning.py",
+            encoding="utf-8",
+        )
+    )
+    assert discovery_runtime_lines < 1200
+    assert discovery_planning_lines < 550

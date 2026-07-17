@@ -1,0 +1,492 @@
+"""Discovery planning: API ops, actors, Behavior IR, obligations, experiments.
+
+Extracted from ``discovery_runtime``. ``build_discovery_plan`` remains the
+immutable planning authority for the experiment-candidate mainline. Symbols are
+re-exported from ``discovery_runtime`` for compatibility.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+from pathlib import Path
+from typing import Any
+
+from .adaptive_discovery_planner import (
+    build_agent_intent_plan,
+    plan_obligation_round,
+)
+from .adaptive_planning_history import (
+    build_planning_budget_receipt,
+    build_planning_history_receipt,
+    finalize_planning_budget_receipt,
+    select_matching_historical_yield,
+)
+from .agent_semantic_linker import (
+    RECEIPT_SCHEMA as AGENT_SEMANTIC_LINK_RECEIPT_SCHEMA,
+    enrich_knowledge_asset_with_agent_relationships,
+)
+from .behavior_ir import build_behavior_ir_from_knowledge_asset
+from .discovery_mainline import (
+    DiscoveryMainlineInputs,
+    DiscoveryPlanningBundle,
+)
+from .discovery_mainline_contract import (
+    MainlineContractError,
+    MainlineRunContract,
+    build_mainline_run_contract,
+)
+from .experiment_compiler import compile_experiments
+from .fixture_dag import attach_fixture_dag_to_experiments
+from .obligation_compiler import compile_obligations_from_behavior_ir
+from .pipeline_slices import _auto_scale_slice_budget
+from .runtime_interface_discovery import (
+    load_runtime_interface_discovery_budget,
+    plan_runtime_interface_candidates,
+)
+
+
+def _dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _campaign_object(handle: Any) -> Any:
+    campaign = _dict(handle).get("campaign") if isinstance(handle, dict) else handle
+    if campaign is None or not _text(getattr(campaign, "campaign_id", "")):
+        raise MainlineContractError("mainline_campaign_object_missing")
+    return campaign
+
+
+def _campaign_store(handle: Any) -> Any:
+    store = _dict(handle).get("store") if isinstance(handle, dict) else None
+    if store is None or not callable(getattr(store, "save", None)):
+        raise MainlineContractError("mainline_campaign_store_missing")
+    return store
+
+
+def _api_operations(
+    api_spec_text: str,
+    *,
+    submitted_source_text: str = "",
+) -> list[dict[str, Any]]:
+    text = _text(api_spec_text)
+    if not text:
+        raise MainlineContractError("api_spec_text_missing")
+    from .universal_api_parser import parse_to_openapi
+
+    operations: list[dict[str, Any]] = []
+    source_documents = [("api_spec", text)]
+    submitted = _text(submitted_source_text)
+    if submitted and submitted != text:
+        source_documents.append(("submitted_api_spec", submitted))
+
+    for source_id, source_text in source_documents:
+        spec = parse_to_openapi(source_text)
+        if not isinstance(spec, dict):
+            raise MainlineContractError(
+                f"api_spec_parse_result_invalid:{source_id}"
+            )
+        paths = spec.get("paths")
+        if not isinstance(paths, dict):
+            raise MainlineContractError(f"api_spec_paths_missing:{source_id}")
+        for path, methods in paths.items():
+            if not isinstance(methods, dict):
+                continue
+            for method, raw_operation in methods.items():
+                normalized_method = _text(method).upper()
+                if normalized_method not in {
+                    "GET",
+                    "POST",
+                    "PUT",
+                    "PATCH",
+                    "DELETE",
+                }:
+                    continue
+                operation = _dict(raw_operation)
+                operations.append({
+                    "method": normalized_method,
+                    "path": _text(path),
+                    "operation_id": _text(operation.get("operationId"))
+                    or f"{normalized_method.lower()}:{_text(path)}",
+                    "source_id": source_id,
+                    "summary": _text(operation.get("summary")),
+                    "description": _text(operation.get("description")),
+                    "tags": list(operation.get("tags") or []),
+                    "parameters": list(operation.get("parameters") or []),
+                    "request_schema": _dict(operation.get("requestBody")),
+                    "response_schema": _dict(operation.get("responses")),
+                })
+    if not operations:
+        for match in re.finditer(
+            r"(?im)^(?:\s*#{1,6}\s*)?(GET|POST|PUT|PATCH|DELETE)\s+(/\S+)",
+            submitted or text,
+        ):
+            method = match.group(1).upper()
+            path = match.group(2).strip().rstrip("`").rstrip(",").rstrip(")")
+            operations.append({
+                "method": method,
+                "path": path,
+                "operation_id": f"{method.lower()}:{path}",
+                "source_id": "api_spec",
+                "summary": "",
+                "description": "",
+                "tags": [],
+                "parameters": [],
+                "request_schema": {},
+                "response_schema": {},
+            })
+    if not operations:
+        raise MainlineContractError("api_spec_operations_missing")
+    return operations
+
+
+def _runtime_actors(root: Path, project: str, context: dict[str, Any]) -> list[dict[str, Any]]:
+    actors: list[dict[str, Any]] = []
+    accounts_path = root / "platform_inputs" / project / "test_accounts.json"
+    payload: Any = {}
+    if accounts_path.exists():
+        try:
+            payload = json.loads(accounts_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise MainlineContractError(
+                f"test_actor_catalog_invalid:{type(exc).__name__}"
+            ) from exc
+    rows: list[Any]
+    if isinstance(payload, list):
+        rows = payload
+    elif isinstance(payload, dict):
+        raw_rows = payload.get("accounts") or payload.get("actors") or payload.get("users")
+        if raw_rows is None:
+            rows = [
+                {**value, "account_ref": key}
+                for key, value in payload.items()
+                if isinstance(value, dict)
+                and key not in {"schema", "schema_version", "meta"}
+            ]
+        elif isinstance(raw_rows, list):
+            rows = raw_rows
+        else:
+            raise MainlineContractError("test_actor_catalog_rows_invalid")
+    else:
+        raise MainlineContractError("test_actor_catalog_root_invalid")
+    for row in rows:
+        if not isinstance(row, dict):
+            raise MainlineContractError("test_actor_catalog_row_invalid")
+        # Prefer the role observed from the authenticated identity over a
+        # display/localized role label.  Permission relations are keyed by the
+        # source role identity; using only a translated display label severs
+        # the source-permitted actor -> runtime credential lineage and leaves
+        # otherwise executable obligations blocked on a missing actor.
+        role = _text(
+            row.get("authenticated_role")
+            or row.get("role")
+            or row.get("name")
+            or row.get("id")
+        )
+        if not role:
+            raise MainlineContractError("test_actor_role_missing")
+        account_ref = _text(
+            row.get("account_ref")
+            or row.get("email")
+            or row.get("username")
+            or row.get("id")
+            or role
+        )
+        actors.append({
+            "role": role,
+            "account_ref": account_ref,
+            "tenant": row.get("tenant") or row.get("scope"),
+            "secret_ref": f"secret_ref:test_accounts:{account_ref}",
+            "status": _text(row.get("status") or "active"),
+        })
+    scenario_actor = _dict(_dict(context.get("runtime_scenario_contract")).get("actor"))
+    declared_role = _text(
+        scenario_actor.get("role")
+        or scenario_actor.get("name")
+        or scenario_actor.get("id")
+    )
+    if declared_role and not any(_text(row.get("role")) == declared_role for row in actors):
+        actors.append({
+            "role": declared_role,
+            "secret_ref": f"secret_ref:context:{declared_role}",
+            "status": "active",
+        })
+    return actors
+
+
+def _contract(inputs: DiscoveryMainlineInputs, campaign_id: str) -> MainlineRunContract:
+    context = inputs.campaign_context
+    return build_mainline_run_contract(
+        mainline_authority=_text(context.get("mainline_authority")),
+        run_id=_text(context.get("run_id")),
+        campaign_id=campaign_id,
+        target_id=_text(context.get("target_id")),
+        environment_id=_text(context.get("environment_id")),
+        policy_version=_text(context.get("policy_version")),
+        evaluation_mode=_text(context.get("evaluation_mode")),
+    )
+
+
+def build_discovery_plan(
+    inputs: DiscoveryMainlineInputs,
+    campaign_handle: Any,
+) -> DiscoveryPlanningBundle:
+    """Compile one immutable Behavior IR -> Obligation -> Experiment plan."""
+
+    campaign = _campaign_object(campaign_handle)
+    contract = _contract(inputs, _text(campaign.campaign_id))
+    from .enterprise_knowledge_center import (
+        build_enterprise_business_knowledge_asset,
+        build_runtime_source_knowledge_overlay,
+        merge_knowledge_asset_overlay,
+    )
+
+    asset = build_enterprise_business_knowledge_asset(inputs.project, inputs.root)
+    runtime_source_overlay = build_runtime_source_knowledge_overlay(
+        prd_text=inputs.prd_text,
+        api_spec_text=_text(
+            inputs.campaign_context.get("_source_verification_text")
+        ) or inputs.api_spec_text,
+        db_schema_text=inputs.db_schema_text,
+    )
+    asset = merge_knowledge_asset_overlay(asset, runtime_source_overlay)
+    agent_semantic_link_receipt: dict[str, Any] = {
+        "schema_version": AGENT_SEMANTIC_LINK_RECEIPT_SCHEMA,
+        "status": "NOT_REQUESTED",
+        "reason_code": "agent_semantic_linking_disabled",
+        "accepted_relationship_count": 0,
+    }
+    semantic_linking_enabled = inputs.campaign_context.get(
+        "agent_semantic_linking_enabled",
+        False,
+    )
+    if not isinstance(semantic_linking_enabled, bool):
+        raise MainlineContractError("agent_semantic_linking_enabled_not_boolean")
+    if semantic_linking_enabled:
+        asset, agent_semantic_link_receipt = (
+            enrich_knowledge_asset_with_agent_relationships(asset)
+        )
+    operations = _api_operations(
+        inputs.api_spec_text,
+        submitted_source_text=_text(
+            inputs.campaign_context.get("_source_verification_text")
+        ),
+    )
+    runtime_interface_discovery_enabled = inputs.campaign_context.get(
+        "runtime_interface_discovery_enabled",
+        False,
+    )
+    if not isinstance(runtime_interface_discovery_enabled, bool):
+        raise MainlineContractError(
+            "runtime_interface_discovery_enabled_not_boolean"
+        )
+    runtime_interface_discovery_plan: dict[str, Any] = {}
+    if runtime_interface_discovery_enabled:
+        configured_budget = inputs.campaign_context.get(
+            "runtime_interface_discovery_budget"
+        )
+        budget_value = (
+            load_runtime_interface_discovery_budget()
+            if configured_budget is None
+            else configured_budget
+        )
+        if (
+            isinstance(budget_value, bool)
+            or not isinstance(budget_value, int)
+            or not 1 <= budget_value <= 1000
+        ):
+            raise MainlineContractError(
+                "runtime_interface_discovery_budget_invalid"
+            )
+        runtime_interface_discovery_plan = plan_runtime_interface_candidates(
+            operations,
+            action_markers=None,
+            max_candidates=budget_value,
+        )
+    runtime_actors = _runtime_actors(
+        inputs.root,
+        inputs.project,
+        inputs.campaign_context,
+    )
+    behavior_ir = build_behavior_ir_from_knowledge_asset(
+        asset,
+        project_id=inputs.project,
+        source_snapshot_hash=_text(
+            _dict(inputs.campaign_context.get("source_manifest")).get("source_hash")
+        ),
+        api_operations=operations,
+        runtime_actors=runtime_actors,
+    )
+    behavior_ir_input_receipt = {
+        "schema_version": "qualibug.behavior-ir-input-receipt.v1",
+        "knowledge_asset_id": _text(asset.get("asset_id")),
+        "runtime_source_overlay": dict(
+            _dict(asset.get("runtime_source_overlay"))
+        ),
+        "api_operation_count": len(operations),
+        "runtime_actor_count": len(runtime_actors),
+        "ui_source_spec_count": len(_list(asset.get("ui_design_specs"))),
+        "runtime_interface_discovery_enabled": runtime_interface_discovery_enabled,
+    }
+    obligation_pack = compile_obligations_from_behavior_ir(behavior_ir)
+    obligations = [
+        dict(row)
+        for row in _list(obligation_pack.get("obligations"))
+        if isinstance(row, dict)
+    ]
+    environment_type = _text(
+        inputs.campaign_context.get("environment_type")
+        or inputs.campaign_context.get("environment_kind")
+    ).lower()
+    experiment_pack = compile_experiments(
+        obligations,
+        behavior_ir=behavior_ir,
+        environment_type=environment_type,
+        policy_version=_text(inputs.campaign_context.get("policy_version")),
+    )
+    experiment_pack = attach_fixture_dag_to_experiments(
+        experiment_pack,
+        behavior_ir=behavior_ir,
+    )
+    all_experiments = [
+        dict(row)
+        for row in (
+            _list(experiment_pack.get("experiments"))
+            + _list(experiment_pack.get("blocked_experiments"))
+        )
+        if isinstance(row, dict)
+    ]
+    by_obligation = {}
+    import re as _re
+    _VARIANT_RE = _re.compile(r"^(.+?)__v_[a-f0-9]+$")
+    for row in all_experiments:
+        if not isinstance(row, dict):
+            continue
+        oid = _text(row.get("obligation_id"))
+        if oid:
+            by_obligation[oid] = row
+        # Variant experiments use IDs like obl_xxx__v_yyy; also index by original
+        _expanded_from = _text(row.get("expanded_from_obligation_id"))
+        if _expanded_from and _expanded_from not in by_obligation:
+            by_obligation[_expanded_from] = row
+        # Also parse variant ID pattern to extract original
+        _vm = _VARIANT_RE.match(oid) if oid else None
+        if _vm:
+            _original = _vm.group(1)
+            if _original not in by_obligation:
+                by_obligation[_original] = row
+    campaign_budget = int(getattr(campaign, "slice_budget", 0) or 0)
+    if campaign_budget <= 0:
+        raise MainlineContractError("obligation_budget_invalid")
+    compiled_pool_size = sum(
+        1
+        for row in by_obligation.values()
+        if _text(_dict(_dict(row).get("compile_receipt")).get("status")).upper()
+        == "COMPILED"
+        or _text(_dict(row).get("compile_status")).upper() == "COMPILED"
+    )
+    # Bind the run budget from the compiled obligation pool using the same
+    # auto-scaler as behavior-slice scheduling. An explicit operator env
+    # override (already reflected in campaign.slice_budget) must not be raised.
+    env_override = str(
+        os.environ.get("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND") or ""
+    ).strip()
+    if env_override:
+        budget = campaign_budget
+    else:
+        budget = max(campaign_budget, _auto_scale_slice_budget(compiled_pool_size))
+    if budget != campaign_budget:
+        campaign.slice_budget = budget
+    budget_receipt = build_planning_budget_receipt(budget)
+    policy_identity = {
+        "policy_id": _text(inputs.campaign_context.get("policy_id")),
+        "policy_version": _text(inputs.campaign_context.get("policy_version")),
+        "strategy_fingerprint": _text(
+            inputs.campaign_context.get("strategy_fingerprint")
+        ),
+    }
+    history_receipt = _dict(
+        inputs.campaign_context.get("adaptive_planning_history_receipt")
+    )
+    historical_yield, history_match_status = (
+        select_matching_historical_yield(
+            history_receipt,
+            expected_policy_identity=policy_identity,
+        )
+        if history_receipt
+        else ({}, "NO_MATCHING_HISTORY")
+    )
+    if history_match_status == "MATCHED" and not historical_yield:
+        history_match_status = "MATCHED_HISTORY_HAS_NO_FAMILY_METRICS"
+    obligation_plan = plan_obligation_round(
+        obligations,
+        experiments_by_obligation=by_obligation,
+        budget=budget,
+        historical_yield=historical_yield,
+        historical_receipt_ids=(
+            [_text(history_receipt.get("receipt_id"))]
+            if (
+                history_match_status
+                in {"MATCHED", "MATCHED_HISTORY_HAS_NO_FAMILY_METRICS"}
+                and _text(history_receipt.get("receipt_id"))
+            )
+            else []
+        ),
+        cold_start_reason=history_match_status,
+    )
+    budget_receipt = finalize_planning_budget_receipt(
+        budget_receipt,
+        consumed_budget=int(obligation_plan.get("selected_count") or 0),
+        stop_condition=_text(obligation_plan.get("stop_condition")),
+    )
+    agent_intent_plan = build_agent_intent_plan(
+        obligation_plan,
+        obligations=obligations,
+        experiments_by_obligation=by_obligation,
+        behavior_ir=behavior_ir,
+    )
+    return DiscoveryPlanningBundle(
+        mainline_run=contract,
+        behavior_ir=behavior_ir,
+        obligations={**obligation_pack, "obligations": obligations},
+        experiments={
+            **experiment_pack,
+            "all_experiments": all_experiments,
+            "by_obligation": by_obligation,
+            "obligation_plan": obligation_plan,
+            "planning_budget_receipt": budget_receipt,
+            "agent_intent_plan": agent_intent_plan,
+            "agent_semantic_link_receipt": agent_semantic_link_receipt,
+            "runtime_source_overlay_receipt": dict(
+                _dict(asset.get("runtime_source_overlay"))
+            ),
+            "behavior_ir_input_receipt": behavior_ir_input_receipt,
+            "runtime_interface_discovery_enabled": (
+                runtime_interface_discovery_enabled
+            ),
+            "runtime_interface_discovery_plan": (
+                runtime_interface_discovery_plan
+            ),
+            "runtime_contract": dict(
+                _dict(inputs.campaign_context.get("_runtime_contract"))
+            ),
+            "knowledge_asset_id": _text(asset.get("asset_id")),
+            # Immutable in-memory inputs for observation-driven round 2. These
+            # private keys are intentionally excluded from product artifacts.
+            "_knowledge_asset": asset,
+            "_documented_operations": operations,
+            "_runtime_actors": runtime_actors,
+            "_environment_type": environment_type,
+            "_planning_budget": budget,
+            "_planning_policy_identity": policy_identity,
+        },
+    )
+
