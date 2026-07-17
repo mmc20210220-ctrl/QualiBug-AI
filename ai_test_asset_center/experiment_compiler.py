@@ -304,8 +304,18 @@ def compile_experiment_for_obligation(
     return _attach_source_observed_mutations(experiment, behavior_ir)
 
 
-# Batch compilation is implemented in the stable base module and resolves this
-# global at runtime. Patch both facade and base so direct and batch calls share
-# the same scoped-conflict and privacy-field semantics.
-_base.compile_experiment_for_obligation = compile_experiment_for_obligation
-_base._base.compile_experiment_for_obligation = compile_experiment_for_obligation
+def compile_experiments(
+    obligations: list[dict[str, Any]],
+    *,
+    behavior_ir: dict[str, Any],
+    environment_type: str = "",
+    policy_version: str = "",
+) -> dict[str, Any]:
+    """Compile a batch through the explicitly selected facade dispatch."""
+    return _base._base.compile_experiments(
+        obligations,
+        behavior_ir=behavior_ir,
+        environment_type=environment_type,
+        policy_version=policy_version,
+        compile_one=compile_experiment_for_obligation,
+    )

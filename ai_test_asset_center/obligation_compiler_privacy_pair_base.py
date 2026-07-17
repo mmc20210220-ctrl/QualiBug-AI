@@ -8,6 +8,7 @@ gap instead of a misleading executable obligation.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 import hashlib
 from typing import Any
 
@@ -277,8 +278,11 @@ def _pair_obligations(
 
 def compile_obligations_from_behavior_ir(
     behavior_ir: dict[str, Any],
+    *,
+    base_compile: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    compiler = base_compile or _original_compile
     return _pair_obligations(
-        _original_compile(behavior_ir),
+        compiler(behavior_ir),
         behavior_ir,
     )

@@ -168,6 +168,18 @@ def compile_experiment_for_obligation(
     )
 
 
-# The baseline batch compiler resolves this module global at runtime. Replace it
-# so both direct and batch compilation enforce the same principal-pair rule.
-_base.compile_experiment_for_obligation = compile_experiment_for_obligation
+def compile_experiments(
+    obligations: list[dict[str, Any]],
+    *,
+    behavior_ir: dict[str, Any],
+    environment_type: str = "",
+    policy_version: str = "",
+) -> dict[str, Any]:
+    """Compile a batch with this facade's principal-pair validator."""
+    return _base.compile_experiments(
+        obligations,
+        behavior_ir=behavior_ir,
+        environment_type=environment_type,
+        policy_version=policy_version,
+        compile_one=compile_experiment_for_obligation,
+    )

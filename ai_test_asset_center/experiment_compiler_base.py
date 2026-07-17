@@ -1,8 +1,9 @@
 """Compile TestObligations into ExecutableExperiments or explicit blocks."""
 from __future__ import annotations
 
-import re
 import hashlib
+import re
+from collections.abc import Callable
 from typing import Any
 
 from .experiment_protocols import compile_family_protocol
@@ -958,7 +959,9 @@ def compile_experiments(
     behavior_ir: dict[str, Any],
     environment_type: str = "",
     policy_version: str = "",
+    compile_one: Callable[..., dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    compiler = compile_one or compile_experiment_for_obligation
     compiled: list[dict[str, Any]] = []
     blocked: list[dict[str, Any]] = []
     operations = _index_by_id(_list(_dict(behavior_ir).get("operations")))
@@ -1004,7 +1007,7 @@ def compile_experiments(
         variant_compiled = 0
         variant_blocked = 0
         for variant in variants:
-            experiment = compile_experiment_for_obligation(
+            experiment = compiler(
                 variant,
                 behavior_ir=behavior_ir,
                 environment_type=environment_type,
