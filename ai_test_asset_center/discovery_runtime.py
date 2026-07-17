@@ -436,9 +436,21 @@ def build_discovery_plan(
 
     campaign = _campaign_object(campaign_handle)
     contract = _contract(inputs, _text(campaign.campaign_id))
-    from .enterprise_knowledge_center import build_enterprise_business_knowledge_asset
+    from .enterprise_knowledge_center import (
+        build_enterprise_business_knowledge_asset,
+        build_runtime_source_knowledge_overlay,
+        merge_knowledge_asset_overlay,
+    )
 
     asset = build_enterprise_business_knowledge_asset(inputs.project, inputs.root)
+    runtime_source_overlay = build_runtime_source_knowledge_overlay(
+        prd_text=inputs.prd_text,
+        api_spec_text=_text(
+            inputs.campaign_context.get("_source_verification_text")
+        ) or inputs.api_spec_text,
+        db_schema_text=inputs.db_schema_text,
+    )
+    asset = merge_knowledge_asset_overlay(asset, runtime_source_overlay)
     agent_semantic_link_receipt: dict[str, Any] = {
         "schema_version": AGENT_SEMANTIC_LINK_RECEIPT_SCHEMA,
         "status": "NOT_REQUESTED",
@@ -506,6 +518,17 @@ def build_discovery_plan(
         api_operations=operations,
         runtime_actors=runtime_actors,
     )
+    behavior_ir_input_receipt = {
+        "schema_version": "qualibug.behavior-ir-input-receipt.v1",
+        "knowledge_asset_id": _text(asset.get("asset_id")),
+        "runtime_source_overlay": dict(
+            _dict(asset.get("runtime_source_overlay"))
+        ),
+        "api_operation_count": len(operations),
+        "runtime_actor_count": len(runtime_actors),
+        "ui_source_spec_count": len(_list(asset.get("ui_design_specs"))),
+        "runtime_interface_discovery_enabled": runtime_interface_discovery_enabled,
+    }
     obligation_pack = compile_obligations_from_behavior_ir(behavior_ir)
     obligations = [
         dict(row)
@@ -578,6 +601,10 @@ def build_discovery_plan(
             "obligation_plan": obligation_plan,
             "agent_intent_plan": agent_intent_plan,
             "agent_semantic_link_receipt": agent_semantic_link_receipt,
+            "runtime_source_overlay_receipt": dict(
+                _dict(asset.get("runtime_source_overlay"))
+            ),
+            "behavior_ir_input_receipt": behavior_ir_input_receipt,
             "runtime_interface_discovery_enabled": (
                 runtime_interface_discovery_enabled
             ),
@@ -1208,6 +1235,12 @@ def run_experiment_candidate(
         "agent_intent_plan": dict(agent_intent_plan),
         "agent_semantic_link_receipt": dict(
             _dict(plan.experiments.get("agent_semantic_link_receipt"))
+        ),
+        "runtime_source_overlay_receipt": dict(
+            _dict(plan.experiments.get("runtime_source_overlay_receipt"))
+        ),
+        "behavior_ir_input_receipt": dict(
+            _dict(plan.experiments.get("behavior_ir_input_receipt"))
         ),
         "runtime_interface_discovery": {
             "status": (

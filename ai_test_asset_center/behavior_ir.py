@@ -2315,6 +2315,80 @@ def build_behavior_ir_from_knowledge_asset(
     model["relations"].extend(_derive_invariant_relations(model))
     model["relations"].extend(_derive_compensation_relations(model))
 
+    for source_gap in _list(data.get("coverage_gaps")):
+        if not isinstance(source_gap, dict):
+            continue
+        gap_type = _text(
+            source_gap.get("gap_type")
+            or source_gap.get("reason_code")
+            or source_gap.get("code")
+            or "source_coverage_gap"
+        ).lower()
+        source_id = _text(source_gap.get("source_id"))
+        model["coverage_gaps"].append(_fact_node(
+            node_id=_stable_id(
+                "gap",
+                gap_type,
+                source_id,
+                source_gap.get("parser_receipt_id"),
+            ),
+            typed_fields={
+                **dict(source_gap),
+                "gap_type": gap_type,
+                "description": _text(source_gap.get("description"))
+                or "A source-stage coverage gap remains unresolved",
+            },
+            source_refs=(
+                [_source_ref(source_id, kind="source_coverage_gap")]
+                if source_id
+                else []
+            ),
+            confidence=1.0,
+            derivation="explicit",
+            status="unsupported",
+        ))
+
+    invariant_relation_refs = {
+        _text(relation.get("to_ref"))
+        for relation in model["relations"]
+        if isinstance(relation, dict)
+        and _text(relation.get("operation_ref"))
+        and _text(relation.get("to_ref"))
+    }
+    already_gapped_invariants = {
+        _text(gap.get("invariant_ref"))
+        for gap in model["coverage_gaps"]
+        if isinstance(gap, dict) and _text(gap.get("invariant_ref"))
+    }
+    for invariant in model["invariants"]:
+        if not isinstance(invariant, dict):
+            continue
+        invariant_ref = _text(invariant.get("id"))
+        if (
+            not invariant_ref
+            or invariant_ref in invariant_relation_refs
+            or invariant_ref in already_gapped_invariants
+        ):
+            continue
+        model["coverage_gaps"].append(_fact_node(
+            node_id=_stable_id("gap", "source_invariant_operation_unbound", invariant_ref),
+            typed_fields={
+                "gap_type": "source_invariant_operation_unbound",
+                "reason_code": "SOURCE_INVARIANT_OPERATION_UNBOUND",
+                "description": "A source-backed invariant has no exact operation binding",
+                "invariant_ref": invariant_ref,
+                "source_rule_refs": list(invariant.get("source_rule_refs") or []),
+            },
+            source_refs=[
+                dict(ref)
+                for ref in _list(invariant.get("source_refs"))
+                if isinstance(ref, dict)
+            ],
+            confidence=1.0,
+            derivation="explicit",
+            status="unsupported",
+        ))
+
     # Default observation surfaces based on available capabilities
     surfaces = [("http_api", "HTTP/API"), ("ui_browser", "Browser/UI"), ("db_snapshot", "DB read snapshot")]
     for surface_id, label in surfaces:

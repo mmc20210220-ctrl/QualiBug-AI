@@ -20,6 +20,12 @@ def test_run_v12_pipeline_emits_behavior_ir_phase(tmp_path: Path, monkeypatch) -
 GET /items
 PUT /items/{id}
 """
+    schema = """
+CREATE TABLE items (
+  id TEXT PRIMARY KEY,
+  quantity INTEGER NOT NULL
+);
+"""
     (root / "projects" / project / "input" / "API_SPEC.md").write_text(api, encoding="utf-8")
     observed_ui_calls: list[dict[str, object]] = []
 
@@ -64,7 +70,7 @@ PUT /items/{id}
         root=root,
         prd_text="Items have owner and viewer roles. Quantity must be conserved.",
         api_spec_text=api,
-        db_schema_text="",
+        db_schema_text=schema,
         base_url="",
         campaign_context={
             "mainline_authority": "experiment_candidate",
@@ -91,6 +97,32 @@ PUT /items/{id}
     phase = (result.get("phases") or {}).get("behavior_ir")
     assert phase["status"] == "completed"
     assert result["behavior_ir"]["schema_version"] == "qualibug.behavior-ir.v2"
+    assert any(
+        entity.get("name") == "items"
+        for entity in result["behavior_ir"]["entities"]
+    )
+    assert any(
+        invariant.get("source_rule_refs")
+        for invariant in result["behavior_ir"]["invariants"]
+    )
+    assert any(
+        gap.get("reason_code") == "SOURCE_INVARIANT_OPERATION_UNBOUND"
+        for gap in result["behavior_ir"]["coverage_gaps"]
+    )
+    overlay_receipt = result["runtime_source_overlay_receipt"]
+    assert overlay_receipt["source_count"] == 3
+    assert {
+        row["source_type"] for row in overlay_receipt["source_fingerprints"]
+    } == {"prd", "markdown_api", "database_schema"}
+    assert all(
+        len(row["content_hash"]) == 64
+        for row in overlay_receipt["source_fingerprints"]
+    )
+    input_receipt = result["behavior_ir_input_receipt"]
+    assert input_receipt["schema_version"] == "qualibug.behavior-ir-input-receipt.v1"
+    assert input_receipt["runtime_source_overlay"]["source_count"] == 3
+    assert input_receipt["api_operation_count"] == 2
+    assert input_receipt["runtime_interface_discovery_enabled"] is False
     assert "test_obligations" in result
     assert "experiment_compile" in result
     assert result["agent_intent_plan"]["schema_version"] == (

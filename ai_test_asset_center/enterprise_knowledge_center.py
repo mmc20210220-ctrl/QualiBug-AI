@@ -2471,6 +2471,204 @@ def _sync_declared_project_sources(project: str, root: Path, registry: dict[str,
     return _load_registry(project, root)
 
 
+def build_runtime_source_knowledge_overlay(
+    *,
+    prd_text: str = "",
+    api_spec_text: str = "",
+    db_schema_text: str = "",
+) -> dict[str, Any]:
+    """Parse immutable in-run source text through the existing knowledge parsers.
+
+    The overlay contains structured facts and parser receipts only; raw source
+    bodies are not copied into the returned asset.
+    """
+
+    api_text = str(api_spec_text or "")
+    api_prefix = api_text.lstrip()
+    api_is_json = api_prefix.startswith("{")
+    api_is_yaml = bool(
+        re.search(r"(?m)^\s*(?:openapi|swagger)\s*:", api_text)
+    )
+    api_source_type = "openapi" if api_is_json or api_is_yaml else "markdown_api"
+    api_filename = (
+        "runtime_api.json"
+        if api_is_json
+        else "runtime_api.yaml"
+        if api_is_yaml
+        else "runtime_api.md"
+    )
+    documents = (
+        ("prd", "runtime_prd.md", str(prd_text or "")),
+        (api_source_type, api_filename, api_text),
+        ("database_schema", "runtime_schema.sql", str(db_schema_text or "")),
+    )
+    parsed_rows: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for source_type, filename, text in documents:
+        if not text.strip():
+            continue
+        content_hash = _hash_bytes(text.encode("utf-8"))
+        source_id = f"runtime:{source_type}:{content_hash[:24]}"
+        source = {
+            "source_id": source_id,
+            "source_type": source_type,
+            "original_name": filename,
+            "filename": filename,
+            "text_hash": content_hash,
+            "content_hash": content_hash,
+            "status": "active",
+            "origin": "runtime_view",
+        }
+        parsed_rows.append((
+            source,
+            _parse_source(text.encode("utf-8"), filename, source_type, source_id),
+        ))
+
+    interfaces = _dedupe_by_id(
+        [row for _, parsed in parsed_rows for row in parsed.get("operations") or []],
+        "interface_id",
+    )
+    rules = _dedupe_by_id(
+        [row for _, parsed in parsed_rows for row in parsed.get("rules") or []],
+        "rule_id",
+    )
+    exact_edges = _links_by_exact_source_section(rules, interfaces)
+    exact_keys = {
+        (str(edge.get("from")), str(edge.get("to")), str(edge.get("relation")))
+        for edge in exact_edges
+    }
+    candidate_edges = [
+        edge
+        for edge in _links_by_overlap(
+            rules,
+            interfaces,
+            "rule_id",
+            "interface_id",
+            relation="rule_to_interface",
+        )
+        if (
+            str(edge.get("from")),
+            str(edge.get("to")),
+            str(edge.get("relation")),
+        ) not in exact_keys
+    ]
+    parser_receipts = [
+        dict(parsed.get("parser_receipt") or {})
+        for _, parsed in parsed_rows
+        if isinstance(parsed.get("parser_receipt"), dict)
+    ]
+    coverage_gaps = [
+        {
+            "gap_type": "runtime_source_parse_degraded",
+            "reason_code": (
+                "RUNTIME_SOURCE_PARSE_DEGRADED"
+                if str(receipt.get("parser_status") or "") == "degraded"
+                else "RUNTIME_SOURCE_PARSE_FAILED"
+            ),
+            "source_id": receipt.get("source_id"),
+            "parser_receipt_id": receipt.get("receipt_id"),
+            "errors": list(receipt.get("errors") or []),
+        }
+        for receipt in parser_receipts
+        if str(receipt.get("parser_status") or "") in {"degraded", "failed"}
+    ]
+    return {
+        "schema_version": "qualibug.runtime-source-knowledge-overlay.v1",
+        "source_inventory": [dict(source) for source, _ in parsed_rows],
+        "parser_receipts": parser_receipts,
+        "interfaces": interfaces,
+        "data_tables": _dedupe_by_id(
+            [row for _, parsed in parsed_rows for row in parsed.get("tables") or []],
+            "table_id",
+        ),
+        "field_dictionary": _dedupe_by_id(
+            [row for _, parsed in parsed_rows for row in parsed.get("field_dictionary") or []],
+            "field_id",
+        ),
+        "ui_design_specs": _dedupe_by_id(
+            [row for _, parsed in parsed_rows for row in parsed.get("ui_specs") or []],
+            "ui_spec_id",
+        ),
+        "permission_matrix": _dedupe_by_id(
+            [row for _, parsed in parsed_rows for row in parsed.get("permissions") or []],
+            "permission_id",
+        ),
+        "rule_library": rules,
+        "roles": _dedupe_by_id(
+            [row for _, parsed in parsed_rows for row in parsed.get("roles") or []],
+            "role_id",
+        ),
+        "state_machines": _dedupe_by_id(
+            [row for _, parsed in parsed_rows for row in parsed.get("state_machines") or []],
+            "state_machine_id",
+        ),
+        "relationships": _dedupe_by_id(
+            [*exact_edges, *candidate_edges],
+            "edge_id",
+        ),
+        "coverage_gaps": coverage_gaps,
+    }
+
+
+def merge_knowledge_asset_overlay(
+    asset: dict[str, Any] | None,
+    overlay: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Merge structured runtime facts into a persisted knowledge asset by identity."""
+
+    merged = dict(asset or {})
+    extra = dict(overlay or {})
+    identity_fields = {
+        "source_inventory": "source_id",
+        "parser_receipts": "receipt_id",
+        "interfaces": "interface_id",
+        "data_tables": "table_id",
+        "field_dictionary": "field_id",
+        "ui_design_specs": "ui_spec_id",
+        "permission_matrix": "permission_id",
+        "rule_library": "rule_id",
+        "roles": "role_id",
+        "state_machines": "state_machine_id",
+        "relationships": "edge_id",
+    }
+    for key, identity_field in identity_fields.items():
+        merged[key] = _dedupe_by_id(
+            [
+                dict(row)
+                for row in [*(merged.get(key) or []), *(extra.get(key) or [])]
+                if isinstance(row, dict)
+            ],
+            identity_field,
+        )
+    merged["coverage_gaps"] = [
+        dict(row)
+        for row in [
+            *(merged.get("coverage_gaps") or []),
+            *(extra.get("coverage_gaps") or []),
+        ]
+        if isinstance(row, dict)
+    ]
+    merged["runtime_source_overlay"] = {
+        "schema_version": extra.get("schema_version"),
+        "source_count": len(extra.get("source_inventory") or []),
+        "source_fingerprints": [
+            {
+                "source_id": row.get("source_id"),
+                "source_type": row.get("source_type"),
+                "content_hash": row.get("content_hash"),
+            }
+            for row in extra.get("source_inventory") or []
+            if isinstance(row, dict) and row.get("source_id")
+        ],
+        "parser_receipt_ids": [
+            row.get("receipt_id")
+            for row in extra.get("parser_receipts") or []
+            if isinstance(row, dict) and row.get("receipt_id")
+        ],
+        "coverage_gap_count": len(extra.get("coverage_gaps") or []),
+    }
+    return merged
+
+
 def build_enterprise_business_knowledge_asset(project_id: str = "real_project_demo", root: Path | None = None, options: dict[str, Any] | None = None) -> dict[str, Any]:
     root = root or ROOT
     project = _safe_project_id(project_id)
