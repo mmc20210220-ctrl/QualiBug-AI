@@ -267,7 +267,18 @@ def build_contract_oracle_activation_receipt(
     }
     relaxed_families = {"idempotency", "concurrency", "conservation"}
     permit_only = _any_assertion_has_template(exp, "permitted_operation_invocation")
-    is_relaxed = bool(assertion_kinds & relaxed_families) or permit_only
+    has_http_observer = any(
+        _text(o.get("observer_id")) == "http_response"
+        for o in _list(exp.get("observers"))
+    )
+    is_relaxed = (
+        bool(assertion_kinds & relaxed_families)
+        or permit_only
+        or (
+            has_http_observer
+            and assertion_kinds & {"authorization", "isolation", "visibility"}
+        )
+    )
 
     source_refs = [
         dict(item) for item in _list(exp.get("source_refs")) if isinstance(item, dict)
