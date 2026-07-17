@@ -1,164 +1,211 @@
-# QualiBug AI Enterprise Edition
+# QualiBug AI
 
-**Enterprise Business-Quality Assurance Platform — AI-powered bug discovery across any industry**
+**Enterprise software behavior-space infrastructure — AI-powered bug discovery across industries**
 
-QualiBug AI 发现普通端点测试经常遗漏的高价值缺陷：跨系统状态漂移、跨视图核对错误、租户隔离失败、生命周期回归、财务守恒违规和 unsafe 发布风险。
+QualiBug AI 把企业系统的 Actor、状态、数据、规则与真实执行轨迹映射为可计算、可验证、可演进的行为空间模型，并在受治理的非生产环境中自动发现高价值缺陷。
+
+典型发现范围包括：跨系统状态漂移、跨视图核对错误、租户隔离失败、生命周期回归、守恒违规，以及不安全发布风险。
+
+> **Bug** = 观察到的行为与期望行为之间、可证据化复现的偏差。  
+> 不是爬虫，不是扫描器口号；产品视觉与文案不使用昆虫 / 爬虫语义。
 
 ---
 
-## 版本信息
+## 产品口径
 
-**当前版本**: 95.0.0（Phase106 前端工程化 · 企业质量指挥中心 HTTP API）
+| 项 | 值 |
+|---|---|
+| 产品版本 | `95.0.0` |
+| 后端端口 | `8088` |
+| 前端端口 | `5174` |
+| 标准健康检查 | `GET /api/health` |
+| 兼容健康检查 | `GET /health` |
+| 正式后端入口 | `ai_test_asset_center.private_pilot_entrypoint`（`qualibug-server`） |
+| 正式客户前端 | `frontend/` React 控制台 |
+| Docker 镜像标签 | `qualibug-ai:95.0.0-private-pilot` |
 
-私有部署统一口径：
-
-- 产品版本：`95.0.0`
-- 默认后端端口：`8088`
-- 正式客户前端：`frontend/` React 控制台
-- 标准健康检查：`/api/health`
-- 兼容健康检查：`/health`
-- 标准私有服务入口：`ai_test_asset_center.private_pilot_entrypoint`
-- Docker 镜像标签：`qualibug-ai:95.0.0-private-pilot`
-- `backend/main.py` 仅保留为兼容/实验接口，不是正式真实执行主入口
-
-证据管道保持四层状态保留（自 Phase92A 起持续生效）：
-
-```
-Raw Probe Evidence → Normalized Runtime Evidence → Semantic Verification Evidence → Business Finding Contract
-```
+`backend/main.py` 仅作兼容 / 实验接口，**不是**正式真实执行主入口。
 
 ---
 
 ## 快速开始
 
+### 环境要求
+
+- Python `>= 3.11`
+- Node.js（前端开发）
+- 可选：Docker / Docker Compose
+
 ### 本地安装
 
 ```bash
-# 1. 克隆项目
-git clone https://github.com/qualibug/qualibug-ai.git
-cd qualibug-ai
+# 1. 克隆仓库
+git clone https://github.com/mmc20210220-ctrl/QualiBug-AI.git
+cd QualiBug-AI
 
-# 2. 安装依赖
+# 2. 安装 Python 依赖
 pip install -r requirements.txt
 pip install -e .
 
 # 3. 配置环境变量
 cp .env.local.example .env.local
-# 编辑 .env.local 配置你的 LLM API
+# 编辑 .env.local：配置 LLM API，并设置 QUALIBUG_JWT_SECRET
 
 # 4. 私有部署自检（推荐先执行）
 qualibug-doctor
-# 如需验证 runtime patch 实际安装状态：
-qualibug-doctor --install-patches
 
-# 5. 运行测试
-python -m pytest tests/test_phase95_runtime_evidence_scoreboard.py -v
-# 或运行完整测试套件
-python -m pytest tests/ -q
-
-# 6. 启动私有服务
-# 后端固定端口：8088
+# 5. 启动后端（固定端口 8088）
 python -m ai_test_asset_center.private_pilot_entrypoint
-# 或使用安装后的脚本入口
+# 或
 qualibug-server
 
-# 7. 启动正式客户前端（React 控制台）
-# 前端固定端口：5174
-cd frontend && npm run dev
-# 或使用 CLI（发布验证、扫描等）
-qualibug verify-release
+# 6. 启动前端（固定端口 5174）
+cd frontend
+npm ci
+cp .env.example .env.local
+npm run dev
 ```
 
-正式产品主线为：
+访问：
 
-1. `frontend/src/pages/Settings.tsx` 维护项目、服务、鉴权和数据库配置
-2. `frontend/src/pages/EnterpriseMaterials.tsx` 导入企业资料并沉淀知识资产
-3. `frontend/src/pages/EnterpriseCampaigns.tsx` 作为统一运行中心发起标准扫描或受控执行
-4. `frontend/src/pages/Dashboard.tsx`、`Findings.tsx`、`EvidenceChain.tsx` 查看真实结果与证据链
+- 前端控制台：`http://127.0.0.1:5174`
+- 后端健康检查：`http://127.0.0.1:8088/api/health`
 
-Phase105 静态前端产物保留为演示包、预览包和导出资产，不再作为正式产品主界面。
-
-### 私有部署 Doctor
-
-`qualibug-doctor` 输出 JSON 诊断，便于客户现场安装、自检和交付排障。默认模式为只读诊断，不要求 HTTP 服务已经启动。
-
-诊断范围包括：
-
-- 产品版本、Phase、默认端口、标准 health path；
-- private-pilot patch 模块是否可导入；
-- runtime patch 当前安装状态；
-- 凭证加密 key 来源、前端是否只返回 masked refs；
-- Browser UI Smoke 是否开启、Playwright 是否可用、UI base URL 环境变量；
-- scan context contract 是否完整，包含 source manifest、scan body 准备、campaign context 构造；
-- `/api/health` payload 预览。
+### 一键自检
 
 ```bash
-# 只读自检
-qualibug-doctor
-
-# 紧凑 JSON，便于 CI 或脚本解析
-qualibug-doctor --compact
-
-# 安装 runtime patches 后再报告状态
-qualibug-doctor --install-patches
+qualibug-doctor              # 只读诊断（JSON）
+qualibug-doctor --compact    # 紧凑输出，便于 CI
+qualibug-doctor --output     # 写出交付用诊断报告
 ```
 
 ### Docker 部署
 
 ```bash
-# 构建镜像
+# 构建
 docker build -t qualibug-ai:95.0.0-private-pilot .
 
-# 使用 docker-compose 启动
+# 启动（需提供 QUALIBUG_JWT_SECRET）
+set QUALIBUG_JWT_SECRET=your-high-entropy-secret   # Windows PowerShell: $env:QUALIBUG_JWT_SECRET=...
 docker-compose up -d
 
-# 查看日志
+# 日志与健康检查
 docker-compose logs -f qualibug
-
-# 访问服务（宿主机与容器统一使用 8088）
-# http://localhost:8088
-# http://localhost:8088/api/health
+curl http://127.0.0.1:8088/api/health
 ```
 
-Docker 容器内统一监听 `8088`，`docker-compose.yml` 默认仅发布到宿主机
-`127.0.0.1:8088`。容器内使用 `0.0.0.0` 只是为了通过 Docker 网络暴露；宿主机默认仍
-限制为本机访问。
+容器默认映射到宿主机 `127.0.0.1:8088`。公开绑定需显式开启，并置于企业反向代理之后。更完整的私有部署说明见 [`deploy/README.md`](deploy/README.md)。
 
 ---
 
-## 核心功能
+## 正式产品主线
 
-### 证据管道 (Phase92A)
+1. **Settings** — 维护项目、服务、鉴权与数据库配置  
+2. **Enterprise Materials** — 导入企业资料，沉淀知识资产  
+3. **Enterprise Campaigns** — 统一运行中心：发起标准扫描或受控执行  
+4. **Dashboard / Findings / Evidence Chain** — 查看真实结果与证据链  
+5. **Internal Clues** — 查看未通过客户交付门禁的内部线索及缺失原因  
+6. **Release Gate** — 发布门禁与交付就绪判断  
 
-| 组件 | 功能 | 文件 |
-|------|------|------|
-| Evidence Normalizer | 原始探针证据归一化 | evidence_normalizer.py |
-| Business Evidence Enricher | 业务证据富化 | business_evidence_enricher.py |
-| Discovery Finding Gate | 双层门控 | discovery_finding_gate.py |
-| Adversarial Validator | 对抗性验证 | business_adversarial_validator.py |
-| Finding Registry | 发现注册中心 | business_finding_registry.py |
-| Browser UI Smoke | 页面可达性、console/network 错误、截图/HAR 证据 | browser_ui_smoke.py |
+前端开发细节见 [`frontend/README.md`](frontend/README.md)。
 
-### 双层门控机制
+---
 
-1. **Runtime Evidence Gate** — 验证探针证据可追溯性
-   - 检查原始探针调用存在性
-   - 验证语义证据引用
-   - 确保运行时裁决可追溯
+## 核心能力
 
-2. **Business Evidence Gate** — 验证业务合同完整性
-   - 实体绑定完整性
-   - Before/After 快照存在性
-   - 动作证据引用
-   - 观察者证据
-   - Cleanup 状态
+### 行为空间与发现主线
 
-### 浏览器 UI Smoke 层
+- 从企业资料与接口文档构建 **Behavior IR**（行为中间表示）
+- 编译测试义务（Test Obligations）与可执行实验（Executable Experiments）
+- 在受治理沙箱中执行读写探针，产出可追溯证据与缺陷候选
+- 仅通过客户交付门禁（Customer Delivery Gate）的结果才可对外交付
 
-浏览器 UI 层默认关闭，不影响 API 扫描主链路。打开后，patched private pilot scan 会额外采集：
+### 证据管道
 
-- 页面可达性与状态码；
-- console error / warning；
-- failed network request；
-- 页面截图；
-- HAR 证据文件。
+```text
+Raw Probe Evidence
+  → Normalized Runtime Evidence
+  → Semantic Verification Evidence
+  → Business Finding Contract
+```
+
+关键原则：
+
+- 证据可格式化展示，可生成明确标注的操作指引
+- **不得**推断请求体、凭证、业务规则、表名 / SQL 或影响结论
+- 合成指引不能替代真实执行证据，也不能满足客户交付门禁
+
+### 执行治理
+
+- 仅对**显式声明的非生产**目标自动执行读写探针
+- 生产与未知环境类型对写操作 **fail-closed**
+- 每次写操作必须经过治理沙箱，并产出 before/after 观察、清理结果与审计回执
+- 只读模式可作为操作员熔断开关，在发请求前阻断写入
+
+### 质量真相口径
+
+- 产品缺陷真相以正式客户可交付结果为准，不以内部候选 / 漏斗计数冒充召回率或商业能力
+- 商业推广所需的外部评测证据缺失时保持 `NOT_MEASURED`，不抬高宣称等级
+
+---
+
+## CLI 入口
+
+| 命令 | 作用 |
+|---|---|
+| `qualibug-server` | 启动私有服务（正式后端入口） |
+| `qualibug-doctor` | 安装 / 交付现场自检 |
+| `qualibug` | 通用 CLI（含发布验证等） |
+| `qualibug-acceptance-smoke` | 私有试点验收冒烟 |
+| `qualibug-discover-chain` | 发现运行并校验主证据链 |
+| `qualibug-pilot-chain` | 试点运行时任务 + 主证据链校验 |
+
+---
+
+## 仓库结构（摘要）
+
+```text
+ai_test_asset_center/   # 产品运行时、发现主线、证据与治理
+frontend/               # 正式客户 React 控制台（端口 5174）
+aitestops/              # CLI 与运维工具入口
+deploy/                 # 私有部署包与环境模板
+docs/                   # 架构、运行手册与目标规格
+tests/                  # 自动化测试
+tools/                  # 评测与运维辅助脚本
+benchmark/              # 可见基准材料（不含评测私有 GT）
+```
+
+---
+
+## 文档索引
+
+| 文档 | 说明 |
+|---|---|
+| [`docs/QUICKSTART.md`](docs/QUICKSTART.md) | 快速上手补充 |
+| [`docs/API.md`](docs/API.md) | HTTP API |
+| [`docs/OPERATIONS_RUNBOOK.md`](docs/OPERATIONS_RUNBOOK.md) | 运维手册 |
+| [`docs/ENTERPRISE_PILOT_RUNBOOK.md`](docs/ENTERPRISE_PILOT_RUNBOOK.md) | 企业试点手册 |
+| [`docs/private_pilot_doctor.md`](docs/private_pilot_doctor.md) | Doctor 诊断说明 |
+| [`deploy/README.md`](deploy/README.md) | 私有部署安全边界与启动 |
+| [`frontend/README.md`](frontend/README.md) | 前端本地运行与 CI 门禁 |
+| [`docs/DISCOVERY_HARNESS_EVOLUTION_GOAL.md`](docs/DISCOVERY_HARNESS_EVOLUTION_GOAL.md) | 发现能力目标与验收门禁 |
+| [`docs/AUTONOMOUS_BUG_DISCOVERY_CAPABILITY_BREAKTHROUGH_SPEC.md`](docs/AUTONOMOUS_BUG_DISCOVERY_CAPABILITY_BREAKTHROUGH_SPEC.md) | 能力架构规格 |
+
+开发代理约束与运行时契约见根目录 [`AGENTS.md`](AGENTS.md)。
+
+---
+
+## 设计原则
+
+1. **Fail Fast** — 错误不得被静默吞掉  
+2. **Fix the Cause** — 修根因，不糊表面补丁  
+3. **Make It Observable** — 关键路径可追溯、可诊断  
+4. **Industry Neutral** — 全行业适配，禁止客户业务硬编码  
+5. **No Fake Bugs** — 没有真实执行证据的缺陷不得交付  
+6. **Living Docs** — 产品方向变更时同步更新文档  
+
+---
+
+## 许可证
+
+Proprietary. 未授权不得复制、分发或商用。
