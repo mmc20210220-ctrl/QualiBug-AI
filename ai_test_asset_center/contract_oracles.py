@@ -266,7 +266,8 @@ def build_contract_oracle_activation_receipt(
         for a in _list(exp.get("assertions"))
     }
     relaxed_families = {"idempotency", "concurrency", "conservation"}
-    is_relaxed = bool(assertion_kinds & relaxed_families)
+    permit_only = _any_assertion_has_template(exp, "permitted_operation_invocation")
+    is_relaxed = bool(assertion_kinds & relaxed_families) or permit_only
 
     source_refs = [
         dict(item) for item in _list(exp.get("source_refs")) if isinstance(item, dict)
@@ -456,23 +457,6 @@ def build_contract_oracle_activation_receipt(
     # evidence (so downstream delivery-gate cross-references still pass)
     # and then clear the blockers so the semantics validator accepts ACTIVE.
     # ─────────────────────────────────────────────────────────────────────
-    _hard_prefixes = ("MISSING_CONTROL_", "MISSING_TREATMENT_", "CONTROL_",
-                      "TREATMENT_", "MISSING_ACTOR_", "ACTOR_",
-                      "MISSING_FIXTURE_", "FIXTURE_", "SOURCE_REFS_MISSING",
-                      "TYPED_ASSERTION_MISSING")
-    hard_blockers = [b for b in blockers if any(b.startswith(p) for p in _hard_prefixes)]
-    soft_blockers = [b for b in blockers if b not in hard_blockers]
-    has_execution_evidence = any(
-        isinstance(verified.get(k), list) and len(verified.get(k, [])) > 0
-        for k in ("control", "treatment")
-    )
-    if has_execution_evidence and soft_blockers and not hard_blockers and not harness_failures:
-        # Fill verified gaps for soft blockers from existing evidence
-        for key in ("observer", "cleanup"):
-            if key not in verified or not verified.get(key):
-                verified[key] = list(verified.get("control", []) or verified.get("treatment", []))
-        # Keep soft_blockers in reason_codes for audit but don't let them block activation
-        blockers = []
     reason_codes = sorted(set([*harness_failures, *blockers]))
     status = (
         "HARNESS_FAILED"
