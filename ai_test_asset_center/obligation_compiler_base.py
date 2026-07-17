@@ -588,24 +588,15 @@ def _cleanup_requirement(
             requirement["mode"] = "reverse_order"
             return requirement
 
-    # POSTs that are direct actions (no path placeholder) with a request body
-    # can use snapshot_restore when no DELETE counterpart exists.
+    # POSTs that are direct actions (no path placeholder) can use
+    # snapshot_restore when no DELETE counterpart exists.
     if (
         method == "POST"
         and raw_path.startswith("/")
         and not path_has_placeholders(raw_path)
     ):
-        request = _dict(op.get("request_example"))
-        if not request:
-            request_schema = _dict(op.get("request_schema"))
-            content = _dict(request_schema.get("content"))
-            for media in content.values():
-                if isinstance(media, dict) and isinstance(media.get("example"), dict):
-                    request = media["example"]
-                    break
-        if request:
-            requirement["mode"] = "snapshot_restore"
-            return requirement
+        requirement["mode"] = "snapshot_restore"
+        return requirement
 
     if (
         required is None

@@ -74,6 +74,14 @@ def _is_permitted_operation_invocation(experiment: dict[str, Any]) -> bool:
     return False
 
 
+def _has_observer_id(experiment: dict[str, Any], observer_id: str) -> bool:
+    """True when the experiment declares the given observer."""
+    for observer in _list(experiment.get("observers")):
+        if isinstance(observer, dict) and _text(observer.get("observer_id")) == observer_id:
+            return True
+    return False
+
+
 def _unresolved_path_placeholders(path: str) -> list[str]:
     """Return path tokens that are still present after runtime materialization."""
 
@@ -346,11 +354,12 @@ def preflight_experiment_executable(
         if not method:
             return False, "BLOCKED_MISSING_OPERATION", f"missing_method:{op_ref}"
         # Align with experiment compile: permit-only reversible writes may rely
-        # on http_response alone. Non-permit writes still require a declared
-        # effect-read observer path (fail closed).
+        # on http_response alone. Writes with http_response observer declared
+        # may also proceed without a separate effect-read observer.
         if (
             method in _WRITE_METHODS
             and not _is_permitted_operation_invocation(exp)
+            and not _has_observer_id(exp, "http_response")
             and not _declared_observation_path(path, ops)
             and not _declared_effect_observer_available(op, ops)
         ):
