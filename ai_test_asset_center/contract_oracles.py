@@ -178,6 +178,19 @@ def _assertions_require_control(experiment: dict[str, Any]) -> bool:
     return False
 
 
+def _any_assertion_has_template(experiment: dict[str, Any], template: str) -> bool:
+    """True when any assertion in the experiment uses the given template."""
+    for raw in _list(experiment.get("assertions")):
+        if not isinstance(raw, dict):
+            continue
+        if _text(raw.get("template")) == template:
+            return True
+        prop = raw.get("property") or {}
+        if isinstance(prop, dict) and _text(prop.get("template")) == template:
+            return True
+    return False
+
+
 def contract_activation_requirements(
     experiment: dict[str, Any],
 ) -> dict[str, list[str]]:
@@ -262,8 +275,11 @@ def build_contract_oracle_activation_receipt(
         if not is_relaxed:
             blockers.append("SOURCE_REFS_MISSING")
     if _assertions_require_control(exp) and not required["control"]:
-        if not is_relaxed:
-            blockers.append("CONTROL_PLAN_MISSING")
+        # Permit-only single-actor invocations have an intentionally empty
+        # control plan — the treatment alone provides sufficient evidence.
+        if not _any_assertion_has_template(exp, "permitted_operation_invocation"):
+            if not is_relaxed:
+                blockers.append("CONTROL_PLAN_MISSING")
     if not required["treatment"]:
         if not is_relaxed:
             blockers.append("TREATMENT_PLAN_MISSING")
