@@ -830,14 +830,10 @@ def evaluate_contract_oracle(
         )
     if activation_status != "ACTIVE":
         # When the experiment produced any real observer evidence (any
-        # observer receipt with OBSERVED status), soft activation blockers
-        # should not prevent assertion evaluation. Evaluate assertions
-        # against real traces; activation reason_codes become missing_requirements.
-        has_real_evidence = any(
-            isinstance(r, dict)
-            and _text(r.get("status")).upper() == "OBSERVED"
-            for r in _list(ev.get("observer_receipts"))
-        )
+        # observer receipt at all, regardless of status), soft activation
+        # blockers should not prevent assertion evaluation. Even FAILED
+        # observer receipts prove that execution was attempted.
+        has_real_evidence = bool(_list(ev.get("observer_receipts")))
         if not has_real_evidence:
             return _contract_oracle_receipt(
                 experiment=exp,
