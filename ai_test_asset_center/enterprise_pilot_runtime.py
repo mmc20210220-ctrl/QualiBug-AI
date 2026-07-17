@@ -46,7 +46,24 @@ def _run_real_project_discovery_stub(*args: Any, **kwargs: Any) -> dict[str, Any
     """Stub for removed real_project_defect_discovery module."""
     return {"status": "not_available", "reason": "module_retired"}
 
-run_real_project_discovery = _run_real_project_discovery_stub
+
+_DEFAULT_DISCOVERY_RUNNER = _run_real_project_discovery_stub
+_ACTIVE_DISCOVERY_RUNNER = _run_real_project_discovery_stub
+
+
+def set_real_project_discovery_runner(runner: Any | None) -> None:
+    """Bind the active discovery runner without replacing this module's symbol."""
+    global _ACTIVE_DISCOVERY_RUNNER
+    _ACTIVE_DISCOVERY_RUNNER = runner if callable(runner) else _DEFAULT_DISCOVERY_RUNNER
+
+
+def get_real_project_discovery_runner() -> Any:
+    return _ACTIVE_DISCOVERY_RUNNER
+
+
+def run_real_project_discovery(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    """Stable public entry; active implementation is selected via setter."""
+    return _ACTIVE_DISCOVERY_RUNNER(*args, **kwargs)
 from .project_runtime_primitives import (
     PROJECT_ROOT as ROOT,
     safe_project_id as _safe_project_id,

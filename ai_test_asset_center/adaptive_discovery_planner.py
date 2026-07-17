@@ -121,25 +121,55 @@ def plan_obligation_round(
         })
     ranked.sort(key=lambda item: (-item["score"], item["obligation_id"]))
 
-    # Minimum coverage quotas by family
+    # Family-fair selection within the fixed budget: do not let abundant
+    # authorization/validation monopolize a cold-start window. Soft-cap is
+    # floor(budget / distinct_families); remaining slots fill by score.
+    families_present: list[str] = []
+    seen_families: set[str] = set()
+    for item in ranked:
+        family = item["risk_family"]
+        if family and family not in seen_families:
+            seen_families.add(family)
+            families_present.append(family)
+    soft_cap = max(1, budget // max(1, len(families_present)))
+
     selected: list[dict[str, Any]] = []
     selected_ids: set[str] = set()
     family_counts: dict[str, int] = {}
-    for item in ranked:
+
+    def _try_add(item: dict[str, Any]) -> bool:
+        oid = item["obligation_id"]
+        if len(selected) >= budget or oid in selected_ids:
+            return False
+        selected.append(item)
+        selected_ids.add(oid)
         family = item["risk_family"]
-        if family_counts.get(family, 0) < 1 and len(selected) < budget:
-            selected.append(item)
-            selected_ids.add(item["obligation_id"])
-            family_counts[family] = family_counts.get(family, 0) + 1
+        family_counts[family] = family_counts.get(family, 0) + 1
+        return True
+
+    for item in ranked:
+        if family_counts.get(item["risk_family"], 0) < 1:
+            _try_add(item)
+
+    progressed = True
+    while len(selected) < budget and progressed:
+        progressed = False
+        for family in families_present:
+            if len(selected) >= budget:
+                break
+            if family_counts.get(family, 0) >= soft_cap:
+                continue
+            for item in ranked:
+                if item["risk_family"] != family or item["obligation_id"] in selected_ids:
+                    continue
+                if _try_add(item):
+                    progressed = True
+                break
+
     for item in ranked:
         if len(selected) >= budget:
             break
-        if item["obligation_id"] in selected_ids:
-            continue
-        selected.append(item)
-        selected_ids.add(item["obligation_id"])
-        family = item["risk_family"]
-        family_counts[family] = family_counts.get(family, 0) + 1
+        _try_add(item)
 
     pending = [item for item in ranked if item["obligation_id"] not in selected_ids]
     return {

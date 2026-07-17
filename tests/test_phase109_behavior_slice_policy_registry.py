@@ -36,10 +36,10 @@ def test_registry_persists_incremental_slice_policy_defaults(tmp_path):
     assert restored_execution.incremental_discovery_round_limit == 8
 
 
-def test_execution_policy_defaults_to_frozen_legacy_champion_authority() -> None:
+def test_execution_policy_defaults_to_installed_experiment_candidate_authority() -> None:
     policy = ExecutionPolicy()
 
-    assert policy.mainline_authority == "legacy_champion"
+    assert policy.mainline_authority == "experiment_candidate"
 
 
 def test_execution_policy_rejects_unknown_mainline_authority() -> None:

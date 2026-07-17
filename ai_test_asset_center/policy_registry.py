@@ -221,7 +221,9 @@ class ExecutionPolicy:
     require_cleanup_receipt: bool = True
     persist_cross_round_traces: bool = True
     # Frozen before a run. Runtime errors must never switch this authority.
-    mainline_authority: str = "legacy_champion"
+    # Product installs only experiment_candidate; legacy_champion remains an
+    # explicit select-before-run choice when a gate-verifiable runner exists.
+    mainline_authority: str = "experiment_candidate"
 
     def __post_init__(self) -> None:
         self.max_requests = max(1, min(int(self.max_requests or 1), 1000))

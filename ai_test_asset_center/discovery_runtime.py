@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -12,6 +13,7 @@ from .adaptive_discovery_planner import (
     build_agent_intent_plan,
     plan_obligation_round,
 )
+from .pipeline_slices import _auto_scale_slice_budget
 from .adaptive_planning_history import (
     build_planning_budget_receipt,
     build_planning_history_receipt,
@@ -582,9 +584,28 @@ def build_discovery_plan(
             _original = _vm.group(1)
             if _original not in by_obligation:
                 by_obligation[_original] = row
-    budget = int(getattr(campaign, "slice_budget", 0) or 0)
-    if budget <= 0:
+    campaign_budget = int(getattr(campaign, "slice_budget", 0) or 0)
+    if campaign_budget <= 0:
         raise MainlineContractError("obligation_budget_invalid")
+    compiled_pool_size = sum(
+        1
+        for row in by_obligation.values()
+        if _text(_dict(_dict(row).get("compile_receipt")).get("status")).upper()
+        == "COMPILED"
+        or _text(_dict(row).get("compile_status")).upper() == "COMPILED"
+    )
+    # Bind the run budget from the compiled obligation pool using the same
+    # auto-scaler as behavior-slice scheduling. An explicit operator env
+    # override (already reflected in campaign.slice_budget) must not be raised.
+    env_override = str(
+        os.environ.get("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND") or ""
+    ).strip()
+    if env_override:
+        budget = campaign_budget
+    else:
+        budget = max(campaign_budget, _auto_scale_slice_budget(compiled_pool_size))
+    if budget != campaign_budget:
+        campaign.slice_budget = budget
     budget_receipt = build_planning_budget_receipt(budget)
     policy_identity = {
         "policy_id": _text(inputs.campaign_context.get("policy_id")),

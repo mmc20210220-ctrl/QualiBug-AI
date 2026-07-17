@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-"""Browser UI smoke bridge for patched private-pilot scans.
+"""Browser UI smoke bridge for private-pilot scans.
 
-The private pilot entrypoint should remain a thin deployment bootstrapper. This
-module owns scan argument resolution and the non-blocking browser UI smoke patch
-that attaches browser evidence to scan results.
+Registers a named ``scan_post_hooks`` hook instead of replacing ``__main__.scan``.
 """
 
 import os
@@ -13,6 +11,7 @@ from typing import Any
 
 from ai_test_asset_center import private_pilot_service as _service
 from ai_test_asset_center.private_pilot_scan_context_contract import current_scan_campaign_context
+from ai_test_asset_center.scan_post_hooks import register_scan_post_hook
 
 
 def scan_project_from_args(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
@@ -32,9 +31,10 @@ def scan_root_from_args(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Path:
         return _service._root()
 
 
-def scan_base_url_from_context(kwargs: dict[str, Any]) -> str:
+def scan_base_url_from_context(kwargs: dict[str, Any] | None = None) -> str:
+    context = kwargs if isinstance(kwargs, dict) else {}
     for key in ("ui_base_url", "base_url"):
-        value = str(kwargs.get(key) or "").strip()
+        value = str(context.get(key) or "").strip()
         if value:
             return value.rstrip("/")
     pending = current_scan_campaign_context()
@@ -67,41 +67,33 @@ def browser_ui_error_report(exc: Exception) -> dict[str, Any]:
     }
 
 
-def install_browser_ui_smoke_patch(*, patch_source: str) -> None:
-    """Attach non-blocking browser UI smoke evidence to patched scans."""
-    if getattr(_service, "_BROWSER_UI_SMOKE_PATCHED", False):
-        return
-    from ai_test_asset_center import __main__ as scanner_module
+def _browser_ui_smoke_hook(result: dict[str, Any], *, project: str, root: Path) -> dict[str, Any]:
     from ai_test_asset_center.browser_ui_smoke import attach_browser_ui_health
 
-    original_scan = getattr(scanner_module, "scan")
+    base_url = scan_base_url_from_context({})
+    try:
+        return attach_browser_ui_health(result, project=project, root=root, base_url=base_url)
+    except Exception as exc:
+        updated = dict(result)
+        updated["browser_ui_health"] = browser_ui_error_report(exc)
+        return updated
 
-    def _scan_with_browser_ui_smoke(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        result = original_scan(*args, **kwargs)
-        if not isinstance(result, dict):
-            return result
-        project = scan_project_from_args(args, kwargs)
-        root = scan_root_from_args(args, kwargs)
-        base_url = scan_base_url_from_context(kwargs)
-        try:
-            return attach_browser_ui_health(result, project=project, root=root, base_url=base_url)
-        except Exception as exc:
-            updated = dict(result)
-            updated["browser_ui_health"] = browser_ui_error_report(exc)
-            return updated
 
-    scanner_module.scan = _scan_with_browser_ui_smoke
-    _service._ORIGINAL_BROWSER_UI_SMOKE_SCAN = original_scan  # type: ignore[attr-defined]
+def install_browser_ui_smoke_patch(*, patch_source: str) -> None:
+    """Register non-blocking browser UI smoke evidence as a scan post-hook."""
+    if getattr(_service, "_BROWSER_UI_SMOKE_PATCHED", False):
+        return
+    register_scan_post_hook("browser_ui_smoke", _browser_ui_smoke_hook)
+    _service._ORIGINAL_BROWSER_UI_SMOKE_SCAN = None  # type: ignore[attr-defined]
     _service._BROWSER_UI_SMOKE_PATCHED = True  # type: ignore[attr-defined]
     _service._BROWSER_UI_SMOKE_PATCH_SOURCE = patch_source  # type: ignore[attr-defined]
+    _service._BROWSER_UI_SMOKE_MODE = "first_class_hook"  # type: ignore[attr-defined]
 
 
 def restore_browser_ui_smoke_patch() -> None:
-    original_scan = getattr(_service, "_ORIGINAL_BROWSER_UI_SMOKE_SCAN", None)
-    if original_scan is not None:
-        from ai_test_asset_center import __main__ as scanner_module
-
-        scanner_module.scan = original_scan
+    register_scan_post_hook("browser_ui_smoke", None)
     _service._ORIGINAL_BROWSER_UI_SMOKE_SCAN = None  # type: ignore[attr-defined]
     _service._BROWSER_UI_SMOKE_PATCHED = False  # type: ignore[attr-defined]
     _service._BROWSER_UI_SMOKE_PATCH_SOURCE = ""  # type: ignore[attr-defined]
+    if hasattr(_service, "_BROWSER_UI_SMOKE_MODE"):
+        delattr(_service, "_BROWSER_UI_SMOKE_MODE")

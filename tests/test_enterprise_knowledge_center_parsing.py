@@ -3,9 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from ai_test_asset_center.enterprise_knowledge_center import (
+    _authoritative_rule_to_interface_edges,
     _classify_source,
     _links_by_exact_source_section,
+    _links_by_exclusive_contract_fields,
     _links_by_overlap,
+    _links_by_same_source_exclusive_module_neighbors,
     _parse_source,
     build_enterprise_business_knowledge_asset,
     ingest_enterprise_knowledge_documents,
@@ -369,6 +372,251 @@ def test_exact_markdown_endpoint_section_is_authoritative_rule_lineage() -> None
     assert edge["status"] == "accepted"
     assert edge["derivation"] == "exact_source_section"
     assert edge["evidence"]["operation_locator"] == "POST /orders"
+
+
+def test_exact_source_section_accepts_cross_document_verbatim_statement() -> None:
+    edges = _links_by_exact_source_section(
+        [{
+            "rule_id": "rule:prd:1",
+            "source_id": "src_prd",
+            "statement": "The amount must be positive.",
+        }],
+        [{
+            "interface_id": "markdown_api:POST:/orders",
+            "source_id": "src_api",
+            "method": "POST",
+            "path": "/orders",
+            "source_excerpt": "### POST `/orders`\nThe amount must be positive.\n",
+        }],
+    )
+
+    assert len(edges) == 1
+    assert edges[0]["status"] == "accepted"
+    assert edges[0]["to"] == "markdown_api:POST:/orders"
+
+
+def test_exclusive_contract_fields_bind_write_ops_in_same_module() -> None:
+    edges = _links_by_exclusive_contract_fields(
+        [{
+            "rule_id": "rule-inventory-conserved",
+            "statement": "available_qty and locked_qty must stay non-negative.",
+            "risk_type": "data_conservation",
+        }],
+        [
+            {
+                "interface_id": "markdown_api:GET:/api/inventory/:sku",
+                "method": "GET",
+                "path": "/api/inventory/:sku",
+                "summary": "Query SKU stock (available_qty / locked_qty).",
+                "source_excerpt": "### GET /api/inventory/:sku\navailable_qty / locked_qty\n",
+                "field_dictionary": ["available_qty", "locked_qty"],
+            },
+            {
+                "interface_id": "markdown_api:POST:/api/inventory/reserve",
+                "method": "POST",
+                "path": "/api/inventory/reserve",
+                "source_excerpt": "### POST /api/inventory/reserve\n{\"sku\":\"X\",\"qty\":1}\n",
+                "field_dictionary": ["sku", "qty"],
+            },
+            {
+                "interface_id": "markdown_api:POST:/api/cart/items",
+                "method": "POST",
+                "path": "/api/cart/items",
+                "source_excerpt": "### POST /api/cart/items\n{\"sku\":\"X\",\"qty\":1}\n",
+                "field_dictionary": ["sku", "qty"],
+            },
+        ],
+    )
+
+    assert {edge["to"] for edge in edges} == {"markdown_api:POST:/api/inventory/reserve"}
+    assert edges[0]["status"] == "accepted"
+    assert edges[0]["derivation"] == "exclusive_contract_field_module"
+    assert edges[0]["evidence"]["module_prefix"] == "/api/inventory"
+
+
+def test_exclusive_contract_fields_prefer_field_bearing_write() -> None:
+    edges = _links_by_exclusive_contract_fields(
+        [{
+            "rule_id": "rule-pay-idempotent",
+            "statement": "idempotencyKey must prevent duplicate payment capture.",
+            "risk_type": "idempotency",
+        }],
+        [
+            {
+                "interface_id": "markdown_api:POST:/api/payments/pay",
+                "method": "POST",
+                "path": "/api/payments/pay",
+                "source_excerpt": '### POST /api/payments/pay\n{"orderId":"1","idempotencyKey":"abc"}\n',
+                "field_dictionary": ["orderId", "idempotencyKey"],
+            },
+            {
+                "interface_id": "markdown_api:POST:/api/payments/admin/manual-success",
+                "method": "POST",
+                "path": "/api/payments/admin/manual-success",
+                "source_excerpt": "### POST /api/payments/admin/manual-success\n",
+                "field_dictionary": ["orderId"],
+            },
+        ],
+    )
+
+    assert [edge["to"] for edge in edges] == ["markdown_api:POST:/api/payments/pay"]
+
+
+def test_exclusive_contract_fields_prefer_reversible_module_writes() -> None:
+    edges = _links_by_exclusive_contract_fields(
+        [{
+            "rule_id": "rule-inventory-conserved",
+            "statement": "available_qty and locked_qty must stay non-negative.",
+            "risk_type": "data_conservation",
+        }],
+        [
+            {
+                "interface_id": "markdown_api:GET:/api/inventory/:sku",
+                "method": "GET",
+                "path": "/api/inventory/:sku",
+                "source_excerpt": "available_qty / locked_qty",
+                "field_dictionary": ["available_qty", "locked_qty"],
+            },
+            {
+                "interface_id": "markdown_api:POST:/api/inventory/reserve",
+                "method": "POST",
+                "path": "/api/inventory/reserve",
+                "summary": "预占库存",
+                "source_excerpt": '{"sku":"X","qty":1,"orderId":"1"}',
+                "field_dictionary": ["sku", "qty", "orderId"],
+            },
+            {
+                "interface_id": "markdown_api:POST:/api/inventory/release",
+                "method": "POST",
+                "path": "/api/inventory/release",
+                "summary": "释放预占库存",
+                "source_excerpt": '{"sku":"X","qty":1,"orderId":"1"}',
+                "field_dictionary": ["sku", "qty", "orderId"],
+            },
+            {
+                "interface_id": "markdown_api:POST:/api/inventory/consume",
+                "method": "POST",
+                "path": "/api/inventory/consume",
+                "summary": "支付后消耗锁定库存",
+                "source_excerpt": '{"sku":"X","qty":1,"orderId":"1"}',
+                "field_dictionary": ["sku", "qty", "orderId"],
+            },
+            {
+                "interface_id": "markdown_api:POST:/api/inventory/admin/adjust",
+                "method": "POST",
+                "path": "/api/inventory/admin/adjust",
+                "summary": "Admin inventory delta adjust",
+                "source_excerpt": '{"sku":"X","delta":10,"reason":"count"}',
+                "field_dictionary": ["sku", "delta", "reason"],
+            },
+        ],
+    )
+
+    targets = {edge["to"] for edge in edges}
+    assert "markdown_api:POST:/api/inventory/reserve" in targets
+    assert "markdown_api:POST:/api/inventory/admin/adjust" in targets
+    assert "markdown_api:POST:/api/inventory/release" not in targets
+    assert "markdown_api:POST:/api/inventory/consume" not in targets
+
+
+def test_exclusive_contract_fields_fail_closed_across_modules() -> None:
+    edges = _links_by_exclusive_contract_fields(
+        [{
+            "rule_id": "rule-ambiguous-qty",
+            "statement": "qty must be conserved across cart and inventory.",
+        }],
+        [
+            {
+                "interface_id": "markdown_api:POST:/api/cart/items",
+                "method": "POST",
+                "path": "/api/cart/items",
+                "source_excerpt": '{"qty":1}',
+                "field_dictionary": ["qty"],
+            },
+            {
+                "interface_id": "markdown_api:POST:/api/inventory/reserve",
+                "method": "POST",
+                "path": "/api/inventory/reserve",
+                "source_excerpt": '{"qty":1}',
+                "field_dictionary": ["qty"],
+            },
+        ],
+    )
+
+    assert edges == []
+
+
+def test_same_source_neighbor_binds_concurrency_when_sku_spans_modules() -> None:
+    rules = [
+        {
+            "rule_id": "rule-inventory-conserved",
+            "source_id": "src-rules",
+            "statement": "available_qty and locked_qty must stay non-negative.",
+            "risk_type": "data_conservation",
+        },
+        {
+            "rule_id": "rule-no-oversell",
+            "source_id": "src-rules",
+            "statement": "The same SKU must not oversell under concurrency.",
+            "risk_type": "concurrency",
+        },
+    ]
+    interfaces = [
+        {
+            "interface_id": "markdown_api:GET:/api/inventory/:sku",
+            "method": "GET",
+            "path": "/api/inventory/:sku",
+            "field_dictionary": ["available_qty", "locked_qty"],
+        },
+        {
+            "interface_id": "markdown_api:POST:/api/inventory/reserve",
+            "method": "POST",
+            "path": "/api/inventory/reserve",
+            "summary": "预占库存",
+            "source_excerpt": '{"sku":"X","qty":1,"orderId":"1"}',
+            "field_dictionary": ["sku", "qty", "orderId"],
+        },
+        {
+            "interface_id": "markdown_api:POST:/api/inventory/release",
+            "method": "POST",
+            "path": "/api/inventory/release",
+            "summary": "释放预占库存",
+            "source_excerpt": '{"sku":"X","qty":1,"orderId":"1"}',
+            "field_dictionary": ["sku", "qty", "orderId"],
+        },
+        {
+            "interface_id": "markdown_api:POST:/api/cart/items",
+            "method": "POST",
+            "path": "/api/cart/items",
+            "source_excerpt": '{"sku":"X","qty":1}',
+            "field_dictionary": ["sku", "qty"],
+        },
+    ]
+    exclusive = _links_by_exclusive_contract_fields(rules, interfaces)
+    neighbor = _links_by_same_source_exclusive_module_neighbors(
+        rules,
+        interfaces,
+        seed_edges=exclusive,
+    )
+    authoritative = _authoritative_rule_to_interface_edges(rules, interfaces)
+
+    assert any(edge["from"] == "rule-inventory-conserved" for edge in exclusive)
+    assert any(
+        edge["from"] == "rule-no-oversell"
+        and edge["to"] == "markdown_api:POST:/api/inventory/reserve"
+        and edge["derivation"] == "same_source_exclusive_module_neighbor"
+        for edge in neighbor
+    )
+    assert any(
+        edge["from"] == "rule-no-oversell"
+        and edge["to"] == "markdown_api:POST:/api/inventory/reserve"
+        for edge in authoritative
+    )
+    assert not any(
+        edge["from"] == "rule-no-oversell"
+        and edge["to"] == "markdown_api:POST:/api/cart/items"
+        for edge in authoritative
+    )
 
 
 def test_explicit_positive_integer_rule_is_extracted_as_typed_constraint() -> None:

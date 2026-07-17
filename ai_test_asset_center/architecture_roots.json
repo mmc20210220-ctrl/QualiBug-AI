@@ -39,6 +39,8 @@
     "ai_test_asset_center.pipeline_slices": "compatibility",
     "ai_test_asset_center.pipeline_db": "compatibility",
     "ai_test_asset_center.system_behavior_space_context": "core",
+    "ai_test_asset_center.system_behavior_space_scenario_enricher": "core",
+    "ai_test_asset_center.product_scan_mainline": "core",
     "ai_test_asset_center.private_pilot_regression_projection": "core",
     "ai_test_asset_center.private_pilot_defect_summaries": "core",
     "ai_test_asset_center.private_pilot_command_center_helpers": "core",

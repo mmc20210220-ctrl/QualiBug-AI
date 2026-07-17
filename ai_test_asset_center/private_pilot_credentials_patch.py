@@ -149,6 +149,7 @@ def install_service_credentials_patch(*, patch_source: str) -> None:
     if str(getattr(_service, "_SERVICE_CREDENTIALS_PATCH_SOURCE", "") or "").strip():
         return
     _service._SERVICE_CREDENTIALS_PATCH_SOURCE = patch_source  # type: ignore[attr-defined]
+    _service._SERVICE_CREDENTIALS_MODE = "first_class"  # type: ignore[attr-defined]
     _service._ORIGINAL_HANDLE_GET_SERVICE_CREDENTIALS = None  # type: ignore[attr-defined]
     _service._ORIGINAL_HANDLE_SAVE_SERVICE_CREDENTIALS = None  # type: ignore[attr-defined]
 
@@ -158,3 +159,5 @@ def restore_service_credentials_patch() -> None:
     _service._ORIGINAL_HANDLE_GET_SERVICE_CREDENTIALS = None  # type: ignore[attr-defined]
     _service._ORIGINAL_HANDLE_SAVE_SERVICE_CREDENTIALS = None  # type: ignore[attr-defined]
     _service._SERVICE_CREDENTIALS_PATCH_SOURCE = ""  # type: ignore[attr-defined]
+    if hasattr(_service, "_SERVICE_CREDENTIALS_MODE"):
+        delattr(_service, "_SERVICE_CREDENTIALS_MODE")

@@ -84,7 +84,25 @@ ROLE_WORDS = {
 RISK_TERMS = {
     "permission_boundary": ["permission", "role", "access", "权限", "越权", "仅能", "只能", "tenant", "租户", "所属"],
     "state_machine": ["status", "state", "transition", "状态", "流转", "终态", "撤销", "取消", "审批"],
-    "data_conservation": ["balance", "amount", "ledger", "inventory", "stock", "quota", "金额", "余额", "账本", "库存", "额度", "数量"],
+    "data_conservation": [
+        "balance",
+        "amount",
+        "ledger",
+        "inventory",
+        "stock",
+        "quota",
+        "available_qty",
+        "locked_qty",
+        "金额",
+        "余额",
+        "账本",
+        "库存",
+        "额度",
+        "数量",
+        "负数",
+        "非负",
+        "守恒",
+    ],
     "data_reconciliation": ["reconcile", "match", "consistency", "对账", "一致", "匹配", "同步"],
     "idempotency": ["idempotent", "duplicate", "retry", "幂等", "重复", "重试"],
     "async_event": [
@@ -1402,7 +1420,30 @@ def _rules_from_text(text: str, source_id: str, source_type: str) -> list[dict[s
         norm = _norm(line)
         if len(norm) < 8:
             continue
-        indicator = any(marker in norm for marker in ("必须", "不得", "只能", "禁止", "应当", "should", "must", "only", "not allowed", "cannot", "require", "一致", "守恒", "审批"))
+        indicator = any(
+            marker in norm
+            for marker in (
+                "必须",
+                "不得",
+                "不能",
+                "不可",
+                "不应",
+                "只能",
+                "禁止",
+                "应当",
+                "应该",
+                "should",
+                "must",
+                "only",
+                "not allowed",
+                "cannot",
+                "must not",
+                "require",
+                "一致",
+                "守恒",
+                "审批",
+            )
+        )
         rule_type = _rule_type_from_text(line)
         if not indicator and not (allow_relaxed_async_rules and rule_type in {"idempotency", "async_event"}):
             continue
@@ -2137,7 +2178,12 @@ def _links_by_exact_source_section(
     rules: Iterable[dict[str, Any]],
     interfaces: Iterable[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Bind a rule only to the exact Markdown endpoint section containing it."""
+    """Bind a rule when its exact statement appears in an interface source excerpt.
+
+    Same-document and cross-document matches are both accepted: the evidence is
+    the verbatim statement inside the interface contract section, not source_id
+    equality. Token-overlap candidates remain non-authoritative elsewhere.
+    """
 
     edges: list[dict[str, Any]] = []
     interface_rows = [row for row in interfaces if isinstance(row, dict)]
@@ -2145,13 +2191,10 @@ def _links_by_exact_source_section(
         if not isinstance(rule, dict):
             continue
         statement = str(rule.get("statement") or "").strip()
-        source_id = str(rule.get("source_id") or "").strip()
         rule_id = str(rule.get("rule_id") or "").strip()
-        if not statement or not source_id or not rule_id:
+        if not statement or not rule_id or len(statement) < 8:
             continue
         for interface in interface_rows:
-            if str(interface.get("source_id") or "").strip() != source_id:
-                continue
             excerpt = str(interface.get("source_excerpt") or "")
             if statement not in excerpt:
                 continue
@@ -2176,12 +2219,583 @@ def _links_by_exact_source_section(
                 "derivation": "exact_source_section",
                 "evidence_gate": "exact_source_section",
                 "evidence": {
-                    "source_id": source_id,
+                    "rule_source_id": str(rule.get("source_id") or "").strip(),
+                    "interface_source_id": str(interface.get("source_id") or "").strip(),
                     "operation_locator": operation_locator,
                     "statement_hash": _short_hash(statement),
                 },
             })
     return _dedupe_by_id(edges, "edge_id")
+
+
+_WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_CONTRACT_FIELD_RE = re.compile(r"`([A-Za-z_][A-Za-z0-9_]{1,64})`")
+_JSON_KEY_RE = re.compile(r'"([A-Za-z_][A-Za-z0-9_]{1,64})"\s*:')
+_SNAKE_FIELD_RE = re.compile(r"\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b")
+_CAMEL_FIELD_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*)\b")
+_CLEANUP_ACTION_RE = re.compile(
+    r"(?:cancel|close|void|disable|archive|reject|release|rollback|revoke|"
+    r"remove|delete|deactivate|suspend|expire|invalidate|terminate|withdraw|"
+    r"abandon|discard|retire|freeze|reset|clear|purge)$",
+    re.I,
+)
+_EXCLUDED_CONTRACT_FIELD_TOKENS = frozenset({
+    "get",
+    "post",
+    "put",
+    "patch",
+    "delete",
+    "head",
+    "options",
+    "http",
+    "https",
+    "api",
+    "json",
+    "bearer",
+    "authorization",
+    "token",
+    "true",
+    "false",
+    "null",
+})
+
+
+def _is_plausible_contract_field(field: str) -> bool:
+    text = str(field or "").strip()
+    if len(text) < 2:
+        return False
+    if text.lower() in _EXCLUDED_CONTRACT_FIELD_TOKENS:
+        return False
+    # Drop HTTP verbs / enum-like ALLCAPS tokens that are not schema fields.
+    if text.isupper() and "_" not in text and len(text) <= 8:
+        return False
+    return True
+
+
+def _path_module_prefix(path: str) -> str:
+    parts = [part for part in str(path or "").split("/") if part]
+    if len(parts) >= 2 and parts[0].lower() == "api":
+        return "/" + "/".join(parts[:2])
+    if parts:
+        return "/" + parts[0]
+    return str(path or "").strip() or "/"
+
+
+def _normalize_contract_field(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return text.split(".", 1)[0].replace("[]", "").strip()
+
+
+def _contract_fields_for_interface(interface: dict[str, Any]) -> set[str]:
+    fields: set[str] = set()
+    for item in interface.get("field_dictionary") or []:
+        if isinstance(item, str):
+            normalized = _normalize_contract_field(item)
+        elif isinstance(item, dict):
+            normalized = _normalize_contract_field(
+                item.get("field") or item.get("name") or item.get("field_path")
+            )
+        else:
+            normalized = ""
+        if normalized:
+            fields.add(normalized)
+    for item in interface.get("parameters") or []:
+        if isinstance(item, str):
+            normalized = _normalize_contract_field(item)
+        elif isinstance(item, dict):
+            normalized = _normalize_contract_field(item.get("name") or item.get("field"))
+        else:
+            normalized = ""
+        if normalized:
+            fields.add(normalized)
+    excerpt = str(interface.get("source_excerpt") or "")
+    for match in _CONTRACT_FIELD_RE.finditer(excerpt):
+        fields.add(match.group(1))
+    for match in _JSON_KEY_RE.finditer(excerpt):
+        fields.add(match.group(1))
+    for match in _SNAKE_FIELD_RE.finditer(excerpt):
+        fields.add(match.group(1))
+    for match in _CAMEL_FIELD_RE.finditer(excerpt):
+        fields.add(match.group(1))
+    summary = str(interface.get("summary") or "")
+    for match in _SNAKE_FIELD_RE.finditer(summary):
+        fields.add(match.group(1))
+    return {field for field in fields if _is_plausible_contract_field(field)}
+
+
+def _rule_mentioned_contract_fields(statement: str, universe: set[str]) -> set[str]:
+    if not statement or not universe:
+        return set()
+    lower_universe = {field.lower(): field for field in universe}
+    mentioned: set[str] = set()
+    for match in _CONTRACT_FIELD_RE.finditer(statement):
+        canonical = lower_universe.get(match.group(1).lower())
+        if canonical:
+            mentioned.add(canonical)
+    for match in _SNAKE_FIELD_RE.finditer(statement):
+        canonical = lower_universe.get(match.group(1).lower())
+        if canonical:
+            mentioned.add(canonical)
+    for match in _CAMEL_FIELD_RE.finditer(statement):
+        canonical = lower_universe.get(match.group(1).lower())
+        if canonical:
+            mentioned.add(canonical)
+    # Allow exact case-insensitive whole-token hits for short declared fields
+    # such as qty that are not snake/camel shaped.
+    for field in universe:
+        if len(field) < 3:
+            continue
+        if re.search(rf"\b{re.escape(field)}\b", statement, flags=re.IGNORECASE):
+            mentioned.add(field)
+    return mentioned
+
+
+def _interface_path_terminal(path: str) -> str:
+    return str(path or "").rstrip("/").rsplit("/", 1)[-1]
+
+
+def _is_cleanup_action_interface(interface: dict[str, Any]) -> bool:
+    method = str(interface.get("method") or "").upper()
+    if method == "DELETE":
+        return True
+    return bool(_CLEANUP_ACTION_RE.search(_interface_path_terminal(str(interface.get("path") or ""))))
+
+
+def _interface_parent_path(path: str) -> str:
+    normalized = str(path or "").rstrip("/")
+    if "/" not in normalized:
+        return normalized
+    return normalized.rsplit("/", 1)[0]
+
+
+def _looks_inverse_delta_capable(interface: dict[str, Any]) -> bool:
+    fields = {field.lower() for field in _contract_fields_for_interface(interface)}
+    return "delta" in fields
+
+
+def _interface_text_blob(interface: dict[str, Any]) -> str:
+    return re.sub(
+        r"[\W_]+",
+        "",
+        " ".join([
+            str(interface.get("summary") or ""),
+            str(interface.get("description") or ""),
+            str(interface.get("source_excerpt") or "")[:240],
+        ]).lower(),
+    )
+
+
+def _interface_summary_blob(interface: dict[str, Any]) -> str:
+    return re.sub(
+        r"[\W_]+",
+        "",
+        " ".join([
+            str(interface.get("summary") or ""),
+            str(interface.get("description") or ""),
+        ]).lower(),
+    )
+
+
+def _cleanup_documents_primary_action(
+    *,
+    source: dict[str, Any],
+    candidate: dict[str, Any],
+) -> bool:
+    """True when cleanup docs name the primary action (language-neutral)."""
+
+    terminal = _interface_path_terminal(str(source.get("path") or "")).lower()
+    source_text = _interface_text_blob(source)
+    source_summary = _interface_summary_blob(source)
+    candidate_text = _interface_text_blob(candidate)
+    candidate_summary = _interface_summary_blob(candidate)
+    if not candidate_text and not candidate_summary:
+        return False
+    if len(terminal) >= 4 and terminal in candidate_text:
+        return True
+    if len(source_text) >= 4 and source_text in candidate_text:
+        return True
+    if source_summary and candidate_summary:
+        if len(source_summary) >= 2 and source_summary in candidate_summary:
+            return True
+        if len(candidate_summary) >= 2 and candidate_summary in source_summary:
+            return True
+        # Shared CJK phrase (>=3) or Latin token (>=4) from the primary summary.
+        for run in re.findall(r"[\u4e00-\u9fff]{3,}|[a-z]{4,}", source_summary):
+            if run in candidate_summary:
+                return True
+    return False
+
+
+def _has_documented_sibling_compensation(
+    interface: dict[str, Any],
+    interfaces: list[dict[str, Any]],
+) -> bool:
+    """True only when exactly one cleanup sibling documents this primary action."""
+
+    parent = _interface_parent_path(str(interface.get("path") or ""))
+    interface_id = str(interface.get("interface_id") or "").strip()
+    source_fields = _contract_fields_for_interface(interface)
+    if not parent:
+        return False
+    candidates: list[dict[str, Any]] = []
+    for candidate in interfaces:
+        if not isinstance(candidate, dict):
+            continue
+        if str(candidate.get("interface_id") or "").strip() == interface_id:
+            continue
+        if str(candidate.get("method") or "").upper() not in _WRITE_METHODS:
+            continue
+        if _interface_parent_path(str(candidate.get("path") or "")) != parent:
+            continue
+        if not _is_cleanup_action_interface(candidate):
+            continue
+        candidate_fields = _contract_fields_for_interface(candidate)
+        text_ok = _cleanup_documents_primary_action(
+            source=interface,
+            candidate=candidate,
+        )
+        fields_ok = bool(source_fields) and source_fields == candidate_fields
+        if not (text_ok or fields_ok):
+            continue
+        if not text_ok and fields_ok:
+            # Shared request schema alone is only safe when this primary is the
+            # unique non-cleanup peer for that cleanup under the same parent.
+            peer_primaries = [
+                peer
+                for peer in interfaces
+                if isinstance(peer, dict)
+                and str(peer.get("interface_id") or "").strip()
+                not in {interface_id, str(candidate.get("interface_id") or "").strip()}
+                and str(peer.get("method") or "").upper() in _WRITE_METHODS
+                and _interface_parent_path(str(peer.get("path") or "")) == parent
+                and not _is_cleanup_action_interface(peer)
+                and _contract_fields_for_interface(peer) == source_fields
+            ]
+            if peer_primaries:
+                continue
+        candidates.append(candidate)
+    return len(candidates) == 1
+
+
+def _prefer_reversible_write_targets(
+    write_targets: list[dict[str, Any]],
+    *,
+    interface_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Prefer source-reversible writes over cleanup/terminal-effect actions.
+
+    Cleanup-named endpoints (release/cancel/...) and irreversible consume-style
+    writes are valid source ops, but they must not become primary write
+    obligations when a sibling reversible primary exists in the same module.
+    """
+
+    non_cleanup = [
+        interface
+        for interface in write_targets
+        if not _is_cleanup_action_interface(interface)
+    ]
+    reversible = [
+        interface
+        for interface in non_cleanup
+        if _has_documented_sibling_compensation(interface, interface_rows)
+        or _looks_inverse_delta_capable(interface)
+    ]
+    return reversible or non_cleanup or list(write_targets)
+
+
+_MODULE_NEIGHBOR_RISK_TYPES = frozenset({
+    "concurrency",
+    "idempotency",
+    "data_conservation",
+})
+
+
+def _module_field_universe(
+    interfaces: Iterable[dict[str, Any]],
+    *,
+    module_prefix: str,
+) -> set[str]:
+    fields: set[str] = set()
+    for interface in interfaces:
+        if not isinstance(interface, dict):
+            continue
+        if _path_module_prefix(str(interface.get("path") or "")) != module_prefix:
+            continue
+        fields |= _contract_fields_for_interface(interface)
+    return fields
+
+
+def _reversible_module_write_targets(
+    *,
+    interface_rows: list[dict[str, Any]],
+    module_prefix: str,
+    mentions: set[str],
+    covering_ids: set[str] | None = None,
+    iface_by_id: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    module_interfaces = [
+        interface
+        for interface in interface_rows
+        if _path_module_prefix(str(interface.get("path") or "")) == module_prefix
+    ]
+    write_targets = [
+        interface
+        for interface in module_interfaces
+        if str(interface.get("method") or "").upper() in _WRITE_METHODS
+    ]
+    field_bearing_writes = [
+        interface
+        for interface in write_targets
+        if mentions & _contract_fields_for_interface(interface)
+    ]
+    if field_bearing_writes:
+        return _prefer_reversible_write_targets(
+            field_bearing_writes,
+            interface_rows=interface_rows,
+        )
+    if write_targets:
+        return _prefer_reversible_write_targets(
+            write_targets,
+            interface_rows=interface_rows,
+        )
+    if covering_ids and iface_by_id is not None:
+        return [
+            iface_by_id[interface_id]
+            for interface_id in covering_ids
+            if interface_id in iface_by_id
+        ]
+    return []
+
+
+def _links_by_exclusive_contract_fields(
+    rules: Iterable[dict[str, Any]],
+    interfaces: Iterable[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Bind rules to interfaces via exclusive declared contract field names.
+
+    Fail-closed: every mentioned field must resolve to interfaces that share one
+    API module prefix. Prefer write operations that declare the fields; otherwise
+    fall back to reversible write operations in that exclusive module
+    (server-side effect fields documented on a sibling read contract).
+    """
+
+    interface_rows = [row for row in interfaces if isinstance(row, dict)]
+    iface_by_id: dict[str, dict[str, Any]] = {}
+    field_to_interfaces: dict[str, set[str]] = defaultdict(set)
+    for interface in interface_rows:
+        interface_id = str(interface.get("interface_id") or "").strip()
+        if not interface_id:
+            continue
+        iface_by_id[interface_id] = interface
+        for field in _contract_fields_for_interface(interface):
+            field_to_interfaces[field].add(interface_id)
+    universe = set(field_to_interfaces)
+    if not universe:
+        return []
+
+    edges: list[dict[str, Any]] = []
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        rule_id = str(rule.get("rule_id") or "").strip()
+        statement = str(rule.get("statement") or "").strip()
+        if not rule_id or not statement:
+            continue
+        mentions = _rule_mentioned_contract_fields(statement, universe)
+        if not mentions:
+            continue
+        covering_ids: set[str] = set()
+        for field in mentions:
+            covering_ids |= field_to_interfaces.get(field, set())
+        if not covering_ids:
+            continue
+        prefixes = {
+            _path_module_prefix(str(iface_by_id[interface_id].get("path") or ""))
+            for interface_id in covering_ids
+            if interface_id in iface_by_id
+        }
+        if len(prefixes) != 1:
+            continue
+        module_prefix = next(iter(prefixes))
+        targets = _reversible_module_write_targets(
+            interface_rows=interface_rows,
+            module_prefix=module_prefix,
+            mentions=mentions,
+            covering_ids=covering_ids,
+            iface_by_id=iface_by_id,
+        )
+        for interface in targets:
+            interface_id = str(interface.get("interface_id") or "").strip()
+            if not interface_id:
+                continue
+            operation_locator = (
+                f"{str(interface.get('method') or '').upper()} "
+                f"{str(interface.get('path') or '')}"
+            ).strip()
+            edges.append({
+                "edge_id": f"edge:{_short_hash({
+                    'rule': rule_id,
+                    'interface': interface_id,
+                    'derivation': 'exclusive_contract_field_module',
+                    'fields': sorted(mentions),
+                })}",
+                "from": rule_id,
+                "to": interface_id,
+                "relation": "rule_to_interface",
+                "confidence": 0.92,
+                "status": "accepted",
+                "derivation": "exclusive_contract_field_module",
+                "evidence_gate": "exclusive_contract_field_module",
+                "evidence": {
+                    "contract_fields": sorted(mentions),
+                    "module_prefix": module_prefix,
+                    "operation_locator": operation_locator,
+                    "statement_hash": _short_hash(statement),
+                },
+            })
+    return _dedupe_by_id(edges, "edge_id")
+
+
+def _links_by_same_source_exclusive_module_neighbors(
+    rules: Iterable[dict[str, Any]],
+    interfaces: Iterable[dict[str, Any]],
+    *,
+    seed_edges: Iterable[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Bind unbound concurrency/idempotency rules via same-source exclusive modules.
+
+    When a field like SKU spans modules, exclusive-field linking fail-closes. A
+    sibling rule in the same source document that already resolved to exactly one
+    module may pull neighboring conservation/concurrency/idempotency rules into
+    that module only when every mentioned field is declared inside it.
+    """
+
+    interface_rows = [row for row in interfaces if isinstance(row, dict)]
+    rule_rows = [row for row in rules if isinstance(row, dict)]
+    rules_by_id = {
+        str(row.get("rule_id") or "").strip(): row
+        for row in rule_rows
+        if str(row.get("rule_id") or "").strip()
+    }
+    universe: set[str] = set()
+    for interface in interface_rows:
+        universe |= _contract_fields_for_interface(interface)
+    if not universe:
+        return []
+
+    seeded_rule_ids = {
+        str(edge.get("from") or "").strip()
+        for edge in seed_edges
+        if isinstance(edge, dict)
+        and str(edge.get("derivation") or "") == "exclusive_contract_field_module"
+        and str(edge.get("status") or "") == "accepted"
+    }
+    module_by_source: dict[str, set[str]] = defaultdict(set)
+    seed_rule_by_source: dict[str, set[str]] = defaultdict(set)
+    for edge in seed_edges:
+        if not isinstance(edge, dict):
+            continue
+        if str(edge.get("derivation") or "") != "exclusive_contract_field_module":
+            continue
+        if str(edge.get("status") or "") != "accepted":
+            continue
+        rule_id = str(edge.get("from") or "").strip()
+        evidence = edge.get("evidence") if isinstance(edge.get("evidence"), dict) else {}
+        module_prefix = str(evidence.get("module_prefix") or "").strip()
+        rule = rules_by_id.get(rule_id) or {}
+        source_id = str(rule.get("source_id") or "").strip()
+        if not rule_id or not module_prefix or not source_id:
+            continue
+        module_by_source[source_id].add(module_prefix)
+        seed_rule_by_source[source_id].add(rule_id)
+
+    edges: list[dict[str, Any]] = []
+    for rule in rule_rows:
+        rule_id = str(rule.get("rule_id") or "").strip()
+        statement = str(rule.get("statement") or "").strip()
+        source_id = str(rule.get("source_id") or "").strip()
+        risk_type = str(rule.get("risk_type") or "").strip().lower()
+        if not rule_id or not statement or not source_id:
+            continue
+        if rule_id in seeded_rule_ids:
+            continue
+        if risk_type not in _MODULE_NEIGHBOR_RISK_TYPES:
+            continue
+        modules = module_by_source.get(source_id) or set()
+        if len(modules) != 1:
+            continue
+        module_prefix = next(iter(modules))
+        mentions = _rule_mentioned_contract_fields(statement, universe)
+        if not mentions:
+            continue
+        module_fields = _module_field_universe(
+            interface_rows,
+            module_prefix=module_prefix,
+        )
+        if not mentions.issubset(module_fields):
+            continue
+        targets = _reversible_module_write_targets(
+            interface_rows=interface_rows,
+            module_prefix=module_prefix,
+            mentions=mentions,
+        )
+        seed_rule_ids = sorted(seed_rule_by_source.get(source_id) or [])
+        for interface in targets:
+            interface_id = str(interface.get("interface_id") or "").strip()
+            if not interface_id:
+                continue
+            operation_locator = (
+                f"{str(interface.get('method') or '').upper()} "
+                f"{str(interface.get('path') or '')}"
+            ).strip()
+            edges.append({
+                "edge_id": f"edge:{_short_hash({
+                    'rule': rule_id,
+                    'interface': interface_id,
+                    'derivation': 'same_source_exclusive_module_neighbor',
+                    'module': module_prefix,
+                    'fields': sorted(mentions),
+                })}",
+                "from": rule_id,
+                "to": interface_id,
+                "relation": "rule_to_interface",
+                "confidence": 0.88,
+                "status": "accepted",
+                "derivation": "same_source_exclusive_module_neighbor",
+                "evidence_gate": "same_source_exclusive_module_neighbor",
+                "evidence": {
+                    "contract_fields": sorted(mentions),
+                    "module_prefix": module_prefix,
+                    "seed_rule_ids": seed_rule_ids,
+                    "operation_locator": operation_locator,
+                    "statement_hash": _short_hash(statement),
+                },
+            })
+    return _dedupe_by_id(edges, "edge_id")
+
+
+def _authoritative_rule_to_interface_edges(
+    rules: Iterable[dict[str, Any]],
+    interfaces: Iterable[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Union of source-grounded authoritative rule→interface edges."""
+
+    exclusive_edges = _links_by_exclusive_contract_fields(rules, interfaces)
+    neighbor_edges = _links_by_same_source_exclusive_module_neighbors(
+        rules,
+        interfaces,
+        seed_edges=exclusive_edges,
+    )
+    return _dedupe_by_id(
+        [
+            *_links_by_exact_source_section(rules, interfaces),
+            *exclusive_edges,
+            *neighbor_edges,
+        ],
+        "edge_id",
+    )
 
 
 def _module_tree(interfaces: list[dict[str, Any]], rules: list[dict[str, Any]], tables: list[dict[str, Any]], objects: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2531,7 +3145,7 @@ def build_runtime_source_knowledge_overlay(
         [row for _, parsed in parsed_rows for row in parsed.get("rules") or []],
         "rule_id",
     )
-    exact_edges = _links_by_exact_source_section(rules, interfaces)
+    exact_edges = _authoritative_rule_to_interface_edges(rules, interfaces)
     exact_keys = {
         (str(edge.get("from")), str(edge.get("to")), str(edge.get("relation")))
         for edge in exact_edges
@@ -2777,7 +3391,7 @@ def build_enterprise_business_knowledge_asset(project_id: str = "real_project_de
         if isinstance(row, dict):
             dependencies.append({"dependency_id": f"industrydep:{_short_hash(row)}", "source_id": "industry_inference", "from": row.get("from") or row.get("source"), "to": row.get("to") or row.get("target"), "relation": row.get("relation") or "business_dependency"})
     dependencies = _dedupe_by_id(dependencies, "dependency_id")
-    exact_section_edges = _links_by_exact_source_section(rules, interfaces)
+    exact_section_edges = _authoritative_rule_to_interface_edges(rules, interfaces)
     exact_section_keys = {
         (str(edge.get("from")), str(edge.get("to")), str(edge.get("relation")))
         for edge in exact_section_edges

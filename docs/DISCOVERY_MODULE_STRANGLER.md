@@ -49,9 +49,9 @@
 
 本轮已先消除三个确定性边界问题，而不是等待整包删减：
 
-- 删除产品进程中的 `p3_benchmark_scan_patch.py` 和 `scan_runtime_gate_patch.py`；
-- 将 seed-bug evaluator 移出 `ai_test_asset_center`，产品 `scan()` 明确拒绝 evaluator-private
-  seed/observation 字段；
+- 删除产品树中的 `p3_benchmark_scan_patch.py` 和 `scan_runtime_gate_patch.py`（已无安装点；
+  runtime 契约门禁与 `compile_runtime_scenarios` 为一等公民；seed-bug 评测留在
+  `benchmark_evaluator`，产品 `scan()` 拒绝 evaluator-private seed/observation 字段）；
 - `ai_test_asset_center` 包导入改为零副作用，runtime scenario 由显式编译器接入主线；
 - patch chain 安装改为幂等并按严格逆序恢复，测试校验真实 callable identity，而不是只看
   marker flag。

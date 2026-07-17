@@ -464,9 +464,11 @@ def test_frontend_materials_flow_uses_real_asset_api_and_supported_doc_types() -
 
 
 def test_private_pilot_frontend_aliases_match_current_vite_routes() -> None:
-    assert private_pilot_service._normalize_frontend_page_path("/materials") == "/knowledge"
-    assert private_pilot_service._normalize_frontend_page_path("/evidence") == "/findings"
+    assert private_pilot_service._normalize_frontend_page_path("/knowledge") == "/materials"
+    assert private_pilot_service._normalize_frontend_page_path("/benchmark") == "/coverage"
+    assert private_pilot_service._normalize_frontend_page_path("/onboard") == "/products"
     assert private_pilot_service._normalize_frontend_page_path("/dashboard") == "/dashboard"
+    assert private_pilot_service._normalize_frontend_page_path("/evidence") == "/evidence"
 
 
 def test_load_scan_history_marks_legacy_compatibility(tmp_path: Path) -> None:

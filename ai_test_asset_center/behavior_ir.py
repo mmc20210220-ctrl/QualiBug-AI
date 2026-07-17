@@ -1219,6 +1219,31 @@ def _derive_source_role_restriction_relations(model: dict[str, Any]) -> list[dic
 def _derive_compensation_relations(model: dict[str, Any]) -> list[dict[str, Any]]:
     operations = [row for row in _list(model.get("operations")) if isinstance(row, dict)]
     relations: list[dict[str, Any]] = []
+    seen_pairs: set[tuple[str, str]] = set()
+
+    def _append_compensation(create_operation: dict[str, Any], compensation: dict[str, Any]) -> None:
+        create_ref = _text(create_operation.get("id"))
+        compensation_ref = _text(compensation.get("id"))
+        pair = (create_ref, compensation_ref)
+        if not create_ref or not compensation_ref or pair in seen_pairs:
+            return
+        seen_pairs.add(pair)
+        relations.append(_relation_node(
+            relation_type="compensates",
+            from_ref=compensation_ref,
+            to_ref=create_ref,
+            operation_ref=compensation_ref,
+            effects=[{"cleanup_target_operation_ref": create_ref}],
+            source_refs=(
+                list(compensation.get("source_refs") or [])
+                + list(create_operation.get("source_refs") or [])
+            )[:5],
+            confidence=min(
+                float(compensation.get("confidence") or 0.7),
+                float(create_operation.get("confidence") or 0.7),
+            ),
+        ))
+
     for create_operation in operations:
         if _text(create_operation.get("method")).upper() != "POST":
             continue
@@ -1245,24 +1270,98 @@ def _derive_compensation_relations(model: dict[str, Any]) -> list[dict[str, Any]
             collection_shape = "/".join(segments[:-1]).rstrip("/")
             if candidate_method == "DELETE" and collection_shape == create_shape:
                 candidates.append(candidate)
-        if len(candidates) != 1:
+        if len(candidates) == 1:
+            _append_compensation(create_operation, candidates[0])
+
+    # Sibling action pairs: POST /resource/reserve ↔ POST /resource/release.
+    # Require unique cleanup-named sibling under the same parent path plus source
+    # text evidence that the cleanup documents the primary action.
+    for source_operation in operations:
+        source_method = _text(source_operation.get("method")).upper()
+        if source_method not in {"POST", "PUT", "PATCH"}:
             continue
-        compensation = candidates[0]
-        relations.append(_relation_node(
-            relation_type="compensates",
-            from_ref=_text(compensation.get("id")),
-            to_ref=_text(create_operation.get("id")),
-            operation_ref=_text(compensation.get("id")),
-            effects=[{"cleanup_target_operation_ref": _text(create_operation.get("id"))}],
-            source_refs=(
-                list(compensation.get("source_refs") or [])
-                + list(create_operation.get("source_refs") or [])
-            )[:5],
-            confidence=min(
-                float(compensation.get("confidence") or 0.7),
-                float(create_operation.get("confidence") or 0.7),
-            ),
-        ))
+        source_path = _path_shape(source_operation.get("path")).rstrip("/")
+        if not source_path or "/" not in source_path:
+            continue
+        source_terminal = source_path.rsplit("/", 1)[-1]
+        if _CLEANUP_ACTION_RE.search(source_terminal):
+            continue
+        parent_path = source_path.rsplit("/", 1)[0]
+        source_text = re.sub(
+            r"[\W_]+",
+            "",
+            " ".join([
+                _text(source_operation.get("summary")),
+                _text(source_operation.get("description")),
+            ]).lower(),
+        )
+        source_action = source_terminal.lower()
+        source_keys = set(_dict(source_operation.get("request_example")))
+        candidates = []
+        for candidate in operations:
+            if _text(candidate.get("id")) == _text(source_operation.get("id")):
+                continue
+            candidate_method = _text(candidate.get("method")).upper()
+            if candidate_method not in {"POST", "PUT", "PATCH", "DELETE"}:
+                continue
+            candidate_path = _path_shape(candidate.get("path")).rstrip("/")
+            if not candidate_path or "/" not in candidate_path:
+                continue
+            if candidate_path.rsplit("/", 1)[0] != parent_path:
+                continue
+            candidate_terminal = candidate_path.rsplit("/", 1)[-1]
+            if not (
+                candidate_method == "DELETE"
+                or _CLEANUP_ACTION_RE.search(candidate_terminal)
+            ):
+                continue
+            candidate_text = re.sub(
+                r"[\W_]+",
+                "",
+                " ".join([
+                    _text(candidate.get("summary")),
+                    _text(candidate.get("description")),
+                ]).lower(),
+            )
+            candidate_keys = set(_dict(candidate.get("request_example")))
+            text_ok = bool(candidate_text) and (
+                (len(source_text) >= 2 and source_text in candidate_text)
+                or (len(source_action) >= 4 and source_action in candidate_text)
+                or any(
+                    run in candidate_text
+                    for run in re.findall(
+                        r"[\u4e00-\u9fff]{3,}|[a-z]{4,}",
+                        source_text,
+                    )
+                )
+            )
+            keys_ok = bool(source_keys) and source_keys == candidate_keys
+            if not (text_ok or keys_ok):
+                continue
+            if not text_ok and keys_ok:
+                peer_primaries = [
+                    peer
+                    for peer in operations
+                    if _text(peer.get("id"))
+                    not in {
+                        _text(source_operation.get("id")),
+                        _text(candidate.get("id")),
+                    }
+                    and _text(peer.get("method")).upper()
+                    in {"POST", "PUT", "PATCH"}
+                    and _path_shape(peer.get("path")).rstrip("/").rsplit("/", 1)[0]
+                    == parent_path
+                    and not _CLEANUP_ACTION_RE.search(
+                        _path_shape(peer.get("path")).rstrip("/").rsplit("/", 1)[-1]
+                    )
+                    and set(_dict(peer.get("request_example"))) == source_keys
+                ]
+                if peer_primaries:
+                    continue
+            candidates.append(candidate)
+        if len(candidates) == 1:
+            _append_compensation(source_operation, candidates[0])
+
     return relations
 
 
@@ -1352,7 +1451,11 @@ def _resolve_operation(
         candidates = [
             row
             for row in candidates
-            if operation_hint in {_text(row.get("id")), _text(row.get("operation_id"))}
+            if operation_hint in {
+                _text(row.get("id")),
+                _text(row.get("operation_id")),
+                *[_text(value) for value in _list(row.get("source_operation_refs"))],
+            }
         ]
     if method_hint:
         candidates = [row for row in candidates if _text(row.get("method")).upper() == method_hint]
@@ -2135,7 +2238,9 @@ def build_behavior_ir_from_knowledge_asset(
             derivation="runtime-observed",
         ))
 
-    # States from state machines
+    # States from state machines. Multiple source machines may describe the same
+    # entity/state after asset+overlay merge; keep one node id and merge refs.
+    states_by_id: dict[str, dict[str, Any]] = {}
     for sm in _list(data.get("state_machines") or data.get("states")):
         if not isinstance(sm, dict):
             continue
@@ -2160,13 +2265,27 @@ def build_behavior_ir_from_knowledge_asset(
             if not name or state_key in seen_state_names:
                 continue
             seen_state_names.add(state_key)
-            model["states"].append(_fact_node(
-                node_id=_stable_id("state", entity, name),
+            node_id = _stable_id("state", entity, name)
+            source_ref = _source_ref(
+                _text(sm.get("source_id")) or "state_machine",
+                locator=f"{entity}:{name}",
+            )
+            existing = states_by_id.get(node_id)
+            if existing is not None:
+                existing["source_refs"] = _merge_unique_sorted(
+                    _list(existing.get("source_refs")),
+                    [source_ref],
+                )
+                continue
+            state_node = _fact_node(
+                node_id=node_id,
                 typed_fields={"entity_ref": entity, "name": name},
-                source_refs=[_source_ref(_text(sm.get("source_id")) or "state_machine", locator=f"{entity}:{name}")],
+                source_refs=[source_ref],
                 confidence=0.75,
                 derivation="explicit",
-            ))
+            )
+            states_by_id[node_id] = state_node
+            model["states"].append(state_node)
 
     # Forbidden transitions are source constraints, never allowed transition
     # relations. Preserve them as typed invariants and bind an operation only

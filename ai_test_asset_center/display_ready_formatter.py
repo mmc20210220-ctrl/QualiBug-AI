@@ -18,10 +18,15 @@ from pathlib import Path
 from typing import Any
 
 from ai_test_asset_center.customer_delivery_gate import CUSTOMER_READY_MIN_EVIDENCE_SCORE
+from ai_test_asset_center.customer_report_boundary import (
+    product_responsibility_boundary,
+    strip_fix_advice_fields,
+)
 from ai_test_asset_center.real_id_resolver import normalize_path_placeholders
 
 
 DISPLAY_READY_POLICY_PATH = Path(__file__).resolve().parent / "policies" / "display_ready_policy.json"
+DISPLAY_READY_BOUNDARY_SOURCE = "ai_test_asset_center.display_ready_formatter"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2312,6 +2317,83 @@ def _build_raw_evidence(finding: dict, reproduction: dict) -> dict:
     return raw_evidence
 
 
+def _normalize_regression_verification_obligations(
+    details: dict[str, Any],
+    finding: dict[str, Any],
+) -> dict[str, Any]:
+    """Map legacy regression suggestion text to customer-safe verification obligations."""
+    obligations = details.get("regression_verification_obligations")
+    if not isinstance(obligations, list):
+        suggestions = details.get("regression_suggestions")
+        obligations = suggestions if isinstance(suggestions, list) else []
+    endpoint = details.get("api_endpoint") if isinstance(details.get("api_endpoint"), dict) else {}
+    method = str(
+        endpoint.get("method")
+        or finding.get("_api_method")
+        or finding.get("method")
+        or ""
+    ).strip().upper()
+    path = str(
+        endpoint.get("path")
+        or finding.get("_api_path")
+        or finding.get("path")
+        or ""
+    ).strip()
+    if not obligations and (method or path):
+        obligations = [
+            f"系统应在客户处理后回归验证 {method or 'HTTP'} {path or '<unknown>'} 是否仍可复现"
+        ]
+    details["regression_verification_obligations"] = [
+        str(item) for item in obligations if str(item).strip()
+    ]
+    details.pop("regression_suggestions", None)
+    return details
+
+
+def _finalize_technical_details_for_customer(
+    details: dict[str, Any],
+    finding: dict[str, Any],
+) -> dict[str, Any]:
+    """Strip fix advice and attach the product responsibility boundary."""
+    cleaned = strip_fix_advice_fields(details) if isinstance(details, dict) else {}
+    cleaned = _normalize_regression_verification_obligations(
+        cleaned if isinstance(cleaned, dict) else {},
+        finding if isinstance(finding, dict) else {},
+    )
+    cleaned["product_responsibility_boundary"] = product_responsibility_boundary(
+        DISPLAY_READY_BOUNDARY_SOURCE
+    )
+    return cleaned
+
+
+def _finalize_display_finding_for_customer(
+    formatted: dict[str, Any],
+    finding: dict[str, Any],
+) -> dict[str, Any]:
+    """Apply customer boundary to a fully formatted display-ready finding."""
+    cleaned = strip_fix_advice_fields(formatted) if isinstance(formatted, dict) else {}
+    technical = cleaned.get("technical_details") if isinstance(cleaned.get("technical_details"), dict) else {}
+    cleaned["technical_details"] = _finalize_technical_details_for_customer(
+        technical,
+        finding if isinstance(finding, dict) else {},
+    )
+    regression = cleaned.get("regression_suggestions")
+    if isinstance(regression, list):
+        cleaned["regression_verification_obligations"] = [
+            str(item) for item in regression if str(item).strip()
+        ]
+    elif not isinstance(cleaned.get("regression_verification_obligations"), list):
+        cleaned["regression_verification_obligations"] = list(
+            cleaned["technical_details"].get("regression_verification_obligations") or []
+        )
+    cleaned.pop("regression_suggestions", None)
+    cleaned.pop("recommended_fix", None)
+    cleaned["product_responsibility_boundary"] = product_responsibility_boundary(
+        DISPLAY_READY_BOUNDARY_SOURCE
+    )
+    return cleaned
+
+
 def _build_technical_details(finding: dict, investigation: dict, reproduction: dict) -> dict:
     """构建研发定位证据（让研发一眼能定位问题）。"""
     runtime_obs = _best_runtime_observation(finding)
@@ -2345,7 +2427,7 @@ def _build_technical_details(finding: dict, investigation: dict, reproduction: d
     if not regression_suggestions:
         regression_suggestions = [_format_policy_text("{method} {path}", **context)]
 
-    return {
+    details = {
         "api_endpoint": {
             "method": method,
             "path": path,
@@ -2355,11 +2437,13 @@ def _build_technical_details(finding: dict, investigation: dict, reproduction: d
         "response_body_excerpt": _runtime_body_excerpt(runtime_obs.get("body"), 500) if runtime_obs else "",
         "related_tables": investigation.get("relevant_tables", []),
         "trace_id": investigation.get("trace_id", ""),
+        # Built for policy/regression mapping, then stripped before return.
         "possible_root_cause": possible_root_cause,
         "recommended_fix": recommended_fix,
         "regression_suggestions": regression_suggestions,
         "code_module_hint": _clean(finding.get("source_entity")) or (path.split("/")[1] if "/" in path and len(path.split("/")) > 1 else ""),
     }
+    return _finalize_technical_details_for_customer(details, finding if isinstance(finding, dict) else {})
 
 
 def _build_business_summary(finding: dict, business_impact: dict, bug_status: dict) -> str:
@@ -2599,7 +2683,7 @@ def _format_single_finding(finding: dict, enterprise_ctx: dict | None = None) ->
     if isinstance(repro_data, dict) and repro_data.get("reproducible"):
         repro_count = round(repro_data.get("reproduction_confidence", 0) * 10) if repro_data.get("reproduction_confidence") else 5
 
-    return {
+    payload = {
         "id": risk_id,
         "candidate_id": _clean(finding.get("candidate_id")),
         "slice_id": _clean(finding.get("slice_id")),
@@ -2664,8 +2748,9 @@ def _format_single_finding(finding: dict, enterprise_ctx: dict | None = None) ->
         ),
         "db_evidence": finding.get("db_evidence") if isinstance(finding.get("db_evidence"), dict) else {},
         "technical_details": technical_details,
-        "recommended_fix": technical_details["recommended_fix"],
-        "regression_suggestions": technical_details["regression_suggestions"],
+        "regression_verification_obligations": list(
+            technical_details.get("regression_verification_obligations") or []
+        ),
 
         # 受影响的业务实例列表（去重合并后，同类缺陷的多个实例）
         "affected_instances": finding.get("_affected_instances") if isinstance(finding.get("_affected_instances"), list) else [],
@@ -2688,6 +2773,7 @@ def _format_single_finding(finding: dict, enterprise_ctx: dict | None = None) ->
         "source_value": _clean(finding.get("source_value")),
         "evidence_hint": _clean(finding.get("evidence_hint")),
     }
+    return _finalize_display_finding_for_customer(payload, finding if isinstance(finding, dict) else {})
 
 
 # ═══════════════════════════════════════════════════════════════════════

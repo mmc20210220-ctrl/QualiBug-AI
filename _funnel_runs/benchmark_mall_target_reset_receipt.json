@@ -1,13 +1,13 @@
 {
   "schema_version": "benchmark_target_reset.v1",
-  "receipt_id": "reset_747cf72d5e8f44a0",
+  "receipt_id": "reset_6d6fc09ef3f54ca9",
   "project": "benchmark_mall",
   "target_base_url": "http://localhost:8080",
   "status": "completed",
-  "reset_at_utc": "2026-07-16T07:22:10Z",
+  "reset_at_utc": "2026-07-17T03:48:06Z",
   "target_db_reset": {
     "status": "ok",
-    "script": "D:\\QualiBug-AI\\benchmark_mall\\scripts\\init_db_windows.ps1",
+    "script": "C:\\Users\\Test\\Desktop\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\qualibug_enterprise_benchmark_v0_5_windows_native_stable\\scripts\\init_db_windows.ps1",
     "exit_code": 0
   }
 }

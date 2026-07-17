@@ -183,6 +183,14 @@ def run_server() -> None:
     _started = time.perf_counter()
     # #endregion
     install_runtime_patches()
+    from ai_test_asset_center.policy_wiring import bind_product_installed_mainline_authority
+
+    _mainline_bind = bind_product_installed_mainline_authority()
+    _service._dbg_report(
+        hypothesis_id="A",
+        msg="[DEBUG] product mainline authority bound",
+        data=_mainline_bind,
+    )
     server = _service.run_private_pilot_service()
     try:
         server.serve_forever()

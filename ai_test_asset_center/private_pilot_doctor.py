@@ -170,18 +170,20 @@ def _runtime_patch_status() -> dict[str, Any]:
         "scan_campaign_context": {
             "patched": bool(getattr(_service, "_SCAN_CAMPAIGN_CONTEXT_PATCHED", False)),
             "source": str(getattr(_service, "_SCAN_CAMPAIGN_CONTEXT_PATCH_SOURCE", "")),
-            "has_original_scan": bool(getattr(_service, "_ORIGINAL_V12_SCAN", None)),
-            "has_original_v12_handler": bool(getattr(_service, "_ORIGINAL_HANDLE_V12_SCAN", None)),
-            "has_original_continuous_loop": bool(getattr(_service, "_ORIGINAL_CONTINUOUS_SCAN_LOOP", None)),
+            "mode": "first_class",
+            "has_original_scan": False,
+            "has_original_v12_handler": False,
+            "has_original_continuous_loop": False,
         },
         "credential_safety": {
-            "patched": bool(getattr(_service, "_ORIGINAL_HANDLE_GET_SERVICE_CREDENTIALS", None))
-            and bool(getattr(_service, "_ORIGINAL_HANDLE_SAVE_SERVICE_CREDENTIALS", None)),
+            "patched": bool(str(getattr(_service, "_SERVICE_CREDENTIALS_PATCH_SOURCE", "") or "").strip()),
             "source": str(getattr(_service, "_SERVICE_CREDENTIALS_PATCH_SOURCE", "")),
+            "mode": str(getattr(_service, "_SERVICE_CREDENTIALS_MODE", "") or "first_class"),
         },
         "browser_ui_smoke": {
             "patched": bool(getattr(_service, "_BROWSER_UI_SMOKE_PATCHED", False)),
             "source": str(getattr(_service, "_BROWSER_UI_SMOKE_PATCH_SOURCE", "")),
+            "mode": str(getattr(_service, "_BROWSER_UI_SMOKE_MODE", "") or ""),
         },
         "customer_report": {
             "patched": bool(getattr(_service, "_CUSTOMER_REPORT_PATCHED", False)),

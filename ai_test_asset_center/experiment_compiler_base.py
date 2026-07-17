@@ -513,6 +513,20 @@ def compile_experiment_for_obligation(
                 if actor_id in actors and _actor_is_executable(actors[actor_id])
             )
         )
+        if not ranked_actors:
+            # Source permits may be absent for invariant-bound writes. Fall back
+            # to executable runtime-bound test actors already present in IR.
+            ranked_actors = sorted(
+                (
+                    (
+                        0 if _text(actor.get("account_ref")) else 1,
+                        0 if actor.get("runtime_bound") is True else 1,
+                        actor_id,
+                    )
+                    for actor_id, actor in actors.items()
+                    if isinstance(actor, dict) and _actor_is_executable(actor)
+                )
+            )
         if ranked_actors:
             required_actors = [ranked_actors[0][2]]
             prop = {

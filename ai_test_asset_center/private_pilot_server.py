@@ -412,10 +412,15 @@ def customer_delivery_gate_patch_status() -> dict[str, Any]:
         ),
         "scan_campaign_context_patched": bool(getattr(_service, "_SCAN_CAMPAIGN_CONTEXT_PATCHED", False)),
         "scan_campaign_context_patch_source": str(getattr(_service, "_SCAN_CAMPAIGN_CONTEXT_PATCH_SOURCE", "")),
-        "continuous_scan_context_patched": bool(getattr(_service, "_ORIGINAL_CONTINUOUS_SCAN_LOOP", None)),
+        "continuous_scan_context_patched": bool(getattr(_service, "_SCAN_CAMPAIGN_CONTEXT_PATCHED", False)),
         "continuous_context_count": len(_CONTINUOUS_CAMPAIGN_CONTEXTS),
-        "credential_response_masking_patched": bool(getattr(_service, "_ORIGINAL_HANDLE_GET_SERVICE_CREDENTIALS", None)),
-        "credential_save_encryption_patched": bool(getattr(_service, "_ORIGINAL_HANDLE_SAVE_SERVICE_CREDENTIALS", None)),
+        "credential_response_masking_patched": bool(
+            str(getattr(_service, "_SERVICE_CREDENTIALS_PATCH_SOURCE", "") or "").strip()
+        ),
+        "credential_save_encryption_patched": bool(
+            str(getattr(_service, "_SERVICE_CREDENTIALS_PATCH_SOURCE", "") or "").strip()
+        ),
+        "credential_safety_mode": str(getattr(_service, "_SERVICE_CREDENTIALS_MODE", "") or "first_class"),
     }
 
 

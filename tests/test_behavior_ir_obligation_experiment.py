@@ -2128,6 +2128,82 @@ def test_missing_compensator_never_downgrades_required_write_cleanup() -> None:
     assert requirement == {"required": True, "mode": "reverse_order"}
 
 
+def test_cleanup_requirement_binds_recreate_when_primary_is_compensator() -> None:
+    operations = [
+        {
+            "id": "create_item",
+            "method": "POST",
+            "path": "/api/cart/items",
+            "read_write": "write",
+        },
+        {
+            "id": "delete_item",
+            "method": "DELETE",
+            "path": "/api/cart/items/{id}",
+            "read_write": "write",
+        },
+        {
+            "id": "patch_product",
+            "method": "PATCH",
+            "path": "/api/products/admin/{sku}",
+            "read_write": "write",
+        },
+        {
+            "id": "create_product",
+            "method": "POST",
+            "path": "/api/products/admin",
+            "read_write": "write",
+        },
+        {
+            "id": "delete_product",
+            "method": "DELETE",
+            "path": "/api/products/admin/{sku}",
+            "read_write": "write",
+        },
+    ]
+    relations = [
+        {
+            "relation_type": "compensates",
+            "from_ref": "delete_item",
+            "to_ref": "create_item",
+            "operation_ref": "delete_item",
+        },
+        {
+            "relation_type": "compensates",
+            "from_ref": "delete_product",
+            "to_ref": "create_product",
+            "operation_ref": "delete_product",
+        },
+        {
+            "relation_type": "compensates",
+            "from_ref": "delete_product",
+            "to_ref": "patch_product",
+            "operation_ref": "delete_product",
+        },
+    ]
+
+    delete_item = _cleanup_requirement(operations[1], operations, relations)
+    assert delete_item["operation_ref"] == "create_item"
+    assert delete_item["mode"] == "recreate_compensated_resource"
+
+    delete_product = _cleanup_requirement(operations[4], operations, relations)
+    assert delete_product["operation_ref"] == "create_product"
+    assert delete_product["mode"] == "recreate_compensated_resource"
+
+    consume = _cleanup_requirement(
+        {
+            "id": "consume",
+            "method": "POST",
+            "path": "/api/inventory/consume",
+            "read_write": "write",
+        },
+        operations,
+        relations,
+    )
+    assert consume["required"] is True
+    assert "operation_ref" not in consume
+
+
 def test_action_shape_and_cleanup_name_do_not_invent_compensation_relation() -> None:
     request_example = {"resourceId": "resource-1", "units": 1}
     source = {
@@ -2596,6 +2672,48 @@ def test_adaptive_planner_reports_final_family_counts_and_reserves_breadth() -> 
         family: selected_families.count(family)
         for family in sorted(set(selected_families))
     }
+
+
+def test_adaptive_planner_soft_caps_abundant_families_within_budget() -> None:
+    obligations = [
+        *[
+            {
+                "obligation_id": f"obl_auth_{index}",
+                "risk_family": "authorization",
+                "subject_refs": [f"auth_{index}"],
+                "confidence": 0.9,
+                "compile_status": "COMPILED",
+            }
+            for index in range(12)
+        ],
+        *[
+            {
+                "obligation_id": f"obl_cons_{index}",
+                "risk_family": "conservation",
+                "subject_refs": [f"cons_{index}"],
+                "confidence": 0.7,
+                "compile_status": "COMPILED",
+            }
+            for index in range(4)
+        ],
+        *[
+            {
+                "obligation_id": f"obl_conc_{index}",
+                "risk_family": "concurrency",
+                "subject_refs": [f"conc_{index}"],
+                "confidence": 0.7,
+                "compile_status": "COMPILED",
+            }
+            for index in range(4)
+        ],
+    ]
+
+    plan = plan_obligation_round(obligations, budget=9)
+
+    assert plan["family_coverage"].get("conservation", 0) >= 3
+    assert plan["family_coverage"].get("concurrency", 0) >= 3
+    assert plan["family_coverage"].get("authorization", 0) <= 3
+    assert plan["selected_count"] == 9
 
 
 def test_adaptive_planner_risk_priority_comes_from_runtime_policy_data() -> None:

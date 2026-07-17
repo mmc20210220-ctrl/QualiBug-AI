@@ -2,11 +2,9 @@ from __future__ import annotations
 
 """Chain-aware enterprise pilot runtime wrapper.
 
-The original enterprise pilot runtime is a large orchestration module. This
-wrapper keeps it intact and installs one narrow patch before delegating:
-`real_project_discovery` tasks must use the chain-aware discovery runner so the
-enterprise-input -> parse -> plan -> execute -> bug -> evidence contract is
-written and returned for each discovery task.
+Binds the chain-aware discovery runner through
+``enterprise_pilot_runtime.set_real_project_discovery_runner`` instead of
+replacing the ``run_real_project_discovery`` symbol.
 """
 
 import argparse
@@ -22,33 +20,37 @@ PATCH_SOURCE = "ai_test_asset_center.enterprise_pilot_runtime_with_chain"
 
 
 def install_chain_aware_pilot_runtime_patch() -> None:
-    """Patch the pilot runtime's discovery callable to the chain-aware runner."""
+    """Select the chain-aware discovery runner for pilot runtime tasks."""
     if getattr(_runtime, "_MAIN_CHAIN_DISCOVERY_PATCHED", False):
         return
-    original = getattr(_runtime, "run_real_project_discovery", None)
+    original = _runtime.get_real_project_discovery_runner()
     _runtime._ORIGINAL_RUN_REAL_PROJECT_DISCOVERY = original  # type: ignore[attr-defined]
-    _runtime.run_real_project_discovery = run_real_project_discovery_with_chain  # type: ignore[attr-defined]
+    _runtime.set_real_project_discovery_runner(run_real_project_discovery_with_chain)
     _runtime._MAIN_CHAIN_DISCOVERY_PATCHED = True  # type: ignore[attr-defined]
     _runtime._MAIN_CHAIN_DISCOVERY_PATCH_SOURCE = PATCH_SOURCE  # type: ignore[attr-defined]
+    _runtime._MAIN_CHAIN_DISCOVERY_MODE = "first_class_runner"  # type: ignore[attr-defined]
 
 
 def chain_aware_pilot_runtime_patch_status() -> dict[str, Any]:
+    active = _runtime.get_real_project_discovery_runner()
     return {
         "patched": bool(getattr(_runtime, "_MAIN_CHAIN_DISCOVERY_PATCHED", False)),
         "source": str(getattr(_runtime, "_MAIN_CHAIN_DISCOVERY_PATCH_SOURCE", "")),
+        "mode": str(getattr(_runtime, "_MAIN_CHAIN_DISCOVERY_MODE", "") or ""),
         "has_original_discovery_runner": bool(getattr(_runtime, "_ORIGINAL_RUN_REAL_PROJECT_DISCOVERY", None)),
-        "active_discovery_runner": getattr(getattr(_runtime, "run_real_project_discovery", None), "__name__", ""),
+        "active_discovery_runner": getattr(active, "__name__", ""),
     }
 
 
 def restore_chain_aware_pilot_runtime_patch() -> None:
-    """Restore the original discovery callable for isolated diagnostics/tests."""
+    """Restore the prior discovery runner for isolated diagnostics/tests."""
     original = getattr(_runtime, "_ORIGINAL_RUN_REAL_PROJECT_DISCOVERY", None)
-    if original is not None:
-        _runtime.run_real_project_discovery = original  # type: ignore[attr-defined]
+    _runtime.set_real_project_discovery_runner(original if callable(original) else None)
     _runtime._ORIGINAL_RUN_REAL_PROJECT_DISCOVERY = None  # type: ignore[attr-defined]
     _runtime._MAIN_CHAIN_DISCOVERY_PATCHED = False  # type: ignore[attr-defined]
     _runtime._MAIN_CHAIN_DISCOVERY_PATCH_SOURCE = ""  # type: ignore[attr-defined]
+    if hasattr(_runtime, "_MAIN_CHAIN_DISCOVERY_MODE"):
+        delattr(_runtime, "_MAIN_CHAIN_DISCOVERY_MODE")
 
 
 def run_next_pilot_task_with_chain(project_id: str = "real_project_demo", root: Path | None = None, actor: dict[str, Any] | None = None) -> dict[str, Any]:

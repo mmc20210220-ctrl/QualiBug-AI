@@ -151,6 +151,58 @@ def _behavior_slice_execution_value(key: str, value: Any, fallback: Any) -> int:
     return _bounded_int(effective, fallback, 1, _INCREMENTAL_DISCOVERY_ROUND_MAX)
 
 
+def bind_product_installed_mainline_authority() -> dict[str, Any]:
+    """Align the active registry with the product-installed discovery runner.
+
+    Private-pilot product surfaces install only ``experiment_candidate``.
+    Persisted registries created under the former ``legacy_champion`` default
+    would otherwise fail closed before campaign creation. This bind runs at
+    process start, never mid-campaign.
+
+    Opt out with ``QUALIBUG_MAINLINE_AUTHORITY=legacy_champion`` when a
+    gate-verifiable legacy runner is intentionally under test.
+    """
+
+    from .policy_registry import get_policy_registry
+
+    requested = str(os.environ.get("QUALIBUG_MAINLINE_AUTHORITY") or "").strip()
+    target = requested or "experiment_candidate"
+    if target not in {"legacy_champion", "experiment_candidate"}:
+        raise ValueError(f"invalid QUALIBUG_MAINLINE_AUTHORITY: {requested}")
+
+    registry = get_policy_registry()
+    active = registry.get_active()
+    if active is None:
+        raise RuntimeError("active policy is unavailable for mainline bind")
+    previous = str(active.strategy.execution.mainline_authority or "").strip()
+    if previous == target:
+        return {
+            "changed": False,
+            "mainline_authority": target,
+            "policy_id": active.policy_id,
+            "source": "env" if requested else "active_policy",
+        }
+
+    active.strategy.execution.mainline_authority = target
+    active.signature = active._compute_signature()
+    registry._events.append(
+        registry._event(
+            "bind_product_mainline_authority",
+            active,
+            f"previous={previous}:target={target}:source="
+            f"{'env' if requested else 'product_installed_runner'}",
+        )
+    )
+    registry._save()
+    return {
+        "changed": True,
+        "mainline_authority": target,
+        "previous_mainline_authority": previous,
+        "policy_id": active.policy_id,
+        "source": "env" if requested else "product_installed_runner",
+    }
+
+
 def get_policy_value(section: str, key: str, default: Any) -> Any:
     """Read an active policy value while enforcing product-level guardrails."""
     value = default

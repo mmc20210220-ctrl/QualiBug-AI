@@ -170,8 +170,10 @@ def _knowledge_asset_sources(asset: dict[str, Any], root: Path) -> list[dict[str
 
 
 def _normalize_frontend_page_path(path: str) -> str:
+    """Map retired server-rendered aliases onto the React console routes."""
     clean = "/" + str(path or "/").strip().strip("/")
     return {
-        "/materials": "/knowledge",
-        "/evidence": "/findings",
+        "/knowledge": "/materials",
+        "/benchmark": "/coverage",
+        "/onboard": "/products",
     }.get(clean, clean)

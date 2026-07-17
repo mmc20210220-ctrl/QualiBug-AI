@@ -121,25 +121,60 @@ def _cleanup_requirement(
     *,
     required: bool | None = None,
 ) -> dict[str, Any]:
-    """Bind cleanup only through one explicit ``compensates`` relation."""
+    """Bind cleanup only through one explicit ``compensates`` relation.
+
+    Two source-grounded directions are accepted:
+    - create/write primary → unique compensator (DELETE/release/…)
+    - compensator primary (DELETE/release/cancel/…) → unique compensated
+      create/restore operation (recreate), preferring a unique POST when multiple
+      targets exist
+    """
     op = _dict(operation)
     is_write = _text(op.get("read_write")) == "write"
     must_cleanup = is_write if required is None else bool(required)
     requirement: dict[str, Any] = {"required": must_cleanup, "mode": "reverse_order"}
     if not must_cleanup:
         return requirement
-    operation_ids = {_text(row.get("id")) for row in operations if _text(row.get("id"))}
+    operations_by_id = {
+        _text(row.get("id")): row
+        for row in operations
+        if isinstance(row, dict) and _text(row.get("id"))
+    }
+    operation_ids = set(operations_by_id)
+    op_id = _text(op.get("id"))
     compensation_refs = {
         _text(relation.get("operation_ref"))
         for relation in relations
         if _text(relation.get("relation_type")) == "compensates"
-        and _text(relation.get("to_ref")) == _text(op.get("id"))
+        and _text(relation.get("to_ref")) == op_id
         and _text(relation.get("from_ref")) == _text(relation.get("operation_ref"))
         and _text(relation.get("operation_ref")) in operation_ids
-        and _text(relation.get("operation_ref")) != _text(op.get("id"))
+        and _text(relation.get("operation_ref")) != op_id
     }
     if len(compensation_refs) == 1:
         requirement["operation_ref"] = next(iter(compensation_refs))
+        return requirement
+
+    restore_refs = {
+        _text(relation.get("to_ref"))
+        for relation in relations
+        if _text(relation.get("relation_type")) == "compensates"
+        and _text(relation.get("operation_ref")) == op_id
+        and _text(relation.get("from_ref")) == op_id
+        and _text(relation.get("to_ref")) in operation_ids
+        and _text(relation.get("to_ref")) != op_id
+    }
+    if len(restore_refs) > 1:
+        post_restores = {
+            ref
+            for ref in restore_refs
+            if _text(_dict(operations_by_id.get(ref)).get("method")).upper() == "POST"
+        }
+        if len(post_restores) == 1:
+            restore_refs = post_restores
+    if len(restore_refs) == 1:
+        requirement["operation_ref"] = next(iter(restore_refs))
+        requirement["mode"] = "recreate_compensated_resource"
     return requirement
 
 
@@ -448,9 +483,20 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
         family = "validation"
         if any(token in kind for token in ("idempot", "exactly_once", "deduplic")):
             family = "idempotency"
-        if any(token in kind for token in ("concurr", "race", "atomic")):
+        elif any(token in kind for token in ("concurr", "race", "atomic")):
             family = "concurrency"
-        if any(token in kind for token in ("conserv", "balance", "amount", "quantity", "库存", "金额")):
+        elif any(
+            token in kind
+            for token in (
+                "conserv",
+                "data_conservation",
+                "balance",
+                "amount",
+                "quantity",
+                "库存",
+                "金额",
+            )
+        ):
             family = "conservation"
         elif any(token in kind for token in ("privacy", "pii", "mask", "隐私")):
             family = "privacy"
@@ -477,7 +523,8 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
         relation_types = {
             "idempotency": {"observes", "produces", "consumes", "transitions"},
             "concurrency": {"observes", "produces", "consumes", "transitions"},
-            "conservation": {"conserves"},
+            # Source joins may emit observes before typed conserves normalization.
+            "conservation": {"conserves", "observes"},
             "privacy": {"observes", "scopes"},
             "temporal": {"transitions", "observes"},
             "visibility": {"scopes", "observes"},

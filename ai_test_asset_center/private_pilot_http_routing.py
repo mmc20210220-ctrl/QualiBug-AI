@@ -6,15 +6,12 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from . import db_persistence as db_persist
 from . import jwt_auth
 from .campaign_api_contract import CampaignContractError, structured_error
-from .enterprise_pilot_runtime import (
-    build_enterprise_pilot_overview,
-    operate_enterprise_pilot_runtime,
-)
+from .enterprise_pilot_runtime import operate_enterprise_pilot_runtime
 from .private_pilot_command_center_envelope import normalize_command_center_envelope
 from .private_pilot_continuous import _get_continuous_state
 from .private_pilot_debug_client import _dbg_report
@@ -36,13 +33,24 @@ class HttpRoutingMixin:
         parsed = urlparse(self.path)
         project = self._project()
         root = self._root()
-        # Serve the prebuilt customer pilot SPA for any non-API path (public, before the
-        # auth gate so the login page itself is reachable). Known legacy server-rendered
-        # pages are excluded so they keep working behind auth.
+        # Serve the React console for any non-API path (public, before the auth
+        # gate so /login is reachable). Retired server-rendered aliases redirect
+        # onto first-class SPA routes; do not regenerate HTML pages here.
         if not parsed.path.startswith("/api") and parsed.path != "/health":
-            _legacy_served = {"/onboard", "/dashboard", "/knowledge", "/benchmark", "/release"}
-            if parsed.path not in _legacy_served:
-                return self._serve_frontend(parsed, root)
+            _spa_aliases = {
+                "/knowledge": "/materials",
+                "/benchmark": "/coverage",
+                "/onboard": "/products",
+            }
+            if parsed.path in _spa_aliases:
+                target = _spa_aliases[parsed.path]
+                if parsed.query:
+                    target = f"{target}?{parsed.query}"
+                self.send_response(302)
+                self.send_header("Location", target)
+                self.end_headers()
+                return
+            return self._serve_frontend(parsed, root)
         if parsed.path in {"/health", "/api/health"}:
             from . import private_pilot_service as _service
             from .private_pilot_health_contract import build_private_pilot_health_payload
@@ -68,7 +76,7 @@ class HttpRoutingMixin:
             return
         if self._require_tenant(root) is None:
             return
-        _route_parts = [urllib.parse.unquote(part) for part in parsed.path.split("/") if part]
+        _route_parts = [unquote(part) for part in parsed.path.split("/") if part]
         _route_project = (
             _route_parts[3]
             if len(_route_parts) >= 4 and _route_parts[:3] == ["api", "v1", "projects"]
@@ -78,32 +86,6 @@ class HttpRoutingMixin:
             project = _safe_project_id(_route_project)
         if not self._require_project_scope(project):
             return
-        if parsed.path == "/onboard":
-            return self._render_onboard(project, root)
-        if parsed.path in {"/", "/dashboard"}:
-            build_enterprise_pilot_overview(project, root)
-            path = root / "platform_outputs" / project / "enterprise_pilot_runtime" / "enterprise_pilot_center.html"
-            fallback = "<h1>Enterprise pilot dashboard is not generated yet.</h1>"
-            return self._html(path.read_text(encoding="utf-8") if path.exists() else fallback)
-        if parsed.path == "/knowledge":
-            from .enterprise_knowledge_center import build_enterprise_business_knowledge_asset, load_enterprise_business_knowledge_asset, render_enterprise_business_knowledge_center
-
-            asset = load_enterprise_business_knowledge_asset(project, root) or build_enterprise_business_knowledge_asset(project, root)
-            return self._html(render_enterprise_business_knowledge_center(project, root, asset))
-        if parsed.path == "/benchmark":
-            from .enterprise_testops_control_plane import render_multi_industry_benchmark_report, run_multi_industry_benchmark
-
-            report = run_multi_industry_benchmark(project, root)
-            return self._html(render_multi_industry_benchmark_report(report))
-        if parsed.path == "/release":
-            from .release_risk_dashboard import build_release_risk_dashboard, render_release_risk_dashboard_html
-
-            dashboard = build_release_risk_dashboard(project, root)
-            return self._html(render_release_risk_dashboard_html(dashboard))
-        if parsed.path == "/settings":
-            return self._render_settings(project, root)
-        if parsed.path == "/findings":
-            return self._render_findings(project, root)
         if parsed.path == "/api/v1/projects":
             # Merge DB projects + filesystem-discovered projects (dedup by project_id)
             tenant_id = self._request_tenant()

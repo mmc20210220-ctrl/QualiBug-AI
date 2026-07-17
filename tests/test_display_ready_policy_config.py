@@ -39,8 +39,16 @@ def test_display_ready_technical_guidance_comes_from_policy_config(monkeypatch, 
         {},
     )
 
-    assert details["possible_root_cause"] == "policy root cause for custom_contract_risk"
-    assert details["recommended_fix"] == "policy fix for POST /orders/{id}/cancel"
-    assert details["regression_suggestions"] == ["policy regression POST /orders/{id}/cancel"]
+    # Policy templates still drive regression verification obligations, but
+    # customer-facing fix/root-cause fields are stripped at the formatter SSOT.
+    assert "possible_root_cause" not in details
+    assert "recommended_fix" not in details
+    assert "regression_suggestions" not in details
+    assert details["regression_verification_obligations"] == [
+        "policy regression POST /orders/{id}/cancel"
+    ]
+    assert details["product_responsibility_boundary"]["no_fix_advice"] is True
+    assert details["api_endpoint"]["method"] == "POST"
+    assert details["api_endpoint"]["path"] == "/orders/{id}/cancel"
 
     display_ready_formatter._display_ready_policy.cache_clear()
