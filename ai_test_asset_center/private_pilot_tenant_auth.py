@@ -11,6 +11,9 @@ from .private_pilot_project_assets import _root
 from .real_project_onboarding import _safe_project_id
 
 
+PROJECT_SCOPE_HEADER = "X-QualiBug-Project-Scopes"
+
+
 class TenantAuthenticationError(Exception):
     """An explicitly supplied tenant credential could not be authenticated."""
 
