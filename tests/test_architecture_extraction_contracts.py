@@ -110,6 +110,20 @@ def test_system_behavior_space_patch_imports_extracted_slice_helpers() -> None:
     assert "register_bsg_build_hook" in patch_source
 
 
+def test_source_finding_and_ui_verification_helpers_are_reexported() -> None:
+    from ai_test_asset_center import __main__ as scan_module
+    from ai_test_asset_center import scan_finding_postprocess as findings
+    from ai_test_asset_center import scan_source_runtime as source
+    from ai_test_asset_center import scan_ui_candidate_verification as ui_verify
+
+    assert scan_module._source_manifest is source._source_manifest
+    assert scan_module._runtime_contract is source._runtime_contract
+    assert scan_module._classify_findings is findings._classify_findings
+    assert scan_module._verify_ui_candidate_findings is (
+        ui_verify._verify_ui_candidate_findings
+    )
+
+
 def test_extracted_modules_remain_under_architecture_budget_threshold() -> None:
     main_lines = sum(
         1 for _ in open(ROOT / "ai_test_asset_center" / "__main__.py", encoding="utf-8")
@@ -122,5 +136,5 @@ def test_extracted_modules_remain_under_architecture_budget_threshold() -> None:
         )
     )
 
-    assert main_lines < 2900
+    assert main_lines < 1700
     assert patch_lines < 500
