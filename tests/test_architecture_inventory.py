@@ -809,6 +809,145 @@ def test_inventory_cli_rejects_product_owned_evaluator_key(tmp_path: Path) -> No
     )
 
 
+def test_external_collector_records_real_root_callable_execution(
+    tmp_path: Path,
+) -> None:
+    from ai_test_asset_center.architecture_inventory import (
+        build_architecture_inventory,
+        persist_architecture_inventory,
+    )
+
+    repository_root = Path(__file__).resolve().parents[1]
+    product = _sample_repo(tmp_path / "product")
+    config = _config(product)
+    inventory = build_architecture_inventory(
+        repo_root=product,
+        config_path=config,
+    )
+    root = next(
+        row
+        for row in inventory["trace_roots"]
+        if row["module"] == "samplepkg.main" and row["callable"] == "main"
+    )
+    evaluator = tmp_path / "evaluator"
+    inventory_path = persist_architecture_inventory(
+        inventory,
+        evaluator / "inventory.json",
+    )
+    trace_path = evaluator / "runtime_trace.observed.json"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(repository_root / "tools" / "collect_architecture_import_trace.py"),
+            "--inventory",
+            str(inventory_path),
+            "--root-id",
+            root["root_id"],
+            "--output",
+            str(trace_path),
+            "--product-workspace",
+            str(product),
+            "--",
+            sys.executable,
+            "-c",
+            "from samplepkg.main import main; main()",
+        ],
+        cwd=repository_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    assert trace["schema_version"] == "qualibug.python-import-trace.v1"
+    assert trace["coverage_status"] == "PARTIAL"
+    assert "samplepkg.main" in trace["modules"]
+    assert trace["root_sessions"] == [
+        {
+            "root_id": root["root_id"],
+            "module": "samplepkg.main",
+            "callable": "main",
+            "status": "COMPLETE",
+            "command_fingerprint": trace["root_sessions"][0][
+                "command_fingerprint"
+            ],
+            "environment_fingerprint": trace["root_sessions"][0][
+                "environment_fingerprint"
+            ],
+        }
+    ]
+    assert len(trace["root_sessions"][0]["command_fingerprint"]) == 64
+    assert len(trace["root_sessions"][0]["environment_fingerprint"]) == 64
+    summary = json.loads(completed.stdout)
+    assert summary["status"] == "OBSERVED"
+    assert summary["target_callable_observed"] is True
+    validated = build_architecture_inventory(
+        repo_root=product,
+        config_path=config,
+        runtime_trace_path=trace_path,
+    )
+    assert validated["runtime_trace"]["status"] == "UNAUTHENTICATED_PARTIAL"
+    assert validated["runtime_trace"]["covered_roots"] == [root["root_id"]]
+
+
+def test_external_collector_rejects_import_without_required_callable(
+    tmp_path: Path,
+) -> None:
+    from ai_test_asset_center.architecture_inventory import (
+        build_architecture_inventory,
+        persist_architecture_inventory,
+    )
+
+    repository_root = Path(__file__).resolve().parents[1]
+    product = _sample_repo(tmp_path / "product")
+    config = _config(product)
+    inventory = build_architecture_inventory(
+        repo_root=product,
+        config_path=config,
+    )
+    root = next(
+        row
+        for row in inventory["trace_roots"]
+        if row["module"] == "samplepkg.main" and row["callable"] == "main"
+    )
+    evaluator = tmp_path / "evaluator"
+    inventory_path = persist_architecture_inventory(
+        inventory,
+        evaluator / "inventory.json",
+    )
+    trace_path = evaluator / "runtime_trace.observed.json"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(repository_root / "tools" / "collect_architecture_import_trace.py"),
+            "--inventory",
+            str(inventory_path),
+            "--root-id",
+            root["root_id"],
+            "--output",
+            str(trace_path),
+            "--product-workspace",
+            str(product),
+            "--",
+            sys.executable,
+            "-c",
+            "import samplepkg.main",
+        ],
+        cwd=repository_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    failure = json.loads(completed.stderr)
+    assert failure["detail"] == "target_callable_not_observed:samplepkg.main:main"
+    assert not trace_path.exists()
+
+
 def test_repository_inventory_reports_architecture_metrics_not_quality() -> None:
     from ai_test_asset_center.architecture_inventory import (
         build_architecture_inventory,

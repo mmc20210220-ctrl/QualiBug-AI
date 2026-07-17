@@ -36,3 +36,19 @@ Authentication proves evaluator ownership and trace integrity; it does not
 prove safe deletion by itself. A complete authenticated trace changes an
 otherwise eligible module only to `MANUAL_DELETION_REVIEW_REQUIRED`, while
 `auto_delete_performed` remains `false`.
+
+## Real per-root collection
+
+`tools/collect_architecture_import_trace.py` executes one declared trace root
+per invocation. It injects a process-local evaluator observer through Python's
+`sitecustomize` hook, unions imports across observed child Python processes,
+and requires a zero command exit code. Roots that declare a callable are not
+complete merely because their module imported: the observer must see that
+exact module/callable execute. Missing process evidence, failed commands,
+unobserved modules or callables, duplicate root sessions, signed-output
+mutation, and product-workspace output paths all fail closed.
+
+The collector emits an unsigned `PARTIAL` trace until every inventory root has
+one complete session. Operators then seal that external trace with
+`tools/seal_architecture_import_trace.py`; collection never reads the signing
+key and sealing never invents sessions.
