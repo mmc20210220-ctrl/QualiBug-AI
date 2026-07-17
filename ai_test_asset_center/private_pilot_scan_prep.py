@@ -1,10 +1,7 @@
-"""Scan preparation, follow-up UI requests, and local approval helpers.
+"""Scan preparation, follow-up UI requests, local approval, and ingest auto-scan.
 
 Extracted from ``private_pilot_service`` so the HTTP handler module stays thinner.
 Symbols remain importable from ``private_pilot_service`` for compatibility.
-``_run_ingest_auto_scan`` stays in the service module because it updates
-continuous-scan state owned there. Debug reporting stays in the service module
-and is reached through lazy wrappers to avoid import cycles.
 """
 from __future__ import annotations
 
@@ -15,31 +12,64 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
 
+from .private_pilot_continuous import _update_continuous_state
+from .private_pilot_debug_client import _dbg_fingerprint_payload, _dbg_report
+from .private_pilot_json_io import _write_json_object_atomic
+from .private_pilot_project_assets import _first_text, _truthy_env
 from .real_project_onboarding import _safe_project_id
 
 
-def _first_text(*values: Any) -> str:
-    for value in values:
-        text = str(value or "").strip()
-        if text:
-            return text
-    return ""
+def _run_ingest_auto_scan(
+    *,
+    root: Path,
+    project: str,
+    body: dict[str, Any],
+    raw: bytes,
+    doc_type: str,
+    source_manifest: dict[str, Any],
+) -> None:
+    """Run an ingest-triggered scan and persist a failure receipt before raising."""
+    phase = "runtime_defaults"
+    try:
+        scan_context: dict[str, Any] = {}
+        if source_manifest.get("source_id") and source_manifest.get("source_hash"):
+            scan_context["source_manifest"] = dict(source_manifest)
+        defaults = _resolve_scan_runtime_defaults(project, root, body)
+        if defaults.get("scope_id"):
+            scan_context["scope_id"] = defaults["scope_id"]
+        if defaults.get("environment_ref"):
+            scan_context["environment_ref"] = defaults["environment_ref"]
+        api_text = raw.decode("utf-8", errors="replace") if doc_type in {"openapi", "markdown_api"} else ""
 
+        phase = "scan"
+        from .__main__ import scan as scan_project
 
-def _truthy_env(name: str, default: str = "") -> bool:
-    return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "on"}
+        scan_result = scan_project(
+            project,
+            root,
+            api_doc_text=api_text,
+            campaign_context=scan_context,
+            save_report=True,
+        )
+        if not isinstance(scan_result, dict):
+            raise TypeError("ingest auto-scan result must be an object")
 
-
-def _dbg_report(**kwargs: Any) -> None:
-    from . import private_pilot_service as _svc
-
-    _svc._dbg_report(**kwargs)
-
-
-def _dbg_fingerprint_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
-    from . import private_pilot_service as _svc
-
-    return _svc._dbg_fingerprint_payload(payload)
+        phase = "state_update"
+        _update_continuous_state(root, project, scan_result)
+    except Exception as exc:
+        _write_json_object_atomic(
+            root / "platform_outputs" / project / "auto_scan_last_error.json",
+            {
+                "schema": "qualibug.auto-scan-failure.v1",
+                "project": project,
+                "doc_type": doc_type,
+                "phase": phase,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            },
+        )
+        raise
 
 
 def _http_url_text(value: Any) -> str:

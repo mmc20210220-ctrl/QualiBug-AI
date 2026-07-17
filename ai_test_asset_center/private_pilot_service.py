@@ -11,12 +11,10 @@ credential values; connectors only receive secret references.
 import json
 import os
 import re
-import tempfile
 import time
 import traceback
 import uuid
 import urllib.parse
-import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -36,170 +34,56 @@ from .campaign_api_contract import CampaignContractError, structured_error
 from .command_center_delivery_contract import normalize_command_center_delivery
 from .customer_delivery_gate import split_customer_delivery_tracks as _partition_delivery_tracks
 
-
-CONFIG_MANAGER_ROLES = {"project_owner", "qa_lead", "security_owner", "testops_admin", "admin"}
-KNOWLEDGE_MANAGER_ROLES = {"knowledge_admin", "project_owner", "qa_lead", "admin"}
-SETTINGS_MANAGER_ROLES = {"project_owner", "security_owner", "testops_admin", "admin"}
-PROJECT_SCOPE_HEADER = "X-QualiBug-Project-Scopes"
-MASKED_CREDENTIAL_VALUE = "********"
-
-
-def _is_masked_credential_value(value: Any) -> bool:
-    return str(value or "").strip() == MASKED_CREDENTIAL_VALUE
-
-
-def _credential_update_value(incoming: Any, previous: Any = "") -> str:
-    text = str(incoming or "").strip()
-    if not text or _is_masked_credential_value(text):
-        return str(previous or "")
-    return text
-
-# #region debug-point Z:debug-client
-_DBG_ENV_CACHE: tuple[str, str] | None = None
-
-
-def _dbg_env() -> tuple[str, str]:
-    global _DBG_ENV_CACHE
-    if _DBG_ENV_CACHE is not None:
-        return _DBG_ENV_CACHE
-    url = str(os.environ.get("QUALIBUG_DEBUG_SERVER_URL") or "").strip()
-    session_id = str(os.environ.get("QUALIBUG_DEBUG_SESSION_ID") or "command-center-502").strip() or "command-center-502"
-    env_path = Path(__file__).resolve().parents[1] / ".dbg" / f"{session_id}.env"
-    try:
-        if env_path.exists():
-            content = env_path.read_text(encoding="utf-8")
-            url = next((line.split("=", 1)[1].strip() for line in content.splitlines() if line.startswith("DEBUG_SERVER_URL=")), url)
-            session_id = next((line.split("=", 1)[1].strip() for line in content.splitlines() if line.startswith("DEBUG_SESSION_ID=")), session_id)
-    except Exception:
-        pass
-    _DBG_ENV_CACHE = (url, session_id)
-    return _DBG_ENV_CACHE
-
-
-def _dbg_report(*, hypothesis_id: str, msg: str, data: dict[str, Any] | None = None, run_id: str = "pre-fix", trace_id: str = "") -> None:
-    # Debug reporting is disabled by default — must be explicitly enabled via
-    # QUALIBUG_DEBUG_REPORT=1 to prevent unintended internal-state exfiltration.
-    if not _truthy_env("QUALIBUG_DEBUG_REPORT", "0"):
-        return
-    try:
-        url, session_id = _dbg_env()
-        if not url:
-            return
-        payload = {
-            "sessionId": session_id,
-            "runId": run_id,
-            "hypothesisId": hypothesis_id,
-            "location": "ai_test_asset_center/private_pilot_service.py",
-            "msg": msg,
-            "data": data or {},
-            "traceId": trace_id,
-            "ts": int(time.time() * 1000),
-        }
-        raw = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
-        req = urllib.request.Request(url, data=raw, headers={"Content-Type": "application/json"})
-        urllib.request.urlopen(req, timeout=0.2).read()
-    except Exception:
-        pass
-
-
-def _dbg_fingerprint_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
-    import hashlib
-
-    row = payload if isinstance(payload, dict) else {}
-    source_manifest = row.get("source_manifest") if isinstance(row.get("source_manifest"), dict) else {}
-    ui_target_resolution = row.get("ui_target_resolution") if isinstance(row.get("ui_target_resolution"), dict) else {}
-    prd_text = str(row.get("prd") or "")
-    api_doc = str(row.get("api_doc") or row.get("api_doc_text") or "")
-    return {
-        "project_id": str(row.get("project_id") or row.get("project") or ""),
-        "scope_id": str(row.get("scope_id") or ""),
-        "environment_ref": str(row.get("environment_ref") or row.get("target_environment") or ""),
-        "execution_approval_id": str(row.get("execution_approval_id") or ""),
-        "execution_mode": str(row.get("execution_mode") or ""),
-        "base_url": str(row.get("base_url") or ""),
-        "ui_base_url": str(row.get("ui_base_url") or ""),
-        "ui_base_url_source": str(row.get("ui_base_url_source") or ""),
-        "ui_target_resolution_status": str(ui_target_resolution.get("status") or ""),
-        "ui_target_resolution_reason": str(ui_target_resolution.get("reason") or ""),
-        "prd_len": len(prd_text),
-        "prd_sha": hashlib.sha256(prd_text.encode("utf-8")).hexdigest() if prd_text else "",
-        "api_len": len(api_doc),
-        "api_sha": hashlib.sha256(api_doc.encode("utf-8")).hexdigest() if api_doc else "",
-        "source_id": str(source_manifest.get("source_id") or ""),
-        "source_hash": str(source_manifest.get("source_hash") or ""),
-        "source_version_id": str(source_manifest.get("source_version_id") or ""),
-    }
-
-# #endregion
-def _current_tenant() -> str:
-    return os.environ.get("QUALIBUG_TENANT", "default")
-
-
-def _first_text(*values: Any) -> str:
-    for value in values:
-        text = str(value or "").strip()
-        if text:
-            return text
-    return ""
-
-
-
-
-
-
-
-
-def _read_json_safe(path: Path, default: Any) -> Any:
-    try:
-        if path.exists():
-            return json.loads(path.read_text(encoding="utf-8", errors="replace") or "null")
-    except Exception:
-        return default
-    return default
-
-
-def _read_json_artifact(path: Path) -> Any:
-    """Read a present JSON artifact or fail with its identity in the error."""
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"invalid JSON artifact: {path}") from exc
-
-
-def _read_json_object(path: Path, *, missing: dict[str, Any] | None = None) -> dict[str, Any]:
-    if not path.exists() or not path.is_file():
-        return dict(missing or {})
-    payload = _read_json_artifact(path)
-    if not isinstance(payload, dict):
-        raise ValueError(f"JSON artifact must be an object: {path}")
-    return payload
-
-
-def _write_json_object_atomic(path: Path, payload: dict[str, Any]) -> None:
-    """Persist a JSON object without exposing a partially written artifact."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    serialized = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as temporary:
-            temporary.write(serialized)
-            temporary.flush()
-            os.fsync(temporary.fileno())
-            temporary_path = Path(temporary.name)
-        os.replace(temporary_path, path)
-        temporary_path = None
-    finally:
-        if temporary_path is not None and temporary_path.exists():
-            temporary_path.unlink()
-
-
+from .private_pilot_json_io import (  # noqa: F401
+    _read_json_artifact,
+    _read_json_object,
+    _read_json_safe,
+    _write_json_object_atomic,
+)
+from .private_pilot_debug_client import (  # noqa: F401
+    _dbg_env,
+    _dbg_fingerprint_payload,
+    _dbg_report,
+)
+from .private_pilot_project_assets import (  # noqa: F401
+    KNOWLEDGE_INGEST_BINARY_EXTENSIONS,
+    KNOWLEDGE_INGEST_EXTENSIONS,
+    KNOWLEDGE_INGEST_SOURCE_TYPES,
+    KNOWLEDGE_INGEST_TEXT_EXTENSIONS,
+    MASKED_CREDENTIAL_VALUE,
+    ONBOARD_DOCUMENT_EXTENSIONS,
+    ONBOARD_OPENAPI_EXTENSIONS,
+    _credential_update_value,
+    _extensions_accept,
+    _extensions_label,
+    _first_text,
+    _is_masked_credential_value,
+    _knowledge_asset_sources,
+    _known_project_exists,
+    _load_real_project_discovery_payload,
+    _normalize_frontend_page_path,
+    _project_output_dir_for_import,
+    _root,
+    _truthy_env,
+    _write_env_local,
+)
+from .private_pilot_tenant_auth import (  # noqa: F401
+    TenantAuthenticationError,
+    _actor,
+    _current_tenant,
+    _parse_project_scopes,
+    _tenant_from_headers,
+)
+from .private_pilot_campaign_projection import (  # noqa: F401
+    _augment_continuous_discovery_campaign,
+    _current_campaign_bundle_finding_stats,
+    _current_campaign_scope_summary,
+    _report_finding_dedupe_key as _finding_dedupe_key,
+)
+from .private_pilot_scan_aggregates import (  # noqa: F401
+    _extend_stage3_impact_analysis,
+    _synchronize_scan_aggregates,
+)
 from .private_pilot_regression_projection import (  # noqa: F401
     _build_regression_release_guidance,
     _build_regression_validation_summary,
@@ -211,27 +95,36 @@ from .private_pilot_regression_projection import (  # noqa: F401
     _regression_summary_title,
     _regression_trend_direction,
 )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+from .private_pilot_defect_summaries import (  # noqa: F401
+    _build_defect_delivery_cards,
+    _build_defect_grouped_summary,
+    _build_defect_priority_summary,
+    _build_defect_repro_summary,
+    _claim_request_identity,
+    _extract_step_calls,
+    _finding_request_identity,
+    _materialized_path_matches,
+    _normalize_summary_path,
+    _validate_api_path,
+)
+from .private_pilot_command_center_helpers import (  # noqa: F401
+    _annotate_ui_risk_item,
+    _build_internal_clue_contract,
+    _collect_track_counts,
+    _command_center_priority_label,
+    _command_center_priority_score,
+    _commercial_assets_signal,
+    _defect_intake_fields,
+    _defect_intake_stats,
+    _is_ui_risk_item,
+    _normalize_commercial_assets,
+    _normalize_execution_evidence_summary,
+    _rebuild_customer_display_contract,
+    _select_commercial_assets,
+    _ui_verification_stats,
+)
 from .private_pilot_command_center_builder import CommandCenterBuilderMixin
+from .private_pilot_credentials_handlers import CredentialsHandlerMixin
 from .private_pilot_continuous import (  # noqa: F401
     _CONTINUOUS_STATE_FILE,
     _continuous_scan_loop,
@@ -249,13 +142,6 @@ from .private_pilot_command_center_envelope import (  # noqa: F401
     normalize_command_center_envelope,
     register_envelope_post_hook,
 )
-
-
-def _normalize_command_center_envelope(payload: dict[str, Any]) -> dict[str, Any]:
-    """Thin dispatcher — patches register post-hooks instead of replacing this."""
-    return normalize_command_center_envelope(payload)
-
-
 from .private_pilot_scan_prep import (  # noqa: F401
     _frontend_entry_url_candidates,
     _has_campaign_id_mismatch,
@@ -271,501 +157,25 @@ from .private_pilot_scan_prep import (  # noqa: F401
     _resolve_followup_ui_test_data_browser_plan,
     _resolve_scan_runtime_defaults,
     _resolve_ui_base_url_from_profile,
+    _run_ingest_auto_scan,
     _validate_scan_base_url,
 )
 
 
-def _run_ingest_auto_scan(
-    *,
-    root: Path,
-    project: str,
-    body: dict[str, Any],
-    raw: bytes,
-    doc_type: str,
-    source_manifest: dict[str, Any],
-) -> None:
-    """Run an ingest-triggered scan and persist a failure receipt before raising."""
-    phase = "runtime_defaults"
-    try:
-        scan_context: dict[str, Any] = {}
-        if source_manifest.get("source_id") and source_manifest.get("source_hash"):
-            scan_context["source_manifest"] = dict(source_manifest)
-        defaults = _resolve_scan_runtime_defaults(project, root, body)
-        if defaults.get("scope_id"):
-            scan_context["scope_id"] = defaults["scope_id"]
-        if defaults.get("environment_ref"):
-            scan_context["environment_ref"] = defaults["environment_ref"]
-        api_text = raw.decode("utf-8", errors="replace") if doc_type in {"openapi", "markdown_api"} else ""
-
-        phase = "scan"
-        from .__main__ import scan as scan_project
-
-        scan_result = scan_project(
-            project,
-            root,
-            api_doc_text=api_text,
-            campaign_context=scan_context,
-            save_report=True,
-        )
-        if not isinstance(scan_result, dict):
-            raise TypeError("ingest auto-scan result must be an object")
-
-        phase = "state_update"
-        _update_continuous_state(root, project, scan_result)
-    except Exception as exc:
-        _write_json_object_atomic(
-            root / "platform_outputs" / project / "auto_scan_last_error.json",
-            {
-                "schema": "qualibug.auto-scan-failure.v1",
-                "project": project,
-                "doc_type": doc_type,
-                "phase": phase,
-                "error_type": type(exc).__name__,
-                "error": str(exc),
-                "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            },
-        )
-        raise
-
-
-
-
-
-
-
-
-
-
-
-class TenantAuthenticationError(Exception):
-    """An explicitly supplied tenant credential could not be authenticated."""
-
-
-def _tenant_from_headers(headers: dict, *, root: Path | None = None) -> str:
-    """Resolve tenant identity, rejecting invalid explicit credentials."""
-    # Credential precedence is fail-closed: once a caller supplies a higher-
-    # priority credential, it must authenticate and cannot fall through to a
-    # lower-priority credential or the local development tenant.
-    auth_present = "Authorization" in headers or "authorization" in headers
-    auth = str(headers.get("Authorization") or headers.get("authorization") or "").strip()
-    if auth_present:
-        if not auth.startswith("Bearer ") or not auth[7:].strip():
-            raise TenantAuthenticationError("invalid bearer token")
-        try:
-            payload = jwt_auth.verify_token(auth[7:].strip())
-        except Exception as exc:
-            raise TenantAuthenticationError(f"bearer token verification failed: {exc}") from exc
-        tenant_id = str(payload.get("sub") or "").strip() if isinstance(payload, dict) else ""
-        if not tenant_id:
-            raise TenantAuthenticationError("invalid bearer token")
-        return tenant_id
-    # 2. HttpOnly Cookie (set by /api/auth/login) — preferred over localStorage
-    #    because it is not readable by JavaScript, mitigating XSS token theft.
-    cookie = headers.get("Cookie") or headers.get("cookie") or ""
-    if cookie:
-        from http.cookies import SimpleCookie
-        try:
-            ck = SimpleCookie()
-            ck.load(cookie)
-            morsel = ck.get("qualibug_token")
-            if morsel:
-                payload = jwt_auth.verify_token(morsel.value)
-                tenant_id = str(payload.get("sub") or "").strip() if isinstance(payload, dict) else ""
-                if not tenant_id:
-                    raise TenantAuthenticationError("invalid cookie token")
-                return tenant_id
-        except TenantAuthenticationError:
-            raise
-        except Exception as exc:
-            raise TenantAuthenticationError(f"cookie token verification failed: {exc}") from exc
-    # 3. API Key
-    api_key_present = "X-API-Key" in headers or "x-api-key" in headers
-    api_key = str(headers.get("X-API-Key") or headers.get("x-api-key") or "").strip()
-    if api_key_present:
-        if not api_key:
-            raise TenantAuthenticationError("invalid API key")
-        try:
-            tenant_id = str(db_persist.verify_api_key(root or _root(), api_key) or "").strip()
-        except Exception as exc:
-            raise TenantAuthenticationError(f"API key verification failed: {exc}") from exc
-        if not tenant_id:
-            raise TenantAuthenticationError("invalid API key")
-        return tenant_id
-    return _current_tenant()
+CONFIG_MANAGER_ROLES = {"project_owner", "qa_lead", "security_owner", "testops_admin", "admin"}
+KNOWLEDGE_MANAGER_ROLES = {"knowledge_admin", "project_owner", "qa_lead", "admin"}
+SETTINGS_MANAGER_ROLES = {"project_owner", "security_owner", "testops_admin", "admin"}
+PROJECT_SCOPE_HEADER = "X-QualiBug-Project-Scopes"
 
 _TENANT = _current_tenant()
 
 
-from .private_pilot_defect_summaries import (  # noqa: F401
-    _build_defect_delivery_cards,
-    _build_defect_grouped_summary,
-    _build_defect_priority_summary,
-    _build_defect_repro_summary,
-    _claim_request_identity,
-    _extract_step_calls,
-    _finding_request_identity,
-    _materialized_path_matches,
-    _normalize_summary_path,
-    _validate_api_path,
-)
+def _normalize_command_center_envelope(payload: dict[str, Any]) -> dict[str, Any]:
+    """Thin dispatcher — patches register post-hooks instead of replacing this."""
+    return normalize_command_center_envelope(payload)
 
 
-
-
-def _augment_continuous_discovery_campaign(
-    payload: dict[str, Any],
-    *,
-    current_report_breakdown: dict[str, Any],
-    delivery_defects: list[dict[str, Any]],
-    current_campaign_customer_ready_defect_count: int = 0,
-    current_campaign_bundle_finding_count_raw: int = 0,
-) -> dict[str, Any]:
-    campaign_payload = dict(payload or {})
-    if not campaign_payload:
-        return {}
-    campaign = dict(campaign_payload.get("campaign") or {}) if isinstance(campaign_payload.get("campaign"), dict) else {}
-    summary = dict(campaign_payload.get("summary") or {}) if isinstance(campaign_payload.get("summary"), dict) else {}
-    current_run = dict(campaign_payload.get("current_run") or {}) if isinstance(campaign_payload.get("current_run"), dict) else {}
-    current_confirmed = summary.get("confirmed_slice_count")
-    if current_confirmed in (None, ""):
-        current_confirmed = current_run.get("confirmed_slice_count")
-    if current_confirmed in (None, ""):
-        current_confirmed = campaign.get("confirmed_slice_count")
-    try:
-        current_confirmed_count = max(0, int(current_confirmed or 0))
-    except (TypeError, ValueError):
-        current_confirmed_count = 0
-    family_customer_ready_defect_count = len([item for item in delivery_defects if isinstance(item, dict)])
-    try:
-        family_report_real_finding_count = max(0, int((current_report_breakdown or {}).get("total_findings") or 0))
-    except (TypeError, ValueError):
-        family_report_real_finding_count = 0
-    alignment_status = (
-        "aligned"
-        if family_customer_ready_defect_count == current_confirmed_count
-        else "family_expands_beyond_current_campaign"
-        if family_customer_ready_defect_count > current_confirmed_count
-        else "current_campaign_exceeds_family_shelf"
-    )
-    summary["current_campaign_confirmed_slice_count"] = current_confirmed_count
-    summary["current_campaign_customer_ready_defect_count"] = max(0, int(current_campaign_customer_ready_defect_count or 0))
-    summary["current_campaign_bundle_finding_count_raw"] = max(0, int(current_campaign_bundle_finding_count_raw or 0))
-    summary["family_customer_ready_defect_count"] = family_customer_ready_defect_count
-    summary["family_report_real_finding_count"] = family_report_real_finding_count
-    summary["family_historical_carryover_defect_count"] = max(0, family_customer_ready_defect_count - max(0, int(current_campaign_customer_ready_defect_count or 0)))
-    summary["confirmed_shelf_alignment_status"] = alignment_status
-    summary["confirmed_shelf_reporting_scope"] = "campaign_confirmed=current_campaign; defect_shelf=family_aggregated"
-    current_run["current_campaign_confirmed_slice_count"] = current_confirmed_count
-    current_run["current_campaign_customer_ready_defect_count"] = max(0, int(current_campaign_customer_ready_defect_count or 0))
-    current_run["current_campaign_bundle_finding_count_raw"] = max(0, int(current_campaign_bundle_finding_count_raw or 0))
-    current_run["family_customer_ready_defect_count"] = family_customer_ready_defect_count
-    current_run["family_report_real_finding_count"] = family_report_real_finding_count
-    campaign_payload["summary"] = summary
-    campaign_payload["current_run"] = current_run
-    return campaign_payload
-
-
-def _current_campaign_scope_summary(payload: dict[str, Any]) -> dict[str, str]:
-    campaign_payload = payload if isinstance(payload, dict) else {}
-    campaign = campaign_payload.get("campaign") if isinstance(campaign_payload.get("campaign"), dict) else {}
-    summary = campaign_payload.get("summary") if isinstance(campaign_payload.get("summary"), dict) else {}
-    current_run = campaign_payload.get("current_run") if isinstance(campaign_payload.get("current_run"), dict) else {}
-    campaign_id = _first_text(campaign.get("campaign_id"), summary.get("campaign_id"), current_run.get("campaign_id"))
-    scope_id = _first_text(campaign.get("scope_id"), summary.get("scope_id"), current_run.get("scope_id"))
-    environment_ref = _first_text(
-        campaign.get("environment_ref"),
-        campaign.get("target_environment"),
-        summary.get("environment_ref"),
-        summary.get("target_environment"),
-        current_run.get("environment_ref"),
-        current_run.get("target_environment"),
-    )
-    lineage_campaign_id = _first_text(campaign.get("lineage_campaign_id"), summary.get("lineage_campaign_id"))
-    source_hash = _first_text(campaign.get("source_hash"), summary.get("source_hash"))
-    source_snapshot_hash = _first_text(campaign.get("source_snapshot_hash"), summary.get("source_snapshot_hash"))
-    if not any((campaign_id, scope_id, environment_ref, lineage_campaign_id, source_hash, source_snapshot_hash)):
-        return {}
-    return {
-        "campaign_id": campaign_id,
-        "lineage_campaign_id": lineage_campaign_id,
-        "scope_id": scope_id,
-        "environment_ref": environment_ref,
-        "source_hash": source_hash,
-        "source_snapshot_hash": source_snapshot_hash,
-    }
-
-
-def _current_campaign_bundle_finding_stats(
-    project_id: str,
-    root: Path,
-    campaign_payload: dict[str, Any],
-) -> dict[str, int]:
-    campaign = campaign_payload.get("campaign") if isinstance(campaign_payload.get("campaign"), dict) else {}
-    campaign_id = str(campaign.get("campaign_id") or "").strip()
-    if not campaign_id:
-        return {"raw": 0, "deduped": 0}
-    bundle_root = root / "platform_workspace" / _safe_project_id(project_id) / "evidence_bundles"
-    if not bundle_root.exists():
-        return {"raw": 0, "deduped": 0}
-    deduped_keys: set[str] = set()
-    raw_count = 0
-    for bundle_dir in bundle_root.iterdir():
-        if not bundle_dir.is_dir():
-            continue
-        campaign_path = bundle_dir / "campaign.json"
-        findings_path = bundle_dir / "findings.json"
-        if not campaign_path.exists() or not findings_path.exists():
-            continue
-        try:
-            bundle_campaign = json.loads(campaign_path.read_text(encoding="utf-8") or "{}")
-            bundle_findings = json.loads(findings_path.read_text(encoding="utf-8") or "[]")
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(bundle_campaign, dict) or str(bundle_campaign.get("campaign_id") or "").strip() != campaign_id:
-            continue
-        if not isinstance(bundle_findings, list):
-            continue
-        raw_count += len([item for item in bundle_findings if isinstance(item, dict)])
-        for finding in bundle_findings:
-            if not isinstance(finding, dict):
-                continue
-            key = PrivatePilotHandler._report_finding_dedupe_key(finding)
-            if key:
-                deduped_keys.add(key)
-    return {"raw": raw_count, "deduped": len(deduped_keys)}
-KNOWLEDGE_INGEST_SOURCE_TYPES = (
-    "prd",
-    "mrd",
-    "openapi",
-    "postman",
-    "database_schema",
-    "permission_matrix",
-    "historical_bug",
-    "ticket",
-    "feishu_document",
-    "confluence_document",
-    "collaboration_document",
-    "other_document",
-)
-KNOWLEDGE_INGEST_TEXT_EXTENSIONS = (
-    ".md",
-    ".markdown",
-    ".txt",
-    ".rst",
-    ".html",
-    ".htm",
-    ".yaml",
-    ".yml",
-    ".json",
-    ".csv",
-    ".sql",
-    ".xml",
-)
-KNOWLEDGE_INGEST_BINARY_EXTENSIONS = (".pdf", ".docx")
-KNOWLEDGE_INGEST_EXTENSIONS = KNOWLEDGE_INGEST_TEXT_EXTENSIONS + KNOWLEDGE_INGEST_BINARY_EXTENSIONS
-ONBOARD_DOCUMENT_EXTENSIONS = (".md", ".markdown", ".txt", ".pdf", ".docx", ".html", ".htm")
-ONBOARD_OPENAPI_EXTENSIONS = (".yaml", ".yml", ".json")
-
-
-def _extensions_label(items: tuple[str, ...]) -> str:
-    return " ".join(items)
-
-
-def _extensions_accept(items: tuple[str, ...]) -> str:
-    return ",".join(items)
-
-
-def _root() -> Path:
-    configured = os.environ.get("QUALIBUG_PRIVATE_ROOT", "").strip()
-    return Path(configured).resolve() if configured else ROOT
-
-
-def _actor(headers: Any) -> dict[str, str] | None:
-    name = str(headers.get("X-QualiBug-Actor") or headers.get("x-qualibug-actor") or "").strip()
-    role = str(headers.get("X-QualiBug-Role") or headers.get("x-qualibug-role") or "").strip()
-    if not name or not role:
-        return None
-    return {"name": name[:120], "role": role[:64]}
-
-
-def _truthy_env(name: str, default: str = "") -> bool:
-    return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _parse_project_scopes(raw: str) -> tuple[set[str], bool]:
-    items = [item.strip() for item in str(raw or "").replace(";", ",").split(",") if item.strip()]
-    wildcard = any(item == "*" for item in items)
-    return {_safe_project_id(item) for item in items if item != "*"}, wildcard
-
-
-def _load_real_project_discovery_payload(root: Path, project_id: str) -> dict[str, Any] | None:
-    project = _safe_project_id(project_id)
-    candidates = (
-        root / "platform_outputs" / project / "real_project" / "real_project_defect_data.json",
-        root / "platform_workspace" / project / "real_project" / "real_project_defect_data.json",
-        root / "platform_workspace" / project / "defect_discovery" / "continuous_discovery_state.json",
-    )
-    for candidate in candidates:
-        if not candidate.exists():
-            continue
-        payload = _read_json_object(candidate)
-        payload.setdefault("report_source_path", candidate.relative_to(root).as_posix() if candidate.is_relative_to(root) else str(candidate))
-        return payload
-    return None
-
-
-from .private_pilot_command_center_helpers import (  # noqa: F401
-    _annotate_ui_risk_item,
-    _build_internal_clue_contract,
-    _collect_track_counts,
-    _command_center_priority_label,
-    _command_center_priority_score,
-    _commercial_assets_signal,
-    _defect_intake_fields,
-    _defect_intake_stats,
-    _is_ui_risk_item,
-    _normalize_commercial_assets,
-    _normalize_execution_evidence_summary,
-    _rebuild_customer_display_contract,
-    _select_commercial_assets,
-    _ui_verification_stats,
-)
-
-
-
-
-
-
-def _write_env_local(updates: dict[str, str]) -> Path:
-    configured = os.environ.get("QUALIBUG_ENV_LOCAL_PATH", "").strip()
-    env_path = Path(configured).expanduser().resolve() if configured else Path(__file__).resolve().parents[1] / ".env.local"
-    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else [
-        "# Local-only QualiBug LLM credentials.",
-        "# This file is ignored by git. Do not share it.",
-        "",
-    ]
-    keys = set(updates)
-    written: set[str] = set()
-    new_lines: list[str] = []
-    for line in lines:
-        raw = line.strip()
-        key = raw.split("=", 1)[0].strip().upper() if "=" in raw and not raw.startswith("#") else ""
-        if key in keys:
-            new_lines.append(f"{key}={updates[key]}")
-            written.add(key)
-        else:
-            new_lines.append(line)
-    if new_lines and new_lines[-1].strip():
-        new_lines.append("")
-    for key in sorted(keys - written):
-        new_lines.append(f"{key}={updates[key]}")
-    env_path.write_text("\n".join(new_lines).rstrip() + "\n", encoding="utf-8")
-    return env_path
-
-
-def _known_project_exists(root: Path, project: str) -> bool:
-    project = _safe_project_id(project)
-    candidates = (
-        root / "platform_inputs" / project / "real_project_config.json",
-        root / "platform_outputs" / project,
-        root / "platform_workspace" / project,
-    )
-    return any(path.exists() for path in candidates)
-
-
-def _project_output_dir_for_import(root: Path, project_id: str) -> tuple[str, Path]:
-    safe_project_id = _safe_project_id(project_id)
-    output_dir = (root / "platform_outputs" / safe_project_id).resolve()
-    platform_outputs = (root / "platform_outputs").resolve()
-    if platform_outputs not in output_dir.parents and output_dir != platform_outputs:
-        raise ValueError("project output path escaped platform_outputs")
-    return safe_project_id, output_dir
-
-
-def _knowledge_asset_sources(asset: dict[str, Any], root: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    inventory = asset.get("source_inventory") or asset.get("sources") or []
-    if not isinstance(inventory, list):
-        return rows
-    for item in inventory:
-        if not isinstance(item, dict):
-            continue
-        stored_path = str(item.get("stored_path") or item.get("path") or "")
-        path = root / stored_path if stored_path and not Path(stored_path).is_absolute() else Path(stored_path) if stored_path else None
-        size = path.stat().st_size if path and path.exists() and path.is_file() else int(item.get("size_bytes") or 0)
-        rows.append({
-            "source_id": str(item.get("source_id") or item.get("id") or ""),
-            "filename": str(item.get("original_name") or item.get("filename") or item.get("name") or ""),
-            "source_type": str(item.get("source_type") or item.get("type") or ""),
-            "status": str(item.get("status") or "active"),
-            "size_bytes": size,
-            "uploaded_at": str(item.get("created_at_utc") or item.get("uploaded_at") or item.get("created_at") or ""),
-            "version": item.get("version", 1),
-            "parse_status": str((item.get("parse") or {}).get("parse_status") or item.get("parse_status") or ""),
-        })
-    return rows
-
-
-def _normalize_frontend_page_path(path: str) -> str:
-    clean = "/" + str(path or "/").strip().strip("/")
-    return {
-        "/materials": "/knowledge",
-        "/evidence": "/findings",
-    }.get(clean, clean)
-
-
-def _synchronize_scan_aggregates(report: dict[str, Any]) -> dict[str, Any]:
-    """Make every scan view derive its counts from the final calibrated list.
-
-    Health, semantic and validation stages may replace the discovery list after
-    the autonomous pipeline has built its executive summary. Keeping the
-    aggregation here prevents release and management views from under-reporting
-    the final risk population.
-    """
-    stage2 = dict(report.get("stage2_discovery") or {})
-    findings = [item for item in (stage2.get("findings") or []) if isinstance(item, dict)]
-    stage2["findings"] = findings
-    stage2["total_findings"] = len(findings)
-    severities = sorted({str(item.get("severity") or "unknown") for item in findings})
-    stage2["by_severity"] = {
-        severity: sum(1 for item in findings if str(item.get("severity") or "unknown") == severity)
-        for severity in severities
-    }
-    report["stage2_discovery"] = stage2
-
-    executive = dict(report.get("executive_summary") or {})
-    executive["total_bugs_found"] = len(findings)
-    executive["critical_bugs"] = sum(1 for item in findings if str(item.get("severity") or "") == "P0")
-    executive["high_priority_bugs"] = sum(1 for item in findings if str(item.get("severity") or "") == "P1")
-
-    stage3 = dict(report.get("stage3_impact_analysis") or {})
-    analyses = [item for item in (stage3.get("analyses") or []) if isinstance(item, dict)]
-    stage3["analyses"] = analyses
-    stage3["total_analyses"] = len(analyses)
-    stage3["llm_powered"] = sum(1 for item in analyses if item.get("source") == "llm_evidence_impact")
-    stage3["heuristic"] = len(analyses) - int(stage3["llm_powered"])
-    report["stage3_impact_analysis"] = stage3
-    executive["impact_analyses"] = len(analyses)
-    executive["llm_powered_analyses"] = int(stage3["llm_powered"])
-    report["executive_summary"] = executive
-    return report
-
-
-def _extend_stage3_impact_analysis(report: dict[str, Any], analyses: list[dict[str, Any]]) -> None:
-    """Append post-pipeline impact notes without discarding LLM assessments."""
-    if not analyses:
-        return
-    stage3 = dict(report.get("stage3_impact_analysis") or {})
-    existing = [item for item in (stage3.get("analyses") or []) if isinstance(item, dict)]
-    existing.extend(item for item in analyses if isinstance(item, dict))
-    stage3["analyses"] = existing
-    stage3["total_analyses"] = len(existing)
-    stage3["llm_powered"] = sum(1 for item in existing if item.get("source") == "llm_evidence_impact")
-    stage3["heuristic"] = sum(1 for item in existing if item.get("source") != "llm_evidence_impact")
-    report["stage3_impact_analysis"] = stage3
-
-
-class PrivatePilotHandler(CommandCenterBuilderMixin, BaseHTTPRequestHandler):
+class PrivatePilotHandler(CredentialsHandlerMixin, CommandCenterBuilderMixin, BaseHTTPRequestHandler):
     server_version = "QualiBugPrivatePilot/1.0"
 
     def _root(self) -> Path:
@@ -2810,27 +2220,7 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
 
     @staticmethod
     def _report_finding_dedupe_key(item: dict[str, Any]) -> str:
-        import re as _re
-
-        title = str(item.get("title") or item.get("description") or "")[:200].strip().lower()
-        title = _re.sub(r"^(\[[^\]]*\]\s*)+", "", title)
-        title = _re.sub(r"\s+", " ", title).strip()
-        method = str(
-            item.get("_api_method")
-            or item.get("method")
-            or (item.get("evidence") or {}).get("method")
-            or ""
-        ).strip().upper()
-        path = str(
-            item.get("_api_path")
-            or item.get("path")
-            or (item.get("evidence") or {}).get("path")
-            or ""
-        ).strip()
-        risk_id = str(item.get("risk_id") or item.get("id") or "").strip().lower()
-        if title or method or path:
-            return f"{title}|{method}|{path}"
-        return risk_id
+        return _finding_dedupe_key(item)
 
     def _aggregate_related_report_candidate(
         self,
@@ -3898,274 +3288,6 @@ th{{background:#f1f5f9;font-weight:700;color:#475569}}
             if result:
                 response["replay_result"] = result
             return self._json(response, 500)
-
-    # ── Multi-Service Credential Management ──
-
-    def _handle_get_service_credentials(self, project: str, root: Path) -> None:
-        """Return current multi-service credential configuration."""
-        config_path = root / "platform_workspace" / project / "multi_service_config.json"
-        try:
-            data = _read_json_object(config_path)
-            services = data.get("services", [])
-            if not isinstance(services, list) or any(not isinstance(item, dict) for item in services):
-                raise ValueError(f"credential config services must be a list of objects: {config_path}")
-        except Exception as exc:
-            return self._json(
-                {
-                    "ok": False,
-                    "error": "CREDENTIAL_CONFIG_INVALID",
-                    "message": str(exc),
-                    "project": project,
-                },
-                500,
-            )
-        return self._json({"project": project, "services": services})
-
-    def _handle_save_service_credentials(self, project: str, root: Path, body: dict) -> None:
-        """Save credentials for a single service, merging into multi_service_config.json."""
-        service_data = body.get("service", {})
-        if not isinstance(service_data, dict) or not str(service_data.get("name") or "").strip():
-            return self._json({"ok": False, "error": "MISSING_NAME",
-                              "message": "service.name is required"}, 400)
-        previous_name = str(body.get("previous_name") or "").strip()
-        config_path = root / "platform_workspace" / project / "multi_service_config.json"
-        try:
-            config = _read_json_object(config_path)
-            services = config.get("services", [])
-            if not isinstance(services, list) or any(not isinstance(item, dict) for item in services):
-                raise ValueError(f"credential config services must be a list of objects: {config_path}")
-        except Exception as exc:
-            return self._json(
-                {
-                    "ok": False,
-                    "error": "CREDENTIAL_CONFIG_INVALID",
-                    "message": str(exc),
-                    "project": project,
-                },
-                500,
-            )
-        config.setdefault("services", [])
-        config.setdefault("project_name", project)
-        config.setdefault("cross_service_contracts", [])
-        config.setdefault("external_integrations", [])
-
-        # Upsert: update existing or append new
-        name = str(service_data["name"]).strip()
-        role_accounts = service_data.get("role_accounts") or []
-        if not isinstance(role_accounts, list) or any(not isinstance(account, dict) for account in role_accounts):
-            return self._json(
-                {"ok": False, "error": "INVALID_ROLE_ACCOUNTS", "message": "service.role_accounts must be a list of objects"},
-                400,
-            )
-        updated = False
-        for i, svc in enumerate(config["services"]):
-            if svc.get("name") in {name, previous_name}:
-                existing = dict(svc)
-                previous_auth = svc.get("auth") if isinstance(svc.get("auth"), dict) else {}
-                existing["name"] = name
-                existing["base_url"] = service_data.get("base_url", "")
-                existing["enabled"] = bool(service_data.get("enabled", True))
-                # Build auth section — include all role accounts
-                auth = {
-                    "type": service_data.get("auth_type", "password_login"),
-                    "login_api": service_data.get("login_api", "/auth/login"),
-                }
-                # Multi-role accounts (new)
-                for ra in role_accounts:
-                    if isinstance(ra, dict) and ra.get("role") and ra.get("username"):
-                        role = str(ra["role"])
-                        previous_role = previous_auth.get(role) if isinstance(previous_auth.get(role), dict) else {}
-                        password = _credential_update_value(ra.get("password"), previous_role.get("password"))
-                        auth[role] = {"username": ra["username"]}
-                        if password:
-                            auth[role]["password"] = password
-                # Legacy single admin (backward compat)
-                if not role_accounts:
-                    if service_data.get("admin_user"):
-                        auth.setdefault("admin", {})
-                        auth["admin"]["username"] = service_data["admin_user"]
-                    previous_admin = previous_auth.get("admin") if isinstance(previous_auth.get("admin"), dict) else {}
-                    admin_password = _credential_update_value(service_data.get("admin_pass"), previous_admin.get("password"))
-                    if admin_password:
-                        auth.setdefault("admin", {})
-                        auth["admin"]["password"] = admin_password
-                bearer_token = _credential_update_value(service_data.get("bearer_token"), previous_auth.get("bearer_token"))
-                if bearer_token:
-                    auth["bearer_token"] = bearer_token
-                api_key = _credential_update_value(service_data.get("api_key"), previous_auth.get("api_key"))
-                if api_key:
-                    auth["api_key"] = api_key
-                existing["auth"] = auth
-                for legacy_key in ("login_api", "auth_type", "admin_user", "admin_pass", "bearer_token", "api_key"):
-                    existing.pop(legacy_key, None)
-
-                # Build db section
-                if any(service_data.get(k) for k in ("db_host", "db_name")):
-                    previous_db = svc.get("db") if isinstance(svc.get("db"), dict) else {}
-                    existing["db"] = {
-                        "host": service_data.get("db_host", ""),
-                        "port": int(service_data.get("db_port", 3306)),
-                        "name": service_data.get("db_name", ""),
-                        "user": service_data.get("db_user", ""),
-                        "password": _credential_update_value(service_data.get("db_pass"), previous_db.get("password")),
-                    }
-                else:
-                    existing.pop("db", None)
-                config["services"][i] = existing
-                updated = True
-                break
-
-        if not updated:
-            auth = {
-                "type": service_data.get("auth_type", "password_login"),
-                "login_api": service_data.get("login_api", "/auth/login"),
-            }
-            # Multi-role accounts
-            for ra in role_accounts:
-                if isinstance(ra, dict) and ra.get("role") and ra.get("username"):
-                    role = str(ra["role"])
-                    auth[role] = {"username": ra["username"]}
-                    password = _credential_update_value(ra.get("password"))
-                    if password:
-                        auth[role]["password"] = password
-            # Legacy single admin fallback
-            if not role_accounts and service_data.get("admin_user"):
-                auth["admin"] = {
-                    "username": service_data["admin_user"],
-                    "password": service_data.get("admin_pass", ""),
-                }
-            bearer_token = _credential_update_value(service_data.get("bearer_token"))
-            if bearer_token:
-                auth["bearer_token"] = bearer_token
-            api_key = _credential_update_value(service_data.get("api_key"))
-            if api_key:
-                auth["api_key"] = api_key
-            svc = {
-                "name": name, "base_url": service_data.get("base_url", ""),
-                "enabled": service_data.get("enabled", True),
-                "description": "", "depends_on": [], "exposes_to": [],
-                "auth": auth,
-            }
-            if any(service_data.get(k) for k in ("db_host", "db_name")):
-                svc["db"] = {
-                    "host": service_data.get("db_host", ""),
-                    "port": int(service_data.get("db_port", 3306)),
-                    "name": service_data.get("db_name", ""),
-                    "user": service_data.get("db_user", ""),
-                    "password": _credential_update_value(service_data.get("db_pass")),
-                }
-            config["services"].append(svc)
-
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        # Encrypt sensitive credential fields before writing to disk so that
-        # secrets are not stored in plaintext in multi_service_config.json.
-        from .credential_crypto import encrypt as _enc_secret, is_encrypted as _is_enc
-        for _svc in config.get("services", []):
-            if not isinstance(_svc, dict):
-                continue
-            _auth = _svc.get("auth")
-            if isinstance(_auth, dict):
-                for _role_cfg in _auth.values():
-                    if isinstance(_role_cfg, dict):
-                        _pw = _role_cfg.get("password")
-                        if _pw and not _is_enc(_pw):
-                            _role_cfg["password"] = _enc_secret(_pw)
-                for _field in ("bearer_token", "api_key"):
-                    _val = _auth.get(_field)
-                    if _val and not _is_enc(_val):
-                        _auth[_field] = _enc_secret(_val)
-            _db_cfg = _svc.get("db")
-            if isinstance(_db_cfg, dict):
-                _db_pw = _db_cfg.get("password")
-                if _db_pw and not _is_enc(_db_pw):
-                    _db_cfg["password"] = _enc_secret(_db_pw)
-        _write_json_object_atomic(config_path, config)
-
-        # Reload credentials and perform a real password-login health check.
-        # Static bearer/API-key configuration remains unverified because the
-        # credential manager cannot prove it against a protected endpoint.
-        try:
-            from .enterprise_credential_manager import EnterpriseCredentialManager
-            mgr = EnterpriseCredentialManager(project, root)
-            mgr.load_from_file(config_path)
-            mgr.load_from_env()
-            login_results = mgr.login_all_services()
-            if not isinstance(login_results, dict):
-                raise TypeError("credential login results must be an object")
-            auth_roles = login_results.get(name) or {}
-            if not isinstance(auth_roles, dict) or any(type(ok) is not bool for ok in auth_roles.values()):
-                raise ValueError("credential role health results must be boolean values")
-            target_service = next(
-                (item for item in config["services"] if isinstance(item, dict) and item.get("name") == name),
-                None,
-            )
-            if target_service is None:
-                raise ValueError(f"saved service missing from credential config: {name}")
-            target_auth = target_service.get("auth") if isinstance(target_service.get("auth"), dict) else {}
-            role_credentials = [
-                value
-                for value in target_auth.values()
-                if isinstance(value, dict) and (value.get("username") or value.get("password"))
-            ]
-            static_token_only = bool(target_auth.get("bearer_token") or target_auth.get("api_key")) and not role_credentials
-            verified = bool(auth_roles) and all(ok is True for ok in auth_roles.values()) and not static_token_only
-            auth_check = {
-                "service": name,
-                "roles": auth_roles,
-                "all_ok": verified,
-                "status": "verified" if verified else "configured_unverified" if static_token_only else "failed",
-            }
-            if static_token_only:
-                auth_check["reason"] = "static credential configured without a live protected-endpoint health check"
-        except Exception as exc:
-            auth_check = {
-                "service": name,
-                "roles": {},
-                "all_ok": False,
-                "status": "failed",
-                "error_type": type(exc).__name__,
-                "error": str(exc),
-            }
-
-        target_service = next(
-            (item for item in config["services"] if isinstance(item, dict) and item.get("name") == name),
-            None,
-        )
-        if target_service is None:
-            raise ValueError(f"saved service missing from credential config: {name}")
-        target_service["auth_check"] = auth_check
-        _write_json_object_atomic(config_path, config)
-
-        if not auth_check["all_ok"]:
-            _write_json_object_atomic(
-                root / "platform_outputs" / project / "credential_verification_last_error.json",
-                {
-                    "schema": "qualibug.credential-verification-failure.v1",
-                    "project": project,
-                    "service": name,
-                    "status": auth_check["status"],
-                    "error_type": auth_check.get("error_type", ""),
-                    "error": auth_check.get("error") or auth_check.get("reason") or "credential health check failed",
-                    "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                },
-            )
-            return self._json({
-                "ok": False,
-                "saved": True,
-                "error": "CREDENTIAL_VERIFICATION_FAILED",
-                "service": name,
-                "services_count": len(config["services"]),
-                "auth_check": auth_check,
-            }, 207)
-
-        return self._json({
-            "ok": True,
-            "saved": True,
-            "service": name,
-            "services_count": len(config["services"]),
-            "auth_check": auth_check,
-        })
-
     # ── Project-level customer metadata (主链 1) ──
 
     def _handle_get_project_metadata(self, project: str, root: Path) -> None:

@@ -46,6 +46,13 @@
     "ai_test_asset_center.private_pilot_continuous": "core",
     "ai_test_asset_center.private_pilot_command_center_envelope": "core",
     "ai_test_asset_center.private_pilot_command_center_builder": "core",
+    "ai_test_asset_center.private_pilot_credentials_handlers": "core",
+    "ai_test_asset_center.private_pilot_json_io": "core",
+    "ai_test_asset_center.private_pilot_debug_client": "core",
+    "ai_test_asset_center.private_pilot_project_assets": "core",
+    "ai_test_asset_center.private_pilot_tenant_auth": "core",
+    "ai_test_asset_center.private_pilot_campaign_projection": "core",
+    "ai_test_asset_center.private_pilot_scan_aggregates": "core",
     "ai_test_asset_center.real_project_defect_discovery": "compatibility",
     "ai_test_asset_center.real_project_discovery_with_chain": "compatibility"
   },
