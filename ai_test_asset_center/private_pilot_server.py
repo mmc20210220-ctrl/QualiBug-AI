@@ -447,18 +447,18 @@ def install_command_center_runtime_support() -> None:
     if getattr(_service, "_CUSTOMER_DELIVERY_GATE_PATCHED", False):
         return
 
-    original_normalizer = getattr(_service, "_normalize_command_center_envelope", None)
+    from ai_test_asset_center.private_pilot_command_center_envelope import register_envelope_post_hook
 
-    def _strict_normalize_command_center_envelope(payload: dict[str, Any]) -> dict[str, Any]:
-        normalized = original_normalizer(payload) if callable(original_normalizer) else payload
-        normalized = _inject_delivery_gate_patch_status(normalized)
+    def _delivery_gate_envelope_hook(payload: dict[str, Any]) -> dict[str, Any]:
+        normalized = _inject_delivery_gate_patch_status(payload)
         normalized = _inject_evidence_normalization_report(normalized)
         return _inject_main_chain_contract(normalized)
 
-    _service._ORIGINAL_NORMALIZE_COMMAND_CENTER_ENVELOPE = original_normalizer  # type: ignore[attr-defined]
-    _service._normalize_command_center_envelope = _strict_normalize_command_center_envelope  # type: ignore[attr-defined]
+    register_envelope_post_hook("customer_delivery_gate_diagnostics", _delivery_gate_envelope_hook)
     _service._CUSTOMER_DELIVERY_GATE_PATCHED = True  # type: ignore[attr-defined]
     _service._CUSTOMER_DELIVERY_GATE_PATCH_SOURCE = PATCH_SOURCE  # type: ignore[attr-defined]
+    _service._CUSTOMER_DELIVERY_GATE_MODE = "first_class_hook"  # type: ignore[attr-defined]
+    _service._ORIGINAL_NORMALIZE_COMMAND_CENTER_ENVELOPE = True  # type: ignore[attr-defined]
 
 
 def customer_delivery_gate_patch_status() -> dict[str, Any]:
@@ -472,9 +472,14 @@ def customer_delivery_gate_patch_status() -> dict[str, Any]:
         "runtime_partition_override": False,
         "diagnostics_installed": diagnostics_installed,
         "diagnostics_source": str(getattr(_service, "_CUSTOMER_DELIVERY_GATE_PATCH_SOURCE", "")),
-        "has_original_normalizer": bool(getattr(_service, "_ORIGINAL_NORMALIZE_COMMAND_CENTER_ENVELOPE", None)),
+        "has_original_normalizer": bool(getattr(_service, "_ORIGINAL_NORMALIZE_COMMAND_CENTER_ENVELOPE", None))
+        or getattr(_service, "_CUSTOMER_DELIVERY_GATE_MODE", "") == "first_class_hook",
         "active_partition_name": getattr(getattr(_service, "_partition_delivery_tracks", None), "__name__", ""),
-        "active_normalizer_name": getattr(getattr(_service, "_normalize_command_center_envelope", None), "__name__", ""),
+        "active_normalizer_name": (
+            "first_class_hooks"
+            if getattr(_service, "_CUSTOMER_DELIVERY_GATE_MODE", "") == "first_class_hook"
+            else getattr(getattr(_service, "_normalize_command_center_envelope", None), "__name__", "")
+        ),
         "scan_campaign_context_patched": bool(getattr(_service, "_SCAN_CAMPAIGN_CONTEXT_PATCHED", False)),
         "scan_campaign_context_patch_source": str(getattr(_service, "_SCAN_CAMPAIGN_CONTEXT_PATCH_SOURCE", "")),
         "continuous_scan_context_patched": bool(getattr(_service, "_ORIGINAL_CONTINUOUS_SCAN_LOOP", None)),
@@ -487,9 +492,12 @@ def customer_delivery_gate_patch_status() -> dict[str, Any]:
 def restore_customer_delivery_gate_patch() -> None:
     """Restore the original partition, normalizer, scan, handler and loop functions for tests."""
     restore_service_credentials_patch()
-    original_normalizer = getattr(_service, "_ORIGINAL_NORMALIZE_COMMAND_CENTER_ENVELOPE", None)
-    if original_normalizer is not None:
-        _service._normalize_command_center_envelope = original_normalizer  # type: ignore[attr-defined]
+    from ai_test_asset_center.private_pilot_command_center_envelope import register_envelope_post_hook
+
+    register_envelope_post_hook("customer_delivery_gate_diagnostics", None)
+    if hasattr(_service, "_CUSTOMER_DELIVERY_GATE_MODE"):
+        delattr(_service, "_CUSTOMER_DELIVERY_GATE_MODE")
+    _service._ORIGINAL_NORMALIZE_COMMAND_CENTER_ENVELOPE = None  # type: ignore[attr-defined]
 
     original_scan = getattr(_service, "_ORIGINAL_V12_SCAN", None)
     original_handler = getattr(_service, "_ORIGINAL_HANDLE_V12_SCAN", None)

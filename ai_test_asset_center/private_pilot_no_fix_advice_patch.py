@@ -40,30 +40,29 @@ def sanitize_customer_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 def install_no_fix_advice_patch(*, patch_source: str = PATCH_SOURCE) -> None:
     from ai_test_asset_center import private_pilot_service as service
+    from ai_test_asset_center.private_pilot_command_center_envelope import register_envelope_post_hook
 
     if getattr(service, "_NO_FIX_ADVICE_PATCHED", False):
         return
 
-    original_normalizer = getattr(service, "_normalize_command_center_envelope", None)
-
-    def _normalize_without_fix_advice(payload: dict[str, Any]) -> dict[str, Any]:
-        normalized = original_normalizer(payload) if callable(original_normalizer) else payload
+    def _no_fix_advice_hook(payload: dict[str, Any]) -> dict[str, Any]:
         try:
-            return sanitize_customer_payload(normalized)
+            return sanitize_customer_payload(payload)
         except Exception:
-            return normalized
+            return payload
 
-    service._ORIGINAL_NO_FIX_ADVICE_NORMALIZER = original_normalizer  # type: ignore[attr-defined]
-    service._normalize_command_center_envelope = _normalize_without_fix_advice  # type: ignore[attr-defined]
+    register_envelope_post_hook("no_fix_advice", _no_fix_advice_hook)
     service._NO_FIX_ADVICE_PATCHED = True  # type: ignore[attr-defined]
     service._NO_FIX_ADVICE_PATCH_SOURCE = patch_source  # type: ignore[attr-defined]
+    service._NO_FIX_ADVICE_MODE = "first_class_hook"  # type: ignore[attr-defined]
 
 
 def restore_no_fix_advice_patch() -> None:
     from ai_test_asset_center import private_pilot_service as service
+    from ai_test_asset_center.private_pilot_command_center_envelope import register_envelope_post_hook
 
-    original = getattr(service, "_ORIGINAL_NO_FIX_ADVICE_NORMALIZER", None)
-    if callable(original):
-        service._normalize_command_center_envelope = original  # type: ignore[attr-defined]
+    register_envelope_post_hook("no_fix_advice", None)
     service._NO_FIX_ADVICE_PATCHED = False  # type: ignore[attr-defined]
     service._NO_FIX_ADVICE_PATCH_SOURCE = ""  # type: ignore[attr-defined]
+    if hasattr(service, "_NO_FIX_ADVICE_MODE"):
+        delattr(service, "_NO_FIX_ADVICE_MODE")
