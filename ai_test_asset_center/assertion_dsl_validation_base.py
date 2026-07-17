@@ -172,6 +172,30 @@ def evaluate_assertion(
             error=_text(probe.get("error")),
         )
     if _text(probe.get("status")) == "VIOLATION":
+        # 2xx soft business reject still counts as a validation rejection miss
+        # when transport looked successful but the body denied the write.
+        if (
+            expected_class == 4
+            and int(obs.get("status_code") or 0) // 100 == 2
+            and (
+                obs.get("business_rejected") is True
+                or _dict(obs.get("business_outcome")).get("business_rejected") is True
+                or obs.get("zero_effect_on_accepted_write") is True
+            )
+        ):
+            return _validation_receipt(
+                status_probe=probe,
+                status="VIOLATION",
+                reason_code="VALIDATION_SOFT_FAIL_ACCEPTED",
+                expected=expected,
+                actual={
+                    **actual,
+                    "business_rejected": True,
+                    "zero_effect_on_accepted_write": obs.get(
+                        "zero_effect_on_accepted_write"
+                    ),
+                },
+            )
         return _validation_receipt(
             status_probe=probe,
             status="VIOLATION",

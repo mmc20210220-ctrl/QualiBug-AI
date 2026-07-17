@@ -162,6 +162,44 @@ def declared_effect_observers(
         )
         if parent_resource not in candidate_paths:
             candidate_paths.append(parent_resource)
+
+    # Source-declared observes/produces/consumes joins may name an effect-read
+    # operation even when path heuristics miss the sibling GET.
+    operation_ref = _text(operation.get("id"))
+    operations_by_id = {
+        _text(row.get("id")): row
+        for row in _list(_dict(behavior_ir).get("operations"))
+        if isinstance(row, dict) and _text(row.get("id"))
+    }
+    for relation in _list(_dict(behavior_ir).get("relations")):
+        if not isinstance(relation, dict):
+            continue
+        if _text(relation.get("relation_type")) not in {
+            "observes",
+            "produces",
+            "consumes",
+            "scopes",
+        }:
+            continue
+        related_refs = {
+            _text(relation.get("operation_ref")),
+            _text(relation.get("from_ref")),
+            _text(relation.get("to_ref")),
+        }
+        if operation_ref and operation_ref not in related_refs:
+            continue
+        for ref in related_refs:
+            if not ref or ref == operation_ref:
+                continue
+            candidate = _dict(operations_by_id.get(ref))
+            method = _text(candidate.get("method")).upper()
+            path = normalize_path_placeholders(
+                _text(candidate.get("path") or candidate.get("raw_path"))
+            )
+            if method in {"GET", "HEAD"} and path.startswith("/"):
+                if path not in candidate_paths:
+                    candidate_paths.append(path)
+
     limit = max(1, min(int(max_candidates or 1), 5))
     resolvers: list[dict[str, str]] = []
     seen_resolvers: set[tuple[str, str, str]] = set()
@@ -196,6 +234,7 @@ def declared_effect_observers(
                 and len(candidate_placeholders) == 1
                 and candidate_collection == target_path
             )
+            relation_declared_match = path == wanted and method in {"GET", "HEAD"}
             if (
                 method not in {"GET", "HEAD"}
                 or not (
@@ -203,6 +242,7 @@ def declared_effect_observers(
                     or body_bound_collection_match
                     or body_bound_domain_lookup_match
                     or response_bound_create_match
+                    or relation_declared_match
                 )
                 or not _text(candidate.get("id"))
             ):

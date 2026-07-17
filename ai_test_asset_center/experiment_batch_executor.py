@@ -27,6 +27,67 @@ from .operational_receipts import build_execution_operational_receipt
 from .sandbox_write_executor_base import evaluator_request_trace
 
 
+def finalize_finding_evidence_after_delivery_gate(
+    finding: dict[str, Any],
+    *,
+    gate_receipt: dict[str, Any],
+    reproduction_receipt: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Align evidence pack with an independent v2 DELIVERABLE gate decision.
+
+    Non-DELIVERABLE findings remain fail-closed with pending evidence status.
+    Oracle and cleanup rules are never relaxed here.
+    """
+
+    row = dict(_dict(finding))
+    gate = _dict(gate_receipt)
+    if _text(gate.get("status")) != "DELIVERABLE":
+        return row
+
+    reproduction = _dict(reproduction_receipt or row.get("reproduction_receipt"))
+    can_reproduce = bool(
+        _text(reproduction.get("receipt_id"))
+        or _list(reproduction.get("steps"))
+        or _list(row.get("reproduction_steps"))
+    )
+    quality = dict(_dict(row.get("evidence_quality")))
+    quality.update({
+        "level": "validated",
+        "score": max(int(quality.get("score") or 0), 90),
+        "can_reproduce": True if can_reproduce else bool(quality.get("can_reproduce")),
+        "evidence_strength": _text(
+            quality.get("evidence_strength")
+            or "typed_contract_violation_gate_deliverable"
+        ),
+        "delivery_gate_receipt_id": _text(gate.get("gate_receipt_id")),
+    })
+    if can_reproduce:
+        quality["can_reproduce"] = True
+
+    missing = [
+        _text(item)
+        for item in _list(_dict(row.get("evidence_status")).get("missing_requirements"))
+        if _text(item) and _text(item) != "independent_delivery_gate_receipt"
+    ]
+    evidence_status = dict(_dict(row.get("evidence_status")))
+    evidence_status.update({
+        "semantic_verdict": "SEMANTIC_CONFIRMED",
+        "business_evidence_status": "VALIDATED",
+        "final_review_status": "VALIDATED_CANDIDATE",
+        "missing_requirements": missing,
+        "delivery_gate_status": "DELIVERABLE",
+        "delivery_gate_receipt_id": _text(gate.get("gate_receipt_id")),
+    })
+    row["evidence_quality"] = quality
+    row["evidence_status"] = evidence_status
+    row["business_evidence_status"] = "VALIDATED"
+    row["final_review_status"] = "VALIDATED_CANDIDATE"
+    row["semantic_verdict"] = "SEMANTIC_CONFIRMED"
+    if reproduction:
+        row["reproduction_receipt"] = reproduction
+    return row
+
+
 def execute_selected_experiments(
     selected: list[Any],
     *,
@@ -402,6 +463,13 @@ def execute_selected_experiments(
                 finding["customer_delivery_gate_reasons"] = list(
                     gate_receipt.get("reason_codes") or []
                 )
+                if gate_receipt.get("status") == "DELIVERABLE":
+                    finding = finalize_finding_evidence_after_delivery_gate(
+                        finding,
+                        gate_receipt=gate_receipt,
+                        reproduction_receipt=reproduction_receipt,
+                    )
+                    outcome["finding"] = finding
                 execution_results[oid]["finding"] = dict(finding)
         cleanup_failures += outcome_cleanup_failures
         if status == "EXECUTED" and isinstance(outcome.get("finding"), dict):

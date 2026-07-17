@@ -120,6 +120,27 @@ def _ownership_params_declared_on_operation(operation: dict[str, Any]) -> list[s
         seen.add(key)
         found.append(text)
 
+    def _walk_properties(properties: dict[str, Any], *, depth: int = 0) -> None:
+        if depth > 8 or not isinstance(properties, dict):
+            return
+        for field_name, field_schema in properties.items():
+            _add(str(field_name))
+            nested = _dict(field_schema)
+            _walk_properties(_dict(nested.get("properties")), depth=depth + 1)
+            items = _dict(nested.get("items"))
+            if items:
+                _walk_properties(_dict(items.get("properties")), depth=depth + 1)
+
+    def _walk_example(value: Any, *, depth: int = 0) -> None:
+        if depth > 8:
+            return
+        if isinstance(value, dict):
+            for field_name, nested in value.items():
+                _add(str(field_name))
+                _walk_example(nested, depth=depth + 1)
+        elif isinstance(value, list) and value:
+            _walk_example(value[0], depth=depth + 1)
+
     for tag in _list(operation.get("tags")):
         _add(_text(tag))
     for parameter in _list(operation.get("parameters")):
@@ -138,14 +159,32 @@ def _ownership_params_declared_on_operation(operation: dict[str, Any]) -> list[s
             _add(match)
     schema = _dict(operation.get("request_schema"))
     content = _dict(schema.get("content"))
+    if _dict(schema.get("properties")):
+        _walk_properties(_dict(schema.get("properties")))
     for media in content.values():
         properties = _dict(_dict(_dict(media).get("schema")).get("properties"))
-        for field_name in properties:
-            _add(field_name)
-    example = _dict(operation.get("request_example"))
-    for field_name in example:
-        _add(field_name)
+        _walk_properties(properties)
+    _walk_example(_dict(operation.get("request_example")))
     return found
+
+
+def _ownership_binder_location(
+    operation: dict[str, Any],
+    *,
+    name: str,
+) -> str:
+    """Prefer the documented parameter location; fall back by HTTP method."""
+
+    for parameter in _list(operation.get("parameters")):
+        if not isinstance(parameter, dict):
+            continue
+        if _param_key(_text(parameter.get("name"))) != _param_key(name):
+            continue
+        location = _text(parameter.get("in") or parameter.get("location")).lower()
+        if location in {"query", "path", "header", "body"}:
+            return location
+    method = _text(operation.get("method")).upper()
+    return "body" if method in {"POST", "PUT", "PATCH"} else "query"
 
 
 def _operation_declares_ownership_language(operation: dict[str, Any]) -> bool:
@@ -180,6 +219,60 @@ def _corpus_ownership_params(operations: list[dict[str, Any]]) -> list[str]:
     return found
 
 
+def _ownership_field_path(
+    operation: dict[str, Any],
+    *,
+    name: str,
+) -> str:
+    """Return dotted body path for a nested ownership field when present."""
+
+    target = _param_key(name)
+
+    def _search(properties: dict[str, Any], prefix: tuple[str, ...] = ()) -> str:
+        for field_name, field_schema in properties.items():
+            field = str(field_name)
+            path = (*prefix, field)
+            if _param_key(field) == target:
+                return ".".join(path)
+            nested = _dict(field_schema)
+            found = _search(_dict(nested.get("properties")), path)
+            if found:
+                return found
+            items = _dict(nested.get("items"))
+            if items:
+                found = _search(_dict(items.get("properties")), path)
+                if found:
+                    return found
+        return ""
+
+    schema = _dict(operation.get("request_schema"))
+    if _dict(schema.get("properties")):
+        found = _search(_dict(schema.get("properties")))
+        if found:
+            return found
+    for media in _dict(schema.get("content")).values():
+        properties = _dict(_dict(_dict(media).get("schema")).get("properties"))
+        found = _search(properties)
+        if found:
+            return found
+    example = operation.get("request_example")
+
+    def _search_example(value: Any, prefix: tuple[str, ...] = ()) -> str:
+        if not isinstance(value, dict):
+            return ""
+        for field_name, nested in value.items():
+            field = str(field_name)
+            path = (*prefix, field)
+            if _param_key(field) == target:
+                return ".".join(path)
+            found = _search_example(nested, path)
+            if found:
+                return found
+        return ""
+
+    return _search_example(example) if isinstance(example, dict) else ""
+
+
 def _resolve_ownership_binder(
     operation: dict[str, Any],
     *,
@@ -202,10 +295,11 @@ def _resolve_ownership_binder(
             candidates.append(name)
     if not candidates:
         return {}
-    method = _text(operation.get("method")).upper()
-    location = "body" if method in {"POST", "PUT", "PATCH"} else "query"
+    name = candidates[0]
+    location = _ownership_binder_location(operation, name=name)
+    field_path = _ownership_field_path(operation, name=name) if location == "body" else ""
     return {
-        "name": candidates[0],
+        "name": field_path or name,
         "location": location,
         "identity_binding_target": "user_id",
     }

@@ -421,6 +421,27 @@ def evaluate_assertion(
                 actual = int(obs["status_code"])
                 expected = int(expected_value)
                 passed = (actual // 100) == expected
+                # Soft business reject on an accepted HTTP class must not pass a
+                # success-class assertion when the body declares failure.
+                if (
+                    passed
+                    and expected == 2
+                    and (
+                        obs.get("business_rejected") is True
+                        or _dict(obs.get("business_outcome")).get("business_rejected")
+                        is True
+                    )
+                ):
+                    passed = False
+                    reason_code = "HTTP_SOFT_BUSINESS_REJECTED"
+                if (
+                    passed
+                    and expected == 2
+                    and obs.get("zero_effect_on_accepted_write") is True
+                    and spec.get("require_nonzero_effect") is True
+                ):
+                    passed = False
+                    reason_code = "HTTP_ACCEPTED_ZERO_EFFECT"
         elif effective_kind == "json_path_exists":
             expected = True
             if "body" not in obs:

@@ -317,10 +317,30 @@ def _source_constraint_material(
     operation: dict[str, Any],
     property_spec: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], str]:
-    control = _base.source_request_example(operation)
-    schema = _base._request_body_schema(operation)
     tokens = _field_tokens(property_spec)
     constraint = _text(property_spec.get("validation_constraint"))
+    location = _text(property_spec.get("parameter_location")).lower()
+    if (
+        tokens
+        and isinstance(tokens[0], str)
+        and str(tokens[0]).startswith("@")
+    ):
+        token_location = str(tokens[0])[1:].lower()
+        if not location:
+            location = token_location
+        if location == token_location:
+            tokens = tokens[1:]
+    if location in {"query", "path", "header"}:
+        return _parameter_constraint_material(
+            operation,
+            property_spec,
+            location=location,
+            tokens=tokens,
+            constraint=constraint,
+        )
+
+    control = _base.source_request_example(operation)
+    schema = _base._request_body_schema(operation)
     if not control or not schema or not tokens or not constraint:
         return {}, {}, {}, "source_constraint_context_missing"
     field_schema, current, found = _schema_and_value_at(
@@ -367,6 +387,87 @@ def _source_constraint_material(
     mutation = {
         "json_path": _text(property_spec.get("json_path")) or _json_path(tokens),
         "field_tokens": list(tokens),
+        "parameter_location": "body",
+        "constraint": constraint,
+        "constraint_value": deepcopy(constraint_value),
+        "source": constraint_source,
+        "operator": operator,
+    }
+    return control, treatment, mutation, ""
+
+
+def _parameter_constraint_material(
+    operation: dict[str, Any],
+    property_spec: dict[str, Any],
+    *,
+    location: str,
+    tokens: tuple[str | int, ...],
+    constraint: str,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], str]:
+    if len(tokens) != 1 or not isinstance(tokens[0], str) or not constraint:
+        return {}, {}, {}, "parameter_constraint_tokens_invalid"
+    name = str(tokens[0])
+    parameter_row: dict[str, Any] = {}
+    for raw in _list(operation.get("parameters")):
+        if not isinstance(raw, dict):
+            continue
+        if _text(raw.get("name")) != name:
+            continue
+        param_in = _text(raw.get("in") or raw.get("location")).lower() or location
+        if param_in != location:
+            continue
+        parameter_row = dict(raw)
+        break
+    schema = _dict(parameter_row.get("schema"))
+    current = parameter_row.get("example", schema.get("example"))
+    if current is None and location == "path":
+        current = "1"
+    if current is None:
+        declared = _text(schema.get("type")).lower()
+        if declared == "integer":
+            current = 1
+        elif declared == "number":
+            current = 1.0
+        elif declared == "boolean":
+            current = True
+        else:
+            current = "example"
+    if not schema:
+        if isinstance(current, bool):
+            schema = {"type": "boolean"}
+        elif isinstance(current, int) and not isinstance(current, bool):
+            schema = {"type": "integer"}
+        elif isinstance(current, float):
+            schema = {"type": "number"}
+        else:
+            schema = {"type": "string"}
+    constraint_value = property_spec.get("validation_constraint_value")
+    constraint_source = _text(
+        property_spec.get("validation_constraint_source") or "request_schema"
+    )
+    if constraint_source not in {"request_schema", "source_invariant"}:
+        return {}, {}, {}, "source_constraint_lineage_invalid"
+    control = {name: deepcopy(current)}
+    treatment = deepcopy(control)
+    if constraint == "required":
+        treatment.pop(name, None)
+        operator = "remove_required_parameter"
+    else:
+        ok, invalid_value, operator = _invalid_constraint_value(
+            constraint=constraint,
+            field_schema=schema,
+            current=current,
+            constraint_value=constraint_value,
+        )
+        if not ok:
+            return {}, {}, {}, f"source_constraint_mutation_unavailable:{constraint}"
+        treatment[name] = deepcopy(invalid_value)
+    mutation = {
+        "json_path": _text(property_spec.get("json_path")) or _json_path(
+            (f"@{location}", name)
+        ),
+        "field_tokens": [f"@{location}", name],
+        "parameter_location": location,
         "constraint": constraint,
         "constraint_value": deepcopy(constraint_value),
         "source": constraint_source,
@@ -426,8 +527,17 @@ def compile_family_protocol(
                 "reason_code": "BLOCKED_UNSUPPORTED_ADAPTER",
                 "detail": "validation_protocol_shape_invalid",
             }
-        control_plan[0]["body"] = deepcopy(control)
-        treatment_plan[0]["body"] = deepcopy(treatment)
+        location = _text(mutation.get("parameter_location")).lower() or "body"
+        if location in {"query", "path", "header"}:
+            control_plan[0][location] = deepcopy(control)
+            treatment_plan[0][location] = deepcopy(treatment)
+            body_example = _base.source_request_example(operation)
+            if body_example:
+                control_plan[0].setdefault("body", deepcopy(body_example))
+                treatment_plan[0].setdefault("body", deepcopy(body_example))
+        else:
+            control_plan[0]["body"] = deepcopy(control)
+            treatment_plan[0]["body"] = deepcopy(treatment)
         treatment_plan[0]["mutation"] = mutation
         result = {
             **result,

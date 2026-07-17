@@ -51,6 +51,82 @@ def _body_schema(operation: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _parameter_entries(operation: dict[str, Any]) -> list[dict[str, Any]]:
+    """Normalize OpenAPI parameters[] and path placeholders into constraint rows."""
+
+    entries: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def _append(
+        *,
+        location: str,
+        name: str,
+        schema: dict[str, Any] | None = None,
+        example: Any = None,
+        required: bool = False,
+    ) -> None:
+        loc = _text(location).lower() or "query"
+        field = _text(name)
+        if not field or (loc, field) in seen:
+            return
+        seen.add((loc, field))
+        field_schema = dict(schema or {})
+        if not _text(field_schema.get("type")) and example is not None:
+            if isinstance(example, bool):
+                field_schema.setdefault("type", "boolean")
+            elif isinstance(example, int) and not isinstance(example, bool):
+                field_schema.setdefault("type", "integer")
+            elif isinstance(example, float):
+                field_schema.setdefault("type", "number")
+            elif isinstance(example, list):
+                field_schema.setdefault("type", "array")
+            elif isinstance(example, dict):
+                field_schema.setdefault("type", "object")
+            else:
+                field_schema.setdefault("type", "string")
+        entries.append({
+            "location": loc,
+            "name": field,
+            "schema": field_schema,
+            "example": example,
+            "required": bool(required),
+        })
+
+    for raw in _list(operation.get("parameters")):
+        if isinstance(raw, str):
+            # Markdown-derived parameter names without location: treat as body
+            # field candidates only when absent from the JSON body example so
+            # query/path docs are still reachable.
+            continue
+        if not isinstance(raw, dict):
+            continue
+        name = _text(raw.get("name"))
+        location = _text(raw.get("in") or raw.get("location")).lower() or "query"
+        schema = _dict(raw.get("schema"))
+        example = raw.get("example")
+        if example is None:
+            example = schema.get("example")
+        if example is None and _text(schema.get("type")).lower() == "string":
+            example = "example"
+        if example is None and _text(schema.get("type")).lower() == "integer":
+            example = 1
+        _append(
+            location=location,
+            name=name,
+            schema=schema,
+            example=example,
+            required=bool(raw.get("required")),
+        )
+
+    path = _text(operation.get("path") or operation.get("raw_path"))
+    for match in re.findall(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", path):
+        _append(location="path", name=match, schema={"type": "string"}, example="1", required=True)
+    for match in re.findall(r":([A-Za-z_][A-Za-z0-9_]*)", path):
+        _append(location="path", name=match, schema={"type": "string"}, example="1", required=True)
+
+    return entries
+
+
 def _matches_declared_type(value: Any, declared_type: str) -> bool:
     if declared_type == "string":
         return isinstance(value, str)
@@ -414,10 +490,7 @@ def expand_validation_obligation(
 
     schema = _body_schema(_dict(operation))
     example = _request_example(_dict(operation))
-    if not schema or not example:
-        return [guarded]
-
-    nodes = _schema_nodes(schema, example)
+    nodes = _schema_nodes(schema, example) if schema and example else []
     if explicit_tokens:
         exact = [node for node in nodes if node[0] == explicit_tokens]
         if exact:
@@ -428,14 +501,17 @@ def expand_validation_obligation(
                 for node in nodes
                 if node[0] and node[0][-1] == explicit_tokens[0]
             ]
-            if len(leaf_matches) != 1:
+            if len(leaf_matches) == 1:
+                nodes = leaf_matches
+            elif not nodes:
+                nodes = []
+            else:
                 return [guarded]
-            nodes = leaf_matches
-        else:
+        elif nodes:
             return [guarded]
 
     targets: list[
-        tuple[tuple[str | int, ...], str, Any]
+        tuple[tuple[str | int, ...], str, Any, str]
     ] = []
     for tokens, field_schema, example_value, required in nodes:
         for constraint, constraint_value in _constraint_targets(
@@ -443,7 +519,27 @@ def expand_validation_obligation(
             example_value=example_value,
             required=required,
         ):
-            targets.append((tokens, constraint, constraint_value))
+            targets.append((tokens, constraint, constraint_value, "body"))
+
+    for parameter in _parameter_entries(_dict(operation)):
+        location = _text(parameter.get("location")) or "query"
+        name = _text(parameter.get("name"))
+        tokens = (f"@{location}", name)
+        if explicit_tokens and tokens != explicit_tokens:
+            if not (
+                len(explicit_tokens) == 1
+                and explicit_tokens[0] == name
+            ):
+                continue
+        example_value = parameter.get("example")
+        if example_value is None:
+            continue
+        for constraint, constraint_value in _constraint_targets(
+            field_schema=_dict(parameter.get("schema")),
+            example_value=example_value,
+            required=bool(parameter.get("required")),
+        ):
+            targets.append((tokens, constraint, constraint_value, location))
 
     if not targets:
         return [guarded]
@@ -453,7 +549,7 @@ def expand_validation_obligation(
         or "validation_obligation"
     )
     variants: list[dict[str, Any]] = []
-    for tokens, constraint, constraint_value in targets:
+    for tokens, constraint, constraint_value, location in targets:
         variant = deepcopy(guarded)
         variant["obligation_id"] = _variant_id(
             original_id,
@@ -467,6 +563,7 @@ def expand_validation_obligation(
             "field_path": _display_path(tokens),
             "field_tokens": list(tokens),
             "json_path": _json_path(tokens),
+            "parameter_location": location,
             "validation_constraint": constraint,
             "validation_constraint_value": deepcopy(constraint_value),
             "validation_constraint_source": "request_schema",

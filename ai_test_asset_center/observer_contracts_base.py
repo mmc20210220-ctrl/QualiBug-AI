@@ -35,6 +35,92 @@ def _fingerprint(value: Any) -> str:
     return hashlib.sha256(_canonical(value).encode("utf-8")).hexdigest()[:20]
 
 
+_BUSINESS_REJECT_TOKENS = frozenset({
+    "fail",
+    "failed",
+    "failure",
+    "error",
+    "denied",
+    "reject",
+    "rejected",
+    "invalid",
+    "forbidden",
+    "unauthorized",
+    "insufficient",
+    "expired",
+    "禁用",
+    "拒绝",
+    "失败",
+    "无效",
+    "不足",
+})
+
+
+def _business_outcome_from_body(body: Any) -> dict[str, Any]:
+    """Extract industry-neutral soft-fail / status tokens from a response body."""
+
+    outcome: dict[str, Any] = {
+        "business_rejected": False,
+        "success_flag": None,
+        "status_token": "",
+        "identity_overlap": False,
+    }
+    payload = body
+    if isinstance(body, list) and body and isinstance(body[0], dict):
+        payload = body[0]
+    if not isinstance(payload, dict):
+        return outcome
+
+    for key in ("success", "ok", "accepted", "passed"):
+        if key in payload:
+            flag = payload.get(key)
+            if isinstance(flag, bool):
+                outcome["success_flag"] = flag
+                if flag is False:
+                    outcome["business_rejected"] = True
+            break
+
+    status_token = ""
+    for key in ("status", "state", "code", "errorCode", "error_code", "result"):
+        value = payload.get(key)
+        if isinstance(value, (str, int)) and not isinstance(value, bool):
+            status_token = _text(value)
+            if status_token:
+                break
+    error_obj = _dict(payload.get("error"))
+    if not status_token:
+        for key in ("code", "message", "type"):
+            value = error_obj.get(key)
+            if isinstance(value, (str, int)) and not isinstance(value, bool):
+                status_token = _text(value)
+                if status_token:
+                    break
+    outcome["status_token"] = status_token
+    token_lower = status_token.lower()
+    if token_lower and any(marker in token_lower for marker in _BUSINESS_REJECT_TOKENS):
+        outcome["business_rejected"] = True
+    if error_obj and (
+        outcome["success_flag"] is False
+        or any(_text(error_obj.get(key)) for key in ("code", "message"))
+    ):
+        if outcome["success_flag"] is not True:
+            outcome["business_rejected"] = True
+
+    identities = []
+    for key in ("id", "orderId", "order_id", "userId", "user_id", "sku"):
+        value = payload.get(key)
+        if value is not None and value != "":
+            identities.append(_fingerprint(value))
+    data = payload.get("data")
+    if isinstance(data, dict):
+        for key in ("id", "orderId", "order_id", "userId", "user_id", "sku"):
+            value = data.get(key)
+            if value is not None and value != "":
+                identities.append(_fingerprint(value))
+    outcome["identity_overlap"] = len(set(identities)) >= 1 and len(identities) > len(set(identities))
+    return outcome
+
+
 def _receipt(
     *,
     observer_id: str,
@@ -809,12 +895,22 @@ def _observe_http_response(
             reason_code="HTTP_RESPONSE_MISSING",
             evidence={"statuses": statuses},
         )
+    outcomes = [
+        _business_outcome_from_body(row.get("body"))
+        for row in rows
+    ]
+    primary = outcomes[-1] if outcomes else {}
     return _receipt(
         observer_id="http_response",
         status="OBSERVED",
         evidence={
             "statuses": statuses,
             "response_fingerprints": [_fingerprint(row.get("body")) for row in rows],
+            "business_outcomes": outcomes,
+            "business_outcome": primary,
+            "business_rejected": bool(primary.get("business_rejected")),
+            "status_token": _text(primary.get("status_token")),
+            "success_flag": primary.get("success_flag"),
         },
     )
 
@@ -1024,7 +1120,34 @@ def _observe_business_effect(
         "before_fingerprint": selected["before_fingerprint"],
         "after_fingerprint": selected["after_fingerprint"],
         "business_effect_observed": True,
+        "zero_effect_on_accepted_write": (
+            int(selected["effect_count"] or 0) == 0
+            and any(
+                200 <= _response_status(step) < 300
+                for step in write_steps
+            )
+        ),
     })
+    write_bodies = [
+        _dict(step.get("body") if "body" in step else None)
+        or _dict(_dict(step.get("governance_receipt")).get("write")).get("body")
+        for step in write_steps
+    ]
+    treatment_body = None
+    for step in reversed(write_steps):
+        if _text(step.get("phase")) == "treatment":
+            treatment_body = step.get("body")
+            if treatment_body is None:
+                treatment_body = _dict(
+                    _dict(step.get("governance_receipt")).get("write")
+                ).get("body")
+            break
+    if treatment_body is None and write_bodies:
+        treatment_body = write_bodies[-1]
+    outcome = _business_outcome_from_body(treatment_body)
+    evidence["business_outcome"] = outcome
+    evidence["business_rejected"] = bool(outcome.get("business_rejected"))
+    evidence["status_token"] = _text(outcome.get("status_token"))
     if _text(selected.get("effect_basis")):
         evidence["effect_basis"] = _text(selected.get("effect_basis"))
     if _text(selected.get("response_bound_after_ref")):

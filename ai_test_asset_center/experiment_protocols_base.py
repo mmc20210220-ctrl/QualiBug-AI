@@ -388,11 +388,49 @@ def compile_family_protocol(
         }
 
     if family == "validation":
-        if method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        parameter_location = _text(property_spec.get("parameter_location")).lower()
+        tokens = property_spec.get("field_tokens")
+        if (
+            not parameter_location
+            and isinstance(tokens, list)
+            and tokens
+            and isinstance(tokens[0], str)
+            and str(tokens[0]).startswith("@")
+        ):
+            parameter_location = str(tokens[0])[1:].lower()
+        allows_non_body = parameter_location in {"query", "path", "header"}
+        if method not in {"POST", "PUT", "PATCH", "DELETE"} and not (
+            allows_non_body and method in {"GET", "HEAD"}
+        ):
             return {
                 "status": "BLOCKED",
                 "reason_code": "BLOCKED_MISSING_OPERATION",
                 "detail": "validation_body_protocol_requires_write_operation",
+            }
+        if allows_non_body and method in {"GET", "HEAD"}:
+            # Parameter-only mutations compile through the privacy facade; emit a
+            # placeholder COMPILED shell that the facade rewrites with query/path.
+            return {
+                "status": "COMPILED",
+                "control_plan": [{
+                    "step_id": "control_1",
+                    "actor_ref": control_actor_ref,
+                    "operation_ref": operation_ref,
+                    "intent": "valid_source_control",
+                    "protocol_step": "positive_control",
+                }],
+                "treatment_plan": [{
+                    "step_id": "treatment_1",
+                    "actor_ref": treatment_actor_ref,
+                    "operation_ref": operation_ref,
+                    "intent": "single_constraint_mutation",
+                    "protocol_step": "single_mutation",
+                }],
+                "assertion": {
+                    "kind": "http_status_class",
+                    "expected_class": 4,
+                    "compare_field": "status_code",
+                },
             }
         control_body, treatment_body, mutation = _validation_protocol_material(
             operation,
@@ -523,7 +561,28 @@ def compile_family_protocol(
         placeholder = "{" + identity_target + "}"
         if ownership_location == "query":
             treatment_step["query"] = {ownership_param: placeholder}
+        elif ownership_location == "path":
+            treatment_step["path_params"] = {ownership_param: placeholder}
+        elif ownership_location == "header":
+            treatment_step["headers"] = {ownership_param: placeholder}
         elif ownership_location == "body":
+            body = dict(_dict(treatment_step.get("body")))
+            # Nested ownership binders use dotted paths from schema walk.
+            if "." in ownership_param:
+                tokens = [part for part in ownership_param.split(".") if part]
+                cursor: Any = body
+                for token in tokens[:-1]:
+                    nested = cursor.get(token)
+                    if not isinstance(nested, dict):
+                        nested = {}
+                        cursor[token] = nested
+                    cursor = nested
+                if tokens:
+                    cursor[tokens[-1]] = placeholder
+            else:
+                body[ownership_param] = placeholder
+            treatment_step["body"] = body
+        else:
             body = dict(_dict(treatment_step.get("body")))
             body[ownership_param] = placeholder
             treatment_step["body"] = body
