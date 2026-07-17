@@ -826,7 +826,10 @@ def _validate_active_chain(
         return "BLOCKED", ["CONTRACT_ORACLE_BLOCKED"]
     if oracle_status == "HARNESS_FAILED":
         return "HARNESS_FAILED", ["CONTRACT_ORACLE_HARNESS_FAILED"]
-    if oracle_status != "VIOLATION" or activation_status != "ACTIVE":
+    if oracle_status != "VIOLATION" or (
+        activation_status != "ACTIVE"
+        and not _list(oracle.get("assertions"))
+    ):
         raise DeliveryGateV2Error("delivery_oracle_semantics_invalid")
 
     assertions = [
