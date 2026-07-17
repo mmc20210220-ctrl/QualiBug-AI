@@ -128,6 +128,7 @@ def test_scan_outcome_and_cleanup_helpers_are_reexported() -> None:
     from ai_test_asset_center import __main__ as scan_module
     from ai_test_asset_center import experiment_cleanup as cleanup
     from ai_test_asset_center import experiment_executor as executor
+    from ai_test_asset_center import experiment_fixture_materializer as fixtures
     from ai_test_asset_center import experiment_runtime_support as runtime
     from ai_test_asset_center import scan_customer_ready_artifacts as ready
     from ai_test_asset_center import scan_execution_outcome as outcome
@@ -147,6 +148,9 @@ def test_scan_outcome_and_cleanup_helpers_are_reexported() -> None:
     )
     assert executor._run_http_step is runtime._run_http_step
     assert executor.load_actor_tokens is runtime.load_actor_tokens
+    assert executor.materialize_experiment_fixtures is (
+        fixtures.materialize_experiment_fixtures
+    )
     from ai_test_asset_center import scan_impl_prepare as prepare
 
     assert scan_module.prepare_scan_before_pipeline is (
@@ -186,9 +190,17 @@ def test_extracted_modules_remain_under_architecture_budget_threshold() -> None:
             encoding="utf-8",
         )
     )
+    fixture_lines = sum(
+        1
+        for _ in open(
+            ROOT / "ai_test_asset_center" / "experiment_fixture_materializer.py",
+            encoding="utf-8",
+        )
+    )
 
     assert main_lines < 1000
     assert patch_lines < 500
-    assert executor_lines < 3200
+    assert executor_lines < 2800
     assert support_lines < 700
     assert prepare_lines < 350
+    assert fixture_lines < 600

@@ -17,6 +17,31 @@ from ai_test_asset_center.observer_contracts import observe_experiment_requireme
 from ai_test_asset_center.runtime_binding_materializer import runtime_cleanup_paths
 
 
+def _patch_http_request(monkeypatch: pytest.MonkeyPatch, http_request) -> None:
+    """Patch HTTP transport on every module that binds ``_http_request``."""
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_executor._http_request",
+        http_request,
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_runtime_support._http_request",
+        http_request,
+    )
+
+
+def _patch_governed_write(monkeypatch: pytest.MonkeyPatch, governed_write) -> None:
+    """Patch governed writes on executor and fixture materializer."""
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_executor.execute_governed_control_write",
+        governed_write,
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_fixture_materializer.execute_governed_control_write",
+        governed_write,
+    )
+
+
+
 def _idempotency_ir() -> dict:
     return {
         "operations": [
@@ -612,8 +637,8 @@ def test_idempotency_executor_observes_two_effects_and_cleans_each_write(
         "ai_test_asset_center.experiment_executor.sandbox_write_allowed",
         lambda **_kwargs: (True, ""),
     )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_executor.execute_governed_control_write",
+    _patch_governed_write(
+        monkeypatch,
         governed_write,
     )
 
@@ -855,12 +880,12 @@ def test_isolation_executor_forces_owned_fixture_and_emits_ownership_receipt(
             "audit_record": {"phase": "fixture_cleanup", "path": kwargs["path"]},
         }
 
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_executor._http_request",
+    _patch_http_request(
+        monkeypatch,
         http_request,
     )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_executor.execute_governed_control_write",
+    _patch_governed_write(
+        monkeypatch,
         governed_write,
     )
 
@@ -1012,8 +1037,8 @@ def test_fixture_cleanup_runs_after_experiment_write_compensations(
         "ai_test_asset_center.experiment_executor.sandbox_write_allowed",
         lambda **_kwargs: (True, ""),
     )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_executor.execute_governed_control_write",
+    _patch_governed_write(
+        monkeypatch,
         governed_write,
     )
 
@@ -1210,8 +1235,8 @@ def test_empty_patch_uses_source_linked_entity_fields_for_runtime_mutation(
         "ai_test_asset_center.experiment_executor.sandbox_write_allowed",
         lambda **_kwargs: (True, ""),
     )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_executor.execute_governed_control_write",
+    _patch_governed_write(
+        monkeypatch,
         governed_write,
     )
 
@@ -1467,8 +1492,8 @@ def test_runtime_mutation_block_is_blocked_before_transport_without_cleanup_fail
         "ai_test_asset_center.experiment_executor.sandbox_write_allowed",
         lambda **_kwargs: (True, ""),
     )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_executor.execute_governed_control_write",
+    _patch_governed_write(
+        monkeypatch,
         governed_write,
     )
 
@@ -1543,8 +1568,8 @@ def test_unresolved_body_placeholder_blocks_before_any_write_transport(
         "ai_test_asset_center.experiment_executor.sandbox_write_allowed",
         lambda **_kwargs: (True, ""),
     )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_executor.execute_governed_control_write",
+    _patch_governed_write(
+        monkeypatch,
         lambda **_kwargs: pytest.fail("unresolved body binding reached transport"),
     )
 
@@ -1619,7 +1644,7 @@ def test_unresolved_read_path_placeholder_blocks_before_target_transport(
             pytest.fail("unresolved path binding reached target transport")
         return {"status": 200, "body": [], "headers": {}, "duration_ms": 1}
 
-    monkeypatch.setattr("ai_test_asset_center.experiment_executor._http_request", http_request)
+    _patch_http_request(monkeypatch, http_request)
 
     result = execute_one_experiment(
         experiment,
@@ -1706,7 +1731,7 @@ def test_unresolved_required_runtime_fixture_blocks_before_control_transport(
             pytest.fail("control/treatment reached transport after required fixture binding failed")
         return {"status": 200, "body": [], "headers": {}, "duration_ms": 1}
 
-    monkeypatch.setattr("ai_test_asset_center.experiment_executor._http_request", http_request)
+    _patch_http_request(monkeypatch, http_request)
 
     result = execute_one_experiment(
         experiment,
@@ -1787,8 +1812,8 @@ def test_barrier_unresolved_body_placeholder_blocks_before_write_transport(
         "ai_test_asset_center.experiment_executor.sandbox_write_allowed",
         lambda **_kwargs: (True, ""),
     )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_executor.execute_governed_control_write",
+    _patch_governed_write(
+        monkeypatch,
         lambda **_kwargs: pytest.fail("unresolved barrier body reached write transport"),
     )
 
@@ -1823,8 +1848,8 @@ def test_accepted_fixture_without_identity_is_visible_cleanup_failure(
         experiment,
         behavior_ir=_isolation_ir(),
     )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_executor.execute_governed_control_write",
+    _patch_governed_write(
+        monkeypatch,
         lambda **_kwargs: {
             "accepted": True,
             "status": "executed",
@@ -1833,8 +1858,8 @@ def test_accepted_fixture_without_identity_is_visible_cleanup_failure(
             "after": {"status": 200, "body": [{"name": "unidentified"}]},
         },
     )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_executor._http_request",
+    _patch_http_request(
+        monkeypatch,
         lambda *_args, **_kwargs: pytest.fail("experiment must stop before probes"),
     )
 
@@ -2094,8 +2119,8 @@ def test_concurrency_executor_releases_control_and_treatment_with_barrier(
         "ai_test_asset_center.experiment_executor.sandbox_write_allowed",
         lambda **_kwargs: (True, ""),
     )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_executor.execute_governed_control_write",
+    _patch_governed_write(
+        monkeypatch,
         governed_write,
     )
 
@@ -2301,8 +2326,8 @@ def test_conservation_executor_evaluates_snapshot_values_through_contract_oracle
         "ai_test_asset_center.experiment_executor.sandbox_write_allowed",
         lambda **_kwargs: (True, ""),
     )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_executor.execute_governed_control_write",
+    _patch_governed_write(
+        monkeypatch,
         governed_write,
     )
 
@@ -2461,8 +2486,8 @@ def test_temporal_executor_feeds_window_evidence_to_contract_oracle(
         "ai_test_asset_center.experiment_executor.sandbox_write_allowed",
         lambda **_kwargs: (True, ""),
     )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_executor.execute_governed_control_write",
+    _patch_governed_write(
+        monkeypatch,
         governed_write,
     )
 
