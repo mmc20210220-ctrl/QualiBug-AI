@@ -123,13 +123,13 @@ def score_obligation(
     hist = _dict(historical_yield)
     hist_risk = hist.get(f"risk:{family}")
     if hist_risk is None:
-        # Cold-start Multi-User Replay bias: isolation (+ ownership binder)
-        # outranks abundant cross-role authorization twins on the same prefix.
+        # Cold-start Multi-User Replay bias: mild lift so isolation is not
+        # starved by abundant authorization twins (ranking only; no budget raise).
         base_priority = _num(obl.get("risk_priority"), 1.0)
         if family == "isolation":
-            base_priority = max(base_priority, 1.65)
+            base_priority = max(base_priority, 1.25)
             if _text(_dict(obl.get("property")).get("ownership_param")):
-                base_priority = max(base_priority, 1.8)
+                base_priority = max(base_priority, 1.4)
     else:
         base_priority = _num(hist_risk, 1.0)
     risk_priority = min(2.0, max(0.05, base_priority))
@@ -276,23 +276,25 @@ def plan_obligation_round(
         if family_counts.get(item["risk_family"], 0) < 1:
             _try_add(item, respect_soft_caps=False)
 
-    # Prefer isolation on still-uncovered path prefixes before abundant
-    # authorization twins fill the same prefixes. Soft-caps stay in force —
-    # this only reorders first contact with a cold prefix, not budget size.
-    uncovered_prefix_candidates = [
-        item
-        for item in ranked
-        if item["path_prefix"] and prefix_counts.get(item["path_prefix"], 0) < 1
-    ]
-    uncovered_prefix_candidates.sort(
-        key=lambda item: (
-            0 if item["risk_family"] == "isolation" else 1,
-            -float(item["score"]),
-            item["obligation_id"],
+    # First contact with each still-uncovered prefix (same diversity pass as
+    # before). When both auth and isolation compete for that first slot, prefer
+    # isolation — soft-caps remain ignored only for this one-per-prefix seed.
+    uncovered_by_prefix: dict[str, list[dict[str, Any]]] = {}
+    for item in ranked:
+        prefix = item["path_prefix"]
+        if not prefix or prefix_counts.get(prefix, 0) >= 1:
+            continue
+        uncovered_by_prefix.setdefault(prefix, []).append(item)
+    for prefix in uncovered_by_prefix:
+        candidates = uncovered_by_prefix[prefix]
+        candidates.sort(
+            key=lambda row: (
+                0 if row["risk_family"] == "isolation" else 1,
+                -float(row["score"]),
+                row["obligation_id"],
+            )
         )
-    )
-    for item in uncovered_prefix_candidates:
-        _try_add(item, respect_soft_caps=True)
+        _try_add(candidates[0], respect_soft_caps=False)
 
     for item in ranked:
         op_key = item["operation_key"]
