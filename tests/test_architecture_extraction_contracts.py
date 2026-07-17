@@ -128,6 +128,7 @@ def test_scan_outcome_and_cleanup_helpers_are_reexported() -> None:
     from ai_test_asset_center import __main__ as scan_module
     from ai_test_asset_center import experiment_cleanup as cleanup
     from ai_test_asset_center import experiment_executor as executor
+    from ai_test_asset_center import experiment_barrier_executor as barriers
     from ai_test_asset_center import experiment_fixture_materializer as fixtures
     from ai_test_asset_center import experiment_runtime_support as runtime
     from ai_test_asset_center import scan_customer_ready_artifacts as ready
@@ -151,6 +152,7 @@ def test_scan_outcome_and_cleanup_helpers_are_reexported() -> None:
     assert executor.materialize_experiment_fixtures is (
         fixtures.materialize_experiment_fixtures
     )
+    assert executor.execute_barrier_plans is barriers.execute_barrier_plans
     from ai_test_asset_center import scan_impl_prepare as prepare
 
     assert scan_module.prepare_scan_before_pipeline is (
@@ -197,10 +199,18 @@ def test_extracted_modules_remain_under_architecture_budget_threshold() -> None:
             encoding="utf-8",
         )
     )
+    barrier_lines = sum(
+        1
+        for _ in open(
+            ROOT / "ai_test_asset_center" / "experiment_barrier_executor.py",
+            encoding="utf-8",
+        )
+    )
 
     assert main_lines < 1000
     assert patch_lines < 500
-    assert executor_lines < 2800
-    assert support_lines < 700
+    assert executor_lines < 2300
+    assert support_lines < 900
     assert prepare_lines < 350
     assert fixture_lines < 600
+    assert barrier_lines < 700
