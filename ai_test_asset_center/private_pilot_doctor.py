@@ -37,16 +37,32 @@ from ai_test_asset_center.version import (
 
 DEFAULT_DOCTOR_REPORT_RELATIVE_PATH = Path("platform_outputs") / "private_pilot_doctor_report.json"
 
-PRIVATE_PILOT_PATCH_MODULES = [
-    "ai_test_asset_center.private_pilot_entrypoint",
-    "ai_test_asset_center.private_pilot_scan_context_contract",
-    "ai_test_asset_center.private_pilot_scan_context_patch",
-    "ai_test_asset_center.private_pilot_credentials_patch",
-    "ai_test_asset_center.private_pilot_browser_bridge",
-    "ai_test_asset_center.private_pilot_customer_report_patch",
-    "ai_test_asset_center.private_pilot_deployment_patch",
-    "ai_test_asset_center.private_pilot_health_contract",
-]
+PRIVATE_PILOT_PATCH_MODULES = {
+    "ai_test_asset_center.private_pilot_entrypoint": lambda: importlib.import_module(
+        "ai_test_asset_center.private_pilot_entrypoint"
+    ),
+    "ai_test_asset_center.private_pilot_scan_context_contract": lambda: importlib.import_module(
+        "ai_test_asset_center.private_pilot_scan_context_contract"
+    ),
+    "ai_test_asset_center.private_pilot_scan_context_patch": lambda: importlib.import_module(
+        "ai_test_asset_center.private_pilot_scan_context_patch"
+    ),
+    "ai_test_asset_center.private_pilot_credentials_patch": lambda: importlib.import_module(
+        "ai_test_asset_center.private_pilot_credentials_patch"
+    ),
+    "ai_test_asset_center.private_pilot_browser_bridge": lambda: importlib.import_module(
+        "ai_test_asset_center.private_pilot_browser_bridge"
+    ),
+    "ai_test_asset_center.private_pilot_customer_report_patch": lambda: importlib.import_module(
+        "ai_test_asset_center.private_pilot_customer_report_patch"
+    ),
+    "ai_test_asset_center.private_pilot_deployment_patch": lambda: importlib.import_module(
+        "ai_test_asset_center.private_pilot_deployment_patch"
+    ),
+    "ai_test_asset_center.private_pilot_health_contract": lambda: importlib.import_module(
+        "ai_test_asset_center.private_pilot_health_contract"
+    ),
+}
 
 NON_BLOCKING_READY_HINT_CODES = {"RUNTIME_PATCHES_READY"}
 
@@ -106,8 +122,11 @@ def write_doctor_report(payload: dict[str, Any], output: str | Path | None = Non
 
 
 def _module_status(module_name: str) -> dict[str, Any]:
+    loader = PRIVATE_PILOT_PATCH_MODULES.get(module_name)
+    if loader is None:
+        raise ValueError(f"unknown private-pilot module: {module_name}")
     try:
-        module = importlib.import_module(module_name)
+        module = loader()
         return {"ok": True, "module": module_name, "file": str(getattr(module, "__file__", ""))}
     except Exception as exc:
         if "QUALIBUG_JWT_SECRET" in str(exc):

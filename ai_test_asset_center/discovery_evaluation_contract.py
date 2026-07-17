@@ -2485,14 +2485,6 @@ FULL_AUTONOMY_GA_THRESHOLDS: dict[str, float | int] = {
 }
 
 
-def _module_export_present(module_name: str, attr_name: str) -> bool:
-    try:
-        module = __import__(module_name, fromlist=[attr_name])
-    except Exception:
-        return False
-    return callable(getattr(module, attr_name, None)) or hasattr(module, attr_name)
-
-
 def assess_implementation_stage_gates() -> dict[str, Any]:
     """Gate A/B/C inventory: required contracts must exist and be importable.
 
@@ -2500,40 +2492,40 @@ def assess_implementation_stage_gates() -> dict[str, Any]:
     Quality claims remain NOT_MEASURED until a private measured report is supplied.
     """
 
+    from .customer_delivery_gate_v2 import validate_customer_delivery_gate_bundle
+    from .discovery_harness_proposer import (
+        propose_harness_candidates,
+        validate_strategy_guardrails,
+    )
+    from .discovery_policy_evaluation_runner import DiscoveryPolicyEvaluationRunner
+    from .discovery_trace_ledger import build_discovery_trace_ledger
+    from .discovery_weakness_miner import mine_discovery_weaknesses
+    from .sandbox_write_executor import is_production_environment
+
     gate_a_checks = [
         {
             "name": "evaluation_manifest_loader",
-            "passed": _module_export_present(
-                "ai_test_asset_center.discovery_evaluation_contract", "load_evaluation_manifest"
-            ),
+            "passed": callable(load_evaluation_manifest),
             "detail": "evaluator-private manifest loader with non-production fail-closed",
         },
         {
             "name": "runtime_view_redaction",
-            "passed": _module_export_present(
-                "ai_test_asset_center.discovery_evaluation_contract", "build_runtime_view"
-            ),
+            "passed": callable(build_runtime_view),
             "detail": "discovery receives runtime view only; ground truth stays evaluator-private",
         },
         {
             "name": "completed_scan_evaluator",
-            "passed": _module_export_present(
-                "ai_test_asset_center.discovery_evaluation_contract", "evaluate_completed_scan"
-            ),
+            "passed": callable(evaluate_completed_scan),
             "detail": "formal customer-deliverable findings only enter commercial scoring",
         },
         {
             "name": "paired_promotion_evidence",
-            "passed": _module_export_present(
-                "ai_test_asset_center.discovery_evaluation_contract", "build_paired_evaluation_evidence"
-            ),
+            "passed": callable(build_paired_evaluation_evidence),
             "detail": "champion/challenger replay+shadow fingerprints must match before promotion",
         },
         {
             "name": "policy_promotion_gate",
-            "passed": _module_export_present(
-                "ai_test_asset_center.policy_evaluation_gate", "PolicyPromotionGate"
-            ),
+            "passed": callable(PolicyPromotionGate),
             "detail": "non-regressive measured promotion with hard safety blockers",
         },
         {
@@ -2543,57 +2535,41 @@ def assess_implementation_stage_gates() -> dict[str, Any]:
         },
         {
             "name": "customer_delivery_gate",
-            "passed": _module_export_present(
-                "ai_test_asset_center.customer_delivery_gate_v2",
-                "validate_customer_delivery_gate_bundle",
-            ),
+            "passed": callable(validate_customer_delivery_gate_bundle),
             "detail": "formal delivery requires immutable Gate-v2 evidence plus the attempt ledger",
         },
         {
             "name": "sandbox_write_fail_closed",
-            "passed": _module_export_present(
-                "ai_test_asset_center.sandbox_write_executor", "is_production_environment"
-            ),
+            "passed": callable(is_production_environment),
             "detail": "production and unknown environments remain fail-closed for writes",
         },
     ]
     gate_b_checks = [
         {
             "name": "trace_ledger_builder",
-            "passed": _module_export_present(
-                "ai_test_asset_center.discovery_trace_ledger", "build_discovery_trace_ledger"
-            ),
+            "passed": callable(build_discovery_trace_ledger),
             "detail": "cross-stage redacted identity from generation through formal accounting",
         },
         {
             "name": "weakness_miner",
-            "passed": _module_export_present(
-                "ai_test_asset_center.discovery_weakness_miner", "mine_discovery_weaknesses"
-            ),
+            "passed": callable(mine_discovery_weaknesses),
             "detail": "verifier-grounded failure clustering with editable-surface proposals",
         },
     ]
     gate_c_checks = [
         {
             "name": "bounded_harness_proposer",
-            "passed": _module_export_present(
-                "ai_test_asset_center.discovery_harness_proposer", "propose_harness_candidates"
-            ),
+            "passed": callable(propose_harness_candidates),
             "detail": "minimal evidence-bound StrategyBundle edits; frozen surfaces rejected",
         },
         {
             "name": "strategy_guardrails",
-            "passed": _module_export_present(
-                "ai_test_asset_center.discovery_harness_proposer", "validate_strategy_guardrails"
-            ),
+            "passed": callable(validate_strategy_guardrails),
             "detail": "timeout/token floors, hypothesis/worker caps, and evidence thresholds stay frozen",
         },
         {
             "name": "observed_policy_evaluation_runner",
-            "passed": _module_export_present(
-                "ai_test_asset_center.discovery_policy_evaluation_runner",
-                "DiscoveryPolicyEvaluationRunner",
-            ),
+            "passed": callable(DiscoveryPolicyEvaluationRunner),
             "detail": "four real champion/challenger replay+shadow passes; no estimated metrics",
         },
         {

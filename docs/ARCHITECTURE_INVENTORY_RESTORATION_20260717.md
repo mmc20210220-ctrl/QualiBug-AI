@@ -52,3 +52,10 @@ The collector emits an unsigned `PARTIAL` trace until every inventory root has
 one complete session. Operators then seal that external trace with
 `tools/seal_architecture_import_trace.py`; collection never reads the signing
 key and sealing never invents sessions.
+
+The runtime inventory root set intentionally excludes individual test modules.
+Tests remain static reachability roots, so a test reference still prevents a
+module from becoming a retirement candidate, and the full passing-test gate
+remains mandatory before manual deletion review. This keeps runtime evidence
+bound to supported product, evaluation, tooling, script, and discovery
+authorities instead of manufacturing hundreds of import-only test sessions.

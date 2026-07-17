@@ -1245,14 +1245,6 @@ def build_architecture_inventory(
             module=_text(entrypoint.get("module")),
             callable_name=_text(entrypoint.get("callable")),
         ))
-    for module in test_roots:
-        trace_roots.append(_trace_root(
-            category="test",
-            group="pytest",
-            name=module,
-            module=module,
-            callable_name="",
-        ))
     trace_roots = sorted(trace_roots, key=lambda item: item["root_id"])
     required_trace_roots = {item["root_id"]: item for item in trace_roots}
     if len(required_trace_roots) != len(trace_roots):

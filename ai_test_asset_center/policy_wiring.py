@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import os
 import sys
 from contextlib import contextmanager
@@ -67,16 +66,16 @@ def get_effective_policy_strategy() -> Any:
     return strategy
 
 
-def _loaded_stage_reasoner_module() -> Any | None:
-    """Return the stage Reasoner module when it can be safely reached."""
+def _loaded_stage_reasoner_module() -> Any:
+    """Return the stage Reasoner module or surface its import failure."""
+
     module_name = f"{__package__}.stage_reason_all_v2"
     module = sys.modules.get(module_name)
     if module is not None:
         return module
-    try:
-        return importlib.import_module(module_name)
-    except Exception:
-        return None
+    from . import stage_reason_all_v2
+
+    return stage_reason_all_v2
 
 
 def _enforce_stage_reasoner_static_cap() -> None:
@@ -84,13 +83,9 @@ def _enforce_stage_reasoner_static_cap() -> None:
 
     ``stage_reason_all_v2`` historically exposed larger module-level defaults.
     Product calls resolve policy through this module, so enforce the canonical
-    cap on the actual module before returning a reasoner budget. Import failures
-    are deliberately ignored because this guardrail must not mask unrelated
-    startup errors; explicit assertions below catch drift once the module loads.
+    cap on the actual module before returning a reasoner budget.
     """
     module = _loaded_stage_reasoner_module()
-    if module is None:
-        return
     for name in _REASONER_GUARDRAIL_LIMIT_NAMES:
         if hasattr(module, name):
             setattr(module, name, _REASONER_MAX_HYPOTHESES_PER_ENGINE)
@@ -105,13 +100,12 @@ def assert_reasoner_guardrails() -> None:
     """
     _enforce_stage_reasoner_static_cap()
     module = _loaded_stage_reasoner_module()
-    if module is not None:
-        for name in _REASONER_GUARDRAIL_LIMIT_NAMES:
-            if hasattr(module, name):
-                value = getattr(module, name)
-                assert value == _REASONER_MAX_HYPOTHESES_PER_ENGINE, (
-                    f"{name} must remain {_REASONER_MAX_HYPOTHESES_PER_ENGINE}, got {value}"
-                )
+    for name in _REASONER_GUARDRAIL_LIMIT_NAMES:
+        if hasattr(module, name):
+            value = getattr(module, name)
+            assert value == _REASONER_MAX_HYPOTHESES_PER_ENGINE, (
+                f"{name} must remain {_REASONER_MAX_HYPOTHESES_PER_ENGINE}, got {value}"
+            )
 
 
 def _clamp_reasoner_hypothesis_cap(value: Any, fallback: Any) -> int:

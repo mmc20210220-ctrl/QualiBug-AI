@@ -580,6 +580,26 @@ def test_trace_roots_preserve_distinct_script_callable_identities(
     assert len(inventory["source_identity"]["project_scripts_fingerprint"]) == 64
 
 
+def test_runtime_trace_scope_excludes_test_modules(tmp_path: Path) -> None:
+    """Deletion evidence traces supported entrypoints; tests stay static roots."""
+
+    from ai_test_asset_center.architecture_inventory import (
+        build_architecture_inventory,
+    )
+
+    root = _sample_repo(tmp_path)
+    inventory = build_architecture_inventory(
+        repo_root=root,
+        config_path=_config(root),
+    )
+
+    assert inventory["supported_roots"]["tests"] == ["tests.test_reference"]
+    assert all(
+        row["category"] != "test"
+        for row in inventory["trace_roots"]
+    )
+
+
 def test_module_graph_and_source_hash_use_one_byte_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -987,5 +1007,10 @@ def test_repository_inventory_reports_architecture_metrics_not_quality() -> None
     assert inventory["dependency_graph"]["cyclic_scc_count"] == len(
         inventory["dependency_graph"]["cyclic_sccs"]
     )
+    assert inventory["dynamic_import_uncertainty"] == {
+        "present": False,
+        "reachable_modules": [],
+        "effect": "none",
+    }
     assert inventory["auto_delete_performed"] is False
     assert inventory["external_discovery_quality"] == "NOT_MEASURED"
