@@ -194,6 +194,16 @@ def test_discovery_execution_helpers_are_reexported() -> None:
     assert runtime._authority_findings is execution._authority_findings
 
 
+def test_discovery_execution_support_helpers_are_reexported() -> None:
+    from ai_test_asset_center import discovery_runtime_execution as execution
+    from ai_test_asset_center import discovery_runtime_execution_support as support
+
+    assert execution._legacy_execution_terminal is support._legacy_execution_terminal
+    assert execution._manual_terminal_receipts is support._manual_terminal_receipts
+    assert execution._authority_findings is support._authority_findings
+    assert execution._empty_execution_batch is support._empty_execution_batch
+
+
 def test_extracted_modules_remain_under_architecture_budget_threshold() -> None:
     main_lines = sum(
         1 for _ in open(ROOT / "ai_test_asset_center" / "__main__.py", encoding="utf-8")
@@ -303,4 +313,12 @@ def test_extracted_modules_remain_under_architecture_budget_threshold() -> None:
         )
     )
     assert discovery_planning_lines < 550
-    assert discovery_execution_lines < 1100
+    discovery_execution_support_lines = sum(
+        1
+        for _ in open(
+            ROOT / "ai_test_asset_center" / "discovery_runtime_execution_support.py",
+            encoding="utf-8",
+        )
+    )
+    assert discovery_execution_lines < 700
+    assert discovery_execution_support_lines < 550
