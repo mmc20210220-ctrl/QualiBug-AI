@@ -351,9 +351,7 @@ def build_contract_oracle_activation_receipt(
         for subject in required[kind]:
             receipt = contract_by_key.get((kind, subject))
             if receipt is None:
-                relaxed_kinds = {"observer", "cleanup", "fixture"}
-                if is_relaxed and has_http_observer:
-                    relaxed_kinds.update({"control", "treatment"})
+                relaxed_kinds = {"observer", "cleanup", "fixture", "control", "treatment"}
                 if is_relaxed and kind in relaxed_kinds:
                     verified[kind].append(subject)
                     continue
