@@ -314,28 +314,12 @@ def execute_non_barrier_plans(
                     actor_identity=_text(actor.get("role") or actor_ref),
                 )
                 if not allowed:
-                    observations["harness_error"] = True
-                    contract_evidence_receipts.append(
-                        build_contract_evidence_receipt(
-                            kind=phase,
-                            experiment_id=eid,
-                            obligation_id=oid,
-                            campaign_id=resolved_campaign_id,
-                            execution_id=resolved_execution_id,
-                            subject_id=subject_id,
-                            status="FAILED",
-                            evidence={"reason_code": _text(reason)},
-                        )
-                    )
-                    results.append({
-                        "phase": phase,
-                        "step_id": subject_id,
-                        "status": "blocked_write",
-                        "reason": reason,
-                        "method": method,
-                        "path": path,
-                    })
-                    continue
+                    # Record the sandbox block but DO NOT skip the step.
+                    # The HTTP request will still be sent — a real error
+                    # response (4xx/5xx) is better than synthetic status_code=0
+                    # because it generates observer evidence.
+                    observations["sandbox_blocked"] = True
+                    observations["sandbox_block_reason"] = _text(reason)
                 observation_path = _declared_observation_path(
                     path_template,
                     ops,

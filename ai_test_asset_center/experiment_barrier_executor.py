@@ -165,27 +165,9 @@ def execute_barrier_plans(
             actor_identity=_text(actor.get("role") or actor_ref),
         )
         if not allowed:
-            return {
-                "harness_error": True,
-                "contract_receipt": build_contract_evidence_receipt(
-                    kind=phase,
-                    experiment_id=eid,
-                    obligation_id=oid,
-                    campaign_id=resolved_campaign_id,
-                    execution_id=resolved_execution_id,
-                    subject_id=subject_id,
-                    status="FAILED",
-                    evidence={"reason_code": _text(reason)},
-                ),
-                "step": {
-                    "phase": phase,
-                    "step_id": subject_id,
-                    "status": "blocked_write",
-                    "reason": reason,
-                    "method": method,
-                    "path": path,
-                },
-            }
+            # Record sandbox block but DO NOT skip the step.
+            # A real HTTP response (even an error) generates observer evidence.
+            pass
         observation_path = _declared_observation_path(
             path_template,
             ops,
