@@ -1393,49 +1393,37 @@ def path_template_compatible(left: str, right: str) -> bool:
     return True
 
 
+_INVARIANT_TEMPLATES: dict[str, str] = {
+    "permission_bypass": "非授权角色不得执行 {method} {path}",
+    "idor": "用户不得读取或变更不属于自己的 {resource} 资源",
+    "tenant_isolation": "不同租户之间的 {resource} 数据必须隔离",
+    "money_consistency": "{resource} 的金额、支付、退款和汇总字段必须一致",
+    "quantity_consistency": "{resource} 的数量、库存或额度不能越界",
+    "state_flow": "{resource} 状态流转必须满足前置状态和后置一致性",
+    "idempotency": "{method} {path} 重复提交或回调必须幂等",
+    "benefit_abuse": "{resource} 的优惠、权益或折扣必须校验归属、门槛和次数",
+    "approval_bypass": "{resource} 审批/复核流程不能跳过必要节点",
+    "audit_log_missing": "{resource} 的关键操作必须留下可追踪审计记录",
+    "file_upload_validation": "{resource} 文件上传或导入必须校验格式、大小和内容",
+    "bulk_operation_partial_failure": "{resource} 批量操作必须处理部分成功、部分失败和回滚",
+    "export_permission": "{resource} 导出必须遵守角色、租户和字段权限",
+    "report_aggregation_error": "{resource} 报表统计口径必须和明细数据一致",
+    "search_scope_leak": "{resource} 搜索和筛选不能越权返回其他组织或用户数据",
+    "notification_wrong_recipient": "{resource} 通知不能发送给错误用户或泄露模板变量",
+    "feature_flag_scope": "{resource} 配置开关必须按租户、组织和角色隔离",
+    "soft_delete_visibility": "{resource} 删除、禁用或归档后不能在普通查询中可见",
+    "callback_trust": "{resource} 外部回调不能无签名、无状态校验地改变业务状态",
+    "race_condition": "{resource} 并发操作不能造成重复处理、丢失更新或资源越界",
+    "time_window_boundary": "{resource} 时间窗口、过期和边界日期必须被严格校验",
+}
+
+
 def invariant_statement(risk: str, op: dict, roles: list[str], tenants: list[str]) -> str:
-    if risk == "permission_bypass":
-        return f"非授权角色不得执行 {op['method']} {op['path']}"
-    if risk == "idor":
-        return f"用户不得读取或变更不属于自己的 {op['resource']} 资源"
-    if risk == "tenant_isolation":
-        return f"不同租户之间的 {op['resource']} 数据必须隔离"
-    if risk == "money_consistency":
-        return f"{op['resource']} 的金额、支付、退款和汇总字段必须一致"
-    if risk == "quantity_consistency":
-        return f"{op['resource']} 的数量、库存或额度不能越界"
-    if risk == "state_flow":
-        return f"{op['resource']} 状态流转必须满足前置状态和后置一致性"
-    if risk == "idempotency":
-        return f"{op['method']} {op['path']} 重复提交或回调必须幂等"
-    if risk == "benefit_abuse":
-        return f"{op['resource']} 的优惠、权益或折扣必须校验归属、门槛和次数"
-    if risk == "approval_bypass":
-        return f"{op['resource']} 审批/复核流程不能跳过必要节点"
-    if risk == "audit_log_missing":
-        return f"{op['resource']} 的关键操作必须留下可追踪审计记录"
-    if risk == "file_upload_validation":
-        return f"{op['resource']} 文件上传或导入必须校验格式、大小和内容"
-    if risk == "bulk_operation_partial_failure":
-        return f"{op['resource']} 批量操作必须处理部分成功、部分失败和回滚"
-    if risk == "export_permission":
-        return f"{op['resource']} 导出必须遵守角色、租户和字段权限"
-    if risk == "report_aggregation_error":
-        return f"{op['resource']} 报表统计口径必须和明细数据一致"
-    if risk == "search_scope_leak":
-        return f"{op['resource']} 搜索和筛选不能越权返回其他组织或用户数据"
-    if risk == "notification_wrong_recipient":
-        return f"{op['resource']} 通知不能发送给错误用户或泄露模板变量"
-    if risk == "feature_flag_scope":
-        return f"{op['resource']} 配置开关必须按租户、组织和角色隔离"
-    if risk == "soft_delete_visibility":
-        return f"{op['resource']} 删除、禁用或归档后不能在普通查询中可见"
-    if risk == "callback_trust":
-        return f"{op['resource']} 外部回调不能无签名、无状态校验地改变业务状态"
-    if risk == "race_condition":
-        return f"{op['resource']} 并发操作不能造成重复处理、丢失更新或资源越界"
-    if risk == "time_window_boundary":
-        return f"{op['resource']} 时间窗口、过期和边界日期必须被严格校验"
+    template = _INVARIANT_TEMPLATES.get(risk)
+    if template:
+        return template.format(
+            method=op.get("method", ""), path=op.get("path", ""), resource=op.get("resource", "")
+        )
     return f"{op['resource']} 必须满足业务不变量"
 
 
@@ -1515,29 +1503,26 @@ def normalize_knowledge_risk(value: str) -> str:
     return KNOWLEDGE_RISK_ALIASES.get(raw, raw)
 
 
+_RISK_KEYWORD_MAP: dict[str, tuple[str, ...]] = {
+    "permission_bypass": ("admin", "permission", "role", "unauthorized", "forbidden", "权限", "角色", "越权", "未授权"),
+    "idor": ("owner", "ownership", "他人", "归属", "本人", "idor"),
+    "tenant_isolation": ("tenant", "租户", "组织", "门店", "机构"),
+    "money_consistency": ("amount", "total", "payment", "refund", "discount", "金额", "费用", "支付", "退款", "折扣"),
+    "quantity_consistency": ("stock", "quantity", "quota", "inventory", "库存", "数量", "额度", "限额"),
+    "state_flow": ("status", "state", "transition", "cancel", "approve", "状态", "流转", "取消", "审批"),
+    "idempotency": ("idempot", "duplicate", "重复", "幂等"),
+    "benefit_abuse": ("coupon", "benefit", "promotion", "优惠", "权益", "券"),
+    "boundary_validation": ("required", "invalid", "empty", "range", "missing", "必填", "非法", "为空", "边界"),
+    "audit_log_missing": ("audit", "log", "审计", "日志", "留痕"),
+}
+
+
 def risks_from_text(text: str) -> set[str]:
     lower = str(text or "").lower()
     risks: set[str] = set()
-    if any(k in lower for k in ["admin", "permission", "role", "unauthorized", "forbidden", "权限", "角色", "越权", "未授权"]):
-        risks.add("permission_bypass")
-    if any(k in lower for k in ["owner", "ownership", "他人", "归属", "本人", "idor"]):
-        risks.add("idor")
-    if any(k in lower for k in ["tenant", "租户", "组织", "门店", "机构"]):
-        risks.add("tenant_isolation")
-    if any(k in lower for k in ["amount", "total", "payment", "refund", "discount", "金额", "费用", "支付", "退款", "折扣"]):
-        risks.add("money_consistency")
-    if any(k in lower for k in ["stock", "quantity", "quota", "inventory", "库存", "数量", "额度", "限额"]):
-        risks.add("quantity_consistency")
-    if any(k in lower for k in ["status", "state", "transition", "cancel", "approve", "状态", "流转", "取消", "审批"]):
-        risks.add("state_flow")
-    if any(k in lower for k in ["idempot", "duplicate", "重复", "幂等"]):
-        risks.add("idempotency")
-    if any(k in lower for k in ["coupon", "benefit", "promotion", "优惠", "权益", "券"]):
-        risks.add("benefit_abuse")
-    if any(k in lower for k in ["required", "invalid", "empty", "range", "missing", "必填", "非法", "为空", "边界"]):
-        risks.add("boundary_validation")
-    if any(k in lower for k in ["audit", "log", "审计", "日志", "留痕"]):
-        risks.add("audit_log_missing")
+    for risk_type, keywords in _RISK_KEYWORD_MAP.items():
+        if any(k in lower for k in keywords):
+            risks.add(risk_type)
     return risks
 
 
@@ -2891,32 +2876,47 @@ def has_path_param_like(path: str) -> bool:
     return "{" in str(path or "") and "}" in str(path or "")
 
 
+_RISK_COMPAT_RULES: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...], bool]] = {
+    # (text_keywords, path_keywords, methods, path_excludes, text_or_method)
+    # text_or_method=True means match if text keywords OR method matches (not AND)
+    "auth_bypass":           (("login", "admin"), (), ("POST", "PUT", "PATCH", "DELETE"), (), True),
+    "permission_bypass":     (("admin", "permission", "role", "approve", "export", "import", "管理", "权限", "审批", "导出"), (), (), (), False),
+    "idor":                  ((), ("{",), (), ("product_id", "sku_id"), False),
+    "tenant_isolation":      (("tenant", "租户", "组织", "org"), (), (), (), False),
+    "money_consistency":     (("amount", "price", "total", "pay", "payment", "refund", "coupon", "discount", "金额", "支付", "退款", "优惠", "折扣"), (), (), (), False),
+    "quantity_consistency":  (("stock", "quantity", "quota", "inventory", "product", "cart", "库存", "数量", "额度"), (), (), (), False),
+    "state_flow":            (("status", "state", "cancel", "approve", "refund", "payment", "order", "状态", "流转", "取消", "审批"), (), (), (), False),
+    "state_consistency":     (("status", "state", "cancel", "approve", "refund", "payment", "order", "状态", "流转", "取消", "审批"), (), (), (), False),
+    "idempotency":           ((), (), ("POST", "PUT", "PATCH", "DELETE"), ("login",), False),
+    "coupon_abuse":          (("coupon", "benefit", "promotion", "discount", "优惠", "权益", "券", "折扣"), (), (), (), False),
+    "benefit_abuse":         (("coupon", "benefit", "promotion", "discount", "优惠", "权益", "券", "折扣"), (), (), (), False),
+    "boundary_validation":   ((), (), ("POST", "PUT", "PATCH", "DELETE"), ("login",), False),
+    "audit_log_missing":     (("admin", "approve", "order", "payment", "refund", "export", "import", "delete", "cancel", "审批", "订单", "支付", "退款", "导出", "导入", "删除", "取消"), (), (), ("login",), False),
+}
+
+
 def risk_operation_compatible(risk_type: str, op: dict) -> bool:
-    method = op.get("method")
+    method = str(op.get("method") or "").upper()
     text = f"{op.get('path', '')} {op.get('summary', '')} {op.get('resource', '')} {op.get('operation', '')}".lower()
     path = str(op.get("path", "")).lower()
-    if risk_type == "auth_bypass":
-        return "login" in text or "admin" in text or method in {"POST", "PUT", "PATCH", "DELETE"}
-    if risk_type == "permission_bypass":
-        return any(k in text for k in ["admin", "permission", "role", "approve", "export", "import", "管理", "权限", "审批", "导出"])
-    if risk_type == "idor":
-        return "{" in path and not any(k in path for k in ["product_id", "sku_id"])
-    if risk_type == "tenant_isolation":
-        return "tenant" in text or "租户" in text or "组织" in text or "org" in text
-    if risk_type == "money_consistency":
-        return any(k in text for k in ["amount", "price", "total", "pay", "payment", "refund", "coupon", "discount", "金额", "支付", "退款", "优惠", "折扣"])
-    if risk_type == "quantity_consistency":
-        return any(k in text for k in ["stock", "quantity", "quota", "inventory", "product", "cart", "库存", "数量", "额度"])
-    if risk_type in {"state_flow", "state_consistency"}:
-        return any(k in text for k in ["status", "state", "cancel", "approve", "refund", "payment", "order", "状态", "流转", "取消", "审批"])
-    if risk_type == "idempotency":
-        return method in {"POST", "PUT", "PATCH", "DELETE"} and "login" not in text
-    if risk_type in {"coupon_abuse", "benefit_abuse"}:
-        return any(k in text for k in ["coupon", "benefit", "promotion", "discount", "优惠", "权益", "券", "折扣"])
-    if risk_type == "boundary_validation":
-        return method in {"POST", "PUT", "PATCH", "DELETE"} and "login" not in text
-    if risk_type == "audit_log_missing":
-        return "login" not in text and any(k in text for k in ["admin", "approve", "order", "payment", "refund", "export", "import", "delete", "cancel", "审批", "订单", "支付", "退款", "导出", "导入", "删除", "取消"])
+
+    rule = _RISK_COMPAT_RULES.get(risk_type)
+    if rule is not None:
+        text_kw, path_kw, methods, excludes, text_or_method = rule
+        if text_or_method:
+            if any(k in text for k in text_kw) or method in methods:
+                return True
+            return False
+        if text_kw and not any(k in text for k in text_kw):
+            return False
+        if path_kw and not any(k in path for k in path_kw):
+            return False
+        if methods and method not in methods:
+            return False
+        if excludes and any(k in path for k in excludes):
+            return False
+        return True
+
     return method in {"POST", "PUT", "PATCH", "DELETE"}
 
 

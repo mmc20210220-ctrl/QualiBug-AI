@@ -570,61 +570,52 @@ def _doc_bool(value: Any) -> bool:
 
 
 def _classify_source(name: str, text: str, explicit: str | None = None) -> str:
+    """Classify a knowledge source document by file name and content preview.
+
+    Rules are evaluated in priority order; the first match wins.
+    """
     explicit = str(explicit or "").strip().lower()
     name_low = _norm(name)
     low = _norm(f"{name} {text[:5000]}")
     data = _json_or_none(text)
     suffix = Path(name).suffix.lower()
-    if suffix == ".har" or (suffix == ".json" and isinstance(data, dict) and "log" in data):
-        return "har"
-    if suffix == ".log" or (suffix == ".txt" and any(token in name_low for token in ("log", "日志", "access", "error"))):
-        return "application_log"
-    if suffix == ".svg" or "<svg" in str(text or "").lower():
-        return "uiux_svg"
-    if any(token in name_low for token in ("permission", "permissions", "matrix", "权限矩阵", "rbac", "acl")):
-        return "permission_matrix"
-    if any(token in name_low for token in ("historical_bug", "historical-bug", "bugs", "bug", "defect", "缺陷")):
-        return "historical_bug"
-    if any(token in name_low for token in ("ticket", "issue", "jira", "zentao", "工单")):
-        return "ticket"
-    if "postman" in name_low:
-        return "postman"
-    if any(token in name_low for token in ("confluence",)):
-        return "confluence_document"
-    if any(token in name_low for token in ("feishu", "lark", "飞书")):
-        return "feishu_document"
-    if isinstance(data, dict):
-        if isinstance(data.get("paths"), dict) and (data.get("openapi") or data.get("swagger")):
-            return "openapi"
-        if isinstance(data.get("item"), list) and (data.get("info") or {}).get("schema", "").lower().find("postman") >= 0:
-            return "postman"
-    if name.lower().endswith(".sql") or "create table" in low or "alter table" in low:
-        return "database_schema"
-    if _looks_like_field_dictionary(name, text, data):
-        return "db_field_dictionary"
-    if "mrd" in name_low or re.search(r"\bMRD\b", name, flags=re.I) or "市场需求" in low:
-        return "mrd"
-    if "prd" in name_low or re.search(r"\bPRD\b", name, flags=re.I) or "产品需求" in low or "需求说明" in low:
-        return "prd"
-    if "postman" in low and ("collection" in low or '"item"' in low):
-        return "postman"
-    if _contains_markdown_api_sections(text) or (suffix in {".md", ".txt", ".rst"} and any(token in name_low for token in ("api", "接口")) and any(token in low for token in ("请求参数", "响应参数", "response", "request", "curl", "header"))):
-        return "markdown_api"
-    if _looks_like_uiux_spec(name, text):
-        return "uiux_spec"
-    if any(token in low for token in ["openapi", "swagger", "api contract"]):
-        return "openapi"
-    if any(token in low for token in ["权限矩阵", "permission matrix", "role matrix", "rbac", "acl"]):
-        return "permission_matrix"
-    if any(token in low for token in ["历史缺陷", "historical bug", "defect list", "bug list", "缺陷列表"]):
-        return "historical_bug"
-    if any(token in low for token in ["jira", "禅道", "工单", "ticket", "incident"]):
-        return "ticket"
-    if any(token in low for token in ["confluence"]):
-        return "confluence_document"
-    if any(token in low for token in ["飞书", "feishu", "lark"]):
-        return "feishu_document"
-    # Fall back to explicit type when auto-detection cannot determine a specific type
+
+    def _has(*tokens: str) -> bool:
+        return any(t in name_low for t in tokens)
+
+    def _has_in_text(*tokens: str) -> bool:
+        return any(t in low for t in tokens)
+
+    rules: list[tuple[bool, str]] = [
+        # (condition, source_type)
+        (suffix == ".har" or (suffix == ".json" and isinstance(data, dict) and "log" in data), "har"),
+        (suffix == ".log" or (suffix == ".txt" and _has("log", "日志", "access", "error")), "application_log"),
+        (suffix == ".svg" or "<svg" in str(text or "").lower(), "uiux_svg"),
+        (_has("permission", "permissions", "matrix", "权限矩阵", "rbac", "acl"), "permission_matrix"),
+        (_has("historical_bug", "historical-bug", "bugs", "bug", "defect", "缺陷"), "historical_bug"),
+        (_has("ticket", "issue", "jira", "zentao", "工单"), "ticket"),
+        (_has("postman",), "postman"),
+        (_has("confluence",), "confluence_document"),
+        (_has("feishu", "lark", "飞书"), "feishu_document"),
+        (isinstance(data, dict) and isinstance(data.get("paths"), dict) and (data.get("openapi") or data.get("swagger")), "openapi"),
+        (isinstance(data, dict) and isinstance(data.get("item"), list) and (data.get("info") or {}).get("schema", "").lower().find("postman") >= 0, "postman"),
+        (name.lower().endswith(".sql") or "create table" in low or "alter table" in low, "database_schema"),
+        (_looks_like_field_dictionary(name, text, data), "db_field_dictionary"),
+        ("mrd" in name_low or bool(re.search(r"\bMRD\b", name, flags=re.I)) or "市场需求" in low, "mrd"),
+        ("prd" in name_low or bool(re.search(r"\bPRD\b", name, flags=re.I)) or "产品需求" in low or "需求说明" in low, "prd"),
+        ("postman" in low and ("collection" in low or '"item"' in low), "postman"),
+        (_contains_markdown_api_sections(text) or (suffix in {".md", ".txt", ".rst"} and _has("api", "接口") and _has_in_text("请求参数", "响应参数", "response", "request", "curl", "header")), "markdown_api"),
+        (_looks_like_uiux_spec(name, text), "uiux_spec"),
+        (_has_in_text("openapi", "swagger", "api contract"), "openapi"),
+        (_has_in_text("权限矩阵", "permission matrix", "role matrix", "rbac", "acl"), "permission_matrix"),
+        (_has_in_text("历史缺陷", "historical bug", "defect list", "bug list", "缺陷列表"), "historical_bug"),
+        (_has_in_text("jira", "禅道", "工单", "ticket", "incident"), "ticket"),
+        (_has_in_text("confluence",), "confluence_document"),
+        (_has_in_text("飞书", "feishu", "lark"), "feishu_document"),
+    ]
+    for condition, source_type in rules:
+        if condition:
+            return source_type
     if explicit in SOURCE_TYPES:
         return explicit
     return "collaboration_document"

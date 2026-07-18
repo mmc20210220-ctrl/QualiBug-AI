@@ -2548,6 +2548,8 @@ def _build_expected_actual_comparison(finding: dict) -> dict:
 
 def _format_single_finding(finding: dict, enterprise_ctx: dict | None = None) -> dict:
     """格式化单条 finding 为 display-ready 结构"""
+
+    # ── Stage 0: 输入标准化 ──
     finding = finding if isinstance(finding, dict) else {}
     ctx = enterprise_ctx or {}
 
@@ -2571,6 +2573,7 @@ def _format_single_finding(finding: dict, enterprise_ctx: dict | None = None) ->
     if not repro_path:
         repro_method = ""
 
+    # ── Stage 1: 子分析器 ──
     taxonomy = _build_taxonomy(finding)
     ui_verification_display = _ui_verification_display({**finding, **taxonomy})
     high_confidence_display = _high_confidence_candidate_display(finding)
@@ -2580,12 +2583,12 @@ def _format_single_finding(finding: dict, enterprise_ctx: dict | None = None) ->
     reproduction = _build_repro_steps_display(finding, ctx)
     investigation = _build_investigation_display(finding)
 
-    # 统一 Bug 状态（四态）+ 证据门控
+    # ── Stage 2: 状态判定 ──
     bug_status = _compute_bug_status(finding, evidence_quality, evidence_completeness)
     bug_status = _enforce_evidence_gate(finding, bug_status, evidence_completeness)
     reproducibility_confidence = _compute_reproducibility_confidence(finding, bug_status, evidence_quality)
 
-    # 影响范围
+    # ── Stage 3: 影响范围与业务影响 ──
     affected_scope_parts: list[str] = []
     if _clean(finding.get("source_entity")):
         affected_scope_parts.append(_clean(finding.get("source_entity")))
@@ -2611,7 +2614,7 @@ def _format_single_finding(finding: dict, enterprise_ctx: dict | None = None) ->
             "module": _clean(finding.get("source_entity")) or "未绑定业务域",
         }
 
-    # 四层证据状态（透传）
+    # ── Stage 4: 证据状态 ──
     evidence_status = {
         "raw_runtime_verdict": _clean(finding.get("raw_runtime_verdict")),
         "semantic_verdict": _clean(finding.get("semantic_verdict")),
@@ -2620,7 +2623,7 @@ def _format_single_finding(finding: dict, enterprise_ctx: dict | None = None) ->
         "missing_requirements": finding.get("missing_requirements") if isinstance(finding.get("missing_requirements"), list) else [],
     }
 
-    # ── 五层证据模型 ──
+    # ── Stage 5: 五层证据模型 ──
     failed_assertions = _extract_failed_assertions(finding, reproduction)
     raw_evidence = _build_raw_evidence(finding, reproduction)
     technical_details = _build_technical_details(finding, investigation, reproduction)
@@ -2647,7 +2650,7 @@ def _format_single_finding(finding: dict, enterprise_ctx: dict | None = None) ->
     if bug_status.get("status") != "reproduced":
         repro_rate = 0 if bug_status.get("status") in {"risk_clue", "not_reproduced"} else min(repro_rate, 69)
 
-    risk_id = _clean(finding.get("risk_id") or finding.get("finding_id") or finding.get("bug_id") or finding.get("issue_id"))
+    # ── Stage 6: 标识符与 ID 去噪 ──
     # 判断 risk_id 是否是误填的标题（而非真正的唯一标识）：
     # - 太长（>40字符）
     # - 包含中文（标题有中文）
@@ -2682,6 +2685,8 @@ def _format_single_finding(finding: dict, enterprise_ctx: dict | None = None) ->
     repro_data = finding.get("reproducibility")
     if isinstance(repro_data, dict) and repro_data.get("reproducible"):
         repro_count = round(repro_data.get("reproduction_confidence", 0) * 10) if repro_data.get("reproduction_confidence") else 5
+
+    # ── Stage 7: 组装 display-ready payload ──
 
     payload = {
         "id": risk_id,
