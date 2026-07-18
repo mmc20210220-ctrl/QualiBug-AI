@@ -1,5 +1,19 @@
 from __future__ import annotations
 
+"""DEPRECATED — Compatibility FastAPI wrapper.
+
+This module was the original FastAPI API gateway.  The canonical production
+entrypoint is now ``ai_test_asset_center.private_pilot_entrypoint.run_server``
+(launched via ``qualibug-server``, port 8088).  This file is kept for:
+
+* ``/v1/scans`` — delegates to the real ``ai_test_asset_center.__main__.scan``
+* ``/health`` — compatibility health check
+
+The mock-engine endpoints (``/run``, ``/replay``, ``/metrics``, ``/graph``,
+``/logs``) return synthetic results and will be removed in a future release.
+"""
+
+import logging
 import os
 import secrets
 from pathlib import Path
@@ -8,10 +22,17 @@ from urllib.parse import urlparse
 
 from fastapi import FastAPI, Header, HTTPException
 
-from core.engine import Engine
+from core.engine import MockEngine
 
-app = FastAPI(title="QualiBug API")
-engine = Engine()
+logger = logging.getLogger(__name__)
+logger.warning(
+    "backend.main is deprecated.  The canonical production entrypoint is "
+    "qualibug-server / ai_test_asset_center.private_pilot_entrypoint.run_server "
+    "on port 8088."
+)
+
+app = FastAPI(title="QualiBug API (deprecated — use qualibug-server on port 8088)")
+engine = MockEngine()
 
 
 def _expected_api_token() -> str:

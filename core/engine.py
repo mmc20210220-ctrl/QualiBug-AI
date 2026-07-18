@@ -1,18 +1,34 @@
-"""Evidence-aware compatibility engine.
+"""Evidence-aware compatibility engine --- DEPRECATED.
 
-The engine intentionally remains an in-memory facade for development and
-integration tests. It never presents simulated mutations as confirmed defects.
-A confirmed verdict requires a real execution receipt with request, response,
-assertion, target, actor, timestamp and reproducible step metadata.
+This module is retained for integration tests only.  Production scanning,
+campaign management, and credential handling live in
+``ai_test_asset_center`` (entrypoints: ``qualibug-server`` /
+``private_pilot_entrypoint.run_server``).  The ``Engine`` class below is
+a pure in-memory mock; it never issues real HTTP requests and always
+returns ``execution_source: "memory_simulation"``.
+
+For new code, import ``MockEngine`` to make the intent explicit.
+The ``Engine`` alias will be removed in a future release.
 """
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import secrets
 import time
+import warnings
 from collections import deque
 from typing import Any
+
+logger = logging.getLogger(__name__)
+
+_DEPRECATION_MSG = (
+    "core.engine.Engine is deprecated.  "
+    "It is a pure in-memory mock that never executes real HTTP requests.  "
+    "Use ai_test_asset_center (qualibug-server / private_pilot_entrypoint) "
+    "for production scanning, or core.engine.MockEngine for test stubs."
+)
 
 
 class Auth:
@@ -64,8 +80,11 @@ class KafkaClient:
         self.stream.append(event)
 
 
-class Engine:
-    """Compatibility facade with an explicit evidence truthfulness gate."""
+class MockEngine:
+    """Pure in-memory mock — never executes real HTTP, always synthetic.
+
+    Use this directly in test code when you need a stub engine.
+    For production scanning use ``ai_test_asset_center``."""
 
     REQUIRED_CONFIRMATION_FIELDS = (
         "request",
@@ -238,3 +257,17 @@ class Engine:
 
     def replay(self, request_name: str, token: str | None = None) -> dict[str, Any]:
         return self.run(request_name, token)
+
+
+class Engine(MockEngine):
+    """Deprecated alias for ``MockEngine`` — kept for backward compatibility.
+
+    Emits a ``DeprecationWarning`` on every instantiation.  Production code
+    should use ``ai_test_asset_center`` (qualibug-server /
+    private_pilot_entrypoint) instead.  Test code should import ``MockEngine``
+    directly.
+    """
+
+    def __init__(self) -> None:
+        warnings.warn(_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
+        super().__init__()

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from core.engine import Engine
+from core.engine import MockEngine as Engine
 
 
 def test_memory_engine_marks_all_generated_results_as_simulated(monkeypatch):

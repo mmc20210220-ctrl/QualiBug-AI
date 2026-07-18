@@ -10,6 +10,7 @@ HTTP server.
 import os
 import signal
 import time
+import traceback
 from typing import Any
 
 from ai_test_asset_center import private_pilot_service as _service
@@ -151,21 +152,51 @@ def restore_deployment_contract_patch() -> None:
 
 
 def install_runtime_patches() -> None:
-    install_command_center_runtime_support()
-    install_extracted_scan_campaign_context_patch()
-    install_extracted_credential_safety_patch()
-    install_scan_result_repair_patch(patch_source=PATCH_SOURCE)
-    install_regression_oracle_patch(patch_source=PATCH_SOURCE)
-    install_regression_suite_refresh_patch(patch_source=PATCH_SOURCE)
-    install_system_behavior_runtime_patch_chain()
-    install_coverage_matrix_patch(patch_source=PATCH_SOURCE, root=_service._root())
-    install_regression_run_visibility_patch(patch_source=PATCH_SOURCE, root=_service._root())
-    install_display_ready_no_fix_advice_patch(patch_source=PATCH_SOURCE)
-    install_no_fix_advice_patch(patch_source=PATCH_SOURCE)
-    install_coverage_steering_patch(patch_source=PATCH_SOURCE)
-    install_browser_ui_smoke_patch()
-    install_customer_report_patch()
-    install_deployment_contract_patch()
+    """Install all runtime patches with per-patch error isolation.
+
+    If any single patch fails (e.g. missing module, import error), the error
+    is logged and the server continues booting with the remaining patches.
+    Previously a single patch failure would prevent the entire server from
+    starting.  Patch failures are reported through the debug channel so
+    operators can investigate.
+    """
+    patches: list[tuple[str, Any, tuple[Any, ...], dict[str, Any]]] = [
+        # (label, installer_callable, args, kwargs) — ordered as before
+        ("command_center_runtime_support", install_command_center_runtime_support, (), {}),
+        ("scan_campaign_context", install_extracted_scan_campaign_context_patch, (), {}),
+        ("credential_safety", install_extracted_credential_safety_patch, (), {}),
+        ("scan_result_repair", install_scan_result_repair_patch, (), {"patch_source": PATCH_SOURCE}),
+        ("regression_oracle", install_regression_oracle_patch, (), {"patch_source": PATCH_SOURCE}),
+        ("regression_suite_refresh", install_regression_suite_refresh_patch, (), {"patch_source": PATCH_SOURCE}),
+        ("system_behavior_runtime_chain", install_system_behavior_runtime_patch_chain, (), {}),
+        ("coverage_matrix", install_coverage_matrix_patch, (), {"patch_source": PATCH_SOURCE, "root": _service._root()}),
+        ("regression_run_visibility", install_regression_run_visibility_patch, (), {"patch_source": PATCH_SOURCE, "root": _service._root()}),
+        ("display_ready_no_fix_advice", install_display_ready_no_fix_advice_patch, (), {"patch_source": PATCH_SOURCE}),
+        ("no_fix_advice", install_no_fix_advice_patch, (), {"patch_source": PATCH_SOURCE}),
+        ("coverage_steering", install_coverage_steering_patch, (), {"patch_source": PATCH_SOURCE}),
+        ("browser_ui_smoke", install_browser_ui_smoke_patch, (), {}),
+        ("customer_report", install_customer_report_patch, (), {}),
+        ("deployment_contract", install_deployment_contract_patch, (), {}),
+    ]
+
+    failed: list[str] = []
+    for label, installer, args, kwargs in patches:
+        try:
+            installer(*args, **kwargs)
+        except Exception:
+            failed.append(label)
+            _service._dbg_report(
+                hypothesis_id="PATCH_FAIL",
+                msg=f"[DEBUG] runtime patch [{label}] failed — continuing",
+                data={"patch": label, "traceback": traceback.format_exc()[-600:]},
+            )
+
+    if failed:
+        _service._dbg_report(
+            hypothesis_id="PATCH_SUMMARY",
+            msg="[DEBUG] some runtime patches failed",
+            data={"failed": failed, "total": len(patches)},
+        )
 
 
 def run_server() -> None:
