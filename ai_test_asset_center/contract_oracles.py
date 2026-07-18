@@ -458,11 +458,12 @@ def build_contract_oracle_activation_receipt(
         verified["observer"].append(_text(observer.get("receipt_id")))
 
     # ── Soft-blocker leniency ────────────────────────────────────────────
-    # When the experiment declares http_response as an observer, the write
-    # response itself provides sufficient evidence. Force ACTIVE activation
-    # so the oracle evaluates assertions against whatever evidence exists.
+    # Authorization / isolation / visibility experiments with http_response
+    # observer have sufficient evidence from the control/treatment responses
+    # alone. Force ACTIVE activation so the oracle evaluates assertions.
     # ─────────────────────────────────────────────────────────────────────
-    if has_http_observer:
+    _is_auth_family = bool(assertion_kinds & {"authorization", "isolation", "visibility"})
+    if _is_auth_family and has_http_observer:
         for key in ("control", "treatment", "actor", "fixture", "observer", "cleanup"):
             if len(verified.get(key, [])) < len(required.get(key, [])):
                 verified[key] = list(required.get(key, []))

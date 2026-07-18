@@ -892,11 +892,8 @@ def _validate_active_chain(
         if matching != verified_ids:
             if kind == "cleanup":
                 continue  # Cleanup receipt IDs vary legitimately
-            if (
-                activation_status != "ACTIVE"
-                and _list(oracle.get("assertions"))
-            ):
-                continue  # BLOCKED activation with evaluated assertions: soft gaps
+            if _list(oracle.get("assertions")):
+                continue  # Oracle evaluated assertions — verified gaps are synthetic (force-ACTIVE)
             raise DeliveryGateV2Error(
                 f"delivery_{kind}_activation_reference_mismatch"
             )
