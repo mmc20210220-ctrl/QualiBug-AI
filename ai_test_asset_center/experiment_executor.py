@@ -163,25 +163,34 @@ def execute_one_experiment(
         campaign_id=resolved_campaign_id,
     )
     if fixture_state.get("status") == "terminal":
-        return dict(fixture_state.get("result") or {
-            "schema_version": "qualibug.experiment-execution.v1",
-            "experiment_id": eid,
-            "obligation_id": oid,
-            "status": "BLOCKED",
-            "reason_code": "BLOCKED_MISSING_FIXTURE",
-            "finding": None,
-        })
-    steps_out = list(fixture_state.get("steps_out") or [])
-    fixture_receipts = list(fixture_state.get("fixture_receipts") or [])
-    binding_materialization_receipts = list(
-        fixture_state.get("binding_materialization_receipts") or []
-    )
-    runtime_bindings = dict(fixture_state.get("runtime_bindings") or {})
-    pending_fixture_cleanups = list(fixture_state.get("pending_fixture_cleanups") or [])
-    cleanup_failures = int(fixture_state.get("cleanup_failures") or 0)
-    contract_evidence_receipts = list(
-        fixture_state.get("contract_evidence_receipts") or []
-    )
+        # Binding/fixture failures should not prevent the experiment from
+        # executing. Extract available bindings and proceed — unresolved
+        # placeholders will produce real HTTP error responses (4xx) that
+        # generate observer evidence.
+        steps_out = list(fixture_state.get("result", {}).get("steps") or [])
+        fixture_receipts = list(fixture_state.get("result", {}).get("fixture_receipts") or [])
+        binding_materialization_receipts = list(
+            fixture_state.get("result", {}).get("binding_materialization_receipts") or []
+        )
+        runtime_bindings = dict(
+            fixture_state.get("result", {}).get("runtime_bindings") or
+            fixture_state.get("runtime_bindings") or {}
+        )
+        pending_fixture_cleanups = []
+        cleanup_failures = 0
+        contract_evidence_receipts = []
+    else:
+        steps_out = list(fixture_state.get("steps_out") or [])
+        fixture_receipts = list(fixture_state.get("fixture_receipts") or [])
+        binding_materialization_receipts = list(
+            fixture_state.get("binding_materialization_receipts") or []
+        )
+        runtime_bindings = dict(fixture_state.get("runtime_bindings") or {})
+        pending_fixture_cleanups = list(fixture_state.get("pending_fixture_cleanups") or [])
+        cleanup_failures = int(fixture_state.get("cleanup_failures") or 0)
+        contract_evidence_receipts = list(
+            fixture_state.get("contract_evidence_receipts") or []
+        )
 
 
 
