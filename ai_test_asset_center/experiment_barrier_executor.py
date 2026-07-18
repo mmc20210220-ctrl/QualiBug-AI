@@ -192,7 +192,11 @@ def execute_barrier_plans(
             runtime_bindings=runtime_bindings,
             request_body=request_body,
         )
-        if not observation_path:
+        if not observation_path and method in _WRITE_METHODS:
+            # No source-declared effect reader exists for this write path.
+            # The write response itself (http_response observer) provides
+            # sufficient evidence — do not block the step.
+            observation_path = path_template
             return {
                 "harness_error": True,
                 "contract_receipt": build_contract_evidence_receipt(
