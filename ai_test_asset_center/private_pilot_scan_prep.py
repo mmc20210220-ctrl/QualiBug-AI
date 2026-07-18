@@ -9,6 +9,7 @@ import json
 import os
 import time
 from pathlib import Path
+import hashlib
 from typing import Any
 from urllib.parse import urljoin
 
@@ -354,9 +355,9 @@ def _predicted_campaign_binding(project: str, root: Path, body: dict[str, Any]) 
         msg="[DEBUG] predicted campaign binding",
         data={
             "body": _dbg_fingerprint_payload(body),
-            "normalized_api_sha": __import__("hashlib").sha256(normalized_api_doc.encode("utf-8")).hexdigest() if normalized_api_doc else "",
+            "normalized_api_sha": hashlib.sha256(normalized_api_doc.encode("utf-8")).hexdigest() if normalized_api_doc else "",
             "normalized_api_len": len(normalized_api_doc),
-            "schema_sha": __import__("hashlib").sha256(schema_text.encode("utf-8")).hexdigest() if schema_text else "",
+            "schema_sha": hashlib.sha256(schema_text.encode("utf-8")).hexdigest() if schema_text else "",
             "schema_len": len(schema_text),
             "campaign_id": campaign.campaign_id,
             "scope_id": scope_id,

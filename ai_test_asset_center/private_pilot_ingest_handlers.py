@@ -223,7 +223,8 @@ class IngestHandlersMixin:
             if asset_cache.exists(): asset_cache.unlink()
             dash_html = root / "platform_outputs" / project / "enterprise_pilot_runtime" / "enterprise_pilot_center.html"
             if dash_html.exists(): dash_html.unlink()
-        except Exception: pass
+        except OSError:
+            pass  # stale cache files may be locked or missing — non-fatal
         filename = str(result.get("original_name") or source_id)
         return self._json({
             "ok": True,

@@ -330,7 +330,7 @@ Response note: values may include YAML-like colons: without quoting.
 """
 
     executable_document, receipt = _normalize_executable_api_document(markdown)
-    normalized = __import__("json").loads(executable_document)
+    normalized = json.loads(executable_document)
 
     assert receipt["status"] == "normalized"
     assert receipt["input_format"] == "markdown_api"
@@ -350,7 +350,7 @@ def test_unparseable_api_becomes_observable_safe_catalog(monkeypatch) -> None:
     executable_document, receipt = _normalize_executable_api_document(
         "### GET /api/orders"
     )
-    normalized = __import__("json").loads(executable_document)
+    normalized = json.loads(executable_document)
 
     assert receipt["status"] == "FAILED_SAFE"
     assert receipt["reason"] == "api_document_parse_failed"

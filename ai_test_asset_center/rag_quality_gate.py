@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -322,7 +323,7 @@ def main() -> int:
         "max_rag_probe_count": args.max_rag_probes,
         "max_rag_top_k": args.max_rag_top_k,
     }
-    if __import__("os").environ.get("RAG_QUALITY_GATE_ALLOW_SAMPLE") == "1":
+    if os.environ.get("RAG_QUALITY_GATE_ALLOW_SAMPLE") == "1":
         write_sample_inputs_if_missing(Path(args.rag_ab_scorecard), Path(args.training_card))
     result = run_rag_quality_gate(Path(args.rag_ab_scorecard), Path(args.out), Path(args.training_card), thresholds)
     print(json.dumps({"decision": result["decision"], "out": args.out}, ensure_ascii=False, indent=2))

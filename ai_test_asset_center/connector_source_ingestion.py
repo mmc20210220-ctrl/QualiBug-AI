@@ -7,6 +7,7 @@ pretend that an external system was contacted.
 """
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -62,7 +63,7 @@ def ingest_connector_snapshot(
         raise ConnectorSnapshotError("connector_snapshot_identity_missing")
     if content in (None, ""):
         raise ConnectorSnapshotError("connector_snapshot_content_missing")
-    text = content if isinstance(content, str) else __import__("json").dumps(content, ensure_ascii=False, sort_keys=True, default=str)
+    text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False, sort_keys=True, default=str)
     _reject_embedded_credentials(text)
     manifest = register_source_asset(
         project_id,

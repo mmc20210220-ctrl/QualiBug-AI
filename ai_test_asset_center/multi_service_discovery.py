@@ -173,8 +173,9 @@ def extract_routes(docs_dir: str) -> list[dict]:
 
 if __name__ == "__main__":
     import sys
+    from pathlib import Path
     dp = sys.argv[1] if len(sys.argv) > 1 else str(
-        __import__('pathlib').Path(__file__).resolve().parent.parent.parent
+        Path(__file__).resolve().parent.parent.parent
         / "benchmark_mall" / "docs")
 
     routes = extract_routes(dp)

@@ -6,22 +6,33 @@ def try_db_auth(scheme: str, host: str, port: int, user: str, pwd: str, dbname: 
         if scheme in ("postgresql", "postgres"):
             try:
                 import psycopg2
-                conn = psycopg2.connect(host=host, port=port, user=user, password=pwd, dbname=dbname or "postgres", connect_timeout=3)
+                conn = psycopg2.connect(host=host, port=port, user=user, password=pwd,
+                                        dbname=dbname or "postgres", connect_timeout=3)
                 ver = conn.server_version; conn.close()
                 return f"认证OK (PG {ver//10000}.{ver%10000//100})"
-            except ImportError: pass
+            except ImportError:
+                pass
         if scheme in ("mysql", "mariadb"):
-            for mod in ("pymysql", "mysql.connector"):
+            # Try both MySQL drivers — connection errors on the first should
+            # NOT prevent trying the second driver (e.g. pymysql may import
+            # fine but fail to connect, while mysql.connector might work).
+            for mod, connect_args in (("pymysql", {"host": host, "port": port, "user": user,
+                                                     "password": pwd, "database": dbname or "",
+                                                     "connect_timeout": 3}),
+                                       ("mysql.connector", {"host": host, "port": port, "user": user,
+                                                            "password": pwd, "database": dbname or "",
+                                                            "connection_timeout": 3})):
                 try:
                     driver = __import__(mod)
-                    if mod == "pymysql":
-                        conn = driver.connect(host=host, port=port, user=user, password=pwd, database=dbname or "", connect_timeout=3)
-                    else:
-                        conn = driver.connect(host=host, port=port, user=user, password=pwd, database=dbname or "", connection_timeout=3)
-                    conn.close(); return "认证OK (MySQL)"
-                except ImportError: pass
-                except Exception as e: return _auth_error(e)
-        if scheme in ("postgresql","postgres","mysql","mariadb"):
+                    conn = driver.connect(**connect_args)
+                    conn.close()
+                    return "认证OK (MySQL)"
+                except ImportError:
+                    pass
+                except Exception:
+                    # Connection/auth error — try the next driver instead of failing
+                    pass
+        if scheme in ("postgresql", "postgres", "mysql", "mariadb"):
             return "认证跳过（无驱动，pip install psycopg2-binary / pymysql）"
     except Exception as e:
         return _auth_error(e)

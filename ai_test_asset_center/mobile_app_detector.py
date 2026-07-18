@@ -22,6 +22,7 @@ Layer 2 (auto-runs if Appium + emulator available):
 from __future__ import annotations
 
 import json
+import shutil
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -749,7 +750,7 @@ def _check_anr(driver) -> list[MobileBug]:
         # Check logcat for historical ANR traces
         try:
             import subprocess
-            adb = __import__('shutil').which("adb")
+            adb = shutil.which("adb")
             if adb:
                 result = subprocess.run(
                     [adb, "logcat", "-d", "-s", "ActivityManager:*", "ANR:*"],
@@ -790,7 +791,7 @@ def _check_biometric_auth(driver) -> list[MobileBug]:
         if is_android:
             try:
                 import subprocess
-                adb = __import__('shutil').which("adb")
+                adb = shutil.which("adb")
                 if adb:
                     package = driver.current_package
                     result = subprocess.run(

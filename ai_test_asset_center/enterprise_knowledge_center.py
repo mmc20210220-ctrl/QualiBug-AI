@@ -25,6 +25,7 @@ import argparse
 import csv
 import hashlib
 import html
+import io
 import json
 import os
 import re
@@ -416,7 +417,7 @@ def _save_registry(project: str, root: Path, registry: dict[str, Any]) -> None:
 
 def _decode_docx(blob: bytes) -> str:
     try:
-        with zipfile.ZipFile(__import__("io").BytesIO(blob)) as archive:
+        with zipfile.ZipFile(io.BytesIO(blob)) as archive:
             xml = archive.read("word/document.xml").decode("utf-8", errors="replace")
         text = re.sub(r"</w:p>", "\n", xml)
         text = re.sub(r"<[^>]+>", " ", text)
@@ -429,7 +430,7 @@ def _decode_pdf(path: Path, blob: bytes) -> str:
     # Optional local extractor; no online OCR or third-party service is used.
     try:
         import pypdf  # type: ignore
-        reader = pypdf.PdfReader(__import__("io").BytesIO(blob))
+        reader = pypdf.PdfReader(io.BytesIO(blob))
         return "\n".join((page.extract_text() or "") for page in reader.pages)
     except Exception:
         pass

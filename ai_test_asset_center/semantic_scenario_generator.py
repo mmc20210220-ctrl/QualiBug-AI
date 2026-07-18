@@ -214,7 +214,7 @@ class SemanticScenarioGenerator:
         return deduped
 
     def _source_observations(self, api_doc: str, discovery_round: int) -> list[ExecutableScenario]:
-        _entities, _states, endpoints = _api_facts(api_doc, __import__("re").compile(r"(?:^|[_\-\s])(status|state|phase|stage|lifecycle)(?:$|[_\-\s])", __import__("re").I))
+        _entities, _states, endpoints = _api_facts(api_doc, re.compile(r"(?:^|[_\-\s])(status|state|phase|stage|lifecycle)(?:$|[_\-\s])", re.I))
         grouped: dict[str, list[dict[str, str]]] = {}
         for item in endpoints:
             if str(item.get("method") or "").upper() not in {"GET", "HEAD", "OPTIONS"}:
