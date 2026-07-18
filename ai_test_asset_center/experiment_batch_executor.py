@@ -183,6 +183,20 @@ def execute_selected_experiments(
             }
             results.append(missing_outcome)
             continue
+        execution_oid = _text(exp.get("obligation_id"))
+        if not execution_oid:
+            raise ValueError("compiled_experiment_obligation_identity_missing")
+        if execution_oid != oid:
+            execution_id = _stable_id(
+                "exec",
+                project,
+                campaign_id,
+                eid,
+                execution_oid,
+                batch_nonce,
+                index,
+            )
+            evidence_id = _stable_id("evidence", execution_id)
         compile_receipt = _dict(exp.get("compile_receipt"))
         compile_status = _text(compile_receipt.get("status")).upper()
         if compile_status != "COMPILED":
@@ -241,7 +255,7 @@ def execute_selected_experiments(
             "run_id": _text(run_contract.get("run_id")),
             "campaign_id": campaign_id,
             "target_id": _text(run_contract.get("target_id")),
-            "obligation_id": oid,
+            "obligation_id": execution_oid,
             "execution_id": execution_id,
         }):
             outcome = execute_one_experiment(
@@ -259,7 +273,8 @@ def execute_selected_experiments(
         outcome.update({
             "candidate_id": candidate_id,
             "slice_id": slice_id,
-            "obligation_id": oid,
+            "selected_obligation_id": oid,
+            "obligation_id": execution_oid,
             "experiment_id": eid,
             "execution_id": execution_id,
             "evidence_id": evidence_id,
@@ -269,7 +284,8 @@ def execute_selected_experiments(
         receipt.update({
             "candidate_id": candidate_id,
             "slice_id": slice_id,
-            "obligation_id": oid,
+            "selected_obligation_id": oid,
+            "obligation_id": execution_oid,
             "experiment_id": eid,
             "execution_id": execution_id,
             "evidence_id": evidence_id,
@@ -285,7 +301,8 @@ def execute_selected_experiments(
                 "candidate_id": candidate_id,
                 "behavior_slice_id": slice_id,
                 "slice_id": slice_id,
-                "obligation_id": oid,
+                "selected_obligation_id": oid,
+                "obligation_id": execution_oid,
                 "experiment_id": eid,
                 "execution_id": execution_id,
                 "evidence_id": evidence_id,
@@ -393,7 +410,7 @@ def execute_selected_experiments(
                 mainline_run=run_contract,
                 candidate_id=candidate_id,
                 slice_id=slice_id,
-                obligation_id=oid,
+                obligation_id=execution_oid,
                 experiment_id=eid,
                 execution_id=execution_id,
                 evidence_id=evidence_id,

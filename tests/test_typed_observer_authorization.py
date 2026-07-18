@@ -805,3 +805,63 @@ def test_batch_lineage_includes_typed_observer_receipt_ids(
         batch["execution_results"]["obl-auth"]["observation_receipt_ids"]
     )
     assert typed_receipt_ids.issubset(recorded_ids)
+
+
+def test_batch_preserves_exact_variant_obligation_lineage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    account_dir = tmp_path / "platform_inputs" / "project"
+    account_dir.mkdir(parents=True)
+    (account_dir / "test_accounts.json").write_text(
+        json.dumps({
+            "accounts": [
+                {"role": "owner", "token": "owner-token"},
+                {"role": "restricted", "token": "restricted-token"},
+            ],
+        }),
+        encoding="utf-8",
+    )
+    payload = {"id": "r-1", "state": "active"}
+    responses = iter([
+        {"status": 200, "body": payload, "headers": {"content-type": "application/json"}},
+        {"status": 200, "body": payload, "headers": {"content-type": "application/json"}},
+    ])
+    for module in (
+        "ai_test_asset_center.experiment_executor",
+        "ai_test_asset_center.experiment_plan_executor",
+        "ai_test_asset_center.experiment_runtime_support",
+    ):
+        monkeypatch.setattr(
+            f"{module}._http_request",
+            lambda *_args, **_kwargs: next(responses),
+        )
+    experiment = _authorization_experiment()
+    variant_id = "obl-auth__v_abcd"
+    experiment["obligation_id"] = variant_id
+
+    batch = execute_selected_experiments(
+        [{"obligation_id": "obl-auth", "experiment_id": "exp-auth"}],
+        experiments_by_obligation={"obl-auth": experiment},
+        behavior_ir=_behavior_ir(),
+        root=tmp_path,
+        project="project",
+        base_url="http://target.invalid",
+        runtime_contract={"environment_type": "test", "environment_ref": "test-env"},
+        mainline_run=build_mainline_run_contract(
+            mainline_authority="experiment_candidate",
+            run_id="run",
+            campaign_id="campaign",
+            target_id="target",
+            environment_id="environment",
+            policy_version="policy",
+            evaluation_mode="operational",
+        ),
+        campaign_id="campaign",
+    )
+
+    outcome = batch["results"][0]
+    assert outcome["selected_obligation_id"] == "obl-auth"
+    assert outcome["obligation_id"] == variant_id
+    assert outcome["oracle_verdict"]["obligation_id"] == variant_id
+    assert outcome["reproduction_receipt"]["obligation_id"] == variant_id
