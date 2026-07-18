@@ -521,6 +521,10 @@ def validated_fixture_setup(
         if _text(actor_ref) in actors
     ]
     if not actor_refs:
+        # Auto-fixture: use all available actors as fallback.
+        # _select_fixture_actor will pick the right one at runtime.
+        actor_refs = [_text(k) for k in actors if _text(k)]
+    if not actor_refs:
         return {}
     return {
         "operation_ref": operation_ref,

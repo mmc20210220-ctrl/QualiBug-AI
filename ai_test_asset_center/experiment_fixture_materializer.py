@@ -83,14 +83,33 @@ def _auto_fixture_create_for_binding_target(
         )
         op_collection = normalize_path_placeholders(_collection_path(op_path))
         if op_path in candidate_paths or op_collection in candidate_paths:
-            # Build a proper fixture_setup sub-dict for validated_fixture_setup.
-            # body_template is extracted from the operation's request_example
-            # by validated_fixture_setup — industry-neutral, source-grounded.
+            # Find a DELETE cleanup operation at the same collection.
+            # The fixture executor will use this to clean up the created resource.
+            cleanup_ops = []
+            for clean_id, clean_op in operations.items():
+                if not isinstance(clean_op, dict):
+                    continue
+                if _text(clean_op.get("method")).upper() != "DELETE":
+                    continue
+                clean_path = normalize_path_placeholders(
+                    _text(clean_op.get("path") or clean_op.get("raw_path"))
+                )
+                clean_collection = normalize_path_placeholders(
+                    _collection_path(clean_path)
+                )
+                if clean_collection == op_collection:
+                    cleanup_ops.append({
+                        "operation_ref": clean_id,
+                        "method": "DELETE",
+                        "path": clean_path,
+                    })
             return {
                 "fixture_setup": {
                     "operation_ref": op_id,
                     "method": "POST",
                     "path": op_path,
+                    "cleanup_operations": cleanup_ops,
+                    "actor_refs": [],  # filled by _select_fixture_actor at runtime
                 },
                 "force_fixture_setup": True,
                 "create_operation_ref": op_id,
