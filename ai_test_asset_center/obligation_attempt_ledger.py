@@ -153,11 +153,34 @@ def _validated_gate_bundle(
             f"delivery_gate_bundle_invalid:{obligation_id}:{exc}"
         ) from exc
     identity = _object(validated.get("identity"), field="delivery_gate_identity")
+    delivery_execution_receipt = evidence_bundle["execution_receipt"]
+    executed_obligation_id = _text(
+        delivery_execution_receipt.get("obligation_id")
+    )
+    if not executed_obligation_id:
+        raise ObligationAttemptLedgerError(
+            f"delivery_execution_obligation_id_missing:{obligation_id}"
+        )
+    declared_selected_obligation_id = _text(
+        execution_receipt.get("selected_obligation_id") or obligation_id
+    )
+    if declared_selected_obligation_id != obligation_id:
+        raise ObligationAttemptLedgerError(
+            f"selected_obligation_identity_mismatch:{obligation_id}"
+        )
+    declared_executed_obligation_id = _text(
+        execution_receipt.get("executed_obligation_id")
+        or executed_obligation_id
+    )
+    if declared_executed_obligation_id != executed_obligation_id:
+        raise ObligationAttemptLedgerError(
+            f"executed_obligation_identity_mismatch:{obligation_id}"
+        )
     expected_pairs = {
         "run_id": _text(run.get("run_id")),
         "campaign_id": _text(run.get("campaign_id")),
         "mainline_contract_fingerprint": _text(run.get("contract_fingerprint")),
-        "obligation_id": obligation_id,
+        "obligation_id": executed_obligation_id,
         "execution_id": _text(execution_receipt.get("execution_id")),
         "experiment_id": _text(execution_receipt.get("experiment_id")),
     }
@@ -405,6 +428,14 @@ def build_obligation_attempt_ledger(
                 if _text(value)
             ],
             "obligation_id": obligation_id,
+            "executed_obligation_id": _text(
+                execution_receipt.get("executed_obligation_id")
+                or _object(
+                    execution_receipt.get("delivery_execution_receipt"),
+                    field=f"delivery_execution_receipt:{obligation_id}",
+                ).get("obligation_id")
+                or obligation_id
+            ),
             "experiment_id": _text(
                 compile_receipt.get("experiment_id")
                 or execution_receipt.get("experiment_id")

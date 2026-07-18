@@ -486,6 +486,8 @@ def execute_selected_experiments(
             execution_results[oid] = {
                 "status": "EXECUTED",
                 "reason_code": "",
+                "selected_obligation_id": oid,
+                "executed_obligation_id": execution_oid,
                 "experiment_id": eid,
                 "execution_id": execution_id,
                 "receipt_id": _text(delivery_execution_receipt.get("receipt_id")),

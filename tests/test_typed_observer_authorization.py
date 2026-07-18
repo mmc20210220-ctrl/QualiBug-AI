@@ -14,6 +14,10 @@ from ai_test_asset_center.experiment_executor import (
     preflight_experiment_executable,
 )
 from ai_test_asset_center.discovery_mainline_contract import build_mainline_run_contract
+from ai_test_asset_center.obligation_attempt_ledger import (
+    build_obligation_attempt_ledger,
+    validate_obligation_attempt_ledger,
+)
 from ai_test_asset_center.observer_contracts import observe_authorization_comparison
 
 
@@ -865,3 +869,24 @@ def test_batch_preserves_exact_variant_obligation_lineage(
     assert outcome["obligation_id"] == variant_id
     assert outcome["oracle_verdict"]["obligation_id"] == variant_id
     assert outcome["reproduction_receipt"]["obligation_id"] == variant_id
+    execution_receipt = batch["execution_results"]["obl-auth"]
+    assert execution_receipt["selected_obligation_id"] == "obl-auth"
+    assert execution_receipt["executed_obligation_id"] == variant_id
+    ledger = build_obligation_attempt_ledger(
+        mainline_run=build_mainline_run_contract(
+            mainline_authority="experiment_candidate",
+            run_id="run",
+            campaign_id="campaign",
+            target_id="target",
+            environment_id="environment",
+            policy_version="policy",
+            evaluation_mode="operational",
+        ),
+        selected=[{"obligation_id": "obl-auth", "experiment_id": "exp-auth"}],
+        compile_results=batch["compile_results"],
+        execution_results=batch["execution_results"],
+        gate_results=batch["gate_results"],
+    )
+    validate_obligation_attempt_ledger(ledger)
+    assert ledger["attempts"][0]["obligation_id"] == "obl-auth"
+    assert ledger["attempts"][0]["executed_obligation_id"] == variant_id
