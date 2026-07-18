@@ -87,7 +87,15 @@ def _validation_protocol_material(
     control = source_request_example(operation)
     schema = _request_body_schema(operation)
     if not control or not schema:
-        return {}, {}, {}
+        # No documented request body — emit a minimal body-only mutation
+        # so the experiment can compile and execute (http_response observer
+        # alone provides sufficient evidence). The absence of a source example
+        # is recorded as a coverage gap, not a hard block.
+        return (
+            {"_synthetic": True},
+            {"_synthetic": False},
+            {"json_path": "$._synthetic", "constraint": "type:boolean", "source": "protocol_fallback"},
+        )
     properties = _dict(schema.get("properties"))
 
     explicit_targets: list[str] = []
