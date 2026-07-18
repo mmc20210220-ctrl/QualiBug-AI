@@ -184,7 +184,16 @@ def execute_one_experiment(
         fixture_state.get("contract_evidence_receipts") or []
     )
 
-
+    # A forced disposable fixture is a source-resolver fallback, not proof that
+    # setup ran. Runtime binding receipts freeze whether cleanup responsibility
+    # actually materialized; missing or ambiguous evidence remains fail-closed.
+    activation_requirements = contract_activation_requirements(
+        exp,
+        evidence={
+            "binding_materialization_receipts": binding_materialization_receipts,
+            "contract_evidence_receipts": contract_evidence_receipts,
+        },
+    )
 
     barrier_result = execute_barrier_plans(
         control_plan=_list(exp.get("control_plan")),

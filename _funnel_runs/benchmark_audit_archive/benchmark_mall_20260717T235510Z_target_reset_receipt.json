@@ -1,0 +1,13 @@
+{
+  "schema_version": "benchmark_target_reset.v1",
+  "receipt_id": "reset_354ee0da91c6454b",
+  "project": "benchmark_mall",
+  "target_base_url": "http://localhost:8080",
+  "status": "completed",
+  "reset_at_utc": "2026-07-17T23:55:10Z",
+  "target_db_reset": {
+    "status": "skipped",
+    "reason": "QUALIBUG_SKIP_TARGET_DB_RESET",
+    "operator_note": "QUALIBUG_SKIP_TARGET_DB_RESET=1: target DB was NOT reset; baseline/optimized recall comparison may be polluted by prior write probes"
+  }
+}

@@ -115,6 +115,58 @@ def _unresolved_body_placeholders(
     return unresolved
 
 
+def _cleanup_body_preflight_error(experiment: dict[str, Any]) -> str:
+    """Reject structurally unbindable cleanup bodies before target writes.
+
+    Top-level runtime bindings are resolved before control/treatment transport.
+    A binding declared only inside optional fixture setup is not sufficient:
+    the source resolver may succeed, skip setup, and leave compensation
+    impossible after a business write has already been accepted.
+    """
+    exp = _dict(experiment)
+    if not _dict(exp.get("safety_contract")).get("governed_write"):
+        return ""
+    declared_bindings = {
+        target: f"declared-binding:{target}"
+        for target in (
+            _text(_dict(binding).get("target"))
+            for binding in _list(exp.get("binding_plan"))
+        )
+        if target and not target.startswith("actor:")
+    }
+    for raw_cleanup in _list(exp.get("cleanup_plan")):
+        cleanup = _dict(raw_cleanup)
+        method = _text(cleanup.get("method")).upper()
+        body = cleanup.get("body")
+        if method not in {"POST", "PUT", "PATCH"}:
+            continue
+        if (
+            _text(cleanup.get("mode")) == "recreate_compensated_resource"
+            and _text(cleanup.get("action")) == "reverse_order_compensation"
+            and body in (None, {}, [])
+        ):
+            operation_ref = _text(cleanup.get("operation_ref")) or "<unknown>"
+            return f"cleanup_preflight_recreate_body_missing:{operation_ref}"
+        if body is None:
+            continue
+        response_bindings: dict[str, Any] = {}
+        if cleanup.get("runtime_response_binding_required") is True:
+            response_bindings = {
+                token: f"runtime-response:{token}"
+                for token in infer_path_params(_text(cleanup.get("path")))
+            }
+        unresolved = _unresolved_body_placeholders(
+            body,
+            {**declared_bindings, **response_bindings},
+        )
+        if unresolved:
+            return (
+                "cleanup_preflight_body_placeholder_unresolved:"
+                + ",".join(sorted(unresolved))
+            )
+    return ""
+
+
 def _select_fixture_actor(
     fixture_setup: dict[str, Any],
     *,
@@ -367,6 +419,9 @@ def preflight_experiment_executable(
     is_write = bool(safety.get("governed_write"))
     if is_write and not _list(exp.get("cleanup_plan")):
         return False, "BLOCKED_NON_REVERSIBLE_WRITE", "cleanup_compensation_unresolved"
+    cleanup_preflight_error = _cleanup_body_preflight_error(exp)
+    if cleanup_preflight_error:
+        return False, "BLOCKED_NON_REVERSIBLE_WRITE", cleanup_preflight_error
     # Fixture nodes that require constructible disposable fixtures must be READY.
     for node in _list(dag.get("nodes")):
         if not isinstance(node, dict):

@@ -190,8 +190,47 @@ def _any_assertion_has_template(experiment: dict[str, Any], template: str) -> bo
     return False
 
 
+def _fixture_cleanup_requirement_materialized(
+    *,
+    target: str,
+    evidence: dict[str, Any],
+) -> bool | None:
+    """Return whether fallback fixture setup actually created cleanup work.
+
+    ``force_fixture_setup`` means "use setup when the source-declared resolver
+    cannot supply an owned resource". It does not prove that setup ran. The
+    binding receipt is the runtime authority. Missing or ambiguous evidence
+    returns ``None`` so the static cleanup requirement remains fail-closed.
+    """
+    subject_id = f"fixture_cleanup:{target}"
+    if any(
+        _text(_dict(receipt).get("kind")) == "cleanup"
+        and _text(_dict(receipt).get("subject_id")) == subject_id
+        for receipt in _list(evidence.get("contract_evidence_receipts"))
+    ):
+        return True
+    matching = [
+        _dict(receipt)
+        for receipt in _list(evidence.get("binding_materialization_receipts"))
+        if _text(_dict(receipt).get("target")) == target
+    ]
+    if len(matching) != 1:
+        return None
+    receipt = matching[0]
+    if (
+        _text(receipt.get("fixture_cleanup_status"))
+        or _text(receipt.get("source_priority")) == "experiment_setup_response"
+    ):
+        return True
+    if _text(receipt.get("status")).upper() == "BOUND":
+        return False
+    return None
+
+
 def contract_activation_requirements(
     experiment: dict[str, Any],
+    *,
+    evidence: dict[str, Any] | None = None,
 ) -> dict[str, list[str]]:
     exp = _dict(experiment)
     controls = _plan_subjects(exp, "control_plan", "control")
@@ -230,7 +269,15 @@ def contract_activation_requirements(
             and _list(fixture_setup.get("cleanup_operations"))
         ):
             target = _text(row.get("target"))
-            if target:
+            materialized = (
+                _fixture_cleanup_requirement_materialized(
+                    target=target,
+                    evidence=_dict(evidence),
+                )
+                if evidence is not None and target
+                else None
+            )
+            if target and materialized is not False:
                 cleanup.append(f"fixture_cleanup:{target}")
     return {
         "control": controls,
@@ -255,7 +302,7 @@ def build_contract_oracle_activation_receipt(
     execution_id = _text(exp.get("execution_id"))
     if not experiment_id or not obligation_id or not campaign_id or not execution_id:
         raise ValueError("contract_activation_identity_missing")
-    required = contract_activation_requirements(exp)
+    required = contract_activation_requirements(exp, evidence=ev)
     blockers: list[str] = []
     harness_failures: list[str] = []
 

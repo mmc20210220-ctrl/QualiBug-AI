@@ -211,6 +211,96 @@ def test_runtime_preflight_rejects_http_response_as_write_effect_observer() -> N
     assert detail == "write_observer:op-create"
 
 
+def test_runtime_preflight_blocks_unresolved_cleanup_body_before_write_transport() -> None:
+    experiment = {
+        "compile_receipt": {"status": "COMPILED"},
+        "control_plan": [],
+        "treatment_plan": [{
+            "step_id": "treatment_1",
+            "actor_ref": "actor-buyer",
+            "operation_ref": "op-cancel",
+            "intent": "permitted_operation_invocation",
+        }],
+        "binding_plan": [{
+            "target": "id",
+            "status": "runtime_resolvable",
+            "resolver_operations": [{
+                "operation_ref": "op-list-orders",
+                "method": "GET",
+                "path": "/api/orders",
+            }],
+        }],
+        "fixture_dag": {
+            "status": "READY",
+            "nodes": [{
+                "node_id": "bind-id",
+                "kind": "runtime_read_binding",
+                "target": "id",
+            }],
+            "setup_order": ["bind-id"],
+        },
+        "observers": [{"observer_id": "http_response"}],
+        "assertions": [{
+            "kind": "http_status_class",
+            "template": "permitted_operation_invocation",
+        }],
+        "cleanup_plan": [{
+            "action": "reverse_order_compensation",
+            "mode": "recreate_compensated_resource",
+            "operation_ref": "op-recreate-order",
+            "path": "/api/orders",
+            "method": "POST",
+            "body": {
+                "items": [{"sku": "SKU-1", "qty": 1}],
+                "addressId": "<address_id>",
+            },
+            "runtime_response_binding_required": False,
+        }],
+        "safety_contract": {"governed_write": True},
+    }
+    behavior_ir = {
+        "actors": [{"id": "actor-buyer", "role": "public"}],
+        "operations": [{
+            "id": "op-cancel",
+            "method": "POST",
+            "path": "/api/orders/{id}/cancel",
+            "read_write": "write",
+        }, {
+            "id": "op-list-orders",
+            "method": "GET",
+            "path": "/api/orders",
+            "read_write": "read",
+        }, {
+            "id": "op-recreate-order",
+            "method": "POST",
+            "path": "/api/orders",
+            "read_write": "write",
+        }],
+    }
+
+    ok, reason, detail = runtime_support.preflight_experiment_executable(
+        experiment,
+        behavior_ir=behavior_ir,
+        actor_tokens={},
+    )
+
+    assert ok is False
+    assert reason == "BLOCKED_NON_REVERSIBLE_WRITE"
+    assert detail == "cleanup_preflight_body_placeholder_unresolved:address_id"
+
+    experiment["cleanup_plan"][0]["body"] = None
+
+    ok, reason, detail = runtime_support.preflight_experiment_executable(
+        experiment,
+        behavior_ir=behavior_ir,
+        actor_tokens={},
+    )
+
+    assert ok is False
+    assert reason == "BLOCKED_NON_REVERSIBLE_WRITE"
+    assert detail == "cleanup_preflight_recreate_body_missing:op-recreate-order"
+
+
 @pytest.mark.parametrize(
     ("actors", "operation_ref", "expected_reason"),
     [
@@ -2007,6 +2097,11 @@ def test_owner_scoped_read_binding_precedes_disposable_fixture_write(
             "path": "/resources",
             "read_write": "write",
             "request_example": {"name": "source-declared"},
+        }, {
+            "id": "op-delete",
+            "method": "DELETE",
+            "path": "/resources/{id}",
+            "read_write": "write",
         }],
         "actors": [
             {"id": "actor-owner", "role": "public"},
@@ -2043,7 +2138,11 @@ def test_owner_scoped_read_binding_precedes_disposable_fixture_write(
                 "path": "/resources",
                 "actor_refs": ["actor-owner"],
                 "body_template": {"name": "source-declared"},
-                "cleanup_operations": [],
+                "cleanup_operations": [{
+                    "operation_ref": "op-delete",
+                    "method": "DELETE",
+                    "path": "/resources/{id}",
+                }],
             },
             "force_fixture_setup": True,
             "fixture_owner_actor_ref": "actor-owner",
@@ -2102,6 +2201,14 @@ def test_owner_scoped_read_binding_precedes_disposable_fixture_write(
     assert binding["ownership_proof_status"] == "OBSERVED"
     assert requested_urls[0] == "http://target.invalid/resources"
     assert requested_urls.count("http://target.invalid/resources/resource-1") == 2
+    assert result["cleanup_failures"] == 0
+    assert not any(
+        receipt.get("subject_id") == "fixture_cleanup:id"
+        for receipt in result["contract_evidence_receipts"]
+    )
+    assert "fixture_cleanup:id" not in (
+        result["oracle_verdict"]["activation_receipt"]["required"]["cleanup"]
+    )
 
 
 def test_sandbox_denial_stops_write_before_governed_transport(
