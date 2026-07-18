@@ -3,7 +3,7 @@ QualiBug Production Diagnostics — pre-scan health check + result summary.
 Client-facing: clear Chinese diagnostics for every layer.
 """
 from __future__ import annotations
-import json, os, urllib.request, time, socket
+import json, os, tempfile, time, socket, urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -490,15 +490,41 @@ def read_scan_counter(counter_path: Path) -> dict[str, Any]:
 
 
 def increment_scan_counter(counter_path: Path, *, now_utc: str | None = None) -> dict[str, Any]:
+    """Atomically increment the scan counter with retry.
+
+    Uses a retry loop to avoid the read-modify-write race when multiple
+    scans run concurrently and atomic temp-file writes for crash safety.
+    """
     stamp = str(now_utc or _now_utc()).strip() or _now_utc()
-    current = read_scan_counter(counter_path)
-    count = max(0, int(current.get("count") or 0)) + 1
-    first_scan_at = str(current.get("first_scan_at") or "").strip() or stamp
-    payload = {
-        "count": count,
-        "first_scan_at": first_scan_at,
-        "last_scan_at": stamp,
-    }
     counter_path.parent.mkdir(parents=True, exist_ok=True)
-    counter_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    return payload
+
+    for attempt in range(5):
+        current = read_scan_counter(counter_path)
+        count = max(0, int(current.get("count") or 0)) + 1
+        first_scan_at = str(current.get("first_scan_at") or "").strip() or stamp
+        payload = {
+            "count": count,
+            "first_scan_at": first_scan_at,
+            "last_scan_at": stamp,
+        }
+        fd, tmp_path = tempfile.mkstemp(
+            dir=str(counter_path.parent), prefix=".scan_counter_", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, str(counter_path))
+            return payload
+        except OSError:
+            if attempt < 4:
+                time.sleep(0.05 * (2 ** attempt))
+                continue
+            return payload
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
+    return payload  # unreachable, keeps type checker happy

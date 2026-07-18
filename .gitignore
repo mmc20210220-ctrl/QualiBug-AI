@@ -63,5 +63,21 @@ _explore_*.py
 debug-*.md
 .dbg/
 
+# One-off analysis / probe / root-cause scripts (never commit)
+_analyze_*.py
+_categorize_*.py
+_debug_*.py
+_deep_*.py
+_extract_*.py
+_id_*.py
+_probe_*.py
+_refresh_*.py
+_rootcause_*.py
+_run_scan_*.py
+_verify_*.py
+_funnel_*.*
+.tmp_*
+!.tmp_benchmark
+
 # Windows reserved device name accidentally captured as a file (never commit)
 nul
