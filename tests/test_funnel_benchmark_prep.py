@@ -196,3 +196,13 @@ def test_funnel_runtime_never_loads_or_scores_evaluator_private_ground_truth() -
         or 'measurement_status="NOT_MEASURED"' in source
     )
     assert "external_evaluator_receipt_required" in source
+
+
+def test_funnel_runtime_has_no_hidden_seed_or_global_cleanup_promotion() -> None:
+    runner = Path(__file__).resolve().parents[1] / "_funnel_benchmark.py"
+    source = runner.read_text(encoding="utf-8")
+
+    assert "CART_SEED" not in source
+    assert "urllib.request" not in source
+    assert "apply_governed_campaign_cleanup" not in source
+    assert "post_run_cleanup_readjudication" not in source

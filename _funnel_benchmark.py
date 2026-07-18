@@ -282,32 +282,6 @@ from ai_test_asset_center.__main__ import scan  # noqa: E402
 # Seed cart data so runtime binding resolvers can extract IDs.
 # Without cart/order data, GET /api/cart/items returns empty and
 # {id} placeholder bindings fail → cascading MISSING_OBSERVER.
-import urllib.request as _urllib  # noqa: E402
-_cart_seeded = 0
-try:
-    for _email, _pw in [("buyer01@example.com", "NewPass@123"), ("buyer02@example.com", "Test@123456")]:
-        _req = _urllib.request.Request(
-            f"{BASE_URL}/api/auth/login",
-            data=json.dumps({"email": _email, "password": _pw}).encode(),
-            headers={"Content-Type": "application/json"},
-        )
-        _tok = json.loads(_urllib.request.urlopen(_req, timeout=10).read()).get("token", "")
-        if not _tok:
-            continue
-        _h = {"Content-Type": "application/json", "Authorization": f"Bearer {_tok}"}
-        for _sku in ["SKU-PHONE-001", "SKU-COFFEE-003"]:
-            _req = _urllib.request.Request(
-                f"{BASE_URL}/api/cart/items",
-                data=json.dumps({"sku": _sku, "quantity": 1}).encode(),
-                headers=_h,
-            )
-            _r = _urllib.request.urlopen(_req, timeout=10)
-            if 200 <= _r.status < 300:
-                _cart_seeded += 1
-    print(f"CART_SEED: {_cart_seeded} items")
-except Exception as _exc:
-    print(f"CART_SEED_WARN: {_exc}")
-
 started = time.time()
 _post_run_cleanup: dict = {}
 _post_run_cleanliness: dict = {}
@@ -341,10 +315,6 @@ elapsed = time.time() - started
 
 v12 = result.get("v12", {}) if isinstance(result, dict) else {}
 
-from ai_test_asset_center.customer_delivery_gate import (
-    apply_governed_campaign_cleanup,
-    is_customer_deliverable_defect,
-)
 from ai_test_asset_center.artifact_redactor import write_json_redacted
 from ai_test_asset_center.discovery_quality_projection import (
     attach_quality_projection_to_scan_result,
@@ -362,50 +332,6 @@ def _projected_formal_count_projection(scan_result: dict) -> dict:
 # Runtime discovery must never load evaluator-private ground truth.  Persist a
 # completed-run envelope for the separate evaluator and remain NOT_MEASURED
 # until that evaluator emits an integrity-checked receipt.
-if isinstance(result, dict):
-    _cleanup_reset_id = str(
-        (_post_run_cleanliness or {}).get("reset_receipt_id")
-        or ((_post_run_cleanup or {}).get("reset_receipt") or {}).get("receipt_id")
-        or ""
-    )
-    _cleanup_observation_ref = str(
-        (_post_run_cleanliness or {}).get("archived_receipt")
-        or (_post_run_cleanup or {}).get("reset_receipt_path")
-        or ""
-    )
-    if (
-        (_post_run_cleanliness or {}).get("status") == "clean_reset_receipt_verified"
-        and _cleanup_reset_id
-        and _cleanup_observation_ref
-    ):
-        _all_delivery_items = [
-            item
-            for item in list(result.get("findings") or []) + list(result.get("candidate_findings") or [])
-            if isinstance(item, dict)
-        ]
-        _before_formal_count = sum(1 for item in _all_delivery_items if is_customer_deliverable_defect(item))
-        _defects_after_cleanup, _clues_after_cleanup = apply_governed_campaign_cleanup(
-            _all_delivery_items,
-            {
-                "status": "SUCCEEDED",
-                "dirty_environment": False,
-                "audit_receipt_id": _cleanup_reset_id,
-                "after_cleanup_observation_ref": _cleanup_observation_ref,
-            },
-        )
-        _after_formal_count = sum(1 for item in _defects_after_cleanup if is_customer_deliverable_defect(item))
-        result["findings"] = _defects_after_cleanup
-        result["candidate_findings"] = _clues_after_cleanup
-        result["post_run_cleanup_readjudication"] = {
-            "status": "applied",
-            "scope": "cleanup_only_customer_delivery_gate_reasons",
-            "formal_before": _before_formal_count,
-            "formal_after": _after_formal_count,
-            "promoted_by_campaign_cleanup": max(0, _after_formal_count - _before_formal_count),
-            "cleanup_failures_preserved_in_operational_metrics": True,
-            "audit_receipt_id": _cleanup_reset_id,
-            "after_cleanup_observation_ref": _cleanup_observation_ref,
-        }
 result = attach_quality_projection_to_scan_result(result if isinstance(result, dict) else {})
 _counts = _projected_formal_count_projection(result)
 _campaign = result.get("campaign") if isinstance(result.get("campaign"), dict) else {}
