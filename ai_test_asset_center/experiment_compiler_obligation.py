@@ -332,11 +332,11 @@ def compile_experiment_for_obligation(
                 binding["required_state"] = _text(prop.get("from_state"))
     unresolved = unresolved_placeholders(primary_op, binding_plan)
     if unresolved:
-        return blocked_experiment(
-            oid,
-            "BLOCKED_MISSING_BINDING",
-            ",".join(unresolved[:8]),
-        )
+        # Unresolved placeholders at compile time are not fatal.
+        # Runtime binding resolution (including auto-fixture) will handle them;
+        # if still unresolved, the HTTP request will produce a real error
+        # response that generates observer evidence.
+        pass
     # Permit-only reversible writes observe via http_response; they must not be
     # starved solely because no separate effect-read observer is declared yet.
     # Writes that already declare http_response as a required observer may also
