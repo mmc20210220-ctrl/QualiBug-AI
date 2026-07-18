@@ -191,7 +191,7 @@ os.environ.setdefault("QUALIBUG_JWT_SECRET", "dev-mode-only")
 os.environ["QUALIBUG_TARGET_BASE_URL"] = "http://localhost:8080"
 os.environ.setdefault("QUALIBUG_BENCHMARK_TARGET_ROOT", r"C:\Users\Test\Desktop\qualibug_enterprise_benchmark_v0_5_windows_native_stable\qualibug_enterprise_benchmark_v0_5_windows_native_stable")
 os.environ.setdefault("QUALIBUG_LOGIN_PATH", "/api/auth/login")
-os.environ.setdefault("QUALIBUG_TEST_ACCOUNTS_SOURCE", r"D:\QualiBug-AI\QualiBug-AI-main\platform_inputs\benchmark_mall\test_accounts.json")
+os.environ.setdefault("QUALIBUG_TEST_ACCOUNTS_SOURCE", r"D:\QualiBug-AI\QualiBug-AI-main\projects\benchmark_mall\input\TEST_ACCOUNTS.md")
 os.environ.setdefault("QUALIBUG_TEST_ACCOUNTS_PATH", r"D:\QualiBug-AI\QualiBug-AI-main\platform_inputs\benchmark_mall\test_accounts.json")
 os.environ.setdefault("QUALIBUG_SKIP_TARGET_DB_RESET", "1")  # Preserve seeded data across runs
 # The benchmark target is an explicitly declared local non-production system.

@@ -206,3 +206,5 @@ def test_funnel_runtime_has_no_hidden_seed_or_global_cleanup_promotion() -> None
     assert "urllib.request" not in source
     assert "apply_governed_campaign_cleanup" not in source
     assert "post_run_cleanup_readjudication" not in source
+    assert "projects\\benchmark_mall\\input\\TEST_ACCOUNTS.md" in source
+    assert source.count("platform_inputs\\benchmark_mall\\test_accounts.json") == 1
