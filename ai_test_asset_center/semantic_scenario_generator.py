@@ -529,6 +529,8 @@ class SemanticScenarioGenerator:
             ))
         return _finish(None)
 
+    # ── Section: 幂等 & 写操作场景 ──
+
     def _bound_idempotency_scenario(
         self,
         *,
@@ -811,6 +813,8 @@ class SemanticScenarioGenerator:
             discovery_round=discovery_round,
             selection_origin="active_slice_fallback_materialized",
         )
+
+    # ── Section: 系统承诺不变量 ──
 
     def _build_system_promise_invariant_scenario(
         self,
@@ -1116,6 +1120,8 @@ class SemanticScenarioGenerator:
         if states:
             return states[0]
         return str(slice_meta.get("entity") or "source_invariant")
+
+    # ── Section: 状态转换 & 认证 ──
 
     def _transition(
         self,
@@ -1709,6 +1715,8 @@ class SemanticScenarioGenerator:
             minimized[key] = value
         return (minimized if minimized else dict(raw)), provenance
 
+    # ── Section: 请求体绑定 ──
+
     @staticmethod
     def _body_binding_resolve_steps(
         body: dict[str, Any],
@@ -1896,6 +1904,8 @@ class SemanticScenarioGenerator:
         return {}, ""
 
     @staticmethod
+    # ── Section: 写操作探针 & 测试夹具 ──
+
     def _append_write_probe_step(
         steps: list[ScenarioStep],
         *,
@@ -2157,6 +2167,8 @@ class SemanticScenarioGenerator:
         ranked.sort(key=lambda item: (-item[0], item[1]))
         _, path, body, provenance = ranked[0]
         return path, body, provenance
+
+    # ── Section: 实体依赖关系 ──
 
     def _dependency(
         self,
@@ -2839,6 +2851,8 @@ class SemanticScenarioGenerator:
         return "SCN_SRC_" + hashlib.sha256("|".join(str(part or "") for part in parts).encode("utf-8")).hexdigest()[:16]
 
     @staticmethod
+    # ── Section: 认证 & 登录模拟 ──
+
     def _resolve_entity_steps(
         path: str,
         *,
@@ -3097,6 +3111,8 @@ class SemanticScenarioGenerator:
         )
 
     @staticmethod
+    # ── Section: 切片生成器 (权限/账号/隔离/并发/资金/库存) ──
+
     def _permission_slice(
         slice_meta: dict[str, Any],
         discovery_round: int,
