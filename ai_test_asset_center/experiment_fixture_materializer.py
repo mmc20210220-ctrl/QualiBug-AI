@@ -257,17 +257,7 @@ def materialize_experiment_fixtures(
                 })
                 break
             if value in (None, "", [], {}):
-                # Try auto-fixture: discover a POST create operation on the
-                # same collection that can produce the needed binding value.
-                auto_create = _auto_fixture_create_for_binding_target(
-                    target, binding, ops, binding_plan
-                )
-                if auto_create:
-                    binding = {**binding, **auto_create}
-                    # Re-validate with the enriched binding
-                    fixture_setup = _validated_fixture_setup(binding, ops, actors)
-                else:
-                    fixture_setup = _validated_fixture_setup(binding, ops, actors)
+                fixture_setup = _validated_fixture_setup(binding, ops, actors)
                 _fs_diag = {
                     "generated": bool(fixture_setup),
                     "blocked_reason": "" if fixture_setup else "fixture_setup_not_generated",
