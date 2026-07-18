@@ -122,6 +122,22 @@ def test_runtime_receipts_without_independent_observation_cannot_be_attested() -
         build_execution_attestation(**inputs, signing_key=SIGNING_KEY)
 
 
+def test_unknown_gateway_attempt_reports_exact_execution_identity() -> None:
+    inputs = _inputs()
+    inputs["trusted_observations"][0]["obligation_id"] = (
+        "obligation-unexpected__v_exact"
+    )
+
+    with pytest.raises(
+        ExecutionAttestationError,
+        match=(
+            "trusted_observation_attempt_unknown:"
+            "obligation-unexpected__v_exact"
+        ),
+    ):
+        build_execution_attestation(**inputs, signing_key=SIGNING_KEY)
+
+
 def test_compile_blocked_attempt_without_execution_is_not_request_bearing() -> None:
     expected = _expected_request_attempts({
         "attempts": [{
@@ -169,6 +185,29 @@ def test_attestation_uses_write_attempt_count_not_only_accepted_writes() -> None
     })
 
     assert expected["obligation-write"]["write_count"] == 2
+
+
+def test_attestation_keys_gateway_requests_by_executed_variant_identity() -> None:
+    expected = _expected_request_attempts({
+        "attempts": [{
+            "obligation_id": "obligation-selected",
+            "executed_obligation_id": "obligation-selected__v_exact",
+            "execution_id": "execution-variant",
+            "terminal_stage": "gate",
+            "terminal_status": "DELIVERABLE",
+            "operational_receipt": {
+                "http_request_attempt_count": 3,
+                "write_request_attempt_count": 1,
+                "accepted_write_count": 1,
+                "production_http_request_count": 0,
+            },
+        }],
+    })
+
+    assert set(expected) == {"obligation-selected__v_exact"}
+    assert expected["obligation-selected__v_exact"]["execution_id"] == (
+        "execution-variant"
+    )
 
 
 def test_attestation_tampering_is_rejected() -> None:

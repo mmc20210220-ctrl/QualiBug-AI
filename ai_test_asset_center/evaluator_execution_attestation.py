@@ -133,14 +133,18 @@ def _expected_request_attempts(ledger: dict[str, Any]) -> dict[str, dict[str, An
     for raw in _list(ledger.get("attempts")):
         attempt = _dict(raw)
         operational = _dict(attempt.get("operational_receipt"))
-        attempt_id = _text(attempt.get("obligation_id"))
+        selected_attempt_id = _text(attempt.get("obligation_id"))
+        attempt_id = (
+            _text(attempt.get("executed_obligation_id"))
+            or selected_attempt_id
+        )
         execution_id = _text(attempt.get("execution_id"))
         terminal_stage = _text(attempt.get("terminal_stage")).lower()
         if not operational:
             if not execution_id and terminal_stage == "compile":
                 continue
             raise ExecutionAttestationError(
-                f"operational_receipt_missing:{attempt_id or 'MISSING'}"
+                f"operational_receipt_missing:{selected_attempt_id or 'MISSING'}"
             )
         request_count = _non_negative_int(
             operational.get("http_request_attempt_count"),
@@ -148,7 +152,12 @@ def _expected_request_attempts(ledger: dict[str, Any]) -> dict[str, dict[str, An
         )
         if request_count == 0:
             continue
-        if not attempt_id or not execution_id or attempt_id in expected:
+        if (
+            not selected_attempt_id
+            or not attempt_id
+            or not execution_id
+            or attempt_id in expected
+        ):
             raise ExecutionAttestationError("execution_attempt_identity_invalid")
         expected[attempt_id] = {
             "execution_id": execution_id,
@@ -192,7 +201,9 @@ def _validated_observations(
             raise ExecutionAttestationError("trusted_observation_attempt_duplicate")
         expected_row = expected.get(attempt_id)
         if expected_row is None:
-            raise ExecutionAttestationError("trusted_observation_attempt_unknown")
+            raise ExecutionAttestationError(
+                f"trusted_observation_attempt_unknown:{attempt_id}"
+            )
         source_kind = _text(row.get("source_kind"))
         if source_kind not in TRUSTED_OBSERVATION_SOURCES:
             raise ExecutionAttestationError("trusted_observation_source_invalid")

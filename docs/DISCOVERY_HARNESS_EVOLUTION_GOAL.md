@@ -183,6 +183,37 @@ and GA at `NOT_MEASURED`: there is no held-out seeded target, no intentionally
 clean target, no three-industry held-out set, no frozen unit-cost baseline, and
 no required sequence of paired non-regressive windows.
 
+### Issue #8 single-variable checkpoint (2026-07-18)
+
+The first Issue #8 iteration kept one implementation variable: preserve the
+exact executed obligation identity from a selected obligation through blocked,
+harness-failed, and delivered execution receipts, then make evaluator network
+attestation join on that executed identity. The change is generic identity
+lineage; it does not inspect benchmark ground truth, paths, labels, match terms,
+or expected defects. Unknown gateway identities now fail with the exact opaque
+execution identity so the next mismatch is observable instead of anonymous.
+
+The evaluator-owned one-target replay completed with run
+`RUN_3a8176d328ca436b1c3b425a`. HMAC validation passed for report fingerprint
+`d1d88ecd9cd0106c95a4d2360f1b11dba30544c5b1b974b10a8e085649e53ded`
+and target-receipt fingerprint
+`cf38b2f85a1abc912c8a44b1dbd8ef2335f0cc01554d5e0d93fffc958839c1bc`.
+The independent execution attestation was `VERIFIED` across `432`
+request-bearing attempts, `1741` observed target requests, and `381` writes;
+production requests, cleanup failures, safety incidents, and dirty test
+environments were all `0`, and the governed fixture cleanup succeeded.
+
+The source-backed semantic linker was also verified in the product run and
+accepted `181` bounded rule-to-interface relationships from visible source
+identities. That produced `688` terminal obligations, `313` executed
+obligations, and `53` formal canonical defects internally. These are diagnostic
+counts only. The external report is `NOT_MEASURED` with reason
+`obligation_campaign_degraded` because `13` attempts terminated as
+`CONTRACT_ORACLE_HARNESS_FAILED`; therefore TP/FP/FN were intentionally omitted.
+This iteration is **rejected for policy promotion**. It proves and retains the
+identity-integrity repair, but it does not claim a discovery-quality gain and
+cannot replace a measured champion/challenger replay-and-shadow comparison.
+
 The older completed `llm_throughput` artifact is also a real single-target
 diagnostic run, but it is not a promotion baseline: it contains 91 saved
 findings, and a post-run evaluation with the current customer-delivery gate

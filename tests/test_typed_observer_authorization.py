@@ -890,3 +890,93 @@ def test_batch_preserves_exact_variant_obligation_lineage(
     validate_obligation_attempt_ledger(ledger)
     assert ledger["attempts"][0]["obligation_id"] == "obl-auth"
     assert ledger["attempts"][0]["executed_obligation_id"] == variant_id
+
+
+@pytest.mark.parametrize(
+    ("execution_status", "reason_code", "terminal_status"),
+    [
+        ("BLOCKED", "BLOCKED_MISSING_OBSERVER", "BLOCKED"),
+        (
+            "HARNESS_FAILURE",
+            "CONTRACT_ORACLE_HARNESS_FAILED",
+            "HARNESS_FAILED",
+        ),
+    ],
+)
+def test_batch_preserves_variant_identity_for_non_deliverable_execution(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    execution_status: str,
+    reason_code: str,
+    terminal_status: str,
+) -> None:
+    account_dir = tmp_path / "platform_inputs" / "project"
+    account_dir.mkdir(parents=True)
+    (account_dir / "test_accounts.json").write_text(
+        json.dumps({
+            "accounts": [
+                {"role": "owner", "token": "owner-token"},
+                {"role": "restricted", "token": "restricted-token"},
+            ],
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_executor.execute_one_experiment",
+        lambda *_args, **_kwargs: {
+            "schema_version": "qualibug.experiment-execution.v1",
+            "experiment_id": "exp-auth",
+            "status": execution_status,
+            "reason_code": reason_code,
+            "steps": [{
+                "phase": "treatment",
+                "method": "GET",
+                "path": "/resources/r-1",
+                "status_code": 200,
+            }],
+            "observer_receipts": [],
+            "contract_evidence_receipts": [],
+            "oracle_verdict": {},
+            "execution_receipt": {},
+            "finding": None,
+        },
+    )
+    experiment = _authorization_experiment()
+    variant_id = "obl-auth__v_blocked"
+    experiment["obligation_id"] = variant_id
+    mainline = build_mainline_run_contract(
+        mainline_authority="experiment_candidate",
+        run_id="run",
+        campaign_id="campaign",
+        target_id="target",
+        environment_id="environment",
+        policy_version="policy",
+        evaluation_mode="operational",
+    )
+
+    batch = execute_selected_experiments(
+        [{"obligation_id": "obl-auth", "experiment_id": "exp-auth"}],
+        experiments_by_obligation={"obl-auth": experiment},
+        behavior_ir=_behavior_ir(),
+        root=tmp_path,
+        project="project",
+        base_url="http://target.invalid",
+        runtime_contract={"environment_type": "test", "environment_ref": "test-env"},
+        mainline_run=mainline,
+        campaign_id="campaign",
+    )
+
+    execution_receipt = batch["execution_results"]["obl-auth"]
+    assert execution_receipt["status"] == terminal_status
+    assert execution_receipt["selected_obligation_id"] == "obl-auth"
+    assert execution_receipt["executed_obligation_id"] == variant_id
+    ledger = build_obligation_attempt_ledger(
+        mainline_run=mainline,
+        selected=[{"obligation_id": "obl-auth", "experiment_id": "exp-auth"}],
+        compile_results=batch["compile_results"],
+        execution_results=batch["execution_results"],
+        gate_results=batch["gate_results"],
+    )
+    validate_obligation_attempt_ledger(ledger)
+    assert ledger["attempts"][0]["terminal_status"] == terminal_status
+    assert ledger["attempts"][0]["executed_obligation_id"] == variant_id

@@ -383,6 +383,8 @@ def execute_selected_experiments(
                 "status": "BLOCKED",
                 "reason_code": _text(outcome.get("reason_code"))
                 or "BLOCKED_EXECUTION",
+                "selected_obligation_id": oid,
+                "executed_obligation_id": execution_oid,
                 "experiment_id": eid,
                 "execution_id": execution_id,
                 "receipt_id": execution_id,
@@ -397,6 +399,8 @@ def execute_selected_experiments(
                 "status": "HARNESS_FAILED",
                 "reason_code": _text(outcome.get("reason_code"))
                 or "HARNESS_FAILURE",
+                "selected_obligation_id": oid,
+                "executed_obligation_id": execution_oid,
                 "experiment_id": eid,
                 "execution_id": execution_id,
                 "receipt_id": execution_id,
