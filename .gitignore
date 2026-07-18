@@ -45,6 +45,7 @@ _e2e_stage/
 .workbuddy/
 .worktrees/
 .superpowers/
+.zcode/
 .trae/*
 !.trae/specs/
 !.trae/specs/nextgen-frontend-nextjs-rsc-sso/
