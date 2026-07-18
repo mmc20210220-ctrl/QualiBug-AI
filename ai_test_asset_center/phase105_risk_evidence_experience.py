@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 """Phase105F: risk list and evidence-detail frontend experience.
 

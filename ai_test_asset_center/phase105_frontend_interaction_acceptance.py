@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 """Phase105K: frontend interaction acceptance gate for QualiBug.
 

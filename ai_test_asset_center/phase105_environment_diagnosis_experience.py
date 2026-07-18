@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 """Phase105D: customer environment diagnosis experience for the frontend layer.
 

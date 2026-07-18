@@ -302,7 +302,7 @@ class SecurityTester:
         except urllib.error.HTTPError as e:
             status = e.code
             try: resp_body = e.read(4096).decode("utf-8", errors="replace")
-            except: resp_body = ""
+            except Exception: resp_body = ""
         except Exception as e:
             return {"vulnerable": False, "detail": f"Error: {e}"}
 

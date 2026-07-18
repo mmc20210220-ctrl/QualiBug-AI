@@ -89,7 +89,8 @@ def run_deep_tests(config: dict | None = None, routes: list[dict] | None = None)
                         f"{base_url}{auth_p}", data=reg, headers={"Content-Type": "application/json"}, method="POST"), timeout=5)
                     break
             buyer_token = login(buyer_email, buyer_pw)
-        except: pass
+        except Exception:
+            pass
     if not admin_token and admin_email:
         try:
             reg = json.dumps({"email": admin_email, "password": admin_pw, "name": "TestAdmin", "phone": "13800000002"}).encode()
@@ -113,7 +114,8 @@ def run_deep_tests(config: dict | None = None, routes: list[dict] | None = None)
                     if isinstance(addrs, list) and addrs:
                         addr_id = addrs[0].get("id", "")
                         break
-                except: pass
+                except Exception:
+                    pass
             # Create address if none exist
             if not addr_id:
                 addr_body = json.dumps({"receiver": "TestBuyer", "phone": "13800000001",
@@ -125,8 +127,10 @@ def run_deep_tests(config: dict | None = None, routes: list[dict] | None = None)
                         resp = json.loads(urllib.request.urlopen(req, timeout=5).read())
                         addr_id = resp.get("id", "")
                         if addr_id: break
-                    except: pass
-        except: pass
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
     H_buyer = {"Content-Type": "application/json", "Authorization": f"Bearer {buyer_token}"}
     H_admin = {"Content-Type": "application/json", "Authorization": f"Bearer {admin_token}"}
@@ -160,7 +164,7 @@ def run_deep_tests(config: dict | None = None, routes: list[dict] | None = None)
             return resp.status, json.loads(resp.read())
         except urllib.error.HTTPError as e:
             try: return e.code, json.loads(e.read())
-            except: return e.code, {}
+            except Exception: return e.code, {}
         except Exception:
             return 0, {}
 
@@ -410,7 +414,8 @@ def run_deep_tests(config: dict | None = None, routes: list[dict] | None = None)
                 r = urllib.request.urlopen(urllib.request.Request(f"{base_url}{cart_create}",
                     data=cd, headers=H_buyer, method="POST"), timeout=5)
                 return r.status
-            except: return 0
+            except Exception:
+                return 0
         q = queue.Queue()
         t1 = threading.Thread(target=lambda: q.put(_cart_add()))
         t2 = threading.Thread(target=lambda: q.put(_cart_add()))
@@ -439,7 +444,8 @@ def run_deep_tests(config: dict | None = None, routes: list[dict] | None = None)
                             r = urllib.request.urlopen(urllib.request.Request(f"{base_url}{pay_path}",
                                 data=pb, headers=H_buyer, method="POST"), timeout=5)
                             pq.put(r.status)
-                        except: pq.put(0)
+                        except Exception:
+                            pq.put(0)
                     p1 = threading.Thread(target=_pay); p2 = threading.Thread(target=_pay)
                     p1.start(); p2.start(); p1.join(3); p2.join(3)
                     pstatuses = []

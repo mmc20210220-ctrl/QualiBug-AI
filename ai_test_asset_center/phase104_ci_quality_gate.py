@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 """Phase104H: CI quality gate exporter for the Phase104 frontend release chain.
 

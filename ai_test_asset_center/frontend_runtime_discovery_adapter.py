@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 """Adapters that surface frontend runtime artifacts as discovery signals."""
 

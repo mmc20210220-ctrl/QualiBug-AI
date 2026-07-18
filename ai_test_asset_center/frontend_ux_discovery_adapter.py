@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 """UX-oriented discovery probes for enterprise frontend flows."""
 

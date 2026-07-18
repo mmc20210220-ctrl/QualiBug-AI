@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 """Phase105J: unified frontend experience hub v2 for QualiBug.
 

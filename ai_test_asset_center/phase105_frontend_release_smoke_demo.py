@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 """Phase105P: one-click smoke and demo command for the frontend preview release.
 

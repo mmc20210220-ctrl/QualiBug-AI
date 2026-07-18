@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 """Phase105B: executive quality dashboard experience for QualiBug.
 

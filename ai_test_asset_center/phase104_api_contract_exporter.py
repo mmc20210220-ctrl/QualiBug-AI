@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 """Phase104B: OpenAPI contract and frontend integration kit exporter.
 

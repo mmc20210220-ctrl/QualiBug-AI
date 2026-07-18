@@ -158,7 +158,8 @@ class SelfImprovingSweep:
             compiler = ProjectContextCompiler()
             openapi_spec = {}
             try: openapi_spec = json.loads(self.api) if self.api.strip().startswith("{") else {}
-            except: pass
+            except Exception:
+                pass
             
             ctx = compiler.compile(self.prd[:5000], openapi_spec, "")
             

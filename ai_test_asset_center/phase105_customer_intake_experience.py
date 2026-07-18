@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 """Phase105C: customer intake experience for the QualiBug frontend layer.
 

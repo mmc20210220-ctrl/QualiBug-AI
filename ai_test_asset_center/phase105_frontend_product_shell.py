@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 """Phase105A: frontend product shell generator for QualiBug Command Center.
 

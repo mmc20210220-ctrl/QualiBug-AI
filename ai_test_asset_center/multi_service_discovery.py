@@ -153,7 +153,8 @@ def extract_routes(docs_dir: str) -> list[dict]:
             continue
         try:
             c = open(os.path.join(docs_dir, fn), encoding='utf-8').read()
-        except: continue
+        except OSError:
+            continue
         section = "gateway"
         for line in c.split("\n"):
             ls = line.strip()
@@ -195,14 +196,20 @@ if __name__ == "__main__":
 
     print(f"Routes: {len(routes)}")
     tokens = {}
-    for role, (em, pw) in [("buyer01",("buyer01@example.com","Test@123456"))]:
+    # Test credentials should come from environment or config, not be hardcoded.
+    test_email = os.environ.get("QUALIBUG_TEST_BUYER_EMAIL", "buyer01@benchmark.local")
+    test_pw = os.environ.get("QUALIBUG_TEST_BUYER_PASSWORD", "")
+    for role, (em, pw) in [("buyer01", (test_email, test_pw))]:
+        if not pw:
+            continue  # skip auth when no password configured
         try:
             d = json.dumps({"email":em,"password":pw}).encode()
             req = urllib.request.Request(f"{svc_addrs['gateway']}/api/auth/login", data=d,
                 headers={"Content-Type":"application/json"})
             t = json.loads(urllib.request.urlopen(req,timeout=10).read()).get("token")
             if t: tokens[role] = t
-        except: pass
+        except Exception:
+            pass
 
     msd = MultiServiceDiscovery(routes, tokens)
     msd.run()

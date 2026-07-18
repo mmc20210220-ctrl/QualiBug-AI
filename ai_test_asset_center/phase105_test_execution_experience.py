@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 """Phase105I: AI test plan and realtime execution frontend experience.
 
