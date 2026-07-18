@@ -74,14 +74,6 @@ def _is_permitted_operation_invocation(experiment: dict[str, Any]) -> bool:
     return False
 
 
-def _has_observer_id(experiment: dict[str, Any], observer_id: str) -> bool:
-    """True when the experiment declares the given observer."""
-    for observer in _list(experiment.get("observers")):
-        if isinstance(observer, dict) and _text(observer.get("observer_id")) == observer_id:
-            return True
-    return False
-
-
 def _unresolved_path_placeholders(path: str) -> list[str]:
     """Return path tokens that are still present after runtime materialization."""
 
@@ -187,8 +179,6 @@ def _observation_state(value: Any) -> dict[str, Any]:
         "status": int(row.get("status") or row.get("status_code") or 0),
         "body": row.get("body"),
     }
-
-
 def _governance_audit_receipt_id(governed: dict[str, Any]) -> str:
     row = _dict(governed)
     audit_record = _dict(row.get("audit_record"))
@@ -353,13 +343,8 @@ def preflight_experiment_executable(
             return False, "BLOCKED_MISSING_BINDING", f"unresolved_path:{op_ref}:{path}"
         if not method:
             return False, "BLOCKED_MISSING_OPERATION", f"missing_method:{op_ref}"
-        # Align with experiment compile: permit-only reversible writes may rely
-        # on http_response alone. Writes with http_response observer declared
-        # may also proceed without a separate effect-read observer.
         if (
             method in _WRITE_METHODS
-            and not _is_permitted_operation_invocation(exp)
-            and not _has_observer_id(exp, "http_response")
             and not _declared_observation_path(path, ops)
             and not _declared_effect_observer_available(op, ops)
         ):
@@ -616,202 +601,3 @@ def _run_http_step(
         "error": resp.get("error") or "",
         "raw": resp,
     }
-
-
-_POOL_FIELD_HINTS = frozenset({
-    "available",
-    "remaining",
-    "free",
-    "balance",
-    "quota",
-    "stock",
-})
-_POOL_EXCLUDE_HINTS = frozenset({
-    "locked",
-    "held",
-    "reserved",
-    "safety",
-    "min",
-    "max",
-    "delta",
-})
-
-
-def _normalized_field_name(value: Any) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", _text(value).lower()).strip("_")
-
-
-def _positive_int_body_fields(body: dict[str, Any]) -> list[tuple[str, int]]:
-    fields: list[tuple[str, int]] = []
-    for key, value in body.items():
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            continue
-        if int(value) != value or int(value) <= 0:
-            continue
-        fields.append((_text(key), int(value)))
-    return fields
-
-
-def _observed_numeric_fields(body: Any) -> dict[str, int]:
-    values: dict[str, int] = {}
-    for row in _runtime_entity_candidates(body):
-        if not isinstance(row, dict):
-            continue
-        for key, child in row.items():
-            if isinstance(child, bool) or not isinstance(child, (int, float)):
-                continue
-            if int(child) != child or int(child) < 0:
-                continue
-            normalized = _normalized_field_name(key)
-            if (
-                not normalized
-                or normalized in {"id", "uuid", "key"}
-                or normalized.endswith("_id")
-            ):
-                continue
-            values[_text(key)] = int(child)
-    return values
-
-
-def _select_observed_capacity(
-    observed: dict[str, int],
-    body_key: str,
-) -> tuple[str, int] | None:
-    """Bind one observed pool field to a request quantity field, or None.
-
-    Uses shared field tokens (e.g. qty↔available_qty) and prefers free-pool
-    hints while excluding locked/held/reserved pools. Ambiguity fails closed.
-    """
-
-    body_token = _normalized_field_name(body_key)
-    if not body_token or not observed:
-        return None
-    matched: list[tuple[str, int, bool]] = []
-    for key, value in observed.items():
-        tokens = {
-            part
-            for part in _normalized_field_name(key).split("_")
-            if part
-        }
-        if body_token not in tokens and _normalized_field_name(key) != body_token:
-            continue
-        if tokens.intersection(_POOL_EXCLUDE_HINTS):
-            continue
-        matched.append((key, value, bool(tokens.intersection(_POOL_FIELD_HINTS))))
-    preferred = [row for row in matched if row[2]]
-    chosen = preferred or matched
-    if len(chosen) != 1:
-        return None
-    return chosen[0][0], chosen[0][1]
-
-
-def stress_concurrency_quantity_bodies(
-    *,
-    steps: list[dict[str, Any]],
-    operations: dict[str, dict[str, Any]],
-    runtime_bindings: dict[str, Any],
-    base_url: str,
-    actor_token: str,
-) -> dict[str, Any]:
-    """Scale shared positive quantity fields so concurrent writes can contend.
-
-    Only mutates when every barrier participant shares one identical positive
-    integer body field and a unique observed free-pool capacity field aligns by
-    name. Never invents fields or scales ambiguous shapes (e.g. adjust deltas).
-    """
-
-    receipt: dict[str, Any] = {
-        "status": "SKIPPED",
-        "reason_code": "concurrency_quantity_stress_not_applicable",
-    }
-    if len(steps) < 2 or not _text(base_url):
-        return receipt
-    materialized_bodies: list[dict[str, Any]] = []
-    operation_refs: set[str] = set()
-    for step in steps:
-        if not isinstance(step, dict):
-            return receipt
-        op_ref = _text(step.get("operation_ref"))
-        op = operations.get(op_ref) or {}
-        operation_refs.add(op_ref)
-        body = step.get("body") if "body" in step else op.get("request_example")
-        body = _materialize_body_template(body, runtime_bindings)
-        if not isinstance(body, dict) or not body:
-            return receipt
-        materialized_bodies.append(dict(body))
-    if len(operation_refs) != 1:
-        receipt["reason_code"] = "concurrency_quantity_stress_mixed_operations"
-        return receipt
-    quantity_fields = _positive_int_body_fields(materialized_bodies[0])
-    if len(quantity_fields) != 1:
-        receipt["reason_code"] = "concurrency_quantity_stress_quantity_field_not_unique"
-        return receipt
-    field_name, original_qty = quantity_fields[0]
-    for body in materialized_bodies[1:]:
-        other = _positive_int_body_fields(body)
-        if other != quantity_fields:
-            receipt["reason_code"] = "concurrency_quantity_stress_body_mismatch"
-            return receipt
-    op_ref = next(iter(operation_refs))
-    op = operations.get(op_ref) or {}
-    path_template = _text(op.get("path") or op.get("raw_path"))
-    observation_path = _declared_observation_path(
-        path_template,
-        operations,
-        runtime_bindings=runtime_bindings,
-        request_body=materialized_bodies[0],
-    )
-    if not observation_path:
-        receipt["reason_code"] = "concurrency_quantity_stress_observer_missing"
-        return receipt
-    observed = _run_http_step(
-        base_url=base_url,
-        method="GET",
-        path=observation_path,
-        token=actor_token,
-    )
-    if not (200 <= int(observed.get("status_code") or 0) < 300):
-        receipt["reason_code"] = "concurrency_quantity_stress_observer_failed"
-        receipt["observation_status_code"] = observed.get("status_code")
-        return receipt
-    capacity_match = _select_observed_capacity(
-        _observed_numeric_fields(observed.get("body")),
-        field_name,
-    )
-    if capacity_match is None:
-        receipt["reason_code"] = "concurrency_quantity_stress_capacity_unresolved"
-        return receipt
-    capacity_field, capacity = capacity_match
-    if capacity < 1:
-        receipt["reason_code"] = "concurrency_quantity_stress_capacity_non_positive"
-        return receipt
-    participant_count = len(steps)
-    stressed_qty = max(original_qty, (capacity // participant_count) + 1)
-    if stressed_qty == original_qty:
-        receipt["status"] = "UNCHANGED"
-        receipt["reason_code"] = "concurrency_quantity_stress_already_contending"
-        receipt.update({
-            "field": field_name,
-            "capacity_field": capacity_field,
-            "capacity": capacity,
-            "original_qty": original_qty,
-            "stressed_qty": stressed_qty,
-            "observation_path": observation_path,
-        })
-        return receipt
-    for step, body in zip(steps, materialized_bodies):
-        updated = dict(body)
-        updated[field_name] = stressed_qty
-        step["body"] = updated
-    receipt.update({
-        "status": "APPLIED",
-        "reason_code": "concurrency_quantity_stress_applied",
-        "field": field_name,
-        "capacity_field": capacity_field,
-        "capacity": capacity,
-        "original_qty": original_qty,
-        "stressed_qty": stressed_qty,
-        "participant_count": participant_count,
-        "observation_path": observation_path,
-    })
-    return receipt

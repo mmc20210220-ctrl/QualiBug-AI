@@ -1,4 +1,4 @@
-"""Observer synthesis, contract oracle, and finding packaging for experiments.
+"""Observer evaluation, contract oracle, and finding packaging for experiments.
 
 Extracted from ``experiment_executor.execute_one_experiment``. Runs after
 fixture/barrier/plan/cleanup and always returns the terminal
@@ -8,23 +8,35 @@ customer-delivery decision.
 from __future__ import annotations
 
 import time
-from pathlib import Path
 from typing import Any
 
 from .assertion_dsl import materialize_assertion
 from .contract_oracles import (
-    build_contract_evidence_receipt,
     evaluate_contract_oracle,
     mark_as_internal_clue,
 )
 from .experiment_runtime_support import (
     _dict,
     _list,
-    _stable_id,
     _text,
 )
 from .observer_contracts_base import observe_experiment_requirements
 from .runtime_binding_materializer import materialize_path as _materialize_path
+
+
+def _pre_transport_reason_code(reasons: list[str]) -> str:
+    combined = " ".join(_text(reason).upper() for reason in reasons)
+    if "TARGET_POLICY" in combined or "READ_ONLY" in combined:
+        return "BLOCKED_TARGET_POLICY"
+    if "OBSERVER" in combined:
+        return "BLOCKED_MISSING_OBSERVER"
+    if "OPERATION" in combined:
+        return "BLOCKED_MISSING_OPERATION"
+    if "ACTOR" in combined:
+        return "BLOCKED_MISSING_ACTOR"
+    if "FIXTURE" in combined:
+        return "BLOCKED_MISSING_FIXTURE"
+    return "BLOCKED_MISSING_BINDING"
 
 
 def finalize_experiment_execution(
@@ -36,7 +48,6 @@ def finalize_experiment_execution(
     fixture_receipts: list[dict[str, Any]],
     binding_materialization_receipts: list[dict[str, Any]],
     pre_transport_block_reasons: list[str],
-    accepted_governed_writes: list[dict[str, Any]],
     cleanup_failures: int,
     runtime_bindings: dict[str, Any],
     ops: dict[str, dict[str, Any]],
@@ -48,7 +59,7 @@ def finalize_experiment_execution(
     resolved_execution_id: str,
     started: float,
 ) -> dict[str, Any]:
-    """Synthesize observers, evaluate contract oracle, and package the outcome."""
+    """Evaluate declared observers and package the terminal execution outcome."""
     # A declared observer is satisfied only by an OBSERVED typed receipt.
     observations["execution_steps"] = steps_out
     observations["campaign_id"] = resolved_campaign_id
@@ -61,28 +72,6 @@ def finalize_experiment_execution(
         execution_id=resolved_execution_id,
     )
     observations["observer_receipts"] = observer_receipts
-    # Synthesize observer receipts from HTTP steps when no typed observers ran
-    if not observer_receipts:
-        for s in steps_out:
-            if not isinstance(s, dict):
-                continue
-            sc = s.get("status_code")
-            if not isinstance(sc, int) or sc <= 0:
-                continue
-            observer_receipts.append({
-                "observer_id": "http_response",
-                "receipt_id": _stable_id("synth_obs", eid, s.get("phase",""), s.get("method",""), s.get("path","")),
-                "status": "OBSERVED" if 200 <= sc < 300 else "FAILED",
-                "schema_version": "qualibug.observer-receipt.v1",
-                "evidence": {
-                    "status_code": sc,
-                    "phase": s.get("phase"),
-                    "method": s.get("method"),
-                    "path": s.get("path"),
-                    "duration_ms": s.get("duration_ms"),
-                },
-            })
-        observations["observer_receipts"] = observer_receipts
     observed_ids: list[str] = []
     for receipt in observer_receipts:
         observer_id = _text(receipt.get("observer_id"))
@@ -112,51 +101,7 @@ def finalize_experiment_execution(
             observations.update(_dict(receipt.get("evidence")))
             observations[observer_id + "_observer_receipt"] = receipt
     observations["observer_ids"] = list(dict.fromkeys(observed_ids))
-    # Compute invariant_held from final_state + barrier evidence.
-    if "invariant_held" not in observations:
-        _final = _dict(observations.get("final_state_observer_receipt", {}))
-        _barrier = _dict(observations.get("barrier_timeline_observer_receipt", {}))
-        if _final.get("status") == "OBSERVED" and _barrier.get("status") == "OBSERVED":
-            after_values = observations.get("after_values")
-            if not isinstance(after_values, dict):
-                after_values = _dict(_final.get("evidence")).get("after_values")
-            if isinstance(after_values, dict) and after_values:
-                # Industry-neutral quantity floor: concurrent writes must not drive
-                # observed numeric resource fields below zero (oversell / overdraw).
-                numeric_after = [
-                    value
-                    for value in after_values.values()
-                    if isinstance(value, (int, float)) and not isinstance(value, bool)
-                ]
-                observations["invariant_held"] = all(value >= 0 for value in numeric_after)
-            else:
-                # Lifecycle final_state without quantity terms: concurrent execution
-                # was observed; leave violation detection to typed assertions.
-                observations["invariant_held"] = True
     observations["contract_evidence_receipts"] = list(contract_evidence_receipts)
-    # Synthesize contract evidence when none was produced by the execution
-    if not contract_evidence_receipts and steps_out:
-        for s in steps_out:
-            if not isinstance(s, dict):
-                continue
-            sc = s.get("status_code")
-            if not isinstance(sc, int) or sc <= 0:
-                continue
-            kind = s.get("phase", "target")
-            subject_id = s.get("step_id") or s.get("subject_id") or f"{kind}:1"
-            contract_evidence_receipts.append({
-                "kind": kind,
-                "subject_id": str(subject_id),
-                "receipt_id": _stable_id("synth_contract", eid, kind, subject_id),
-                "status": "OBSERVED" if 200 <= sc < 300 else "FAILED",
-                "schema_version": "qualibug.contract-evidence-receipt.v1",
-                "experiment_id": eid,
-                "obligation_id": oid,
-                "campaign_id": resolved_campaign_id,
-                "execution_id": resolved_execution_id,
-                "evidence": {"status_code": sc, "method": s.get("method"), "path": s.get("path")},
-            })
-        observations["contract_evidence_receipts"] = list(contract_evidence_receipts)
     observations["fixture_receipts"] = list(fixture_receipts)
     observations["source_refs"] = [
         dict(item) for item in _list(exp.get("source_refs")) if isinstance(item, dict)
@@ -198,38 +143,12 @@ def finalize_experiment_execution(
         for s in steps_out
     )
     status = "EXECUTED" if has_http else "HARNESS_FAILURE"
-    if pre_transport_block_reasons and not has_http:
+    if pre_transport_block_reasons:
         # Pre-transport blocks (binding placeholders, unresolved paths) mean the
         # request never reached the target — this is a BLOCKED outcome, not a
         # harness failure in the evidence infrastructure.
         status = "BLOCKED"
-        reason = "BLOCKED_MISSING_BINDING"
-        detail = ",".join(dict.fromkeys(pre_transport_block_reasons))
-        return {
-            "schema_version": "qualibug.experiment-execution.v1",
-            "experiment_id": eid,
-            "obligation_id": oid,
-            "status": status,
-            "reason_code": reason,
-            "detail": detail,
-            "elapsed_ms": int((time.time() - started) * 1000),
-            "steps": steps_out,
-            "fixture_receipts": fixture_receipts,
-            "binding_materialization_receipts": binding_materialization_receipts,
-            "observer_receipts": observer_receipts,
-            "contract_evidence_receipts": contract_evidence_receipts,
-            "oracle_verdict": verdict,
-            "finding": None,
-            "cleanup_failures": cleanup_failures,
-            "execution_receipt": {
-                "status": status,
-                "reason_code": reason,
-                "detail": detail,
-            },
-        }
-    if pre_transport_block_reasons and not accepted_governed_writes:
-        status = "BLOCKED"
-        reason = "BLOCKED_MISSING_BINDING"
+        reason = _pre_transport_reason_code(pre_transport_block_reasons)
         detail = ",".join(dict.fromkeys(pre_transport_block_reasons))
         return {
             "schema_version": "qualibug.experiment-execution.v1",

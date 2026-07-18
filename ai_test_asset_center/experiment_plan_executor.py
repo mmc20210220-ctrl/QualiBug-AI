@@ -29,8 +29,6 @@ from .experiment_runtime_support import (
 )
 from .real_id_resolver import (
     infer_path_params,
-    normalize_path_placeholders,
-    path_has_placeholders,
 )
 from .runtime_binding_materializer import (
     materialize_body_template as _materialize_body_template,
@@ -78,6 +76,42 @@ def execute_non_barrier_plans(
     source_observed_control_bodies: dict[str, Any] = {}
     source_body_control_blocked = False
 
+    def _identity_block(
+        *,
+        phase: str,
+        subject_id: str,
+        step: dict[str, Any],
+        reason_code: str,
+        detail: str,
+    ) -> dict[str, Any]:
+        pre_transport_block_reasons.append(f"{reason_code}:{detail}")
+        contract_evidence_receipts.append(build_contract_evidence_receipt(
+            kind=phase,
+            experiment_id=eid,
+            obligation_id=oid,
+            campaign_id=resolved_campaign_id,
+            execution_id=resolved_execution_id,
+            subject_id=subject_id,
+            status="BLOCKED",
+            evidence={
+                "request_reached_transport": False,
+                "reason_code": reason_code,
+                "detail": detail,
+            },
+        ))
+        return {
+            "phase": phase,
+            "step_id": subject_id,
+            "status": "blocked_request",
+            "reason": reason_code,
+            "detail": detail,
+            "method": _text(step.get("method")).upper(),
+            "path": _text(step.get("path") or step.get("path_template")),
+            "status_code": 0,
+            "actor_ref": _text(step.get("actor_ref")),
+            "operation_ref": _text(step.get("operation_ref")),
+        }
+
     def _exec_plan(plan: list[Any], *, phase: str) -> list[dict[str, Any]]:
         nonlocal cleanup_failures, source_body_control_blocked
         results = []
@@ -94,22 +128,52 @@ def execute_non_barrier_plans(
                 or f"{phase}:{op_ref or 'operation'}:{index + 1}"
             )
             if phase == "treatment" and source_body_control_blocked:
-                # Control body binding failed — proceed with treatment anyway.
-                pass
-            actor = actors.get(actor_ref) or {}
-            op = ops.get(op_ref) or {}
-            # If op_ref doesn't match, try to find by method+path_template
-            if not op and op_ref:
-                path_template_candidate = _text(step.get("path") or step.get("path_template"))
-                method_candidate = _text(step.get("method") or "POST").upper()
-                for _oid, _op in ops.items():
-                    if isinstance(_op, dict) and _text(_op.get("method","")).upper() == method_candidate:
-                        _op_path = normalize_path_placeholders(_text(_op.get("path") or _op.get("raw_path")))
-                        _step_path = normalize_path_placeholders(path_template_candidate)
-                        if _op_path == _step_path:
-                            op = _op
-                            op_ref = _oid
-                            break
+                reason = "control_body_binding_blocked"
+                pre_transport_block_reasons.append(reason)
+                contract_evidence_receipts.append(build_contract_evidence_receipt(
+                    kind=phase,
+                    experiment_id=eid,
+                    obligation_id=oid,
+                    campaign_id=resolved_campaign_id,
+                    execution_id=resolved_execution_id,
+                    subject_id=subject_id,
+                    status="BLOCKED",
+                    evidence={
+                        "write_reached_transport": False,
+                        "reason_code": reason,
+                    },
+                ))
+                results.append({
+                    "phase": phase,
+                    "step_id": subject_id,
+                    "status": "blocked_write",
+                    "reason": "BLOCKED_MISSING_BINDING",
+                    "detail": reason,
+                    "method": _text(step.get("method") or "POST").upper(),
+                    "path": _text(step.get("path") or step.get("path_template")),
+                    "status_code": 0,
+                })
+                continue
+            if not actor_ref or actor_ref not in actors:
+                results.append(_identity_block(
+                    phase=phase,
+                    subject_id=subject_id,
+                    step=step,
+                    reason_code="BLOCKED_MISSING_ACTOR",
+                    detail=f"actor_identity_missing:{actor_ref or '<empty>'}",
+                ))
+                continue
+            if not op_ref or op_ref not in ops:
+                results.append(_identity_block(
+                    phase=phase,
+                    subject_id=subject_id,
+                    step=step,
+                    reason_code="BLOCKED_MISSING_OPERATION",
+                    detail=f"operation_identity_missing:{op_ref or '<empty>'}",
+                ))
+                continue
+            actor = actors[actor_ref]
+            op = ops[op_ref]
             method = _text(op.get("method") or "GET").upper()
             path_template = _text(op.get("path") or op.get("raw_path"))
             path = _materialize_path(
@@ -290,12 +354,29 @@ def execute_non_barrier_plans(
                     actor_identity=_text(actor.get("role") or actor_ref),
                 )
                 if not allowed:
-                    # Record the sandbox block but DO NOT skip the step.
-                    # The HTTP request will still be sent — a real error
-                    # response (4xx/5xx) is better than synthetic status_code=0
-                    # because it generates observer evidence.
-                    observations["sandbox_blocked"] = True
-                    observations["sandbox_block_reason"] = _text(reason)
+                    policy_reason = f"BLOCKED_TARGET_POLICY:{_text(reason)}"
+                    pre_transport_block_reasons.append(policy_reason)
+                    contract_evidence_receipts.append(
+                        build_contract_evidence_receipt(
+                            kind=phase,
+                            experiment_id=eid,
+                            obligation_id=oid,
+                            campaign_id=resolved_campaign_id,
+                            execution_id=resolved_execution_id,
+                            subject_id=subject_id,
+                            status="BLOCKED",
+                            evidence={"reason_code": _text(reason)},
+                        )
+                    )
+                    results.append({
+                        "phase": phase,
+                        "step_id": subject_id,
+                        "status": "blocked_write",
+                        "reason": reason,
+                        "method": method,
+                        "path": path,
+                    })
+                    continue
                 observation_path = _declared_observation_path(
                     path_template,
                     ops,
@@ -303,12 +384,33 @@ def execute_non_barrier_plans(
                     request_body=request_body,
                 )
                 if not observation_path:
-                    # No declared effect observer exists for this endpoint.
-                    # Fall back to the write path itself as a best-effort
-                    # observation target. The before/after GETs may return
-                    # 404/405 for POST-only endpoints, but the write itself
-                    # still executes and produces observable evidence.
-                    observation_path = path
+                    reason_code = "BLOCKED_MISSING_OBSERVER"
+                    pre_transport_block_reasons.append(reason_code)
+                    contract_evidence_receipts.append(
+                        build_contract_evidence_receipt(
+                            kind=phase,
+                            experiment_id=eid,
+                            obligation_id=oid,
+                            campaign_id=resolved_campaign_id,
+                            execution_id=resolved_execution_id,
+                            subject_id=subject_id,
+                            status="BLOCKED",
+                            evidence={
+                                "write_reached_transport": False,
+                                "reason_code": reason_code,
+                            },
+                        )
+                    )
+                    results.append({
+                        "phase": phase,
+                        "step_id": subject_id,
+                        "status": "blocked_write",
+                        "reason": reason_code,
+                        "method": method,
+                        "path": path,
+                        "status_code": 0,
+                    })
+                    continue
                 governed = execute_governed_control_write(
                     root=root,
                     project=project,

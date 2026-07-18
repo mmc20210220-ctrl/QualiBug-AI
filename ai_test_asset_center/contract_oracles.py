@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from typing import Any
 
 from .assertion_dsl import (
@@ -260,44 +259,21 @@ def build_contract_oracle_activation_receipt(
     blockers: list[str] = []
     harness_failures: list[str] = []
 
-    # Relax requirements for obligation families that don't need full evidence chain
-    assertion_kinds = {
-        _text(_dict(a).get("kind") or _dict(a).get("type")).lower()
-        for a in _list(exp.get("assertions"))
-    }
-    relaxed_families = {"idempotency", "concurrency", "conservation"}
-    permit_only = _any_assertion_has_template(exp, "permitted_operation_invocation")
-    has_http_observer = any(
-        _text(o.get("observer_id")) == "http_response"
-        for o in _list(exp.get("observers"))
-    )
-    is_relaxed = (
-        bool(assertion_kinds & relaxed_families)
-        or permit_only
-        or (
-            has_http_observer
-            and assertion_kinds & {"authorization", "isolation", "visibility"}
-        )
-    )
-
+    # Every verified requirement must resolve to a validated runtime receipt.
     source_refs = [
         dict(item) for item in _list(exp.get("source_refs")) if isinstance(item, dict)
     ]
     if not source_refs:
-        if not is_relaxed:
-            blockers.append("SOURCE_REFS_MISSING")
+        blockers.append("SOURCE_REFS_MISSING")
     if _assertions_require_control(exp) and not required["control"]:
         # Permit-only single-actor invocations have an intentionally empty
         # control plan — the treatment alone provides sufficient evidence.
         if not _any_assertion_has_template(exp, "permitted_operation_invocation"):
-            if not is_relaxed:
-                blockers.append("CONTROL_PLAN_MISSING")
+            blockers.append("CONTROL_PLAN_MISSING")
     if not required["treatment"]:
-        if not is_relaxed:
-            blockers.append("TREATMENT_PLAN_MISSING")
+        blockers.append("TREATMENT_PLAN_MISSING")
     if not any(isinstance(item, dict) for item in _list(exp.get("assertions"))):
-        if not is_relaxed:
-            blockers.append("TYPED_ASSERTION_MISSING")
+        blockers.append("TYPED_ASSERTION_MISSING")
     if ev.get("harness_error"):
         harness_failures.append("HARNESS_ERROR_PRESENT")
 
@@ -351,18 +327,11 @@ def build_contract_oracle_activation_receipt(
         for subject in required[kind]:
             receipt = contract_by_key.get((kind, subject))
             if receipt is None:
-                relaxed_kinds = {"observer", "cleanup", "fixture", "control", "treatment"}
-                if is_relaxed and kind in relaxed_kinds:
-                    verified[kind].append(subject)
-                    continue
                 blockers.append(f"MISSING_{kind.upper()}_RECEIPT:{subject}")
                 continue
             receipt_status = _text(receipt.get("status")).upper()
             receipt_evidence = _dict(receipt.get("evidence"))
             if kind == "cleanup":
-                if is_relaxed:
-                    verified[kind].append(subject)
-                    continue
                 audit_receipt_ids = [
                     _text(item)
                     for item in _list(receipt_evidence.get("audit_receipt_ids"))
@@ -444,9 +413,6 @@ def build_contract_oracle_activation_receipt(
                 f"OBSERVER_RECEIPT_{observer_status}:{observer_id}"
             )
     for observer_id in required["observer"]:
-        if is_relaxed:
-            verified["observer"].append(observer_id)
-            continue
         observer = observer_by_id.get(observer_id)
         if observer is None:
             blockers.append(f"MISSING_OBSERVER_RECEIPT:{observer_id}")
@@ -457,18 +423,6 @@ def build_contract_oracle_activation_receipt(
             continue
         verified["observer"].append(_text(observer.get("receipt_id")))
 
-    # ── Soft-blocker leniency ────────────────────────────────────────────
-    # Authorization / isolation / visibility experiments with http_response
-    # observer have sufficient evidence from the control/treatment responses
-    # alone. Force ACTIVE activation so the oracle evaluates assertions.
-    # ─────────────────────────────────────────────────────────────────────
-    _is_auth_family = bool(assertion_kinds & {"authorization", "isolation", "visibility"})
-    if _is_auth_family and has_http_observer:
-        for key in ("control", "treatment", "actor", "fixture", "observer", "cleanup"):
-            if len(verified.get(key, [])) < len(required.get(key, [])):
-                verified[key] = list(required.get(key, []))
-        blockers = []
-        harness_failures = []
     reason_codes = sorted(set([*harness_failures, *blockers]))
     status = (
         "HARNESS_FAILED"
@@ -708,55 +662,18 @@ def validate_contract_oracle_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
         item for item in assertions if item.get("harness_error") is True
     ]
     activation_status = _text(activation.get("status"))
-    has_evaluated_assertions = bool(assertions)
     if activation_status == "HARNESS_FAILED":
         expected_status = "HARNESS_FAILED"
         expected_verdict = "harness_failure"
         expected_missing = list(activation.get("reason_codes") or [])
         expected_demotion = ""
     elif activation_status != "ACTIVE":
-        if has_evaluated_assertions:
-            # BLOCKED activation with evaluated assertions: soft blockers did
-            # not prevent assertion evaluation. Derive expected values from
-            # assertion results rather than activation status.
-            if assertion_harness:
-                expected_status = "HARNESS_FAILED"
-                expected_verdict = "harness_failure"
-                expected_missing = sorted(set(
-                    list(activation.get("reason_codes") or [])
-                    + [_text(item.get("reason_code")) for item in assertion_harness]
-                ))
-                expected_demotion = ""
-            elif indeterminate:
-                # INDETERMINATE assertions are now reported as PROPERTY_HELD
-                # (the experiment executed but evidence was insufficient to
-                # prove a violation — this is a real execution outcome).
-                expected_status = "PROPERTY_HELD"
-                expected_verdict = "property_held"
-                expected_missing = sorted(set(
-                    list(activation.get("reason_codes") or [])
-                    + [_text(item.get("reason_code")) for item in indeterminate]
-                ))
-                expected_demotion = "assertion_evidence_indeterminate"
-            elif violations:
-                expected_status = "VIOLATION"
-                expected_verdict = "customer_deliverable_defect_candidate"
-                expected_missing = sorted(set(
-                    list(activation.get("reason_codes") or [])
-                ))
-                expected_demotion = ""
-            else:
-                expected_status = "PROPERTY_HELD"
-                expected_verdict = "property_held"
-                expected_missing = sorted(set(
-                    list(activation.get("reason_codes") or [])
-                ))
-                expected_demotion = ""
-        else:
-            expected_status = "BLOCKED"
-            expected_verdict = "blocked_experiment"
-            expected_missing = list(activation.get("reason_codes") or [])
-            expected_demotion = ""
+        if assertions:
+            raise ValueError("contract_oracle_blocked_assertions_present")
+        expected_status = "BLOCKED"
+        expected_verdict = "blocked_experiment"
+        expected_missing = list(activation.get("reason_codes") or [])
+        expected_demotion = ""
     elif assertion_harness:
         expected_status = "HARNESS_FAILED"
         expected_verdict = "harness_failure"
@@ -833,26 +750,14 @@ def evaluate_contract_oracle(
             missing_requirements=list(activation.get("reason_codes") or []),
         )
     if activation_status != "ACTIVE":
-        # When the experiment produced any observer evidence at all
-        # (including fixture, binding, or contract receipts), soft
-        # activation blockers should not prevent assertion evaluation.
-        has_real_evidence = (
-            bool(_list(ev.get("observer_receipts")))
-            or bool(_list(ev.get("contract_evidence_receipts")))
-            or bool(_list(ev.get("fixture_receipts")))
+        return _contract_oracle_receipt(
+            experiment=exp,
+            status="BLOCKED",
+            verdict="blocked_experiment",
+            activation=activation,
+            assertions=[],
+            missing_requirements=list(activation.get("reason_codes") or []),
         )
-        if not has_real_evidence:
-            return _contract_oracle_receipt(
-                experiment=exp,
-                status="BLOCKED",
-                verdict="blocked_experiment",
-                activation=activation,
-                assertions=[],
-                missing_requirements=list(activation.get("reason_codes") or []),
-            )
-        # Fall through — evaluate assertions despite BLOCKED activation.
-        # The activation receipt documents the soft gaps; the oracle receipt
-        # reflects what the assertions found in the available evidence.
 
     assertion_results: list[dict[str, Any]] = []
     try:
@@ -901,13 +806,10 @@ def evaluate_contract_oracle(
             )),
         )
     if indeterminate:
-        # INDETERMINATE means the assertion was evaluated but evidence was
-        # insufficient for a definitive conclusion. This is a real execution
-        # outcome (not a blocker) — treat as PROPERTY_HELD (no violation).
         return _contract_oracle_receipt(
             experiment=exp,
-            status="PROPERTY_HELD",
-            verdict="property_held",
+            status="INDETERMINATE",
+            verdict="indeterminate",
             activation=activation,
             assertions=assertion_results,
             missing_requirements=sorted(set(
@@ -999,52 +901,6 @@ def scenario_has_contract_activation(scenario: dict[str, Any]) -> bool:
     return recomputed.get("status") == "ACTIVE"
 
 
-def _source_grounded_permission_bypass(finding: dict[str, Any]) -> bool:
-    """Return True for direct, source-declared authorization bypass evidence."""
-    row = _dict(finding)
-    oracle = _dict(row.get("oracle"))
-    if _text(oracle.get("oracle_name") or oracle.get("name")).lower() != "permissionoracle":
-        return False
-    if _text(oracle.get("violated_rule")).lower() != "unauthorized_access":
-        return False
-    if row.get("blocked_by_safety_boundary"):
-        return False
-    source_kinds = {
-        _text(_dict(ref).get("kind")).lower()
-        for ref in _list(row.get("source_refs"))
-        if isinstance(ref, dict)
-    }
-    if not source_kinds.intersection({"permission_matrix", "api_permission_contract"}):
-        return False
-    evidence = _dict(row.get("evidence"))
-    request = _text(evidence.get("request"))
-    if not request or "{" in request or re.search(r"/:[A-Za-z_]", request):
-        return False
-    snapshot = _dict(row.get("before_after_snapshot"))
-    observed = _dict(snapshot.get("after"))
-    try:
-        status = int(observed.get("status_code") or 0)
-    except (TypeError, ValueError):
-        return False
-    if not 200 <= status < 300:
-        return False
-    method = _text(observed.get("method")).upper()
-    body = observed.get("body")
-    if method in {"GET", "HEAD"} and body in (None, {}, []):
-        return False
-    authenticated = bool(evidence.get("actor_token_present"))
-    login = _dict(snapshot.get("before"))
-    try:
-        login_status = int(login.get("status_code") or 0)
-    except (TypeError, ValueError):
-        login_status = 0
-    authenticated = authenticated or (
-        _text(login.get("action")).lower().startswith("login")
-        and 200 <= login_status < 300
-    )
-    return authenticated
-
-
 def demote_heuristic_business_oracle_finding(finding: dict[str, Any]) -> dict[str, Any]:
     """Downgrade legacy heuristic business oracle hits to internal clues."""
     row = _dict(finding)
@@ -1058,8 +914,6 @@ def demote_heuristic_business_oracle_finding(finding: dict[str, Any]) -> dict[st
         token in compact for token in HEURISTIC_BUSINESS_ORACLE_NAMES
     )
     if not matched:
-        return row
-    if _source_grounded_permission_bypass(row):
         return row
     has_control = bool(evidence.get("control_succeeded") or evidence.get("authorized_control") or evidence.get("control_observation"))
     has_effect = contract_effect_evidence_present(evidence)

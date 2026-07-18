@@ -22,7 +22,7 @@ def test_cleanup_marks_put_as_snapshot_restore_when_no_compensator() -> None:
     assert _cleanup_is_schedulable(req) is True
 
 
-def test_cleanup_marks_post_action_with_terminal_body_field() -> None:
+def test_cleanup_keeps_post_action_with_terminal_body_field_unschedulable() -> None:
     op = {
         "id": "op-status",
         "method": "POST",
@@ -31,8 +31,8 @@ def test_cleanup_marks_post_action_with_terminal_body_field() -> None:
         "request_example": {"status": "DISABLED", "reason": "policy"},
     }
     req = _cleanup_requirement(op, [op], [])
-    assert req["mode"] == "snapshot_restore"
-    assert _cleanup_is_schedulable(req) is True
+    assert req == {"required": True, "mode": "reverse_order"}
+    assert _cleanup_is_schedulable(req) is False
 
 
 def test_cleanup_keeps_uncompensated_action_post_unschedulable() -> None:
@@ -48,7 +48,7 @@ def test_cleanup_keeps_uncompensated_action_post_unschedulable() -> None:
     assert _cleanup_is_schedulable(req) is False
 
 
-def test_cleanup_skips_when_source_relations_declare_no_entity_mutation() -> None:
+def test_cleanup_does_not_treat_permits_relation_as_no_entity_effect() -> None:
     op = {
         "id": "op-login",
         "method": "POST",
@@ -65,9 +65,72 @@ def test_cleanup_skips_when_source_relations_declare_no_entity_mutation() -> Non
         }
     ]
     req = _cleanup_requirement(op, [op], relations)
-    assert req["required"] is False
-    assert req.get("reason") == "no_declared_entity_effect"
+    assert req == {"required": True, "mode": "reverse_order"}
+    assert _cleanup_is_schedulable(req) is False
+
+
+def test_cleanup_infers_only_identity_bound_delete_for_created_resource() -> None:
+    create = {
+        "id": "op-create",
+        "method": "POST",
+        "path": "/api/resources",
+        "read_write": "write",
+    }
+    delete = {
+        "id": "op-delete",
+        "method": "DELETE",
+        "path": "/api/resources/{resourceId}",
+        "read_write": "write",
+    }
+
+    req = _cleanup_requirement(create, [create, delete], [])
+
+    assert req == {
+        "required": True,
+        "mode": "reverse_order",
+        "operation_ref": "op-delete",
+    }
     assert _cleanup_is_schedulable(req) is True
+
+
+def test_cleanup_rejects_collection_delete_as_create_compensator() -> None:
+    create = {
+        "id": "op-create",
+        "method": "POST",
+        "path": "/api/resources",
+        "read_write": "write",
+    }
+    collection_delete = {
+        "id": "op-archive",
+        "method": "DELETE",
+        "path": "/api/resources/archive",
+        "read_write": "write",
+    }
+
+    req = _cleanup_requirement(create, [create, collection_delete], [])
+
+    assert req == {"required": True, "mode": "reverse_order"}
+    assert _cleanup_is_schedulable(req) is False
+
+
+def test_cleanup_does_not_infer_recreation_for_delete_without_source_relation() -> None:
+    delete = {
+        "id": "op-delete",
+        "method": "DELETE",
+        "path": "/api/resources/{resourceId}",
+        "read_write": "write",
+    }
+    create = {
+        "id": "op-create",
+        "method": "POST",
+        "path": "/api/resources",
+        "read_write": "write",
+    }
+
+    req = _cleanup_requirement(delete, [delete, create], [])
+
+    assert req == {"required": True, "mode": "reverse_order"}
+    assert _cleanup_is_schedulable(req) is False
 
 
 def test_cleanup_keeps_entity_producing_write_required_without_compensator() -> None:

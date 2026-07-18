@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .contract_oracles import contract_activation_requirements
+from .real_id_resolver import bind_entity_fields  # compatibility re-export
 from .sandbox_write_executor import (  # noqa: F401
     _http_request,
     execute_governed_control_write,
@@ -163,34 +164,25 @@ def execute_one_experiment(
         campaign_id=resolved_campaign_id,
     )
     if fixture_state.get("status") == "terminal":
-        # Binding/fixture failures should not prevent the experiment from
-        # executing. Extract available bindings and proceed — unresolved
-        # placeholders will produce real HTTP error responses (4xx) that
-        # generate observer evidence.
-        steps_out = list(fixture_state.get("result", {}).get("steps") or [])
-        fixture_receipts = list(fixture_state.get("result", {}).get("fixture_receipts") or [])
-        binding_materialization_receipts = list(
-            fixture_state.get("result", {}).get("binding_materialization_receipts") or []
-        )
-        runtime_bindings = dict(
-            fixture_state.get("result", {}).get("runtime_bindings") or
-            fixture_state.get("runtime_bindings") or {}
-        )
-        pending_fixture_cleanups = []
-        cleanup_failures = 0
-        contract_evidence_receipts = []
-    else:
-        steps_out = list(fixture_state.get("steps_out") or [])
-        fixture_receipts = list(fixture_state.get("fixture_receipts") or [])
-        binding_materialization_receipts = list(
-            fixture_state.get("binding_materialization_receipts") or []
-        )
-        runtime_bindings = dict(fixture_state.get("runtime_bindings") or {})
-        pending_fixture_cleanups = list(fixture_state.get("pending_fixture_cleanups") or [])
-        cleanup_failures = int(fixture_state.get("cleanup_failures") or 0)
-        contract_evidence_receipts = list(
-            fixture_state.get("contract_evidence_receipts") or []
-        )
+        return dict(fixture_state.get("result") or {
+            "schema_version": "qualibug.experiment-execution.v1",
+            "experiment_id": eid,
+            "obligation_id": oid,
+            "status": "BLOCKED",
+            "reason_code": "BLOCKED_MISSING_FIXTURE",
+            "finding": None,
+        })
+    steps_out = list(fixture_state.get("steps_out") or [])
+    fixture_receipts = list(fixture_state.get("fixture_receipts") or [])
+    binding_materialization_receipts = list(
+        fixture_state.get("binding_materialization_receipts") or []
+    )
+    runtime_bindings = dict(fixture_state.get("runtime_bindings") or {})
+    pending_fixture_cleanups = list(fixture_state.get("pending_fixture_cleanups") or [])
+    cleanup_failures = int(fixture_state.get("cleanup_failures") or 0)
+    contract_evidence_receipts = list(
+        fixture_state.get("contract_evidence_receipts") or []
+    )
 
 
 
@@ -212,7 +204,6 @@ def execute_one_experiment(
         base_url=base_url,
         runtime_contract=runtime_contract,
         observations=observations,
-        resolver_token=resolver_token,
     )
     steps_out.extend(list(barrier_result.get("steps") or []))
     contract_evidence_receipts.extend(
@@ -290,10 +281,6 @@ def execute_one_experiment(
         cleanup_result.get("contract_evidence_receipts") or contract_evidence_receipts
     )
     cleanup_failures = int(cleanup_result.get("cleanup_failures") or 0)
-    accepted_governed_writes = list(
-        cleanup_result.get("accepted_governed_writes") or []
-    )
-
     return finalize_experiment_execution(
         exp=exp,
         steps_out=steps_out,
@@ -302,7 +289,6 @@ def execute_one_experiment(
         fixture_receipts=fixture_receipts,
         binding_materialization_receipts=binding_materialization_receipts,
         pre_transport_block_reasons=pre_transport_block_reasons,
-        accepted_governed_writes=accepted_governed_writes,
         cleanup_failures=cleanup_failures,
         runtime_bindings=runtime_bindings,
         ops=ops,

@@ -87,15 +87,8 @@ def _validation_protocol_material(
     control = source_request_example(operation)
     schema = _request_body_schema(operation)
     if not control or not schema:
-        # No documented request body — emit a minimal body-only mutation
-        # so the experiment can compile and execute (http_response observer
-        # alone provides sufficient evidence). The absence of a source example
-        # is recorded as a coverage gap, not a hard block.
-        return (
-            {"_synthetic": True},
-            {"_synthetic": False},
-            {"json_path": "$._synthetic", "constraint": "type:boolean", "source": "protocol_fallback"},
-        )
+        # An undocumented mutation cannot become an executable request.
+        return {}, {}, {}
     properties = _dict(schema.get("properties"))
 
     explicit_targets: list[str] = []
@@ -364,7 +357,7 @@ def compile_family_protocol(
         if method in {"POST", "PUT", "PATCH"} and not body:
             return {
                 "status": "BLOCKED",
-                "reason_code": "BLOCKED_MISSING_FIXTURE",
+                "reason_code": "BLOCKED_MISSING_BINDING",
                 "detail": "temporal_requires_source_request_example",
             }
         expression = _dict(property_spec.get("expression"))
@@ -447,7 +440,7 @@ def compile_family_protocol(
         if not mutation:
             return {
                 "status": "BLOCKED",
-                "reason_code": "BLOCKED_MISSING_FIXTURE",
+                "reason_code": "BLOCKED_MISSING_BINDING",
                 "detail": "validation_requires_source_example_and_request_schema",
             }
         return {

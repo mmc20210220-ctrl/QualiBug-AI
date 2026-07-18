@@ -26,7 +26,6 @@ from .experiment_compiler_support import (
     _inverse_delta_cleanup_spec,
     _is_unresolvable_actor_secret_ref,
     _operation_entity_refs,
-    _post_action_can_restore_named_terminal_field,
     _resolve_state_compile_context,
     _source_declared_control_fixture_binding,
     _source_request_example,
@@ -98,8 +97,13 @@ def compile_experiment_for_obligation(
             )
         )
         if state_reason:
-            # BLOCKED_MISSING_BINDING/ACTOR suppressed: runtime will handle
-            pass
+            return blocked_experiment(
+                oid,
+                "BLOCKED_MISSING_BINDING"
+                if "actor" not in state_reason
+                else "BLOCKED_MISSING_ACTOR",
+                state_reason,
+            )
         obl = {
             **obl,
             "property": prop,
@@ -227,11 +231,6 @@ def compile_experiment_for_obligation(
         if is_write
         else []
     )
-    if is_write and not write_observers:
-        # Allow compilation; the write response itself serves as observation.
-        # Mark as deferred observation rather than hard-blocking.
-        write_observers = []
-
     binding_plan = build_binding_plan(
         operation=primary_op,
         obligation=obl,
@@ -299,8 +298,11 @@ def compile_experiment_for_obligation(
                     "value_fingerprint": "",
                 })
             else:
-                # BLOCKED_MISSING_BINDING suppressed: owner_identity_resolver
-                pass
+                return blocked_experiment(
+                    oid,
+                    "BLOCKED_MISSING_BINDING",
+                    "owner_identity_resolver",
+                )
     if family == "state":
         state_token = _state_match_token(prop.get("from_state"))
         normalized_path = normalize_path_placeholders(
@@ -324,22 +326,12 @@ def compile_experiment_for_obligation(
                 binding["required_state"] = _text(prop.get("from_state"))
     unresolved = unresolved_placeholders(primary_op, binding_plan)
     if unresolved:
-        # Unresolved placeholders at compile time are not fatal.
-        # Runtime binding resolution (including auto-fixture) will handle them;
-        # if still unresolved, the HTTP request will produce a real error
-        # response that generates observer evidence.
-        pass
-    # Permit-only reversible writes observe via http_response; they must not be
-    # starved solely because no separate effect-read observer is declared yet.
-    # Writes that already declare http_response as a required observer may also
-    # proceed — the write response itself provides evidence for authorization,
-    # isolation, and validation judgments without a separate effect observer.
-    if (
-        is_write
-        and not write_observers
-        and _text(prop.get("template")) != "permitted_operation_invocation"
-        and "http_response" not in required_observers
-    ):
+        return blocked_experiment(
+            oid,
+            "BLOCKED_MISSING_BINDING",
+            ",".join(unresolved[:8]),
+        )
+    if is_write and not write_observers:
         return blocked_experiment(
             oid,
             "BLOCKED_MISSING_OBSERVER",
@@ -436,11 +428,7 @@ def compile_experiment_for_obligation(
             }]
         elif (
             primary_path.startswith("/")
-            and (
-                primary_method in {"PUT", "PATCH"}
-                or _post_action_can_restore_named_terminal_field(primary_op)
-                or _text(cleanup_req.get("mode")) == "snapshot_restore"
-            )
+            and primary_method in {"PUT", "PATCH"}
             and (
                 not cleanup_op
                 # create→DELETE compensators must not destroy pre-existing
@@ -636,18 +624,11 @@ def compile_experiment_for_obligation(
     }
     if effect_observer_ids:
         if not write_observers:
-            if _text(prop.get("template")) == "permitted_operation_invocation":
-                observers = [
-                    observer
-                    for observer in observers
-                    if _text(observer.get("observer_id")) not in effect_observer_ids
-                ]
-            else:
-                return blocked_experiment(
-                    oid,
-                    "BLOCKED_MISSING_OBSERVER",
-                    ",".join(sorted(effect_observer_ids)),
-                )
+            return blocked_experiment(
+                oid,
+                "BLOCKED_MISSING_OBSERVER",
+                ",".join(sorted(effect_observer_ids)),
+            )
         else:
             for observer in observers:
                 if _text(observer.get("observer_id")) in effect_observer_ids:

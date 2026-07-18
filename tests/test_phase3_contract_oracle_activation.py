@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+import ai_test_asset_center.customer_delivery_gate_v2 as delivery_gate_v2
 from ai_test_asset_center.contract_oracles import (
     ACTIVATION_RECEIPT_SCHEMA,
     CONTRACT_ORACLE_RECEIPT_SCHEMA,
@@ -17,6 +18,10 @@ from ai_test_asset_center.contract_oracles import (
     validate_contract_oracle_receipt,
 )
 from ai_test_asset_center.observer_contracts import build_observer_receipt
+from ai_test_asset_center.customer_delivery_gate_v2 import (
+    DeliveryGateV2Error,
+    _validate_active_chain,
+)
 
 
 SOURCE_REFS = [
@@ -154,6 +159,262 @@ def test_complete_typed_receipt_chain_activates_and_emits_violation() -> None:
     assert validate_contract_oracle_receipt(oracle) == oracle
 
 
+def test_delivery_gate_rejects_violation_with_blocked_activation() -> None:
+    evidence = _evidence()
+    oracle = evaluate_contract_oracle(experiment=_experiment(), evidence=evidence)
+    oracle["activation_receipt"]["status"] = "BLOCKED"
+
+    with pytest.raises(
+        DeliveryGateV2Error,
+        match="delivery_oracle_semantics_invalid",
+    ):
+        _validate_active_chain(
+            execution={"observation_receipt_ids": []},
+            contracts=evidence["contract_evidence_receipts"],
+            observers=evidence["observer_receipts"],
+            oracle=oracle,
+            reproduction={},
+        )
+
+
+def test_delivery_gate_rejects_cleanup_activation_reference_mismatch() -> None:
+    evidence = _evidence()
+    oracle = evaluate_contract_oracle(experiment=_experiment(), evidence=evidence)
+    oracle["activation_receipt"]["verified_receipt_ids"]["cleanup"] = [
+        "contract_unrelated_cleanup"
+    ]
+
+    with pytest.raises(
+        DeliveryGateV2Error,
+        match="delivery_cleanup_activation_reference_mismatch",
+    ):
+        _validate_active_chain(
+            execution={"observation_receipt_ids": []},
+            contracts=evidence["contract_evidence_receipts"],
+            observers=evidence["observer_receipts"],
+            oracle=oracle,
+            reproduction={},
+        )
+
+
+def test_delivery_gate_rejects_observer_activation_reference_mismatch() -> None:
+    evidence = _evidence()
+    oracle = evaluate_contract_oracle(experiment=_experiment(), evidence=evidence)
+    oracle["activation_receipt"]["verified_receipt_ids"]["observer"] = [
+        "observer_unrelated"
+    ]
+
+    with pytest.raises(
+        DeliveryGateV2Error,
+        match="delivery_observer_activation_reference_mismatch",
+    ):
+        _validate_active_chain(
+            execution={"observation_receipt_ids": []},
+            contracts=evidence["contract_evidence_receipts"],
+            observers=evidence["observer_receipts"],
+            oracle=oracle,
+            reproduction={},
+        )
+
+
+def test_reproduction_requires_exact_obligation_lineage(monkeypatch) -> None:
+    monkeypatch.setattr(
+        delivery_gate_v2,
+        "validate_delivery_execution_receipt",
+        lambda value: value,
+    )
+    monkeypatch.setattr(
+        delivery_gate_v2,
+        "validate_contract_oracle_receipt",
+        lambda value: value,
+    )
+    execution = {
+        "campaign_id": "campaign-1",
+        "obligation_id": "obl-base__variant-1",
+        "experiment_id": "experiment-1",
+        "execution_id": "execution-1",
+        "evidence_id": "evidence-1",
+        "observation_receipt_ids": ["observation-1"],
+    }
+    oracle = {
+        "campaign_id": "campaign-1",
+        "obligation_id": "obl-base",
+        "experiment_id": "experiment-1",
+        "execution_id": "execution-1",
+        "receipt_id": "oracle-1",
+        "status": "BLOCKED",
+        "activation_receipt": {"required": {"control": [], "treatment": []}},
+    }
+
+    with pytest.raises(
+        DeliveryGateV2Error,
+        match="reproduction_oracle_lineage_mismatch",
+    ):
+        delivery_gate_v2.build_reproduction_receipt(
+            execution_receipt=execution,
+            steps=[],
+            oracle_receipt=oracle,
+            source_refs=SOURCE_REFS,
+        )
+
+
+def test_delivery_evidence_requires_exact_obligation_lineage(monkeypatch) -> None:
+    monkeypatch.setattr(
+        delivery_gate_v2,
+        "validate_contract_evidence_receipt",
+        lambda value: value,
+    )
+    monkeypatch.setattr(
+        delivery_gate_v2,
+        "validate_observer_receipt",
+        lambda value: value,
+    )
+    monkeypatch.setattr(
+        delivery_gate_v2,
+        "validate_contract_oracle_receipt",
+        lambda value: value,
+    )
+    monkeypatch.setattr(
+        delivery_gate_v2,
+        "validate_reproduction_receipt",
+        lambda value: value,
+    )
+    lineage = {
+        "campaign_id": "campaign-1",
+        "execution_id": "execution-1",
+        "experiment_id": "experiment-1",
+        "obligation_id": "obl-base__variant-1",
+    }
+    contract = {**lineage, "receipt_id": "contract-1"}
+    observer = {
+        "campaign_id": "campaign-1",
+        "execution_id": "execution-1",
+        "receipt_id": "observer-1",
+    }
+    oracle = {
+        **lineage,
+        "obligation_id": "obl-base",
+        "receipt_id": "oracle-1",
+    }
+    reproduction = {
+        **lineage,
+        "receipt_id": "reproduction-1",
+        "oracle_receipt_id": "oracle-1",
+    }
+
+    with pytest.raises(
+        DeliveryGateV2Error,
+        match="oracle_execution_lineage_mismatch",
+    ):
+        delivery_gate_v2._validate_receipt_collections(
+            execution={**lineage, "oracle_receipt_id": "oracle-1"},
+            contract_evidence_receipts=[contract],
+            observer_receipts=[observer],
+            oracle_receipt=oracle,
+            reproduction_receipt=reproduction,
+        )
+
+
+def test_reproduction_never_synthesizes_observation_receipt_identity(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        delivery_gate_v2,
+        "validate_delivery_execution_receipt",
+        lambda value: value,
+    )
+    monkeypatch.setattr(
+        delivery_gate_v2,
+        "validate_contract_oracle_receipt",
+        lambda value: value,
+    )
+    execution = {
+        "campaign_id": "campaign-1",
+        "obligation_id": "obligation-1",
+        "experiment_id": "experiment-1",
+        "execution_id": "execution-1",
+        "evidence_id": "evidence-1",
+        "observation_receipt_ids": ["observation-1"],
+    }
+    oracle = {
+        "campaign_id": "campaign-1",
+        "obligation_id": "obligation-1",
+        "experiment_id": "experiment-1",
+        "execution_id": "execution-1",
+        "receipt_id": "oracle-1",
+        "status": "BLOCKED",
+        "activation_receipt": {"required": {"control": [], "treatment": []}},
+    }
+
+    with pytest.raises(
+        DeliveryGateV2Error,
+        match="reproduction_observation_receipt_missing",
+    ):
+        delivery_gate_v2.build_reproduction_receipt(
+            execution_receipt=execution,
+            steps=[{
+                "phase": "treatment",
+                "step_id": "treatment-1",
+                "operation_ref": "read-resource",
+                "method": "GET",
+                "path": "/resources/resource-1",
+                "path_template": "/resources/{resourceId}",
+                "status_code": 200,
+            }],
+            oracle_receipt=oracle,
+            source_refs=SOURCE_REFS,
+        )
+
+
+def test_reproduction_never_synthesizes_request_semantics(monkeypatch) -> None:
+    monkeypatch.setattr(
+        delivery_gate_v2,
+        "validate_delivery_execution_receipt",
+        lambda value: value,
+    )
+    monkeypatch.setattr(
+        delivery_gate_v2,
+        "validate_contract_oracle_receipt",
+        lambda value: value,
+    )
+    execution = {
+        "campaign_id": "campaign-1",
+        "obligation_id": "obligation-1",
+        "experiment_id": "experiment-1",
+        "execution_id": "execution-1",
+        "evidence_id": "evidence-1",
+        "observation_receipt_ids": ["observation-1"],
+    }
+    oracle = {
+        "campaign_id": "campaign-1",
+        "obligation_id": "obligation-1",
+        "experiment_id": "experiment-1",
+        "execution_id": "execution-1",
+        "receipt_id": "oracle-1",
+        "status": "BLOCKED",
+        "activation_receipt": {"required": {"control": [], "treatment": []}},
+    }
+
+    with pytest.raises(
+        DeliveryGateV2Error,
+        match="reproduction_request_semantics_missing",
+    ):
+        delivery_gate_v2.build_reproduction_receipt(
+            execution_receipt=execution,
+            steps=[{
+                "phase": "treatment",
+                "step_id": "treatment-1",
+                "operation_ref": "read-resource",
+                "method": "GET",
+                "path": "/resources/resource-1",
+                "status_code": 200,
+                "observation_receipt_id": "observation-1",
+            }],
+            oracle_receipt=oracle,
+            source_refs=SOURCE_REFS,
+        )
+
+
 @pytest.mark.parametrize(
     ("plan_key", "reason_code"),
     [
@@ -210,6 +471,43 @@ def test_missing_required_receipt_blocks_oracle(kind: str, subject_id: str) -> N
     assert any(code.startswith(f"MISSING_{kind.upper()}_RECEIPT") for code in activation["reason_codes"])
     assert oracle["status"] == "BLOCKED"
     assert oracle["customer_deliverable_candidate"] is False
+
+
+def test_relaxed_family_cannot_synthesize_missing_receipt_verification() -> None:
+    experiment = _experiment()
+    experiment["assertions"][0]["kind"] = "idempotency"
+    evidence = _evidence()
+    evidence["contract_evidence_receipts"] = [
+        receipt
+        for receipt in evidence["contract_evidence_receipts"]
+        if not (
+            receipt["kind"] == "control"
+            and receipt["subject_id"] == "control-1"
+        )
+    ]
+
+    activation = build_contract_oracle_activation_receipt(
+        experiment=experiment,
+        evidence=evidence,
+    )
+
+    assert activation["status"] == "BLOCKED"
+    assert "MISSING_CONTROL_RECEIPT:control-1" in activation["reason_codes"]
+    assert activation["verified_receipt_ids"]["control"] == []
+
+
+def test_relaxed_family_still_requires_source_lineage() -> None:
+    experiment = _experiment()
+    experiment["assertions"][0]["kind"] = "idempotency"
+    experiment["source_refs"] = []
+
+    activation = build_contract_oracle_activation_receipt(
+        experiment=experiment,
+        evidence=_evidence(),
+    )
+
+    assert activation["status"] == "BLOCKED"
+    assert "SOURCE_REFS_MISSING" in activation["reason_codes"]
 
 
 def test_boolean_flags_and_observer_ids_cannot_spoof_activation() -> None:

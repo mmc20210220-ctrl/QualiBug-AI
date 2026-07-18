@@ -25,7 +25,6 @@ from .experiment_runtime_support import (
     _resolve_token,
     _unresolved_body_placeholders,
     _unresolved_path_placeholders,
-    stress_concurrency_quantity_bodies,
 )
 from .runtime_binding_materializer import (
     materialize_body_template as _materialize_body_template,
@@ -56,7 +55,6 @@ def execute_barrier_plans(
     base_url: str,
     runtime_contract: dict[str, Any],
     observations: dict[str, Any],
-    resolver_token: str = "",
 ) -> dict[str, Any]:
     """Execute barrier-grouped steps and return sequential leftovers identity.
 
@@ -66,7 +64,6 @@ def execute_barrier_plans(
     contract_evidence_receipts: list[dict[str, Any]] = []
     request_bodies_for_cleanup: dict[str, Any] = {}
     pre_transport_block_reasons: list[str] = []
-    stress_steps: list[dict[str, Any]] = []
 
     def _barrier_timeline_event(
         events: list[dict[str, Any]],
@@ -165,22 +162,11 @@ def execute_barrier_plans(
             actor_identity=_text(actor.get("role") or actor_ref),
         )
         if not allowed:
-            # Record sandbox block but DO NOT skip the step.
-            # A real HTTP response (even an error) generates observer evidence.
-            pass
-        observation_path = _declared_observation_path(
-            path_template,
-            ops,
-            runtime_bindings=runtime_bindings,
-            request_body=request_body,
-        )
-        if not observation_path and method in _WRITE_METHODS:
-            # No source-declared effect reader exists for this write path.
-            # The write response itself (http_response observer) provides
-            # sufficient evidence — do not block the step.
-            observation_path = path_template
             return {
-                "harness_error": True,
+                "harness_error": False,
+                "pre_transport_reason": (
+                    f"BLOCKED_TARGET_POLICY:{_text(reason)}"
+                ),
                 "contract_receipt": build_contract_evidence_receipt(
                     kind=phase,
                     experiment_id=eid,
@@ -188,7 +174,36 @@ def execute_barrier_plans(
                     campaign_id=resolved_campaign_id,
                     execution_id=resolved_execution_id,
                     subject_id=subject_id,
-                    status="FAILED",
+                    status="BLOCKED",
+                    evidence={"reason_code": _text(reason)},
+                ),
+                "step": {
+                    "phase": phase,
+                    "step_id": subject_id,
+                    "status": "blocked_write",
+                    "reason": reason,
+                    "method": method,
+                    "path": path,
+                },
+            }
+        observation_path = _declared_observation_path(
+            path_template,
+            ops,
+            runtime_bindings=runtime_bindings,
+            request_body=request_body,
+        )
+        if not observation_path:
+            return {
+                "harness_error": False,
+                "pre_transport_reason": "BLOCKED_MISSING_OBSERVER",
+                "contract_receipt": build_contract_evidence_receipt(
+                    kind=phase,
+                    experiment_id=eid,
+                    obligation_id=oid,
+                    campaign_id=resolved_campaign_id,
+                    execution_id=resolved_execution_id,
+                    subject_id=subject_id,
+                    status="BLOCKED",
                     evidence={"reason_code": "BLOCKED_MISSING_OBSERVER"},
                 ),
                 "step": {
@@ -368,6 +383,7 @@ def execute_barrier_plans(
         item: dict[str, Any],
         *,
         reason: str,
+        reason_code: str = "BLOCKED_MISSING_BINDING",
         unresolved_path_tokens: list[str] | None = None,
         unresolved_body_tokens: list[str] | None = None,
     ) -> dict[str, Any]:
@@ -389,7 +405,7 @@ def execute_barrier_plans(
             "path_template": path_template,
             "response_observed": False,
             "request_reached_transport": False,
-            "reason_code": "BLOCKED_MISSING_BINDING",
+            "reason_code": reason_code,
             "detail": reason,
             "barrier_group": _text(item.get("barrier_group")),
             "barrier_participant": participant,
@@ -418,7 +434,7 @@ def execute_barrier_plans(
                 "status": "blocked_write"
                 if method in _WRITE_METHODS
                 else "blocked_request",
-                "reason": "BLOCKED_MISSING_BINDING",
+                "reason": reason_code,
                 "detail": reason,
                 "method": method,
                 "path": path,
@@ -434,7 +450,27 @@ def execute_barrier_plans(
 
     def _barrier_pretransport_block(item: dict[str, Any]) -> dict[str, Any] | None:
         step = _dict(item.get("step"))
-        op = ops.get(_text(step.get("operation_ref"))) or {}
+        actor_ref = _text(step.get("actor_ref"))
+        if not actor_ref or actor_ref not in actors:
+            reason = f"actor_identity_missing:{actor_ref or '<empty>'}"
+            reason_code = "BLOCKED_MISSING_ACTOR"
+            pre_transport_block_reasons.append(f"{reason_code}:{reason}")
+            return _barrier_block_row(
+                item,
+                reason=reason,
+                reason_code=reason_code,
+            )
+        op_ref = _text(step.get("operation_ref"))
+        if not op_ref or op_ref not in ops:
+            reason = f"operation_identity_missing:{op_ref or '<empty>'}"
+            reason_code = "BLOCKED_MISSING_OPERATION"
+            pre_transport_block_reasons.append(f"{reason_code}:{reason}")
+            return _barrier_block_row(
+                item,
+                reason=reason,
+                reason_code=reason_code,
+            )
+        op = ops[op_ref]
         method = _text(op.get("method") or "GET").upper()
         path = _materialize_path(
             _text(op.get("path") or op.get("raw_path")),
@@ -485,6 +521,12 @@ def execute_barrier_plans(
         for group_id, group_items in grouped.items():
             if len(group_items) < 2:
                 observations["harness_error"] = True
+                reason = f"barrier_group_participant_count_invalid:{group_id}:{len(group_items)}"
+                pre_transport_block_reasons.append(reason)
+                for item in group_items:
+                    row = _barrier_block_row(item, reason=reason)
+                    contract_evidence_receipts.append(_dict(row.get("contract_receipt")))
+                    executed_steps.append(_dict(row.get("step")))
                 continue
             timeline: list[dict[str, Any]] = []
             timeline_lock = threading.Lock()
@@ -497,28 +539,6 @@ def execute_barrier_plans(
                     int(item.get("index") or 0),
                 ),
             )
-            stress_receipt = stress_concurrency_quantity_bodies(
-                steps=[_dict(item.get("step")) for item in ordered_items],
-                operations=ops,
-                runtime_bindings=runtime_bindings,
-                base_url=base_url,
-                actor_token=resolver_token,
-            )
-            if _text(stress_receipt.get("status")) == "APPLIED":
-                observations["concurrency_quantity_stress"] = stress_receipt
-                stress_steps.append({
-                    "phase": "concurrency_quantity_stress",
-                    "status_code": 200,
-                    "path": _text(stress_receipt.get("observation_path")),
-                    "body": {
-                        "field": stress_receipt.get("field"),
-                        "capacity_field": stress_receipt.get("capacity_field"),
-                        "capacity": stress_receipt.get("capacity"),
-                        "original_qty": stress_receipt.get("original_qty"),
-                        "stressed_qty": stress_receipt.get("stressed_qty"),
-                        "participant_count": stress_receipt.get("participant_count"),
-                    },
-                })
             preblocked_by_subject = {
                 _text(item.get("subject_id")): row
                 for item in ordered_items
@@ -561,6 +581,9 @@ def execute_barrier_plans(
                     continue
                 if row.get("harness_error"):
                     observations["harness_error"] = True
+                pre_transport_reason = _text(row.get("pre_transport_reason"))
+                if pre_transport_reason:
+                    pre_transport_block_reasons.append(pre_transport_reason)
                 contract_evidence_receipts.append(_dict(row.get("contract_receipt")))
                 step_out = _dict(row.get("step"))
                 executed_steps.append(step_out)
@@ -595,10 +618,8 @@ def execute_barrier_plans(
     executed_barrier_steps: list[dict[str, Any]] = []
     if barrier_plan_items:
         executed_barrier_steps.extend(_exec_barrier_groups(barrier_plan_items))
-    # Stress receipts are recorded during group setup, before writes.
-    steps = [*stress_steps, *executed_barrier_steps]
     return {
-        "steps": steps,
+        "steps": executed_barrier_steps,
         "consumed_barrier_steps": consumed_barrier_steps,
         "contract_evidence_receipts": contract_evidence_receipts,
         "request_bodies_for_cleanup": request_bodies_for_cleanup,

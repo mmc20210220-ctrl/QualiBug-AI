@@ -41,7 +41,7 @@ def _wire_probe_inputs(monkeypatch, payload: dict[str, Any]) -> None:
     monkeypatch.setattr(slices.urllib.request, "urlopen", lambda _request, timeout=10: _FakeResponse(payload))
 
 
-def test_disabled_login_probe_outputs_customer_deliverable_evidence(tmp_path, monkeypatch) -> None:
+def test_disabled_login_probe_stays_diagnostic_without_formal_oracle_chain(tmp_path, monkeypatch) -> None:
     _wire_probe_inputs(monkeypatch, {"token": "runtime-secret-token", "user": {"id": "u-1"}})
 
     findings = slices.probe_disabled_account_logins(
@@ -55,7 +55,7 @@ def test_disabled_login_probe_outputs_customer_deliverable_evidence(tmp_path, mo
 
     assert len(findings) == 1
     finding = findings[0]
-    assert is_customer_deliverable_defect(finding)
+    assert not is_customer_deliverable_defect(finding)
     assert finding["raw_evidence"]["has_real_evidence"] is True
     assert finding["evidence_quality"]["level"] == "validated"
     assert finding["evidence_status"]["business_evidence_status"] == "VALIDATED"

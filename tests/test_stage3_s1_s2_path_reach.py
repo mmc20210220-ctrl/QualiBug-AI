@@ -65,15 +65,15 @@ def _behavior_ir() -> dict:
     }
 
 
-def test_preflight_allows_permit_only_write_without_effect_read() -> None:
+def test_preflight_blocks_permit_only_write_without_effect_read() -> None:
     ok, reason, detail = preflight_experiment_executable(
         _permit_only_write_experiment(),
         behavior_ir=_behavior_ir(),
         actor_tokens={"secret_ref:buyer": "token"},
     )
-    assert ok is True, (reason, detail)
-    assert reason == ""
-    assert detail == ""
+    assert ok is False
+    assert reason == "BLOCKED_MISSING_OBSERVER"
+    assert detail == "write_observer:op-create"
 
 
 def test_preflight_still_blocks_non_permit_write_without_effect_read() -> None:

@@ -291,6 +291,14 @@ def test_executor_does_not_emit_finding_for_empty_2xx_pair(
         "ai_test_asset_center.experiment_executor._http_request",
         lambda *_args, **_kwargs: next(responses),
     )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_plan_executor._http_request",
+        lambda *_args, **_kwargs: next(responses),
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_runtime_support._http_request",
+        lambda *_args, **_kwargs: next(responses),
+    )
 
     result = execute_one_experiment(
         _authorization_experiment(),
@@ -313,7 +321,7 @@ def test_executor_does_not_emit_finding_for_empty_2xx_pair(
         },
     )
 
-    assert result["status"] == "BLOCKED"
+    assert result["status"] == "BLOCKED", json.dumps(result, default=str, indent=2)
     assert result["reason_code"] == "BLOCKED_MISSING_OBSERVER"
     assert result["finding"] is None
     comparison = next(
@@ -446,7 +454,7 @@ def test_authorization_write_blocks_without_business_effect_observer() -> None:
     assert experiment["compile_receipt"]["detail"] == "write_observer"
 
 
-def test_executor_materializes_response_bound_write_observer_from_create_response(
+def test_executor_blocks_response_only_write_observer_before_create_transport(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -557,6 +565,14 @@ def test_executor_materializes_response_bound_write_observer_from_create_respons
         fake_http,
     )
     monkeypatch.setattr(
+        "ai_test_asset_center.experiment_plan_executor._http_request",
+        fake_http,
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_runtime_support._http_request",
+        fake_http,
+    )
+    monkeypatch.setattr(
         "ai_test_asset_center.sandbox_write_executor._http_request",
         fake_http,
     )
@@ -579,21 +595,9 @@ def test_executor_materializes_response_bound_write_observer_from_create_respons
         actor_tokens={"secret_ref:owner": "owner-token"},
     )
 
-    assert result["status"] == "EXECUTED", result
-    assert result["finding"] is None
-    effect_receipt = next(
-        receipt
-        for receipt in result["observer_receipts"]
-        if receipt["observer_id"] == "business_effect"
-    )
-    assert effect_receipt["status"] == "OBSERVED"
-    assert effect_receipt["evidence"]["control_effect_count"] == 1
-    assert effect_receipt["evidence"]["treatment_effect_count"] == 0
-    assert any(
-        step.get("phase") == "control_response_bound_effect_observation"
-        and step.get("path") == "/resources/r-1"
-        for step in result["steps"]
-    )
+    assert result["status"] == "BLOCKED", json.dumps(result, default=str, indent=2)
+    assert result["reason_code"] == "BLOCKED_MISSING_OBSERVER"
+    assert all(step["status"] == "blocked_write" for step in result["steps"])
     assert resources == {}
 
 
@@ -643,6 +647,14 @@ def test_executor_uses_same_resource_receipt_for_violation(
         "ai_test_asset_center.experiment_executor._http_request",
         lambda *_args, **_kwargs: next(responses),
     )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_plan_executor._http_request",
+        lambda *_args, **_kwargs: next(responses),
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_runtime_support._http_request",
+        lambda *_args, **_kwargs: next(responses),
+    )
 
     result = execute_one_experiment(
         _authorization_experiment(),
@@ -650,7 +662,7 @@ def test_executor_uses_same_resource_receipt_for_violation(
         root=tmp_path,
         project="project",
         base_url="http://target.invalid",
-        runtime_contract={"environment_type": "test"},
+        runtime_contract={"environment_type": "test", "environment_ref": "test-env"},
         campaign_id="campaign",
         execution_id="execution-same-resource",
         actor_tokens={
@@ -659,7 +671,7 @@ def test_executor_uses_same_resource_receipt_for_violation(
         },
     )
 
-    assert result["status"] == "EXECUTED"
+    assert result["status"] == "EXECUTED", json.dumps(result, default=str, indent=2)
     assert result["finding"] is not None
     assert result["oracle_verdict"]["status"] == "VIOLATION"
     assert result["oracle_verdict"]["activation_receipt"]["status"] == "ACTIVE"
@@ -703,6 +715,14 @@ def test_executor_treatment_rejection_does_not_emit_finding(
         "ai_test_asset_center.experiment_executor._http_request",
         lambda *_args, **_kwargs: next(responses),
     )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_plan_executor._http_request",
+        lambda *_args, **_kwargs: next(responses),
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_runtime_support._http_request",
+        lambda *_args, **_kwargs: next(responses),
+    )
 
     result = execute_one_experiment(
         _authorization_experiment(),
@@ -710,7 +730,7 @@ def test_executor_treatment_rejection_does_not_emit_finding(
         root=tmp_path,
         project="project",
         base_url="http://target.invalid",
-        runtime_contract={"environment_type": "test"},
+        runtime_contract={"environment_type": "test", "environment_ref": "test-env"},
         campaign_id="campaign",
         execution_id="execution-different-resource",
         actor_tokens={
@@ -719,7 +739,7 @@ def test_executor_treatment_rejection_does_not_emit_finding(
         },
     )
 
-    assert result["status"] == "EXECUTED"
+    assert result["status"] == "EXECUTED", json.dumps(result, default=str, indent=2)
     assert result["finding"] is None
     assert result["oracle_verdict"]["verdict"] == "property_held"
 
@@ -748,6 +768,14 @@ def test_batch_lineage_includes_typed_observer_receipt_ids(
         "ai_test_asset_center.experiment_executor._http_request",
         lambda *_args, **_kwargs: next(responses),
     )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_plan_executor._http_request",
+        lambda *_args, **_kwargs: next(responses),
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_runtime_support._http_request",
+        lambda *_args, **_kwargs: next(responses),
+    )
 
     batch = execute_selected_experiments(
         [{"obligation_id": "obl-auth", "experiment_id": "exp-auth"}],
@@ -756,7 +784,7 @@ def test_batch_lineage_includes_typed_observer_receipt_ids(
         root=tmp_path,
         project="project",
         base_url="http://target.invalid",
-        runtime_contract={"environment_type": "test"},
+        runtime_contract={"environment_type": "test", "environment_ref": "test-env"},
         mainline_run=build_mainline_run_contract(
             mainline_authority="experiment_candidate",
             run_id="run",

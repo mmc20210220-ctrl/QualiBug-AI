@@ -13,6 +13,7 @@ from .discovery_mainline_contract import validate_mainline_run_contract
 from .discovery_quality_projection import (
     SCHEMA_VERSION as QUALITY_PROJECTION_SCHEMA,
 )
+from .operational_receipts import EXECUTION_OPERATIONAL_SUMMARY_SCHEMA
 
 
 REQUIRED_STAGE_NAMES = (
@@ -376,6 +377,38 @@ def _formal_projection(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _operational_cleanup_failure_count(
+    result: dict[str, Any],
+) -> int | None:
+    """Read the write-level cleanup SSOT and reject contradictory projections."""
+
+    nested = _dict(result.get("v12"))
+    raw_summaries = [
+        value
+        for value in (
+            result.get("operational_receipt_summary"),
+            nested.get("operational_receipt_summary"),
+        )
+        if value is not None
+    ]
+    if not raw_summaries:
+        return None
+    counts: list[int] = []
+    for raw in raw_summaries:
+        summary = _dict(raw)
+        if summary.get("schema_version") != EXECUTION_OPERATIONAL_SUMMARY_SCHEMA:
+            raise DiscoveryFunnelError("operational_summary_schema_invalid")
+        value = summary.get("cleanup_failures")
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise DiscoveryFunnelError(
+                "operational_cleanup_failure_count_invalid"
+            )
+        counts.append(value)
+    if len(set(counts)) != 1:
+        raise DiscoveryFunnelError("operational_cleanup_failure_count_mismatch")
+    return counts[0]
+
+
 def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
     result = _dict(v12_result)
     ledger = _attempt_ledger(result)
@@ -444,11 +477,24 @@ def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
         if _text(row.get("status")).lower()
         not in {"ok", "healthy", "completed", "success", "succeeded"}
     ]
-    cleanup_failures = sum(
+    attempt_cleanup_failures = sum(
         1
         for attempt in attempts
         if "CLEANUP" in _text(attempt.get("reason_code")).upper()
         and _text(attempt.get("terminal_status")).upper() == "HARNESS_FAILED"
+    )
+    operational_cleanup_failures = _operational_cleanup_failure_count(result)
+    if (
+        operational_cleanup_failures is not None
+        and operational_cleanup_failures < attempt_cleanup_failures
+    ):
+        raise DiscoveryFunnelError(
+            "operational_cleanup_failure_count_below_attempt_receipts"
+        )
+    cleanup_failures = (
+        operational_cleanup_failures
+        if operational_cleanup_failures is not None
+        else attempt_cleanup_failures
     )
     cost_unknown = any(
         _text(attempt.get("cost_coverage_status")).upper() == "UNKNOWN"
@@ -463,6 +509,7 @@ def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
         status = "BLOCKED"
     elif (
         harness_failures
+        or cleanup_failures
         or blocked
         or execution_status != "completed"
         or reasoner_failure_count

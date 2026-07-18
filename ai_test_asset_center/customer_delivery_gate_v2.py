@@ -411,10 +411,6 @@ def build_reproduction_receipt(
         _exec_val = _text(execution.get(field))
         _oracle_val = _text(oracle.get(field))
         if _exec_val != _oracle_val:
-            # Variant obligation IDs (obl_xxx__v_yyy) differ from original;
-            # accept when they share a common prefix
-            if field == "obligation_id" and (_exec_val.startswith(_oracle_val) or _oracle_val.startswith(_exec_val)):
-                continue
             raise DeliveryGateV2Error("reproduction_oracle_lineage_mismatch")
     refs = [dict(value) for value in source_refs if isinstance(value, dict)]
     if not refs:
@@ -432,28 +428,18 @@ def build_reproduction_receipt(
             continue
         observation_receipt_id = _text(step.get("observation_receipt_id"))
         if not observation_receipt_id:
-            observation_receipt_id = _fingerprint({
-                "phase": phase, "status": status_code,
-                "method": _text(step.get("method")),
-                "path": _text(step.get("path")),
-            })
+            raise DeliveryGateV2Error(
+                "reproduction_observation_receipt_missing"
+            )
         if status_code <= 0:
             # Skip steps without actual HTTP execution
             continue
-        path_template = _text(step.get("path_template") or step.get("path"))
-        request_body_fingerprint = _text(
-            step.get("request_body_fingerprint")
-            or _fingerprint(step.get("body"))
-        )
+        path_template = _text(step.get("path_template"))
+        request_body_fingerprint = _text(step.get("request_body_fingerprint"))
         request_semantics_fingerprint = _text(
             step.get("request_semantics_fingerprint")
-            or _fingerprint({
-                "method": _text(step.get("method")),
-                "path": _text(step.get("path") or path_template),
-                "phase": phase,
-            })
         )
-        mutation_class = _text(step.get("mutation_class") or step.get("protocol_step") or step.get("intent") or phase)
+        mutation_class = _text(step.get("mutation_class"))
         mutation_selector = _text(step.get("mutation_selector"))
         mutation_operator = _text(step.get("mutation_operator"))
         if (
@@ -701,24 +687,11 @@ def _validate_receipt_collections(
     for field in ("campaign_id", "execution_id", "experiment_id", "obligation_id"):
         expected = _text(execution.get(field))
         if _text(oracle.get(field)) != expected:
-            if not (field == "obligation_id" and (
-                expected.startswith(_text(oracle.get(field)))
-                or _text(oracle.get(field)).startswith(expected)
-            )):
-                raise DeliveryGateV2Error("oracle_execution_lineage_mismatch")
+            raise DeliveryGateV2Error("oracle_execution_lineage_mismatch")
         if _text(reproduction.get(field)) != expected:
-            if not (field == "obligation_id" and (
-                expected.startswith(_text(reproduction.get(field)))
-                or _text(reproduction.get(field)).startswith(expected)
-            )):
-                raise DeliveryGateV2Error("reproduction_execution_lineage_mismatch")
+            raise DeliveryGateV2Error("reproduction_execution_lineage_mismatch")
         if any(_text(value.get(field)) != expected for value in contracts):
-            if not (field == "obligation_id" and any(
-                expected.startswith(_text(value.get(field)))
-                or _text(value.get(field)).startswith(expected)
-                for value in contracts
-            )):
-                raise DeliveryGateV2Error("contract_execution_lineage_mismatch")
+            raise DeliveryGateV2Error("contract_execution_lineage_mismatch")
         if field in {"campaign_id", "execution_id"} and any(
             _text(value.get(field)) != expected for value in observers
         ):
@@ -826,10 +799,7 @@ def _validate_active_chain(
         return "BLOCKED", ["CONTRACT_ORACLE_BLOCKED"]
     if oracle_status == "HARNESS_FAILED":
         return "HARNESS_FAILED", ["CONTRACT_ORACLE_HARNESS_FAILED"]
-    if oracle_status != "VIOLATION" or (
-        activation_status != "ACTIVE"
-        and not _list(oracle.get("assertions"))
-    ):
+    if oracle_status != "VIOLATION" or activation_status != "ACTIVE":
         raise DeliveryGateV2Error("delivery_oracle_semantics_invalid")
 
     assertions = [
@@ -890,10 +860,6 @@ def _validate_active_chain(
             for value in subject_receipts
         }
         if matching != verified_ids:
-            if kind == "cleanup":
-                continue  # Cleanup receipt IDs vary legitimately
-            if _list(oracle.get("assertions")):
-                continue  # Oracle evaluated assertions — verified gaps are synthetic (force-ACTIVE)
             raise DeliveryGateV2Error(
                 f"delivery_{kind}_activation_reference_mismatch"
             )
@@ -901,7 +867,9 @@ def _validate_active_chain(
         _text(value) for value in _list(verified.get("observer")) if _text(value)
     }
     if verified_observers != observer_ids:
-        pass  # Observer IDs may differ legitimately
+        raise DeliveryGateV2Error(
+            "delivery_observer_activation_reference_mismatch"
+        )
     if not contract_ids.issubset(set(execution["observation_receipt_ids"])):
         raise DeliveryGateV2Error("execution_contract_receipts_missing")
     if not observer_ids.issubset(set(execution["observation_receipt_ids"])):
@@ -1294,15 +1262,9 @@ def validate_customer_delivery_gate_receipt_v2(
     }:
         raise DeliveryGateV2Error("delivery_gate_adjudication_invalid")
     if deliverable:
-        expected_activation = (
-            "BLOCKED"
-            if _text(adjudication.get("oracle")) == "VIOLATION"
-            and _text(adjudication.get("activation")) == "BLOCKED"
-            else "ACTIVE"
-        )
         expected_adjudication = {
             "execution": "EXECUTED",
-            "activation": expected_activation,
+            "activation": "ACTIVE",
             "assertion": "VIOLATION",
             "oracle": "VIOLATION",
             "reproduction": "REPRODUCED",
@@ -1651,32 +1613,6 @@ def has_customer_replay_asset(item: dict[str, Any]) -> bool:
     )
 
 
-def has_validated_runtime_db_write_evidence(item: dict[str, Any]) -> bool:
-    """Recognize reproduced non-production writes with runtime and DB evidence.
-
-    This does not erase cleanup failures from operational metrics. It only
-    prevents the per-finding delivery gate from discarding a validated defect
-    when the finding already contains real request, response, assertion,
-    timestamp, replay asset, and before/after DB side-effect evidence.
-    """
-
-    if not has_validated_evidence_quality(item):
-        return False
-    if not has_passed_business_evidence_status(item):
-        return False
-    raw_evidence = _dict(item.get("raw_evidence"))
-    if not raw_evidence.get("has_real_evidence"):
-        return False
-    request_raw = _dict(raw_evidence.get("request_raw"))
-    method = _text(request_raw.get("method")).upper()
-    if method not in {"POST", "PUT", "PATCH", "DELETE"}:
-        return False
-    db_snapshot = _dict(raw_evidence.get("db_snapshot")) or _dict(item.get("db_evidence"))
-    if db_snapshot.get("status") != "captured" or not bool(db_snapshot.get("any_change")):
-        return False
-    return has_customer_facing_hard_evidence(item) and has_customer_replay_asset(item)
-
-
 def governed_cleanup_rejection_reasons(item: dict[str, Any]) -> list[str]:
     """Fail closed when a write-shaped finding omits its cleanup contract."""
 
@@ -1694,30 +1630,12 @@ def governed_cleanup_rejection_reasons(item: dict[str, Any]) -> list[str]:
         or item.get("repro_method")
         or request_raw.get("method")
     ).upper()
-    path = _v1_lower(
-        reproduction.get("path")
-        or item.get("repro_path")
-        or request_raw.get("path")
-        or evidence.get("request")
-        or ""
-    )
-    execution_semantics = _v1_lower(
-        evidence.get("execution_semantics")
-        or raw_evidence.get("execution_semantics")
-        or item.get("execution_semantics")
-        or item.get("execution_policy")
-    )
-    explicit_read_only = execution_semantics in {
-        "read_only", "safe_read_only", "query_only",
-    }
-    # GET/HEAD are inherently read-only and never require cleanup
+    # GET/HEAD are inherently read-only. A write method cannot become read-only
+    # through a label; its governed lifecycle must prove cleanup or no mutation.
     if method in {"GET", "HEAD"}:
         return []
-    auth_step = path.endswith("/login") or "/auth/login" in path or path.rstrip("/").endswith("/auth")
-    validated_runtime_db_write = has_validated_runtime_db_write_evidence(item)
     if not cleanup:
-        # Auth/login POSTs are identity steps, not governed resource writes.
-        if method in {"POST", "PUT", "PATCH", "DELETE"} and not explicit_read_only and not auth_step:
+        if method in {"POST", "PUT", "PATCH", "DELETE"}:
             return ["CLEANUP_EVIDENCE_MISSING"]
         return []
     status = _v1_lower(cleanup.get("status"))
@@ -1732,27 +1650,11 @@ def governed_cleanup_rejection_reasons(item: dict[str, Any]) -> list[str]:
             "rejected_write_observer_unchanged",
             "setup_rejected_observer_unchanged",
         }
-        action_style = strategy in {
-            "action_post_on_existing_resource",
-            "action_post_no_created_resource",
-        } or "action_style_write" in strategy
-        # Bare not_required without observer-unchanged proof or an explicit
-        # action-style strategy stays internal. Creates without DELETE use
-        # not_reversible (also internal).
-        if (
-            not explicit_read_only
-            and not rejection_proved_unchanged
-            and not action_style
-            and not validated_runtime_db_write
-        ):
+        if not rejection_proved_unchanged:
             return ["CLEANUP_NOT_SUCCEEDED"]
-    elif status not in {
-        "completed", "success", "succeeded", "read_only",
-    }:
-        if validated_runtime_db_write and status in {"not_reversible", "not_applicable"}:
-            return []
+    elif status not in {"completed", "success", "succeeded"}:
         return ["CLEANUP_NOT_SUCCEEDED"]
-    if status not in {"not_required", "read_only"} and not _text(cleanup.get("receipt_ref")):
+    if not _text(cleanup.get("receipt_ref")):
         return ["CLEANUP_RECEIPT_MISSING"]
     return []
 

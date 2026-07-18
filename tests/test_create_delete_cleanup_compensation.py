@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,14 @@ def _create_delete_ir() -> dict:
                 "request_example": {"name": "item"},
                 "request_schema": request_schema,
                 "source_refs": [{"source_id": "api", "locator": "POST /resources"}],
+            },
+            {
+                "id": "op-list",
+                "operation_id": "list_resources",
+                "method": "GET",
+                "path": "/resources",
+                "read_write": "read",
+                "source_refs": [{"source_id": "api", "locator": "GET /resources"}],
             },
             {
                 "id": "op-read",
@@ -139,6 +148,14 @@ def _run_create_delete_experiment(
         fake_http,
     )
     monkeypatch.setattr(
+        "ai_test_asset_center.experiment_plan_executor._http_request",
+        fake_http,
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_runtime_support._http_request",
+        fake_http,
+    )
+    monkeypatch.setattr(
         "ai_test_asset_center.sandbox_write_executor._http_request",
         fake_http,
     )
@@ -236,7 +253,7 @@ def test_executor_runs_delete_cleanup_for_accepted_creates(
         for step in (result.get("steps") or [])
         if step.get("phase") == "cleanup" and step.get("method") == "DELETE"
     ]
-    assert delete_http, seen
+    assert delete_http, json.dumps(result, default=str, indent=2)
     assert delete_steps, result.get("steps")
     assert all(200 <= int(step.get("status_code") or 0) < 300 for step in delete_steps)
     assert resources == {}
@@ -321,6 +338,14 @@ def test_cleanup_uses_each_write_actor_for_actor_scoped_collections(
 
     monkeypatch.setattr(
         "ai_test_asset_center.experiment_executor._http_request",
+        fake_http,
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_plan_executor._http_request",
+        fake_http,
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_runtime_support._http_request",
         fake_http,
     )
     monkeypatch.setattr(

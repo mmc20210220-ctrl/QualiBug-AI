@@ -7,7 +7,7 @@ from itertools import permutations
 from typing import Any
 
 from .behavior_ir import BehaviorIRError, SCHEMA_VERSION as BEHAVIOR_IR_SCHEMA, validate_behavior_ir
-from .real_id_resolver import collection_path, normalize_path_placeholders, path_has_placeholders
+from .real_id_resolver import collection_path, normalize_path_placeholders
 from .test_obligation import RISK_FAMILIES, dedupe_obligations, make_obligation
 
 
@@ -353,6 +353,11 @@ def _authorization_pair_incomplete_gap(
     return {
         "id": f"compile_gap_{hashlib.sha256(material.encode('utf-8')).hexdigest()[:16]}",
         "code": "BLOCKED_MISSING_ACTOR_PAIR",
+        "risk_family": (
+            "visibility"
+            if _text(operation.get("method")).upper() in {"GET", "HEAD"}
+            else "authorization"
+        ),
         "subject_ref": operation_ref,
         "operation_ref": operation_ref,
         "required_relation_types": ["denies", "permits"],
@@ -396,40 +401,6 @@ def _actor_has_runtime_binding(actor: dict[str, Any]) -> bool:
     return bool(secret_ref)
 
 
-_ENTITY_MUTATION_RELATION_TYPES = frozenset({"produces", "consumes", "scopes"})
-
-
-def _operation_source_relation_refs(
-    operation_ref: str,
-    relations: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Return Behavior IR relations that name ``operation_ref`` as the subject op."""
-
-    op_id = _text(operation_ref)
-    if not op_id:
-        return []
-    matched: list[dict[str, Any]] = []
-    for relation in relations:
-        if not isinstance(relation, dict):
-            continue
-        subject = _text(relation.get("operation_ref") or relation.get("from_ref"))
-        if subject == op_id:
-            matched.append(relation)
-    return matched
-
-
-def _operation_declares_entity_mutation(
-    operation_ref: str,
-    relations: list[dict[str, Any]],
-) -> bool:
-    """True when IR binds this write to a durable entity mutation relation."""
-
-    for relation in _operation_source_relation_refs(operation_ref, relations):
-        if _text(relation.get("relation_type")) in _ENTITY_MUTATION_RELATION_TYPES:
-            return True
-    return False
-
-
 def _cleanup_is_schedulable(requirement: dict[str, Any]) -> bool:
     """True when a write may leave the compile pool (cleanup not required or bound)."""
 
@@ -437,8 +408,8 @@ def _cleanup_is_schedulable(requirement: dict[str, Any]) -> bool:
     if req.get("required") is False:
         return True
     if _text(req.get("mode")) == "snapshot_restore":
-        # PUT/PATCH and source-bound POST actions restore via before-snapshot;
-        # experiment compile builds cleanup_plan without a separate compensator op.
+        # PUT/PATCH restore via before-snapshot; experiment compile validates
+        # the primary method before building the cleanup plan.
         return True
     return bool(
         _text(req.get("operation_ref") or req.get("compensation_operation_ref"))
@@ -463,18 +434,11 @@ def _cleanup_requirement(
     Compensator identity may appear on ``operation_ref``, ``from_ref``, or
     ``effects[].cleanup_target_operation_ref`` (Behavior IR derivation stamps).
 
-    When no compensator exists, PUT/PATCH and source-bound POST actions that can
-    restore a named terminal field remain schedulable via ``snapshot_restore``.
-
-    Writes that already carry source relations but declare no entity mutation
-    (``produces`` / ``consumes`` / ``scopes``) do not require cleanup — e.g.
-    session handshake POSTs that only have ``permits``. Unrelated writes with
-    zero source relations stay fail-closed (``required=True``).
+    Without an explicit relation, only PUT/PATCH snapshot restoration and an
+    identity-bound DELETE for a create POST are schedulable. Route shape never
+    proves that a deleted entity can be recreated, and unrelated source
+    relations never prove that a write is non-mutating.
     """
-    from .experiment_compiler_support import (
-        _post_action_can_restore_named_terminal_field,
-    )
-
     op = _dict(operation)
     is_write = _text(op.get("read_write")) == "write"
     must_cleanup = is_write if required is None else bool(required)
@@ -538,37 +502,16 @@ def _cleanup_requirement(
         return requirement
 
     method = _text(op.get("method")).upper()
-    if method in {"PUT", "PATCH"} or _post_action_can_restore_named_terminal_field(op):
+    if method in {"PUT", "PATCH"}:
         requirement["mode"] = "snapshot_restore"
         return requirement
 
-    # Path-heuristic recreator detection for DELETE and POST operations
-    # that have entity mutations but no explicit compensates relation.
-    # DELETE /api/X/{id} → find POST /api/X (same collection, different method)
-    # POST  /api/X       → find DELETE /api/X/{id} as compensator
+    # A create route may use only an exact identity-bound DELETE on the same
+    # collection. DELETE-to-POST recreation requires an explicit relation.
     raw_path = normalize_path_placeholders(
         _text(op.get("path") or op.get("raw_path"))
     )
     op_collection = normalize_path_placeholders(collection_path(raw_path))
-    if method == "DELETE" and op_collection.startswith("/"):
-        recreate_candidates: list[str] = []
-        for cand_id, cand_op in operations_by_id.items():
-            if cand_id == op_id:
-                continue
-            cand_method = _text(cand_op.get("method")).upper()
-            if cand_method != "POST":
-                continue
-            cand_path = normalize_path_placeholders(
-                _text(cand_op.get("path") or cand_op.get("raw_path"))
-            )
-            cand_collection = normalize_path_placeholders(collection_path(cand_path))
-            if cand_collection == op_collection:
-                recreate_candidates.append(cand_id)
-        if len(recreate_candidates) == 1:
-            requirement["operation_ref"] = recreate_candidates[0]
-            requirement["mode"] = "recreate_compensated_resource"
-            return requirement
-
     if method == "POST" and op_collection.startswith("/"):
         delete_candidates: list[str] = []
         for cand_id, cand_op in operations_by_id.items():
@@ -581,29 +524,17 @@ def _cleanup_requirement(
                 _text(cand_op.get("path") or cand_op.get("raw_path"))
             )
             cand_collection = normalize_path_placeholders(collection_path(cand_path))
-            if cand_collection == op_collection or cand_path == op_collection:
+            identity_suffix = cand_path[len(op_collection):]
+            if (
+                cand_collection == op_collection
+                and re.fullmatch(r"/\{[A-Za-z_]\w*\}", identity_suffix)
+            ):
                 delete_candidates.append(cand_id)
         if len(delete_candidates) == 1:
             requirement["operation_ref"] = delete_candidates[0]
             requirement["mode"] = "reverse_order"
             return requirement
 
-    # POSTs without an explicit DELETE compensator can use snapshot_restore.
-    # Path placeholders are resolved at runtime from the binding plan.
-    if method == "POST" and raw_path.startswith("/"):
-        requirement["mode"] = "snapshot_restore"
-        return requirement
-
-    if (
-        required is None
-        and _operation_source_relation_refs(op_id, relations)
-        and not _operation_declares_entity_mutation(op_id, relations)
-    ):
-        return {
-            "required": False,
-            "mode": "none",
-            "reason": "no_declared_entity_effect",
-        }
     return requirement
 
 

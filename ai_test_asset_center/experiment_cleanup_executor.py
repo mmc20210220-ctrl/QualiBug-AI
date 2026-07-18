@@ -47,23 +47,19 @@ from .sandbox_write_executor import (
 )
 
 
-def _fallback_plan_actor_ref(exp: dict[str, Any]) -> str:
-    for planned_step in _list(exp.get("control_plan")) + _list(exp.get("treatment_plan")):
-        if isinstance(planned_step, dict) and _text(planned_step.get("actor_ref")):
-            return _text(planned_step.get("actor_ref"))
-    return ""
-
-
 def _cleanup_actor_for_write_step(
     source_step: dict[str, Any],
     *,
-    exp: dict[str, Any],
     actors: dict[str, dict[str, Any]],
     tokens: dict[str, str],
 ) -> tuple[str, dict[str, Any], str]:
     """Use the write's own actor so actor-scoped collections restore correctly."""
-    actor_ref = _text(source_step.get("actor_ref")) or _fallback_plan_actor_ref(exp)
-    actor = actors.get(actor_ref) or {}
+    actor_ref = _text(source_step.get("actor_ref"))
+    if not actor_ref or actor_ref not in actors:
+        raise ValueError(
+            f"cleanup_actor_identity_missing:{actor_ref or '<empty>'}"
+        )
+    actor = actors[actor_ref]
     token = _resolve_token(actor, tokens)
     return actor_ref, actor, token
 
@@ -152,7 +148,7 @@ def execute_experiment_cleanup_compensation(
         # new id on the write response while collection snapshots stay empty.
         if not delete_cleanup_templates:
             return False
-        synthetic_step = {
+        projected_write_step = {
             "phase": "treatment",
             "operation_ref": _text(attempt.get("operation_ref")),
             "governance_receipt": attempt,
@@ -160,7 +156,10 @@ def execute_experiment_cleanup_compensation(
             "status_code": int(_dict(attempt.get("write")).get("status") or 0),
         }
         for path_template in delete_cleanup_templates:
-            targets, missing = _runtime_cleanup_paths(path_template, [synthetic_step])
+            targets, missing = _runtime_cleanup_paths(
+                path_template,
+                [projected_write_step],
+            )
             if targets and not missing:
                 return True
         return False
@@ -352,7 +351,6 @@ def execute_experiment_cleanup_compensation(
                 for source_step in reversed(source_steps):
                     actor_ref, actor, token = _cleanup_actor_for_write_step(
                         source_step,
-                        exp=exp,
                         actors=actors,
                         tokens=tokens,
                     )
@@ -486,7 +484,6 @@ def execute_experiment_cleanup_compensation(
                 for step in reversed(restore_steps):
                     actor_ref, actor, token = _cleanup_actor_for_write_step(
                         step,
-                        exp=exp,
                         actors=actors,
                         tokens=tokens,
                     )
@@ -635,7 +632,6 @@ def execute_experiment_cleanup_compensation(
                 )
                 actor_ref, actor, token = _cleanup_actor_for_write_step(
                     source_step,
-                    exp=exp,
                     actors=actors,
                     tokens=tokens,
                 )

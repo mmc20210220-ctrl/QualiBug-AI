@@ -88,6 +88,25 @@ def test_validation_protocol_declares_control_effect_requirement() -> None:
     assert protocol["assertion"]["expected_control_effect_min"] == 1
 
 
+def test_validation_protocol_blocks_without_source_request_material() -> None:
+    protocol = compile_family_protocol(
+        risk_family="validation",
+        operation={
+            "id": "op-update",
+            "method": "PATCH",
+            "path": "/resources/{id}",
+        },
+        operation_ref="op-update",
+        control_actor_ref="actor-owner",
+        treatment_actor_ref="actor-owner",
+        property_spec={"field": "status"},
+    )
+
+    assert protocol["status"] == "BLOCKED"
+    assert protocol["reason_code"] == "BLOCKED_MISSING_BINDING"
+    assert protocol["detail"] == "validation_requires_source_example_and_request_schema"
+
+
 def test_rejected_create_with_snapshot_proven_side_effect_is_cleaned() -> None:
     paths, missing = runtime_cleanup_paths(
         "/resources/{id}",

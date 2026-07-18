@@ -365,6 +365,31 @@ def test_pipeline_health_degraded_on_not_reversible_cleanup() -> None:
     assert health["cleanup_failure_count"] == 1
 
 
+def test_pipeline_health_uses_write_level_operational_cleanup_receipts() -> None:
+    result = _attempt_health_result()
+    result["operational_receipt_summary"] = {
+        "schema_version": "qualibug.execution-operational-summary.v1",
+        "cleanup_failures": 3,
+    }
+
+    health = build_pipeline_health(result)
+
+    assert health["status"] == "DEGRADED"
+    assert health["cleanup_failure_count"] == 3
+    assert "cleanup_failures" in health["operator_note"]
+
+
+def test_pipeline_health_rejects_invalid_operational_cleanup_count() -> None:
+    result = _attempt_health_result()
+    result["operational_receipt_summary"] = {
+        "schema_version": "qualibug.execution-operational-summary.v1",
+        "cleanup_failures": -1,
+    }
+
+    with pytest.raises(ValueError, match="operational_cleanup_failure_count_invalid"):
+        build_pipeline_health(result)
+
+
 def test_private_pilot_service_contains_no_disabled_industry_endpoint_templates() -> None:
     service_path = Path(__file__).parents[1] / "ai_test_asset_center" / "private_pilot_service.py"
     source = service_path.read_text(encoding="utf-8").lower()

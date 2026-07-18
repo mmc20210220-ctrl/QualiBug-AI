@@ -124,7 +124,7 @@ def test_non_reversible_governed_cleanup_blocks_customer_delivery() -> None:
     assert "CLEANUP_NOT_SUCCEEDED" in customer_delivery_rejection_reasons(finding)
 
 
-def test_validated_runtime_db_write_evidence_is_not_demoted_by_not_reversible_cleanup() -> None:
+def test_validated_runtime_db_write_evidence_still_requires_cleanup() -> None:
     finding = _valid_finding()
     finding["evidence"] = {"cleanup": {"status": "not_reversible", "receipt_ref": ""}}
     finding["raw_evidence"]["db_snapshot"] = {
@@ -133,8 +133,8 @@ def test_validated_runtime_db_write_evidence_is_not_demoted_by_not_reversible_cl
         "changed_tables": [{"table": "orders", "added": 1}],
     }
 
-    assert "CLEANUP_NOT_SUCCEEDED" not in customer_delivery_rejection_reasons(finding)
-    assert is_customer_deliverable_defect(finding) is True
+    assert "CLEANUP_NOT_SUCCEEDED" in customer_delivery_rejection_reasons(finding)
+    assert is_customer_deliverable_defect(finding) is False
 
 
 def test_successful_cleanup_requires_receipt() -> None:
@@ -152,10 +152,10 @@ def test_write_method_without_cleanup_fails_closed_and_read_only_is_explicit() -
     assert "CLEANUP_EVIDENCE_MISSING" in customer_delivery_rejection_reasons(finding)
     declared_read_only = deepcopy(finding)
     declared_read_only["evidence"] = {"cleanup": {"status": "read_only", "receipt_ref": ""}}
-    assert is_customer_deliverable_defect(declared_read_only) is True
+    assert is_customer_deliverable_defect(declared_read_only) is False
     explicit_safe_read_only = deepcopy(finding)
     explicit_safe_read_only["execution_semantics"] = "safe_read_only"
-    assert is_customer_deliverable_defect(explicit_safe_read_only) is True
+    assert is_customer_deliverable_defect(explicit_safe_read_only) is False
 
 
 def test_not_reversible_or_not_applicable_write_cleanup_stays_internal() -> None:
@@ -181,7 +181,7 @@ def test_action_write_not_required_without_no_mutation_proof_stays_internal() ->
     assert is_customer_deliverable_defect(finding) is False
 
 
-def test_action_style_strategy_allows_not_required_cleanup() -> None:
+def test_action_style_strategy_does_not_prove_cleanup_not_required() -> None:
     finding = _valid_finding()
     finding["evidence"] = {
         "cleanup": {
@@ -190,8 +190,8 @@ def test_action_style_strategy_allows_not_required_cleanup() -> None:
             "receipt_ref": "/api/orders/{id}/cancel",
         },
     }
-    assert "CLEANUP_NOT_SUCCEEDED" not in customer_delivery_rejection_reasons(finding)
-    assert is_customer_deliverable_defect(finding) is True
+    assert "CLEANUP_NOT_SUCCEEDED" in customer_delivery_rejection_reasons(finding)
+    assert is_customer_deliverable_defect(finding) is False
 
 
 def test_rejected_write_with_observer_unchanged_proof_allows_not_required() -> None:

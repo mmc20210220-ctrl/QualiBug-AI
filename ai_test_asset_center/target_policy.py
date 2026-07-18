@@ -111,12 +111,7 @@ def build_target_policy_decision(
         blocking.append("TARGET_NOT_APPROVED")
     if requested and approved and requested != approved:
         blocking.append("TARGET_URL_APPROVAL_MISMATCH")
-    if not env_ref and not (
-        env_type and is_nonproduction_environment(env_type)
-    ):
-        # Environment reference is optional when the type is explicitly
-        # non-production (e.g. \"test\"). Fail closed only when both
-        # reference and type are missing.
+    if not env_ref:
         blocking.append("ENVIRONMENT_REFERENCE_MISSING")
     if not env_type:
         blocking.append("UNKNOWN_ENVIRONMENT")

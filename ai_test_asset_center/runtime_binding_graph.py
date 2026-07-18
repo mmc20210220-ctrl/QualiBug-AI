@@ -712,13 +712,6 @@ def _declared_fixture_actor_refs(
         secret = _text(actor.get("credential_secret_ref"))
         ranked.append((0 if "test_accounts" in secret or "context" in secret else 1, index, _text(actor.get("id"))))
     result = [actor_ref for _, _, actor_ref in sorted(ranked)]
-    if not result:
-        # Fallback: use the first admin actor when no explicit permissions
-        # are declared for this operation. Admin role should have universal
-        # access in most enterprise systems.
-        for actor in _list(_dict(behavior_ir).get("actors")):
-            if isinstance(actor, dict) and _text(actor.get("role")).lower() == "admin":
-                return [_text(actor.get("id"))]
     return result
 
 
@@ -776,9 +769,6 @@ def _declared_fixture_setup(
             behavior_ir=behavior_ir,
         )
         actor_refs = _declared_fixture_actor_refs(create, behavior_ir=behavior_ir)
-        # Allow fixture creation even without cleanup operations or actors.
-        # Missing cleanup means the created resource can't be automatically
-        # removed after the test — acceptable for non-production targets.
         if unresolved_body or not cleanup_operations or not actor_refs:
             continue
         return {

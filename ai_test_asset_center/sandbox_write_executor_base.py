@@ -556,14 +556,8 @@ def execute_governed_control_write(
     observation_path = normalize_path_placeholders(_text(observation_path)).split("?", 1)[0]
     phase = _text(operation_phase)
 
-    def _synthetic_block(reason: str) -> dict[str, Any]:
-        """Return a synthetic blocked result instead of raising ValueError.
-        
-        Unresolved path placeholders or invalid methods are harness-level
-        compilation gaps, not runtime errors. Returning a synthetic blocked
-        result lets the pipeline continue and surface these gaps in the
-        obligation ledger rather than crashing the entire scan.
-        """
+    def _blocked_result(reason: str) -> dict[str, Any]:
+        """Emit an explicit zero-transport governance block for the ledger."""
         return {
             "status": "blocked",
             "reason": reason,
@@ -583,16 +577,13 @@ def execute_governed_control_write(
         }
 
     if method not in _WRITE_METHODS:
-        return _synthetic_block("governed_control_write_method_invalid")
-    # Path placeholders are resolved by the caller via _materialize_path.
-    # If unresolved, the HTTP request will return a real error (4xx/5xx)
-    # that generates observer evidence — better than a synthetic block.
-    if not path.startswith("/"):
-        return _synthetic_block("governed_control_write_path_invalid")
-    if not observation_path.startswith("/"):
-        observation_path = path
+        return _blocked_result("governed_control_write_method_invalid")
+    if not path.startswith("/") or path_has_placeholders(path):
+        return _blocked_result("governed_control_write_path_placeholder_unresolved")
+    if not observation_path.startswith("/") or path_has_placeholders(observation_path):
+        return _blocked_result("governed_control_observation_path_placeholder_unresolved")
     if not phase:
-        return _synthetic_block("governed_control_write_phase_missing")
+        return _blocked_result("governed_control_write_phase_missing")
 
     allowed, reason = sandbox_write_allowed(
         root=root,

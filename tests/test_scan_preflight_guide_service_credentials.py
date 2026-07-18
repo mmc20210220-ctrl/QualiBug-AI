@@ -30,6 +30,21 @@ def _manifest() -> dict:
     return {"source_id": "openapi-main", "source_hash": "sha256:source"}
 
 
+def test_target_policy_requires_separate_environment_identity() -> None:
+    decision = build_target_policy_decision(
+        requested_base_url="http://127.0.0.1:8011",
+        approved_base_url="http://127.0.0.1:8011",
+        environment_type="staging",
+        environment_ref="",
+        execution_mode="approved_sandbox_write",
+        runtime_status="approved",
+    )
+
+    assert decision["status"] == "blocked"
+    assert decision["write_allowed"] is False
+    assert "ENVIRONMENT_REFERENCE_MISSING" in decision["blocking_codes"]
+
+
 def test_scan_preflight_guide_blocks_healthy_claim_when_service_credentials_unverified() -> None:
     guide = _scan_preflight_guide(
         context={

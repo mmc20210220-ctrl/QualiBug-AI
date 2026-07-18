@@ -8,8 +8,11 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .enterprise_test_data_plan import build_campaign_test_data_plan
 from .product_scan_mainline import _as_dict, _first_text, _safe_project, _sha256
+from .scan_customer_ready_artifacts import _persist_customer_ready_static_artifacts
 from .scan_diagnostics import increment_scan_counter
+from .scan_source_runtime import _scan_preflight_guide
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -33,7 +36,14 @@ def _test_data_receipt_verifier(root: Path, project: str):
             from .enterprise_test_data_receipts import verify_test_data_receipt
             verdict = verify_test_data_receipt(project, receipt_id, root=root, kind=kind, campaign_id=campaign_id, scope_id=scope_id, environment_ref=environment_ref)
             return bool(verdict.get("valid"))
-        except Exception:
+        except Exception as exc:
+            import sys
+
+            print(
+                "[scan] test-data receipt verification failed: "
+                f"kind={kind} receipt_id={receipt_id} error={type(exc).__name__}:{exc}",
+                file=sys.stderr,
+            )
             return False
     return verify
 
@@ -187,8 +197,14 @@ def _blocked_result(project: str, root: Path, started: float, gaps: list[dict[st
             "summary": lifecycle.get("summary", {}),
             "active_issue_count": lifecycle.get("summary", {}).get("active_issue_count", 0),
         }
-    except Exception:
-        pass
+    except Exception as exc:
+        import sys
+
+        print(
+            "[scan] issue lifecycle projection failed after blocked scan: "
+            f"{type(exc).__name__}:{exc}",
+            file=sys.stderr,
+        )
 
     return result
 

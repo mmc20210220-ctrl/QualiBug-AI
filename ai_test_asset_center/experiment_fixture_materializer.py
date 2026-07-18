@@ -23,7 +23,7 @@ from .experiment_runtime_support import (
     _select_runtime_binding,
     _text,
 )
-from .real_id_resolver import normalize_path_placeholders
+from .real_id_resolver import normalize_path_placeholders, path_has_placeholders
 from .runtime_binding_materializer import (
     materialize_body_template as _materialize_body_template,
     runtime_setup_value_from_response as _runtime_setup_value_from_response,
@@ -97,19 +97,26 @@ def _auto_fixture_create_for_binding_target(
                 clean_collection = normalize_path_placeholders(
                     _collection_path(clean_path)
                 )
-                if clean_collection == op_collection:
+                if (
+                    clean_collection == op_collection
+                    and path_has_placeholders(clean_path)
+                ):
                     cleanup_ops.append({
                         "operation_ref": clean_id,
                         "method": "DELETE",
                         "path": clean_path,
                     })
+            if not cleanup_ops:
+                continue
             return {
                 "fixture_setup": {
                     "operation_ref": op_id,
                     "method": "POST",
                     "path": op_path,
                     "cleanup_operations": cleanup_ops,
-                    "actor_refs": [],  # filled by _select_fixture_actor at runtime
+                    "actor_refs": [
+                        _text(binding.get("fixture_owner_actor_ref"))
+                    ] if _text(binding.get("fixture_owner_actor_ref")) else [],
                 },
                 "force_fixture_setup": True,
                 "create_operation_ref": op_id,
@@ -253,7 +260,7 @@ def materialize_experiment_fixtures(
                 "status_code": 0,
                 "value_fingerprint": "",
             }
-            for index, resolver in enumerate([] if force_fixture_setup else resolvers):
+            for index, resolver in enumerate(resolvers):
                 obs = _run_http_step(
                     base_url=base_url,
                     method=resolver["method"],
@@ -270,6 +277,7 @@ def materialize_experiment_fixtures(
                 receipt.update({
                     "resolver_path": resolver["path"],
                     "resolver_operation_ref": resolver["operation_ref"],
+                    "resolver_actor_ref": resolver_actor_ref,
                     "status_code": int(obs.get("status_code") or 0),
                 })
                 if not (200 <= int(obs.get("status_code") or 0) < 300):
@@ -285,11 +293,22 @@ def materialize_experiment_fixtures(
                 if value in (None, "", [], {}):
                     continue
                 runtime_bindings[target] = value
+                owner_actor_ref = _text(binding.get("fixture_owner_actor_ref"))
+                ownership_required = force_fixture_setup and bool(owner_actor_ref)
                 receipt.update({
                     "status": "BOUND",
                     "value_fingerprint": hashlib.sha256(
                         str(value).encode("utf-8")
                     ).hexdigest()[:12],
+                    "owner_actor_ref": owner_actor_ref,
+                    "ownership_proof_status": (
+                        "OBSERVED"
+                        if ownership_required and resolver_actor_ref == owner_actor_ref
+                        else "NOT_REQUIRED"
+                        if not ownership_required
+                        else "INDETERMINATE"
+                    ),
+                    "ownership_proof_source": "source_actor_bound_read",
                 })
                 break
             if value in (None, "", [], {}):
@@ -326,11 +345,6 @@ def materialize_experiment_fixtures(
                     dependency_token = _text(_dict(dependency).get("template_token"))
                     dependency_value: Any = None
                     dependency_leaf = dependency_target.split(".")[-1].split("[")[0]
-                    # Use synthetic fallback when no resolver operations exist
-                    _fallback = _dict(dependency).get("fallback_value")
-                    if _fallback is not None:
-                        token_values[dependency_token] = _fallback
-                        continue
                     for index, resolver in enumerate(_list(_dict(dependency).get("resolver_operations"))):
                         if not isinstance(resolver, dict):
                             continue
@@ -549,6 +563,60 @@ def materialize_experiment_fixtures(
                 "target": target,
                 "value_fingerprint": receipt["value_fingerprint"],
             })
+        elif kind == "ownership_fixture_proof":
+            target = _text(_dict(node).get("binding_target"))
+            owner_actor_ref = _text(_dict(node).get("owner_actor_ref"))
+            binding_receipt = next(
+                (
+                    receipt
+                    for receipt in binding_materialization_receipts
+                    if _text(_dict(receipt).get("target")) == target
+                ),
+                {},
+            )
+            proof_observed = bool(
+                _text(_dict(binding_receipt).get("status")) == "BOUND"
+                and _text(_dict(binding_receipt).get("owner_actor_ref"))
+                == owner_actor_ref
+                and _text(_dict(binding_receipt).get("ownership_proof_status"))
+                == "OBSERVED"
+            )
+            fixture_receipts.append({
+                "node_id": node_id,
+                "kind": kind,
+                "status": "resolved" if proof_observed else "BLOCKED",
+                "reason_code": "" if proof_observed else "BLOCKED_MISSING_FIXTURE",
+                "detail": "" if proof_observed else "ownership_proof_unresolved",
+                "owner_actor_ref": owner_actor_ref,
+                "binding_target": target,
+                "value_fingerprint": _text(
+                    _dict(binding_receipt).get("value_fingerprint")
+                ),
+                "ownership_proof_source": _text(
+                    _dict(binding_receipt).get("ownership_proof_source")
+                ),
+            })
+            if not proof_observed:
+                return {
+                    "status": "terminal",
+                    "result": {
+                        "schema_version": "qualibug.experiment-execution.v1",
+                        "experiment_id": eid,
+                        "obligation_id": oid,
+                        "status": "BLOCKED",
+                        "reason_code": "BLOCKED_MISSING_FIXTURE",
+                        "detail": f"ownership_proof_unresolved:{target}",
+                        "elapsed_ms": int((time.time() - started) * 1000),
+                        "finding": None,
+                        "fixture_receipts": fixture_receipts,
+                        "binding_materialization_receipts": binding_materialization_receipts,
+                        "execution_receipt": {
+                            "status": "BLOCKED",
+                            "reason_code": "BLOCKED_MISSING_FIXTURE",
+                            "detail": f"ownership_proof_unresolved:{target}",
+                        },
+                    },
+                }
         elif kind == "disposable_fixture":
             # Without a concrete create operation binding, refuse to invent IDs.
             fixture_receipts.append({

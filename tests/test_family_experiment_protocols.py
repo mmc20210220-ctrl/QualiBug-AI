@@ -4,17 +4,28 @@ import threading
 
 import pytest
 
+import ai_test_asset_center.experiment_outcome_finalizer as outcome_finalizer
+import ai_test_asset_center.experiment_barrier_executor as barrier_executor
+import ai_test_asset_center.experiment_plan_executor as plan_executor
+import ai_test_asset_center.experiment_runtime_support as runtime_support
 from ai_test_asset_center.experiment_compiler import compile_experiment_for_obligation
 from ai_test_asset_center.experiment_executor import (
     _select_fixture_actor,
     _select_runtime_binding,
     execute_one_experiment,
 )
+from ai_test_asset_center.experiment_fixture_materializer import (
+    _auto_fixture_create_for_binding_target,
+)
 from ai_test_asset_center.fixture_dag import build_fixture_dag_for_experiment
 from ai_test_asset_center.behavior_ir import empty_behavior_ir
 from ai_test_asset_center.obligation_compiler import compile_obligations_from_behavior_ir
 from ai_test_asset_center.observer_contracts import observe_experiment_requirements
-from ai_test_asset_center.runtime_binding_materializer import runtime_cleanup_paths
+from ai_test_asset_center.runtime_binding_materializer import (
+    runtime_cleanup_paths,
+    validated_fixture_setup,
+)
+from ai_test_asset_center.runtime_binding_graph import _declared_fixture_actor_refs
 
 
 def _patch_http_request(monkeypatch: pytest.MonkeyPatch, http_request) -> None:
@@ -43,6 +54,247 @@ def _patch_governed_write(monkeypatch: pytest.MonkeyPatch, governed_write) -> No
         "ai_test_asset_center.experiment_cleanup_executor",
     ):
         monkeypatch.setattr(f"{mod}.execute_governed_control_write", governed_write)
+
+
+def test_partial_execution_preserves_later_pretransport_block_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        outcome_finalizer,
+        "observe_experiment_requirements",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        outcome_finalizer,
+        "evaluate_contract_oracle",
+        lambda **kwargs: {
+            "status": "PROPERTY_HELD",
+            "verdict": "property_held",
+        },
+    )
+
+    result = outcome_finalizer.finalize_experiment_execution(
+        exp={"source_refs": [], "assertions": []},
+        steps_out=[{
+            "phase": "control",
+            "method": "GET",
+            "path": "/resources/one",
+            "status_code": 200,
+        }],
+        observations={},
+        contract_evidence_receipts=[],
+        fixture_receipts=[],
+        binding_materialization_receipts=[],
+        pre_transport_block_reasons=[
+            "BLOCKED_MISSING_BINDING:treatment_1:resourceId"
+        ],
+        cleanup_failures=0,
+        runtime_bindings={},
+        ops={},
+        actors={},
+        eid="experiment-1",
+        oid="obligation-1",
+        campaign_id="campaign-1",
+        resolved_campaign_id="campaign-1",
+        resolved_execution_id="execution-1",
+        started=0.0,
+    )
+
+    assert result["status"] == "BLOCKED"
+    assert result["reason_code"] == "BLOCKED_MISSING_BINDING"
+
+
+@pytest.mark.parametrize(
+    ("actors", "ops", "expected_reason"),
+    [
+        (
+            {},
+            {"op-read": {"method": "GET", "path": "/resources"}},
+            "BLOCKED_MISSING_ACTOR",
+        ),
+        (
+            {"actor-reader": {"role": "reader"}},
+            {"op-other": {"method": "GET", "path": "/resources"}},
+            "BLOCKED_MISSING_OPERATION",
+        ),
+    ],
+)
+def test_runtime_never_falls_back_across_missing_actor_or_operation_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+    actors: dict,
+    ops: dict,
+    expected_reason: str,
+) -> None:
+    transport_calls: list[tuple] = []
+    monkeypatch.setattr(
+        plan_executor,
+        "_run_http_step",
+        lambda **kwargs: transport_calls.append(tuple(kwargs.items())),
+    )
+
+    result = plan_executor.execute_non_barrier_plans(
+        control_plan=[],
+        treatment_plan=[{
+            "step_id": "treatment-1",
+            "actor_ref": "actor-reader",
+            "operation_ref": "op-read",
+            "method": "GET",
+            "path": "/resources",
+        }],
+        consumed_barrier_steps=set(),
+        actors=actors,
+        ops=ops,
+        tokens={},
+        runtime_bindings={},
+        activation_requirements={"treatment": ["treatment-1"]},
+        observations={},
+        eid="experiment-1",
+        oid="obligation-1",
+        resolved_campaign_id="campaign-1",
+        resolved_execution_id="execution-1",
+        campaign_id="campaign-1",
+        root=tmp_path,
+        project="project-1",
+        base_url="http://127.0.0.1:8088",
+        runtime_contract={},
+    )
+
+    assert transport_calls == []
+    assert result["steps"][0]["reason"] == expected_reason
+    assert result["contract_evidence_receipts"][0]["status"] == "BLOCKED"
+
+
+def test_runtime_preflight_rejects_http_response_as_write_effect_observer() -> None:
+    experiment = {
+        "compile_receipt": {"status": "COMPILED"},
+        "control_plan": [],
+        "treatment_plan": [{
+            "actor_ref": "actor-public",
+            "operation_ref": "op-create",
+            "intent": "permitted_operation_invocation",
+        }],
+        "observers": [{"observer_id": "http_response"}],
+        "assertions": [{
+            "kind": "http_status_class",
+            "template": "permitted_operation_invocation",
+        }],
+        "cleanup_plan": [{"operation_ref": "op-delete"}],
+        "safety_contract": {"governed_write": True},
+    }
+    behavior_ir = {
+        "actors": [{"id": "actor-public", "role": "public"}],
+        "operations": [
+            {
+                "id": "op-create",
+                "method": "POST",
+                "path": "/resources",
+                "read_write": "write",
+            },
+            {
+                "id": "op-delete",
+                "method": "DELETE",
+                "path": "/resources/{resourceId}",
+                "read_write": "write",
+            },
+        ],
+    }
+
+    ok, reason, detail = runtime_support.preflight_experiment_executable(
+        experiment,
+        behavior_ir=behavior_ir,
+        actor_tokens={},
+    )
+
+    assert ok is False
+    assert reason == "BLOCKED_MISSING_OBSERVER"
+    assert detail == "write_observer:op-create"
+
+
+@pytest.mark.parametrize(
+    ("actors", "operation_ref", "expected_reason"),
+    [
+        ({}, "op-create", "BLOCKED_MISSING_ACTOR"),
+        (
+            {"actor-writer": {"role": "public"}},
+            "op-missing",
+            "BLOCKED_MISSING_OPERATION",
+        ),
+    ],
+)
+def test_barrier_runtime_blocks_missing_identity_before_transport(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+    actors: dict,
+    operation_ref: str,
+    expected_reason: str,
+) -> None:
+    write_calls: list[dict] = []
+    monkeypatch.setattr(
+        barrier_executor,
+        "sandbox_write_allowed",
+        lambda **kwargs: (True, ""),
+    )
+    monkeypatch.setattr(
+        barrier_executor,
+        "execute_governed_control_write",
+        lambda **kwargs: write_calls.append(kwargs) or {},
+    )
+    steps = [
+        {
+            "step_id": "control-1",
+            "actor_ref": "actor-writer",
+            "operation_ref": operation_ref,
+            "barrier_group": "group-1",
+            "barrier_participant": "control",
+        },
+        {
+            "step_id": "treatment-1",
+            "actor_ref": "actor-writer",
+            "operation_ref": operation_ref,
+            "barrier_group": "group-1",
+            "barrier_participant": "treatment",
+        },
+    ]
+    result = barrier_executor.execute_barrier_plans(
+        control_plan=[steps[0]],
+        treatment_plan=[steps[1]],
+        actors=actors,
+        ops={
+            "op-create": {
+                "id": "op-create",
+                "method": "POST",
+                "path": "/resources",
+                "read_write": "write",
+                "request_example": {"value": 1},
+            },
+            "op-list": {
+                "id": "op-list",
+                "method": "GET",
+                "path": "/resources",
+                "read_write": "read",
+            },
+        },
+        tokens={},
+        runtime_bindings={},
+        activation_requirements={
+            "control": ["control-1"],
+            "treatment": ["treatment-1"],
+        },
+        eid="experiment-1",
+        oid="obligation-1",
+        resolved_campaign_id="campaign-1",
+        resolved_execution_id="execution-1",
+        campaign_id="campaign-1",
+        root=tmp_path,
+        project="project-1",
+        base_url="http://127.0.0.1:8088",
+        runtime_contract={},
+        observations={},
+    )
+
+    assert write_calls == []
+    assert {step["reason"] for step in result["steps"]} == {expected_reason}
 
 
 
@@ -856,6 +1108,12 @@ def test_isolation_executor_forces_owned_fixture_and_emits_ownership_receipt(
 
     def http_request(method, url, *, token="", body=None):
         path = url.removeprefix("http://target.invalid")
+        if path == "/resources":
+            return {
+                "status": 200,
+                "body": [],
+                "headers": {"content-type": "application/json"},
+            }
         assert path == "/resources/r-owned"
         return {
             "status": 200,
@@ -1728,6 +1986,191 @@ def test_unresolved_read_path_placeholder_blocks_before_target_transport(
     assert requested_urls == ["http://target.invalid/resources"]
 
 
+def test_owner_scoped_read_binding_precedes_disposable_fixture_write(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    behavior_ir = {
+        "operations": [{
+            "id": "op-read",
+            "method": "GET",
+            "path": "/resources/{id}",
+            "read_write": "read",
+        }, {
+            "id": "op-list",
+            "method": "GET",
+            "path": "/resources",
+            "read_write": "read",
+        }, {
+            "id": "op-create",
+            "method": "POST",
+            "path": "/resources",
+            "read_write": "write",
+            "request_example": {"name": "source-declared"},
+        }],
+        "actors": [
+            {"id": "actor-owner", "role": "public"},
+            {"id": "actor-viewer", "role": "public"},
+        ],
+    }
+    experiment = {
+        "experiment_id": "exp-owner-read-first",
+        "obligation_id": "obl-owner-read-first",
+        "compile_receipt": {"status": "COMPILED"},
+        "control_plan": [{
+            "step_id": "control_1",
+            "operation_ref": "op-read",
+            "actor_ref": "actor-owner",
+        }],
+        "treatment_plan": [{
+            "step_id": "treatment_1",
+            "operation_ref": "op-read",
+            "actor_ref": "actor-viewer",
+        }],
+        "binding_plan": [{
+            "target": "id",
+            "status": "runtime_resolvable",
+            "target_path": "/resources/{id}",
+            "source_priority": "same_actor_list_read",
+            "resolver_operations": [{
+                "operation_ref": "op-list",
+                "method": "GET",
+                "path": "/resources",
+            }],
+            "fixture_setup": {
+                "operation_ref": "op-create",
+                "method": "POST",
+                "path": "/resources",
+                "actor_refs": ["actor-owner"],
+                "body_template": {"name": "source-declared"},
+                "cleanup_operations": [],
+            },
+            "force_fixture_setup": True,
+            "fixture_owner_actor_ref": "actor-owner",
+        }],
+        "fixture_dag": {
+            "status": "READY",
+            "nodes": [{
+                "node_id": "bind-id",
+                "kind": "runtime_read_binding",
+                "target": "id",
+            }, {
+                "node_id": "prove-owner",
+                "kind": "ownership_fixture_proof",
+                "binding_target": "id",
+                "owner_actor_ref": "actor-owner",
+            }],
+            "setup_order": ["bind-id", "prove-owner"],
+        },
+        "observers": [{"observer_id": "http_response"}],
+        "assertions": [],
+    }
+    requested_urls: list[str] = []
+
+    def http_request(method: str, url: str, **_kwargs):
+        requested_urls.append(url)
+        if url.endswith("/resources"):
+            return {
+                "status": 200,
+                "body": [{"id": "resource-1"}],
+                "headers": {},
+                "duration_ms": 1,
+            }
+        return {"status": 200, "body": {"id": "resource-1"}, "headers": {}, "duration_ms": 1}
+
+    _patch_http_request(monkeypatch, http_request)
+    _patch_governed_write(
+        monkeypatch,
+        lambda **_kwargs: pytest.fail("read-resolvable binding performed fixture write"),
+    )
+
+    result = execute_one_experiment(
+        experiment,
+        behavior_ir=behavior_ir,
+        root=tmp_path,
+        project="project",
+        base_url="http://target.invalid",
+        runtime_contract={"environment_type": "test"},
+        campaign_id="campaign",
+        execution_id="execution-owner-read-first",
+        actor_tokens={},
+    )
+
+    binding = result["binding_materialization_receipts"][0]
+    assert binding["status"] == "BOUND"
+    assert binding["resolver_actor_ref"] == "actor-owner"
+    assert binding["ownership_proof_status"] == "OBSERVED"
+    assert requested_urls[0] == "http://target.invalid/resources"
+    assert requested_urls.count("http://target.invalid/resources/resource-1") == 2
+
+
+def test_sandbox_denial_stops_write_before_governed_transport(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    behavior_ir = {
+        "operations": [{
+            "id": "op-write",
+            "method": "POST",
+            "path": "/resources",
+            "read_write": "write",
+            "request_example": {"name": "source-declared"},
+        }, {
+            "id": "op-observe-resources",
+            "method": "GET",
+            "path": "/resources",
+            "read_write": "read",
+        }],
+        "actors": [{"id": "actor-writer", "role": "public"}],
+    }
+    experiment = {
+        "experiment_id": "exp-sandbox-denied",
+        "obligation_id": "obl-sandbox-denied",
+        "compile_receipt": {"status": "COMPILED"},
+        "control_plan": [],
+        "treatment_plan": [{
+            "step_id": "treatment_1",
+            "operation_ref": "op-write",
+            "actor_ref": "actor-writer",
+            "body": {"name": "source-declared"},
+        }],
+        "cleanup_plan": [{
+            "operation_ref": "op-write",
+            "method": "POST",
+            "path": "/resources",
+        }],
+        "safety_contract": {"governed_write": True},
+        "fixture_dag": {"status": "READY", "nodes": [], "setup_order": []},
+        "observers": [{"observer_id": "http_response"}],
+        "assertions": [],
+    }
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_plan_executor.sandbox_write_allowed",
+        lambda **_kwargs: (False, "READ_ONLY_MODE"),
+    )
+    _patch_governed_write(
+        monkeypatch,
+        lambda **_kwargs: pytest.fail("sandbox-denied write reached governed transport"),
+    )
+
+    result = execute_one_experiment(
+        experiment,
+        behavior_ir=behavior_ir,
+        root=tmp_path,
+        project="project",
+        base_url="http://target.invalid",
+        runtime_contract={"environment_type": "test"},
+        campaign_id="campaign",
+        execution_id="execution-sandbox-denied",
+        actor_tokens={},
+    )
+
+    assert result["status"] == "BLOCKED"
+    assert result["reason_code"] == "BLOCKED_TARGET_POLICY"
+    assert result["steps"][0]["status"] == "blocked_write"
+    assert result["steps"][0]["reason"] == "READ_ONLY_MODE"
+
+
 def test_unresolved_required_runtime_fixture_blocks_before_control_transport(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
@@ -1911,6 +2354,42 @@ def test_barrier_unresolved_body_placeholder_blocks_before_write_transport(
     assert result["cleanup_failures"] == 0
 
 
+def test_single_participant_barrier_is_explicit_pretransport_block(tmp_path) -> None:
+    observations: dict[str, object] = {}
+    result = barrier_executor.execute_barrier_plans(
+        control_plan=[{
+            "step_id": "control-only",
+            "operation_ref": "op-read",
+            "actor_ref": "actor-control",
+            "barrier_group": "group-incomplete",
+            "barrier_participant": "control",
+        }],
+        treatment_plan=[],
+        actors={"actor-control": {"id": "actor-control"}},
+        ops={"op-read": {"id": "op-read", "method": "GET", "path": "/resources"}},
+        tokens={},
+        runtime_bindings={},
+        activation_requirements={},
+        eid="exp-incomplete-barrier",
+        oid="obl-incomplete-barrier",
+        resolved_campaign_id="campaign",
+        resolved_execution_id="execution",
+        campaign_id="campaign",
+        root=tmp_path,
+        project="project",
+        base_url="http://target.invalid",
+        runtime_contract={"environment_type": "test"},
+        observations=observations,
+    )
+
+    assert observations["harness_error"] is True
+    assert result["pre_transport_block_reasons"] == [
+        "barrier_group_participant_count_invalid:group-incomplete:1"
+    ]
+    assert result["steps"][0]["status"] == "blocked_request"
+    assert result["contract_evidence_receipts"][0]["status"] == "BLOCKED"
+
+
 def test_accepted_fixture_without_identity_is_visible_cleanup_failure(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
@@ -1934,10 +2413,12 @@ def test_accepted_fixture_without_identity_is_visible_cleanup_failure(
             "after": {"status": 200, "body": [{"name": "unidentified"}]},
         },
     )
-    _patch_http_request(
-        monkeypatch,
-        lambda *_args, **_kwargs: pytest.fail("experiment must stop before probes"),
-    )
+    def binding_read_only(method, url, **_kwargs):
+        if url == "http://target.invalid/resources":
+            return {"status": 200, "body": [], "headers": {}, "duration_ms": 1}
+        pytest.fail("experiment must stop before probes")
+
+    _patch_http_request(monkeypatch, binding_read_only)
 
     result = execute_one_experiment(
         experiment,
@@ -2161,10 +2642,12 @@ def test_concurrency_executor_releases_control_and_treatment_with_barrier(
         "experiment_control": "r-control",
         "experiment_treatment": "r-treatment",
     }
+    submitted_bodies: list[dict] = []
 
     def governed_write(**kwargs):
         phase = kwargs["operation_phase"]
         if phase in {"experiment_control", "experiment_treatment"}:
+            submitted_bodies.append(dict(kwargs["body"]))
             transport_barrier.wait(timeout=2)
             write_id = write_ids[phase]
             return {
@@ -2211,6 +2694,12 @@ def test_concurrency_executor_releases_control_and_treatment_with_barrier(
         monkeypatch,
         governed_write,
     )
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_runtime_support._run_http_step",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("concurrency request semantics must not be inferred")
+        ),
+    )
 
     result = execute_one_experiment(
         experiment,
@@ -2237,6 +2726,13 @@ def test_concurrency_executor_releases_control_and_treatment_with_barrier(
         for step in result["steps"]
         if step.get("phase") in {"control", "treatment"}
     } == {"concurrent_write"}
+    assert submitted_bodies == [
+        experiment["control_plan"][0]["body"],
+        experiment["treatment_plan"][0]["body"],
+    ] or submitted_bodies == [
+        experiment["treatment_plan"][0]["body"],
+        experiment["control_plan"][0]["body"],
+    ]
 
 
 def test_source_invariant_obligation_compiles_typed_assertion_observers() -> None:
@@ -2874,6 +3370,112 @@ def test_validation_write_blocks_without_source_observation_path() -> None:
         environment_type="test",
     )
 
-    # http_response observer provides sufficient evidence for validation writes
-    # even when no separate effect-read observer is declared.
-    assert experiment["compile_receipt"]["status"] == "COMPILED"
+    assert experiment["compile_receipt"]["status"] == "BLOCKED"
+    assert experiment["compile_receipt"]["reason_code"] == "BLOCKED_MISSING_OBSERVER"
+    assert experiment["compile_receipt"]["detail"] == "write_observer"
+
+
+def test_auto_fixture_requires_identity_bound_cleanup_operation() -> None:
+    operations = {
+        "op-create": {
+            "id": "op-create",
+            "method": "POST",
+            "path": "/resources",
+            "request_example": {"name": "source-name"},
+        },
+        "op-archive-all": {
+            "id": "op-archive-all",
+            "method": "DELETE",
+            "path": "/resources/archive",
+        },
+    }
+    binding = {
+        "target": "id",
+        "target_path": "/resources/{id}",
+        "resolver_operations": [{
+            "operation_ref": "op-list",
+            "method": "GET",
+            "path": "/resources",
+        }],
+    }
+
+    assert _auto_fixture_create_for_binding_target(
+        "id",
+        binding,
+        operations,
+        {"id": binding},
+    ) is None
+
+    operations["op-delete"] = {
+        "id": "op-delete",
+        "method": "DELETE",
+        "path": "/resources/{id}",
+    }
+    fixture = _auto_fixture_create_for_binding_target(
+        "id",
+        binding,
+        operations,
+        {"id": binding},
+    )
+
+    assert fixture is not None
+    assert fixture["fixture_setup"]["cleanup_operations"] == [{
+        "operation_ref": "op-delete",
+        "method": "DELETE",
+        "path": "/resources/{id}",
+    }]
+
+
+def test_fixture_actor_is_not_inferred_from_admin_role() -> None:
+    actor_refs = _declared_fixture_actor_refs(
+        {"id": "op-create", "method": "POST", "path": "/resources"},
+        behavior_ir={
+            "actors": [{
+                "id": "actor-admin",
+                "role": "admin",
+                "credential_secret_ref": "secret_ref:test_accounts:admin",
+            }],
+        },
+    )
+
+    assert actor_refs == []
+
+
+def test_runtime_fixture_setup_does_not_fallback_to_any_available_actor() -> None:
+    setup = validated_fixture_setup(
+        {
+            "fixture_setup": {
+                "operation_ref": "op-create",
+                "method": "POST",
+                "path": "/resources",
+                "actor_refs": [],
+                "cleanup_operations": [{
+                    "operation_ref": "op-delete",
+                    "method": "DELETE",
+                    "path": "/resources/{id}",
+                }],
+            },
+        },
+        {
+            "op-create": {
+                "id": "op-create",
+                "method": "POST",
+                "path": "/resources",
+                "request_example": {"name": "source-name"},
+            },
+            "op-delete": {
+                "id": "op-delete",
+                "method": "DELETE",
+                "path": "/resources/{id}",
+            },
+        },
+        {
+            "actor-admin": {
+                "id": "actor-admin",
+                "role": "admin",
+                "credential_secret_ref": "secret_ref:test_accounts:admin",
+            },
+        },
+    )
+
+    assert setup == {}

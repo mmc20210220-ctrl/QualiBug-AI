@@ -110,9 +110,10 @@ def build_fixture_dag_for_experiment(
                 "constructible": constructible,
             })
             if not constructible:
-                # Non-constructible bindings are deferred to runtime.
-                # The auto-fixture or HTTP error response will handle them.
-                pass
+                blocked.append({
+                    "reason_code": "BLOCKED_MISSING_BINDING",
+                    "detail": f"runtime resolver invalid for {target}",
+                })
         elif status == "fixture_proof":
             create_path = _text(item.get("create_path"))
             owner_actor_ref = _text(item.get("owner_actor_ref"))

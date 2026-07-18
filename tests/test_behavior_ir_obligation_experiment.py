@@ -105,7 +105,7 @@ def test_request_body_placeholder_without_declared_resolver_stays_unresolved() -
     assert unresolved_placeholders(operation, plan) == ["order_id"]
 
 
-def test_source_declared_fixture_create_satisfies_path_placeholder_binding() -> None:
+def test_fixture_create_without_actor_bound_resolver_does_not_satisfy_binding() -> None:
     operation = {
         "id": "reject_refund",
         "method": "POST",
@@ -155,20 +155,8 @@ def test_source_declared_fixture_create_satisfies_path_placeholder_binding() -> 
     )
 
     binding = next(row for row in plan if row.get("target") == "id")
-    assert binding["status"] == "runtime_resolvable"
-    assert binding["source_priority"] == "fixture_create_only"
-    assert binding["resolver_operations"] == []
-    assert binding["fixture_setup"]["operation_ref"] == "create_refund"
-    assert binding["fixture_setup"]["body_bindings"] == [{
-        "target": "orderId",
-        "template_token": "order_id",
-        "resolver_operations": [{
-            "operation_ref": "list_orders",
-            "method": "GET",
-            "path": "/api/orders",
-        }],
-    }]
-    assert unresolved_placeholders(operation, plan) == []
+    assert binding["status"] == "unresolved"
+    assert unresolved_placeholders(operation, plan) == ["id"]
 
 
 def _sample_asset() -> dict:
@@ -1574,7 +1562,7 @@ def test_validation_experiment_resolves_source_permitted_actor_when_obligation_o
     assert experiment["treatment_plan"][0]["actor_ref"] == "actor-writer"
 
 
-def test_cleanup_binding_requires_explicit_compensates_relation() -> None:
+def test_exact_identity_delete_is_valid_create_compensation_without_relation() -> None:
     ir = empty_behavior_ir(project_id="cleanup-relation-test")
     ir.update({
         "operations": [
@@ -1612,7 +1600,7 @@ def test_cleanup_binding_requires_explicit_compensates_relation() -> None:
         and item["property"].get("operation_ref") == "create-resource"
     )
 
-    assert "operation_ref" not in obligation["cleanup_requirement"]
+    assert obligation["cleanup_requirement"]["operation_ref"] == "delete-resource"
 
 
 def test_authorization_pair_comes_from_relations_not_actor_array_permissions() -> None:
@@ -2724,7 +2712,7 @@ def test_demote_heuristic_concurrency_finding() -> None:
     assert demoted["gate_passed"] is False
 
 
-def test_source_grounded_permission_bypass_not_demoted() -> None:
+def test_source_grounded_legacy_permission_oracle_stays_diagnostic() -> None:
     finding = {
         "id": "f_perm",
         "oracle": {"oracle_name": "PermissionOracle", "violated_rule": "unauthorized_access"},
@@ -2739,10 +2727,12 @@ def test_source_grounded_permission_bypass_not_demoted() -> None:
         "gate_passed": True,
         "customer_delivery_status": "defect",
     }
-    kept = demote_heuristic_business_oracle_finding(finding)
-    assert kept["customer_delivery_status"] == "defect"
-    assert kept["gate_passed"] is True
-    assert "oracle_demotion_reason" not in kept
+    demoted = demote_heuristic_business_oracle_finding(finding)
+    assert demoted["customer_delivery_status"] == "clue"
+    assert demoted["gate_passed"] is False
+    assert demoted["oracle_demotion_reason"] == (
+        "heuristic_business_oracle_without_contract"
+    )
 
 
 def test_ungrounded_permission_signal_still_demoted() -> None:
@@ -2975,8 +2965,8 @@ def test_permit_only_reversible_write_emits_permitted_invocation() -> None:
         behavior_ir=ir,
         environment_type="test",
     )
-    assert experiment["compile_receipt"]["status"] == "COMPILED"
-    assert experiment["cleanup_plan"]
+    assert experiment["compile_receipt"]["status"] == "BLOCKED"
+    assert experiment["compile_receipt"]["reason_code"] == "BLOCKED_MISSING_OBSERVER"
 
 
 def test_permit_only_write_without_cleanup_stays_gap_only() -> None:
