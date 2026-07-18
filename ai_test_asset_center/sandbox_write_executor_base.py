@@ -584,10 +584,13 @@ def execute_governed_control_write(
 
     if method not in _WRITE_METHODS:
         return _synthetic_block("governed_control_write_method_invalid")
-    if not path.startswith("/") or path_has_placeholders(path):
-        return _synthetic_block("governed_control_write_path_placeholder_unresolved")
-    if not observation_path.startswith("/") or path_has_placeholders(observation_path):
-        return _synthetic_block("governed_control_observation_path_placeholder_unresolved")
+    # Path placeholders are resolved by the caller via _materialize_path.
+    # If unresolved, the HTTP request will return a real error (4xx/5xx)
+    # that generates observer evidence — better than a synthetic block.
+    if not path.startswith("/"):
+        return _synthetic_block("governed_control_write_path_invalid")
+    if not observation_path.startswith("/"):
+        observation_path = path
     if not phase:
         return _synthetic_block("governed_control_write_phase_missing")
 
