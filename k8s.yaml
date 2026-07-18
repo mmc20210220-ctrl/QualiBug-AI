@@ -2,7 +2,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: qualibug-v11
+  name: qualibug
 spec:
   replicas: 3
   selector:
@@ -15,6 +15,13 @@ spec:
     spec:
       containers:
       - name: api
-        image: qualibug:v11
+        image: qualibug:latest
         ports:
-        - containerPort: 8000
+        - containerPort: 8088
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "512Mi"
+          limits:
+            cpu: "2000m"
+            memory: "2Gi"
