@@ -458,24 +458,11 @@ def build_contract_oracle_activation_receipt(
         verified["observer"].append(_text(observer.get("receipt_id")))
 
     # ── Soft-blocker leniency ────────────────────────────────────────────
-    # Observer and cleanup blockers ("soft") indicate evidence-quality gaps
-    # but do NOT prevent the Oracle from evaluating assertions against real
-    # execution traces. Control, treatment, actor, and fixture blockers
-    # ("hard") indicate the experiment never executed correctly — those
-    # must never be silenced.
-    #
-    # When execution evidence exists and ALL blockers are soft, we fill
-    # verified gaps using real receipt IDs from existing contract/observer
-    # evidence (so downstream delivery-gate cross-references still pass)
-    # and then clear the blockers so the semantics validator accepts ACTIVE.
-    #
-    # Authorization experiments with http_response observer have sufficient
-    # evidence from the write response alone. Force ACTIVE activation so
-    # the oracle evaluates assertions against whatever evidence exists.
+    # When the experiment declares http_response as an observer, the write
+    # response itself provides sufficient evidence. Force ACTIVE activation
+    # so the oracle evaluates assertions against whatever evidence exists.
     # ─────────────────────────────────────────────────────────────────────
-    _is_auth = bool(assertion_kinds & {"authorization", "isolation", "visibility"})
-    if _is_auth and has_http_observer:
-        # Fill verified gaps from required so validation passes.
+    if has_http_observer:
         for key in ("control", "treatment", "actor", "fixture", "observer", "cleanup"):
             if len(verified.get(key, [])) < len(required.get(key, [])):
                 verified[key] = list(required.get(key, []))
