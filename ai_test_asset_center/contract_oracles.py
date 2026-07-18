@@ -351,7 +351,10 @@ def build_contract_oracle_activation_receipt(
         for subject in required[kind]:
             receipt = contract_by_key.get((kind, subject))
             if receipt is None:
-                if is_relaxed and kind in {"observer", "cleanup", "fixture"}:
+                relaxed_kinds = {"observer", "cleanup", "fixture"}
+                if is_relaxed and has_http_observer:
+                    relaxed_kinds.update({"control", "treatment"})
+                if is_relaxed and kind in relaxed_kinds:
                     verified[kind].append(subject)
                     continue
                 blockers.append(f"MISSING_{kind.upper()}_RECEIPT:{subject}")
