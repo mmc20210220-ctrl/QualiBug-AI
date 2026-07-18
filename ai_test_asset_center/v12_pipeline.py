@@ -23,6 +23,20 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+
+def _reset_pipeline_har_entries() -> None:
+    """Reset thread-local HAR storage at pipeline start.
+
+    Avoids module-level import (circular) — v12_compat_helpers may import us.
+    """
+    try:
+        from .v12_compat_helpers import _reset_v12_har_entries
+
+        _reset_v12_har_entries()
+    except Exception:
+        pass
+
+
 from .enterprise_campaign import (
     EnterpriseCampaign,
     EnterpriseCampaignStore,
@@ -49,13 +63,6 @@ from .disposable_identity_materializer import (
 )
 from .target_policy import build_target_policy_decision
 
-_v12_har_entries: list[dict[str, Any]] = []
-# NOTE: _v12_har_entries is a module-level global. It is reset at the start of each
-# pipeline run (line ~1414: `global _v12_har_entries; _v12_har_entries = []`).
-# CONCURRENCY WARNING: If two scans run concurrently in the same process (e.g.,
-# multithreaded server), HAR entries from one scan will contaminate the other.
-# This is safe for the current single-scan-per-process deployment model.
-# If multi-scan concurrency is ever enabled, replace this with threading.local().
 _SENSITIVE = {"authorization", "token", "password", "secret", "cookie", "api_key", "apikey"}
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _AUTH_ACCEPTANCE_KEY_TOKENS = (
@@ -489,6 +496,7 @@ def run_v12_pipeline(
 
     context_token = set_behavior_space_context(str(project), Path(root))
     try:
+        _reset_pipeline_har_entries()
         context = dict(campaign_context or {})
         _require_mainline_identity(context)
         submitted_api_spec_text = str(api_spec_text or "")
@@ -680,6 +688,7 @@ from .v12_compat_helpers import (  # noqa: F401
     _redacted_execution_trace_graph,
     _redacted_trace_path,
     _redacted_trace_status,
+    _reset_v12_har_entries,
     _scenario_executable,
     _test_write_fixture_prefix,
     _v12_har_report,

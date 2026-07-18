@@ -1,12 +1,12 @@
 """At-rest encryption for sensitive credential fields stored in config files.
 
 Uses PBKDF2-HMAC-SHA256 for key derivation and an HMAC-keystream XOR cipher
-(standard library only — no external dependencies). The master key is read
+(standard library only --- no external dependencies). The master key is read
 from the ``QUALIBUG_CRED_ENC_KEY`` environment variable.
 
-When no master key is configured, ``encrypt`` returns the plaintext unchanged
-and ``decrypt`` is a no-op, so existing deployments keep working. Set the env
-var to enable encryption for newly written secrets.
+When no master key is configured, ``encrypt`` emits a clear warning (and in
+production mode refuses to write credentials), so operators notice the gap
+before secrets are persisted in plaintext.
 
 Encrypted values use the format::
 
@@ -21,8 +21,11 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import logging
 import os
 import secrets
+
+logger = logging.getLogger(__name__)
 
 _MASTER_KEY_ENV = "QUALIBUG_CRED_ENC_KEY"
 _PBKDF2_ITER = 100_000
@@ -36,6 +39,32 @@ class CredentialDecryptionError(ValueError):
 def _master_key() -> bytes | None:
     raw = os.environ.get(_MASTER_KEY_ENV, "").strip()
     return raw.encode("utf-8") if raw else None
+
+
+def _is_production() -> bool:
+    return os.environ.get("QUALIBUG_PRODUCTION", "").strip() in ("1", "true", "yes")
+
+
+def ensure_credential_key() -> str:
+    """Verify the credential encryption key is configured.
+
+    Returns ``"ok"`` when available, ``"plaintext_warning"`` when missing but
+    non-production, or raises ``RuntimeError`` when missing in production.
+    Should be called at startup by every entrypoint that may write credentials.
+    """
+    if _master_key():
+        return "ok"
+    if _is_production():
+        raise RuntimeError(
+            f"{_MASTER_KEY_ENV} is not set.  "
+            "Refusing to run in production with credential encryption disabled."
+        )
+    logger.warning(
+        "%s is not set --- credentials will be stored as plaintext.  "
+        "Set this environment variable to enable at-rest encryption.",
+        _MASTER_KEY_ENV,
+    )
+    return "plaintext_warning"
 
 
 def _derive_keys(master: bytes, salt: bytes) -> tuple[bytes, bytes]:
@@ -59,14 +88,24 @@ def _keystream(key: bytes, nonce: bytes, length: int) -> bytes:
 def encrypt(plaintext: str) -> str:
     """Encrypt *plaintext*.
 
-    Returns a prefixed ciphertext string, or the original plaintext when no
-    master key is configured (graceful degradation for existing deployments).
+    Returns a prefixed ciphertext string.  When no master key is configured
+    in non-production mode a warning is emitted and the plaintext is returned
+    unchanged.  In production mode the call refuses to write credentials.
     """
     if not plaintext:
         return plaintext
     master = _master_key()
     if not master:
-        return plaintext  # no key configured — keep plaintext for compatibility
+        if _is_production():
+            raise RuntimeError(
+                f"{_MASTER_KEY_ENV} is not set --- refusing to write credentials "
+                "in plaintext while QUALIBUG_PRODUCTION=1."
+            )
+        logger.warning(
+            "QUALIBUG_CRED_ENC_KEY is not set --- storing credential in plaintext.  "
+            "Set the environment variable to enable at-rest encryption."
+        )
+        return plaintext
     salt = secrets.token_bytes(16)
     nonce = secrets.token_bytes(16)
     enc_key, mac_key = _derive_keys(master, salt)

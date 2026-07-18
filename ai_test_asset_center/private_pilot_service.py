@@ -12,9 +12,16 @@ root and compatibility re-export surface.
 """
 
 import os
+import signal
+import socket
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+
+_MAX_REQUEST_BODY = int(os.environ.get("QUALIBUG_MAX_REQUEST_BODY", str(10 * 1024 * 1024)))  # 10 MiB
+_HTTP_TIMEOUT = int(os.environ.get("QUALIBUG_HTTP_TIMEOUT", "30"))  # seconds
+_REQUEST_QUEUE_SIZE = int(os.environ.get("QUALIBUG_REQUEST_QUEUE_SIZE", "128"))
 
 from . import db_persistence as db_persist  # noqa: F401
 from .customer_delivery_gate import split_customer_delivery_tracks as _partition_delivery_tracks
@@ -190,15 +197,68 @@ class PrivatePilotHandler(
     def log_message(self, fmt: str, *args: object) -> None:
         return
 
+    def handle_one_request(self) -> None:
+        """Wrap the parent handler with a request-body size guard."""
+        content_length = self.headers.get("Content-Length")
+        if content_length is not None:
+            try:
+                length = int(content_length)
+            except (TypeError, ValueError):
+                self.send_error(400, "Bad Request: invalid Content-Length")
+                return
+            if length > _MAX_REQUEST_BODY:
+                self.send_error(413, "Payload Too Large")
+                return
+        super().handle_one_request()
 
-def run_private_pilot_service(root: Path | None = None, host: str | None = None, port: int | None = None) -> ThreadingHTTPServer:
+
+class QualiBugHTTPServer(ThreadingHTTPServer):
+    """Production-hardened ThreadingHTTPServer with SO_REUSEADDR,
+    configurable request queue, and per-connection timeouts."""
+
+    allow_reuse_address = True
+    daemon_threads = True
+
+    def __init__(self, server_address: tuple[str, int], handler_class: type[BaseHTTPRequestHandler]) -> None:
+        self.request_queue_size = _REQUEST_QUEUE_SIZE
+        self.timeout = _HTTP_TIMEOUT
+        super().__init__(server_address, handler_class)
+
+    def server_bind(self) -> None:
+        super().server_bind()
+        if hasattr(self, "socket") and self.socket is not None:
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            except OSError:
+                pass
+
+    def get_request(self) -> socket.socket:
+        conn, addr = super().get_request()
+        if self.timeout and self.timeout > 0:
+            conn.settimeout(self.timeout)
+        return conn, addr
+
+
+_global_server: QualiBugHTTPServer | None = None
+_shutdown_event = threading.Event()
+
+
+def _signal_handler(signum: int, frame: Any) -> None:
+    """Forward SIGTERM / SIGINT to the shutdown event so serve_forever exits."""
+    _shutdown_event.set()
+
+
+def run_private_pilot_service(root: Path | None = None, host: str | None = None, port: int | None = None) -> QualiBugHTTPServer:
+    global _global_server
     root = root or _root()
     host = host or os.environ.get("QUALIBUG_BIND_HOST", "127.0.0.1")
     if host in {"0.0.0.0", "::"} and os.environ.get("QUALIBUG_ALLOW_PUBLIC_BIND") != "1":
         raise ValueError("Public binding is disabled by default. Set QUALIBUG_ALLOW_PUBLIC_BIND=1 only behind a trusted reverse proxy.")
     selected_port = int(os.environ.get("QUALIBUG_PORT", "8088")) if port is None else int(port)
-    server = ThreadingHTTPServer((host, selected_port), PrivatePilotHandler)
+    server = QualiBugHTTPServer((host, selected_port), PrivatePilotHandler)
     server.qualibug_private_root = root
+    _global_server = server
     _dbg_report(
         hypothesis_id="A",
         msg="[DEBUG] private-pilot service bound",
@@ -207,6 +267,9 @@ def run_private_pilot_service(root: Path | None = None, host: str | None = None,
             "root": str(root),
             "host": host,
             "port": selected_port,
+            "timeout": _HTTP_TIMEOUT,
+            "request_queue_size": _REQUEST_QUEUE_SIZE,
+            "max_request_body": _MAX_REQUEST_BODY,
         },
     )
     return server

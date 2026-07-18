@@ -870,6 +870,10 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
 def main() -> None:
     import argparse
 
+    from .credential_crypto import ensure_credential_key
+
+    ensure_credential_key()
+
     parser = argparse.ArgumentParser(description="QualiBug enterprise source-grounded scanner")
     parser.add_argument("scan", nargs="?", default="scan")
     parser.add_argument("--project", required=True)

@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -27,12 +28,29 @@ from .target_policy import build_target_policy_decision
 
 logger = logging.getLogger(__name__)
 
-_v12_har_entries: list[dict[str, Any]] = []
-_SENSITIVE = {"authorization", "token", "password", "secret", "cookie", "api_key", "apikey"}
-_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+# Thread-safe HAR storage using threading.local() so concurrent scans
+# (e.g. multithreaded server, background continuous discovery) never
+# contaminate each other's entry lists.
+_har_store = threading.local()
+
+def _ensure_har_list() -> list[dict[str, Any]]:
+    """Return the per-thread HAR entry list, initialising it on first access."""
+    try:
+        return _har_store.entries
+    except AttributeError:
+        _har_store.entries = []
+        return _har_store.entries
+
+def _reset_v12_har_entries() -> None:
+    """Discard all per-thread HAR entries.
+
+    Called at the start of every pipeline run so stale traffic from a
+    previous scan never leaks into the current report.
+    """
+    _har_store.entries = []
 
 def _record_v12_har(method: str, url: str, status: int, body: Any, actor: str = "", elapsed_ms: float = 0.0) -> None:
-    _v12_har_entries.append({
+    _ensure_har_list().append({
         "startedDateTime": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
         "time": elapsed_ms,
         "request": {"method": method, "url": url},
@@ -42,15 +60,16 @@ def _record_v12_har(method: str, url: str, status: int, body: Any, actor: str = 
 
 
 def _v12_har_report() -> dict[str, Any]:
-    if not _v12_har_entries:
+    entries = _ensure_har_list()
+    if not entries:
         return {"status": "no_traffic"}
     counts: dict[int, int] = {}
-    entries: list[dict[str, Any]] = []
-    for item in _v12_har_entries:
+    result: list[dict[str, Any]] = []
+    for item in entries:
         status = int(item.get("response", {}).get("status") or 0)
         counts[status] = counts.get(status, 0) + 1
         content = item.get("response", {}).get("content", {})
-        entries.append({
+        result.append({
             "startedDateTime": item.get("startedDateTime"),
             "time": item.get("time"),
             "request": item.get("request"),
@@ -59,11 +78,14 @@ def _v12_har_report() -> dict[str, Any]:
         })
     return {
         "status": "captured",
-        "total_calls": len(entries),
+        "total_calls": len(result),
         "error_responses": sum(count for status, count in counts.items() if status >= 400),
         "status_distribution": counts,
-        "entries": entries,
+        "entries": result,
     }
+
+_SENSITIVE = {"authorization", "token", "password", "secret", "cookie", "api_key", "apikey"}
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def is_v12_enabled() -> bool:

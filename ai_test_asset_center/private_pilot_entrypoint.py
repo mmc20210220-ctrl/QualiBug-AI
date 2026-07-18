@@ -8,6 +8,7 @@ HTTP server.
 """
 
 import os
+import signal
 import time
 from typing import Any
 
@@ -183,7 +184,10 @@ def run_server() -> None:
     _started = time.perf_counter()
     # #endregion
     install_runtime_patches()
+    from ai_test_asset_center.credential_crypto import ensure_credential_key
     from ai_test_asset_center.policy_wiring import bind_product_installed_mainline_authority
+
+    _cred_key_status = ensure_credential_key()
 
     _mainline_bind = bind_product_installed_mainline_authority()
     _service._dbg_report(
@@ -192,6 +196,28 @@ def run_server() -> None:
         data=_mainline_bind,
     )
     server = _service.run_private_pilot_service()
+
+    _shutdown_requested = False
+
+    def _on_shutdown(signum: int, frame: Any) -> None:
+        nonlocal _shutdown_requested
+        if _shutdown_requested:
+            return
+        _shutdown_requested = True
+        _service._dbg_report(
+            hypothesis_id="B",
+            msg="[DEBUG] received shutdown signal, draining connections",
+            data={"signal": signum, "elapsed_ms": int((time.perf_counter() - _started) * 1000)},
+        )
+        # shutdown() is signal-safe: it sets an internal flag and does
+        # not acquire locks; serve_forever() will exit on the next poll
+        # cycle then finally: will call server_close() cleanly.
+        server.shutdown()
+
+    signal.signal(signal.SIGINT, _on_shutdown)
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, _on_shutdown)
+
     try:
         server.serve_forever()
     finally:
