@@ -790,6 +790,34 @@ def test_shadow_finding_retains_semantic_gate_status_for_private_evaluator() -> 
     assert shadow[0]["delivery_gate_receipt_id"] == "gate-1"
 
 
+def test_shadow_finding_resolves_selected_key_with_exact_variant_gate_identity() -> None:
+    from ai_test_asset_center.discovery_runtime import _authority_findings
+
+    deliverable, candidates, shadow = _authority_findings(
+        raw_findings=[{
+            "finding_id": "finding-variant",
+            "selected_obligation_id": "obl-selected",
+            "obligation_id": "obl-selected__v_abcd",
+        }],
+        gate_results={
+            "obl-selected": {
+                "status": "DELIVERABLE",
+                "gate_receipt_id": "gate-variant",
+                "identity": {
+                    "finding_id": "finding-variant",
+                    "obligation_id": "obl-selected__v_abcd",
+                },
+            }
+        },
+        contract=_contract("experiment_candidate"),
+    )
+
+    assert deliverable == []
+    assert candidates == []
+    assert shadow[0]["obligation_id"] == "obl-selected__v_abcd"
+    assert shadow[0]["delivery_gate_receipt_id"] == "gate-variant"
+
+
 def test_campaign_identity_exists_before_planning_and_execution() -> None:
     from ai_test_asset_center.discovery_mainline import run_discovery_mainline
 

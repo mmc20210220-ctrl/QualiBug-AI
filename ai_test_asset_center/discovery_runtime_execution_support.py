@@ -353,10 +353,18 @@ def _authority_findings(
             },
         }
         findings_by_id[finding_id] = row
-        gate = _dict(gate_results.get(_text(row.get("obligation_id"))))
+        selected_obligation_id = _text(
+            row.get("selected_obligation_id") or row.get("obligation_id")
+        )
+        gate = _dict(gate_results.get(selected_obligation_id))
         if not gate:
             raise MainlineContractError(
                 f"finding_gate_receipt_missing:{finding_id}"
+            )
+        gate_obligation_id = _text(_dict(gate.get("identity")).get("obligation_id"))
+        if gate_obligation_id and gate_obligation_id != _text(row.get("obligation_id")):
+            raise MainlineContractError(
+                f"finding_gate_obligation_mismatch:{finding_id}"
             )
         if not contract["customer_outputs_published"]:
             shadow.append({
