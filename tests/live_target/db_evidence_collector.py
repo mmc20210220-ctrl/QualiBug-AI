@@ -15,11 +15,20 @@ Usage:
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Any
 
 # We don't need psycopg2 — use subprocess to call psql for portability
 import subprocess
+
+_SAFE_IDENTIFIER_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+
+
+def _safe_identifier(name: str) -> str:
+    if not _SAFE_IDENTIFIER_RE.match(name):
+        raise ValueError(f"unsafe SQL identifier: {name!r}")
+    return name
 
 PSQL_BIN = "C:/Program Files/PostgreSQL/17/bin/psql.exe"
 
@@ -89,7 +98,8 @@ class DBEvidenceCollector:
 
     def snapshot(self, table: str, where_clause: str = "1=1") -> dict:
         """Take a before/after snapshot of specific rows."""
-        sql = f"SELECT row_to_json(t.*) FROM (SELECT * FROM {table} WHERE {where_clause}) t"
+        table = _safe_identifier(table)
+        sql = f"SELECT row_to_json(t.*) FROM (SELECT * FROM \"{table}\" WHERE {where_clause}) t"
         rows = self.query_json(sql)
         return {
             "table": table,

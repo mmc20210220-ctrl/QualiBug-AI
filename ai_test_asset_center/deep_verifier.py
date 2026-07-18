@@ -6,6 +6,17 @@ from __future__ import annotations
 import urllib.request, json, time, re, threading, queue
 from typing import Any
 
+_SAFE_IDENTIFIER_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+
+
+def _safe_identifier(name: str) -> str:
+    """Validate a SQL identifier (table/column name) against a strict
+    whitelist to prevent injection.  Raises ValueError if the name
+    contains anything other than alphanumerics and underscores."""
+    if not _SAFE_IDENTIFIER_RE.match(name):
+        raise ValueError(f"unsafe SQL identifier: {name!r}")
+    return name
+
 
 def run_deep_tests(config: dict | None = None, routes: list[dict] | None = None) -> list[dict]:
     """Run deep verification tests driven by configuration and API routes.
@@ -461,23 +472,39 @@ def run_deep_tests(config: dict | None = None, routes: list[dict] | None = None)
                 
                 # Simple check: any numeric column with negative values
                 for table in tables:
-                    cur.execute(f"SELECT column_name, data_type FROM information_schema.columns WHERE table_name='{table}' AND data_type IN ('integer','numeric','real','double precision') LIMIT 5")
+                    table = _safe_identifier(table)
+                    cur.execute(
+                        "SELECT column_name, data_type FROM information_schema.columns "
+                        "WHERE table_name=%s AND data_type IN "
+                        "('integer','numeric','real','double precision') LIMIT 5",
+                        (table,),
+                    )
                     for col_name, _ in cur.fetchall():
                         try:
-                            cur.execute(f"SELECT COUNT(*) FROM {table} WHERE {col_name} < 0")
+                            col_name = _safe_identifier(col_name)
+                            cur.execute(f"SELECT COUNT(*) FROM \"{table}\" WHERE \"{col_name}\" < 0")
                             neg = cur.fetchone()[0]
                             if neg > 0:
-                                # Find primary key
-                                cur.execute(f"SELECT column_name FROM information_schema.columns WHERE table_name='{table}' AND column_name LIKE '%id' LIMIT 1")
+                                cur.execute(
+                                    "SELECT column_name FROM information_schema.columns "
+                                    "WHERE table_name=%s AND column_name LIKE '%%id' LIMIT 1",
+                                    (table,),
+                                )
                                 pk_rows = cur.fetchall()
                                 pk = pk_rows[0][0] if pk_rows else col_name
-                                # 动态发现业务可读字段（通用：不硬编码字段名）
-                                cur.execute(f"SELECT column_name FROM information_schema.columns WHERE table_name='{table}' AND column_name IN ('order_id','sku','product_id','user_id','email','name','product_name','code','phone','amount','status')")
+                                cur.execute(
+                                    "SELECT column_name FROM information_schema.columns "
+                                    "WHERE table_name=%s AND column_name IN "
+                                    "('order_id','sku','product_id','user_id','email','name',"
+                                    "'product_name','code','phone','amount','status')",
+                                    (table,),
+                                )
                                 biz_cols = [r[0] for r in cur.fetchall()]
-                                # 构建查询：主键 + 负值字段 + 业务字段
                                 select_cols = [pk, col_name] + [c for c in biz_cols if c != pk and c != col_name]
-                                select_sql = ", ".join(select_cols)
-                                cur.execute(f"SELECT {select_sql} FROM {table} WHERE {col_name} < 0 LIMIT 3")
+                                select_col_names = ", ".join(f'"{_safe_identifier(c)}"' for c in select_cols)
+                                cur.execute(
+                                    f"SELECT {select_col_names} FROM \"{table}\" WHERE \"{col_name}\" < 0 LIMIT 3"
+                                )
                                 for row in cur.fetchall():
                                     pk_val, neg_val = row[0], row[1]
                                     # 构建业务可读的区分信息（通用：跳过UUID格式值，用户看不懂）

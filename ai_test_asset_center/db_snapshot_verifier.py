@@ -13,10 +13,19 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+_SAFE_IDENTIFIER_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+
+
+def _safe_identifier(name: str) -> str:
+    if not _SAFE_IDENTIFIER_RE.match(name):
+        raise ValueError(f"unsafe SQL identifier: {name!r}")
+    return name
 
 
 @dataclass
@@ -299,7 +308,8 @@ class DBSnapshotVerifier:
 
         for table in tables:
             try:
-                rows = self._query_all(f"SELECT * FROM {table}")
+                table = _safe_identifier(table)
+                rows = self._query_all(f"SELECT * FROM \"{table}\"")
             except Exception:
                 continue
 
@@ -454,7 +464,8 @@ class DBSnapshotVerifier:
             return list(collection.find({}).limit(200))
 
         if self._db_type == "cassandra":
-            rows = self._conn.execute(f"SELECT * FROM {sql_or_collection} LIMIT 200")
+            safe_table = _safe_identifier(sql_or_collection)
+            rows = self._conn.execute(f"SELECT * FROM {safe_table} LIMIT 200")
             return [dict(row._asdict()) if hasattr(row, '_asdict') else dict(zip(row._fields, row))
                    for row in rows]
 
