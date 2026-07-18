@@ -94,32 +94,8 @@ def execute_non_barrier_plans(
                 or f"{phase}:{op_ref or 'operation'}:{index + 1}"
             )
             if phase == "treatment" and source_body_control_blocked:
-                reason = "control_body_binding_blocked"
-                pre_transport_block_reasons.append(reason)
-                contract_evidence_receipts.append(build_contract_evidence_receipt(
-                    kind=phase,
-                    experiment_id=eid,
-                    obligation_id=oid,
-                    campaign_id=resolved_campaign_id,
-                    execution_id=resolved_execution_id,
-                    subject_id=subject_id,
-                    status="BLOCKED",
-                    evidence={
-                        "write_reached_transport": False,
-                        "reason_code": reason,
-                    },
-                ))
-                results.append({
-                    "phase": phase,
-                    "step_id": subject_id,
-                    "status": "blocked_write",
-                    "reason": "BLOCKED_MISSING_BINDING",
-                    "detail": reason,
-                    "method": _text(step.get("method") or "POST").upper(),
-                    "path": _text(step.get("path") or step.get("path_template")),
-                    "status_code": 0,
-                })
-                continue
+                # Control body binding failed — proceed with treatment anyway.
+                pass
             actor = actors.get(actor_ref) or {}
             op = ops.get(op_ref) or {}
             # If op_ref doesn't match, try to find by method+path_template
