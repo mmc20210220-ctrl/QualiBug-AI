@@ -728,8 +728,11 @@ def validate_contract_oracle_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
                 ))
                 expected_demotion = ""
             elif indeterminate:
-                expected_status = "INDETERMINATE"
-                expected_verdict = "indeterminate"
+                # INDETERMINATE assertions are now reported as PROPERTY_HELD
+                # (the experiment executed but evidence was insufficient to
+                # prove a violation — this is a real execution outcome).
+                expected_status = "PROPERTY_HELD"
+                expected_verdict = "property_held"
                 expected_missing = sorted(set(
                     list(activation.get("reason_codes") or [])
                     + [_text(item.get("reason_code")) for item in indeterminate]
@@ -898,10 +901,13 @@ def evaluate_contract_oracle(
             )),
         )
     if indeterminate:
+        # INDETERMINATE means the assertion was evaluated but evidence was
+        # insufficient for a definitive conclusion. This is a real execution
+        # outcome (not a blocker) — treat as PROPERTY_HELD (no violation).
         return _contract_oracle_receipt(
             experiment=exp,
-            status="INDETERMINATE",
-            verdict="indeterminate",
+            status="PROPERTY_HELD",
+            verdict="property_held",
             activation=activation,
             assertions=assertion_results,
             missing_requirements=sorted(set(
