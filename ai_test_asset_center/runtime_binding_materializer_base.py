@@ -448,10 +448,25 @@ def validated_fixture_setup(
         != path
         or not path.startswith("/")
         or path_has_placeholders(path)
-        or not isinstance(setup.get("body_template"), dict)
-        or not setup.get("body_template")
     ):
         return {}
+    # Body template: prefer explicit declaration, fall back to the
+    # operation's documented request example from the Behavior IR.
+    # This is source-grounded (from the API spec) and industry-neutral.
+    body_template = _dict(setup.get("body_template"))
+    if not body_template:
+        body_template = _dict(operation.get("request_example"))
+        if not body_template:
+            request_schema = _dict(operation.get("request_schema"))
+            for media in _dict(request_schema.get("content")).values():
+                if isinstance(media, dict):
+                    example = media.get("example")
+                    if isinstance(example, dict) and example:
+                        body_template = example
+                        break
+    if not body_template:
+        return {}
+    setup = {**setup, "body_template": body_template}
     body_bindings: list[dict[str, Any]] = []
     for raw in _list(setup.get("body_bindings")):
         if not isinstance(raw, dict):

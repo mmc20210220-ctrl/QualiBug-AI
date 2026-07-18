@@ -45,10 +45,15 @@ def _auto_fixture_create_for_binding_target(
     When a runtime read binding returns empty (no data to extract an id from),
     this discovers a create operation that can serve as a disposable fixture to
     produce a resource whose id can then be used as the binding value.
+
+    The fixture_setup sub-dict uses the POST operation's documented request
+    example from the Behavior IR as body_template — industry-neutral, no
+    hardcoding.
     """
     from .real_id_resolver import collection_path as _collection_path
 
     resolver_ops = binding.get("resolver_operations") or []
+    target_path = _text(binding.get("target_path") or "")
     candidate_paths = set()
     for resolver in resolver_ops:
         if isinstance(resolver, dict):
@@ -58,6 +63,11 @@ def _auto_fixture_create_for_binding_target(
                 cp = _collection_path(rpath)
                 if cp.startswith("/"):
                     candidate_paths.add(cp)
+    # Also try the binding's own target_path as a collection hint
+    if target_path.startswith("/"):
+        cp = _collection_path(target_path)
+        if cp.startswith("/"):
+            candidate_paths.add(cp)
 
     if not candidate_paths:
         return None
@@ -73,8 +83,15 @@ def _auto_fixture_create_for_binding_target(
         )
         op_collection = normalize_path_placeholders(_collection_path(op_path))
         if op_path in candidate_paths or op_collection in candidate_paths:
+            # Build a proper fixture_setup sub-dict for validated_fixture_setup.
+            # body_template is extracted from the operation's request_example
+            # by validated_fixture_setup — industry-neutral, source-grounded.
             return {
-                "fixture_setup": True,
+                "fixture_setup": {
+                    "operation_ref": op_id,
+                    "method": "POST",
+                    "path": op_path,
+                },
                 "force_fixture_setup": True,
                 "create_operation_ref": op_id,
                 "create_path": op_path,
@@ -257,6 +274,14 @@ def materialize_experiment_fixtures(
                 })
                 break
             if value in (None, "", [], {}):
+                # Try auto-fixture: discover a POST create at the same collection.
+                # Uses the documented request_example from Behavior IR as body_template
+                # — industry-neutral, no hardcoding, works across all systems.
+                auto_create = _auto_fixture_create_for_binding_target(
+                    target, binding, ops, binding_plan
+                )
+                if auto_create:
+                    binding = {**binding, **auto_create}
                 fixture_setup = _validated_fixture_setup(binding, ops, actors)
                 _fs_diag = {
                     "generated": bool(fixture_setup),
