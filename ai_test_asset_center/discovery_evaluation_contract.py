@@ -2447,8 +2447,8 @@ def persist_evaluation_report(
 GOAL_GATE_STATUS_SCHEMA = "qualibug.discovery-goal-gate-status.v1"
 
 # Frozen product ports — discovery/harness evolution must never retarget these.
+from .version import DEFAULT_PRIVATE_PILOT_PORT as PRODUCT_BACKEND_PORT
 PRODUCT_FRONTEND_PORT = 5174
-PRODUCT_BACKEND_PORT = 8088
 
 # Absolute measured thresholds. Missing measurement never becomes a pass.
 CAPABILITY_BREAKTHROUGH_THRESHOLDS: dict[str, float | int] = {

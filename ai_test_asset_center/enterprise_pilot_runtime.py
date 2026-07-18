@@ -41,6 +41,7 @@ from .enterprise_testops_control_plane import (
     build_test_data_orchestration,
     load_environment_config,
 )
+from .version import DEFAULT_PRIVATE_PILOT_PORT
 
 def _run_real_project_discovery_stub(*args: Any, **kwargs: Any) -> dict[str, Any]:
     """Stub for removed real_project_defect_discovery module."""
@@ -202,7 +203,7 @@ def _default_config(project: str) -> dict[str, Any]:
         "private_mode": True,
         "deployment": {
             "bind_host": "127.0.0.1",
-            "port": 8088,
+            "port": DEFAULT_PRIVATE_PILOT_PORT,
             "auth_mode": "trusted_reverse_proxy",
             "identity_header": "X-QualiBug-Actor",
             "role_header": "X-QualiBug-Role",
@@ -249,7 +250,7 @@ def _validate_deployment(value: dict[str, Any]) -> dict[str, Any]:
     if host in {"0.0.0.0", "::"} and not bool(result.get("allow_public_bind")):
         raise ValueError("私有化运行时默认禁止公开绑定；如需反向代理，请保持 allow_public_bind=false")
     result["bind_host"] = host
-    result["port"] = max(1, min(65535, int(result.get("port") or 8088)))
+    result["port"] = max(1, min(65535, int(result.get("port") or DEFAULT_PRIVATE_PILOT_PORT)))
     result["auth_mode"] = str(result.get("auth_mode") or "trusted_reverse_proxy")
     result["identity_header"] = str(result.get("identity_header") or "X-QualiBug-Actor")
     result["role_header"] = str(result.get("role_header") or "X-QualiBug-Role")

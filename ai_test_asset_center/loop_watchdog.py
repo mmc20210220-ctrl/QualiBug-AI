@@ -44,7 +44,7 @@ HEARTBEAT_TIMEOUT_S = int(os.environ.get("QUALIBUG_HEARTBEAT_TIMEOUT_S", "900"))
 DEGRADATION_BUG_DROP = 0.5      # Bug 数下降 >50% → 标记退化
 DEGRADATION_INCONCLUSIVE_RISE = 0.20  # Inconclusive 率上升 >20pp → 标记退化
 TARGET_HEALTH_TIMEOUT_S = 10
-QUALIBUG_PORT = 8088
+from .version import DEFAULT_PRIVATE_PILOT_PORT as QUALIBUG_PORT
 POLL_INTERVAL_S = 120           # cron 每 2 分钟跑一次
 
 
