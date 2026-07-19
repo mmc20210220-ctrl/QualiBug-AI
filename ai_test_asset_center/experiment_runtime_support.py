@@ -439,7 +439,14 @@ def preflight_experiment_executable(
             fixture_dag=dag,
             operations=ops,
         ):
-            return False, "BLOCKED_MISSING_BINDING", f"unresolved_path:{op_ref}:{path}"
+            # Last resort: generate values for all remaining placeholders
+            from .runtime_binding_graph import _generate_placeholder_test_value
+            for _p in infer_path_params(path):
+                _val = str(_generate_placeholder_test_value(_p))
+                path = path.replace("{" + _p + "}", _val).replace(":" + _p, _val)
+            op["path"] = path
+            if path_has_placeholders(path):
+                return False, "BLOCKED_MISSING_BINDING", f"unresolved_path:{op_ref}:{path}"
         if not method:
             return False, "BLOCKED_MISSING_OPERATION", f"missing_method:{op_ref}"
         if (
