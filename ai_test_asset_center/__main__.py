@@ -625,8 +625,8 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
 
     result = attach_quality_projection_to_scan_result(result)
     # ── Authorization evidence gate ──
-    # Downgrade authorization findings where the control request itself
-    # failed — the test setup was broken, not the authorization boundary.
+    # Only downgrade findings from permission-matrix-inferred operations
+    # that lack real API endpoints. Original API findings are preserved.
     _downgraded = 0
     for _finding in (result.get("findings") or []):
         if _finding.get("risk_family") != "authorization":
@@ -634,10 +634,17 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
         _evidence = _finding.get("evidence") or {}
         _control_ok = _evidence.get("control_succeeded")
         if _control_ok is False or str(_control_ok).lower() == "false":
-            _finding["customer_delivery_status"] = "candidate"
-            _finding["confirmation_status"] = "candidate"
-            _finding["gate_override_reason"] = "AUTH_CONTROL_FAILED"
-            _downgraded += 1
+            # Only downgrade if ALL source_refs are from inferred operations
+            _srcs = _finding.get("source_refs") or []
+            _all_inferred = all(
+                str(s.get("kind", "")).startswith("permission_")
+                for s in _srcs if isinstance(s, dict)
+            ) if _srcs else False
+            if _all_inferred:
+                _finding["customer_delivery_status"] = "candidate"
+                _finding["confirmation_status"] = "candidate"
+                _finding["gate_override_reason"] = "INFERRED_OP_CONTROL_FAILED"
+                _downgraded += 1
     if _downgraded:
         _formal = [f for f in (result.get("findings") or []) if f.get("customer_delivery_status") == "defect"]
         result["total_findings"] = len(_formal)
