@@ -183,7 +183,7 @@ def finalize_experiment_execution(
         # evidence — the response status IS the authorization decision.
         # Same for isolation (cross-tenant access → 401/403) and concurrency.
         risk = _text(exp.get("risk_family") or "")
-        if risk in ("authorization", "isolation", "concurrency") and has_http:
+        if risk in ("authorization", "isolation", "validation", "concurrency") and has_http:
             reason = "ORACLE_NOT_VIOLATED"
             detail = f"{risk}_boundary_not_violated"
         else:

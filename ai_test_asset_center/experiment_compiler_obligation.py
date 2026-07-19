@@ -385,13 +385,12 @@ def compile_experiment_for_obligation(
                     ":" + target, str(gen_val)
                 )
     if is_write and not write_observers:
-        # For authorization obligations, the HTTP response status code
-        # (401/403 vs 2xx) IS the observation of whether access control
-        # is enforced. No separate write-effect observer is needed.
-        if family == "authorization":
+        # For authorization/isolation/validation, the HTTP response status
+        # code IS the observation. No separate write-effect observer needed.
+        if family in ("authorization", "isolation", "validation"):
             write_observers = [{
                 "kind": "http_status",
-                "source": "authorization_response",
+                "source": f"{family}_response",
                 "observe": "status_code",
             }]
         else:
