@@ -817,14 +817,18 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
             ]
             # Skip operations with unresolvable path placeholders:
             # if the path has {param} tokens and no GET endpoint exists on
-            # the same collection to resolve them, the obligation will always
-            # fail at binding. Don't create it.
+            # the same resource path (with placeholder) to resolve them,
+            # the obligation will always fail at binding.
             _op_path = normalize_path_placeholders(_text(op.get("path") or op.get("raw_path")))
             if path_has_placeholders(_op_path):
-                _collection = normalize_path_placeholders(collection_path(_op_path))
                 _has_resolver = any(
                     _text(o.get("method")).upper() in ("GET", "HEAD")
-                    and normalize_path_placeholders(_text(o.get("path") or o.get("raw_path"))).rstrip("/") == _collection.rstrip("/")
+                    and (
+                        normalize_path_placeholders(_text(o.get("path") or o.get("raw_path"))).rstrip("/")
+                        == _op_path.rstrip("/")
+                        or normalize_path_placeholders(collection_path(_text(o.get("path") or o.get("raw_path")))).rstrip("/")
+                        == normalize_path_placeholders(collection_path(_op_path)).rstrip("/")
+                    )
                     for o in operations if isinstance(o, dict)
                 )
                 if not _has_resolver:
