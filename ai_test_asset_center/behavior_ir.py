@@ -2422,7 +2422,9 @@ def build_behavior_ir_from_knowledge_asset(
         for op in model["operations"]
     }
     _inferred_count = 0
-    for row in permission_rows:
+    # DISABLED: inferred operations dominate the pool (285 vs 26 original).
+    # Re-enable after adding per-resource limits and dedup with existing ops.
+    for row in []:  # was: permission_rows
         if not isinstance(row, dict):
             continue
         resource = _text(row.get("resource") or row.get("module"))
