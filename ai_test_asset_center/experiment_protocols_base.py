@@ -142,17 +142,12 @@ def _validation_protocol_material(
         return {}, {}, {}
     if not control:
         # No documented example — generate a minimal valid body from the schema.
+        # This is a best-effort fallback: the generated body may not exercise all
+        # business rules, but it allows the obligation to compile and execute,
+        # which is better than blocking the entire discovery pipeline.
         control = _generate_minimal_body_from_schema(schema)
         if not control:
-            # Last resort: synthetic body. Core discovery must not be gated
-            # on schema/example availability for any operation type.
-            method = _text(operation.get("method", "")).upper()
-            if method in ("PATCH", "PUT"):
-                control = {"status": "active"}
-            elif method == "DELETE":
-                control = {}
-            else:
-                control = {"test_field": "auto_generated"}
+            return {}, {}, {}
     properties = _dict(schema.get("properties"))
 
     explicit_targets: list[str] = []
