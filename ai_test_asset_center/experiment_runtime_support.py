@@ -400,11 +400,24 @@ def preflight_experiment_executable(
                     _needs_resolve.append(_p)
             if _needs_resolve:
                 from .runtime_binding_graph import _generate_placeholder_test_value
+                _subs = {}
                 for _p in _needs_resolve:
                     _val = _generate_placeholder_test_value(_p)
-                    path = path.replace("{" + _p + "}", str(_val)).replace(":" + _p, str(_val))
-                # Update the operation path for subsequent checks
-                op["path"] = path
+                    _subs[_p] = str(_val)
+                # Update the operation path
+                _new_path = path
+                for _p, _val in _subs.items():
+                    _new_path = _new_path.replace("{" + _p + "}", _val).replace(":" + _p, _val)
+                op["path"] = _new_path
+                path = _new_path
+                # Also update step paths in control_plan and treatment_plan
+                for _step_list_key in ("control_plan", "treatment_plan"):
+                    for _step in _list(exp.get(_step_list_key)):
+                        if isinstance(_step, dict) and _text(_step.get("operation_ref")) == op_ref:
+                            _step_path = _text(_step.get("path", ""))
+                            for _p, _val in _subs.items():
+                                _step_path = _step_path.replace("{" + _p + "}", _val).replace(":" + _p, _val)
+                            _step["path"] = _step_path
         method = _text(op.get("method") or "GET").upper()
         if not path.startswith("/"):
             return False, "BLOCKED_MISSING_BINDING", f"unresolved_path:{op_ref}:{path}"
