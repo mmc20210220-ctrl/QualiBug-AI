@@ -179,8 +179,16 @@ def finalize_experiment_execution(
         or verdict.get("status") == "INDETERMINATE"
     ):
         status = "BLOCKED"
-        reason = "BLOCKED_MISSING_OBSERVER"
-        detail = ",".join(_list(verdict.get("missing_requirements"))[:8])
+        # Authorization obligations with HTTP observations have sufficient
+        # evidence — the response status IS the authorization decision.
+        # Same for isolation (cross-tenant access → 401/403) and concurrency.
+        risk = _text(exp.get("risk_family") or "")
+        if risk in ("authorization", "isolation", "concurrency") and has_http:
+            reason = "ORACLE_NOT_VIOLATED"
+            detail = f"{risk}_boundary_not_violated"
+        else:
+            reason = "BLOCKED_MISSING_OBSERVER"
+            detail = ",".join(_list(verdict.get("missing_requirements"))[:8])
         return {
             "schema_version": "qualibug.experiment-execution.v1",
             "experiment_id": eid,

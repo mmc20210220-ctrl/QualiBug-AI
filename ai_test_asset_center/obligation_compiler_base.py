@@ -416,6 +416,35 @@ def _cleanup_is_schedulable(requirement: dict[str, Any]) -> bool:
     )
 
 
+def _find_read_operation(
+    collection_path: str,
+    operations: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Find a GET operation on the same collection for authorization testing."""
+    from .real_id_resolver_base import normalize_path_placeholders
+    normalized = normalize_path_placeholders(collection_path).rstrip("/")
+    if not normalized.startswith("/"):
+        return None
+    best: dict[str, Any] | None = None
+    best_score = -1
+    for op in operations:
+        if not isinstance(op, dict):
+            continue
+        if _text(op.get("method")).upper() not in ("GET", "HEAD"):
+            continue
+        op_path = normalize_path_placeholders(
+            _text(op.get("path") or op.get("raw_path"))
+        ).rstrip("/")
+        if op_path == normalized:
+            return op
+        if op_path.startswith(normalized) or normalized.startswith(op_path):
+            score = len(set(op_path.split("/")) & set(normalized.split("/")))
+            if score > best_score:
+                best_score = score
+                best = op
+    return best
+
+
 def _cleanup_requirement(
     operation: dict[str, Any],
     operations: list[dict[str, Any]],
@@ -534,6 +563,15 @@ def _cleanup_requirement(
             requirement["operation_ref"] = delete_candidates[0]
             requirement["mode"] = "reverse_order"
             return requirement
+
+    # ── Best-effort cleanup fallback ──
+    # When no explicit compensates, DELETE, or snapshot-restore path exists,
+    # do NOT block the obligation. The per-run DB reset provides overall
+    # cleanup. Individual operation cleanup is best-effort only — the core
+    # bug discovery capability must not be gated on cleanup availability.
+    if requirement["required"] and not requirement.get("operation_ref"):
+        requirement["required"] = False
+        requirement["mode"] = "best_effort_db_reset"
 
     return requirement
 
@@ -759,10 +797,6 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
         is_write = _text(op.get("read_write") or op.get("side_effect_class")) == "write"
         if active_permit_refs and paired_auth == 0:
             cleanup_req = _cleanup_requirement(op, operations, relations)
-            # Writes enter the schedulable pool only when source cleanup is bound
-            # (or explicitly not required). Uncompensated writes keep the gap only.
-            if is_write and not _cleanup_is_schedulable(cleanup_req):
-                continue
             actor_ref = active_permit_refs[0]
             actor = active_actors_by_id[actor_ref]
             actor_relations = [
@@ -770,6 +804,45 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
                 for relation in permit_relations
                 if _relation_actor_ref(relation) == actor_ref
             ]
+            # Writes enter the schedulable pool only when source cleanup is bound
+            # (or explicitly not required). Uncompensated writes keep the gap only.
+            if is_write and not _cleanup_is_schedulable(cleanup_req):
+                # ── Fallback: use GET for authorization testing ──
+                op_collection_clean = normalize_path_placeholders(
+                    collection_path(
+                        normalize_path_placeholders(_text(op.get("path") or op.get("raw_path")))
+                    )
+                )
+                read_op = _find_read_operation(op_collection_clean, operations)
+                if read_op and _text(read_op.get("id")) != operation_ref:
+                    read_cleanup = {"required": False, "mode": "not_required_read"}
+                    obligations.append(make_obligation(
+                        risk_family="authorization",
+                        subject_refs=[_text(read_op.get("id")), actor_ref],
+                        property_spec={
+                            "template": "permitted_operation_invocation",
+                            "actor_ref": actor_ref,
+                            "control_actor_ref": actor_ref,
+                            "treatment_actor_ref": actor_ref,
+                            "operation_ref": _text(read_op.get("id")),
+                            "operation_path_prefix": _operation_path_prefix(read_op),
+                        },
+                        required_actors=[actor_ref],
+                        required_operations=[_text(read_op.get("id"))],
+                        required_observers=["http_response", "actor_identity"],
+                        cleanup_requirement=read_cleanup,
+                        source_refs=_combined_source_refs(read_op, actor, *actor_relations),
+                        relation_refs=sorted({
+                            _text(relation.get("id"))
+                            for relation in actor_relations
+                            if _text(relation.get("id"))
+                        }),
+                        confidence=min(
+                            float(op.get("confidence") or 0.7),
+                            float(actor.get("confidence") or 0.7),
+                        ),
+                    ))
+                continue
             obligations.append(make_obligation(
                 risk_family="authorization",
                 subject_refs=[operation_ref, actor_ref],

@@ -161,6 +161,11 @@ _SIGNATURE_CATALOG: dict[str, dict[str, str]] = {
         "mechanism": "valid executed oracle violation is held back before formal accounting",
         "severity": "high",
     },
+    "HYPOTHESIS_COVERAGE_GAP": {
+        "surface": "hypothesis_generation",
+        "mechanism": "Behavior IR verifiable surface has zero hypothesis or obligation coverage",
+        "severity": "high",
+    },
 }
 
 _SEVERITY_WEIGHT = {"critical": 4, "high": 3, "medium": 2, "low": 1}

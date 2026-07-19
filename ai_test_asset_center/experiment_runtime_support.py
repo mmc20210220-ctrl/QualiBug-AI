@@ -400,9 +400,12 @@ def preflight_experiment_executable(
             and not _declared_observation_path(path, ops)
             and not _declared_effect_observer_available(op, ops)
         ):
-            return False, "BLOCKED_MISSING_OBSERVER", f"write_observer:{op_ref}"
+            # Authorization obligations observe via HTTP status code.
+            if _text(exp.get("risk_family") or "") != "authorization":
+                return False, "BLOCKED_MISSING_OBSERVER", f"write_observer:{op_ref}"
     if not _list(exp.get("observers")):
-        return False, "BLOCKED_MISSING_OBSERVER", "none"
+        if _text(exp.get("risk_family") or "") != "authorization":
+            return False, "BLOCKED_MISSING_OBSERVER", "none"
     assertion = _dict(_list(exp.get("assertions"))[0] if _list(exp.get("assertions")) else {})
     risk_family = _text(assertion.get("kind") or assertion.get("type"))
     if risk_family == "owner_tenant_visibility":

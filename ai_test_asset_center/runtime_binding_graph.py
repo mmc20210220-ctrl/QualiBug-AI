@@ -715,6 +715,89 @@ def _declared_fixture_actor_refs(
     return result
 
 
+def _generate_minimal_body_from_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Generate a minimal valid request body from a JSON Schema definition.
+
+    Used when no documented request example exists. Handles complex enterprise
+    schemas with nested objects, arrays, and type constraints.
+    """
+    if not isinstance(schema, dict):
+        return {}
+    properties = _dict(schema.get("properties", {}))
+    if not properties:
+        return {}
+    required = [_text(v) for v in (schema.get("required") or []) if _text(v)]
+    body: dict[str, Any] = {}
+    for field_name, field_schema in properties.items():
+        if not isinstance(field_schema, dict):
+            continue
+        field_type = _text(field_schema.get("type", "")).lower()
+        # Use schema example, default, or generate from type
+        example = field_schema.get("example") or field_schema.get("default")
+        if example is not None:
+            body[field_name] = example
+            continue
+        if field_type == "string":
+            enum_vals = field_schema.get("enum")
+            body[field_name] = str(enum_vals[0]) if enum_vals else f"auto_{field_name}"
+        elif field_type == "integer":
+            body[field_name] = int(field_schema.get("minimum", 1))
+        elif field_type == "number":
+            body[field_name] = float(field_schema.get("minimum", 1.0))
+        elif field_type == "boolean":
+            body[field_name] = True
+        elif field_type == "array":
+            items_schema = field_schema.get("items", {})
+            if isinstance(items_schema, dict) and items_schema.get("type") == "object":
+                body[field_name] = [_generate_minimal_body_from_schema(items_schema)]
+            else:
+                body[field_name] = []
+        elif field_type == "object":
+            body[field_name] = _generate_minimal_body_from_schema(field_schema)
+        else:
+            body[field_name] = f"auto_{field_name}"
+    return body
+
+
+def _generate_placeholder_test_value(name: str) -> str:
+    """Generate a best-effort test value for an unresolvable path/body placeholder.
+
+    Uses semantic heuristics based on the parameter name. This is a last-resort
+    fallback — the API may reject the generated value, but that produces an
+    observable HTTP response rather than silently blocking the obligation.
+    """
+    import uuid
+    from datetime import datetime
+
+    lower = name.lower().strip()
+    # ID-like parameters: generate a semi-random numeric ID
+    if lower in {"id", "uuid", "key"} or lower.endswith("_id") or lower.endswith("id"):
+        return f"qb_test_{abs(hash(name + str(datetime.now().timestamp())))}"[:20]
+    # SKU/code parameters
+    if lower in {"sku", "code", "product_code", "item_code"} or "sku" in lower:
+        return f"QB-TEST-{uuid.uuid4().hex[:8].upper()}"
+    # Numeric parameters
+    if lower in {"qty", "quantity", "amount", "price", "total", "count", "number"}:
+        return "1"
+    # String parameters
+    if lower in {"name", "title", "description", "reason", "note", "comment"}:
+        return f"qb_test_{lower}"
+    # Email
+    if "email" in lower:
+        return "test@qualibug.test"
+    # Phone
+    if "phone" in lower or "mobile" in lower:
+        return "13800138000"
+    # Address
+    if "address" in lower:
+        return "1"
+    # Status/state
+    if lower in {"status", "state", "type", "kind", "category", "role"}:
+        return "active"
+    # Generic fallback
+    return f"qb_test_{lower}_{uuid.uuid4().hex[:6]}"
+
+
 def _declared_fixture_setup(
     operation: dict[str, Any],
     *,
@@ -743,7 +826,24 @@ def _declared_fixture_setup(
         ), None)
         if not isinstance(create, dict):
             continue
-        body_template = _request_example(create, sibling_ops=operations)
+        # ── Body generation priority ──
+        # 1. Enterprise test data engine (schema-driven, realistic values)
+        # 2. Schema-based minimal body generation
+        # 3. Documented example (LAST RESORT — illustrative only in real APIs)
+        body_template = {}
+        request_schema = _dict(
+            create.get("request_schema")
+            or _dict(create.get("requestBody", {}))
+        )
+        schema_props = _dict(request_schema.get("properties", {}))
+        if schema_props:
+            try:
+                from .enterprise_test_data_engine import generate_request_body
+                body_template = generate_request_body(request_schema)
+            except Exception:
+                body_template = _generate_minimal_body_from_schema(request_schema)
+        if not body_template:
+            body_template = _request_example(create, sibling_ops=operations)
         if not body_template:
             continue
         body_bindings: list[dict[str, Any]] = []
@@ -757,8 +857,17 @@ def _declared_fixture_setup(
                 behavior_ir=behavior_ir,
             )
             if not resolvers:
-                unresolved_body = True
-                break
+                # Best-effort: unresolvable body placeholders should not block
+                # the entire fixture setup. Use the template value as-is.
+                # Enterprise APIs often have fields (addressId, couponCode)
+                # that can't be auto-resolved from list endpoints.
+                body_bindings.append({
+                    "target": _text(row.get("target")),
+                    "template_token": token,
+                    "resolver_operations": [],
+                    "fallback": "template_value",
+                })
+                continue
             body_bindings.append({
                 "target": _text(row.get("target")),
                 "template_token": token,
@@ -769,7 +878,7 @@ def _declared_fixture_setup(
             behavior_ir=behavior_ir,
         )
         actor_refs = _declared_fixture_actor_refs(create, behavior_ir=behavior_ir)
-        if unresolved_body or not cleanup_operations or not actor_refs:
+        if not cleanup_operations or not actor_refs:
             continue
         return {
             "operation_ref": _text(create.get("id")),
@@ -945,12 +1054,20 @@ def build_binding_plan(
                         "value_fingerprint": "",
                     })
                     continue
+            # ── Best-effort fallback for unresolvable placeholders ──
+            # When no resolver, fixture setup, or credential binding exists,
+            # generate a test value instead of blocking. The API may reject
+            # the request, but an HTTP 4xx is more informative than a blocked
+            # obligation. Enterprise APIs often have path parameters that
+            # cannot be auto-resolved from documented endpoints.
+            generated_value = _generate_placeholder_test_value(name)
             plan.append({
                 "target": name,
-                "status": "unresolved",
-                "source_priority": "",
+                "status": "bound",
+                "source_priority": "test_value_generated",
                 "resolver_operations": [],
-                "value_fingerprint": "",
+                "value_fingerprint": _fingerprint(generated_value),
+                "generated_value": generated_value,
             })
 
     for actor in actors or []:

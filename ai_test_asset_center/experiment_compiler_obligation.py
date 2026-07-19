@@ -325,18 +325,81 @@ def compile_experiment_for_obligation(
                 binding["selection_semantics"] = "source_state_precondition"
                 binding["required_state"] = _text(prop.get("from_state"))
     unresolved = unresolved_placeholders(primary_op, binding_plan)
+    prereq_plan = None
     if unresolved:
-        return blocked_experiment(
-            oid,
-            "BLOCKED_MISSING_BINDING",
-            ",".join(unresolved[:8]),
-        )
+        # ── Try unified enterprise test data constructor ──
+        # If placeholders cannot be resolved from existing data, build a
+        # full prerequisite chain: detect FK dependencies recursively,
+        # classify values, plan creation order. Store the plan for
+        # execution at runtime by the fixture materializer.
+        prereq_plan = None
+        try:
+            from .enterprise_test_data_constructor import plan_prerequisite_data
+            prereq_plan = plan_prerequisite_data(primary_op, ir, max_depth=10)
+            if prereq_plan and prereq_plan["total_prerequisites"] > 0:
+                # Check if the plan covers our unresolved placeholders
+                planned_entities = {
+                    step.get("entity", "").lower().rstrip("s")
+                    for step in prereq_plan["execution_plan"]
+                }
+                resolved_placeholders = [
+                    p for p in unresolved
+                    if p.lower().rstrip("s") in planned_entities
+                    or any(p.lower() in e for e in planned_entities)
+                ]
+                if resolved_placeholders:
+                    unresolved = [p for p in unresolved if p not in resolved_placeholders]
+        except Exception:
+            prereq_plan = None
+
+        if unresolved:
+            return blocked_experiment(
+                oid,
+                "BLOCKED_MISSING_BINDING",
+                ",".join(unresolved[:8]),
+            )
+
+    # Store prerequisite plan for runtime execution — attach to binding_plan
+    # since the experiment dict is built later by make_experiment().
+    if prereq_plan and prereq_plan.get("total_prerequisites", 0) > 0:
+        binding_plan.append({
+            "target": "__prerequisite_plan__",
+            "status": "bound",
+            "source_priority": "enterprise_test_data_constructor",
+            "prerequisite_plan": prereq_plan,
+        })
+    # ── Substitute generated values into operation path ──
+    # When the binding plan contains best-effort generated values, substitute
+    # them into the operation's path so that runtime preflight doesn't reject
+    # the still-present {placeholder} tokens.
+    for binding in binding_plan:
+        if not isinstance(binding, dict):
+            continue
+        gen_val = binding.get("generated_value")
+        if gen_val is not None:
+            target = _text(binding.get("target"))
+            if target:
+                primary_op["path"] = _text(primary_op.get("path", "")).replace(
+                    "{" + target + "}", str(gen_val)
+                ).replace(
+                    ":" + target, str(gen_val)
+                )
     if is_write and not write_observers:
-        return blocked_experiment(
-            oid,
-            "BLOCKED_MISSING_OBSERVER",
-            "write_observer",
-        )
+        # For authorization obligations, the HTTP response status code
+        # (401/403 vs 2xx) IS the observation of whether access control
+        # is enforced. No separate write-effect observer is needed.
+        if family == "authorization":
+            write_observers = [{
+                "kind": "http_status",
+                "source": "authorization_response",
+                "observe": "status_code",
+            }]
+        else:
+            return blocked_experiment(
+                oid,
+                "BLOCKED_MISSING_OBSERVER",
+                "write_observer",
+            )
 
     for fixture in required_fixtures:
         concrete = next(

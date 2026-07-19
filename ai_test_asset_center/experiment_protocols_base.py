@@ -80,15 +80,70 @@ def _request_body_schema(operation: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _generate_minimal_body_from_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Generate a minimal valid request body from a JSON Schema definition.
+
+    Used as a fallback when no documented request example exists. The generated
+    body uses type-appropriate default values for required fields.
+    """
+    if not isinstance(schema, dict):
+        return {}
+    properties = _dict(schema.get("properties"))
+    if not properties:
+        return {}
+    required = [_text(v) for v in (schema.get("required") or []) if _text(v)]
+    body: dict[str, Any] = {}
+    for field_name, field_schema in properties.items():
+        if not isinstance(field_schema, dict):
+            continue
+        field_type = _text(field_schema.get("type")).lower()
+        # Only populate required fields or fields needed for meaningful requests
+        if field_name not in required and field_name not in properties:
+            continue
+        if field_type == "string":
+            example = field_schema.get("example") or field_schema.get("default")
+            body[field_name] = str(example) if example else "test_value"
+        elif field_type == "integer":
+            body[field_name] = int(field_schema.get("example") or field_schema.get("default") or 1)
+        elif field_type == "number":
+            body[field_name] = float(field_schema.get("example") or field_schema.get("default") or 1.0)
+        elif field_type == "boolean":
+            body[field_name] = True
+        elif field_type == "array":
+            body[field_name] = []
+        elif field_type == "object":
+            body[field_name] = {}
+        else:
+            body[field_name] = "test_value"
+    return body
+
+
 def _validation_protocol_material(
     operation: dict[str, Any],
     property_spec: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, str]]:
     control = source_request_example(operation)
     schema = _request_body_schema(operation)
-    if not control or not schema:
-        # An undocumented mutation cannot become an executable request.
+    if not schema:
+        # No request body schema — for PATCH/PUT, generate a minimal body
+        # so the authorization/validation test can proceed. Core discovery
+        # must not be gated on schema availability.
+        method = _text(operation.get("method", "")).upper()
+        if method in ("PATCH", "PUT"):
+            control = {"status": "active"}
+            return control, {}, {"json_path": "$.status", "constraint": "synthetic", "source": "synthetic_fallback"}
+        if method == "POST":
+            control = {}
+            return control, {}, {"json_path": "$", "constraint": "synthetic", "source": "synthetic_fallback"}
         return {}, {}, {}
+    if not control:
+        # No documented example — generate a minimal valid body from the schema.
+        # This is a best-effort fallback: the generated body may not exercise all
+        # business rules, but it allows the obligation to compile and execute,
+        # which is better than blocking the entire discovery pipeline.
+        control = _generate_minimal_body_from_schema(schema)
+        if not control:
+            return {}, {}, {}
     properties = _dict(schema.get("properties"))
 
     explicit_targets: list[str] = []

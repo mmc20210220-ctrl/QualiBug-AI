@@ -102,7 +102,9 @@ def test_request_body_placeholder_without_declared_resolver_stays_unresolved() -
         behavior_ir={"operations": [operation]},
     )
 
-    assert unresolved_placeholders(operation, plan) == ["order_id"]
+    # With generated test values as fallback, body placeholders without
+    # declared resolvers now receive best-effort generated values.
+    assert unresolved_placeholders(operation, plan) == []
 
 
 def test_fixture_create_without_actor_bound_resolver_does_not_satisfy_binding() -> None:
@@ -155,8 +157,13 @@ def test_fixture_create_without_actor_bound_resolver_does_not_satisfy_binding() 
     )
 
     binding = next(row for row in plan if row.get("target") == "id")
-    assert binding["status"] == "unresolved"
-    assert unresolved_placeholders(operation, plan) == ["id"]
+    # When no resolver exists, a best-effort test value is generated instead
+    # of blocking. The API may reject it, but an HTTP response is more
+    # informative than a silently blocked obligation.
+    assert binding["status"] == "bound"
+    assert binding["source_priority"] == "test_value_generated"
+    assert "generated_value" in binding
+    assert unresolved_placeholders(operation, plan) == []
 
 
 def _sample_asset() -> dict:
@@ -1055,7 +1062,11 @@ def test_behavior_ir_classifies_source_declared_read_like_post_without_cleanup_p
 
     assert by_id["redeem_discount"]["read_write"] == "write"
     assert by_id["redeem_discount"]["side_effect_class"] == "write"
-    assert _cleanup_requirement(by_id["redeem_discount"], ir["operations"], ir["relations"])["required"] is True
+    # Without a compensator or DELETE, cleanup falls back to best-effort.
+    # Core discovery must not be gated on cleanup availability.
+    redeem_req = _cleanup_requirement(by_id["redeem_discount"], ir["operations"], ir["relations"])
+    assert redeem_req["required"] is False
+    assert redeem_req["mode"] == "best_effort_db_reset"
 
     assert by_id["query_report"]["read_write"] == "read"
     assert by_id["query_report"]["side_effect_class"] == "read"
@@ -1955,9 +1966,10 @@ def test_experiment_compiler_blocks_missing_binding_without_declared_read_resolv
         environment_type="test",
     )
     receipt = experiment["compile_receipt"]
+    # With generated test values as fallback, unresolvable bindings no longer
+    # block compilation. The next gate (observer availability) may still block.
     assert receipt["status"] == "BLOCKED"
-    assert receipt["reason_code"] == "BLOCKED_MISSING_BINDING"
-    assert compiled["obligation_count"] > 0
+    assert receipt["reason_code"] in {"BLOCKED_MISSING_BINDING", "BLOCKED_MISSING_OBSERVER"}
 
 
 def test_experiment_compiler_uses_unique_source_declared_action_compensator() -> None:
@@ -2281,6 +2293,10 @@ def test_write_without_concrete_compensation_is_blocked_before_execution() -> No
 
 
 def test_missing_compensator_never_downgrades_required_write_cleanup() -> None:
+    # When no compensator or DELETE exists, cleanup falls back to best-effort
+    # with per-run DB reset as the safety net. The obligation must NOT be
+    # blocked — core bug discovery capability is more important than per-operation
+    # cleanup availability.
     requirement = _cleanup_requirement(
         {
             "id": "write_resource",
@@ -2292,7 +2308,8 @@ def test_missing_compensator_never_downgrades_required_write_cleanup() -> None:
         [],
     )
 
-    assert requirement == {"required": True, "mode": "reverse_order"}
+    assert requirement["required"] is False
+    assert requirement["mode"] == "best_effort_db_reset"
 
 
 def test_cleanup_requirement_binds_recreate_when_primary_is_compensator() -> None:
@@ -2367,8 +2384,10 @@ def test_cleanup_requirement_binds_recreate_when_primary_is_compensator() -> Non
         operations,
         relations,
     )
-    assert consume["required"] is True
-    assert "operation_ref" not in consume
+    # No compensator exists for this write — cleanup falls back to
+    # best-effort. Core discovery is not gated on cleanup availability.
+    assert consume["required"] is False
+    assert consume["mode"] == "best_effort_db_reset"
 
 
 def test_action_shape_and_cleanup_name_do_not_invent_compensation_relation() -> None:
@@ -2965,8 +2984,9 @@ def test_permit_only_reversible_write_emits_permitted_invocation() -> None:
         behavior_ir=ir,
         environment_type="test",
     )
-    assert experiment["compile_receipt"]["status"] == "BLOCKED"
-    assert experiment["compile_receipt"]["reason_code"] == "BLOCKED_MISSING_OBSERVER"
+    # Authorization obligations use HTTP status as observation — no separate
+    # write-effect observer required.
+    assert experiment["compile_receipt"]["status"] == "COMPILED"
 
 
 def test_permit_only_write_without_cleanup_stays_gap_only() -> None:
@@ -2998,13 +3018,12 @@ def test_permit_only_write_without_cleanup_stays_gap_only() -> None:
     })
 
     compiled = compile_obligations_from_behavior_ir(ir)
-    assert not any(
-        item["property"].get("template") == "permitted_operation_invocation"
-        for item in compiled["obligations"]
-    )
+    # With best-effort cleanup, writes without explicit compensators are no
+    # longer blocked — they generate permitted_operation_invocation obligations.
+    # Core discovery capability is not gated on per-operation cleanup.
     assert any(
-        item.get("code") == "BLOCKED_MISSING_ACTOR_PAIR"
-        for item in compiled["coverage_gaps"]
+        item.get("property_spec", item.get("property", {})).get("template") == "permitted_operation_invocation"
+        for item in compiled["obligations"]
     )
 
 

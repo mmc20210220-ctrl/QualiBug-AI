@@ -4098,18 +4098,52 @@ def execute_probe(client: HttpClient, tokens: dict[str, str], item: dict) -> dic
         }
     path = str(item.get("path") or "")
     if "{" in path or "}" in path or ":" in path:
-        return {
-            "probe": item,
-            "request": {"method": method, "path": path, "body": None, "sent": False},
-            "response": {"status_code": 0, "body": {}},
-            "expected": item.get("expected"),
-            "actual": "source path binding is unresolved",
-            "assertion_result": "blocked",
-            "execution_status": "blocked",
-            "reason_code": "BLOCKED_MISSING_BINDING",
-            "bug_signal": item.get("bug_signal"),
-            "confidence": 0.0,
-        }
+        # ── Best-effort placeholder resolution ──
+        # Try to substitute path placeholders with generated test values
+        # rather than immediately blocking. Enterprise APIs often have path
+        # parameters that cannot be pre-resolved from documented endpoints.
+        resolved_path = path
+        try:
+            from .real_id_resolver_base import normalize_path_placeholders, infer_path_params
+            from .enterprise_test_data_engine import _generate_value, _detect_field_semantic
+            normalized = normalize_path_placeholders(path)
+            params = infer_path_params(normalized)
+            for param in params:
+                semantic = _detect_field_semantic(param)
+                value = str(_generate_value(semantic.get("generator", "numeric_id"), param))
+                resolved_path = resolved_path.replace("{" + param + "}", value)
+                resolved_path = resolved_path.replace(":" + param, value)
+            if resolved_path != path:
+                item = {**item, "path": resolved_path}
+            else:
+                return {
+                    "probe": item,
+                    "request": {"method": method, "path": path, "body": None, "sent": False},
+                    "response": {"status_code": 0, "body": {}},
+                    "expected": item.get("expected"),
+                    "actual": "source path binding is unresolved",
+                    "assertion_result": "blocked",
+                    "execution_status": "blocked",
+                    "reason_code": "BLOCKED_MISSING_BINDING",
+                    "bug_signal": item.get("bug_signal"),
+                    "confidence": 0.0,
+                }
+        except Exception:
+            pass
+        if "{" in resolved_path or "}" in resolved_path or ":" in resolved_path:
+            return {
+                "probe": item,
+                "request": {"method": method, "path": path, "body": None, "sent": False},
+                "response": {"status_code": 0, "body": {}},
+                "expected": item.get("expected"),
+                "actual": "source path binding is unresolved",
+                "assertion_result": "blocked",
+                "execution_status": "blocked",
+                "reason_code": "BLOCKED_MISSING_BINDING",
+                "bug_signal": item.get("bug_signal"),
+                "confidence": 0.0,
+            }
+        item = {**item, "path": resolved_path}
     actor = str(item.get("actor") or "")
     token = None if actor in {"anonymous", "system"} else tokens.get(actor) or tokens.get("normal_user")
     return execute_generic_probe(client, token, item, {})

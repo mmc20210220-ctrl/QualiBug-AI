@@ -263,6 +263,14 @@ def _edit_templates(signature: str, strategy: StrategyBundle) -> list[dict[str, 
             {"path": "discovery.candidate_ranking_signals", "operation": "append_unique", "value": "weakness_recurrence"},
             {"path": "discovery.candidate_ranking_signals", "operation": "append_unique", "value": "cross_industry_recurrence"},
         ]
+    if signature == "HYPOTHESIS_COVERAGE_GAP":
+        return [
+            {
+                "path": "discovery.max_hypotheses_execute",
+                "operation": "set_integer",
+                "value": min(200, strategy.discovery.max_hypotheses_execute + 20),
+            },
+        ]
     # Critical promotion/verifier safety rules are frozen true and must be fixed
     # in code, not toggled by an autonomous proposal.
     return []

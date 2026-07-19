@@ -342,6 +342,44 @@ def build_discovery_plan(
         for row in _list(obligation_pack.get("obligations"))
         if isinstance(row, dict)
     ]
+
+    # ── Behavior IR coverage gap → source-backed obligations ──
+    # Augment obligations with coverage-driven obligations for Behavior IR
+    # nodes that have zero existing obligation coverage. This is a single-variable
+    # optimization: it only adds obligations, does not change compilation,
+    # execution, oracle, or evaluation.
+    coverage_report: dict[str, Any] = {}
+    try:
+        from .behavior_ir_hypothesis_coverage import (
+            compute_obligation_coverage_gaps,
+            build_source_backed_coverage_obligations,
+        )
+
+        coverage_gaps = compute_obligation_coverage_gaps(behavior_ir, obligations)
+        coverage_obligations = build_source_backed_coverage_obligations(
+            behavior_ir,
+            coverage_gaps,
+        )
+        if coverage_obligations:
+            obligations.extend(coverage_obligations)
+        coverage_report = {
+            "coverage_obligations_added": len(coverage_obligations),
+            "total_obligations_after_coverage": len(obligations),
+            "coverage_gap": {
+                "total_nodes": coverage_gaps.get("total_count", 0),
+                "covered": coverage_gaps.get("covered_count", 0),
+                "uncovered": coverage_gaps.get("uncovered_count", 0),
+                "coverage_rate": coverage_gaps.get("coverage_rate"),
+                "uncovered_by_family": coverage_gaps.get("uncovered_by_family", {}),
+            },
+        }
+    except Exception as exc:
+        # Coverage enrichment is a progressive enhancement; its failure must not
+        # abort the mainline. Log and continue with original obligations.
+        coverage_report = {
+            "coverage_obligations_added": 0,
+            "coverage_error": f"{type(exc).__name__}: {str(exc)[:200]}",
+        }
     environment_type = _text(
         inputs.campaign_context.get("environment_type")
         or inputs.campaign_context.get("environment_kind")
@@ -457,7 +495,7 @@ def build_discovery_plan(
     return DiscoveryPlanningBundle(
         mainline_run=contract,
         behavior_ir=behavior_ir,
-        obligations={**obligation_pack, "obligations": obligations},
+        obligations={**obligation_pack, "obligations": obligations, "behavior_ir_coverage_report": coverage_report},
         experiments={
             **experiment_pack,
             "all_experiments": all_experiments,

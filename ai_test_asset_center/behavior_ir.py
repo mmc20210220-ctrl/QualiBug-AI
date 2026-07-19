@@ -2413,6 +2413,77 @@ def build_behavior_ir_from_knowledge_asset(
             derivation="explicit",
         ))
 
+    # ── Infer missing operations from permission matrix ──
+    # Enterprise permission matrices often reference operations not in the
+    # API spec (e.g., admin endpoints, internal services). Create minimal
+    # operation stubs so authorization obligations can be compiled.
+    _existing_paths = {
+        (_text(op.get("method")).upper(), _path_shape(_text(op.get("path") or op.get("raw_path"))))
+        for op in model["operations"]
+    }
+    _inferred_count = 0
+    for row in permission_rows:
+        if not isinstance(row, dict):
+            continue
+        resource = _text(row.get("resource") or row.get("module"))
+        if not resource or resource == "*":
+            continue
+        actions = row.get("actions") or row.get("action") or []
+        if isinstance(actions, str):
+            actions = [actions]
+        for action in actions:
+            action_upper = _text(action).upper()
+            # Map action words to HTTP methods
+            method_map = {
+                "READ": "GET", "VIEW": "GET", "LIST": "GET", "GET": "GET", "HEAD": "HEAD",
+                "CREATE": "POST", "WRITE": "POST", "ADD": "POST", "POST": "POST",
+                "UPDATE": "PUT", "MODIFY": "PUT", "EDIT": "PUT", "PUT": "PUT", "PATCH": "PATCH",
+                "DELETE": "DELETE", "REMOVE": "DELETE", "DESTROY": "DELETE",
+                "SHIP": "POST", "DELIVER": "POST", "ADJUST": "POST", "APPROVE": "POST",
+                "REJECT": "POST", "CANCEL": "POST", "CONFIRM": "POST",
+            }
+            method = method_map.get(action_upper, "POST")
+            # Build simple path from resource name
+            clean = re.sub(r"[^a-z0-9_/-]", "", resource.lower().replace(" ", "_"))
+            if not clean.startswith("/"):
+                clean = "/api/" + clean
+            path = clean
+            # Minimal schema for write operations
+            minimal_schema: dict[str, Any] = {}
+            if method in ("POST", "PUT", "PATCH"):
+                minimal_schema = {
+                    "type": "object",
+                    "properties": {
+                        "status": {"type": "string", "example": "active"},
+                    },
+                }
+            key = (method, _path_shape(path))
+            if key not in _existing_paths:
+                _existing_paths.add(key)
+                _inferred_count += 1
+                inferred_op = _fact_node(
+                    node_id=_stable_id("inferred", method, path),
+                    typed_fields={
+                        "method": method,
+                        "path": path,
+                        "raw_path": path,
+                        "operation_id": f"{method.lower()}:{_path_shape(path)}",
+                        "read_write": "write" if method in ("POST", "PUT", "PATCH", "DELETE") else "read",
+                        "side_effect_class": "write" if method in ("POST", "PUT", "PATCH", "DELETE") else "read",
+                        "source_id": "permission_matrix",
+                        "summary": f"Inferred from permission matrix: {action} {resource}",
+                        "description": "",
+                        "request_schema": minimal_schema,
+                        "request_example": minimal_schema.get("properties", {}) if minimal_schema else {},
+                        "tags": [],
+                        "field_dictionary": {},
+                    },
+                    source_refs=[_source_ref("permission_matrix", locator=f"{action} {resource}", kind="permission_inferred")],
+                    confidence=0.5,
+                    derivation="model-inferred",
+                )
+                model["operations"].append(inferred_op)
+
     # Runtime V2 relations are the only semantic joins used by the compiler.
     permission_policy_mode = _text(
         data.get("permission_policy_mode")

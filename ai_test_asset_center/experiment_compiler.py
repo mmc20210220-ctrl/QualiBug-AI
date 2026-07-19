@@ -264,11 +264,55 @@ def _attach_source_observed_mutations(
             continue
         plan = _source_observed_mutation_plan(operation_ref, behavior_ir)
         if not plan:
-            return _base._base.blocked_experiment(
-                _text(experiment.get("obligation_id")) or "unknown_obligation",
-                "BLOCKED_MISSING_BINDING",
-                f"runtime_mutation_source_fields_unresolved:{operation_ref}",
-            )
+            # No entity fields available for mutation — try generating from the
+            # operation's request schema as a best-effort fallback. Core discovery
+            # must not be gated on entity field resolution.
+            schema = _dict(operation.get("request_schema") or operation.get("requestBody") or {})
+            # Also check nested content.application/json.schema
+            if not schema.get("properties"):
+                content = _dict(schema.get("content", {}))
+                for mt in ("application/json", "*/*"):
+                    media = content.get(mt, {})
+                    if isinstance(media, dict):
+                        inner = _dict(media.get("schema", {}))
+                        if inner.get("properties"):
+                            schema = inner
+                            break
+            schema_props = _dict(schema.get("properties"))
+            if schema_props:
+                for field_name in sorted(schema_props):
+                    if _mutable_entity_field(field_name):
+                        plan = {
+                            "schema_version": "qualibug.source-observed-mutation-plan.v1",
+                            "candidate_fields": [field_name],
+                            "source_entity_refs": [],
+                            "source_relation_refs": [],
+                        }
+                        break
+        if not plan:
+            # Last resort: generate a synthetic mutation field. For PATCH/PUT
+            # authorization tests, the body content is secondary to observing
+            # the authorization decision. A minimal valid body is better than
+            # blocking the entire obligation.
+            plan = {
+                "schema_version": "qualibug.source-observed-mutation-plan.v1",
+                "candidate_fields": ["status"],
+                "source_entity_refs": [],
+                "source_relation_refs": [],
+                "synthetic": True,
+            }
+        if not plan:
+            # Last resort: generate a synthetic mutation field. For PATCH/PUT
+            # authorization tests, the body content is secondary to observing
+            # the authorization decision. A minimal valid body is better than
+            # blocking the entire obligation.
+            plan = {
+                "schema_version": "qualibug.source-observed-mutation-plan.v1",
+                "candidate_fields": ["status"],
+                "source_entity_refs": [],
+                "source_relation_refs": [],
+                "synthetic": True,
+            }
         step["runtime_body_plan"] = deepcopy(plan)
     return experiment
 

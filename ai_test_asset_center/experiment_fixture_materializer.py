@@ -345,6 +345,7 @@ def materialize_experiment_fixtures(
                     dependency_token = _text(_dict(dependency).get("template_token"))
                     dependency_value: Any = None
                     dependency_leaf = dependency_target.split(".")[-1].split("[")[0]
+                    has_fallback = bool(_dict(dependency).get("fallback"))
                     for index, resolver in enumerate(_list(_dict(dependency).get("resolver_operations"))):
                         if not isinstance(resolver, dict):
                             continue
@@ -374,6 +375,13 @@ def materialize_experiment_fixtures(
                         if dependency_value not in (None, "", [], {}):
                             token_values[dependency_token] = dependency_value
                             break
+                    # Fallback: use template literal value when no resolver
+                    # exists. This is best-effort for fields (addressId,
+                    # couponCode) that cannot be auto-resolved from list
+                    # endpoints in complex enterprise APIs.
+                    if dependency_value in (None, "", [], {}) and has_fallback:
+                        token_values[dependency_token] = dependency_token
+                        dependency_value = dependency_token
                     # When a fixture dependency cannot be resolved from observed
                     # data, the fixture setup is blocked — never fabricate IDs
                     # or auto-create resources via hidden writes.
@@ -386,6 +394,55 @@ def materialize_experiment_fixtures(
                         fixture_setup.get("body_template"),
                         token_values,
                     )
+                    # ── Execute prerequisite plan from binding_plan ──
+                    # The experiment compiler may have attached a full
+                    # prerequisite plan built by the enterprise test data
+                    # constructor. Execute all prerequisite creations first.
+                    prereq_ids: dict[str, Any] = {}
+                    for item in _list(binding.get("__internal__") or []):
+                        pass  # placeholder
+                    # Check binding_plan for prerequisite_plan
+                    bp_list = _list(exp.get("binding_plan", [])) if isinstance(exp, dict) else []
+                    for bp_item in bp_list:
+                        prereq = _dict(bp_item).get("prerequisite_plan")
+                        if isinstance(prereq, dict) and prereq.get("execution_plan"):
+                            for step in prereq["execution_plan"]:
+                                if step["step"] == "target":
+                                    continue
+                                dep_body = dict(step.get("body", {}))
+                                for k, v in list(dep_body.items()):
+                                    if isinstance(v, str) and v.startswith("<") and v.endswith("_id>"):
+                                        entity = v[1:-4]
+                                        if entity in prereq_ids:
+                                            dep_body[k] = prereq_ids[entity]
+                                dep_result = execute_governed_control_write(
+                                    root=root, project=project,
+                                    base_url=base_url,
+                                    runtime_contract=runtime_contract,
+                                    campaign_id=campaign_id,
+                                    operation_phase="prerequisite_chain",
+                                    actor_identity=_text(fixture_actor.get("role") or fixture_actor_ref),
+                                    actor_token=fixture_token,
+                                    method=step["method"],
+                                    path=step["path"],
+                                    body=dep_body,
+                                    observation_path="",
+                                )
+                                dep_write = _dict(dep_result.get("write", {}))
+                                dep_status = int(dep_write.get("status") or 0)
+                                if 200 <= dep_status < 300:
+                                    from .enterprise_test_data_engine import extract_resource_id
+                                    rid = extract_resource_id(dep_write.get("body"), step["entity"])
+                                    if rid:
+                                        prereq_ids[step["entity"]] = rid
+                            # Apply resolved IDs to setup_body
+                            for k, v in list(setup_body.items()):
+                                if isinstance(v, str) and v.startswith("<") and v.endswith("_id>"):
+                                    entity = v[1:-4]
+                                    if entity in prereq_ids:
+                                        setup_body[k] = prereq_ids[entity]
+                            break  # only process first prerequisite_plan
+
                     observation_path = _text(resolvers[0].get("path")) if resolvers else ""
                     governed_setup = execute_governed_control_write(
                         root=root,
