@@ -733,11 +733,21 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
         for relation in [*permit_relations, *deny_relations]:
             note_unbound_actor_relation(relation, operation_ref)
         paired_auth = 0
+        # Limit authorization pairs for inferred operations (max 2 pairs)
+        _is_inferred = any(
+            str(s.get("kind", "")).startswith("permission_")
+            for s in _list(op.get("source_refs"))
+        )
+        _MAX_AUTH_PAIRS = 2 if _is_inferred else 999
         for permit_relation in permit_relations:
+            if paired_auth >= _MAX_AUTH_PAIRS:
+                break
             allowed = active_actors_by_id.get(_relation_actor_ref(permit_relation))
             if not allowed:
                 continue
             for deny_relation in deny_relations:
+                if paired_auth >= _MAX_AUTH_PAIRS:
+                    break
                 denied = active_actors_by_id.get(_relation_actor_ref(deny_relation))
                 if not denied or _text(denied.get("id")) == _text(allowed.get("id")):
                     continue

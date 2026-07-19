@@ -2443,13 +2443,12 @@ def build_behavior_ir_from_knowledge_asset(
     # Remove generic terms
     _referenced_entities.difference_update({"me", "items", "validate", "login", "register"})
     _inferred_count = 0
-    # DISABLED pending proper per-resource obligation limiting.
-    # The inference generates too many obligations per operation.
-    for row in []:  # was: permission_rows
+    _MAX_INFERRED = 10
+    for row in permission_rows:
         if not isinstance(row, dict):
             continue
         if _inferred_count >= _MAX_INFERRED:
-            break  # exit for-row loop
+            break
         resource = _text(row.get("resource") or row.get("module"))
         if not resource or resource == "*":
             continue
@@ -2490,6 +2489,8 @@ def build_behavior_ir_from_knowledge_asset(
             if key not in _existing_paths:
                 _existing_paths.add(key)
                 _inferred_count += 1
+                if _inferred_count >= _MAX_INFERRED:
+                    break  # inner loop
                 inferred_op = _fact_node(
                     node_id=_stable_id("inferred", method, path),
                     typed_fields={
