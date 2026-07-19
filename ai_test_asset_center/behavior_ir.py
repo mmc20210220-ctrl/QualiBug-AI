@@ -2443,7 +2443,7 @@ def build_behavior_ir_from_knowledge_asset(
     # Remove generic terms
     _referenced_entities.difference_update({"me", "items", "validate", "login", "register"})
     _inferred_count = 0
-    _MAX_INFERRED = 10
+    _MAX_INFERRED = 3
     for row in permission_rows:
         if not isinstance(row, dict):
             continue
@@ -2500,7 +2500,7 @@ def build_behavior_ir_from_knowledge_asset(
                         "operation_id": f"{method.lower()}:{_path_shape(path)}",
                         "read_write": "write" if method in ("POST", "PUT", "PATCH", "DELETE") else "read",
                         "side_effect_class": "write" if method in ("POST", "PUT", "PATCH", "DELETE") else "read",
-                        "source_id": "permission_matrix",
+                        "source_id": "permission_inferred",
                         "summary": f"Inferred from permission matrix: {action} {resource}",
                         "description": "",
                         "request_schema": minimal_schema,
@@ -2508,7 +2508,7 @@ def build_behavior_ir_from_knowledge_asset(
                         "tags": [],
                         "field_dictionary": {},
                     },
-                    source_refs=[_source_ref("permission_matrix", locator=f"{action} {resource}", kind="permission_inferred")],
+                    source_refs=[_source_ref("permission_inferred", locator=f"{action} {resource}", kind="permission_inferred")],
                     confidence=0.5,
                     derivation="model-inferred",
                 )
