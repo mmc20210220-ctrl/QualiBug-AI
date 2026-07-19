@@ -8,6 +8,7 @@ from typing import Any
 
 from .behavior_ir import BehaviorIRError, SCHEMA_VERSION as BEHAVIOR_IR_SCHEMA, validate_behavior_ir
 from .real_id_resolver import collection_path, normalize_path_placeholders
+from .real_id_resolver_base import path_has_placeholders
 from .test_obligation import RISK_FAMILIES, dedupe_obligations, make_obligation
 
 
@@ -814,6 +815,20 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
                 for relation in permit_relations
                 if _relation_actor_ref(relation) == actor_ref
             ]
+            # Skip operations with unresolvable path placeholders:
+            # if the path has {param} tokens and no GET endpoint exists on
+            # the same collection to resolve them, the obligation will always
+            # fail at binding. Don't create it.
+            _op_path = normalize_path_placeholders(_text(op.get("path") or op.get("raw_path")))
+            if path_has_placeholders(_op_path):
+                _collection = normalize_path_placeholders(collection_path(_op_path))
+                _has_resolver = any(
+                    _text(o.get("method")).upper() in ("GET", "HEAD")
+                    and normalize_path_placeholders(_text(o.get("path") or o.get("raw_path"))).rstrip("/") == _collection.rstrip("/")
+                    for o in operations if isinstance(o, dict)
+                )
+                if not _has_resolver:
+                    continue  # skip — can never resolve path params
             # Writes enter the schedulable pool only when source cleanup is bound
             # (or explicitly not required). Uncompensated writes keep the gap only.
             if is_write and not _cleanup_is_schedulable(cleanup_req):
