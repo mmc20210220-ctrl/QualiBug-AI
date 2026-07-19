@@ -125,8 +125,8 @@ def _validation_protocol_material(
     control = source_request_example(operation)
     schema = _request_body_schema(operation)
     if not schema:
-        # No request body schema — for PATCH/PUT, generate a minimal body
-        # so the authorization/validation test can proceed. Core discovery
+        # No request body schema — generate a minimal body so the
+        # validation/authorization test can proceed. Core discovery
         # must not be gated on schema availability.
         method = _text(operation.get("method", "")).upper()
         if method in ("PATCH", "PUT"):
@@ -135,6 +135,10 @@ def _validation_protocol_material(
         if method == "POST":
             control = {}
             return control, {}, {"json_path": "$", "constraint": "synthetic", "source": "synthetic_fallback"}
+        if method == "DELETE":
+            # DELETE has no body — the validation test checks the HTTP response
+            control = {}
+            return control, {}, {"json_path": "$", "constraint": "synthetic", "source": "synthetic_fallback_delete"}
         return {}, {}, {}
     if not control:
         # No documented example — generate a minimal valid body from the schema.
