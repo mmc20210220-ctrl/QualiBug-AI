@@ -214,6 +214,22 @@ def execute_non_barrier_plans(
                     separator = "&" if "?" in path else "?"
                     path = f"{path}{separator}{urlencode(materialized_query)}"
             if unresolved_path_tokens:
+                # ── Last-resort: generate values for unresolved path tokens ──
+                # When runtime binding resolution fails (GET returns no usable
+                # data), use generated test values instead of blocking.
+                _all_generated = True
+                for _token in list(unresolved_path_tokens):
+                    try:
+                        from .runtime_binding_graph import _generate_placeholder_test_value
+                        _gen_val = str(_generate_placeholder_test_value(_token))
+                        path = path.replace("{" + _token + "}", _gen_val).replace(":" + _token, _gen_val)
+                        runtime_bindings[_token] = _gen_val
+                    except Exception:
+                        _all_generated = False
+                if _all_generated:
+                    # Re-check: path should now be clean
+                    unresolved_path_tokens = _unresolved_path_placeholders(path)
+            if unresolved_path_tokens:
                 reason = (
                     "path_placeholder_unresolved:"
                     + ",".join(unresolved_path_tokens)
