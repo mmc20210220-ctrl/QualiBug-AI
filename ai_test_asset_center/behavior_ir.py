@@ -2414,21 +2414,48 @@ def build_behavior_ir_from_knowledge_asset(
         ))
 
     # ── Infer missing operations from permission matrix ──
-    # Enterprise permission matrices often reference operations not in the
-    # API spec (e.g., admin endpoints, internal services). Create minimal
-    # operation stubs so authorization obligations can be compiled.
+    # Only infer operations for resources referenced by existing API schemas
+    # (as FK targets). This prevents flooding the obligation pool with
+    # operations for resources that are only in the permission matrix.
     _existing_paths = {
         (_text(op.get("method")).upper(), _path_shape(_text(op.get("path") or op.get("raw_path"))))
         for op in model["operations"]
     }
+    # Build set of FK entities from existing API operation schemas
+    _referenced_entities: set[str] = set()
+    for _op in model["operations"]:
+        _sch = _dict(_op.get("request_schema") or {})
+        for _props_key in ("properties",):
+            _props = _dict(_sch.get(_props_key, {}))
+            for _field in _props:
+                _norm = _field.lower().rstrip("s")
+                if _norm.endswith("_id") or _norm.endswith("id"):
+                    _entity = _norm[:-3].rstrip("_") if _norm.endswith("_id") else _norm[:-2].rstrip("_")
+                    if _entity:
+                        _referenced_entities.add(_entity)
+    # Also collect entity names from existing API paths as referenced entities
+    for _op in model["operations"]:
+        _path = _text(_op.get("path") or "").lower()
+        for _seg in _path.split("/"):
+            _seg = _seg.strip("{}:").rstrip("s")
+            if _seg and _seg not in ("api", "v1", "v2", "v3", "admin"):
+                _referenced_entities.add(_seg)
+    # Remove generic terms
+    _referenced_entities.difference_update({"me", "items", "validate", "login", "register"})
     _inferred_count = 0
-    # DISABLED: inferred operations dominate the pool (285 vs 26 original).
-    # Re-enable after adding per-resource limits and dedup with existing ops.
+    # DISABLED pending proper per-resource obligation limiting.
+    # The inference generates too many obligations per operation.
     for row in []:  # was: permission_rows
         if not isinstance(row, dict):
             continue
+        if _inferred_count >= _MAX_INFERRED:
+            break  # exit for-row loop
         resource = _text(row.get("resource") or row.get("module"))
         if not resource or resource == "*":
+            continue
+        # Only infer if this resource is referenced by existing API schemas
+        _resource_lower = resource.lower().rstrip("s")
+        if _resource_lower not in _referenced_entities and _referenced_entities:
             continue
         actions = row.get("actions") or row.get("action") or []
         if isinstance(actions, str):
