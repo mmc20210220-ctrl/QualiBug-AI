@@ -386,9 +386,21 @@ def preflight_experiment_executable(
         method = _text(op.get("method") or "GET").upper()
         if not path.startswith("/"):
             return False, "BLOCKED_MISSING_BINDING", f"unresolved_path:{op_ref}:{path}"
-        if path_has_placeholders(path) and not _runtime_binding_contract_ready(
+        # Check if all path placeholders have generated values in binding plan
+        _bp = _list(exp.get("binding_plan"))
+        _has_generated_bindings = False
+        if path_has_placeholders(path):
+            _params = infer_path_params(path)
+            _has_generated_bindings = _params and all(
+                any(
+                    b.get("target") == p and b.get("generated_value")
+                    for b in _bp if isinstance(b, dict)
+                )
+                for p in _params
+            )
+        if path_has_placeholders(path) and not _has_generated_bindings and not _runtime_binding_contract_ready(
             path,
-            binding_plan=_list(exp.get("binding_plan")),
+            binding_plan=_bp,
             fixture_dag=dag,
             operations=ops,
         ):
