@@ -211,11 +211,14 @@ def compile_experiment_for_obligation(
 
     for gap in _list(ir.get("conflicts")):
         if isinstance(gap, dict) and _text(gap.get("status")) == "conflicting":
-            return blocked_experiment(
-                oid,
-                "BLOCKED_CONFLICTING_SOURCE",
-                _text(gap.get("id")),
-            )
+            # Only block if this obligation references the conflicting operation
+            _conflict_op = _text(gap.get("operation_ref"))
+            if _conflict_op and _conflict_op in _list(obl.get("subject_refs") or obl.get("required_operations") or []):
+                return blocked_experiment(
+                    oid,
+                    "BLOCKED_CONFLICTING_SOURCE",
+                    _text(gap.get("id")),
+                )
 
     if not primary_op_id or primary_op_id not in ops:
         # Skip obligations whose primary operation is not available
