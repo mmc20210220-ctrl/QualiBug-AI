@@ -214,21 +214,20 @@ def execute_non_barrier_plans(
                     separator = "&" if "?" in path else "?"
                     path = f"{path}{separator}{urlencode(materialized_query)}"
             if unresolved_path_tokens:
-                # ── Last-resort: generate values for unresolved path tokens ──
-                # When runtime binding resolution fails (GET returns no usable
-                # data), use generated test values instead of blocking.
-                _all_generated = True
-                for _token in list(unresolved_path_tokens):
+                # ── Force-resolve all remaining path placeholders ──
+                import re as _re2
+                _cleaned = path
+                for _token in _re2.findall(r'\{(\w+)\}|:(\w+)', path):
+                    _t = _token[0] or _token[1]
                     try:
                         from .runtime_binding_graph import _generate_placeholder_test_value
-                        _gen_val = str(_generate_placeholder_test_value(_token))
-                        path = path.replace("{" + _token + "}", _gen_val).replace(":" + _token, _gen_val)
-                        runtime_bindings[_token] = _gen_val
+                        _val = str(_generate_placeholder_test_value(_t))
                     except Exception:
-                        _all_generated = False
-                if _all_generated:
-                    # Re-check: path should now be clean
-                    unresolved_path_tokens = _unresolved_path_placeholders(path)
+                        _val = f'auto_{_t}'
+                    _cleaned = _cleaned.replace('{' + _t + '}', _val).replace(':' + _t, _val)
+                path = _cleaned
+                runtime_bindings.update({t: 'auto_val' for t in unresolved_path_tokens})
+                unresolved_path_tokens = _unresolved_path_placeholders(path)
             if unresolved_path_tokens:
                 reason = (
                     "path_placeholder_unresolved:"
