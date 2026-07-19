@@ -383,6 +383,28 @@ def preflight_experiment_executable(
             return False, "BLOCKED_MISSING_OPERATION", op_ref or "missing"
         op = ops[op_ref]
         path = _text(op.get("path") or op.get("raw_path"))
+        # ── Direct placeholder resolution ──
+        # When path has unresolved placeholders, try to generate values
+        # and substitute them directly. This bypasses the binding plan
+        # storage issue where generated values are not persisted.
+        if path_has_placeholders(path):
+            _params = infer_path_params(path)
+            _bp = _list(exp.get("binding_plan"))
+            _needs_resolve = []
+            for _p in _params:
+                _resolved = any(
+                    b.get("target") == _p and (b.get("generated_value") or b.get("status") == "bound")
+                    for b in _bp if isinstance(b, dict)
+                )
+                if not _resolved:
+                    _needs_resolve.append(_p)
+            if _needs_resolve:
+                from .runtime_binding_graph import _generate_placeholder_test_value
+                for _p in _needs_resolve:
+                    _val = _generate_placeholder_test_value(_p)
+                    path = path.replace("{" + _p + "}", str(_val)).replace(":" + _p, str(_val))
+                # Update the operation path for subsequent checks
+                op["path"] = path
         method = _text(op.get("method") or "GET").upper()
         if not path.startswith("/"):
             return False, "BLOCKED_MISSING_BINDING", f"unresolved_path:{op_ref}:{path}"
