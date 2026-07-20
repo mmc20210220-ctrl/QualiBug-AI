@@ -119,7 +119,10 @@ def parse_to_openapi(text_or_path: str | Path) -> dict[str, Any]:
         filename = ""
 
     fmt = detect_format(text, filename)
-    print(f"  [INFO] universal_api_parser: detected format={fmt}", flush=True)
+    try:
+        print(f"  [INFO] universal_api_parser: detected format={fmt}", flush=True)
+    except OSError:
+        pass
 
     if fmt == "openapi3":
         return _normalize_openapi3(text)
@@ -136,7 +139,10 @@ def parse_to_openapi(text_or_path: str | Path) -> dict[str, Any]:
     elif fmt == "markdown_api":
         return _convert_markdown_api(text)
     else:
-        print(f"  [WARN] universal_api_parser: unknown format, returning empty spec", flush=True, file=sys.stderr)
+        try:
+            print(f"  [WARN] universal_api_parser: unknown format, returning empty spec", flush=True, file=sys.stderr)
+        except OSError:
+            pass
         return _empty_spec()
 
 

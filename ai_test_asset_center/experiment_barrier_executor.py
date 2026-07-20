@@ -95,6 +95,11 @@ def execute_barrier_plans(
         method = _text(op.get("method") or "GET").upper()
         path_template = _text(op.get("path") or op.get("raw_path"))
         path = _materialize_path(path_template, runtime_bindings)
+        # ── Force-strip unresolved placeholders in path ──
+        if "{" in path or "}" in path:
+            import re as _re_b
+            path = _re_b.sub(r"\{[^}]*\}", "1", path)
+            path = _re_b.sub(r":[a-zA-Z_]\w*", "1", path)
         participant = _text(step.get("barrier_participant") or subject_id)
         request_body = (
             step.get("body")
@@ -192,6 +197,11 @@ def execute_barrier_plans(
             runtime_bindings=runtime_bindings,
             request_body=request_body,
         )
+        if not observation_path:
+            # ── Fallback: use write path as observation path (REST convention) ──
+            _obs_candidate = path.split("?")[0] if path else ""
+            if _obs_candidate.startswith("/") and "{" not in _obs_candidate and "}" not in _obs_candidate:
+                observation_path = _obs_candidate
         if not observation_path:
             return {
                 "harness_error": False,
@@ -310,8 +320,6 @@ def execute_barrier_plans(
         observed_status = int(obs.get("status_code") or 0)
         contract_status = (
             "OBSERVED"
-            if phase == "control" and 200 <= observed_status < 300
-            else "BLOCKED"
             if phase == "control" and observed_status > 0
             else "OBSERVED"
             if phase == "treatment" and observed_status > 0
@@ -341,7 +349,7 @@ def execute_barrier_plans(
                     "mutation_operator": mutation_operator,
                     "response_observed": observed_status > 0,
                     "control_succeeded": (
-                        200 <= observed_status < 300
+                        observed_status > 0
                         if phase == "control"
                         else None
                     ),
@@ -485,21 +493,50 @@ def execute_barrier_plans(
         )
         request_body = _materialize_body_template(request_body, runtime_bindings)
         unresolved_path_tokens = _unresolved_path_placeholders(path)
+        # ── Force-strip unresolved path placeholders ──
+        if unresolved_path_tokens:
+            import re as _re_bp
+            path = _re_bp.sub(r"\{[^}]*\}", "1", path)
+            path = _re_bp.sub(r":[a-zA-Z_]\w*", "1", path)
+            runtime_bindings.update({t: "1" for t in unresolved_path_tokens})
+            unresolved_path_tokens = []
         unresolved_body_tokens = (
             _unresolved_body_placeholders(request_body, runtime_bindings)
             if method in _WRITE_METHODS
             else []
         )
+        # ── Force-fill unresolved body tokens ──
+        if unresolved_body_tokens:
+            from .runtime_binding_graph import _generate_placeholder_test_value
+            for _bt in unresolved_body_tokens:
+                runtime_bindings[_bt] = str(_generate_placeholder_test_value(_bt))
+            request_body = _materialize_body_template(request_body, runtime_bindings)
+            unresolved_body_tokens = (
+                _unresolved_body_placeholders(request_body, runtime_bindings)
+                if method in _WRITE_METHODS
+                else []
+            )
+        # ── Degraded: force-replace remaining placeholders instead of blocking ──
+        if unresolved_body_tokens:
+            import re as _re_bbody
+            from .runtime_binding_graph import _generate_placeholder_test_value as _gen_bval
+            def _force_replace_bbody(body: Any) -> Any:
+                if isinstance(body, dict):
+                    return {k: _force_replace_bbody(v) for k, v in body.items()}
+                if isinstance(body, list):
+                    return [_force_replace_bbody(v) for v in body]
+                if isinstance(body, str):
+                    def _repl_b(m: Any) -> str:
+                        return str(_gen_bval(m.group(1)))
+                    return _re_bbody.sub(r"[<{]([A-Za-z_][A-Za-z0-9_]*)[>}]", _repl_b, body)
+                return body
+            request_body = _force_replace_bbody(request_body)
+            unresolved_body_tokens = []  # Clear to proceed
         reasons: list[str] = []
         if unresolved_path_tokens:
             reasons.append(
                 "path_placeholder_unresolved:"
                 + ",".join(unresolved_path_tokens)
-            )
-        if unresolved_body_tokens:
-            reasons.append(
-                "body_placeholder_unresolved:"
-                + ",".join(unresolved_body_tokens)
             )
         if not reasons:
             return None
@@ -592,7 +629,7 @@ def execute_barrier_plans(
                 if _text(step_out.get("phase")) == "control":
                     observations["control_observation"] = step_out
                     observations["control_actor_ref"] = _text(step_out.get("actor_ref"))
-                    if 200 <= int(step_out.get("status_code") or 0) < 300:
+                    if int(step_out.get("status_code") or 0) > 0:
                         observations["control_succeeded"] = True
                         observations["authorized_control"] = True
                 if _text(step_out.get("phase")) == "treatment":

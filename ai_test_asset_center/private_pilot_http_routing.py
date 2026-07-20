@@ -313,7 +313,7 @@ class HttpRoutingMixin:
         try:
             body = self._body()
             route_project = ""
-            route_parts = [urllib.parse.unquote(part) for part in parsed.path.split("/") if part]
+            route_parts = [unquote(part) for part in parsed.path.split("/") if part]
             if len(route_parts) >= 4 and route_parts[:3] == ["api", "v1", "projects"]:
                 route_project = route_parts[3]
             project = _safe_project_id(str(body.get("project_id") or route_project or self._project()))
@@ -333,7 +333,7 @@ class HttpRoutingMixin:
                 and route_parts[4] == "campaigns"
                 and route_parts[6] in {"run", "resume"}
             ):
-                from .campaign_api_contract import CampaignContractError, load_created_campaign
+                from .campaign_api_contract import load_created_campaign
 
                 campaign_contract = load_created_campaign(root, project, route_parts[5])
                 if campaign_contract.get("status") != "ready":

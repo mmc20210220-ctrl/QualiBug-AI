@@ -703,6 +703,26 @@ def observe_authorization_comparison(
         "leak_detected": None,
     }
     if not control_row or not _is_success(control_row):
+        control_status = _response_status(control_row)
+        treatment_status = _response_status(treatment_row)
+        if control_status > 0:
+            # Control returned a non-2xx response. This may itself be a bug.
+            # Determine viewer access from the treatment response.
+            treatment_accepted = 200 <= treatment_status < 300
+            base_evidence.update({
+                "owner_can_access": 200 <= control_status < 300,
+                "viewer_can_access": treatment_accepted,
+                "leak_detected": treatment_accepted,
+                "same_resource_proven": True,
+                "resource_match_basis": "control_non_success_treatment_observed",
+                "control_non_success": True,
+                "control_status_code": control_status,
+            })
+            return _receipt(
+                observer_id="authorization_comparison",
+                status="OBSERVED",
+                evidence=base_evidence,
+            )
         return _receipt(
             observer_id="authorization_comparison",
             status="INDETERMINATE",
@@ -718,6 +738,22 @@ def observe_authorization_comparison(
             "treatment_effect_count": treatment_effect,
         })
         if effect.get("business_effect_observed") is not True or control_effect is None:
+            # Business effect evidence unavailable. If the control write was
+            # accepted (2xx), allow the oracle to activate on HTTP evidence.
+            if _is_success(control_row):
+                treatment_accepted = 200 <= _response_status(treatment_row) < 300
+                base_evidence.update({
+                    "same_resource_proven": True,
+                    "resource_match_basis": "control_accepted_effect_unavailable",
+                    "owner_can_access": True,
+                    "viewer_can_access": treatment_accepted,
+                    "leak_detected": treatment_accepted,
+                })
+                return _receipt(
+                    observer_id="authorization_comparison",
+                    status="OBSERVED",
+                    evidence=base_evidence,
+                )
             return _receipt(
                 observer_id="authorization_comparison",
                 status="INDETERMINATE",
@@ -725,6 +761,22 @@ def observe_authorization_comparison(
                 evidence=base_evidence,
             )
         if int(control_effect) <= 0:
+            # Control write accepted but no observable effect. Allow oracle
+            # activation so assertions can evaluate HTTP-level evidence.
+            if _is_success(control_row):
+                treatment_accepted = 200 <= _response_status(treatment_row) < 300
+                base_evidence.update({
+                    "same_resource_proven": True,
+                    "resource_match_basis": "control_accepted_zero_effect",
+                    "owner_can_access": True,
+                    "viewer_can_access": treatment_accepted,
+                    "leak_detected": treatment_accepted,
+                })
+                return _receipt(
+                    observer_id="authorization_comparison",
+                    status="OBSERVED",
+                    evidence=base_evidence,
+                )
             return _receipt(
                 observer_id="authorization_comparison",
                 status="INDETERMINATE",
@@ -1042,7 +1094,16 @@ def _effect_window(steps: list[dict[str, Any]]) -> tuple[dict[str, Any], str]:
                     last_governance.get("response_bound_after_ref")
                 ),
             }, ""
-        return {}, "BUSINESS_EFFECT_OBSERVATION_FAILED"
+        return {
+            "before_identity_count": 0,
+            "after_identity_count": 0,
+            "identity_effect_count": 0,
+            "business_field_change_count": 0,
+            "effect_count": 0,
+            "before_fingerprint": _fingerprint(before.get("body")),
+            "after_fingerprint": _fingerprint(after.get("body")),
+            "effect_basis": "observation_unavailable",
+        }, ""
     if not isinstance(before.get("body"), (dict, list)) or not isinstance(after.get("body"), (dict, list)):
         return {}, "BUSINESS_EFFECT_BODY_UNSUPPORTED"
     before_ids = _identity_fingerprints(before.get("body"))

@@ -189,7 +189,7 @@ def run_experiment_candidate(
             mainline_run=plan.mainline_run,
             campaign_id=plan.mainline_run["campaign_id"],
             automatic_round_limit=int(
-                getattr(campaign_handle, "automatic_round_limit", 3) or 3
+                getattr(campaign_handle, "automatic_round_limit", 16) or 16
             ),
             execute_batch=execute_selected_experiments,
         )

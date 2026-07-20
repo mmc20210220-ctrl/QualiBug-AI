@@ -32,13 +32,13 @@ OUTPUT_HARD_LIMITS = (
     "- If evidence is insufficient, return fewer hypotheses rather than verbose explanations.\n"
 )
 
-MAX_HYPOTHESES = 15
+MAX_HYPOTHESES = 40
 MAX_HYPOTHESIS_CHARS = 500
 MAX_REASONER_WORKERS = 4
 MIN_REASONER_TIMEOUT_SECONDS = 300
 MIN_REASONER_MAX_TOKENS = 32768
 MAX_REASONER_MAX_TOKENS = 100000
-MAX_HYPOTHESES_HARD_LIMIT = 15
+MAX_HYPOTHESES_HARD_LIMIT = 40
 EXECUTABLE_QUALITY_REPORT_FIELDS = (
     "executable_hypotheses",
     "non_executable_hypotheses",

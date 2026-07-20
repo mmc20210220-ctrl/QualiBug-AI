@@ -381,6 +381,7 @@ def evaluate_assertion(
         "idempotency": "idempotency_effect",
         "concurrency": "concurrency_final_invariant",
         "temporal": "eventual_consistency",
+        "consistency": "cross_surface_consistency",
     }
     effective_kind = aliases.get(kind, kind)
 

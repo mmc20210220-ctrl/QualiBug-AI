@@ -1,0 +1,256 @@
+Slide width: 12191695, height: 6858000
+Total slides: 7
+================================================================================
+
+--- Slide 1 ---
+Layout: DEFAULT
+  Shape: PICTURE (13), name=Image 0, pos=(7543800,0), size=(4645152,6858000)
+    Image: image/jpeg, size=61951 bytes
+  Shape: AUTO_SHAPE (1), name=Shape 0, pos=(0,0), size=(7498080,6858000)
+  Shape: AUTO_SHAPE (1), name=Shape 1, pos=(7406640,228600), size=(0,6400800)
+  Shape: AUTO_SHAPE (1), name=Text 2, pos=(731520,1143000), size=(4297680,502920)
+    P: "QualiBug" [font=Noto Sans CJK SC, size=457200, bold=True, color=0F4C81]
+  Shape: AUTO_SHAPE (1), name=Text 3, pos=(768096,1755648), size=(4114800,411480)
+    P: "AI智能测试平台" [font=Noto Sans CJK SC, size=292100, bold=True, color=1F2937]
+  Shape: AUTO_SHAPE (1), name=Text 4, pos=(777240,2423160), size=(5257800,685800)
+    P: "让AI理解企业业务，自动执行测试、发现真实缺陷，并输出完整证据链。" [font=Noto Sans CJK SC, size=215900, bold=True, color=1F2937]
+  Shape: AUTO_SHAPE (1), name=Shape 5, pos=(777240,3337560), size=(3383280,384048)
+  Shape: AUTO_SHAPE (1), name=Text 6, pos=(832104,3429000), size=(3273552,137160)
+    P: "人工智能 × 企业软件测试 × 工业数字化" [font=Noto Sans CJK SC, size=127000, bold=True, color=FFFFFF]
+  Shape: AUTO_SHAPE (1), name=Text 7, pos=(786384,5257800), size=(4754880,457200)
+    P: "拟设公司：昆山观迹知因智能科技有限公司" [font=Noto Sans CJK SC, size=133350, bold=None, color=6B7280]
+    P: "沟通对象：政务中心 / OPC社区 / 招商与试点企业" [font=Noto Sans CJK SC, size=133350, bold=None, color=6B7280]
+
+--- Slide 2 ---
+Layout: DEFAULT
+  Shape: AUTO_SHAPE (1), name=Text 0, pos=(502920,320040), size=(8046720,411480)
+    P: "为什么需要QualiBug" [font=Noto Sans CJK SC, size=330200, bold=True, color=0F4C81]
+  Shape: AUTO_SHAPE (1), name=Text 1, pos=(530352,786384), size=(7772400,237744)
+    P: "传统测试已跟不上企业软件复杂度——80% 的缺陷在测试阶段无法被发现" [font=None, size=None, bold=None, color=None]
+  Shape: AUTO_SHAPE (1), name=Shape 2, pos=(594360,1325880), size=(3383280,4069080)
+  Shape: AUTO_SHAPE (1), name=Text 3, pos=(795528,1463040), size=(2980944,228600)
+    P: "企业侧痛点" [font=Noto Sans CJK SC, size=190500, bold=True, color=0F4C81]
+  Shape: AUTO_SHAPE (1), name=Text 4, pos=(813816,1828800), size=(2944368,3429000)
+    P: "• 需求、接口、UI、数据库等资料分散" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 测试人员理解成本高，重复劳动多" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 中小企业缺少专业测试团队" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+  Shape: AUTO_SHAPE (1), name=Shape 5, pos=(4434840,1325880), size=(3383280,4069080)
+  Shape: AUTO_SHAPE (1), name=Text 6, pos=(4636008,1463040), size=(2980944,228600)
+    P: "传统自动化痛点" [font=Noto Sans CJK SC, size=190500, bold=True, color=00A6A6]
+  Shape: AUTO_SHAPE (1), name=Text 7, pos=(4654296,1828800), size=(2944368,3429000)
+    P: "• 依赖人工预设脚本" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 能回归已知路径，难主动发现未知缺陷" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 每次需求变化都需要维护脚本" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+  Shape: AUTO_SHAPE (1), name=Shape 8, pos=(8275320,1325880), size=(3383280,4069080)
+  Shape: AUTO_SHAPE (1), name=Text 9, pos=(8476488,1463040), size=(2980944,228600)
+    P: "AI测试现状痛点" [font=Noto Sans CJK SC, size=190500, bold=True, color=FF8A00]
+  Shape: AUTO_SHAPE (1), name=Text 10, pos=(8494776,1828800), size=(2944368,3429000)
+    P: "• 很多工具停留在“生成用例”" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 缺少真实环境执行和证据链" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 不能形成缺陷修复后的回归闭环" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+  Shape: AUTO_SHAPE (1), name=Shape 11, pos=(502920,6446520), size=(11155680,0)
+  Shape: AUTO_SHAPE (1), name=Text 12, pos=(502920,6519672), size=(7315200,164592)
+    P: "QualiBug AI智能测试平台｜昆山｜2026年7月" [font=None, size=None, bold=None, color=None]
+  Shape: AUTO_SHAPE (1), name=Text 13, pos=(11155680,6519672), size=(502920,164592)
+    P: "02" [font=Noto Sans CJK SC, size=127000, bold=None, color=6B7280]
+
+--- Slide 3 ---
+Layout: DEFAULT
+  Shape: AUTO_SHAPE (1), name=Text 0, pos=(502920,320040), size=(8046720,411480)
+    P: "产品闭环" [font=Noto Sans CJK SC, size=330200, bold=True, color=0F4C81]
+  Shape: AUTO_SHAPE (1), name=Text 1, pos=(530352,786384), size=(7772400,237744)
+    P: "从企业资料导入到缺陷证据，再到自动回归验证" [font=Noto Sans CJK SC, size=139700, bold=None, color=6B7280]
+  Shape: AUTO_SHAPE (1), name=Shape 2, pos=(640080,2240280), size=(1243584,566928)
+  Shape: AUTO_SHAPE (1), name=Text 3, pos=(694944,2395728), size=(1133856,164592)
+    P: "资料导入" [font=Noto Sans CJK SC, size=133350, bold=True, color=FFFFFF]
+  Shape: AUTO_SHAPE (1), name=Shape 4, pos=(1911096,2523744), size=(402336,0)
+  Shape: AUTO_SHAPE (1), name=Shape 5, pos=(2423160,2240280), size=(1243584,566928)
+  Shape: AUTO_SHAPE (1), name=Text 6, pos=(2478024,2395728), size=(1133856,164592)
+    P: "业务建模" [font=Noto Sans CJK SC, size=133350, bold=True, color=FFFFFF]
+  Shape: AUTO_SHAPE (1), name=Shape 7, pos=(3694176,2523744), size=(402336,0)
+  Shape: AUTO_SHAPE (1), name=Shape 8, pos=(4206240,2240280), size=(1243584,566928)
+  Shape: AUTO_SHAPE (1), name=Text 9, pos=(4261104,2395728), size=(1133856,164592)
+    P: "场景生成" [font=Noto Sans CJK SC, size=133350, bold=True, color=FFFFFF]
+  Shape: AUTO_SHAPE (1), name=Shape 10, pos=(5477256,2523744), size=(402336,0)
+  Shape: AUTO_SHAPE (1), name=Shape 11, pos=(5989320,2240280), size=(1243584,566928)
+  Shape: AUTO_SHAPE (1), name=Text 12, pos=(6044184,2395728), size=(1133856,164592)
+    P: "自动执行" [font=Noto Sans CJK SC, size=133350, bold=True, color=FFFFFF]
+  Shape: AUTO_SHAPE (1), name=Shape 13, pos=(7260336,2523744), size=(402336,0)
+  Shape: AUTO_SHAPE (1), name=Shape 14, pos=(7772400,2240280), size=(1243584,566928)
+  Shape: AUTO_SHAPE (1), name=Text 15, pos=(7827264,2395728), size=(1133856,164592)
+    P: "缺陷证据" [font=Noto Sans CJK SC, size=133350, bold=True, color=FFFFFF]
+  Shape: AUTO_SHAPE (1), name=Shape 16, pos=(9043416,2523744), size=(402336,0)
+  Shape: AUTO_SHAPE (1), name=Shape 17, pos=(9555480,2240280), size=(1243584,566928)
+  Shape: AUTO_SHAPE (1), name=Text 18, pos=(9610344,2395728), size=(1133856,164592)
+    P: "回归验证" [font=Noto Sans CJK SC, size=133350, bold=True, color=FFFFFF]
+  Shape: AUTO_SHAPE (1), name=Text 19, pos=(914400,1234440), size=(10058400,438912)
+    P: "QualiBug 的核心差异：不是生成测试用例文本，而是打通"理解→执行→发现→证据→回归"全链路。" [font=None, size=None, bold=None, color=None]
+  Shape: AUTO_SHAPE (1), name=Shape 20, pos=(822960,3749040), size=(3154680,1600200)
+  Shape: AUTO_SHAPE (1), name=Text 21, pos=(1024128,3886200), size=(2752344,228600)
+    P: "输入资料" [font=Noto Sans CJK SC, size=190500, bold=True, color=0F4C81]
+  Shape: AUTO_SHAPE (1), name=Text 22, pos=(1042416,4251960), size=(2715768,960120)
+    P: "• PRD/需求文档" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 接口文档/数据库结构" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• UI原型/设计图" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 历史Bug/测试报告" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 测试账号与环境配置" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+  Shape: AUTO_SHAPE (1), name=Shape 23, pos=(4526280,3749040), size=(3154680,1600200)
+  Shape: AUTO_SHAPE (1), name=Text 24, pos=(4727448,3886200), size=(2752344,228600)
+    P: "输出结果" [font=Noto Sans CJK SC, size=190500, bold=True, color=00A6A6]
+  Shape: AUTO_SHAPE (1), name=Text 25, pos=(4745736,4251960), size=(2715768,960120)
+    P: "• 真实缺陷与风险点" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 复现步骤" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 请求响应/截图/日志" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 数据库变化" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 修复后回归结果" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+  Shape: AUTO_SHAPE (1), name=Shape 26, pos=(8229600,3749040), size=(3154680,1600200)
+  Shape: AUTO_SHAPE (1), name=Text 27, pos=(8430768,3886200), size=(2752344,228600)
+    P: "最终价值" [font=Noto Sans CJK SC, size=190500, bold=True, color=FF8A00]
+  Shape: AUTO_SHAPE (1), name=Text 28, pos=(8449056,4251960), size=(2715768,960120)
+    P: "• 降低测试成本" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 提高Bug发现率" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 形成可审计证据链" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 缩短交付周期" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 沉淀行业测试能力" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+  Shape: AUTO_SHAPE (1), name=Shape 29, pos=(502920,6446520), size=(11155680,0)
+  Shape: AUTO_SHAPE (1), name=Text 30, pos=(502920,6519672), size=(7315200,164592)
+    P: "QualiBug AI智能测试平台｜昆山｜2026年7月" [font=None, size=None, bold=None, color=None]
+  Shape: AUTO_SHAPE (1), name=Text 31, pos=(11155680,6519672), size=(502920,164592)
+    P: "03" [font=Noto Sans CJK SC, size=127000, bold=None, color=6B7280]
+
+--- Slide 4 ---
+Layout: DEFAULT
+  Shape: AUTO_SHAPE (1), name=Text 0, pos=(502920,320040), size=(8046720,411480)
+    P: "核心能力" [font=Noto Sans CJK SC, size=330200, bold=True, color=0F4C81]
+  Shape: AUTO_SHAPE (1), name=Text 1, pos=(530352,786384), size=(7772400,237744)
+    P: "以“业务行为场景”为主线，覆盖接口、UI、数据和性能" [font=Noto Sans CJK SC, size=139700, bold=None, color=6B7280]
+  Shape: PICTURE (13), name=Image 0, pos=(7543800,1143000), size=(4251960,4297680)
+    Image: image/jpeg, size=127220 bytes
+  Shape: AUTO_SHAPE (1), name=Shape 2, pos=(685800,1170432), size=(3337560,1828800)
+  Shape: AUTO_SHAPE (1), name=Text 3, pos=(886968,1307592), size=(2935224,228600)
+    P: "业务理解与场景建模" [font=Noto Sans CJK SC, size=190500, bold=True, color=0F4C81]
+  Shape: AUTO_SHAPE (1), name=Text 4, pos=(905256,1673352), size=(2898648,1188720)
+    P: "• 识别业务流程、规则、角色、权限" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 识别正常路径、异常路径和边界条件" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 将业务行为映射到接口、页面和数据状态" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+  Shape: AUTO_SHAPE (1), name=Shape 5, pos=(4251960,1170432), size=(2788920,1828800)
+  Shape: AUTO_SHAPE (1), name=Text 6, pos=(4453128,1307592), size=(2386584,228600)
+    P: "自动执行与缺陷识别" [font=Noto Sans CJK SC, size=190500, bold=True, color=00A6A6]
+  Shape: AUTO_SHAPE (1), name=Text 7, pos=(4471416,1673352), size=(2350008,1188720)
+    P: "• 接口调用、页面操作、数据库校验" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 检测业务规则、接口契约和数据一致性问题" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 输出可复现、可验证、可回归的缺陷证据" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+  Shape: AUTO_SHAPE (1), name=Shape 8, pos=(685800,3566160), size=(6355080,1417320)
+  Shape: AUTO_SHAPE (1), name=Text 9, pos=(886968,3703320), size=(5952744,228600)
+    P: "长期积累" [font=Noto Sans CJK SC, size=190500, bold=True, color=FF8A00]
+  Shape: AUTO_SHAPE (1), name=Text 10, pos=(905256,4069080), size=(5916168,777240)
+    P: "• 企业系统行为模型" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 行业测试场景库" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 缺陷知识与证据模板" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "从"一次性测试工具"升级为"持续演进的质量基础设施"" [font=None, size=None, bold=None, color=None]
+  Shape: AUTO_SHAPE (1), name=Shape 11, pos=(502920,6446520), size=(11155680,0)
+  Shape: AUTO_SHAPE (1), name=Text 12, pos=(502920,6519672), size=(7315200,164592)
+    P: "QualiBug AI智能测试平台｜昆山｜2026年7月" [font=None, size=None, bold=None, color=None]
+  Shape: AUTO_SHAPE (1), name=Text 13, pos=(11155680,6519672), size=(502920,164592)
+    P: "04" [font=Noto Sans CJK SC, size=127000, bold=None, color=6B7280]
+
+--- Slide 5 ---
+Layout: DEFAULT
+  Shape: AUTO_SHAPE (1), name=Text 0, pos=(502920,320040), size=(8046720,411480)
+    P: "当前进展与知识产权规划" [font=Noto Sans CJK SC, size=330200, bold=True, color=0F4C81]
+  Shape: AUTO_SHAPE (1), name=Text 1, pos=(530352,786384), size=(7772400,237744)
+    P: "明确区分已完成能力与公司成立后的申请计划" [font=Noto Sans CJK SC, size=139700, bold=None, color=6B7280]
+  Shape: AUTO_SHAPE (1), name=Shape 2, pos=(685800,1143000), size=(5166360,2971800)
+  Shape: AUTO_SHAPE (1), name=Text 3, pos=(886968,1280160), size=(4764024,228600)
+    P: "当前进展" [font=Noto Sans CJK SC, size=190500, bold=True, color=0F4C81]
+  Shape: AUTO_SHAPE (1), name=Text 4, pos=(905256,1645920), size=(4727448,2331720)
+    P: "• 已完成平台主要核心模块开发" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 具备资料导入、场景生成、任务执行、证据采集基础能力" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 前端管理、任务执行和结果展示形成初步闭环" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "当前重点：提升真实缺陷发现率（当前已发现 9 个真实缺陷 / 131 Bug 基准测试）" [font=None, size=None, bold=None, color=None]
+  Shape: AUTO_SHAPE (1), name=Shape 5, pos=(6309360,1143000), size=(5166360,2971800)
+  Shape: AUTO_SHAPE (1), name=Text 6, pos=(6510528,1280160), size=(4764024,228600)
+    P: "知识产权规划" [font=Noto Sans CJK SC, size=190500, bold=True, color=00A6A6]
+  Shape: AUTO_SHAPE (1), name=Text 7, pos=(6528816,1645920), size=(4727448,2331720)
+    P: "• 公司成立后申请QualiBug平台软件著作权" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 围绕多源资料解析、业务场景建模、智能测试执行、缺陷证据链申请发明专利" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 申请公司名称、产品名称及核心标识商标" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 建立代码、算法、文档和商业秘密管理机制" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+  Shape: AUTO_SHAPE (1), name=Shape 8, pos=(1097280,4800600), size=(10012680,731520)
+  Shape: AUTO_SHAPE (1), name=Text 9, pos=(1325880,5056632), size=(9509760,164592)
+  Shape: AUTO_SHAPE (1), name=Shape 10, pos=(502920,6446520), size=(11155680,0)
+  Shape: AUTO_SHAPE (1), name=Text 11, pos=(502920,6519672), size=(7315200,164592)
+    P: "QualiBug AI智能测试平台｜昆山｜2026年7月" [font=None, size=None, bold=None, color=None]
+  Shape: AUTO_SHAPE (1), name=Text 12, pos=(11155680,6519672), size=(502920,164592)
+    P: "05" [font=Noto Sans CJK SC, size=127000, bold=None, color=6B7280]
+
+--- Slide 6 ---
+Layout: DEFAULT
+  Shape: AUTO_SHAPE (1), name=Text 0, pos=(502920,320040), size=(8046720,411480)
+    P: "昆山落地计划" [font=Noto Sans CJK SC, size=330200, bold=True, color=0F4C81]
+  Shape: AUTO_SHAPE (1), name=Text 1, pos=(530352,786384), size=(7772400,237744)
+    P: "优先依托OPC社区和数字经济生态，完成试点验证" [font=Noto Sans CJK SC, size=139700, bold=None, color=6B7280]
+  Shape: PICTURE (13), name=Image 0, pos=(594360,1097280), size=(4023360,3977640)
+    Image: image/jpeg, size=99114 bytes
+  Shape: AUTO_SHAPE (1), name=Shape 2, pos=(4983480,1051560), size=(2971800,1874520)
+  Shape: AUTO_SHAPE (1), name=Text 3, pos=(5184648,1188720), size=(2569464,228600)
+    P: "第一站：政务中心OPC专窗" [font=Noto Sans CJK SC, size=190500, bold=True, color=0F4C81]
+  Shape: AUTO_SHAPE (1), name=Text 4, pos=(5202936,1554480), size=(2532888,1234440)
+    P: "• 咨询注册、社区入驻、工位和注册地址" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 核实创业、人才、租房和社保补贴条件" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 让窗口直接对接社区运营负责人" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+  Shape: AUTO_SHAPE (1), name=Shape 5, pos=(8458200,1051560), size=(2971800,1874520)
+  Shape: AUTO_SHAPE (1), name=Text 6, pos=(8659368,1188720), size=(2569464,228600)
+    P: "优先社区：全球数字创新港" [font=Noto Sans CJK SC, size=190500, bold=True, color=00A6A6]
+  Shape: AUTO_SHAPE (1), name=Text 7, pos=(8677656,1554480), size=(2532888,1234440)
+    P: "• 更贴近软件/SaaS和AI应用方向" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 便于对接数字经济企业与应用场景" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 适合形成产品试点和案例" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+  Shape: AUTO_SHAPE (1), name=Shape 8, pos=(4983480,3520440), size=(6446520,1572768)
+  Shape: AUTO_SHAPE (1), name=Text 9, pos=(5184648,3657600), size=(6044184,228600)
+    P: "试点路径" [font=Noto Sans CJK SC, size=190500, bold=True, color=FF8A00]
+  Shape: AUTO_SHAPE (1), name=Text 10, pos=(5202936,4023360), size=(6007608,932688)
+    P: "• 注册公司并入驻社区" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 完成1-3家真实企业系统验证" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 形成真实Bug证据和回归报告" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 沉淀制造业/企业软件场景模板" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+  Shape: AUTO_SHAPE (1), name=Shape 11, pos=(502920,6446520), size=(11155680,0)
+  Shape: AUTO_SHAPE (1), name=Text 12, pos=(502920,6519672), size=(7315200,164592)
+    P: "QualiBug AI智能测试平台｜昆山｜2026年7月" [font=None, size=None, bold=None, color=None]
+  Shape: AUTO_SHAPE (1), name=Text 13, pos=(11155680,6519672), size=(502920,164592)
+    P: "06" [font=Noto Sans CJK SC, size=127000, bold=None, color=6B7280]
+
+--- Slide 7 ---
+Layout: DEFAULT
+  Shape: AUTO_SHAPE (1), name=Text 0, pos=(502920,320040), size=(8046720,411480)
+    P: "本次沟通希望获得的支持" [font=Noto Sans CJK SC, size=330200, bold=True, color=0F4C81]
+  Shape: AUTO_SHAPE (1), name=Text 1, pos=(530352,786384), size=(7772400,237744)
+    P: "不是只要工位，更重要的是试点场景和产业资源" [font=Noto Sans CJK SC, size=139700, bold=None, color=6B7280]
+  Shape: AUTO_SHAPE (1), name=Shape 2, pos=(685800,1143000), size=(3429000,3429000)
+  Shape: AUTO_SHAPE (1), name=Text 3, pos=(886968,1280160), size=(3026664,228600)
+    P: "基础支持" [font=Noto Sans CJK SC, size=190500, bold=True, color=0F4C81]
+  Shape: AUTO_SHAPE (1), name=Text 4, pos=(905256,1645920), size=(2990088,2788920)
+    P: "• OPC社区入驻和创业工位" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 工商注册地址和注册指导" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 代理记账、银行开户、税务登记等服务确认" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+  Shape: AUTO_SHAPE (1), name=Shape 5, pos=(4434840,1143000), size=(3429000,3429000)
+  Shape: AUTO_SHAPE (1), name=Text 6, pos=(4636008,1280160), size=(3026664,228600)
+    P: "技术与政策支持" [font=Noto Sans CJK SC, size=190500, bold=True, color=00A6A6]
+  Shape: AUTO_SHAPE (1), name=Text 7, pos=(4654296,1645920), size=(2990088,2788920)
+    P: "• AI算力、模型和技术资源对接" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 软件、AI、科技创业政策指导" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 软著、专利、商标和科技项目申报辅导" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+  Shape: AUTO_SHAPE (1), name=Shape 8, pos=(8183880,1143000), size=(3429000,3429000)
+  Shape: AUTO_SHAPE (1), name=Text 9, pos=(8385048,1280160), size=(3026664,228600)
+    P: "最关键支持" [font=Noto Sans CJK SC, size=190500, bold=True, color=FF8A00]
+  Shape: AUTO_SHAPE (1), name=Text 10, pos=(8403336,1645920), size=(2990088,2788920)
+    P: "• 对接昆山制造企业和软件企业试点" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 提供真实企业系统验证机会" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+    P: "• 帮助形成首批标杆案例和客户背书" [font=Noto Sans CJK SC, size=152400, bold=None, color=1F2937]
+  Shape: AUTO_SHAPE (1), name=Text 11, pos=(1097280,5257800), size=(10012680,320040)
+    P: "🎯 一句话请求：请帮助 QualiBug 对接 OPC 全球数字创新港，引入 1-3 家昆山本地制造/软件企业作为首批试点——让我们在昆山做出看得见的标杆案例。" [font=None, size=None, bold=None, color=None]
+  Shape: AUTO_SHAPE (1), name=Shape 12, pos=(502920,6446520), size=(11155680,0)
+  Shape: AUTO_SHAPE (1), name=Text 13, pos=(502920,6519672), size=(7315200,164592)
+    P: "QualiBug AI智能测试平台｜昆山｜2026年7月" [font=None, size=None, bold=None, color=None]
+  Shape: AUTO_SHAPE (1), name=Text 14, pos=(11155680,6519672), size=(502920,164592)
+    P: "07" [font=Noto Sans CJK SC, size=127000, bold=None, color=6B7280]

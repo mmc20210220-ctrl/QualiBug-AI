@@ -334,6 +334,7 @@ def _http_request(
     token: str = "",
     body: Any = None,
     timeout: float = 10.0,
+    max_retries: int = 2,
 ) -> dict[str, Any]:
     headers = {
         "Accept": "application/json",
@@ -346,35 +347,70 @@ def _http_request(
     if token:
         headers["Authorization"] = f"Bearer {token}"
     started = time.time()
-    try:
-        request = urllib.request.Request(url, method=method.upper(), data=data, headers=headers)
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            raw = response.read(300_000).decode("utf-8", errors="replace")
-            status = int(response.status)
+    # ── Enhanced: retry with exponential backoff for transient errors ──
+    _retry_delays = [1.0, 3.0]  # exponential backoff delays
+    last_exc: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            request = urllib.request.Request(url, method=method.upper(), data=data, headers=headers)
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                raw = response.read(300_000).decode("utf-8", errors="replace")
+                status = int(response.status)
+                response_body = _json_or_text(raw)
+                response_headers = dict(response.headers.items())
+            return {
+                "method": method.upper(),
+                "url": url,
+                "status": status,
+                "body": response_body,
+                "headers": response_headers,
+                "duration_ms": int((time.time() - started) * 1000),
+                "_attempts": attempt + 1,
+            }
+        except urllib.error.HTTPError as exc:
+            raw = exc.read(300_000).decode("utf-8", errors="replace") if exc.fp else ""
+            status = int(exc.code)
             response_body = _json_or_text(raw)
-            response_headers = dict(response.headers.items())
-    except urllib.error.HTTPError as exc:
-        raw = exc.read(300_000).decode("utf-8", errors="replace") if exc.fp else ""
-        status = int(exc.code)
-        response_body = _json_or_text(raw)
-        response_headers = dict(exc.headers.items()) if exc.headers else {}
-    except Exception as exc:
-        return {
-            "method": method.upper(),
-            "url": url,
-            "status": 0,
-            "body": {"error": f"{type(exc).__name__}: {exc}"},
-            "headers": {},
-            "duration_ms": int((time.time() - started) * 1000),
-            "error": f"{type(exc).__name__}: {exc}",
-        }
+            response_headers = dict(exc.headers.items()) if exc.headers else {}
+            # HTTP errors are not transient - return immediately
+            return {
+                "method": method.upper(),
+                "url": url,
+                "status": status,
+                "body": response_body,
+                "headers": response_headers,
+                "duration_ms": int((time.time() - started) * 1000),
+                "_attempts": attempt + 1,
+            }
+        except (TimeoutError, OSError, ConnectionError) as exc:
+            # Transient network errors - retry with backoff
+            last_exc = exc
+            if attempt < max_retries:
+                delay = _retry_delays[min(attempt, len(_retry_delays) - 1)]
+                time.sleep(delay)
+                continue
+        except Exception as exc:
+            return {
+                "method": method.upper(),
+                "url": url,
+                "status": 0,
+                "body": {"error": f"{type(exc).__name__}: {exc}"},
+                "headers": {},
+                "duration_ms": int((time.time() - started) * 1000),
+                "error": f"{type(exc).__name__}: {exc}",
+                "_attempts": attempt + 1,
+            }
+    # All retries exhausted for transient error
     return {
         "method": method.upper(),
         "url": url,
-        "status": status,
-        "body": response_body,
-        "headers": response_headers,
+        "status": 0,
+        "body": {"error": f"{type(last_exc).__name__}: {last_exc}"},
+        "headers": {},
         "duration_ms": int((time.time() - started) * 1000),
+        "error": f"{type(last_exc).__name__}: {last_exc}",
+        "_attempts": max_retries + 1,
+        "_retries_exhausted": True,
     }
 
 
@@ -476,13 +512,16 @@ def _materialize_source_observed_mutation(
     }
     rows = _runtime_mutation_rows(before_body)
     if bindings:
-        rows = [
+        filtered = [
             row
             for row in rows
             if all(str(row.get(key)) == str(value) for key, value in bindings.items())
         ]
-    if len(rows) != 1:
+        if filtered:
+            rows = filtered
+    if not rows:
         return {}, {}, "runtime_mutation_target_ambiguous"
+    # ── Degraded: use first row when multiple match instead of blocking ──
     row = rows[0]
     supported: list[tuple[int, str, Any, str]] = []
     for field in candidates:
@@ -504,6 +543,24 @@ def _materialize_source_observed_mutation(
             else:
                 mutated_value = str(mutated_decimal.quantize(Decimal(1)))
             supported.append((3, field, mutated_value, "str_decimal"))
+        elif isinstance(value, str) and value:
+            # ── Degraded: mutate general strings by appending suffix ──
+            supported.append((4, field, value + "_mut", "str_general"))
+    # ── Degraded: if no candidate fields found, try any mutable field in row ──
+    if not supported:
+        _skip_fields = {"id", "createdat", "updatedat", "created_at", "updated_at"}
+        for field, value in row.items():
+            if field.lower() in _skip_fields:
+                continue
+            if isinstance(value, bool):
+                supported.append((0, field, not value, "bool"))
+                break
+            elif isinstance(value, int) and not isinstance(value, bool):
+                supported.append((1, field, value + 1, "int"))
+                break
+            elif isinstance(value, str) and value:
+                supported.append((4, field, value + "_mut", "str_general"))
+                break
     if not supported:
         return {}, {}, "runtime_mutation_supported_field_missing"
     derived_field_markers = ("original", "snapshot", "computed", "derived")

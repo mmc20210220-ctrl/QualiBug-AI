@@ -338,7 +338,7 @@ def _predicted_campaign_binding(project: str, root: Path, body: dict[str, Any]) 
             normalized_api_doc,
             schema_text,
             str(body.get("base_url") or "").strip(),
-            {"slice_budget": 15, "round_limit": 3},
+            {"slice_budget": 100, "round_limit": 16},
             {
                 "scope_id": scope_id,
                 "environment_ref": environment_ref,

@@ -380,6 +380,36 @@ def build_discovery_plan(
             "coverage_obligations_added": 0,
             "coverage_error": f"{type(exc).__name__}: {str(exc)[:200]}",
         }
+
+    # ── Exhaustive obligation matrix (Phase 4.1) ──
+    # Generate comprehensive obligations from Behavior IR structure:
+    # auth matrix, boundary validation, state integrity, isolation,
+    # idempotency, conservation, invariant checks.
+    matrix_report: dict[str, Any] = {}
+    try:
+        from .behavior_ir_hypothesis_coverage import build_exhaustive_obligation_matrix
+
+        matrix_obligations = build_exhaustive_obligation_matrix(behavior_ir)
+        if matrix_obligations:
+            # Deduplicate against existing obligations by signature
+            existing_sigs = {
+                _text(o.get("obligation_id")) for o in obligations if isinstance(o, dict)
+            }
+            new_matrix = [
+                mo for mo in matrix_obligations
+                if _text(mo.get("obligation_id")) not in existing_sigs
+            ]
+            obligations.extend(new_matrix)
+            matrix_report = {
+                "matrix_obligations_generated": len(matrix_obligations),
+                "matrix_obligations_added": len(new_matrix),
+                "total_obligations_after_matrix": len(obligations),
+            }
+    except Exception as exc:
+        matrix_report = {
+            "matrix_obligations_added": 0,
+            "matrix_error": f"{type(exc).__name__}: {str(exc)[:200]}",
+        }
     environment_type = _text(
         inputs.campaign_context.get("environment_type")
         or inputs.campaign_context.get("environment_kind")

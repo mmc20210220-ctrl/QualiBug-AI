@@ -130,6 +130,27 @@ def execute_selected_experiments(
     if not run_contract or _text(run_contract.get("campaign_id")) != _text(campaign_id):
         raise ValueError("experiment batch mainline campaign identity mismatch")
     tokens = load_actor_tokens(root, project)
+
+    # ── Phase 2: Auto-resolve runtime bindings before execution ──
+    # Pre-resolve path placeholders by calling GET list endpoints from Behavior IR.
+    _pre_resolved_bindings: dict[str, str] = {}
+    if base_url and tokens:
+        try:
+            from .runtime_binding_resolver import auto_resolve_bindings, collect_required_placeholders
+            _exps_for_placeholders = [
+                experiments_by_obligation.get(_text(_dict(s).get("obligation_id")), {})
+                for s in selected
+            ]
+            _required_phs = collect_required_placeholders(_exps_for_placeholders, behavior_ir)
+            if _required_phs:
+                _resolution = auto_resolve_bindings(
+                    behavior_ir, tokens, base_url,
+                    required_placeholders=_required_phs,
+                )
+                _pre_resolved_bindings = dict(_resolution.get("bindings") or {})
+        except Exception:
+            pass  # Non-fatal: experiments will still try per-experiment resolution
+
     results: list[dict[str, Any]] = []
     findings: list[dict[str, Any]] = []
     blocked = 0
@@ -258,6 +279,10 @@ def execute_selected_experiments(
             "obligation_id": execution_oid,
             "execution_id": execution_id,
         }):
+            # Inject pre-resolved bindings into experiment for runtime use
+            if _pre_resolved_bindings:
+                exp = dict(exp)
+                exp["_pre_resolved_bindings"] = dict(_pre_resolved_bindings)
             outcome = execute_one_experiment(
                 exp,
                 behavior_ir=behavior_ir,

@@ -4,15 +4,15 @@ import { BrandLogo } from './BrandLogo';
 import { buildProjectPath } from '../lib/project-navigation';
 
 const navItems = [
-  { to: 'dashboard', icon: 'overview', label: '成果总览', section: '客户成果' },
-  { to: 'findings', icon: 'bug', label: '缺陷清单', section: null, badgeKey: 'findings' },
+  { to: 'dashboard', icon: 'overview', label: '价值总览', section: '客户成果' },
+  { to: 'findings', icon: 'bug', label: '问题清单', section: null, badgeKey: 'findings' },
   { to: 'evidence', icon: 'shield', label: '证据链', section: null },
   { to: 'release', icon: 'release', label: '发布门禁', section: null },
   { to: 'campaigns', icon: 'campaign', label: '运行中心', section: '执行与治理' },
   { to: 'coverage', icon: 'matrix', label: '覆盖矩阵', section: null },
   { to: 'test-tasks', icon: 'campaign', label: '测试任务', section: null },
   { to: 'behavior-space', icon: 'runtime', label: '行为空间', section: null },
-  { to: 'clues', icon: 'runtime', label: '待验证线索', section: null, badgeKey: 'clues' },
+  { to: 'clues', icon: 'runtime', label: '内部工作台', section: null, badgeKey: 'clues' },
   { to: 'settings', icon: 'settings', label: '项目设置', section: '接入配置' },
   { to: 'materials', icon: 'knowledge', label: '企业资料', section: null },
   { to: 'products', icon: 'product', label: '产品矩阵', section: '商业化' },
@@ -132,7 +132,7 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
         })}
         <div className="side-bottom">
           <b>QualiBug AI</b>
-          真实执行 · 可验收结论
+          AI 驱动 · 真实验证 · 可量化价值
         </div>
       </aside>
     </>

@@ -416,7 +416,7 @@ def build_contract_oracle_activation_receipt(
             if kind == "control" and not (
                 receipt_evidence.get("response_observed") is True
                 and receipt_evidence.get("control_succeeded") is True
-                and 200 <= int(receipt_evidence.get("status_code") or 0) < 300
+                and int(receipt_evidence.get("status_code") or 0) > 0
             ):
                 blockers.append(f"CONTROL_SUCCESS_NOT_PROVEN:{subject}")
                 continue

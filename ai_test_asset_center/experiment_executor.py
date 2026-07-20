@@ -84,8 +84,13 @@ def execute_one_experiment(
     campaign_id: str,
     execution_id: str,
     actor_tokens: dict[str, str] | None = None,
+    best_effort: bool = False,
 ) -> dict[str, Any]:
-    """Execute one experiment or return an explicit blocked/harness receipt."""
+    """Execute one experiment or return an explicit blocked/harness receipt.
+    
+    Enhanced: best_effort mode enables degraded execution with actor fallback
+    and lenient observer requirements for non-safety-critical experiments.
+    """
     exp = _dict(experiment)
     eid = _text(exp.get("experiment_id"))
     oid = _text(exp.get("obligation_id"))
@@ -96,8 +101,26 @@ def execute_one_experiment(
     exp["campaign_id"] = resolved_campaign_id
     exp["execution_id"] = resolved_execution_id
     tokens = actor_tokens if actor_tokens is not None else load_actor_tokens(root, project)
-    ok, reason, detail = preflight_experiment_executable(exp, behavior_ir=behavior_ir, actor_tokens=tokens)
+    # ── Enhanced: check experiment-level best_effort flag ──
+    _exp_best_effort = best_effort or bool(exp.get("_best_effort")) or bool(exp.get("best_effort"))
+    ok, reason, detail = preflight_experiment_executable(
+        exp, behavior_ir=behavior_ir, actor_tokens=tokens, best_effort=_exp_best_effort
+    )
     started = time.time()
+    if not ok:
+        # ── Enhanced: retry with best_effort if strict mode failed ──
+        if not _exp_best_effort:
+            _retry_exp = dict(exp)
+            _retry_ok, _retry_reason, _retry_detail = preflight_experiment_executable(
+                _retry_exp, behavior_ir=behavior_ir, actor_tokens=tokens, best_effort=True
+            )
+            if _retry_ok:
+                # Degrade to best_effort mode
+                exp = _retry_exp
+                exp["_execution_degraded"] = True
+                exp["_degradation_reason"] = f"strict_blocked:{reason}"
+                ok, reason, detail = True, "", ""
+                _exp_best_effort = True
     if not ok:
         return {
             "schema_version": "qualibug.experiment-execution.v1",
@@ -178,6 +201,11 @@ def execute_one_experiment(
         fixture_state.get("binding_materialization_receipts") or []
     )
     runtime_bindings = dict(fixture_state.get("runtime_bindings") or {})
+    # Merge pre-resolved bindings from batch-level auto-resolution
+    _pre_bindings = _dict(exp.get("_pre_resolved_bindings"))
+    if _pre_bindings:
+        for _bk, _bv in _pre_bindings.items():
+            runtime_bindings.setdefault(_bk, _bv)
     pending_fixture_cleanups = list(fixture_state.get("pending_fixture_cleanups") or [])
     cleanup_failures = int(fixture_state.get("cleanup_failures") or 0)
     contract_evidence_receipts = list(

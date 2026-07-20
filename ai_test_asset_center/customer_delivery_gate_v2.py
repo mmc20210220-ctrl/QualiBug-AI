@@ -742,6 +742,10 @@ def _cleanup_gate_decision(
         return "DELIVERABLE", [], "NOT_REQUIRED"
 
     if not cleanup_contracts:
+        # When cleanup was explicitly declared not required by the source
+        # obligation, the operational receipt records NOT_REQUIRED status.
+        if cleanup_status == "NOT_REQUIRED":
+            return "DELIVERABLE", [], "NOT_REQUIRED"
         return "HARNESS_FAILED", ["CLEANUP_EVIDENCE_INCOMPLETE"], "INCOMPLETE"
     if covered != accepted_non_cleanup:
         return "HARNESS_FAILED", ["CLEANUP_WRITE_COVERAGE_MISMATCH"], "INCOMPLETE"

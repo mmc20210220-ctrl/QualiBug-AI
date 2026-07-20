@@ -498,6 +498,14 @@ def _consume_pending_obligation_rounds(
     }
     follow_on_batches: list[dict[str, Any]] = []
     follow_on_receipts: list[dict[str, Any]] = []
+    # ── Enhanced: track resolved bindings across rounds ──
+    accumulated_bindings: dict[str, str] = {}
+    # ── Enhanced: collect BLOCKED obligations eligible for retry ──
+    retry_eligible_reasons = {
+        "BLOCKED_MISSING_BINDING",
+        "HARNESS_FAILED",
+        "BLOCKED_MISSING_OBSERVER",
+    }
     # Round 1 already ran; additional rounds are 2..round_limit inclusive.
     for planning_round in range(2, round_limit + 1):
         pending_ids = [
@@ -505,19 +513,35 @@ def _consume_pending_obligation_rounds(
             for row in pending_rows
             if _text(row.get("obligation_id"))
         ]
+        # ── Enhanced: include retry-eligible BLOCKED obligations ──
+        blocked_retry_ids = [
+            _text(row.get("obligation_id"))
+            for row in _list(plan_row.get("blocked_retry_pool"))
+            if isinstance(row, dict)
+            and _text(row.get("block_reason")) in retry_eligible_reasons
+            and _text(row.get("obligation_id"))
+        ]
+        all_round_ids = list(dict.fromkeys(pending_ids + blocked_retry_ids))
         remaining_obligations = [
             obligation_by_id[oid]
-            for oid in pending_ids
+            for oid in all_round_ids
             if oid in obligation_by_id
         ]
         remaining_experiments = {
             oid: experiments[oid]
-            for oid in pending_ids
+            for oid in all_round_ids
             if oid in experiments
-            and _text(
-                _dict(_dict(experiments[oid]).get("compile_receipt")).get("status")
-            ).upper()
-            == "COMPILED"
+            and (
+                _text(
+                    _dict(_dict(experiments[oid]).get("compile_receipt")).get("status")
+                ).upper()
+                == "COMPILED"
+                # Allow retry of blocked experiments that may now succeed
+                or _text(
+                    _dict(_dict(experiments[oid]).get("compile_receipt")).get("status")
+                ).upper()
+                in {"BLOCKED", "BLOCKED_MISSING_BINDING", "HARNESS_FAILED"}
+            )
         }
         if not remaining_experiments:
             break
@@ -547,7 +571,7 @@ def _consume_pending_obligation_rounds(
             ]
             plan_row = {
                 **plan_row,
-                "pending_next_round": pending_rows[:200],
+                "pending_next_round": pending_rows[:600],
                 "pending_count": len(pending_rows),
                 "stop_condition": _text(next_plan.get("stop_condition"))
                 or plan_row.get("stop_condition"),
@@ -564,6 +588,23 @@ def _consume_pending_obligation_rounds(
             mainline_run=mainline_run,
             campaign_id=campaign_id,
         )
+        # ── Enhanced: collect runtime bindings from this round ──
+        batch_bindings = _dict(_dict(next_batch).get("runtime_bindings"))
+        if batch_bindings:
+            accumulated_bindings.update(batch_bindings)
+        # ── Enhanced: collect BLOCKED experiments for retry pool ──
+        blocked_retry_pool: list[dict[str, Any]] = []
+        for result_row in _list(_dict(next_batch).get("results")):
+            if not isinstance(result_row, dict):
+                continue
+            status = _text(result_row.get("status") or result_row.get("execution_status")).upper()
+            reason = _text(result_row.get("block_reason") or result_row.get("failure_reason"))
+            if status in {"BLOCKED", "HARNESS_FAILED"} and reason in retry_eligible_reasons:
+                blocked_retry_pool.append({
+                    "obligation_id": _text(result_row.get("obligation_id")),
+                    "block_reason": reason,
+                    "planning_round": planning_round,
+                })
         follow_on_batches.append(dict(_dict(next_batch)))
         follow_on_receipts.append({
             "planning_round": planning_round,
@@ -571,6 +612,8 @@ def _consume_pending_obligation_rounds(
             "pending_count": int(next_plan.get("pending_count") or 0),
             "executed_count": int(_dict(next_batch).get("executed_count") or 0),
             "budget": budget,
+            "accumulated_bindings_count": len(accumulated_bindings),
+            "blocked_retry_count": len(blocked_retry_pool),
         })
         pending_rows = [
             dict(row)
@@ -579,11 +622,13 @@ def _consume_pending_obligation_rounds(
         ]
         plan_row = {
             **plan_row,
-            "pending_next_round": pending_rows[:200],
+            "pending_next_round": pending_rows[:600],
             "pending_count": len(pending_rows),
             "stop_condition": _text(next_plan.get("stop_condition"))
             or plan_row.get("stop_condition"),
             "follow_on_round_receipts": follow_on_receipts,
+            "blocked_retry_pool": blocked_retry_pool[:100],
+            "accumulated_bindings": accumulated_bindings,
         }
         if not pending_rows:
             break

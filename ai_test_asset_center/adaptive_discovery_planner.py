@@ -175,7 +175,7 @@ def plan_obligation_round(
     *,
     experiments_by_obligation: dict[str, dict[str, Any]] | None = None,
     behavior_ir: dict[str, Any] | None = None,
-    budget: int = 20,
+    budget: int = 600,
     historical_yield: dict[str, float] | None = None,
     historical_receipt_ids: list[str] | None = None,
     cold_start_reason: str = "NO_MATCHING_HISTORY",
@@ -355,28 +355,24 @@ def plan_obligation_round(
                 continue
             _try_add(item, respect_soft_caps=True)
 
-    # Last resort: fill remaining budget while still respecting operation and
-    # prefix soft-caps (family soft-cap may relax so mixed-family windows can
-    # exhaust budget without starving rare prefixes).
+    # Last resort: fill remaining budget ignoring soft-caps to maximize coverage.
+    # Soft-caps are diversity heuristics, not hard limits; unused budget slots
+    # are wasted discovery potential.
     for item in ranked:
         if len(selected) >= budget:
             break
         oid = item["obligation_id"]
         if oid in selected_ids:
             continue
-        prefix = item["path_prefix"]
-        op_key = item["operation_key"]
-        if prefix and prefix_counts.get(prefix, 0) >= prefix_soft_cap:
-            continue
-        if op_key and operation_counts.get(op_key, 0) >= operation_soft_cap:
-            continue
         selected.append(item)
         selected_ids.add(oid)
         family = item["risk_family"]
         if family:
             family_counts[family] = family_counts.get(family, 0) + 1
+        prefix = item["path_prefix"]
         if prefix:
             prefix_counts[prefix] = prefix_counts.get(prefix, 0) + 1
+        op_key = item["operation_key"]
         if op_key:
             operation_counts[op_key] = operation_counts.get(op_key, 0) + 1
 
@@ -400,9 +396,10 @@ def plan_obligation_round(
             if _text(value)
         ],
         "selected": selected,
-        "pending_next_round": pending[:200],
+        "pending_next_round": pending[:600],
         "selected_count": len(selected),
         "pending_count": len(pending),
+        "budget": budget,
         "family_coverage": family_counts,
         "path_prefix_coverage": prefix_counts,
         "operation_coverage": operation_counts,

@@ -38,8 +38,8 @@ except ImportError:
 COVERAGE_SCHEMA = "qualibug.behavior-ir-hypothesis-coverage.v1"
 
 # Maximum additional hypotheses generated per coverage run.
-# Kept small to avoid overwhelming the existing engine output.
-MAX_COVERAGE_HYPOTHESES = 30
+# Raised to 500 to support comprehensive coverage on large systems.
+MAX_COVERAGE_HYPOTHESES = 500
 
 # Risk families derived from Behavior IR structure — these are the families
 # that can be verified from Behavior IR facts alone, without hidden GT.
@@ -657,7 +657,7 @@ def build_source_backed_coverage_hypotheses(
     seen_titles: set[str] = set()
 
     for node in sorted_uncovered:
-        if len(hypotheses) >= max(1, min(int(max_hypotheses), MAX_COVERAGE_HYPOTHESES)):
+        if len(hypotheses) >= max(1, int(max_hypotheses)):
             break
 
         title = _template_title(node)
@@ -941,7 +941,7 @@ def build_source_backed_coverage_obligations(
     valid_op_ids: set[str] = {_text(op.get("id")) for op in all_ops if _text(op.get("id"))}
 
     for node in sorted_uncovered:
-        if len(obligations) >= max(1, min(int(max_obligations), MAX_COVERAGE_HYPOTHESES)):
+        if len(obligations) >= max(1, int(max_obligations)):
             break
 
         family = _text(node.get("risk_family"))
@@ -1067,6 +1067,291 @@ def build_source_backed_coverage_obligations(
 
         obl["_coverage_obligation"] = True
         obligations.append(obl)
+
+    return obligations
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Exhaustive Obligation Matrix (Phase 4.1)
+# ═══════════════════════════════════════════════════════════════════
+
+
+def build_exhaustive_obligation_matrix(
+    behavior_ir: dict[str, Any],
+    *,
+    max_obligations: int = 2000,
+) -> list[dict[str, Any]]:
+    """Generate an exhaustive obligation matrix from Behavior IR.
+
+    Strategies (all industry-neutral, driven solely by Behavior IR declarations):
+    1. Write operation × each actor → authorization test
+    2. Each operation × boundary values → input validation
+    3. Each state transition × illegal source state → state integrity
+    4. Each entity × cross-actor access → isolation
+    5. Each write operation × repeated submission → idempotency
+    6. Each conservation relation × concurrent write → consistency
+
+    Returns a list of obligation dicts compatible with the V12 pipeline.
+    """
+    ir = behavior_ir if isinstance(behavior_ir, dict) else {}
+    operations = _list(ir.get("operations"))
+    actors = _list(ir.get("actors"))
+    entities = _list(ir.get("entities"))
+    invariants = _list(ir.get("invariants"))
+    relations = _list(ir.get("relations"))
+    state_machines = _list(ir.get("state_machines") or ir.get("state_transitions"))
+
+    # Index maps
+    op_by_id: dict[str, dict[str, Any]] = {}
+    for op in operations:
+        oid = _text(op.get("id"))
+        if oid:
+            op_by_id[oid] = op
+
+    write_ops = [
+        op for op in operations
+        if _text(op.get("side_effect_class")).lower() == "write"
+        or _text(op.get("method")).upper() in {"POST", "PUT", "PATCH", "DELETE"}
+    ]
+    read_ops = [
+        op for op in operations
+        if _text(op.get("method")).upper() in {"GET", "HEAD"}
+    ]
+    # Only use actors that are runtime-bound (have tokens configured)
+    # This prevents generating obligations for declared-but-unbound actors
+    active_actors = [
+        a for a in actors
+        if _text(a.get("id")) and a.get("runtime_bound") is True
+    ]
+    # Fallback: if no runtime-bound actors, use all actors with IDs
+    if not active_actors:
+        active_actors = [a for a in actors if _text(a.get("id"))]
+
+    obligations: list[dict[str, Any]] = []
+    seen_signatures: set[str] = set()
+
+    def _add_obligation(
+        risk_family: str,
+        subject_refs: list[str],
+        property_spec: dict[str, Any],
+        required_actors: list[str],
+        required_operations: list[str],
+        source_refs: list[dict[str, Any]],
+        *,
+        confidence: float = 0.5,
+        cleanup: str = "not_required",
+    ) -> None:
+        if len(obligations) >= max_obligations:
+            return
+        sig = _coverage_signature(risk_family, *sorted(subject_refs), *sorted(required_actors))
+        if sig in seen_signatures:
+            return
+        seen_signatures.add(sig)
+        raw_id = f"obl_mtx_{sig}"
+        obl: dict[str, Any] = {
+            "obligation_id": f"obl_{hashlib.sha256(raw_id.encode()).hexdigest()[:16]}",
+            "risk_family": risk_family,
+            "subject_refs": subject_refs,
+            "property_spec": property_spec,
+            "required_actors": required_actors,
+            "required_operations": required_operations,
+            "required_observers": [],
+            "cleanup_requirement": cleanup,
+            "source_refs": source_refs,
+            "confidence": confidence,
+            "_matrix_obligation": True,
+        }
+        obligations.append(obl)
+
+    # ── Strategy 1: Write op × each actor → authorization ──
+    for op in write_ops:
+        op_id = _text(op.get("id"))
+        op_src = _list(op.get("source_refs"))
+        for actor in active_actors:
+            actor_id = _text(actor.get("id"))
+            actor_src = _list(actor.get("source_refs"))
+            _add_obligation(
+                "authorization",
+                [op_id, actor_id],
+                {
+                    "template": "permitted_operation_invocation",
+                    "actor_ref": actor_id,
+                    "operation_ref": op_id,
+                    "operation_path_prefix": _text(op.get("path")),
+                    "_strategy": "auth_matrix",
+                },
+                [actor_id],
+                [op_id],
+                op_src + actor_src,
+                cleanup="required",
+            )
+
+    # ── Strategy 2: Each op × boundary values → input validation ──
+    _BOUNDARY_KINDS = ["empty_body", "oversized_field", "special_characters", "negative_number", "zero_value", "null_field", "type_mismatch"]
+    for op in operations:
+        op_id = _text(op.get("id"))
+        method = _text(op.get("method")).upper()
+        if method not in {"POST", "PUT", "PATCH"}:
+            continue
+        op_src = _list(op.get("source_refs"))
+        for boundary in _BOUNDARY_KINDS:
+            _add_obligation(
+                "validation",
+                [op_id, f"boundary:{boundary}"],
+                {
+                    "template": "input_boundary_validation",
+                    "operation_ref": op_id,
+                    "operation_path_prefix": _text(op.get("path")),
+                    "boundary_kind": boundary,
+                    "_strategy": "boundary_matrix",
+                },
+                [_text(active_actors[0].get("id"))] if active_actors else [],
+                [op_id],
+                op_src,
+            )
+
+    # ── Strategy 3: State transitions × illegal source → state integrity ──
+    for sm in state_machines:
+        sm_id = _text(sm.get("id") or sm.get("entity_ref"))
+        transitions = _list(sm.get("transitions") or sm.get("allowed_transitions"))
+        states = _list(sm.get("states") or sm.get("all_states"))
+        sm_src = _list(sm.get("source_refs"))
+        # Collect all declared from_states
+        declared_from: set[str] = set()
+        transition_ops: list[str] = []
+        for tr in transitions:
+            if isinstance(tr, dict):
+                from_s = _text(tr.get("from") or tr.get("from_state"))
+                if from_s:
+                    declared_from.add(from_s)
+                op_ref = _text(tr.get("operation_ref") or tr.get("trigger_operation"))
+                if op_ref:
+                    transition_ops.append(op_ref)
+        # For each state not in declared_from, generate illegal transition obligation
+        all_state_names = {_text(s) if isinstance(s, str) else _text(s.get("id") or s.get("name")) for s in states}
+        for state in all_state_names:
+            if not state or state in declared_from:
+                continue
+            _add_obligation(
+                "state_integrity",
+                [sm_id, f"illegal_from:{state}"],
+                {
+                    "template": "state_transition_boundary",
+                    "entity_ref": sm_id,
+                    "illegal_source_state": state,
+                    "_strategy": "state_matrix",
+                },
+                [_text(active_actors[0].get("id"))] if active_actors else [],
+                transition_ops[:3],
+                sm_src,
+            )
+
+    # ── Strategy 4: Entity × cross-actor access → isolation ──
+    for entity in entities:
+        ent_id = _text(entity.get("id"))
+        if not ent_id:
+            continue
+        ent_src = _list(entity.get("source_refs"))
+        # Find operations that reference this entity
+        ent_ops = [
+            _text(op.get("id")) for op in operations
+            if ent_id in [_text(r) for r in _list(op.get("entity_refs"))]
+        ]
+        if not ent_ops:
+            continue
+        # Cross-actor: each pair of actors
+        for i, actor_a in enumerate(active_actors):
+            for actor_b in active_actors[i + 1:]:
+                a_id = _text(actor_a.get("id"))
+                b_id = _text(actor_b.get("id"))
+                _add_obligation(
+                    "isolation",
+                    [ent_id, a_id, b_id],
+                    {
+                        "template": "owner_viewer_isolation",
+                        "owner_actor_ref": a_id,
+                        "viewer_actor_ref": b_id,
+                        "entity_ref": ent_id,
+                        "operation_ref": ent_ops[0],
+                        "_strategy": "isolation_matrix",
+                    },
+                    [a_id, b_id],
+                    ent_ops[:3],
+                    ent_src + _list(actor_a.get("source_refs")) + _list(actor_b.get("source_refs")),
+                )
+
+    # ── Strategy 5: Write op × repeated submission → idempotency ──
+    for op in write_ops:
+        op_id = _text(op.get("id"))
+        method = _text(op.get("method")).upper()
+        if method not in {"POST", "PUT", "PATCH"}:
+            continue
+        op_src = _list(op.get("source_refs"))
+        _add_obligation(
+            "consistency",
+            [op_id, "idempotency"],
+            {
+                "template": "idempotent_write_verification",
+                "operation_ref": op_id,
+                "operation_path_prefix": _text(op.get("path")),
+                "repeat_count": 2,
+                "_strategy": "idempotency_matrix",
+            },
+            [_text(active_actors[0].get("id"))] if active_actors else [],
+            [op_id],
+            op_src,
+            cleanup="required",
+        )
+
+    # ── Strategy 6: Conservation relations × concurrent write → consistency ──
+    for rel in relations:
+        rel_id = _text(rel.get("id"))
+        rel_type = _text(rel.get("type") or rel.get("relation_type")).lower()
+        if rel_type not in {"conservation", "balance", "sum_constraint", "invariant_bound"}:
+            continue
+        rel_src = _list(rel.get("source_refs"))
+        rel_ops = [_text(r) for r in _list(rel.get("operation_refs")) if _text(r)]
+        if not rel_ops:
+            # Try from_ref / to_ref
+            from_ref = _text(rel.get("from_ref") or rel.get("operation_ref"))
+            if from_ref:
+                rel_ops = [from_ref]
+        _add_obligation(
+            "consistency",
+            [rel_id or f"rel_{_coverage_signature(rel_type, *rel_ops)}", "concurrent"],
+            {
+                "template": "conservation_under_concurrency",
+                "relation_ref": rel_id,
+                "operation_refs": rel_ops,
+                "concurrent_participants": 2,
+                "_strategy": "conservation_matrix",
+            },
+            [_text(active_actors[0].get("id"))] if active_actors else [],
+            rel_ops[:3],
+            rel_src,
+            cleanup="required",
+        )
+
+    # ── Strategy 7: Invariant × violating operation → invariant check ──
+    for inv in invariants:
+        inv_id = _text(inv.get("id"))
+        if not inv_id:
+            continue
+        inv_src = _list(inv.get("source_refs"))
+        inv_ops = [_text(r) for r in _list(inv.get("operation_refs")) if _text(r)]
+        _add_obligation(
+            "invariant",
+            [inv_id],
+            {
+                "template": "invariant_violation_detection",
+                "invariant_ref": inv_id,
+                "operation_refs": inv_ops,
+                "_strategy": "invariant_matrix",
+            },
+            [_text(active_actors[0].get("id"))] if active_actors else [],
+            inv_ops[:3],
+            inv_src,
+        )
 
     return obligations
 

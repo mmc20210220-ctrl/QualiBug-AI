@@ -317,6 +317,45 @@ def _attach_source_observed_mutations(
     return experiment
 
 
+def _find_distinct_actor_pair(
+    behavior_ir: dict[str, Any],
+) -> tuple[str, str] | None:
+    """Find two actors with distinct credentials from Behavior IR."""
+    actors = [
+        a for a in _list(_dict(behavior_ir).get("actors"))
+        if isinstance(a, dict) and _text(a.get("id"))
+    ]
+    # Prefer runtime-bound actors with credentials
+    proven = [
+        a for a in actors
+        if _text(a.get("credential_secret_ref") or a.get("secret_ref"))
+        and a.get("runtime_bound") is True
+    ]
+    if len(proven) < 2:
+        proven = [
+            a for a in actors
+            if _text(a.get("credential_secret_ref") or a.get("secret_ref"))
+        ]
+    if len(proven) < 2:
+        # Fallback: any runtime-bound actors
+        proven = [a for a in actors if a.get("runtime_bound") is True]
+    if len(proven) < 2:
+        return None
+    # Pick two with different secrets
+    first = proven[0]
+    first_secret = _text(
+        first.get("credential_secret_ref") or first.get("secret_ref")
+    )
+    for candidate in proven[1:]:
+        cand_secret = _text(
+            candidate.get("credential_secret_ref") or candidate.get("secret_ref")
+        )
+        if cand_secret != first_secret:
+            return _text(first.get("id")), _text(candidate.get("id"))
+    # If all share same secret, just pick first two (better than blocking)
+    return _text(proven[0].get("id")), _text(proven[1].get("id"))
+
+
 def compile_experiment_for_obligation(
     obligation: dict[str, Any],
     *,
@@ -328,15 +367,36 @@ def compile_experiment_for_obligation(
     if not _privacy_field_mode(obligation):
         problem = _base._runtime_pair_problem(obligation, behavior_ir)
         if problem:
-            obligation_id = (
-                _text(_dict(obligation).get("obligation_id"))
-                or "unknown_obligation"
-            )
-            return _base._base.blocked_experiment(
-                obligation_id,
-                "BLOCKED_MISSING_ACTOR",
-                f"runtime_actor_pair_not_distinct:{problem}",
-            )
+            # ── Enhanced: try actor substitution before blocking ──
+            pair = _find_distinct_actor_pair(behavior_ir)
+            if pair:
+                ctrl_id, treat_id = pair
+                obl = _dict(obligation)
+                prop = _dict(obl.get("property"))
+                prop = {
+                    **prop,
+                    "control_actor_ref": ctrl_id,
+                    "treatment_actor_ref": treat_id,
+                    "_actor_pair_degraded": True,
+                    "_original_pair_problem": problem,
+                }
+                obligation = {
+                    **obl,
+                    "property": prop,
+                    "required_actors": [ctrl_id, treat_id],
+                }
+                # Re-check after substitution
+                problem = _base._runtime_pair_problem(obligation, behavior_ir)
+            if problem:
+                obligation_id = (
+                    _text(_dict(obligation).get("obligation_id"))
+                    or "unknown_obligation"
+                )
+                return _base._base.blocked_experiment(
+                    obligation_id,
+                    "BLOCKED_MISSING_ACTOR",
+                    f"runtime_actor_pair_not_distinct:{problem}",
+                )
 
     experiment = _original_compile_experiment(
         obligation,

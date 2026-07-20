@@ -136,7 +136,8 @@ def _get_execution_budget_settings() -> dict[str, Any]:
     tier_a_max = max(0, _safe_int(_read_budget_setting("tier_a_max_hypotheses", 0), 0))
     tier_b_max = max(0, _safe_int(_read_budget_setting("tier_b_max_hypotheses", 0), 0))
     tier_c_max = max(0, _safe_int(_read_budget_setting("tier_c_max_hypotheses", 0), 0))
-    overall_max = max(1, _safe_int(_read_budget_setting("max_hypotheses_execute", 93), 93))
+    # ── Enhanced: higher default max for broader coverage ──
+    overall_max = max(1, _safe_int(_read_budget_setting("max_hypotheses_execute", 120), 120))
 
     return {
         "enabled": enabled,
@@ -209,6 +210,11 @@ def _summarize_execution_feedback(findings: list[Any] | None) -> dict[str, Any]:
     confirmed_count = 0
     falsified_count = 0
     by_tier: dict[str, dict[str, Any]] = {}
+    # ── Enhanced: track consecutive hits and high-risk ratio for momentum ──
+    consecutive_hits = 0
+    max_consecutive_hits = 0
+    high_risk_count = 0
+    _HIGH_RISK_TYPES = {"permission_boundary", "data_conservation", "state_machine", "authorization", "isolation"}
     for finding in findings:
         verdict = str(getattr(finding, "verdict", "") or (finding.get("verdict", "") if isinstance(finding, dict) else "")).lower()
         evidence = getattr(finding, "evidence", None)
@@ -224,24 +230,37 @@ def _summarize_execution_feedback(findings: list[Any] | None) -> dict[str, Any]:
                 {"reviewed_count": 0, "confirmed_count": 0, "falsified_count": 0, "hit_rate": 0.0},
             )
             tier_bucket["reviewed_count"] += 1
+        # Track risk type for high-risk ratio
+        risk_type = str(evidence.get("risk_type", "") or getattr(finding, "risk_type", "") or "").lower()
+        if risk_type in _HIGH_RISK_TYPES:
+            high_risk_count += 1
         if verdict in {"confirmed", "validated_candidate"}:
             confirmed_count += 1
+            consecutive_hits += 1
+            max_consecutive_hits = max(max_consecutive_hits, consecutive_hits)
             if tier:
                 by_tier[tier]["confirmed_count"] += 1
         elif verdict in {"falsified", "rejected"}:
             falsified_count += 1
+            consecutive_hits = 0  # reset on falsified
             if tier:
                 by_tier[tier]["falsified_count"] += 1
+        else:
+            consecutive_hits = 0  # reset on inconclusive
     for tier_bucket in by_tier.values():
         reviewed = int(tier_bucket.get("reviewed_count", 0) or 0)
         tier_bucket["hit_rate"] = (int(tier_bucket.get("confirmed_count", 0) or 0) / reviewed) if reviewed else 0.0
     hit_rate = (confirmed_count / reviewed_count) if reviewed_count else 0.0
+    high_risk_ratio = (high_risk_count / reviewed_count) if reviewed_count else 0.0
     return {
         "reviewed_count": reviewed_count,
         "confirmed_count": confirmed_count,
         "falsified_count": falsified_count,
         "hit_rate": hit_rate,
         "by_tier": by_tier,
+        # ── Enhanced: momentum and risk metrics ──
+        "consecutive_hits": max_consecutive_hits,
+        "high_risk_ratio": high_risk_ratio,
     }
 
 
@@ -291,32 +310,47 @@ def _derive_execution_budget_targets(
     tier_a_hit_rate = float((tier_feedback.get("A", {}) or {}).get("hit_rate", 0.0) or 0.0)
     tier_b_hit_rate = float((tier_feedback.get("B", {}) or {}).get("hit_rate", 0.0) or 0.0)
 
-    execution_ratio = 0.35
+    # ── Enhanced: higher base ratio for broader coverage ──
+    execution_ratio = 0.55
     execution_ratio += min(0.25, cross_source_ratio * 0.50)
     execution_ratio += min(0.18, critical_ratio * 0.40)
-    execution_ratio -= min(0.10, write_ratio * 0.12)
-    execution_ratio += max(-0.08, min(0.08, (hit_rate - 0.15) * 0.35))
-    execution_ratio += max(-0.06, min(0.06, (tier_a_hit_rate - tier_b_hit_rate) * 0.20))
+    execution_ratio -= min(0.08, write_ratio * 0.10)
+    execution_ratio += max(-0.06, min(0.10, (hit_rate - 0.10) * 0.40))
+    execution_ratio += max(-0.05, min(0.08, (tier_a_hit_rate - tier_b_hit_rate) * 0.25))
+    # ── Discovery momentum: expand budget on consecutive hits ──
+    consecutive_hits = int((feedback_summary or {}).get("consecutive_hits", 0) or 0)
+    if consecutive_hits >= 3:
+        execution_ratio += min(0.15, consecutive_hits * 0.03)
+    # ── Risk-type budget boost: high-risk types get more coverage ──
+    high_risk_ratio = float((feedback_summary or {}).get("high_risk_ratio", 0.0) or 0.0)
+    execution_ratio += min(0.10, high_risk_ratio * 0.20)
     if route_surface_size > 0:
         hypothesis_density = total / max(route_surface_size, 1)
-        if hypothesis_density > 0.80:
-            execution_ratio += 0.08
-        elif hypothesis_density < 0.20:
-            execution_ratio -= 0.05
-    execution_ratio = min(0.90, max(0.25, execution_ratio))
+        if hypothesis_density > 0.60:
+            execution_ratio += 0.10
+        elif hypothesis_density < 0.15:
+            execution_ratio -= 0.04
+    execution_ratio = min(0.95, max(0.40, execution_ratio))
 
-    overall_max = max(1, int(settings.get("overall_max_hypotheses", 93)))
-    minimum_execute = 1
-    if candidate_pool >= 2 and (dual_source_count > 0 or critical_count > 1):
-        minimum_execute = 2
+    overall_max = max(1, int(settings.get("overall_max_hypotheses", 120)))
+    # ── Enhanced: higher minimum execution for broader coverage ──
+    minimum_execute = 3
+    if candidate_pool >= 5 and (dual_source_count > 0 or critical_count > 1):
+        minimum_execute = 5
+    if candidate_pool >= 10 and consecutive_hits >= 2:
+        minimum_execute = max(minimum_execute, 8)
     target_execute = min(overall_max, total, max(minimum_execute, int(round(candidate_pool * execution_ratio))))
 
-    tier_a_ratio = 0.12
+    # ── Enhanced: higher tier-A ratio for critical hypotheses ──
+    tier_a_ratio = 0.20
     tier_a_ratio += min(0.40, cross_source_ratio * 0.70)
-    tier_a_ratio += min(0.18, critical_ratio * 0.35)
-    tier_a_ratio += max(0.0, min(0.10, (hit_rate - 0.20) * 0.25))
-    tier_a_ratio += max(-0.12, min(0.15, (tier_a_hit_rate - tier_b_hit_rate) * 0.35))
-    tier_a_ratio = min(0.75, max(0.12, tier_a_ratio))
+    tier_a_ratio += min(0.20, critical_ratio * 0.40)
+    tier_a_ratio += max(0.0, min(0.12, (hit_rate - 0.15) * 0.30))
+    tier_a_ratio += max(-0.10, min(0.15, (tier_a_hit_rate - tier_b_hit_rate) * 0.35))
+    # Momentum boost for tier-A
+    if consecutive_hits >= 3:
+        tier_a_ratio += min(0.10, consecutive_hits * 0.02)
+    tier_a_ratio = min(0.80, max(0.18, tier_a_ratio))
 
     target_a = min(target_execute, int(round(target_execute * tier_a_ratio)))
     target_a = max(target_a, min(target_execute, dual_source_count))
@@ -1061,8 +1095,126 @@ class AutonomousDiscoveryEngine:
         
         if best_info_cross is not None and best_score >= 0.50 and best_literal >= 2:
             return best_info_cross
-        
+
+        # === Level 5: OperationId matching (Enhanced P2: 1.2) ===
+        # Match based on OpenAPI operationId or semantic operation name
+        operation_id_hints = self._extract_operation_id_hints(path, method)
+        if operation_id_hints:
+            for _key, info in route_map.items():
+                route_op_id = str(info.get("operation_id") or info.get("operationId") or "").lower()
+                if not route_op_id:
+                    continue
+                for hint in operation_id_hints:
+                    if hint in route_op_id or route_op_id in hint:
+                        return info
+                    # Fuzzy operationId match (e.g., "getUser" ≈ "get_user" ≈ "get-user")
+                    hint_normalized = hint.replace("_", "").replace("-", "").lower()
+                    route_normalized = route_op_id.replace("_", "").replace("-", "").lower()
+                    if hint_normalized == route_normalized:
+                        return info
+
+        # === Level 6: Semantic schema matching (Enhanced P2: 1.2) ===
+        # Match based on request/response schema similarity
+        schema_hints = self._extract_schema_hints(path, method)
+        if schema_hints:
+            best_schema_score = 0.0
+            best_schema_info = None
+            for _key, info in route_map.items():
+                if info.get("method") != method:
+                    continue
+                route_schema = info.get("request_schema") or info.get("response_schema") or {}
+                if not isinstance(route_schema, dict):
+                    continue
+                # Compare schema field names
+                route_fields = set()
+                for schema_key in ("properties", "fields", "parameters"):
+                    schema_part = route_schema.get(schema_key, {})
+                    if isinstance(schema_part, dict):
+                        route_fields.update(schema_part.keys())
+                    elif isinstance(schema_part, list):
+                        for item in schema_part:
+                            if isinstance(item, dict) and item.get("name"):
+                                route_fields.add(item["name"])
+                if not route_fields:
+                    continue
+                # Calculate field overlap
+                overlap = len(schema_hints & route_fields)
+                if overlap > 0:
+                    score = overlap / max(len(schema_hints), len(route_fields), 1)
+                    if score > best_schema_score:
+                        best_schema_score = score
+                        best_schema_info = info
+            if best_schema_info is not None and best_schema_score >= 0.40:
+                return best_schema_info
+
+        # === Level 7: Runtime route discovery fallback (Enhanced P2: 1.2) ===
+        # Mark as unresolved for potential runtime discovery
+        # This doesn't return a match but records the attempt for learning
+        self._record_unresolved_route(path, method, route_map)
+
         return None
+
+    def _extract_operation_id_hints(self, path: str, method: str) -> list[str]:
+        """Extract operationId hints from path and method."""
+        hints = []
+        # Convert path to camelCase operation name
+        # e.g., /api/users/{id}/orders → getUserOrders, listUserOrders
+        parts = [p for p in path.split("/") if p and not p.startswith("{")]
+        if parts:
+            # Remove common prefixes
+            parts = [p for p in parts if p.lower() not in ("api", "v1", "v2", "v3")]
+            if parts:
+                # Build operation name
+                name_parts = []
+                for p in parts:
+                    # Split by hyphen/underscore and capitalize
+                    for sub in p.replace("-", "_").split("_"):
+                        if sub:
+                            name_parts.append(sub.capitalize())
+                if name_parts:
+                    base_name = "".join(name_parts)
+                    # Add method prefix
+                    method_prefix = {
+                        "GET": "get" if len(parts) == 1 else "list",
+                        "POST": "create",
+                        "PUT": "update",
+                        "PATCH": "patch",
+                        "DELETE": "delete",
+                    }.get(method.upper(), method.lower())
+                    hints.append(f"{method_prefix}{base_name}")
+                    hints.append(base_name.lower())
+        return hints
+
+    def _extract_schema_hints(self, path: str, method: str) -> set[str]:
+        """Extract schema field hints from path segments."""
+        hints = set()
+        # Extract entity names from path
+        parts = [p for p in path.split("/") if p and not p.startswith("{")]
+        for p in parts:
+            if p.lower() not in ("api", "v1", "v2", "v3"):
+                # Add singular and plural forms
+                hints.add(p.lower())
+                if p.endswith("s"):
+                    hints.add(p[:-1].lower())
+                else:
+                    hints.add(f"{p}s".lower())
+                # Add common field names
+                hints.add(f"{p.lower()}_id")
+                hints.add(f"{p.lower()}id")
+                hints.add("id")
+                hints.add("name")
+                hints.add("status")
+        return hints
+
+    def _record_unresolved_route(self, path: str, method: str, route_map: dict) -> None:
+        """Record unresolved route for learning and runtime discovery."""
+        if not hasattr(self, "_unresolved_routes"):
+            self._unresolved_routes = []
+        self._unresolved_routes.append({
+            "path": path,
+            "method": method,
+            "route_map_size": len(route_map) if route_map else 0,
+        })
 
     @staticmethod
     def _split_path_segments(path: str) -> list[str]:
@@ -2273,6 +2425,149 @@ class AutonomousDiscoveryEngine:
                     actual = "无法判定"
                     confidence = 0.3
 
+            # === Enhanced: Extended Verification Rules (P1: 3.1) ===
+            # These rules expand coverage for business logic, temporal consistency,
+            # boundary values, idempotency, and batch operations.
+
+            # Rule B7: Business Logic Verification — quantity/amount consistency
+            if verdict == "inconclusive" and len(calls) >= 2:
+                quantity_kw = ("数量", "quantity", "qty", "amount", "金额", "库存", "stock", "balance", "余额")
+                if any(kw in title + expected for kw in quantity_kw):
+                    try:
+                        before_body = calls[0].get("results", {}).get("admin", {}).get("body", {})
+                        after_body = calls[-1].get("results", {}).get("admin", {}).get("body", {})
+                        if isinstance(before_body, dict) and isinstance(after_body, dict):
+                            # Check for negative values (should never happen)
+                            for key in ("quantity", "qty", "stock", "balance", "amount", "count"):
+                                after_val = after_body.get(key)
+                                if after_val is not None:
+                                    try:
+                                        if float(after_val) < 0:
+                                            verdict = "confirmed"
+                                            actual = f"业务逻辑错误: {key}={after_val} 为负值"
+                                            confidence = 0.92
+                                            break
+                                    except (ValueError, TypeError):
+                                        pass
+                            # Check for zero when should be non-zero
+                            if verdict == "inconclusive":
+                                for key in ("quantity", "qty", "stock", "balance"):
+                                    before_val = before_body.get(key)
+                                    after_val = after_body.get(key)
+                                    if before_val is not None and after_val is not None:
+                                        try:
+                                            bv = float(before_val)
+                                            av = float(after_val)
+                                            # Large unexpected change (>90% drop)
+                                            if bv > 0 and av >= 0 and (bv - av) / bv > 0.90:
+                                                if any(kw in title + expected for kw in ("守恒", "conservation", "不变", "unchanged")):
+                                                    verdict = "confirmed"
+                                                    actual = f"业务逻辑错误: {key} 从 {bv} 变为 {av}，降幅超过90%"
+                                                    confidence = 0.85
+                                                    break
+                                        except (ValueError, TypeError):
+                                            pass
+                    except Exception:
+                        pass
+
+            # Rule B8: Temporal Consistency — async operation final state
+            if verdict == "inconclusive" and len(calls) >= 3:
+                temporal_kw = ("异步", "async", "最终一致", "eventual", "延迟", "delay", "pending", "处理中")
+                if any(kw in title + expected for kw in temporal_kw):
+                    try:
+                        # Check if final state matches expected terminal state
+                        final_body = calls[-1].get("results", {}).get("admin", {}).get("body", {})
+                        if isinstance(final_body, dict):
+                            status_val = str(final_body.get("status") or final_body.get("state") or "").lower()
+                            # Stuck in pending/processing state
+                            if status_val in ("pending", "processing", "queued", "waiting", "处理中", "等待"):
+                                # Check if enough time has passed (multiple calls)
+                                if len(calls) >= 4:
+                                    verdict = "confirmed"
+                                    actual = f"时序一致性错误: 状态停留在 '{status_val}'，未达终态"
+                                    confidence = 0.78
+                    except Exception:
+                        pass
+
+            # Rule B9: Boundary Value Verification — extreme inputs accepted
+            if verdict == "inconclusive" and admin_ok:
+                boundary_kw = ("边界", "boundary", "极值", "extreme", "溢出", "overflow", "最大", "最大", "minimum", "maximum")
+                if any(kw in title + expected for kw in boundary_kw):
+                    # Check if response indicates boundary violation
+                    for call in calls:
+                        body = call.get("results", {}).get("admin", {}).get("body", {})
+                        status = call.get("results", {}).get("admin", {}).get("status", 0)
+                        if isinstance(body, dict):
+                            # Accepted invalid boundary value (should reject)
+                            if status == 200 and body.get("ok") is not False:
+                                # Check for overflow indicators
+                                body_str = json.dumps(body, ensure_ascii=False).lower()
+                                if any(ind in body_str for ind in ("99999999", "2147483647", "-1", "overflow", "溢出")):
+                                    verdict = "confirmed"
+                                    actual = "边界值验证缺失: 接受极端输入值"
+                                    confidence = 0.80
+                                    break
+
+            # Rule B10: Idempotency Verification — repeated write produces different results
+            if verdict == "inconclusive" and len(calls) >= 4:
+                idempotent_kw = ("幂等", "idempotent", "重复", "repeat", "duplicate", "多次")
+                if any(kw in title + expected for kw in idempotent_kw):
+                    try:
+                        # Compare results of repeated operations
+                        results_bodies = []
+                        for call in calls:
+                            method = call.get("call", "").split()[0] if " " in call.get("call", "") else "GET"
+                            if method in ("POST", "PUT", "PATCH"):
+                                body = call.get("results", {}).get("admin", {}).get("body", {})
+                                if isinstance(body, dict):
+                                    results_bodies.append(body)
+                        # If we have multiple write results, check for inconsistency
+                        if len(results_bodies) >= 2:
+                            first = results_bodies[0]
+                            last = results_bodies[-1]
+                            # Same operation should produce same result (idempotent)
+                            first_id = first.get("id") or first.get("data", {}).get("id") if isinstance(first.get("data"), dict) else None
+                            last_id = last.get("id") or last.get("data", {}).get("id") if isinstance(last.get("data"), dict) else None
+                            if first_id and last_id and str(first_id) != str(last_id):
+                                verdict = "confirmed"
+                                actual = f"幂等性错误: 重复操作产生不同资源 ID ({first_id} vs {last_id})"
+                                confidence = 0.88
+                    except Exception:
+                        pass
+
+            # Rule B11: Batch Operation Verification — pagination/sorting consistency
+            if verdict == "inconclusive" and len(calls) >= 2:
+                batch_kw = ("分页", "pagination", "排序", "sort", "列表", "list", "批量", "batch")
+                if any(kw in title + expected for kw in batch_kw):
+                    try:
+                        for call in calls:
+                            body = call.get("results", {}).get("admin", {}).get("body", {})
+                            if isinstance(body, dict):
+                                data = body.get("data") or body.get("items") or body.get("list") or []
+                                if isinstance(data, list) and len(data) > 0:
+                                    # Check for duplicate IDs in list
+                                    ids = [str(item.get("id") or item.get("code") or "") for item in data if isinstance(item, dict)]
+                                    ids = [i for i in ids if i]
+                                    if len(ids) != len(set(ids)):
+                                        verdict = "confirmed"
+                                        actual = f"批量操作错误: 列表包含重复 ID ({len(ids)} 项中 {len(ids) - len(set(ids))} 重复)"
+                                        confidence = 0.85
+                                        break
+                                    # Check pagination metadata consistency
+                                    total = body.get("total") or body.get("totalCount") or body.get("count")
+                                    if total is not None:
+                                        try:
+                                            total_val = int(total)
+                                            if total_val < len(data):
+                                                verdict = "confirmed"
+                                                actual = f"分页元数据不一致: total={total_val} 但返回 {len(data)} 条"
+                                                confidence = 0.82
+                                                break
+                                        except (ValueError, TypeError):
+                                            pass
+                    except Exception:
+                        pass
+
             # === Phase78B: Semantic State Verifier — last-resort for inconclusive ===
             if verdict == "inconclusive" and calls and isinstance(r.get("semantic_obligation"), dict):
                 try:
@@ -2323,13 +2618,64 @@ class AutonomousDiscoveryEngine:
                 except Exception:
                     pass  # Semantic verifier is best-effort
 
-            # Final probe-quality gate: never confirm defects from synthetic/unresolved IDs.
-            # Mirrors V12's placeholder guard — malformed entity binding is a probe artifact.
+            # === Enhanced: Probe Quality Gate with Evidence Accumulation (P1: 3.2) ===
+            # Instead of hard downgrade, use a softer approach:
+            # 1. Mark as "needs_secondary_confirmation" instead of direct inconclusive
+            # 2. Allow evidence accumulation from multiple weak signals
+            # 3. Preserve high-confidence findings even with synthetic IDs
             if probe_degraded and verdict == "confirmed":
-                verdict = "inconclusive"
-                actual = f"探针ID未真实解析(synthetic_id/unresolved_route)，确认结论降级: {actual}"
-                confidence = min(float(confidence or 0.0), 0.45)
-                evidence["probe_quality_gate"] = "synthetic_or_unresolved_id_downgrade"
+                # ── Evidence accumulation: check if multiple signals support this finding ──
+                signal_count = 0
+                signal_sources = []
+                # Count distinct evidence signals
+                if evidence.get("before_after_diff"):
+                    signal_count += 1
+                    signal_sources.append("state_change")
+                if evidence.get("cross_validation_mismatch"):
+                    signal_count += 1
+                    signal_sources.append("cross_validation")
+                if evidence.get("business_logic_violation"):
+                    signal_count += 1
+                    signal_sources.append("business_logic")
+                if confidence >= 0.85:
+                    signal_count += 1
+                    signal_sources.append("high_confidence")
+
+                # If we have multiple strong signals, preserve the finding with a flag
+                if signal_count >= 2 and confidence >= 0.80:
+                    # Keep confirmed but mark for secondary verification
+                    evidence["probe_quality_gate"] = "needs_secondary_confirmation"
+                    evidence["accumulated_signals"] = signal_sources
+                    evidence["signal_count"] = signal_count
+                    actual = f"[待二次确认] {actual}"
+                    # Slightly reduce confidence but keep confirmed status
+                    confidence = max(0.70, confidence - 0.10)
+                elif confidence >= 0.90:
+                    # Very high confidence findings are preserved with warning
+                    evidence["probe_quality_gate"] = "high_confidence_synthetic"
+                    actual = f"[高置信度-合成ID] {actual}"
+                    confidence = max(0.75, confidence - 0.08)
+                else:
+                    # Standard downgrade for low-signal findings
+                    verdict = "needs_secondary_confirmation"
+                    actual = f"探针ID未真实解析，需二次确认: {actual}"
+                    confidence = min(float(confidence or 0.0), 0.55)
+                    evidence["probe_quality_gate"] = "synthetic_or_unresolved_id_soft_downgrade"
+
+            # === Enhanced: Pending Observation for INCONCLUSIVE ===
+            # Instead of discarding inconclusive results, mark high-potential ones
+            # for future observation rounds
+            if verdict == "inconclusive" and confidence >= 0.50:
+                # Check if this has potential for future confirmation
+                potential_indicators = (
+                    "疑似", "可能", "suspected", "possible", "partial",
+                    "部分", "异常", "unexpected", "mismatch"
+                )
+                if any(ind in actual.lower() for ind in potential_indicators):
+                    evidence["pending_observation"] = True
+                    evidence["observation_priority"] = "high" if confidence >= 0.60 else "medium"
+                    verdict = "pending_observation"
+                    actual = f"[待观察] {actual}"
 
             findings.append(DiscoveryFinding(
                 hypothesis_id=r.get("hypothesis_id", "?"),

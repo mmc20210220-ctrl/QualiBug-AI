@@ -199,6 +199,24 @@ class PrivatePilotHandler(
 
     def handle_one_request(self) -> None:
         """Wrap the parent handler with a request-body size guard."""
+        # Must parse the request first to populate self.headers
+        try:
+            self.raw_requestline = self.rfile.readline(65537)
+            if len(self.raw_requestline) > 65536:
+                self.requestline = ''
+                self.request_version = ''
+                self.command = ''
+                self.send_error(414)
+                return
+            if not self.raw_requestline:
+                self.close_connection = True
+                return
+            if not self.parse_request():
+                return
+        except Exception:
+            self.close_connection = True
+            return
+        # Now self.headers is available — check body size
         content_length = self.headers.get("Content-Length")
         if content_length is not None:
             try:
@@ -209,7 +227,14 @@ class PrivatePilotHandler(
             if length > _MAX_REQUEST_BODY:
                 self.send_error(413, "Payload Too Large")
                 return
-        super().handle_one_request()
+        # Dispatch to do_GET/do_POST/etc.
+        mname = 'do_' + self.command
+        if not hasattr(self, mname):
+            self.send_error(501, "Unsupported method (%r)" % self.command)
+            return
+        method = getattr(self, mname)
+        method()
+        self.wfile.flush()
 
 
 class QualiBugHTTPServer(ThreadingHTTPServer):

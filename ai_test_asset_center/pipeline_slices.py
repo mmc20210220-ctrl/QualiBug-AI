@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import Any
 
 # Absolute safety clamps — auto-scaler and env overrides stay bounded.
-_ABS_MAX_SLICE_BUDGET = 200
-_ABS_MAX_ROUND_LIMIT = 24
+_ABS_MAX_SLICE_BUDGET = 1200
+_ABS_MAX_ROUND_LIMIT = 48
 
 
 def _as_int(value: Any, default: int, minimum: int, maximum: int) -> int:
@@ -58,7 +58,7 @@ def _auto_scale_slice_budget(pool_size: int) -> int:
 
     if pool_size <= 0:
         return 15
-    return max(15, min(_ABS_MAX_SLICE_BUDGET, math.ceil(pool_size / 2)))
+    return max(15, min(_ABS_MAX_SLICE_BUDGET, pool_size))
 
 
 def _auto_scale_round_limit(pool_size: int, budget: int) -> int:

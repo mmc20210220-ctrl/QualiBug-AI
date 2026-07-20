@@ -6,9 +6,9 @@ import { formatCustomerName } from '../lib/customer';
 import { useProjectNavigation } from '../lib/project-navigation';
 
 const pageLabels: Record<string, string> = {
-  '/dashboard': '成果总览',
-  '/findings': '缺陷清单',
-  '/clues': '待验证线索',
+  '/dashboard': '价值总览',
+  '/findings': '问题清单',
+  '/clues': '内部工作台',
   '/evidence': '证据链',
   '/behavior-space': '行为空间',
   '/materials': '企业资料',

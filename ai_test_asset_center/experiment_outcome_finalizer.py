@@ -150,6 +150,9 @@ def finalize_experiment_execution(
         status = "BLOCKED"
         reason = _pre_transport_reason_code(pre_transport_block_reasons)
         detail = ",".join(dict.fromkeys(pre_transport_block_reasons))
+        # ── Diagnostic: log block reasons to stderr ──
+        import sys as _sys_diag
+        print(f"[DIAG] {oid}: reason={reason}, details={detail[:500]}", file=_sys_diag.stderr)
         return {
             "schema_version": "qualibug.experiment-execution.v1",
             "experiment_id": eid,

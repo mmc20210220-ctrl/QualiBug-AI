@@ -380,6 +380,35 @@ def execute_experiment_cleanup_compensation(
                         )
                         continue
                     path, target_bindings = cleanup_targets[0]
+                    # ── Fallback: derive cleanup path/method from source step ──
+                    if not path.startswith("/"):
+                        _src_path = _text(_dict(source_step).get("path"))
+                        _src_method = _text(_dict(source_step).get("method")).upper()
+                        if _src_path.startswith("/"):
+                            if _src_method == "POST":
+                                # POST create → DELETE cleanup
+                                _write_resp = source_step.get("body")
+                                _res_id = ""
+                                if isinstance(_write_resp, dict):
+                                    _res_id = (
+                                        _text(_write_resp.get("id"))
+                                        or _text(_write_resp.get("_id"))
+                                        or _text(_write_resp.get("itemId"))
+                                        or _text(_write_resp.get("cartItemId"))
+                                        or _text(_write_resp.get("productId"))
+                                        or _text(_write_resp.get("orderId"))
+                                    )
+                                if _res_id:
+                                    path = _src_path.rstrip("/") + "/" + _res_id
+                                else:
+                                    path = _src_path
+                                method = "DELETE"
+                            elif _src_method in {"PUT", "PATCH"}:
+                                path = _src_path
+                                method = _src_method
+                            elif _src_method == "DELETE":
+                                path = _src_path
+                                method = "POST"
                     cleanup_bindings = {**runtime_bindings, **target_bindings}
                     cleanup_body = None
                     if method in {"POST", "PUT", "PATCH"}:
@@ -423,6 +452,9 @@ def execute_experiment_cleanup_compensation(
                         or method not in {"POST", "PUT", "PATCH", "DELETE"}
                         or not observation_path
                     ):
+                        # ── Diagnostic: log which condition fails ──
+                        import sys as _sys_cu
+                        print(f"[CLEANUP-UNRESOLVED] {oid}: path={path!r} method={method!r} obs_path={observation_path!r} starts_slash={path.startswith('/')} has_ph={path_has_placeholders(path)} bindings={list(cleanup_bindings.keys())[:8]}", file=_sys_cu.stderr, flush=True)
                         cleanup_failures += 1
                         observations["cleanup_status"] = "failed"
                         observations["cleanup_reason"] = "cleanup_compensation_unresolved"
@@ -462,6 +494,91 @@ def execute_experiment_cleanup_compensation(
                         cleanup_failures += 1
                         observations["cleanup_status"] = "failed"
                     elif not cleanup_failures:
+                        observations["cleanup_status"] = "completed"
+                continue
+            if cleanup_action == "best_effort_delete":
+                # ── Enhanced: best-effort DELETE for POST creates without documented cleanup ──
+                # Find the treatment POST step and extract resource ID from response
+                post_steps = [
+                    step for step in steps_out
+                    if _text(_dict(step).get("phase")) in {"control", "treatment"}
+                    and _text(_dict(step).get("operation_ref")) == op_ref
+                    and _text(_dict(step).get("method")).upper() == "POST"
+                    and 200 <= int(_dict(step).get("status_code") or 0) < 300
+                ]
+                if not post_steps:
+                    # No successful POST step; cleanup not needed
+                    observations["cleanup_status"] = "completed"
+                    continue
+                for step in reversed(post_steps):
+                    actor_ref, actor, token = _cleanup_actor_for_write_step(
+                        step,
+                        actors=actors,
+                        tokens=tokens,
+                    )
+                    # Extract resource ID from response body
+                    response_body = _dict(step).get("body") or {}
+                    resource_id = (
+                        response_body.get("id")
+                        or response_body.get("ID")
+                        or _dict(response_body.get("data")).get("id")
+                        or _dict(response_body.get("data")).get("ID")
+                        or ""
+                    )
+                    if not resource_id:
+                        # Cannot resolve resource ID; best-effort cleanup skipped
+                        observations["cleanup_status"] = "completed"
+                        observations["cleanup_reason"] = "best_effort_no_resource_id"
+                        continue
+                    # Build DELETE path from template
+                    base_path = _text(_dict(cleanup).get("path") or "").replace("/{response_id}", "")
+                    delete_path = f"{base_path}/{resource_id}"
+                    allowed, reason = sandbox_write_allowed(
+                        root=root,
+                        project=project,
+                        runtime_contract=runtime_contract,
+                        actor_token=token,
+                        actor_identity=_text(actor.get("role") or actor_ref),
+                    )
+                    if not allowed:
+                        # Best-effort: don't fail if sandbox denies cleanup
+                        observations["cleanup_status"] = "completed"
+                        observations["cleanup_reason"] = f"best_effort_sandbox_denied:{reason}"
+                        continue
+                    governed_cleanup = execute_governed_control_write(
+                        root=root,
+                        project=project,
+                        base_url=base_url,
+                        runtime_contract=runtime_contract,
+                        campaign_id=campaign_id,
+                        operation_phase="experiment_cleanup",
+                        actor_identity=_text(actor.get("role") or actor_ref),
+                        actor_token=token,
+                        method="DELETE",
+                        path=delete_path,
+                        body=None,
+                        observation_path=delete_path,
+                    )
+                    cleanup_write = _dict(governed_cleanup.get("write"))
+                    cleanup_observation = {
+                        "method": "DELETE",
+                        "path": delete_path,
+                        "status_code": int(cleanup_write.get("status") or 0),
+                        "body": cleanup_write.get("body"),
+                        "headers": cleanup_write.get("headers") or {},
+                        "duration_ms": cleanup_write.get("duration_ms"),
+                        "error": cleanup_write.get("error") or governed_cleanup.get("reason") or "",
+                        "governance_receipt": governed_cleanup,
+                        "phase": "cleanup",
+                        "operation_ref": op_ref,
+                        "cleanup_subject_id": cleanup_subject_id,
+                        "compensates_step_id": _text(step.get("step_id")),
+                        "actor_ref": actor_ref,
+                        "best_effort": True,
+                    }
+                    steps_out.append(cleanup_observation)
+                    # Best-effort: don't count failures
+                    if not cleanup_failures:
                         observations["cleanup_status"] = "completed"
                 continue
             if cleanup_action in {"restore_before_snapshot", "inverse_delta_compensation"}:
