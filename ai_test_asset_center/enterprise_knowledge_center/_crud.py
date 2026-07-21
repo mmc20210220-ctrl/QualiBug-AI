@@ -18,7 +18,6 @@ import zipfile
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable
-from ._api import build_enterprise_business_knowledge_asset, load_enterprise_business_knowledge_asset  # noqa: F401
 from ._parsing import _classify_source, _parse_source  # noqa: F401
 from ._utils import _hash_bytes, _load_registry, _now, _parser_receipt, _paths, _read_source_bytes, _require_manage_actor, _safe_slug, _save_registry, _short_hash  # noqa: F401
 
@@ -331,6 +330,7 @@ def operate_enterprise_knowledge_center(
     project = _safe_project_id(project_id)
     action = str(action or "view").strip().lower()
     if action in {"view", "list"}:
+        from ._api import load_enterprise_business_knowledge_asset  # lazy: avoid circular import
         asset = load_enterprise_business_knowledge_asset(project, root)
         return {
             "ok": True,
@@ -349,6 +349,7 @@ def operate_enterprise_knowledge_center(
         source_id = str(payload.get("source_id") or "")
         return {"ok": True, "action": "delete", "result": delete_enterprise_knowledge_source(project, source_id, root=root, actor=actor, purge_bytes=bool(payload.get("purge_bytes")))}
     if action in {"rebuild", "build"}:
+        from ._api import build_enterprise_business_knowledge_asset  # lazy: avoid circular import
         asset = build_enterprise_business_knowledge_asset(project, root, options=payload.get("options") if isinstance(payload.get("options"), dict) else None)
         return {"ok": True, "action": "rebuild", "asset": asset}
     raise ValueError("unsupported knowledge center action; use view, upload, edit, delete or rebuild")

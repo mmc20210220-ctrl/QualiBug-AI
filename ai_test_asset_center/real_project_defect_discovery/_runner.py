@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ._common import *  # noqa: F401,F403
+from ._common import _html_escape, _join_url, _load_json, _read_text, _safe_project_id, _write_json  # noqa: F401
 from ._helpers import *  # noqa: F401,F403
 from ._helpers import _append_adapter_issue, _apply_browser_health_probe_policy, _augment_risk_plan_with_browser_health, _build_discovery_funnel, _fetch_json_or_text, _live_mode_or_plan, _login, _safe_rate, _status_suspicious, generate_history_informed_probes, generate_real_project_probes  # noqa: F401
 from ._reporting import _fix_for_risk, _impact_for_risk, _render_bug_drafts, render_real_project_report  # noqa: F401

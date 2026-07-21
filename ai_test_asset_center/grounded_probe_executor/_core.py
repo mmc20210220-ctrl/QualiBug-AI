@@ -30,11 +30,6 @@ def _probe_has_strict_document_grounding(probe: dict[str, Any]) -> bool:
     return bool(has_endpoint and has_support)
 
 
-def _get_mapping_value(mapping: dict[str, Any], candidate_id: str, method: str, path: str) -> Any:
-    for key in (candidate_id, f"{method} {path}", path, "*"):
-        if key in mapping:
-            return mapping[key]
-    return None
 
 
 def _auto_fixture_enabled(config: dict[str, Any]) -> bool:
@@ -103,48 +98,8 @@ def _configured_body(config: dict[str, Any], candidate_id: str, method: str, pat
     return None, "write_probe_body_not_document_configured"
 
 
-def _production_guard_allows(config: dict[str, Any], base_url: str) -> tuple[bool, str]:
-    env_kind = str(config.get("environment_kind") or config.get("target_environment") or "").lower()
-    if env_kind in {"prod", "production", "live"}:
-        return False, "production_environment_kind_blocked"
-    host = _url_host(base_url)
-    if host and PRODUCTION_HOST_RE.search(host) and not NON_PROD_HINT_RE.search(host):
-        return False, "production_like_host_blocked"
-    # If customers point a test URL incorrectly, product blocks obvious production
-    # patterns and keeps all created data prefixed with qb_auto.  Beyond that the
-    # test environment is customer-maintained and intended to be operable.
-    return True, "production_guard_passed"
 
 
-def _approval_enabled(config: dict[str, Any], base_url: str, approval_id: str) -> tuple[bool, str, dict[str, Any]]:
-    ok_guard, guard_reason = _production_guard_allows(config, base_url)
-    if not ok_guard:
-        return False, guard_reason, {}
-    sandbox = config.get("disposable_sandbox") or config.get("sandbox") or config.get("test_environment") or {}
-    if not isinstance(sandbox, dict):
-        sandbox = {}
-    if not sandbox and not config.get("allow_write_probes"):
-        return False, "sandbox_config_missing_or_disabled", {}
-    # Phase92N commercial UX: a staging/test target is expected to be operable.
-    # We still require a clear non-production/test-env config or CLI flag, but no
-    # longer require customers to provide business data/body IDs.
-    enabled = bool(sandbox.get("enabled") or sandbox.get("allow_write_probes") or config.get("allow_write_probes"))
-    if not enabled:
-        return False, "test_environment_write_execution_not_enabled", sandbox
-    expected_approval = str(sandbox.get("approval_id") or sandbox.get("id") or "")
-    if expected_approval and approval_id and expected_approval != str(approval_id):
-        return False, "sandbox_approval_id_mismatch", sandbox
-    target_kind = str(sandbox.get("target_kind") or sandbox.get("kind") or config.get("environment_kind") or "")
-    if target_kind and target_kind.lower() in {"prod", "production", "live"}:
-        return False, f"unsupported_sandbox_target_kind:{target_kind}", sandbox
-    cleanup = str(sandbox.get("cleanup_strategy") or sandbox.get("reset_strategy") or "qualibug_auto_fixture_cleanup")
-    if cleanup not in SANDBOX_CLEANUP_STRATEGIES:
-        return False, "sandbox_cleanup_strategy_required", sandbox
-    allow_hosts = [str(h).lower() for h in (sandbox.get("base_url_allowlist") or sandbox.get("host_allowlist") or [])]
-    host = _url_host(base_url)
-    if allow_hosts and host not in allow_hosts:
-        return False, "sandbox_base_url_not_in_allowlist", sandbox
-    return True, "test_environment_write_execution_approved", sandbox
 
 
 def _configured_replay_count(config: dict[str, Any], probe: dict[str, Any]) -> int:

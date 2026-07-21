@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ._common import *  # noqa: F401,F403
+from ._common import _html_escape  # noqa: F401
 from ._helpers import *  # noqa: F401,F403
 from ._runner import *  # noqa: F401,F403
 

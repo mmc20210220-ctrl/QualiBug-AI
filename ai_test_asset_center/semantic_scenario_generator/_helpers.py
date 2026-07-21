@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from ._common import *  # noqa: F401,F403
+from ..business_state_graph import _api_facts  # noqa: F401
 
 
 def _adjacent_read_for_entity(entity: str, write_path: str) -> str:
