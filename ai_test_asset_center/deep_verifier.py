@@ -3,8 +3,10 @@ QualiBug Deep Verifier — Configuration-driven, no hardcoded values.
 Reads test_profile from connector_registry, discovers targets from API spec + DB.
 """
 from __future__ import annotations
-import urllib.request, json, time, re, threading, queue
+import urllib.request, urllib.error, json, time, re, threading, queue, logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 _SAFE_IDENTIFIER_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 
@@ -100,7 +102,8 @@ def run_deep_tests(config: dict | None = None, routes: list[dict] | None = None)
                         f"{base_url}{auth_p}", data=reg, headers={"Content-Type": "application/json"}, method="POST"), timeout=5)
                     break
             admin_token = login(admin_email, admin_pw)
-        except: pass
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            logger.debug("Admin auto-setup login failed: %s", exc)
     
     # ── Auto-setup: fetch or create address ──
     addr_id = ""

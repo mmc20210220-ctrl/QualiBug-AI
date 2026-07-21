@@ -27,6 +27,7 @@ from ai_test_asset_center.phase105_frontend_experience_hub_v2 import (
     PAGE_SPECS_V2,
     build_frontend_experience_hub_v2,
 )
+from ai_test_asset_center.version import default_api_base_url
 
 PHASE105K_VERSION = "phase105k-frontend-interaction-acceptance-v1"
 
@@ -360,9 +361,10 @@ def run_frontend_interaction_acceptance(
     output_dir: str | Path | None = None,
     build_first: bool = False,
     scenario: str = "manufacturing",
-    api_base_url: str = "http://127.0.0.1:8088",
+    api_base_url: str | None = None,
     min_score: int = 90,
 ) -> dict[str, Any]:
+    api_base_url = api_base_url or default_api_base_url()
     hub = Path(hub_dir)
     output = Path(output_dir) if output_dir is not None else hub
     if build_first:
@@ -377,7 +379,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--build-first", action="store_true")
     parser.add_argument("--scenario", default="manufacturing")
-    parser.add_argument("--api-base-url", default="http://127.0.0.1:8088")
+    parser.add_argument("--api-base-url", default=None, help="Backend API base URL (default: from QUALIBUG_API_BASE_URL or QUALIBUG_PORT)")
     parser.add_argument("--min-score", type=int, default=90)
     return parser
 

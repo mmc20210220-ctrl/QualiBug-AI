@@ -37,6 +37,7 @@ from ai_test_asset_center.phase105_frontend_preview_acceptance import (
     run_frontend_preview_acceptance,
 )
 from ai_test_asset_center.phase105_frontend_preview_server import PHASE105M_VERSION, PREVIEW_API_PREFIX, PREVIEW_MANIFEST_JSON
+from ai_test_asset_center.version import default_api_base_url
 
 PHASE105O_VERSION = "phase105o-frontend-preview-release-package-v1"
 
@@ -455,11 +456,12 @@ def build_frontend_preview_release_package(
     output_dir: str | Path,
     *,
     scenario: str = "manufacturing",
-    api_base_url: str = "http://127.0.0.1:8088",
+    api_base_url: str | None = None,
     host: str = "127.0.0.1",
     port: int = 8795,
     create_zip: bool = True,
 ) -> dict[str, Any]:
+    api_base_url = api_base_url or default_api_base_url()
     release = Path(output_dir)
     release.mkdir(parents=True, exist_ok=True)
     delivery = release / DELIVERY_BUNDLE_DIR
@@ -669,7 +671,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", default="outputs/phase105_frontend_preview_release_package")
     parser.add_argument("--release-dir", default=None)
     parser.add_argument("--scenario", default="manufacturing", choices=["manufacturing", "ecommerce", "saas"])
-    parser.add_argument("--api-base-url", default="http://127.0.0.1:8088")
+    parser.add_argument("--api-base-url", default=None, help="Backend API base URL (default: from QUALIBUG_API_BASE_URL or QUALIBUG_PORT)")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8795)
     parser.add_argument("--validate-only", action="store_true")

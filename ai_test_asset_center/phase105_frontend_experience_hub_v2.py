@@ -31,6 +31,7 @@ from ai_test_asset_center.phase105_frontend_product_shell import build_frontend_
 from ai_test_asset_center.phase105_report_roi_experience import build_report_roi_experience
 from ai_test_asset_center.phase105_risk_evidence_experience import build_risk_evidence_experience
 from ai_test_asset_center.phase105_test_execution_experience import build_test_execution_experience
+from ai_test_asset_center.version import default_api_base_url
 
 PHASE105J_VERSION = "phase105j-frontend-experience-hub-v2"
 
@@ -490,9 +491,10 @@ def build_frontend_experience_hub_v2(
     output_dir: str | Path,
     *,
     scenario: str = "manufacturing",
-    api_base_url: str = "http://127.0.0.1:8088",
+    api_base_url: str | None = None,
     create_zip: bool = True,
 ) -> dict[str, Any]:
+    api_base_url = api_base_url or default_api_base_url()
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
 
@@ -660,10 +662,11 @@ def run_frontend_experience_hub_v2_export(
     *,
     output_dir: str | Path,
     scenario: str = "manufacturing",
-    api_base_url: str = "http://127.0.0.1:8088",
+    api_base_url: str | None = None,
     validate_only: bool = False,
     create_zip: bool = True,
 ) -> dict[str, Any]:
+    api_base_url = api_base_url or default_api_base_url()
     output = Path(output_dir)
     manifest: dict[str, Any] = _read_json(output / FRONTEND_HUB_V2_MANIFEST)
     if not validate_only:
@@ -677,7 +680,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build or validate the Phase105J unified frontend experience hub v2.")
     parser.add_argument("--output-dir", default="outputs/phase105_frontend_experience_hub_v2")
     parser.add_argument("--scenario", default="manufacturing", choices=("manufacturing", "ecommerce", "saas"))
-    parser.add_argument("--api-base-url", default="http://127.0.0.1:8088")
+    parser.add_argument("--api-base-url", default=None, help="Backend API base URL (default: from QUALIBUG_API_BASE_URL or QUALIBUG_PORT)")
     parser.add_argument("--validate-only", action="store_true")
     parser.add_argument("--no-zip", action="store_true")
     return parser

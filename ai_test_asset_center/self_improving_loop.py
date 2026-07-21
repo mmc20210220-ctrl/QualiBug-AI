@@ -4,10 +4,12 @@ QualiBug Self-Improving Loop v2 — with heartbeat, progress tracking, increment
 
 from __future__ import annotations
 
-import json, time, sys, os, traceback
+import json, time, sys, os, traceback, logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from .discovery_engine import AutonomousDiscoveryEngine, DiscoveryFinding
 from .target_endpoint import resolve_target_base_url
@@ -432,8 +434,8 @@ class SelfImprovingSweep:
         try:
             with open(str(self.output_dir / ".loop_progress.json"), "w") as f:
                 json.dump(data, f, indent=2)
-        except Exception:
-            pass
+        except (OSError, TypeError, ValueError) as exc:
+            logger.warning("Failed to save loop progress: %s", exc)
 
     def _load_state(self) -> dict:
         """Load previous round progress for resumable execution."""
@@ -442,7 +444,8 @@ class SelfImprovingSweep:
             rounds = data.get("rounds", [])
             if rounds:
                 return {"round": rounds[-1]["round"], "actions": rounds[-1].get("actions", [])}
-        except: pass
+        except (OSError, json.JSONDecodeError, KeyError) as exc:
+            logger.debug("No resumable loop state: %s", exc)
         return {}
 
     def _write_report(self, result: dict) -> None:
@@ -625,8 +628,10 @@ def _save_to_memory(result: dict, actions: list, output_dir: Path | str | None =
     existing = []
     if mem_path.exists():
         for line in mem_path.read_text(encoding="utf-8", errors="replace").splitlines():
-            try: existing.append(json.loads(line))
-            except: pass
+            try:
+                existing.append(json.loads(line))
+            except (json.JSONDecodeError, ValueError) as exc:
+                logger.debug("Skipping malformed bug_memory line: %s", exc)
     
     # Dedup by title hash
     seen = {hashlib.md5(json.dumps(e, sort_keys=True, default=str).encode()).hexdigest() for e in existing}

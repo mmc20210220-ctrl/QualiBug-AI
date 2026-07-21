@@ -10,12 +10,14 @@ NOTE: Engine outputs are merged without quality weighting. An engine producing
 Future improvement: score hypotheses by engine reliability history + evidence grounding.
 """
 
-import ast, copy, json, os, re, time
+import ast, copy, json, logging, os, re, time
 from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 from typing import Any
 
 from .console_output import safe_print as print
 from .reasoner_quality_report import build_executable_quality_report
+
+logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════
 # Constants
@@ -522,6 +524,7 @@ def _filter_low_quality_hypotheses(hypotheses: list[dict[str, Any]]) -> list[dic
         else:
             dropped += 1
     if dropped:
+        logger.info("Quality gate filtered %d low-quality hypotheses", dropped)
         print(f"  [OK] 质量门控过滤了 {dropped} 条低质量假设", flush=True)
     return filtered
 
@@ -913,6 +916,7 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
         _seen_templates[template_key] = True
         _deduped_engines.append((ename, etemplate))
     if _dedup_count:
+        logger.info("Deduplicated %d engines with identical prompt templates (%d -> %d)", _dedup_count, len(engines), len(_deduped_engines))
         print(f"  [INFO] Deduplicated {_dedup_count} engines with identical prompt templates "
               f"({len(engines)} -> {len(_deduped_engines)})", flush=True)
     engines = _deduped_engines
@@ -1028,6 +1032,7 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
             "max_hypothesis_chars": max_hypothesis_chars,
         }
         self._last_engine_report.update(local_executable_quality_report)
+        logger.warning("[local_bootstrap_only] %d read-only hypotheses", len(local_hypotheses))
         print(f"    [WARN] [local_bootstrap_only] {len(local_hypotheses)} read-only hypotheses", flush=True)
         return local_hypotheses
 
@@ -1165,6 +1170,7 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
 
     results_by_engine: dict[str, dict] = {}
 
+    logger.info("[Stage 2] Reasoner — %d engines, %d parallel workers", len(engines), max_workers)
     print(f"\n[Stage 2] Reasoner — {len(engines)} engines, {max_workers} parallel workers...", flush=True)
 
     # Schedule high-weight lenses first while aggregating in canonical order.
@@ -1215,6 +1221,8 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
         failure_suffix = ""
         if r.get("status") == "failed":
             failure_suffix = f" class={r.get('error_class') or 'unknown'} code={r.get('error_code') or 'unknown_failure'} attempts={int(r.get('model_attempt_count') or 0)}"
+        log_level = logging.INFO if r.get("status") == "success" else logging.WARNING
+        logger.log(log_level, "[%s] %d hypotheses (%s)%s", engine_name, len(hyps), r.get('status', '?'), failure_suffix)
         print(
             f"    {status_label} [{engine_name}] {len(hyps)} hypotheses "
             f"({r.get('status', '?')}){failure_suffix}",
@@ -1259,6 +1267,7 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
                 "error": "",
                 "degradation_reason": "live_reasoners_unavailable_read_only_local_bootstrap",
             }
+            logger.warning("[local_bootstrap] %d read-only hypotheses (LLM reasoners unavailable)", len(local_bootstrap_hypotheses))
             print(f"    [WARN] [local_bootstrap] {len(local_bootstrap_hypotheses)} read-only hypotheses (LLM reasoners unavailable)", flush=True)
 
     engine_names_for_report = [name for name, _ in engines] + (["local_bootstrap"] if "local_bootstrap" in results_by_engine else [])
@@ -1270,6 +1279,7 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
             from .analyzers_adapter import build_analyzer_hypotheses, get_analyzer_engine_names
 
             analyzer_engine_names = get_analyzer_engine_names()
+            logger.info("[Stage 2] Analyzers — running %d analyzers", len(analyzer_engine_names))
             print(f"\n[Stage 2] Analyzers — 运行 {len(analyzer_engine_names)} 个分析器...", flush=True)
 
             analyzer_hypotheses_by_engine = build_analyzer_hypotheses(
@@ -1297,12 +1307,16 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
                 all_hypotheses.extend(hypotheses)
                 analyzer_hypotheses_count += len(hypotheses)
                 status_label = "[OK]" if hypotheses else "[WARN]"
+                log_level = logging.INFO if hypotheses else logging.WARNING
+                logger.log(log_level, "[%s] %d hypotheses", engine_name, len(hypotheses))
                 print(f"    {status_label} [{engine_name}] {len(hypotheses)} hypotheses", flush=True)
             engine_names_for_report.extend(analyzer_engine_names)
 
+            logger.info("Analyzers generated %d hypotheses", analyzer_hypotheses_count)
             print(f"  [OK] 分析器生成了 {analyzer_hypotheses_count} 条假设", flush=True)
 
         except Exception as e:
+            logger.warning("Analyzer integration failed: %s", e)
             print(f"  [WARN] 分析器集成失败: {e}", flush=True)
 
     # ── P3: Bug Ontology-driven hypothesis generation ────────────────
@@ -1347,6 +1361,7 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
             })
 
         if ontology_hypotheses:
+            logger.info("Ontology: %d ontology-driven hypotheses generated", len(ontology_hypotheses))
             print(f"  [OK] Ontology: {len(ontology_hypotheses)} ontology-driven hypotheses generated", flush=True)
             results_by_engine["bug_ontology"] = {
                 "engine_name": "bug_ontology",
@@ -1362,6 +1377,7 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
             }
             engine_names_for_report.append("bug_ontology")
     except Exception as e:
+        logger.warning("Ontology integration degraded: %s", e)
         print(f"  [WARN] Ontology integration degraded: {e}", flush=True)
 
     # Merge ontology hypotheses into the main pool (with dedup weighting)
@@ -1376,10 +1392,12 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
     all_hypotheses = _dedupe_hypotheses(all_hypotheses)
     deduped_count = pre_dedupe_total - len(all_hypotheses)
     if deduped_count > 0:
+        logger.info("Deduplication removed %d duplicate hypotheses", deduped_count)
         print(f"  [OK] 去重移除了 {deduped_count} 条重复假设", flush=True)
     all_hypotheses = _prioritize_hypotheses(all_hypotheses)
     if all_hypotheses:
         top = all_hypotheses[0]
+        logger.info("Top priority hypothesis: [%s] %s", top.get('severity', '?'), str(top.get('title', '?'))[:80])
         print(
             f"  [OK] 最高优先级假设: [{top.get('severity','?')}] {str(top.get('title','?'))[:80]}",
             flush=True,
@@ -1482,6 +1500,7 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
     }
     self._last_engine_report.update(executable_quality_report)
 
+    logger.info("Generated %d hypotheses (across %d engines)", len(all_hypotheses), len(engines))
     print(f"  [OK] 生成了 {len(all_hypotheses)} 条假设 (across {len(engines)} engines)", flush=True)
     return all_hypotheses
 

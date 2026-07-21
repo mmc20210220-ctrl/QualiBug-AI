@@ -30,6 +30,7 @@ from typing import Any, Mapping, Sequence
 
 from ai_test_asset_center.phase103_enterprise_command_center import redact_value
 from ai_test_asset_center.phase104_command_center_http_api import Phase104CommandCenterHttpApp
+from ai_test_asset_center.version import default_api_base_url
 
 PHASE105A_VERSION = "phase105a-frontend-product-shell-v1"
 
@@ -143,8 +144,9 @@ def _api_data(app: Phase104CommandCenterHttpApp, method: str, path: str, body: M
     return envelope.get("data")
 
 
-def collect_product_shell_demo_data(scenario: str = "manufacturing", api_base_url: str = "http://127.0.0.1:8088") -> dict[str, Any]:
+def collect_product_shell_demo_data(scenario: str = "manufacturing", api_base_url: str | None = None) -> dict[str, Any]:
     """Collect redacted real demo API data for the product display shell."""
+    api_base_url = api_base_url or default_api_base_url()
     app = Phase104CommandCenterHttpApp(seed_scenario=scenario)
     health = _api_data(app, "GET", "/api/v1/health")
     projects = _api_data(app, "GET", "/api/v1/projects")
@@ -673,8 +675,9 @@ def build_frontend_product_shell(
     output_dir: str | Path,
     *,
     scenario: str = "manufacturing",
-    api_base_url: str = "http://127.0.0.1:8088",
+    api_base_url: str | None = None,
 ) -> dict[str, Any]:
+    api_base_url = api_base_url or default_api_base_url()
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     data = collect_product_shell_demo_data(scenario=scenario, api_base_url=api_base_url)
@@ -830,9 +833,10 @@ def run_frontend_product_shell_export(
     *,
     output_dir: str | Path,
     scenario: str = "manufacturing",
-    api_base_url: str = "http://127.0.0.1:8088",
+    api_base_url: str | None = None,
     validate_only: bool = False,
 ) -> dict[str, Any]:
+    api_base_url = api_base_url or default_api_base_url()
     out = Path(output_dir)
     if not validate_only:
         build_frontend_product_shell(out, scenario=scenario, api_base_url=api_base_url)
@@ -846,7 +850,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Generate or validate the Phase105A frontend product shell.")
     parser.add_argument("--output-dir", default="outputs/phase105_frontend_product_shell")
     parser.add_argument("--scenario", default="manufacturing", choices=["manufacturing", "ecommerce", "saas"])
-    parser.add_argument("--api-base-url", default="http://127.0.0.1:8088")
+    parser.add_argument("--api-base-url", default=None, help="Backend API base URL (default: from QUALIBUG_API_BASE_URL or QUALIBUG_PORT)")
     parser.add_argument("--validate-only", action="store_true")
     args = parser.parse_args(argv)
 

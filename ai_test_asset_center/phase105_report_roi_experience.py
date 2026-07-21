@@ -23,6 +23,7 @@ from typing import Any, Mapping, Sequence
 
 from ai_test_asset_center.phase103_enterprise_command_center import redact_value
 from ai_test_asset_center.phase105_frontend_product_shell import collect_product_shell_demo_data
+from ai_test_asset_center.version import default_api_base_url
 
 PHASE105G_VERSION = "phase105g-report-roi-experience-v1"
 
@@ -604,8 +605,9 @@ def build_report_roi_experience(
     output_dir: str | Path,
     *,
     scenario: str = "manufacturing",
-    api_base_url: str = "http://127.0.0.1:8088",
+    api_base_url: str | None = None,
 ) -> dict[str, Any]:
+    api_base_url = api_base_url or default_api_base_url()
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
 
@@ -731,9 +733,10 @@ def run_report_roi_experience_export(
     *,
     output_dir: str | Path,
     scenario: str = "manufacturing",
-    api_base_url: str = "http://127.0.0.1:8088",
+    api_base_url: str | None = None,
     validate_only: bool = False,
 ) -> dict[str, Any]:
+    api_base_url = api_base_url or default_api_base_url()
     if not validate_only:
         manifest = build_report_roi_experience(output_dir, scenario=scenario, api_base_url=api_base_url)
     else:
@@ -747,7 +750,7 @@ def run_report_roi_experience_export(
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Export Phase105G executive report and ROI frontend experience.")
     parser.add_argument("--scenario", default="manufacturing", choices=("manufacturing", "ecommerce", "saas"))
-    parser.add_argument("--api-base-url", default="http://127.0.0.1:8088")
+    parser.add_argument("--api-base-url", default=None, help="Backend API base URL (default: from QUALIBUG_API_BASE_URL or QUALIBUG_PORT)")
     parser.add_argument("--output-dir", default="outputs/phase105_report_roi_experience")
     parser.add_argument("--validate-only", action="store_true")
     args = parser.parse_args(argv)

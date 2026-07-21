@@ -24,6 +24,7 @@ from typing import Any, Mapping, Sequence
 from ai_test_asset_center.phase103_enterprise_command_center import redact_value
 from ai_test_asset_center.phase104_command_center_http_api import Phase104CommandCenterHttpApp
 from ai_test_asset_center.phase105_frontend_product_shell import collect_product_shell_demo_data
+from ai_test_asset_center.version import default_api_base_url
 
 PHASE105F_VERSION = "phase105f-risk-evidence-experience-v1"
 
@@ -316,7 +317,8 @@ def _build_filter_summary(risks: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
-def build_risk_evidence_view_model(scenario: str = "manufacturing", api_base_url: str = "http://127.0.0.1:8088") -> dict[str, Any]:
+def build_risk_evidence_view_model(scenario: str = "manufacturing", api_base_url: str | None = None) -> dict[str, Any]:
+    api_base_url = api_base_url or default_api_base_url()
     shell_data = collect_product_shell_demo_data(scenario=scenario, api_base_url=api_base_url)
     details = [_normalize_detail(item) for item in _collect_all_risk_details(scenario)]
     if not details and isinstance(shell_data.get("risk_detail"), Mapping):
@@ -740,7 +742,8 @@ def _manifest(output_dir: Path, scenario: str, data: Mapping[str, Any]) -> dict[
     )
 
 
-def build_risk_evidence_experience(output_dir: str | Path, *, scenario: str = "manufacturing", api_base_url: str = "http://127.0.0.1:8088") -> dict[str, Any]:
+def build_risk_evidence_experience(output_dir: str | Path, *, scenario: str = "manufacturing", api_base_url: str | None = None) -> dict[str, Any]:
+    api_base_url = api_base_url or default_api_base_url()
     output = Path(output_dir)
     data = build_risk_evidence_view_model(scenario=scenario, api_base_url=api_base_url)
     manifest = _manifest(output, scenario, data)
@@ -869,9 +872,10 @@ def run_risk_evidence_experience_export(
     *,
     output_dir: str | Path = "outputs/phase105_risk_evidence_experience",
     scenario: str = "manufacturing",
-    api_base_url: str = "http://127.0.0.1:8088",
+    api_base_url: str | None = None,
     validate_only: bool = False,
 ) -> dict[str, Any]:
+    api_base_url = api_base_url or default_api_base_url()
     output = Path(output_dir)
     if not validate_only:
         build_risk_evidence_experience(output, scenario=scenario, api_base_url=api_base_url)
@@ -884,7 +888,7 @@ def run_risk_evidence_experience_export(
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Generate Phase105F risk and evidence frontend experience.")
     parser.add_argument("--scenario", default="manufacturing", choices=["manufacturing", "ecommerce", "saas"], help="Demo scenario used to collect Phase104 API data.")
-    parser.add_argument("--api-base-url", default="http://127.0.0.1:8088", help="Displayed API base URL for frontend handoff.")
+    parser.add_argument("--api-base-url", default=None, help="Backend API base URL (default: from QUALIBUG_API_BASE_URL or QUALIBUG_PORT)")
     parser.add_argument("--output-dir", default="outputs/phase105_risk_evidence_experience", help="Output directory.")
     parser.add_argument("--validate-only", action="store_true", help="Validate an existing output directory without rebuilding files.")
     args = parser.parse_args(argv)

@@ -316,6 +316,32 @@ def _infer_operation_effect(operation: dict[str, Any], method: str) -> str:
     return "write"
 
 
+# Regex for ID-like path segments that should be normalized to {}.
+# Matches: numeric IDs, UUIDs, test IDs (qb_test_*, QB-TEST-*), hex strings,
+# and mixed alphanumeric IDs containing digits.
+_ID_LIKE_SEGMENT_RE = re.compile(
+    r"^(?:"
+    r"\d{3,}"  # pure numeric (3+ digits to avoid version-like v1)
+    r"|[0-9a-f]{8}(?:-[0-9a-f]{4}){0,3}(?:-[0-9a-f]{4,12})?"  # UUID/hex
+    r"|qb[_-]test[_-].*"  # test fixture IDs
+    r"|[a-z]+[_-]\d+.*"  # mixed: prefix_123, prefix-123
+    r"|\d+[_-][a-z]+.*"  # mixed: 123_suffix
+    r"|.*[_-]\d{2,}$"  # ends with _001, -123 (e.g. SKU-PHONE-001)
+    r")$",
+    re.IGNORECASE,
+)
+
+# Segments that look like versions (v1, v2, v12) should NOT be normalized.
+_VERSION_SEGMENT_RE = re.compile(r"^v\d{1,3}$", re.IGNORECASE)
+
+
+def _is_id_like_segment(segment: str) -> bool:
+    """Return True if a path segment looks like a resource identifier."""
+    if _VERSION_SEGMENT_RE.match(segment):
+        return False
+    return bool(_ID_LIKE_SEGMENT_RE.match(segment))
+
+
 def _path_shape(value: Any) -> str:
     path = _text(value).split("?", 1)[0].strip().lower()
     if not path:
@@ -328,6 +354,7 @@ def _path_shape(value: Any) -> str:
             (segment.startswith("{") and segment.endswith("}"))
             or segment.startswith(":")
             or segment == "*"
+            or _is_id_like_segment(segment)
         ):
             segments.append("{}")
         else:
@@ -1259,6 +1286,8 @@ def _derive_compensation_relations(model: dict[str, Any]) -> list[dict[str, Any]
     operations = [row for row in _list(model.get("operations")) if isinstance(row, dict)]
     relations: list[dict[str, Any]] = []
     seen_pairs: set[tuple[str, str]] = set()
+    import os as _os
+    _debug_comp = _os.environ.get("QUALIBUG_DEBUG_COMPENSATION", "").strip() == "1"
 
     def _append_compensation(create_operation: dict[str, Any], compensation: dict[str, Any]) -> None:
         create_ref = _text(create_operation.get("id"))
@@ -1288,7 +1317,11 @@ def _derive_compensation_relations(model: dict[str, Any]) -> list[dict[str, Any]
             continue
         create_shape = _path_shape(create_operation.get("path")).rstrip("/")
         if not create_shape or "{}" in create_shape:
+            if _debug_comp:
+                print(f"[COMP-DEBUG] SKIP POST {_text(create_operation.get('id'))}: path={create_operation.get('path')} shape={create_shape}")
             continue
+        if _debug_comp:
+            print(f"[COMP-DEBUG] CREATE {_text(create_operation.get('id'))}: POST {create_operation.get('path')} shape={create_shape}")
         candidates: list[dict[str, Any]] = []
         for candidate in operations:
             candidate_method = _text(candidate.get("method")).upper()
@@ -1308,9 +1341,15 @@ def _derive_compensation_relations(model: dict[str, Any]) -> list[dict[str, Any]
                 continue
             collection_shape = "/".join(segments[:-1]).rstrip("/")
             if candidate_method == "DELETE" and collection_shape == create_shape:
+                if _debug_comp:
+                    print(f"[COMP-DEBUG]   MATCH DELETE {_text(candidate.get('id'))}: {candidate.get('path')} collection={collection_shape}")
                 candidates.append(candidate)
         if len(candidates) == 1:
+            if _debug_comp:
+                print(f"[COMP-DEBUG]   => CREATE compensates relation")
             _append_compensation(create_operation, candidates[0])
+        elif _debug_comp and len(candidates) > 1:
+            print(f"[COMP-DEBUG]   => AMBIGUOUS {len(candidates)} candidates")
 
     # Sibling action pairs: POST /resource/reserve ↔ POST /resource/release.
     # Require unique cleanup-named sibling under the same parent path plus source
