@@ -1092,6 +1092,7 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
     chunk_evidence = ""
     try:
         from .enterprise_source_registry import search_chunks_by_entity
+        from .real_project_onboarding import ROOT as _CHUNK_ROOT
         _project = os.environ.get("QUALIBUG_PROJECT", "real_project_demo")
         # Extract top entity names from reader output
         _reader_entities = []
@@ -1106,7 +1107,7 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
         # Search chunks for top entities (bounded to avoid latency)
         _chunk_fragments: list[str] = []
         for ename in _reader_entities[:5]:
-            hits = search_chunks_by_entity(_project, ename)
+            hits = search_chunks_by_entity(_project, ename, root=_CHUNK_ROOT)
             for hit in (hits or [])[:2]:
                 if isinstance(hit, dict):
                     content = str(hit.get("content") or "")[:300]

@@ -1942,6 +1942,24 @@ def ingest_enterprise_knowledge_documents(
             registry["sources"].append(record)
             active.append(record)
             created.append(record)
+            # ── Chunk registration for GraphRAG retrieval ──
+            # Parse document into typed chunks with evidence metadata and
+            # persist them so search_chunks_by_entity can provide precise
+            # context to LLM reasoning engines.
+            try:
+                from .document_intelligence import parse_document as _parse_doc_chunks
+                from .enterprise_source_registry import register_source_chunks
+                _text_for_chunks = blob.decode("utf-8", errors="replace")
+                _chunk_result = _parse_doc_chunks(
+                    _text_for_chunks, filename=filename, text=_text_for_chunks, source_id=source_id,
+                )
+                _chunks = _chunk_result.get("chunks") or []
+                if _chunks:
+                    register_source_chunks(
+                        project, source_id, content_hash, _chunks, root=root,
+                    )
+            except Exception:
+                pass  # Chunk registration is best-effort; must not block ingest
         except Exception as exc:
             errors.append({"index": index, "filename": str(doc.get("filename") or doc.get("name") or ""), "error": str(exc)[:500]})
     registry["audit_events"].append({"event": "ingest", "at_utc": _now(), "actor": clean_actor, "created_source_ids": [x["source_id"] for x in created], "duplicate_count": len(duplicates), "error_count": len(errors)})

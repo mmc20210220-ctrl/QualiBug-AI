@@ -534,10 +534,15 @@ def build_discovery_plan(
                 ref_conf = ref.get("confidence")
                 if ref_conf is not None:
                     min_conf = min(min_conf, float(ref_conf))
-        # Also check obligation-level source_confidence
-        obl_conf = obl.get("source_confidence")
+        # Also check obligation-level confidence (set by obligation compiler
+        # from IR node confidence: invariant × operation × actor)
+        obl_conf = obl.get("confidence")
         if obl_conf is not None:
             min_conf = min(min_conf, float(obl_conf))
+        # Also check obligation-level source_confidence
+        src_conf = obl.get("source_confidence")
+        if src_conf is not None:
+            min_conf = min(min_conf, float(src_conf))
         if min_conf < _LOW_CONFIDENCE_THRESHOLD:
             # Mark as low-confidence so the planner deprioritizes it
             obl["_low_confidence_source"] = True
