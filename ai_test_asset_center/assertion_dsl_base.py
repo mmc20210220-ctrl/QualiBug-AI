@@ -22,6 +22,7 @@ SUPPORTED_KINDS = {
     "delta",
     "cardinality",
     "state_transition",
+    "postcondition",
     "owner_tenant_visibility",
     "conservation",
     "idempotency_effect",
@@ -573,6 +574,56 @@ def evaluate_assertion(
                     passed = _state_token(
                         obs["after_state"]
                     ) == _state_token(spec["to_state"])
+        elif effective_kind == "postcondition":
+            # Postcondition assertions verify that a causal rule's expected
+            # effect actually materialized after the trigger action executed.
+            # Uses entity_state observer evidence (state_change_count, effect_count).
+            # must_become: state must have changed (fingerprint difference)
+            # must_create: a new entity must appear (identity count increase)
+            pc_operator = _text(spec.get("operator"))
+            pc_operands = spec.get("operands") or []
+            pc_operand = pc_operands[0] if pc_operands and isinstance(pc_operands[0], dict) else {}
+            entity_ref = _text(pc_operand.get("entity_ref"))
+            field_ref = _text(pc_operand.get("field"))
+            expected_value = pc_operand.get("expected_value")
+            must_create = bool(pc_operand.get("must_create"))
+            # Gather entity_state evidence from observations
+            state_change_count = obs.get("state_change_count")
+            effect_count = obs.get("effect_count")
+            entity_state_observed = obs.get("entity_state_observed")
+            state_windows = obs.get("state_windows") or []
+            if entity_state_observed is not True and state_change_count is None:
+                reason_code = "POSTCONDITION_ENTITY_STATE_EVIDENCE_MISSING"
+            elif must_create:
+                # must_create: verify new entity appeared (identity count increase or effect > 0)
+                expected = {"entity": entity_ref, "must_create": True}
+                identity_increase = any(
+                    isinstance(w, dict) and int(w.get("after_identity_count") or 0) > int(w.get("before_identity_count") or 0)
+                    for w in state_windows
+                )
+                actual = {
+                    "state_change_count": state_change_count,
+                    "effect_count": effect_count,
+                    "identity_increase": identity_increase,
+                }
+                passed = identity_increase or int(effect_count or 0) > 0
+                if not passed:
+                    reason_code = "POSTCONDITION_ENTITY_NOT_CREATED"
+            else:
+                # must_become: verify state actually changed
+                expected = {"entity": entity_ref, "field": field_ref, "must_become": expected_value}
+                actual = {
+                    "state_change_count": state_change_count,
+                    "effect_count": effect_count,
+                }
+                if int(state_change_count or 0) > 0:
+                    passed = True
+                elif int(effect_count or 0) > 0:
+                    # Effect detected but fingerprint unchanged — partial pass
+                    passed = True
+                else:
+                    passed = False
+                    reason_code = "POSTCONDITION_STATE_NOT_CHANGED"
         elif effective_kind == "owner_tenant_visibility":
             required_values = (
                 obs.get("owner_can_access"),

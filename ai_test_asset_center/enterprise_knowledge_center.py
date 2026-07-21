@@ -3275,6 +3275,327 @@ def merge_knowledge_asset_overlay(
     return merged
 
 
+# ── Entity-Relation Graph + Cross-Document Conflict Detection (RAGFlow-inspired) ──
+
+
+def _extract_entity_relations(
+    interfaces: list[dict[str, Any]],
+    tables: list[dict[str, Any]],
+    field_dictionary: list[dict[str, Any]],
+    rules: list[dict[str, Any]],
+    state_machines: list[dict[str, Any]],
+    permissions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Extract typed entity-relationship edges from already-parsed knowledge.
+
+    Reuses existing parsed outputs (no new NLP dependency). Produces a graph
+    of business entities and their relationships for downstream GraphRAG-style
+    retrieval and Behavior IR enrichment.
+    """
+    relations: list[dict[str, Any]] = []
+
+    def _add_rel(from_e: str, to_e: str, rel_type: str, source_id: str, confidence: float, chunk_ref: str = "") -> None:
+        if not from_e or not to_e:
+            return
+        relations.append({
+            "from_entity": from_e,
+            "to_entity": to_e,
+            "relation_type": rel_type,
+            "source_id": source_id,
+            "source_chunk_id": chunk_ref,
+            "confidence": round(min(1.0, max(0.0, confidence)), 3),
+        })
+
+    # Table FK relationships (from table foreign_keys)
+    for table in tables:
+        tname = str(table.get("name") or "")
+        sid = str(table.get("source_id") or "")
+        for fk in table.get("foreign_keys") or []:
+            target = str(fk) if isinstance(fk, str) else str(fk.get("ref_table") or fk.get("to") or "")
+            if target:
+                _add_rel(tname, target, "foreign_key", sid, 0.95)
+        # Field-to-table ownership
+        for col in table.get("columns") or []:
+            col_name = str(col) if isinstance(col, str) else str(col.get("name") or "")
+            if col_name and tname:
+                _add_rel(col_name, tname, "belongs_to", sid, 0.9)
+
+    # Field dictionary ownership
+    for field in field_dictionary:
+        fname = str(field.get("field") or "")
+        tname = str(field.get("table") or "")
+        sid = str(field.get("source_id") or "")
+        if fname and tname:
+            _add_rel(fname, tname, "field_of", sid, 0.85)
+
+    # Interface-to-table relationships (path segment matching)
+    table_names = {str(t.get("name") or "").lower(): str(t.get("name") or "") for t in tables}
+    for iface in interfaces:
+        path = str(iface.get("path") or "").lower()
+        sid = str(iface.get("source_id") or "")
+        op_id = str(iface.get("interface_id") or "")
+        segments = {seg for seg in re.split(r"[/\-_{}]", path) if len(seg) >= 3}
+        for seg in segments:
+            matched_table = table_names.get(seg) or table_names.get(seg.rstrip("s")) or table_names.get(seg + "s")
+            if matched_table:
+                _add_rel(op_id, matched_table, "operates_on", sid, 0.7)
+
+    # State machine transitions
+    for sm in state_machines:
+        entity = str(sm.get("entity") or sm.get("object") or sm.get("state_machine_id") or "")
+        sid = str(sm.get("source_id") or "")
+        states = sm.get("states") or sm.get("transitions") or []
+        if isinstance(states, list):
+            for i in range(len(states) - 1):
+                from_s = str(states[i].get("from") or states[i]) if isinstance(states[i], dict) else str(states[i])
+                to_s = str(states[i + 1].get("to") or states[i + 1]) if isinstance(states[i + 1], dict) else str(states[i + 1])
+                if from_s and to_s and entity:
+                    _add_rel(f"{entity}:{from_s}", f"{entity}:{to_s}", "transitions", sid, 0.8)
+
+    # Permission-to-role relationships
+    for perm in permissions:
+        role = str(perm.get("role") or perm.get("actor") or "")
+        resource = str(perm.get("resource") or perm.get("scope") or perm.get("permission_id") or "")
+        sid = str(perm.get("source_id") or "")
+        if role and resource:
+            action = str(perm.get("action") or perm.get("effect") or "access")
+            _add_rel(role, resource, f"permission:{action}", sid, 0.85)
+
+    # Rule-to-entity relationships (rules referencing known tables/interfaces)
+    known_entities = {str(t.get("name") or "").lower(): str(t.get("name") or "") for t in tables}
+    known_entities.update({str(i.get("interface_id") or "").lower(): str(i.get("interface_id") or "") for i in interfaces})
+    for rule in rules:
+        sid = str(rule.get("source_id") or "")
+        rule_id = str(rule.get("rule_id") or "")
+        rule_tokens = set(rule.get("tokens") or [])
+        for token in rule_tokens:
+            matched = known_entities.get(token.lower())
+            if matched and rule_id:
+                _add_rel(rule_id, matched, "constrains", sid, 0.6)
+
+    # Deduplicate
+    seen: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+    for rel in relations:
+        key = f"{rel['from_entity']}|{rel['to_entity']}|{rel['relation_type']}"
+        if key not in seen:
+            seen.add(key)
+            deduped.append(rel)
+    return deduped
+
+
+def _detect_cross_document_conflicts(
+    field_dictionary: list[dict[str, Any]],
+    rules: list[dict[str, Any]],
+    interfaces: list[dict[str, Any]],
+    permissions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Detect contradictions between knowledge extracted from different sources.
+
+    Conflict types:
+    - field_required_mismatch: same field declared required in one source, nullable in another
+    - permission_contradiction: same resource with conflicting access rules across sources
+    - rule_contradiction: rules from different sources making opposing claims about same entity
+    """
+    conflicts: list[dict[str, Any]] = []
+
+    # 1. Field required/nullable mismatches across sources
+    field_by_name: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for field in field_dictionary:
+        key = f"{str(field.get('table') or 'default').lower()}:{str(field.get('field') or '').lower()}"
+        if field.get("field"):
+            field_by_name[key].append(field)
+    for key, entries in field_by_name.items():
+        if len(entries) < 2:
+            continue
+        has_true = any(e.get("required") is True for e in entries)
+        has_false = any(e.get("required") is False for e in entries)
+        if has_true and has_false:
+            sources = sorted({str(e.get("source_id") or "") for e in entries})
+            conflicts.append({
+                "conflict_type": "field_required_mismatch",
+                "entity": key,
+                "source_a": sources[0] if sources else "",
+                "source_b": sources[1] if len(sources) > 1 else "",
+                "detail": f"Field '{key}' is declared required in one source but nullable/optional in another",
+            })
+
+    # 2. Permission contradictions across sources
+    perm_by_resource: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for perm in permissions:
+        resource = str(perm.get("resource") or perm.get("scope") or "").lower()
+        role = str(perm.get("role") or perm.get("actor") or "").lower()
+        if resource and role:
+            perm_by_resource[f"{role}:{resource}"].append(perm)
+    for key, entries in perm_by_resource.items():
+        if len(entries) < 2:
+            continue
+        effects = {str(e.get("effect") or e.get("action") or "").lower() for e in entries}
+        has_allow = bool(effects & {"allow", "grant", "permit", "read", "write", "admin"})
+        has_deny = bool(effects & {"deny", "forbid", "prohibit", "none", "no_access"})
+        if has_allow and has_deny:
+            sources = sorted({str(e.get("source_id") or "") for e in entries})
+            conflicts.append({
+                "conflict_type": "permission_contradiction",
+                "entity": key,
+                "source_a": sources[0] if sources else "",
+                "source_b": sources[1] if len(sources) > 1 else "",
+                "detail": f"Permission for '{key}' has conflicting allow/deny across sources",
+            })
+
+    # 3. Rule contradictions (same risk_type + overlapping tokens, different sources)
+    rules_by_risk: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for rule in rules:
+        risk_type = str(rule.get("risk_type") or rule.get("kind") or "").lower()
+        if risk_type:
+            rules_by_risk[risk_type].append(rule)
+    for risk_type, group in rules_by_risk.items():
+        if len(group) < 2:
+            continue
+        for i in range(len(group)):
+            for j in range(i + 1, min(i + 5, len(group))):
+                a, b = group[i], group[j]
+                src_a = str(a.get("source_id") or "")
+                src_b = str(b.get("source_id") or "")
+                if not src_a or not src_b or src_a == src_b:
+                    continue
+                tokens_a = set(a.get("tokens") or [])
+                tokens_b = set(b.get("tokens") or [])
+                overlap = tokens_a & tokens_b
+                if len(overlap) >= 2:
+                    stmt_a = str(a.get("statement") or a.get("expected") or "")[:120]
+                    stmt_b = str(b.get("statement") or b.get("expected") or "")[:120]
+                    if stmt_a and stmt_b and _norm(stmt_a) != _norm(stmt_b):
+                        conflicts.append({
+                            "conflict_type": "rule_contradiction",
+                            "entity": f"{risk_type}:{','.join(sorted(overlap)[:3])}",
+                            "source_a": src_a,
+                            "source_b": src_b,
+                            "detail": f"Rules about '{risk_type}' from different sources may contradict: [{stmt_a}] vs [{stmt_b}]",
+                        })
+                        break
+            else:
+                continue
+            break
+
+    return conflicts[:50]
+
+
+def _structurize_rule_causal_chains(rules: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Structurize text rules into causal chains (Daguan-style rule relationalization).
+
+    For each rule, attempt to extract:
+    - preconditions: list of {entity, field, value} that must hold before the action
+    - trigger_action: the action/event that fires the rule
+    - postconditions: list of {entity, field, must_become} or {entity, must_create}
+
+    Industry-neutral: uses generic causal-pattern detection, no hardcoded
+    business terms. Supports Chinese and English causal connectors.
+    Rules that cannot be structured retain their original text-only form.
+    """
+    # Causal pattern indicators (language-neutral coverage)
+    _TRIGGER_MARKERS = (
+        "后", "之后", "时", "当", "执行", "触发", "调用",
+        "after", "when", "upon", "on", "trigger", "execute",
+    )
+    _MUST_MARKERS = (
+        "必须", "应当", "应该", "需要", "则", "就要", "确保",
+        "must", "shall", "should", "required", "ensure", "then",
+    )
+    _POSTCONDITION_SPLIT = re.compile(r"[、；;，,]|(?:并且)|(?:同时)|(?:以及)| and |; ")
+
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        statement = str(rule.get("statement") or "").strip()
+        if not statement or rule.get("postconditions") or rule.get("causal_chain"):
+            continue  # Already structured or empty
+
+        norm = _norm(statement)
+
+        # Detect trigger + postcondition pattern
+        trigger_part = ""
+        must_part = ""
+
+        # Pattern: "X后/时/当...必须/应当/则...Y"
+        for marker in _MUST_MARKERS:
+            idx = norm.find(marker)
+            if idx > 0:
+                before = statement[:idx].strip()
+                after = statement[idx + len(marker):].strip()
+                if after and len(after) >= 4:
+                    trigger_part = before
+                    must_part = after
+                    break
+
+        if not must_part:
+            continue  # Cannot structurize
+
+        # Extract trigger action from the before-part
+        trigger_action = ""
+        for tm in _TRIGGER_MARKERS:
+            tidx = _norm(trigger_part).find(tm)
+            if tidx > 0:
+                trigger_action = trigger_part[:tidx].strip() or trigger_part
+                break
+        if not trigger_action and trigger_part:
+            trigger_action = trigger_part
+
+        # Extract preconditions from trigger ("当X并且Y" patterns)
+        preconditions: list[dict[str, Any]] = []
+        precond_markers = ("当", "并且", "且", "如果", "when", "and", "if")
+        precond_parts = re.split(r"(?:并且)|(?:而且)| and |, ", trigger_part)
+        for pp in precond_parts:
+            pp = pp.strip().lstrip("当如果if ")
+            if pp and len(pp) >= 3:
+                # Try to extract entity.field = value
+                eq_match = re.search(r"([\w\u4e00-\u9fff]+)[.．]([\w\u4e00-\u9fff]+)\s*[=是为]\s*(.+)", pp)
+                if eq_match:
+                    preconditions.append({
+                        "entity": eq_match.group(1),
+                        "field": eq_match.group(2),
+                        "value": eq_match.group(3).strip(),
+                    })
+                else:
+                    preconditions.append({"description": pp})
+
+        # Split postconditions (multiple effects separated by connectors)
+        postconditions: list[dict[str, Any]] = []
+        post_parts = _POSTCONDITION_SPLIT.split(must_part)
+        for pp in post_parts:
+            pp = pp.strip()
+            if not pp or len(pp) < 3:
+                continue
+            # Try "entity.field → value" or "entity → action"
+            arrow_match = re.search(r"([\w\u4e00-\u9fff]+)[.．]?([\w\u4e00-\u9fff]*)\s*(?:→|->|=>)\s*(.+)", pp)
+            if arrow_match:
+                postconditions.append({
+                    "entity": arrow_match.group(1),
+                    "field": arrow_match.group(2) or "",
+                    "must_become": arrow_match.group(3).strip(),
+                })
+            else:
+                # Try "创建/释放/记录 + entity" pattern
+                create_match = re.search(r"(创建|释放|记录|生成|发送|触发|create|release|record|send|emit)\s*([\w\u4e00-\u9fff]+)", pp)
+                if create_match:
+                    postconditions.append({
+                        "entity": create_match.group(2),
+                        "must_create": True,
+                        "action": create_match.group(1),
+                    })
+                else:
+                    postconditions.append({"description": pp})
+
+        if postconditions:
+            rule["causal_chain"] = {
+                "preconditions": preconditions,
+                "trigger_action": trigger_action,
+                "postconditions": postconditions,
+            }
+
+    return rules
+
+
 def build_enterprise_business_knowledge_asset(project_id: str = "real_project_demo", root: Path | None = None, options: dict[str, Any] | None = None) -> dict[str, Any]:
     root = root or ROOT
     project = _safe_project_id(project_id)
@@ -3416,6 +3737,11 @@ def build_enterprise_business_knowledge_asset(project_id: str = "real_project_de
     relation_edges = _dedupe_by_id(relation_edges, "edge_id")
     oracles = _oracle_library(rules, industry_oracles, relation_edges)
     risks = _risk_domains(rules, tickets, industry)
+    # Entity-relation graph and cross-document conflict detection (RAGFlow-inspired)
+    # Rule relationalization: structurize text rules into causal chains
+    rules = _structurize_rule_causal_chains(rules)
+    entity_relations = _extract_entity_relations(interfaces, tables, field_dictionary, rules, state_machines, permissions)
+    cross_doc_conflicts = _detect_cross_document_conflicts(field_dictionary, rules, interfaces, permissions)
     asset = {
         "phase": PHASE,
         "asset_id": f"knowledge_asset:{project}:{_short_hash({'sources': [(x.get('source_id'), x.get('content_hash'), x.get('version')) for x in active]})}",
@@ -3445,6 +3771,8 @@ def build_enterprise_business_knowledge_asset(project_id: str = "real_project_de
             "oracle_dsl_activation": "evidence_gated" if dsl_rules else "suppressed_unknown_or_low_confidence",
         },
         "relationships": relation_edges,
+        "entity_relations": entity_relations,
+        "cross_document_conflicts": cross_doc_conflicts,
         "oracle_library": oracles,
         "governance": {
             "no_manual_customer_industry_pack_required": True,

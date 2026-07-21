@@ -74,6 +74,7 @@ def _paths(root: Path, project_id: str) -> dict[str, Path]:
         "audit": base / "audit.jsonl",
         "blobs": base / "blobs",
         "versions": base / "versions",
+        "chunks": base / "chunks",
     }
 
 
@@ -365,3 +366,124 @@ def load_source_content(project_id: str, source_hash: str, *, root: Path) -> str
     if _sha256(content) != digest:
         raise SourceRegistryError("source_blob_hash_mismatch")
     return content
+
+
+# ── Chunk-level index storage and retrieval (RAGFlow-inspired tracing) ──────
+
+
+def register_source_chunks(
+    project_id: str,
+    source_id: str,
+    source_hash: str,
+    chunks: list[dict[str, Any]],
+    *,
+    root: Path,
+) -> dict[str, Any]:
+    """Persist typed knowledge chunks alongside the source blob.
+
+    Chunks are stored in chunks/{source_hash}/chunks.json and are indexed
+    by chunk_id for precise retrieval. This does not alter the existing
+    register_source_asset() behavior.
+    """
+    digest = str(source_hash or "").strip().lower()
+    if not _SHA256_RE.fullmatch(digest):
+        raise SourceRegistryError("source_hash_invalid")
+    if not isinstance(chunks, list):
+        raise SourceRegistryError("chunks_must_be_list")
+    paths = _paths(Path(root), _safe_project(project_id))
+    chunk_dir = paths["chunks"] / digest
+    chunk_dir.mkdir(parents=True, exist_ok=True)
+    # Build index: chunk_id -> chunk
+    index: dict[str, Any] = {}
+    for chunk in chunks:
+        if not isinstance(chunk, dict):
+            continue
+        cid = str(chunk.get("chunk_id") or "").strip()
+        if cid:
+            index[cid] = chunk
+    payload = {
+        "source_id": _safe_asset_id(source_id),
+        "source_hash": digest,
+        "chunk_count": len(index),
+        "registered_at_utc": _now(),
+        "chunks": list(index.values()),
+    }
+    _atomic_json(chunk_dir / "chunks.json", payload)
+    return {
+        "source_id": _safe_asset_id(source_id),
+        "source_hash": digest,
+        "chunk_count": len(index),
+        "chunk_index_path": str((chunk_dir / "chunks.json").relative_to(Path(root))),
+    }
+
+
+def load_source_chunks(
+    project_id: str,
+    source_hash: str,
+    *,
+    root: Path,
+    chunk_ids: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Load chunks for a source version. Optionally filter by chunk_ids."""
+    digest = str(source_hash or "").strip().lower()
+    if not _SHA256_RE.fullmatch(digest):
+        raise SourceRegistryError("source_hash_invalid")
+    paths = _paths(Path(root), _safe_project(project_id))
+    chunk_file = paths["chunks"] / digest / "chunks.json"
+    if not chunk_file.exists():
+        return []
+    try:
+        payload = json.loads(chunk_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    all_chunks = payload.get("chunks") if isinstance(payload, dict) else []
+    if not isinstance(all_chunks, list):
+        return []
+    if chunk_ids:
+        wanted = set(chunk_ids)
+        return [c for c in all_chunks if isinstance(c, dict) and str(c.get("chunk_id") or "") in wanted]
+    return [c for c in all_chunks if isinstance(c, dict)]
+
+
+def search_chunks_by_entity(
+    project_id: str,
+    entity_name: str,
+    *,
+    root: Path,
+) -> list[dict[str, Any]]:
+    """Search all chunk indexes for chunks referencing a given entity.
+
+    Scans every source version's chunk index under the project and returns
+    chunks whose 'entities' list contains the entity_name (case-insensitive).
+    This is the GraphRAG retrieval foundation.
+    """
+    entity_lower = str(entity_name or "").strip().lower()
+    if not entity_lower:
+        return []
+    paths = _paths(Path(root), _safe_project(project_id))
+    chunks_root = paths["chunks"]
+    if not chunks_root.exists():
+        return []
+    results: list[dict[str, Any]] = []
+    for chunk_dir in chunks_root.iterdir():
+        if not chunk_dir.is_dir():
+            continue
+        chunk_file = chunk_dir / "chunks.json"
+        if not chunk_file.exists():
+            continue
+        try:
+            payload = json.loads(chunk_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        all_chunks = payload.get("chunks") if isinstance(payload, dict) else []
+        if not isinstance(all_chunks, list):
+            continue
+        for chunk in all_chunks:
+            if not isinstance(chunk, dict):
+                continue
+            entities = chunk.get("entities") or []
+            if isinstance(entities, list) and any(
+                str(e).strip().lower() == entity_lower for e in entities
+            ):
+                results.append(chunk)
+    return results

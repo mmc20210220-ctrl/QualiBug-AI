@@ -106,6 +106,37 @@ def _normalized_identity_class(value: Any) -> str:
     return text
 
 
+def _normalize_path_segment(segment: str) -> str:
+    """Collapse ID-like path segments into a placeholder (industry-agnostic).
+
+    Mirrors the generic normalization used by the external evaluator so the
+    same defect surface reported against different runtime-generated resource
+    IDs (pure numeric IDs, qb_test_*/QB-TEST-* test IDs, alphanumeric IDs)
+    shares a single canonical identity.
+    """
+    if not segment or segment == "{param}":
+        return segment
+    if segment.isdigit():
+        return "{id}"
+    if re.fullmatch(r"(?i)qb[_-]test[_-].+", segment):
+        return "{id}"
+    if re.fullmatch(r"[A-Za-z]+\d+[A-Za-z0-9]*", segment) and len(segment) >= 3:
+        return "{id}"
+    return segment
+
+
+def _is_operation_locator(locator: Any) -> bool:
+    """True when a source-ref locator denotes an operation/path rather than an
+    actor instance reference (e.g. ``buyer:buyer01``) or other instance handle.
+    """
+    text = _text(locator)
+    if text.startswith("/"):
+        return True
+    if re.match(r"^[A-Za-z]+\s+/", text):
+        return True
+    return False
+
+
 def _normalized_locator(value: Any) -> str:
     locator = _text(value).split("?", 1)[0]
     if not locator:
@@ -120,6 +151,7 @@ def _normalized_locator(value: Any) -> str:
         path = re.sub(r"/{2,}", "/", path)
         path = re.sub(r"\{[^{}\/]+\}", "{param}", path)
         path = re.sub(r"/:([A-Za-z_][A-Za-z0-9_]*)", "/{param}", path)
+        path = "/".join(_normalize_path_segment(seg) for seg in path.split("/"))
         if len(path) > 1:
             path = path.rstrip("/")
     else:
@@ -309,14 +341,14 @@ def _canonical_actor_relation(
             "treatment_actor_class": "not_identity_defining",
             "relation": "actor_insensitive_property",
         }
+    # The resource owner's concrete role/instance is not identity defining:
+    # "a non-owner actor can access the owner's resource" is the same defect
+    # surface regardless of which owner role/instance holds the resource.
+    # Only the accessing (treatment) actor class distinguishes the surface.
     return {
-        "control_actor_class": control_actor_class,
+        "control_actor_class": "resource_owner",
         "treatment_actor_class": treatment_actor_class,
-        "relation": (
-            "same_actor_class"
-            if control_actor_class == treatment_actor_class
-            else "control_to_treatment"
-        ),
+        "relation": "control_to_treatment",
     }
 
 
@@ -428,7 +460,12 @@ def derive_canonical_identity_evidence(
     actual_signature = _semantic_value(
         assertion.get("actual"), assertion_kind=assertion_kind
     )
-    observer_kinds = _observer_kinds(
+    # Observer composition is detection infrastructure, not defect identity.
+    # Validate observer-receipt provenance (raises on incomplete receipts) but
+    # do NOT embed the observer set into the canonical identity: the same
+    # defect surface observed through different observer ensembles must
+    # collapse to a single canonical defect instead of fragmenting.
+    _observer_kinds(
         assertion,
         _list(bundle.get("observer_receipts")),
     )
@@ -442,7 +479,6 @@ def derive_canonical_identity_evidence(
         "property": {
             "assertion_kind": assertion_kind,
             "expected_signature": expected_signature,
-            "source_refs": source_refs,
         },
         "actor_relation": _canonical_actor_relation(
             assertion_kind=assertion_kind,
@@ -451,7 +487,9 @@ def derive_canonical_identity_evidence(
         ),
         "resource_identity_class": {
             "source_locators": sorted({
-                item["locator"] for item in source_refs
+                item["locator"]
+                for item in source_refs
+                if _is_operation_locator(item["locator"])
             } | {_normalized_locator(locator)}),
         },
         "mutation": {
@@ -467,7 +505,6 @@ def derive_canonical_identity_evidence(
                 "not_observed" if control is None else _observation_class(control)
             ),
             "treatment_observation_class": _observation_class(treatment),
-            "observer_kinds": observer_kinds,
         },
     }
     return {
@@ -598,7 +635,6 @@ def derive_legacy_champion_canonical_identity_evidence(
                 expected,
                 assertion_kind=assertion_kind,
             ),
-            "source_refs": source_refs,
         },
         "actor_relation": _canonical_actor_relation(
             assertion_kind=assertion_kind,
@@ -610,7 +646,11 @@ def derive_legacy_champion_canonical_identity_evidence(
             ),
         ),
         "resource_identity_class": {
-            "source_locators": sorted({locator, *[item["locator"] for item in source_refs]}),
+            "source_locators": sorted({
+                item["locator"]
+                for item in source_refs
+                if _is_operation_locator(item["locator"])
+            } | {locator}),
         },
         "mutation": {
             "class": "legacy_treatment",
@@ -629,7 +669,6 @@ def derive_legacy_champion_canonical_identity_evidence(
             ),
             "control_observation_class": "not_observed",
             "treatment_observation_class": _observation_class(treatment),
-            "observer_kinds": ["http_response"],
         },
     }
     return {

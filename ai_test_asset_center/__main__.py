@@ -139,6 +139,7 @@ from .scan_source_runtime import (  # noqa: F401
 from .scan_finding_postprocess import (  # noqa: F401
     _classify_findings,
     _dedupe_findings,
+    _filter_http_status_class_quality,
     _has_verified_db_evidence,
     _is_external_signal_finding,
     _snapshot_entry_from_external,
@@ -265,6 +266,8 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
         )
     confirmed = list(canonical_scope["findings"])
     candidates = list(canonical_scope["candidates"])
+    # ── FP quality filter: demote low-confidence http_status_class findings ──
+    confirmed, candidates = _filter_http_status_class_quality(confirmed, candidates)
     delivery_occurrences = list(canonical_scope["delivery_occurrences"])
     canonical_registry = dict(canonical_scope["canonical_defect_registry"])
     dedupe_input_count = int(

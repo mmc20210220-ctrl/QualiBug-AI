@@ -258,6 +258,11 @@ def build_discovery_plan(
         db_schema_text=inputs.db_schema_text,
     )
     asset = merge_knowledge_asset_overlay(asset, runtime_source_overlay)
+    # Structurize any new rules from the overlay that lack causal chains
+    from .enterprise_knowledge_center import _structurize_rule_causal_chains
+    asset["rule_library"] = _structurize_rule_causal_chains(
+        asset.get("rule_library") or []
+    )
     agent_semantic_link_receipt: dict[str, Any] = {
         "schema_version": AGENT_SEMANTIC_LINK_RECEIPT_SCHEMA,
         "status": "NOT_REQUESTED",
@@ -301,7 +306,7 @@ def build_discovery_plan(
         if (
             isinstance(budget_value, bool)
             or not isinstance(budget_value, int)
-            or not 1 <= budget_value <= 1000
+            or not 1 <= budget_value <= 5000
         ):
             raise MainlineContractError(
                 "runtime_interface_discovery_budget_invalid"
@@ -410,6 +415,142 @@ def build_discovery_plan(
             "matrix_obligations_added": 0,
             "matrix_error": f"{type(exc).__name__}: {str(exc)[:200]}",
         }
+
+    # ── Read-only state audit obligations (Phase 3-A) ──
+    # For invariants with no operation binding, map entity type to GET
+    # endpoint and generate read-only audit obligations. Safe: no writes.
+    state_audit_report: dict[str, Any] = {}
+    try:
+        from .state_audit_planner import build_readonly_state_audit_obligations
+
+        audit_obligations = build_readonly_state_audit_obligations(behavior_ir)
+        if audit_obligations:
+            existing_sigs = {
+                _text(o.get("obligation_id")) for o in obligations if isinstance(o, dict)
+            }
+            new_audit = [
+                ao for ao in audit_obligations
+                if _text(ao.get("obligation_id")) not in existing_sigs
+            ]
+            obligations.extend(new_audit)
+            state_audit_report = {
+                "state_audit_obligations_generated": len(audit_obligations),
+                "state_audit_obligations_added": len(new_audit),
+                "total_obligations_after_state_audit": len(obligations),
+            }
+    except Exception as exc:
+        state_audit_report = {
+            "state_audit_obligations_added": 0,
+            "state_audit_error": f"{type(exc).__name__}: {str(exc)[:200]}",
+        }
+
+    # ── Cross-document conflict obligations ──
+    # Consume conflicts detected by enterprise_knowledge_center between
+    # different source documents. Each conflict becomes a test obligation
+    # targeting the contradiction (e.g. field required in PRD but nullable
+    # in DB schema → test that the API enforces the declared constraint).
+    conflict_report: dict[str, Any] = {}
+    try:
+        from .behavior_ir_hypothesis_coverage import _stable_id as _cov_stable_id
+
+        cross_conflicts = _list(asset.get("cross_document_conflicts"))
+        conflict_obligations: list[dict[str, Any]] = []
+        for conflict in cross_conflicts:
+            if not isinstance(conflict, dict):
+                continue
+            conflict_type = _text(conflict.get("conflict_type"))
+            entity = _text(conflict.get("entity"))
+            if not conflict_type or not entity:
+                continue
+            # Map conflict type to risk family for obligation routing
+            risk_family_map = {
+                "field_required_mismatch": "consistency",
+                "permission_contradiction": "authorization",
+                "rule_contradiction": "invariant",
+            }
+            risk_family = risk_family_map.get(conflict_type, "consistency")
+            obl_id = _cov_stable_id(
+                "obl", "cross_doc_conflict", conflict_type, entity,
+            )
+            conflict_obligations.append({
+                "obligation_id": obl_id,
+                "risk_family": risk_family,
+                "hypothesis": (
+                    f"Cross-document conflict ({conflict_type}): "
+                    f"{conflict.get('detail', entity)}"
+                ),
+                "source_refs": [
+                    {
+                        "source_id": _text(conflict.get("source_a")) or "unknown",
+                        "locator": entity,
+                        "kind": "cross_document_conflict",
+                    },
+                    {
+                        "source_id": _text(conflict.get("source_b")) or "unknown",
+                        "locator": entity,
+                        "kind": "cross_document_conflict",
+                    },
+                ],
+                "derivation": "cross_document_conflict",
+                "conflict_type": conflict_type,
+                "entity": entity,
+            })
+        if conflict_obligations:
+            existing_sigs = {
+                _text(o.get("obligation_id")) for o in obligations if isinstance(o, dict)
+            }
+            new_conflicts = [
+                co for co in conflict_obligations
+                if _text(co.get("obligation_id")) not in existing_sigs
+            ]
+            obligations.extend(new_conflicts)
+            conflict_report = {
+                "conflict_obligations_generated": len(conflict_obligations),
+                "conflict_obligations_added": len(new_conflicts),
+                "total_obligations_after_conflicts": len(obligations),
+            }
+    except Exception as exc:
+        conflict_report = {
+            "conflict_obligations_added": 0,
+            "conflict_error": f"{type(exc).__name__}: {str(exc)[:200]}",
+        }
+
+    # ── Source-confidence gate ──
+    # Obligations derived from low-confidence sources (e.g. OCR-parsed
+    # documents with confidence < 0.5) are downweighted: they remain in the
+    # pool but are pushed to the bottom of execution priority. This prevents
+    # noisy OCR artifacts from consuming execution budget ahead of
+    # high-confidence electronic-source obligations.
+    _LOW_CONFIDENCE_THRESHOLD = 0.5
+    _low_conf_count = 0
+    for obl in obligations:
+        if not isinstance(obl, dict):
+            continue
+        # Check source_refs for confidence signals
+        source_refs = obl.get("source_refs") or []
+        min_conf = 1.0
+        for ref in source_refs:
+            if isinstance(ref, dict):
+                ref_conf = ref.get("confidence")
+                if ref_conf is not None:
+                    min_conf = min(min_conf, float(ref_conf))
+        # Also check obligation-level source_confidence
+        obl_conf = obl.get("source_confidence")
+        if obl_conf is not None:
+            min_conf = min(min_conf, float(obl_conf))
+        if min_conf < _LOW_CONFIDENCE_THRESHOLD:
+            # Mark as low-confidence so the planner deprioritizes it
+            obl["_low_confidence_source"] = True
+            obl["_source_confidence"] = min_conf
+            _low_conf_count += 1
+        else:
+            obl["_source_confidence"] = min_conf
+    # Sort: high-confidence obligations first, low-confidence last
+    if _low_conf_count > 0:
+        obligations.sort(
+            key=lambda o: (1 if isinstance(o, dict) and o.get("_low_confidence_source") else 0)
+        )
+
     environment_type = _text(
         inputs.campaign_context.get("environment_type")
         or inputs.campaign_context.get("environment_kind")
@@ -525,7 +666,7 @@ def build_discovery_plan(
     return DiscoveryPlanningBundle(
         mainline_run=contract,
         behavior_ir=behavior_ir,
-        obligations={**obligation_pack, "obligations": obligations, "behavior_ir_coverage_report": coverage_report},
+        obligations={**obligation_pack, "obligations": obligations, "behavior_ir_coverage_report": coverage_report, "state_audit_report": state_audit_report, "conflict_report": conflict_report},
         experiments={
             **experiment_pack,
             "all_experiments": all_experiments,

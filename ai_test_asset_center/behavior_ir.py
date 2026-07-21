@@ -89,6 +89,45 @@ def _source_ref(source_id: str = "", *, version: str = "", locator: str = "", qu
     }
 
 
+def parse_source_locator(locator_str: str) -> dict[str, Any]:
+    """Parse a structured locator string into a dict for downstream consumers.
+
+    Locator format: "chunk_id=chk_xxx;page=3;section=订单管理;line=42-58;table_index=0"
+    Backward compatible: empty string or unrecognized format returns empty dict.
+
+    This enables obligation compilers and experiment executors to trace back
+    to the exact document chunk that produced a Behavior IR node.
+    """
+    text = _text(locator_str)
+    if not text:
+        return {}
+    result: dict[str, Any] = {}
+    for part in text.split(";"):
+        part = part.strip()
+        if "=" not in part:
+            continue
+        key, _, value = part.partition("=")
+        key = key.strip().lower()
+        value = value.strip()
+        if not key or not value:
+            continue
+        if key in ("page", "table_index", "line_start", "line_end"):
+            try:
+                result[key] = int(value)
+            except ValueError:
+                result[key] = value
+        elif key == "line" and "-" in value:
+            start, _, end = value.partition("-")
+            try:
+                result["line_start"] = int(start)
+                result["line_end"] = int(end)
+            except ValueError:
+                result["line"] = value
+        else:
+            result[key] = value
+    return result
+
+
 _METHOD_ACTIONS = {
     "GET": {"get", "read", "view", "list", "query"},
     "HEAD": {"head", "read", "view"},
@@ -1464,6 +1503,87 @@ def _resolve_operation(
     return candidates[0] if len(candidates) == 1 else None
 
 
+def _state_action_stems(state_name: str) -> list[str]:
+    """Derive generic linguistic action stems from a state name.
+
+    Industry-neutral English morphology only (no domain vocabulary): strip the
+    trailing past-tense/participle suffix and normalise ``-y`` past tenses
+    (``PAID`` -> ``pay``).  The resulting stems are matched against operation
+    path tokens so a declared target state can be bound to the write that
+    produces it, without any source-supplied operation hint.
+    """
+
+    token = re.sub(r"[^a-z]", "", _text(state_name).lower())
+    if len(token) < 4:
+        return []
+    stem = token
+    if stem.endswith("ed"):
+        stem = stem[:-2]
+    elif stem.endswith("d"):
+        stem = stem[:-1]
+    # Undouble the final consonant reverted by the past-tense suffix
+    # (``shipp`` -> ``ship``, ``cancell`` -> ``cancel``).
+    if len(stem) >= 3 and stem[-1] == stem[-2] and stem[-1] not in "aeiou":
+        stem = stem[:-1]
+    stems: list[str] = []
+    for candidate in (stem, stem + "e", stem + "y"):
+        if len(candidate) >= 3 and candidate not in stems:
+            stems.append(candidate)
+    # Consonant+y past tense: ``paid`` -> ``pay`` (the ``y`` surfaces as ``i``).
+    if stem.endswith("i"):
+        y_form = stem[:-1] + "y"
+        if len(y_form) >= 3 and y_form not in stems:
+            stems.append(y_form)
+    return stems
+
+
+def _infer_transition_operation(
+    operations: list[dict[str, Any]],
+    entity: str,
+    to_state: str,
+) -> dict[str, Any] | None:
+    """Bind a declared target state to the unique write that produces it.
+
+    Generic, source-agnostic heuristic: match the state's linguistic stems
+    against the path tokens of write operations that touch the entity.  Returns
+    a binding only when exactly one operation matches (exact-token matches are
+    preferred over prefix matches); ambiguous or absent matches fail closed to
+    ``None`` so no unjustified operation is bound.
+    """
+
+    stems = _state_action_stems(to_state)
+    if not stems:
+        return None
+    exact: list[dict[str, Any]] = []
+    prefix: list[dict[str, Any]] = []
+    for op in operations:
+        if not isinstance(op, dict):
+            continue
+        if _text(op.get("method")).upper() not in {"POST", "PUT", "PATCH"}:
+            continue
+        path = _text(op.get("path") or op.get("raw_path")).lower()
+        if not path:
+            continue
+        tokens = [
+            tok
+            for tok in re.split(r"[^a-z]+", path)
+            if len(tok) >= 3 and tok not in {"api", "admin", "v1", "v2", "v3"}
+        ]
+        if any(stem == tok for stem in stems for tok in tokens):
+            exact.append(op)
+        elif any(
+            len(stem) >= 4
+            and any(tok.startswith(stem) for tok in tokens)
+            for stem in stems
+        ):
+            prefix.append(op)
+    if len(exact) == 1:
+        return exact[0]
+    if not exact and len(prefix) == 1:
+        return prefix[0]
+    return None
+
+
 def _derive_state_transition_relations(
     model: dict[str, Any],
     data: dict[str, Any],
@@ -2315,7 +2435,16 @@ def build_behavior_ir_from_knowledge_asset(
                 _text(transition.get(key))
                 for key in ("operation_ref", "operation_id", "operation", "method", "path")
             )
-            operation = _resolve_operation(operations, transition) if operation_binding else None
+            operation_inferred = False
+            if operation_binding:
+                operation = _resolve_operation(operations, transition)
+            else:
+                # No source-supplied operation hint: fall back to a generic,
+                # industry-neutral state->action linguistic binding so the
+                # declared forbidden transition becomes testable. Binds only a
+                # unique write; ambiguity fails closed to no binding.
+                operation = _infer_transition_operation(operations, entity, to_name)
+                operation_inferred = operation is not None
             operation_refs = [_text(operation.get("id"))] if operation else []
             invariant_id = _stable_id(
                 "inv",
@@ -2347,7 +2476,7 @@ def build_behavior_ir_from_knowledge_asset(
                 },
                 source_refs=source_refs,
                 confidence=float(transition.get("confidence") or sm.get("confidence") or 0.8),
-                derivation="explicit",
+                derivation="model-inferred" if operation_inferred else "explicit",
             ))
             if not operation:
                 model["coverage_gaps"].append(_fact_node(
@@ -2412,6 +2541,85 @@ def build_behavior_ir_from_knowledge_asset(
             confidence=float(rule.get("confidence") or 0.7),
             derivation="explicit",
         ))
+
+    # ── Causal chain postconditions → individual invariants ──
+    # When a rule has been structurized into a causal chain (Daguan-style),
+    # each postcondition becomes a separate, independently testable invariant.
+    # This multiplies test coverage: one rule with 4 postconditions generates
+    # 4 distinct verification obligations.
+    for rule in _list(data.get("rule_library") or data.get("rules")):
+        if not isinstance(rule, dict):
+            continue
+        causal = _dict(rule.get("causal_chain"))
+        postconditions = _list(causal.get("postconditions"))
+        if not postconditions:
+            continue
+        trigger = _text(causal.get("trigger_action"))
+        rule_id = _text(rule.get("rule_id") or rule.get("id"))
+        source_id = _text(rule.get("source_id")) or "rule_library"
+        # Try to bind trigger to an existing operation
+        trigger_op_refs: list[str] = []
+        if trigger:
+            trigger_lower = trigger.lower()
+            # Tokenize trigger for fuzzy matching (e.g. "cancel order" → ["cancel", "order"])
+            trigger_tokens = [t for t in re.split(r"[\s_\-/]+", trigger_lower) if len(t) >= 3]
+            for op in model["operations"]:
+                op_summary = _text(op.get("summary")).lower()
+                op_path = _text(op.get("path")).lower()
+                op_id = _text(op.get("id")).lower()
+                # Full phrase match
+                if trigger_lower in op_summary or trigger_lower in op_path or trigger_lower in op_id:
+                    trigger_op_refs.append(_text(op.get("id")))
+                    break
+                # Token overlap match: at least half of trigger tokens appear in op
+                if trigger_tokens:
+                    op_text = f"{op_summary} {op_path} {op_id}"
+                    hits = sum(1 for t in trigger_tokens if t in op_text)
+                    if hits >= max(1, len(trigger_tokens) // 2):
+                        trigger_op_refs.append(_text(op.get("id")))
+                        break
+        for pc_idx, pc in enumerate(postconditions):
+            if not isinstance(pc, dict):
+                continue
+            pc_entity = _text(pc.get("entity"))
+            pc_field = _text(pc.get("field"))
+            pc_must = _text(pc.get("must_become"))
+            pc_create = pc.get("must_create")
+            pc_desc = _text(pc.get("description"))
+            # Build a precise invariant description
+            if pc_must and pc_entity:
+                desc = f"After {trigger or 'action'}, {pc_entity}.{pc_field or 'state'} must become {pc_must}" if pc_field else f"After {trigger or 'action'}, {pc_entity} must become {pc_must}"
+            elif pc_create and pc_entity:
+                desc = f"After {trigger or 'action'}, {pc_entity} must be created"
+            elif pc_desc:
+                desc = f"After {trigger or 'action'}, {pc_desc}"
+            else:
+                continue
+            pc_inv_id = _stable_id("inv", "postcondition", rule_id or trigger, pc_entity, pc_field or pc_must or pc_desc, str(pc_idx))
+            model["invariants"].append(_fact_node(
+                node_id=pc_inv_id,
+                typed_fields={
+                    "description": desc,
+                    "expression": {
+                        "kind": "postcondition",
+                        "operator": "must_become" if pc_must else "must_create" if pc_create else "must_hold",
+                        "operands": [{
+                            "entity_ref": pc_entity,
+                            "field": pc_field,
+                            "expected_value": pc_must,
+                            "must_create": bool(pc_create),
+                        }],
+                        "raw": desc,
+                    },
+                    "operation_refs": trigger_op_refs,
+                    "source_rule_refs": [rule_id] if rule_id else [],
+                    "causal_trigger": trigger,
+                    "preconditions": _list(causal.get("preconditions")),
+                },
+                source_refs=[_source_ref(source_id, quote=_text(rule.get("statement"))[:200], kind="causal_postcondition")],
+                confidence=float(rule.get("confidence") or 0.7),
+                derivation="explicit",
+            ))
 
     # ── Infer missing operations from permission matrix ──
     # Only infer operations for resources referenced by existing API schemas
@@ -2534,6 +2742,45 @@ def build_behavior_ir_from_knowledge_asset(
     model["relations"].extend(_derive_source_relationship_relations(model, data))
     model["relations"].extend(_derive_invariant_relations(model))
     model["relations"].extend(_derive_compensation_relations(model))
+
+    # ── Knowledge-center entity_relations → IR relation nodes ──
+    # Consume the typed entity-relationship graph produced by
+    # enterprise_knowledge_center._extract_entity_relations. Each edge
+    # becomes a first-class IR relation with chunk-level source tracing.
+    # Relation types are mapped to the IR schema's ALLOWED_RELATION_TYPES.
+    _ENTITY_REL_TYPE_MAP: dict[str, str] = {
+        "foreign_key": "owns",
+        "belongs_to": "owns",
+        "field_of": "owns",
+        "operates_on": "consumes",
+        "transitions": "transitions",
+        "constrains": "scopes",
+    }
+    for rel in _list(data.get("entity_relations")):
+        if not isinstance(rel, dict):
+            continue
+        from_e = _text(rel.get("from_entity"))
+        to_e = _text(rel.get("to_entity"))
+        raw_type = _text(rel.get("relation_type"))
+        if not from_e or not to_e or not raw_type:
+            continue
+        # Map to allowed IR relation type; permission:* → permits/denies
+        if raw_type.startswith("permission:"):
+            action = raw_type.split(":", 1)[1].lower()
+            ir_type = "denies" if action in ("deny", "forbid", "prohibit", "none") else "permits"
+        else:
+            ir_type = _ENTITY_REL_TYPE_MAP.get(raw_type, "owns")
+        chunk_id = _text(rel.get("source_chunk_id"))
+        source_id = _text(rel.get("source_id")) or "entity_relations"
+        locator = f"chunk_id={chunk_id}" if chunk_id else f"{from_e}->{to_e}"
+        model["relations"].append(_relation_node(
+            relation_type=ir_type,
+            from_ref=from_e,
+            to_ref=to_e,
+            source_refs=[_source_ref(source_id, locator=locator, kind=f"entity_relation:{raw_type}")],
+            confidence=float(rel.get("confidence") or 0.7),
+            derivation="schema-derived",
+        ))
 
     for source_gap in _list(data.get("coverage_gaps")):
         if not isinstance(source_gap, dict):

@@ -1085,6 +1085,43 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
         }, ensure_ascii=False, default=str)[:3500]
         observed_json = graph_rendered
 
+    # ── Chunk-based evidence enrichment ──
+    # Use the knowledge-center chunk index to provide precise, entity-relevant
+    # document fragments instead of relying solely on truncated raw text.
+    # This gives each reasoner engine grounded, traceable evidence.
+    chunk_evidence = ""
+    try:
+        from .enterprise_source_registry import search_chunks_by_entity
+        _project = os.environ.get("QUALIBUG_PROJECT", "real_project_demo")
+        # Extract top entity names from reader output
+        _reader_entities = []
+        if isinstance(reader_output, dict):
+            for ent in (reader_output.get("entities") or [])[:10]:
+                if isinstance(ent, dict):
+                    name = str(ent.get("name") or ent.get("entity_alias") or "").strip()
+                    if name:
+                        _reader_entities.append(name)
+                elif isinstance(ent, str) and ent.strip():
+                    _reader_entities.append(ent.strip())
+        # Search chunks for top entities (bounded to avoid latency)
+        _chunk_fragments: list[str] = []
+        for ename in _reader_entities[:5]:
+            hits = search_chunks_by_entity(_project, ename)
+            for hit in (hits or [])[:2]:
+                if isinstance(hit, dict):
+                    content = str(hit.get("content") or "")[:300]
+                    ctype = str(hit.get("chunk_type") or "")
+                    conf = hit.get("confidence", 1.0)
+                    if content and conf >= 0.7:
+                        _chunk_fragments.append(f"[{ctype}|conf={conf}] {content}")
+        if _chunk_fragments:
+            chunk_evidence = (
+                "\n\nSOURCE-GROUND EVIDENCE (from document chunks):\n"
+                + "\n".join(_chunk_fragments[:12])
+            )[:3000]
+    except Exception:
+        pass  # Chunk enrichment is progressive; never blocks reasoning
+
     # ── Build prompts ──
     engine_prompts: dict[str, str] = {}
     for engine_name, template in engines:
@@ -1109,6 +1146,8 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
         # 11 engines operate on the selected local graph neighborhood.
         if use_graph_context:
             prompt += "\n\n[PHASE91 GRAPH EVIDENCE PACK]\n" + graph_rendered
+        if chunk_evidence:
+            prompt += chunk_evidence
         engine_prompts[engine_name] = prompt + OUTPUT_HARD_LIMITS
 
     # ── Parallel execution ──

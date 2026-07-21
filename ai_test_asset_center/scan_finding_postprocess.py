@@ -37,6 +37,89 @@ def _classify_findings(items: Any) -> tuple[list[dict[str, Any]], list[dict[str,
     return confirmed, candidates
 
 
+# ── http_status_class quality filter ──
+# Security-sensitive path patterns (general, industry-neutral)
+_SECURITY_SENSITIVE_PATTERNS = _re.compile(
+    r"/(auth|login|register|password|token|session|admin|permission|role|acl)\b",
+    _re.IGNORECASE,
+)
+
+
+def _is_security_sensitive_path(path: str) -> bool:
+    """Check if a path is security-sensitive (auth/admin/permission related)."""
+    return bool(_SECURITY_SENSITIVE_PATTERNS.search(path or ""))
+
+
+def _filter_http_status_class_quality(
+    confirmed: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Demote low-quality http_status_class findings to candidates.
+
+    http_status_class assertions without control evidence are prone to false
+    positives: a 4xx response may be expected behavior (unauthorized access
+    correctly rejected) rather than a bug. This filter keeps only findings
+    that are likely real bugs:
+    - 5xx responses (server errors are always bugs)
+    - 4xx on security-sensitive paths (potential auth bugs)
+    - Findings with control evidence (control/treatment comparison)
+    - Admin role failures (privilege escalation indicators)
+    """
+    filtered_confirmed: list[dict[str, Any]] = []
+    demoted: list[dict[str, Any]] = []
+
+    for row in confirmed:
+        category = str(row.get("category") or "").strip().lower()
+        if category != "http_status_class":
+            filtered_confirmed.append(row)
+            continue
+
+        # Check for control evidence
+        raw = row.get("raw_evidence") if isinstance(row.get("raw_evidence"), dict) else {}
+        control_actor = str(raw.get("control_actor") or "").strip()
+        observations = raw.get("observations") if isinstance(raw.get("observations"), dict) else {}
+        control_succeeded = observations.get("control_succeeded")
+
+        has_control = bool(control_actor) or control_succeeded is True
+        if has_control:
+            # Has control evidence - keep as confirmed
+            filtered_confirmed.append(row)
+            continue
+
+        # No control evidence - check response status, path, and role
+        response_raw = raw.get("response_raw") if isinstance(raw.get("response_raw"), dict) else {}
+        status_code = int(response_raw.get("status_code") or 0)
+        request_raw = raw.get("request_raw") if isinstance(raw.get("request_raw"), dict) else {}
+        path = str(request_raw.get("path") or "")
+        actor = str(request_raw.get("actor") or "").strip().lower()
+
+        # 5xx is always a bug
+        if 500 <= status_code < 600:
+            filtered_confirmed.append(row)
+            continue
+
+        # 4xx on security-sensitive path is likely a bug
+        if 400 <= status_code < 500 and _is_security_sensitive_path(path):
+            filtered_confirmed.append(row)
+            continue
+
+        # Admin role failures are likely privilege escalation bugs
+        if actor == "admin":
+            filtered_confirmed.append(row)
+            continue
+
+        # 4xx on non-security path by non-admin without control - likely expected behavior
+        # Demote to candidate
+        row = dict(row)
+        row["gate_passed"] = False
+        row["customer_delivery_status"] = "candidate"
+        row["confirmation_status"] = "candidate"
+        row["_fp_filter_reason"] = "http_status_class_4xx_no_control_non_admin_non_security"
+        demoted.append(row)
+
+    return filtered_confirmed, candidates + demoted
+
+
 def _dedupe_findings(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Collapse near-identical findings that share the same reproduction path.
 

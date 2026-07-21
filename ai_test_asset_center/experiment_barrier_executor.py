@@ -349,7 +349,7 @@ def execute_barrier_plans(
                     "mutation_operator": mutation_operator,
                     "response_observed": observed_status > 0,
                     "control_succeeded": (
-                        observed_status > 0
+                        200 <= observed_status < 300
                         if phase == "control"
                         else None
                     ),
@@ -629,7 +629,7 @@ def execute_barrier_plans(
                 if _text(step_out.get("phase")) == "control":
                     observations["control_observation"] = step_out
                     observations["control_actor_ref"] = _text(step_out.get("actor_ref"))
-                    if int(step_out.get("status_code") or 0) > 0:
+                    if 200 <= int(step_out.get("status_code") or 0) < 300:
                         observations["control_succeeded"] = True
                         observations["authorized_control"] = True
                 if _text(step_out.get("phase")) == "treatment":

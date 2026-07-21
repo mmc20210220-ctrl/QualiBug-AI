@@ -1076,6 +1076,8 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
             family = "visibility"
         elif any(token in kind for token in ("state_machine", "state", "状态", "status_")):
             family = "state"
+        elif any(token in kind for token in ("postcondition", "must_become", "must_create", "因果", "后置")):
+            family = "state"
         relation_types = {
             "idempotency": {"observes", "produces", "consumes", "transitions"},
             "concurrency": {"observes", "produces", "consumes", "transitions"},
@@ -1147,6 +1149,7 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
                 "concurrency": ["final_state", "barrier_timeline"],
                 "conservation": ["typed_assertion", "source_invariant", "entity_state"],
                 "validation": ["http_response"],
+                "state": ["entity_state", "typed_assertion", "source_invariant"],
             }
             property_spec = {
                 "template": template_by_family.get(family, f"invariant_{family}"),

@@ -51,6 +51,34 @@ def _source_ref(operation: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _source_id_hint(operations: list[dict[str, Any]]) -> str:
+    """Pick the most common declared source_id as the general-ref provenance."""
+
+    counts: dict[str, int] = defaultdict(int)
+    for operation in operations:
+        source_id = _text(operation.get("source_id")) or "api_spec"
+        counts[source_id] += 1
+    if not counts:
+        return "api_spec"
+    return max(sorted(counts), key=lambda key: counts[key])
+
+
+def _general_source_ref(prefix_path: str, source_id: str) -> dict[str, str]:
+    """Provenance anchor for candidates derived from the general vocabulary.
+
+    These candidates are not tied to one documented operation; they are bounded
+    by the declared transport namespace (the common route prefix) plus the
+    deployment-owned general resource vocabulary. The locator records that
+    derivation so the probe stays source-bound rather than an unbounded fuzz.
+    """
+
+    return {
+        "source_id": source_id or "api_spec",
+        "locator": f"general-vocabulary {prefix_path or '/'}",
+        "kind": "source_route_vocabulary",
+    }
+
+
 def _segments(path: str) -> list[str]:
     clean = path.split("?", 1)[0].strip()
     return [segment for segment in clean.split("/") if segment]
@@ -92,9 +120,46 @@ def load_runtime_interface_discovery_budget() -> int:
             f"runtime_interface_semantic_policy_unreadable:{type(exc).__name__}"
         ) from exc
     value = payload.get("runtime_interface_discovery_max_candidates")
-    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 1000:
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 5000:
         raise ValueError("runtime_interface_discovery_budget_invalid")
     return value
+
+
+def _load_lexicon_segment_list(key: str) -> list[str]:
+    """Load an optional list of safe path segments from the semantic lexicon.
+
+    Returns an empty list when the key is absent so deployments that have not
+    extended the lexicon keep the prior (narrower) discovery behaviour.
+    """
+
+    path = Path(__file__).resolve().parent / "policies" / "semantic_lexicon.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    raw = payload.get(key)
+    if not isinstance(raw, list):
+        return []
+    segments: list[str] = []
+    for value in raw:
+        segment = _text(value).strip("/").lower()
+        if not segment or not _SAFE_SEGMENT_RE.fullmatch(segment):
+            continue
+        if segment not in segments:
+            segments.append(segment)
+    return segments
+
+
+def load_runtime_interface_discovery_subresources() -> list[str]:
+    """Intermediate path segments used to build nested discovery candidates."""
+
+    return _load_lexicon_segment_list("runtime_interface_discovery_subresources")
+
+
+def load_runtime_interface_discovery_resources() -> list[str]:
+    """Top-level resource vocabulary for reaching undocumented namespaces."""
+
+    return _load_lexicon_segment_list("runtime_interface_discovery_resources")
 
 
 def load_runtime_interface_confirmation_tokens(
@@ -264,18 +329,45 @@ def plan_runtime_interface_candidates(
     namespaces = sorted(
         token for token, children in child_tokens.items() if len(children) >= 2
     )
+
+    # Deployment-owned general vocabulary (optional).  These extend discovery to
+    # source namespaces that the supplied documents did not enumerate (e.g. an
+    # undocumented service mounted under the same transport prefix).  They are
+    # bounded by the declared route prefix and anchored to a general provenance
+    # ref, so the probe stays source-bound rather than an unbounded fuzz.
+    general_resources = [
+        resource
+        for resource in load_runtime_interface_discovery_resources()
+        if resource not in refs_by_token
+    ]
+    subresources = load_runtime_interface_discovery_subresources()
+    general_ref = _general_source_ref(prefix_path, _source_id_hint(operations))
+
     planned: list[dict[str, Any]] = []
     seen: set[str] = set(documented_paths)
+    # Hard generation ceiling so the nested lattices cannot exhaust memory before
+    # the budget truncation below applies.
+    generation_cap = int(max_candidates) * 8
 
-    def add(path: str, derivation: str, tokens: list[str]) -> None:
-        if path in seen:
-            return
+    def add(
+        path: str,
+        derivation: str,
+        tokens: list[str],
+        *,
+        extra_refs: Iterable[dict[str, str]] = (),
+    ) -> bool:
+        if len(planned) >= generation_cap or path in seen:
+            return False
         seen.add(path)
         refs = [ref for token in tokens for ref in refs_by_token.get(token, [])]
+        refs.extend(extra_refs)
         if not refs:
             raise ValueError("runtime_interface_candidate_source_refs_missing")
         planned.append(_candidate(path, derivation=derivation, source_refs=refs))
+        return True
 
+    # Tier 1: documented resource x action (source-anchored on the operation
+    # that declared the resource).
     for action in actions:
         for resource in resources:
             add(
@@ -283,6 +375,72 @@ def plan_runtime_interface_candidates(
                 "resource_action_lattice",
                 [resource],
             )
+
+    # Tier 2: general resource vocabulary x action, reaching undocumented
+    # service namespaces mounted under the declared transport prefix.  Iterated
+    # resource-major and capped to a budget share so every general resource is
+    # probed with the most diagnostic actions first (breadth before depth),
+    # instead of one resource exhausting the budget across all actions.
+    tier2_cap = len(planned) + max(1, int(max_candidates) // 2)
+    for resource in general_resources:
+        if len(planned) >= tier2_cap or len(planned) >= generation_cap:
+            break
+        for action in actions:
+            if len(planned) >= tier2_cap or len(planned) >= generation_cap:
+                break
+            add(
+                f"{prefix_path}/{resource}/{action}",
+                "general_resource_action_lattice",
+                [],
+                extra_refs=[general_ref],
+            )
+
+    # Tier 3: nested resource/subresource/action lattice (reaches deeper
+    # undocumented paths such as a resource's child collections).  Distributed
+    # evenly across (subresource, action) pairs so no single pair monopolises the
+    # budget.  Placed before the admin shape because nested child paths are a
+    # richer source of undocumented behaviour than admin variants.
+    nested_pool = sorted(set(resources) | set(general_resources))
+    if subresources and nested_pool:
+        pairs = [
+            (sub, action)
+            for sub in subresources
+            for action in actions
+            if sub != action
+        ]
+        per_pair = max(1, int(max_candidates) // max(1, len(pairs)))
+        for sub, action in pairs:
+            if len(planned) >= generation_cap:
+                break
+            emitted = 0
+            for resource in nested_pool:
+                if emitted >= per_pair:
+                    break
+                if sub == resource:
+                    continue
+                if add(
+                    f"{prefix_path}/{resource}/{sub}/{action}",
+                    "nested_resource_subresource_action_lattice",
+                    [resource] if resource in refs_by_token else [],
+                    extra_refs=() if resource in refs_by_token else [general_ref],
+                ):
+                    emitted += 1
+
+    # Tier 4: admin shape lattice (observed admin convention or general admin
+    # vocabulary) across documented and general resources.
+    if admin_shape_observed or "admin" in subresources or "admin" in general_resources:
+        admin_pool = sorted(set(resources) | set(general_resources))
+        for action in actions:
+            for resource in admin_pool:
+                add(
+                    f"{prefix_path}/{resource}/admin/{action}",
+                    "observed_admin_shape_action_lattice",
+                    [resource] if resource in refs_by_token else [],
+                    extra_refs=() if resource in refs_by_token else [general_ref],
+                )
+
+    # Tier 5: observed namespace/resource/action lattice (lowest priority).
+    for action in actions:
         for namespace in namespaces:
             for resource in resources:
                 if resource == namespace:
@@ -292,13 +450,6 @@ def plan_runtime_interface_candidates(
                     "observed_namespace_resource_action_lattice",
                     [namespace, resource],
                 )
-        if admin_shape_observed:
-            for resource in resources:
-                add(
-                    f"{prefix_path}/{resource}/admin/{action}",
-                    "observed_admin_shape_action_lattice",
-                    [resource],
-                )
 
     selected = planned[: int(max_candidates)]
     receipt = {
@@ -306,6 +457,8 @@ def plan_runtime_interface_candidates(
         "documented_operation_count": len(operations),
         "source_resource_count": len(resources),
         "source_namespace_count": len(namespaces),
+        "general_resource_count": len(general_resources),
+        "subresource_count": len(subresources),
         "policy_action_count": len(actions),
         "candidate_budget": int(max_candidates),
         "candidate_count": len(selected),

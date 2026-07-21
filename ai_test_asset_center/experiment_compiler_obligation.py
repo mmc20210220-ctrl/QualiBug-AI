@@ -843,18 +843,34 @@ def compile_experiment_for_obligation(
             "from_state_ref": _text(prop.get("from_state_ref")),
             "to_state_ref": _text(prop.get("to_state_ref")),
         }
-        protocol = {
-            **protocol,
-            "control_plan": [],
-            "treatment_plan": treatment_rows,
-            "assertion": {
-                "kind": "state_transition",
-                "from_state": _text(prop.get("from_state")),
-                "to_state": _text(prop.get("to_state")),
-                "from_state_ref": _text(prop.get("from_state_ref")),
-                "to_state_ref": _text(prop.get("to_state_ref")),
-            },
-        }
+        # Postcondition causal-chain assertions use a dedicated evaluation path
+        # that checks entity_state observer evidence (state_change_count, effect_count)
+        # rather than requiring explicit from_state/to_state values.
+        expr_kind = _text(_dict(prop.get("expression")).get("kind"))
+        if expr_kind == "postcondition":
+            protocol = {
+                **protocol,
+                "control_plan": [],
+                "treatment_plan": treatment_rows,
+                "assertion": {
+                    "kind": "postcondition",
+                    "operator": _text(_dict(prop.get("expression")).get("operator")),
+                    "operands": _list(_dict(prop.get("expression")).get("operands")),
+                },
+            }
+        else:
+            protocol = {
+                **protocol,
+                "control_plan": [],
+                "treatment_plan": treatment_rows,
+                "assertion": {
+                    "kind": "state_transition",
+                    "from_state": _text(prop.get("from_state")),
+                    "to_state": _text(prop.get("to_state")),
+                    "from_state_ref": _text(prop.get("from_state_ref")),
+                    "to_state_ref": _text(prop.get("to_state_ref")),
+                },
+            }
 
     control_plan = [
         row

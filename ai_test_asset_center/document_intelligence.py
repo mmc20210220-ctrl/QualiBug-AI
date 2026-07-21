@@ -650,9 +650,10 @@ def extract_pdf_document(path_or_blob: str | bytes, is_path: bool = True) -> dic
 
             all_text_parts = []
             for page_num, page in enumerate(pdf.pages):
-                # Tables via geometric line detection
+                # Tables via geometric line detection with bbox coordinates
                 page_tables = page.extract_tables()
-                for table in page_tables:
+                table_settings = page.find_tables()
+                for t_idx, table in enumerate(page_tables):
                     if not table or len(table) < 2:
                         continue
                     headers = [str(h or "").strip().replace("\n", " ") for h in table[0]]
@@ -663,18 +664,28 @@ def extract_pdf_document(path_or_blob: str | bytes, is_path: bool = True) -> dic
                             rows.append({headers[i]: clean[i] if i < len(clean) else ""
                                          for i in range(len(headers))})
                     if rows:
-                        result["tables"].append({
+                        # Record bbox from table finder for coordinate-level tracing
+                        bbox = None
+                        if t_idx < len(table_settings):
+                            try:
+                                bbox = list(table_settings[t_idx].bbox)
+                            except (AttributeError, TypeError, IndexError):
+                                pass
+                        table_entry: dict[str, Any] = {
                             "page": page_num + 1, "headers": headers,
                             "rows": rows[:100], "row_count": len(rows),
                             "method": "pdfplumber_lines",
-                        })
+                        }
+                        if bbox:
+                            table_entry["bbox"] = bbox
+                        result["tables"].append(table_entry)
 
                 # Text with layout awareness
                 text = page.extract_text()
                 if text:
                     all_text_parts.append(text)
 
-                # Heading detection (larger font sizes)
+                # Heading detection (larger font sizes) with bbox
                 chars = page.chars
                 if chars:
                     font_sizes = {}
@@ -690,11 +701,17 @@ def extract_pdf_document(path_or_blob: str | bytes, is_path: bool = True) -> dic
                             if lc:
                                 avg = round(sum(c.get("size", 12) for c in lc) / len(lc))
                                 if avg > median * 1.15 and len(line["text"].strip()) > 3:
-                                    result["headings"].append({
+                                    # Compute bbox from char positions
+                                    x0 = min(c.get("x0", 0) for c in lc)
+                                    x1 = max(c.get("x1", 0) for c in lc)
+                                    heading_entry: dict[str, Any] = {
                                         "page": page_num + 1,
                                         "text": line["text"].strip()[:120],
                                         "font_size": avg,
-                                    })
+                                        "bbox": [round(x0, 1), round(line["top"], 1),
+                                                 round(x1, 1), round(line["bottom"], 1)],
+                                    }
+                                    result["headings"].append(heading_entry)
 
             result["text"] = "\n".join(all_text_parts)
     except ImportError:
@@ -792,10 +809,13 @@ def extract_docx_document(path: str) -> dict[str, Any]:
         from docx import Document
         doc = Document(path)
 
-        # Structure: headings hierarchy
+        # Structure: headings hierarchy with paragraph index for tracing
+        para_index = 0
+        current_heading = ""
         for para in doc.paragraphs:
             text = para.text.strip()
             if not text:
+                para_index += 1
                 continue
             style = para.style.name if para.style else "Normal"
             level = 0
@@ -804,11 +824,15 @@ def extract_docx_document(path: str) -> dict[str, Any]:
                     level = int(style.replace("Heading ", "").split(" ")[0])
                 except ValueError:
                     level = 1
-            item = {"text": text[:200], "style": style, "level": level}
+            item = {"text": text[:200], "style": style, "level": level, "para_index": para_index}
             if "Heading" in style:
+                current_heading = text[:200]
+                item["section"] = current_heading
                 result["structure"].append(item)
             else:
+                item["parent_heading"] = current_heading
                 result["paragraphs"].append(item)
+            para_index += 1
 
         # Tables
         for table in doc.tables:
@@ -1007,20 +1031,206 @@ def _detect_config_type(text: str, filename: str) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# 7. Typed Knowledge Chunks with coordinate-level tracing (RAGFlow-inspired)
+# ══════════════════════════════════════════════════════════════════════════
+
+def _chunk_id(*parts: Any) -> str:
+    """Stable chunk identity from content parts."""
+    import hashlib as _hl
+    raw = "|".join(str(p) for p in parts if p)
+    return "chk_" + _hl.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _build_typed_chunks(
+    doc_type: str,
+    data: dict[str, Any],
+    source_id: str = "",
+    extraction_method: str = "electronic",
+    source_hash: str = "",
+) -> list[dict[str, Any]]:
+    """Convert structured parser output into typed, traceable knowledge chunks.
+
+    Each chunk carries a stable chunk_id, a chunk_type, structured content,
+    a coordinate-level locator, parent heading context, and referenced entities.
+    Additionally, every chunk is an evidence-preserving object (TextIn-style):
+    it records extraction_method, per-chunk confidence, content_hash, and
+    source version fingerprint for full audit traceability.
+    """
+    import hashlib as _hl
+
+    # Confidence by extraction method: electronic extraction is deterministic,
+    # PDF text layer is high-confidence, OCR is lower.
+    _CONFIDENCE_MAP = {
+        "electronic": 1.0,
+        "pdf_text": 0.95,
+        "ocr": 0.7,
+        "text_parse": 0.95,
+    }
+    base_confidence = _CONFIDENCE_MAP.get(extraction_method, 0.9)
+
+    chunks: list[dict[str, Any]] = []
+
+    def _add(
+        chunk_type: str,
+        content: str,
+        *,
+        page: int | None = None,
+        section: str = "",
+        line_start: int | None = None,
+        line_end: int | None = None,
+        table_index: int | None = None,
+        parent_heading: str = "",
+        entities: list[str] | None = None,
+        bbox: list[float] | None = None,
+        confidence: float | None = None,
+    ) -> None:
+        locator: dict[str, Any] = {
+            "source_id": source_id,
+            "page": page,
+            "section": section,
+            "line_start": line_start,
+            "line_end": line_end,
+            "table_index": table_index,
+        }
+        if bbox:
+            locator["bbox"] = bbox
+        # Evidence-preserving content hash (full content, not truncated)
+        content_hash = _hl.sha256(content.encode("utf-8")).hexdigest()[:32]
+        chunks.append({
+            "chunk_id": _chunk_id(source_id, chunk_type, content[:200]),
+            "chunk_type": chunk_type,
+            "content": content[:4000],
+            "locator": locator,
+            "parent_heading": parent_heading,
+            "entities": sorted(set(entities or [])),
+            # ── TextIn-style evidence metadata ──
+            "extraction_method": extraction_method,
+            "confidence": round(confidence if confidence is not None else base_confidence, 3),
+            "content_hash": content_hash,
+            "version": source_hash,
+        })
+
+    # ── SQL / DBML / Prisma: tables become chunks ──
+    if doc_type in ("sql", "dbml", "prisma"):
+        tables = data.get("tables") or data.get("models") or {}
+        for idx, (tname, tinfo) in enumerate(tables.items()):
+            cols = tinfo.get("columns") or tinfo.get("fields") or []
+            col_names = [c.get("name", "") for c in cols if isinstance(c, dict)]
+            content = json.dumps({"table": tname, "columns": cols[:50],
+                                  "constraints": tinfo.get("constraints", [])},
+                                 ensure_ascii=False, default=str)
+            _add("table", content, table_index=idx,
+                 entities=[tname] + col_names,
+                 section=tname)
+            # Constraints as separate rule chunks
+            for con in tinfo.get("constraints") or []:
+                if isinstance(con, dict) and con.get("type"):
+                    con_content = json.dumps(con, ensure_ascii=False, default=str)
+                    ref_table = con.get("ref_table", "")
+                    ents = [tname] + con.get("columns", []) + ([ref_table] if ref_table else [])
+                    _add("constraint", con_content, table_index=idx,
+                         entities=ents, section=tname, parent_heading=tname)
+        # Relationships (DBML)
+        for rel in data.get("relationships") or []:
+            if isinstance(rel, dict):
+                _add("constraint", json.dumps(rel, ensure_ascii=False),
+                     entities=[rel.get("from_table", ""), rel.get("to_table", "")],
+                     section="relationships")
+        # Views / triggers
+        for view in data.get("views") or []:
+            if isinstance(view, dict):
+                _add("rule", json.dumps(view, ensure_ascii=False),
+                     entities=[view.get("name", "")], section="views")
+        for trigger in data.get("triggers") or []:
+            if isinstance(trigger, dict):
+                _add("rule", json.dumps(trigger, ensure_ascii=False),
+                     entities=[trigger.get("table", ""), trigger.get("name", "")],
+                     section="triggers")
+
+    # ── CSV: column profiles as chunks ──
+    elif doc_type == "csv":
+        for col_name, col_info in (data.get("columns") or {}).items():
+            _add("rule", json.dumps({"column": col_name, **col_info}, ensure_ascii=False, default=str),
+                 entities=[col_name], section="schema_profile")
+        for anomaly in data.get("anomalies") or []:
+            _add("rule", json.dumps(anomaly, ensure_ascii=False, default=str),
+                 entities=[anomaly.get("column", "")], section="anomalies")
+
+    # ── PDF: tables + headings + text sections ──
+    elif doc_type == "pdf":
+        current_heading = ""
+        for heading in data.get("headings") or []:
+            h_text = heading.get("text", "")
+            current_heading = h_text
+            _add("heading", h_text, page=heading.get("page"),
+                 section=h_text, parent_heading=h_text,
+                 bbox=heading.get("bbox"))
+        for idx, table in enumerate(data.get("tables") or []):
+            headers = table.get("headers", [])
+            content = json.dumps(table, ensure_ascii=False, default=str)
+            _add("table", content, page=table.get("page"),
+                 table_index=idx, parent_heading=current_heading,
+                 entities=headers, bbox=table.get("bbox"))
+        # Full text split into paragraph chunks (by double newline)
+        full_text = data.get("text", "")
+        if full_text:
+            paragraphs = [p.strip() for p in full_text.split("\n\n") if p.strip()]
+            for pidx, para in enumerate(paragraphs[:200]):
+                if len(para) > 20:
+                    _add("paragraph", para[:2000],
+                         line_start=pidx, parent_heading=current_heading)
+
+    # ── DOCX: structure + tables + paragraphs ──
+    elif doc_type == "docx":
+        current_heading = ""
+        for item in data.get("structure") or []:
+            h_text = item.get("text", "")
+            current_heading = h_text
+            _add("heading", h_text, section=h_text,
+                 parent_heading=h_text, line_start=item.get("para_index"))
+        for idx, table in enumerate(data.get("tables") or []):
+            headers = table.get("headers", [])
+            content = json.dumps(table, ensure_ascii=False, default=str)
+            _add("table", content, table_index=idx,
+                 parent_heading=current_heading, entities=headers)
+        for item in data.get("paragraphs") or []:
+            p_text = item.get("text", "")
+            if len(p_text) > 20:
+                _add("paragraph", p_text, parent_heading=current_heading,
+                     line_start=item.get("para_index"))
+
+    # ── Dockerfile: issues as rule chunks ──
+    elif doc_type == "dockerfile":
+        for issue in data.get("issues") or []:
+            _add("rule", json.dumps(issue, ensure_ascii=False),
+                 line_start=issue.get("line"), section="dockerfile_analysis")
+
+    # ── Config: findings as rule chunks ──
+    elif doc_type == "config":
+        for finding in data.get("findings") or []:
+            _add("rule", json.dumps(finding, ensure_ascii=False),
+                 line_start=finding.get("line"), section="config_validation")
+
+    return chunks
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # Unified entry point
 # ══════════════════════════════════════════════════════════════════════════
 
-def parse_document(path_or_text: str, filename: str = "", text: str | None = None) -> dict[str, Any]:
+def parse_document(path_or_text: str, filename: str = "", text: str | None = None, source_id: str = "") -> dict[str, Any]:
     """Auto-detect document type and parse into structured knowledge.
 
     Args:
         path_or_text: File path or raw text content
         filename: Original filename (helps type detection)
         text: Pre-loaded text content (avoids re-reading)
+        source_id: Source identifier for chunk tracing (optional)
 
     Returns:
-        {"type": "dbml"|"prisma"|"sql"|"csv"|"dockerfile"|"pdf_table"|"docx_table"|"config",
+        {"type": "dbml"|"prisma"|"sql"|"csv"|"dockerfile"|"pdf"|"docx"|"config",
          "data": parsed_structured_knowledge,
+         "chunks": list of typed knowledge chunks with coordinate-level locators,
          "warnings": [...]}
     """
     # Determine source text
@@ -1031,19 +1241,54 @@ def parse_document(path_or_text: str, filename: str = "", text: str | None = Non
             with open(path_or_text, "r", encoding="utf-8", errors="replace") as f:
                 content = f.read()
         except Exception:
-            return {"type": "error", "data": {}, "warnings": ["Cannot read file"]}
+            return {"type": "error", "data": {}, "chunks": [], "warnings": ["Cannot read file"]}
     else:
         content = str(path_or_text) if isinstance(path_or_text, str) else ""
 
     name = filename.lower() or os.path.basename(str(path_or_text)).lower() if isinstance(path_or_text, str) else ""
     warnings: list[str] = []
+    sid = source_id or name
+
+    # Compute source-level content fingerprint (version identity)
+    import hashlib as _hl_parse
+    source_hash = _hl_parse.sha256(
+        (content if isinstance(content, str) else str(path_or_text)).encode("utf-8", errors="replace")
+    ).hexdigest()[:32]
+
+    # Determine extraction method by document type
+    _EXTRACTION_METHOD_MAP = {
+        "dbml": "text_parse",
+        "prisma": "text_parse",
+        "sql": "text_parse",
+        "csv": "text_parse",
+        "dockerfile": "text_parse",
+        "config": "text_parse",
+        "pdf": "pdf_text",
+        "docx": "electronic",
+    }
+
+    def _result(doc_type: str, data: dict[str, Any]) -> dict[str, Any]:
+        """Wrap parser output with typed chunks + evidence metadata."""
+        method = _EXTRACTION_METHOD_MAP.get(doc_type, "text_parse")
+        # PDF OCR detection: if text layer is very sparse relative to pages,
+        # the document is likely scanned (OCR-required).
+        if doc_type == "pdf":
+            pages = int(data.get("pages") or 0)
+            text_len = len(data.get("text") or "")
+            if pages > 0 and text_len < pages * 50:
+                method = "ocr"
+        chunks = _build_typed_chunks(
+            doc_type, data, source_id=sid,
+            extraction_method=method, source_hash=source_hash,
+        )
+        return {"type": doc_type, "data": data, "chunks": chunks, "warnings": warnings}
 
     # DBML
     if name.endswith(".dbml") or "Table " in content and "enum " in content:
         try:
             result = parse_dbml(content)
             if result.get("tables"):
-                return {"type": "dbml", "data": result, "warnings": warnings}
+                return _result("dbml", result)
         except Exception as e:
             warnings.append(f"DBML parse error: {e}")
 
@@ -1052,7 +1297,7 @@ def parse_document(path_or_text: str, filename: str = "", text: str | None = Non
         try:
             result = parse_prisma(content)
             if result.get("models"):
-                return {"type": "prisma", "data": result, "warnings": warnings}
+                return _result("prisma", result)
         except Exception as e:
             warnings.append(f"Prisma parse error: {e}")
 
@@ -1060,38 +1305,38 @@ def parse_document(path_or_text: str, filename: str = "", text: str | None = Non
     if name.endswith(".sql") or name.endswith(".ddl") or name.endswith(".dml") or "CREATE TABLE " in content.upper():
         result = parse_sql_ddl(content)
         if result.get("tables"):
-            return {"type": "sql", "data": result, "warnings": warnings}
+            return _result("sql", result)
 
     # CSV
     if name.endswith(".csv") or "\t" in content[:200]:
         profile = profile_csv(content)
         if profile.get("rows", 0) > 0:
-            return {"type": "csv", "data": profile, "warnings": warnings}
+            return _result("csv", profile)
 
     # Dockerfile
     if "dockerfile" in name or ("FROM " in content and "RUN " in content and "COPY " in content and "EXPOSE " in content):
         analysis = analyze_dockerfile(content)
         if analysis.get("stages"):
-            return {"type": "dockerfile", "data": analysis, "warnings": warnings}
+            return _result("dockerfile", analysis)
 
     # Config files
     if any(name.endswith(ext) for ext in (".env", ".toml", ".ini", ".conf", ".cfg", ".yaml", ".yml", ".json")) or any(kw in name for kw in ("config", "settings", "docker-compose")):
         validation = validate_config(content, name)
-        return {"type": "config", "data": validation, "warnings": warnings}
+        return _result("config", validation)
 
     # PDF tables
     if name.endswith(".pdf"):
         doc = extract_pdf_document(content if isinstance(content, bytes) else path_or_text, is_path=isinstance(path_or_text, str) and os.path.exists(str(path_or_text)))
         if doc.get("tables") or doc.get("pages", 0) > 0:
-            return {"type": "pdf", "data": doc, "warnings": warnings}
+            return _result("pdf", doc)
 
     # DOCX tables
     if name.endswith(".docx") and os.path.exists(str(path_or_text)):
         doc = extract_docx_document(str(path_or_text))
         if doc.get("tables") or doc.get("paragraphs"):
-            return {"type": "docx", "data": doc, "warnings": warnings}
+            return _result("docx", doc)
 
-    return {"type": "unknown", "data": {}, "warnings": ["No matching parser found"] + warnings}
+    return {"type": "unknown", "data": {}, "chunks": [], "warnings": ["No matching parser found"] + warnings}
 
 
 # ── Quick test ───────────────────────────────────────────────────────────
