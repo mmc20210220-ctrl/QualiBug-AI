@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 SCHEMA_VERSION = "qualibug.behavior-ir.v2"
@@ -1318,10 +1321,10 @@ def _derive_compensation_relations(model: dict[str, Any]) -> list[dict[str, Any]
         create_shape = _path_shape(create_operation.get("path")).rstrip("/")
         if not create_shape or "{}" in create_shape:
             if _debug_comp:
-                print(f"[COMP-DEBUG] SKIP POST {_text(create_operation.get('id'))}: path={create_operation.get('path')} shape={create_shape}")
+                logger.debug("[COMP-DEBUG] SKIP POST %s: path=%s shape=%s", _text(create_operation.get('id')), create_operation.get('path'), create_shape)
             continue
         if _debug_comp:
-            print(f"[COMP-DEBUG] CREATE {_text(create_operation.get('id'))}: POST {create_operation.get('path')} shape={create_shape}")
+            logger.debug("[COMP-DEBUG] CREATE %s: POST %s shape=%s", _text(create_operation.get('id')), create_operation.get('path'), create_shape)
         candidates: list[dict[str, Any]] = []
         for candidate in operations:
             candidate_method = _text(candidate.get("method")).upper()
@@ -1342,14 +1345,28 @@ def _derive_compensation_relations(model: dict[str, Any]) -> list[dict[str, Any]
             collection_shape = "/".join(segments[:-1]).rstrip("/")
             if candidate_method == "DELETE" and collection_shape == create_shape:
                 if _debug_comp:
-                    print(f"[COMP-DEBUG]   MATCH DELETE {_text(candidate.get('id'))}: {candidate.get('path')} collection={collection_shape}")
+                    logger.debug("[COMP-DEBUG]   MATCH DELETE %s: %s collection=%s", _text(candidate.get('id')), candidate.get('path'), collection_shape)
                 candidates.append(candidate)
+        # Deduplicate candidates by normalized path shape. Multiple DELETE ops
+        # with the same shape (e.g. /api/orders/:id and /api/orders/qb_test_*)
+        # are semantically identical cleanup paths; pick the highest-confidence one.
+        if len(candidates) > 1:
+            by_shape: dict[str, dict[str, Any]] = {}
+            for cand in candidates:
+                shape = _path_shape(cand.get("path")).rstrip("/")
+                existing = by_shape.get(shape)
+                if existing is None or float(cand.get("confidence") or 0) > float(existing.get("confidence") or 0):
+                    by_shape[shape] = cand
+            deduped = list(by_shape.values())
+            if _debug_comp:
+                logger.debug("[COMP-DEBUG]   DEDUPE %d -> %d unique shapes", len(candidates), len(deduped))
+            candidates = deduped
         if len(candidates) == 1:
             if _debug_comp:
-                print(f"[COMP-DEBUG]   => CREATE compensates relation")
+                logger.debug("[COMP-DEBUG]   => CREATE compensates relation")
             _append_compensation(create_operation, candidates[0])
         elif _debug_comp and len(candidates) > 1:
-            print(f"[COMP-DEBUG]   => AMBIGUOUS {len(candidates)} candidates")
+            logger.debug("[COMP-DEBUG]   => AMBIGUOUS %d candidates (different shapes)", len(candidates))
 
     # Sibling action pairs: POST /resource/reserve ↔ POST /resource/release.
     # Require unique cleanup-named sibling under the same parent path plus source

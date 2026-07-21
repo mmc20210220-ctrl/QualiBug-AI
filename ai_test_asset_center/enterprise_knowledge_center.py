@@ -27,6 +27,7 @@ import hashlib
 import html
 import io
 import json
+import logging
 import os
 import re
 import shutil
@@ -37,6 +38,8 @@ import zipfile
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable
+
+logger = logging.getLogger(__name__)
 
 try:
     from .multi_industry_business_reasoning import infer_multi_industry_business_model
@@ -1677,7 +1680,7 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
                 "operator_action": "validate HAR JSON and parser compatibility",
                 "detail": f"{type(har_err).__name__}: {har_err}"[:500],
             })
-            print(f"  [WARN] HAR parsing failed for {filename}: {har_err}", flush=True, file=sys.stderr)
+            logger.warning("HAR parsing failed for %s: %s", filename, har_err)
     # Application logs: run log analysis
     log_errors: list[dict[str, Any]] = []
     if source_type == "application_log":
@@ -1713,7 +1716,7 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
                 "operator_action": "validate log encoding and parser compatibility",
                 "detail": f"{type(log_err).__name__}: {log_err}"[:500],
             })
-            print(f"  [WARN] Log analysis failed for {filename}: {log_err}", flush=True, file=sys.stderr)
+            logger.warning("Log analysis failed for %s: %s", filename, log_err)
     if source_type == "markdown_api" or (source_type == "openapi" and suffix in {".md", ".markdown", ".txt"}):
         operations.extend(_markdown_api_operations(text, source_id))
         if text.strip() and not operations:

@@ -14,6 +14,7 @@ QualiBug Autonomous Discovery Engine — 自主发现引擎
 
 import base64
 import json
+import logging
 import os
 import random
 import re
@@ -23,6 +24,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from .budget_feedback_store import (
     load_budget_feedback_profile,
@@ -643,6 +646,7 @@ class AutonomousDiscoveryEngine:
         except ImportError as import_error:
             warning = f"enterprise_credential_manager_unavailable:{import_error}"
             self._auth_warnings.append(warning)
+            logger.warning("%s", warning)
             print(f"  [WARN] {warning}", flush=True)
 
     def _login(self):
@@ -650,6 +654,7 @@ class AutonomousDiscoveryEngine:
             admin_user = os.environ.get("QUALIBUG_ADMIN_USER", "")
             admin_pass = os.environ.get("QUALIBUG_ADMIN_PASS", "")
             if not admin_user or not admin_pass:
+                logger.info("QUALIBUG_ADMIN_USER/PASS not set — skipping auth login")
                 print(f"  [INFO] QUALIBUG_ADMIN_USER/PASS not set — skipping auth login", flush=True)
                 return False
             r = self._http("POST", "/api/auth/login",
@@ -658,6 +663,7 @@ class AutonomousDiscoveryEngine:
             token = (r.get("data", {}) or {}).get("accessToken", "")
             if token:
                 self._tokens["admin"] = token
+                logger.info("Real admin token obtained from /api/auth/login")
                 print(f"  [OK] Real admin token obtained from /api/auth/login", flush=True)
                 # Attempt viewer token — try same credentials with a different role
                 # If the system has role-specific endpoints, try to get a viewer token
@@ -671,17 +677,20 @@ class AutonomousDiscoveryEngine:
                         vtoken = (vr.get("data", {}) or {}).get("accessToken", "")
                         if vtoken:
                             self._tokens["viewer"] = vtoken
+                            logger.info("Real viewer token obtained")
                             print(f"  [OK] Real viewer token obtained", flush=True)
                             return True
                         self._auth_warnings.append("viewer_login_returned_no_token")
                     except Exception as viewer_error:
                         warning = f"viewer_login_failed:{type(viewer_error).__name__}:{viewer_error}"
                         self._auth_warnings.append(warning)
+                        logger.warning("%s", warning)
                         print(f"  [WARN] {warning}", flush=True)
                 # Fallback 1: explicit viewer token from env var
                 env_viewer_token = os.environ.get("QUALIBUG_VIEWER_TOKEN", "").strip()
                 if env_viewer_token:
                     self._tokens["viewer"] = env_viewer_token
+                    logger.info("Using QUALIBUG_VIEWER_TOKEN for viewer role")
                     print(f"  [OK] Using QUALIBUG_VIEWER_TOKEN for viewer role", flush=True)
                 else:
                     self._auth_warnings.append("viewer_identity_missing")
