@@ -21,6 +21,7 @@ import hashlib
 import json
 import math
 import re
+import enum
 import time
 from collections import Counter, defaultdict
 from pathlib import Path

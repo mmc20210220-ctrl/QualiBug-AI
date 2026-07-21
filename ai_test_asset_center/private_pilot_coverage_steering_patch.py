@@ -20,6 +20,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any
+import signal
 
 PATCH_SOURCE = "ai_test_asset_center.private_pilot_coverage_steering_patch"
 _COVERAGE_STEERING_CONTEXT: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(

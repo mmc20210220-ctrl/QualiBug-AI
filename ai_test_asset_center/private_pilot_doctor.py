@@ -12,9 +12,15 @@ import importlib
 import json
 import os
 import platform
+import re
+import shutil
 import sys
+import tempfile
+import zipfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+import warnings
 
 try:
     from ai_test_asset_center import private_pilot_service as _service
@@ -612,6 +618,270 @@ def diagnose_private_pilot(root: str | Path | None = None, *, install_patches: b
     return payload
 
 
+# ---------------------------------------------------------------------------
+# Support bundle export (--export-bundle)
+# ---------------------------------------------------------------------------
+
+_BUNDLE_REDACT_KEYS = frozenset({
+    "token", "tokens", "access_token", "refresh_token", "bearer",
+    "password", "passwd", "secret", "api_key", "apikey", "api_secret",
+    "authorization", "auth", "credential", "credentials",
+    "credential_encryption_key", "signing_key", "receipt_signing_key",
+    "jwt_secret", "private_key", "client_secret",
+})
+
+_BUNDLE_REDACT_VALUE_RE = re.compile(
+    r"(?i)(bearer\s+)[A-Za-z0-9\-._~+/]+=*",
+)
+
+
+def _bundle_redact_text(text: str) -> str:
+    """Redact bearer tokens from free text for safe export."""
+    return _BUNDLE_REDACT_VALUE_RE.sub(r"\1***REDACTED***", text)
+
+
+def _bundle_redact_dict(data: Any, _depth: int = 0) -> Any:
+    """Recursively redact sensitive fields from a dict/list."""
+    if _depth > 8:
+        return "_truncated_"
+    if isinstance(data, dict):
+        result: dict[str, Any] = {}
+        for key, value in data.items():
+            if key.lower() in _BUNDLE_REDACT_KEYS:
+                result[key] = "***REDACTED***"
+            else:
+                result[key] = _bundle_redact_dict(value, _depth + 1)
+        return result
+    if isinstance(data, list):
+        return [_bundle_redact_dict(item, _depth + 1) for item in data[:100]]
+    if isinstance(data, str) and len(data) > 20:
+        return _bundle_redact_text(data)
+    return data
+
+
+def _collect_log_files(log_dir: Path) -> list[Path]:
+    """Collect log files (current + rotated) from the log directory."""
+    if not log_dir.is_dir():
+        return []
+    files = []
+    for pattern in ("qualibug.log*", "qualibug_error.log*", "qualibug_audit.log*"):
+        files.extend(sorted(log_dir.glob(pattern)))
+    return files
+
+
+def _build_error_summary(log_dir: Path) -> dict[str, Any]:
+    """Parse error log and cluster errors by error code."""
+    error_log = log_dir / "qualibug_error.log"
+    error_files = sorted(log_dir.glob("qualibug_error.log*")) if log_dir.is_dir() else []
+    if not error_files:
+        return {"total_errors": 0, "by_code": {}, "recent_errors": []}
+
+    by_code: dict[str, int] = {}
+    recent_errors: list[dict[str, Any]] = []
+    total = 0
+
+    for ef in error_files:
+        try:
+            content = ef.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for line in content.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            total += 1
+            try:
+                record = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                record = {"msg": line[:500]}
+            code = record.get("code", "UNKNOWN")
+            by_code[code] = by_code.get(code, 0) + 1
+            if len(recent_errors) < 50:
+                recent_errors.append({
+                    "ts": record.get("ts", ""),
+                    "code": code,
+                    "level": record.get("level", "ERROR"),
+                    "msg": str(record.get("msg", ""))[:300],
+                })
+
+    # Sort by count descending
+    sorted_codes = dict(sorted(by_code.items(), key=lambda x: x[1], reverse=True))
+    return {
+        "total_errors": total,
+        "by_code": sorted_codes,
+        "recent_errors": recent_errors[-50:],  # last 50
+    }
+
+
+def _collect_redacted_config(root: Path) -> dict[str, Any]:
+    """Collect environment/config info with secrets masked."""
+    config: dict[str, Any] = {
+        "python_version": sys.version.split()[0],
+        "platform": platform.system(),
+        "platform_release": platform.release(),
+        "pid": os.getpid(),
+    }
+    # Collect relevant env vars (redacted)
+    relevant_env = [
+        "QUALIBUG_PORT", "QUALIBUG_BIND_HOST", "QUALIBUG_BROWSER_UI_SMOKE",
+        "QUALIBUG_LLM_ENDPOINT", "QUALIBUG_LLM_MODEL",
+        "JWT_SECRET", "OPENAI_API_KEY", "DEEPSEEK_API_KEY",
+    ]
+    env_snapshot: dict[str, str] = {}
+    for key in relevant_env:
+        val = os.environ.get(key)
+        if val is None:
+            env_snapshot[key] = "<not set>"
+        elif key.lower() in _BUNDLE_REDACT_KEYS or "KEY" in key or "SECRET" in key:
+            env_snapshot[key] = "***REDACTED***"
+        else:
+            env_snapshot[key] = val
+    config["environment"] = env_snapshot
+
+    # Collect .env file keys (names only, never values)
+    env_file = root / ".env"
+    if env_file.is_file():
+        try:
+            keys = []
+            for line in env_file.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    keys.append(line.split("=", 1)[0].strip())
+            config["dot_env_keys"] = keys
+        except OSError:
+            config["dot_env_keys"] = ["<read error>"]
+    return config
+
+
+def _find_latest_scan_result(root: Path) -> Path | None:
+    """Find the most recent scan_result.json under platform_outputs."""
+    outputs = root / "platform_outputs"
+    if not outputs.is_dir():
+        return None
+    candidates = list(outputs.rglob("scan_result.json"))
+    if not candidates:
+        candidates = list(outputs.rglob("*scan*result*.json"))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: p.stat().st_mtime)
+
+
+def export_support_bundle(root: str | Path | None = None) -> Path:
+    """Generate a one-click support bundle zip for remote diagnostics.
+
+    Returns the path to the generated zip file.
+    """
+    resolved_root = _resolve_root(root)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    bundle_name = f"qualibug_support_bundle_{timestamp}"
+
+    # Use a temp directory to assemble bundle contents
+    with tempfile.TemporaryDirectory(prefix="qualibug_bundle_") as tmp_str:
+        tmp = Path(tmp_str)
+
+        # 1. Run full doctor diagnosis
+        print("  [1/6] 运行诊断检查...")
+        payload = diagnose_private_pilot(root=resolved_root)
+        report_path = tmp / "doctor_report.json"
+        report_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        # 2. Collect logs (redacted)
+        print("  [2/6] 收集日志文件...")
+        from ai_test_asset_center.product_logging import get_log_dir
+        log_dir = get_log_dir(resolved_root)
+        logs_out = tmp / "logs"
+        logs_out.mkdir(exist_ok=True)
+        log_files = _collect_log_files(log_dir)
+        for lf in log_files:
+            try:
+                content = lf.read_text(encoding="utf-8", errors="replace")
+                redacted = _bundle_redact_text(content)
+                (logs_out / lf.name).write_text(redacted, encoding="utf-8")
+            except OSError:
+                (logs_out / lf.name).write_text("<read error>", encoding="utf-8")
+        if not log_files:
+            (logs_out / "README.txt").write_text(
+                "日志目录为空。产品可能尚未启动过，或日志已被清理。\n",
+                encoding="utf-8",
+            )
+
+        # 3. Collect latest scan result
+        print("  [3/6] 收集扫描结果...")
+        scan_file = _find_latest_scan_result(resolved_root)
+        if scan_file and scan_file.is_file():
+            try:
+                scan_data = json.loads(scan_file.read_text(encoding="utf-8", errors="replace"))
+                # Only include summary-level info, redact sensitive parts
+                scan_summary = _bundle_redact_dict(scan_data)
+                (tmp / "last_scan_result.json").write_text(
+                    json.dumps(scan_summary, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+            except (OSError, json.JSONDecodeError):
+                (tmp / "last_scan_result.json").write_text(
+                    '{"error": "scan result file could not be parsed"}\n', encoding="utf-8"
+                )
+        else:
+            (tmp / "last_scan_result.json").write_text(
+                '{"info": "未找到扫描结果文件，产品可能尚未执行过扫描。"}\n', encoding="utf-8"
+            )
+
+        # 4. Generate error summary
+        print("  [4/6] 生成错误统计...")
+        error_summary = _build_error_summary(log_dir)
+        (tmp / "error_summary.json").write_text(
+            json.dumps(error_summary, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        # 5. Export redacted config
+        print("  [5/6] 导出脱敏配置...")
+        config_data = _collect_redacted_config(resolved_root)
+        (tmp / "config_redacted.json").write_text(
+            json.dumps(config_data, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        # 6. Generate README
+        print("  [6/6] 生成说明文件...")
+        readme_text = (
+            "=" * 50 + "\n"
+            "  QualiBug 技术支持诊断包\n"
+            "=" * 50 + "\n\n"
+            f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"产品版本: {PRODUCT_VERSION}\n\n"
+            "本文件包含什么：\n"
+            "  - doctor_report.json    系统诊断报告\n"
+            "  - logs/                 最近运行日志（已脱敏）\n"
+            "  - last_scan_result.json 最近一次扫描结果\n"
+            "  - error_summary.json    错误统计摘要\n"
+            "  - config_redacted.json  系统配置（密钥已隐藏）\n\n"
+            "操作步骤（共3步）：\n"
+            "  1. 找到本目录下的 .zip 压缩包文件\n"
+            "  2. 通过邮件/微信/企业IM发送给技术支持\n"
+            "  3. 等待技术支持回复即可\n\n"
+            "注意事项：\n"
+            "  - 本包已自动脱敏，不包含任何密码/密钥/令牌\n"
+            "  - 无需做任何额外操作\n"
+            "  - 如有补充信息，可在发送时附带文字描述\n\n"
+            "感谢您的配合！\n"
+        )
+        (tmp / "README_发送说明.txt").write_text(readme_text, encoding="utf-8")
+
+        # 7. Package into zip
+        zip_path = resolved_root / f"{bundle_name}.zip"
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for file in sorted(tmp.rglob("*")):
+                if file.is_file():
+                    arcname = f"{bundle_name}/{file.relative_to(tmp)}"
+                    zf.write(file, arcname)
+
+    return zip_path
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run QualiBug private-pilot deployment diagnostics.")
     parser.add_argument("--root", default=None, help="Private pilot root/workspace directory.")
@@ -624,8 +894,38 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Write the doctor JSON report to a file. With no value, writes platform_outputs/private_pilot_doctor_report.json under --root.",
     )
+    parser.add_argument(
+        "--export-bundle",
+        action="store_true",
+        help="Generate a one-click support bundle (.zip) for remote diagnostics.",
+    )
     args = parser.parse_args(argv)
 
+    # --- Export bundle mode ---
+    if args.export_bundle:
+        print("\n正在生成诊断包，请稍候...\n")
+        try:
+            zip_path = export_support_bundle(root=args.root)
+        except Exception as exc:
+            print(f"\n[错误] 诊断包生成失败: {exc}")
+            print("请将此错误信息发送给技术支持。\n")
+            return 1
+        size_mb = zip_path.stat().st_size / (1024 * 1024)
+        print(
+            "\n"
+            "============================================\n"
+            "  诊断包已生成！\n"
+            f"  文件: {zip_path.name}\n"
+            f"  位置: {zip_path}\n"
+            f"  大小: {size_mb:.1f} MB\n"
+            "\n"
+            "  请将此文件发送给技术支持即可。\n"
+            "  无需其他操作。\n"
+            "============================================\n"
+        )
+        return 0
+
+    # --- Normal doctor mode ---
     payload = diagnose_private_pilot(root=args.root, install_patches=args.install_patches)
     if args.output is not None:
         write_doctor_report(payload, output=args.output, root=args.root)

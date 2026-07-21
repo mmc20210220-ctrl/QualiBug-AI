@@ -7,7 +7,10 @@ remains the single-obligation compile authority. Symbols are re-exported from
 from __future__ import annotations
 
 import hashlib
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from .experiment_protocols import compile_family_protocol
 from .observer_contracts_base import compile_observer_requirements
@@ -416,7 +419,8 @@ def compile_experiment_for_obligation(
                 ]
                 if resolved_placeholders:
                     unresolved = [p for p in unresolved if p not in resolved_placeholders]
-        except Exception:
+        except Exception as exc:
+            logger.debug("prerequisite plan failed for obligation: %s", exc)
             prereq_plan = None
 
         if unresolved:
@@ -448,8 +452,8 @@ def compile_experiment_for_obligation(
                         "generated_value": gen_val,
                         "source_priority": "compile_time_fallback",
                     })
-            except Exception:
-                pass  # If generation fails, runtime will handle it
+            except Exception as exc:
+                logger.debug("compile-time fallback generation failed: %s", exc)
 
     # Store prerequisite plan for runtime execution — attach to binding_plan
     # since the experiment dict is built later by make_experiment().

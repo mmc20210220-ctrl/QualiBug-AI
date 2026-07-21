@@ -28,6 +28,7 @@ import re
 import time
 from pathlib import Path
 from typing import Any
+import signal
 
 PROJECT_LEARNING_VERSION = "risk_clue_pool_project_learning.v3"
 PLATFORM_LEARNING_VERSION = "risk_clue_pool_platform_learning.v1"

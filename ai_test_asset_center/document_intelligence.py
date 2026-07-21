@@ -22,6 +22,8 @@ import tempfile
 from pathlib import Path
 import zipfile
 from typing import Any
+import warnings
+import xml
 
 
 # ══════════════════════════════════════════════════════════════════════════

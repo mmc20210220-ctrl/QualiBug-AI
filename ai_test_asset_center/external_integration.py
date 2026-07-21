@@ -18,6 +18,7 @@ import logging
 from typing import Any, Dict, List, Optional, Callable
 from dataclasses import dataclass
 from pathlib import Path
+import base64
 
 logger = logging.getLogger(__name__)
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import os
+import time
+import uuid
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -16,7 +18,10 @@ from .private_pilot_tenant_auth import (
     _parse_project_scopes,
     _tenant_from_headers,
 )
+from .product_logging import get_logger
 from .real_project_onboarding import _safe_project_id
+
+_http_logger = get_logger("qualibug.http")
 
 class AuthScopeMixin:
     def _root(self) -> Path:
@@ -24,6 +29,36 @@ class AuthScopeMixin:
         return Path(configured).resolve() if configured else _root()
 
     def _json(self, body: Any, status: int = 200, extra_headers: dict[str, str] | None = None) -> None:
+        # --- Product request logging ---
+        _req_start = getattr(self, "_qualibug_req_start", 0.0)
+        _elapsed_ms = int((time.time() - _req_start) * 1000) if _req_start else -1
+        _corr_id = getattr(self, "_qualibug_corr_id", "")
+        _method = getattr(self, "command", "?")
+        _path = getattr(self, "path", "?")
+        if status >= 500:
+            _http_logger.error(
+                f"{_method} {_path} -> {status} ({_elapsed_ms}ms)",
+                extra={"error_code": "QB-S999", "context": {
+                    "method": _method, "path": _path, "status": status,
+                    "elapsed_ms": _elapsed_ms, "correlation_id": _corr_id,
+                }},
+            )
+        elif status >= 400:
+            _http_logger.warning(
+                f"{_method} {_path} -> {status} ({_elapsed_ms}ms)",
+                extra={"context": {
+                    "method": _method, "path": _path, "status": status,
+                    "elapsed_ms": _elapsed_ms, "correlation_id": _corr_id,
+                }},
+            )
+        else:
+            _http_logger.info(
+                f"{_method} {_path} -> {status} ({_elapsed_ms}ms)",
+                extra={"context": {
+                    "method": _method, "path": _path, "status": status,
+                    "elapsed_ms": _elapsed_ms, "correlation_id": _corr_id,
+                }},
+            )
         try:
             raw = json.dumps(body, ensure_ascii=False, default=str).encode("utf-8")
             self.send_response(status)
@@ -37,6 +72,11 @@ class AuthScopeMixin:
         except (ConnectionAbortedError, ConnectionResetError, OSError):
             pass  # client disconnected
         except Exception as exc:
+            _http_logger.error(
+                f"JSON response failed: {type(exc).__name__}: {exc}",
+                exc_info=True,
+                extra={"error_code": "QB-S999", "context": {"status": status, "path": _path}},
+            )
             _dbg_report(
                 hypothesis_id="A",
                 msg=f"[DEBUG] json-response-failed status={status}",

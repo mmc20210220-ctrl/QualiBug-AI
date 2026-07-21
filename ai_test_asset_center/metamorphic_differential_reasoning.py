@@ -36,6 +36,7 @@ import hashlib
 import json
 import os
 import re
+import types
 import urllib.parse
 from pathlib import Path
 from typing import Any, Iterable

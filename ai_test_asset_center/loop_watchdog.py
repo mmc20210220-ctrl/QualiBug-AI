@@ -28,6 +28,7 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+import warnings
 
 # ── 配置 ──────────────────────────────────────────────────
 PROJECT = os.environ.get("QUALIBUG_PROJECT", "real_project_demo")

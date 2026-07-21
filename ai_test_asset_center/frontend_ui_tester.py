@@ -5,6 +5,7 @@ Zero hardcoded values. Reads from connector_registry.test_profile.
 from __future__ import annotations
 import json, time
 from typing import Any
+import html
 
 
 def run_frontend_tests(config: dict | None = None) -> list[dict]:

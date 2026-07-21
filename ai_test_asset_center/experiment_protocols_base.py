@@ -118,6 +118,68 @@ def _generate_minimal_body_from_schema(schema: dict[str, Any]) -> dict[str, Any]
     return body
 
 
+# ── Semantic invalid value heuristics (industry-neutral, field-name driven) ──
+_NUMERIC_NEGATIVE_FIELDS = re.compile(
+    r"(price|amount|total|balance|stock|quantity|qty|count|num|limit|quota|"
+    r"weight|volume|rate|fee|cost|salary|wage|budget|credit|debit|payment|"
+    r"refund|discount|tax|margin|profit|revenue|income|expense|"
+    r"价格|金额|余额|库存|数量|限额|配额|费用|单价|总价|退款|优惠)",
+    re.IGNORECASE,
+)
+_PASSWORD_FIELDS = re.compile(
+    r"(pass(word|wd|phrase)?|pwd|secret|credential|密码|口令)", re.IGNORECASE
+)
+_EMAIL_FIELDS = re.compile(r"(e-?mail|邮箱|邮件地址)", re.IGNORECASE)
+_PHONE_FIELDS = re.compile(r"(phone|mobile|tel|cell|手机|电话|联系方式)", re.IGNORECASE)
+_DATE_FIELDS = re.compile(r"(date|time|_at$|_on$|日期|时间)", re.IGNORECASE)
+
+
+def _semantic_invalid_value(
+    field_name: str,
+    declared_type: str,
+    property_schema: dict[str, Any],
+    semantic_text: str = "",
+) -> tuple[Any, str] | None:
+    """Generate a semantically invalid value based on field name/type heuristics.
+
+    Returns (invalid_value, constraint_description) or None if no heuristic applies.
+    Industry-neutral: uses common field-name patterns, never benchmark-specific values.
+    """
+    combined = f"{field_name} {semantic_text}".lower()
+
+    # Numeric fields that should reject negative values
+    if declared_type in ("integer", "number"):
+        if _NUMERIC_NEGATIVE_FIELDS.search(combined):
+            return -1, "semantic:negative_value"
+        # Check for maximum constraint in schema
+        maximum = property_schema.get("maximum")
+        if isinstance(maximum, (int, float)) and not isinstance(maximum, bool):
+            return maximum + 1, "semantic:exceeds_maximum"
+        # Generic numeric boundary: zero for quantities
+        if re.search(r"(quantity|qty|count|num|stock|数量|库存)", combined, re.IGNORECASE):
+            return 0, "semantic:zero_quantity"
+
+    # String fields with semantic constraints
+    if declared_type == "string":
+        if _PASSWORD_FIELDS.search(combined):
+            return "1", "semantic:weak_password"
+        if _EMAIL_FIELDS.search(combined):
+            return "not-an-email", "semantic:invalid_email_format"
+        if _PHONE_FIELDS.search(combined):
+            return "0", "semantic:invalid_phone_format"
+        if _DATE_FIELDS.search(combined):
+            return "1900-13-99", "semantic:invalid_date"
+        # Check for minLength constraint
+        min_length = property_schema.get("minLength")
+        if isinstance(min_length, int) and min_length > 1:
+            return "x", "semantic:below_min_length"
+        # Check for pattern constraint
+        if property_schema.get("pattern"):
+            return "!!!invalid!!!", "semantic:pattern_violation"
+
+    return None
+
+
 def _validation_protocol_material(
     operation: dict[str, Any],
     property_spec: dict[str, Any],
@@ -125,9 +187,68 @@ def _validation_protocol_material(
     control = source_request_example(operation)
     schema = _request_body_schema(operation)
     if not schema:
-        # No request body schema — generate a minimal body so the
-        # validation/authorization test can proceed. Core discovery
-        # must not be gated on schema availability.
+        # No request body schema — but if we have a control body from
+        # request_example, apply semantic invalid values using inferred types.
+        if control and isinstance(control, dict):
+            semantic_text_no_schema = "\n".join(
+                _text(v)
+                for v in (
+                    _dict(property_spec.get("expression")).get("raw"),
+                    property_spec.get("source_intent"),
+                    property_spec.get("description"),
+                )
+                if _text(v)
+            )
+            # Try explicit target fields first, then all fields
+            explicit_no_schema = [
+                _text(v).removeprefix("$.")
+                for v in (
+                    property_spec.get("field"),
+                    property_spec.get("field_name"),
+                    property_spec.get("field_ref"),
+                    property_spec.get("json_path"),
+                    _dict(property_spec.get("expression")).get("field"),
+                    _dict(property_spec.get("expression")).get("field_name"),
+                )
+                if _text(v)
+            ]
+            field_order_no_schema = [
+                *[f for f in explicit_no_schema if f in control],
+                *[f for f in control if f not in explicit_no_schema],
+            ]
+            for field in field_order_no_schema:
+                val = control[field]
+                if isinstance(val, bool):
+                    inferred_type = "boolean"
+                elif isinstance(val, int):
+                    inferred_type = "integer"
+                elif isinstance(val, float):
+                    inferred_type = "number"
+                elif isinstance(val, str):
+                    inferred_type = "string"
+                else:
+                    continue
+                result = _semantic_invalid_value(field, inferred_type, {}, semantic_text_no_schema)
+                if result is not None:
+                    invalid_value, constraint = result
+                    treatment = deepcopy(control)
+                    treatment[field] = invalid_value
+                    return control, treatment, {
+                        "json_path": f"$.{field}",
+                        "constraint": constraint,
+                        "source": "inferred_from_example",
+                    }
+            # No semantic match — fall back to removing first field
+            if field_order_no_schema:
+                field = field_order_no_schema[0]
+                treatment = deepcopy(control)
+                treatment.pop(field, None)
+                return control, treatment, {
+                    "json_path": f"$.{field}",
+                    "constraint": "required_inferred",
+                    "source": "inferred_from_example",
+                }
+        # No control body or no fields — use synthetic fallback
         method = _text(operation.get("method", "")).upper()
         if method in ("PATCH", "PUT"):
             control = {"status": "active"}
@@ -183,9 +304,45 @@ def _validation_protocol_material(
         ):
             explicit_targets.append(str(field))
 
+    # ── Strategy 1: semantic invalid value (catches negative price, weak password, etc.) ──
+    semantic_field_order = [
+        *explicit_targets,
+        *[str(f) for f in properties if str(f) not in explicit_targets],
+    ]
+    for field in semantic_field_order:
+        if field not in control:
+            continue
+        raw_property = properties.get(field)
+        property_schema = _dict(raw_property)
+        declared_type = _text(property_schema.get("type")).lower()
+        if not declared_type:
+            # Infer type from control value
+            val = control[field]
+            if isinstance(val, bool):
+                declared_type = "boolean"
+            elif isinstance(val, int):
+                declared_type = "integer"
+            elif isinstance(val, float):
+                declared_type = "number"
+            elif isinstance(val, str):
+                declared_type = "string"
+            else:
+                continue
+        result = _semantic_invalid_value(field, declared_type, property_schema, semantic_text)
+        if result is not None:
+            invalid_value, constraint = result
+            treatment = deepcopy(control)
+            treatment[field] = invalid_value
+            return control, treatment, {
+                "json_path": f"$.{field}",
+                "constraint": constraint,
+                "source": "request_schema",
+            }
+
+    # ── Strategy 2: remove required field ──
     required = [
         _text(value)
-        for value in schema.get("required") or []
+        for value in (schema.get("required") or [])
         if _text(value)
     ]
     required_order = [
@@ -203,6 +360,7 @@ def _validation_protocol_material(
             "source": "request_schema",
         }
 
+    # ── Strategy 3: type mismatch ──
     def matches_declared_type(value: Any, declared_type: str) -> bool:
         if declared_type == "string":
             return isinstance(value, str)

@@ -274,7 +274,7 @@ def ensure_appium(platform_name: str = "android",
     def _connect():
         options = AppiumOptions()
         options.load_capabilities(caps)
-        return webdriver.Remote("http://localhost:4723", options=options)
+        return webdriver.Remote(os.environ.get("APPIUM_SERVER_URL", "http://localhost:4723"), options=options)
 
     try:
         driver = _connect()

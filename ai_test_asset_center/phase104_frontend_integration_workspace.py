@@ -21,6 +21,7 @@ Security posture:
 * generated content is scanned before being declared acceptable;
 * the generated sample uses placeholders and safe local URLs only.
 """
+import os
 
 import argparse
 import hashlib
@@ -485,7 +486,7 @@ def _workspace_files_manifest(output_dir: Path) -> dict[str, dict[str, Any]]:
 def build_frontend_integration_workspace(
     output_dir: str | Path,
     *,
-    api_base_url: str = "http://127.0.0.1:8088",
+    api_base_url: str = os.environ.get("QUALIBUG_API_BASE_URL", "http://127.0.0.1:8088"),
     overwrite: bool = True,
 ) -> dict[str, Any]:
     """Generate a framework-neutral frontend handoff workspace."""
@@ -636,7 +637,7 @@ def render_validation_markdown(report: WorkspaceValidationReport) -> str:
 def run_frontend_workspace_export(
     *,
     output_dir: str | Path,
-    api_base_url: str = "http://127.0.0.1:8088",
+    api_base_url: str = os.environ.get("QUALIBUG_API_BASE_URL", "http://127.0.0.1:8088"),
     validate: bool = True,
 ) -> dict[str, Any]:
     manifest = build_frontend_integration_workspace(output_dir, api_base_url=api_base_url)
@@ -653,7 +654,7 @@ def run_frontend_workspace_export(
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate Phase104D frontend integration workspace.")
     parser.add_argument("--output-dir", required=True, help="Directory for generated workspace artifacts.")
-    parser.add_argument("--api-base-url", default="http://127.0.0.1:8088", help="Local API base URL for generated env/client examples.")
+    parser.add_argument("--api-base-url", default=os.environ.get("QUALIBUG_API_BASE_URL", "http://127.0.0.1:8088"), help="Local API base URL for generated env/client examples.")
     parser.add_argument("--validate-only", action="store_true", help="Validate an existing workspace without regenerating it.")
     parser.add_argument("--no-validate", action="store_true", help="Skip validation report after generation.")
     return parser

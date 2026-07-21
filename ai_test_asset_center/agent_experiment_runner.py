@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 from typing import Any
 import copy
+import re
 
 from .concurrency_async_sandbox import _http
 from .real_project_onboarding import _join_url

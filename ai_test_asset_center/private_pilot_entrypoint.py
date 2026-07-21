@@ -8,12 +8,18 @@ HTTP server.
 """
 
 import os
+import platform
+import shutil
 import signal
+import socket
+import sys
 import time
 import traceback
 from typing import Any
 
 from ai_test_asset_center import private_pilot_service as _service
+from ai_test_asset_center.product_logging import setup_product_logging, get_logger, audit_log
+from ai_test_asset_center.error_codes import ErrorCode
 from ai_test_asset_center import private_pilot_system_behavior_space_patch as _system_behavior_patch
 from ai_test_asset_center.display_ready_no_fix_advice_patch import (
     install_display_ready_no_fix_advice_patch,
@@ -75,6 +81,8 @@ from ai_test_asset_center.private_pilot_system_behavior_space_patch import (
 )
 
 PATCH_SOURCE = "ai_test_asset_center.private_pilot_entrypoint"
+
+_logger = get_logger(__name__)
 
 
 def _health_payload(handler: Any) -> dict[str, Any]:
@@ -185,6 +193,11 @@ def install_runtime_patches() -> None:
             installer(*args, **kwargs)
         except Exception:
             failed.append(label)
+            _logger.error(
+                f"Runtime patch [{label}] failed — continuing",
+                exc_info=True,
+                extra={"error_code": ErrorCode.IMPORT_FAILED.code, "context": {"patch": label}},
+            )
             _service._dbg_report(
                 hypothesis_id="PATCH_FAIL",
                 msg=f"[DEBUG] runtime patch [{label}] failed — continuing",
@@ -192,14 +205,116 @@ def install_runtime_patches() -> None:
             )
 
     if failed:
+        _logger.warning(
+            f"{len(failed)}/{len(patches)} runtime patches failed",
+            extra={"context": {"failed_patches": failed}},
+        )
         _service._dbg_report(
             hypothesis_id="PATCH_SUMMARY",
             msg="[DEBUG] some runtime patches failed",
             data={"failed": failed, "total": len(patches)},
         )
+    else:
+        _logger.info(f"All {len(patches)} runtime patches installed successfully")
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: Startup preflight checks
+# ---------------------------------------------------------------------------
+
+
+def _run_preflight_checks() -> list[dict[str, Any]]:
+    """Run startup self-checks. Returns list of check results."""
+    results: list[dict[str, Any]] = []
+
+    def _check(name: str, ok: bool, detail: str, code: str = "", severity: str = "P2") -> None:
+        results.append({"name": name, "ok": ok, "detail": detail, "code": code, "severity": severity})
+        if not ok:
+            _logger.warning(
+                f"Preflight check failed: {name} - {detail}",
+                extra={"error_code": code, "context": {"check": name, "severity": severity}},
+            )
+
+    # Python version
+    py_ver = sys.version_info
+    _check(
+        "python_version",
+        py_ver >= (3, 11),
+        f"Python {py_ver.major}.{py_ver.minor}.{py_ver.micro}",
+        ErrorCode.PYTHON_VERSION.code,
+        "P0",
+    )
+
+    # Port availability
+    port = int(os.environ.get("QUALIBUG_PORT", "8088"))
+    bind_host = os.environ.get("QUALIBUG_BIND_HOST", "127.0.0.1")
+    port_ok = True
+    port_detail = f"Port {port} available"
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((bind_host if bind_host != "0.0.0.0" else "", port))
+    except OSError as exc:
+        port_ok = False
+        port_detail = f"Port {port} unavailable: {exc}"
+    _check("port_available", port_ok, port_detail, ErrorCode.PORT_IN_USE.code, "P0")
+
+    # Disk space
+    try:
+        disk = shutil.disk_usage(os.getcwd())
+        free_mb = disk.free / (1024 * 1024)
+        _check(
+            "disk_space",
+            free_mb > 100,
+            f"Free disk: {free_mb:.0f} MB",
+            ErrorCode.DISK_SPACE_LOW.code,
+            "P1",
+        )
+    except Exception:
+        _check("disk_space", True, "Unable to check disk space (non-fatal)")
+
+    # Required environment variables (informational, not blocking)
+    jwt_secret = os.environ.get("QUALIBUG_JWT_SECRET", "").strip()
+    _check(
+        "jwt_secret",
+        bool(jwt_secret),
+        "QUALIBUG_JWT_SECRET configured" if jwt_secret else "QUALIBUG_JWT_SECRET not set (optional for local dev)",
+        ErrorCode.ENV_MISSING.code,
+        "P2",
+    )
+
+    # LLM endpoint reachability (TCP connect only, no real request)
+    llm_base = os.environ.get("QUALIBUG_LLM_BASE_URL", os.environ.get("LLM_BASE_URL", "")).strip()
+    if llm_base:
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(llm_base)
+            host = parsed.hostname or ""
+            check_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            if host:
+                sock = socket.create_connection((host, check_port), timeout=5)
+                sock.close()
+                _check("llm_endpoint", True, f"LLM endpoint {host}:{check_port} reachable")
+            else:
+                _check("llm_endpoint", True, "LLM base URL configured (no host to probe)")
+        except (OSError, ValueError) as exc:
+            _check(
+                "llm_endpoint",
+                False,
+                f"LLM endpoint unreachable: {exc}",
+                ErrorCode.LLM_CONNECTION_REFUSED.code,
+                "P0",
+            )
+    else:
+        _check("llm_endpoint", True, "No LLM_BASE_URL configured (will use default)")
+
+    return results
 
 
 def run_server() -> None:
+    # --- Product logging initialization (must be first) ---
+    log_dir = setup_product_logging()
+
     # #region debug-point A:entrypoint-run-server
     _service._dbg_report(
         hypothesis_id="A",
@@ -214,11 +329,66 @@ def run_server() -> None:
     )
     _started = time.perf_counter()
     # #endregion
+
+    # --- Startup preflight checks ---
+    preflight_results = _run_preflight_checks()
+    failed_checks = [r for r in preflight_results if not r["ok"]]
+    fatal_checks = [r for r in failed_checks if r["severity"] == "P0"]
+
+    audit_log(
+        "server_startup_preflight",
+        context={
+            "total_checks": len(preflight_results),
+            "failed": len(failed_checks),
+            "fatal": len(fatal_checks),
+            "results": preflight_results,
+            "python": sys.version.split()[0],
+            "platform": platform.system(),
+            "pid": os.getpid(),
+            "log_dir": str(log_dir),
+        },
+    )
+
+    if fatal_checks:
+        for fc in fatal_checks:
+            print(f"\n  [FATAL] {fc['name']}: {fc['detail']}")
+            print(f"          错误码: {fc['code']}")
+            print(f"          如问题持续，请运行: qualibug-doctor --export-bundle\n")
+        _logger.error(
+            "Server startup blocked by fatal preflight failures",
+            extra={"error_code": ErrorCode.STARTUP_CHECK_FAILED.code, "context": {"fatal_checks": fatal_checks}},
+        )
+        raise SystemExit(1)
+
+    if failed_checks:
+        print(f"\n  [WARNING] 启动自检发现 {len(failed_checks)} 个问题（非致命，服务继续启动）:")
+        for fc in failed_checks:
+            print(f"    - {fc['name']}: {fc['detail']} ({fc['code']})")
+        print(f"  如问题持续，请运行: qualibug-doctor --export-bundle\n")
+
+    _logger.info(
+        "Server starting",
+        extra={"context": {
+            "pid": os.getpid(),
+            "port": os.environ.get("QUALIBUG_PORT", "8088"),
+            "bind_host": os.environ.get("QUALIBUG_BIND_HOST", "127.0.0.1"),
+            "python": sys.version.split()[0],
+            "platform": platform.system(),
+            "preflight_passed": len(preflight_results) - len(failed_checks),
+            "preflight_failed": len(failed_checks),
+        }},
+    )
+
     install_runtime_patches()
     from ai_test_asset_center.credential_crypto import ensure_credential_key
     from ai_test_asset_center.policy_wiring import bind_product_installed_mainline_authority
 
     _cred_key_status = ensure_credential_key()
+    if isinstance(_cred_key_status, dict) and not _cred_key_status.get("ok", True):
+        _logger.error(
+            "Credential encryption key issue",
+            extra={"error_code": ErrorCode.KEY_MISSING.code, "context": _cred_key_status},
+        )
 
     _mainline_bind = bind_product_installed_mainline_authority()
     _service._dbg_report(
@@ -226,6 +396,7 @@ def run_server() -> None:
         msg="[DEBUG] product mainline authority bound",
         data=_mainline_bind,
     )
+    audit_log("mainline_authority_bound", context=_mainline_bind if isinstance(_mainline_bind, dict) else {})
     server = _service.run_private_pilot_service()
 
     _shutdown_requested = False
@@ -235,6 +406,14 @@ def run_server() -> None:
         if _shutdown_requested:
             return
         _shutdown_requested = True
+        _logger.info(
+            "Shutdown signal received, draining connections",
+            extra={"context": {"signal": signum, "elapsed_ms": int((time.perf_counter() - _started) * 1000)}},
+        )
+        audit_log(
+            "server_shutdown_requested",
+            context={"signal": signum, "elapsed_ms": int((time.perf_counter() - _started) * 1000)},
+        )
         _service._dbg_report(
             hypothesis_id="B",
             msg="[DEBUG] received shutdown signal, draining connections",
@@ -251,14 +430,24 @@ def run_server() -> None:
 
     try:
         server.serve_forever()
+    except Exception as exc:
+        _logger.critical(
+            f"Server crashed: {exc}",
+            exc_info=True,
+            extra={"error_code": ErrorCode.UNHANDLED_EXCEPTION.code},
+        )
+        raise
     finally:
         # #region debug-point B:entrypoint-run-server-finally
+        _elapsed = int((time.perf_counter() - _started) * 1000)
+        _logger.info("Server stopped", extra={"context": {"pid": os.getpid(), "elapsed_ms": _elapsed}})
+        audit_log("server_stopped", context={"pid": os.getpid(), "elapsed_ms": _elapsed})
         _service._dbg_report(
             hypothesis_id="B",
             msg="[DEBUG] private-pilot entrypoint stopping server",
             data={
                 "pid": os.getpid(),
-                "elapsed_ms": int((time.perf_counter() - _started) * 1000),
+                "elapsed_ms": _elapsed,
             },
         )
         # #endregion

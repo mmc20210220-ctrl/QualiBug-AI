@@ -7,9 +7,12 @@ actor/fixture/observer/cleanup compensation.
 """
 from __future__ import annotations
 
+import logging
 import time
 from pathlib import Path
 from typing import Any
+
+_exec_logger = logging.getLogger("qualibug.execution")
 
 from .contract_oracles import contract_activation_requirements
 from .real_id_resolver import bind_entity_fields  # compatibility re-export
@@ -122,6 +125,14 @@ def execute_one_experiment(
                 ok, reason, detail = True, "", ""
                 _exp_best_effort = True
     if not ok:
+        _exec_logger.warning(
+            f"Experiment BLOCKED: {eid} obligation={oid} reason={reason}",
+            extra={"error_code": "QB-X003" if "ACTOR" in reason else "QB-X004", "context": {
+                "experiment_id": eid, "obligation_id": oid,
+                "reason_code": reason, "detail": str(detail)[:300],
+                "campaign_id": resolved_campaign_id,
+            }},
+        )
         return {
             "schema_version": "qualibug.experiment-execution.v1",
             "experiment_id": eid,
@@ -288,6 +299,13 @@ def execute_one_experiment(
     )
     cleanup_failures = int(plan_result.get("cleanup_failures") or cleanup_failures)
 
+    _exec_logger.info(
+        f"Experiment started: {eid} obligation={oid} campaign={resolved_campaign_id}",
+        extra={"context": {
+            "experiment_id": eid, "obligation_id": oid,
+            "campaign_id": resolved_campaign_id, "best_effort": _exp_best_effort,
+        }},
+    )
     cleanup_result = execute_experiment_cleanup_compensation(
         exp=exp,
         steps_out=steps_out,
@@ -318,7 +336,7 @@ def execute_one_experiment(
         cleanup_result.get("contract_evidence_receipts") or contract_evidence_receipts
     )
     cleanup_failures = int(cleanup_result.get("cleanup_failures") or 0)
-    return finalize_experiment_execution(
+    _final_result = finalize_experiment_execution(
         exp=exp,
         steps_out=steps_out,
         observations=observations,
@@ -337,6 +355,19 @@ def execute_one_experiment(
         resolved_execution_id=resolved_execution_id,
         started=started,
     )
+    _final_status = _dict(_final_result).get("status", "UNKNOWN")
+    _elapsed = int((time.time() - started) * 1000)
+    if _final_status == "BLOCKED":
+        _exec_logger.warning(
+            f"Experiment finished BLOCKED: {eid} ({_elapsed}ms) reason={_dict(_final_result).get('reason_code', '')}",
+            extra={"context": {"experiment_id": eid, "obligation_id": oid, "elapsed_ms": _elapsed, "status": _final_status}},
+        )
+    else:
+        _exec_logger.info(
+            f"Experiment finished: {eid} status={_final_status} ({_elapsed}ms)",
+            extra={"context": {"experiment_id": eid, "obligation_id": oid, "elapsed_ms": _elapsed, "status": _final_status}},
+        )
+    return _final_result
 
 
 from .experiment_batch_executor import execute_selected_experiments  # noqa: E402,F401

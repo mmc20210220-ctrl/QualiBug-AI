@@ -6341,6 +6341,13 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .toast-item-copy {
   line-height: 1.6;
 }
+.toast-item.toast-has-code {
+  max-width: 480px;
+  font-size: 12.5px;
+}
+.toast-item.toast-has-code .toast-item-copy {
+  line-height: 1.7;
+}
 @keyframes toastIn {
   from { opacity: 0; transform: translateX(20px); }
   to { opacity: 1; transform: translateX(0); }

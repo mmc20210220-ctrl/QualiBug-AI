@@ -6,9 +6,12 @@ from ``experiment_executor`` for compatibility.
 """
 from __future__ import annotations
 
+import logging
 import time
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from .contract_oracles import validate_contract_oracle_receipt
 from .customer_delivery_gate_v2 import (
@@ -148,8 +151,8 @@ def execute_selected_experiments(
                     required_placeholders=_required_phs,
                 )
                 _pre_resolved_bindings = dict(_resolution.get("bindings") or {})
-        except Exception:
-            pass  # Non-fatal: experiments will still try per-experiment resolution
+        except Exception as exc:
+            logger.debug("batch pre-resolution failed (non-fatal): %s", exc)
 
     results: list[dict[str, Any]] = []
     findings: list[dict[str, Any]] = []

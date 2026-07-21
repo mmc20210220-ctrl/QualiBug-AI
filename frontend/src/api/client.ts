@@ -157,16 +157,33 @@ function toProjectSummary(value: unknown): CustomerWorkspace {
   };
 }
 
+const SUPPORT_HINT = '如问题持续，请运行 qualibug-doctor --export-bundle 并发送给技术支持';
+const QB_CODE_RE = /QB-[A-Z]\d{3}/;
+
 function parseApiErrorMessage(status: number, text: string): string {
   const trimmed = text.trim();
   if (!trimmed) return `API ${status}`;
   try {
     const payload = asRecord(JSON.parse(trimmed));
+    // Detect structured error_code from ProductError responses
+    const errorCode = asString(payload.error_code);
+    const supportHint = asString(payload.support_hint);
     const message = asString(payload.message) || asString(payload.error) || asString(payload.detail);
-    if (message) return `API ${status}: ${message}`;
+    if (errorCode && QB_CODE_RE.test(errorCode)) {
+      const base = message || `系统错误 ${errorCode}`;
+      return supportHint ? `${base}（${errorCode}）\n${supportHint}` : `${base}（${errorCode}）`;
+    }
+    if (message) {
+      // Check if message itself contains a QB code (e.g. "[QB-L001] ...")
+      const codeMatch = message.match(QB_CODE_RE);
+      if (codeMatch) return `${message}\n${SUPPORT_HINT}`;
+      return `API ${status}: ${message}`;
+    }
   } catch {
     // Preserve a bounded non-JSON response for operators.
   }
+  // Check raw text for QB codes
+  if (QB_CODE_RE.test(trimmed)) return `${trimmed.slice(0, 200)}\n${SUPPORT_HINT}`;
   return `API ${status}: ${trimmed.slice(0, 200)}`;
 }
 

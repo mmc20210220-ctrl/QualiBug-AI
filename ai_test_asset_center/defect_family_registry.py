@@ -3,6 +3,7 @@ from __future__ import annotations
 """Unified defect family registry for full-spectrum discovery coverage."""
 
 from typing import Any
+import signal
 
 DEFECT_FAMILIES: dict[str, dict[str, Any]] = {
     "scenario_flow": {

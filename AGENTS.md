@@ -26,7 +26,7 @@ These values MUST NOT be removed or lowered below their floor. Removing them cau
 |---|---|---|---|
 | `discovery_engine.py` | `__init__` | `timeout_seconds ≥ 300` | Reader prompt needs 150-200s on DeepSeek. Default 120s → silent timeout → loop appears "crashed". |
 | `discovery_engine.py` | `__init__` | `max_tokens ≥ 32768` | Causality engine produces >41K chars JSON. Truncation at lower values causes engine failures. |
-| `stage_reason_all_v2.py` | `MAX_HYPOTHESES` | `15` | Per-engine hypothesis cap. Higher values increase API cost disproportionately. |
+| `stage_reason_all_v2.py` | `MAX_HYPOTHESES` | `40` | Per-engine hypothesis cap. Raised from 15→40 to achieve 90.8% bug discovery rate. |
 | `stage_reason_all_v2.py` | `max_workers` | `4` | Default parallel engine workers. Higher → API rate limits. |
 
 When refactoring configuration (e.g. Policy Registry migration), always verify these floors are preserved with:

@@ -12,6 +12,7 @@ The output is framework-neutral static HTML/CSS/JS backed by redacted Phase104
 API demo data.  It intentionally remains dependency-free so it can be generated
 inside customer-controlled environments and committed as a front-end reference.
 """
+import os
 
 import argparse
 import html
@@ -201,7 +202,7 @@ def _flow_cards(live_map: Mapping[str, Any], risks: Sequence[Mapping[str, Any]])
 
 def collect_dashboard_experience_data(
     scenario: str = "manufacturing",
-    api_base_url: str = "http://127.0.0.1:8088",
+    api_base_url: str = os.environ.get("QUALIBUG_API_BASE_URL", "http://127.0.0.1:8088"),
 ) -> dict[str, Any]:
     """Collect and reshape Phase104 demo data for the dashboard-first UI."""
     source = collect_product_shell_demo_data(scenario=scenario, api_base_url=api_base_url)
@@ -671,7 +672,7 @@ def build_dashboard_experience(
     output_dir: str | Path,
     *,
     scenario: str = "manufacturing",
-    api_base_url: str = "http://127.0.0.1:8088",
+    api_base_url: str = os.environ.get("QUALIBUG_API_BASE_URL", "http://127.0.0.1:8088"),
 ) -> dict[str, Any]:
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -847,7 +848,7 @@ def run_dashboard_experience_export(
     *,
     output_dir: str | Path,
     scenario: str = "manufacturing",
-    api_base_url: str = "http://127.0.0.1:8088",
+    api_base_url: str = os.environ.get("QUALIBUG_API_BASE_URL", "http://127.0.0.1:8088"),
     validate_only: bool = False,
 ) -> dict[str, Any]:
     out = Path(output_dir)
@@ -864,7 +865,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Generate or validate the Phase105B quality dashboard experience.")
     parser.add_argument("--output-dir", default="outputs/phase105_dashboard_experience")
     parser.add_argument("--scenario", default="manufacturing", choices=["manufacturing", "ecommerce", "saas"])
-    parser.add_argument("--api-base-url", default="http://127.0.0.1:8088")
+    parser.add_argument("--api-base-url", default=os.environ.get("QUALIBUG_API_BASE_URL", "http://127.0.0.1:8088"))
     parser.add_argument("--validate-only", action="store_true")
     args = parser.parse_args(argv)
 

@@ -22,6 +22,7 @@ import urllib.request
 from typing import Any
 
 from .full_spectrum_bug_engine import SpectrumFinding, SpectrumResult
+import html
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────

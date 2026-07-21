@@ -20,6 +20,7 @@ Architecture:
 """
 
 import json
+import logging
 import os
 import re
 import threading
@@ -32,6 +33,8 @@ from pathlib import Path
 from typing import Any, Literal
 
 from aitestops.env_loader import load_dotenv
+
+_llm_logger = logging.getLogger("qualibug.llm")
 
 # ---------------------------------------------------------------------------
 # Engine types — each maps to one or more existing reasoning modules
@@ -1068,15 +1071,51 @@ class ReasoningClient:
             },
             method="POST",
         )
+        _llm_start = time.time()
+        _prompt_len = len(user_prompt)
         try:
             with urllib.request.urlopen(request, timeout=self.config.timeout_seconds) as resp:
                 response_text = resp.read().decode("utf-8")
+                _elapsed_ms = int((time.time() - _llm_start) * 1000)
                 self._record_usage(response_text)
+                _llm_logger.info(
+                    f"LLM call OK: model={self.config.model} prompt={_prompt_len}c resp={len(response_text)}c {_elapsed_ms}ms",
+                    extra={"context": {
+                        "model": self.config.model,
+                        "prompt_chars": _prompt_len,
+                        "response_chars": len(response_text),
+                        "elapsed_ms": _elapsed_ms,
+                        "timeout_seconds": self.config.timeout_seconds,
+                    }},
+                )
                 return response_text
         except urllib.error.HTTPError as exc:
+            _elapsed_ms = int((time.time() - _llm_start) * 1000)
             error_body = exc.read().decode("utf-8", errors="replace")
+            _code = "QB-L006" if exc.code in (401, 403) else ("QB-L002" if exc.code == 429 else "QB-L001")
+            _llm_logger.error(
+                f"LLM HTTP {exc.code} after {_elapsed_ms}ms: {error_body[:200]}",
+                extra={"error_code": _code, "context": {
+                    "model": self.config.model,
+                    "http_status": exc.code,
+                    "elapsed_ms": _elapsed_ms,
+                    "prompt_chars": _prompt_len,
+                }},
+            )
             raise ReasoningClientError(f"LLM HTTP {exc.code}: {error_body[:500]}") from exc
         except urllib.error.URLError as exc:
+            _elapsed_ms = int((time.time() - _llm_start) * 1000)
+            _is_timeout = "timed out" in str(exc).lower() or _elapsed_ms >= (self.config.timeout_seconds * 1000 - 500)
+            _code = "QB-L001" if _is_timeout else "QB-L004"
+            _llm_logger.error(
+                f"LLM network error after {_elapsed_ms}ms: {exc}",
+                extra={"error_code": _code, "context": {
+                    "model": self.config.model,
+                    "elapsed_ms": _elapsed_ms,
+                    "is_timeout": _is_timeout,
+                    "base_url": self.config.base_url,
+                }},
+            )
             raise ReasoningClientError(f"LLM network error: {exc}") from exc
 
     @staticmethod

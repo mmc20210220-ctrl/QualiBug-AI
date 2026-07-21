@@ -11,6 +11,7 @@ The generator is framework-neutral and dependency-free. It creates static
 HTML/CSS/JS plus a redacted JSON data model so a future React/Vue frontend can
 copy the information architecture and bind it to the Phase104 API contract.
 """
+import os
 
 import argparse
 import html
@@ -284,7 +285,7 @@ def _role_needed_for(role: str) -> str:
 
 
 def collect_customer_intake_experience_data(
-    scenario: str = "manufacturing", api_base_url: str = "http://127.0.0.1:8088"
+    scenario: str = "manufacturing", api_base_url: str = os.environ.get("QUALIBUG_API_BASE_URL", "http://127.0.0.1:8088")
 ) -> dict[str, Any]:
     """Collect redacted demo data for the customer intake display layer."""
     demo = collect_product_shell_demo_data(scenario=scenario, api_base_url=api_base_url)
@@ -629,7 +630,7 @@ def render_customer_intake_readme(manifest: Mapping[str, Any]) -> str:
 
 
 def build_customer_intake_experience(
-    output_dir: str | Path, scenario: str = "manufacturing", api_base_url: str = "http://127.0.0.1:8088"
+    output_dir: str | Path, scenario: str = "manufacturing", api_base_url: str = os.environ.get("QUALIBUG_API_BASE_URL", "http://127.0.0.1:8088")
 ) -> dict[str, Any]:
     out = Path(output_dir)
     data = collect_customer_intake_experience_data(scenario=scenario, api_base_url=api_base_url)
@@ -794,7 +795,7 @@ def run_customer_intake_experience_export(
     *,
     output_dir: str | Path,
     scenario: str = "manufacturing",
-    api_base_url: str = "http://127.0.0.1:8088",
+    api_base_url: str = os.environ.get("QUALIBUG_API_BASE_URL", "http://127.0.0.1:8088"),
     validate_only: bool = False,
 ) -> dict[str, Any]:
     out = Path(output_dir)
@@ -811,7 +812,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Generate or validate the Phase105C customer intake experience.")
     parser.add_argument("--output-dir", default="outputs/phase105_customer_intake_experience")
     parser.add_argument("--scenario", default="manufacturing", choices=["manufacturing", "ecommerce", "saas"])
-    parser.add_argument("--api-base-url", default="http://127.0.0.1:8088")
+    parser.add_argument("--api-base-url", default=os.environ.get("QUALIBUG_API_BASE_URL", "http://127.0.0.1:8088"))
     parser.add_argument("--validate-only", action="store_true")
     args = parser.parse_args(argv)
 

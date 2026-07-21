@@ -11,6 +11,7 @@ missing required fields, duplicate tracking keys, and raw secret-like content.
 
 import re
 from typing import Any
+import warnings
 
 
 SECRET_VALUE_RE = re.compile(

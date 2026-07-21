@@ -16,6 +16,7 @@ The implementation stays dependency-free and uses the existing Phase104 gates in
 process, so it can run in a clean Python environment without Node, browsers, or
 external services.
 """
+import os
 
 import argparse
 import hashlib
@@ -348,7 +349,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description='Run QualiBug Phase104 CI quality gate.')
     parser.add_argument('--output-dir', default='outputs/phase104_ci_quality_gate')
     parser.add_argument('--scenario', default='manufacturing')
-    parser.add_argument('--api-base-url', default='http://127.0.0.1:8088')
+    parser.add_argument('--api-base-url', default=os.environ.get("QUALIBUG_API_BASE_URL", "http://127.0.0.1:8088"))
     parser.add_argument('--validate-only', action='store_true')
     args = parser.parse_args()
 
@@ -646,7 +647,7 @@ def build_ci_quality_gate(
     *,
     output_dir: str | Path = "outputs/phase104_ci_quality_gate",
     scenario: str = "manufacturing",
-    api_base_url: str = "http://127.0.0.1:8088",
+    api_base_url: str = os.environ.get("QUALIBUG_API_BASE_URL", "http://127.0.0.1:8088"),
     build_release: bool = True,
     release_dir: str | Path | None = None,
 ) -> CIQualityGateBundle:
@@ -792,7 +793,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build or validate the Phase104H CI quality gate bundle.")
     parser.add_argument("--output-dir", default="outputs/phase104_ci_quality_gate")
     parser.add_argument("--scenario", default="manufacturing")
-    parser.add_argument("--api-base-url", default="http://127.0.0.1:8088")
+    parser.add_argument("--api-base-url", default=os.environ.get("QUALIBUG_API_BASE_URL", "http://127.0.0.1:8088"))
     parser.add_argument("--no-build-release", action="store_true", help="Use --release-dir instead of building a fresh Phase104G release readiness bundle.")
     parser.add_argument("--release-dir", default=None)
     parser.add_argument("--validate-only", action="store_true")

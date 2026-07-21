@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from . import db_persistence as db_persist
 from . import jwt_auth
 from .campaign_api_contract import CampaignContractError, structured_error
+from .error_codes import ProductError
 from .enterprise_pilot_runtime import operate_enterprise_pilot_runtime
 from .private_pilot_command_center_envelope import normalize_command_center_envelope
 from .private_pilot_continuous import _get_continuous_state
@@ -29,7 +30,15 @@ def _normalize_command_center_envelope(payload: dict[str, Any]) -> dict[str, Any
     return normalize_command_center_envelope(payload)
 
 class HttpRoutingMixin:
+    def _init_request_context(self) -> None:
+        """Initialize per-request correlation ID and timer for structured logging."""
+        import time as _time
+        import uuid as _uuid
+        self._qualibug_req_start = _time.time()
+        self._qualibug_corr_id = _uuid.uuid4().hex[:12]
+
     def do_GET(self) -> None:  # noqa: N802
+        self._init_request_context()
         parsed = urlparse(self.path)
         project = self._project()
         root = self._root()
@@ -231,6 +240,7 @@ class HttpRoutingMixin:
         return self._json({"ok": False, "error": "NOT_FOUND"}, 404)
 
     def do_POST(self) -> None:  # noqa: N802
+        self._init_request_context()
         parsed = urlparse(self.path)
         root = self._root()
         # Auth & tenant routes — no actor required
@@ -427,5 +437,14 @@ class HttpRoutingMixin:
             return self._json({"ok": False, "error": "FORBIDDEN", "message": str(exc)}, 403)
         except (ValueError, KeyError) as exc:
             return self._json({"ok": False, "error": "BAD_REQUEST", "message": str(exc)}, 400)
+        except ProductError as exc:
+            return self._json({
+                "ok": False,
+                "error": exc.code,
+                "error_code": exc.code,
+                "message": exc.user_message + (f" | {exc.detail}" if exc.detail else ""),
+                "severity": exc.severity,
+                "support_hint": "如问题持续，请运行 qualibug-doctor --export-bundle 并发送给技术支持",
+            }, 500)
         except Exception as exc:  # pragma: no cover - defensive private-service boundary
             return self._json({"ok": False, "error": "INTERNAL_ERROR", "message": str(exc)[:300]}, 500)

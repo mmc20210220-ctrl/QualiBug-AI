@@ -14,6 +14,7 @@ The generator is dependency-free and framework-neutral. It emits static
 HTML/CSS/JS plus a redacted JSON view model that a future React/Vue frontend
 can reuse directly.
 """
+import os
 
 import argparse
 import html
@@ -388,7 +389,7 @@ def _build_phase104_actions(data: Mapping[str, Any]) -> dict[str, str]:
     }
 
 
-def build_business_flow_map_view_model(scenario: str = "manufacturing", api_base_url: str = "http://127.0.0.1:8088") -> dict[str, Any]:
+def build_business_flow_map_view_model(scenario: str = "manufacturing", api_base_url: str = os.environ.get("QUALIBUG_API_BASE_URL", "http://127.0.0.1:8088")) -> dict[str, Any]:
     source = collect_product_shell_demo_data(scenario=scenario, api_base_url=api_base_url)
     lanes = _build_flow_lanes(source)
     live_map = _as_mapping(source.get("live_map"))
@@ -831,7 +832,7 @@ def scan_business_flow_map_for_secret_leaks(output_dir: str | Path) -> list[str]
 def build_business_flow_map_experience(
     output_dir: str | Path,
     scenario: str = "manufacturing",
-    api_base_url: str = "http://127.0.0.1:8088",
+    api_base_url: str = os.environ.get("QUALIBUG_API_BASE_URL", "http://127.0.0.1:8088"),
 ) -> dict[str, Any]:
     output = Path(output_dir)
     data = build_business_flow_map_view_model(scenario=scenario, api_base_url=api_base_url)
@@ -975,7 +976,7 @@ def write_business_flow_map_acceptance_report(output_dir: str | Path, report: Bu
 def run_business_flow_map_experience_export(
     output_dir: str | Path,
     scenario: str = "manufacturing",
-    api_base_url: str = "http://127.0.0.1:8088",
+    api_base_url: str = os.environ.get("QUALIBUG_API_BASE_URL", "http://127.0.0.1:8088"),
     validate_only: bool = False,
 ) -> dict[str, Any]:
     output = Path(output_dir)
@@ -995,7 +996,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate or validate the Phase105E business flow map experience.")
     parser.add_argument("--output-dir", default="outputs/phase105_business_flow_map_experience")
     parser.add_argument("--scenario", default="manufacturing", choices=("manufacturing", "ecommerce", "saas"))
-    parser.add_argument("--api-base-url", default="http://127.0.0.1:8088")
+    parser.add_argument("--api-base-url", default=os.environ.get("QUALIBUG_API_BASE_URL", "http://127.0.0.1:8088"))
     parser.add_argument("--validate-only", action="store_true")
     return parser
 

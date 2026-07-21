@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .product_scan_mainline import _as_dict, _safe_project
+import time
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
