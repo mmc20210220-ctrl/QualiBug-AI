@@ -31,6 +31,7 @@ PROBE_POLICY_PROFILES = {
 }
 
 def normalize_probe_policy_profile(profile: str | None = None, discovery_mode: str = "blind") -> str:
+    from ._probes import normalize_discovery_mode  # lazy: avoid circular
     raw = (profile or os.environ.get("PROBE_POLICY_PROFILE") or "adaptive").strip().lower()
     aliases = {
         "base": "baseline",

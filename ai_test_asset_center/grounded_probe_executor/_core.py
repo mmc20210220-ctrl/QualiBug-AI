@@ -19,6 +19,7 @@ from ._common import _append_query, _auth_boundary_plan, _configured_query_param
 logger = logging.getLogger(__name__)
 
 from ._common import *  # noqa: F401,F403
+from ._common import _approval_enabled, _get_mapping_value, _production_guard_allows  # noqa: F401
 from ._evidence_delivery import *  # noqa: F401,F403
 
 def _probe_has_strict_document_grounding(probe: dict[str, Any]) -> bool:
