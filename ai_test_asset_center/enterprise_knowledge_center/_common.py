@@ -51,6 +51,16 @@ except ImportError:
 from ..real_project_onboarding import ROOT, _html_escape, _load_json, _safe_project_id, _write_json, config_paths, load_real_project_config
 from ..product_ui import _icon, callout, detail_list, empty_state, h, metric_card, product_shell, section, status_badge, table
 
+# Re-export underscore-prefixed helpers so `from ._common import *` propagates them
+__all__ = [
+    "ROOT", "_html_escape", "_load_json", "_safe_project_id", "_write_json",
+    "config_paths", "load_real_project_config",
+    "_icon", "callout", "detail_list", "empty_state", "h", "metric_card",
+    "product_shell", "section", "status_badge", "table",
+    "infer_multi_industry_business_model",
+    "PHASE", "PARSER_RECEIPT_SCHEMA", "SOURCE_TYPES",
+]
+
 PHASE = "phase58_enterprise_knowledge_unified_ingestion"
 PARSER_RECEIPT_SCHEMA = "qualibug.parser-receipt.v1"
 SOURCE_TYPES = {

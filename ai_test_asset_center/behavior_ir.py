@@ -1347,19 +1347,28 @@ def _derive_compensation_relations(model: dict[str, Any]) -> list[dict[str, Any]
                 if _debug_comp:
                     logger.debug("[COMP-DEBUG]   MATCH DELETE %s: %s collection=%s", _text(candidate.get('id')), candidate.get('path'), collection_shape)
                 candidates.append(candidate)
-        # Deduplicate candidates by normalized path shape. Multiple DELETE ops
-        # with the same shape (e.g. /api/orders/:id and /api/orders/qb_test_*)
-        # are semantically identical cleanup paths; pick the highest-confidence one.
+        # Deduplicate candidates. DELETE operations are preferred over action-based
+        # compensation (POST /resource/:id/cancel). Multiple DELETE ops with the same
+        # shape (e.g. /api/orders/:id and /api/orders/qb_test_*) are semantically
+        # identical; pick the highest-confidence one.
         if len(candidates) > 1:
+            delete_cands = [c for c in candidates if _text(c.get("method")).upper() == "DELETE"]
+            action_cands = [c for c in candidates if _text(c.get("method")).upper() != "DELETE"]
+            if _debug_comp:
+                logger.debug("[COMP-DEBUG]   SPLIT %d candidates: %d DELETE, %d action", len(candidates), len(delete_cands), len(action_cands))
+            # Prefer DELETE candidates; only use action candidates if no DELETE exists
+            pool = delete_cands if delete_cands else action_cands
             by_shape: dict[str, dict[str, Any]] = {}
-            for cand in candidates:
+            for cand in pool:
                 shape = _path_shape(cand.get("path")).rstrip("/")
+                if _debug_comp:
+                    logger.debug("[COMP-DEBUG]   CAND %s: method=%s path=%s shape=%s", _text(cand.get('id')), cand.get('method'), cand.get('path'), shape)
                 existing = by_shape.get(shape)
                 if existing is None or float(cand.get("confidence") or 0) > float(existing.get("confidence") or 0):
                     by_shape[shape] = cand
             deduped = list(by_shape.values())
             if _debug_comp:
-                logger.debug("[COMP-DEBUG]   DEDUPE %d -> %d unique shapes", len(candidates), len(deduped))
+                logger.debug("[COMP-DEBUG]   DEDUPE %d -> %d unique shapes", len(pool), len(deduped))
             candidates = deduped
         if len(candidates) == 1:
             if _debug_comp:

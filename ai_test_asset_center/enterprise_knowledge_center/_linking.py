@@ -31,6 +31,24 @@ from ._utils import *  # noqa: F401,F403
 from ._parsing import *  # noqa: F401,F403
 from ._crud import *  # noqa: F401,F403
 
+__all__ = [
+    "_authoritative_rule_to_interface_edges", "_cleanup_documents_primary_action",
+    "_contract_fields_for_interface", "_declared_project_source_files",
+    "_dedupe_by_id", "_evidence_bundle", "_has_documented_sibling_compensation",
+    "_interface_parent_path", "_interface_path_terminal", "_interface_summary_blob",
+    "_interface_text_blob", "_is_cleanup_action_interface", "_is_plausible_contract_field",
+    "_links_by_exact_source_section", "_links_by_exclusive_contract_fields",
+    "_links_by_overlap", "_links_by_same_source_exclusive_module_neighbors",
+    "_looks_inverse_delta_capable", "_merge_openapi", "_module_field_universe",
+    "_module_tree", "_normalize_contract_field", "_oracle_dsl_pack_from_recognized_industries",
+    "_oracle_family", "_oracle_library", "_path_module_prefix",
+    "_prefer_reversible_write_targets", "_probes_from_asset",
+    "_relationship_is_authoritative", "_reversible_module_write_targets",
+    "_risk_domains", "_rule_mentioned_contract_fields",
+    "_sync_declared_project_sources",
+    "TOKEN_OVERLAP_RELATION_GATE",
+]
+
 
 def _merge_openapi(parts: list[dict[str, Any]]) -> dict[str, Any]:
     merged: dict[str, Any] = {"openapi": "3.0.3", "info": {"title": "Enterprise Knowledge Unified API", "version": "derived"}, "paths": {}, "components": {"schemas": {}}}
@@ -49,20 +67,6 @@ def _merge_openapi(parts: list[dict[str, Any]]) -> dict[str, Any]:
         if isinstance(schemas, dict):
             merged["components"]["schemas"].update(schemas)
     return merged
-
-
-def _dedupe_by_id(rows: Iterable[dict[str, Any]], id_field: str) -> list[dict[str, Any]]:
-    seen: set[str] = set()
-    result: list[dict[str, Any]] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        key = str(row.get(id_field) or _short_hash(row))
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append(row)
-    return result
 
 
 TOKEN_OVERLAP_RELATION_GATE = "token_overlap_only_requires_explicit_source_relation"

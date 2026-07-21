@@ -28,6 +28,20 @@ except ImportError:
 
 from ._common import *  # noqa: F401,F403
 from ._utils import *  # noqa: F401,F403
+from ._utils import _csv_rows  # noqa: F401
+
+__all__ = [
+    "_classify_source", "_csv_rows", "_doc_bool", "_field_dictionary_entries",
+    "_field_dictionary_tables", "_flatten_json_field_names", "_infer_field_rows_from_markdown",
+    "_json_blocks", "_json_schema_tables", "_markdown_api_operations", "_markdown_table_blocks",
+    "_markdown_table_rows", "_negative_permission_clause", "_openapi_operations", "_parse_source",
+    "_permission_action_aliases", "_permission_action_values", "_permission_decision",
+    "_permission_entries", "_permission_field", "_permission_resource_aliases",
+    "_permission_scope", "_pick_first", "_postman_operations", "_risk_type_from_text",
+    "_roles_from_text", "_rule_type_from_text", "_rules_from_text", "_sql_tables",
+    "_state_machines_from_text", "_ticket_rows", "_typed_validation_constraint",
+    "_uiux_specs_from_text",
+]
 
 
 def _doc_bool(value: Any) -> bool:
@@ -457,11 +471,6 @@ def _uiux_specs_from_text(text: str, source_id: str, source_type: str, filename:
     return specs
 
 
-def _csv_rows(text: str) -> list[dict[str, str]]:
-    try:
-        return [dict(row) for row in csv.DictReader(text.splitlines()) if isinstance(row, dict)]
-    except Exception:
-        return []
 
 
 def _markdown_table_rows(text: str) -> list[dict[str, str]]:

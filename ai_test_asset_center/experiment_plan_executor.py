@@ -384,6 +384,25 @@ def execute_non_barrier_plans(
                     if _obs_candidate.startswith("/") and "{" not in _obs_candidate and "}" not in _obs_candidate:
                         observation_path = _obs_candidate
                 if not observation_path:
+                    # ── Fallback 2: strip action suffix to find resource path ──
+                    # E.g. POST /api/orders/:id/ship -> GET /api/orders/:id
+                    _ACTION_SUFFIXES = {"ship", "cancel", "confirm", "approve", "reject", "pay", "use", "release", "consume", "reserve", "adjust", "reset", "login", "register"}
+                    _obs_candidate = path.split("?")[0] if path else ""
+                    if _obs_candidate.startswith("/"):
+                        segments = _obs_candidate.rstrip("/").split("/")
+                        # Strip trailing action suffix
+                        if len(segments) >= 2 and segments[-1].lower() in _ACTION_SUFFIXES:
+                            segments = segments[:-1]
+                        # Try to find a GET operation for the derived path
+                        _derived_path = "/".join(segments)
+                        if _derived_path.startswith("/"):
+                            # Check if this path (with placeholders resolved) can be observed
+                            _resolved = _derived_path
+                            for name, value in (runtime_bindings or {}).items():
+                                _resolved = _resolved.replace("{" + name + "}", str(value)).replace(":" + name, str(value))
+                            if "{" not in _resolved and "}" not in _resolved and ":" not in _resolved.split("/")[-1]:
+                                observation_path = _resolved
+                if not observation_path:
                     reason_code = "BLOCKED_MISSING_OBSERVER"
                     pre_transport_block_reasons.append(reason_code)
                     contract_evidence_receipts.append(

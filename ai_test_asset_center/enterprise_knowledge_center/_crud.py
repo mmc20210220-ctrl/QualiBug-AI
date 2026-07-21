@@ -27,8 +27,16 @@ except ImportError:
     docx2txt = None
 
 from ._common import *  # noqa: F401,F403
+from ._common import _safe_project_id  # explicit: underscore names not exported by *
 from ._utils import *  # noqa: F401,F403
 from ._parsing import *  # noqa: F401,F403
+
+__all__ = [
+    "_logical_key", "_record_parse",
+    "delete_enterprise_knowledge_source", "ingest_enterprise_knowledge_documents",
+    "ingest_enterprise_knowledge_files", "list_enterprise_knowledge_sources",
+    "operate_enterprise_knowledge_center", "update_enterprise_knowledge_source",
+]
 
 
 def _record_parse(record: dict[str, Any], root: Path) -> dict[str, Any]:

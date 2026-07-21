@@ -1,0 +1,85 @@
+{
+  "total": 2,
+  "by_status": {
+    "conflicting": 2
+  },
+  "samples": [
+    {
+      "id": "bir_e8746996aab7524c",
+      "conflict_type": "permission_decision_conflict",
+      "role_key": "finance",
+      "operation_ref": "bir_5ac20bf28da670d7",
+      "decisions": [
+        "DENY",
+        "PERMIT"
+      ],
+      "source_refs": [
+        {
+          "source_id": "src_a2df4e35caaa2ed6",
+          "version": "",
+          "locator": "finance->refund",
+          "kind": "permission_matrix",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "runtime:prd:5430ee328dda8d7c1a150990",
+          "version": "",
+          "locator": "finance->refund",
+          "kind": "permission_matrix",
+          "quote_hash": ""
+        }
+      ],
+      "confidence": 1.0,
+      "derivation": "explicit",
+      "status": "conflicting"
+    },
+    {
+      "id": "bir_e5b6362e3f15f6f3",
+      "conflict_type": "permission_decision_conflict",
+      "role_key": "buyer",
+      "operation_ref": "bir_cd93d22bc648c06d",
+      "decisions": [
+        "DENY",
+        "PERMIT"
+      ],
+      "source_refs": [
+        {
+          "source_id": "src_a2df4e35caaa2ed6",
+          "version": "",
+          "locator": "buyer->order",
+          "kind": "permission_matrix",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "runtime:prd:5430ee328dda8d7c1a150990",
+          "version": "",
+          "locator": "buyer->order",
+          "kind": "permission_matrix",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "runtime:prd:5430ee328dda8d7c1a150990",
+          "version": "",
+          "locator": "buyer->order",
+          "kind": "permission_matrix",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "runtime:prd:5430ee328dda8d7c1a150990",
+          "version": "",
+          "locator": "buyer->order",
+          "kind": "permission_matrix",
+          "quote_hash": ""
+        }
+      ],
+      "confidence": 1.0,
+      "derivation": "explicit",
+      "status": "conflicting"
+    }
+  ],
+  "conflicting_operation_refs": [
+    "bir_5ac20bf28da670d7",
+    "bir_cd93d22bc648c06d"
+  ],
+  "num_conflicting_oprefs": 2
+}

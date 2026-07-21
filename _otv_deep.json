@@ -1,0 +1,343 @@
+{
+  "TP_warehouse_products": {
+    "title": "[ContractOracle] owner_tenant_visibility: warehouse GET /api/products",
+    "assertion": {
+      "schema_version": "qualibug.assertion-receipt.v1",
+      "campaign_id": "CMP_73f6bb5f863dab71ad11cd27",
+      "execution_id": "exec_a033bcbe3bdfec2426e9",
+      "assertion_id": "assert_authorization",
+      "kind": "owner_tenant_visibility",
+      "status": "VIOLATION",
+      "reason_code": "",
+      "passed": false,
+      "expected": {
+        "owner_can_access": true,
+        "viewer_can_access": false,
+        "leak_detected": false
+      },
+      "actual": {
+        "owner_can_access": true,
+        "viewer_can_access": true,
+        "leak_detected": true
+      },
+      "error": "",
+      "observer_receipt_ids": [
+        "obs_095a83a010326fd7f36b",
+        "obs_9f4d72731efce34a78ea",
+        "obs_c054044e02bf4c911053"
+      ],
+      "source_refs": [
+        {
+          "source_id": "api_spec",
+          "version": "",
+          "locator": "GET /api/products",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "src_cffd9ab1957b6659",
+          "version": "",
+          "locator": "GET /api/products",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "src_a2df4e35caaa2ed6",
+          "version": "",
+          "locator": "seller",
+          "kind": "permission_matrix",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "runtime:prd:5430ee328dda8d7c1a150990",
+          "version": "",
+          "locator": "seller",
+          "kind": "permission_matrix",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "runtime_actors",
+          "version": "",
+          "locator": "seller:seller01",
+          "kind": "runtime_actor",
+          "quote_hash": ""
+        }
+      ],
+      "harness_error": false,
+      "receipt_id": "assert_956da4fb607ac03e101f100f"
+    },
+    "reproduction_steps": [
+      "GET /api/products -> HTTP 200",
+      "GET /api/products -> HTTP 200"
+    ],
+    "request": "GET /api/products",
+    "response": "HTTP 200",
+    "oracle": {
+      "oracle_name": "ContractOracle",
+      "oracle_tier": "contract",
+      "customer_deliverable": false,
+      "customer_deliverable_candidate": true,
+      "verdict": "customer_deliverable_defect_candidate",
+      "status": "VIOLATION",
+      "receipt_id": "oracle_6cedf8fd784fd1f38f7e0b9b",
+      "activation_receipt_id": "activation_d7e9f65a301c0ee644899487"
+    }
+  },
+  "TP_warehouse_pay": {
+    "title": "[ContractOracle] owner_tenant_visibility: warehouse POST /api/payments/pay",
+    "assertion": {
+      "schema_version": "qualibug.assertion-receipt.v1",
+      "campaign_id": "CMP_73f6bb5f863dab71ad11cd27",
+      "execution_id": "exec_7749a7a3a0850e01fafa",
+      "assertion_id": "assert_authorization",
+      "kind": "owner_tenant_visibility",
+      "status": "VIOLATION",
+      "reason_code": "",
+      "passed": false,
+      "expected": {
+        "owner_can_access": true,
+        "viewer_can_access": false,
+        "leak_detected": false
+      },
+      "actual": {
+        "owner_can_access": true,
+        "viewer_can_access": true,
+        "leak_detected": true
+      },
+      "error": "",
+      "observer_receipt_ids": [
+        "obs_3a303ef01f5847f9c3cc",
+        "obs_3ac4ae0c48d0efa7169e",
+        "obs_5128776cde1bf0260c74",
+        "obs_a8182915c7bdd84d4ca9"
+      ],
+      "source_refs": [
+        {
+          "source_id": "api_spec",
+          "version": "",
+          "locator": "POST /api/payments/pay",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "src_cffd9ab1957b6659",
+          "version": "",
+          "locator": "POST /api/payments/pay",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "src_a2df4e35caaa2ed6",
+          "version": "",
+          "locator": "buyer",
+          "kind": "permission_matrix",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "runtime:prd:5430ee328dda8d7c1a150990",
+          "version": "",
+          "locator": "buyer",
+          "kind": "permission_matrix",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "runtime_actors",
+          "version": "",
+          "locator": "buyer:buyer01",
+          "kind": "runtime_actor",
+          "quote_hash": ""
+        }
+      ],
+      "harness_error": false,
+      "receipt_id": "assert_3115250fd40841205a479b28"
+    },
+    "reproduction_steps": [
+      "GET /api/orders -> HTTP 200",
+      "POST /api/payments/pay -> HTTP 201",
+      "POST /api/payments/pay -> HTTP 201"
+    ],
+    "request": "POST /api/payments/pay",
+    "response": "HTTP 201",
+    "oracle": {
+      "oracle_name": "ContractOracle",
+      "oracle_tier": "contract",
+      "customer_deliverable": false,
+      "customer_deliverable_candidate": true,
+      "verdict": "customer_deliverable_defect_candidate",
+      "status": "VIOLATION",
+      "receipt_id": "oracle_0b1659e880522f8049ed7532",
+      "activation_receipt_id": "activation_490518c55e1c2262bd597b91"
+    }
+  },
+  "FP_buyer_cart": {
+    "title": "[ContractOracle] owner_tenant_visibility: buyer POST /api/cart/items",
+    "assertion": {
+      "schema_version": "qualibug.assertion-receipt.v1",
+      "campaign_id": "CMP_73f6bb5f863dab71ad11cd27",
+      "execution_id": "exec_02ce0a1da07f85b42086",
+      "assertion_id": "assert_isolation",
+      "kind": "owner_tenant_visibility",
+      "status": "VIOLATION",
+      "reason_code": "",
+      "passed": false,
+      "expected": {
+        "owner_can_access": true,
+        "viewer_can_access": false,
+        "leak_detected": false
+      },
+      "actual": {
+        "owner_can_access": true,
+        "viewer_can_access": true,
+        "leak_detected": true
+      },
+      "error": "",
+      "observer_receipt_ids": [
+        "obs_2509592aa296197a68c9",
+        "obs_cbd8cb03454205eeb62f",
+        "obs_e7b599098b678dacf0e9",
+        "obs_ea96bc090684fdd89cc6"
+      ],
+      "source_refs": [
+        {
+          "source_id": "api_spec",
+          "version": "",
+          "locator": "POST /api/cart/items",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "src_cffd9ab1957b6659",
+          "version": "",
+          "locator": "POST /api/cart/items",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "src_a2df4e35caaa2ed6",
+          "version": "",
+          "locator": "buyer",
+          "kind": "permission_matrix",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "runtime:prd:5430ee328dda8d7c1a150990",
+          "version": "",
+          "locator": "buyer",
+          "kind": "permission_matrix",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "runtime_actors",
+          "version": "",
+          "locator": "buyer:buyer01",
+          "kind": "runtime_actor",
+          "quote_hash": ""
+        }
+      ],
+      "harness_error": false,
+      "receipt_id": "assert_06ff16845c188aa7e368d5b9"
+    },
+    "reproduction_steps": [
+      "POST /api/cart/items -> HTTP 201",
+      "POST /api/cart/items -> HTTP 201"
+    ],
+    "request": "POST /api/cart/items",
+    "response": "HTTP 201",
+    "oracle": {
+      "oracle_name": "ContractOracle",
+      "oracle_tier": "contract",
+      "customer_deliverable": false,
+      "customer_deliverable_candidate": true,
+      "verdict": "customer_deliverable_defect_candidate",
+      "status": "VIOLATION",
+      "receipt_id": "oracle_268df122c8aa85a54acbacae",
+      "activation_receipt_id": "activation_7f7f50be9183862ae062e9e4"
+    }
+  },
+  "FP_buyer_pay": {
+    "title": "[ContractOracle] owner_tenant_visibility: buyer POST /api/payments/pay",
+    "assertion": {
+      "schema_version": "qualibug.assertion-receipt.v1",
+      "campaign_id": "CMP_73f6bb5f863dab71ad11cd27",
+      "execution_id": "exec_e414cb59dcd819a06f16",
+      "assertion_id": "assert_isolation",
+      "kind": "owner_tenant_visibility",
+      "status": "VIOLATION",
+      "reason_code": "",
+      "passed": false,
+      "expected": {
+        "owner_can_access": true,
+        "viewer_can_access": false,
+        "leak_detected": false
+      },
+      "actual": {
+        "owner_can_access": true,
+        "viewer_can_access": true,
+        "leak_detected": true
+      },
+      "error": "",
+      "observer_receipt_ids": [
+        "obs_6b4640895f2350f5ab9e",
+        "obs_c0f02c98ce9bbbb2ccd9",
+        "obs_d4455c2eb5505ffaec8b",
+        "obs_f1a15693889dc5b2a5e8"
+      ],
+      "source_refs": [
+        {
+          "source_id": "api_spec",
+          "version": "",
+          "locator": "POST /api/payments/pay",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "src_cffd9ab1957b6659",
+          "version": "",
+          "locator": "POST /api/payments/pay",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "src_a2df4e35caaa2ed6",
+          "version": "",
+          "locator": "buyer",
+          "kind": "permission_matrix",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "runtime:prd:5430ee328dda8d7c1a150990",
+          "version": "",
+          "locator": "buyer",
+          "kind": "permission_matrix",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "runtime_actors",
+          "version": "",
+          "locator": "buyer:buyer01",
+          "kind": "runtime_actor",
+          "quote_hash": ""
+        }
+      ],
+      "harness_error": false,
+      "receipt_id": "assert_2712955c9908a588515be909"
+    },
+    "reproduction_steps": [
+      "GET /api/orders -> HTTP 200",
+      "POST /api/payments/pay -> HTTP 201",
+      "POST /api/payments/pay -> HTTP 201"
+    ],
+    "request": "POST /api/payments/pay",
+    "response": "HTTP 201",
+    "oracle": {
+      "oracle_name": "ContractOracle",
+      "oracle_tier": "contract",
+      "customer_deliverable": false,
+      "customer_deliverable_candidate": true,
+      "verdict": "customer_deliverable_defect_candidate",
+      "status": "VIOLATION",
+      "receipt_id": "oracle_de504a48ca1d98859e78acd4",
+      "activation_receipt_id": "activation_9e5bcbc53295a56fbb1f4c6b"
+    }
+  }
+}

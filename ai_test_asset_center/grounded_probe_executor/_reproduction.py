@@ -11,6 +11,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 from ._common import *  # noqa: F401,F403
+from ._common import _redact, _safe_payload_summary  # explicit import for underscore-prefixed helpers
 
 def _shell_single_quote(value: str) -> str:
     return "'" + str(value).replace("'", "'\"'\"'") + "'"

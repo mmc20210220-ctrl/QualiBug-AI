@@ -1,0 +1,389 @@
+{
+  "BLOCKED_MISSING_BINDING": {
+    "count": 15,
+    "samples": [
+      {
+        "obligation_id": "obl_ad1438962c090d61875e",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_b07f4c69a292731a",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_c61e10b51ae916e5",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_54a99964a1487401",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_6a889748a22796ac",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_da1a2dac36753533",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_0a3968620018439f",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_10c3fdef0fc7e723",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_252f73922bfd2332",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_91a7cfb1acab6e23",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_6c9ca4d843a0b777",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_95dd9383766947ce",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      }
+    ]
+  },
+  "BLOCKED_MISSING_OBSERVER": {
+    "count": 6,
+    "samples": [
+      {
+        "obligation_id": "obl_9ef7dffc4ac4eb7e7706",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_3f9c3dc02d1f76a25ba3",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_70ecbb9240393c6f",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_e59cbff764177bfd",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_30ac2f9864e6b9cb",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_555c89fb201e3474",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      }
+    ]
+  },
+  "BLOCKED_MISSING_FIXTURE": {
+    "count": 4,
+    "samples": [
+      {
+        "obligation_id": "obl_fa1c4e4b290b81b47471",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_efcbb219f156f1772188",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_bb8bc1381e7d1bc524be",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_9f7694af474af378a1fa",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      }
+    ]
+  },
+  "BLOCKED_CONFLICTING_SOURCE": {
+    "count": 24,
+    "samples": [
+      {
+        "obligation_id": "obl_e3771afa8516c49c",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_fb23f2d2b1124b71",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_5b0272ca017e96d0",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_ab2280f29694f991",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_2ab7bb6dc61d9e4a",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_076ca7747b0dcf3e",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_e72e296ed05d9b8a",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_7e6ded1dca39a134",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_58dfcaf23271ac26",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_1a3554fce25e10de",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_b4402db957fbb7ea",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_df3ade825a48f413",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      }
+    ]
+  },
+  "OBLIGATION_NOT_IN_PLAN": {
+    "count": 240,
+    "samples": [
+      {
+        "obligation_id": "obl_0cad573d5fa66cbb",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_b66fb2a517153391",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_f00e491b1e51f244",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_52ca1dc8d696da2f",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_473a5e8f26ea5ee5",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_e477adc5518004d3",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_e938450ab74f8855",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_05459db8fdb483f0",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_997ed2a5b0228e67",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_9e6dd8dc8b7426c5",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_a9b273998c3ef837",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_95661ca36b83daeb",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      }
+    ]
+  },
+  "BLOCKED_NON_REVERSIBLE_WRITE": {
+    "count": 99,
+    "samples": [
+      {
+        "obligation_id": "obl_f662dcaae2a8c78b9df1",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_1feb747715f24e3da617",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_abbc78725a66925078e9",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_d016e7527450f1a5",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_4f45f10e4624a651",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_f3e1759cea77f16a",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_9a3f353d58e24e00",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_4d33623b7d882947",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_55e456f6fdc4aa8a",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_e045db1b6d717783",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_cd0d30531bb29e75",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      },
+      {
+        "obligation_id": "obl_a82964fa2a5c2e49",
+        "detail": "",
+        "hypothesis": "",
+        "assertion_kind": ""
+      }
+    ]
+  },
+  "OBLIGATION_NOT_IN_PLAN_kinds": {
+    "?": 240
+  },
+  "BLOCKED_NON_REVERSIBLE_WRITE_kinds": {
+    "?": 99
+  },
+  "BLOCKED_MISSING_BINDING_kinds": {
+    "?": 15
+  }
+}

@@ -27,6 +27,19 @@ except ImportError:
     docx2txt = None
 
 from ._common import *  # noqa: F401,F403
+from ._common import _safe_project_id, _load_json, _write_json  # explicit: underscore names not exported by *
+
+# Ensure underscore-prefixed helpers are exported via `from ._utils import *`
+__all__ = [
+    "_clean_markup_text", "_contains_markdown_api_sections", "_csv_rows",
+    "_decode_docx", "_decode_pdf", "_dedupe_by_id",
+    "_detected_source_format", "_hash_bytes", "_json_or_none", "_lexicon_dict", "_lexicon_list",
+    "_load_registry", "_looks_like_field_dictionary", "_looks_like_uiux_spec", "_norm",
+    "_normalize_state_token", "_now", "_parser_receipt", "_paths", "_read_source_bytes",
+    "_redact_text", "_registry_default", "_require_manage_actor", "_safe_actor", "_safe_slug",
+    "_save_registry", "_semantic_lexicon", "_short_hash", "_tokens",
+    "_safe_project_id", "_load_json", "_write_json",
+]
 
 
 def _semantic_lexicon() -> dict[str, Any]:
@@ -463,3 +476,22 @@ def _clean_markup_text(value: str, limit: int = 200) -> str:
     return text[:limit]
 
 
+def _csv_rows(text: str) -> list[dict[str, str]]:
+    try:
+        return [dict(row) for row in csv.DictReader(text.splitlines()) if isinstance(row, dict)]
+    except Exception:
+        return []
+
+
+def _dedupe_by_id(rows: Iterable[dict[str, Any]], id_field: str) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        key = str(row.get(id_field) or _short_hash(row))
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(row)
+    return result

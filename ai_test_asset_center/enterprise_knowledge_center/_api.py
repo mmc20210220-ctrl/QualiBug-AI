@@ -27,10 +27,17 @@ except ImportError:
     docx2txt = None
 
 from ._common import *  # noqa: F401,F403
+from ._common import _safe_project_id, _load_json, _write_json, _icon  # explicit: underscore names not exported by *
 from ._utils import *  # noqa: F401,F403
+from ._utils import _hash_bytes, _short_hash, _norm, _tokens, _now, _paths, _load_registry, _save_registry, _redact_text  # noqa: F401
 from ._parsing import *  # noqa: F401,F403
+from ._parsing import _parse_source, _openapi_operations, _risk_type_from_text  # noqa: F401
 from ._crud import *  # noqa: F401,F403
+from ._crud import _record_parse  # noqa: F401
 from ._linking import *  # noqa: F401,F403
+from ._linking import (_dedupe_by_id, _authoritative_rule_to_interface_edges, _links_by_overlap,  # noqa: F401
+    _evidence_bundle, _merge_openapi, _module_tree, _oracle_dsl_pack_from_recognized_industries,
+    _oracle_library, _probes_from_asset, _sync_declared_project_sources, _risk_domains)
 
 
 def build_runtime_source_knowledge_overlay(

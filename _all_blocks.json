@@ -1,0 +1,23 @@
+{
+  "compiled_count": 518,
+  "blocked_count": 484,
+  "block_reason_counts": {
+    "BLOCKED_MISSING_FIXTURE": 4,
+    "BLOCKED_MISSING_BINDING": 15,
+    "MISSING_PRIMARY_OPERATION": 240,
+    "BLOCKED_NON_REVERSIBLE_WRITE": 96,
+    "BLOCKED_CONFLICTING_SOURCE": 129
+  },
+  "all_experiments": 1002,
+  "blocked_experiments": 484,
+  "reason_tally": {
+    "BLOCKED_MISSING_FIXTURE": 4,
+    "BLOCKED_MISSING_BINDING": 15,
+    "MISSING_PRIMARY_OPERATION": 240,
+    "BLOCKED_NON_REVERSIBLE_WRITE": 96,
+    "BLOCKED_CONFLICTING_SOURCE": 129
+  },
+  "missing_primary_detail": {
+    "none": 240
+  }
+}

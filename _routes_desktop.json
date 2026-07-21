@@ -1,0 +1,467 @@
+{
+  "auth-service": [
+    {
+      "m": "GET",
+      "p": "/health"
+    },
+    {
+      "m": "POST",
+      "p": "/login"
+    },
+    {
+      "m": "POST",
+      "p": "/register"
+    },
+    {
+      "m": "GET",
+      "p": "/me"
+    },
+    {
+      "m": "POST",
+      "p": "/admin/users/:id/status"
+    },
+    {
+      "m": "POST",
+      "p": "/password/reset"
+    },
+    {
+      "m": "POST",
+      "p": "/token/impersonate"
+    },
+    {
+      "m": "GET",
+      "p": "/otp/send"
+    },
+    {
+      "m": "POST",
+      "p": "/debug/token"
+    },
+    {
+      "m": "POST",
+      "p": "/admin/users/:id/role"
+    },
+    {
+      "m": "POST",
+      "p": "/login/phone"
+    }
+  ],
+  "cart-service": [
+    {
+      "m": "GET",
+      "p": "/health"
+    },
+    {
+      "m": "GET",
+      "p": "/items"
+    },
+    {
+      "m": "POST",
+      "p": "/items"
+    },
+    {
+      "m": "PATCH",
+      "p": "/items/:id"
+    },
+    {
+      "m": "DELETE",
+      "p": "/items/:id"
+    },
+    {
+      "m": "POST",
+      "p": "/merge"
+    },
+    {
+      "m": "POST",
+      "p": "/checkout-preview"
+    },
+    {
+      "m": "POST",
+      "p": "/items/bulk"
+    },
+    {
+      "m": "DELETE",
+      "p": "/selected"
+    },
+    {
+      "m": "POST",
+      "p": "/clone/:id"
+    },
+    {
+      "m": "POST",
+      "p": "/price-sync"
+    }
+  ],
+  "coupon-service": [
+    {
+      "m": "GET",
+      "p": "/health"
+    },
+    {
+      "m": "GET",
+      "p": "/"
+    },
+    {
+      "m": "POST",
+      "p": "/validate"
+    },
+    {
+      "m": "POST",
+      "p": "/use"
+    },
+    {
+      "m": "POST",
+      "p": "/admin/create"
+    },
+    {
+      "m": "POST",
+      "p": "/batch-validate"
+    },
+    {
+      "m": "POST",
+      "p": "/claim"
+    },
+    {
+      "m": "POST",
+      "p": "/admin/:code/status"
+    },
+    {
+      "m": "GET",
+      "p": "/code/:code"
+    },
+    {
+      "m": "POST",
+      "p": "/simulate-discount"
+    }
+  ],
+  "gateway-service": [],
+  "inventory-service": [
+    {
+      "m": "GET",
+      "p": "/health"
+    },
+    {
+      "m": "GET",
+      "p": "/locks/list"
+    },
+    {
+      "m": "GET",
+      "p": "/:sku"
+    },
+    {
+      "m": "POST",
+      "p": "/reserve"
+    },
+    {
+      "m": "POST",
+      "p": "/release"
+    },
+    {
+      "m": "POST",
+      "p": "/consume"
+    },
+    {
+      "m": "POST",
+      "p": "/admin/adjust"
+    },
+    {
+      "m": "POST",
+      "p": "/transfer"
+    },
+    {
+      "m": "POST",
+      "p": "/bulk-reserve"
+    },
+    {
+      "m": "POST",
+      "p": "/admin/set"
+    },
+    {
+      "m": "POST",
+      "p": "/locks/:id/status"
+    },
+    {
+      "m": "POST",
+      "p": "/recount/:sku"
+    }
+  ],
+  "order-service": [
+    {
+      "m": "GET",
+      "p": "/health"
+    },
+    {
+      "m": "GET",
+      "p": "/"
+    },
+    {
+      "m": "GET",
+      "p": "/:id"
+    },
+    {
+      "m": "POST",
+      "p": "/"
+    },
+    {
+      "m": "POST",
+      "p": "/:id/cancel"
+    },
+    {
+      "m": "POST",
+      "p": "/:id/ship"
+    },
+    {
+      "m": "POST",
+      "p": "/:id/confirm"
+    },
+    {
+      "m": "GET",
+      "p": "/admin/all/list"
+    },
+    {
+      "m": "POST",
+      "p": "/:id/address"
+    },
+    {
+      "m": "POST",
+      "p": "/:id/price-adjust"
+    },
+    {
+      "m": "POST",
+      "p": "/batch-cancel"
+    },
+    {
+      "m": "POST",
+      "p": "/:id/status"
+    },
+    {
+      "m": "POST",
+      "p": "/from-cart"
+    }
+  ],
+  "payment-service": [
+    {
+      "m": "GET",
+      "p": "/health"
+    },
+    {
+      "m": "POST",
+      "p": "/pay"
+    },
+    {
+      "m": "GET",
+      "p": "/order/:orderId"
+    },
+    {
+      "m": "POST",
+      "p": "/admin/manual-success"
+    },
+    {
+      "m": "POST",
+      "p": "/callback/mock"
+    },
+    {
+      "m": "POST",
+      "p": "/pay-by-balance"
+    },
+    {
+      "m": "POST",
+      "p": "/refund-to-balance"
+    },
+    {
+      "m": "POST",
+      "p": "/admin/replay-success"
+    },
+    {
+      "m": "GET",
+      "p": "/admin/export"
+    },
+    {
+      "m": "POST",
+      "p": "/channel-test"
+    }
+  ],
+  "product-service": [
+    {
+      "m": "GET",
+      "p": "/health"
+    },
+    {
+      "m": "GET",
+      "p": "/"
+    },
+    {
+      "m": "GET",
+      "p": "/recommendations/home"
+    },
+    {
+      "m": "GET",
+      "p": "/seller/:sellerId/catalog"
+    },
+    {
+      "m": "GET",
+      "p": "/search-raw"
+    },
+    {
+      "m": "GET",
+      "p": "/:sku"
+    },
+    {
+      "m": "POST",
+      "p": "/admin"
+    },
+    {
+      "m": "PATCH",
+      "p": "/admin/:sku"
+    },
+    {
+      "m": "DELETE",
+      "p": "/admin/:sku"
+    },
+    {
+      "m": "POST",
+      "p": "/admin/import"
+    },
+    {
+      "m": "POST",
+      "p": "/admin/bulk-price"
+    },
+    {
+      "m": "POST",
+      "p": "/admin/:sku/status"
+    }
+  ],
+  "refund-service": [
+    {
+      "m": "GET",
+      "p": "/health"
+    },
+    {
+      "m": "POST",
+      "p": "/"
+    },
+    {
+      "m": "GET",
+      "p": "/:id"
+    },
+    {
+      "m": "POST",
+      "p": "/:id/approve"
+    },
+    {
+      "m": "POST",
+      "p": "/:id/reject"
+    },
+    {
+      "m": "GET",
+      "p": "/admin/all"
+    },
+    {
+      "m": "POST",
+      "p": "/:id/amount"
+    },
+    {
+      "m": "POST",
+      "p": "/:id/return-received"
+    },
+    {
+      "m": "POST",
+      "p": "/quick-refund"
+    },
+    {
+      "m": "POST",
+      "p": "/:id/close"
+    },
+    {
+      "m": "GET",
+      "p": "/by-order/:orderId"
+    }
+  ],
+  "report-service": [
+    {
+      "m": "GET",
+      "p": "/health"
+    },
+    {
+      "m": "GET",
+      "p": "/sales"
+    },
+    {
+      "m": "GET",
+      "p": "/inventory-risk"
+    },
+    {
+      "m": "GET",
+      "p": "/users"
+    },
+    {
+      "m": "GET",
+      "p": "/orders/export"
+    },
+    {
+      "m": "GET",
+      "p": "/finance/revenue"
+    },
+    {
+      "m": "GET",
+      "p": "/debug/table"
+    },
+    {
+      "m": "GET",
+      "p": "/slow/orders"
+    },
+    {
+      "m": "GET",
+      "p": "/customer/:userId/sales"
+    },
+    {
+      "m": "GET",
+      "p": "/audit-logs"
+    }
+  ],
+  "user-service": [
+    {
+      "m": "GET",
+      "p": "/health"
+    },
+    {
+      "m": "GET",
+      "p": "/addresses"
+    },
+    {
+      "m": "POST",
+      "p": "/addresses"
+    },
+    {
+      "m": "GET",
+      "p": "/admin/search"
+    },
+    {
+      "m": "PATCH",
+      "p": "/admin/users/:id/balance"
+    },
+    {
+      "m": "GET",
+      "p": "/profile/:id"
+    },
+    {
+      "m": "DELETE",
+      "p": "/addresses/:id"
+    },
+    {
+      "m": "POST",
+      "p": "/addresses/:id/default"
+    },
+    {
+      "m": "GET",
+      "p": "/admin/export"
+    },
+    {
+      "m": "GET",
+      "p": "/phone/check"
+    },
+    {
+      "m": "POST",
+      "p": "/admin/users/:id/status2"
+    }
+  ]
+}

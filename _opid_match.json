@@ -1,0 +1,188 @@
+{
+  "num_ops": 24,
+  "num_unique_op_ids": 24,
+  "op_id_samples": [
+    "bir_0a4c13b49fafb589",
+    "bir_150b60f34bf4b8ff",
+    "bir_3b3a5b5ce2e90655",
+    "bir_4464589682df2a5f",
+    "bir_4652619ca59aca8e",
+    "bir_5320292f347504f1",
+    "bir_588a7915b5421e5e",
+    "bir_5ac20bf28da670d7",
+    "bir_6876d72b3664fd4c",
+    "bir_6bdeb1f16937c950"
+  ],
+  "id_fields": [
+    {
+      "id": "bir_588a7915b5421e5e",
+      "operation_id": "post_api_auth_login",
+      "method": "POST",
+      "path": "/api/auth/login"
+    },
+    {
+      "id": "bir_ac0e035f9eb4b43a",
+      "operation_id": "post_api_auth_register",
+      "method": "POST",
+      "path": "/api/auth/register"
+    },
+    {
+      "id": "bir_0a4c13b49fafb589",
+      "operation_id": "get_api_cart_items",
+      "method": "GET",
+      "path": "/api/cart/items"
+    },
+    {
+      "id": "bir_dff5e016338935e6",
+      "operation_id": "post_api_cart_items",
+      "method": "POST",
+      "path": "/api/cart/items"
+    },
+    {
+      "id": "bir_f0a5e2bd75d3f240",
+      "operation_id": "patch_api_cart_items__id",
+      "method": "PATCH",
+      "path": "/api/cart/items/qb_test_619866165981"
+    },
+    {
+      "id": "bir_7a77b73d03e4b80b",
+      "operation_id": "post_api_coupons_validate",
+      "method": "POST",
+      "path": "/api/coupons/validate"
+    },
+    {
+      "id": "bir_5320292f347504f1",
+      "operation_id": "get_api_orders",
+      "method": "GET",
+      "path": "/api/orders"
+    },
+    {
+      "id": "bir_cd93d22bc648c06d",
+      "operation_id": "post_api_orders",
+      "method": "POST",
+      "path": "/api/orders"
+    },
+    {
+      "id": "bir_4652619ca59aca8e",
+      "operation_id": "get_api_orders__id",
+      "method": "GET",
+      "path": "/api/orders/qb_test_140038348168"
+    },
+    {
+      "id": "bir_3b3a5b5ce2e90655",
+      "operation_id": "post_api_orders__id_cancel",
+      "method": "POST",
+      "path": "/api/orders/qb_test_385027739364/cancel"
+    },
+    {
+      "id": "bir_aad54f95dc2b53f2",
+      "operation_id": "post_api_orders__id_confirm",
+      "method": "POST",
+      "path": "/api/orders/qb_test_491923477622/confirm"
+    },
+    {
+      "id": "bir_6876d72b3664fd4c",
+      "operation_id": "post_api_orders__id_ship",
+      "method": "POST",
+      "path": "/api/orders/qb_test_456607395714/ship"
+    },
+    {
+      "id": "bir_9c14fd249f745565",
+      "operation_id": "post_api_payments_pay",
+      "method": "POST",
+      "path": "/api/payments/pay"
+    },
+    {
+      "id": "bir_6bdeb1f16937c950",
+      "operation_id": "get_api_products",
+      "method": "GET",
+      "path": "/api/products"
+    },
+    {
+      "id": "bir_aae8c0a3bf95d14d",
+      "operation_id": "get_api_products__sku",
+      "method": "GET",
+      "path": "/api/products/QB-TEST-97E7F028"
+    },
+    {
+      "id": "bir_8b84c00bd763ed97",
+      "operation_id": "post_api_products_admin",
+      "method": "POST",
+      "path": "/api/products/admin"
+    },
+    {
+      "id": "bir_b7b588dff7feba44",
+      "operation_id": "patch_api_products_admin__sku",
+      "method": "PATCH",
+      "path": "/api/products/admin/QB-TEST-AAEDBCBE"
+    },
+    {
+      "id": "bir_5ac20bf28da670d7",
+      "operation_id": "post_api_refunds",
+      "method": "POST",
+      "path": "/api/refunds"
+    },
+    {
+      "id": "bir_93a22a916e1cbf45",
+      "operation_id": "post_api_refunds__id_approve",
+      "method": "POST",
+      "path": "/api/refunds/qb_test_757408920782/approve"
+    },
+    {
+      "id": "bir_e250926855e614d0",
+      "operation_id": "post_api_refunds__id_reject",
+      "method": "POST",
+      "path": "/api/refunds/qb_test_376195410147/reject"
+    },
+    {
+      "id": "bir_da7ad848409572ad",
+      "operation_id": "get_api_reports_inventory-risk",
+      "method": "GET",
+      "path": "/api/reports/inventory-risk"
+    },
+    {
+      "id": "bir_150b60f34bf4b8ff",
+      "operation_id": "get_api_reports_sales",
+      "method": "GET",
+      "path": "/api/reports/sales"
+    },
+    {
+      "id": "bir_d0448ec47fe7b601",
+      "operation_id": "post:/api/product",
+      "method": "POST",
+      "path": "/api/product"
+    },
+    {
+      "id": "bir_4464589682df2a5f",
+      "operation_id": "post:/api/item",
+      "method": "POST",
+      "path": "/api/item"
+    }
+  ],
+  "num_obligations": 592,
+  "matched": 352,
+  "num_missing_refs": 0,
+  "missing_refs": [],
+  "ref_counter_top": {
+    "bir_f0a5e2bd75d3f240": 30,
+    "bir_dff5e016338935e6": 29,
+    "bir_5ac20bf28da670d7": 24,
+    "bir_b7b588dff7feba44": 22,
+    "bir_9c14fd249f745565": 21,
+    "bir_8b84c00bd763ed97": 21,
+    "bir_3b3a5b5ce2e90655": 19,
+    "bir_d0448ec47fe7b601": 18,
+    "bir_93a22a916e1cbf45": 18,
+    "bir_cd93d22bc648c06d": 17,
+    "bir_aad54f95dc2b53f2": 17,
+    "bir_6876d72b3664fd4c": 17,
+    "bir_4464589682df2a5f": 17,
+    "bir_588a7915b5421e5e": 16,
+    "bir_ac0e035f9eb4b43a": 16,
+    "bir_7a77b73d03e4b80b": 16,
+    "bir_e250926855e614d0": 16,
+    "bir_0a4c13b49fafb589": 6,
+    "bir_6bdeb1f16937c950": 4,
+    "bir_aae8c0a3bf95d14d": 4
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "risk_family": {
+    "state_integrity": 21,
+    "invariant": 219
+  },
+  "unique_obids": 240,
+  "samples": [
+    {
+      "obligation_id": "obl_006b7c408071a0b4",
+      "NOT_IN_PLAN": true
+    },
+    {
+      "obligation_id": "obl_00b882d354ec16be",
+      "NOT_IN_PLAN": true
+    },
+    {
+      "obligation_id": "obl_01286dd37f89fdd3",
+      "NOT_IN_PLAN": true
+    },
+    {
+      "obligation_id": "obl_019538666040556f",
+      "NOT_IN_PLAN": true
+    },
+    {
+      "obligation_id": "obl_01969927f7b32683",
+      "NOT_IN_PLAN": true
+    }
+  ]
+}

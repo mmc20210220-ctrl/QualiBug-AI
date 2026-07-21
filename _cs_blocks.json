@@ -1,0 +1,919 @@
+{
+  "total": 129,
+  "risk_family": {
+    "": 129
+  },
+  "detail": {
+    "bir_e5b6362e3f15f6f3": 85,
+    "bir_e8746996aab7524c": 44
+  },
+  "by_conflict": {
+    "bir_e8746996aab7524c": [
+      {
+        "obligation_id": "obl_7e6ded1dca39a134",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_49849cf3ca9f271d__v_cc480febe906",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_49849cf3ca9f271d__v_cdafa38315e4",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_49849cf3ca9f271d__v_d4101d67598f",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_49849cf3ca9f271d__v_c6be48ecfc82",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_49849cf3ca9f271d__v_d7110c44245f",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_49849cf3ca9f271d__v_f30f7e34453c",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_6dcec18bc94cc6fe__v_1ad2365441e1",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_6dcec18bc94cc6fe__v_cb52c2cb0e3a",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_6dcec18bc94cc6fe__v_9db943178f08",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_6dcec18bc94cc6fe__v_d2b0c7d7caa5",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_6dcec18bc94cc6fe__v_aa6a81cea52e",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_6dcec18bc94cc6fe__v_9e6c4da5f7de",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_7ebde8e3a51e17a5__v_17cbe5b71432",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_7ebde8e3a51e17a5__v_bdbd6bde6fbf",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_7ebde8e3a51e17a5__v_05a8099c2717",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_7ebde8e3a51e17a5__v_f1d32168a037",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_7ebde8e3a51e17a5__v_d852af6eb9f7",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_7ebde8e3a51e17a5__v_8b2a3ff7813a",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_5b8dea9fb27975d4__v_e3dc8f845251",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_5b8dea9fb27975d4__v_1ab7bfb31e28",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_5b8dea9fb27975d4__v_1dbf5b240e20",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_5b8dea9fb27975d4__v_2703fa2b16df",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_5b8dea9fb27975d4__v_16b9d9b135b7",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_5b8dea9fb27975d4__v_4bf3a3b641e9",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_81b90107f38dbf80__v_8bbdbe593a8a",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_81b90107f38dbf80__v_ca80fe0ecc18",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_81b90107f38dbf80__v_c0528923b336",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_81b90107f38dbf80__v_7885ee21219b",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_81b90107f38dbf80__v_59afb2f83287",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_81b90107f38dbf80__v_8779dbe95e0e",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_ea0f4da2e8eec4cb__v_5ae9b88e6f26",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_ea0f4da2e8eec4cb__v_a88c7ed28e9b",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_ea0f4da2e8eec4cb__v_01e2393ac3de",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_ea0f4da2e8eec4cb__v_2df32b405405",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_ea0f4da2e8eec4cb__v_9e4d542344c0",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_ea0f4da2e8eec4cb__v_9d95526c40fe",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_bdb9f701957ef76b__v_398ff809f581",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_bdb9f701957ef76b__v_ebb27879d528",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_bdb9f701957ef76b__v_7f9f2910ae7b",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_bdb9f701957ef76b__v_3989509af778",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_bdb9f701957ef76b__v_3c6d69000975",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_bdb9f701957ef76b__v_769f736a5c2f",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_a501e140a4612e5a",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      }
+    ],
+    "bir_e5b6362e3f15f6f3": [
+      {
+        "obligation_id": "obl_e3771afa8516c49c",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_fb23f2d2b1124b71",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_5b0272ca017e96d0",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_ab2280f29694f991",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_2ab7bb6dc61d9e4a",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_076ca7747b0dcf3e",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_e72e296ed05d9b8a",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_58dfcaf23271ac26__v_51200867168c",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_58dfcaf23271ac26__v_c7c6909d0f9b",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_58dfcaf23271ac26__v_1c1bbe38d73c",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_58dfcaf23271ac26__v_6cac82c4b0b8",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_58dfcaf23271ac26__v_f6f47cd133f9",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_58dfcaf23271ac26__v_a663d364ce09",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_58dfcaf23271ac26__v_6f4bdc0f48de",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_58dfcaf23271ac26__v_a61fb2069bc4",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_58dfcaf23271ac26__v_a4306a518dbb",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_58dfcaf23271ac26__v_b26f970f0a5a",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_58dfcaf23271ac26__v_174307ccfd50",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_1a3554fce25e10de__v_5c4ebd819fe5",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_1a3554fce25e10de__v_ada3d88fd11c",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_1a3554fce25e10de__v_b479bf414cd9",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_1a3554fce25e10de__v_f26074e0e8ce",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_1a3554fce25e10de__v_399b93ce6639",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_1a3554fce25e10de__v_d5ffb23ccaa2",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_1a3554fce25e10de__v_a3df159f1af9",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_1a3554fce25e10de__v_7cd724133490",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_1a3554fce25e10de__v_2c266b578cc9",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_1a3554fce25e10de__v_e2bcb0133a1d",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_1a3554fce25e10de__v_b96bdda769fd",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_b4402db957fbb7ea__v_ddbcad30e2fc",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_b4402db957fbb7ea__v_1564721670e1",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_b4402db957fbb7ea__v_5e332d3623f8",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_b4402db957fbb7ea__v_459766fb4320",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_b4402db957fbb7ea__v_787b5c20fd78",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_b4402db957fbb7ea__v_464c3509c0b7",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_b4402db957fbb7ea__v_f9e418cad07f",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_b4402db957fbb7ea__v_2e7c320a34f4",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_b4402db957fbb7ea__v_3892c87e2394",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_b4402db957fbb7ea__v_603655797ad3",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_b4402db957fbb7ea__v_c51d043d29bc",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_df3ade825a48f413__v_95ea716e9662",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_df3ade825a48f413__v_1c4ba075d27a",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_df3ade825a48f413__v_0f70f1f0538f",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_df3ade825a48f413__v_3a074b91c06d",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_df3ade825a48f413__v_25e4bdacbeb7",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_df3ade825a48f413__v_72084d8d08ad",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_df3ade825a48f413__v_f9091eb5d272",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_df3ade825a48f413__v_4cddd8992a4d",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_df3ade825a48f413__v_6cb3adb7249e",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_df3ade825a48f413__v_fbe66d493cba",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_df3ade825a48f413__v_acedeb50a8f8",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_b8a8ec77527f0c3c__v_f98cf6031ed7",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_b8a8ec77527f0c3c__v_bcf1025fe516",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_b8a8ec77527f0c3c__v_7bddc18aad21",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_b8a8ec77527f0c3c__v_e4c03c5745a0",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_b8a8ec77527f0c3c__v_4906e5319ca1",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_b8a8ec77527f0c3c__v_4c981c35e1d1",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_b8a8ec77527f0c3c__v_d0bba97a3b77",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_b8a8ec77527f0c3c__v_7bde21a17c66",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_b8a8ec77527f0c3c__v_07e72f981941",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_b8a8ec77527f0c3c__v_376406d1e975",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_b8a8ec77527f0c3c__v_8d0512677314",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_c524ffef22589ebd__v_8ae062ca88b4",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_c524ffef22589ebd__v_d41c5d22644e",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_c524ffef22589ebd__v_f3a5029121c8",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_c524ffef22589ebd__v_e976ad0c2234",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_c524ffef22589ebd__v_2e203859a984",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_c524ffef22589ebd__v_7853efbad0ad",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_c524ffef22589ebd__v_4a89bc286ab2",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_c524ffef22589ebd__v_c814fc2743e2",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_c524ffef22589ebd__v_82b1a5e082b5",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_c524ffef22589ebd__v_906f2a94a08d",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_c524ffef22589ebd__v_084566226c9d",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_793707caedb0f71e__v_40bdeda61e75",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_793707caedb0f71e__v_66aa6a2ad031",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_793707caedb0f71e__v_a8b64c368723",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_793707caedb0f71e__v_1b79bf256246",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_793707caedb0f71e__v_3326930adbbf",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_793707caedb0f71e__v_08c4f7fb0288",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_793707caedb0f71e__v_3bdee88c1b57",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_793707caedb0f71e__v_a1d726d4eeea",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_793707caedb0f71e__v_bed4222cec47",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_793707caedb0f71e__v_391654fd10c6",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_793707caedb0f71e__v_76bf47fc7337",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      },
+      {
+        "obligation_id": "obl_5db2c19c0b154b21",
+        "risk_family": "",
+        "assertion_kinds": [],
+        "control_present": false,
+        "treatment_present": false
+      }
+    ]
+  }
+}
