@@ -68,6 +68,7 @@ def scenario(scenario_id: str, title: str, scenario_type: str, ops: list[dict], 
 
 
 def cross_resource_scenarios(operations: list[dict], prd: str) -> list[dict]:
+    from ._model import _FULFILLMENT_PARENT_LIKE, _INVENTORY_LIKE, _OWNED_RECORD_LIKE, _OWNERSHIP_PARENT_LIKE, _PAYMENT_LIKE, _REFUND_LIKE, _resource_in  # lazy: avoid circular import
     """Build cross-resource scenarios from OpenAPI role families — not mall path lists."""
     scenarios: list[dict] = []
     by_resource: dict[str, list[dict]] = {}
@@ -75,6 +76,7 @@ def cross_resource_scenarios(operations: list[dict], prd: str) -> list[dict]:
         by_resource.setdefault(str(op.get("resource") or ""), []).append(op)
 
     def _ops_for_family(family: set[str], *, methods: set[str] | None = None, limit: int = 3) -> list[dict]:
+        from ._model import _FULFILLMENT_PARENT_LIKE, _INVENTORY_LIKE, _OWNED_RECORD_LIKE, _OWNERSHIP_PARENT_LIKE, _PAYMENT_LIKE, _REFUND_LIKE, _resource_in  # lazy: avoid circular import
         matched: list[dict] = []
         for resource, ops in by_resource.items():
             if not _resource_in(resource, family):

@@ -28,6 +28,7 @@ except ImportError:
 
 from ._common import *  # noqa: F401,F403
 from ._common import _safe_project_id, _load_json, _write_json  # explicit: underscore names not exported by *
+from ._common import _SEMANTIC_LEXICON_CACHE  # noqa: F401
 
 # Ensure underscore-prefixed helpers are exported via `from ._utils import *`
 __all__ = [
@@ -39,6 +40,7 @@ __all__ = [
     "_redact_text", "_registry_default", "_require_manage_actor", "_safe_actor", "_safe_slug",
     "_save_registry", "_semantic_lexicon", "_short_hash", "_tokens",
     "_safe_project_id", "_load_json", "_write_json",
+    "ENGLISH_STATE_TOKENS", "CHINESE_STATE_HINTS",
 ]
 
 

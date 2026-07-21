@@ -10,6 +10,7 @@ from typing import Any
 
 from ._common import *  # noqa: F401,F403
 from ._evidence import *  # noqa: F401,F403
+from ._evidence import _best_runtime_observation, _clean, _extract_verified_db_evidence, _has_anomaly_signal, _has_db_clue, _has_runtime_response, _is_unresolved_path_value, _relevant_har_evidence, _runtime_body_excerpt, _status_code_int  # noqa: F401
 
 
 def _compute_evidence_quality(finding: dict, repro_path: str) -> dict:
@@ -207,6 +208,8 @@ def _deep_get(d: dict, *keys, default: Any = None) -> Any:
 # ═══════════════════════════════════════════════════════════════════════
 
 def _extract_db_evidence(finding: dict) -> dict | None:
+    from ._display import _looks_like_api_endpoint  # lazy
+    from ._format import _strip_internal_tags  # lazy
     """从 finding 提取结构化 DB 证据（通用，不硬编码表名/字段名）。
 
     优先从 title 正则解析 deep_verifier 的输出格式，
@@ -351,6 +354,8 @@ def _compute_evidence_completeness(finding: dict) -> dict:
 
 
 def _build_display_evidence_chain(finding: dict) -> dict:
+    from ._display import _filter_chain_for_business, _filter_chain_for_test  # lazy
+    from ._format import _strip_internal_tags  # lazy
     """构建多源数据驱动的企业级证据链。
 
     从文档/HAR/DB/日志/复现多源条件式提取真实数据，

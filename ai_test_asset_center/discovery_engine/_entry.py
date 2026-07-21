@@ -7,6 +7,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any
+from ._engine import AutonomousDiscoveryEngine  # noqa: F401
 
 logger = logging.getLogger(__name__)
 

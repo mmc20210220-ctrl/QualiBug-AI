@@ -14,6 +14,7 @@ import urllib.request
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any
+from ._common import _append_query, _auth_boundary_plan, _configured_query_params, _find_sensitive_keys, _fixture_backed_read_probe, _fixture_control_headers, _has_business_data, _has_unresolved_placeholder, _headers_from_config, _http_request, _is_auth_boundary_risk, _join_url, _negative_headers, _read_fixture_setup_approval, _redact, _render_path, _render_query, _safe_payload_summary, _url_host  # noqa: F401
 
 logger = logging.getLogger(__name__)
 

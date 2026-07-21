@@ -71,6 +71,7 @@ def load_business_knowledge_model(config: DiscoveryConfig) -> dict:
 
 
 def enrich_business_model_with_knowledge(business_model: dict, knowledge_model: dict) -> dict:
+    from ._probes import normalize_knowledge_risk, operation_matches_any_knowledge_risk, risks_from_text  # lazy
     if not knowledge_model:
         business_model["enterprise_knowledge"] = {
             "enabled": False,
@@ -133,6 +134,7 @@ class HttpClient:
 
 
 def extract_business_rules(prd: str, openapi: dict) -> list[dict]:
+    from ._probes import keyword_hits  # lazy
     paths = sorted(openapi.get("paths", {}).keys())
     domains = ["permission", "idor", "tenant", "order", "stock", "coupon", "payment", "refund", "idempotency", "money"]
     return [{"rule_id": f"BR_{domain.upper()}", "domain": domain, "source": "PRD+OpenAPI", "paths": [p for p in paths if keyword_hits(domain, p)]} for domain in domains]
@@ -157,6 +159,7 @@ def _documented_request_contract(spec: dict) -> tuple[dict, dict]:
 
 
 def infer_business_model(prd: str, openapi: dict, accounts: dict) -> dict:
+    from ._scenarios import infer_business_scenarios  # lazy
     """Build a zero-config business model from the user's single input bundle.
 
     This intentionally reads only public materials: PRD/MRD-like text, OpenAPI and
@@ -317,6 +320,7 @@ def infer_industry(prd: str, paths: dict) -> str:
 
 
 def infer_invariants_from_model(operations: list[dict], roles: list[str], tenants: list[str]) -> list[dict]:
+    from ._probes import invariant_statement  # lazy
     invariants = []
     for op in operations:
         for risk in op["risk_hints"]:

@@ -19,10 +19,12 @@ from ._common import *  # noqa: F401,F403
 from ._model import *  # noqa: F401,F403
 from ._scenarios import *  # noqa: F401,F403
 from ._probes import *  # noqa: F401,F403
+from ._probes import build_invariants, build_lightweight_business_adaptation_profile, generate_defect_probes, load_business_adaptation_profile, load_high_value_attack_plan, load_high_value_capability_assessment, load_high_value_capability_trend, load_high_value_pattern_memory, load_risk_learning_profile, normalize_discovery_mode, step  # noqa: F401
 
 
 class DefectDiscoveryRunner:
     def __init__(self, config: DiscoveryConfig):
+        from ._model import DiscoveryConfig, HttpClient, enrich_business_model_with_knowledge, extract_business_rules, infer_business_model, load_business_knowledge_model, read_json, read_text  # lazy: avoid circular import
         self.config = config
         self.workspace = config.workspace_root / config.project / "defect_discovery"
         self.output = config.output_root / config.project / "defect_discovery"
@@ -30,6 +32,9 @@ class DefectDiscoveryRunner:
         self.output.mkdir(parents=True, exist_ok=True)
 
     def run(self) -> dict:
+        from ._reporting import build_bug_drafts, build_business_risk_radar, build_cluster_fix_verification_plan, build_enterprise_bug_triage_matrix, build_enterprise_release_gate_decision, build_high_value_attack_plan, build_high_value_capability_assessment, build_high_value_capability_trend, build_high_value_issue_clusters, build_high_value_pattern_memory, build_high_value_repro_evidence_pack, build_high_value_self_improvement_report, build_high_value_summary, build_oracle_coverage_summary, build_report, build_risk_learning_profile, roi_metrics, write_json  # lazy
+        from ._model import DiscoveryConfig, HttpClient, enrich_business_model_with_knowledge, extract_business_rules, infer_business_model, load_business_knowledge_model, read_json, read_text  # lazy: avoid circular import
+        from ._scenarios import build_enterprise_user_preparation_guide, build_execution_readiness_plan, build_scenario_data_orchestration, evaluate_scenario_coverage  # lazy: avoid circular import
         prd = read_text(self.config.public_artifacts / "prd.md")
         openapi = read_json(self.config.public_artifacts / "openapi.json")
         sut_config = read_json(self.config.public_artifacts / "sut_config.json")
@@ -265,6 +270,7 @@ class DefectDiscoveryRunner:
         return data
 
     def execute_probes(self, client: HttpClient, accounts: dict, probes: list[dict]) -> list[dict]:
+        from ._model import DiscoveryConfig, HttpClient, enrich_business_model_with_knowledge, extract_business_rules, infer_business_model, load_business_knowledge_model, read_json, read_text  # lazy: avoid circular import
         workers_raw = os.environ.get("PROBE_PARALLEL_WORKERS", "1").strip()
         try:
             max_workers = max(1, int(workers_raw or "1"))
@@ -277,6 +283,7 @@ class DefectDiscoveryRunner:
             timeout_ms = 8000
 
         def run_one(index_item: tuple[int, dict]) -> tuple[int, dict]:
+            from ._model import DiscoveryConfig, HttpClient, enrich_business_model_with_knowledge, extract_business_rules, infer_business_model, load_business_knowledge_model, read_json, read_text  # lazy: avoid circular import
             index, item = index_item
             local_client = HttpClient(client.base_url)
             start = time.time()
@@ -319,6 +326,7 @@ class DefectDiscoveryRunner:
 
 
 def login_accounts(client: HttpClient, accounts: dict) -> dict[str, str]:
+    from ._model import DiscoveryConfig, HttpClient, enrich_business_model_with_knowledge, extract_business_rules, infer_business_model, load_business_knowledge_model, read_json, read_text  # lazy: avoid circular import
     del client
     tokens: dict[str, str] = {}
     for account in accounts.get("accounts", []):
@@ -339,6 +347,7 @@ def login_accounts(client: HttpClient, accounts: dict) -> dict[str, str]:
 
 
 def execute_probe(client: HttpClient, tokens: dict[str, str], item: dict) -> dict:
+    from ._model import DiscoveryConfig, HttpClient, enrich_business_model_with_knowledge, extract_business_rules, infer_business_model, load_business_knowledge_model, read_json, read_text  # lazy: avoid circular import
     method = str(item.get("method") or "GET").upper()
     steps = [step for step in item.get("steps", []) if isinstance(step, dict)]
     has_write = method in {"POST", "PUT", "PATCH", "DELETE"} or any(
@@ -417,6 +426,7 @@ def execute_probe(client: HttpClient, tokens: dict[str, str], item: dict) -> dic
     return execute_generic_probe(client, token, item, {})
 
 def execute_generic_probe(client: HttpClient, token: str | None, item: dict, body: dict) -> dict:
+    from ._model import DiscoveryConfig, HttpClient, enrich_business_model_with_knowledge, extract_business_rules, infer_business_model, load_business_knowledge_model, read_json, read_text  # lazy: avoid circular import
     response = client.request(item["method"], item["path"], token=token, body=body if item["method"] != "GET" else None)
     risk = item["risk_type"]
     if risk in {"permission_bypass", "auth_bypass", "idor", "tenant_isolation"}:
@@ -525,6 +535,7 @@ def operation_for_method(method: str, path: str) -> str:
 
 
 def to_discovered_bug(item: dict) -> dict:
+    from ._reporting import high_value_profile, value_tier  # lazy
     p = item["probe"]
     profile = high_value_profile(item)
     score = profile["total_score"]

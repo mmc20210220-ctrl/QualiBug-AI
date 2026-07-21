@@ -18,6 +18,8 @@ from ai_test_asset_center.rag_probe_generator import generate_rag_enhanced_probe
 from ._common import *  # noqa: F401,F403
 from ._model import *  # noqa: F401,F403
 from ._scenarios import *  # noqa: F401,F403
+from ._model import _FULFILLMENT_PARENT_LIKE, _INVENTORY_LIKE, _PAYMENT_LIKE, _REFUND_LIKE, _resource_in, resource_name  # noqa: F401
+from ._scenarios import scenario  # noqa: F401
 
 
 _INVARIANT_TEMPLATES: dict[str, str] = {
@@ -273,6 +275,8 @@ def generate_defect_probes(invariants: list[dict], business_model: dict | None =
 
 
 def inferred_business_context_for_probe(item: dict, business_model: dict) -> dict:
+    from ._reporting import business_risk_domain_for  # lazy
+    from ._runner import business_object_for_api, operation_for_method  # lazy
     api_template = str(item.get("api_template") or f"{item.get('method', '')} {item.get('path', '')}".strip())
     operations = business_model.get("operations", []) or []
     op = find_operation_by_api_template(operations, api_template)
@@ -937,6 +941,7 @@ def generate_risk_learning_profile_probes(business_model: dict) -> list[dict]:
 
 
 def generate_high_value_attack_plan_probes(business_model: dict) -> list[dict]:
+    from ._reporting import safe_pattern_token  # lazy
     plan = business_model.get("high_value_attack_plan") or {}
     focus = plan.get("top_focus") or []
     if not focus:

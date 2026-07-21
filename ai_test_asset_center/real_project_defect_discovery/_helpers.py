@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ._common import *  # noqa: F401,F403
+from ._common import _BROWSER_UI_BLOCKED_SOURCES  # noqa: F401
 
 
 def _live_mode_or_plan(configured_mode: Any, live_execution_allowed: bool) -> str:

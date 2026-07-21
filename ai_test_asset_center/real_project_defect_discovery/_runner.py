@@ -12,6 +12,8 @@ from typing import Any
 
 from ._common import *  # noqa: F401,F403
 from ._helpers import *  # noqa: F401,F403
+from ._helpers import _append_adapter_issue, _apply_browser_health_probe_policy, _augment_risk_plan_with_browser_health, _build_discovery_funnel, _fetch_json_or_text, _live_mode_or_plan, _login, _safe_rate, _status_suspicious, generate_history_informed_probes, generate_real_project_probes  # noqa: F401
+from ._reporting import _fix_for_risk, _impact_for_risk, _render_bug_drafts, render_real_project_report  # noqa: F401
 
 
 def run_real_project_discovery(project_id: str = "real_project_demo", root: Path | None = None) -> dict[str, Any]:

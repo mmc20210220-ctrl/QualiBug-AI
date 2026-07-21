@@ -13,6 +13,9 @@ from ._evidence import *  # noqa: F401,F403
 from ._quality import *  # noqa: F401,F403
 from ._display import *  # noqa: F401,F403
 from ._scoring import *  # noqa: F401,F403
+from ._display import _build_investigation_display, _build_repro_steps_display, _looks_like_api_endpoint  # noqa: F401
+from ._evidence import _best_runtime_observation, _build_taxonomy, _clean, _extract_verified_db_evidence, _format_policy_text, _high_confidence_candidate_display, _is_unresolved_path_value, _normalize_severity, _policy_list, _policy_section, _runtime_body_excerpt, _runtime_identity_mismatch_reasons, _runtime_observation_supports_finding, _status_code_int, _ui_verification_display  # noqa: F401
+from ._quality import _build_display_evidence_chain, _compute_evidence_completeness, _compute_evidence_quality, _deep_get  # noqa: F401
 
 
 def _normalize_regression_verification_obligations(
@@ -245,6 +248,7 @@ def _build_expected_actual_comparison(finding: dict) -> dict:
 # ═══════════════════════════════════════════════════════════════════════
 
 def _format_single_finding(finding: dict, enterprise_ctx: dict | None = None) -> dict:
+    from ._scoring import _build_raw_evidence, _compute_bug_status, _compute_commercial_value, _compute_reproducibility_confidence, _compute_scores, _enforce_evidence_gate, _extract_failed_assertions  # lazy: avoid circular import
     """格式化单条 finding 为 display-ready 结构"""
 
     # ── Stage 0: 输入标准化 ──
@@ -962,6 +966,7 @@ def format_findings_display_ready(
     enterprise_ctx: dict | None = None,
     raw_report: dict | None = None,
 ) -> tuple[list[dict], dict]:
+    from ._scoring import _build_raw_evidence, _compute_bug_status, _compute_commercial_value, _compute_reproducibility_confidence, _compute_scores, _enforce_evidence_gate, _extract_failed_assertions  # lazy: avoid circular import
     """
     主入口：对统一汇聚后的 risks 列表做整体格式化。
 

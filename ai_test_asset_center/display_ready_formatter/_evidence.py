@@ -316,6 +316,7 @@ def _runtime_relevance_mismatch_reasons(finding: dict) -> list[str]:
 
 
 def _extract_runtime_call_evidence(finding: dict) -> list[dict[str, Any]]:
+    from ._quality import _deep_get  # lazy
     evidence = finding.get("evidence") if isinstance(finding.get("evidence"), dict) else {}
     calls = evidence.get("calls") if isinstance(evidence.get("calls"), list) else []
     rows: list[dict[str, Any]] = []
@@ -380,6 +381,7 @@ def _observation_has_response_payload(obs: dict[str, Any]) -> bool:
 
 
 def _declared_request_identity(finding: dict) -> tuple[str, str]:
+    from ._quality import _deep_get  # lazy
     method = _clean(
         finding.get("_api_method")
         or finding.get("repro_method")
@@ -552,6 +554,7 @@ def _extract_verified_db_evidence(finding: dict) -> dict | None:
 
 
 def _has_db_clue(finding: dict) -> bool:
+    from ._quality import _deep_get  # lazy
     return bool(
         _clean(finding.get("source_entity") or finding.get("source_value"))
         or _has_any_value(_deep_get(finding, "investigation_guidance", "relevant_tables"))
@@ -560,6 +563,7 @@ def _has_db_clue(finding: dict) -> bool:
 
 
 def _has_anomaly_signal(finding: dict) -> bool:
+    from ._quality import _deep_get  # lazy
     if _extract_verified_db_evidence(finding):
         return True
     for obs in _accepted_runtime_observations(finding):

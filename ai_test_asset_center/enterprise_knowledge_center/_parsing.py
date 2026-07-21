@@ -18,6 +18,7 @@ import zipfile
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable
+from ._utils import _clean_markup_text, _contains_markdown_api_sections, _decode_docx, _decode_pdf, _dedupe_by_id, _detected_source_format, _hash_bytes, _json_or_none, _lexicon_dict, _lexicon_list, _looks_like_field_dictionary, _looks_like_uiux_spec, _norm, _normalize_state_token, _now, _parser_receipt, _redact_text, _safe_slug, _short_hash, _tokens  # noqa: F401
 
 logger = logging.getLogger(__name__)
 

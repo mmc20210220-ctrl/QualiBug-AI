@@ -40,6 +40,7 @@ def _filter_chain_for_test(chain: list[dict]) -> list[dict]:
 # ═══════════════════════════════════════════════════════════════════════
 
 def _build_repro_steps_display(finding: dict, enterprise_ctx: dict | None = None) -> dict:
+    from ._evidence import _best_runtime_observation, _clean, _has_runtime_response, _is_unresolved_path_value, _path_mismatch_reasons, _runtime_body_excerpt, _status_code_int  # lazy: avoid circular import
     """构建复现信息展示（基于 HAR 真实数据）"""
     ctx = enterprise_ctx or {}
     runtime_obs = _best_runtime_observation(finding)
@@ -137,6 +138,8 @@ def _build_repro_steps_display(finding: dict, enterprise_ctx: dict | None = None
 
 
 def _generate_default_repro_steps(finding: dict, path: str, method: str, ctx: dict) -> list[str]:
+    from ._format import _strip_internal_tags  # lazy
+    from ._evidence import _best_runtime_observation, _clean, _has_runtime_response, _is_unresolved_path_value, _path_mismatch_reasons, _runtime_body_excerpt, _status_code_int  # lazy: avoid circular import
     """生成默认复现步骤指引（当后端没有真实步骤时的 fallback）。
 
     注意：这些是"建议操作指引"，不是"已执行的真实复现步骤"。
@@ -188,6 +191,8 @@ def _looks_like_api_endpoint(value: str) -> bool:
 
 
 def _extract_business_keys(finding: dict) -> list[tuple[str, str]]:
+    from ._quality import _deep_get  # lazy: avoid circular import
+    from ._evidence import _best_runtime_observation, _clean, _has_runtime_response, _is_unresolved_path_value, _path_mismatch_reasons, _runtime_body_excerpt, _status_code_int  # lazy: avoid circular import
     """
     通用业务主键提取：从 finding 数据的多个位置动态提取业务主键。
     不硬编码任何业务概念（如 order_id/sku/email），
@@ -267,6 +272,7 @@ def _extract_business_keys(finding: dict) -> list[tuple[str, str]]:
 
 
 def _infer_tables_from_finding(finding: dict) -> list[str]:
+    from ._evidence import _best_runtime_observation, _clean, _has_runtime_response, _is_unresolved_path_value, _path_mismatch_reasons, _runtime_body_excerpt, _status_code_int  # lazy: avoid circular import
     """
     通用表名推断：从 finding 的 source_entity、investigation_guidance.relevant_tables、
     API path 动态获取相关表名。不硬编码任何表名映射。
@@ -309,6 +315,7 @@ def _infer_tables_from_finding(finding: dict) -> list[str]:
 
 
 def _build_specific_sql(finding: dict, tables: list[str], business_keys: list[tuple[str, str]], entity: str = "") -> str:
+    from ._evidence import _best_runtime_observation, _clean, _has_runtime_response, _is_unresolved_path_value, _path_mismatch_reasons, _runtime_body_excerpt, _status_code_int  # lazy: avoid circular import
     """
     通用 SQL 核验语句生成：基于 finding 动态提取的表名和业务主键生成 SQL。
     不硬编码任何表结构——如果没有表名信息，生成通用模板。
@@ -389,6 +396,8 @@ def _build_specific_sql(finding: dict, tables: list[str], business_keys: list[tu
 
 
 def _build_investigation_display(finding: dict) -> dict:
+    from ._quality import _deep_get  # lazy: avoid circular import
+    from ._evidence import _best_runtime_observation, _clean, _has_runtime_response, _is_unresolved_path_value, _path_mismatch_reasons, _runtime_body_excerpt, _status_code_int  # lazy: avoid circular import
     """构建排查指引展示——生成具体 SQL 而非通用模板"""
     inv = finding.get("investigation_guidance") if isinstance(finding.get("investigation_guidance"), dict) else {}
     entity = _clean(finding.get("source_entity"))

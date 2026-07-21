@@ -103,6 +103,7 @@ def render_real_project_report(data: dict[str, Any]) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from ._runner import run_real_project_discovery  # lazy: avoid circular import
     argv = argv or []
     project = os.environ.get("REAL_PROJECT_ID") or (argv[0] if argv else "real_project_demo")
     data = run_real_project_discovery(project)

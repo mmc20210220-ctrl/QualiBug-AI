@@ -20,6 +20,8 @@ from ._model import *  # noqa: F401,F403
 from ._scenarios import *  # noqa: F401,F403
 from ._probes import *  # noqa: F401,F403
 from ._runner import *  # noqa: F401,F403
+from ._model import DiscoveryConfig  # noqa: F401
+from ._probes import ORACLE_REQUIRED_RISKS, step  # noqa: F401
 
 
 def high_value_profile(item: dict) -> dict:
@@ -1359,6 +1361,7 @@ def write_json(path: Path, data: object) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from ._runner import DefectDiscoveryRunner  # lazy: avoid circular import
     import argparse
     parser = argparse.ArgumentParser(description="Run AI defect discovery")
     parser.add_argument("--project", default=os.environ.get("PROJECT", "enterprise_shop"))

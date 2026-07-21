@@ -33,7 +33,6 @@ from ._utils import _hash_bytes, _short_hash, _norm, _tokens, _now, _paths, _loa
 from ._parsing import *  # noqa: F401,F403
 from ._parsing import _parse_source, _openapi_operations, _risk_type_from_text  # noqa: F401
 from ._crud import *  # noqa: F401,F403
-from ._crud import _record_parse  # noqa: F401
 from ._linking import *  # noqa: F401,F403
 from ._linking import (_dedupe_by_id, _authoritative_rule_to_interface_edges, _links_by_overlap,  # noqa: F401
     _evidence_bundle, _merge_openapi, _module_tree, _oracle_dsl_pack_from_recognized_industries,
@@ -560,6 +559,7 @@ def _structurize_rule_causal_chains(rules: list[dict[str, Any]]) -> list[dict[st
 
 
 def build_enterprise_business_knowledge_asset(project_id: str = "real_project_demo", root: Path | None = None, options: dict[str, Any] | None = None) -> dict[str, Any]:
+    from ._crud import _record_parse  # lazy: avoid circular import
     root = root or ROOT
     project = _safe_project_id(project_id)
     options = options or {}

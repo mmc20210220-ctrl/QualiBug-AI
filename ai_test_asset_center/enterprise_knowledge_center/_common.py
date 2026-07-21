@@ -58,7 +58,12 @@ __all__ = [
     "_icon", "callout", "detail_list", "empty_state", "h", "metric_card",
     "product_shell", "section", "status_badge", "table",
     "infer_multi_industry_business_model",
+    "logger",
     "PHASE", "PARSER_RECEIPT_SCHEMA", "SOURCE_TYPES",
+    "TEXT_SUFFIXES", "MAX_SOURCE_BYTES", "SAFE_METHODS", "WRITE_METHODS",
+    "MARKDOWN_API_ENDPOINT_RE", "SVG_TEXT_RE", "SVG_TAG_ATTR_RE",
+    "SVG_TITLE_RE", "SVG_DESC_RE", "ROLE_WORDS", "RISK_TERMS",
+    "SECRET_PATTERNS", "SEMANTIC_LEXICON_PATH", "_SEMANTIC_LEXICON_CACHE",
 ]
 
 PHASE = "phase58_enterprise_knowledge_unified_ingestion"

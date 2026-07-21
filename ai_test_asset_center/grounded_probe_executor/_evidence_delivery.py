@@ -13,6 +13,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 from ._common import *  # noqa: F401,F403
+from ._common import _dedupe, _read_json  # noqa: F401
 
 def _runtime_rerun_manifest_from_value(value: Any) -> tuple[dict[str, Any] | None, str]:
     """Load an optional remediation rerun manifest from config.

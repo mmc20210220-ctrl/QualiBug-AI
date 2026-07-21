@@ -18,6 +18,8 @@ import zipfile
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable
+from ._parsing import _risk_type_from_text  # noqa: F401
+from ._utils import _dedupe_by_id, _hash_bytes, _load_registry, _now, _redact_text, _short_hash, _tokens  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -1008,6 +1010,7 @@ def _declared_project_source_files(project: str, root: Path) -> list[Path]:
 
 
 def _sync_declared_project_sources(project: str, root: Path, registry: dict[str, Any]) -> dict[str, Any]:
+    from ._crud import ingest_enterprise_knowledge_files  # lazy: avoid circular import
     """Ingest source files declared in the existing project input locations."""
     active_hashes = {
         str(row.get("content_hash") or "")

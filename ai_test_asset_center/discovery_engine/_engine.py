@@ -13,6 +13,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from ._budget import _apply_execution_budget_profile, _get_execution_budget_settings, _plan_execution_budget, _summarize_execution_feedback  # noqa: F401
 
 logger = logging.getLogger(__name__)
 

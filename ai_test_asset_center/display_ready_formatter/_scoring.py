@@ -12,9 +12,11 @@ from ._common import *  # noqa: F401,F403
 from ._evidence import *  # noqa: F401,F403
 from ._quality import *  # noqa: F401,F403
 from ._display import *  # noqa: F401,F403
+from ._evidence import _best_runtime_observation, _clean, _extract_verified_db_evidence, _has_anomaly_signal, _has_runtime_response, _is_unresolved_path_value, _path_mismatch_reasons, _runtime_body_excerpt, _runtime_relevance_mismatch_reasons, _status_code_int  # noqa: F401
 
 
 def _compute_scores(findings: list[dict], raw: dict | None = None) -> dict:
+    from ._quality import _deep_get  # lazy: avoid circular import
     """计算 BEI / BDS / BCS 评分。
 
     商业化口径：证据可信度只能来自 display-ready 后的证据门控结果，
@@ -454,6 +456,7 @@ def _compute_reproducibility_confidence(finding: dict, bug_status: dict, evidenc
 # ═══════════════════════════════════════════════════════════════════════
 
 def _extract_failed_assertions(finding: dict, reproduction: dict) -> list[dict]:
+    from ._format import _strip_internal_tags  # lazy
     """从 finding 提取失败断言列表（通用，不硬编码业务概念）。
 
     断言来源（均需真实异常信号，非仅有文本描述）：
@@ -527,6 +530,7 @@ def _extract_failed_assertions(finding: dict, reproduction: dict) -> list[dict]:
 
 
 def _build_raw_evidence(finding: dict, reproduction: dict) -> dict:
+    from ._quality import _deep_get  # lazy: avoid circular import
     """构建原始证据结构（机器可追溯）。
 
     从 canonical runtime observation / DB / 日志 / 执行记录中提取原始证据，不伪造。

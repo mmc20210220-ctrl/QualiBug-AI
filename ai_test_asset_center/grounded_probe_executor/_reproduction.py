@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 from ._common import *  # noqa: F401,F403
 from ._common import _redact, _safe_payload_summary  # explicit import for underscore-prefixed helpers
+from ._evidence_scoreboard import _runtime_evidence_probe_binding_events, _runtime_evidence_target_statuses  # noqa: F401
 
 def _shell_single_quote(value: str) -> str:
     return "'" + str(value).replace("'", "'\"'\"'") + "'"
