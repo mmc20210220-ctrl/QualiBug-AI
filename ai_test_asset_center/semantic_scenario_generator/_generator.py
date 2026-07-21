@@ -1,8 +1,4 @@
-"""Source-grounded scenarios for the existing V12 behavior graph.
-
-No default business entity, API path, actor, request body or cleanup action is
-created here. Missing executable prerequisites are represented as plan gaps.
-"""
+"""SemanticScenarioGenerator: source-grounded scenario planning."""
 from __future__ import annotations
 
 import hashlib
@@ -13,9 +9,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .auto_test_data_factory import _markdown_request_example
-from .business_state_graph import BusinessStateGraph, StateEdge, StateTransition, _api_facts, behavior_slice_id
-from .real_id_resolver import (
+from ._common import *  # noqa: F401,F403
+from ..auto_test_data_factory import _markdown_request_example
+from ..business_state_graph import BusinessStateGraph, StateEdge, StateTransition, _api_facts, behavior_slice_id
+from ..real_id_resolver import (
     alternate_collection_paths,
     body_field_collection_paths,
     extract_body_binding_fields,
@@ -25,107 +22,6 @@ from .real_id_resolver import (
     path_has_placeholders,
     collection_path,
 )
-
-# First-class System Behavior Space scenario enricher — no method replacement.
-ScenarioEnricher = Callable[..., Any]
-_SCENARIO_ENRICHER: ScenarioEnricher | None = None
-
-
-def register_scenario_enricher(hook: ScenarioEnricher | None) -> None:
-    """Post-``_invariant_from_meta`` enricher for system-behavior slices."""
-    global _SCENARIO_ENRICHER
-    _SCENARIO_ENRICHER = hook
-
-
-def clear_scenario_enricher() -> None:
-    register_scenario_enricher(None)
-
-
-@dataclass
-class ScenarioStep:
-    order: int
-    action: str
-    api_method: str = ""
-    api_path: str = ""
-    body_template: dict[str, Any] = field(default_factory=dict)
-    extract_from_response: list[str] = field(default_factory=list)
-    extract_where: dict[str, Any] = field(default_factory=dict)
-    expected_status: int = 0
-    actor: str = ""
-    body_provenance: str = ""
-
-
-@dataclass
-class ExecutableScenario:
-    id: str
-    title: str
-    description: str = ""
-    category: str = "state_machine"
-    severity: str = "P2"
-    entity: str = ""
-    preconditions: list[str] = field(default_factory=list)
-    actors: list[str] = field(default_factory=list)
-    steps: list[ScenarioStep] = field(default_factory=list)
-    expected_state: str = ""
-    oracle_rules: list[str] = field(default_factory=list)
-    cleanup_steps: list[ScenarioStep] = field(default_factory=list)
-    is_forbidden_path: bool = False
-    is_boundary_path: bool = False
-    is_concurrent: bool = False
-    confidence: float = 0.0
-    actor_token: str = ""
-    execution_policy: str = "plan_only_requires_fixture"
-    evidence_gaps: list[str] = field(default_factory=list)
-    source_refs: list[dict[str, str]] = field(default_factory=list)
-    behavior_slice_id: str = ""
-    behavior_slice_kind: str = ""
-    discovery_round: int = 1
-    selection_origin: str = ""
-    runtime_hints: dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "title": self.title,
-            "description": self.description,
-            "category": self.category,
-            "severity": self.severity,
-            "entity": self.entity,
-            "preconditions": self.preconditions,
-            "actors": self.actors,
-            "steps": [
-                {
-                    "order": step.order,
-                    "action": step.action,
-                    "method": step.api_method,
-                    "path": step.api_path,
-                    "body": step.body_template,
-                    "extract": step.extract_from_response,
-                    "extract_where": step.extract_where,
-                    "expected": step.expected_status,
-                    "actor": step.actor,
-                    "body_provenance": step.body_provenance,
-                }
-                for step in self.steps
-            ],
-            "expected_state": self.expected_state,
-            "oracle_rules": self.oracle_rules,
-            "cleanup": [step.action for step in self.cleanup_steps],
-            "flags": {
-                "forbidden": self.is_forbidden_path,
-                "boundary": self.is_boundary_path,
-                "concurrent": self.is_concurrent,
-            },
-            "confidence": self.confidence,
-            "execution_policy": self.execution_policy,
-            "evidence_gaps": self.evidence_gaps,
-            "source_refs": self.source_refs,
-            "behavior_slice_id": self.behavior_slice_id,
-            "behavior_slice_kind": self.behavior_slice_kind,
-            "discovery_round": self.discovery_round,
-            "selection_origin": self.selection_origin,
-            "runtime_hints": self.runtime_hints,
-        }
 
 
 class SemanticScenarioGenerator:
@@ -3666,91 +3562,3 @@ class SemanticScenarioGenerator:
         )
 
 
-def _adjacent_read_for_entity(entity: str, write_path: str) -> str:
-    """Derive the observation (GET) endpoint for a write path — structurally.
-
-    A write like `/api/payments/pay` or `/api/orders/{id}/cancel` has its read
-    counterpart at the resource collection `/api/payments` or `/api/orders`.
-    We compute that purely from path structure — the first two segments form
-    the resource collection — with no per-project or per-industry endpoint map.
-    """
-    candidates = _observation_read_candidates(write_path)
-    return candidates[0] if candidates else normalize_path_placeholders(str(write_path or ""))
-
-
-def _documented_observation_read_candidates(write_path: str, api_doc: str) -> list[str]:
-    """Return source-declared GET observers related to a write path."""
-    if not str(api_doc or "").strip():
-        return []
-    try:
-        _, _, endpoints = _api_facts(
-            api_doc,
-            re.compile(r"(?:^|[_\-\s])(status|state|phase|stage|lifecycle)(?:$|[_\-\s])", re.I),
-        )
-    except Exception:
-        return []
-    write_norm = normalize_path_placeholders(str(write_path or ""))
-    write_parts = [
-        part.lower()
-        for part in write_norm.strip("/").split("/")
-        if part and not part.startswith("{")
-    ]
-    stop = {"api", "v1", "v2", "v3", "admin"}
-    write_tokens = {part for part in write_parts if part not in stop}
-    if not write_tokens:
-        return []
-    write_collection = collection_path(write_norm).rstrip("/")
-    scored: list[tuple[tuple[int, int, int, int], str]] = []
-    for endpoint in endpoints:
-        if str(endpoint.get("method") or "").upper() not in {"GET", "HEAD"}:
-            continue
-        read_path = normalize_path_placeholders(str(endpoint.get("path") or ""))
-        if not read_path.startswith("/"):
-            continue
-        read_parts = [
-            part.lower()
-            for part in read_path.strip("/").split("/")
-            if part and not part.startswith("{")
-        ]
-        read_tokens = {part for part in read_parts if part not in stop}
-        overlap = len(write_tokens & read_tokens)
-        if overlap <= 0:
-            continue
-        prefix_match = 0 if (
-            read_path.rstrip("/") == write_collection
-            or read_path.rstrip("/").startswith(write_collection + "/")
-            or write_norm.rstrip("/").startswith(read_path.rstrip("/") + "/")
-        ) else 1
-        placeholder_count = len(re.findall(r"\{[A-Za-z_]\w*\}", read_path))
-        depth = read_path.count("/")
-        scored.append(((prefix_match, -overlap, placeholder_count, depth), read_path))
-    return list(dict.fromkeys(path for _score, path in sorted(scored, key=lambda item: item[0])))
-
-
-def _observation_read_candidates(write_path: str) -> list[str]:
-    """Return ordered GET observation paths for a write endpoint."""
-    normalized = normalize_path_placeholders(str(write_path or ""))
-    paths: list[str] = []
-    parts = [p for p in normalized.strip("/").split("/") if p and "{" not in p]
-    if len(parts) >= 2:
-        paths.append("/" + "/".join(parts[:2]))
-    coll = collection_path(normalized)
-    if coll.startswith("/") and coll not in paths:
-        paths.append(coll)
-    alternates: list[str] = []
-    if len(parts) >= 2:
-        prefix, resource = parts[0], parts[1].lower()
-        synthetic = f"/{prefix}/{resource}/{{id}}"
-        if resource in {"inventory", "stock", "warehouse"}:
-            synthetic = f"/{prefix}/{resource}/{{sku}}"
-        alternates.extend(alternate_collection_paths(synthetic))
-        # Action-style writes (/api/inventory/reserve) usually have no list at /api/inventory.
-        if len(parts) > 2 and resource in {"inventory", "stock", "warehouse"} and alternates:
-            def _obs_rank(candidate: str) -> tuple[int, int]:
-                last = candidate.rstrip("/").rsplit("/", 1)[-1].lower()
-                catalog = 0 if last in {"products", "product", "materials", "material", "items", "goods", "skus", "catalog"} else 1
-                return (catalog, candidate.count("/"))
-            paths = sorted(alternates, key=_obs_rank) + paths
-        else:
-            paths.extend(alternates)
-    return list(dict.fromkeys(item for item in paths if item.startswith("/")))
