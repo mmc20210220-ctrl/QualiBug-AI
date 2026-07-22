@@ -408,7 +408,26 @@ def derive_canonical_identity_evidence(
     reproduction = _dict(bundle.get("reproduction_receipt"))
     oracle = _dict(bundle.get("oracle_receipt"))
     treatment = _one_step(reproduction, "treatment")
-    assertion = _one_violation(oracle)
+    # For HTTP evidence violations, the oracle_receipt may be BLOCKED (missing
+    # activation receipts) while the finding carries a synthetic VIOLATION
+    # assertion derived from direct HTTP observation.  Fall back to the
+    # finding's failed_assertions in that case.
+    _finding_in_bundle = _dict(bundle.get("finding"))
+    if (
+        _finding_in_bundle.get("_http_evidence_violation") is True
+        and _text(oracle.get("status")).upper() != "VIOLATION"
+    ):
+        _finding_assertions = [
+            _dict(a)
+            for a in _list(_finding_in_bundle.get("failed_assertions"))
+            if _dict(a).get("status") == "VIOLATION"
+        ]
+        if _finding_assertions:
+            assertion = _finding_assertions[0]
+        else:
+            assertion = _one_violation(oracle)
+    else:
+        assertion = _one_violation(oracle)
     assertion_kind = _normalized_text(assertion.get("kind"))
     if not assertion_kind:
         raise _incomplete("assertion.kind")

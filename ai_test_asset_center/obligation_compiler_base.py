@@ -1109,11 +1109,38 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
                 for oid in _op_ids_from_inv:
                     joined_relations.append({"operation_ref": oid, "relation_type": "observes"})
             if not joined_relations:
-                coverage_gaps.append(_compile_gap(
-                    subject_ref=invariant_ref,
-                    relation_types=relation_types,
-                ))
-                continue
+                # ── Phase 1: entity-co-reference fallback ──
+                # When no explicit relation or operation_refs exist, try to
+                # bind the invariant to operations that reference the same
+                # entity declared in the invariant's expression operands.
+                _inv_entity_refs: set[str] = set()
+                for _operand in _list(expr.get("operands")):
+                    _ent = _text(_dict(_operand).get("entity_ref"))
+                    if _ent:
+                        _inv_entity_refs.add(_ent)
+                # Also check top-level entity_ref on the invariant itself
+                _top_ent = _text(inv.get("entity_ref"))
+                if _top_ent:
+                    _inv_entity_refs.add(_top_ent)
+                if _inv_entity_refs:
+                    for _cand_op_id, _cand_op in operations_by_id.items():
+                        _op_ents = {
+                            _text(e) for e in _list(_cand_op.get("entity_refs"))
+                            if _text(e)
+                        }
+                        if _op_ents & _inv_entity_refs:
+                            joined_relations.append({
+                                "operation_ref": _cand_op_id,
+                                "relation_type": "observes",
+                                "derivation": "entity-co-reference",
+                                "confidence": 0.4,
+                            })
+                if not joined_relations:
+                    coverage_gaps.append(_compile_gap(
+                        subject_ref=invariant_ref,
+                        relation_types=relation_types,
+                    ))
+                    continue
         relations_by_operation: dict[str, list[dict[str, Any]]] = {}
         for relation in joined_relations:
             relations_by_operation.setdefault(_text(relation.get("operation_ref")), []).append(relation)
@@ -1214,6 +1241,13 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
                         float(inv.get("confidence") or 0.6),
                         float(op.get("confidence") or 0.7),
                         float(actor.get("confidence") or 0.7) if actor_ref else 0.7,
+                        # Phase 1: degrade confidence for entity-co-reference bindings
+                        *[
+                            float(r.get("confidence"))
+                            for r in operation_relations
+                            if isinstance(r.get("confidence"), (int, float))
+                            and _text(r.get("derivation")) == "entity-co-reference"
+                        ] or [1.0],
                     ),
                 ))
 

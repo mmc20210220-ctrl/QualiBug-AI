@@ -235,15 +235,29 @@ def finalize_experiment_execution(
                 _primary_path = _text(_treatment_step.get("path") or _primary_op.get("path") or "")
                 _primary_method = _text(_treatment_step.get("method") or _primary_op.get("method") or "POST").upper()
                 _timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                _source_refs = [dict(item) for item in _list(exp.get("source_refs")) if isinstance(item, dict)][:3]
+                # Build a synthetic assertion for downstream canonical identity.
+                _synthetic_assertion = {
+                    "assertion_id": f"http_evidence_{_sha256(f'{oid}|{eid}')[:12]}",
+                    "kind": "http_status_class",
+                    "status": "VIOLATION",
+                    "expected": {"status_class": 4},
+                    "actual": {"status_code": _observed_status, "status_class": _observed_status // 100},
+                    "source_refs": _source_refs,
+                    "error": f"{_treatment_role} {_primary_method} {_primary_path} -> HTTP {_observed_status} (expected 4xx)",
+                }
                 finding = {
                     "finding_id": f"finding_{_sha256(f'{oid}|{eid}|http_evidence_violation')[:20]}",
                     "obligation_id": oid,
                     "experiment_id": eid,
+                    "campaign_id": campaign_id,
                     "risk_family": risk,
+                    "category": "http_status_class",
                     "assertion_kind": "http_status_class",
                     "title": f"[ContractOracle] http_status_class: {_treatment_role} {_primary_method} {_primary_path}",
                     "severity": "high" if risk in ("authorization", "isolation") else "medium",
                     "confidence": 0.85,
+                    "confidence_score": 0.85,
                     "status_code": _observed_status,
                     "expected_class": 4,
                     "actual_class": _observed_status // 100,
@@ -251,10 +265,40 @@ def finalize_experiment_execution(
                     "method": _primary_method,
                     "path": _primary_path,
                     "timestamp": _timestamp,
+                    "source": "experiment_contract_oracle",
+                    "execution_status": "executed",
+                    "confirmation_status": "candidate",
+                    "customer_delivery_status": "candidate",
+                    "bug_status": "suspected",
+                    "gate_passed": False,
                     "reproduction_steps": [
                         f"{_primary_method} {_primary_path} as {_treatment_role} -> HTTP {_observed_status} (expected 4xx rejection)"
                     ],
-                    "source_refs": [dict(item) for item in _list(exp.get("source_refs")) if isinstance(item, dict)][:3],
+                    "source_refs": _source_refs,
+                    "failed_assertions": [_synthetic_assertion],
+                    "oracle": {
+                        "oracle_name": "ContractOracle",
+                        "oracle_tier": "contract",
+                        "customer_deliverable": False,
+                        "customer_deliverable_candidate": True,
+                        "verdict": "customer_deliverable_defect_candidate",
+                        "status": "VIOLATION",
+                        "assertions": [_synthetic_assertion],
+                    },
+                    "evidence": {
+                        "request": f"{_primary_method} {_primary_path}",
+                        "response": f"HTTP {_observed_status}",
+                        "target": _primary_path,
+                        "actor": _treatment_role,
+                        "timestamp": _timestamp,
+                        "reproduction_steps": [f"{_primary_method} {_primary_path} as {_treatment_role} -> HTTP {_observed_status}"],
+                        "control_succeeded": _control_2xx,
+                    },
+                    "reproduction": {
+                        "method": _primary_method,
+                        "path": _primary_path,
+                        "actor": _treatment_role,
+                    },
                     "_http_evidence_violation": True,
                 }
                 return {

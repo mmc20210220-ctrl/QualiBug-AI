@@ -2269,6 +2269,22 @@ def build_behavior_ir_from_knowledge_asset(
         )
         request_schema = _request_schema_for_operation(op)
         request_example = _operation_request_example(op)
+        # ── Phase 3: derive affected_fields for write operations ──
+        # Union of request_schema.properties keys and request_example keys,
+        # giving downstream compilers explicit field-level operation binding.
+        affected_fields: list[str] = []
+        if method in ("POST", "PUT", "PATCH"):
+            _af_seen: set[str] = set()
+            for _af_key in _dict(_dict(request_schema).get("properties")):
+                _af_norm = _text(_af_key)
+                if _af_norm and _af_norm.casefold() not in _af_seen:
+                    _af_seen.add(_af_norm.casefold())
+                    affected_fields.append(_af_norm)
+            for _af_key in request_example:
+                _af_norm = _text(_af_key)
+                if _af_norm and _af_norm.casefold() not in _af_seen:
+                    _af_seen.add(_af_norm.casefold())
+                    affected_fields.append(_af_norm)
         source_operation_refs = _merge_unique_sorted([
             _text(value)
             for value in (
@@ -2301,6 +2317,7 @@ def build_behavior_ir_from_knowledge_asset(
                 "side_effect_class": side_effect,
                 "read_write": side_effect,
                 "entity_refs": [_text(x) for x in _list(op.get("entity_refs")) if _text(x)],
+                "affected_fields": affected_fields,
                 "examples": _list(op.get("examples")),
                 "source_operation_refs": source_operation_refs,
             },
@@ -2329,6 +2346,7 @@ def build_behavior_ir_from_knowledge_asset(
             "security",
             "tags",
             "entity_refs",
+            "affected_fields",
             "examples",
         ):
             existing[field] = merge_unique(
@@ -2655,6 +2673,44 @@ def build_behavior_ir_from_knowledge_asset(
                     transition.get("from") or transition.get("from_state"),
                     transition.get("to") or transition.get("to_state"),
                 ])
+        # ── Phase 5: collect per-state preconditions and invariant_refs ──
+        # Transitions carry preconditions/conditions for the source state;
+        # state machine dict may carry per-state invariants/conditions.
+        _sm_states_meta = sm.get("states") if isinstance(sm.get("states"), dict) else {}
+        _sm_invariants = _list(sm.get("invariants"))
+        _state_preconditions: dict[str, list[str]] = {}
+        _state_invariant_refs: dict[str, list[str]] = {}
+        for transition in _list(sm.get("transitions")):
+            if not isinstance(transition, dict):
+                continue
+            _from_name = _text(transition.get("from") or transition.get("from_state")).lower()
+            if not _from_name:
+                continue
+            for _pc in _list(transition.get("preconditions") or transition.get("conditions") or transition.get("guard_conditions")):
+                _pc_text = _text(_pc)
+                if _pc_text:
+                    _state_preconditions.setdefault(_from_name, []).append(_pc_text)
+        for _s_name_key, _s_meta in _sm_states_meta.items():
+            if not isinstance(_s_meta, dict):
+                continue
+            _s_key = _text(_s_name_key).lower()
+            for _cond in _list(_s_meta.get("conditions")):
+                _cond_text = _text(_cond)
+                if _cond_text:
+                    _state_preconditions.setdefault(_s_key, []).append(_cond_text)
+            for _inv in _list(_s_meta.get("invariants")):
+                _inv_text = _text(_inv)
+                if _inv_text:
+                    _state_invariant_refs.setdefault(_s_key, []).append(_inv_text)
+        # Machine-level invariants apply to all states
+        if _sm_invariants:
+            for _s_name in state_names:
+                _s_key = _text(_s_name).lower()
+                if _s_key:
+                    for _inv in _sm_invariants:
+                        _inv_text = _text(_inv) if not isinstance(_inv, dict) else _text(_inv.get("id") or _inv.get("expression"))
+                        if _inv_text:
+                            _state_invariant_refs.setdefault(_s_key, []).append(_inv_text)
         seen_state_names: set[str] = set()
         for state_name in state_names:
             name = _text(state_name)
@@ -2673,10 +2729,26 @@ def build_behavior_ir_from_knowledge_asset(
                     _list(existing.get("source_refs")),
                     [source_ref],
                 )
+                # Phase 5: merge preconditions/invariant_refs on dedup
+                if _state_preconditions.get(state_key):
+                    existing["preconditions"] = _merge_unique_sorted(
+                        _list(existing.get("preconditions")),
+                        _state_preconditions[state_key],
+                    )
+                if _state_invariant_refs.get(state_key):
+                    existing["invariant_refs"] = _merge_unique_sorted(
+                        _list(existing.get("invariant_refs")),
+                        _state_invariant_refs[state_key],
+                    )
                 continue
             state_node = _fact_node(
                 node_id=node_id,
-                typed_fields={"entity_ref": entity, "name": name},
+                typed_fields={
+                    "entity_ref": entity,
+                    "name": name,
+                    "preconditions": list(dict.fromkeys(_state_preconditions.get(state_key, []))),
+                    "invariant_refs": list(dict.fromkeys(_state_invariant_refs.get(state_key, []))),
+                },
                 source_refs=[source_ref],
                 confidence=0.75,
                 derivation="explicit",

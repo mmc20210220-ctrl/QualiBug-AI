@@ -19,6 +19,10 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
 def _minimal_body_from_schema(operation: dict[str, Any]) -> dict[str, Any]:
     """Generate a minimal default request body from the operation's schema properties."""
     schema = _dict(operation.get("request_schema") or operation.get("requestBody") or {})
@@ -687,6 +691,33 @@ def compile_family_protocol(
         }
 
     if family == "state":
+        # ── Phase 2: postcondition-driven structured assertion ──
+        # When the property_spec carries a postcondition expression, emit a
+        # typed postcondition assertion (entity.field must_become expected_value)
+        # instead of the generic state_transition assertion.
+        _expr = _dict(property_spec.get("expression"))
+        _expr_kind = _text(_expr.get("kind"))
+        if _expr_kind == "postcondition":
+            return {
+                "status": "COMPILED",
+                "control_plan": [],
+                "treatment_plan": [{
+                    "step_id": "treatment_1",
+                    "actor_ref": treatment_actor_ref,
+                    "operation_ref": operation_ref,
+                    "intent": "state_transition_treatment",
+                    "protocol_step": "treatment",
+                }],
+                "observers": [
+                    {"observer_id": "before_state"},
+                    {"observer_id": "after_state"},
+                ],
+                "assertion": {
+                    "kind": "postcondition",
+                    "operator": _text(_expr.get("operator")),
+                    "operands": _list(_expr.get("operands")),
+                },
+            }
         return {
             "status": "COMPILED",
             "control_plan": [{
@@ -715,6 +746,40 @@ def compile_family_protocol(
         }
 
     if family == "conservation":
+        # ── Phase 4: derive conservation equation from expression operands ──
+        # When property_spec lacks an explicit equation but carries an expression
+        # with operands (entity_ref + field), build a structured equation so the
+        # entity_state observer can extract concrete before/after field values.
+        _cons_equation = _dict(property_spec.get("equation"))
+        if not _cons_equation:
+            _cons_expr = _dict(property_spec.get("expression"))
+            _cons_operands = _list(_cons_expr.get("operands"))
+            _cons_terms: list[str] = []
+            for _cons_op in _cons_operands:
+                if not isinstance(_cons_op, dict):
+                    continue
+                _cons_field = _text(_cons_op.get("field"))
+                if _cons_field:
+                    _cons_terms.append(_cons_field)
+            if _cons_terms:
+                _cons_equation = {
+                    "operator": _text(_cons_expr.get("operator")) or "unchanged_sum",
+                    "terms": _cons_terms,
+                }
+        _cons_assertion: dict[str, Any] = {
+            "kind": "conservation",
+            "equation": _cons_equation or _dict(property_spec),
+        }
+        # Add json_path hints when operands declare entity_ref + field
+        _cons_expr = _dict(property_spec.get("expression"))
+        _cons_operands = _list(_cons_expr.get("operands"))
+        if _cons_operands and isinstance(_cons_operands[0], dict):
+            _cons_first = _cons_operands[0]
+            _cons_entity = _text(_cons_first.get("entity_ref"))
+            _cons_field = _text(_cons_first.get("field"))
+            if _cons_entity and _cons_field:
+                _cons_assertion["before_json_path"] = f"$.{_cons_entity}.{_cons_field}"
+                _cons_assertion["after_json_path"] = f"$.{_cons_entity}.{_cons_field}"
         return {
             "status": "COMPILED",
             "control_plan": [{
@@ -735,10 +800,7 @@ def compile_family_protocol(
                 {"observer_id": "business_effect"},
                 {"observer_id": "entity_state"},
             ],
-            "assertion": {
-                "kind": "conservation",
-                "equation": _dict(property_spec.get("equation") or property_spec),
-            },
+            "assertion": _cons_assertion,
         }
 
     write_body: dict[str, Any] = {}

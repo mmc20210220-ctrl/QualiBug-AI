@@ -610,20 +610,46 @@ def evaluate_assertion(
                 if not passed:
                     reason_code = "POSTCONDITION_ENTITY_NOT_CREATED"
             else:
-                # must_become: verify state actually changed
+                # must_become: verify state changed to expected value
                 expected = {"entity": entity_ref, "field": field_ref, "must_become": expected_value}
                 actual = {
                     "state_change_count": state_change_count,
                     "effect_count": effect_count,
                 }
-                if int(state_change_count or 0) > 0:
-                    passed = True
-                elif int(effect_count or 0) > 0:
-                    # Effect detected but fingerprint unchanged — partial pass
-                    passed = True
-                else:
-                    passed = False
-                    reason_code = "POSTCONDITION_STATE_NOT_CHANGED"
+                # ── Phase 2: value-level postcondition verification ──
+                # When expected_value and field_ref are declared and observer
+                # evidence provides after_values, verify the concrete field value
+                # instead of merely checking that *something* changed.
+                _pc_value_verified = False
+                if expected_value is not None and field_ref:
+                    _after_vals = obs.get("after_values")
+                    if isinstance(_after_vals, dict) and _after_vals:
+                        # Normalize field_ref for lookup (case-insensitive)
+                        _norm_field = _state_token(field_ref)
+                        _matched_val = None
+                        for _ak, _av in _after_vals.items():
+                            if _state_token(_ak) == _norm_field:
+                                _matched_val = _av
+                                break
+                        if _matched_val is not None:
+                            actual["observed_field_value"] = _matched_val
+                            if _state_token(_matched_val) == _state_token(expected_value):
+                                passed = True
+                                _pc_value_verified = True
+                            else:
+                                passed = False
+                                reason_code = "POSTCONDITION_VALUE_MISMATCH"
+                                _pc_value_verified = True
+                if not _pc_value_verified:
+                    # Fallback: no field-level evidence — use fingerprint change
+                    if int(state_change_count or 0) > 0:
+                        passed = True
+                    elif int(effect_count or 0) > 0:
+                        # Effect detected but fingerprint unchanged — partial pass
+                        passed = True
+                    else:
+                        passed = False
+                        reason_code = "POSTCONDITION_STATE_NOT_CHANGED"
         elif effective_kind == "owner_tenant_visibility":
             required_values = (
                 obs.get("owner_can_access"),

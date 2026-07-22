@@ -1,4 +1,4 @@
 {
- "success": false,
- "error": "v12_pipeline_failed:NameError:name 'list_enterprise_knowledge_sources' is not defined"
+  "success": false,
+  "error": "v12_pipeline_failed:CanonicalDefectRegistryError:CANONICAL_IDENTITY_INCOMPLETE:assertion.observer_receipt_ids"
 }
