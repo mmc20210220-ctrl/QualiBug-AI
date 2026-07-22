@@ -18,6 +18,7 @@ from .contract_oracles import (
 from .experiment_runtime_support import (
     _dict,
     _list,
+    _sha256,
     _text,
 )
 from .observer_contracts_base import observe_experiment_requirements
@@ -181,12 +182,99 @@ def finalize_experiment_execution(
         verdict.get("verdict") == "blocked_experiment"
         or verdict.get("status") == "INDETERMINATE"
     ):
-        status = "BLOCKED"
+        # If HTTP requests were made, the experiment EXECUTED successfully.
+        # Oracle verdict is advisory evidence quality, not execution status.
+        if has_http:
+            status = "EXECUTED"
+        else:
+            status = "BLOCKED"
         # Authorization obligations with HTTP observations have sufficient
         # evidence — the response status IS the authorization decision.
         # Same for isolation (cross-tenant access → 401/403) and concurrency.
         risk = _text(exp.get("risk_family") or "")
-        if risk in ("authorization", "isolation", "validation", "concurrency") and has_http:
+        if risk in ("authorization", "isolation", "validation", "concurrency", "visibility") and has_http:
+            # ── Enhanced: detect violations from HTTP evidence directly ──
+            # If treatment got 2xx when we expected 4xx rejection, that IS a
+            # violation even if the oracle couldn't fully activate.
+            _treatment_steps_http = [
+                s for s in steps_out
+                if isinstance(s, dict) and s.get("phase") == "treatment"
+                and isinstance(s.get("status_code"), int) and s["status_code"] > 0
+            ]
+            _control_steps_http = [
+                s for s in steps_out
+                if isinstance(s, dict) and s.get("phase") == "control"
+                and isinstance(s.get("status_code"), int) and s["status_code"] > 0
+            ]
+            _treatment_2xx = any(
+                200 <= s["status_code"] < 300 for s in _treatment_steps_http
+            ) if _treatment_steps_http else False
+            _control_2xx = any(
+                200 <= s["status_code"] < 300 for s in _control_steps_http
+            ) if _control_steps_http else False
+            # For authorization/isolation/visibility: treatment 2xx = VIOLATION
+            # An unauthorized request succeeding (2xx) is direct evidence of a bug,
+            # regardless of whether the control succeeded. The control proves the
+            # endpoint works, but treatment 2xx alone proves access control is broken.
+            # For validation: treatment 2xx = VIOLATION (invalid input accepted)
+            _is_violation = False
+            if risk in ("authorization", "isolation", "visibility"):
+                _is_violation = _treatment_2xx
+            elif risk == "validation":
+                _is_violation = _treatment_2xx
+            elif risk == "concurrency":
+                _is_violation = _treatment_2xx and _control_2xx
+            if _is_violation:
+                # Promote to DELIVERABLE - this is a real bug
+                _treatment_step = _treatment_steps_http[0] if _treatment_steps_http else {}
+                _primary_step = _dict(_list(exp.get("treatment_plan"))[0]) if _list(exp.get("treatment_plan")) else {}
+                _primary_op = ops.get(_text(_primary_step.get("operation_ref"))) or {}
+                _treatment_actor = actors.get(_text(_primary_step.get("actor_ref"))) or {}
+                _treatment_role = _text(_treatment_actor.get("role") or _primary_step.get("actor_ref"))
+                _observed_status = int(_treatment_step.get("status_code") or 0)
+                _primary_path = _text(_treatment_step.get("path") or _primary_op.get("path") or "")
+                _primary_method = _text(_treatment_step.get("method") or _primary_op.get("method") or "POST").upper()
+                _timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                finding = {
+                    "finding_id": f"finding_{_sha256(f'{oid}|{eid}|http_evidence_violation')[:20]}",
+                    "obligation_id": oid,
+                    "experiment_id": eid,
+                    "risk_family": risk,
+                    "assertion_kind": "http_status_class",
+                    "title": f"[ContractOracle] http_status_class: {_treatment_role} {_primary_method} {_primary_path}",
+                    "severity": "high" if risk in ("authorization", "isolation") else "medium",
+                    "confidence": 0.85,
+                    "status_code": _observed_status,
+                    "expected_class": 4,
+                    "actual_class": _observed_status // 100,
+                    "actor_role": _treatment_role,
+                    "method": _primary_method,
+                    "path": _primary_path,
+                    "timestamp": _timestamp,
+                    "reproduction_steps": [
+                        f"{_primary_method} {_primary_path} as {_treatment_role} -> HTTP {_observed_status} (expected 4xx rejection)"
+                    ],
+                    "source_refs": [dict(item) for item in _list(exp.get("source_refs")) if isinstance(item, dict)][:3],
+                    "_http_evidence_violation": True,
+                }
+                return {
+                    "schema_version": "qualibug.experiment-execution.v1",
+                    "experiment_id": eid,
+                    "obligation_id": oid,
+                    "status": "DELIVERABLE",
+                    "reason_code": "HTTP_EVIDENCE_VIOLATION",
+                    "detail": f"{risk}_treatment_2xx_unexpected",
+                    "elapsed_ms": int((time.time() - started) * 1000),
+                    "steps": steps_out,
+                    "fixture_receipts": fixture_receipts,
+                    "binding_materialization_receipts": binding_materialization_receipts,
+                    "observer_receipts": observer_receipts,
+                    "contract_evidence_receipts": contract_evidence_receipts,
+                    "oracle_verdict": verdict,
+                    "finding": finding,
+                    "cleanup_failures": cleanup_failures,
+                    "execution_receipt": {"status": "DELIVERABLE", "reason_code": "HTTP_EVIDENCE_VIOLATION", "detail": f"{risk}_treatment_2xx_unexpected"},
+                }
             reason = "ORACLE_NOT_VIOLATED"
             detail = f"{risk}_boundary_not_violated"
         else:

@@ -540,11 +540,13 @@ def materialize_experiment_fixtures(
                             ),
                             "ownership_proof_ref": _text(governed_setup.get("after_ref")),
                         })
+                        _cleanup_ops = _list(fixture_setup.get("cleanup_operations"))
+                        _first_cleanup = _cleanup_ops[0] if len(_cleanup_ops) > 0 else {}
                         pending_fixture_cleanups.append({
                             "target": target,
                             "value": value,
                             "observation_path": observation_path,
-                            "cleanup": dict(_list(fixture_setup.get("cleanup_operations"))[0]),
+                            "cleanup": dict(_first_cleanup) if isinstance(_first_cleanup, dict) else {},
                             "receipt": receipt,
                             "actor_ref": fixture_actor_ref,
                             "actor_identity": _text(fixture_actor.get("role") or fixture_actor_ref),

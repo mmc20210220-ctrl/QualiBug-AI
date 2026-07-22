@@ -30,6 +30,7 @@ from .experiment_runtime_support import (
 from .real_id_resolver import (
     infer_path_params,
 )
+from .real_id_resolver_base import normalize_path_placeholders
 from .runtime_binding_materializer import (
     materialize_body_template as _materialize_body_template,
     materialize_path as _materialize_path,
@@ -378,11 +379,24 @@ def execute_non_barrier_plans(
                     request_body=request_body,
                 )
                 if not observation_path:
-                    # ── Fallback: derive observation path from the write path ──
-                    # REST convention: GET on the same resource path observes state
+                    # ── Fallback 1: use write path ONLY if a GET operation exists for it ──
+                    # REST convention: GET on the same resource path observes state.
+                    # But action paths like /api/orders/123/cancel don't support GET;
+                    # those must fall through to Fallback 2 (strip action suffix).
                     _obs_candidate = path.split("?")[0] if path else ""
                     if _obs_candidate.startswith("/") and "{" not in _obs_candidate and "}" not in _obs_candidate:
-                        observation_path = _obs_candidate
+                        _has_get = any(
+                            _text(op.get("method")).upper() == "GET"
+                            and _obs_candidate.rstrip("/").startswith(
+                                normalize_path_placeholders(
+                                    _text(op.get("path") or op.get("raw_path"))
+                                ).rstrip("/").split("{")[0].rstrip("/")
+                            )
+                            for op in ops.values()
+                            if isinstance(op, dict)
+                        )
+                        if _has_get:
+                            observation_path = _obs_candidate
                 if not observation_path:
                     # ── Fallback 2: strip action suffix to find resource path ──
                     # E.g. POST /api/orders/:id/ship -> GET /api/orders/:id
@@ -402,6 +416,14 @@ def execute_non_barrier_plans(
                                 _resolved = _resolved.replace("{" + name + "}", str(value)).replace(":" + name, str(value))
                             if "{" not in _resolved and "}" not in _resolved and ":" not in _resolved.split("/")[-1]:
                                 observation_path = _resolved
+                if not observation_path:
+                    # ── Fallback 3: use the resolved write path itself ──
+                    # The governed executor will attempt GET before/after on this
+                    # path. Even if GET returns 404/405, the write still executes
+                    # and we capture HTTP response evidence for the oracle.
+                    _obs_candidate = path.split("?")[0] if path else ""
+                    if _obs_candidate.startswith("/"):
+                        observation_path = _obs_candidate
                 if not observation_path:
                     reason_code = "BLOCKED_MISSING_OBSERVER"
                     pre_transport_block_reasons.append(reason_code)
@@ -548,6 +570,7 @@ def execute_non_barrier_plans(
                     _dict(obs.get("governance_receipt")).get("reason")
                 ) or "runtime_body_materialization_blocked"
             observed_status = int(obs.get("status_code") or 0)
+            obs["response_observed"] = observed_status > 0
             if _text(step.get("protocol_step")) == "temporal_write":
                 temporal_elapsed = int(obs.get("duration_ms") or 0)
                 after_state = _observation_state(

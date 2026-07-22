@@ -203,6 +203,11 @@ def execute_barrier_plans(
             if _obs_candidate.startswith("/") and "{" not in _obs_candidate and "}" not in _obs_candidate:
                 observation_path = _obs_candidate
         if not observation_path:
+            # ── Fallback 2: use resolved write path directly ──
+            _obs_candidate = path.split("?")[0] if path else ""
+            if _obs_candidate.startswith("/"):
+                observation_path = _obs_candidate
+        if not observation_path:
             return {
                 "harness_error": False,
                 "pre_transport_reason": "BLOCKED_MISSING_OBSERVER",
@@ -318,6 +323,7 @@ def execute_barrier_plans(
             "barrier_participant": participant,
         }
         observed_status = int(obs.get("status_code") or 0)
+        obs["response_observed"] = observed_status > 0
         contract_status = (
             "OBSERVED"
             if phase == "control" and observed_status > 0

@@ -18,7 +18,7 @@ MAX_AUTOMATIC_ROUNDS = 12
 # a large enterprise system. The per-round batch is sized dynamically to the
 # discovered candidate pool; these only cap the extreme tail so API cost stays
 # bounded. They are NOT the reasoner MAX_HYPOTHESES / max_workers floors.
-ABS_MAX_SLICES_PER_ROUND = 150
+ABS_MAX_SLICES_PER_ROUND = 800
 ABS_MAX_AUTOMATIC_ROUNDS = 24
 LEGACY_COMPLETION_AUTHORITY = "legacy_behavior_slice_compatibility"
 OBLIGATION_ATTEMPT_COMPLETION_AUTHORITY = "obligation_attempt_ledger"

@@ -567,8 +567,11 @@ class AutonomousDiscoveryEngine:
                 r = self._http("GET", "/openapi.json", no_auth=True)
                 if isinstance(r, dict) and "paths" in r:
                     spec_texts.append(json.dumps(r))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "discovery: OpenAPI spec获取失败，将无法生成API探针",
+                    extra={"error_code": "QB-D003", "context": {"target": getattr(self, '_base_url', '?'), "error": str(exc)[:200]}},
+                )
         
         if not spec_texts:
             return route_map
@@ -1142,8 +1145,11 @@ class AutonomousDiscoveryEngine:
         try:
             from .fixture_auto_constructor import FixtureAutoConstructor, FixtureObject
             _fixture_constructor = FixtureAutoConstructor()
-        except ImportError:
-            pass
+        except ImportError as exc:
+            logger.warning(
+                "discovery: FixtureAutoConstructor不可用，POST假设将无法自动构造测试数据",
+                extra={"error_code": "QB-D005", "context": {"error": str(exc)[:200]}},
+            )
         
         from .hypothesis_schema import validate_hypothesis
         for plan_item in execution_plan:
@@ -1347,8 +1353,11 @@ class AutonomousDiscoveryEngine:
                                 fixture_data = {"code": f"AUTO-DEL-{int(time.time())}", "name": f"Fixture for DELETE test", "spec": "auto"}
                                 # Try creating via HTTP POST
                                 self._http("POST", fixture_path.replace("POST ", "").strip(), fixture_data)
-                            except Exception:
-                                pass  # Best-effort
+                            except Exception as exc:
+                                logger.debug(
+                                    f"discovery: DELETE fixture创建失败(best-effort) path={fixture_path}",
+                                    extra={"context": {"path": fixture_path, "error": str(exc)[:150]}},
+                                )
                         
                         if entity_type and method != "DELETE":
                             try:
@@ -1373,8 +1382,11 @@ class AutonomousDiscoveryEngine:
                                             fname, dummy_schema.get("properties", {}).get(fname, {"type": "string"}))
                                 fixture_path = f"/{entity_type}s" if not entity_type.endswith("s") else f"/{entity_type}"
                                 self._http("POST", fixture_path, fixture_obj.fields)
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                logger.debug(
+                                    f"discovery: fixture构造失败(best-effort) entity={entity_type}",
+                                    extra={"context": {"entity": entity_type, "error": str(exc)[:150]}},
+                                )
                 
                 evidence = self._execute_verification(execution_vm, route_map, async_delay=async_delay)
                 evidence["execution_budget"] = {
@@ -1873,8 +1885,11 @@ class AutonomousDiscoveryEngine:
                                 "observers": list(observer_data.keys()),
                                 "inconsistencies": inconsistencies[:5]
                             }
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(
+                        "discovery: 跨视图一致性校验异常",
+                        extra={"context": {"error": str(exc)[:200]}},
+                    )
 
             # Rule B5: Missing cascade — hypothesis says cascade but no related entity evidence
             cascade_kw = ("级联", "cascade", "同步", "sync", "关联更新", "propagate")

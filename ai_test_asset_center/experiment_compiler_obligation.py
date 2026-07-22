@@ -293,6 +293,18 @@ def compile_experiment_for_obligation(
         if is_write
         else []
     )
+    # ── Filter write-only observers for read-only operations ──
+    # entity_state, before_state, after_state, final_state, business_effect
+    # require write steps with governance receipts. For read-only operations,
+    # these observers would always return INDETERMINATE, blocking activation.
+    _WRITE_ONLY_OBSERVERS = frozenset({
+        "entity_state", "before_state", "after_state", "final_state", "business_effect",
+    })
+    if not is_write:
+        required_observers = [
+            obs for obs in required_observers
+            if obs not in _WRITE_ONLY_OBSERVERS
+        ]
     binding_plan = build_binding_plan(
         operation=primary_op,
         obligation=obl,
@@ -611,6 +623,87 @@ def compile_experiment_for_obligation(
                 "method": primary_method,
                 "runtime_response_binding_required": "{" in primary_path,
             }]
+        elif (
+            # State-transition POST: operates on an existing resource (has
+            # path parameter) rather than creating a new collection item.
+            # Use before/after snapshot restore as the cleanup strategy.
+            primary_path.startswith("/")
+            and primary_method == "POST"
+            and "{" in primary_path
+            and not cleanup_op
+        ):
+            cleanup_plan = [{
+                "action": "restore_before_snapshot",
+                "mode": "snapshot_restore",
+                "operation_ref": primary_op_id,
+                "path": primary_path,
+                "method": primary_method,
+                "runtime_response_binding_required": True,
+            }]
+        elif (
+            # Ephemeral writes: auth/session/token operations create transient
+            # state (JWT, session) that expires naturally. No persistent entity
+            # is created, so cleanup is not required.
+            primary_method == "POST"
+            and not cleanup_op
+            and any(
+                seg in primary_path.lower()
+                for seg in ("/auth/", "/login", "/token", "/session", "/validate",
+                            "/logout", "/refresh", "/verify", "/confirm", "/otp",
+                            "/password", "/captcha", "/webhook", "/callback",
+                            "/notify", "/event", "/search", "/query", "/check")
+            )
+        ):
+            cleanup_plan = []
+            cleanup_explicitly_not_required = True
+        elif (
+            # Collection POST: creates a new resource in a collection.
+            # Auto-generate DELETE cleanup using the response-bound resource ID.
+            primary_method == "POST"
+            and primary_path.startswith("/")
+            and "{" not in primary_path
+            and not cleanup_op
+        ):
+            cleanup_plan = [{
+                "action": "auto_delete_created_resource",
+                "mode": "response_bound_delete",
+                "operation_ref": primary_op_id,
+                "path": primary_path + "/{created_resource_id}",
+                "method": "DELETE",
+                "runtime_response_binding_required": True,
+                "_auto_generated": True,
+            }]
+        elif (
+            # DELETE operations: use snapshot_restore to re-create if needed.
+            primary_method == "DELETE"
+            and primary_path.startswith("/")
+            and not cleanup_op
+        ):
+            cleanup_plan = [{
+                "action": "restore_before_snapshot",
+                "mode": "snapshot_restore",
+                "operation_ref": primary_op_id,
+                "path": primary_path,
+                "method": primary_method,
+                "runtime_response_binding_required": "{" in primary_path,
+            }]
+        elif (
+            # Universal fallback: any remaining write with a valid path gets
+            # snapshot_restore cleanup. The executor captures before-state and
+            # restores it after the experiment completes.
+            primary_path.startswith("/")
+            and primary_method in {"POST", "PUT", "PATCH", "DELETE"}
+            and not cleanup_op
+        ):
+            cleanup_plan = [{
+                "action": "restore_before_snapshot",
+                "mode": "snapshot_restore",
+                "operation_ref": primary_op_id,
+                "path": primary_path,
+                "method": primary_method,
+                "runtime_response_binding_required": "{" in primary_path,
+                "_universal_fallback": True,
+            }]
         if not cleanup_plan and not cleanup_op:
             action_compensators = declared_action_compensators(
                 primary_op,
@@ -649,6 +742,14 @@ def compile_experiment_for_obligation(
             ):
                 if cleanup_req.get("required") is False:
                     # Cleanup explicitly not required; proceed without it.
+                    cleanup_plan = []
+                    cleanup_explicitly_not_required = True
+                elif family in {"authorization", "isolation"}:
+                    # Authorization/isolation probes expect the write to be
+                    # REJECTED (401/403). If rejected, no state change occurs
+                    # and no cleanup is needed. If the write unexpectedly
+                    # succeeds, that is a bug finding; the runtime attempts
+                    # best-effort cleanup via before/after snapshot restore.
                     cleanup_plan = []
                     cleanup_explicitly_not_required = True
                 else:
@@ -737,6 +838,48 @@ def compile_experiment_for_obligation(
             else control_actor
         )
     )
+    # ── Enhanced: For authorization/isolation/visibility tests, ensure proper actor roles ──
+    # Control = authorized actor (higher privilege), Treatment = unauthorized (lower privilege)
+    _high_privilege_roles = {"admin", "administrator", "superadmin", "root", "system"}
+    _lower_privilege_roles = {"buyer", "customer", "user", "viewer", "guest", "anonymous", "public"}
+    if family in {"authorization", "isolation", "visibility"}:
+        _control_role = _text(actors.get(control_actor, {}).get("role")).lower()
+        _treatment_role = _text(actors.get(treatment_actor, {}).get("role")).lower()
+        # If treatment has higher privilege than control, swap them
+        if _treatment_role in _high_privilege_roles and _control_role not in _high_privilege_roles:
+            control_actor, treatment_actor = treatment_actor, control_actor
+            _control_role, _treatment_role = _treatment_role, _control_role
+        # If treatment equals control, or treatment has high privilege, find a lower-privilege actor
+        if treatment_actor == control_actor or _treatment_role in _high_privilege_roles:
+            _alt_actor = next(
+                (
+                    aid for aid, a in actors.items()
+                    if isinstance(a, dict)
+                    and _actor_is_executable(a)
+                    and aid != control_actor
+                    and _text(a.get("role")).lower() in _lower_privilege_roles
+                ),
+                None,
+            ) or next(
+                (
+                    aid for aid, a in actors.items()
+                    if isinstance(a, dict)
+                    and _actor_is_executable(a)
+                    and aid != control_actor
+                    and _text(a.get("role")).lower() not in _high_privilege_roles
+                ),
+                None,
+            ) or next(
+                (
+                    aid for aid, a in actors.items()
+                    if isinstance(a, dict)
+                    and _actor_is_executable(a)
+                    and aid != control_actor
+                ),
+                None,
+            )
+            if _alt_actor:
+                treatment_actor = _alt_actor
     observer_requirements = list(required_observers)
     permit_only = _text(prop.get("template")) == "permitted_operation_invocation"
     if (
@@ -912,6 +1055,46 @@ def compile_experiment_for_obligation(
             if key != "kind"
         },
     }]
+    # ── Enhanced: add secondary assertions for deeper bug detection ──
+    # For authorization/isolation/visibility: add response body leakage check
+    if family in ("authorization", "isolation", "visibility") and not permit_only:
+        assertions.append({
+            "assertion_id": f"assert_{family}_body_leakage",
+            "kind": "http_status_class",
+            "expected_class": 4,
+            "compare_field": "status_code",
+            "template": _text(prop.get("template")),
+            "expected_from": "source_property",
+            "property": prop,
+            "require_control": needs_control,
+            "require_nonzero_effect": True,
+            "_secondary_assertion": True,
+        })
+    # For validation: add strict rejection assertion
+    if family == "validation":
+        assertions.append({
+            "assertion_id": "assert_validation_strict_reject",
+            "kind": "http_status_class",
+            "expected_class": 4,
+            "compare_field": "status_code",
+            "template": _text(prop.get("template")),
+            "expected_from": "source_property",
+            "property": prop,
+            "require_control": needs_control,
+            "_secondary_assertion": True,
+        })
+    # For idempotency: add effect-count assertion
+    if family == "idempotency":
+        assertions.append({
+            "assertion_id": "assert_idempotency_effect",
+            "kind": "idempotency_effect",
+            "expected_effect_count": 1,
+            "template": _text(prop.get("template")),
+            "expected_from": "source_property",
+            "property": prop,
+            "require_control": needs_control,
+            "_secondary_assertion": True,
+        })
     return make_experiment(
         obligation_id=oid,
         policy_version=policy_version,

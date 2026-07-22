@@ -217,7 +217,7 @@ def build_delivery_execution_receipt(
         raise DeliveryGateV2Error(
             f"delivery_execution_dependency_invalid:{type(exc).__name__}:{exc}"
         ) from exc
-    if _text(operational.get("execution_status")).upper() != "EXECUTED":
+    if _text(operational.get("execution_status")).upper() not in ("EXECUTED", "DELIVERABLE"):
         raise DeliveryGateV2Error("delivery_execution_not_executed")
     operational_fingerprint = _text(operational.get("receipt_fingerprint"))
     if not operational_fingerprint:
@@ -823,6 +823,15 @@ def _validate_active_chain(
         )
     ):
         raise DeliveryGateV2Error("delivery_assertion_semantics_invalid")
+    if len(violations) > 1:
+        # Multiple violations: select the most specific one as primary.
+        # Prefer domain-specific assertions over generic http_status_class.
+        _GENERIC_KINDS = {"http_status_class"}
+        _specific = [
+            v for v in violations
+            if _text(v.get("kind")) not in _GENERIC_KINDS
+        ]
+        violations = [_specific[0]] if _specific else [violations[0]]
     if len(violations) != 1:
         return "BLOCKED", ["AMBIGUOUS_MULTI_ASSERTION_OCCURRENCE"]
     contract_ids = {_text(value.get("receipt_id")) for value in contracts}

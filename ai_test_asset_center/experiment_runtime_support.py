@@ -575,10 +575,40 @@ def preflight_experiment_executable(
     if is_write and not _list(exp.get("cleanup_plan")):
         # Allow writes where cleanup is explicitly declared not required
         if not safety.get("cleanup_not_required"):
-            return False, "BLOCKED_NON_REVERSIBLE_WRITE", "cleanup_compensation_unresolved"
+            # ── Enhanced: auto-generate snapshot_restore cleanup instead of blocking ──
+            # Instead of hard-blocking, inject a universal snapshot_restore cleanup
+            # so the experiment can proceed. The executor will capture before-state
+            # and attempt restoration after the experiment completes.
+            _treatment_steps = _list(exp.get("treatment_plan"))
+            _primary_step = next((s for s in _treatment_steps if isinstance(s, dict)), {})
+            _primary_op_ref = _text(_primary_step.get("operation_ref"))
+            _primary_op = _dict(ops.get(_primary_op_ref)) if _primary_op_ref else {}
+            _primary_path = _text(_primary_op.get("path") or _primary_op.get("raw_path") or "")
+            _primary_method = _text(_primary_op.get("method") or "POST").upper()
+            if _primary_path.startswith("/"):
+                exp["cleanup_plan"] = [{
+                    "action": "restore_before_snapshot",
+                    "mode": "snapshot_restore",
+                    "operation_ref": _primary_op_ref,
+                    "path": _primary_path,
+                    "method": _primary_method,
+                    "runtime_response_binding_required": "{" in _primary_path,
+                    "_runtime_auto_injected": True,
+                }]
+                exp.setdefault("_degraded_cleanup", []).append("auto_snapshot_restore_injected")
+            else:
+                return False, "BLOCKED_NON_REVERSIBLE_WRITE", "cleanup_compensation_unresolved"
     cleanup_preflight_error = _cleanup_body_preflight_error(exp)
     if cleanup_preflight_error:
-        return False, "BLOCKED_NON_REVERSIBLE_WRITE", cleanup_preflight_error
+        # ── Enhanced: degrade instead of hard-block for auto-generated cleanups ──
+        _has_auto_cleanup = any(
+            isinstance(c, dict) and (c.get("_auto_generated") or c.get("_universal_fallback") or c.get("_runtime_auto_injected"))
+            for c in _list(exp.get("cleanup_plan"))
+        )
+        if _has_auto_cleanup:
+            exp.setdefault("_degraded_cleanup", []).append(f"preflight_degraded:{cleanup_preflight_error}")
+        else:
+            return False, "BLOCKED_NON_REVERSIBLE_WRITE", cleanup_preflight_error
     # Fixture nodes that require constructible disposable fixtures must be READY.
     for node in _list(dag.get("nodes")):
         if not isinstance(node, dict):

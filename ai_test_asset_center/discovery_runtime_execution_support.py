@@ -273,7 +273,7 @@ def _manual_terminal_receipts(
     )
     for row in selected_rows:
         obligation_id = _text(row.get("obligation_id"))
-        if obligation_id in compile_results:
+        if obligation_id in compile_results or obligation_id in execution_results:
             continue
         # Check variant obligation_ids and map them to the original
         _variant_result = None

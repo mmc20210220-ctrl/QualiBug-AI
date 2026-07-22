@@ -28,7 +28,7 @@ TERMINAL_STATUSES = frozenset({
 })
 _STAGE_STATUSES = {
     "compile": frozenset({"COMPILED", "BLOCKED", "DEFERRED", "HARNESS_FAILED"}),
-    "execution": frozenset({"EXECUTED", "BLOCKED", "DEFERRED", "HARNESS_FAILED"}),
+    "execution": frozenset({"EXECUTED", "BLOCKED", "DEFERRED", "HARNESS_FAILED", "DELIVERABLE"}),
     "gate": frozenset(TERMINAL_STATUSES),
 }
 _COST_COVERAGE_STATUSES = frozenset({"MEASURED", "PARTIAL", "UNKNOWN"})
@@ -296,8 +296,29 @@ def build_obligation_attempt_ledger(
             )
             if _text(receipt.get("status")).upper() in TERMINAL_STATUSES
         ]
+        # When a gate receipt exists, execution DELIVERABLE is superseded by
+        # the gate decision and must not count as a separate terminal.
+        if (
+            len(terminals) == 2
+            and gate_receipt
+            and _text(gate_receipt.get("status")).upper() in TERMINAL_STATUSES
+        ):
+            terminals = [
+                (stage, receipt)
+                for stage, receipt in terminals
+                if not (
+                    stage == "execution"
+                    and _text(receipt.get("status")).upper() == "DELIVERABLE"
+                )
+            ]
         if len(terminals) != 1:
             code = "terminal_receipt_missing" if not terminals else "duplicate_terminal_receipt"
+            import sys
+            print(f"[LEDGER_DEBUG] {code}:{obligation_id}", file=sys.stderr)
+            print(f"  compile_status={_text(compile_receipt.get('status'))}", file=sys.stderr)
+            print(f"  execution_status={_text(execution_receipt.get('status'))}", file=sys.stderr)
+            print(f"  gate_status={_text(gate_receipt.get('status'))}", file=sys.stderr)
+            print(f"  terminals_after_filter={[(s, _text(r.get('status'))) for s, r in terminals]}", file=sys.stderr)
             raise ObligationAttemptLedgerError(f"{code}:{obligation_id}")
 
         compile_status = _text(compile_receipt.get("status")).upper()
@@ -306,7 +327,7 @@ def build_obligation_attempt_ledger(
             raise ObligationAttemptLedgerError(
                 f"execution_without_compiled_obligation:{obligation_id}"
             )
-        if gate_receipt and execution_status != "EXECUTED":
+        if gate_receipt and execution_status not in ("EXECUTED", "DELIVERABLE"):
             raise ObligationAttemptLedgerError(
                 f"gate_without_executed_obligation:{obligation_id}"
             )

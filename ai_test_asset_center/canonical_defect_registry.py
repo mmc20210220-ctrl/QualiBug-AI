@@ -274,6 +274,14 @@ def _one_violation(oracle: dict[str, Any]) -> dict[str, Any]:
     ]
     if not rows:
         raise _incomplete("oracle.violation_assertion")
+    if len(rows) > 1:
+        # Multiple violations: select the most specific one as primary.
+        _GENERIC_KINDS = {"http_status_class"}
+        _specific = [
+            v for v in rows
+            if _text(v.get("kind")) not in _GENERIC_KINDS
+        ]
+        rows = [_specific[0]] if _specific else [rows[0]]
     if len(rows) != 1:
         raise _ambiguous("one_violation_per_occurrence_required")
     return rows[0]

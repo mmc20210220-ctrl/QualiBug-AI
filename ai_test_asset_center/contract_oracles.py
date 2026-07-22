@@ -302,6 +302,7 @@ def build_contract_oracle_activation_receipt(
     execution_id = _text(exp.get("execution_id"))
     if not experiment_id or not obligation_id or not campaign_id or not execution_id:
         raise ValueError("contract_activation_identity_missing")
+
     required = contract_activation_requirements(exp, evidence=ev)
     blockers: list[str] = []
     harness_failures: list[str] = []

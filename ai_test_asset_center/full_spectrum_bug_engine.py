@@ -23,6 +23,7 @@ API Compatibility  | compat      | api
 import concurrent.futures
 import hashlib
 import json
+import logging
 import os
 import re
 import time
@@ -31,6 +32,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+_spectrum_logger = logging.getLogger("qualibug.spectrum")
 
 
 # ── Data structures ──────────────────────────────────────────────────────
@@ -441,8 +444,11 @@ def test_cache_consistency(
                             evidence={"write": str(write_body)[:200], "read": str(rresult)[:200]},
                             reproduction=[f"POST {wurl} → 写入 {write_body}", f"GET {rurl} → 立即读取", "对比写入值和读取值"]
                         ))
-        except Exception:
-            pass
+        except Exception as exc:
+            _spectrum_logger.warning(
+                f"spectrum[cache]: 缓存一致性检查异常",
+                extra={"error_code": "QB-X005", "context": {"base_url": base_url, "error": str(exc)[:200]}},
+            )
 
     return SpectrumResult(
         capability="cache", status="issues_found" if findings else "ok",
@@ -625,8 +631,11 @@ def test_i18n(
                             reproduction=[f"设置 Accept-Language: {locale}", f"访问 {url}"]
                         ))
 
-            except Exception:
-                pass
+            except Exception as exc:
+                _spectrum_logger.debug(
+                    f"spectrum[i18n]: 国际化检查异常 page={page}",
+                    extra={"context": {"page": page, "error": str(exc)[:150]}},
+                )
 
     return SpectrumResult(
         capability="i18n", status="issues_found" if findings else "ok",
@@ -694,8 +703,11 @@ def test_mobile_webview(
                             reproduction=[f"用 {agent_name} UA 访问 {url}", "在不同宽度下检查布局"]
                         ))
 
-            except Exception:
-                pass
+            except Exception as exc:
+                _spectrum_logger.debug(
+                    f"spectrum[mobile]: 移动端检查异常 page={page}",
+                    extra={"context": {"page": page, "agent": agent_name, "error": str(exc)[:150]}},
+                )
 
     return SpectrumResult(
         capability="mobile", status="issues_found" if findings else "ok",

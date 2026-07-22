@@ -254,8 +254,10 @@ def execute_selected_experiments(
                 "reason_code": reason_code,
                 "detail": "experiment_compile_receipt_not_executable",
                 "finding": None,
+                # When compile fails, execution_receipt must NOT have terminal status
+                # to avoid duplicate_terminal_receipt in ledger validation.
                 "execution_receipt": {
-                    "status": terminal_status,
+                    "status": "NOT_EXECUTED",
                     "reason_code": reason_code,
                     "obligation_id": oid,
                     "experiment_id": _text(exp.get("experiment_id") or eid),
@@ -379,7 +381,7 @@ def execute_selected_experiments(
             oracle_receipt_id = _text(validated_oracle.get("receipt_id"))
             outcome["oracle_verdict"] = validated_oracle
         status = _text(outcome.get("status")).upper()
-        if status not in {"EXECUTED", "BLOCKED", "HARNESS_FAILURE", "HARNESS_FAILED"}:
+        if status not in {"EXECUTED", "BLOCKED", "HARNESS_FAILURE", "HARNESS_FAILED", "DELIVERABLE"}:
             raise ValueError(f"experiment_execution_status_invalid:{status or 'MISSING'}")
         outcome_cleanup_failures = int(outcome.get("cleanup_failures") or 0)
         if outcome_cleanup_failures:
@@ -515,6 +517,10 @@ def execute_selected_experiments(
                     reproduction_receipt=reproduction_receipt,
                 )
             executed += 1
+            # execution_results must NEVER have DELIVERABLE status.
+            # DELIVERABLE is a gate-stage decision, not execution-stage.
+            # If execution_results has DELIVERABLE and gate_results has BLOCKED,
+            # we get duplicate_terminal_receipt error in ledger validation.
             execution_results[oid] = {
                 "status": "EXECUTED",
                 "reason_code": "",
@@ -551,7 +557,7 @@ def execute_selected_experiments(
                 outcome["finding"] = finding
                 execution_results[oid]["finding"] = dict(finding)
         cleanup_failures += outcome_cleanup_failures
-        if status == "EXECUTED" and isinstance(outcome.get("finding"), dict):
+        if status in ("EXECUTED", "DELIVERABLE") and isinstance(outcome.get("finding"), dict):
             findings.append(outcome["finding"])
     return {
         "schema_version": "qualibug.experiment-execution-batch.v1",

@@ -38,8 +38,10 @@ def run_deep_tests(config: dict | None = None, routes: list[dict] | None = None)
     db_cfg = config.get("database", {})
     frontend = config.get("frontend_urls", {})
     
-    buyer_email = creds.get("buyer", {}).get("email", "")
-    buyer_pw = creds.get("buyer", {}).get("password", "")
+    # 通用角色命名：支持 "user"(通用) 和 "buyer"(向后兼容) 配置键
+    _user_creds = creds.get("user") or creds.get("buyer") or {}
+    user_email = _user_creds.get("email", "")
+    user_pw = _user_creds.get("password", "")
     admin_email = creds.get("admin", {}).get("email", "")
     admin_pw = creds.get("admin", {}).get("password", "")
     
@@ -53,15 +55,10 @@ def run_deep_tests(config: dict | None = None, routes: list[dict] | None = None)
     
     admin_paths = [r["path"] for r in routes if _is_admin_path(r["path"], r.get("method", ""))]
     auth_paths = [r["path"] for r in routes if "auth" in r.get("path", "").lower()]
-    order_paths = [r["path"] for r in routes if "order" in r.get("path", "").lower()]
-    cart_paths = [r["path"] for r in routes if "cart" in r.get("path", "").lower()]
-    product_paths = [r["path"] for r in routes if "product" in r.get("path", "").lower()]
-    coupon_paths = [r["path"] for r in routes if "coupon" in r.get("path", "").lower()]
-    refund_paths = [r["path"] for r in routes if "refund" in r.get("path", "").lower()]
-    payment_paths = [r["path"] for r in routes if "payment" in r.get("path", "").lower()]
-    report_paths = [r["path"] for r in routes if "report" in r.get("path", "").lower()]
-    ship_paths = [r["path"] for r in routes if "ship" in r.get("path", "").lower()]
-    confirm_paths = [r["path"] for r in routes if "confirm" in r.get("path", "").lower()]
+    # 通用路由分类：按 HTTP 方法分组，不硬编码行业路径
+    post_paths = [r["path"] for r in routes if r.get("method", "GET").upper() in ("POST", "PUT", "PATCH")]
+    list_paths = [r["path"] for r in routes if r.get("method", "GET").upper() == "GET" and not _is_admin_path(r["path"], "GET")]
+    state_paths = [r["path"] for r in routes if any(kw in r.get("path", "").lower() for kw in ("status", "state", "cancel", "approve", "reject", "close", "complete", "confirm", "activate", "disable"))]
     
     def add(title: str, sev: str, cat: str, desc: str, conf: float = 0.90):
         findings.append({"severity": sev, "title": title, "category": cat,
@@ -78,21 +75,24 @@ def run_deep_tests(config: dict | None = None, routes: list[dict] | None = None)
         except Exception:
             return ""
     
-    buyer_token = login(buyer_email, buyer_pw) if buyer_email else ""
+    user_token = login(user_email, user_pw) if user_email else ""
     admin_token = login(admin_email, admin_pw) if admin_email else ""
     
     # ── Auto-setup: register if login fails ──
-    if not buyer_token and buyer_email:
+    if not user_token and user_email:
         try:
-            reg = json.dumps({"email": buyer_email, "password": buyer_pw, "name": "TestBuyer", "phone": "13800000001"}).encode()
+            reg = json.dumps({"email": user_email, "password": user_pw, "name": "AutoTestUser", "phone": "13800000001"}).encode()
             for auth_p in auth_paths:
                 if "register" in auth_p.lower() or "signup" in auth_p.lower():
                     urllib.request.urlopen(urllib.request.Request(
                         f"{base_url}{auth_p}", data=reg, headers={"Content-Type": "application/json"}, method="POST"), timeout=5)
                     break
-            buyer_token = login(buyer_email, buyer_pw)
-        except Exception:
-            pass
+            user_token = login(user_email, user_pw)
+        except Exception as exc:
+            logger.warning(
+                f"deep_verifier: 测试账号自动注册/登录失败，用户流程验证将跳过",
+                extra={"error_code": "QB-X001", "context": {"email": user_email, "base_url": base_url, "error": str(exc)[:200]}},
+            )
     if not admin_token and admin_email:
         try:
             reg = json.dumps({"email": admin_email, "password": admin_pw, "name": "TestAdmin", "phone": "13800000002"}).encode()
@@ -105,37 +105,7 @@ def run_deep_tests(config: dict | None = None, routes: list[dict] | None = None)
         except (urllib.error.URLError, OSError, ValueError) as exc:
             logger.debug("Admin auto-setup login failed: %s", exc)
     
-    # ── Auto-setup: fetch or create address ──
-    addr_id = ""
-    if buyer_token:
-        try:
-            addr_endpoints = [p for p in routes if isinstance(p, dict) and "address" in p.get("path","").lower()]
-            for ae in addr_endpoints:
-                try:
-                    req = urllib.request.Request(f"{base_url}{ae['path']}", headers={"Authorization": f"Bearer {buyer_token}"})
-                    addrs = json.loads(urllib.request.urlopen(req, timeout=5).read())
-                    if isinstance(addrs, list) and addrs:
-                        addr_id = addrs[0].get("id", "")
-                        break
-                except Exception:
-                    pass
-            # Create address if none exist
-            if not addr_id:
-                addr_body = json.dumps({"receiver": "TestBuyer", "phone": "13800000001",
-                    "province": "上海", "city": "上海", "detail": "测试地址", "isDefault": True}).encode()
-                for ae in addr_endpoints:
-                    try:
-                        req = urllib.request.Request(f"{base_url}{ae['path']}", data=addr_body,
-                            headers={"Content-Type": "application/json", "Authorization": f"Bearer {buyer_token}"}, method="POST")
-                        resp = json.loads(urllib.request.urlopen(req, timeout=5).read())
-                        addr_id = resp.get("id", "")
-                        if addr_id: break
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-
-    H_buyer = {"Content-Type": "application/json", "Authorization": f"Bearer {buyer_token}"}
+    H_user = {"Content-Type": "application/json", "Authorization": f"Bearer {user_token}"}
     H_admin = {"Content-Type": "application/json", "Authorization": f"Bearer {admin_token}"}
     
     # ── DB helper ──
@@ -153,7 +123,7 @@ def run_deep_tests(config: dict | None = None, routes: list[dict] | None = None)
     
     def _api_get(path: str, headers: dict | None = None) -> Any:
         try:
-            req = urllib.request.Request(f"{base_url}{path}", headers=headers or H_buyer)
+            req = urllib.request.Request(f"{base_url}{path}", headers=headers or H_user)
             return json.loads(urllib.request.urlopen(req, timeout=5).read())
         except Exception:
             return None
@@ -162,7 +132,7 @@ def run_deep_tests(config: dict | None = None, routes: list[dict] | None = None)
         try:
             data = json.dumps(body).encode()
             req = urllib.request.Request(f"{base_url}{path}", data=data,
-                headers=headers or H_buyer, method="POST")
+                headers=headers or H_user, method="POST")
             resp = urllib.request.urlopen(req, timeout=5)
             return resp.status, json.loads(resp.read())
         except urllib.error.HTTPError as e:
@@ -171,42 +141,6 @@ def run_deep_tests(config: dict | None = None, routes: list[dict] | None = None)
         except Exception:
             return 0, {}
 
-    def _ensure_address(token: str) -> str:
-        """Get or auto-create a shipping address for the authenticated user."""
-        h = {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
-        paths = ["/api/users/addresses", "/api/addresses", "/api/user/addresses"]
-        for p in paths:
-            try:
-                req = urllib.request.Request(f"{base_url}{p}", headers=h)
-                r = json.loads(urllib.request.urlopen(req, timeout=5).read())
-                if isinstance(r, list) and r:
-                    return r[0].get("id", "")
-                if isinstance(r, dict) and r.get("id"):
-                    return r["id"]
-            except Exception:
-                continue
-        # Create address
-        addr_data = json.dumps({
-            "receiver": "QualiBug Auto", "phone": "13800000000",
-            "province": "Test", "city": "TestCity", "detail": "Auto-created test address",
-            "is_default": True
-        }).encode()
-        for p in paths:
-            try:
-                req = urllib.request.Request(f"{base_url}{p}", data=addr_data, headers=h, method="POST")
-                r = json.loads(urllib.request.urlopen(req, timeout=5).read())
-                rid = (r or {}).get("id", "") if isinstance(r, dict) else ""
-                if rid: return rid
-            except Exception:
-                continue
-        # Last resort: try PATCH/DELETE-based endpoints fallback
-        try:
-            req = urllib.request.Request(f"{base_url}/api/user/profile", data=addr_data, headers=h, method="PUT")
-            r = json.loads(urllib.request.urlopen(req, timeout=5).read())
-            return (r or {}).get("addressId", "") if isinstance(r, dict) else ""
-        except Exception:
-            return ""
-    
     def _http_error_code(path: str, method: str, body: dict | None, headers: dict) -> int:
         try:
             data = json.dumps(body).encode() if body else None
@@ -219,243 +153,125 @@ def run_deep_tests(config: dict | None = None, routes: list[dict] | None = None)
             return 0
     
     # ═══════════════════════════════════════
-    # 1. Permission: buyer token vs admin endpoints (iterate routes, not pre-filter)
+    # 1. Permission: low-privilege token vs admin endpoints
     # ═══════════════════════════════════════
-    if buyer_token and routes:
+    if user_token and routes:
         for route in routes:
             path = route["path"]
             if not _is_admin_path(path, route.get("method", "")):
                 continue
             method = route.get("method", "GET")
-            # Resolve parameter placeholders
-            test_path = path.replace(":id", "SKU-001").replace(":sku", "SKU-001").replace(":orderId", "test")
-            code = _http_error_code(test_path, method, {}, H_buyer)
+            test_path = re.sub(r'[:{]\w+[}]?', 'test-id', path)
+            code = _http_error_code(test_path, method, {}, H_user)
             if code == 200:
-                add(f"[权限] 买家可访问管理端点: {method} {path}", "P0", "authorization",
-                    f"买家token访问{path}返回200", 0.95)
+                add(f"[权限] 低权限用户可访问管理端点: {method} {path}", "P0", "authorization",
+                    f"低权限token访问{path}返回200", 0.95)
             elif code not in (0, 401, 403, 404):
                 add(f"[权限] {method} {path} 返回{code}(非403)", "P1", "authorization",
-                    f"买家token访问管理端点返回{code}", 0.85)
+                    f"低权限token访问管理端点返回{code}", 0.85)
     
     # ═══════════════════════════════════════
-    # 2. Coupon: discover codes from DB and test
+    # 2. Numeric boundary: POST endpoints with invalid numeric values
     # ═══════════════════════════════════════
-    if buyer_token and coupon_paths:
-        # Discover coupons from DB
-        coupons = _db_query("SELECT code, type, amount, status, expires_at FROM coupons WHERE status='ACTIVE' LIMIT 5")
-        if coupons:
-            validate_path = next((p for p in coupon_paths if "validate" in p), coupon_paths[0])
-            # Use first available product for test
-            products = _api_get("/api/products")
-            test_sku = "SKU-001"
-            test_price = 100
-            if products and isinstance(products, list):
-                for p in products:
-                    if isinstance(p, dict) and p.get("status") == "ON_SALE":
-                        test_sku = p.get("sku", test_sku)
-                        test_price = float(p.get("price") or p.get("current_price") or 0)
-                        if test_price > 0: break
-            
-            for code, ctype, amount, status, expires_at in coupons:
-                # Test: below-minimum order amount
-                status_code, result = _api_post(validate_path, {
-                    "code": code, "items": [{"sku": test_sku, "qty": 1, "price": 1}], "totalAmount": 1}, H_buyer)
-                if status_code == 200 and isinstance(result, dict) and result.get("valid"):
-                    add(f"[优惠券] 低于最低消费仍可用{code}", "P1", "business_rule",
-                        f"totalAmount=1但优惠券{code}仍valid", 0.88)
-                
-                # Test: repeat validation
-                _, r1 = _api_post(validate_path, {"code": code, "items": [{"sku": test_sku, "qty": 1, "price": test_price}],
-                    "totalAmount": test_price}, H_buyer)
-                _, r2 = _api_post(validate_path, {"code": code, "items": [{"sku": test_sku, "qty": 1, "price": test_price}],
-                    "totalAmount": test_price}, H_buyer)
-                if isinstance(r1, dict) and r1.get("valid") and isinstance(r2, dict) and r2.get("valid"):
-                    add(f"[优惠券] {code}可重复验证(应限制)", "P1", "business_rule",
-                        f"同一优惠券多次validate均返回valid", 0.85)
+    if user_token and post_paths:
+        boundary_values = [("零值", 0), ("负数", -1), ("超大值", 999999999)]
+        tested = 0
+        for pp in post_paths[:15]:  # 限制测试端点数量
+            if tested >= 20:
+                break
+            resolved = re.sub(r'[:{]\w+[}]?', 'test-id', pp)
+            for label, val in boundary_values:
+                tested += 1
+                sc, _ = _api_post(resolved, {"quantity": val, "amount": val, "count": val}, H_user)
+                if sc in (200, 201):
+                    add(f"[边界] {label}提交被接受: POST {pp}", "P1", "input_validation",
+                        f"POST {pp} 数值={val} 返回{sc}，应拒绝非法数值", 0.85)
+                    break  # 每个端点只报一次
         
-        # Test expired coupons from DB
-        expired = _db_query("SELECT code FROM coupons WHERE status='ACTIVE' AND expires_at < NOW() LIMIT 3")
-        for (ecode,) in expired:
-            _, result = _api_post(validate_path, {"code": ecode, "items": [{"sku": test_sku, "qty": 1, "price": test_price}],
-                "totalAmount": test_price}, H_buyer)
-            if isinstance(result, dict) and result.get("valid"):
-                add(f"[优惠券] 过期券{ecode}仍可使用", "P0", "business_rule", f"过期券验证返回valid=true", 0.95)
+    # ═══════════════════════════════════════
+    # 3. State machine: invalid state transitions
+    # ═══════════════════════════════════════
+    if user_token and state_paths:
+        for sp in state_paths[:10]:
+            resolved = re.sub(r'[:{]\w+[}]?', 'test-id', sp)
+            # 尝试对不存在的实体执行状态转换
+            code = _http_error_code(resolved, "POST", {}, H_user)
+            if code == 200:
+                add(f"[状态机] 无效实体可执行状态转换: POST {sp}", "P1", "state_machine",
+                    f"对不存在的实体执行状态操作返回200，应返回404或400", 0.85)
+        
+    # ═══════════════════════════════════════
+    # 4. Idempotency: duplicate POST should not create duplicates
+    # ═══════════════════════════════════════
+    if user_token and post_paths:
+        idem_tested = 0
+        for pp in post_paths[:8]:
+            if idem_tested >= 5:
+                break
+            resolved = re.sub(r'[:{]\w+[}]?', 'test-id', pp)
+            idem_key = f"qb-idem-{int(time.time()*1000)}"
+            body = {"idempotencyKey": idem_key, "idempotency_key": idem_key, "name": "QualiBug Idem Test"}
+            sc1, r1 = _api_post(resolved, body, H_user)
+            sc2, r2 = _api_post(resolved, body, H_user)
+            idem_tested += 1
+            if sc1 in (200, 201) and sc2 in (200, 201):
+                id1 = (r1 or {}).get("id", "") if isinstance(r1, dict) else ""
+                id2 = (r2 or {}).get("id", "") if isinstance(r2, dict) else ""
+                if id1 and id2 and id1 != id2:
+                    add(f"[幂等性] 重复提交产生不同资源: POST {pp}", "P0", "idempotency",
+                        f"相同请求两次提交产生不同 ID ({id1} vs {id2})", 0.90)
     
     # ═══════════════════════════════════════
-    # 3. Order: boundary tests
+    # 5. Multi-user data isolation
     # ═══════════════════════════════════════
-    if buyer_token and order_paths:
-        create_path = next((p for p in order_paths if not any(x in p for x in ("cancel","ship","confirm","pay"))), None)
-        if create_path:
-            # Get address dynamically
-            addr_id = _ensure_address(buyer_token)
-            if addr_id:
-                for label, items in [("零数量", [{"sku": test_sku, "qty": 0}]), ("负数量", [{"sku": test_sku, "qty": -1}])]:
-                    sc, _ = _api_post(create_path, {"items": items, "addressId": addr_id}, H_buyer)
-                    if sc in (200, 201):
-                        add(f"[资金] {label}下单成功(应拒绝)", "P1", "financial",
-                            f"POST {create_path} qty异常返回{sc}", 0.90)
-                
-                # Create order for further tests
-                sc, order = _api_post(create_path, {"items": [{"sku": test_sku, "qty": 1}], "addressId": addr_id}, H_buyer)
-                oid = (order or {}).get("id", "") if sc in (200, 201) else ""
-                amt = float((order or {}).get("total_amount") or (order or {}).get("payable_amount") or 0)
-                
-                if oid and amt > 0:
-                    # Pay
-                    pay_path = next((p for p in payment_paths if "pay" in p), None) if payment_paths else "/api/payments/pay"
-                    _api_post(pay_path, {"orderId": oid, "amount": amt, "channel": "BALANCE",
-                        "idempotencyKey": f"deep-{int(time.time())}"}, H_buyer)
-                    
-                    # Refund boundary tests
-                    if refund_paths:
-                        refund_path = refund_paths[0]
-                        for rlabel, ramt in [("超额", amt*2), ("零元", 0), ("负金额", -100)]:
-                            sc_r, _ = _api_post(refund_path, {"orderId": oid, "amount": ramt, "reason": "test"}, H_buyer)
-                            if sc_r in (200, 201):
-                                add(f"[退款] {rlabel}退款成功(amount={ramt})", "P0", "financial",
-                                    f"order={oid} refund={ramt}返回{sc_r}", 0.95)
-                    
-                    # Cancel + re-pay (state machine)
-                    cancel_path = next((p for p in order_paths if "cancel" in p), None)
-                    if cancel_path:
-                        sc_c, _ = _api_post(cancel_path.format(id=oid) if "{" in cancel_path else cancel_path + f"/{oid}/cancel",
-                                           {}, H_buyer)
-                        if sc_c in (200, 201):
-                            sc_rp, _ = _api_post(pay_path, {"orderId": oid, "amount": amt, "channel": "BALANCE",
-                                "idempotencyKey": f"deep2-{int(time.time())}"}, H_buyer)
-                            if sc_rp in (200, 201):
-                                add("[状态机] 已取消订单仍可支付", "P0", "state_machine",
-                                    f"order={oid} 取消后pay返回{sc_rp}", 0.95)
-    
-    # ═══════════════════════════════════════
-    # 4. Cart boundary tests
-    # ═══════════════════════════════════════
-    if buyer_token and cart_paths:
-        cart_create = next((p for p in cart_paths if "items" in p and not any(x in p for x in (":","{"))), cart_paths[0])
-        # Non-existent SKU
-        sc, _ = _api_post(cart_create, {"sku": "NONEXISTENT-SKU-999", "qty": 1}, H_buyer)
-        if sc in (200, 201):
-            add("[购物车] 不存在SKU可加入", "P1", "business_rule", "添加不存在商品返回成功", 0.90)
-        # Negative qty
-        sc, _ = _api_post(cart_create, {"sku": test_sku, "qty": -5}, H_buyer)
-        if sc in (200, 201):
-            add("[购物车] 负数数量可加入", "P0", "business_rule", "qty=-5返回成功", 0.95)
-    
-    # ═══════════════════════════════════════
-    # 5. Confirm without payment
-    # ═══════════════════════════════════════
-    if buyer_token and confirm_paths and order_paths:
-        addr_resp = _ensure_address(buyer_token)
-        addr_id = addr_resp[0]["id"] if isinstance(addr_resp, list) and addr_resp else ""
-        if addr_id:
-            create_path = next((p for p in order_paths if not any(x in p for x in ("cancel","ship","confirm","pay"))), None)
-            if create_path:
-                sc, order = _api_post(create_path, {"items": [{"sku": test_sku, "qty": 1}], "addressId": addr_id}, H_buyer)
-                oid = (order or {}).get("id", "") if sc in (200, 201) else ""
-                if oid:
-                    for cp in confirm_paths:
-                        resolved = cp.replace(":id", oid).replace("{id}", oid)
-                        code = _http_error_code(resolved, "POST", {}, H_buyer)
-                        if code == 200:
-                            add("[状态机] 未支付订单可确认收货", "P0", "state_machine",
-                                f"order={oid} confirm返回200", 0.95)
-                            break
-    
-    # ═══════════════════════════════════════
-    # 6. Ship as buyer
-    # ═══════════════════════════════════════
-    if buyer_token and ship_paths and order_paths:
-        addr_resp = _ensure_address(buyer_token)
-        addr_id = addr_resp[0]["id"] if isinstance(addr_resp, list) and addr_resp else ""
-        if addr_id:
-            create_path = next((p for p in order_paths if not any(x in p for x in ("cancel","ship","confirm","pay"))), None)
-            sc, order = _api_post(create_path, {"items": [{"sku": test_sku, "qty": 1}], "addressId": addr_id}, H_buyer)
-            oid = (order or {}).get("id", "") if sc in (200, 201) else ""
-            amt = float((order or {}).get("total_amount") or (order or {}).get("payable_amount") or 0)
-            if oid and amt > 0:
-                pay_path = payment_paths[0] if payment_paths else "/api/payments/pay"
-                _api_post(pay_path, {"orderId": oid, "amount": amt, "channel": "BALANCE",
-                    "idempotencyKey": f"ship-{int(time.time())}"}, H_buyer)
-                for sp in ship_paths:
-                    resolved = sp.replace(":id", oid).replace("{id}", oid)
-                    code = _http_error_code(resolved, "POST", {}, H_buyer)
-                    if code == 200:
-                        add("[权限] 买家可执行发货", "P0", "authorization",
-                            f"买家token调用POST {resolved}返回200", 0.95)
-                        break
-    
-    # ═══════════════════════════════════════
-    # 7. Multi-user isolation
-    # ═══════════════════════════════════════
-    if buyer_token:
+    if user_token:
         try:
             user2_email = f"qb_auto_{int(time.time())}@test.com"
             sc_r, _ = _api_post("/api/auth/register" if auth_paths else "/api/auth/register",
-                {"email": user2_email, "password": buyer_pw or "Test@123456", "name": "AutoUser", "phone": "13900000001"}, H_buyer)
-            user2_token = login(user2_email, buyer_pw or "Test@123456")
-            if user2_token and user2_token != buyer_token:
+                {"email": user2_email, "password": user_pw or "Test@123456", "name": "AutoUser", "phone": "13900000001"}, H_user)
+            user2_token = login(user2_email, user_pw or "Test@123456")
+            if user2_token and user2_token != user_token:
                 H2 = {"Content-Type": "application/json", "Authorization": f"Bearer {user2_token}"}
-                # Check order list endpoint
-                if order_paths:
-                    ol_path = next((p for p in order_paths if "{" not in p and ":" not in p), order_paths[0].split("/:")[0])
-                    orders = _api_get(ol_path, H2)
-                    if isinstance(orders, list) and len(orders) > 0:
-                        add("[数据隔离] 新用户可查看他人订单", "P0", "data_isolation",
-                            f"新用户{user2_email}看到{len(orders)}条订单", 0.95)
-        except Exception:
-            pass
+                # 通用隔离检查：新用户访问列表端点应返回空
+                if list_paths:
+                    for lp in list_paths[:5]:
+                        resolved = re.sub(r'[:{]\w+[}]?', '', lp).rstrip('/')
+                        data = _api_get(resolved, H2)
+                        if isinstance(data, list) and len(data) > 0:
+                            add(f"[数据隔离] 新用户可查看他人数据: GET {resolved}", "P0", "data_isolation",
+                                f"新用户{user2_email}访问{resolved}看到{len(data)}条记录", 0.95)
+                            break
+        except Exception as exc:
+            logger.warning(
+                f"deep_verifier: 数据隔离检查异常",
+                extra={"error_code": "QB-O003", "context": {"error": str(exc)[:200]}},
+            )
     
     # ═══════════════════════════════════════
-    # 8. Concurrent tests
+    # 6. Concurrent write race condition
     # ═══════════════════════════════════════
-    if buyer_token:
-        # Concurrent cart add
-        def _cart_add():
-            try:
-                cd = json.dumps({"sku": test_sku, "qty": 1}).encode()
-                r = urllib.request.urlopen(urllib.request.Request(f"{base_url}{cart_create}",
-                    data=cd, headers=H_buyer, method="POST"), timeout=5)
-                return r.status
-            except Exception:
-                return 0
-        q = queue.Queue()
-        t1 = threading.Thread(target=lambda: q.put(_cart_add()))
-        t2 = threading.Thread(target=lambda: q.put(_cart_add()))
-        t1.start(); t2.start(); t1.join(3); t2.join(3)
-        statuses = []
-        while not q.empty(): statuses.append(q.get_nowait())
-        if len(statuses) == 2 and all(s in (200, 201) for s in statuses):
-            add("[并发] 购物车双写未加锁", "P1", "concurrency", f"两个并发add均成功", 0.85)
-        
-        # Concurrent payment race
-        addr_resp = _ensure_address(buyer_token)
-        addr_id = addr_resp[0]["id"] if isinstance(addr_resp, list) and addr_resp else ""
-        if addr_id and order_paths:
-            create_path = next((p for p in order_paths if not any(x in p for x in ("cancel","ship","confirm","pay"))), None)
-            if create_path:
-                sc, order = _api_post(create_path, {"items": [{"sku": test_sku, "qty": 1}], "addressId": addr_id}, H_buyer)
-                oid = (order or {}).get("id", "") if sc in (200, 201) else ""
-                amt = float((order or {}).get("total_amount") or (order or {}).get("payable_amount") or 0)
-                if oid and amt > 0:
-                    pay_path = payment_paths[0] if payment_paths else "/api/payments/pay"
-                    pq = queue.Queue()
-                    def _pay():
-                        try:
-                            pb = json.dumps({"orderId": oid, "amount": amt, "channel": "BALANCE",
-                                "idempotencyKey": f"race-{int(time.time()*1000)}"}).encode()
-                            r = urllib.request.urlopen(urllib.request.Request(f"{base_url}{pay_path}",
-                                data=pb, headers=H_buyer, method="POST"), timeout=5)
-                            pq.put(r.status)
-                        except Exception:
-                            pq.put(0)
-                    p1 = threading.Thread(target=_pay); p2 = threading.Thread(target=_pay)
-                    p1.start(); p2.start(); p1.join(3); p2.join(3)
-                    pstatuses = []
-                    while not pq.empty(): pstatuses.append(pq.get_nowait())
-                    if len(pstatuses) == 2 and all(ps in (200, 201) for ps in pstatuses):
-                        add("[并发] 双支付竞争均成功", "P0", "concurrency",
-                            f"order={oid} 同时两次pay返回成功", 0.95)
+    if user_token and post_paths:
+        # 通用并发测试：对同一 POST 端点发起并发请求
+        conc_target = post_paths[0] if post_paths else None
+        if conc_target:
+            resolved = re.sub(r'[:{]\w+[}]?', 'test-id', conc_target)
+            def _conc_post():
+                try:
+                    cd = json.dumps({"name": f"conc-{time.time()}", "value": 1}).encode()
+                    r = urllib.request.urlopen(urllib.request.Request(f"{base_url}{resolved}",
+                        data=cd, headers=H_user, method="POST"), timeout=5)
+                    return r.status
+                except Exception:
+                    return 0
+            q = queue.Queue()
+            t1 = threading.Thread(target=lambda: q.put(_conc_post()))
+            t2 = threading.Thread(target=lambda: q.put(_conc_post()))
+            t1.start(); t2.start(); t1.join(3); t2.join(3)
+            statuses = []
+            while not q.empty(): statuses.append(q.get_nowait())
+            if len(statuses) == 2 and all(s in (200, 201) for s in statuses):
+                add(f"[并发] 并发写入未加锁: POST {conc_target}", "P1", "concurrency",
+                    f"两个并发POST {conc_target}均成功，可能存在竞态条件", 0.80)
     
     # ═══════════════════════════════════════
     # 9. DB consistency checks (auto-discover)
@@ -472,14 +288,7 @@ def run_deep_tests(config: dict | None = None, routes: list[dict] | None = None)
                 cur.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'")
                 tables = [r[0] for r in cur.fetchall()]
                 
-                # Check inventory consistency if inventory table exists
-                if any("inventor" in t for t in tables):
-                    cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name LIKE '%inventor%' AND column_name LIKE '%qty%'")
-                    qty_cols = [r[0] for r in cur.fetchall()]
-                    if qty_cols:
-                        cur.execute(f"SELECT * FROM (SELECT * FROM information_schema.tables WHERE table_name LIKE '%inventor%' LIMIT 1) t")
-                
-                # Simple check: any numeric column with negative values
+                # 通用完整性检查：数值列不应为负
                 for table in tables:
                     table = _safe_identifier(table)
                     cur.execute(
@@ -504,8 +313,7 @@ def run_deep_tests(config: dict | None = None, routes: list[dict] | None = None)
                                 cur.execute(
                                     "SELECT column_name FROM information_schema.columns "
                                     "WHERE table_name=%s AND column_name IN "
-                                    "('order_id','sku','product_id','user_id','email','name',"
-                                    "'product_name','code','phone','amount','status')",
+                                    "('user_id','email','name','code','phone','amount','status')",
                                     (table,),
                                 )
                                 biz_cols = [r[0] for r in cur.fetchall()]
@@ -545,15 +353,18 @@ def run_deep_tests(config: dict | None = None, routes: list[dict] | None = None)
                             pass
                 
                 conn.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                f"deep_verifier: DB验证整体失败，数据完整性检查将跳过",
+                extra={"error_code": "QB-X004", "context": {"error": str(exc)[:200]}},
+            )
     
     # ═══════════════════════════════════════
     # 10. Input boundary: dynamic tests for ALL POST/PUT endpoints
     # ═══════════════════════════════════════
     # 通用边界测试：对所有 POST/PUT 路由动态生成边界测试用例，
     # 不硬编码特定端点（之前只测 /api/auth/login 和 /api/auth/register）
-    if buyer_token and routes:
+    if user_token and routes:
         # 通用边界测试数据（非业务概念）
         boundary_payloads = [
             ("超长字符串", {"_boundary_field_": "a" * 5000}),
@@ -581,25 +392,31 @@ def run_deep_tests(config: dict | None = None, routes: list[dict] | None = None)
             for label, template in boundary_payloads:
                 # 用实际参数名替换通用字段
                 payload = {test_field: v} if isinstance(template, dict) and "_boundary_field_" in template else template
-                code = _http_error_code(path, method, payload, H_buyer)
+                code = _http_error_code(path, method, payload, H_user)
                 if code >= 500:
                     add(f"[边界] {label}导致服务端{code}: {method} {path}", "P1", "input_validation",
                         f"{method} {path} 返回{code}", 0.88)
     
     # ═══════════════════════════════════════
-    # 11. Report accuracy (if reports exist)
+    # 9. Report accuracy (API vs DB count)
     # ═══════════════════════════════════════
-    if admin_token and report_paths and db_cfg:
+    if admin_token and list_paths and db_cfg:
         try:
-            db_count = _db_query("SELECT COUNT(*) FROM orders")
-            db_total = db_count[0][0] if db_count else 0
-            for rp in report_paths:
-                result = _api_get(rp, H_admin)
+            # 通用报表一致性：对比 API 返回的 total/count 与 DB 实际行数
+            for lp in list_paths[:3]:
+                resolved = re.sub(r'[:{]\w+[}]?', '', lp).rstrip('/')
+                result = _api_get(resolved, H_admin)
                 if isinstance(result, dict):
-                    api_count = result.get("total_orders") or result.get("count") or 0
-                    if api_count and db_total and api_count != db_total:
-                        add(f"[报表] 订单数不一致: API={api_count} DB={db_total}", "P1", "data_integrity",
-                            f"报表{rp}数据与DB不符", 0.90)
+                    api_count = result.get("total") or result.get("count") or result.get("total_count") or 0
+                    if api_count and isinstance(api_count, int) and api_count > 0:
+                        # 尝试从路径推断表名（通用：取路径最后一段）
+                        table_guess = resolved.rstrip('/').split('/')[-1]
+                        if table_guess and _SAFE_IDENTIFIER_RE.match(table_guess):
+                            db_count = _db_query(f'SELECT COUNT(*) FROM "{_safe_identifier(table_guess)}"')
+                            db_total = db_count[0][0] if db_count else 0
+                            if db_total and api_count != db_total:
+                                add(f"[报表] 数据不一致: API={api_count} DB={db_total} ({resolved})", "P1", "data_integrity",
+                                    f"端点{resolved}返回total={api_count}但DB实际{db_total}条", 0.88)
         except Exception:
             pass
     
@@ -607,7 +424,7 @@ def run_deep_tests(config: dict | None = None, routes: list[dict] | None = None)
     # 12. Security: CORS & headers
     # ═══════════════════════════════════════
     try:
-        req = urllib.request.Request(f"{base_url}/api/products" if product_paths else base_url,
+        req = urllib.request.Request(base_url,
             headers={"Origin": "https://evil.com"})
         resp = urllib.request.urlopen(req, timeout=5)
         cors = resp.getheader("Access-Control-Allow-Origin") or ""
@@ -622,16 +439,16 @@ def run_deep_tests(config: dict | None = None, routes: list[dict] | None = None)
     # ═══════════════════════════════════════
     # 13. Frontend access check (if URLs configured)
     # ═══════════════════════════════════════
-    if buyer_token and frontend.get("admin"):
+    if frontend.get("admin") and user_token:
         try:
             req = urllib.request.Request(frontend["admin"],
-                headers={"Authorization": f"Bearer {buyer_token}"})
+                headers={"Authorization": f"Bearer {user_token}"})
             resp = urllib.request.urlopen(req, timeout=5)
             html = resp.read().decode('utf-8', 'replace').lower()
-            admin_keywords = ["dashboard", "admin", "管理", "后台", "订单列表", "用户管理"]
+            admin_keywords = ["dashboard", "admin", "管理", "后台", "用户管理", "系统设置"]
             if any(w in html for w in admin_keywords):
-                add("[前端] 买家可访问管理端Web", "P0", "authorization",
-                    f"买家token访问{frontend['admin']}返回管理内容", 0.95)
+                add("[前端] 低权限用户可访问管理端Web", "P0", "authorization",
+                    f"低权限token访问{frontend['admin']}返回管理内容", 0.95)
         except Exception:
             pass
 

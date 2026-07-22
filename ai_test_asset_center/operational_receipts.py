@@ -22,6 +22,7 @@ _EXECUTION_STATUSES = frozenset({
     "DEFERRED",
     "HARNESS_FAILURE",
     "HARNESS_FAILED",
+    "DELIVERABLE",
 })
 _CLEANUP_PHASES = frozenset({"cleanup", "fixture_cleanup"})
 _CLEANUP_STATUSES = frozenset({"COMPLETED", "FAILED", "NOT_REQUIRED"})

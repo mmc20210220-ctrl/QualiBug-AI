@@ -204,7 +204,7 @@ def _observation(
             "reason": _text(execution_stage.get("reason_code")),
             "elapsed_ms": execution_stage.get("elapsed_ms"),
         }
-    if execution_status != "EXECUTED" and stage_name not in {"formal_projection"}:
+    if execution_status not in ("EXECUTED", "DELIVERABLE") and stage_name not in {"formal_projection"}:
         return None
     if stage_name == "observation":
         observed = bool(_list(attempt.get("observation_receipt_ids")))
@@ -435,12 +435,12 @@ def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
     harness_failures = int(terminal_counts.get("HARNESS_FAILED", 0))
     blocked = int(terminal_counts.get("BLOCKED", 0) + terminal_counts.get("DEFERRED", 0))
     executed = sum(
-        1 for attempt in attempts if _text(_stage(attempt, "execution").get("status")).upper() == "EXECUTED"
+        1 for attempt in attempts if _text(_stage(attempt, "execution").get("status")).upper() in ("EXECUTED", "DELIVERABLE")
     )
     observation_missing = sum(
         1
         for attempt in attempts
-        if _text(_stage(attempt, "execution").get("status")).upper() == "EXECUTED"
+        if _text(_stage(attempt, "execution").get("status")).upper() in ("EXECUTED", "DELIVERABLE")
         and not _list(attempt.get("observation_receipt_ids"))
     )
     error_present = bool(_text(result.get("error")))

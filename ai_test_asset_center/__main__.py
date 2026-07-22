@@ -211,6 +211,8 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
         from .v12_pipeline import run_v12_pipeline
         v12 = run_v12_pipeline(project=project, root=root, prd_text=prd_text, api_spec_text=api_doc_text, db_schema_text=schema_text, base_url=approved_base_url, campaign_context=context)
     except Exception as exc:
+        import traceback as _tb
+        _tb.print_exc()
         return {"success": False, "error": f"v12_pipeline_failed:{type(exc).__name__}:{exc}"}
 
     runtime_contract = _as_dict(v12.get("runtime_contract")) or initial_runtime_contract

@@ -1,6 +1,7 @@
 """V12 scan / preflight / regression-run handlers for PrivatePilotHandler."""
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from pathlib import Path
@@ -17,6 +18,8 @@ from .private_pilot_scan_prep import (
 )
 from .scan_counter import increment_scan_counter
 
+_scan_logger = logging.getLogger("qualibug.scan")
+
 class ScanHandlersMixin:
     def _handle_scan_preflight(self, project: str, root: Path, body: dict[str, Any] | None = None) -> None:
         """Customer-facing readiness check: surface actionable blockers BEFORE a scan
@@ -29,8 +32,11 @@ class ScanHandlersMixin:
         if _cfg.exists():
             try:
                 _services = json.loads(_cfg.read_text(encoding="utf-8")).get("services", [])
-            except Exception:
-                pass
+            except Exception as exc:
+                _scan_logger.warning(
+                    f"preflight: 服务凭证配置解析失败 project={project}",
+                    extra={"error_code": "QB-C003", "context": {"project": project, "config_path": str(_cfg), "error": str(exc)[:200]}},
+                )
         if not _services:
             reasons.append({"code": "NO_CREDENTIALS", "message": "尚未配置任何服务凭证，请先在「设置」页保存。"})
         # 2) source ingested — with type-awareness so the UI can tell the
@@ -89,8 +95,11 @@ class ScanHandlersMixin:
                     if not _base_url and _ep.startswith(("http://", "https://")):
                         _base_url = _ep
                         break
-        except Exception:
-            pass
+        except Exception as exc:
+            _scan_logger.warning(
+                f"preflight: 连接器注册表加载失败 project={project}",
+                extra={"error_code": "QB-X003", "context": {"project": project, "error": str(exc)[:200]}},
+            )
         if not _base_url:
             reasons.append({"code": "NO_TARGET", "message": "未配置被测目标 base_url 或启用连接器端点。"})
 
@@ -370,8 +379,11 @@ class ScanHandlersMixin:
             # entrypoints project the same run metadata into command center.
             try:
                 increment_scan_counter(root / "platform_outputs" / project / "scan_counter.json")
-            except Exception:
-                pass
+            except Exception as exc:
+                _scan_logger.warning(
+                    f"scan_counter: 扫描计数写入失败 project={project}",
+                    extra={"context": {"project": project, "error": str(exc)[:200]}},
+                )
             # Also write raw findings for frontend Dashboard/Findings compatibility
             try:
                 # Re-read from evaluation result
@@ -402,8 +414,11 @@ class ScanHandlersMixin:
                     if isinstance(ui_finds, list) and ui_finds:
                         existing.setdefault("ui_findings", []).extend(ui_finds)
                     eval_json.write_text(_j2.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
-            except Exception:
-                pass
+            except Exception as exc:
+                _scan_logger.error(
+                    f"scan_result: 扫描结果持久化失败 project={project}",
+                    extra={"error_code": "QB-S005", "context": {"project": project, "error": str(exc)[:300]}},
+                )
             # Save spectrum result to disk for Dashboard polling
             if result.get("spectrum"):
                 spectrum_dir = root / "platform_outputs" / project / "spectrum"

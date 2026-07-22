@@ -60,10 +60,10 @@ def run_frontend_tests(config: dict | None = None) -> list[dict]:
                     f"{customer_url} HTML包含{len(sensitive)}类敏感信息", 0.90)
             # Check for error indicators
             if '500' in html or 'internal server error' in html.lower():
-                add("[UI] 买家端页面返回服务端错误", "P1", "availability",
+                add("[UI] 用户端页面返回服务端错误", "P1", "availability",
                     f"{customer_url} 内容含500错误", 0.85)
         except Exception:
-            add("[UI] 买家端不可达", "P1", "availability", f"{customer_url} 无法访问", 0.88)
+            add("[UI] 用户端不可达", "P1", "availability", f"{customer_url} 无法访问", 0.88)
 
     # Check admin web
     if admin_url:
@@ -103,25 +103,25 @@ def run_frontend_tests(config: dict | None = None) -> list[dict]:
                             page.goto(customer_url, timeout=10000, wait_until="networkidle")
                             page.wait_for_timeout(500)
                             html = page.content()
-                            # Check for draft/hidden products
-                            if any(w in html.lower() for w in ['draft', '草稿', 'off_sale', 'hidden']):
-                                add("[UI] 买家端暴露非上架商品", "P1", "data_leak",
-                                    "前端含DRAFT/OFF_SALE/HIDDEN字样", 0.88)
+                            # Check for draft/hidden/internal state data leaks
+                            if any(w in html.lower() for w in ['draft', '草稿', 'off_sale', 'hidden', 'internal']):
+                                add("[UI] 用户端暴露内部状态数据", "P1", "data_leak",
+                                    "前端含DRAFT/OFF_SALE/HIDDEN/INTERNAL字样", 0.88)
                             # Check for admin links
                             admin_words = ['admin', 'dashboard', '管理', '后台']
                             found_admin = [w for w in admin_words if w in html.lower()]
                             if found_admin:
-                                add(f"[UI] 买家端含管理链接: {','.join(found_admin)}", "P1", "authorization",
+                                add(f"[UI] 用户端含管理链接: {','.join(found_admin)}", "P1", "authorization",
                                     "前端暴露管理入口", 0.88)
                             
                             # Try to inject token and check logged-in state
-                            buyer_creds = creds.get("buyer", {})
-                            if buyer_creds.get("email") and base_url:
+                            _user_creds = creds.get("user") or creds.get("buyer") or {}
+                            if _user_creds.get("email") and base_url:
                                 try:
                                     # Get token via API
                                     import urllib.request as _ur
-                                    ld = json.dumps({"email": buyer_creds["email"],
-                                        "password": buyer_creds.get("password", "")}).encode()
+                                    ld = json.dumps({"email": _user_creds["email"],
+                                        "password": _user_creds.get("password", "")}).encode()
                                     req = _ur.Request(f"{base_url}/api/auth/login", data=ld,
                                         headers={"Content-Type": "application/json"}, method="POST")
                                     resp = _ur.urlopen(req, timeout=5)
@@ -132,13 +132,10 @@ def run_frontend_tests(config: dict | None = None) -> list[dict]:
                                         page.wait_for_timeout(500)
                                         post_login = page.content()
                                         if "logout" in post_login.lower() or "退出" in post_login:
-                                            # Check cart access after login
-                                            page.goto(f"{customer_url}/cart", timeout=5000)
-                                            page.wait_for_timeout(500)
-                                            cart_html = page.content()
-                                            if any(w in cart_html.lower() for w in ['draft', 'hidden', 'off_sale']):
-                                                add("[UI] 购物车暴露非上架商品", "P1", "data_leak",
-                                                    "登录后购物车页面含隐藏商品", 0.88)
+                                            # 通用：登录后检查是否暴露内部状态数据
+                                            if any(w in post_login.lower() for w in ['draft', 'hidden', 'internal', 'debug']):
+                                                add("[UI] 登录后暴露内部状态数据", "P1", "data_leak",
+                                                    "登录后页面含内部/调试状态数据", 0.88)
                                 except Exception:
                                     pass
                         finally:

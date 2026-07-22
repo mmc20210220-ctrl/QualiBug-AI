@@ -287,21 +287,21 @@ def generate_real_project_probes(openapi: dict[str, Any], cfg: dict[str, Any], m
             if "admin" in keys:
                 probes.append({**base, "probe_id": f"RP_AUTH_ADMIN_{len(probes)+1:04d}", "risk_type": "permission_bypass", "title": "普通用户访问管理员接口", "actor": "normal_user", "expected": "403/401", "bug_signal": "返回 2xx 且包含业务数据", "destructive": False, "severity": "P1"})
             if "order" in keys and "GET" == method_u and ("{" in path or "}" in path):
-                probes.append({**base, "probe_id": f"RP_IDOR_ORDER_{len(probes)+1:04d}", "risk_type": "idor", "title": "订单详情疑似水平越权", "actor": "normal_user", "expected": "只能访问本人订单", "bug_signal": "可访问他人资源或无归属校验", "destructive": False, "severity": "P1"})
+                probes.append({**base, "probe_id": f"RP_IDOR_ORDER_{len(probes)+1:04d}", "risk_type": "idor", "title": "资源详情疑似水平越权", "actor": "normal_user", "expected": "只能访问本人资源", "bug_signal": "可访问他人资源或无归属校验", "destructive": False, "severity": "P1"})
             if "tenant" in keys:
                 probes.append({**base, "probe_id": f"RP_TENANT_{len(probes)+1:04d}", "risk_type": "tenant_isolation", "title": "租户数据隔离风险", "actor": "normal_user", "expected": "跨租户访问应拒绝", "bug_signal": "返回其他租户数据", "destructive": False, "severity": "P0"})
             if mode in {"standard", "aggressive"}:
                 if "coupon" in keys:
-                    probes.append({**base, "probe_id": f"RP_COUPON_{len(probes)+1:04d}", "risk_type": "coupon_abuse", "title": "优惠券规则绕过风险", "actor": "normal_user", "expected": "优惠券门槛、归属、有效期和重复使用受控", "bug_signal": "异常优惠仍可使用或重复抵扣", "destructive": method_u != "GET", "severity": "P1"})
+                    probes.append({**base, "probe_id": f"RP_COUPON_{len(probes)+1:04d}", "risk_type": "coupon_abuse", "title": "优惠权益规则绕过风险", "actor": "normal_user", "expected": "优惠权益门槛、归属、有效期和重复使用受控", "bug_signal": "异常优惠仍可使用或重复抵扣", "destructive": method_u != "GET", "severity": "P1"})
                 if "stock" in keys or "inventory" in keys or "checkout" in keys:
-                    probes.append({**base, "probe_id": f"RP_STOCK_{len(probes)+1:04d}", "risk_type": "stock_consistency", "title": "库存一致性风险", "actor": "normal_user", "expected": "库存不足不可下单且库存变更一致", "bug_signal": "库存不足成功或状态不一致", "destructive": method_u != "GET", "severity": "P1"})
+                    probes.append({**base, "probe_id": f"RP_STOCK_{len(probes)+1:04d}", "risk_type": "stock_consistency", "title": "资源数量一致性风险", "actor": "normal_user", "expected": "资源不足时业务操作应拒绝且数量变更一致", "bug_signal": "资源不足仍成功或状态不一致", "destructive": method_u != "GET", "severity": "P1"})
                 if "payment" in keys:
-                    probes.append({**base, "probe_id": f"RP_PAYMENT_{len(probes)+1:04d}", "risk_type": "payment", "title": "支付金额和状态一致性风险", "actor": "normal_user", "expected": "支付金额、订单状态和回调幂等一致", "bug_signal": "金额不一致仍成功或重复回调重复入账", "destructive": True, "severity": "P0"})
+                    probes.append({**base, "probe_id": f"RP_PAYMENT_{len(probes)+1:04d}", "risk_type": "payment", "title": "交易金额和状态一致性风险", "actor": "normal_user", "expected": "交易金额、业务状态和回调幂等一致", "bug_signal": "金额不一致仍成功或重复回调重复入账", "destructive": True, "severity": "P0"})
                 if "refund" in keys:
                     probes.append({**base, "probe_id": f"RP_REFUND_{len(probes)+1:04d}", "risk_type": "refund", "title": "退款状态和金额一致性风险", "actor": "normal_user", "expected": "退款金额、状态和幂等受控", "bug_signal": "重复退款、超额退款或未支付退款成功", "destructive": True, "severity": "P0"})
             if mode == "aggressive" and allow_destructive:
                 if method_u in {"POST", "PUT", "PATCH"} and ("order" in keys or "checkout" in keys or "payment" in keys):
-                    probes.append({**base, "probe_id": f"RP_IDEMPOTENCY_{len(probes)+1:04d}", "risk_type": "idempotency", "title": "重复提交 / 幂等风险", "actor": "normal_user", "expected": "相同幂等键重复提交不应产生重复业务结果", "bug_signal": "重复创建订单、重复扣款或重复扣库存", "destructive": True, "severity": "P1"})
+                    probes.append({**base, "probe_id": f"RP_IDEMPOTENCY_{len(probes)+1:04d}", "risk_type": "idempotency", "title": "重复提交 / 幂等风险", "actor": "normal_user", "expected": "相同幂等键重复提交不应产生重复业务结果", "bug_signal": "重复创建资源、重复扣款或重复变更", "destructive": True, "severity": "P1"})
     filtered = []
     for p in probes:
         if p.get("destructive") and (mode == "safe" or not allow_destructive and mode == "aggressive"):
