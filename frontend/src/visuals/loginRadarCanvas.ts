@@ -160,6 +160,7 @@ function drawParticles(
   frame: LoginRadarFrame,
   centerX: number,
   centerY: number,
+  sweepAngle: number,
 ): void {
   const linkDistance = Math.min(150, Math.max(100, scene.width * 0.11));
   for (let index = 0; index < scene.particles.length; index += 1) {
@@ -191,11 +192,125 @@ function drawParticles(
       }
     }
 
+    // Sweep flare: particles near the radar sweep line briefly ignite,
+    // like contacts lit by a passing beam. Deterministic per frame.
+    const particleAngle = Math.atan2(particle.y - centerY, particle.x - centerX);
+    let angularGap = Math.abs(particleAngle - (sweepAngle % (Math.PI * 2)));
+    if (angularGap > Math.PI) angularGap = Math.PI * 2 - angularGap;
+    const flare = frame.reducedMotion ? 0 : Math.max(0, 1 - angularGap / 0.42);
+
     const glow = 0.45 + Math.sin(frame.time * 0.004 + particle.pulse) * 0.3;
+    const radius = particle.r * (1 + flare * 1.15);
     context.beginPath();
-    context.arc(particle.x, particle.y, particle.r, 0, Math.PI * 2);
-    context.fillStyle = `rgba(167, 243, 208, ${0.35 + glow * 0.4})`;
-    context.shadowColor = 'rgba(45, 212, 191, 0.55)';
+    context.arc(particle.x, particle.y, radius, 0, Math.PI * 2);
+    context.fillStyle = `rgba(167, 243, 208, ${Math.min(1, 0.35 + glow * 0.4 + flare * 0.55)})`;
+    context.shadowColor = flare > 0.25 ? 'rgba(204, 251, 241, 0.95)' : 'rgba(45, 212, 191, 0.55)';
+    context.shadowBlur = 8 + flare * 14;
+    context.fill();
+    context.shadowBlur = 0;
+
+    if (flare > 0.55) {
+      context.beginPath();
+      context.arc(particle.x, particle.y, radius + 4.5, 0, Math.PI * 2);
+      context.strokeStyle = `rgba(94, 234, 212, ${(flare - 0.55) * 0.9})`;
+      context.lineWidth = 1;
+      context.stroke();
+    }
+  }
+}
+
+function drawInstrumentRing(
+  context: CanvasRenderingContext2D,
+  scene: LoginRadarScene,
+  frame: LoginRadarFrame,
+  centerX: number,
+  centerY: number,
+  radius: number,
+): void {
+  const glowMultiplier = 1 + frame.focusBoost * 0.45;
+  const outer = radius * 1.1;
+  context.save();
+
+  // Outer bearing ring with degree ticks — the instrument face.
+  context.beginPath();
+  context.arc(centerX, centerY, outer, 0, Math.PI * 2);
+  context.strokeStyle = `rgba(45, 212, 191, ${0.1 * glowMultiplier})`;
+  context.lineWidth = 1;
+  context.stroke();
+
+  for (let degree = 0; degree < 360; degree += 6) {
+    const major = degree % 30 === 0;
+    const tickAngle = (degree * Math.PI) / 180;
+    const inner = outer - (major ? 10 : 5);
+    context.beginPath();
+    context.moveTo(centerX + Math.cos(tickAngle) * inner, centerY + Math.sin(tickAngle) * inner);
+    context.lineTo(centerX + Math.cos(tickAngle) * outer, centerY + Math.sin(tickAngle) * outer);
+    context.strokeStyle = `rgba(94, 234, 212, ${(major ? 0.3 : 0.14) * glowMultiplier})`;
+    context.lineWidth = major ? 1.3 : 1;
+    context.stroke();
+  }
+
+  // Cardinal bearing markers (N/E/S/W style diamond pips, no text).
+  for (let quarter = 0; quarter < 4; quarter += 1) {
+    const pipAngle = (quarter * Math.PI) / 2;
+    const pipX = centerX + Math.cos(pipAngle) * (outer + 6);
+    const pipY = centerY + Math.sin(pipAngle) * (outer + 6);
+    context.save();
+    context.translate(pipX, pipY);
+    context.rotate(pipAngle + Math.PI / 4);
+    context.fillStyle = `rgba(153, 246, 228, ${0.4 * glowMultiplier})`;
+    context.fillRect(-2.2, -2.2, 4.4, 4.4);
+    context.restore();
+  }
+
+  // Slow counter-rotating dashed ring — mechanical instrument feel.
+  context.save();
+  context.translate(centerX, centerY);
+  context.rotate(frame.reducedMotion ? 0.6 : -frame.time * 0.00035);
+  context.setLineDash([3, 9]);
+  context.beginPath();
+  context.arc(0, 0, radius * 0.62, 0, Math.PI * 2);
+  context.strokeStyle = `rgba(56, 189, 248, ${0.22 * glowMultiplier})`;
+  context.lineWidth = 1;
+  context.stroke();
+  context.setLineDash([1, 6]);
+  context.beginPath();
+  context.arc(0, 0, radius * 0.44, 0, Math.PI * 2);
+  context.strokeStyle = `rgba(94, 234, 212, ${0.16 * glowMultiplier})`;
+  context.stroke();
+  context.setLineDash([]);
+  context.restore();
+
+  context.restore();
+}
+
+function drawEscortSatellites(
+  context: CanvasRenderingContext2D,
+  frame: LoginRadarFrame,
+  centerX: number,
+  centerY: number,
+  radius: number,
+): void {
+  // Two escort contacts on fixed orbits — deterministic positions.
+  const orbits = [
+    { ratio: 0.44, speed: 0.00062, offset: 1.1, size: 2.1 },
+    { ratio: 0.8, speed: -0.00041, offset: 3.6, size: 1.7 },
+  ];
+  for (const orbit of orbits) {
+    const angle = frame.reducedMotion ? orbit.offset : orbit.offset + frame.time * orbit.speed;
+    const x = centerX + Math.cos(angle) * radius * orbit.ratio;
+    const y = centerY + Math.sin(angle) * radius * orbit.ratio;
+    const trailAngle = angle - 0.32 * Math.sign(orbit.speed);
+    context.beginPath();
+    context.moveTo(centerX + Math.cos(trailAngle) * radius * orbit.ratio, centerY + Math.sin(trailAngle) * radius * orbit.ratio);
+    context.lineTo(x, y);
+    context.strokeStyle = 'rgba(125, 211, 252, 0.28)';
+    context.lineWidth = 1;
+    context.stroke();
+    context.beginPath();
+    context.arc(x, y, orbit.size, 0, Math.PI * 2);
+    context.fillStyle = 'rgba(186, 230, 253, 0.85)';
+    context.shadowColor = 'rgba(56, 189, 248, 0.8)';
     context.shadowBlur = 8;
     context.fill();
     context.shadowBlur = 0;
@@ -208,8 +323,9 @@ function drawRadar(
   frame: LoginRadarFrame,
   centerX: number,
   centerY: number,
+  radius: number,
+  angle: number,
 ): void {
-  const radius = Math.min(scene.width, scene.height) * (0.34 + frame.focusBoost * 0.02);
   const glowMultiplier = 1 + frame.focusBoost * 0.45;
   context.save();
 
@@ -239,10 +355,23 @@ function drawRadar(
   context.arc(centerX, centerY, radius, 0, Math.PI * 2);
   context.fill();
 
-  const angle = frame.reducedMotion ? -0.35 : frame.time * (0.0015 + frame.focusBoost * 0.0006);
+  // Comet sweep: layered slices form a smooth fading trail behind the beam.
   context.save();
   context.translate(centerX, centerY);
   context.rotate(angle);
+  const trailSlices = 16;
+  for (let slice = 0; slice < trailSlices; slice += 1) {
+    const ratio = slice / trailSlices;
+    const sliceStart = -0.92 + ratio * 0.92;
+    const sliceEnd = sliceStart + 0.1;
+    const fade = ratio * ratio;
+    context.beginPath();
+    context.moveTo(0, 0);
+    context.arc(0, 0, radius, sliceStart, sliceEnd);
+    context.closePath();
+    context.fillStyle = `rgba(45, 212, 191, ${(0.02 + fade * 0.16) * glowMultiplier})`;
+    context.fill();
+  }
   const wedge = context.createLinearGradient(0, 0, radius, 0);
   wedge.addColorStop(0, `rgba(94, 234, 212, ${0.5 + frame.focusBoost * 0.2})`);
   wedge.addColorStop(0.35, `rgba(56, 189, 248, ${0.18 + frame.focusBoost * 0.1})`);
@@ -261,6 +390,14 @@ function drawRadar(
   context.moveTo(0, 0);
   context.lineTo(radius, 0);
   context.stroke();
+  context.shadowBlur = 0;
+  // Beam tip highlight.
+  context.beginPath();
+  context.arc(radius, 0, 2.6, 0, Math.PI * 2);
+  context.fillStyle = 'rgba(240, 253, 250, 0.95)';
+  context.shadowColor = 'rgba(94, 234, 212, 1)';
+  context.shadowBlur = 12;
+  context.fill();
   context.shadowBlur = 0;
   context.restore();
 
@@ -303,6 +440,13 @@ function drawRadar(
   context.shadowColor = 'rgba(94, 234, 212, 0.9)';
   context.shadowBlur = 16 + frame.focusBoost * 10;
   context.fill();
+  // Core crosshair pip.
+  context.shadowBlur = 0;
+  context.beginPath();
+  context.arc(centerX, centerY, 9.5, 0, Math.PI * 2);
+  context.strokeStyle = `rgba(204, 251, 241, ${0.5 * glowMultiplier})`;
+  context.lineWidth = 1;
+  context.stroke();
   context.restore();
 }
 
@@ -315,9 +459,13 @@ export function drawLoginRadarFrame(
   drawGrid(context, scene, frame);
   const centerX = scene.width * (0.22 + (frame.pointerX - 0.5) * 0.05);
   const centerY = scene.height * (0.58 + (frame.pointerY - 0.5) * 0.06);
+  const radius = Math.min(scene.width, scene.height) * (0.34 + frame.focusBoost * 0.02);
+  const sweepAngle = frame.reducedMotion ? -0.35 : frame.time * (0.0015 + frame.focusBoost * 0.0006);
   drawBeams(context, scene, frame);
-  drawParticles(context, scene, frame, centerX, centerY);
-  drawRadar(context, scene, frame, centerX, centerY);
+  drawParticles(context, scene, frame, centerX, centerY, sweepAngle);
+  drawInstrumentRing(context, scene, frame, centerX, centerY, radius);
+  drawEscortSatellites(context, frame, centerX, centerY, radius);
+  drawRadar(context, scene, frame, centerX, centerY, radius, sweepAngle);
 
   const vignette = context.createRadialGradient(
     scene.width * 0.35,

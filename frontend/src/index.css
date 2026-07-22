@@ -94,6 +94,29 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   0% { background-position: 0% 50%; }
   100% { background-position: 200% 50%; }
 }
+@keyframes aurora-drift {
+  0% { transform: translate3d(-2%, -1%, 0) scale(1); }
+  50% { transform: translate3d(2%, 1.5%, 0) scale(1.06); }
+  100% { transform: translate3d(-1%, 2%, 0) scale(1.03); }
+}
+@keyframes login-beam-spin {
+  to { --login-beam-angle: 360deg; }
+}
+@keyframes login-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes auth-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-6px); }
+  40% { transform: translateX(5px); }
+  60% { transform: translateX(-3px); }
+  80% { transform: translateX(2px); }
+}
+@property --login-beam-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
 
 /* Login — trusted technology authentication stage */
 .login-page {
@@ -112,12 +135,33 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
     linear-gradient(150deg, #030b11 0%, #06151d 52%, #041019 100%);
 }
 .login-page > .login-stage-canvas,
+.login-page > .login-aurora,
 .login-page > .login-stage-glow,
 .login-page > .login-stage-scan,
 .login-page > .login-stage-orb,
 .login-page > .login-light-bleed,
+.login-page > .login-noise,
 .login-page > .login-hud-frame {
   z-index: 0;
+}
+.login-aurora {
+  position: absolute;
+  inset: -18% -8%;
+  background:
+    radial-gradient(ellipse 30% 24% at 30% 35%, rgba(45, 212, 191, .12), transparent 60%),
+    radial-gradient(ellipse 26% 20% at 62% 60%, rgba(56, 189, 248, .09), transparent 62%),
+    radial-gradient(ellipse 22% 18% at 48% 22%, rgba(16, 185, 129, .08), transparent 60%);
+  filter: blur(42px);
+  pointer-events: none;
+  animation: aurora-drift 18s ease-in-out infinite alternate;
+}
+.login-noise {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: .05;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.55'/%3E%3C/svg%3E");
 }
 .login-stage {
   position: relative;
@@ -706,6 +750,182 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   color: var(--muted);
 }
 .login-proof { display: none; }
+
+/* Login — field icons and filled state */
+.login-input-control { position: relative; }
+.login-field-icon {
+  position: absolute;
+  left: 13px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 17px;
+  height: 17px;
+  display: inline-flex;
+  color: #5f7788;
+  pointer-events: none;
+  transition: color .2s ease;
+}
+.login-field-icon svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.login-form .form-input.has-icon { padding-left: 42px; }
+.login-field:focus-within .login-field-icon { color: #5eead4; }
+.login-field[data-filled="true"] .form-input:not([aria-invalid="true"]) {
+  border-color: rgba(94, 234, 212, .3);
+}
+.login-field[data-filled="true"] .login-field-icon { color: #7dd3fc; }
+
+/* Login — caps lock hint */
+.login-caps-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 7px;
+  color: #fcd34d;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: .01em;
+}
+.login-caps-hint svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Login — password strength meter */
+.login-strength {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: -2px;
+  animation: rise-in .3s var(--ease-out) both;
+}
+.login-strength-track { display: inline-flex; gap: 4px; flex: none; }
+.login-strength-track i {
+  width: 26px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(148, 163, 184, .22);
+  transition: background .25s ease;
+}
+.login-strength-label {
+  font-size: 11px;
+  color: #8fa3b5;
+  font-weight: 600;
+  letter-spacing: .01em;
+}
+.login-strength.is-level-1 .login-strength-track i:nth-child(1) { background: #f87171; box-shadow: 0 0 8px rgba(248, 113, 113, .5); }
+.login-strength.is-level-1 .login-strength-label { color: #fca5a5; }
+.login-strength.is-level-2 .login-strength-track i:nth-child(-n+2) { background: #fbbf24; box-shadow: 0 0 8px rgba(251, 191, 36, .45); }
+.login-strength.is-level-2 .login-strength-label { color: #fde68a; }
+.login-strength.is-level-3 .login-strength-track i { background: #34d399; box-shadow: 0 0 8px rgba(52, 211, 153, .5); }
+.login-strength.is-level-3 .login-strength-label { color: #6ee7b7; }
+
+/* Login — submit spinner and error shake */
+.login-submit-spinner {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, .35);
+  border-top-color: #ffffff;
+  animation: login-spin .7s linear infinite;
+}
+.login-error { animation: auth-shake .45s ease; }
+
+/* Login — value card icons */
+.login-value-icon {
+  display: block;
+  width: 20px;
+  height: 20px;
+  margin-bottom: 8px;
+  color: #5eead4;
+}
+.login-value-icon svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 6px rgba(45, 212, 191, .45));
+}
+
+/* Login — capability chips (real product modules) */
+.login-module-list {
+  list-style: none;
+  margin: 18px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: 590px;
+  animation: rise-in .7s var(--ease-out) .36s both;
+}
+.login-module-list li {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(94, 234, 212, .14);
+  background: rgba(255, 255, 255, .02);
+  backdrop-filter: blur(8px);
+  color: #9db4c6;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: .02em;
+  transition: border-color .25s ease, color .25s ease, background .25s ease;
+}
+.login-module-list li::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #38bdf8;
+  box-shadow: 0 0 8px rgba(56, 189, 248, .8);
+}
+.login-module-list li:hover {
+  border-color: rgba(94, 234, 212, .34);
+  background: rgba(255, 255, 255, .05);
+  color: #d7e6f2;
+}
+
+/* Login — animated conic beam tracing the panel border */
+.login-panel-inner::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: 23px;
+  padding: 1.2px;
+  background: conic-gradient(
+    from var(--login-beam-angle, 0deg),
+    transparent 0deg,
+    transparent 292deg,
+    rgba(94, 234, 212, .95) 324deg,
+    rgba(125, 211, 252, .55) 342deg,
+    transparent 360deg
+  );
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+  opacity: .85;
+  animation: login-beam-spin 6s linear infinite;
+}
 
 @media (prefers-reduced-motion: reduce) {
   .login-stage-scan,

@@ -1,4 +1,10 @@
-import { useState, type ChangeEventHandler, type FocusEventHandler, type ReactNode } from 'react';
+import {
+  useState,
+  type ChangeEventHandler,
+  type FocusEventHandler,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+} from 'react';
 
 type PasswordFieldProps = {
   id: string;
@@ -13,6 +19,7 @@ type PasswordFieldProps = {
   invalid?: boolean;
   describedBy?: string;
   action?: ReactNode;
+  icon?: ReactNode;
 };
 
 function VisibilityIcon({ visible }: { visible: boolean }) {
@@ -41,28 +48,52 @@ export function PasswordField({
   invalid = false,
   describedBy,
   action,
+  icon,
 }: PasswordFieldProps) {
   const [visible, setVisible] = useState(false);
+  const [capsLock, setCapsLock] = useState(false);
+  const [localFocus, setLocalFocus] = useState(false);
   const toggleLabel = visible ? '隐藏密码' : '显示密码';
+  const showCapsHint = capsLock && localFocus;
+
+  const handleFocus: FocusEventHandler<HTMLInputElement> = (event) => {
+    setLocalFocus(true);
+    onFocus?.(event);
+  };
+  const handleBlur: FocusEventHandler<HTMLInputElement> = (event) => {
+    setLocalFocus(false);
+    setCapsLock(false);
+    onBlur?.(event);
+  };
+  const trackCapsLock = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (typeof event.getModifierState === 'function') {
+      setCapsLock(event.getModifierState('CapsLock'));
+    }
+  };
 
   return (
-    <div className="login-field">
+    <div className="login-field" data-filled={value ? 'true' : undefined}>
       <div className="login-label-row">
         <label htmlFor={id}>{label}</label>
         {action}
       </div>
       <div className="login-password-control">
+        {icon && <span className="login-field-icon" aria-hidden="true">{icon}</span>}
         <input
           id={id}
           name={name}
-          className="form-input"
+          className={`form-input${icon ? ' has-icon' : ''}`}
           value={value}
           onChange={onChange}
-          onFocus={onFocus}
-          onBlur={onBlur}
+          onFocus={handleFocus}
+          onBlur={handleBlur}
+          onKeyDown={trackCapsLock}
+          onKeyUp={trackCapsLock}
           placeholder={placeholder}
           type={visible ? 'text' : 'password'}
           autoComplete={autoComplete}
+          spellCheck={false}
+          autoCapitalize="none"
           aria-invalid={invalid || undefined}
           aria-describedby={describedBy}
         />
@@ -76,6 +107,14 @@ export function PasswordField({
           <VisibilityIcon visible={visible} />
         </button>
       </div>
+      {showCapsHint && (
+        <div className="login-caps-hint" role="status">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 9v4m0 4h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z" />
+          </svg>
+          <span>大写锁定已开启</span>
+        </div>
+      )}
     </div>
   );
 }

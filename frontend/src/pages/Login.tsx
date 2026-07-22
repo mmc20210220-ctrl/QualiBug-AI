@@ -3,6 +3,7 @@ import {
   type FocusEventHandler,
   type FormEvent,
   type MouseEvent,
+  type ReactNode,
   useMemo,
   useState,
 } from 'react';
@@ -28,6 +29,7 @@ type TextFieldProps = {
   autoComplete: string;
   invalid: boolean;
   describedBy?: string;
+  icon?: ReactNode;
 };
 
 function TextField({
@@ -42,24 +44,93 @@ function TextField({
   autoComplete,
   invalid,
   describedBy,
+  icon,
 }: TextFieldProps) {
   return (
-    <div className="login-field">
+    <div className="login-field" data-filled={value ? 'true' : undefined}>
       <label htmlFor={id}>{label}</label>
-      <input
-        id={id}
-        name={name}
-        className="form-input"
-        value={value}
-        onChange={onChange}
-        onFocus={onFocus}
-        onBlur={onBlur}
-        placeholder={placeholder}
-        autoComplete={autoComplete}
-        aria-invalid={invalid || undefined}
-        aria-describedby={describedBy}
-      />
+      <div className="login-input-control">
+        {icon && <span className="login-field-icon" aria-hidden="true">{icon}</span>}
+        <input
+          id={id}
+          name={name}
+          className={`form-input${icon ? ' has-icon' : ''}`}
+          value={value}
+          onChange={onChange}
+          onFocus={onFocus}
+          onBlur={onBlur}
+          placeholder={placeholder}
+          autoComplete={autoComplete}
+          spellCheck={false}
+          autoCapitalize="none"
+          aria-invalid={invalid || undefined}
+          aria-describedby={describedBy}
+        />
+      </div>
     </div>
+  );
+}
+
+function UserIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="8" r="3.4" />
+      <path d="M4.8 19.6a7.2 7.2 0 0114.4 0" />
+    </svg>
+  );
+}
+
+function LockIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="5" y="10.5" width="14" height="9.5" rx="2" />
+      <path d="M8 10.5V7.8a4 4 0 018 0v2.7" />
+    </svg>
+  );
+}
+
+function WorkspaceIdIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M9.2 4.5L7.7 19.5M16.3 4.5l-1.5 15M4.8 9h15M4.2 14.5h15" />
+    </svg>
+  );
+}
+
+function WorkspaceNameIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 20h16M6 20V5.5A1.5 1.5 0 017.5 4h6A1.5 1.5 0 0115 5.5V20M15 9.5h2.5A1.5 1.5 0 0119 11v9" />
+      <path d="M9 8h3M9 12h3M9 16h3" />
+    </svg>
+  );
+}
+
+function ScopeIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="7" />
+      <circle cx="12" cy="12" r="2.2" />
+      <path d="M12 2.5V5M12 19v2.5M2.5 12H5M19 12h2.5" />
+    </svg>
+  );
+}
+
+function ChainIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M10 14a4 4 0 005.7 0l2.4-2.4a4 4 0 00-5.7-5.7l-1.1 1.1" />
+      <path d="M14 10a4 4 0 00-5.7 0l-2.4 2.4a4 4 0 005.7 5.7l1.1-1.1" />
+    </svg>
+  );
+}
+
+function GateIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 3l7 3v5c0 4.6-3 8.4-7 10-4-1.6-7-5.4-7-10V6l7-3z" />
+      <path d="M9 12l2.2 2.2L15.5 10" />
+    </svg>
   );
 }
 
@@ -88,6 +159,37 @@ function humanizeAuthError(message: string, fallback: string): string {
     return fallback;
   }
   return text;
+}
+
+type PasswordStrength = 1 | 2 | 3;
+
+function measurePasswordStrength(value: string): PasswordStrength {
+  let score = 0;
+  if (value.length >= 8) score += 1;
+  if (value.length >= 12) score += 1;
+  if (/[a-z]/.test(value) && /[A-Z]/.test(value)) score += 1;
+  if (/\d/.test(value)) score += 1;
+  if (/[^a-zA-Z0-9]/.test(value)) score += 1;
+  if (score <= 2) return 1;
+  if (score <= 4) return 2;
+  return 3;
+}
+
+const strengthLabels: Record<PasswordStrength, string> = {
+  1: '强度偏弱 · 建议混合大小写、数字与符号',
+  2: '强度适中 · 可再加长或加入符号',
+  3: '强度良好',
+};
+
+function PasswordStrengthMeter({ password }: { password: string }) {
+  if (!password) return null;
+  const level = measurePasswordStrength(password);
+  return (
+    <div className={`login-strength is-level-${level}`} role="status" aria-live="polite">
+      <span className="login-strength-track" aria-hidden="true"><i /><i /><i /></span>
+      <span className="login-strength-label">{strengthLabels[level]}</span>
+    </div>
+  );
 }
 
 export function Login() {
@@ -233,10 +335,12 @@ export function Login() {
 
   const feedback = (
     <>
-      {error && <div id="auth-form-error" className="login-error" role="alert">{error}</div>}
+      {error && <div key={error} id="auth-form-error" className="login-error" role="alert">{error}</div>}
       {success && <div className="login-success" role="status" aria-live="polite">{success}</div>}
     </>
   );
+
+  const submitSpinner = submitting ? <span className="login-submit-spinner" aria-hidden="true" /> : null;
 
   return (
     <main
@@ -244,6 +348,7 @@ export function Login() {
       onMouseMove={onStagePointerMove}
     >
       <LoginStageCanvas pointerX={pointer.x} pointerY={pointer.y} focusBoost={fieldFocused || submitting} />
+      <div className="login-aurora" aria-hidden="true" />
       <div className="login-stage-glow" aria-hidden="true" />
       <div
         className="login-stage-scan"
@@ -253,6 +358,7 @@ export function Login() {
       <div className="login-stage-orb login-stage-orb-a" aria-hidden="true" />
       <div className="login-stage-orb login-stage-orb-b" aria-hidden="true" />
       <div className="login-light-bleed" aria-hidden="true" />
+      <div className="login-noise" aria-hidden="true" />
       <div className="login-hud-frame" aria-hidden="true">
         <i className="tl" /><i className="tr" /><i className="bl" /><i className="br" />
       </div>
@@ -276,9 +382,15 @@ export function Login() {
           </h1>
           <p className="login-stage-lead">把软件风险变成可复现、可验收、可决策的业务结论。</p>
           <ul className="login-value-list">
-            <li><strong>发现真问题</strong><span>验证后再交付</span></li>
-            <li><strong>结论有证据</strong><span>影响与复现可追溯</span></li>
-            <li><strong>发布有依据</strong><span>风险门禁清晰可见</span></li>
+            <li><span className="login-value-icon" aria-hidden="true"><ScopeIcon /></span><strong>发现真问题</strong><span>验证后再交付</span></li>
+            <li><span className="login-value-icon" aria-hidden="true"><ChainIcon /></span><strong>结论有证据</strong><span>影响与复现可追溯</span></li>
+            <li><span className="login-value-icon" aria-hidden="true"><GateIcon /></span><strong>发布有依据</strong><span>风险门禁清晰可见</span></li>
+          </ul>
+          <ul className="login-module-list" aria-label="平台核心能力">
+            <li>行为空间建模</li>
+            <li>证据链回放</li>
+            <li>发布风险门禁</li>
+            <li>回归守护</li>
           </ul>
         </div>
       </aside>
@@ -306,6 +418,7 @@ export function Login() {
                 autoComplete="username"
                 invalid={invalid}
                 describedBy={errorId}
+                icon={<UserIcon />}
               />
               <PasswordField
                 id="login-password"
@@ -319,6 +432,7 @@ export function Login() {
                 autoComplete="current-password"
                 invalid={invalid}
                 describedBy={errorId}
+                icon={<LockIcon />}
                 action={(
                   <button
                     type="button"
@@ -332,6 +446,7 @@ export function Login() {
               />
               {feedback}
               <button className={`btn btn-primary login-submit${submitting ? ' is-loading' : ''}`} type="submit" disabled={submitting}>
+                {submitSpinner}
                 <span>{submitting ? '安全登录中...' : '安全登录'}</span>
                 {!submitting && <span className="login-submit-arrow" aria-hidden="true">→</span>}
               </button>
@@ -351,6 +466,7 @@ export function Login() {
                   autoComplete="off"
                   invalid={invalid}
                   describedBy={errorId}
+                  icon={<WorkspaceIdIcon />}
                 />
                 <TextField
                   id="register-workspace-name"
@@ -364,6 +480,7 @@ export function Login() {
                   autoComplete="organization"
                   invalid={invalid}
                   describedBy={errorId}
+                  icon={<WorkspaceNameIcon />}
                 />
               </div>
               <TextField
@@ -378,6 +495,7 @@ export function Login() {
                 autoComplete="username"
                 invalid={invalid}
                 describedBy={errorId}
+                icon={<UserIcon />}
               />
               <div className="login-form-row">
                 <PasswordField
@@ -392,6 +510,7 @@ export function Login() {
                   autoComplete="new-password"
                   invalid={invalid}
                   describedBy={errorId}
+                  icon={<LockIcon />}
                 />
                 <PasswordField
                   id="register-confirm-password"
@@ -405,10 +524,13 @@ export function Login() {
                   autoComplete="new-password"
                   invalid={invalid}
                   describedBy={errorId}
+                  icon={<LockIcon />}
                 />
               </div>
+              <PasswordStrengthMeter password={password} />
               {feedback}
               <button className={`btn btn-primary login-submit${submitting ? ' is-loading' : ''}`} type="submit" disabled={submitting}>
+                {submitSpinner}
                 <span>{submitting ? '创建中...' : '创建并进入工作区'}</span>
                 {!submitting && <span className="login-submit-arrow" aria-hidden="true">→</span>}
               </button>
@@ -427,6 +549,7 @@ export function Login() {
                 autoComplete="off"
                 invalid={invalid}
                 describedBy={errorId}
+                icon={<WorkspaceIdIcon />}
               />
               <TextField
                 id="reset-username"
@@ -440,6 +563,7 @@ export function Login() {
                 autoComplete="username"
                 invalid={invalid}
                 describedBy={errorId}
+                icon={<UserIcon />}
               />
               <div className="login-form-row">
                 <PasswordField
@@ -454,6 +578,7 @@ export function Login() {
                   autoComplete="new-password"
                   invalid={invalid}
                   describedBy={errorId}
+                  icon={<LockIcon />}
                 />
                 <PasswordField
                   id="reset-confirm-password"
@@ -467,10 +592,12 @@ export function Login() {
                   autoComplete="new-password"
                   invalid={invalid}
                   describedBy={errorId}
+                  icon={<LockIcon />}
                 />
               </div>
               {feedback}
               <button className={`btn btn-primary login-submit${submitting ? ' is-loading' : ''}`} type="submit" disabled={submitting}>
+                {submitSpinner}
                 <span>{submitting ? '重置中...' : '重置密码并登录'}</span>
                 {!submitting && <span className="login-submit-arrow" aria-hidden="true">→</span>}
               </button>
