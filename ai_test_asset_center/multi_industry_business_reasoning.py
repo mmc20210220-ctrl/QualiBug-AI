@@ -67,9 +67,9 @@ INDUSTRY_SIGNATURES: dict[str, dict[str, Any]] = {
             {"object": "contract", "states": ["draft", "approved", "signed", "active", "void", "archived"], "aliases": ["contract status", "signed", "合同状态", "签署", "归档"]},
         ],
         "dependencies": [("lead", "customer", "converted_to"), ("customer", "opportunity", "owns"), ("opportunity", "quote", "priced_by"), ("quote", "contract", "accepted_as")],
-        "rules": [
-            {"rule_id": "crm_owner_scope", "kind": "permission", "objects": ["lead", "customer", "opportunity"], "expected": "销售只能访问自己负责或被授权的线索、客户和商机；转交必须留痕。", "oracle_family": "ownership_access_oracle"},
-            {"rule_id": "crm_quote_contract_amount", "kind": "conservation", "objects": ["quote", "contract"], "expected": "合同金额、折扣和报价版本必须可追溯，超权限折扣必须触发审批。", "oracle_family": "approval_and_amount_oracle"},
+        "risk_hints": [
+            {"hint_id": "crm_owner_scope", "kind": "permission", "objects": ["lead", "customer", "opportunity"], "risk_category": "ownership_boundary"},
+            {"hint_id": "crm_quote_contract_amount", "kind": "conservation", "objects": ["quote", "contract"], "risk_category": "amount_conservation"},
         ],
         "risks": [
             {"risk_type": "industry_ownership_boundary", "severity": "P1", "title": "CRM 负责人边界与客户归属风险", "object": "customer", "rule_id": "crm_owner_scope", "destructive": False},
@@ -100,10 +100,10 @@ INDUSTRY_SIGNATURES: dict[str, dict[str, Any]] = {
             {"object": "work_order", "states": ["planned", "released", "in_progress", "completed", "closed", "cancelled"], "aliases": ["work order status", "生产状态", "完工", "工单状态"]},
         ],
         "dependencies": [("supplier", "purchase_order", "fulfills"), ("purchase_order", "goods_receipt", "received_as"), ("goods_receipt", "inventory", "changes"), ("purchase_order", "invoice", "three_way_match")],
-        "rules": [
-            {"rule_id": "erp_inventory_conservation", "kind": "conservation", "objects": ["goods_receipt", "inventory", "warehouse"], "expected": "入库、出库、预留、冲销与库存余额必须按同一物料/仓库/批次守恒。", "oracle_family": "inventory_ledger_oracle"},
-            {"rule_id": "erp_three_way_match", "kind": "reconciliation", "objects": ["purchase_order", "goods_receipt", "invoice"], "expected": "采购订单、收货数量和应付发票应在金额、数量和状态上可对账。", "oracle_family": "three_way_reconciliation_oracle"},
-            {"rule_id": "erp_approval_matrix", "kind": "permission", "objects": ["purchase_order", "invoice"], "expected": "采购和付款审批必须按金额、组织、角色和状态机执行。", "oracle_family": "approval_matrix_oracle"},
+        "risk_hints": [
+            {"hint_id": "erp_inventory_conservation", "kind": "conservation", "objects": ["goods_receipt", "inventory", "warehouse"], "risk_category": "quantity_conservation"},
+            {"hint_id": "erp_three_way_match", "kind": "reconciliation", "objects": ["purchase_order", "goods_receipt", "invoice"], "risk_category": "cross_entity_consistency"},
+            {"hint_id": "erp_approval_matrix", "kind": "permission", "objects": ["purchase_order", "invoice"], "risk_category": "approval_boundary"},
         ],
         "risks": [
             {"risk_type": "industry_inventory_conservation", "severity": "P0", "title": "ERP 库存账实与库存变更守恒风险", "object": "inventory", "rule_id": "erp_inventory_conservation", "destructive": True},
@@ -133,10 +133,10 @@ INDUSTRY_SIGNATURES: dict[str, dict[str, Any]] = {
             {"object": "loan", "states": ["applied", "approved", "disbursed", "repaying", "repaid", "defaulted", "cancelled"], "aliases": ["loan status", "disbursed", "还款状态", "放款", "逾期"]},
         ],
         "dependencies": [("account", "transaction", "initiates"), ("transaction", "ledger", "posts"), ("ledger", "balance", "reconciles"), ("loan", "repayment", "settled_by")],
-        "rules": [
-            {"rule_id": "finance_double_entry", "kind": "conservation", "objects": ["transaction", "ledger", "balance"], "expected": "交易、账本和余额必须可双向对账；金额不得凭空增加、丢失或重复入账。", "oracle_family": "financial_conservation_oracle"},
-            {"rule_id": "finance_account_boundary", "kind": "permission", "objects": ["account", "transaction"], "expected": "账户余额、交易明细与资金操作必须校验账户归属和授权。", "oracle_family": "account_ownership_oracle"},
-            {"rule_id": "finance_limit_policy", "kind": "constraint", "objects": ["transaction", "loan"], "expected": "额度、限额、风控状态和审批结果必须在服务端强制执行。", "oracle_family": "limit_enforcement_oracle"},
+        "risk_hints": [
+            {"hint_id": "finance_double_entry", "kind": "conservation", "objects": ["transaction", "ledger", "balance"], "risk_category": "amount_conservation"},
+            {"hint_id": "finance_account_boundary", "kind": "permission", "objects": ["account", "transaction"], "risk_category": "ownership_boundary"},
+            {"hint_id": "finance_limit_policy", "kind": "constraint", "objects": ["transaction", "loan"], "risk_category": "limit_enforcement"},
         ],
         "risks": [
             {"risk_type": "industry_financial_conservation", "severity": "P0", "title": "金融余额、账本与交易金额守恒风险", "object": "ledger", "rule_id": "finance_double_entry", "destructive": True},
@@ -165,10 +165,10 @@ INDUSTRY_SIGNATURES: dict[str, dict[str, Any]] = {
             {"object": "prescription", "states": ["draft", "signed", "dispensed", "cancelled", "expired"], "aliases": ["prescription status", "dispensed", "处方状态", "发药", "签署"]},
         ],
         "dependencies": [("patient", "appointment", "books"), ("appointment", "medical_record", "creates"), ("doctor", "diagnosis", "records"), ("diagnosis", "prescription", "supports")],
-        "rules": [
-            {"rule_id": "healthcare_sensitive_access", "kind": "permission", "objects": ["patient", "medical_record", "diagnosis"], "expected": "患者病历、诊断和处方仅能被治疗关系或明确授权角色访问，读取也应审计。", "oracle_family": "sensitive_data_access_oracle"},
-            {"rule_id": "healthcare_appointment_capacity", "kind": "constraint", "objects": ["appointment", "doctor"], "expected": "同一医生/诊室/设备在同一时段不能产生冲突预约。", "oracle_family": "temporal_capacity_oracle"},
-            {"rule_id": "healthcare_prescription_authorization", "kind": "permission", "objects": ["doctor", "patient", "prescription"], "expected": "处方必须由授权医生针对有效患者关系创建，剂量和状态必须合法。", "oracle_family": "prescription_authorization_oracle"},
+        "risk_hints": [
+            {"hint_id": "healthcare_sensitive_access", "kind": "permission", "objects": ["patient", "medical_record", "diagnosis"], "risk_category": "sensitive_data_boundary"},
+            {"hint_id": "healthcare_appointment_capacity", "kind": "constraint", "objects": ["appointment", "doctor"], "risk_category": "temporal_capacity"},
+            {"hint_id": "healthcare_prescription_authorization", "kind": "permission", "objects": ["doctor", "patient", "prescription"], "risk_category": "authorization_boundary"},
         ],
         "risks": [
             {"risk_type": "industry_sensitive_data_access", "severity": "P0", "title": "医疗敏感病历与患者隐私访问风险", "object": "medical_record", "rule_id": "healthcare_sensitive_access", "destructive": False},
@@ -198,9 +198,9 @@ INDUSTRY_SIGNATURES: dict[str, dict[str, Any]] = {
             {"object": "exam", "states": ["draft", "scheduled", "open", "submitted", "graded", "published"], "aliases": ["exam status", "graded", "考试状态", "阅卷", "成绩发布"]},
         ],
         "dependencies": [("student", "enrollment", "owns"), ("course", "class", "delivered_as"), ("class", "enrollment", "contains"), ("exam", "score", "produces")],
-        "rules": [
-            {"rule_id": "education_grade_integrity", "kind": "permission", "objects": ["teacher", "student", "score"], "expected": "成绩只能由授权教师/流程写入，学生只能读取自己成绩且成绩变更可审计。", "oracle_family": "grade_integrity_oracle"},
-            {"rule_id": "education_enrollment_capacity", "kind": "constraint", "objects": ["course", "class", "enrollment"], "expected": "选课、候补、退课与容量统计必须原子一致，不能超名额或重复报名。", "oracle_family": "enrollment_capacity_oracle"},
+        "risk_hints": [
+            {"hint_id": "education_grade_integrity", "kind": "permission", "objects": ["teacher", "student", "score"], "risk_category": "write_authorization"},
+            {"hint_id": "education_enrollment_capacity", "kind": "constraint", "objects": ["course", "class", "enrollment"], "risk_category": "capacity_conservation"},
         ],
         "risks": [
             {"risk_type": "industry_grade_integrity", "severity": "P0", "title": "教育成绩归属、写入权限与审计风险", "object": "score", "rule_id": "education_grade_integrity", "destructive": True},
@@ -229,10 +229,10 @@ INDUSTRY_SIGNATURES: dict[str, dict[str, Any]] = {
             {"object": "subscription", "states": ["trial", "active", "past_due", "cancelled", "expired"], "aliases": ["subscription status", "past_due", "订阅状态", "试用", "到期"]},
         ],
         "dependencies": [("tenant", "membership", "contains"), ("membership", "role", "granted"), ("tenant", "subscription", "billed_by"), ("subscription", "entitlement", "enables")],
-        "rules": [
-            {"rule_id": "saas_tenant_isolation", "kind": "permission", "objects": ["tenant", "membership"], "expected": "每条业务数据和查询必须绑定租户边界，跨租户 ID、过滤、关联和异步任务均不得泄漏。", "oracle_family": "tenant_isolation_oracle"},
-            {"rule_id": "saas_entitlement_enforcement", "kind": "constraint", "objects": ["subscription", "entitlement"], "expected": "套餐、额度和功能权益必须由后端强制校验，降级/到期后不能继续使用。", "oracle_family": "entitlement_oracle"},
-            {"rule_id": "saas_role_separation", "kind": "permission", "objects": ["role", "audit_log"], "expected": "租户管理员、计费管理员与平台管理员权限必须隔离，敏感操作必须可审计。", "oracle_family": "rbac_and_audit_oracle"},
+        "risk_hints": [
+            {"hint_id": "saas_tenant_isolation", "kind": "permission", "objects": ["tenant", "membership"], "risk_category": "tenant_boundary"},
+            {"hint_id": "saas_entitlement_enforcement", "kind": "constraint", "objects": ["subscription", "entitlement"], "risk_category": "entitlement_enforcement"},
+            {"hint_id": "saas_role_separation", "kind": "permission", "objects": ["role", "audit_log"], "risk_category": "role_separation"},
         ],
         "risks": [
             {"risk_type": "industry_tenant_isolation", "severity": "P0", "title": "SaaS 多租户数据与关联边界泄漏风险", "object": "tenant", "rule_id": "saas_tenant_isolation", "destructive": False},
@@ -264,10 +264,10 @@ INDUSTRY_SIGNATURES: dict[str, dict[str, Any]] = {
             {"object": "refund", "states": ["requested", "approved", "processing", "refunded", "rejected", "cancelled"], "aliases": ["refund status", "refunded", "退款状态", "退款申请"]},
         ],
         "dependencies": [("cart", "order", "checked_out_as"), ("order", "payment", "paid_by"), ("order", "inventory", "reserves"), ("order", "fulfillment", "fulfilled_by"), ("payment", "refund", "reversed_by")],
-        "rules": [
-            {"rule_id": "ecom_order_payment_amount", "kind": "conservation", "objects": ["order", "payment", "refund"], "expected": "订单金额、优惠、支付和退款累计必须守恒；同一支付不能重复记账。", "oracle_family": "order_payment_refund_oracle"},
-            {"rule_id": "ecom_inventory_reservation", "kind": "conservation", "objects": ["order", "inventory", "sku"], "expected": "下单、取消、发货与退款对库存预留和释放必须一致，不能超卖或重复扣减。", "oracle_family": "inventory_reservation_oracle"},
-            {"rule_id": "ecom_coupon_ownership", "kind": "permission", "objects": ["coupon", "order"], "expected": "优惠券必须校验归属、有效期、门槛、叠加规则和单次使用限制。", "oracle_family": "coupon_policy_oracle"},
+        "risk_hints": [
+            {"hint_id": "ecom_order_payment_amount", "kind": "conservation", "objects": ["order", "payment", "refund"], "risk_category": "amount_conservation"},
+            {"hint_id": "ecom_inventory_reservation", "kind": "conservation", "objects": ["order", "inventory", "sku"], "risk_category": "quantity_conservation"},
+            {"hint_id": "ecom_coupon_ownership", "kind": "permission", "objects": ["coupon", "order"], "risk_category": "ownership_boundary"},
         ],
         "risks": [
             {"risk_type": "industry_payment_idempotency", "severity": "P0", "title": "电商支付重复记账与订单金额不一致风险", "object": "payment", "rule_id": "ecom_order_payment_amount", "destructive": True},
@@ -463,9 +463,9 @@ def _signature_score(signature: dict[str, Any], documents: dict[str, str], opera
         path_text = f"{op.get('method')} {op.get('path')} {op.get('operation_id')}".lower()
         if any(_contains(path_text, alias) for aliases in (signature.get("objects") or {}).values() for alias in aliases):
             route_hits += 1
-    for rule in signature.get("rules") or []:
+    for hint in signature.get("risk_hints") or []:
         terms: list[str] = []
-        for obj in rule.get("objects") or []:
+        for obj in hint.get("objects") or []:
             terms.extend((signature.get("objects") or {}).get(obj, []))
         if sum(1 for term in terms if _contains(combined, term)) >= 2:
             constraint_hits += 1
@@ -643,49 +643,68 @@ def _infer_dependencies(selected: list[str], objects: list[dict[str, Any]]) -> l
 
 
 def _infer_rules_and_boundaries(selected: list[str], objects: list[dict[str, Any]], roles: list[dict[str, Any]], operations: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Infer rule candidates and boundaries from evidence-gated risk hints.
+
+    Risk hints provide only the TYPE of risk to investigate; actual business
+    formulas and assertions must be derived from project evidence (documents,
+    schema, runtime observations).  No industry-specific formulas are embedded.
+    """
     object_names = {str(row.get("object")) for row in objects}
     role_names = {str(row.get("role")) for row in roles}
     rules: list[dict[str, Any]] = []
     boundaries: list[dict[str, Any]] = []
     oracles: list[dict[str, Any]] = []
+    # Generic oracle family derived from rule kind (industry-neutral)
+    _KIND_TO_ORACLE = {
+        "conservation": "conservation_oracle",
+        "permission": "ownership_access_oracle",
+        "constraint": "field_invariant_oracle",
+        "reconciliation": "cross_entity_consistency_oracle",
+    }
     for industry in selected:
         signature = INDUSTRY_SIGNATURES[industry]
-        for rule in signature.get("rules") or []:
-            required_objects = set(str(x) for x in rule.get("objects") or [])
+        for hint in signature.get("risk_hints") or []:
+            required_objects = set(str(x) for x in hint.get("objects") or [])
             matched = sorted(required_objects & object_names)
             if not matched:
                 continue
             confidence = round(min(0.96, 0.55 + 0.08 * len(matched) + (0.06 if role_names else 0.0)), 3)
+            kind = str(hint.get("kind") or "constraint")
+            oracle_family = _KIND_TO_ORACLE.get(kind, "business_rule_oracle")
+            hint_id = str(hint.get("hint_id") or "")
+            risk_category = str(hint.get("risk_category") or "general")
             item = {
-                "rule_id": str(rule.get("rule_id")),
+                "rule_id": hint_id,
                 "industry": industry,
-                "kind": str(rule.get("kind") or "constraint"),
+                "kind": kind,
                 "objects": matched,
-                "expected": str(rule.get("expected") or "业务规则必须由后端持续强制执行。"),
-                "oracle_family": str(rule.get("oracle_family") or "business_rule_oracle"),
+                "risk_category": risk_category,
+                "oracle_family": oracle_family,
                 "confidence": confidence,
+                "evidence_status": "requires_project_evidence",
+                "derivation": "risk_hint_candidate",
             }
             rules.append(item)
             oracles.append({
-                "oracle_id": f"IOR_{_short_hash([industry, item['rule_id'], item['oracle_family']])}",
+                "oracle_id": f"IOR_{_short_hash([industry, hint_id, oracle_family])}",
                 "industry": industry,
-                "oracle_family": item["oracle_family"],
-                "rule_id": item["rule_id"],
+                "oracle_family": oracle_family,
+                "rule_id": hint_id,
                 "objects": matched,
-                "assertion": item["expected"],
-                "evidence_type": "document_and_contract_inferred",
+                "risk_category": risk_category,
+                "evidence_type": "risk_hint_requires_document_confirmation",
                 "execution_safety": "read_only_or_sandbox_required",
             })
-            if item["kind"] == "permission":
-                boundary_type = "tenant_boundary" if industry == "saas_multitenant" else "role_and_ownership_boundary"
+            if kind == "permission":
+                boundary_type = "tenant_boundary" if risk_category == "tenant_boundary" else "role_and_ownership_boundary"
                 boundaries.append({
-                    "boundary_id": f"IPB_{_short_hash([industry, item['rule_id']])}",
+                    "boundary_id": f"IPB_{_short_hash([industry, hint_id])}",
                     "industry": industry,
                     "boundary_type": boundary_type,
                     "protected_objects": matched,
                     "recognized_roles": sorted(role_names),
-                    "expected": item["expected"],
-                    "oracle_family": item["oracle_family"],
+                    "risk_category": risk_category,
+                    "oracle_family": oracle_family,
                     "confidence": confidence,
                 })
     # Any resource-ID detail route is an explicit ownership/access boundary.

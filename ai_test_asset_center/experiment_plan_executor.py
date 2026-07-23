@@ -43,6 +43,54 @@ from .sandbox_write_executor import (
 from .sandbox_write_executor_base import evaluator_request_trace
 
 
+# ── P0-4: Route resolution with service-direct fallback ──
+import os as _os
+
+def _resolve_route_with_fallback(
+    *,
+    base_url: str,
+    method: str,
+    path: str,
+    token: str,
+) -> dict[str, Any]:
+    """Execute HTTP step; on 404 try alternative service base URLs.
+
+    Returns the observation dict with an added ``resolved_route`` field.
+    """
+    obs = _run_http_step(base_url=base_url, method=method, path=path, token=token)
+    status = int(obs.get("status_code") or 0)
+    resolved_route = {
+        "strategy": "gateway",
+        "base_url": base_url,
+        "path": path,
+        "status_code": status,
+    }
+    if status == 404:
+        # Try alternative service URLs from environment
+        alt_urls = [
+            u.strip()
+            for u in _os.environ.get("QUALIBUG_SERVICE_URLS", "").split(",")
+            if u.strip()
+        ]
+        for alt_url in alt_urls:
+            if alt_url.rstrip("/") == base_url.rstrip("/"):
+                continue
+            retry = _run_http_step(base_url=alt_url, method=method, path=path, token=token)
+            retry_status = int(retry.get("status_code") or 0)
+            if retry_status != 404 and retry_status > 0:
+                obs = retry
+                resolved_route = {
+                    "strategy": "service_direct",
+                    "base_url": alt_url,
+                    "path": path,
+                    "status_code": retry_status,
+                    "original_gateway_status": 404,
+                }
+                break
+    obs["resolved_route"] = resolved_route
+    return obs
+
+
 def execute_non_barrier_plans(
     *,
     control_plan: list[Any],
@@ -551,7 +599,7 @@ def execute_non_barrier_plans(
                 if response_bound_observation:
                     obs["response_bound_observation"] = response_bound_observation
             else:
-                obs = _run_http_step(base_url=base_url, method=method, path=path, token=token)
+                obs = _resolve_route_with_fallback(base_url=base_url, method=method, path=path, token=token)
             obs["phase"] = phase
             obs["step_id"] = subject_id
             obs["actor_ref"] = actor_ref

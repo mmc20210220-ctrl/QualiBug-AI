@@ -30,6 +30,54 @@ from .operational_receipts import build_execution_operational_receipt
 from .sandbox_write_executor_base import evaluator_request_trace
 
 
+# ── P0-7: Parameter binding validation ──
+import re as _re_bindings
+
+_BINDING_PLACEHOLDER_RE = _re_bindings.compile(r"\{(\w+)\}|:(\w+)")
+
+
+def _check_required_bindings(
+    experiment: dict[str, Any],
+    pre_resolved: dict[str, Any],
+) -> list[str]:
+    """Return list of unresolved required path parameters.
+
+    Only blocks if a path placeholder cannot be resolved from:
+    - pre_resolved bindings
+    - experiment binding_plan
+    - runtime_bindings already in the experiment
+    """
+    exp = _dict(experiment)
+    known_bindings: set[str] = set()
+    # From pre-resolved
+    known_bindings.update(k for k, v in (pre_resolved or {}).items() if v not in (None, ""))
+    # From binding_plan
+    for item in _list(exp.get("binding_plan")):
+        if isinstance(item, dict) and _text(item.get("target")):
+            known_bindings.add(_text(item["target"]))
+    # From runtime_bindings
+    known_bindings.update(k for k, v in _dict(exp.get("runtime_bindings")).items() if v not in (None, ""))
+    # From _pre_resolved_bindings injected at batch level
+    known_bindings.update(k for k, v in _dict(exp.get("_pre_resolved_bindings")).items() if v not in (None, ""))
+
+    unresolved: set[str] = set()
+    for plan_key in ("treatment_plan", "control_plan"):
+        for step in _list(exp.get(plan_key)):
+            if not isinstance(step, dict):
+                continue
+            path = _text(step.get("path") or step.get("path_template"))
+            if not path:
+                continue
+            for match in _BINDING_PLACEHOLDER_RE.finditer(path):
+                param = match.group(1) or match.group(2)
+                if param and param not in known_bindings:
+                    # Common auto-resolvable params are not blockers
+                    if param in ("id", "page", "limit", "offset", "sort"):
+                        continue
+                    unresolved.add(param)
+    return sorted(unresolved)
+
+
 def finalize_finding_evidence_after_delivery_gate(
     finding: dict[str, Any],
     *,
@@ -121,8 +169,13 @@ def execute_selected_experiments(
     runtime_contract: dict[str, Any],
     mainline_run: dict[str, Any],
     campaign_id: str = "",
+    experiment_budget: int = 100,
 ) -> dict[str, Any]:
-    """Execute every selected experiment; each yields EXECUTED or BLOCKED receipt."""
+    """Execute every selected experiment; each yields EXECUTED or BLOCKED receipt.
+    
+    experiment_budget: maximum number of experiments to execute (default 100).
+    Experiments beyond the budget are marked BUDGET_EXCEEDED.
+    """
     # Lazy import avoids a package cycle with experiment_executor re-exports.
     from .experiment_executor import execute_one_experiment
 
@@ -164,6 +217,23 @@ def execute_selected_experiments(
     execution_results: dict[str, dict[str, Any]] = {}
     gate_results: dict[str, dict[str, Any]] = {}
     batch_nonce = str(time.time_ns())
+    # ── Experiment budget enforcement ──
+    # Read budget from runtime_contract or use parameter default.
+    # Prevents runaway execution (e.g. 2700+ experiments in 4.5h).
+    _budget = int(
+        _dict(runtime_contract).get("experiment_budget")
+        or experiment_budget
+        or 100
+    )
+    _budget = max(1, min(_budget, 200))  # hard cap at 200
+    _total_selected = len(selected)
+    if _total_selected > _budget:
+        logger.info(
+            "Experiment budget: truncating %d selected to %d (budget=%d)",
+            _total_selected, _budget, _budget,
+        )
+        selected = selected[:_budget]
+    budget_exceeded = _total_selected - len(selected)
     for index, item in enumerate(selected):
         row = _dict(item)
         oid = _text(row.get("obligation_id"))
@@ -288,6 +358,38 @@ def execute_selected_experiments(
             if _pre_resolved_bindings:
                 exp = dict(exp)
                 exp["_pre_resolved_bindings"] = dict(_pre_resolved_bindings)
+            # ── P0-7: Validate parameter bindings before execution ──
+            _unresolved_params = _check_required_bindings(exp, _pre_resolved_bindings)
+            if _unresolved_params:
+                blocked += 1
+                compile_results[oid] = {
+                    "status": "BLOCKED",
+                    "reason_code": "PARAMETER_BINDING_BLOCKED",
+                    "experiment_id": _text(exp.get("experiment_id") or eid),
+                    "unresolved_parameters": _unresolved_params,
+                }
+                results.append({
+                    "schema_version": "qualibug.experiment-execution.v1",
+                    "candidate_id": candidate_id,
+                    "slice_id": slice_id,
+                    "obligation_id": oid,
+                    "experiment_id": _text(exp.get("experiment_id") or eid),
+                    "execution_id": execution_id,
+                    "evidence_id": evidence_id,
+                    "campaign_id": campaign_id,
+                    "status": "BLOCKED",
+                    "reason_code": "PARAMETER_BINDING_BLOCKED",
+                    "detail": f"unresolved_parameters:{','.join(_unresolved_params[:10])}",
+                    "finding": None,
+                    "execution_receipt": {
+                        "status": "BLOCKED",
+                        "reason_code": "PARAMETER_BINDING_BLOCKED",
+                        "obligation_id": oid,
+                        "experiment_id": _text(exp.get("experiment_id") or eid),
+                        "campaign_id": campaign_id,
+                    },
+                })
+                continue
             outcome = execute_one_experiment(
                 exp,
                 behavior_ir=behavior_ir,
@@ -566,6 +668,8 @@ def execute_selected_experiments(
         "blocked_count": blocked,
         "harness_failure_count": harness,
         "cleanup_failures": cleanup_failures,
+        "budget_exceeded_count": budget_exceeded,
+        "experiment_budget": _budget,
         "findings": findings,
         "results": results,
         "compile_results": compile_results,

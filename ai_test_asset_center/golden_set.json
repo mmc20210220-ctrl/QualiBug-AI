@@ -1,0 +1,32 @@
+{
+  "schema_version": "qualibug.golden-obligation-set.v1",
+  "description": "Fixed regression set selected from DELIVERABLE obligations",
+  "obligation_ids": [
+    "obl_0e7256e4219f27881873",
+    "obl_fa278d90e61e1c1f93df",
+    "obl_12a2de664cb69c0b4a1d",
+    "obl_d6f8883416b9e28a09cb",
+    "obl_7406719654472fec5977",
+    "obl_de77f3103a78b0dad4b8",
+    "obl_130e7e6e12d2d212558a",
+    "obl_f4fd966c933509c7",
+    "obl_e7a2cbf70837fd1c",
+    "obl_15eaaaf08032c5fb",
+    "obl_63bed42fcaa58655",
+    "obl_46fc1c7731f933ec",
+    "obl_c3bd2345875e78837ad7",
+    "obl_df2c2c4f247b09a2d8fa",
+    "obl_10e6ad7827b073076ed8",
+    "obl_a6106284ad5d06753e79",
+    "obl_f016c2102f260e77bc9c",
+    "obl_9f52d7147206152402e8",
+    "obl_25ef960e48275d1a451d",
+    "obl_a6fa78c5b34a801ca623"
+  ],
+  "selection_criteria": "DELIVERABLE terminal status, diverse risk_family coverage",
+  "risk_family_distribution": {
+    "conservation": 2,
+    "authorization": 13,
+    "validation": 5
+  }
+}

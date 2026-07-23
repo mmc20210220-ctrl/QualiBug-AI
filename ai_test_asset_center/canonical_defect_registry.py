@@ -492,10 +492,16 @@ def derive_canonical_identity_evidence(
     # do NOT embed the observer set into the canonical identity: the same
     # defect surface observed through different observer ensembles must
     # collapse to a single canonical defect instead of fragmenting.
-    _observer_kinds(
-        assertion,
-        _list(bundle.get("observer_receipts")),
-    )
+    # For HTTP evidence violations the synthetic assertion carries no
+    # observer_receipt_ids; skip the provenance check in that case.
+    if not (
+        _finding_in_bundle.get("_http_evidence_violation") is True
+        and _text(oracle.get("status")).upper() != "VIOLATION"
+    ):
+        _observer_kinds(
+            assertion,
+            _list(bundle.get("observer_receipts")),
+        )
     identity = {
         "operation": {
             "adapter": adapter,
@@ -538,7 +544,9 @@ def derive_canonical_identity_evidence(
         "schema_version": CANONICAL_IDENTITY_EVIDENCE_SCHEMA,
         **identity,
         "proof": {
-            "assertion_receipt_id": _text(assertion.get("receipt_id")),
+            "assertion_receipt_id": _text(
+                assertion.get("receipt_id") or assertion.get("assertion_id")
+            ),
             "oracle_receipt_id": _text(oracle.get("receipt_id")),
             "reproduction_receipt_id": _text(reproduction.get("receipt_id")),
             **request_proof,

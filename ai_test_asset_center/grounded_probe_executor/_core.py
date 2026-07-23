@@ -47,7 +47,7 @@ def _auto_fixture_bundle(config: dict[str, Any], probe: dict[str, Any]) -> dict[
     cache = config.setdefault("_auto_fixture_runtime", {})
     if cid in cache and isinstance(cache[cid], dict):
         return cache[cid]
-    from .auto_test_data_factory import build_auto_fixture_for_probe
+    from ..auto_test_data_factory import build_auto_fixture_for_probe
 
     bundle = build_auto_fixture_for_probe(
         probe,
@@ -452,9 +452,14 @@ def _expected_negative_statuses(probe: dict[str, Any]) -> set[int]:
 
 def _extract_id_like(value: Any) -> str:
     if isinstance(value, dict):
-        for key in ("id", "order_id", "payment_id", "transaction_id", "event_id", "resource_id", "uuid", "code"):
+        # Generic identity key patterns (industry-neutral)
+        for key in ("id", "uuid", "code", "key", "ref", "number"):
             if key in value and value[key] not in (None, ""):
                 return str(value[key])
+        # Check for *_id pattern keys
+        for key, val in value.items():
+            if key.endswith("_id") and val not in (None, ""):
+                return str(val)
         for v in value.values():
             hit = _extract_id_like(v)
             if hit:
@@ -539,9 +544,9 @@ def _extract_id_for_bind_fields(value: Any, bind_fields: list[str]) -> str:
     """Extract the server id that matches the path param being rebound.
 
     Generic response parsing often sees many ``id`` fields (customer.id, user.id,
-    order.id).  When runtime binding knows the target path param (for example
-    ``order_id``), prefer exact response keys such as ``order_id``/``orderId`` or
-    nested resource objects such as ``order.id`` before falling back to the first
+    resource.id).  When runtime binding knows the target path param (for example
+    ``entity_id``), prefer exact response keys such as ``entity_id``/``entityId`` or
+    nested resource objects such as ``entity.id`` before falling back to the first
     generic id.
     """
     fields = [str(f or "").strip().strip("{}") for f in bind_fields if str(f or "").strip()]
@@ -703,7 +708,7 @@ def _bind_auto_fixture_response_id(config: dict[str, Any], probe: dict[str, Any]
 
 
 FLOW_BINDABLE_PATH_PARAM_RE = re.compile(
-    r"(?:^|[_-])(?:id|uuid|code)$|(?:order|payment|transaction|event|resource|item|invoice|shipment|cart|product|sku)[_-]?(?:id|uuid|code)$",
+    r"^(?:id|uuid|code)$|^.+[_-]?(?:id|uuid|code)$",
     re.I,
 )
 
@@ -1035,7 +1040,7 @@ def _markdown_schema_tables(text: str) -> set[str]:
 def _db_snapshot_tables(config: dict[str, Any], probe: dict[str, Any]) -> list[str]:
     tables: list[str] = []
     try:
-        from .auto_test_data_factory import _infer_table_from_path, _parse_sql_tables
+        from ..auto_test_data_factory import _infer_table_from_path, _parse_sql_tables
     except Exception:
         return tables
 
@@ -1189,8 +1194,8 @@ def _fixture_item_path_params(config: dict[str, Any], probe: dict[str, Any], ite
 def _render_fixture_runtime_value(value: Any, path_params: dict[str, Any], original_params: dict[str, Any] | None = None) -> Any:
     """Render observed runtime ids into fixture bodies/queries.
 
-    Fixture bodies generated before execution often carry either ``{order_id}``
-    placeholders or QualiBug-generated ids such as ``qb_auto_order_1``.  After
+    Fixture bodies generated before execution often carry either ``{entity_id}``
+    placeholders or QualiBug-generated ids such as ``qb_auto_entity_1``.  After
     earlier setup steps return real server ids, later fixture bodies must use the
     same observed ids as the path/query; otherwise the child object can be
     created under the right URL but still reference the stale parent id in JSON.
@@ -1232,7 +1237,7 @@ def _runtime_binding_original_values(config: dict[str, Any], probe: dict[str, An
     """Return pre-runtime placeholder values observed before response id binding.
 
     Multi-step flow steps can carry their own request bodies.  Those bodies may
-    contain either ``{order_id}`` placeholders or the original generated
+    contain either ``{entity_id}`` placeholders or the original generated
     ``qb_auto_*`` IDs.  After a previous step binds the real server id, render
     step bodies against the current path params and replace any remembered
     generated values from earlier runtime bindings.
@@ -1283,7 +1288,7 @@ def _render_runtime_target_body(
     Setup, snapshot, cleanup and flow-step bodies already bind runtime ids.  The
     one remaining gap was the main write probe body when it came from
     ``request_bodies`` or another advanced override: the URL could target the
-    server-created resource while JSON still carried ``{order_id}`` or
+    server-created resource while JSON still carried ``{entity_id}`` or
     ``qb_auto_*`` placeholders.  Render the target body against the same
     runtime path params immediately before execution and record a receipt so the
     report shows whether body binding actually happened.

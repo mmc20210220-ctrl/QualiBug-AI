@@ -1133,7 +1133,7 @@ class SemanticScenarioGenerator:
                 body_provenance=cbody_provenance,
                 expected_status=200,
                 actor=role,
-                extract_from_response=["id", "orderId", "order_id", "refundId", "paymentId", "sku"],
+                extract_from_response=["id"],  # generic: runtime discovers entity-specific identity fields
             ))
             order += 1
         else:
@@ -1200,7 +1200,7 @@ class SemanticScenarioGenerator:
             body_template=action_body,
             expected_status=(200 if not forbidden else 409),
             actor=role,
-            extract_from_response=["id", "status", "state", "order_status"],
+            extract_from_response=["id", "status", "state"],
         ))
         order += 1
         # 5) Observe the resulting state.
@@ -1214,7 +1214,7 @@ class SemanticScenarioGenerator:
                 api_path=obs_path,
                 expected_status=200,
                 actor=role,
-                extract_from_response=["status", "state", "order_status"],
+                extract_from_response=["status", "state"],
             ))
         else:
             gaps.append("READ_ENDPOINT_NOT_SOURCE_BOUND")
@@ -1386,7 +1386,7 @@ class SemanticScenarioGenerator:
                 body_template=body,
                 expected_status=200,
                 actor=actor,
-                extract_from_response=["id", "status", "state", "orderId", "order_id"],
+                extract_from_response=["id", "status", "state"],
             ))
             order += 1
         return order
@@ -1643,8 +1643,8 @@ class SemanticScenarioGenerator:
             extract_fields = list(dict.fromkeys([
                 field,
                 *param_field_candidates(field),
-                "id", "uuid", "code", "sku",
-                "amount", "payableAmount", "payable_amount", "totalAmount", "total_amount",
+                "id", "uuid", "code", "key", "ref",
+                "amount", "total", "balance", "quantity",
             ]))
             collections = body_field_collection_paths(field, api_prefix=api_prefix)
             for collection in collections:
@@ -1737,7 +1737,7 @@ class SemanticScenarioGenerator:
 
         Action-style admin routes often omit a request example while a nearby
         documented write in the same service already names the entity binder
-        (``orderId``, ``resourceId``, …). Copy only identity-shaped keys so the
+        (``entityId``, ``resourceId``, …). Copy only identity-shaped keys so the
         probe can reach an authorization decision instead of a missing-payload
         transport error. Never invent keys or copy non-identity business fields.
         """
@@ -1877,7 +1877,7 @@ class SemanticScenarioGenerator:
             project=project,
         )
         steps.extend(binding_steps)
-        extract_fields = ["id", "status", "state", "orderId", "order_id", "amount", "payableAmount", "payable_amount"]
+        extract_fields = ["id", "status", "state", "amount"]
         steps.append(ScenarioStep(
             order=len(steps) + 1,
             action=action,
@@ -2083,7 +2083,7 @@ class SemanticScenarioGenerator:
         write_path = self._preferred_write_endpoint(api_doc, entity)
         write_body = self._dependency_write_body(api_doc, entity, edge.target_entity)
         if observation_path and write_path and isinstance(write_body, dict) and write_body:
-            extract_fields = ["id", "status", "state", "amount", "totalAmount", "total_amount"]
+            extract_fields = ["id", "status", "state", "amount", "total", "balance", "quantity"]
             return ExecutableScenario(
                 id=self._id(entity, edge.target_entity, edge.relation, write_path),
                 title=title,
@@ -2266,7 +2266,7 @@ class SemanticScenarioGenerator:
         action_plan = self._match_invariant_action(api_doc, entity, invariant, refs, state=state)
         if not action_plan:
             return None
-        extract_fields = ["id", "status", "state", "amount", "totalAmount", "total_amount", "payableAmount", "payable_amount"]
+        extract_fields = ["id", "status", "state", "amount", "total", "balance", "quantity"]
         validation_only = bool(action_plan.get("validation_only"))
         # A validation-only route (e.g. POST /validate) is itself the probe and
         # needs no separate read endpoint to bind a state prerequisite. Only
@@ -2609,7 +2609,7 @@ class SemanticScenarioGenerator:
         if has_any(invariant_text, ("类目", "category", "scope")):
             return "coupon_category_scope_must_match"
         if has_any(invariant_text, ("最低订单金额", "min order", "minimum order", "门槛")):
-            return "coupon_min_order_amount_must_match"
+            return "coupon_min_threshold_must_match"
         if has_any(invariant_text, ("有效期", "过期", "expire", "expired")):
             return "expired_coupon_must_be_invalid"
         if has_any(invariant_text, ("active", "停用", "禁用", "disabled", "状态")):
@@ -2621,7 +2621,7 @@ class SemanticScenarioGenerator:
         if has_any(merged, ("类目", "category", "scope")):
             return "coupon_category_scope_must_match"
         if has_any(merged, ("最低订单金额", "min order", "minimum order", "门槛")):
-            return "coupon_min_order_amount_must_match"
+            return "coupon_min_threshold_must_match"
         if has_any(merged, ("active", "停用", "禁用", "disabled", "状态")):
             return "inactive_coupon_must_be_invalid"
         if has_any(merged, ("有效期", "过期", "expire", "expired")):
@@ -3210,7 +3210,7 @@ class SemanticScenarioGenerator:
                     action="resolve_owner_collection_ids",
                     api_method="GET",
                     api_path=path,
-                    extract_from_response=["id", "orderId", "order_id", "addressId", "address_id"],
+                    extract_from_response=["id", "status", "state"],
                     expected_status=200,
                     actor=owner_label or owner_email,
                 ))

@@ -1,0 +1,892 @@
+{
+  "schema_version": "qualibug.field-level-golden-rule-set.v1",
+  "version": "1.0.0",
+  "domain": "ecommerce_order_lifecycle",
+  "source_refs": [
+    {"source_id": "BUSINESS_RULES.md", "kind": "business_rules"},
+    {"source_id": "DB_SCHEMA.md", "kind": "db_schema"},
+    {"source_id": "API_SPEC.md", "kind": "api_spec"}
+  ],
+  "rules": [
+    {
+      "rule_id": "conservation.inventory.reserve_sum",
+      "rule_type": "conservation",
+      "business_description": "库存预占时 available_qty + locked_qty 总和不变",
+      "scope": {
+        "primary_entity_id": "inventory",
+        "related_entity_ids": ["orders"],
+        "correlation_keys": ["sku"]
+      },
+      "preconditions": [
+        {"entity_id": "inventory", "field_id": "available_qty", "operator": "GTE", "expected_value": 1}
+      ],
+      "operation": {
+        "operation_id": "inventory.reserve",
+        "actor_role": "buyer",
+        "parameter_bindings": [{"param": "sku", "source": "fixture"}, {"param": "qty", "source": "literal", "value": 1}]
+      },
+      "expected_field_changes": [
+        {"entity_id": "inventory", "field_id": "available_qty", "delta_expression": "-qty"},
+        {"entity_id": "inventory", "field_id": "locked_qty", "delta_expression": "+qty"}
+      ],
+      "unchanged_fields": [
+        {"entity_id": "inventory", "field_id": "available_qty+locked_qty"}
+      ],
+      "observation_plan": {
+        "before_observers": ["GET /api/inventory/{sku}"],
+        "after_observers": ["GET /api/inventory/{sku}"]
+      },
+      "oracle": {
+        "expression_type": "conservation",
+        "expression": {
+          "operator": "unchanged_sum",
+          "terms": ["available_qty", "locked_qty"]
+        },
+        "tolerance": 0
+      },
+      "source_evidence": [
+        {"source_id": "BUSINESS_RULES.md", "location": "库存规则", "original_text": "用户下单时，应扣减 available_qty 并增加 locked_qty", "confidence": 0.95}
+      ]
+    },
+    {
+      "rule_id": "conservation.inventory.release_sum",
+      "rule_type": "conservation",
+      "business_description": "库存释放时 available_qty + locked_qty 总和不变",
+      "scope": {
+        "primary_entity_id": "inventory",
+        "related_entity_ids": ["orders"],
+        "correlation_keys": ["sku"]
+      },
+      "preconditions": [
+        {"entity_id": "inventory", "field_id": "locked_qty", "operator": "GTE", "expected_value": 1}
+      ],
+      "operation": {
+        "operation_id": "inventory.release",
+        "actor_role": "system",
+        "parameter_bindings": [{"param": "sku", "source": "fixture"}, {"param": "qty", "source": "literal", "value": 1}]
+      },
+      "expected_field_changes": [
+        {"entity_id": "inventory", "field_id": "available_qty", "delta_expression": "+qty"},
+        {"entity_id": "inventory", "field_id": "locked_qty", "delta_expression": "-qty"}
+      ],
+      "unchanged_fields": [
+        {"entity_id": "inventory", "field_id": "available_qty+locked_qty"}
+      ],
+      "observation_plan": {
+        "before_observers": ["GET /api/inventory/{sku}"],
+        "after_observers": ["GET /api/inventory/{sku}"]
+      },
+      "oracle": {
+        "expression_type": "conservation",
+        "expression": {
+          "operator": "unchanged_sum",
+          "terms": ["available_qty", "locked_qty"]
+        },
+        "tolerance": 0
+      },
+      "source_evidence": [
+        {"source_id": "BUSINESS_RULES.md", "location": "库存规则", "original_text": "订单取消时，应减少 locked_qty 并恢复 available_qty", "confidence": 0.95}
+      ]
+    },
+    {
+      "rule_id": "conservation.inventory.consume_sum",
+      "rule_type": "conservation",
+      "business_description": "库存扣减(支付成功)时 available_qty + locked_qty 总和不变",
+      "scope": {
+        "primary_entity_id": "inventory",
+        "correlation_keys": ["sku"]
+      },
+      "preconditions": [
+        {"entity_id": "inventory", "field_id": "locked_qty", "operator": "GTE", "expected_value": 1}
+      ],
+      "operation": {
+        "operation_id": "inventory.consume",
+        "actor_role": "system",
+        "parameter_bindings": [{"param": "sku", "source": "fixture"}, {"param": "qty", "source": "literal", "value": 1}]
+      },
+      "expected_field_changes": [
+        {"entity_id": "inventory", "field_id": "locked_qty", "delta_expression": "-qty"}
+      ],
+      "unchanged_fields": [],
+      "observation_plan": {
+        "before_observers": ["GET /api/inventory/{sku}"],
+        "after_observers": ["GET /api/inventory/{sku}"]
+      },
+      "oracle": {
+        "expression_type": "conservation",
+        "expression": {
+          "operator": "unchanged_sum",
+          "terms": ["available_qty", "locked_qty"]
+        },
+        "tolerance": 0
+      },
+      "source_evidence": [
+        {"source_id": "BUSINESS_RULES.md", "location": "库存规则", "original_text": "订单支付成功后，应将 locked_qty 消耗", "confidence": 0.90}
+      ]
+    },
+    {
+      "rule_id": "conservation.order.amount_formula",
+      "rule_type": "conservation",
+      "business_description": "订单金额公式: payable_amount = total_amount - discount_amount",
+      "scope": {
+        "primary_entity_id": "orders",
+        "correlation_keys": ["order_id"]
+      },
+      "preconditions": [],
+      "operation": {
+        "operation_id": "order.create",
+        "actor_role": "buyer",
+        "parameter_bindings": [{"param": "items", "source": "fixture"}]
+      },
+      "expected_field_changes": [],
+      "unchanged_fields": [],
+      "forbidden_field_changes": [],
+      "observation_plan": {
+        "before_observers": [],
+        "after_observers": ["GET /api/orders/{id}"]
+      },
+      "oracle": {
+        "expression_type": "conservation",
+        "expression": {
+          "operator": "eq",
+          "left_terms": [{"field_id": "payable_amount", "coefficient": 1}],
+          "right_terms": [
+            {"field_id": "total_amount", "coefficient": 1},
+            {"field_id": "discount_amount", "coefficient": -1}
+          ]
+        },
+        "tolerance": 0.01
+      },
+      "source_evidence": [
+        {"source_id": "BUSINESS_RULES.md", "location": "金额规则", "original_text": "payable_amount = total_amount - discount_amount", "confidence": 0.98}
+      ]
+    },
+    {
+      "rule_id": "conservation.order.discount_non_negative",
+      "rule_type": "conservation",
+      "business_description": "discount_amount 不能小于 0",
+      "scope": {
+        "primary_entity_id": "orders",
+        "correlation_keys": ["order_id"]
+      },
+      "preconditions": [],
+      "operation": {
+        "operation_id": "order.create",
+        "actor_role": "buyer",
+        "parameter_bindings": [{"param": "items", "source": "fixture"}, {"param": "couponCode", "source": "fixture"}]
+      },
+      "expected_field_changes": [],
+      "unchanged_fields": [],
+      "forbidden_field_changes": [
+        {"entity_id": "orders", "field_id": "discount_amount", "forbidden_expression": "< 0"}
+      ],
+      "observation_plan": {
+        "after_observers": ["GET /api/orders/{id}"]
+      },
+      "oracle": {
+        "expression_type": "conservation",
+        "expression": {
+          "operator": "unchanged_sum",
+          "terms": ["discount_amount"]
+        },
+        "tolerance": 0
+      },
+      "source_evidence": [
+        {"source_id": "BUSINESS_RULES.md", "location": "金额规则", "original_text": "discount_amount 不能小于 0", "confidence": 0.95}
+      ]
+    },
+    {
+      "rule_id": "conservation.order.discount_lte_total",
+      "rule_type": "conservation",
+      "business_description": "discount_amount 不能大于 total_amount",
+      "scope": {
+        "primary_entity_id": "orders",
+        "correlation_keys": ["order_id"]
+      },
+      "preconditions": [],
+      "operation": {
+        "operation_id": "order.create",
+        "actor_role": "buyer",
+        "parameter_bindings": [{"param": "items", "source": "fixture"}, {"param": "couponCode", "source": "fixture"}]
+      },
+      "expected_field_changes": [],
+      "forbidden_field_changes": [
+        {"entity_id": "orders", "field_id": "discount_amount", "forbidden_expression": "> total_amount"}
+      ],
+      "observation_plan": {
+        "after_observers": ["GET /api/orders/{id}"]
+      },
+      "oracle": {
+        "expression_type": "conservation",
+        "expression": {
+          "operator": "unchanged_sum",
+          "terms": ["discount_amount", "total_amount"]
+        },
+        "tolerance": 0
+      },
+      "source_evidence": [
+        {"source_id": "BUSINESS_RULES.md", "location": "金额规则", "original_text": "discount_amount 不能大于 total_amount", "confidence": 0.95}
+      ]
+    },
+    {
+      "rule_id": "conservation.inventory.non_negative_available",
+      "rule_type": "conservation",
+      "business_description": "available_qty 不能为负数",
+      "scope": {
+        "primary_entity_id": "inventory",
+        "correlation_keys": ["sku"]
+      },
+      "preconditions": [],
+      "operation": {
+        "operation_id": "inventory.reserve",
+        "actor_role": "buyer",
+        "parameter_bindings": [{"param": "sku", "source": "fixture"}, {"param": "qty", "source": "literal", "value": 99999}]
+      },
+      "expected_field_changes": [],
+      "forbidden_field_changes": [
+        {"entity_id": "inventory", "field_id": "available_qty", "forbidden_expression": "< 0"}
+      ],
+      "observation_plan": {
+        "after_observers": ["GET /api/inventory/{sku}"]
+      },
+      "oracle": {
+        "expression_type": "conservation",
+        "expression": {
+          "operator": "unchanged_sum",
+          "terms": ["available_qty"]
+        },
+        "tolerance": 0
+      },
+      "source_evidence": [
+        {"source_id": "BUSINESS_RULES.md", "location": "库存规则", "original_text": "available_qty、locked_qty 均不能为负数", "confidence": 0.95}
+      ]
+    },
+    {
+      "rule_id": "conservation.refund.amount_lte_paid",
+      "rule_type": "conservation",
+      "business_description": "退款金额不能大于实际支付金额",
+      "scope": {
+        "primary_entity_id": "refunds",
+        "related_entity_ids": ["payments", "orders"],
+        "correlation_keys": ["order_id"]
+      },
+      "preconditions": [
+        {"entity_id": "orders", "field_id": "status", "operator": "EQ", "expected_value": "PAID"}
+      ],
+      "operation": {
+        "operation_id": "refund.create",
+        "actor_role": "buyer",
+        "parameter_bindings": [{"param": "orderId", "source": "fixture"}, {"param": "amount", "source": "literal", "value": 999999}]
+      },
+      "expected_field_changes": [],
+      "forbidden_field_changes": [
+        {"entity_id": "refunds", "field_id": "amount", "forbidden_expression": "> paid_amount"}
+      ],
+      "observation_plan": {
+        "before_observers": ["GET /api/payments/order/{orderId}"],
+        "after_observers": ["GET /api/refunds/{id}"]
+      },
+      "oracle": {
+        "expression_type": "conservation",
+        "expression": {
+          "operator": "unchanged_sum",
+          "terms": ["amount"]
+        },
+        "tolerance": 0
+      },
+      "source_evidence": [
+        {"source_id": "BUSINESS_RULES.md", "location": "金额规则", "original_text": "退款金额不能大于实际支付金额", "confidence": 0.95}
+      ]
+    },
+    {
+      "rule_id": "causal.order.create_inventory_reserve",
+      "rule_type": "causal_postcondition",
+      "business_description": "创建订单后库存应预占: available_qty减少, locked_qty增加",
+      "scope": {
+        "primary_entity_id": "inventory",
+        "related_entity_ids": ["orders"],
+        "correlation_keys": ["sku"]
+      },
+      "preconditions": [
+        {"entity_id": "inventory", "field_id": "available_qty", "operator": "GTE", "expected_value": 1}
+      ],
+      "operation": {
+        "operation_id": "order.create",
+        "actor_role": "buyer",
+        "parameter_bindings": [{"param": "items[0].sku", "source": "fixture"}, {"param": "items[0].qty", "source": "literal", "value": 1}]
+      },
+      "expected_field_changes": [
+        {"entity_id": "inventory", "field_id": "available_qty", "before_expression": "available_qty_before", "after_expression": "available_qty_before - 1", "delta_expression": "-1", "comparison": "eq"},
+        {"entity_id": "inventory", "field_id": "locked_qty", "before_expression": "locked_qty_before", "after_expression": "locked_qty_before + 1", "delta_expression": "+1", "comparison": "eq"}
+      ],
+      "unchanged_fields": [],
+      "observation_plan": {
+        "before_observers": ["GET /api/inventory/{sku}"],
+        "after_observers": ["GET /api/inventory/{sku}"]
+      },
+      "oracle": {
+        "expression_type": "causal_delta",
+        "expression": {
+          "operator": "field_delta",
+          "fields": [
+            {"field_id": "available_qty", "expected_delta": -1},
+            {"field_id": "locked_qty", "expected_delta": 1}
+          ]
+        }
+      },
+      "source_evidence": [
+        {"source_id": "BUSINESS_RULES.md", "location": "库存规则", "original_text": "用户下单时，应扣减 available_qty 并增加 locked_qty", "confidence": 0.95}
+      ]
+    },
+    {
+      "rule_id": "causal.order.cancel_inventory_release",
+      "rule_type": "causal_postcondition",
+      "business_description": "取消订单后库存应释放: locked_qty减少, available_qty恢复",
+      "scope": {
+        "primary_entity_id": "inventory",
+        "related_entity_ids": ["orders"],
+        "correlation_keys": ["sku", "order_id"]
+      },
+      "preconditions": [
+        {"entity_id": "orders", "field_id": "status", "operator": "EQ", "expected_value": "PENDING_PAYMENT"},
+        {"entity_id": "inventory", "field_id": "locked_qty", "operator": "GTE", "expected_value": 1}
+      ],
+      "operation": {
+        "operation_id": "order.cancel",
+        "actor_role": "buyer",
+        "parameter_bindings": [{"param": "id", "source": "fixture"}]
+      },
+      "expected_field_changes": [
+        {"entity_id": "inventory", "field_id": "locked_qty", "delta_expression": "-qty", "comparison": "eq"},
+        {"entity_id": "inventory", "field_id": "available_qty", "delta_expression": "+qty", "comparison": "eq"}
+      ],
+      "unchanged_fields": [],
+      "observation_plan": {
+        "before_observers": ["GET /api/inventory/{sku}"],
+        "after_observers": ["GET /api/inventory/{sku}"]
+      },
+      "oracle": {
+        "expression_type": "causal_delta",
+        "expression": {
+          "operator": "field_delta",
+          "fields": [
+            {"field_id": "locked_qty", "expected_delta_direction": "decrease"},
+            {"field_id": "available_qty", "expected_delta_direction": "increase"}
+          ]
+        }
+      },
+      "source_evidence": [
+        {"source_id": "BUSINESS_RULES.md", "location": "库存规则", "original_text": "订单取消时，应减少 locked_qty 并恢复 available_qty", "confidence": 0.95}
+      ]
+    },
+    {
+      "rule_id": "causal.order.cancel_status_change",
+      "rule_type": "causal_postcondition",
+      "business_description": "取消订单后订单状态应变为CANCELLED",
+      "scope": {
+        "primary_entity_id": "orders",
+        "correlation_keys": ["order_id"]
+      },
+      "preconditions": [
+        {"entity_id": "orders", "field_id": "status", "operator": "EQ", "expected_value": "PENDING_PAYMENT"}
+      ],
+      "operation": {
+        "operation_id": "order.cancel",
+        "actor_role": "buyer",
+        "parameter_bindings": [{"param": "id", "source": "fixture"}]
+      },
+      "expected_field_changes": [
+        {"entity_id": "orders", "field_id": "status", "after_expression": "CANCELLED", "comparison": "eq"}
+      ],
+      "unchanged_fields": [],
+      "observation_plan": {
+        "before_observers": ["GET /api/orders/{id}"],
+        "after_observers": ["GET /api/orders/{id}"]
+      },
+      "oracle": {
+        "expression_type": "causal_delta",
+        "expression": {
+          "operator": "field_becomes",
+          "fields": [{"field_id": "status", "expected_value": "CANCELLED"}]
+        }
+      },
+      "source_evidence": [
+        {"source_id": "BUSINESS_RULES.md", "location": "订单状态机", "original_text": "PENDING_PAYMENT -> CANCELLED", "confidence": 0.95}
+      ]
+    },
+    {
+      "rule_id": "causal.payment.pay_status_change",
+      "rule_type": "causal_postcondition",
+      "business_description": "支付成功后订单状态应变为PAID",
+      "scope": {
+        "primary_entity_id": "orders",
+        "related_entity_ids": ["payments"],
+        "correlation_keys": ["order_id"]
+      },
+      "preconditions": [
+        {"entity_id": "orders", "field_id": "status", "operator": "EQ", "expected_value": "PENDING_PAYMENT"}
+      ],
+      "operation": {
+        "operation_id": "payment.pay",
+        "actor_role": "buyer",
+        "parameter_bindings": [{"param": "orderId", "source": "fixture"}, {"param": "amount", "source": "fixture_field:orders.payable_amount"}, {"param": "idempotencyKey", "source": "generated"}]
+      },
+      "expected_field_changes": [
+        {"entity_id": "orders", "field_id": "status", "after_expression": "PAID", "comparison": "eq"}
+      ],
+      "unchanged_fields": [],
+      "observation_plan": {
+        "before_observers": ["GET /api/orders/{orderId}"],
+        "after_observers": ["GET /api/orders/{orderId}"]
+      },
+      "oracle": {
+        "expression_type": "causal_delta",
+        "expression": {
+          "operator": "field_becomes",
+          "fields": [{"field_id": "status", "expected_value": "PAID"}]
+        }
+      },
+      "source_evidence": [
+        {"source_id": "BUSINESS_RULES.md", "location": "订单状态机", "original_text": "PENDING_PAYMENT -> PAID", "confidence": 0.95}
+      ]
+    },
+    {
+      "rule_id": "causal.payment.pay_amount_equals_payable",
+      "rule_type": "causal_postcondition",
+      "business_description": "支付金额必须等于订单应付金额",
+      "scope": {
+        "primary_entity_id": "payments",
+        "related_entity_ids": ["orders"],
+        "correlation_keys": ["order_id"]
+      },
+      "preconditions": [
+        {"entity_id": "orders", "field_id": "status", "operator": "EQ", "expected_value": "PENDING_PAYMENT"}
+      ],
+      "operation": {
+        "operation_id": "payment.pay",
+        "actor_role": "buyer",
+        "parameter_bindings": [{"param": "orderId", "source": "fixture"}, {"param": "amount", "source": "literal", "value": 1}]
+      },
+      "expected_field_changes": [
+        {"entity_id": "payments", "field_id": "amount", "after_expression": "orders.payable_amount", "comparison": "eq"}
+      ],
+      "unchanged_fields": [],
+      "observation_plan": {
+        "before_observers": ["GET /api/orders/{orderId}"],
+        "after_observers": ["GET /api/payments/order/{orderId}"]
+      },
+      "oracle": {
+        "expression_type": "causal_delta",
+        "expression": {
+          "operator": "cross_entity_eq",
+          "fields": [
+            {"field_id": "payments.amount", "equals": "orders.payable_amount"}
+          ]
+        }
+      },
+      "source_evidence": [
+        {"source_id": "BUSINESS_RULES.md", "location": "金额规则", "original_text": "支付金额必须等于订单应付金额", "confidence": 0.95}
+      ]
+    },
+    {
+      "rule_id": "causal.inventory.reserve_decreases_available",
+      "rule_type": "causal_postcondition",
+      "business_description": "预占库存后 available_qty 应减少",
+      "scope": {
+        "primary_entity_id": "inventory",
+        "correlation_keys": ["sku"]
+      },
+      "preconditions": [
+        {"entity_id": "inventory", "field_id": "available_qty", "operator": "GTE", "expected_value": 1}
+      ],
+      "operation": {
+        "operation_id": "inventory.reserve",
+        "actor_role": "system",
+        "parameter_bindings": [{"param": "sku", "source": "fixture"}, {"param": "qty", "source": "literal", "value": 1}]
+      },
+      "expected_field_changes": [
+        {"entity_id": "inventory", "field_id": "available_qty", "delta_expression": "-1", "comparison": "eq"}
+      ],
+      "unchanged_fields": [],
+      "observation_plan": {
+        "before_observers": ["GET /api/inventory/{sku}"],
+        "after_observers": ["GET /api/inventory/{sku}"]
+      },
+      "oracle": {
+        "expression_type": "causal_delta",
+        "expression": {
+          "operator": "field_delta",
+          "fields": [{"field_id": "available_qty", "expected_delta": -1}]
+        }
+      },
+      "source_evidence": [
+        {"source_id": "API_SPEC.md", "location": "POST /api/inventory/reserve", "original_text": "预占库存", "confidence": 0.90}
+      ]
+    },
+    {
+      "rule_id": "causal.inventory.release_increases_available",
+      "rule_type": "causal_postcondition",
+      "business_description": "释放库存后 available_qty 应增加",
+      "scope": {
+        "primary_entity_id": "inventory",
+        "correlation_keys": ["sku"]
+      },
+      "preconditions": [
+        {"entity_id": "inventory", "field_id": "locked_qty", "operator": "GTE", "expected_value": 1}
+      ],
+      "operation": {
+        "operation_id": "inventory.release",
+        "actor_role": "system",
+        "parameter_bindings": [{"param": "sku", "source": "fixture"}, {"param": "qty", "source": "literal", "value": 1}]
+      },
+      "expected_field_changes": [
+        {"entity_id": "inventory", "field_id": "available_qty", "delta_expression": "+1", "comparison": "eq"}
+      ],
+      "unchanged_fields": [],
+      "observation_plan": {
+        "before_observers": ["GET /api/inventory/{sku}"],
+        "after_observers": ["GET /api/inventory/{sku}"]
+      },
+      "oracle": {
+        "expression_type": "causal_delta",
+        "expression": {
+          "operator": "field_delta",
+          "fields": [{"field_id": "available_qty", "expected_delta": 1}]
+        }
+      },
+      "source_evidence": [
+        {"source_id": "API_SPEC.md", "location": "POST /api/inventory/release", "original_text": "释放预占库存", "confidence": 0.90}
+      ]
+    },
+    {
+      "rule_id": "causal.inventory.adjust_changes_available",
+      "rule_type": "causal_postcondition",
+      "business_description": "管理员调整库存后 available_qty 应变化 delta 量",
+      "scope": {
+        "primary_entity_id": "inventory",
+        "correlation_keys": ["sku"]
+      },
+      "preconditions": [],
+      "operation": {
+        "operation_id": "inventory.admin.adjust",
+        "actor_role": "admin",
+        "parameter_bindings": [{"param": "sku", "source": "fixture"}, {"param": "delta", "source": "literal", "value": 10}]
+      },
+      "expected_field_changes": [
+        {"entity_id": "inventory", "field_id": "available_qty", "delta_expression": "+10", "comparison": "eq"}
+      ],
+      "unchanged_fields": [
+        {"entity_id": "inventory", "field_id": "locked_qty"}
+      ],
+      "observation_plan": {
+        "before_observers": ["GET /api/inventory/{sku}"],
+        "after_observers": ["GET /api/inventory/{sku}"]
+      },
+      "oracle": {
+        "expression_type": "causal_delta",
+        "expression": {
+          "operator": "field_delta",
+          "fields": [{"field_id": "available_qty", "expected_delta": 10}]
+        }
+      },
+      "source_evidence": [
+        {"source_id": "API_SPEC.md", "location": "POST /api/inventory/admin/adjust", "original_text": "管理员调整库存", "confidence": 0.90}
+      ]
+    },
+    {
+      "rule_id": "causal.refund.create_record",
+      "rule_type": "causal_postcondition",
+      "business_description": "申请退款后应创建退款记录",
+      "scope": {
+        "primary_entity_id": "refunds",
+        "related_entity_ids": ["orders"],
+        "correlation_keys": ["order_id"]
+      },
+      "preconditions": [
+        {"entity_id": "orders", "field_id": "status", "operator": "IN", "expected_value": ["PAID", "SHIPPED", "COMPLETED"]}
+      ],
+      "operation": {
+        "operation_id": "refund.create",
+        "actor_role": "buyer",
+        "parameter_bindings": [{"param": "orderId", "source": "fixture"}, {"param": "amount", "source": "literal", "value": 100}, {"param": "reason", "source": "literal", "value": "test"}]
+      },
+      "expected_field_changes": [
+        {"entity_id": "refunds", "field_id": "id", "after_expression": "EXISTS", "comparison": "exists"}
+      ],
+      "unchanged_fields": [],
+      "observation_plan": {
+        "after_observers": ["GET /api/refunds/{id}"]
+      },
+      "oracle": {
+        "expression_type": "causal_delta",
+        "expression": {
+          "operator": "entity_created",
+          "fields": [{"field_id": "refunds.id", "expected_value": "EXISTS"}]
+        }
+      },
+      "source_evidence": [
+        {"source_id": "API_SPEC.md", "location": "POST /api/refunds", "original_text": "申请退款", "confidence": 0.90}
+      ]
+    },
+    {
+      "rule_id": "state.order.pending_to_paid",
+      "rule_type": "state_transition",
+      "business_description": "订单从PENDING_PAYMENT转为PAID",
+      "scope": {
+        "primary_entity_id": "orders",
+        "correlation_keys": ["order_id"]
+      },
+      "preconditions": [
+        {"entity_id": "orders", "field_id": "status", "operator": "EQ", "expected_value": "PENDING_PAYMENT"}
+      ],
+      "operation": {
+        "operation_id": "payment.pay",
+        "actor_role": "buyer",
+        "parameter_bindings": [{"param": "orderId", "source": "fixture"}]
+      },
+      "expected_field_changes": [
+        {"entity_id": "orders", "field_id": "status", "before_expression": "PENDING_PAYMENT", "after_expression": "PAID", "comparison": "eq"}
+      ],
+      "unchanged_fields": [],
+      "observation_plan": {
+        "before_observers": ["GET /api/orders/{orderId}"],
+        "after_observers": ["GET /api/orders/{orderId}"]
+      },
+      "oracle": {
+        "expression_type": "state_transition",
+        "expression": {
+          "entity_id": "orders",
+          "state_field_id": "status",
+          "from_state": "PENDING_PAYMENT",
+          "to_state": "PAID"
+        }
+      },
+      "source_evidence": [
+        {"source_id": "BUSINESS_RULES.md", "location": "订单状态机", "original_text": "CREATED -> PENDING_PAYMENT -> PAID -> SHIPPED -> COMPLETED", "confidence": 0.98}
+      ]
+    },
+    {
+      "rule_id": "state.order.pending_to_cancelled",
+      "rule_type": "state_transition",
+      "business_description": "订单从PENDING_PAYMENT转为CANCELLED",
+      "scope": {
+        "primary_entity_id": "orders",
+        "correlation_keys": ["order_id"]
+      },
+      "preconditions": [
+        {"entity_id": "orders", "field_id": "status", "operator": "EQ", "expected_value": "PENDING_PAYMENT"}
+      ],
+      "operation": {
+        "operation_id": "order.cancel",
+        "actor_role": "buyer",
+        "parameter_bindings": [{"param": "id", "source": "fixture"}]
+      },
+      "expected_field_changes": [
+        {"entity_id": "orders", "field_id": "status", "before_expression": "PENDING_PAYMENT", "after_expression": "CANCELLED", "comparison": "eq"}
+      ],
+      "unchanged_fields": [],
+      "observation_plan": {
+        "before_observers": ["GET /api/orders/{id}"],
+        "after_observers": ["GET /api/orders/{id}"]
+      },
+      "oracle": {
+        "expression_type": "state_transition",
+        "expression": {
+          "entity_id": "orders",
+          "state_field_id": "status",
+          "from_state": "PENDING_PAYMENT",
+          "to_state": "CANCELLED"
+        }
+      },
+      "source_evidence": [
+        {"source_id": "BUSINESS_RULES.md", "location": "订单状态机", "original_text": "PENDING_PAYMENT -> CANCELLED", "confidence": 0.98}
+      ]
+    },
+    {
+      "rule_id": "state.order.paid_to_shipped",
+      "rule_type": "state_transition",
+      "business_description": "订单从PAID转为SHIPPED",
+      "scope": {
+        "primary_entity_id": "orders",
+        "correlation_keys": ["order_id"]
+      },
+      "preconditions": [
+        {"entity_id": "orders", "field_id": "status", "operator": "EQ", "expected_value": "PAID"}
+      ],
+      "operation": {
+        "operation_id": "order.ship",
+        "actor_role": "warehouse",
+        "parameter_bindings": [{"param": "id", "source": "fixture"}]
+      },
+      "expected_field_changes": [
+        {"entity_id": "orders", "field_id": "status", "before_expression": "PAID", "after_expression": "SHIPPED", "comparison": "eq"}
+      ],
+      "unchanged_fields": [],
+      "observation_plan": {
+        "before_observers": ["GET /api/orders/{id}"],
+        "after_observers": ["GET /api/orders/{id}"]
+      },
+      "oracle": {
+        "expression_type": "state_transition",
+        "expression": {
+          "entity_id": "orders",
+          "state_field_id": "status",
+          "from_state": "PAID",
+          "to_state": "SHIPPED"
+        }
+      },
+      "source_evidence": [
+        {"source_id": "BUSINESS_RULES.md", "location": "订单状态机", "original_text": "PAID -> SHIPPED", "confidence": 0.98}
+      ]
+    },
+    {
+      "rule_id": "state.order.shipped_to_completed",
+      "rule_type": "state_transition",
+      "business_description": "订单从SHIPPED转为COMPLETED(确认收货)",
+      "scope": {
+        "primary_entity_id": "orders",
+        "correlation_keys": ["order_id"]
+      },
+      "preconditions": [
+        {"entity_id": "orders", "field_id": "status", "operator": "EQ", "expected_value": "SHIPPED"}
+      ],
+      "operation": {
+        "operation_id": "order.confirm",
+        "actor_role": "buyer",
+        "parameter_bindings": [{"param": "id", "source": "fixture"}]
+      },
+      "expected_field_changes": [
+        {"entity_id": "orders", "field_id": "status", "before_expression": "SHIPPED", "after_expression": "COMPLETED", "comparison": "eq"}
+      ],
+      "unchanged_fields": [],
+      "observation_plan": {
+        "before_observers": ["GET /api/orders/{id}"],
+        "after_observers": ["GET /api/orders/{id}"]
+      },
+      "oracle": {
+        "expression_type": "state_transition",
+        "expression": {
+          "entity_id": "orders",
+          "state_field_id": "status",
+          "from_state": "SHIPPED",
+          "to_state": "COMPLETED"
+        }
+      },
+      "source_evidence": [
+        {"source_id": "BUSINESS_RULES.md", "location": "订单状态机", "original_text": "SHIPPED -> COMPLETED", "confidence": 0.98}
+      ]
+    },
+    {
+      "rule_id": "state.order.forbidden_cancelled_to_paid",
+      "rule_type": "state_transition",
+      "business_description": "禁止: CANCELLED订单不能转为PAID",
+      "scope": {
+        "primary_entity_id": "orders",
+        "correlation_keys": ["order_id"]
+      },
+      "preconditions": [
+        {"entity_id": "orders", "field_id": "status", "operator": "EQ", "expected_value": "CANCELLED"}
+      ],
+      "operation": {
+        "operation_id": "payment.pay",
+        "actor_role": "buyer",
+        "parameter_bindings": [{"param": "orderId", "source": "fixture"}]
+      },
+      "expected_field_changes": [],
+      "forbidden_field_changes": [
+        {"entity_id": "orders", "field_id": "status", "forbidden_expression": "== PAID"}
+      ],
+      "observation_plan": {
+        "before_observers": ["GET /api/orders/{orderId}"],
+        "after_observers": ["GET /api/orders/{orderId}"]
+      },
+      "oracle": {
+        "expression_type": "state_transition",
+        "expression": {
+          "entity_id": "orders",
+          "state_field_id": "status",
+          "from_state": "CANCELLED",
+          "forbidden_to_state": "PAID"
+        }
+      },
+      "source_evidence": [
+        {"source_id": "BUSINESS_RULES.md", "location": "禁止状态流转", "original_text": "CANCELLED -> PAID", "confidence": 0.98}
+      ]
+    },
+    {
+      "rule_id": "state.order.forbidden_refunded_to_shipped",
+      "rule_type": "state_transition",
+      "business_description": "禁止: REFUNDED订单不能转为SHIPPED",
+      "scope": {
+        "primary_entity_id": "orders",
+        "correlation_keys": ["order_id"]
+      },
+      "preconditions": [
+        {"entity_id": "orders", "field_id": "status", "operator": "EQ", "expected_value": "REFUNDED"}
+      ],
+      "operation": {
+        "operation_id": "order.ship",
+        "actor_role": "warehouse",
+        "parameter_bindings": [{"param": "id", "source": "fixture"}]
+      },
+      "expected_field_changes": [],
+      "forbidden_field_changes": [
+        {"entity_id": "orders", "field_id": "status", "forbidden_expression": "== SHIPPED"}
+      ],
+      "observation_plan": {
+        "before_observers": ["GET /api/orders/{id}"],
+        "after_observers": ["GET /api/orders/{id}"]
+      },
+      "oracle": {
+        "expression_type": "state_transition",
+        "expression": {
+          "entity_id": "orders",
+          "state_field_id": "status",
+          "from_state": "REFUNDED",
+          "forbidden_to_state": "SHIPPED"
+        }
+      },
+      "source_evidence": [
+        {"source_id": "BUSINESS_RULES.md", "location": "禁止状态流转", "original_text": "REFUNDED -> SHIPPED", "confidence": 0.98}
+      ]
+    },
+    {
+      "rule_id": "state.order.paid_to_refund_requested",
+      "rule_type": "state_transition",
+      "business_description": "订单从PAID转为REFUND_REQUESTED",
+      "scope": {
+        "primary_entity_id": "orders",
+        "related_entity_ids": ["refunds"],
+        "correlation_keys": ["order_id"]
+      },
+      "preconditions": [
+        {"entity_id": "orders", "field_id": "status", "operator": "EQ", "expected_value": "PAID"}
+      ],
+      "operation": {
+        "operation_id": "refund.create",
+        "actor_role": "buyer",
+        "parameter_bindings": [{"param": "orderId", "source": "fixture"}, {"param": "amount", "source": "literal", "value": 100}]
+      },
+      "expected_field_changes": [
+        {"entity_id": "orders", "field_id": "status", "before_expression": "PAID", "after_expression": "REFUND_REQUESTED", "comparison": "eq"}
+      ],
+      "unchanged_fields": [],
+      "observation_plan": {
+        "before_observers": ["GET /api/orders/{orderId}"],
+        "after_observers": ["GET /api/orders/{orderId}"]
+      },
+      "oracle": {
+        "expression_type": "state_transition",
+        "expression": {
+          "entity_id": "orders",
+          "state_field_id": "status",
+          "from_state": "PAID",
+          "to_state": "REFUND_REQUESTED"
+        }
+      },
+      "source_evidence": [
+        {"source_id": "BUSINESS_RULES.md", "location": "订单状态机", "original_text": "PAID -> REFUND_REQUESTED -> REFUNDED", "confidence": 0.95}
+      ]
+    }
+  ]
+}

@@ -191,7 +191,7 @@ SENSITIVE_FIELD_RE = re.compile(
     re.I,
 )
 BUSINESS_FIELD_RE = re.compile(
-    r"(?:id|tenant|org|owner|user|order|订单|amount|price|payment|inventory|库存|sku|status|流水|audit|payload|data|items|records|email|phone)",
+    r"(?:id|tenant|org|owner|user|amount|price|balance|quantity|qty|stock|status|state|流水|audit|payload|data|items|records|email|phone|订单|库存|金额|余额|数量)",
     re.I,
 )
 NEGATIVE_NUMBER_KEY_RE = re.compile(r"(?:amount|price|balance|inventory|quantity|qty|stock|quota|points|额度|库存|数量|金额|余额)", re.I)

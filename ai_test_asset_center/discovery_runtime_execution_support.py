@@ -267,6 +267,12 @@ def _manual_terminal_receipts(
         for row in _list(obligation_plan.get("pending_next_round"))
         if isinstance(row, dict) and _text(row.get("obligation_id"))
     }
+    # P0-5: map pending obligation_id -> specific not-in-plan reason
+    pending_reasons: dict[str, str] = {
+        _text(row.get("obligation_id")): _text(row.get("not_in_plan_reason")) or "BUDGET_EXHAUSTED"
+        for row in _list(obligation_plan.get("pending_next_round"))
+        if isinstance(row, dict) and _text(row.get("obligation_id"))
+    }
     runtime_approved = (
         _text(runtime_contract.get("status")) == "approved"
         and bool(_text(runtime_contract.get("approved_base_url")))
@@ -303,6 +309,7 @@ def _manual_terminal_receipts(
             compile_results[obligation_id] = {
                 "status": "DEFERRED",
                 "reason_code": "OBLIGATION_BUDGET_REACHED",
+                "not_in_plan_reason": pending_reasons.get(obligation_id, "BUDGET_EXHAUSTED"),
                 "experiment_id": _text(experiment.get("experiment_id")),
                 "cost_coverage_status": "UNKNOWN",
             }
@@ -324,6 +331,7 @@ def _manual_terminal_receipts(
             compile_results[obligation_id] = {
                 "status": "DEFERRED",
                 "reason_code": "OBLIGATION_NOT_IN_PLAN",
+                "not_in_plan_reason": pending_reasons.get(obligation_id, "BUDGET_EXHAUSTED"),
                 "detail": _text(compile_receipt.get("detail") or ""),
                 "experiment_id": _text(experiment.get("experiment_id")),
                 "cost_coverage_status": "UNKNOWN",

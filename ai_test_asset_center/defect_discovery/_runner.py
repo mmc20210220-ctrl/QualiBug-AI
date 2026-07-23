@@ -455,25 +455,44 @@ def execute_generic_probe(client: HttpClient, token: str | None, item: dict, bod
     return {"probe": item, "request": {"method": item["method"], "path": item["path"], "body": body, "actor": item["actor"]}, "response": response, "expected": item["expected"], "actual": actual, "assertion_result": "failed" if failed else "passed", "bug_signal": item["bug_signal"], "confidence": 0.84 if failed else 0.62}
 
 
+def _is_identity_key(key: str) -> bool:
+    """Generic identity key detection (industry-neutral)."""
+    k = key.lower()
+    return k == "id" or k.endswith("_id") or k.endswith("id") and len(k) > 2
+
+
+def _is_numeric_semantic_key(key: str) -> bool:
+    """Generic numeric/amount/balance key detection (industry-neutral)."""
+    k = key.lower()
+    numeric_suffixes = ("_amount", "amount", "_balance", "balance", "_total", "total",
+                        "_count", "count", "_qty", "qty", "_quantity", "quantity",
+                        "_stock", "stock", "_value", "value", "_sum", "sum",
+                        "_paid", "_refunded", "_due", "_fee", "_price", "_cost")
+    return any(k.endswith(s) or k == s.lstrip("_") for s in numeric_suffixes)
+
+
 def idempotency_changed(first: dict, second: dict) -> bool:
     a = first.get("body") or {}
     b = second.get("body") or {}
-    for key in ("order_id", "id", "payment_id", "refund_id"):
-        if a.get(key) and b.get(key) and a.get(key) != b.get(key):
-            return True
-    for key in ("paid_amount", "refunded_amount", "stock", "balance", "amount"):
-        if isinstance(a.get(key), (int, float)) and isinstance(b.get(key), (int, float)) and a.get(key) != b.get(key):
-            return True
+    # Generic identity key comparison
+    for key in set(list(a.keys()) + list(b.keys())):
+        if _is_identity_key(key):
+            if a.get(key) and b.get(key) and a.get(key) != b.get(key):
+                return True
+    # Generic numeric field comparison
+    for key in set(list(a.keys()) + list(b.keys())):
+        if _is_numeric_semantic_key(key):
+            if isinstance(a.get(key), (int, float)) and isinstance(b.get(key), (int, float)) and a.get(key) != b.get(key):
+                return True
     return first.get("status_code") in {200, 201} and second.get("status_code") in {200, 201} and a != b
 
 
 def business_signal_suspicious(body: object) -> bool:
     if not isinstance(body, dict):
         return False
-    numeric_keys = ("total_amount", "payable_amount", "stock", "balance", "amount", "paid_amount", "refunded_amount")
-    for key in numeric_keys:
-        value = body.get(key)
-        if isinstance(value, (int, float)) and value < 0:
+    # Generic: check all numeric-semantic keys for negative values
+    for key, value in body.items():
+        if _is_numeric_semantic_key(key) and isinstance(value, (int, float)) and value < 0:
             return True
     status = str(body.get("status") or "").lower()
     if status in {"cancelled_pending"}:
@@ -519,18 +538,42 @@ def business_object_for_api(api: str) -> str:
     return "root"
 
 
+# Generic path-verb patterns for operation type inference (industry-neutral)
+_PATH_ACTION_VERB_RE = re.compile(
+    r"/(cancel|close|void|approve|reject|activate|deactivate|suspend|resume|"
+    r"enable|disable|archive|restore|publish|unpublish|submit|withdraw|"
+    r"confirm|verify|validate|process|execute|trigger|send|notify|"
+    r"assign|unassign|transfer|move|copy|clone|duplicate|merge|split|"
+    r"start|stop|pause|continue|retry|abort|complete|finalize|"
+    r"lock|unlock|freeze|unfreeze|open|reopen|escalate|resolve)\b",
+    re.I,
+)
+
+
 def operation_for_method(method: str, path: str) -> str:
-    text = path.lower()
-    if "cancel" in text:
-        return "cancel"
-    if "callback" in text:
-        return "callback"
-    if "refund" in text:
-        return "refund"
-    if method.upper() == "GET":
+    """Infer generic operation type from HTTP method and path verbs.
+
+    Industry-neutral: uses only generic action verbs, no domain-specific terms.
+    """
+    method_upper = method.upper()
+    # Check for explicit action verb in path
+    match = _PATH_ACTION_VERB_RE.search(path.lower())
+    if match:
+        return match.group(1).lower()
+    # Fall back to HTTP method semantics
+    if method_upper == "GET":
         return "view"
-    if method.upper() == "POST":
+    if method_upper == "POST":
+        # Check if path suggests creation vs action
+        if re.search(r"/(create|new|add|register|signup)\b", path.lower()):
+            return "create"
         return "create"
+    if method_upper == "PUT":
+        return "replace"
+    if method_upper == "PATCH":
+        return "update"
+    if method_upper == "DELETE":
+        return "delete"
     return method.lower()
 
 

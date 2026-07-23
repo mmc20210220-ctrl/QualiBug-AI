@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -306,43 +307,146 @@ def _inverse_delta_cleanup_body(
 
 
 def load_actor_tokens(root: Path, project: str) -> dict[str, str]:
-    """Map role / secret_ref → bearer token from declared test accounts only."""
+    """Map role / secret_ref → bearer token from declared test accounts only.
+
+    P0-4/P0-7 enhanced: falls back to parsing TEST_ACCOUNTS.md from the
+    project input directory and performing login when tokens are absent.
+    Priority: test_accounts.json > TEST_ACCOUNTS.md (with login) > empty.
+    """
     path = Path(root) / "platform_inputs" / str(project) / "test_accounts.json"
-    if not path.exists():
+    if path.exists():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8") or "{}")
+        except (OSError, json.JSONDecodeError):
+            payload = {}
+        tokens: dict[str, str] = {}
+        rows: list[Any] = []
+        if isinstance(payload, dict):
+            rows = list(payload.get("accounts") or payload.get("actors") or payload.get("users") or [])
+            if not rows:
+                rows = [
+                    {**(value if isinstance(value, dict) else {}), "account_ref": key}
+                    for key, value in payload.items()
+                    if isinstance(value, dict) and key not in {"schema", "schema_version", "meta"}
+                ]
+        elif isinstance(payload, list):
+            rows = payload
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            role = _text(row.get("role") or row.get("name") or row.get("id"))
+            account_ref = _text(row.get("account_ref") or row.get("name") or row.get("id") or row.get("email"))
+            token = _text(row.get("token") or row.get("access_token") or row.get("jwt"))
+            if not role or not token:
+                continue
+            status = _text(row.get("status") or row.get("account_status") or row.get("state") or "active").upper()
+            if account_ref:
+                tokens[account_ref] = token
+                tokens[f"secret_ref:test_accounts:{account_ref}"] = token
+            if status not in {"DISABLED", "LOCKED"}:
+                tokens.setdefault(role, token)
+                tokens.setdefault(f"secret_ref:test_accounts:{role}", token)
+                tokens.setdefault(f"secret_ref:context:{role}", token)
+        if tokens:
+            return tokens
+
+    # ── P0-4: Fallback to TEST_ACCOUNTS.md with login ──
+    md_accounts = _parse_test_accounts_md(root, project)
+    if not md_accounts:
         return {}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8") or "{}")
-    except (OSError, json.JSONDecodeError):
+    # Attempt login for each account to obtain tokens
+    base_url = _text(os.environ.get("QUALIBUG_TARGET_BASE_URL") or "")
+    login_path = _text(os.environ.get("QUALIBUG_LOGIN_PATH") or "/api/auth/login")
+    if not base_url:
+        # Return credential info without tokens (preflight will flag this)
         return {}
-    tokens: dict[str, str] = {}
-    rows: list[Any] = []
-    if isinstance(payload, dict):
-        rows = list(payload.get("accounts") or payload.get("actors") or payload.get("users") or [])
-        if not rows:
-            rows = [
-                {**(value if isinstance(value, dict) else {}), "account_ref": key}
-                for key, value in payload.items()
-                if isinstance(value, dict) and key not in {"schema", "schema_version", "meta"}
-            ]
-    elif isinstance(payload, list):
-        rows = payload
-    for row in rows:
-        if not isinstance(row, dict):
+    tokens = {}
+    for acct in md_accounts:
+        role = _text(acct.get("role"))
+        email = _text(acct.get("email"))
+        password = _text(acct.get("password"))
+        if not role or not email or not password:
             continue
-        role = _text(row.get("role") or row.get("name") or row.get("id"))
-        account_ref = _text(row.get("account_ref") or row.get("name") or row.get("id") or row.get("email"))
-        token = _text(row.get("token") or row.get("access_token") or row.get("jwt"))
-        if not role or not token:
+        try:
+            resp = _http_request(
+                "POST",
+                base_url.rstrip("/") + login_path,
+                body={"email": email, "password": password},
+                timeout=8.0,
+            )
+            status = int(resp.get("status") or 0)
+            body = resp.get("body")
+            token = ""
+            if isinstance(body, dict):
+                token = _text(body.get("token") or body.get("access_token") or body.get("jwt") or _dict(body.get("data")).get("token"))
+            if status == 200 and token:
+                account_ref = email.split("@")[0] if "@" in email else email
+                tokens[account_ref] = token
+                tokens[f"secret_ref:test_accounts:{account_ref}"] = token
+                tokens.setdefault(role, token)
+                tokens.setdefault(f"secret_ref:test_accounts:{role}", token)
+                tokens.setdefault(f"secret_ref:context:{role}", token)
+        except Exception:
             continue
-        status = _text(row.get("status") or row.get("account_status") or row.get("state") or "active").upper()
-        if account_ref:
-            tokens[account_ref] = token
-            tokens[f"secret_ref:test_accounts:{account_ref}"] = token
-        if status not in {"DISABLED", "LOCKED"}:
-            tokens.setdefault(role, token)
-            tokens.setdefault(f"secret_ref:test_accounts:{role}", token)
-            tokens.setdefault(f"secret_ref:context:{role}", token)
     return tokens
+
+
+def _parse_test_accounts_md(root: Path, project: str) -> list[dict[str, str]]:
+    """Parse TEST_ACCOUNTS.md markdown table into account dicts."""
+    search_dirs = [
+        Path(root) / "projects" / str(project) / "input",
+        Path(root) / "platform_inputs" / str(project),
+        Path(root) / "platform_workspace" / str(project) / "input",
+    ]
+    md_path: Path | None = None
+    for d in search_dirs:
+        for fname in ("TEST_ACCOUNTS.md", "test_accounts.md"):
+            candidate = d / fname
+            if candidate.exists():
+                md_path = candidate
+                break
+        if md_path:
+            break
+    if not md_path:
+        return []
+    try:
+        text = md_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    accounts: list[dict[str, str]] = []
+    lines = text.splitlines()
+    header_cols: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        cells = [c.strip() for c in stripped.split("|")[1:-1]]
+        if not cells:
+            continue
+        # Detect header row
+        lower_cells = [c.lower() for c in cells]
+        if any(h in lower_cells for h in ("角色", "role", "邮箱", "email")):
+            header_cols = lower_cells
+            continue
+        # Skip separator row
+        if all(set(c) <= set("-| ") for c in cells):
+            continue
+        if not header_cols:
+            continue
+        row: dict[str, str] = {}
+        for i, col in enumerate(header_cols):
+            val = cells[i] if i < len(cells) else ""
+            if col in ("角色", "role"):
+                row["role"] = val
+            elif col in ("邮箱", "email"):
+                row["email"] = val
+            elif col in ("密码", "password"):
+                row["password"] = val
+            elif col in ("说明", "description", "note"):
+                row["note"] = val
+        if row.get("email"):
+            accounts.append(row)
+    return accounts
 
 
 def preflight_experiment_executable(
@@ -429,10 +533,9 @@ def preflight_experiment_executable(
         op = ops[op_ref]
         # ── Enhanced: prefer step-level path (set by compiler) over IR path ──
         path = _text(step.get("path") or op.get("path") or op.get("raw_path"))
-        # ── Direct placeholder resolution ──
-        # When path has unresolved placeholders, try to generate values
-        # and substitute them directly. This bypasses the binding plan
-        # storage issue where generated values are not persisted.
+        # ── Placeholder interception: BLOCK if path has unresolved placeholders ──
+        # Generating qb_test_* placeholder IDs guarantees 404/400 failures and
+        # wastes compute. Block the experiment until real fixture data exists.
         if path_has_placeholders(path):
             _params = infer_path_params(path)
             _bp = _list(exp.get("binding_plan"))
@@ -445,25 +548,10 @@ def preflight_experiment_executable(
                 if not _resolved:
                     _needs_resolve.append(_p)
             if _needs_resolve:
-                from .runtime_binding_graph import _generate_placeholder_test_value
-                _subs = {}
-                for _p in _needs_resolve:
-                    _val = _generate_placeholder_test_value(_p)
-                    _subs[_p] = str(_val)
-                # Update the operation path
-                _new_path = path
-                for _p, _val in _subs.items():
-                    _new_path = _new_path.replace("{" + _p + "}", _val).replace(":" + _p, _val)
-                op["path"] = _new_path
-                path = _new_path
-                # Also update step paths in control_plan and treatment_plan
-                for _step_list_key in ("control_plan", "treatment_plan"):
-                    for _step in _list(exp.get(_step_list_key)):
-                        if isinstance(_step, dict) and _text(_step.get("operation_ref")) == op_ref:
-                            _step_path = _text(_step.get("path", ""))
-                            for _p, _val in _subs.items():
-                                _step_path = _step_path.replace("{" + _p + "}", _val).replace(":" + _p, _val)
-                            _step["path"] = _step_path
+                return False, "BLOCKED_MISSING_BINDING", f"unresolved_path_placeholders:{';'.join(_needs_resolve[:6])}"
+        # ── Detect pre-compiled placeholder IDs (qb_test_*) in path ──
+        if "qb_test_" in path or "QB-TEST-" in path:
+            return False, "BLOCKED_MISSING_BINDING", f"placeholder_id_in_path:{path[:80]}"
         method = _text(op.get("method") or "GET").upper()
         if not path.startswith("/"):
             # ── Enhanced: aggressively fix path instead of blocking ──
@@ -513,21 +601,9 @@ def preflight_experiment_executable(
             fixture_dag=dag,
             operations=ops,
         ):
-            # Last resort: generate values for all remaining placeholders
-            from .runtime_binding_graph import _generate_placeholder_test_value
-            for _p in infer_path_params(path):
-                _val = str(_generate_placeholder_test_value(_p))
-                path = path.replace("{" + _p + "}", _val).replace(":" + _p, _val)
-            op["path"] = path
-            if path_has_placeholders(path):
-                # ── Enhanced: regex-replace ALL remaining placeholders ──
-                import re as _re
-                path = _re.sub(r"\{[^}]+\}", "1", path)
-                path = _re.sub(r":[a-zA-Z_]\w*", "1", path)
-                op["path"] = path
-                exp.setdefault("_degraded_bindings", []).append(
-                    f"force_resolved_placeholders:{op_ref}"
-                )
+            # ── Placeholder interception: BLOCK instead of generating fake IDs ──
+            _unresolved = infer_path_params(path)
+            return False, "BLOCKED_MISSING_BINDING", f"unresolvable_placeholders_last_resort:{';'.join(_unresolved[:6])}"
         if not method:
             return False, "BLOCKED_MISSING_OPERATION", f"missing_method:{op_ref}"
         if (
@@ -849,4 +925,154 @@ def _run_http_step(
         "duration_ms": resp.get("duration_ms"),
         "error": resp.get("error") or "",
         "raw": resp,
+    }
+
+
+# ── P0-3: Environment Preflight ──
+
+def run_environment_preflight(
+    *,
+    root: Path,
+    project: str,
+    base_url: str,
+    obligation_plan: dict[str, Any],
+    behavior_ir: dict[str, Any],
+    runtime_contract: dict[str, Any] | None = None,
+    max_route_checks: int = 20,
+) -> dict[str, Any]:
+    """Pre-scan environment validation.
+
+    Checks:
+    1. base_url reachable
+    2. Gateway routes for planned paths (deduplicated, capped)
+    3. Auth configuration present
+    4. Actor tokens loadable
+
+    Returns a preflight_receipt dict with per-check results and a set of
+    obligation IDs that should be marked ENVIRONMENT_BLOCKED.
+    """
+    checks: list[dict[str, Any]] = []
+    blocked_obligation_ids: set[str] = set()
+    all_passed = True
+
+    # ── Check 1: base_url reachable ──
+    base_url_ok = False
+    if not base_url:
+        checks.append({"check": "base_url_reachable", "status": "FAILED", "detail": "no base_url provided"})
+        all_passed = False
+    else:
+        try:
+            resp = _http_request("GET", base_url.rstrip("/") + "/", timeout=8.0)
+            status = int(resp.get("status") or 0)
+            # Any HTTP response means the server is reachable
+            if status > 0:
+                base_url_ok = True
+                checks.append({"check": "base_url_reachable", "status": "PASSED", "http_status": status})
+            else:
+                checks.append({"check": "base_url_reachable", "status": "FAILED", "detail": "no HTTP response"})
+                all_passed = False
+        except Exception as exc:
+            checks.append({"check": "base_url_reachable", "status": "FAILED", "detail": str(exc)[:200]})
+            all_passed = False
+
+    # ── Check 2: Gateway route sampling ──
+    planned_paths: set[str] = set()
+    for item in _list(obligation_plan.get("selected")):
+        if not isinstance(item, dict):
+            continue
+        op_key = _text(item.get("operation_key"))
+        # operation_key format: "METHOD /path" or "op:ref"
+        if " " in op_key:
+            path_part = op_key.split(" ", 1)[1]
+            if path_part.startswith("/"):
+                planned_paths.add(path_part)
+    route_results: list[dict[str, Any]] = []
+    routes_ok = 0
+    routes_failed = 0
+    if base_url_ok and planned_paths:
+        sample_paths = sorted(planned_paths)[:max_route_checks]
+        for path in sample_paths:
+            try:
+                resp = _http_request("HEAD", base_url.rstrip("/") + path, timeout=6.0)
+                status = int(resp.get("status") or 0)
+                if status == 404:
+                    routes_failed += 1
+                    route_results.append({"path": path, "status": status, "route": "NOT_FOUND"})
+                else:
+                    routes_ok += 1
+                    route_results.append({"path": path, "status": status, "route": "OK"})
+            except Exception:
+                routes_failed += 1
+                route_results.append({"path": path, "status": 0, "route": "ERROR"})
+    route_ratio = routes_ok / max(1, routes_ok + routes_failed)
+    checks.append({
+        "check": "gateway_routes",
+        "status": "PASSED" if route_ratio >= 0.5 else "DEGRADED" if routes_ok > 0 else "FAILED",
+        "routes_ok": routes_ok,
+        "routes_failed": routes_failed,
+        "sample_size": len(route_results),
+    })
+    if routes_ok == 0 and routes_failed > 0:
+        all_passed = False
+
+    # ── Check 3: Auth configuration ──
+    auth_config_present = False
+    auth_source = ""
+    # Check test_accounts.json
+    accounts_path = Path(root) / "platform_inputs" / str(project) / "test_accounts.json"
+    if accounts_path.exists():
+        auth_config_present = True
+        auth_source = "test_accounts.json"
+    # Check project input directory for TEST_ACCOUNTS.md
+    input_dir = Path(root) / "projects" / str(project) / "input"
+    if not auth_config_present and input_dir.exists():
+        for fname in ("TEST_ACCOUNTS.md", "test_accounts.md", "accounts.md"):
+            if (input_dir / fname).exists():
+                auth_config_present = True
+                auth_source = fname
+                break
+    # Check runtime_contract for explicit auth
+    rc = _dict(runtime_contract)
+    if not auth_config_present and _text(rc.get("auth_token") or rc.get("bearer_token")):
+        auth_config_present = True
+        auth_source = "runtime_contract"
+    checks.append({
+        "check": "auth_configuration",
+        "status": "PASSED" if auth_config_present else "WARNING",
+        "source": auth_source,
+    })
+
+    # ── Check 4: Actor tokens loadable ──
+    actor_tokens = load_actor_tokens(root, project)
+    tokens_ok = len(actor_tokens) > 0
+    checks.append({
+        "check": "actor_tokens",
+        "status": "PASSED" if tokens_ok else "WARNING",
+        "token_count": len(actor_tokens),
+        "roles": sorted(set(
+            k for k in actor_tokens if not k.startswith("secret_ref:")
+        ))[:20],
+    })
+
+    # ── Determine blocked obligations ──
+    # If base_url is not reachable, ALL planned obligations are blocked
+    if not base_url_ok:
+        for item in _list(obligation_plan.get("selected")):
+            if isinstance(item, dict):
+                oid = _text(item.get("obligation_id"))
+                if oid:
+                    blocked_obligation_ids.add(oid)
+
+    return {
+        "schema_version": "qualibug.environment-preflight.v1",
+        "all_passed": all_passed,
+        "checks": checks,
+        "base_url": base_url,
+        "base_url_reachable": base_url_ok,
+        "route_sample_results": route_results,
+        "auth_config_present": auth_config_present,
+        "auth_source": auth_source,
+        "actor_token_count": len(actor_tokens),
+        "environment_blocked_obligation_ids": sorted(blocked_obligation_ids),
+        "environment_blocked_count": len(blocked_obligation_ids),
     }

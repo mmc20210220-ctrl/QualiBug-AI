@@ -484,6 +484,7 @@ def compile_family_protocol(
     control_actor_ref: str,
     treatment_actor_ref: str,
     property_spec: dict[str, Any],
+    behavior_ir: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     result = _base.compile_family_protocol(
         risk_family=risk_family,
@@ -492,6 +493,7 @@ def compile_family_protocol(
         control_actor_ref=control_actor_ref,
         treatment_actor_ref=treatment_actor_ref,
         property_spec=property_spec,
+        behavior_ir=behavior_ir,
     )
     if (
         _text(risk_family) != "validation"

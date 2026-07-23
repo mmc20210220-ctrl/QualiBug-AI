@@ -55,6 +55,106 @@ from .runtime_interface_discovery import (
 
 RUNTIME_SCHEMA = "qualibug.discovery-runtime.v1"
 
+# ── P0-2: Business / Discovery funnel separation ──
+_DISCOVERY_REASON_CODES = frozenset({
+    "SURFACE_DISCOVERY_OBSERVATION_ONLY",
+})
+_DISCOVERY_FAMILIES = frozenset({
+    "interface_discovery",
+})
+
+
+def _is_discovery_task(attempt: dict[str, Any]) -> bool:
+    """Classify an attempt as a discovery task vs business obligation."""
+    reason = _text(attempt.get("reason_code")).upper()
+    family = _text(attempt.get("risk_family")).lower()
+    return reason in _DISCOVERY_REASON_CODES or family in _DISCOVERY_FAMILIES
+
+
+def build_business_discovery_separation(
+    ledger: dict[str, Any],
+    findings: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Separate ledger attempts into business obligations and discovery tasks.
+
+    Produces per-type funnel statistics for business obligations and a
+    separate discovery task summary. Existing metrics remain compatible.
+    """
+    attempts = [_dict(a) for a in _list(ledger.get("attempts"))]
+    business_attempts = [a for a in attempts if not _is_discovery_task(a)]
+    discovery_attempts = [a for a in attempts if _is_discovery_task(a)]
+
+    # ── Business obligation per-type funnel ──
+    _STAGES = (
+        "generated", "eligible", "planned", "prepared",
+        "executed", "observed", "oracle_evaluated", "finding", "confirmed_tp",
+    )
+    per_type: dict[str, dict[str, int]] = {}
+    for a in business_attempts:
+        family = _text(a.get("risk_family")) or "unknown"
+        if family not in per_type:
+            per_type[family] = {s: 0 for s in _STAGES}
+            per_type[family]["blocked"] = 0
+        row = per_type[family]
+        row["generated"] += 1
+        terminal = _text(a.get("terminal_status")).upper()
+        reason = _text(a.get("reason_code")).upper()
+        # Eligible: not blocked at compile
+        if terminal not in ("DEFERRED",) or reason != "OBLIGATION_NOT_IN_PLAN":
+            row["eligible"] += 1
+        # Planned: selected for execution
+        if reason != "OBLIGATION_NOT_IN_PLAN" and terminal != "DEFERRED":
+            row["planned"] += 1
+        # Executed: reached transport
+        if terminal in ("DELIVERABLE", "REJECTED", "HARNESS_FAILED"):
+            row["executed"] += 1
+        # Observed: has observation receipts
+        if terminal in ("DELIVERABLE", "REJECTED"):
+            row["observed"] += 1
+        # Oracle evaluated
+        if terminal in ("DELIVERABLE", "REJECTED") and reason not in (
+            "CONTRACT_ORACLE_BLOCKED", "CONTRACT_ORACLE_HARNESS_FAILED",
+        ):
+            row["oracle_evaluated"] += 1
+        # Finding produced
+        if terminal == "DELIVERABLE":
+            row["finding"] += 1
+        # Blocked
+        if terminal in ("BLOCKED", "HARNESS_FAILED") or reason.startswith("BLOCKED"):
+            row["blocked"] += 1
+
+    # ── Business funnel totals ──
+    biz_total = {s: sum(per_type[t][s] for t in per_type) for s in _STAGES}
+    biz_total["blocked"] = sum(per_type[t]["blocked"] for t in per_type)
+
+    # ── Discovery task summary ──
+    disc_executed = sum(
+        1 for a in discovery_attempts
+        if _text(a.get("terminal_status")).upper() in ("REJECTED", "EXECUTED", "DELIVERABLE")
+    )
+    discovery_summary = {
+        "generated_discovery_tasks": len(discovery_attempts),
+        "executed_discovery_tasks": disc_executed,
+        "successful_discovery_tasks": disc_executed,
+        "discovered_operations": 0,  # filled by runtime_interface_discovery
+        "discovered_observers": 0,
+    }
+
+    return {
+        "schema_version": "qualibug.business-discovery-separation.v1",
+        "business_obligation_summary": {
+            "total": len(business_attempts),
+            **biz_total,
+        },
+        "business_per_type": per_type,
+        "discovery_task_summary": discovery_summary,
+        "separation_note": (
+            f"{len(business_attempts)} business obligations separated from "
+            f"{len(discovery_attempts)} discovery tasks. "
+            "Discovery tasks do not consume business execution budget."
+        ),
+    }
+
 
 def run_experiment_candidate(
     inputs: DiscoveryMainlineInputs,
@@ -689,6 +789,15 @@ def run_experiment_candidate(
         ),
     }
     result["discovery_funnel"] = build_funnel(result)
+    # ── P0-2: Business / Discovery separation ──
+    _separation = build_business_discovery_separation(
+        ledger,
+        canonical_findings if plan.mainline_run["customer_outputs_published"] else [],
+    )
+    # Fill discovered_operations from surface execution
+    _disc_ops = _list(surface_execution.get("discovered_operations"))
+    _separation["discovery_task_summary"]["discovered_operations"] = len(_disc_ops)
+    result["business_discovery_separation"] = _separation
     return result
 
 

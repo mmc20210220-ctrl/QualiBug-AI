@@ -57,6 +57,26 @@ _BUSINESS_REJECT_TOKENS = frozenset({
 })
 
 
+_IDENTITY_KEY_RE = re.compile(
+    r"^(id|uuid|guid|key|code|slug)$"
+    r"|.*(_id|_key|_code|_uuid|_ref|_no|_number)$"
+    r"|.*([A-Z]id|[A-Z]key|[A-Z]code|[A-Z]uuid|[A-Z]ref|[A-Z]no)$",
+    re.IGNORECASE,
+)
+
+
+def _is_identity_key(key: str) -> bool:
+    """Industry-generic identity field detection.
+
+    Matches patterns like: id, uuid, *_id, *Id, *_key, *Key, *_code, *Code,
+    *_ref, *Ref, *_no, *No, *_number, *Number.
+    Never uses project-specific entity names.
+    """
+    if not key or not isinstance(key, str):
+        return False
+    return bool(_IDENTITY_KEY_RE.match(key))
+
+
 def _business_outcome_from_body(body: Any) -> dict[str, Any]:
     """Extract industry-neutral soft-fail / status tokens from a response body."""
 
@@ -110,15 +130,13 @@ def _business_outcome_from_body(body: Any) -> dict[str, Any]:
             outcome["business_rejected"] = True
 
     identities = []
-    for key in ("id", "orderId", "order_id", "userId", "user_id", "sku"):
-        value = payload.get(key)
-        if value is not None and value != "":
+    for key, value in payload.items():
+        if _is_identity_key(key) and value is not None and value != "":
             identities.append(_fingerprint(value))
     data = payload.get("data")
     if isinstance(data, dict):
-        for key in ("id", "orderId", "order_id", "userId", "user_id", "sku"):
-            value = data.get(key)
-            if value is not None and value != "":
+        for key, value in data.items():
+            if _is_identity_key(key) and value is not None and value != "":
                 identities.append(_fingerprint(value))
     outcome["identity_overlap"] = len(set(identities)) >= 1 and len(identities) > len(set(identities))
     return outcome
@@ -450,7 +468,7 @@ def _identity_fingerprints(value: Any) -> set[str]:
                 if isinstance(child, (str, int, float)) and str(child).strip():
                     if (
                         normalized_key in {
-                            "id", "uuid", "key", "sku", "code", "slug",
+                            "id", "uuid", "key", "code", "slug",
                             "ref", "reference", "number",
                         }
                         or normalized_key.endswith(("_code", "_ref", "_number"))
@@ -464,7 +482,7 @@ def _identity_fingerprints(value: Any) -> set[str]:
                         (
                             normalized_key.endswith(("_id", "_code", "_ref", "_number"))
                             or normalized_key in {
-                                "sku", "code", "slug", "ref", "reference", "number",
+                                "code", "slug", "ref", "reference", "number",
                             }
                         )
                         and isinstance(child, (str, int, float))
@@ -573,7 +591,7 @@ def _identity_value_fingerprints(value: Any) -> set[str]:
                     and str(child).strip()
                     and (
                         normalized_key in {
-                            "id", "uuid", "key", "sku", "code", "slug",
+                            "id", "uuid", "key", "code", "slug",
                             "ref", "reference", "number",
                         }
                         or normalized_key.endswith(("_id", "_code", "_ref", "_number"))
@@ -1256,11 +1274,38 @@ def _conservation_terms_from_experiment(experiment: dict[str, Any]) -> list[str]
             or prop.get("kind")
             or expression.get("kind")
         ).lower()
-        if kind != "conservation" and not equation:
+        if kind == "field_delta":
+            # ── P0-9: extract field references from field_delta assertions ──
+            for field_spec in _list(assertion.get("fields") or assertion.get("operands")):
+                if isinstance(field_spec, dict):
+                    _f = _text(field_spec.get("field_id") or field_spec.get("field"))
+                    if _f:
+                        terms.append(_f)
+        elif kind != "conservation" and kind not in ("cross_entity_consistency", "limit_constraint") and not equation:
             continue
         for term in _list(equation.get("terms") or equation.get("fields")):
             if _text(term):
                 terms.append(_text(term))
+        # ── Extract fields from structured_expression (multi-entity resolver output) ──
+        structured = _dict(assertion.get("structured_expression"))
+        if structured:
+            for side_key in ("left", "right"):
+                side = _dict(structured.get(side_key))
+                _sf = _text(side.get("field"))
+                if _sf:
+                    terms.append(_sf)
+            # Also extract from condition/constraint (state consistency)
+            for part_key in ("condition", "constraint"):
+                part = _dict(structured.get(part_key))
+                _pf = _text(part.get("field"))
+                if _pf:
+                    terms.append(_pf)
+            # Extract from observer_requirements
+            for req in _list(assertion.get("observer_requirements")):
+                if isinstance(req, dict):
+                    for rf in _list(req.get("fields")):
+                        if _text(rf):
+                            terms.append(_text(rf))
     return list(dict.fromkeys(terms))
 
 
@@ -1397,10 +1442,6 @@ _STATE_FIELD_NAMES = {
     "phase",
     "lifecycle_state",
     "workflow_state",
-    "order_state",
-    "order_status",
-    "payment_state",
-    "payment_status",
     "resource_state",
     "resource_status",
 }

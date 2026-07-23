@@ -319,6 +319,183 @@ def _infer_operation_effect(operation: dict[str, Any], method: str) -> str:
     return "write"
 
 
+# ────────────────────────────────────────────────────────────────────────────
+# P0-5: Multi-evidence operation semantic inference
+# ────────────────────────────────────────────────────────────────────────────
+
+# Generic operation semantic types (industry-neutral)
+OPERATION_SEMANTIC_TYPES = (
+    "CREATE", "READ", "UPDATE", "REPLACE", "DELETE",
+    "TRANSITION", "ACTION", "QUERY", "BATCH", "AGGREGATE",
+    "VALIDATE", "EXPORT", "IMPORT", "SYNC", "WEBHOOK",
+    "UNKNOWN",
+)
+
+# Path verb → operation type mapping (generic, industry-neutral)
+_PATH_VERB_TO_OP_TYPE: dict[str, str] = {
+    # CRUD
+    "create": "CREATE", "new": "CREATE", "add": "CREATE", "register": "CREATE",
+    "get": "READ", "fetch": "READ", "retrieve": "READ", "view": "READ", "show": "READ",
+    "update": "UPDATE", "edit": "UPDATE", "modify": "UPDATE", "patch": "UPDATE",
+    "replace": "REPLACE", "put": "REPLACE", "set": "REPLACE",
+    "delete": "DELETE", "remove": "DELETE", "destroy": "DELETE", "purge": "DELETE",
+    # State transitions
+    "approve": "TRANSITION", "reject": "TRANSITION", "cancel": "TRANSITION",
+    "close": "TRANSITION", "open": "TRANSITION", "reopen": "TRANSITION",
+    "activate": "TRANSITION", "deactivate": "TRANSITION", "suspend": "TRANSITION",
+    "resume": "TRANSITION", "enable": "TRANSITION", "disable": "TRANSITION",
+    "publish": "TRANSITION", "unpublish": "TRANSITION", "archive": "TRANSITION",
+    "restore": "TRANSITION", "submit": "TRANSITION", "withdraw": "TRANSITION",
+    "confirm": "TRANSITION", "complete": "TRANSITION", "finalize": "TRANSITION",
+    "start": "TRANSITION", "stop": "TRANSITION", "pause": "TRANSITION",
+    "continue": "TRANSITION", "abort": "TRANSITION", "expire": "TRANSITION",
+    # Actions
+    "process": "ACTION", "execute": "ACTION", "trigger": "ACTION", "run": "ACTION",
+    "send": "ACTION", "notify": "ACTION", "assign": "ACTION", "unassign": "ACTION",
+    "transfer": "ACTION", "move": "ACTION", "copy": "ACTION", "clone": "ACTION",
+    "duplicate": "ACTION", "merge": "ACTION", "split": "ACTION",
+    "lock": "ACTION", "unlock": "ACTION", "freeze": "ACTION", "unfreeze": "ACTION",
+    "escalate": "ACTION", "resolve": "ACTION", "retry": "ACTION",
+    # Query/aggregate
+    "search": "QUERY", "find": "QUERY", "filter": "QUERY", "list": "QUERY",
+    "count": "AGGREGATE", "sum": "AGGREGATE", "stats": "AGGREGATE", "report": "AGGREGATE",
+    # Validation
+    "validate": "VALIDATE", "verify": "VALIDATE", "check": "VALIDATE", "preview": "VALIDATE",
+    # Data movement
+    "export": "EXPORT", "download": "EXPORT", "import": "IMPORT", "upload": "IMPORT",
+    "sync": "SYNC", "batch": "BATCH", "bulk": "BATCH",
+}
+
+
+def classify_operation_semantic_multi_evidence(
+    operation: dict[str, Any],
+    *,
+    http_method: str = "",
+    path: str = "",
+    request_fields: list[str] | None = None,
+    response_fields: list[str] | None = None,
+    description_text: str = "",
+) -> dict[str, Any]:
+    """Classify operation semantic type using multi-evidence scoring.
+
+    Evidence sources:
+    1. http_method_score: HTTP method semantics (GET→READ, POST→CREATE/ACTION, etc.)
+    2. path_verb_score: Action verb extracted from path segments
+    3. request_field_score: Request body field patterns (id→UPDATE, items→BATCH)
+    4. response_field_score: Response field patterns
+    5. description_score: Keywords in operation summary/description
+
+    Returns:
+        {
+            "operation_type": str,
+            "confidence": float,
+            "semantic_evidence": {...},
+            "evidence_sources_active": int,
+        }
+    """
+    method = (http_method or _text(operation.get("method"))).upper()
+    op_path = path or _text(operation.get("path"))
+    desc = description_text or _text(operation.get("summary")) or _text(operation.get("description"))
+
+    evidence: dict[str, Any] = {}
+    type_scores: dict[str, float] = {}
+
+    # Evidence 1: HTTP method
+    if method:
+        method_type_map = {
+            "GET": "READ", "HEAD": "READ", "OPTIONS": "READ",
+            "POST": "CREATE", "PUT": "REPLACE", "PATCH": "UPDATE", "DELETE": "DELETE",
+        }
+        inferred = method_type_map.get(method, "UNKNOWN")
+        evidence["http_method_score"] = {"method": method, "inferred_type": inferred, "weight": 0.3}
+        type_scores[inferred] = type_scores.get(inferred, 0.0) + 0.3
+
+    # Evidence 2: Path verb
+    path_lower = op_path.lower()
+    segments = [s for s in path_lower.strip("/").split("/") if s and not s.startswith("{")]
+    path_verb_type = None
+    if segments:
+        last_seg = segments[-1]
+        # Direct verb match
+        if last_seg in _PATH_VERB_TO_OP_TYPE:
+            path_verb_type = _PATH_VERB_TO_OP_TYPE[last_seg]
+        else:
+            # Check for verb prefix (e.g., "cancel-order" → cancel)
+            for verb, op_type in _PATH_VERB_TO_OP_TYPE.items():
+                if last_seg.startswith(verb) or f"/{verb}" in path_lower:
+                    path_verb_type = op_type
+                    break
+    if path_verb_type:
+        evidence["path_verb_score"] = {"verb": last_seg if segments else "", "inferred_type": path_verb_type, "weight": 0.35}
+        type_scores[path_verb_type] = type_scores.get(path_verb_type, 0.0) + 0.35
+
+    # Evidence 3: Request fields
+    if request_fields:
+        req_lower = [f.lower() for f in request_fields]
+        if any(f.endswith("_id") or f.endswith("id") for f in req_lower):
+            type_scores["UPDATE"] = type_scores.get("UPDATE", 0.0) + 0.1
+            evidence["request_field_score"] = {"pattern": "*_id present", "inferred_type": "UPDATE", "weight": 0.1}
+        if any(f in ("items", "records", "batch", "bulk") for f in req_lower):
+            type_scores["BATCH"] = type_scores.get("BATCH", 0.0) + 0.15
+            evidence["request_field_score"] = {"pattern": "batch/items", "inferred_type": "BATCH", "weight": 0.15}
+
+    # Evidence 4: Response fields
+    if response_fields:
+        resp_lower = [f.lower() for f in response_fields]
+        if any(f in ("total", "count", "sum", "average") for f in resp_lower):
+            type_scores["AGGREGATE"] = type_scores.get("AGGREGATE", 0.0) + 0.1
+            evidence["response_field_score"] = {"pattern": "aggregate field", "inferred_type": "AGGREGATE", "weight": 0.1}
+        if any(f in ("items", "results", "data", "records") for f in resp_lower):
+            type_scores["QUERY"] = type_scores.get("QUERY", 0.0) + 0.05
+
+    # Evidence 5: Description keywords
+    if desc:
+        desc_lower = desc.lower()
+        desc_keywords = {
+            "create": "CREATE", "new": "CREATE", "add": "CREATE",
+            "update": "UPDATE", "modify": "UPDATE", "change": "UPDATE",
+            "delete": "DELETE", "remove": "DELETE",
+            "list": "QUERY", "search": "QUERY", "find": "QUERY",
+            "validate": "VALIDATE", "check": "VALIDATE",
+            "export": "EXPORT", "download": "EXPORT",
+            "import": "IMPORT", "upload": "IMPORT",
+        }
+        for kw, op_type in desc_keywords.items():
+            if kw in desc_lower:
+                type_scores[op_type] = type_scores.get(op_type, 0.0) + 0.1
+                evidence["description_score"] = {"keyword": kw, "inferred_type": op_type, "weight": 0.1}
+                break
+
+    # Determine winner
+    if not type_scores:
+        return {
+            "operation_type": "UNKNOWN",
+            "confidence": 0.0,
+            "semantic_evidence": evidence,
+            "evidence_sources_active": 0,
+        }
+
+    best_type = max(type_scores, key=lambda k: type_scores[k])
+    raw_score = type_scores[best_type]
+    active_sources = len(evidence)
+
+    # Confidence capping based on evidence count
+    if active_sources >= 3:
+        confidence = min(raw_score, 0.95)
+    elif active_sources == 2:
+        confidence = min(raw_score, 0.85)
+    else:
+        confidence = min(raw_score, 0.60)
+
+    return {
+        "operation_type": best_type,
+        "confidence": round(confidence, 3),
+        "semantic_evidence": evidence,
+        "total_score": round(raw_score, 3),
+        "evidence_sources_active": active_sources,
+    }
+
+
 # Regex for ID-like path segments that should be normalized to {}.
 # Matches: numeric IDs, UUIDs, test IDs (qb_test_*, QB-TEST-*), hex strings,
 # and mixed alphanumeric IDs containing digits.
@@ -1889,6 +2066,13 @@ def _derive_state_transition_relations(
             operation = _resolve_operation(operations, transition) if operation_binding else None
             from_name = _text(transition.get("from") or transition.get("from_state"))
             to_name = _text(transition.get("to") or transition.get("to_state"))
+            # ── P0-6: infer operation binding from state name when absent ──
+            # Use the same linguistic stem matching that forbidden transitions
+            # use, so allowed transitions also bind to their trigger operation.
+            _operation_inferred = False
+            if not operation and from_state and to_state and to_name:
+                operation = _infer_transition_operation(operations, entity, to_name)
+                _operation_inferred = operation is not None
             if not from_state or not to_state or not operation:
                 if from_state and to_state and not operation:
                     model["coverage_gaps"].append(_fact_node(
@@ -1934,8 +2118,8 @@ def _derive_state_transition_relations(
                     locator=f"{entity}:{_text(from_state.get('name'))}->{_text(to_state.get('name'))}",
                     kind="state_transition",
                 )],
-                confidence=float(transition.get("confidence") or 0.8),
-                derivation="explicit",
+                confidence=float(transition.get("confidence") or (0.7 if _operation_inferred else 0.8)),
+                derivation="model-inferred" if _operation_inferred else "explicit",
             ))
     return relations
 
@@ -2853,6 +3037,74 @@ def build_behavior_ir_from_knowledge_asset(
                     status="unsupported",
                 ))
 
+    # ── Field-level extraction for conservation/causal rules ──
+    # Known entity-field mappings derived from DB schema and API documentation.
+    # These are industry-neutral patterns: the parser extracts field tokens
+    # from rule statements and maps them to entities via schema evidence.
+    _ENTITY_FIELD_REGISTRY: dict[str, list[str]] = {}
+    for _ent in _list(model.get("entities")):
+        _ent_id = _text(_ent.get("id") or _ent.get("name"))
+        if not _ent_id:
+            continue
+        _ent_fields: list[str] = []
+        for _f in _list(_ent.get("fields") or _ent.get("properties") or []):
+            if isinstance(_f, dict):
+                _ent_fields.append(_text(_f.get("name") or _f.get("id")))
+            elif isinstance(_f, str):
+                _ent_fields.append(_f)
+        # Also extract from operation schemas that reference this entity
+        _ENTITY_FIELD_REGISTRY[_ent_id.lower()] = [f for f in _ent_fields if f]
+    # Supplement from operation request/response schemas
+    for _op in _list(model.get("operations")):
+        _op_ents = [_text(e).lower() for e in _list(_op.get("entity_refs")) if _text(e)]
+        _schema_fields: list[str] = []
+        _req_schema = _dict(_op.get("request_schema") or _op.get("requestBody"))
+        _content = _dict(_req_schema.get("content"))
+        _json_media = _dict(_content.get("application/json"))
+        _schema_props = _dict(_dict(_json_media.get("schema")).get("properties"))
+        _schema_fields.extend(_schema_props.keys())
+        _example = _dict(_json_media.get("example"))
+        _schema_fields.extend(k for k in _example.keys() if isinstance(_example.get(k), (int, float)))
+        _field_dict = _list(_op.get("field_dictionary"))
+        for _fd in _field_dict:
+            if isinstance(_fd, dict):
+                _schema_fields.append(_text(_fd.get("name") or _fd.get("field")))
+            elif isinstance(_fd, str):
+                _schema_fields.append(_fd)
+        for _ent_name in _op_ents:
+            existing = _ENTITY_FIELD_REGISTRY.setdefault(_ent_name, [])
+            for sf in _schema_fields:
+                if sf and sf not in existing:
+                    existing.append(sf)
+
+    def _extract_fields_from_statement(stmt: str) -> list[dict[str, str]]:
+        """Extract field references from a rule statement using schema evidence."""
+        # Match backtick-quoted fields: `field_name`
+        backtick_fields = re.findall(r"`([a-zA-Z_][a-zA-Z0-9_]*)`", stmt)
+        # Match snake_case identifiers (>= 4 chars, not common words)
+        _STOP_WORDS = {"true", "false", "null", "none", "must", "should", "cannot", "must_hold"}
+        snake_fields = re.findall(r"\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b", stmt.lower())
+        snake_fields = [f for f in snake_fields if len(f) >= 4 and f not in _STOP_WORDS]
+        # Combine and dedupe
+        all_fields = list(dict.fromkeys(backtick_fields + snake_fields))
+        # Map fields to entities using registry
+        result: list[dict[str, str]] = []
+        for field in all_fields:
+            field_lower = field.lower()
+            matched_entity = ""
+            for ent_name, ent_fields in _ENTITY_FIELD_REGISTRY.items():
+                if any(field_lower == ef.lower() for ef in ent_fields):
+                    matched_entity = ent_name
+                    break
+            # Heuristic entity mapping from field name prefix
+            if not matched_entity:
+                for ent_name in _ENTITY_FIELD_REGISTRY:
+                    if field_lower.startswith(ent_name.rstrip("s") + "_") or ent_name.rstrip("s") in field_lower:
+                        matched_entity = ent_name
+                        break
+            result.append({"entity_ref": matched_entity, "field": field})
+        return result
+
     # Invariants from rule library (typed expression + description)
     for rule in _list(data.get("rule_library") or data.get("rules")):
         if not isinstance(rule, dict):
@@ -2861,16 +3113,39 @@ def build_behavior_ir_from_knowledge_asset(
         if not statement:
             continue
         rid = _text(rule.get("rule_id") or rule.get("id")) or _stable_id("inv", statement)
+        # ── Field-level grounding: extract structured operands from statement ──
+        _rule_kind = _text(rule.get("kind") or rule.get("risk_type") or "business_rule")
+        _rule_operands = _list(rule.get("operands"))
+        _rule_equation: dict[str, Any] = _dict(rule.get("equation"))
+        # For conservation/data_conservation rules without explicit operands,
+        # extract field references from the statement text.
+        if not _rule_operands and any(
+            token in _rule_kind.lower()
+            for token in ("conserv", "data_conservation", "balance", "amount", "quantity")
+        ):
+            _extracted = _extract_fields_from_statement(statement)
+            if _extracted:
+                _rule_operands = _extracted
+                # Build conservation equation terms from extracted fields
+                _terms = [f["field"] for f in _extracted if f.get("field")]
+                if _terms and not _rule_equation:
+                    _rule_equation = {
+                        "operator": "unchanged_sum",
+                        "terms": _terms,
+                    }
+        _expression: dict[str, Any] = {
+            "kind": _rule_kind,
+            "operator": _text(rule.get("operator") or "must_hold"),
+            "operands": _rule_operands,
+            "raw": statement,
+        }
+        if _rule_equation:
+            _expression["equation"] = _rule_equation
         model["invariants"].append(_fact_node(
             node_id=rid if rid.startswith("bir_") else _stable_id("inv", rid),
             typed_fields={
                 "description": statement,
-                "expression": {
-                    "kind": _text(rule.get("kind") or rule.get("risk_type") or "business_rule"),
-                    "operator": _text(rule.get("operator") or "must_hold"),
-                    "operands": _list(rule.get("operands")),
-                    "raw": statement,
-                },
+                "expression": _expression,
                 "operation_refs": [
                     _text(value)
                     for value in _list(
@@ -2890,6 +3165,81 @@ def build_behavior_ir_from_knowledge_asset(
             confidence=float(rule.get("confidence") or 0.7),
             derivation="explicit",
         ))
+        # ── P0-5: create causal postcondition invariant from conservation rules ──
+        # When a conservation rule has extracted field operands AND the statement
+        # contains causal delta language, create an additional postcondition
+        # invariant that verifies field-level deltas (not just sum conservation).
+        _CAUSAL_DELTA_TOKENS = (
+            "减少", "增加", "扣减", "恢复", "预占", "释放", "消耗",
+            "降低", "提升", "上涨", "下降", "锁定", "解冻",
+            "decrease", "increase", "reduce", "restore", "reserve", "release",
+        )
+        if (
+            _rule_operands
+            and any(token in _rule_kind.lower() for token in ("conserv", "data_conservation", "balance", "amount", "quantity"))
+            and any(token in statement.lower() for token in _CAUSAL_DELTA_TOKENS)
+        ):
+            # Build field_delta operands from extracted fields
+            _delta_operands: list[dict[str, Any]] = []
+            for _op in _rule_operands:
+                if not isinstance(_op, dict) or not _text(_op.get("field")):
+                    continue
+                _field_name = _text(_op.get("field"))
+                # Infer delta direction from statement context around the field
+                _dir = ""
+                _field_lower = _field_name.lower()
+                # Check if field is associated with decrease/increase in statement
+                _stmt_lower = statement.lower()
+                if any(tok in _stmt_lower for tok in ("减少", "扣减", "降低", "decrease", "reduce")):
+                    if any(tok in _field_lower for tok in ("available", "unlock", "free")):
+                        _dir = "decrease"
+                    elif any(tok in _field_lower for tok in ("locked", "reserved", "frozen")):
+                        _dir = "increase"
+                elif any(tok in _stmt_lower for tok in ("增加", "恢复", "释放", "increase", "restore", "release")):
+                    if any(tok in _field_lower for tok in ("available", "unlock", "free")):
+                        _dir = "increase"
+                    elif any(tok in _field_lower for tok in ("locked", "reserved", "frozen")):
+                        _dir = "decrease"
+                _delta_op: dict[str, Any] = {
+                    "entity_ref": _text(_op.get("entity_ref")),
+                    "field": _field_name,
+                    "field_id": _field_name,
+                }
+                if _dir:
+                    _delta_op["expected_delta_direction"] = _dir
+                _delta_operands.append(_delta_op)
+            if _delta_operands:
+                _pc_invariant_id = _stable_id("inv", rid, "causal_postcondition")
+                _pc_expression: dict[str, Any] = {
+                    "kind": "postcondition",
+                    "operator": "field_delta",
+                    "operands": _delta_operands,
+                    "raw": statement,
+                }
+                model["invariants"].append(_fact_node(
+                    node_id=_pc_invariant_id,
+                    typed_fields={
+                        "description": f"[causal] {statement}",
+                        "expression": _pc_expression,
+                        "operation_refs": [
+                            _text(value)
+                            for value in _list(
+                                rule.get("operation_refs")
+                                or ([rule.get("operation_ref") or rule.get("operation_id")]
+                                    if rule.get("operation_ref") or rule.get("operation_id") else [])
+                            )
+                            if _text(value)
+                        ],
+                        "source_rule_refs": list(dict.fromkeys(
+                            _text(value)
+                            for value in (rule.get("rule_id"), rule.get("id"))
+                            if _text(value)
+                        )),
+                    },
+                    source_refs=[_source_ref(_text(rule.get("source_id")) or "rule_library", quote=statement[:200])],
+                    confidence=float(rule.get("confidence") or 0.65),
+                    derivation="model-inferred",
+                ))
 
     # ── Causal chain postconditions → individual invariants ──
     # When a rule has been structurized into a causal chain (Daguan-style),

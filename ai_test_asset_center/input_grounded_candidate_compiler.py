@@ -74,6 +74,44 @@ class GroundedCandidate:
     source_refs: list[dict[str, str]]
     grounding_basis: dict[str, Any]
     rationale: str
+    evidence_source: str = ""  # P0-6: explicit evidence source marker
+    rule_category: str = ""    # P0-6: standardized rule category
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# P0-6: Standardized rule category taxonomy (industry-neutral)
+# ────────────────────────────────────────────────────────────────────────────
+
+RULE_CATEGORY_TAXONOMY = (
+    "FIELD_INVARIANT",           # Field value constraints (range, format, uniqueness)
+    "CAUSAL_POSTCONDITION",      # After action X, condition Y must hold
+    "STATE_TRANSITION",          # Valid state transitions and guards
+    "CONSERVATION",              # Resource conservation (balance, quantity, amount)
+    "CROSS_ENTITY_CONSISTENCY",  # Consistency between related entities
+    "IDEMPOTENCY",               # Repeated operations produce same result
+    "AUTHORIZATION",             # Access control boundaries
+    "ISOLATION",                 # Tenant/owner data isolation
+    "TEMPORAL",                  # Time-based constraints (expiry, ordering)
+    "REFERENTIAL_INTEGRITY",     # FK relationships must be valid
+)
+
+# Map internal risk_type to standardized rule category
+_RISK_TYPE_TO_RULE_CATEGORY: dict[str, str] = {
+    "business_rule_probe": "FIELD_INVARIANT",
+    "read_consistency_probe": "CROSS_ENTITY_CONSISTENCY",
+    "auth_boundary_probe": "AUTHORIZATION",
+    "ownership_scope_probe": "ISOLATION",
+    "idempotency_replay_probe": "IDEMPOTENCY",
+    "state_transition_probe": "STATE_TRANSITION",
+    "conservation_probe": "CONSERVATION",
+    "audit_privacy_probe": "AUTHORIZATION",
+    "async_external_event_probe": "CAUSAL_POSTCONDITION",
+}
+
+
+def rule_category_for_risk_type(risk_type: str) -> str:
+    """Map internal risk_type to standardized rule category."""
+    return _RISK_TYPE_TO_RULE_CATEGORY.get(risk_type, "FIELD_INVARIANT")
 
 
 def _read(path: Path) -> str:
@@ -1222,6 +1260,8 @@ def compile_grounded_candidates(input_dir: str | Path, *, project_id: str = "", 
                 "generation_reason": "endpoint_contract_plus_customer_requirement",
             },
             rationale="该候选必须同时引用 input 中的接口契约和客户需求/业务规则/风险面；未读取 oracle/ground_truth/BUG_MATRIX，未使用行业静态模板。",
+            evidence_source=f"document_grounded:{risk_type}",
+            rule_category=rule_category_for_risk_type(risk_type),
         ))
 
     for ep in endpoints:

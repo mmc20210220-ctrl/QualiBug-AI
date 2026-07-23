@@ -336,6 +336,179 @@ def execute_one_experiment(
         cleanup_result.get("contract_evidence_receipts") or contract_evidence_receipts
     )
     cleanup_failures = int(cleanup_result.get("cleanup_failures") or 0)
+
+    # ── Related Entity Observer Execution ──
+    # For experiments with structured expressions referencing related entities,
+    # execute observers to fetch related entity collections before finalization.
+    _has_structured_expr = any(
+        isinstance(a, dict) and (
+            _dict(a.get("structured_expression"))
+            or _text(a.get("kind")) in ("cross_entity_consistency", "limit_constraint", "conservation")
+        )
+        for a in _list(exp.get("assertions"))
+    )
+    _exec_logger.debug(
+        f"Related entity observer check: {eid} has_structured_expr={_has_structured_expr} "
+        f"assertions_count={len(_list(exp.get('assertions')))}",
+        extra={"context": {"experiment_id": eid, "obligation_id": oid}},
+    )
+    if _has_structured_expr:
+        try:
+            from .related_entity_observer_binder import bind_observer_plan
+            from .related_entity_observer_executor import execute_observer_plan
+
+            # Collect observer_requirements from assertions
+            _all_observer_reqs: list[dict[str, Any]] = []
+            _root_identity_value: Any = None
+            _tenant_scope_values: dict[str, Any] = {}
+            _relation_key: str = ""
+
+            for _assertion in _list(exp.get("assertions")):
+                if not isinstance(_assertion, dict):
+                    continue
+                _obs_reqs = _list(_assertion.get("observer_requirements"))
+                if _obs_reqs:
+                    _all_observer_reqs.extend(_obs_reqs)
+                    # Extract relation_key from MANY cardinality requirements
+                    for _req in _obs_reqs:
+                        if isinstance(_req, dict) and _text(_req.get("cardinality")).upper() == "MANY":
+                            _rk = _text(_req.get("relation_key"))
+                            if _rk:
+                                _relation_key = _rk
+                                break
+
+            # Extract root identity from multiple sources:
+            # 1. Before/after observations using relation_key (real data)
+            # 2. Treatment body using relation_key (for conservation experiments)
+            # 3. Before/after state body id/uuid
+            # 4. Runtime bindings
+            _treatment_plan = _list(exp.get("treatment_plan"))
+            _before_states = _list(observations.get("before_state_evidence"))
+            _after_states = _list(observations.get("after_state_evidence"))
+
+            # Priority 1: Extract from before/after observations (real data)
+            if _relation_key and _root_identity_value is None:
+                for _state_list in (_after_states, _before_states):
+                    if _root_identity_value is not None:
+                        break
+                    for _state in _state_list:
+                        if not isinstance(_state, dict):
+                            continue
+                        _state_body = _state.get("body")
+                        # Handle list body (collection observation)
+                        if isinstance(_state_body, list) and _state_body:
+                            for _rec in _state_body:
+                                if isinstance(_rec, dict) and _relation_key in _rec:
+                                    _val = _rec[_relation_key]
+                                    # Skip placeholder UUIDs (550e8400 pattern)
+                                    if _val and not str(_val).startswith("550e8400"):
+                                        _root_identity_value = _val
+                                        break
+                            if _root_identity_value is not None:
+                                break
+                        # Handle dict body (single entity)
+                        elif isinstance(_state_body, dict) and _relation_key in _state_body:
+                            _val = _state_body[_relation_key]
+                            if _val and not str(_val).startswith("550e8400"):
+                                _root_identity_value = _val
+                                break
+
+            # Priority 2: Extract from treatment body
+            if _relation_key and _root_identity_value is None and _treatment_plan:
+                for _step in _treatment_plan:
+                    if not isinstance(_step, dict):
+                        continue
+                    _body = _dict(_step.get("body"))
+                    if _relation_key in _body:
+                        _root_identity_value = _body[_relation_key]
+                        break
+
+            # Priority 3: Extract id/uuid from after/before state
+            if _root_identity_value is None and _after_states:
+                _root_body = _dict(_after_states[-1]).get("body")
+                if isinstance(_root_body, dict):
+                    _root_identity_value = _root_body.get("id") or _root_body.get("uuid")
+            if _root_identity_value is None:
+                _root_identity_value = runtime_bindings.get("id") or runtime_bindings.get("uuid")
+
+            # Extract tenant scope from root body or treatment body
+            if _after_states:
+                _root_body = _dict(_after_states[-1]).get("body")
+                if isinstance(_root_body, dict):
+                    for _sf in ("tenant_id", "owner_id", "department_id"):
+                        if _sf in _root_body:
+                            _tenant_scope_values[_sf] = _root_body[_sf]
+            # Also check treatment body for tenant scope
+            if not _tenant_scope_values and _treatment_plan:
+                for _step in _treatment_plan:
+                    if not isinstance(_step, dict):
+                        continue
+                    _body = _dict(_step.get("body"))
+                    for _sf in ("tenant_id", "owner_id", "department_id"):
+                        if _sf in _body:
+                            _tenant_scope_values[_sf] = _body[_sf]
+                    if _tenant_scope_values:
+                        break
+
+            _exec_logger.debug(
+                f"Related entity observer reqs: {eid} count={len(_all_observer_reqs)} "
+                f"root_identity={_root_identity_value} tenant_scope={list(_tenant_scope_values.keys())}",
+                extra={"context": {"experiment_id": eid, "obligation_id": oid}},
+            )
+            if _all_observer_reqs:
+                # Bind observer plan
+                _observer_plan = bind_observer_plan(
+                    _all_observer_reqs,
+                    behavior_ir,
+                    root_identity_value=_root_identity_value,
+                    tenant_scope_values=_tenant_scope_values,
+                )
+                _exec_logger.debug(
+                    f"Related entity observer plan: {eid} "
+                    f"related_observers={len(_observer_plan.get('related_observers', []))} "
+                    f"root_observers={len(_observer_plan.get('root_observers', []))} "
+                    f"blockers={len(_observer_plan.get('blockers', []))}",
+                    extra={"context": {"experiment_id": eid, "obligation_id": oid}},
+                )
+
+                # Execute observer plan if we have related observers
+                if _observer_plan.get("related_observers"):
+                    # Get auth token from actors
+                    _auth_token = ""
+                    for _actor_ref, _actor_info in actors.items():
+                        _token = _text(_dict(_actor_info).get("token"))
+                        if _token:
+                            _auth_token = _token
+                            break
+                    if not _auth_token and tokens:
+                        _auth_token = next(iter(tokens.values()), "")
+
+                    _exec_result = execute_observer_plan(
+                        _observer_plan,
+                        base_url,
+                        _auth_token,
+                        root_identity_value=_root_identity_value,
+                        tenant_scope_values=_tenant_scope_values,
+                    )
+
+                    # Store results in observations for finalizer
+                    observations["related_entity_observations"] = _exec_result.get("related_observations", [])
+                    observations["related_entity_multi_state"] = _exec_result.get("multi_entity_state", {})
+                    observations["related_entity_trace"] = _exec_result.get("trace", [])
+                    observations["related_entity_blockers"] = _exec_result.get("blockers", [])
+
+                    _exec_logger.info(
+                        f"Related entity observers: {eid} fetched={len(_exec_result.get('related_observations', []))} "
+                        f"blockers={len(_exec_result.get('blockers', []))}",
+                        extra={"context": {"experiment_id": eid, "obligation_id": oid}},
+                    )
+        except Exception as _obs_exc:
+            _exec_logger.warning(
+                f"Related entity observer execution failed: {eid} error={_obs_exc}",
+                extra={"context": {"experiment_id": eid, "obligation_id": oid, "error": str(_obs_exc)}},
+            )
+            observations["related_entity_observer_error"] = str(_obs_exc)
+
     _final_result = finalize_experiment_execution(
         exp=exp,
         steps_out=steps_out,

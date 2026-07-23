@@ -190,6 +190,184 @@ class ProjectContext:
 
 
 # ────────────────────────────────────────────────────────────
+# P0-4: Multi-evidence field semantic classification
+# ────────────────────────────────────────────────────────────
+
+# Generic semantic types (industry-neutral)
+FIELD_SEMANTIC_TYPES = (
+    "IDENTITY", "FOREIGN_KEY", "OWNER", "TENANT", "STATE", "BALANCE",
+    "DELTA", "AMOUNT", "QUANTITY", "VERSION", "SEQUENCE", "TIMESTAMP",
+    "BOOLEAN_FLAG", "ENUM", "LIMIT", "THRESHOLD", "IDEMPOTENCY_KEY",
+    "AUDIT", "UNKNOWN",
+)
+
+# Name-pattern evidence (generic suffixes/prefixes, never entity-specific)
+_NAME_EVIDENCE: list[tuple[str, str, float]] = [
+    # (regex_pattern, semantic_type, base_score)
+    (r"^(id|uuid|guid|pk)$", "IDENTITY", 0.9),
+    (r".*(_id|_uuid|_key|_ref|_no|_number)$", "FOREIGN_KEY", 0.7),
+    (r".*(_by|_owner|_assignee|_creator|_author)$", "OWNER", 0.7),
+    (r"^(tenant|org|organization|workspace)_", "TENANT", 0.75),
+    (r".*(status|state|stage|phase)$", "STATE", 0.8),
+    (r".*(balance|remaining|available|left)$", "BALANCE", 0.7),
+    (r".*(delta|diff|change|adjustment|correction)$", "DELTA", 0.7),
+    (r".*(amount|price|total|fee|cost|tax|discount|salary|wage|budget|credit|debit)$", "AMOUNT", 0.7),
+    (r".*(quantity|qty|count|num|stock|volume|capacity)$", "QUANTITY", 0.7),
+    (r".*(version|ver|revision|rev)$", "VERSION", 0.75),
+    (r".*(seq|sequence|order_num|sort|rank|position)$", "SEQUENCE", 0.7),
+    (r".*(_at|_on|_date|_time|timestamp|created|updated|expired)$", "TIMESTAMP", 0.8),
+    (r"^(is_|has_|can_|should_|will_|enabled|active|deleted|archived|verified)", "BOOLEAN_FLAG", 0.8),
+    (r".*(type|kind|category|class|mode|level|grade|tier)$", "ENUM", 0.65),
+    (r".*(limit|max|min|quota|ceiling|floor|cap|allowance)$", "LIMIT", 0.7),
+    (r".*(threshold|trigger|alert|warning|cutoff)$", "THRESHOLD", 0.7),
+    (r".*(idempotency|dedup|correlation|request_id|trace_id|external_event)", "IDEMPOTENCY_KEY", 0.75),
+    (r".*(audit|log|trail|history|changelog|modified_by|modified_at)", "AUDIT", 0.7),
+]
+
+
+def classify_field_semantic_multi_evidence(
+    field_name: str,
+    *,
+    schema_info: dict[str, Any] | None = None,
+    description_text: str = "",
+    operation_context: dict[str, Any] | None = None,
+    runtime_values: list[Any] | None = None,
+    relationships: list[str] | None = None,
+) -> dict[str, Any]:
+    """P0-4: Classify field semantic type using multi-evidence scoring.
+
+    Never relies on a single keyword match. Combines:
+    - name_score: field name pattern matching (generic suffixes/prefixes)
+    - schema_score: data type, constraints (min/max/enum)
+    - description_score: documentation text evidence
+    - operation_context_score: read/write operation patterns
+    - runtime_behavior_score: observed value patterns
+    - relationship_score: foreign key / association evidence
+
+    Returns:
+        {"semantic_type": str, "confidence": float, "semantic_evidence": {...}}
+    """
+    normalized = re.sub(r"[_\s-]+", "_", str(field_name or "").lower()).strip("_")
+    scores: dict[str, float] = {
+        "name_score": 0.0,
+        "schema_score": 0.0,
+        "description_score": 0.0,
+        "operation_context_score": 0.0,
+        "runtime_behavior_score": 0.0,
+        "relationship_score": 0.0,
+    }
+    candidates: dict[str, float] = {}  # semantic_type -> accumulated score
+
+    # ── Evidence 1: Name pattern ──
+    for pattern, sem_type, base_score in _NAME_EVIDENCE:
+        if re.search(pattern, normalized):
+            scores["name_score"] = max(scores["name_score"], base_score)
+            candidates[sem_type] = candidates.get(sem_type, 0.0) + base_score
+
+    # ── Evidence 2: Schema constraints ──
+    schema = schema_info or {}
+    schema_type = str(schema.get("type") or "").lower()
+    if schema.get("enum"):
+        scores["schema_score"] = max(scores["schema_score"], 0.8)
+        candidates["ENUM"] = candidates.get("ENUM", 0.0) + 0.8
+    elif schema_type in ("integer", "number"):
+        if schema.get("minimum") is not None or schema.get("maximum") is not None:
+            scores["schema_score"] = max(scores["schema_score"], 0.6)
+            candidates["LIMIT"] = candidates.get("LIMIT", 0.0) + 0.4
+            candidates["QUANTITY"] = candidates.get("QUANTITY", 0.0) + 0.3
+        else:
+            scores["schema_score"] = max(scores["schema_score"], 0.3)
+    elif schema_type == "boolean":
+        scores["schema_score"] = max(scores["schema_score"], 0.7)
+        candidates["BOOLEAN_FLAG"] = candidates.get("BOOLEAN_FLAG", 0.0) + 0.7
+    elif schema_type == "string" and schema.get("format") in ("date-time", "date"):
+        scores["schema_score"] = max(scores["schema_score"], 0.8)
+        candidates["TIMESTAMP"] = candidates.get("TIMESTAMP", 0.0) + 0.8
+
+    # ── Evidence 3: Description text ──
+    desc_lower = str(description_text or "").lower()
+    if desc_lower:
+        _desc_signals: list[tuple[str, str, float]] = [
+            (r"(余额|balance|可用|remaining)", "BALANCE", 0.6),
+            (r"(状态|status|state|阶段|phase)", "STATE", 0.6),
+            (r"(数量|quantity|库存|stock)", "QUANTITY", 0.5),
+            (r"(金额|amount|价格|price|费用|fee)", "AMOUNT", 0.5),
+            (r"(版本|version|乐观锁)", "VERSION", 0.6),
+            (r"(幂等|idempoten|去重|dedup)", "IDEMPOTENCY_KEY", 0.7),
+            (r"(租户|tenant|隔离|isolation)", "TENANT", 0.6),
+            (r"(归属|owner|负责人|assignee)", "OWNER", 0.6),
+        ]
+        for pattern, sem_type, score in _desc_signals:
+            if re.search(pattern, desc_lower):
+                scores["description_score"] = max(scores["description_score"], score)
+                candidates[sem_type] = candidates.get(sem_type, 0.0) + score
+
+    # ── Evidence 4: Operation context ──
+    op_ctx = operation_context or {}
+    if op_ctx.get("is_write_target"):
+        # Field appears in write body → likely mutable business field
+        if schema_type in ("integer", "number"):
+            candidates["QUANTITY"] = candidates.get("QUANTITY", 0.0) + 0.2
+            scores["operation_context_score"] = max(scores["operation_context_score"], 0.3)
+    if op_ctx.get("is_path_param"):
+        candidates["IDENTITY"] = candidates.get("IDENTITY", 0.0) + 0.5
+        scores["operation_context_score"] = max(scores["operation_context_score"], 0.5)
+    if op_ctx.get("is_filter_param"):
+        candidates["STATE"] = candidates.get("STATE", 0.0) + 0.2
+        scores["operation_context_score"] = max(scores["operation_context_score"], 0.3)
+
+    # ── Evidence 5: Runtime values ──
+    if runtime_values:
+        non_null = [v for v in runtime_values if v is not None]
+        if non_null:
+            if all(isinstance(v, bool) for v in non_null):
+                candidates["BOOLEAN_FLAG"] = candidates.get("BOOLEAN_FLAG", 0.0) + 0.6
+                scores["runtime_behavior_score"] = 0.6
+            elif all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in non_null):
+                if len(set(non_null)) <= 5 and len(non_null) >= 3:
+                    candidates["ENUM"] = candidates.get("ENUM", 0.0) + 0.4
+                    scores["runtime_behavior_score"] = 0.4
+                elif all(v >= 0 for v in non_null):
+                    candidates["QUANTITY"] = candidates.get("QUANTITY", 0.0) + 0.3
+                    scores["runtime_behavior_score"] = 0.3
+
+    # ── Evidence 6: Relationships ──
+    rels = relationships or []
+    if any("foreign_key" in r or "references" in r for r in rels):
+        candidates["FOREIGN_KEY"] = candidates.get("FOREIGN_KEY", 0.0) + 0.7
+        scores["relationship_score"] = 0.7
+    if any("owner" in r or "belongs_to" in r for r in rels):
+        candidates["OWNER"] = candidates.get("OWNER", 0.0) + 0.5
+        scores["relationship_score"] = max(scores["relationship_score"], 0.5)
+
+    # ── Final decision ──
+    if not candidates:
+        return {
+            "semantic_type": "UNKNOWN",
+            "confidence": 0.0,
+            "semantic_evidence": scores,
+        }
+    best_type = max(candidates, key=candidates.get)  # type: ignore[arg-type]
+    raw_score = candidates[best_type]
+    # Normalize: require at least 2 evidence sources for high confidence
+    evidence_sources_active = sum(1 for v in scores.values() if v > 0)
+    if evidence_sources_active >= 3:
+        confidence = min(0.95, raw_score * 0.9)
+    elif evidence_sources_active >= 2:
+        confidence = min(0.85, raw_score * 0.75)
+    else:
+        confidence = min(0.60, raw_score * 0.5)  # single-source: capped low
+
+    return {
+        "semantic_type": best_type,
+        "confidence": round(confidence, 3),
+        "semantic_evidence": {k: round(v, 3) for k, v in scores.items()},
+        "total_confidence": round(confidence, 3),
+        "evidence_sources_active": evidence_sources_active,
+    }
+
+
+# ────────────────────────────────────────────────────────────
 # Entity type taxonomy (generic — never industry-specific)
 # ────────────────────────────────────────────────────────────
 

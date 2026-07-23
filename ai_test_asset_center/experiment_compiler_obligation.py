@@ -16,6 +16,7 @@ from .experiment_protocols import compile_family_protocol
 from .observer_contracts_base import compile_observer_requirements
 from .real_id_resolver import normalize_path_placeholders
 from .runtime_binding_graph import (
+    blocked_binding_reasons,
     build_binding_plan,
     declared_action_compensators,
     declared_effect_observers,
@@ -311,6 +312,14 @@ def compile_experiment_for_obligation(
         actors=[actors[a] for a in required_actors if a in actors],
         behavior_ir=ir,
     )
+    # ── Placeholder interception: block if any binding is unresolvable ──
+    _blocked_reasons = blocked_binding_reasons(binding_plan)
+    if _blocked_reasons:
+        return blocked_experiment(
+            oid,
+            "BLOCKED_MISSING_BINDING",
+            f"unresolvable_path_placeholders:{';'.join(_blocked_reasons[:4])}",
+        )
     if (
         not is_write
         and family in {"authorization", "isolation", "visibility"}
@@ -436,36 +445,16 @@ def compile_experiment_for_obligation(
             prereq_plan = None
 
         if unresolved:
-            # ── Enhanced: defer binding to runtime instead of hard-blocking ──
-            # Mark the experiment for runtime binding resolution. The
-            # runtime_binding_resolver in experiment_batch_executor will
-            # attempt to resolve these placeholders via GET list endpoints.
-            # If runtime resolution fails, preflight's last-resort generates
-            # test values so the experiment can still execute.
-            binding_plan.append({
-                "target": "__deferred_binding__",
-                "status": "deferred_to_runtime",
-                "unresolved_placeholders": unresolved[:8],
-                "source_priority": "runtime_binding_resolver",
-            })
-            # Generate placeholder test values so compilation proceeds
-            try:
-                from .runtime_binding_graph import _generate_placeholder_test_value
-                for ph in unresolved:
-                    gen_val = str(_generate_placeholder_test_value(ph))
-                    primary_op["path"] = _text(primary_op.get("path", "")).replace(
-                        "{" + ph + "}", gen_val
-                    ).replace(
-                        ":" + ph, gen_val
-                    )
-                    binding_plan.append({
-                        "target": ph,
-                        "status": "generated",
-                        "generated_value": gen_val,
-                        "source_priority": "compile_time_fallback",
-                    })
-            except Exception as exc:
-                logger.debug("compile-time fallback generation failed: %s", exc)
+            # ── Placeholder interception: BLOCK instead of generating fake IDs ──
+            # Unresolved path placeholders mean no real entity exists. Executing
+            # with placeholder IDs (qb_test_*) wastes compute and produces 100%
+            # failed requests. Block the experiment until real fixture data is
+            # materialized by the governed Bootstrap flow.
+            return blocked_experiment(
+                oid,
+                "BLOCKED_MISSING_BINDING",
+                f"unresolved_placeholders_no_fixture:{';'.join(unresolved[:6])}",
+            )
 
     # Store prerequisite plan for runtime execution — attach to binding_plan
     # since the experiment dict is built later by make_experiment().
@@ -956,6 +945,7 @@ def compile_experiment_for_obligation(
         control_actor_ref=control_actor,
         treatment_actor_ref=treatment_actor,
         property_spec=prop,
+        behavior_ir=ir,
     )
     # Merge protocol-level observers (e.g. before_state, after_state)
     for pobs in _list(protocol.get("observers")):
@@ -995,14 +985,24 @@ def compile_experiment_for_obligation(
         # rather than requiring explicit from_state/to_state values.
         expr_kind = _text(_dict(prop.get("expression")).get("kind"))
         if expr_kind == "postcondition":
+            # ── P0-5: detect field_delta operands for causal verification ──
+            _pc_expr = _dict(prop.get("expression"))
+            _pc_ops = _list(_pc_expr.get("operands"))
+            _has_delta = any(
+                isinstance(op, dict)
+                and (op.get("expected_delta") is not None or _text(op.get("expected_delta_direction")))
+                for op in _pc_ops
+            )
+            _a_kind = "field_delta" if _has_delta else "postcondition"
             protocol = {
                 **protocol,
                 "control_plan": [],
                 "treatment_plan": treatment_rows,
                 "assertion": {
-                    "kind": "postcondition",
-                    "operator": _text(_dict(prop.get("expression")).get("operator")),
-                    "operands": _list(_dict(prop.get("expression")).get("operands")),
+                    "kind": _a_kind,
+                    "operator": _text(_pc_expr.get("operator")),
+                    "operands": _pc_ops,
+                    "fields": _pc_ops if _has_delta else [],
                 },
             }
         else:

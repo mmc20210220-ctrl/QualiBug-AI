@@ -42,6 +42,7 @@ def compile_family_protocol(
     control_actor_ref: str,
     treatment_actor_ref: str,
     property_spec: dict[str, Any],
+    behavior_ir: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     policy = _text(property_spec.get("privacy_policy"))
     is_field_policy = (
@@ -57,6 +58,7 @@ def compile_family_protocol(
             control_actor_ref=control_actor_ref,
             treatment_actor_ref=treatment_actor_ref,
             property_spec=property_spec,
+            behavior_ir=behavior_ir,
         )
 
     actor_ref = _text(treatment_actor_ref or control_actor_ref or property_spec.get("actor_ref"))

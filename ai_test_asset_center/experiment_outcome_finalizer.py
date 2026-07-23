@@ -25,6 +25,30 @@ from .observer_contracts_base import observe_experiment_requirements
 from .runtime_binding_materializer import materialize_path as _materialize_path
 
 
+def _extract_related_from_body(body: Any, entity_name: str) -> Any:
+    """Extract related entity data from a response body.
+
+    Searches for nested objects/arrays matching the entity name (singular/plural).
+    Returns the matched data or None.
+    """
+    if not isinstance(body, dict) or not entity_name:
+        return None
+    # Direct key match (plural or singular)
+    if entity_name in body:
+        return body[entity_name]
+    # Try singular form (strip trailing 's')
+    singular = entity_name.rstrip("s") if entity_name.endswith("s") else entity_name + "s"
+    if singular in body:
+        return body[singular]
+    # Search nested dicts for entity-named keys
+    normalized = entity_name.lower().replace("-", "_").replace(" ", "_")
+    for key, value in body.items():
+        norm_key = key.lower().replace("-", "_").replace(" ", "_")
+        if norm_key == normalized or norm_key == normalized.rstrip("s") or norm_key + "s" == normalized:
+            return value
+    return None
+
+
 def _pre_transport_reason_code(reasons: list[str]) -> str:
     combined = " ".join(_text(reason).upper() for reason in reasons)
     if "TARGET_POLICY" in combined or "READ_ONLY" in combined:
@@ -38,6 +62,121 @@ def _pre_transport_reason_code(reasons: list[str]) -> str:
     if "FIXTURE" in combined:
         return "BLOCKED_MISSING_FIXTURE"
     return "BLOCKED_MISSING_BINDING"
+
+
+# ── P0-9: Harness failure sub-classification ──
+HARNESS_FAILURE_SUBTYPES = (
+    "HARNESS_REQUEST_BUILD_FAILED",
+    "HARNESS_PARAMETER_BINDING_FAILED",
+    "HARNESS_AUTH_INJECTION_FAILED",
+    "HARNESS_ROUTE_FAILED",
+    "HARNESS_CONNECTION_FAILED",
+    "HARNESS_RESPONSE_PARSE_FAILED",
+    "HARNESS_PRE_OBSERVATION_FAILED",
+    "HARNESS_POST_OBSERVATION_FAILED",
+)
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# P0-7: Runtime evidence level progression
+# ────────────────────────────────────────────────────────────────────────────
+
+# Evidence levels in ascending order of confidence
+RUNTIME_EVIDENCE_LEVELS = (
+    "DOCUMENT_DERIVED",      # Rule derived from documents only
+    "OBSERVED_ONCE",         # Rule observed once at runtime
+    "OBSERVED_REPEATED",     # Rule observed multiple times
+    "RUNTIME_CONFIRMED",     # Rule confirmed through controlled experiment
+)
+
+_EVIDENCE_LEVEL_ORDER = {level: idx for idx, level in enumerate(RUNTIME_EVIDENCE_LEVELS)}
+
+
+def upgrade_evidence_level(current_level: str, observation_count: int = 1) -> str:
+    """Upgrade evidence level based on observation count.
+
+    Progression: DOCUMENT_DERIVED → OBSERVED_ONCE → OBSERVED_REPEATED → RUNTIME_CONFIRMED
+
+    Args:
+        current_level: Current evidence level
+        observation_count: Number of times the rule has been observed
+
+    Returns:
+        Upgraded evidence level
+    """
+    current_level = (current_level or "DOCUMENT_DERIVED").upper()
+    if current_level not in _EVIDENCE_LEVEL_ORDER:
+        current_level = "DOCUMENT_DERIVED"
+
+    current_idx = _EVIDENCE_LEVEL_ORDER[current_level]
+
+    # Determine target level based on observations
+    if observation_count >= 3:
+        target_level = "RUNTIME_CONFIRMED"
+    elif observation_count >= 2:
+        target_level = "OBSERVED_REPEATED"
+    elif observation_count >= 1:
+        target_level = "OBSERVED_ONCE"
+    else:
+        target_level = current_level
+
+    target_idx = _EVIDENCE_LEVEL_ORDER.get(target_level, 0)
+
+    # Only upgrade, never downgrade
+    if target_idx > current_idx:
+        return target_level
+    return current_level
+
+
+def compute_evidence_confidence(evidence_level: str, base_confidence: float = 0.5) -> float:
+    """Compute confidence score based on evidence level.
+
+    Args:
+        evidence_level: Current evidence level
+        base_confidence: Base confidence from document derivation
+
+    Returns:
+        Adjusted confidence score (0.0 - 1.0)
+    """
+    level_boosts = {
+        "DOCUMENT_DERIVED": 0.0,
+        "OBSERVED_ONCE": 0.15,
+        "OBSERVED_REPEATED": 0.25,
+        "RUNTIME_CONFIRMED": 0.40,
+    }
+    boost = level_boosts.get((evidence_level or "").upper(), 0.0)
+    return min(0.98, base_confidence + boost)
+
+
+def _classify_harness_failure(
+    steps_out: list[dict[str, Any]],
+    observations: dict[str, Any],
+    pre_transport_block_reasons: list[str],
+) -> str:
+    """Classify why no HTTP request reached the target."""
+    combined = " ".join(_text(r).upper() for r in pre_transport_block_reasons)
+    if "BINDING" in combined or "PLACEHOLDER" in combined or "PARAMETER" in combined:
+        return "HARNESS_PARAMETER_BINDING_FAILED"
+    if "ACTOR" in combined or "TOKEN" in combined or "AUTH" in combined:
+        return "HARNESS_AUTH_INJECTION_FAILED"
+    if "OBSERVER" in combined:
+        return "HARNESS_PRE_OBSERVATION_FAILED"
+    if "OPERATION" in combined or "ROUTE" in combined:
+        return "HARNESS_ROUTE_FAILED"
+    # Check steps for connection errors
+    for step in steps_out:
+        if not isinstance(step, dict):
+            continue
+        error = _text(step.get("error"))
+        status = int(step.get("status_code") or 0)
+        if "connection" in error.lower() or "timeout" in error.lower():
+            return "HARNESS_CONNECTION_FAILED"
+        if status in (404, 503):
+            return "HARNESS_ROUTE_FAILED"
+    # Check observations for harness_error flag
+    if observations.get("harness_error"):
+        return "HARNESS_REQUEST_BUILD_FAILED"
+    return "HARNESS_CONNECTION_FAILED"
 
 
 def finalize_experiment_execution(
@@ -127,6 +266,131 @@ def finalize_experiment_execution(
                 "both_succeeded": observations["dual_2xx"],
             }
 
+    # ── P0-10: Extract before/after state from governed writes ──
+    # For causal/conservation obligations, the governed write captures
+    # before_state and after_state via GET on the observation_path.
+    _before_states: list[dict[str, Any]] = []
+    _after_states: list[dict[str, Any]] = []
+    for step in steps_out:
+        if not isinstance(step, dict):
+            continue
+        gov = _dict(step.get("governance_receipt"))
+        if not gov:
+            continue
+        before = _dict(gov.get("before"))
+        after = _dict(gov.get("after"))
+        if before and int(before.get("status") or 0) > 0:
+            _before_states.append({
+                "path": _text(gov.get("observation_path") or step.get("observation_path")),
+                "status": int(before.get("status") or 0),
+                "body": before.get("body"),
+                "phase": _text(step.get("phase")),
+            })
+        if after and int(after.get("status") or 0) > 0:
+            _after_states.append({
+                "path": _text(gov.get("observation_path") or step.get("observation_path")),
+                "status": int(after.get("status") or 0),
+                "body": after.get("body"),
+                "phase": _text(step.get("phase")),
+            })
+    if _before_states:
+        observations["before_state_evidence"] = _before_states
+        observations["before_state"] = _before_states[-1].get("body")
+    if _after_states:
+        observations["after_state_evidence"] = _after_states
+        observations["after_state"] = _after_states[-1].get("body")
+    # For causal obligations: ensure before/after comparison is available
+    _risk = _text(exp.get("risk_family") or "")
+    if _risk in ("causal_postcondition", "conservation", "state_transition", "state"):
+        observations["causal_observation_ready"] = bool(_before_states and _after_states)
+        observations["observation_coverage"] = {
+            "before_count": len(_before_states),
+            "after_count": len(_after_states),
+            "risk_family": _risk,
+        }
+
+    # ── Multi-entity observation collection for structured expressions ──
+    _has_structured_expr = any(
+        isinstance(a, dict) and (
+            _dict(a.get("structured_expression"))
+            or _text(a.get("kind")) in ("cross_entity_consistency", "limit_constraint")
+        )
+        for a in _list(exp.get("assertions"))
+    )
+    if _has_structured_expr:
+        _multi_entity: dict[str, Any] = {}
+        # Build root entity state from before/after
+        _root_before = _before_states[-1].get("body") if _before_states else None
+        _root_after = _after_states[-1].get("body") if _after_states else None
+        # Extract entity bindings from assertions to identify root/related
+        for _assertion in _list(exp.get("assertions")):
+            if not isinstance(_assertion, dict):
+                continue
+            # ── Read entity_bindings (produced by protocol compiler) ──
+            _bindings = _dict(_assertion.get("entity_bindings"))
+            _root_entity = _text(_assertion.get("root_entity"))
+            _related_entities = _list(_assertion.get("related_entities"))
+            # Fallback: derive root/related from entity_bindings
+            if not _root_entity and _bindings:
+                for _alias, _info in _bindings.items():
+                    _ent_name = _text(_info.get("entity_name")) if isinstance(_info, dict) else _text(_info)
+                    if _alias == "root" or (_info.get("cardinality") if isinstance(_info, dict) else "") != "MANY":
+                        if not _root_entity:
+                            _root_entity = _ent_name
+                            # Store under both entity name and "root" alias
+                            _multi_entity["root"] = {"before": _root_before, "after": _root_after}
+                            if _ent_name:
+                                _multi_entity[_ent_name] = {"before": _root_before, "after": _root_after}
+                    else:
+                        _related_entities.append({"entity": _ent_name, "alias": _alias})
+            elif _root_entity:
+                _multi_entity[_root_entity] = {
+                    "before": _root_before,
+                    "after": _root_after,
+                }
+                _multi_entity["root"] = {
+                    "before": _root_before,
+                    "after": _root_after,
+                }
+            # Try to extract related entity data from response bodies
+            for _rel in _related_entities:
+                _rel_name = _text(_rel) if isinstance(_rel, str) else _text(_rel.get("entity")) if isinstance(_rel, dict) else ""
+                _rel_alias = _text(_rel.get("alias")) if isinstance(_rel, dict) else ""
+                if not _rel_name:
+                    continue
+                # Search for related data in before/after bodies
+                _rel_before = _extract_related_from_body(_root_before, _rel_name)
+                _rel_after = _extract_related_from_body(_root_after, _rel_name)
+                if _rel_before is not None or _rel_after is not None:
+                    _multi_entity[_rel_name] = {
+                        "before": _rel_before,
+                        "after": _rel_after,
+                    }
+                    # Also store under alias and generic "related" key
+                    if _rel_alias:
+                        _multi_entity[_rel_alias] = {"before": _rel_before, "after": _rel_after}
+                    _multi_entity.setdefault("related", {"before": _rel_before, "after": _rel_after})
+
+        # ── Merge related entity observations from active observer execution ──
+        _related_multi_state = _dict(observations.get("related_entity_multi_state"))
+        if _related_multi_state:
+            for _key, _state in _related_multi_state.items():
+                if not isinstance(_state, dict):
+                    continue
+                _records = _state.get("records", [])
+                # Store collection data for assertion DSL
+                _multi_entity[_key] = {
+                    "before": _records,  # Collection is same before/after for read-only
+                    "after": _records,
+                    "records": _records,
+                    "record_count": _state.get("record_count", len(_records)),
+                    "pagination": _state.get("pagination", {}),
+                    "collection_status": _state.get("collection_status", ""),
+                }
+
+        if _multi_entity:
+            observations["multi_entity_state"] = _multi_entity
+
     # Materialize + evaluate typed assertions via contract oracle.
     assertions = []
     for raw in _list(exp.get("assertions")):
@@ -136,6 +400,44 @@ def finalize_experiment_execution(
     exp_for_oracle["assertions"] = assertions
     verdict = evaluate_contract_oracle(experiment=exp_for_oracle, evidence=observations)
 
+    # ── P0-10: Build field-level oracle trace ──
+    oracle_trace: list[dict[str, Any]] = []
+    for _ar in _list(verdict.get("assertions")):
+        if not isinstance(_ar, dict):
+            continue
+        _ar_kind = _text(_ar.get("kind"))
+        _ar_expected = _ar.get("expected") if isinstance(_ar.get("expected"), dict) else {}
+        _ar_actual = _ar.get("actual") if isinstance(_ar.get("actual"), dict) else {}
+        trace_entry: dict[str, Any] = {
+            "rule_id": _text(_ar.get("assertion_id") or _ar.get("receipt_id")),
+            "kind": _ar_kind,
+            "result": _text(_ar.get("status")),
+            "reason_code": _text(_ar.get("reason_code")),
+        }
+        if _ar_kind == "field_delta":
+            # Causal oracle trace: per-field before/after/delta
+            trace_entry["observed_fields"] = _list(_ar_actual.get("field_results"))
+            trace_entry["expected_fields"] = _list(_ar_expected.get("fields"))
+        elif _ar_kind == "conservation":
+            # Conservation trace: terms, before/after sums, per-term values
+            trace_entry["terms"] = _list(_ar_expected.get("terms"))
+            trace_entry["operator"] = _text(_ar_expected.get("operator"))
+            trace_entry["before_sum"] = _ar_actual.get("before_sum")
+            trace_entry["after_sum"] = _ar_actual.get("after_sum")
+            trace_entry["before_values"] = _ar_actual.get("before")
+            trace_entry["after_values"] = _ar_actual.get("after")
+        elif _ar_kind == "state_transition":
+            # State transition trace: from/to/observed
+            trace_entry["from_state"] = _text(_ar_expected.get("before"))
+            trace_entry["to_state"] = _text(_ar_expected.get("after"))
+            trace_entry["observed_before"] = _ar_actual.get("before")
+            trace_entry["observed_after"] = _ar_actual.get("after")
+        else:
+            trace_entry["expected"] = _ar_expected
+            trace_entry["actual"] = _ar_actual
+        oracle_trace.append(trace_entry)
+    observations["oracle_trace"] = oracle_trace
+
     finding = None
     # Execution status reflects actual HTTP activity, not oracle assessment.
     # Oracle verdict is advisory evidence quality metadata.
@@ -144,6 +446,10 @@ def finalize_experiment_execution(
         for s in steps_out
     )
     status = "EXECUTED" if has_http else "HARNESS_FAILURE"
+    # ── P0-9: Fine-grained harness failure classification ──
+    harness_failure_reason = ""
+    if not has_http:
+        harness_failure_reason = _classify_harness_failure(steps_out, observations, pre_transport_block_reasons)
     if pre_transport_block_reasons:
         # Pre-transport blocks (binding placeholders, unresolved paths) mean the
         # request never reached the target — this is a BLOCKED outcome, not a
@@ -239,6 +545,7 @@ def finalize_experiment_execution(
                 # Build a synthetic assertion for downstream canonical identity.
                 _synthetic_assertion = {
                     "assertion_id": f"http_evidence_{_sha256(f'{oid}|{eid}')[:12]}",
+                    "receipt_id": f"http_evidence_{_sha256(f'{oid}|{eid}')[:12]}",
                     "kind": "http_status_class",
                     "status": "VIOLATION",
                     "expected": {"status_class": 4},
@@ -539,13 +846,30 @@ def finalize_experiment_execution(
             reason=_text(verdict.get("demotion_reason") or "executed_clue"),
         )
 
+    # ── P0-12: Finding filter reason ──
+    _finding_created = finding is not None
+    _finding_filter_reason = ""
+    if not _finding_created:
+        if status == "HARNESS_FAILURE":
+            _finding_filter_reason = f"environment_error:{harness_failure_reason or 'harness_failure'}"
+        elif status == "BLOCKED":
+            _finding_filter_reason = "environment_blocked"
+        elif _text(verdict.get("status")) == "PROPERTY_HELD":
+            _finding_filter_reason = "oracle_property_held"
+        elif _text(verdict.get("status")) == "INDETERMINATE":
+            _finding_filter_reason = "oracle_indeterminate"
+        elif _text(verdict.get("status")) == "BLOCKED":
+            _finding_filter_reason = "oracle_blocked"
+        else:
+            _finding_filter_reason = "no_violation_detected"
+
     return {
         "schema_version": "qualibug.experiment-execution.v1",
         "experiment_id": eid,
         "obligation_id": oid,
         "status": status,
-        "reason_code": "",
-        "detail": "",
+        "reason_code": harness_failure_reason if status == "HARNESS_FAILURE" else "",
+        "detail": harness_failure_reason if status == "HARNESS_FAILURE" else "",
         "elapsed_ms": int((time.time() - started) * 1000),
         "steps": steps_out,
         "fixture_receipts": fixture_receipts,
@@ -554,6 +878,8 @@ def finalize_experiment_execution(
         "contract_evidence_receipts": contract_evidence_receipts,
         "oracle_verdict": verdict,
         "finding": finding,
+        "finding_created": _finding_created,
+        "finding_filter_reason": _finding_filter_reason,
         "cleanup_failures": cleanup_failures,
         "execution_receipt": {
             "status": status,
@@ -561,6 +887,9 @@ def finalize_experiment_execution(
             "cleanup_failures": cleanup_failures,
             "binding_materialization_receipts": len(binding_materialization_receipts),
             "verdict": verdict.get("verdict"),
+            "harness_failure_reason": harness_failure_reason or None,
+            "finding_created": _finding_created,
+            "finding_filter_reason": _finding_filter_reason or None,
         },
     }
 

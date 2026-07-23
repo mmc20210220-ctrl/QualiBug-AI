@@ -34,6 +34,74 @@ from .runtime_binding_materializer import (
 from .sandbox_write_executor import execute_governed_control_write
 
 
+def _validate_fixture_preconditions(
+    exp: dict[str, Any],
+    fixture_response_body: Any,
+    target: str,
+) -> list[dict[str, str]]:
+    """P0-8: Validate fixture preconditions after setup.
+
+    After fixture setup completes, verify that the created resource satisfies
+    the experiment's preconditions. Returns a list of validation failures
+    (empty list means all preconditions passed).
+    """
+    failures: list[dict[str, str]] = []
+    body = _dict(fixture_response_body) if isinstance(fixture_response_body, dict) else {}
+    if not body:
+        # Non-dict response (e.g., plain ID string) — skip field validation
+        return failures
+
+    # Extract precondition fields from experiment assertions
+    assertions = _list(exp.get("assertions"))
+    precondition_fields: set[str] = set()
+    for assertion in assertions:
+        if not isinstance(assertion, dict):
+            continue
+        # Conservation: terms define fields that must exist
+        for term in _list(assertion.get("terms")):
+            field = _text(_dict(term).get("field"))
+            if field:
+                precondition_fields.add(field)
+        # State transition: from_field/to_field must exist
+        for key in ("from_field", "to_field", "state_field"):
+            field = _text(assertion.get(key))
+            if field:
+                precondition_fields.add(field)
+        # Generic assertion fields
+        field = _text(assertion.get("field"))
+        if field:
+            precondition_fields.add(field)
+
+    # Also check treatment_plan for body fields that reference the fixture
+    for step in _list(exp.get("treatment_plan")):
+        step_body = _dict(step).get("body")
+        if isinstance(step_body, dict):
+            for key, val in step_body.items():
+                # If body references the fixture target, the fixture must have that field
+                if isinstance(val, str) and f"{{{target}}}" in val:
+                    precondition_fields.add(key)
+
+    # Validate each precondition field exists in fixture response
+    for field in sorted(precondition_fields):
+        # Check top-level and nested (one level deep)
+        found = field in body
+        if not found:
+            # Check nested objects (e.g., response.data.field)
+            for nested_key in ("data", "result", "entity", "record"):
+                nested = body.get(nested_key)
+                if isinstance(nested, dict) and field in nested:
+                    found = True
+                    break
+        if not found:
+            failures.append({
+                "field": field,
+                "reason": "field_missing_in_fixture_response",
+                "target": target,
+            })
+
+    return failures
+
+
 def _auto_fixture_create_for_binding_target(
     target: str,
     binding: dict[str, Any],
@@ -519,40 +587,57 @@ def materialize_experiment_fixtures(
                             and _body_contains_scalar(setup_after.get("body"), value)
                         )
                         runtime_bindings[target] = value
-                        receipt.update({
-                            "status": "BOUND",
-                            "source_priority": "experiment_setup_response",
-                            "resolver_path": _text(fixture_setup.get("path")),
-                            "resolver_operation_ref": _text(fixture_setup.get("operation_ref")),
-                            "status_code": setup_status,
-                            "value_fingerprint": hashlib.sha256(
-                                str(value).encode("utf-8")
-                            ).hexdigest()[:12],
-                            "fixture_cleanup_status": "pending",
-                            "fixture_id": _text(binding.get("required_fixture_id")),
-                            "owner_actor_ref": _text(binding.get("fixture_owner_actor_ref")),
-                            "ownership_proof_status": (
-                                "OBSERVED"
-                                if ownership_observed
-                                else "NOT_REQUIRED"
-                                if not ownership_required
-                                else "INDETERMINATE"
-                            ),
-                            "ownership_proof_ref": _text(governed_setup.get("after_ref")),
-                        })
-                        _cleanup_ops = _list(fixture_setup.get("cleanup_operations"))
-                        _first_cleanup = _cleanup_ops[0] if len(_cleanup_ops) > 0 else {}
-                        pending_fixture_cleanups.append({
-                            "target": target,
-                            "value": value,
-                            "observation_path": observation_path,
-                            "cleanup": dict(_first_cleanup) if isinstance(_first_cleanup, dict) else {},
-                            "receipt": receipt,
-                            "actor_ref": fixture_actor_ref,
-                            "actor_identity": _text(fixture_actor.get("role") or fixture_actor_ref),
-                            "actor_token": fixture_token,
-                            "governed_setup": governed_setup,
-                        })
+                        # ── P0-8: Validate fixture preconditions ──
+                        _precond_failures = _validate_fixture_preconditions(
+                            exp, setup_write.get("body"), target
+                        )
+                        if _precond_failures:
+                            _fs_diag["blocked_reason"] = "fixture_precondition_failed"
+                            receipt.update({
+                                "status": "PRECONDITION_FAILED",
+                                "precondition_failures": _precond_failures,
+                            })
+                            fixture_receipts.append({
+                                "node_id": node_id,
+                                "kind": "fixture_precondition_validation",
+                                "status": "FAILED",
+                                "failures": _precond_failures,
+                            })
+                        else:
+                            receipt.update({
+                                "status": "BOUND",
+                                "source_priority": "experiment_setup_response",
+                                "resolver_path": _text(fixture_setup.get("path")),
+                                "resolver_operation_ref": _text(fixture_setup.get("operation_ref")),
+                                "status_code": setup_status,
+                                "value_fingerprint": hashlib.sha256(
+                                    str(value).encode("utf-8")
+                                ).hexdigest()[:12],
+                                "fixture_cleanup_status": "pending",
+                                "fixture_id": _text(binding.get("required_fixture_id")),
+                                "owner_actor_ref": _text(binding.get("fixture_owner_actor_ref")),
+                                "ownership_proof_status": (
+                                    "OBSERVED"
+                                    if ownership_observed
+                                    else "NOT_REQUIRED"
+                                    if not ownership_required
+                                    else "INDETERMINATE"
+                                ),
+                                "ownership_proof_ref": _text(governed_setup.get("after_ref")),
+                            })
+                            _cleanup_ops = _list(fixture_setup.get("cleanup_operations"))
+                            _first_cleanup = _cleanup_ops[0] if len(_cleanup_ops) > 0 else {}
+                            pending_fixture_cleanups.append({
+                                "target": target,
+                                "value": value,
+                                "observation_path": observation_path,
+                                "cleanup": dict(_first_cleanup) if isinstance(_first_cleanup, dict) else {},
+                                "receipt": receipt,
+                                "actor_ref": fixture_actor_ref,
+                                "actor_identity": _text(fixture_actor.get("role") or fixture_actor_ref),
+                                "actor_token": fixture_token,
+                                "governed_setup": governed_setup,
+                            })
             binding_materialization_receipts.append(receipt)
             if value in (None, "", [], {}):
                 if fixture_setup_accepted:
@@ -784,6 +869,23 @@ def materialize_experiment_fixtures(
                 "fixture_setup_dependency": _text(_dict(fixture).get("fixture_setup_dependency")),
             },
         ))
+    # ── P0-8: Fixture validation ──
+    # Verify that resolved bindings have actual values before proceeding.
+    _fixture_validation: dict[str, Any] = {
+        "total_bindings": len(runtime_bindings),
+        "empty_bindings": [],
+        "fixture_receipts_count": len(fixture_receipts),
+        "blocked_fixtures": [],
+        "status": "PASSED",
+    }
+    for _bk, _bv in runtime_bindings.items():
+        if _bv in (None, "", "auto_val", "1"):
+            _fixture_validation["empty_bindings"].append(_bk)
+    for _fr in fixture_receipts:
+        if isinstance(_fr, dict) and _text(_fr.get("status")).upper() == "BLOCKED":
+            _fixture_validation["blocked_fixtures"].append(_text(_fr.get("node_id") or _fr.get("target")))
+    if _fixture_validation["blocked_fixtures"]:
+        _fixture_validation["status"] = "DEGRADED"
     return {
         "status": "ready",
         "steps_out": steps_out,
@@ -793,4 +895,5 @@ def materialize_experiment_fixtures(
         "pending_fixture_cleanups": pending_fixture_cleanups,
         "cleanup_failures": cleanup_failures,
         "contract_evidence_receipts": contract_evidence_receipts,
+        "fixture_validation": _fixture_validation,
     }

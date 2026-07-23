@@ -911,11 +911,12 @@ def build_binding_plan(
         body_path = _text(row.get("target"))
         if token and body_path:
             body_placeholder_paths.setdefault(token, []).append(body_path)
-    placeholders = extract_placeholders(
+    path_placeholders = set(extract_placeholders(
         op.get("path"),
         op.get("operation_id"),
         *[str(p) for p in _list(op.get("parameters"))],
-    )
+    ))
+    placeholders = list(path_placeholders)
     # Body schema may declare path-like placeholders in examples
     for example in _list(op.get("examples")):
         if isinstance(example, dict):
@@ -1055,20 +1056,31 @@ def build_binding_plan(
                     })
                     continue
             # ── Best-effort fallback for unresolvable placeholders ──
-            # When no resolver, fixture setup, or credential binding exists,
-            # generate a test value instead of blocking. The API may reject
-            # the request, but an HTTP 4xx is more informative than a blocked
-            # obligation. Enterprise APIs often have path parameters that
-            # cannot be auto-resolved from documented endpoints.
-            generated_value = _generate_placeholder_test_value(name)
-            plan.append({
-                "target": name,
-                "status": "bound",
-                "source_priority": "test_value_generated",
-                "resolver_operations": [],
-                "value_fingerprint": _fingerprint(generated_value),
-                "generated_value": generated_value,
-            })
+            # PATH PARAMETERS: Block instead of generating placeholder.
+            # Using qb_test_* in path guarantees 404/400 failure - waste of resources.
+            # BODY PARAMETERS: Generate test value (API may accept or reject).
+            is_path_param = name in path_placeholders
+            if is_path_param:
+                # Block: path parameter with placeholder ID will definitely fail
+                plan.append({
+                    "target": name,
+                    "status": "blocked",
+                    "source_priority": "path_placeholder_unresolvable",
+                    "resolver_operations": [],
+                    "value_fingerprint": "",
+                    "blocked_reason": "PLACEHOLDER_PATH_PARAMETER_NOT_RESOLVED",
+                })
+            else:
+                # Body parameter: generate test value (may be accepted)
+                generated_value = _generate_placeholder_test_value(name)
+                plan.append({
+                    "target": name,
+                    "status": "bound",
+                    "source_priority": "test_value_generated",
+                    "resolver_operations": [],
+                    "value_fingerprint": _fingerprint(generated_value),
+                    "generated_value": generated_value,
+                })
 
     for actor in actors or []:
         if not isinstance(actor, dict):
@@ -1189,6 +1201,7 @@ def unresolved_placeholders(operation: dict[str, Any], plan: list[dict[str, Any]
         _text(item.get("target"))
         for item in plan
         if _text(item.get("status")) == "bound"
+        or _text(item.get("status")) == "blocked"  # blocked is terminal, not unresolved
         or (
             _text(item.get("status")) == "runtime_resolvable"
             and (
@@ -1198,6 +1211,15 @@ def unresolved_placeholders(operation: dict[str, Any], plan: list[dict[str, Any]
         )
     }
     return [name for name in needed if name not in bound]
+
+
+def blocked_binding_reasons(plan: list[dict[str, Any]]) -> list[str]:
+    """Return list of blocked_reason from binding plan items with status='blocked'."""
+    return [
+        _text(item.get("blocked_reason")) or f"blocked:{_text(item.get('target'))}"
+        for item in plan
+        if isinstance(item, dict) and _text(item.get("status")) == "blocked"
+    ]
 
 
 # ── Cross-entity relation chain resolver ─────────────────────────────────

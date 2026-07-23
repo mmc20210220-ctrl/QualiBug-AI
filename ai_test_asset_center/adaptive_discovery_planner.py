@@ -170,6 +170,37 @@ def score_obligation(
     )
 
 
+# ── P0-5: Type minimum guarantees ──
+# Business obligation types that must receive minimum execution budget
+# to prevent authorization/http_status from monopolizing the plan.
+DEFAULT_TYPE_MINIMUM_GUARANTEES: dict[str, int] = {
+    "causal_postcondition": 20,
+    "conservation": 10,
+    "state_transition": 10,
+    "state": 10,
+    "authorization": 10,
+    "idempotency": 5,
+    "cross_entity_consistency": 5,
+    "consistency": 5,
+    "isolation": 5,
+    "validation": 5,
+}
+
+# Reasons an obligation was not selected for the plan.
+NOT_IN_PLAN_REASONS = (
+    "BUDGET_EXHAUSTED",
+    "TYPE_QUOTA_EXHAUSTED",
+    "LOW_READINESS",
+    "DUPLICATE_SEMANTICS",
+    "LOW_CONFIDENCE",
+    "RISK_TOO_HIGH",
+    "DEPENDENCY_NOT_SELECTED",
+    "ENVIRONMENT_BLOCKED",
+    "ACCOUNT_UNAVAILABLE",
+    "OBSERVER_UNAVAILABLE",
+)
+
+
 def plan_obligation_round(
     obligations: list[dict[str, Any]],
     *,
@@ -180,6 +211,7 @@ def plan_obligation_round(
     historical_receipt_ids: list[str] | None = None,
     cold_start_reason: str = "NO_MATCHING_HISTORY",
     covered_keys: set[str] | None = None,
+    type_minimum_guarantees: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Select obligations that are compiled and maximize information gain."""
     if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0:
@@ -216,37 +248,58 @@ def plan_obligation_round(
         })
     ranked.sort(key=lambda item: (-item["score"], item["obligation_id"]))
 
-    # Family-fair + path-prefix-fair + operation-fair selection within the fixed
-    # budget: do not let abundant authorization/validation (or one API prefix /
-    # one operation) monopolize a cold-start window.
-    families_present: list[str] = []
-    seen_families: set[str] = set()
-    prefixes_present: list[str] = []
-    seen_prefixes: set[str] = set()
-    operations_present: list[str] = []
-    seen_operations: set[str] = set()
-    for item in ranked:
-        family = item["risk_family"]
-        if family and family not in seen_families:
-            seen_families.add(family)
-            families_present.append(family)
-        prefix = item["path_prefix"]
-        if prefix and prefix not in seen_prefixes:
-            seen_prefixes.add(prefix)
-            prefixes_present.append(prefix)
-        op_key = item["operation_key"]
-        if op_key and op_key not in seen_operations:
-            seen_operations.add(op_key)
-            operations_present.append(op_key)
-    family_soft_cap = max(1, budget // max(1, len(families_present)))
-    prefix_soft_cap = max(1, budget // max(1, len(prefixes_present) or 1))
-    operation_soft_cap = max(1, budget // max(1, len(operations_present) or 1))
+    # ── P0-5: Type minimum guarantee reservation ──
+    # Reserve budget slots for each business obligation type BEFORE the
+    # general diversity selection. This prevents authorization/validation
+    # from monopolizing the entire execution budget.
+    guarantees = dict(type_minimum_guarantees or DEFAULT_TYPE_MINIMUM_GUARANTEES)
+    # Scale guarantees down if budget is small
+    total_guaranteed = sum(guarantees.values())
+    if total_guaranteed > budget:
+        scale = budget / max(1, total_guaranteed)
+        guarantees = {k: max(1, int(v * scale)) for k, v in guarantees.items()}
 
     selected: list[dict[str, Any]] = []
     selected_ids: set[str] = set()
     family_counts: dict[str, int] = {}
     prefix_counts: dict[str, int] = {}
     operation_counts: dict[str, int] = {}
+
+    def _add_item(item: dict[str, Any]) -> None:
+        selected.append(item)
+        selected_ids.add(item["obligation_id"])
+        family = item["risk_family"]
+        if family:
+            family_counts[family] = family_counts.get(family, 0) + 1
+        prefix = item["path_prefix"]
+        if prefix:
+            prefix_counts[prefix] = prefix_counts.get(prefix, 0) + 1
+        op_key = item["operation_key"]
+        if op_key:
+            operation_counts[op_key] = operation_counts.get(op_key, 0) + 1
+
+    # Reserve minimum slots per type
+    for family_key, minimum in sorted(guarantees.items(), key=lambda kv: -kv[1]):
+        if len(selected) >= budget:
+            break
+        count = 0
+        for item in ranked:
+            if count >= minimum or len(selected) >= budget:
+                break
+            if item["obligation_id"] in selected_ids:
+                continue
+            if item["risk_family"] != family_key:
+                continue
+            _add_item(item)
+            count += 1
+
+    # Compute diversity sets and soft caps from ranked candidates
+    families_present = sorted({item["risk_family"] for item in ranked if item["risk_family"]})
+    prefixes_present = sorted({item["path_prefix"] for item in ranked if item["path_prefix"]})
+    operations_present = sorted({item["operation_key"] for item in ranked if item["operation_key"]})
+    family_soft_cap = max(2, budget // max(1, len(families_present)))
+    prefix_soft_cap = max(2, budget // max(1, len(prefixes_present)))
+    operation_soft_cap = max(2, budget // max(1, len(operations_present)))
 
     def _try_add(item: dict[str, Any], *, respect_soft_caps: bool = True) -> bool:
         oid = item["obligation_id"]
@@ -376,7 +429,18 @@ def plan_obligation_round(
         if op_key:
             operation_counts[op_key] = operation_counts.get(op_key, 0) + 1
 
-    pending = [item for item in ranked if item["obligation_id"] not in selected_ids]
+    # ── P0-5: Assign specific not-in-plan reasons ──
+    pending: list[dict[str, Any]] = []
+    for item in ranked:
+        if item["obligation_id"] in selected_ids:
+            continue
+        reason = "BUDGET_EXHAUSTED"
+        family = item["risk_family"]
+        if family and family_counts.get(family, 0) >= family_soft_cap:
+            reason = "TYPE_QUOTA_EXHAUSTED"
+        elif item["score"] < 0.01:
+            reason = "LOW_CONFIDENCE"
+        pending.append({**item, "not_in_plan_reason": reason})
     return {
         "schema_version": "qualibug.adaptive-obligation-plan.v1",
         "budget": budget,

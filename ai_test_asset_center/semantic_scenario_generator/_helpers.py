@@ -83,15 +83,11 @@ def _observation_read_candidates(write_path: str) -> list[str]:
     if len(parts) >= 2:
         prefix, resource = parts[0], parts[1].lower()
         synthetic = f"/{prefix}/{resource}/{{id}}"
-        if resource in {"inventory", "stock", "warehouse"}:
-            synthetic = f"/{prefix}/{resource}/{{sku}}"
         alternates.extend(alternate_collection_paths(synthetic))
-        # Action-style writes (/api/inventory/reserve) usually have no list at /api/inventory.
-        if len(parts) > 2 and resource in {"inventory", "stock", "warehouse"} and alternates:
+        # Action-style writes usually have no list at the bare collection path.
+        if len(parts) > 2 and alternates:
             def _obs_rank(candidate: str) -> tuple[int, int]:
-                last = candidate.rstrip("/").rsplit("/", 1)[-1].lower()
-                catalog = 0 if last in {"products", "product", "materials", "material", "items", "goods", "skus", "catalog"} else 1
-                return (catalog, candidate.count("/"))
+                return (candidate.count("/"), len(candidate))
             paths = sorted(alternates, key=_obs_rank) + paths
         else:
             paths.extend(alternates)

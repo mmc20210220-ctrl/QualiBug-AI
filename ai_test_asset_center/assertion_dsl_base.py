@@ -1,6 +1,7 @@
 """Restricted assertion DSL — no eval, typed operators only."""
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 from typing import Any
@@ -29,6 +30,9 @@ SUPPORTED_KINDS = {
     "concurrency_final_invariant",
     "eventual_consistency",
     "cross_surface_consistency",
+    "field_delta",
+    "cross_entity_consistency",
+    "limit_constraint",
 }
 
 
@@ -59,6 +63,364 @@ def _canonical(value: Any) -> str:
         separators=(",", ":"),
         default=str,
     )
+
+
+def _to_decimal(value: Any) -> Decimal | None:
+    """Safely convert a value to Decimal for precise numeric comparison."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return Decimal(str(value))
+        except (InvalidOperation, ValueError):
+            return None
+    if isinstance(value, str):
+        try:
+            return Decimal(value.strip())
+        except (InvalidOperation, ValueError):
+            return None
+    return None
+
+
+def _compute_aggregate(
+    values: list[Any],
+    aggregate_op: str,
+) -> Decimal | None:
+    """Compute an aggregate over a list of numeric values using Decimal."""
+    decimals = [d for d in (_to_decimal(v) for v in values) if d is not None]
+    if not decimals:
+        return None
+    op = _text(aggregate_op).upper()
+    if op == "SUM":
+        return sum(decimals, Decimal("0"))
+    if op == "COUNT":
+        return Decimal(len(decimals))
+    if op == "MIN":
+        return min(decimals)
+    if op == "MAX":
+        return max(decimals)
+    if op == "AVG":
+        return sum(decimals, Decimal("0")) / Decimal(len(decimals))
+    return None
+
+
+def _resolve_expression_side(
+    side: dict[str, Any],
+    observations: dict[str, Any],
+    phase: str,
+) -> Decimal | None:
+    """Resolve one side of a structured expression to a Decimal value.
+
+    phase: 'before' or 'after' — determines which snapshot to read from.
+    Supports both legacy format (aggregate/entity/field) and resolver format
+    (node_type/function/source_entity_name/value_field/field_id/entity_name).
+    """
+    if not isinstance(side, dict):
+        return None
+
+    # Normalize resolver format to legacy keys
+    node_type = _text(side.get("node_type"))
+    aggregate_op = _text(side.get("aggregate") or side.get("function"))
+    entity = _text(side.get("entity") or side.get("source_entity_name") or side.get("entity_name"))
+    entity_alias = _text(side.get("source_entity_alias") or side.get("entity_alias"))
+    field = _text(side.get("field") or side.get("value_field") or side.get("field_id"))
+
+    # Multi-entity aggregate
+    if aggregate_op or node_type == "aggregate":
+        if not aggregate_op:
+            aggregate_op = "SUM"
+        # Try multi_entity_state with entity name
+        mes = _dict(observations.get("multi_entity_state"))
+        # Try by entity name first, then by alias
+        for key in (entity, entity_alias):
+            if not key:
+                continue
+            entity_data = _dict(mes.get(key))
+            phase_data = entity_data.get(phase)
+            if isinstance(phase_data, list):
+                values = [
+                    item.get(field)
+                    for item in phase_data
+                    if isinstance(item, dict) and item.get(field) is not None
+                ]
+                if values:
+                    return _compute_aggregate(values, aggregate_op)
+        # Try "related" key (observer stores related entities under "related")
+        related_data = _dict(mes.get("related"))
+        phase_data = related_data.get(phase)
+        if isinstance(phase_data, list):
+            values = [
+                item.get(field)
+                for item in phase_data
+                if isinstance(item, dict) and item.get(field) is not None
+            ]
+            if values:
+                return _compute_aggregate(values, aggregate_op)
+        # Fallback: try related_entities in observations
+        related = _dict(observations.get("related_entities"))
+        for key in (entity, entity_alias):
+            if not key:
+                continue
+            rel_data = _dict(related.get(key))
+            rel_phase = rel_data.get(phase)
+            if isinstance(rel_phase, list):
+                values = [
+                    item.get(field)
+                    for item in rel_phase
+                    if isinstance(item, dict) and item.get(field) is not None
+                ]
+                if values:
+                    return _compute_aggregate(values, aggregate_op)
+        # Fallback: single value from before/after_values
+        bv = observations.get(f"{phase}_values")
+        if isinstance(bv, dict) and field in bv:
+            return _to_decimal(bv[field])
+        return None
+
+    # Single field reference (node_type == "field_ref" or has field)
+    if field:
+        mes = _dict(observations.get("multi_entity_state"))
+        # Try by entity name, alias, or "root"
+        for key in (entity, entity_alias, "root"):
+            if not key:
+                continue
+            entity_data = _dict(mes.get(key))
+            phase_data = entity_data.get(phase)
+            if isinstance(phase_data, dict) and field in phase_data:
+                return _to_decimal(phase_data[field])
+            if isinstance(phase_data, list) and phase_data:
+                first = phase_data[0] if phase_data else {}
+                if isinstance(first, dict) and field in first:
+                    return _to_decimal(first[field])
+        # Fallback: before/after_values
+        bv = observations.get(f"{phase}_values")
+        if isinstance(bv, dict) and field in bv:
+            return _to_decimal(bv[field])
+        # Fallback: before/after state body
+        state = observations.get(f"{phase}_state")
+        if isinstance(state, dict) and field in state:
+            return _to_decimal(state[field])
+    # Literal value
+    if "value" in side:
+        return _to_decimal(side["value"])
+    return None
+
+
+def _compare_decimals(
+    left: Decimal,
+    right: Decimal,
+    operator: str,
+) -> bool:
+    """Compare two Decimal values with the given operator."""
+    op = _text(operator).upper()
+    if op in ("EQ", "EQUALS", "=="):
+        return left == right
+    if op in ("LTE", "LE", "<="):
+        return left <= right
+    if op in ("GTE", "GE", ">="):
+        return left >= right
+    if op in ("LT", "<"):
+        return left < right
+    if op in ("GT", ">"):
+        return left > right
+    if op in ("NEQ", "NE", "!="):
+        return left != right
+    return False
+
+
+def _evaluate_structured_expression(
+    spec: dict[str, Any],
+    obs: dict[str, Any],
+) -> tuple[str, Any, Any]:
+    """Evaluate a structured expression from the resolver.
+
+    Returns (reason_code, expected, actual).
+    reason_code is empty string on successful evaluation (passed or violated).
+    """
+    expr = _dict(spec.get("structured_expression"))
+    expr_type = _text(spec.get("expression_type") or expr.get("type"))
+    operator = _text(expr.get("operator") or spec.get("operator"))
+    left_spec = _dict(expr.get("left"))
+    right_spec = _dict(expr.get("right"))
+
+    # ── State consistency / IMPLIES evaluation ──
+    if expr_type in ("state_consistency", "cross_entity_state"):
+        return _evaluate_state_implication(spec, obs)
+
+    # ── Compensation (Before/After delta) ──
+    if expr_type == "compensation":
+        return _evaluate_compensation(spec, obs)
+
+    # ── Numeric comparison (conservation / limit_constraint) ──
+    if not left_spec and not right_spec:
+        return ("UNRESOLVED_EXPRESSION_STRUCTURE", None, None)
+
+    # For limit_constraint: evaluate after-state only
+    # For conservation: compare before vs after
+    if expr_type == "limit_constraint" or operator in ("LTE", "GTE", "LT", "GT"):
+        left_val = _resolve_expression_side(left_spec, obs, "after")
+        right_val = _resolve_expression_side(right_spec, obs, "after")
+        if left_val is None or right_val is None:
+            # Try before phase as fallback
+            left_val = left_val if left_val is not None else _resolve_expression_side(left_spec, obs, "before")
+            right_val = right_val if right_val is not None else _resolve_expression_side(right_spec, obs, "before")
+        if left_val is None or right_val is None:
+            return ("EXPRESSION_VALUES_MISSING", {"operator": operator}, {"left": None, "right": None})
+        expected = {"operator": operator, "left": str(left_val), "right": str(right_val)}
+        actual = {"left": str(left_val), "right": str(right_val)}
+        passed = _compare_decimals(left_val, right_val, operator)
+        return ("" if passed else "LIMIT_CONSTRAINT_VIOLATED", expected, actual)
+
+    # Conservation: SUM(left) == SUM(right) or left unchanged
+    if operator in ("EQ", "EQUALS", "CONSERVATION"):
+        left_before = _resolve_expression_side(left_spec, obs, "before")
+        left_after = _resolve_expression_side(left_spec, obs, "after")
+        right_before = _resolve_expression_side(right_spec, obs, "before")
+        right_after = _resolve_expression_side(right_spec, obs, "after")
+        # If both sides resolve in after phase, compare them
+        if left_after is not None and right_after is not None:
+            expected = {"operator": "EQ", "left": str(left_after), "right": str(right_after)}
+            actual = {"left": str(left_after), "right": str(right_after)}
+            passed = left_after == right_after
+            return ("" if passed else "CONSERVATION_VIOLATED", expected, actual)
+        # If only left side resolves, check unchanged
+        if left_before is not None and left_after is not None:
+            expected = {"operator": "CONSERVATION", "before": str(left_before), "after": str(left_after)}
+            actual = {"before": str(left_before), "after": str(left_after)}
+            passed = left_before == left_after
+            return ("" if passed else "CONSERVATION_VIOLATED", expected, actual)
+        return ("EXPRESSION_VALUES_MISSING", {"operator": operator}, {"left_before": str(left_before) if left_before else None, "left_after": str(left_after) if left_after else None})
+
+    return ("UNSUPPORTED_EXPRESSION_OPERATOR", {"operator": operator}, None)
+
+
+def _evaluate_state_implication(
+    spec: dict[str, Any],
+    obs: dict[str, Any],
+) -> tuple[str, Any, Any]:
+    """Evaluate IMPLIES(root.condition → related.constraint)."""
+    expr = _dict(spec.get("structured_expression"))
+    condition = _dict(expr.get("condition") or expr.get("left"))
+    constraint = _dict(expr.get("constraint") or expr.get("right"))
+
+    # Get root entity state (after phase)
+    root_entity = _text(spec.get("root_entity") or condition.get("entity"))
+    root_field = _text(condition.get("field"))
+    root_value = _text(condition.get("value") or condition.get("equals"))
+
+    # Get related entity constraint
+    related_entity = _text(constraint.get("entity"))
+    related_field = _text(constraint.get("field"))
+    related_expected = _text(constraint.get("value") or constraint.get("equals"))
+    related_op = _text(constraint.get("operator") or "EQ")
+
+    # Try to get root state from observations
+    mes = _dict(obs.get("multi_entity_state"))
+    root_data = _dict(mes.get(root_entity))
+    root_after = root_data.get("after")
+
+    # Fallback: use after_state directly
+    if not root_after:
+        after_state = obs.get("after_state")
+        if isinstance(after_state, dict):
+            root_after = after_state
+
+    if not isinstance(root_after, dict) and not isinstance(root_after, list):
+        return ("CROSS_ENTITY_EVIDENCE_MISSING", {"root_entity": root_entity}, None)
+
+    # Check if condition is met
+    root_items = root_after if isinstance(root_after, list) else [root_after]
+    condition_met = False
+    for item in root_items:
+        if isinstance(item, dict) and root_field:
+            actual_val = _text(item.get(root_field))
+            if root_value and _state_token(actual_val) == _state_token(root_value):
+                condition_met = True
+                break
+
+    if not condition_met:
+        # Condition not met → implication is vacuously true
+        return ("", {"implication": "vacuously_true"}, {"condition_met": False})
+
+    # Condition met → check constraint on related entities
+    related_data = _dict(mes.get(related_entity))
+    related_after = related_data.get("after")
+    if not related_after:
+        # Try related_entities in observations
+        related_obs = _dict(obs.get("related_entities"))
+        rel_data = _dict(related_obs.get(related_entity))
+        related_after = rel_data.get("after")
+
+    if not related_after:
+        return ("CROSS_ENTITY_RELATED_EVIDENCE_MISSING", {"related_entity": related_entity}, {"condition_met": True})
+
+    related_items = related_after if isinstance(related_after, list) else [related_after]
+    violations = []
+    for item in related_items:
+        if not isinstance(item, dict):
+            continue
+        actual_val = _text(item.get(related_field))
+        if related_expected and _state_token(actual_val) != _state_token(related_expected):
+            violations.append({"actual": actual_val, "expected": related_expected})
+
+    expected = {"root_condition": f"{root_entity}.{root_field}={root_value}", "related_constraint": f"{related_entity}.{related_field}={related_expected}"}
+    actual = {"condition_met": True, "violations": violations}
+    if violations:
+        return ("CROSS_ENTITY_CONSISTENCY_VIOLATED", expected, actual)
+    return ("", expected, actual)
+
+
+def _evaluate_compensation(
+    spec: dict[str, Any],
+    obs: dict[str, Any],
+) -> tuple[str, Any, Any]:
+    """Evaluate Before/After delta compensation (e.g. release reserved amount)."""
+    expr = _dict(spec.get("structured_expression"))
+    target_field = _text(expr.get("field") or _dict(expr.get("left")).get("field"))
+    expected_direction = _text(expr.get("direction") or "increase")
+    entity = _text(expr.get("entity") or _dict(expr.get("left")).get("entity") or spec.get("root_entity"))
+
+    # Get before/after values
+    before_val = None
+    after_val = None
+
+    # Try multi_entity_state
+    mes = _dict(obs.get("multi_entity_state"))
+    entity_data = _dict(mes.get(entity))
+    before_state = entity_data.get("before")
+    after_state = entity_data.get("after")
+    if isinstance(before_state, dict) and target_field in before_state:
+        before_val = _to_decimal(before_state[target_field])
+    if isinstance(after_state, dict) and target_field in after_state:
+        after_val = _to_decimal(after_state[target_field])
+
+    # Fallback: before/after_values
+    if before_val is None:
+        bv = obs.get("before_values")
+        if isinstance(bv, dict) and target_field in bv:
+            before_val = _to_decimal(bv[target_field])
+    if after_val is None:
+        av = obs.get("after_values")
+        if isinstance(av, dict) and target_field in av:
+            after_val = _to_decimal(av[target_field])
+
+    if before_val is None or after_val is None:
+        return ("COMPENSATION_EVIDENCE_MISSING", {"field": target_field, "entity": entity}, {"before": None, "after": None})
+
+    delta = after_val - before_val
+    expected = {"field": target_field, "direction": expected_direction, "before": str(before_val)}
+    actual = {"before": str(before_val), "after": str(after_val), "delta": str(delta)}
+
+    if expected_direction in ("increase", "restore", "release"):
+        passed = delta > Decimal("0")
+    elif expected_direction in ("decrease", "deduct", "reserve"):
+        passed = delta < Decimal("0")
+    else:
+        passed = delta != Decimal("0")
+
+    if passed:
+        return ("", expected, actual)
+    return ("COMPENSATION_NOT_OBSERVED", expected, actual)
 
 
 def _assertion_receipt(
@@ -394,14 +756,16 @@ def evaluate_assertion(
             if operator not in {"eq", "neq", "gte", "lte"}:
                 raise ValueError(f"unsupported_operator:{operator}")
         if effective_kind == "conservation":
-            conservation_operator = _text(
-                _dict(spec.get("equation")).get("operator")
-                or "unchanged_sum"
-            )
-            if conservation_operator not in {"eq", "unchanged_sum"}:
-                raise ValueError(
-                    f"unsupported_conservation_operator:{conservation_operator}"
+            # Structured expressions bypass operator validation
+            if not _dict(spec.get("structured_expression")):
+                conservation_operator = _text(
+                    _dict(spec.get("equation")).get("operator")
+                    or "unchanged_sum"
                 )
+                if conservation_operator not in {"eq", "unchanged_sum"}:
+                    raise ValueError(
+                        f"unsupported_conservation_operator:{conservation_operator}"
+                    )
         if effective_kind == "idempotency_effect":
             int(spec.get("expected_effect_count", 1))
 
@@ -650,6 +1014,88 @@ def evaluate_assertion(
                     else:
                         passed = False
                         reason_code = "POSTCONDITION_STATE_NOT_CHANGED"
+        elif effective_kind == "field_delta":
+            # ── P0-5: field-level causal delta verification ──
+            # Compares before/after values for specific fields and verifies
+            # the observed delta matches the expected delta from the rule.
+            _fd_fields = _list(spec.get("fields") or spec.get("operands"))
+            _fd_before = obs.get("before_values")
+            _fd_after = obs.get("after_values")
+            if not isinstance(_fd_before, dict) or not isinstance(_fd_after, dict):
+                reason_code = "FIELD_DELTA_EVIDENCE_MISSING"
+            elif not _fd_fields:
+                reason_code = "FIELD_DELTA_NO_FIELDS_SPECIFIED"
+            else:
+                _fd_results: list[dict[str, Any]] = []
+                _fd_all_passed = True
+                for _fd_spec in _fd_fields:
+                    if not isinstance(_fd_spec, dict):
+                        continue
+                    _fd_field = _text(_fd_spec.get("field_id") or _fd_spec.get("field"))
+                    if not _fd_field:
+                        continue
+                    # Case-insensitive field lookup
+                    _fd_b_val = None
+                    _fd_a_val = None
+                    for _bk, _bv in _fd_before.items():
+                        if _state_token(_bk) == _state_token(_fd_field):
+                            _fd_b_val = _bv
+                            break
+                    for _ak, _av in _fd_after.items():
+                        if _state_token(_ak) == _state_token(_fd_field):
+                            _fd_a_val = _av
+                            break
+                    if _fd_b_val is None or _fd_a_val is None:
+                        _fd_results.append({"field": _fd_field, "result": "MISSING"})
+                        _fd_all_passed = False
+                        continue
+                    _fd_expected_delta = _fd_spec.get("expected_delta")
+                    _fd_expected_dir = _text(_fd_spec.get("expected_delta_direction"))
+                    _fd_expected_value = _fd_spec.get("expected_value")
+                    try:
+                        _fd_actual_delta = float(_fd_a_val) - float(_fd_b_val)
+                    except (TypeError, ValueError):
+                        # Non-numeric field: check value equality
+                        if _fd_expected_value is not None:
+                            _fd_match = _state_token(_fd_a_val) == _state_token(_fd_expected_value)
+                            _fd_results.append({
+                                "field": _fd_field,
+                                "before": _fd_b_val,
+                                "after": _fd_a_val,
+                                "expected_value": _fd_expected_value,
+                                "result": "PASS" if _fd_match else "FAIL",
+                            })
+                            if not _fd_match:
+                                _fd_all_passed = False
+                        else:
+                            _fd_results.append({"field": _fd_field, "result": "NON_NUMERIC"})
+                        continue
+                    _fd_field_passed = True
+                    if _fd_expected_delta is not None:
+                        _fd_field_passed = abs(_fd_actual_delta - float(_fd_expected_delta)) < 0.001
+                    elif _fd_expected_dir:
+                        if _fd_expected_dir == "increase":
+                            _fd_field_passed = _fd_actual_delta > 0
+                        elif _fd_expected_dir == "decrease":
+                            _fd_field_passed = _fd_actual_delta < 0
+                        elif _fd_expected_dir == "unchanged":
+                            _fd_field_passed = _fd_actual_delta == 0
+                    _fd_results.append({
+                        "field": _fd_field,
+                        "before": _fd_b_val,
+                        "after": _fd_a_val,
+                        "actual_delta": _fd_actual_delta,
+                        "expected_delta": _fd_expected_delta,
+                        "expected_direction": _fd_expected_dir or None,
+                        "result": "PASS" if _fd_field_passed else "FAIL",
+                    })
+                    if not _fd_field_passed:
+                        _fd_all_passed = False
+                expected = {"fields": _fd_fields}
+                actual = {"field_results": _fd_results}
+                passed = _fd_all_passed and bool(_fd_results)
+                if not passed and not reason_code:
+                    reason_code = "FIELD_DELTA_MISMATCH"
         elif effective_kind == "owner_tenant_visibility":
             required_values = (
                 obs.get("owner_can_access"),
@@ -680,75 +1126,119 @@ def evaluate_assertion(
                 }
                 passed = actual == expected
         elif effective_kind == "conservation":
-            equation = _dict(spec.get("equation"))
-            operator = _text(
-                equation.get("operator")
-                or "unchanged_sum"
-            )
-            terms = [
-                _text(item)
-                for item in _list(
-                    equation.get("terms")
-                    or equation.get("fields")
+            # ── Structured expression evaluation (multi-entity / aggregate) ──
+            if _dict(spec.get("structured_expression")):
+                _se_rc, _se_expected, _se_actual = _evaluate_structured_expression(spec, obs)
+                expected = _se_expected
+                actual = _se_actual
+                if _se_rc and "VIOLATED" in _se_rc:
+                    # Violation detected - test failure
+                    passed = False
+                    reason_code = _se_rc
+                elif _se_rc:
+                    # Missing evidence - indeterminate
+                    reason_code = _se_rc
+                else:
+                    # Determine pass/fail from the result
+                    if isinstance(_se_actual, dict):
+                        # Check for violations in actual
+                        _violations = _se_actual.get("violations")
+                        if isinstance(_violations, list) and _violations:
+                            passed = False
+                        elif "left" in _se_actual and "right" in _se_actual:
+                            # Numeric comparison already done in helper
+                            _left_d = _to_decimal(_se_actual.get("left"))
+                            _right_d = _to_decimal(_se_actual.get("right"))
+                            _op = _text(_dict(spec.get("structured_expression")).get("operator") or spec.get("operator"))
+                            if _left_d is not None and _right_d is not None:
+                                passed = _compare_decimals(_left_d, _right_d, _op) if _op else _left_d == _right_d
+                            else:
+                                passed = _se_actual.get("left") == _se_actual.get("right")
+                        elif "before" in _se_actual and "after" in _se_actual:
+                            passed = _se_actual.get("before") == _se_actual.get("after")
+                        elif "condition_met" in _se_actual:
+                            passed = not _se_actual.get("violations")
+                        elif "delta" in _se_actual:
+                            passed = _se_actual.get("delta") != "0"
+                        else:
+                            passed = True
+                    else:
+                        passed = True
+            elif _text(spec.get("compile_diagnostic")):
+                # ── P0-10: propagate compile-time diagnostic as reason code ──
+                reason_code = _text(spec.get("compile_diagnostic"))
+                expected = {"compile_diagnostic": reason_code}
+            else:
+                equation = _dict(spec.get("equation"))
+                operator = _text(
+                    equation.get("operator")
+                    or "unchanged_sum"
                 )
-                if _text(item)
-            ]
-            before_values = obs.get("before_values")
-            after_values = obs.get("after_values")
-            expected = {"operator": operator, "terms": terms}
-            if (
-                not isinstance(before_values, dict)
-                or not before_values
-                or not isinstance(after_values, dict)
-                or not after_values
-            ):
-                reason_code = "CONSERVATION_VALUES_MISSING"
-            elif operator == "eq":
-                actual = {
-                    "before": before_values,
-                    "after": after_values,
-                }
-                passed = before_values == after_values
-            elif operator == "unchanged_sum":
-                selected_terms = terms or sorted(
-                    set(before_values).intersection(after_values)
-                )
-                if not selected_terms or any(
-                    term not in before_values
-                    or term not in after_values
-                    or isinstance(before_values[term], bool)
-                    or isinstance(after_values[term], bool)
-                    or not isinstance(
-                        before_values[term],
-                        (int, float),
+                terms = [
+                    _text(item)
+                    for item in _list(
+                        equation.get("terms")
+                        or equation.get("fields")
                     )
-                    or not isinstance(
-                        after_values[term],
-                        (int, float),
-                    )
-                    for term in selected_terms
+                    if _text(item)
+                ]
+                before_values = obs.get("before_values")
+                after_values = obs.get("after_values")
+                expected = {"operator": operator, "terms": terms}
+                if (
+                    not isinstance(before_values, dict)
+                    or not before_values
+                    or not isinstance(after_values, dict)
+                    or not after_values
                 ):
                     reason_code = "CONSERVATION_VALUES_MISSING"
-                else:
-                    before_sum = sum(
-                        float(before_values[term])
-                        for term in selected_terms
-                    )
-                    after_sum = sum(
-                        float(after_values[term])
-                        for term in selected_terms
-                    )
+                elif operator == "eq":
                     actual = {
-                        "before_sum": before_sum,
-                        "after_sum": after_sum,
                         "before": before_values,
                         "after": after_values,
                     }
-                    passed = before_sum == after_sum
-            else:
-                raise ValueError(
-                    f"unsupported_conservation_operator:{operator}"
-                )
+                    passed = before_values == after_values
+                elif operator == "unchanged_sum":
+                    # ── Field grounding: empty terms is a compilation failure ──
+                    # Never fall back to generic sum of all numeric fields.
+                    if not terms:
+                        reason_code = "BLOCKED_EMPTY_CONSERVATION_TERMS"
+                    elif any(
+                        term not in before_values
+                        or term not in after_values
+                        or isinstance(before_values[term], bool)
+                        or isinstance(after_values[term], bool)
+                        or not isinstance(
+                            before_values[term],
+                            (int, float),
+                        )
+                        or not isinstance(
+                            after_values[term],
+                            (int, float),
+                        )
+                        for term in terms
+                    ):
+                        reason_code = "CONSERVATION_VALUES_MISSING"
+                    else:
+                        before_sum = sum(
+                            float(before_values[term])
+                            for term in terms
+                        )
+                        after_sum = sum(
+                            float(after_values[term])
+                            for term in terms
+                        )
+                        actual = {
+                            "before_sum": before_sum,
+                            "after_sum": after_sum,
+                            "before": before_values,
+                            "after": after_values,
+                        }
+                        passed = before_sum == after_sum
+                else:
+                    raise ValueError(
+                        f"unsupported_conservation_operator:{operator}"
+                    )
         elif effective_kind == "idempotency_effect":
             expected_count = spec.get("expected_effect_count", 1)
             expected = {"effect_count": expected_count}
@@ -806,6 +1296,46 @@ def evaluate_assertion(
             else:
                 actual = obs["surfaces_agree"]
                 passed = actual is True
+        elif effective_kind == "cross_entity_consistency":
+            # ── Cross-entity state consistency via structured expression ──
+            _ce_rc, _ce_expected, _ce_actual = _evaluate_structured_expression(spec, obs)
+            expected = _ce_expected
+            actual = _ce_actual
+            if _ce_rc and "VIOLATED" in _ce_rc:
+                # Violation detected - this is a test failure, not indeterminate
+                passed = False
+                reason_code = _ce_rc
+            elif _ce_rc:
+                # Missing evidence - indeterminate
+                reason_code = _ce_rc
+            else:
+                if isinstance(_ce_actual, dict) and _ce_actual.get("violations"):
+                    passed = False
+                else:
+                    passed = True
+        elif effective_kind == "limit_constraint":
+            # ── Aggregate limit constraint via structured expression ──
+            _lc_rc, _lc_expected, _lc_actual = _evaluate_structured_expression(spec, obs)
+            expected = _lc_expected
+            actual = _lc_actual
+            if _lc_rc and "VIOLATED" in _lc_rc:
+                # Violation detected - test failure
+                passed = False
+                reason_code = _lc_rc
+            elif _lc_rc:
+                # Missing evidence - indeterminate
+                reason_code = _lc_rc
+            else:
+                if isinstance(_lc_actual, dict) and "left" in _lc_actual and "right" in _lc_actual:
+                    _lc_left = _to_decimal(_lc_actual["left"])
+                    _lc_right = _to_decimal(_lc_actual["right"])
+                    _lc_op = _text(_dict(spec.get("structured_expression")).get("operator") or spec.get("operator"))
+                    if _lc_left is not None and _lc_right is not None:
+                        passed = _compare_decimals(_lc_left, _lc_right, _lc_op)
+                    else:
+                        reason_code = "LIMIT_CONSTRAINT_VALUES_MISSING"
+                else:
+                    passed = True
         else:
             expected = spec.get(
                 "expected",
@@ -926,6 +1456,8 @@ def materialize_assertion(
         "state": "state_transition",
         "conservation": "conservation",
         "validation": "http_status",
+        "causal": "field_delta",
+        "causal_postcondition": "field_delta",
     }
     if kind in family_map:
         spec["kind"] = family_map[kind]

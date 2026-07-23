@@ -10,6 +10,8 @@ from copy import deepcopy
 import re
 from typing import Any
 
+from .oracle_expression_resolver import resolve_expression_from_invariant
+
 
 def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
@@ -411,6 +413,7 @@ def compile_family_protocol(
     control_actor_ref: str,
     treatment_actor_ref: str,
     property_spec: dict[str, Any],
+    behavior_ir: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compile exact family steps or return one typed blocker."""
 
@@ -548,6 +551,32 @@ def compile_family_protocol(
             body = _minimal_body_from_schema(operation)
         expression = _dict(property_spec.get("expression"))
         equation = _dict(property_spec.get("equation") or expression.get("equation"))
+        # ── Multi-entity resolution: when equation is empty, resolve from raw + IR ──
+        resolved_expr: dict[str, Any] = {}
+        _resolve_error = ""
+        if not equation and behavior_ir:
+            _inv_for_resolve = {
+                "expression": expression,
+                "description": _text(property_spec.get("template") or expression.get("raw")),
+            }
+            _resolve_result = resolve_expression_from_invariant(_inv_for_resolve, behavior_ir, operation=operation)
+            if _resolve_result.get("status") == "RESOLVED":
+                resolved_expr = _resolve_result
+            else:
+                _resolve_error = _text(_resolve_result.get("error_code"))
+        _cons_assertion: dict[str, Any] = {
+            "kind": "conservation",
+            "equation": equation,
+        }
+        if resolved_expr:
+            _cons_assertion["structured_expression"] = resolved_expr.get("expression", {})
+            _cons_assertion["entity_bindings"] = resolved_expr.get("entity_bindings", {})
+            _cons_assertion["join_plan"] = resolved_expr.get("join_plan", {})
+            _cons_assertion["observer_requirements"] = resolved_expr.get("observer_requirements", [])
+            _cons_assertion["scope_fields"] = resolved_expr.get("scope_fields", [])
+            _cons_assertion["expression_type"] = resolved_expr.get("expression_type", "")
+        elif _resolve_error:
+            _cons_assertion["compile_diagnostic"] = _resolve_error
         return {
             "status": "COMPILED",
             "control_plan": [],
@@ -561,10 +590,11 @@ def compile_family_protocol(
                 "property_template": _text(property_spec.get("template")),
                 "invariant_ref": _text(property_spec.get("invariant_ref")),
             }],
-            "assertion": {
-                "kind": "conservation",
-                "equation": equation,
-            },
+            "observers": [
+                {"observer_id": "business_effect"},
+                {"observer_id": "entity_state"},
+            ],
+            "assertion": _cons_assertion,
         }
 
     if family == "temporal":
@@ -698,6 +728,14 @@ def compile_family_protocol(
         _expr = _dict(property_spec.get("expression"))
         _expr_kind = _text(_expr.get("kind"))
         if _expr_kind == "postcondition":
+            # ── P0-5: detect field_delta operands for causal verification ──
+            _pc_operands = _list(_expr.get("operands"))
+            _has_delta_fields = any(
+                isinstance(op, dict)
+                and (op.get("expected_delta") is not None or _text(op.get("expected_delta_direction")))
+                for op in _pc_operands
+            )
+            _assertion_kind = "field_delta" if _has_delta_fields else "postcondition"
             return {
                 "status": "COMPILED",
                 "control_plan": [],
@@ -711,12 +749,59 @@ def compile_family_protocol(
                 "observers": [
                     {"observer_id": "before_state"},
                     {"observer_id": "after_state"},
+                    {"observer_id": "entity_state"},
                 ],
                 "assertion": {
-                    "kind": "postcondition",
+                    "kind": _assertion_kind,
                     "operator": _text(_expr.get("operator")),
-                    "operands": _list(_expr.get("operands")),
+                    "operands": _pc_operands,
+                    "fields": _pc_operands if _has_delta_fields else [],
                 },
+            }
+        # ── Cross-entity state consistency: resolve from raw + IR when no explicit states ──
+        _state_from = _text(property_spec.get("from_state_ref"))
+        _state_to = _text(property_spec.get("to_state_ref"))
+        _state_resolved: dict[str, Any] = {}
+        if not _state_from and not _state_to and behavior_ir:
+            _state_inv = {
+                "expression": _expr,
+                "description": _text(
+                    property_spec.get("template")
+                    or _expr.get("raw")
+                    or property_spec.get("invariant_ref")
+                ),
+            }
+            _state_rr = resolve_expression_from_invariant(_state_inv, behavior_ir, operation=operation)
+            if _state_rr.get("status") == "RESOLVED":
+                _state_resolved = _state_rr
+        if _state_resolved:
+            _st_assertion: dict[str, Any] = {
+                "kind": "cross_entity_consistency",
+                "structured_expression": _state_resolved.get("expression", {}),
+                "entity_bindings": _state_resolved.get("entity_bindings", {}),
+                "join_plan": _state_resolved.get("join_plan", {}),
+                "observer_requirements": _state_resolved.get("observer_requirements", []),
+                "scope_fields": _state_resolved.get("scope_fields", []),
+                "expression_type": _state_resolved.get("expression_type", ""),
+                "root_entity": _state_resolved.get("root_entity", ""),
+                "related_entities": _state_resolved.get("related_entities", []),
+            }
+            return {
+                "status": "COMPILED",
+                "control_plan": [],
+                "treatment_plan": [{
+                    "step_id": "treatment_1",
+                    "actor_ref": treatment_actor_ref,
+                    "operation_ref": operation_ref,
+                    "intent": "cross_entity_state_treatment",
+                    "protocol_step": "treatment",
+                }],
+                "observers": [
+                    {"observer_id": "before_state"},
+                    {"observer_id": "after_state"},
+                    {"observer_id": "entity_state"},
+                ],
+                "assertion": _st_assertion,
             }
         return {
             "status": "COMPILED",
@@ -740,8 +825,8 @@ def compile_family_protocol(
             ],
             "assertion": {
                 "kind": "state_transition",
-                "from_state": _text(property_spec.get("from_state_ref")),
-                "to_state": _text(property_spec.get("to_state_ref")),
+                "from_state": _state_from,
+                "to_state": _state_to,
             },
         }
 
@@ -750,9 +835,12 @@ def compile_family_protocol(
         # When property_spec lacks an explicit equation but carries an expression
         # with operands (entity_ref + field), build a structured equation so the
         # entity_state observer can extract concrete before/after field values.
-        _cons_equation = _dict(property_spec.get("equation"))
+        _cons_expr = _dict(property_spec.get("expression"))
+        _cons_equation = _dict(
+            property_spec.get("equation")
+            or _cons_expr.get("equation")
+        )
         if not _cons_equation:
-            _cons_expr = _dict(property_spec.get("expression"))
             _cons_operands = _list(_cons_expr.get("operands"))
             _cons_terms: list[str] = []
             for _cons_op in _cons_operands:
@@ -766,10 +854,38 @@ def compile_family_protocol(
                     "operator": _text(_cons_expr.get("operator")) or "unchanged_sum",
                     "terms": _cons_terms,
                 }
+        # ── Multi-entity resolution fallback: operands empty → resolve from raw + IR ──
+        _cons_resolved: dict[str, Any] = {}
+        _cons_resolve_error = ""
+        if not _cons_equation and behavior_ir:
+            _cons_inv = {
+                "expression": _cons_expr,
+                "description": _text(
+                    property_spec.get("template")
+                    or _cons_expr.get("raw")
+                    or property_spec.get("invariant_ref")
+                ),
+            }
+            _cons_rr = resolve_expression_from_invariant(_cons_inv, behavior_ir, operation=operation)
+            if _cons_rr.get("status") == "RESOLVED":
+                _cons_resolved = _cons_rr
+            else:
+                _cons_resolve_error = _text(_cons_rr.get("error_code"))
         _cons_assertion: dict[str, Any] = {
             "kind": "conservation",
             "equation": _cons_equation or _dict(property_spec),
         }
+        if _cons_resolved:
+            _cons_assertion["structured_expression"] = _cons_resolved.get("expression", {})
+            _cons_assertion["entity_bindings"] = _cons_resolved.get("entity_bindings", {})
+            _cons_assertion["join_plan"] = _cons_resolved.get("join_plan", {})
+            _cons_assertion["observer_requirements"] = _cons_resolved.get("observer_requirements", [])
+            _cons_assertion["scope_fields"] = _cons_resolved.get("scope_fields", [])
+            _cons_assertion["expression_type"] = _cons_resolved.get("expression_type", "")
+            _cons_assertion["root_entity"] = _cons_resolved.get("root_entity", "")
+            _cons_assertion["related_entities"] = _cons_resolved.get("related_entities", [])
+        elif _cons_resolve_error:
+            _cons_assertion["compile_diagnostic"] = _cons_resolve_error
         # Add json_path hints when operands declare entity_ref + field
         _cons_expr = _dict(property_spec.get("expression"))
         _cons_operands = _list(_cons_expr.get("operands"))

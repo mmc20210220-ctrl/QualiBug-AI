@@ -37,6 +37,7 @@ from .discovery_mainline_contract import (
     build_mainline_run_contract,
 )
 from .experiment_compiler import compile_experiments
+from .experiment_runtime_support import run_environment_preflight
 from .fixture_dag import attach_fixture_dag_to_experiments
 from .obligation_compiler import compile_obligations_from_behavior_ir
 from .pipeline_slices import _auto_scale_slice_budget
@@ -662,6 +663,17 @@ def build_discovery_plan(
         consumed_budget=int(obligation_plan.get("selected_count") or 0),
         stop_condition=_text(obligation_plan.get("stop_condition")),
     )
+    # ── P0-3: Environment preflight ──
+    _runtime_contract = dict(_dict(inputs.campaign_context.get("_runtime_contract")))
+    _preflight_base_url = _text(_runtime_contract.get("approved_base_url"))
+    preflight_receipt = run_environment_preflight(
+        root=inputs.root,
+        project=inputs.project,
+        base_url=_preflight_base_url,
+        obligation_plan=obligation_plan,
+        behavior_ir=behavior_ir,
+        runtime_contract=_runtime_contract,
+    )
     agent_intent_plan = build_agent_intent_plan(
         obligation_plan,
         obligations=obligations,
@@ -693,6 +705,7 @@ def build_discovery_plan(
             "runtime_contract": dict(
                 _dict(inputs.campaign_context.get("_runtime_contract"))
             ),
+            "preflight_receipt": preflight_receipt,
             "knowledge_asset_id": _text(asset.get("asset_id")),
             # Immutable in-memory inputs for observation-driven round 2. These
             # private keys are intentionally excluded from product artifacts.
