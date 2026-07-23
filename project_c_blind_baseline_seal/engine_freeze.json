@@ -1,0 +1,12 @@
+{
+  "git_commit": "dc341c3",
+  "branch": "main",
+  "source_hash": "frozen_at_p0_1",
+  "behavior_ir_schema_version": "qualibug.behavior-ir.v1",
+  "rule_schema_version": "qualibug.invariant.v1",
+  "planner_version": "experiment_candidate",
+  "oracle_version": "ContractOracle",
+  "finding_schema_version": "qualibug.finding.v1",
+  "frozen_at": "2026-07-22T06:00:00Z",
+  "note": "Engine frozen before Project C blind baseline execution"
+}

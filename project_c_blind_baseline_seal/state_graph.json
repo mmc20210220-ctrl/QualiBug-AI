@@ -1,0 +1,240 @@
+{
+  "schema_version": "qualibug.state-graph.v1",
+  "states": [
+    {
+      "id": "bir_58dce160adb9764a",
+      "entity_ref": "document_workflow",
+      "name": "LEGAL_REVIEW",
+      "preconditions": [],
+      "invariant_refs": [],
+      "source_refs": [
+        {
+          "source_id": "runtime:prd:874fddbf3ca778ed95df218d",
+          "version": "",
+          "locator": "document_workflow:LEGAL_REVIEW",
+          "kind": "",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "src_f6008c42314fa17d",
+          "version": "",
+          "locator": "document_workflow:LEGAL_REVIEW",
+          "kind": "",
+          "quote_hash": ""
+        }
+      ],
+      "confidence": 0.75,
+      "derivation": "explicit",
+      "status": "accepted"
+    },
+    {
+      "id": "bir_cc6f3ddb19d88ec3",
+      "entity_ref": "document_workflow",
+      "name": "REJECTED",
+      "preconditions": [],
+      "invariant_refs": [],
+      "source_refs": [
+        {
+          "source_id": "runtime:prd:874fddbf3ca778ed95df218d",
+          "version": "",
+          "locator": "document_workflow:REJECTED",
+          "kind": "",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "src_f6008c42314fa17d",
+          "version": "",
+          "locator": "document_workflow:REJECTED",
+          "kind": "",
+          "quote_hash": ""
+        }
+      ],
+      "confidence": 0.75,
+      "derivation": "explicit",
+      "status": "accepted"
+    },
+    {
+      "id": "bir_09a588f2635ed2b4",
+      "entity_ref": "document_workflow",
+      "name": "DRAFT",
+      "preconditions": [],
+      "invariant_refs": [],
+      "source_refs": [
+        {
+          "source_id": "runtime:prd:874fddbf3ca778ed95df218d",
+          "version": "",
+          "locator": "document_workflow:DRAFT",
+          "kind": "",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "src_f6008c42314fa17d",
+          "version": "",
+          "locator": "document_workflow:DRAFT",
+          "kind": "",
+          "quote_hash": ""
+        }
+      ],
+      "confidence": 0.75,
+      "derivation": "explicit",
+      "status": "accepted"
+    },
+    {
+      "id": "bir_2d531d44e4560dcf",
+      "entity_ref": "document_workflow",
+      "name": "ACTIVE",
+      "preconditions": [],
+      "invariant_refs": [],
+      "source_refs": [
+        {
+          "source_id": "runtime:prd:874fddbf3ca778ed95df218d",
+          "version": "",
+          "locator": "document_workflow:ACTIVE",
+          "kind": "",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "src_f6008c42314fa17d",
+          "version": "",
+          "locator": "document_workflow:ACTIVE",
+          "kind": "",
+          "quote_hash": ""
+        }
+      ],
+      "confidence": 0.75,
+      "derivation": "explicit",
+      "status": "accepted"
+    },
+    {
+      "id": "bir_7dd5eec2e159566c",
+      "entity_ref": "document_workflow",
+      "name": "CANCELLED",
+      "preconditions": [],
+      "invariant_refs": [],
+      "source_refs": [
+        {
+          "source_id": "runtime:prd:874fddbf3ca778ed95df218d",
+          "version": "",
+          "locator": "document_workflow:CANCELLED",
+          "kind": "",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "src_f6008c42314fa17d",
+          "version": "",
+          "locator": "document_workflow:CANCELLED",
+          "kind": "",
+          "quote_hash": ""
+        }
+      ],
+      "confidence": 0.75,
+      "derivation": "explicit",
+      "status": "accepted"
+    },
+    {
+      "id": "bir_c397843205d83c46",
+      "entity_ref": "document_workflow",
+      "name": "PENDING",
+      "preconditions": [],
+      "invariant_refs": [],
+      "source_refs": [
+        {
+          "source_id": "runtime:prd:874fddbf3ca778ed95df218d",
+          "version": "",
+          "locator": "document_workflow:PENDING",
+          "kind": "",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "src_f6008c42314fa17d",
+          "version": "",
+          "locator": "document_workflow:PENDING",
+          "kind": "",
+          "quote_hash": ""
+        }
+      ],
+      "confidence": 0.75,
+      "derivation": "explicit",
+      "status": "accepted"
+    },
+    {
+      "id": "bir_aa467adfba77fc31",
+      "entity_ref": "document_workflow",
+      "name": "SUBMITTED",
+      "preconditions": [],
+      "invariant_refs": [],
+      "source_refs": [
+        {
+          "source_id": "runtime:prd:874fddbf3ca778ed95df218d",
+          "version": "",
+          "locator": "document_workflow:SUBMITTED",
+          "kind": "",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "src_f6008c42314fa17d",
+          "version": "",
+          "locator": "document_workflow:SUBMITTED",
+          "kind": "",
+          "quote_hash": ""
+        }
+      ],
+      "confidence": 0.75,
+      "derivation": "explicit",
+      "status": "accepted"
+    },
+    {
+      "id": "bir_9889006f3b81ca3d",
+      "entity_ref": "document_workflow",
+      "name": "ACCEPTED",
+      "preconditions": [],
+      "invariant_refs": [],
+      "source_refs": [
+        {
+          "source_id": "runtime:prd:874fddbf3ca778ed95df218d",
+          "version": "",
+          "locator": "document_workflow:ACCEPTED",
+          "kind": "",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "src_f6008c42314fa17d",
+          "version": "",
+          "locator": "document_workflow:ACCEPTED",
+          "kind": "",
+          "quote_hash": ""
+        }
+      ],
+      "confidence": 0.75,
+      "derivation": "explicit",
+      "status": "accepted"
+    },
+    {
+      "id": "bir_d5653e43df79c921",
+      "entity_ref": "document_workflow",
+      "name": "FINANCE_APPROVED",
+      "preconditions": [],
+      "invariant_refs": [],
+      "source_refs": [
+        {
+          "source_id": "runtime:prd:874fddbf3ca778ed95df218d",
+          "version": "",
+          "locator": "document_workflow:FINANCE_APPROVED",
+          "kind": "",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "src_f6008c42314fa17d",
+          "version": "",
+          "locator": "document_workflow:FINANCE_APPROVED",
+          "kind": "",
+          "quote_hash": ""
+        }
+      ],
+      "confidence": 0.75,
+      "derivation": "explicit",
+      "status": "accepted"
+    }
+  ],
+  "state_transitions": []
+}

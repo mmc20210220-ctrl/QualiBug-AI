@@ -1,3 +1,29 @@
+"""Run scan with new project name."""
+import requests
+import json
+import sys
+import time
+
+print(f"Starting scan at {time.strftime('%H:%M:%S')}...")
+sys.stdout.flush()
+
+r = requests.post(
+    "http://127.0.0.1:8088/api/v1/scan",
+    json={
+        "project": "qb_ecommerce_observer_test",
+        "root": "d:/QualiBug-AI/QualiBug-AI-main/.tmp_single_ecommerce_suite",
+    },
+    timeout=1800,
+)
+
+print(f"Status: {r.status_code}")
+print(f"Response size: {len(r.text):,} bytes")
+print(f"Response preview: {r.text[:500]}")
+
+# Save full response
+with open("project_c_observer_test_result.json", "w", encoding="utf-8") as f:
+    f.write(r.text)
+print("Saved to project_c_observer_test_result.json")
 """Trigger a scan and report results."""
 import requests
 import json

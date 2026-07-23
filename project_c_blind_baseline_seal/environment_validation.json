@@ -1,0 +1,24 @@
+{
+  "schema_version": "qualibug.environment-validation.v1",
+  "backend_url": "http://localhost:8000",
+  "backend_health": "/health -> 200 OK",
+  "database": "postgresql://localhost:5432/contractflow",
+  "api_prefix": "/api/v1",
+  "test_accounts": 10,
+  "tenants": [
+    "acme",
+    "globex"
+  ],
+  "roles": [
+    "admin",
+    "legal",
+    "finance",
+    "requester",
+    "project_manager",
+    "auditor",
+    "vendor"
+  ],
+  "write_allowed": true,
+  "environment_type": "test",
+  "validated_at": "2026-07-22T14:41:36.142581+00:00"
+}

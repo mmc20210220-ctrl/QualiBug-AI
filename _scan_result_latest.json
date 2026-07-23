@@ -1,4 +1,0 @@
-{
-  "success": false,
-  "error": "v12_pipeline_failed:CanonicalDefectRegistryError:CANONICAL_IDENTITY_INCOMPLETE:assertion.observer_receipt_ids"
-}

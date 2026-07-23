@@ -1,0 +1,11 @@
+{
+  "run_id": "PROJECT_C_POST_TUNING_ORACLE_V1_FINAL",
+  "git_commit": "frozen_workspace",
+  "source_hash": "89c725ec14e49505a79a304afb7e0b0a5fdacb90fb2df85dae58934541484a0e",
+  "project_id": "contractflow_project_c",
+  "environment_id": "local_test_8000",
+  "tenant_id": "acme",
+  "llm_provider": "none",
+  "llm_model": "none_required",
+  "started_at": "2026-07-23T11:14:56Z"
+}

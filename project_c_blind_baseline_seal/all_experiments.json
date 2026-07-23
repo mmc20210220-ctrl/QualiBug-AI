@@ -1,0 +1,1927 @@
+{
+  "schema_version": "qualibug.all-experiments.v1",
+  "compiled_count": 3807,
+  "blocked_count": 820,
+  "block_reason_counts": {
+    "BLOCKED_MISSING_FIXTURE": 9,
+    "BLOCKED_MISSING_OPERATION": 156,
+    "MISSING_PRIMARY_OPERATION": 654,
+    "BLOCKED_NON_REVERSIBLE_WRITE": 1
+  },
+  "experiment_count": 3807,
+  "sample_experiments": [
+    {
+      "schema_version": "qualibug.experiment.v1",
+      "experiment_id": "exp_5b81f20cabb916ae2ce3",
+      "obligation_id": "obl_2dec2a2297b3dbf8ba39",
+      "policy_version": "v1.0.0-baseline",
+      "risk_family": "authorization",
+      "control_plan": [],
+      "treatment_plan": [
+        {
+          "step_id": "treatment_1",
+          "actor_ref": "bir_b96502994a8f27aa",
+          "operation_ref": "bir_4f51351be2c9910b",
+          "intent": "permitted_operation_invocation",
+          "protocol_step": "permitted_invocation",
+          "property_template": "permitted_operation_invocation",
+          "path": "/api/v1/contracts"
+        }
+      ],
+      "binding_plan": [
+        {
+          "target": "actor:bir_b96502994a8f27aa",
+          "status": "bound",
+          "source_priority": "runtime_actor_secret_ref",
+          "secret_ref": "secret_ref:test_accounts:acme-vendor",
+          "value_fingerprint": "95f691c8e1ea"
+        }
+      ],
+      "setup_plan": [
+        {
+          "action": "resolve_bindings",
+          "bindings": [
+            "actor:bir_b96502994a8f27aa"
+          ]
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "assert_authorization",
+          "kind": "http_status_class",
+          "template": "permitted_operation_invocation",
+          "expected_from": "source_property",
+          "property": {
+            "template": "permitted_operation_invocation",
+            "actor_ref": "bir_b96502994a8f27aa",
+            "control_actor_ref": "bir_b96502994a8f27aa",
+            "treatment_actor_ref": "bir_b96502994a8f27aa",
+            "operation_ref": "bir_4f51351be2c9910b",
+            "operation_path_prefix": "/api/v1"
+          },
+          "require_control": false,
+          "expected_class": 2,
+          "compare_field": "status_code"
+        }
+      ],
+      "observers": [
+        {
+          "observer_id": "http_response",
+          "surface": "http_api",
+          "adapter": "http_api",
+          "receipt_schema": "qualibug.observer-receipt.v1",
+          "required_status": "OBSERVED"
+        },
+        {
+          "observer_id": "actor_identity",
+          "surface": "identity_context",
+          "adapter": "http_api",
+          "receipt_schema": "qualibug.observer-receipt.v1",
+          "required_status": "OBSERVED"
+        }
+      ],
+      "async_observation_policy": {
+        "mode": "bounded_backoff"
+      },
+      "cleanup_plan": [
+        {
+          "action": "auto_delete_created_resource",
+          "mode": "response_bound_delete",
+          "operation_ref": "bir_4f51351be2c9910b",
+          "path": "/api/v1/contracts/{created_resource_id}",
+          "method": "DELETE",
+          "runtime_response_binding_required": true,
+          "_auto_generated": true
+        }
+      ],
+      "safety_contract": {
+        "environment_type": "test",
+        "non_production_required": true,
+        "governed_write": true,
+        "cleanup_not_required": false
+      },
+      "source_refs": [
+        {
+          "source_id": "api_spec",
+          "version": "",
+          "locator": "POST /api/v1/contracts",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "src_68e5e273aaf8f71e",
+          "version": "",
+          "locator": "POST /api/v1/contracts",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "submitted_api_spec",
+          "version": "",
+          "locator": "POST /api/v1/contracts",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "runtime_actors",
+          "version": "",
+          "locator": "vendor:acme-vendor",
+          "kind": "runtime_actor",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "knowledge_relationships",
+          "version": "",
+          "locator": "rule:src_68e5e273aaf8f71e:45->markdown_api:POST:/api/v1/contracts",
+          "kind": "rule_to_interface_permit",
+          "quote_hash": ""
+        }
+      ],
+      "compile_receipt": {
+        "status": "COMPILED",
+        "reason_code": "",
+        "unresolved_placeholders": 0,
+        "control_present": false,
+        "treatment_present": true,
+        "cleanup_present": true
+      },
+      "fixture_dag": {
+        "schema_version": "qualibug.fixture-dag.v1",
+        "status": "READY",
+        "experiment_id": "exp_5b81f20cabb916ae2ce3",
+        "nodes": [
+          {
+            "node_id": "fix_a053096feff2ac76",
+            "kind": "actor_context",
+            "actor_ref": "bir_b96502994a8f27aa",
+            "secret_ref": "secret_ref:test_accounts:acme-vendor",
+            "requires_read_proof": false
+          },
+          {
+            "node_id": "fix_27729fe9da157e98",
+            "kind": "setup_step",
+            "action": "resolve_bindings",
+            "requires_read_proof": true,
+            "constructible": true
+          }
+        ],
+        "edges": [],
+        "setup_order": [
+          "fix_a053096feff2ac76",
+          "fix_27729fe9da157e98"
+        ],
+        "cleanup_order": [
+          "fix_27729fe9da157e98"
+        ],
+        "blocked_reasons": [],
+        "read_proof_required_count": 1,
+        "rules": {
+          "low_priority_must_not_override_high": true,
+          "cleanup_reverse_order": true,
+          "setup_rejected_is_not_cleanup_failure": true,
+          "no_fake_ids": true
+        }
+      }
+    },
+    {
+      "schema_version": "qualibug.experiment.v1",
+      "experiment_id": "exp_5316ef48a79c95a812d9",
+      "obligation_id": "obl_013a3616e4e213775855",
+      "policy_version": "v1.0.0-baseline",
+      "risk_family": "authorization",
+      "control_plan": [],
+      "treatment_plan": [
+        {
+          "step_id": "treatment_1",
+          "actor_ref": "bir_b96502994a8f27aa",
+          "operation_ref": "bir_0886b6b0a15f1c45",
+          "intent": "permitted_operation_invocation",
+          "protocol_step": "permitted_invocation",
+          "property_template": "permitted_operation_invocation",
+          "path": "/api/v1/contracts/qb_test_125914978470"
+        }
+      ],
+      "binding_plan": [
+        {
+          "target": "contractId",
+          "target_path": "/api/v1/contracts/{contractId}",
+          "status": "runtime_resolvable",
+          "source_priority": "same_actor_list_read",
+          "resolver_operations": [
+            {
+              "operation_ref": "bir_b4cb6f097d74c36d",
+              "method": "GET",
+              "path": "/api/v1/contracts"
+            }
+          ],
+          "value_fingerprint": ""
+        },
+        {
+          "target": "actor:bir_b96502994a8f27aa",
+          "status": "bound",
+          "source_priority": "runtime_actor_secret_ref",
+          "secret_ref": "secret_ref:test_accounts:acme-vendor",
+          "value_fingerprint": "95f691c8e1ea"
+        }
+      ],
+      "setup_plan": [
+        {
+          "action": "resolve_bindings",
+          "bindings": [
+            "contractId",
+            "actor:bir_b96502994a8f27aa"
+          ]
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "assert_authorization",
+          "kind": "http_status_class",
+          "template": "permitted_operation_invocation",
+          "expected_from": "source_property",
+          "property": {
+            "template": "permitted_operation_invocation",
+            "actor_ref": "bir_b96502994a8f27aa",
+            "control_actor_ref": "bir_b96502994a8f27aa",
+            "treatment_actor_ref": "bir_b96502994a8f27aa",
+            "operation_ref": "bir_0886b6b0a15f1c45",
+            "operation_path_prefix": "/api/v1"
+          },
+          "require_control": false,
+          "expected_class": 2,
+          "compare_field": "status_code"
+        }
+      ],
+      "observers": [
+        {
+          "observer_id": "http_response",
+          "surface": "http_api",
+          "adapter": "http_api",
+          "receipt_schema": "qualibug.observer-receipt.v1",
+          "required_status": "OBSERVED"
+        },
+        {
+          "observer_id": "actor_identity",
+          "surface": "identity_context",
+          "adapter": "http_api",
+          "receipt_schema": "qualibug.observer-receipt.v1",
+          "required_status": "OBSERVED"
+        }
+      ],
+      "async_observation_policy": {
+        "mode": "bounded_backoff"
+      },
+      "cleanup_plan": [],
+      "safety_contract": {
+        "environment_type": "test",
+        "non_production_required": true,
+        "governed_write": false,
+        "cleanup_not_required": false
+      },
+      "source_refs": [
+        {
+          "source_id": "api_spec",
+          "version": "",
+          "locator": "GET /api/v1/contracts/:contractId",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "src_68e5e273aaf8f71e",
+          "version": "",
+          "locator": "GET /api/v1/contracts/:contractId",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "submitted_api_spec",
+          "version": "",
+          "locator": "GET /api/v1/contracts/:contractId",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "runtime_actors",
+          "version": "",
+          "locator": "vendor:acme-vendor",
+          "kind": "runtime_actor",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "knowledge_relationships",
+          "version": "",
+          "locator": "rule:src_68e5e273aaf8f71e:45->markdown_api:GET:/api/v1/contracts/:contractId",
+          "kind": "rule_to_interface_permit",
+          "quote_hash": ""
+        }
+      ],
+      "compile_receipt": {
+        "status": "COMPILED",
+        "reason_code": "",
+        "unresolved_placeholders": 0,
+        "control_present": false,
+        "treatment_present": true,
+        "cleanup_present": true
+      },
+      "fixture_dag": {
+        "schema_version": "qualibug.fixture-dag.v1",
+        "status": "READY",
+        "experiment_id": "exp_5316ef48a79c95a812d9",
+        "nodes": [
+          {
+            "node_id": "fix_a053096feff2ac76",
+            "kind": "actor_context",
+            "actor_ref": "bir_b96502994a8f27aa",
+            "secret_ref": "secret_ref:test_accounts:acme-vendor",
+            "requires_read_proof": false
+          },
+          {
+            "node_id": "fix_ac09462f6f7b988e",
+            "kind": "runtime_read_binding",
+            "target": "contractId",
+            "source_priority": "same_actor_list_read",
+            "resolver_operations": [
+              {
+                "operation_ref": "bir_b4cb6f097d74c36d",
+                "method": "GET",
+                "path": "/api/v1/contracts"
+              }
+            ],
+            "requires_read_proof": true,
+            "constructible": true
+          },
+          {
+            "node_id": "fix_27729fe9da157e98",
+            "kind": "setup_step",
+            "action": "resolve_bindings",
+            "requires_read_proof": true,
+            "constructible": true
+          }
+        ],
+        "edges": [],
+        "setup_order": [
+          "fix_a053096feff2ac76",
+          "fix_ac09462f6f7b988e",
+          "fix_27729fe9da157e98"
+        ],
+        "cleanup_order": [
+          "fix_27729fe9da157e98"
+        ],
+        "blocked_reasons": [],
+        "read_proof_required_count": 2,
+        "rules": {
+          "low_priority_must_not_override_high": true,
+          "cleanup_reverse_order": true,
+          "setup_rejected_is_not_cleanup_failure": true,
+          "no_fake_ids": true
+        }
+      }
+    },
+    {
+      "schema_version": "qualibug.experiment.v1",
+      "experiment_id": "exp_c67f4d45fac60b566eb3",
+      "obligation_id": "obl_545895725b3841281515",
+      "policy_version": "v1.0.0-baseline",
+      "risk_family": "authorization",
+      "control_plan": [],
+      "treatment_plan": [
+        {
+          "step_id": "treatment_1",
+          "actor_ref": "bir_b96502994a8f27aa",
+          "operation_ref": "bir_a845ab3314b8386d",
+          "intent": "permitted_operation_invocation",
+          "protocol_step": "permitted_invocation",
+          "property_template": "permitted_operation_invocation",
+          "path": "/api/v1/contracts/qb_test_149818388817"
+        }
+      ],
+      "binding_plan": [
+        {
+          "target": "contractId",
+          "target_path": "/api/v1/contracts/{contractId}",
+          "status": "runtime_resolvable",
+          "source_priority": "same_actor_list_read",
+          "resolver_operations": [
+            {
+              "operation_ref": "bir_b4cb6f097d74c36d",
+              "method": "GET",
+              "path": "/api/v1/contracts"
+            }
+          ],
+          "value_fingerprint": ""
+        },
+        {
+          "target": "actor:bir_b96502994a8f27aa",
+          "status": "bound",
+          "source_priority": "runtime_actor_secret_ref",
+          "secret_ref": "secret_ref:test_accounts:acme-vendor",
+          "value_fingerprint": "95f691c8e1ea"
+        }
+      ],
+      "setup_plan": [
+        {
+          "action": "resolve_bindings",
+          "bindings": [
+            "contractId",
+            "actor:bir_b96502994a8f27aa"
+          ]
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "assert_authorization",
+          "kind": "http_status_class",
+          "template": "permitted_operation_invocation",
+          "expected_from": "source_property",
+          "property": {
+            "template": "permitted_operation_invocation",
+            "actor_ref": "bir_b96502994a8f27aa",
+            "control_actor_ref": "bir_b96502994a8f27aa",
+            "treatment_actor_ref": "bir_b96502994a8f27aa",
+            "operation_ref": "bir_a845ab3314b8386d",
+            "operation_path_prefix": "/api/v1"
+          },
+          "require_control": false,
+          "expected_class": 2,
+          "compare_field": "status_code"
+        }
+      ],
+      "observers": [
+        {
+          "observer_id": "http_response",
+          "surface": "http_api",
+          "adapter": "http_api",
+          "receipt_schema": "qualibug.observer-receipt.v1",
+          "required_status": "OBSERVED"
+        },
+        {
+          "observer_id": "actor_identity",
+          "surface": "identity_context",
+          "adapter": "http_api",
+          "receipt_schema": "qualibug.observer-receipt.v1",
+          "required_status": "OBSERVED"
+        }
+      ],
+      "async_observation_policy": {
+        "mode": "bounded_backoff"
+      },
+      "cleanup_plan": [
+        {
+          "action": "restore_before_snapshot",
+          "mode": "snapshot_restore",
+          "operation_ref": "bir_a845ab3314b8386d",
+          "path": "/api/v1/contracts/{contractId}",
+          "method": "PATCH",
+          "runtime_response_binding_required": true
+        }
+      ],
+      "safety_contract": {
+        "environment_type": "test",
+        "non_production_required": true,
+        "governed_write": true,
+        "cleanup_not_required": false
+      },
+      "source_refs": [
+        {
+          "source_id": "api_spec",
+          "version": "",
+          "locator": "PATCH /api/v1/contracts/:contractId",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "src_68e5e273aaf8f71e",
+          "version": "",
+          "locator": "PATCH /api/v1/contracts/:contractId",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "submitted_api_spec",
+          "version": "",
+          "locator": "PATCH /api/v1/contracts/:contractId",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "runtime_actors",
+          "version": "",
+          "locator": "vendor:acme-vendor",
+          "kind": "runtime_actor",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "knowledge_relationships",
+          "version": "",
+          "locator": "rule:src_68e5e273aaf8f71e:45->markdown_api:PATCH:/api/v1/contracts/:contractId",
+          "kind": "rule_to_interface_permit",
+          "quote_hash": ""
+        }
+      ],
+      "compile_receipt": {
+        "status": "COMPILED",
+        "reason_code": "",
+        "unresolved_placeholders": 0,
+        "control_present": false,
+        "treatment_present": true,
+        "cleanup_present": true
+      },
+      "fixture_dag": {
+        "schema_version": "qualibug.fixture-dag.v1",
+        "status": "READY",
+        "experiment_id": "exp_c67f4d45fac60b566eb3",
+        "nodes": [
+          {
+            "node_id": "fix_a053096feff2ac76",
+            "kind": "actor_context",
+            "actor_ref": "bir_b96502994a8f27aa",
+            "secret_ref": "secret_ref:test_accounts:acme-vendor",
+            "requires_read_proof": false
+          },
+          {
+            "node_id": "fix_ac09462f6f7b988e",
+            "kind": "runtime_read_binding",
+            "target": "contractId",
+            "source_priority": "same_actor_list_read",
+            "resolver_operations": [
+              {
+                "operation_ref": "bir_b4cb6f097d74c36d",
+                "method": "GET",
+                "path": "/api/v1/contracts"
+              }
+            ],
+            "requires_read_proof": true,
+            "constructible": true
+          },
+          {
+            "node_id": "fix_27729fe9da157e98",
+            "kind": "setup_step",
+            "action": "resolve_bindings",
+            "requires_read_proof": true,
+            "constructible": true
+          }
+        ],
+        "edges": [],
+        "setup_order": [
+          "fix_a053096feff2ac76",
+          "fix_ac09462f6f7b988e",
+          "fix_27729fe9da157e98"
+        ],
+        "cleanup_order": [
+          "fix_27729fe9da157e98"
+        ],
+        "blocked_reasons": [],
+        "read_proof_required_count": 2,
+        "rules": {
+          "low_priority_must_not_override_high": true,
+          "cleanup_reverse_order": true,
+          "setup_rejected_is_not_cleanup_failure": true,
+          "no_fake_ids": true
+        }
+      }
+    },
+    {
+      "schema_version": "qualibug.experiment.v1",
+      "experiment_id": "exp_b5737dfec24de969a274",
+      "obligation_id": "obl_e644fb500645c5736249",
+      "policy_version": "v1.0.0-baseline",
+      "risk_family": "authorization",
+      "control_plan": [],
+      "treatment_plan": [
+        {
+          "step_id": "treatment_1",
+          "actor_ref": "bir_a024c8cd8b3e5dc9",
+          "operation_ref": "bir_0db0ba442a1f5550",
+          "intent": "permitted_operation_invocation",
+          "protocol_step": "permitted_invocation",
+          "property_template": "permitted_operation_invocation",
+          "path": "/api/v1/contracts/:contractId/legal-approve"
+        }
+      ],
+      "binding_plan": [
+        {
+          "target": "contractId",
+          "target_path": "/api/v1/contracts/{contractId}/legal-approve",
+          "status": "runtime_resolvable",
+          "source_priority": "same_actor_list_read",
+          "resolver_operations": [
+            {
+              "operation_ref": "bir_b4cb6f097d74c36d",
+              "method": "GET",
+              "path": "/api/v1/contracts"
+            }
+          ],
+          "value_fingerprint": ""
+        },
+        {
+          "target": "actor:bir_a024c8cd8b3e5dc9",
+          "status": "bound",
+          "source_priority": "runtime_actor_secret_ref",
+          "secret_ref": "secret_ref:test_accounts:globex-admin",
+          "value_fingerprint": "296020e73733"
+        }
+      ],
+      "setup_plan": [
+        {
+          "action": "resolve_bindings",
+          "bindings": [
+            "contractId",
+            "actor:bir_a024c8cd8b3e5dc9"
+          ]
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "assert_authorization",
+          "kind": "http_status_class",
+          "template": "permitted_operation_invocation",
+          "expected_from": "source_property",
+          "property": {
+            "template": "permitted_operation_invocation",
+            "actor_ref": "bir_a024c8cd8b3e5dc9",
+            "control_actor_ref": "bir_a024c8cd8b3e5dc9",
+            "treatment_actor_ref": "bir_a024c8cd8b3e5dc9",
+            "operation_ref": "bir_0db0ba442a1f5550",
+            "operation_path_prefix": "/api/v1"
+          },
+          "require_control": false,
+          "expected_class": 2,
+          "compare_field": "status_code"
+        }
+      ],
+      "observers": [
+        {
+          "observer_id": "http_response",
+          "surface": "http_api",
+          "adapter": "http_api",
+          "receipt_schema": "qualibug.observer-receipt.v1",
+          "required_status": "OBSERVED"
+        },
+        {
+          "observer_id": "actor_identity",
+          "surface": "identity_context",
+          "adapter": "http_api",
+          "receipt_schema": "qualibug.observer-receipt.v1",
+          "required_status": "OBSERVED"
+        }
+      ],
+      "async_observation_policy": {
+        "mode": "bounded_backoff"
+      },
+      "cleanup_plan": [
+        {
+          "action": "restore_before_snapshot",
+          "mode": "snapshot_restore",
+          "operation_ref": "bir_0db0ba442a1f5550",
+          "path": "/api/v1/contracts/{contractId}/legal-approve",
+          "method": "POST",
+          "runtime_response_binding_required": true
+        }
+      ],
+      "safety_contract": {
+        "environment_type": "test",
+        "non_production_required": true,
+        "governed_write": true,
+        "cleanup_not_required": false
+      },
+      "source_refs": [
+        {
+          "source_id": "api_spec",
+          "version": "",
+          "locator": "POST /api/v1/contracts/:contractId/legal-approve",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "src_68e5e273aaf8f71e",
+          "version": "",
+          "locator": "POST /api/v1/contracts/:contractId/legal-approve",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "submitted_api_spec",
+          "version": "",
+          "locator": "POST /api/v1/contracts/:contractId/legal-approve",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "runtime_actors",
+          "version": "",
+          "locator": "admin:globex-admin",
+          "kind": "runtime_actor",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "knowledge_relationships",
+          "version": "",
+          "locator": "rule:src_68e5e273aaf8f71e:80->markdown_api:POST:/api/v1/contracts/:contractId/legal-approve",
+          "kind": "rule_to_interface_permit",
+          "quote_hash": ""
+        }
+      ],
+      "compile_receipt": {
+        "status": "COMPILED",
+        "reason_code": "",
+        "unresolved_placeholders": 0,
+        "control_present": false,
+        "treatment_present": true,
+        "cleanup_present": true
+      },
+      "fixture_dag": {
+        "schema_version": "qualibug.fixture-dag.v1",
+        "status": "READY",
+        "experiment_id": "exp_b5737dfec24de969a274",
+        "nodes": [
+          {
+            "node_id": "fix_89c18d9476429e7f",
+            "kind": "actor_context",
+            "actor_ref": "bir_a024c8cd8b3e5dc9",
+            "secret_ref": "secret_ref:test_accounts:globex-admin",
+            "requires_read_proof": false
+          },
+          {
+            "node_id": "fix_ac09462f6f7b988e",
+            "kind": "runtime_read_binding",
+            "target": "contractId",
+            "source_priority": "same_actor_list_read",
+            "resolver_operations": [
+              {
+                "operation_ref": "bir_b4cb6f097d74c36d",
+                "method": "GET",
+                "path": "/api/v1/contracts"
+              }
+            ],
+            "requires_read_proof": true,
+            "constructible": true
+          },
+          {
+            "node_id": "fix_27729fe9da157e98",
+            "kind": "setup_step",
+            "action": "resolve_bindings",
+            "requires_read_proof": true,
+            "constructible": true
+          }
+        ],
+        "edges": [],
+        "setup_order": [
+          "fix_89c18d9476429e7f",
+          "fix_ac09462f6f7b988e",
+          "fix_27729fe9da157e98"
+        ],
+        "cleanup_order": [
+          "fix_27729fe9da157e98"
+        ],
+        "blocked_reasons": [],
+        "read_proof_required_count": 2,
+        "rules": {
+          "low_priority_must_not_override_high": true,
+          "cleanup_reverse_order": true,
+          "setup_rejected_is_not_cleanup_failure": true,
+          "no_fake_ids": true
+        }
+      }
+    },
+    {
+      "schema_version": "qualibug.experiment.v1",
+      "experiment_id": "exp_24a989ffea68c1d2300e",
+      "obligation_id": "obl_2c04441f3654cf63217e",
+      "policy_version": "v1.0.0-baseline",
+      "risk_family": "authorization",
+      "control_plan": [],
+      "treatment_plan": [
+        {
+          "step_id": "treatment_1",
+          "actor_ref": "bir_7e938edc6af3f4e1",
+          "operation_ref": "bir_37cd4345833b164f",
+          "intent": "permitted_operation_invocation",
+          "protocol_step": "permitted_invocation",
+          "property_template": "permitted_operation_invocation",
+          "path": "/api/v1/payment-requests"
+        }
+      ],
+      "binding_plan": [
+        {
+          "target": "actor:bir_7e938edc6af3f4e1",
+          "status": "bound",
+          "source_priority": "runtime_actor_secret_ref",
+          "secret_ref": "secret_ref:test_accounts:acme-finance",
+          "value_fingerprint": "de5e0081e00d"
+        }
+      ],
+      "setup_plan": [
+        {
+          "action": "resolve_bindings",
+          "bindings": [
+            "actor:bir_7e938edc6af3f4e1"
+          ]
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "assert_authorization",
+          "kind": "http_status_class",
+          "template": "permitted_operation_invocation",
+          "expected_from": "source_property",
+          "property": {
+            "template": "permitted_operation_invocation",
+            "actor_ref": "bir_7e938edc6af3f4e1",
+            "control_actor_ref": "bir_7e938edc6af3f4e1",
+            "treatment_actor_ref": "bir_7e938edc6af3f4e1",
+            "operation_ref": "bir_37cd4345833b164f",
+            "operation_path_prefix": "/api/v1"
+          },
+          "require_control": false,
+          "expected_class": 2,
+          "compare_field": "status_code"
+        }
+      ],
+      "observers": [
+        {
+          "observer_id": "http_response",
+          "surface": "http_api",
+          "adapter": "http_api",
+          "receipt_schema": "qualibug.observer-receipt.v1",
+          "required_status": "OBSERVED"
+        },
+        {
+          "observer_id": "actor_identity",
+          "surface": "identity_context",
+          "adapter": "http_api",
+          "receipt_schema": "qualibug.observer-receipt.v1",
+          "required_status": "OBSERVED"
+        }
+      ],
+      "async_observation_policy": {
+        "mode": "bounded_backoff"
+      },
+      "cleanup_plan": [],
+      "safety_contract": {
+        "environment_type": "test",
+        "non_production_required": true,
+        "governed_write": false,
+        "cleanup_not_required": false
+      },
+      "source_refs": [
+        {
+          "source_id": "api_spec",
+          "version": "",
+          "locator": "GET /api/v1/payment-requests",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "src_68e5e273aaf8f71e",
+          "version": "",
+          "locator": "GET /api/v1/payment-requests",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "submitted_api_spec",
+          "version": "",
+          "locator": "GET /api/v1/payment-requests",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "runtime_actors",
+          "version": "",
+          "locator": "finance:acme-finance",
+          "kind": "runtime_actor",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "knowledge_relationships",
+          "version": "",
+          "locator": "rule:src_68e5e273aaf8f71e:238->markdown_api:GET:/api/v1/payment-requests",
+          "kind": "rule_to_interface_permit",
+          "quote_hash": ""
+        }
+      ],
+      "compile_receipt": {
+        "status": "COMPILED",
+        "reason_code": "",
+        "unresolved_placeholders": 0,
+        "control_present": false,
+        "treatment_present": true,
+        "cleanup_present": true
+      },
+      "fixture_dag": {
+        "schema_version": "qualibug.fixture-dag.v1",
+        "status": "READY",
+        "experiment_id": "exp_24a989ffea68c1d2300e",
+        "nodes": [
+          {
+            "node_id": "fix_d56763e24f8e88fa",
+            "kind": "actor_context",
+            "actor_ref": "bir_7e938edc6af3f4e1",
+            "secret_ref": "secret_ref:test_accounts:acme-finance",
+            "requires_read_proof": false
+          },
+          {
+            "node_id": "fix_27729fe9da157e98",
+            "kind": "setup_step",
+            "action": "resolve_bindings",
+            "requires_read_proof": true,
+            "constructible": true
+          }
+        ],
+        "edges": [],
+        "setup_order": [
+          "fix_d56763e24f8e88fa",
+          "fix_27729fe9da157e98"
+        ],
+        "cleanup_order": [
+          "fix_27729fe9da157e98"
+        ],
+        "blocked_reasons": [],
+        "read_proof_required_count": 1,
+        "rules": {
+          "low_priority_must_not_override_high": true,
+          "cleanup_reverse_order": true,
+          "setup_rejected_is_not_cleanup_failure": true,
+          "no_fake_ids": true
+        }
+      }
+    },
+    {
+      "schema_version": "qualibug.experiment.v1",
+      "experiment_id": "exp_af37414d58ff1ad35ae7",
+      "obligation_id": "obl_9621d490a93494757f87",
+      "policy_version": "v1.0.0-baseline",
+      "risk_family": "authorization",
+      "control_plan": [],
+      "treatment_plan": [
+        {
+          "step_id": "treatment_1",
+          "actor_ref": "bir_764d28c639978ba3",
+          "operation_ref": "bir_9999e3e85167e84e",
+          "intent": "permitted_operation_invocation",
+          "protocol_step": "permitted_invocation",
+          "property_template": "permitted_operation_invocation",
+          "path": "/api/v1/payment-requests"
+        }
+      ],
+      "binding_plan": [
+        {
+          "target": "actor:bir_764d28c639978ba3",
+          "status": "bound",
+          "source_priority": "runtime_actor_secret_ref",
+          "secret_ref": "secret_ref:test_accounts:acme-manager",
+          "value_fingerprint": "f90253743562"
+        }
+      ],
+      "setup_plan": [
+        {
+          "action": "resolve_bindings",
+          "bindings": [
+            "actor:bir_764d28c639978ba3"
+          ]
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "assert_authorization",
+          "kind": "http_status_class",
+          "template": "permitted_operation_invocation",
+          "expected_from": "source_property",
+          "property": {
+            "template": "permitted_operation_invocation",
+            "actor_ref": "bir_764d28c639978ba3",
+            "control_actor_ref": "bir_764d28c639978ba3",
+            "treatment_actor_ref": "bir_764d28c639978ba3",
+            "operation_ref": "bir_9999e3e85167e84e",
+            "operation_path_prefix": "/api/v1"
+          },
+          "require_control": false,
+          "expected_class": 2,
+          "compare_field": "status_code"
+        }
+      ],
+      "observers": [
+        {
+          "observer_id": "http_response",
+          "surface": "http_api",
+          "adapter": "http_api",
+          "receipt_schema": "qualibug.observer-receipt.v1",
+          "required_status": "OBSERVED"
+        },
+        {
+          "observer_id": "actor_identity",
+          "surface": "identity_context",
+          "adapter": "http_api",
+          "receipt_schema": "qualibug.observer-receipt.v1",
+          "required_status": "OBSERVED"
+        }
+      ],
+      "async_observation_policy": {
+        "mode": "bounded_backoff"
+      },
+      "cleanup_plan": [
+        {
+          "action": "source_declared_compensation",
+          "mode": "reverse_order",
+          "operation_ref": "bir_033a41672a5e80a9",
+          "compensates_operation_ref": "bir_9999e3e85167e84e",
+          "path": "/api/v1/payment-requests/{paymentId}/reject",
+          "method": "POST",
+          "body_from_original_request": true,
+          "runtime_response_binding_required": true
+        }
+      ],
+      "safety_contract": {
+        "environment_type": "test",
+        "non_production_required": true,
+        "governed_write": true,
+        "cleanup_not_required": false
+      },
+      "source_refs": [
+        {
+          "source_id": "api_spec",
+          "version": "",
+          "locator": "POST /api/v1/payment-requests",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "src_68e5e273aaf8f71e",
+          "version": "",
+          "locator": "POST /api/v1/payment-requests",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "submitted_api_spec",
+          "version": "",
+          "locator": "POST /api/v1/payment-requests",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "runtime_actors",
+          "version": "",
+          "locator": "project_manager:acme-manager",
+          "kind": "runtime_actor",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "knowledge_relationships",
+          "version": "",
+          "locator": "rule:src_f6008c42314fa17d:25->markdown_api:POST:/api/v1/payment-requests",
+          "kind": "rule_to_interface_permit",
+          "quote_hash": ""
+        }
+      ],
+      "compile_receipt": {
+        "status": "COMPILED",
+        "reason_code": "",
+        "unresolved_placeholders": 0,
+        "control_present": false,
+        "treatment_present": true,
+        "cleanup_present": true
+      },
+      "fixture_dag": {
+        "schema_version": "qualibug.fixture-dag.v1",
+        "status": "READY",
+        "experiment_id": "exp_af37414d58ff1ad35ae7",
+        "nodes": [
+          {
+            "node_id": "fix_6a0901d016e831de",
+            "kind": "actor_context",
+            "actor_ref": "bir_764d28c639978ba3",
+            "secret_ref": "secret_ref:test_accounts:acme-manager",
+            "requires_read_proof": false
+          },
+          {
+            "node_id": "fix_27729fe9da157e98",
+            "kind": "setup_step",
+            "action": "resolve_bindings",
+            "requires_read_proof": true,
+            "constructible": true
+          }
+        ],
+        "edges": [],
+        "setup_order": [
+          "fix_6a0901d016e831de",
+          "fix_27729fe9da157e98"
+        ],
+        "cleanup_order": [
+          "fix_27729fe9da157e98"
+        ],
+        "blocked_reasons": [],
+        "read_proof_required_count": 1,
+        "rules": {
+          "low_priority_must_not_override_high": true,
+          "cleanup_reverse_order": true,
+          "setup_rejected_is_not_cleanup_failure": true,
+          "no_fake_ids": true
+        }
+      }
+    },
+    {
+      "schema_version": "qualibug.experiment.v1",
+      "experiment_id": "exp_8284f76a29d6598a543d",
+      "obligation_id": "obl_3197e28e37b2be523552",
+      "policy_version": "v1.0.0-baseline",
+      "risk_family": "authorization",
+      "control_plan": [],
+      "treatment_plan": [
+        {
+          "step_id": "treatment_1",
+          "actor_ref": "bir_764d28c639978ba3",
+          "operation_ref": "bir_6a59d80d5290dfac",
+          "intent": "permitted_operation_invocation",
+          "protocol_step": "permitted_invocation",
+          "property_template": "permitted_operation_invocation",
+          "path": "/api/v1/payment-requests/qb_test_454509588610"
+        }
+      ],
+      "binding_plan": [
+        {
+          "target": "paymentId",
+          "target_path": "/api/v1/payment-requests/{paymentId}",
+          "status": "runtime_resolvable",
+          "source_priority": "same_actor_list_read",
+          "resolver_operations": [
+            {
+              "operation_ref": "bir_37cd4345833b164f",
+              "method": "GET",
+              "path": "/api/v1/payment-requests"
+            }
+          ],
+          "value_fingerprint": ""
+        },
+        {
+          "target": "actor:bir_764d28c639978ba3",
+          "status": "bound",
+          "source_priority": "runtime_actor_secret_ref",
+          "secret_ref": "secret_ref:test_accounts:acme-manager",
+          "value_fingerprint": "f90253743562"
+        }
+      ],
+      "setup_plan": [
+        {
+          "action": "resolve_bindings",
+          "bindings": [
+            "paymentId",
+            "actor:bir_764d28c639978ba3"
+          ]
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "assert_authorization",
+          "kind": "http_status_class",
+          "template": "permitted_operation_invocation",
+          "expected_from": "source_property",
+          "property": {
+            "template": "permitted_operation_invocation",
+            "actor_ref": "bir_764d28c639978ba3",
+            "control_actor_ref": "bir_764d28c639978ba3",
+            "treatment_actor_ref": "bir_764d28c639978ba3",
+            "operation_ref": "bir_6a59d80d5290dfac",
+            "operation_path_prefix": "/api/v1"
+          },
+          "require_control": false,
+          "expected_class": 2,
+          "compare_field": "status_code"
+        }
+      ],
+      "observers": [
+        {
+          "observer_id": "http_response",
+          "surface": "http_api",
+          "adapter": "http_api",
+          "receipt_schema": "qualibug.observer-receipt.v1",
+          "required_status": "OBSERVED"
+        },
+        {
+          "observer_id": "actor_identity",
+          "surface": "identity_context",
+          "adapter": "http_api",
+          "receipt_schema": "qualibug.observer-receipt.v1",
+          "required_status": "OBSERVED"
+        }
+      ],
+      "async_observation_policy": {
+        "mode": "bounded_backoff"
+      },
+      "cleanup_plan": [],
+      "safety_contract": {
+        "environment_type": "test",
+        "non_production_required": true,
+        "governed_write": false,
+        "cleanup_not_required": false
+      },
+      "source_refs": [
+        {
+          "source_id": "api_spec",
+          "version": "",
+          "locator": "GET /api/v1/payment-requests/:paymentId",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "src_68e5e273aaf8f71e",
+          "version": "",
+          "locator": "GET /api/v1/payment-requests/:paymentId",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "submitted_api_spec",
+          "version": "",
+          "locator": "GET /api/v1/payment-requests/:paymentId",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "runtime_actors",
+          "version": "",
+          "locator": "project_manager:acme-manager",
+          "kind": "runtime_actor",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "knowledge_relationships",
+          "version": "",
+          "locator": "rule:src_f6008c42314fa17d:25->markdown_api:GET:/api/v1/payment-requests/:paymentId",
+          "kind": "rule_to_interface_permit",
+          "quote_hash": ""
+        }
+      ],
+      "compile_receipt": {
+        "status": "COMPILED",
+        "reason_code": "",
+        "unresolved_placeholders": 0,
+        "control_present": false,
+        "treatment_present": true,
+        "cleanup_present": true
+      },
+      "fixture_dag": {
+        "schema_version": "qualibug.fixture-dag.v1",
+        "status": "READY",
+        "experiment_id": "exp_8284f76a29d6598a543d",
+        "nodes": [
+          {
+            "node_id": "fix_6a0901d016e831de",
+            "kind": "actor_context",
+            "actor_ref": "bir_764d28c639978ba3",
+            "secret_ref": "secret_ref:test_accounts:acme-manager",
+            "requires_read_proof": false
+          },
+          {
+            "node_id": "fix_152a5634c7c44691",
+            "kind": "runtime_read_binding",
+            "target": "paymentId",
+            "source_priority": "same_actor_list_read",
+            "resolver_operations": [
+              {
+                "operation_ref": "bir_37cd4345833b164f",
+                "method": "GET",
+                "path": "/api/v1/payment-requests"
+              }
+            ],
+            "requires_read_proof": true,
+            "constructible": true
+          },
+          {
+            "node_id": "fix_27729fe9da157e98",
+            "kind": "setup_step",
+            "action": "resolve_bindings",
+            "requires_read_proof": true,
+            "constructible": true
+          }
+        ],
+        "edges": [],
+        "setup_order": [
+          "fix_6a0901d016e831de",
+          "fix_152a5634c7c44691",
+          "fix_27729fe9da157e98"
+        ],
+        "cleanup_order": [
+          "fix_27729fe9da157e98"
+        ],
+        "blocked_reasons": [],
+        "read_proof_required_count": 2,
+        "rules": {
+          "low_priority_must_not_override_high": true,
+          "cleanup_reverse_order": true,
+          "setup_rejected_is_not_cleanup_failure": true,
+          "no_fake_ids": true
+        }
+      }
+    },
+    {
+      "schema_version": "qualibug.experiment.v1",
+      "experiment_id": "exp_7960ad2112a4560116f0",
+      "obligation_id": "obl_91c27e4702e1ce23e91a",
+      "policy_version": "v1.0.0-baseline",
+      "risk_family": "authorization",
+      "control_plan": [],
+      "treatment_plan": [
+        {
+          "step_id": "treatment_1",
+          "actor_ref": "bir_764d28c639978ba3",
+          "operation_ref": "bir_f6d16db2daaa2270",
+          "intent": "permitted_operation_invocation",
+          "protocol_step": "permitted_invocation",
+          "property_template": "permitted_operation_invocation",
+          "path": "/api/v1/payment-requests/qb_test_973288400223/manager-approve"
+        }
+      ],
+      "binding_plan": [
+        {
+          "target": "paymentId",
+          "target_path": "/api/v1/payment-requests/{paymentId}/manager-approve",
+          "status": "runtime_resolvable",
+          "source_priority": "same_actor_list_read",
+          "resolver_operations": [
+            {
+              "operation_ref": "bir_37cd4345833b164f",
+              "method": "GET",
+              "path": "/api/v1/payment-requests"
+            }
+          ],
+          "value_fingerprint": ""
+        },
+        {
+          "target": "actor:bir_764d28c639978ba3",
+          "status": "bound",
+          "source_priority": "runtime_actor_secret_ref",
+          "secret_ref": "secret_ref:test_accounts:acme-manager",
+          "value_fingerprint": "f90253743562"
+        }
+      ],
+      "setup_plan": [
+        {
+          "action": "resolve_bindings",
+          "bindings": [
+            "paymentId",
+            "actor:bir_764d28c639978ba3"
+          ]
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "assert_authorization",
+          "kind": "http_status_class",
+          "template": "permitted_operation_invocation",
+          "expected_from": "source_property",
+          "property": {
+            "template": "permitted_operation_invocation",
+            "actor_ref": "bir_764d28c639978ba3",
+            "control_actor_ref": "bir_764d28c639978ba3",
+            "treatment_actor_ref": "bir_764d28c639978ba3",
+            "operation_ref": "bir_f6d16db2daaa2270",
+            "operation_path_prefix": "/api/v1"
+          },
+          "require_control": false,
+          "expected_class": 2,
+          "compare_field": "status_code"
+        }
+      ],
+      "observers": [
+        {
+          "observer_id": "http_response",
+          "surface": "http_api",
+          "adapter": "http_api",
+          "receipt_schema": "qualibug.observer-receipt.v1",
+          "required_status": "OBSERVED"
+        },
+        {
+          "observer_id": "actor_identity",
+          "surface": "identity_context",
+          "adapter": "http_api",
+          "receipt_schema": "qualibug.observer-receipt.v1",
+          "required_status": "OBSERVED"
+        }
+      ],
+      "async_observation_policy": {
+        "mode": "bounded_backoff"
+      },
+      "cleanup_plan": [
+        {
+          "action": "restore_before_snapshot",
+          "mode": "snapshot_restore",
+          "operation_ref": "bir_f6d16db2daaa2270",
+          "path": "/api/v1/payment-requests/{paymentId}/manager-approve",
+          "method": "POST",
+          "runtime_response_binding_required": true
+        }
+      ],
+      "safety_contract": {
+        "environment_type": "test",
+        "non_production_required": true,
+        "governed_write": true,
+        "cleanup_not_required": false
+      },
+      "source_refs": [
+        {
+          "source_id": "api_spec",
+          "version": "",
+          "locator": "POST /api/v1/payment-requests/:paymentId/manager-approve",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "src_68e5e273aaf8f71e",
+          "version": "",
+          "locator": "POST /api/v1/payment-requests/:paymentId/manager-approve",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "submitted_api_spec",
+          "version": "",
+          "locator": "POST /api/v1/payment-requests/:paymentId/manager-approve",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "runtime_actors",
+          "version": "",
+          "locator": "project_manager:acme-manager",
+          "kind": "runtime_actor",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "knowledge_relationships",
+          "version": "",
+          "locator": "rule:src_f6008c42314fa17d:180->markdown_api:POST:/api/v1/payment-requests/:paymentId/manager-approve",
+          "kind": "rule_to_interface_permit",
+          "quote_hash": ""
+        }
+      ],
+      "compile_receipt": {
+        "status": "COMPILED",
+        "reason_code": "",
+        "unresolved_placeholders": 0,
+        "control_present": false,
+        "treatment_present": true,
+        "cleanup_present": true
+      },
+      "fixture_dag": {
+        "schema_version": "qualibug.fixture-dag.v1",
+        "status": "READY",
+        "experiment_id": "exp_7960ad2112a4560116f0",
+        "nodes": [
+          {
+            "node_id": "fix_6a0901d016e831de",
+            "kind": "actor_context",
+            "actor_ref": "bir_764d28c639978ba3",
+            "secret_ref": "secret_ref:test_accounts:acme-manager",
+            "requires_read_proof": false
+          },
+          {
+            "node_id": "fix_152a5634c7c44691",
+            "kind": "runtime_read_binding",
+            "target": "paymentId",
+            "source_priority": "same_actor_list_read",
+            "resolver_operations": [
+              {
+                "operation_ref": "bir_37cd4345833b164f",
+                "method": "GET",
+                "path": "/api/v1/payment-requests"
+              }
+            ],
+            "requires_read_proof": true,
+            "constructible": true
+          },
+          {
+            "node_id": "fix_27729fe9da157e98",
+            "kind": "setup_step",
+            "action": "resolve_bindings",
+            "requires_read_proof": true,
+            "constructible": true
+          }
+        ],
+        "edges": [],
+        "setup_order": [
+          "fix_6a0901d016e831de",
+          "fix_152a5634c7c44691",
+          "fix_27729fe9da157e98"
+        ],
+        "cleanup_order": [
+          "fix_27729fe9da157e98"
+        ],
+        "blocked_reasons": [],
+        "read_proof_required_count": 2,
+        "rules": {
+          "low_priority_must_not_override_high": true,
+          "cleanup_reverse_order": true,
+          "setup_rejected_is_not_cleanup_failure": true,
+          "no_fake_ids": true
+        }
+      }
+    },
+    {
+      "schema_version": "qualibug.experiment.v1",
+      "experiment_id": "exp_23385db792e171a44ea0",
+      "obligation_id": "obl_b9a08716ed06b13e479f",
+      "policy_version": "v1.0.0-baseline",
+      "risk_family": "authorization",
+      "control_plan": [],
+      "treatment_plan": [
+        {
+          "step_id": "treatment_1",
+          "actor_ref": "bir_764d28c639978ba3",
+          "operation_ref": "bir_c3cc370237a29be6",
+          "intent": "permitted_operation_invocation",
+          "protocol_step": "permitted_invocation",
+          "property_template": "permitted_operation_invocation",
+          "path": "/api/v1/payment-requests/qb_test_105847931243/finance-approve"
+        }
+      ],
+      "binding_plan": [
+        {
+          "target": "paymentId",
+          "target_path": "/api/v1/payment-requests/{paymentId}/finance-approve",
+          "status": "runtime_resolvable",
+          "source_priority": "same_actor_list_read",
+          "resolver_operations": [
+            {
+              "operation_ref": "bir_37cd4345833b164f",
+              "method": "GET",
+              "path": "/api/v1/payment-requests"
+            }
+          ],
+          "value_fingerprint": ""
+        },
+        {
+          "target": "actor:bir_764d28c639978ba3",
+          "status": "bound",
+          "source_priority": "runtime_actor_secret_ref",
+          "secret_ref": "secret_ref:test_accounts:acme-manager",
+          "value_fingerprint": "f90253743562"
+        }
+      ],
+      "setup_plan": [
+        {
+          "action": "resolve_bindings",
+          "bindings": [
+            "paymentId",
+            "actor:bir_764d28c639978ba3"
+          ]
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "assert_authorization",
+          "kind": "http_status_class",
+          "template": "permitted_operation_invocation",
+          "expected_from": "source_property",
+          "property": {
+            "template": "permitted_operation_invocation",
+            "actor_ref": "bir_764d28c639978ba3",
+            "control_actor_ref": "bir_764d28c639978ba3",
+            "treatment_actor_ref": "bir_764d28c639978ba3",
+            "operation_ref": "bir_c3cc370237a29be6",
+            "operation_path_prefix": "/api/v1"
+          },
+          "require_control": false,
+          "expected_class": 2,
+          "compare_field": "status_code"
+        }
+      ],
+      "observers": [
+        {
+          "observer_id": "http_response",
+          "surface": "http_api",
+          "adapter": "http_api",
+          "receipt_schema": "qualibug.observer-receipt.v1",
+          "required_status": "OBSERVED"
+        },
+        {
+          "observer_id": "actor_identity",
+          "surface": "identity_context",
+          "adapter": "http_api",
+          "receipt_schema": "qualibug.observer-receipt.v1",
+          "required_status": "OBSERVED"
+        }
+      ],
+      "async_observation_policy": {
+        "mode": "bounded_backoff"
+      },
+      "cleanup_plan": [
+        {
+          "action": "restore_before_snapshot",
+          "mode": "snapshot_restore",
+          "operation_ref": "bir_c3cc370237a29be6",
+          "path": "/api/v1/payment-requests/{paymentId}/finance-approve",
+          "method": "POST",
+          "runtime_response_binding_required": true
+        }
+      ],
+      "safety_contract": {
+        "environment_type": "test",
+        "non_production_required": true,
+        "governed_write": true,
+        "cleanup_not_required": false
+      },
+      "source_refs": [
+        {
+          "source_id": "api_spec",
+          "version": "",
+          "locator": "POST /api/v1/payment-requests/:paymentId/finance-approve",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "src_68e5e273aaf8f71e",
+          "version": "",
+          "locator": "POST /api/v1/payment-requests/:paymentId/finance-approve",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "submitted_api_spec",
+          "version": "",
+          "locator": "POST /api/v1/payment-requests/:paymentId/finance-approve",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "runtime_actors",
+          "version": "",
+          "locator": "project_manager:acme-manager",
+          "kind": "runtime_actor",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "knowledge_relationships",
+          "version": "",
+          "locator": "rule:src_f6008c42314fa17d:25->markdown_api:POST:/api/v1/payment-requests/:paymentId/finance-approve",
+          "kind": "rule_to_interface_permit",
+          "quote_hash": ""
+        }
+      ],
+      "compile_receipt": {
+        "status": "COMPILED",
+        "reason_code": "",
+        "unresolved_placeholders": 0,
+        "control_present": false,
+        "treatment_present": true,
+        "cleanup_present": true
+      },
+      "fixture_dag": {
+        "schema_version": "qualibug.fixture-dag.v1",
+        "status": "READY",
+        "experiment_id": "exp_23385db792e171a44ea0",
+        "nodes": [
+          {
+            "node_id": "fix_6a0901d016e831de",
+            "kind": "actor_context",
+            "actor_ref": "bir_764d28c639978ba3",
+            "secret_ref": "secret_ref:test_accounts:acme-manager",
+            "requires_read_proof": false
+          },
+          {
+            "node_id": "fix_152a5634c7c44691",
+            "kind": "runtime_read_binding",
+            "target": "paymentId",
+            "source_priority": "same_actor_list_read",
+            "resolver_operations": [
+              {
+                "operation_ref": "bir_37cd4345833b164f",
+                "method": "GET",
+                "path": "/api/v1/payment-requests"
+              }
+            ],
+            "requires_read_proof": true,
+            "constructible": true
+          },
+          {
+            "node_id": "fix_27729fe9da157e98",
+            "kind": "setup_step",
+            "action": "resolve_bindings",
+            "requires_read_proof": true,
+            "constructible": true
+          }
+        ],
+        "edges": [],
+        "setup_order": [
+          "fix_6a0901d016e831de",
+          "fix_152a5634c7c44691",
+          "fix_27729fe9da157e98"
+        ],
+        "cleanup_order": [
+          "fix_27729fe9da157e98"
+        ],
+        "blocked_reasons": [],
+        "read_proof_required_count": 2,
+        "rules": {
+          "low_priority_must_not_override_high": true,
+          "cleanup_reverse_order": true,
+          "setup_rejected_is_not_cleanup_failure": true,
+          "no_fake_ids": true
+        }
+      }
+    },
+    {
+      "schema_version": "qualibug.experiment.v1",
+      "experiment_id": "exp_f84c083efa1fbee27662",
+      "obligation_id": "obl_23a3892f289618c198c6",
+      "policy_version": "v1.0.0-baseline",
+      "risk_family": "authorization",
+      "control_plan": [],
+      "treatment_plan": [
+        {
+          "step_id": "treatment_1",
+          "actor_ref": "bir_7e938edc6af3f4e1",
+          "operation_ref": "bir_f125591056379219",
+          "intent": "permitted_operation_invocation",
+          "protocol_step": "permitted_invocation",
+          "property_template": "permitted_operation_invocation",
+          "path": "/api/v1/payment-requests/qb_test_672883619569/pay"
+        }
+      ],
+      "binding_plan": [
+        {
+          "target": "paymentId",
+          "target_path": "/api/v1/payment-requests/{paymentId}/pay",
+          "status": "runtime_resolvable",
+          "source_priority": "same_actor_list_read",
+          "resolver_operations": [
+            {
+              "operation_ref": "bir_37cd4345833b164f",
+              "method": "GET",
+              "path": "/api/v1/payment-requests"
+            }
+          ],
+          "value_fingerprint": ""
+        },
+        {
+          "target": "actor:bir_7e938edc6af3f4e1",
+          "status": "bound",
+          "source_priority": "runtime_actor_secret_ref",
+          "secret_ref": "secret_ref:test_accounts:acme-finance",
+          "value_fingerprint": "de5e0081e00d"
+        }
+      ],
+      "setup_plan": [
+        {
+          "action": "resolve_bindings",
+          "bindings": [
+            "paymentId",
+            "actor:bir_7e938edc6af3f4e1"
+          ]
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "assert_authorization",
+          "kind": "http_status_class",
+          "template": "permitted_operation_invocation",
+          "expected_from": "source_property",
+          "property": {
+            "template": "permitted_operation_invocation",
+            "actor_ref": "bir_7e938edc6af3f4e1",
+            "control_actor_ref": "bir_7e938edc6af3f4e1",
+            "treatment_actor_ref": "bir_7e938edc6af3f4e1",
+            "operation_ref": "bir_f125591056379219",
+            "operation_path_prefix": "/api/v1"
+          },
+          "require_control": false,
+          "expected_class": 2,
+          "compare_field": "status_code"
+        }
+      ],
+      "observers": [
+        {
+          "observer_id": "http_response",
+          "surface": "http_api",
+          "adapter": "http_api",
+          "receipt_schema": "qualibug.observer-receipt.v1",
+          "required_status": "OBSERVED"
+        },
+        {
+          "observer_id": "actor_identity",
+          "surface": "identity_context",
+          "adapter": "http_api",
+          "receipt_schema": "qualibug.observer-receipt.v1",
+          "required_status": "OBSERVED"
+        }
+      ],
+      "async_observation_policy": {
+        "mode": "bounded_backoff"
+      },
+      "cleanup_plan": [
+        {
+          "action": "restore_before_snapshot",
+          "mode": "snapshot_restore",
+          "operation_ref": "bir_f125591056379219",
+          "path": "/api/v1/payment-requests/{paymentId}/pay",
+          "method": "POST",
+          "runtime_response_binding_required": true
+        }
+      ],
+      "safety_contract": {
+        "environment_type": "test",
+        "non_production_required": true,
+        "governed_write": true,
+        "cleanup_not_required": false
+      },
+      "source_refs": [
+        {
+          "source_id": "api_spec",
+          "version": "",
+          "locator": "POST /api/v1/payment-requests/:paymentId/pay",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "src_68e5e273aaf8f71e",
+          "version": "",
+          "locator": "POST /api/v1/payment-requests/:paymentId/pay",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "submitted_api_spec",
+          "version": "",
+          "locator": "POST /api/v1/payment-requests/:paymentId/pay",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "src_75c80a84b78a6d77",
+          "version": "",
+          "locator": "POST /api/v1/payment-requests/{id}/pay",
+          "kind": "api_operation",
+          "quote_hash": ""
+        },
+        {
+          "source_id": "runtime_actors",
+          "version": "",
+          "locator": "finance:acme-finance",
+          "kind": "runtime_actor",
+          "quote_hash": ""
+        }
+      ],
+      "compile_receipt": {
+        "status": "COMPILED",
+        "reason_code": "",
+        "unresolved_placeholders": 0,
+        "control_present": false,
+        "treatment_present": true,
+        "cleanup_present": true
+      },
+      "fixture_dag": {
+        "schema_version": "qualibug.fixture-dag.v1",
+        "status": "READY",
+        "experiment_id": "exp_f84c083efa1fbee27662",
+        "nodes": [
+          {
+            "node_id": "fix_d56763e24f8e88fa",
+            "kind": "actor_context",
+            "actor_ref": "bir_7e938edc6af3f4e1",
+            "secret_ref": "secret_ref:test_accounts:acme-finance",
+            "requires_read_proof": false
+          },
+          {
+            "node_id": "fix_152a5634c7c44691",
+            "kind": "runtime_read_binding",
+            "target": "paymentId",
+            "source_priority": "same_actor_list_read",
+            "resolver_operations": [
+              {
+                "operation_ref": "bir_37cd4345833b164f",
+                "method": "GET",
+                "path": "/api/v1/payment-requests"
+              }
+            ],
+            "requires_read_proof": true,
+            "constructible": true
+          },
+          {
+            "node_id": "fix_27729fe9da157e98",
+            "kind": "setup_step",
+            "action": "resolve_bindings",
+            "requires_read_proof": true,
+            "constructible": true
+          }
+        ],
+        "edges": [],
+        "setup_order": [
+          "fix_d56763e24f8e88fa",
+          "fix_152a5634c7c44691",
+          "fix_27729fe9da157e98"
+        ],
+        "cleanup_order": [
+          "fix_27729fe9da157e98"
+        ],
+        "blocked_reasons": [],
+        "read_proof_required_count": 2,
+        "rules": {
+          "low_priority_must_not_override_high": true,
+          "cleanup_reverse_order": true,
+          "setup_rejected_is_not_cleanup_failure": true,
+          "no_fake_ids": true
+        }
+      }
+    }
+  ]
+}

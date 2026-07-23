@@ -1,0 +1,12 @@
+{
+  "bootstrap_req": 265,
+  "observer_req": 6,
+  "target_req": 25,
+  "cleanup_req": 0,
+  "transport_accepted": 272,
+  "business_rejected": 24,
+  "unexpected_rejected": 0,
+  "harness_failed": 0,
+  "experiments_executed": 24,
+  "placeholder_requests": 0
+}

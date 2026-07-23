@@ -1,0 +1,12 @@
+{
+  "entity_literals": 0,
+  "field_literals": 0,
+  "endpoint_literals": 0,
+  "state_literals": 0,
+  "role_literals": 0,
+  "formula_literals": 0,
+  "benchmark_literals": 0,
+  "production_hits": 0,
+  "test_only_hits": 0,
+  "passed": true
+}

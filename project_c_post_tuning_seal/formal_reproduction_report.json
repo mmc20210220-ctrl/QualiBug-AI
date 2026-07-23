@@ -1,0 +1,14 @@
+[
+  {
+    "finding_id": "F-dc1dfb49d31f",
+    "rule_id": "BR-PAY-005",
+    "reproduced": true,
+    "mechanism_match": true
+  },
+  {
+    "finding_id": "F-b8ccc0d230f7",
+    "rule_id": "BR-MIL-001",
+    "reproduced": true,
+    "mechanism_match": true
+  }
+]

@@ -185,3 +185,170 @@ def verify_test_data_receipt(
         if str(receipt.get(key) or "") != value:
             return {"valid": False, "code": f"TEST_DATA_RECEIPT_{key.upper()}_MISMATCH"}
     return {"valid": True, "receipt": dict(receipt)}
+
+
+# ── Enhanced Receipt Validation (SPEC §12) ──
+# Specific failure codes instead of blanket DATA_CREATION_RECEIPT_MISSING
+
+RECEIPT_EXPIRY_SECONDS = 3600  # 1 hour default TTL
+
+
+def validate_receipt_for_execution(
+    project_id: str,
+    *,
+    root: Path,
+    receipt_id: str,
+    run_id: str,
+    campaign_id: str,
+    environment_ref: str,
+    tenant_id: str = "",
+    target_rule_ids: list[str] | None = None,
+    required_entities: list[dict[str, Any]] | None = None,
+    required_relations: list[dict[str, Any]] | None = None,
+    required_preconditions: list[dict[str, Any]] | None = None,
+    max_age_seconds: int = RECEIPT_EXPIRY_SECONDS,
+) -> dict[str, Any]:
+    """Comprehensive pre-execution receipt validation with specific failure codes.
+
+    Instead of returning a blanket DATA_CREATION_RECEIPT_MISSING, this function
+    returns the exact reason why a receipt cannot be used for execution.
+
+    Failure codes:
+    - RECEIPT_NOT_FOUND: Receipt ID does not exist in registry
+    - RECEIPT_HASH_INVALID: Receipt hash verification failed
+    - RECEIPT_RUN_MISMATCH: Receipt not bound to current run/campaign
+    - RECEIPT_ENVIRONMENT_MISMATCH: Receipt not bound to current environment
+    - RECEIPT_TENANT_MISMATCH: Receipt not bound to current tenant
+    - RECEIPT_EXPIRED: Receipt has exceeded its TTL
+    - RECEIPT_ENTITY_NOT_VERIFIED: Created entities not confirmed existing
+    - RECEIPT_RELATION_NOT_VERIFIED: Entity relations not confirmed
+    - RECEIPT_PRECONDITION_NOT_VERIFIED: Rule preconditions not confirmed
+    - RECEIPT_RULE_NOT_COVERED: Target rule not in receipt scope
+    """
+    registry = _read_registry(Path(root), project_id)
+    rid = _text(receipt_id, 160)
+
+    # 1. Receipt exists
+    receipt = registry["receipts"].get(rid)
+    if not isinstance(receipt, dict):
+        return {
+            "valid": False,
+            "code": "RECEIPT_NOT_FOUND",
+            "receipt_id": rid,
+            "detail": f"Receipt '{rid}' not found in registry",
+        }
+
+    # 2. Hash integrity
+    expected_hash = _hash({k: v for k, v in receipt.items() if k != "receipt_hash"})
+    if str(receipt.get("receipt_hash") or "") != expected_hash:
+        return {
+            "valid": False,
+            "code": "RECEIPT_HASH_INVALID",
+            "receipt_id": rid,
+            "detail": "Receipt hash verification failed - possible tampering",
+        }
+
+    # 3. Run/Campaign binding
+    receipt_campaign = str(receipt.get("campaign_id") or "").strip()
+    if campaign_id and receipt_campaign != _text(campaign_id, 160):
+        return {
+            "valid": False,
+            "code": "RECEIPT_RUN_MISMATCH",
+            "receipt_id": rid,
+            "detail": f"Receipt campaign '{receipt_campaign}' != current '{campaign_id}'",
+        }
+
+    # 4. Environment binding
+    receipt_env = str(receipt.get("environment_ref") or "").strip()
+    if environment_ref and receipt_env != _text(environment_ref, 160):
+        return {
+            "valid": False,
+            "code": "RECEIPT_ENVIRONMENT_MISMATCH",
+            "receipt_id": rid,
+            "detail": f"Receipt env '{receipt_env}' != current '{environment_ref}'",
+        }
+
+    # 5. Tenant binding (via scope_id)
+    receipt_scope = str(receipt.get("scope_id") or "").strip()
+    if tenant_id and receipt_scope and tenant_id not in receipt_scope:
+        return {
+            "valid": False,
+            "code": "RECEIPT_TENANT_MISMATCH",
+            "receipt_id": rid,
+            "detail": f"Receipt scope '{receipt_scope}' does not match tenant '{tenant_id}'",
+        }
+
+    # 6. Expiry check
+    issued_at = str(receipt.get("issued_at_utc") or "").strip()
+    if issued_at and max_age_seconds > 0:
+        try:
+            import calendar
+            issued_struct = time.strptime(issued_at, "%Y-%m-%dT%H:%M:%SZ")
+            issued_epoch = calendar.timegm(issued_struct)
+            age = time.time() - issued_epoch
+            if age > max_age_seconds:
+                return {
+                    "valid": False,
+                    "code": "RECEIPT_EXPIRED",
+                    "receipt_id": rid,
+                    "detail": f"Receipt age {age:.0f}s exceeds max {max_age_seconds}s",
+                }
+        except (ValueError, OverflowError):
+            pass  # Cannot parse timestamp - skip expiry check
+
+    # 7. Entity verification
+    for entity in (required_entities or []):
+        if not isinstance(entity, dict):
+            continue
+        if not entity.get("verified") and not entity.get("observer_proven"):
+            return {
+                "valid": False,
+                "code": "RECEIPT_ENTITY_NOT_VERIFIED",
+                "receipt_id": rid,
+                "detail": f"Entity '{entity.get('entity_id', '?')}' not verified by observer",
+            }
+
+    # 8. Relation verification
+    for relation in (required_relations or []):
+        if not isinstance(relation, dict):
+            continue
+        if not relation.get("verified") and not relation.get("passed"):
+            return {
+                "valid": False,
+                "code": "RECEIPT_RELATION_NOT_VERIFIED",
+                "receipt_id": rid,
+                "detail": f"Relation '{relation.get('parent_entity_id', '?')}->{relation.get('child_entity_id', '?')}' not verified",
+            }
+
+    # 9. Precondition verification
+    for precond in (required_preconditions or []):
+        if not isinstance(precond, dict):
+            continue
+        if not precond.get("passed") and not precond.get("verified"):
+            return {
+                "valid": False,
+                "code": "RECEIPT_PRECONDITION_NOT_VERIFIED",
+                "receipt_id": rid,
+                "detail": f"Precondition for rule '{precond.get('rule_id', '?')}' not verified",
+            }
+
+    # 10. Target rule coverage
+    if target_rule_ids:
+        receipt_rules = set(str(r) for r in (receipt.get("target_rule_ids") or []))
+        # If receipt has no rule scope, it covers all (backward compat)
+        if receipt_rules:
+            for rule_id in target_rule_ids:
+                if str(rule_id) not in receipt_rules:
+                    return {
+                        "valid": False,
+                        "code": "RECEIPT_RULE_NOT_COVERED",
+                        "receipt_id": rid,
+                        "detail": f"Rule '{rule_id}' not in receipt scope",
+                    }
+
+    return {
+        "valid": True,
+        "code": "RECEIPT_VALID",
+        "receipt_id": rid,
+        "receipt": dict(receipt),
+    }

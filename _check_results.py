@@ -1,3 +1,48 @@
+"""Check scan results after timeout."""
+from pathlib import Path
+import json
+
+# Check for scan results
+proj_dir = Path("platform_outputs/qb_ecommerce_single_retest")
+if proj_dir.exists():
+    print(f"Project dir exists: {proj_dir}")
+    for f in sorted(proj_dir.glob("*.json"))[:10]:
+        print(f"  {f.name}")
+        if f.name in ["intelligence_report.json", "scan_result.json"]:
+            try:
+                d = json.load(open(f, "r", encoding="utf-8"))
+                print(f"    keys: {list(d.keys())[:10]}")
+                tf = d.get("total_findings")
+                if tf is not None:
+                    print(f"    total_findings: {tf}")
+            except Exception as e:
+                print(f"    error: {e}")
+else:
+    print(f"Project dir not found: {proj_dir}")
+
+# Check for real_project_demo (the ingest showed this path)
+demo_dir = Path("platform_outputs/real_project_demo")
+if demo_dir.exists():
+    print(f"\nreal_project_demo dir exists")
+    for f in sorted(demo_dir.glob("*.json"))[:5]:
+        print(f"  {f.name}")
+        if f.name in ["intelligence_report.json", "scan_result.json"]:
+            try:
+                d = json.load(open(f, "r", encoding="utf-8"))
+                tf = d.get("total_findings")
+                if tf is not None:
+                    print(f"    total_findings: {tf}")
+            except:
+                pass
+
+# Check platform_workspace for experiment files
+ws_dir = Path("platform_workspace/qb_ecommerce_single_retest")
+if ws_dir.exists():
+    print(f"\nWorkspace dir exists: {ws_dir}")
+    exp_files = list(ws_dir.rglob("*experiment*.json"))
+    print(f"Experiment files: {len(exp_files)}")
+    for f in exp_files[:5]:
+        print(f"  {f.relative_to(ws_dir)}")
 """Quick analysis of latest scan results."""
 import json, sys
 

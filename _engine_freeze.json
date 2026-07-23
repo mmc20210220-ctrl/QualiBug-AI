@@ -1,0 +1,16 @@
+{
+  "git_commit": "dc341c3",
+  "source_hashes": {
+    "ai_test_asset_center/behavior_ir.py": "6e91195ebefdab78",
+    "ai_test_asset_center/input_grounded_candidate_compiler.py": "1cf11186f82e16ec",
+    "ai_test_asset_center/experiment_outcome_finalizer.py": "3ddead610d4f3f6d",
+    "ai_test_asset_center/observer_contracts_base.py": "67496ac99e6df1ac",
+    "ai_test_asset_center/defect_discovery/_runner.py": "ec01da00cd6635f0",
+    "ai_test_asset_center/semantic_scenario_generator/_generator.py": "57f7f9ab8bb87c94",
+    "ai_test_asset_center/grounded_probe_executor/_core.py": "58372534a2d4e0f9"
+  },
+  "behavior_ir_schema_version": "v1",
+  "rule_schema_version": "v1",
+  "oracle_schema_version": "v1",
+  "frozen_at": "2026-07-22T15:17:39.957341"
+}

@@ -1,0 +1,12 @@
+{
+  "schema_version": "qualibug.scan-metadata.v1",
+  "success": true,
+  "grade": "evidence_ready",
+  "execution_status": "completed",
+  "total_findings": 3,
+  "total_candidates": 10,
+  "campaign_id": "CMP_f55e51c8645970e796a7c9cf",
+  "scan_result_file": "platform_outputs/contractflow_project_c/scan_result.json",
+  "scan_result_size_bytes": 115732719,
+  "sealed_at": "2026-07-22T14:41:36.335763+00:00"
+}

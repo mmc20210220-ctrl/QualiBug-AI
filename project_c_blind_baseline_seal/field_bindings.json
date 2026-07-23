@@ -1,0 +1,202 @@
+{
+  "schema_version": "qualibug.field-bindings.v1",
+  "entities": [
+    {
+      "entity_id": "bir_1093a43df9259ae6",
+      "fields": [
+        "accepted_amount",
+        "active",
+        "amount",
+        "api_token",
+        "available_amount",
+        "budget_id",
+        "code",
+        "contract_id",
+        "contract_no",
+        "department_id",
+        "due_date",
+        "email",
+        "id",
+        "idempotency_key",
+        "internal_notes",
+        "invoice_no",
+        "issue_date",
+        "name",
+        "owner_id",
+        "paid_amount",
+        "paid_at",
+        "password",
+        "requested_by",
+        "reserved_amount",
+        "role",
+        "spent_amount",
+        "start_date/end_date",
+        "status",
+        "submission_version",
+        "subtotal",
+        "tax_amount",
+        "tenant_id",
+        "total_amount",
+        "vendor_id",
+        "version"
+      ],
+      "typed_fields": {}
+    },
+    {
+      "entity_id": "bir_a00da1734f0d4d81",
+      "fields": [
+        "code",
+        "created_at",
+        "id",
+        "name"
+      ],
+      "typed_fields": {}
+    },
+    {
+      "entity_id": "bir_309e2af79ba59b4e",
+      "fields": [
+        "code",
+        "id",
+        "name",
+        "tenant_id"
+      ],
+      "typed_fields": {}
+    },
+    {
+      "entity_id": "bir_3bf5ab29312673c9",
+      "fields": [
+        "active",
+        "api_token",
+        "department_id",
+        "email",
+        "full_name",
+        "id",
+        "password",
+        "role",
+        "tenant_id"
+      ],
+      "typed_fields": {}
+    },
+    {
+      "entity_id": "bir_e3a21e721fb7674d",
+      "fields": [
+        "active",
+        "code",
+        "contact_email",
+        "id",
+        "name",
+        "tenant_id"
+      ],
+      "typed_fields": {}
+    },
+    {
+      "entity_id": "bir_d3cd0fc15a0605eb",
+      "fields": [
+        "available_amount",
+        "department_id",
+        "fiscal_year",
+        "id",
+        "reserved_amount",
+        "spent_amount",
+        "tenant_id",
+        "total_amount",
+        "version"
+      ],
+      "typed_fields": {}
+    },
+    {
+      "entity_id": "bir_49facd8be7c60453",
+      "fields": [
+        "budget_id",
+        "contract_no",
+        "created_at",
+        "currency",
+        "department_id",
+        "end_date",
+        "id",
+        "internal_notes",
+        "owner_id",
+        "paid_amount",
+        "rejection_reason",
+        "start_date",
+        "status",
+        "tenant_id",
+        "title",
+        "total_amount",
+        "updated_at",
+        "vendor_id",
+        "version"
+      ],
+      "typed_fields": {}
+    },
+    {
+      "entity_id": "bir_fa0ac0d317973e84",
+      "fields": [
+        "accepted_amount",
+        "amount",
+        "contract_id",
+        "due_date",
+        "evidence_url",
+        "id",
+        "name",
+        "status",
+        "submission_version",
+        "tenant_id",
+        "version"
+      ],
+      "typed_fields": {}
+    },
+    {
+      "entity_id": "bir_12980e17d182e6fd",
+      "fields": [
+        "accepted_amount",
+        "accepted_by",
+        "created_at",
+        "id",
+        "milestone_id",
+        "notes",
+        "tenant_id"
+      ],
+      "typed_fields": {}
+    },
+    {
+      "entity_id": "bir_c42a962ac772c8d0",
+      "fields": [
+        "contract_id",
+        "created_at",
+        "created_by",
+        "id",
+        "invoice_no",
+        "issue_date",
+        "status",
+        "subtotal",
+        "tax_amount",
+        "tenant_id",
+        "total_amount",
+        "vendor_id"
+      ],
+      "typed_fields": {}
+    },
+    {
+      "entity_id": "bir_898bcced3c4c2e2c",
+      "fields": [
+        "amount",
+        "contract_id",
+        "created_at",
+        "finance_approved_by",
+        "id",
+        "idempotency_key",
+        "invoice_id",
+        "manager_approved_by",
+        "milestone_id",
+        "paid_at",
+        "rejection_reason",
+        "requested_by",
+        "status",
+        "tenant_id",
+        "version"
+      ],
+      "typed_fields": {}
+    }
+  ]
+}

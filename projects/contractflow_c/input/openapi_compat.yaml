@@ -1,0 +1,696 @@
+openapi: 3.0.3
+info:
+  title: ContractFlow Project C API
+  version: 1.0.0
+  description: 企业合同履约、预算预留、里程碑验收和付款审批API。
+servers:
+  - url: http://localhost:8000/api/v1
+security:
+  - bearerAuth: []
+tags:
+  - name: auth
+  - name: contracts
+  - name: milestones
+  - name: finance
+  - name: audit
+  - name: reference
+paths:
+  /auth/login:
+    post:
+      tags: [auth]
+      security: []
+      summary: 登录并获取固定测试Token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/LoginRequest'}
+      responses:
+        '200':
+          description: 登录成功
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LoginResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /auth/me:
+    get:
+      tags: [auth]
+      summary: 当前用户
+      responses:
+        '200':
+          description: 当前用户
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/User'}
+  /contracts:
+    get:
+      tags: [contracts]
+      summary: 查询当前租户合同
+      responses:
+        '200':
+          description: 合同列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/Contract'}
+    post:
+      tags: [contracts]
+      summary: 创建合同草稿
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ContractCreate'}
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Contract'}
+        '422': {$ref: '#/components/responses/ValidationError'}
+  /contracts/{contractId}:
+    parameters:
+      - {$ref: '#/components/parameters/ContractId'}
+    get:
+      tags: [contracts]
+      summary: 获取合同详情
+      description: 必须验证tenant_id。vendor视图不得暴露internal_notes。
+      responses:
+        '200':
+          description: 合同详情
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Contract'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      tags: [contracts]
+      summary: 修改草稿合同
+      parameters:
+        - name: If-Match-Version
+          in: header
+          required: true
+          schema: {type: integer}
+          description: 乐观锁版本；不匹配返回409。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ContractUpdate'}
+      responses:
+        '200':
+          description: 修改成功
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Contract'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /contracts/{contractId}/submit:
+    post:
+      tags: [contracts]
+      summary: 提交法务审核
+      description: 仅DRAFT；至少一个里程碑且里程碑金额合计等于合同总额。
+      parameters:
+        - {$ref: '#/components/parameters/ContractId'}
+      responses:
+        '200':
+          description: 状态变为LEGAL_REVIEW
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Contract'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /contracts/{contractId}/legal-approve:
+    post:
+      tags: [contracts]
+      summary: 法务批准
+      description: 仅legal/admin且合同状态必须为LEGAL_REVIEW。
+      parameters:
+        - {$ref: '#/components/parameters/ContractId'}
+      responses:
+        '200':
+          description: 状态变为APPROVED
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Contract'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /contracts/{contractId}/legal-reject:
+    post:
+      tags: [contracts]
+      summary: 法务驳回
+      parameters:
+        - {$ref: '#/components/parameters/ContractId'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RejectRequest'}
+      responses:
+        '200':
+          description: 状态变为REJECTED
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Contract'}
+  /contracts/{contractId}/return-to-draft:
+    post:
+      tags: [contracts]
+      summary: 驳回合同返回草稿
+      parameters:
+        - {$ref: '#/components/parameters/ContractId'}
+      responses:
+        '200':
+          description: 状态变为DRAFT
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Contract'}
+  /contracts/{contractId}/activate:
+    post:
+      tags: [contracts]
+      summary: 激活合同并预留预算
+      description: 仅APPROVED；available减少合同金额，reserved增加同额，预算守恒。
+      parameters:
+        - {$ref: '#/components/parameters/ContractId'}
+      responses:
+        '200':
+          description: 合同ACTIVE
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Contract'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /contracts/{contractId}/cancel:
+    post:
+      tags: [contracts]
+      summary: 取消合同并释放未使用预算
+      parameters:
+        - {$ref: '#/components/parameters/ContractId'}
+      responses:
+        '200':
+          description: 合同CANCELLED
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Contract'}
+  /contracts/{contractId}/complete:
+    post:
+      tags: [contracts]
+      summary: 完成合同
+      description: 所有里程碑已验收、已足额付款且无进行中付款时才允许。
+      parameters:
+        - {$ref: '#/components/parameters/ContractId'}
+      responses:
+        '200':
+          description: 合同COMPLETED
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Contract'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /contracts/{contractId}/summary:
+    get:
+      tags: [contracts]
+      summary: 合同金额聚合摘要
+      parameters:
+        - {$ref: '#/components/parameters/ContractId'}
+      responses:
+        '200':
+          description: 合同、里程碑合计、已付款合计
+  /contracts/{contractId}/vendor-view:
+    get:
+      tags: [contracts]
+      summary: 供应商合同视图
+      description: 不得返回internal_notes、budget_id和内部审批信息。
+      parameters:
+        - {$ref: '#/components/parameters/ContractId'}
+      responses:
+        '200':
+          description: 对外合同摘要
+  /contracts/{contractId}/milestones:
+    parameters:
+      - {$ref: '#/components/parameters/ContractId'}
+    get:
+      tags: [milestones]
+      summary: 查询合同里程碑
+      responses:
+        '200':
+          description: 里程碑列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/Milestone'}
+    post:
+      tags: [milestones]
+      summary: 创建里程碑
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MilestoneCreate'}
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Milestone'}
+  /milestones/{milestoneId}/submit:
+    post:
+      tags: [milestones]
+      summary: 提交履约材料
+      parameters:
+        - {$ref: '#/components/parameters/MilestoneId'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [evidence_url]
+              properties:
+                evidence_url: {type: string, format: uri}
+      responses:
+        '200':
+          description: 状态变为SUBMITTED
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Milestone'}
+  /milestones/{milestoneId}/accept:
+    post:
+      tags: [milestones]
+      summary: 验收里程碑
+      description: 仅SUBMITTED；重复调用不得重复生成验收记录。
+      parameters:
+        - {$ref: '#/components/parameters/MilestoneId'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MilestoneDecision'}
+      responses:
+        '200':
+          description: 状态变为ACCEPTED
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Milestone'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /milestones/{milestoneId}/reject:
+    post:
+      tags: [milestones]
+      summary: 驳回履约
+      parameters:
+        - {$ref: '#/components/parameters/MilestoneId'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RejectRequest'}
+      responses:
+        '200':
+          description: 状态变为REJECTED
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Milestone'}
+  /invoices:
+    post:
+      tags: [finance]
+      summary: 创建发票
+      description: 同一供应商发票号唯一；金额非负；total=subtotal+tax。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/InvoiceCreate'}
+      responses:
+        '201':
+          description: 发票创建成功
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Invoice'}
+  /invoices/{invoiceId}:
+    get:
+      tags: [finance]
+      summary: 查询发票
+      parameters:
+        - name: invoiceId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      responses:
+        '200':
+          description: 发票详情
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Invoice'}
+  /payment-requests:
+    get:
+      tags: [finance]
+      summary: 查询付款申请
+      responses:
+        '200':
+          description: 付款列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/PaymentRequest'}
+    post:
+      tags: [finance]
+      summary: 创建付款申请
+      description: 合同ACTIVE、里程碑ACCEPTED、发票VALID；金额不得超过剩余额度。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PaymentCreate'}
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PaymentRequest'}
+  /payment-requests/{paymentId}:
+    get:
+      tags: [finance]
+      summary: 查询付款申请
+      parameters:
+        - {$ref: '#/components/parameters/PaymentId'}
+      responses:
+        '200':
+          description: 付款申请
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PaymentRequest'}
+  /payment-requests/{paymentId}/manager-approve:
+    post:
+      tags: [finance]
+      summary: 业务审批
+      parameters:
+        - {$ref: '#/components/parameters/PaymentId'}
+      responses:
+        '200':
+          description: MANAGER_APPROVED
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PaymentRequest'}
+  /payment-requests/{paymentId}/finance-approve:
+    post:
+      tags: [finance]
+      summary: 财务审批
+      description: 只能从MANAGER_APPROVED进入FINANCE_APPROVED。
+      parameters:
+        - {$ref: '#/components/parameters/PaymentId'}
+      responses:
+        '200':
+          description: FINANCE_APPROVED
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PaymentRequest'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /payment-requests/{paymentId}/pay:
+    post:
+      tags: [finance]
+      summary: 执行付款
+      description: 仅FINANCE_APPROVED。相同Idempotency-Key重复调用不得重复改变资金。
+      parameters:
+        - {$ref: '#/components/parameters/PaymentId'}
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: {type: string, minLength: 8}
+      responses:
+        '200':
+          description: PAID
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PaymentRequest'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /payment-requests/{paymentId}/reject:
+    post:
+      tags: [finance]
+      summary: 驳回付款申请
+      parameters:
+        - {$ref: '#/components/parameters/PaymentId'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RejectRequest'}
+      responses:
+        '200':
+          description: REJECTED
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PaymentRequest'}
+  /budgets:
+    get:
+      tags: [finance]
+      summary: 查询当前租户预算
+      responses:
+        '200':
+          description: 预算列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/Budget'}
+  /budgets/{budgetId}:
+    get:
+      tags: [finance]
+      summary: 查询预算
+      parameters:
+        - name: budgetId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      responses:
+        '200':
+          description: 预算详情
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Budget'}
+  /audit-logs:
+    get:
+      tags: [audit]
+      summary: 查询审计日志
+      responses:
+        '200':
+          description: 审计日志
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/AuditLog'}
+  /reference/departments:
+    get:
+      tags: [reference]
+      summary: 当前租户部门
+      responses:
+        '200': {description: 部门列表}
+  /reference/vendors:
+    get:
+      tags: [reference]
+      summary: 当前租户供应商
+      responses:
+        '200': {description: 供应商列表}
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    ContractId:
+      name: contractId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    MilestoneId:
+      name: milestoneId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    PaymentId:
+      name: paymentId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+  responses:
+    Unauthorized:
+      description: 未认证
+    Forbidden:
+      description: 无权限
+    NotFound:
+      description: 资源不存在或不可见
+    Conflict:
+      description: 状态、版本或业务约束冲突
+    ValidationError:
+      description: 参数或业务字段不合法
+  schemas:
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: {type: string, format: email}
+        password: {type: string}
+    LoginResponse:
+      type: object
+      required: [token, user_id, tenant_id, role, full_name]
+      properties:
+        token: {type: string}
+        user_id: {type: string, format: uuid}
+        tenant_id: {type: string, format: uuid}
+        role: {type: string}
+        full_name: {type: string}
+    User:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        tenant_id: {type: string, format: uuid}
+        department_id: {type: string
+nullable: true, format: uuid}
+        email: {type: string}
+        full_name: {type: string}
+        role: {type: string}
+    ContractCreate:
+      type: object
+      required: [contract_no, title, department_id, vendor_id, budget_id, total_amount, start_date, end_date]
+      properties:
+        contract_no: {type: string}
+        title: {type: string}
+        department_id: {type: string, format: uuid}
+        vendor_id: {type: string, format: uuid}
+        budget_id: {type: string, format: uuid}
+        total_amount: {type: number, exclusiveMinimum: 0}
+        currency: {type: string, default: CNY}
+        start_date: {type: string, format: date}
+        end_date: {type: string, format: date}
+        internal_notes: {type: string
+nullable: true}
+    ContractUpdate:
+      type: object
+      properties:
+        title: {type: string}
+        total_amount: {type: number, exclusiveMinimum: 0}
+        start_date: {type: string, format: date}
+        end_date: {type: string, format: date}
+        internal_notes: {type: string
+nullable: true}
+    Contract:
+      allOf:
+        - {$ref: '#/components/schemas/ContractCreate'}
+        - type: object
+          required: [id, tenant_id, owner_id, paid_amount, status, version]
+          properties:
+            id: {type: string, format: uuid}
+            tenant_id: {type: string, format: uuid}
+            owner_id: {type: string, format: uuid}
+            paid_amount: {type: number}
+            status: {type: string, enum: [DRAFT, LEGAL_REVIEW, REJECTED, APPROVED, ACTIVE, COMPLETED, CANCELLED]}
+            rejection_reason: {type: string
+nullable: true}
+            version: {type: integer}
+            created_at: {type: string, format: date-time}
+            updated_at: {type: string, format: date-time}
+    MilestoneCreate:
+      type: object
+      required: [name, amount, due_date]
+      properties:
+        name: {type: string}
+        amount: {type: number, exclusiveMinimum: 0}
+        due_date: {type: string, format: date}
+    MilestoneDecision:
+      type: object
+      properties:
+        accepted_amount: {type: number, minimum: 0}
+        notes: {type: string
+nullable: true}
+    Milestone:
+      allOf:
+        - {$ref: '#/components/schemas/MilestoneCreate'}
+        - type: object
+          properties:
+            id: {type: string, format: uuid}
+            tenant_id: {type: string, format: uuid}
+            contract_id: {type: string, format: uuid}
+            accepted_amount: {type: number}
+            status: {type: string, enum: [PENDING, SUBMITTED, ACCEPTED, REJECTED]}
+            submission_version: {type: integer}
+            evidence_url: {type: string
+nullable: true}
+            version: {type: integer}
+    InvoiceCreate:
+      type: object
+      required: [contract_id, invoice_no, subtotal, tax_amount, issue_date]
+      properties:
+        contract_id: {type: string, format: uuid}
+        invoice_no: {type: string}
+        subtotal: {type: number, minimum: 0}
+        tax_amount: {type: number, minimum: 0}
+        issue_date: {type: string, format: date}
+    Invoice:
+      allOf:
+        - {$ref: '#/components/schemas/InvoiceCreate'}
+        - type: object
+          properties:
+            id: {type: string, format: uuid}
+            tenant_id: {type: string, format: uuid}
+            vendor_id: {type: string, format: uuid}
+            total_amount: {type: number}
+            status: {type: string, enum: [VALID, VOID]}
+            created_by: {type: string, format: uuid}
+    PaymentCreate:
+      type: object
+      required: [contract_id, milestone_id, invoice_id, amount]
+      properties:
+        contract_id: {type: string, format: uuid}
+        milestone_id: {type: string, format: uuid}
+        invoice_id: {type: string, format: uuid}
+        amount: {type: number, exclusiveMinimum: 0}
+    PaymentRequest:
+      allOf:
+        - {$ref: '#/components/schemas/PaymentCreate'}
+        - type: object
+          properties:
+            id: {type: string, format: uuid}
+            tenant_id: {type: string, format: uuid}
+            requested_by: {type: string, format: uuid}
+            status: {type: string, enum: [DRAFT, MANAGER_APPROVED, FINANCE_APPROVED, PAID, REJECTED]}
+            idempotency_key: {type: string
+nullable: true}
+            manager_approved_by: {type: string
+nullable: true, format: uuid}
+            finance_approved_by: {type: string
+nullable: true, format: uuid}
+            paid_at: {type: string
+nullable: true, format: date-time}
+            rejection_reason: {type: string
+nullable: true}
+            version: {type: integer}
+    Budget:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        tenant_id: {type: string, format: uuid}
+        department_id: {type: string, format: uuid}
+        fiscal_year: {type: integer}
+        total_amount: {type: number}
+        available_amount: {type: number}
+        reserved_amount: {type: number}
+        spent_amount: {type: number}
+        version: {type: integer}
+    AuditLog:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        tenant_id: {type: string, format: uuid}
+        actor_id: {type: string, format: uuid}
+        entity_type: {type: string}
+        entity_id: {type: string, format: uuid}
+        action: {type: string}
+        before_data: {type: object
+nullable: true}
+        after_data: {type: object
+nullable: true}
+        correlation_id: {type: string
+nullable: true}
+        created_at: {type: string, format: date-time}
+    RejectRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason: {type: string, minLength: 1}

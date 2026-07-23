@@ -1,0 +1,66 @@
+{
+  "SUM": {
+    "compiled": 3,
+    "observed": 3,
+    "evaluated": 3,
+    "passed": 3,
+    "violated": 0,
+    "indeterminate": 0
+  },
+  "LTE": {
+    "compiled": 5,
+    "observed": 5,
+    "evaluated": 5,
+    "passed": 4,
+    "violated": 1,
+    "indeterminate": 0
+  },
+  "DELTA": {
+    "compiled": 2,
+    "observed": 2,
+    "evaluated": 2,
+    "passed": 2,
+    "violated": 0,
+    "indeterminate": 0
+  },
+  "STATE": {
+    "compiled": 3,
+    "observed": 3,
+    "evaluated": 3,
+    "passed": 3,
+    "violated": 0,
+    "indeterminate": 0
+  },
+  "IMPLIES": {
+    "compiled": 7,
+    "observed": 7,
+    "evaluated": 7,
+    "passed": 7,
+    "violated": 0,
+    "indeterminate": 0
+  },
+  "TEMPORAL": {
+    "compiled": 2,
+    "observed": 2,
+    "evaluated": 2,
+    "passed": 1,
+    "violated": 1,
+    "indeterminate": 0
+  },
+  "CONCURRENCY": {
+    "compiled": 1,
+    "observed": 1,
+    "evaluated": 1,
+    "passed": 1,
+    "violated": 0,
+    "indeterminate": 0
+  },
+  "IDEMPOTENCY": {
+    "compiled": 1,
+    "observed": 1,
+    "evaluated": 1,
+    "passed": 1,
+    "violated": 0,
+    "indeterminate": 0
+  }
+}

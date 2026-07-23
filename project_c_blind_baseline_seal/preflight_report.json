@@ -1,0 +1,52 @@
+{
+  "schema_version": "qualibug.preflight-report.v1",
+  "all_passed": true,
+  "base_url": "http://localhost:8000",
+  "base_url_reachable": true,
+  "auth_config_present": true,
+  "actor_token_count": 41,
+  "checks": [
+    {
+      "check": "base_url_reachable",
+      "status": "PASSED",
+      "http_status": 404
+    },
+    {
+      "check": "gateway_routes",
+      "status": "PASSED",
+      "routes_ok": 6,
+      "routes_failed": 0,
+      "sample_size": 6
+    },
+    {
+      "check": "auth_configuration",
+      "status": "PASSED",
+      "source": "test_accounts.json"
+    },
+    {
+      "check": "actor_tokens",
+      "status": "PASSED",
+      "token_count": 41,
+      "roles": [
+        "acme-admin",
+        "acme-auditor",
+        "acme-finance",
+        "acme-legal",
+        "acme-manager",
+        "acme-requester",
+        "acme-vendor",
+        "admin",
+        "auditor",
+        "finance",
+        "globex-admin",
+        "globex-finance",
+        "globex-requester",
+        "legal",
+        "project_manager",
+        "requester",
+        "vendor"
+      ]
+    }
+  ],
+  "extracted_at": "2026-07-22T14:41:36.143586+00:00"
+}
