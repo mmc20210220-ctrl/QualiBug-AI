@@ -16,6 +16,7 @@ from .adaptive_discovery_planner import (
     build_agent_intent_plan,
     plan_obligation_round,
 )
+from .deep_experiment_planner import plan_deep_experiments
 from .adaptive_planning_history import (
     build_planning_budget_receipt,
     build_planning_history_receipt,
@@ -598,6 +599,24 @@ def build_discovery_plan(
             _original = _vm.group(1)
             if _original not in by_obligation:
                 by_obligation[_original] = row
+
+    # ── Deep Experiment Planner: enrich blocked/shallow obligations ──
+    _deep_budget = int(
+        os.environ.get("QUALIBUG_DEEP_EXPERIMENT_BUDGET") or "100"
+    )
+    _deep_result = plan_deep_experiments(
+        obligations,
+        by_obligation,
+        behavior_ir,
+        budget=_deep_budget,
+    )
+    _deep_by_obl = _dict(_deep_result.get("by_obligation"))
+    for _d_oid, _d_exp in _deep_by_obl.items():
+        if _d_oid not in by_obligation or _text(
+            _dict(_dict(by_obligation[_d_oid]).get("compile_receipt")).get("status")
+        ).upper() != "COMPILED":
+            by_obligation[_d_oid] = _d_exp
+
     campaign_budget = int(getattr(campaign, "slice_budget", 0) or 0)
     if campaign_budget <= 0:
         raise MainlineContractError("obligation_budget_invalid")

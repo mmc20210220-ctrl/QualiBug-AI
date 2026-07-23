@@ -613,6 +613,51 @@ def compile_family_protocol(
             }
         expression = _dict(property_spec.get("expression"))
         window_ms = expression.get("window_ms") or property_spec.get("window_ms")
+        # Date-range temporal: expression has date_field/bounds but no window_ms
+        date_field = _text(expression.get("date_field") or expression.get("field") or expression.get("start_date"))
+        has_date_bounds = bool(
+            expression.get("bounds")
+            or expression.get("start")
+            or expression.get("end")
+            or expression.get("min")
+            or expression.get("max")
+            or expression.get("from")
+            or expression.get("to")
+        )
+        if date_field and has_date_bounds:
+            # Date-range temporal boundary experiment
+            return {
+                "status": "COMPILED",
+                "control_plan": [{
+                    "step_id": "control_1",
+                    "actor_ref": control_actor_ref,
+                    "operation_ref": operation_ref,
+                    "intent": "valid_source_control",
+                    "protocol_step": "positive_control",
+                    "body": deepcopy(body),
+                }],
+                "treatment_plan": [{
+                    "step_id": "treatment_1",
+                    "actor_ref": treatment_actor_ref,
+                    "operation_ref": operation_ref,
+                    "intent": "temporal_date_boundary_mutation",
+                    "protocol_step": "temporal_date_write",
+                    "body": deepcopy(body),
+                    "date_field": date_field,
+                    "property_template": _text(property_spec.get("template")),
+                    "invariant_ref": _text(property_spec.get("invariant_ref")),
+                }],
+                "observers": [{"observer_id": "http_response"}, {"observer_id": "entity_state"}],
+                "assertion": {
+                    "kind": "temporal_date_boundary",
+                    "date_field": date_field,
+                    "bounds": expression.get("bounds") or {
+                        k: expression[k]
+                        for k in ("start", "end", "min", "max", "from", "to")
+                        if k in expression
+                    },
+                },
+            }
         if not isinstance(window_ms, (int, float)) or isinstance(window_ms, bool) or window_ms <= 0:
             return {
                 "status": "BLOCKED",
