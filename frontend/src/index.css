@@ -94,6 +94,18 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   0% { background-position: 0% 50%; }
   100% { background-position: 200% 50%; }
 }
+@keyframes text-reveal {
+  from { opacity: 0; clip-path: inset(0 100% 0 0); }
+  to { opacity: 1; clip-path: inset(0 0 0 0); }
+}
+@keyframes panel-rise-in {
+  from { opacity: 0; transform: translateY(18px) scale(.975); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes shine-sweep {
+  0% { transform: translateX(-100%) skewX(-20deg); }
+  100% { transform: translateX(200%) skewX(-20deg); }
+}
 @keyframes aurora-drift {
   0% { transform: translate3d(-2%, -1%, 0) scale(1); }
   50% { transform: translate3d(2%, 1.5%, 0) scale(1.06); }
@@ -331,6 +343,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   font-size: 10px;
   font-weight: 800;
   letter-spacing: .18em;
+  animation: rise-in .6s var(--ease-out) .05s both;
 }
 .login-stage-title {
   margin: 0;
@@ -344,7 +357,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   gap: 6px;
   text-shadow: 0 8px 40px rgba(0,0,0,.35);
 }
-.login-title-line { display: block; }
+.login-title-line { display: block; animation: text-reveal .72s var(--ease-out) .08s both; }
 .login-title-accent {
   display: inline-block;
   background: linear-gradient(100deg, #f8fafc 0%, #5eead4 48%, #7dd3fc 100%);
@@ -352,7 +365,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: title-sheen 8s linear infinite;
+  animation: title-sheen 8s linear infinite, text-reveal .72s var(--ease-out) .16s both;
 }
 .login-stage-lead {
   margin-top: 16px;
@@ -361,6 +374,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   font-size: clamp(14px, 1.45vw, 16px);
   line-height: 1.6;
   font-weight: 500;
+  animation: rise-in .6s var(--ease-out) .24s both;
 }
 .login-value-list {
   list-style: none;
@@ -469,7 +483,20 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
     -16px 0 46px rgba(45,212,191,.06),
     0 0 60px rgba(45,212,191,.07);
   transition: border-color .35s ease, box-shadow .35s ease, background .35s ease;
-  animation: rise-in .45s var(--ease-out) both;
+  animation: panel-rise-in .55s var(--ease-out) .12s both;
+}
+@media (min-width: 901px) {
+  .login-panel-inner {
+    transform:
+      perspective(1200px)
+      rotateY(calc((var(--login-pointer-x, .5) - .5) * -5deg))
+      rotateX(calc((var(--login-pointer-y, .5) - .5) * 3deg));
+    will-change: transform;
+  }
+  .login-page.is-focused .login-panel-inner {
+    transform: perspective(1200px) rotateY(0deg) rotateX(0deg);
+    transition: transform .6s var(--ease-out);
+  }
 }
 .login-panel-inner::before {
   content: "";
@@ -641,6 +668,24 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   border-color: #2dd4bf;
   box-shadow: 0 0 0 3px rgba(45,212,191,.16), 0 0 18px rgba(45,212,191,.1);
   outline: none;
+  transform: translateY(-1px);
+}
+.login-form .form-input:not([type="password"])[data-filled="true"]:not([aria-invalid="true"]) + .login-field-status::after {
+  content: "";
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(52, 211, 153, .22);
+  border: 1.6px solid #34d399;
+  color: #34d399;
+  mask: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.5'%3E%3Cpath d='M5 13l4 4L19 7'/%3E%3C/svg%3E") center / 14px no-repeat;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.5'%3E%3Cpath d='M5 13l4 4L19 7'/%3E%3C/svg%3E") center / 14px no-repeat;
+  background: #34d399;
+  animation: rise-in .3s var(--ease-out) both;
 }
 .btn.btn-primary.login-submit,
 .login-submit {
@@ -681,6 +726,12 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   transform: translateY(-2px);
   box-shadow: 0 16px 36px rgba(13, 148, 136, .42), 0 0 30px rgba(45,212,191,.22) !important;
   background: linear-gradient(115deg, #0f766e 0%, #0d9488 35%, #0ea5e9 70%, #14b8a6 100%) !important;
+}
+.btn.btn-primary.login-submit:active:not(:disabled),
+.login-submit:active:not(:disabled) {
+  transform: translateY(0) scale(.975);
+  box-shadow: 0 6px 16px rgba(13, 148, 136, .28), 0 0 14px rgba(45,212,191,.1) !important;
+  transition-duration: .08s;
 }
 .login-submit.is-loading {
   animation-duration: 1.4s;
@@ -724,6 +775,17 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   font-size: 11px;
   font-weight: 600;
   letter-spacing: .01em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.login-trust-icon {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  opacity: .5;
+  color: #94a3b8;
 }
 .login-panel .btn-link {
   display: inline-flex;
@@ -929,6 +991,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 
 @media (prefers-reduced-motion: reduce) {
   .login-stage-scan,
+  .login-title-line,
   .login-title-accent,
   .login-health-dot,
   .login-submit,
@@ -936,7 +999,11 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   .login-hud-frame i,
   .login-stage-orb,
   .login-value-list li,
-  .login-panel-inner {
+  .login-stage-kicker,
+  .login-stage-lead,
+  .login-panel-inner,
+  .login-panel-inner::after,
+  .login-module-list {
     animation: none !important;
   }
   .login-stage-inner,

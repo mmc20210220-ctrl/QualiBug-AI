@@ -346,6 +346,10 @@ export function Login() {
     <main
       className={`login-page${fieldFocused ? ' is-focused' : ''}${submitting ? ' is-submitting' : ''}${mode !== 'login' ? ' is-register' : ''}`}
       onMouseMove={onStagePointerMove}
+      style={{
+        '--login-pointer-x': pointer.x.toFixed(3),
+        '--login-pointer-y': pointer.y.toFixed(3),
+      } as React.CSSProperties}
     >
       <LoginStageCanvas pointerX={pointer.x} pointerY={pointer.y} focusBoost={fieldFocused || submitting} />
       <div className="login-aurora" aria-hidden="true" />
@@ -617,7 +621,14 @@ export function Login() {
               </>
             )}
           </div>
-          <p className="login-trust-note">身份信息通过安全连接提交 · 不在页面保存密码</p>
+          <p className="login-trust-note">
+            <svg className="login-trust-icon" viewBox="0 0 24 24" aria-hidden="true" width="14" height="14">
+              <rect x="5" y="10" width="14" height="10" rx="2" />
+              <path d="M8 10V7.2a4 4 0 018 0V10" />
+              <circle cx="12" cy="15" r="1.2" />
+            </svg>
+            身份信息通过安全连接提交 · 不在页面保存密码
+          </p>
         </div>
       </section>
     </main>

@@ -222,8 +222,16 @@ def build_private_pilot_health_payload(
 ) -> dict[str, Any]:
     root = _handler_root(handler, fallback_root)
     llm_health = _handler_llm_health(handler)
+    root_ok = root.exists()
+    system_behavior = system_behavior_runtime_status()
+    api_status = "healthy"  # serving this response proves API liveness
+    llm_status = llm_health.get("status", "offline")
+    sb_ready = bool(system_behavior.get("ready"))
+    sb_status = "healthy" if sb_ready else "degraded"
+    overall_ok = True
     return {
-        "ok": True,
+        "ok": overall_ok,
+        "status": "healthy" if overall_ok else "degraded",
         "service": "qualibug_private_pilot",
         "product": PRODUCT_NAME,
         "version": PRODUCT_VERSION,
@@ -232,7 +240,7 @@ def build_private_pilot_health_payload(
         "channel": PRODUCT_CHANNEL,
         "api_version": "v1",
         "private_root": str(root),
-        "private_root_exists": root.exists(),
+        "private_root_exists": root_ok,
         "public_bind_allowed": os.environ.get("QUALIBUG_ALLOW_PUBLIC_BIND") == "1",
         "bind_host": os.environ.get("QUALIBUG_BIND_HOST", "127.0.0.1"),
         "port": int_env("QUALIBUG_PORT", DEFAULT_PRIVATE_PILOT_PORT),
@@ -244,11 +252,26 @@ def build_private_pilot_health_payload(
         "llm_status": llm_health,
         "browser_ui_smoke": browser_ui_status(),
         "pattern_library_patterns": pattern_library_count(root),
-        "system_behavior_runtime": system_behavior_runtime_status(),
+        "system_behavior_runtime": system_behavior,
         "deployment_contract_patch": {
             "patched": True,
             "source": patch_source,
             "port_contract": f"container:{DEFAULT_PRIVATE_PILOT_PORT}",
             "health_contract": CANONICAL_HEALTH_PATH,
+        },
+        "components": {
+            "api": {
+                "status": api_status,
+                "service": "qualibug_private_pilot",
+                "root_exists": root_ok,
+            },
+            "llm": {
+                "status": llm_status,
+                "available": bool(llm_health.get("available")),
+            },
+            "system_behavior": {
+                "status": sb_status,
+                "ready": sb_ready,
+            },
         },
     }
