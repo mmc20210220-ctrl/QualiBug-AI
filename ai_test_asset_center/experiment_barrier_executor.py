@@ -499,45 +499,35 @@ def execute_barrier_plans(
         )
         request_body = _materialize_body_template(request_body, runtime_bindings)
         unresolved_path_tokens = _unresolved_path_placeholders(path)
-        # ── Force-strip unresolved path placeholders ──
+        # ── P0-PLACEHOLDER: BLOCK instead of force-strip ──
+        # Unresolved path placeholders mean no real entity exists.
+        # Executing with placeholder IDs (e.g. "1") guarantees 404/400
+        # failures and wastes compute. Block until real fixture data exists.
         if unresolved_path_tokens:
-            import re as _re_bp
-            path = _re_bp.sub(r"\{[^}]*\}", "1", path)
-            path = _re_bp.sub(r":[a-zA-Z_]\w*", "1", path)
-            runtime_bindings.update({t: "1" for t in unresolved_path_tokens})
-            unresolved_path_tokens = []
+            reason = f"BLOCKED_UNRESOLVED_PATH_PLACEHOLDERS:{','.join(unresolved_path_tokens[:6])}"
+            pre_transport_block_reasons.append(reason)
+            return _barrier_block_row(
+                item,
+                reason=reason,
+                unresolved_path_tokens=unresolved_path_tokens,
+                unresolved_body_tokens=[],
+            )
         unresolved_body_tokens = (
             _unresolved_body_placeholders(request_body, runtime_bindings)
             if method in _WRITE_METHODS
             else []
         )
-        # ── Force-fill unresolved body tokens ──
+        # ── P0-PLACEHOLDER: BLOCK instead of force-fill ──
+        # Unresolved body placeholders mean fixture data is missing.
         if unresolved_body_tokens:
-            from .runtime_binding_graph import _generate_placeholder_test_value
-            for _bt in unresolved_body_tokens:
-                runtime_bindings[_bt] = str(_generate_placeholder_test_value(_bt))
-            request_body = _materialize_body_template(request_body, runtime_bindings)
-            unresolved_body_tokens = (
-                _unresolved_body_placeholders(request_body, runtime_bindings)
-                if method in _WRITE_METHODS
-                else []
+            reason = f"BLOCKED_UNRESOLVED_BODY_PLACEHOLDERS:{','.join(unresolved_body_tokens[:6])}"
+            pre_transport_block_reasons.append(reason)
+            return _barrier_block_row(
+                item,
+                reason=reason,
+                unresolved_path_tokens=[],
+                unresolved_body_tokens=unresolved_body_tokens,
             )
-        # ── Degraded: force-replace remaining placeholders instead of blocking ──
-        if unresolved_body_tokens:
-            import re as _re_bbody
-            from .runtime_binding_graph import _generate_placeholder_test_value as _gen_bval
-            def _force_replace_bbody(body: Any) -> Any:
-                if isinstance(body, dict):
-                    return {k: _force_replace_bbody(v) for k, v in body.items()}
-                if isinstance(body, list):
-                    return [_force_replace_bbody(v) for v in body]
-                if isinstance(body, str):
-                    def _repl_b(m: Any) -> str:
-                        return str(_gen_bval(m.group(1)))
-                    return _re_bbody.sub(r"[<{]([A-Za-z_][A-Za-z0-9_]*)[>}]", _repl_b, body)
-                return body
-            request_body = _force_replace_bbody(request_body)
-            unresolved_body_tokens = []  # Clear to proceed
         reasons: list[str] = []
         if unresolved_path_tokens:
             reasons.append(

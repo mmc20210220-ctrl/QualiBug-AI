@@ -287,12 +287,23 @@ def execute_non_barrier_plans(
                 runtime_bindings.update({t: 'auto_val' for t in unresolved_path_tokens})
                 unresolved_path_tokens = _unresolved_path_placeholders(path)
             if unresolved_path_tokens:
-                # ── Enhanced: force-strip ALL remaining placeholders ──
-                import re as _re3
-                path = _re3.sub(r"\{[^}]*\}", "1", path)
-                path = _re3.sub(r":[a-zA-Z_]\w*", "1", path)
-                runtime_bindings.update({t: "1" for t in unresolved_path_tokens})
-                unresolved_path_tokens = []
+                # ── P0-PLACEHOLDER: BLOCK instead of force-strip ──
+                # Unresolved path placeholders mean no real entity exists.
+                # Executing with placeholder IDs (e.g. "1") guarantees 404/400
+                # failures and wastes compute. Block the experiment until real
+                # fixture data exists via Bootstrap.
+                steps_out.append({
+                    "phase": phase,
+                    "subject_id": subject_id,
+                    "method": method,
+                    "path": path,
+                    "status_code": 0,
+                    "skipped_reason": f"BLOCKED_UNRESOLVED_PATH_PLACEHOLDERS:{','.join(unresolved_path_tokens[:6])}",
+                    "request": {},
+                    "response": {"status_code": 0, "body": {}},
+                })
+                blocked_reasons.append(f"unresolved_path_placeholders:{','.join(unresolved_path_tokens[:6])}")
+                continue
             request_body = (
                 step.get("body")
                 if "body" in step
@@ -309,42 +320,22 @@ def execute_non_barrier_plans(
                 runtime_bindings,
             )
             if method in _WRITE_METHODS and unresolved_body_tokens:
-                # ── Force-fill unresolved body tokens with generated values ──
-                from .runtime_binding_graph import _generate_placeholder_test_value
-                for _bt in unresolved_body_tokens:
-                    _bval = str(_generate_placeholder_test_value(_bt))
-                    runtime_bindings[_bt] = _bval
-                # Re-materialize body with new bindings
-                request_body = _materialize_body_template(
-                    request_body,
-                    runtime_bindings,
-                )
-                unresolved_body_tokens = _unresolved_body_placeholders(
-                    request_body,
-                    runtime_bindings,
-                )
-            if method in _WRITE_METHODS and unresolved_body_tokens:
-                # ── Degraded: force-replace remaining placeholders and proceed ──
-                # Instead of blocking, replace unresolved tokens with generic values
-                # and mark the step as degraded. The request may fail but we get
-                # HTTP response evidence either way.
-                import re as _re_body
-                from .runtime_binding_graph import _generate_placeholder_test_value as _gen_val
-                def _force_replace_body_placeholders(body: Any) -> Any:
-                    if isinstance(body, dict):
-                        return {k: _force_replace_body_placeholders(v) for k, v in body.items()}
-                    if isinstance(body, list):
-                        return [_force_replace_body_placeholders(v) for v in body]
-                    if isinstance(body, str):
-                        # Replace <token> or {token} patterns with generated values
-                        def _repl(m: Any) -> str:
-                            tok = m.group(1)
-                            return str(_gen_val(tok))
-                        return _re_body.sub(r"[<{]([A-Za-z_][A-Za-z0-9_]*)[>}]", _repl, body)
-                    return body
-                request_body = _force_replace_body_placeholders(request_body)
-                # Mark as degraded but continue execution
-                unresolved_body_tokens = []  # Clear to proceed
+                # ── P0-PLACEHOLDER: BLOCK instead of force-fill ──
+                # Unresolved body placeholders mean fixture data is missing.
+                # Force-filling with generated values creates fake data that
+                # violates the Non-Production Execution Contract.
+                steps_out.append({
+                    "phase": phase,
+                    "subject_id": subject_id,
+                    "method": method,
+                    "path": path,
+                    "status_code": 0,
+                    "skipped_reason": f"BLOCKED_UNRESOLVED_BODY_PLACEHOLDERS:{','.join(unresolved_body_tokens[:6])}",
+                    "request": {"body": request_body} if request_body else {},
+                    "response": {"status_code": 0, "body": {}},
+                })
+                blocked_reasons.append(f"unresolved_body_placeholders:{','.join(unresolved_body_tokens[:6])}")
+                continue
             runtime_body_plan = deepcopy(_dict(step.get("runtime_body_plan")))
             if runtime_body_plan:
                 identity_fields = infer_path_params(path_template)

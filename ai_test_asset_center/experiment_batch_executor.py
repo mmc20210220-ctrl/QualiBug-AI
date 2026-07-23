@@ -170,10 +170,12 @@ def execute_selected_experiments(
     mainline_run: dict[str, Any],
     campaign_id: str = "",
     experiment_budget: int = 100,
+    validation_phase: str = "",  # "small_scale" or "formal" or "" (auto)
 ) -> dict[str, Any]:
     """Execute every selected experiment; each yields EXECUTED or BLOCKED receipt.
     
     experiment_budget: maximum number of experiments to execute (default 100).
+    validation_phase: "small_scale" (≤20) or "formal" (≤100) or "" (auto-detect).
     Experiments beyond the budget are marked BUDGET_EXCEEDED.
     """
     # Lazy import avoids a package cycle with experiment_executor re-exports.
@@ -217,14 +219,23 @@ def execute_selected_experiments(
     execution_results: dict[str, dict[str, Any]] = {}
     gate_results: dict[str, dict[str, Any]] = {}
     batch_nonce = str(time.time_ns())
-    # ── Experiment budget enforcement ──
+    # ── Experiment budget enforcement with validation phase ──
     # Read budget from runtime_contract or use parameter default.
     # Prevents runaway execution (e.g. 2700+ experiments in 4.5h).
-    _budget = int(
-        _dict(runtime_contract).get("experiment_budget")
-        or experiment_budget
-        or 100
+    # Phase-aware: small_scale ≤20, formal ≤100.
+    from .small_scale_validation_gate import (
+        get_validation_budget,
+        SMALL_SCALE_BUDGET,
+        FORMAL_BUDGET,
     )
+    _phase = str(validation_phase or _dict(runtime_contract).get("validation_phase") or "").strip().lower()
+    if _phase in ("small_scale", "small", "validation"):
+        _phase = "small_scale"
+    elif _phase in ("formal", "full", "production"):
+        _phase = "formal"
+    else:
+        _phase = "small_scale"  # Default to small-scale for safety
+    _budget = get_validation_budget(runtime_contract, phase=_phase)
     _budget = max(1, min(_budget, 200))  # hard cap at 200
     _total_selected = len(selected)
     if _total_selected > _budget:
@@ -661,7 +672,9 @@ def execute_selected_experiments(
         cleanup_failures += outcome_cleanup_failures
         if status in ("EXECUTED", "DELIVERABLE") and isinstance(outcome.get("finding"), dict):
             findings.append(outcome["finding"])
-    return {
+    # ── Build validation gate summary ──
+    from .small_scale_validation_gate import check_validation_gate
+    _batch_result = {
         "schema_version": "qualibug.experiment-execution-batch.v1",
         "selected_count": len(selected),
         "executed_count": executed,
@@ -670,6 +683,7 @@ def execute_selected_experiments(
         "cleanup_failures": cleanup_failures,
         "budget_exceeded_count": budget_exceeded,
         "experiment_budget": _budget,
+        "validation_phase": _phase,
         "findings": findings,
         "results": results,
         "compile_results": compile_results,
@@ -679,4 +693,13 @@ def execute_selected_experiments(
             isinstance(item.get("execution_receipt"), dict) for item in results
         ),
     }
+    # Attach validation gate check
+    _validation_gate = check_validation_gate(
+        _batch_result,
+        campaign_id=campaign_id,
+        run_id=_text(run_contract.get("run_id")),
+        phase=_phase,
+    )
+    _batch_result["validation_gate"] = _validation_gate
+    return _batch_result
 
