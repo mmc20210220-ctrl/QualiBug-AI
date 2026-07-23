@@ -586,12 +586,24 @@ def plan_deep_experiments(
     actors_by_id = {_text(a.get("id")): a for a in actors if isinstance(a, dict)}
     invariants_by_id = {_text(inv.get("id")): inv for inv in invariants if isinstance(inv, dict)}
 
-    # Find executable actor (first actor with credentials or any actor)
+    # Find executable actor: prefer actors with real credentials (non-template)
     default_actor_ref = ""
+    _admin_actor_ref = ""
     for a in actors:
-        if isinstance(a, dict) and _text(a.get("id")):
+        if not isinstance(a, dict) or not _text(a.get("id")):
+            continue
+        _role = _text(a.get("role"))
+        _secret = _text(a.get("credential_secret_ref") or a.get("secret_ref"))
+        # Skip template actors (role/secret contains { or is empty)
+        if not _role or _role.startswith("{") or not _secret or _secret.startswith("{") or ":{" in _secret:
+            continue
+        if not default_actor_ref:
             default_actor_ref = _text(a.get("id"))
-            break
+        if _role.lower() in {"admin", "administrator", "superuser", "root"}:
+            _admin_actor_ref = _text(a.get("id"))
+    # Prefer admin if available
+    if _admin_actor_ref:
+        default_actor_ref = _admin_actor_ref
 
     deep_experiments: list[dict[str, Any]] = []
     by_obligation: dict[str, dict[str, Any]] = {}

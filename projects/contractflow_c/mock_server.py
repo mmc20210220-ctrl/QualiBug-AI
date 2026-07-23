@@ -69,12 +69,73 @@ for tname, tinfo in TENANTS.items():
         "spent_amount": 0.0, "version": 1,
     }
 
-# Idempotency store
-IDEMPOTENCY_STORE: dict[str, dict] = {}
-
 
 def _now_iso():
     return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# ── Seed business data (contracts, milestones, invoices, payments) ──
+for tname, tinfo in TENANTS.items():
+    tid = tinfo["id"]
+    dept_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"dept-{tname}"))
+    vendor_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"vendor-{tname}"))
+    budget_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"budget-{tname}"))
+    admin_user = next(u for u in DB["users"].values() if u["tenant_id"] == tid and u["role"] == "admin")
+    for ci in range(1, 4):
+        cid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"contract-{tname}-{ci}"))
+        contract = {
+            "id": cid, "tenant_id": tid, "owner_id": admin_user["id"],
+            "contract_no": f"{tname.upper()}-2026-{ci:03d}",
+            "title": f"{tname} Service Agreement {ci}",
+            "department_id": dept_id, "vendor_id": vendor_id,
+            "budget_id": budget_id, "total_amount": 100000.0 * ci,
+            "currency": "CNY",
+            "start_date": "2026-01-01", "end_date": "2026-12-31",
+            "internal_notes": f"Internal notes for {tname} contract {ci}",
+            "paid_amount": 0.0, "status": "APPROVED", "version": 1,
+            "rejection_reason": None,
+            "created_at": _now_iso(), "updated_at": _now_iso(),
+        }
+        DB["contracts"][cid] = contract
+        # Create milestones for this contract
+        for mi in range(1, 3):
+            mid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"milestone-{tname}-{ci}-{mi}"))
+            milestone = {
+                "id": mid, "tenant_id": tid, "contract_id": cid,
+                "title": f"Milestone {mi} for contract {ci}",
+                "amount": 50000.0 * ci,
+                "status": "ACCEPTED" if mi == 1 else "DRAFT",
+                "deliverables": f"Deliverable {mi}",
+                "acceptance_criteria": f"Criteria {mi}",
+                "created_at": _now_iso(),
+            }
+            DB["milestones"][mid] = milestone
+            # Create invoice for accepted milestones
+            if mi == 1:
+                inv_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"invoice-{tname}-{ci}-{mi}"))
+                invoice = {
+                    "id": inv_id, "tenant_id": tid, "contract_id": cid,
+                    "milestone_id": mid, "invoice_no": f"INV-{tname.upper()}-{ci:03d}-{mi:03d}",
+                    "amount": 50000.0 * ci, "status": "PENDING",
+                    "created_at": _now_iso(),
+                }
+                DB["invoices"][inv_id] = invoice
+                # Create payment request
+                pr_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"payment-{tname}-{ci}-{mi}"))
+                payment = {
+                    "id": pr_id, "tenant_id": tid, "contract_id": cid,
+                    "milestone_id": mid, "invoice_id": inv_id,
+                    "requested_by": admin_user["id"],
+                    "amount": 50000.0 * ci, "status": "DRAFT",
+                    "idempotency_key": None,
+                    "manager_approved_by": None, "finance_approved_by": None,
+                    "paid_at": None, "rejection_reason": None,
+                    "version": 1, "created_at": _now_iso(),
+                }
+                DB["payment_requests"][pr_id] = payment
+
+# Idempotency store
+IDEMPOTENCY_STORE: dict[str, dict] = {}
 
 
 def _audit(tenant_id, actor_id, entity_type, entity_id, action, before=None, after=None):
@@ -203,6 +264,19 @@ class ContractFlowHandler(BaseHTTPRequestHandler):
                 return
             c = {k: v for k, v in contract.items() if k not in ("internal_notes", "budget_id")}
             self._send_json(200, c)
+        elif path == "/milestones":
+            items = [m for m in DB["milestones"].values() if m["tenant_id"] == tid]
+            self._send_json(200, items)
+        elif re.match(r"^/milestones/[^/]+$", path):
+            mid = path.split("/")[2]
+            ms = DB["milestones"].get(mid)
+            if not ms or ms["tenant_id"] != tid:
+                self._send_json(404, {"error": "Not found"})
+                return
+            self._send_json(200, ms)
+        elif path == "/invoices":
+            items = [i for i in DB["invoices"].values() if i["tenant_id"] == tid]
+            self._send_json(200, items)
         elif re.match(r"^/invoices/[^/]+$", path):
             iid = path.split("/")[2]
             inv = DB["invoices"].get(iid)

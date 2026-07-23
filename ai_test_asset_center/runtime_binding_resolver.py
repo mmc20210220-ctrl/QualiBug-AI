@@ -17,6 +17,7 @@ from typing import Any
 
 _SCHEMA = "qualibug.runtime-binding-resolver.v1"
 _PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+_COLON_PARAM_RE = re.compile(r"(?<=/):([a-zA-Z_]\w*)\b")
 
 # Timeout for binding resolution HTTP calls (seconds)
 _BINDING_TIMEOUT = 10
@@ -35,8 +36,10 @@ def _list(value: Any) -> list[Any]:
 
 
 def _extract_placeholders(path: str) -> list[str]:
-    """Extract placeholder names from a path template."""
-    return _PLACEHOLDER_RE.findall(path or "")
+    """Extract placeholder names from a path template ({param} and :param)."""
+    results = _PLACEHOLDER_RE.findall(path or "")
+    results.extend(_COLON_PARAM_RE.findall(path or ""))
+    return results
 
 
 def _find_list_endpoints_for_entity(
@@ -66,7 +69,7 @@ def _find_list_endpoints_for_entity(
         if not path:
             continue
         # Skip paths with unresolved placeholders (can't call them)
-        if _PLACEHOLDER_RE.search(path):
+        if _PLACEHOLDER_RE.search(path) or _COLON_PARAM_RE.search(path):
             continue
         # Match: path contains the entity hint
         path_lower = path.lower()

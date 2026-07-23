@@ -221,6 +221,18 @@ paths:
       responses:
         '200':
           description: 对外合同摘要
+  /milestones:
+    get:
+      tags: [milestones]
+      summary: 查询当前租户所有里程碑
+      responses:
+        '200':
+          description: 里程碑列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/Milestone'}
   /contracts/{contractId}/milestones:
     parameters:
       - {$ref: '#/components/parameters/ContractId'}
@@ -307,6 +319,17 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Milestone'}
   /invoices:
+    get:
+      tags: [finance]
+      summary: 查询当前租户所有发票
+      responses:
+        '200':
+          description: 发票列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/Invoice'}
     post:
       tags: [finance]
       summary: 创建发票
@@ -541,8 +564,7 @@ components:
       properties:
         id: {type: string, format: uuid}
         tenant_id: {type: string, format: uuid}
-        department_id: {type: string
-nullable: true, format: uuid}
+        department_id: {type: string, nullable: true, format: uuid}
         email: {type: string}
         full_name: {type: string}
         role: {type: string}
@@ -559,8 +581,7 @@ nullable: true, format: uuid}
         currency: {type: string, default: CNY}
         start_date: {type: string, format: date}
         end_date: {type: string, format: date}
-        internal_notes: {type: string
-nullable: true}
+        internal_notes: {type: string, nullable: true}
     ContractUpdate:
       type: object
       properties:
@@ -568,8 +589,7 @@ nullable: true}
         total_amount: {type: number, exclusiveMinimum: 0}
         start_date: {type: string, format: date}
         end_date: {type: string, format: date}
-        internal_notes: {type: string
-nullable: true}
+        internal_notes: {type: string, nullable: true}
     Contract:
       allOf:
         - {$ref: '#/components/schemas/ContractCreate'}
@@ -581,8 +601,7 @@ nullable: true}
             owner_id: {type: string, format: uuid}
             paid_amount: {type: number}
             status: {type: string, enum: [DRAFT, LEGAL_REVIEW, REJECTED, APPROVED, ACTIVE, COMPLETED, CANCELLED]}
-            rejection_reason: {type: string
-nullable: true}
+            rejection_reason: {type: string, nullable: true}
             version: {type: integer}
             created_at: {type: string, format: date-time}
             updated_at: {type: string, format: date-time}
@@ -597,8 +616,7 @@ nullable: true}
       type: object
       properties:
         accepted_amount: {type: number, minimum: 0}
-        notes: {type: string
-nullable: true}
+        notes: {type: string, nullable: true}
     Milestone:
       allOf:
         - {$ref: '#/components/schemas/MilestoneCreate'}
@@ -610,8 +628,7 @@ nullable: true}
             accepted_amount: {type: number}
             status: {type: string, enum: [PENDING, SUBMITTED, ACCEPTED, REJECTED]}
             submission_version: {type: integer}
-            evidence_url: {type: string
-nullable: true}
+            evidence_url: {type: string, nullable: true}
             version: {type: integer}
     InvoiceCreate:
       type: object
@@ -650,16 +667,11 @@ nullable: true}
             tenant_id: {type: string, format: uuid}
             requested_by: {type: string, format: uuid}
             status: {type: string, enum: [DRAFT, MANAGER_APPROVED, FINANCE_APPROVED, PAID, REJECTED]}
-            idempotency_key: {type: string
-nullable: true}
-            manager_approved_by: {type: string
-nullable: true, format: uuid}
-            finance_approved_by: {type: string
-nullable: true, format: uuid}
-            paid_at: {type: string
-nullable: true, format: date-time}
-            rejection_reason: {type: string
-nullable: true}
+            idempotency_key: {type: string, nullable: true}
+            manager_approved_by: {type: string, nullable: true, format: uuid}
+            finance_approved_by: {type: string, nullable: true, format: uuid}
+            paid_at: {type: string, nullable: true, format: date-time}
+            rejection_reason: {type: string, nullable: true}
             version: {type: integer}
     Budget:
       type: object
@@ -682,12 +694,9 @@ nullable: true}
         entity_type: {type: string}
         entity_id: {type: string, format: uuid}
         action: {type: string}
-        before_data: {type: object
-nullable: true}
-        after_data: {type: object
-nullable: true}
-        correlation_id: {type: string
-nullable: true}
+        before_data: {type: object, nullable: true}
+        after_data: {type: object, nullable: true}
+        correlation_id: {type: string, nullable: true}
         created_at: {type: string, format: date-time}
     RejectRequest:
       type: object

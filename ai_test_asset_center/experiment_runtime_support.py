@@ -347,6 +347,7 @@ def load_actor_tokens(root: Path, project: str) -> dict[str, str]:
                 tokens.setdefault(role, token)
                 tokens.setdefault(f"secret_ref:test_accounts:{role}", token)
                 tokens.setdefault(f"secret_ref:context:{role}", token)
+                tokens.setdefault(f"secret_ref:actor:{role}", token)
         if tokens:
             return tokens
 
@@ -539,12 +540,20 @@ def preflight_experiment_executable(
         if path_has_placeholders(path):
             _params = infer_path_params(path)
             _bp = _list(exp.get("binding_plan"))
+            _pre_rb = _dict(exp.get("_pre_resolved_bindings"))
             _needs_resolve = []
             for _p in _params:
                 _resolved = any(
-                    b.get("target") == _p and (b.get("generated_value") or b.get("status") == "bound")
+                    b.get("target") == _p and (
+                        b.get("generated_value")
+                        or b.get("status") == "bound"
+                        or _text(b.get("resolver_operation_ref"))
+                    )
                     for b in _bp if isinstance(b, dict)
                 )
+                # Also accept batch-level pre-resolved bindings
+                if not _resolved and _pre_rb.get(_p) not in (None, ""):
+                    _resolved = True
                 if not _resolved:
                     _needs_resolve.append(_p)
             if _needs_resolve:
@@ -585,6 +594,7 @@ def preflight_experiment_executable(
                 pass
         # Check if all path placeholders have generated values in binding plan
         _bp = _list(exp.get("binding_plan"))
+        _pre_rb = _dict(exp.get("_pre_resolved_bindings"))
         _has_generated_bindings = False
         if path_has_placeholders(path):
             _params = infer_path_params(path)
@@ -592,7 +602,7 @@ def preflight_experiment_executable(
                 any(
                     b.get("target") == p and b.get("generated_value")
                     for b in _bp if isinstance(b, dict)
-                )
+                ) or _pre_rb.get(p) not in (None, "")
                 for p in _params
             )
         if path_has_placeholders(path) and not _has_generated_bindings and not _runtime_binding_contract_ready(

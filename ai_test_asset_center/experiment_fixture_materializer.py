@@ -260,6 +260,24 @@ def materialize_experiment_fixtures(
         elif kind == "runtime_read_binding":
             target = _text(_dict(node).get("target"))
             binding = binding_plan.get(target) or {}
+            # ── Shortcut: pre-resolved binding with generated_value ──
+            # Batch-level auto_resolve_bindings already called the GET endpoint and
+            # obtained a real entity ID. Use it directly without re-resolving.
+            if binding.get("generated_value") and _text(binding.get("status")) == "bound":
+                _pre_val = str(binding["generated_value"])
+                runtime_bindings[target] = _pre_val
+                fixture_receipts.append({
+                    "node_id": node_id,
+                    "kind": kind,
+                    "status": "resolved",
+                    "target": target,
+                    "value": _pre_val,
+                    "value_fingerprint": hashlib.sha256(
+                        _pre_val.encode("utf-8")
+                    ).hexdigest()[:12],
+                    "source": "pre_resolved_binding",
+                })
+                continue
             # Invented identifiers are forbidden. A synthetic_value without a
             # source-declared GET/HEAD resolver or fixture setup remains blocked.
             # Before blocking, try to auto-discover a create operation on the

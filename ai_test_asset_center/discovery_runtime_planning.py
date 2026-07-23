@@ -17,6 +17,7 @@ from .adaptive_discovery_planner import (
     plan_obligation_round,
 )
 from .deep_experiment_planner import plan_deep_experiments
+from .deep_experiment_protocol_adapter import adapt_deep_experiments_for_execution
 from .adaptive_planning_history import (
     build_planning_budget_receipt,
     build_planning_history_receipt,
@@ -610,7 +611,13 @@ def build_discovery_plan(
         behavior_ir,
         budget=_deep_budget,
     )
-    _deep_by_obl = _dict(_deep_result.get("by_obligation"))
+    # ── Plan-to-Protocol Adaptation (SPEC §8): enrich for executor ──
+    _deep_raw = _list(_deep_result.get("deep_experiments"))
+    _adaptation = adapt_deep_experiments_for_execution(
+        _deep_raw,
+        behavior_ir,
+    )
+    _deep_by_obl = _dict(_adaptation.get("by_obligation"))
     for _d_oid, _d_exp in _deep_by_obl.items():
         if _d_oid not in by_obligation or _text(
             _dict(_dict(by_obligation[_d_oid]).get("compile_receipt")).get("status")
