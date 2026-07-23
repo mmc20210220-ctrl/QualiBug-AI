@@ -10,6 +10,7 @@ import uuid
 import time
 from datetime import date, datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
 import json
 import re
 from urllib.parse import urlparse, parse_qs
@@ -193,7 +194,10 @@ class ContractFlowHandler(BaseHTTPRequestHandler):
         if not user:
             self._send_json(401, {"error": "Unauthorized"})
             return
-        self._route_get(user, path, query)
+        try:
+            self._route_get(user, path, query)
+        except Exception as e:
+            self._send_json(500, {"error": f"Internal: {type(e).__name__}: {e}"})
 
     def do_POST(self):
         path, query = self._path_parts()
@@ -206,7 +210,10 @@ class ContractFlowHandler(BaseHTTPRequestHandler):
         if not user:
             self._send_json(401, {"error": "Unauthorized"})
             return
-        self._route_post(user, path, body)
+        try:
+            self._route_post(user, path, body)
+        except Exception as e:
+            self._send_json(500, {"error": f"Internal: {type(e).__name__}: {e}"})
 
     def do_PATCH(self):
         user = self._auth()
@@ -215,7 +222,10 @@ class ContractFlowHandler(BaseHTTPRequestHandler):
         if not user:
             self._send_json(401, {"error": "Unauthorized"})
             return
-        self._route_patch(user, path, body)
+        try:
+            self._route_patch(user, path, body)
+        except Exception as e:
+            self._send_json(500, {"error": f"Internal: {type(e).__name__}: {e}"})
 
     # ── Route Dispatch ──
     def _route_get(self, user, path, query):
@@ -779,8 +789,12 @@ class ContractFlowHandler(BaseHTTPRequestHandler):
         self._send_json(200, pr)
 
 
+class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
+
+
 def run_server(port=8000):
-    server = HTTPServer(("0.0.0.0", port), ContractFlowHandler)
+    server = ThreadingHTTPServer(("0.0.0.0", port), ContractFlowHandler)
     print(f"ContractFlow Mock Server running on http://localhost:{port}/api/v1")
     print(f"Tenants: {list(TENANTS.keys())}")
     print(f"Accounts: {len(ACCOUNTS)}")
