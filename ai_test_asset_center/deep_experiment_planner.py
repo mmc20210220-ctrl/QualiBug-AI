@@ -21,6 +21,18 @@ from ai_test_asset_center.temporal_experiment_planning import (
     BoundaryValueSolver,
     REFERENCE_RELATED_ENTITY_FIELD,
 )
+from ai_test_asset_center.actor_matrix_planning import (
+    plan_actor_matrix,
+    build_actor_relation_proof,
+    RELATION_SAME_TENANT_OWNER,
+    RELATION_SAME_TENANT_ALLOWED_ROLE,
+    RELATION_CROSS_TENANT_SAME_ROLE,
+)
+from ai_test_asset_center.state_path_exploration import (
+    explore_state_paths,
+    plan_state_path_experiments,
+    build_reachability_proof,
+)
 
 # ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -851,11 +863,13 @@ def build_control_violation_pair(
         for i, mut in enumerate(muts):
             mutated_body = deepcopy(body) if isinstance(body, dict) else {}
             field = _text(mut.get("field"))
-            if field and isinstance(mutated_body, dict):
+            if field and isinstance(mutated_body, dict) and field != "actor_relation":
                 mutated_body[field] = mut.get("value")
+            # Use per-mutation actor_ref for actor matrix experiments (SPEC §16 fixture isolation)
+            step_actor = _text(mut.get("actor_ref")) or actor_ref
             violation_steps.append({
                 "step_id": f"violation_{i + 1}",
-                "actor_ref": actor_ref,
+                "actor_ref": step_actor,
                 "operation_ref": op_ref,
                 "intent": f"{mechanism.lower()}_mutation",
                 "protocol_step": "deep_mutation",
@@ -898,8 +912,10 @@ def deduplicate_experiments(
 ) -> list[dict[str, Any]]:
     """Remove semantically duplicate experiments.
 
-    Signature: (rule_id, operation_sequence, mutation_dimension, target_field)
-    Same mechanism + same rule = duplicate.
+    Signature: (rule_id, operation_sequence, mutation_dimension, target_field,
+                actor_relation, tenant_relation, ownership_relation)
+    Same mechanism + same rule + same actor relation dimensions = duplicate.
+    Preserves tenant, owner, and assignment differences (SPEC §23).
     """
     seen: set[str] = set()
     unique: list[dict[str, Any]] = []
@@ -920,15 +936,25 @@ def deduplicate_experiments(
         # Mutation dimension
         mutation_dim = ""
         target_field = ""
+        actor_relation = ""
+        tenant_relation = ""
+        ownership_relation = ""
         for step in _list(exp.get("treatment_plan")):
             if isinstance(step, dict):
                 mut = _dict(step.get("mutation"))
                 if mut:
                     mutation_dim = _text(mut.get("mutation_type"))
                     target_field = _text(mut.get("field"))
+                    # Include actor relation dimensions in signature (SPEC §23)
+                    actor_relation = _text(mut.get("value")) if target_field == "actor_relation" else ""
+                    actor_ref = _text(mut.get("actor_ref"))
+                    control_ref = _text(mut.get("control_actor_ref"))
+                    if actor_ref:
+                        tenant_relation = _text(mut.get("dimension_under_test"))
+                        ownership_relation = control_ref  # Distinguishes owner vs non-owner
                     break
 
-        sig = f"{rule_id}|{mechanism}|{op_sig}|{mutation_dim}|{target_field}"
+        sig = f"{rule_id}|{mechanism}|{op_sig}|{mutation_dim}|{target_field}|{actor_relation}|{tenant_relation}|{ownership_relation}"
         if sig in seen:
             continue
         seen.add(sig)
@@ -994,6 +1020,7 @@ def plan_deep_experiments(
     deep_experiments: list[dict[str, Any]] = []
     by_obligation: dict[str, dict[str, Any]] = {}
     mechanism_counts: dict[str, int] = {}
+    _actor_matrix_meta: dict[str, dict[str, Any]] = {}
     skipped = 0
 
     for obl in obligations:
@@ -1094,32 +1121,69 @@ def plan_deep_experiments(
                 mutations = generate_temporal_mutation(date_field, bounds)
 
         elif mechanism == MECHANISM_STATE_NEGATIVE:
-            # Find forbidden transitions from state graph
-            target_state = _text(
-                _dict(expr).get("target_state")
-                or _dict(expr).get("state")
-                or _dict(expr).get("to_state")
-            )
-            if target_state:
-                path = plan_state_path(ir, target_state)
-                if path:
+            # STATE_PATH_NOT_EXPLORED fix: Use state_path_exploration for forbidden source states
+            _sp_result = explore_state_paths(obl, ir, budget=8)
+            if _sp_result.get("status") == "EXPLORED" and _sp_result.get("experiments"):
+                # Use state path exploration results
+                _sp_experiments = _sp_result.get("experiments", [])
+                _sp_state_rule = _sp_result.get("state_rule", {})
+                for _sp_exp in _sp_experiments:
+                    _forbidden_state = _text(_sp_exp.get("forbidden_source_state"))
+                    _fixture_steps = _list(_sp_exp.get("fixture_steps"))
+                    # Build multi-step fixture from state path
                     multi_step_fixture = [
                         {
-                            "operation_ref": step["operation_ref"],
-                            "intent": f"advance_to_{step['to_state']}",
-                            "expected_state": step["to_state"],
+                            "operation_ref": step.get("operation_ref"),
+                            "intent": step.get("intent", f"advance_to_{step.get('expected_state', 'unknown')}"),
+                            "expected_state": step.get("expected_state"),
                             "actor_ref": actor_ref,
                         }
-                        for step in path
+                        for step in _fixture_steps
                     ]
-            # Negative: attempt operation from wrong state
-            mutations = [{
-                "mutation_id": _stable_id("state_neg", oid, "wrong_state"),
-                "field": "state",
-                "value": "forbidden_source_state",
-                "mutation_type": "negative_state_transition",
-                "expected_outcome": "rejected",
-            }]
+                    mutations.append({
+                        "mutation_id": _stable_id("state_path", oid, _forbidden_state),
+                        "field": _text(_sp_state_rule.get("state_field", "status")),
+                        "value": _forbidden_state,
+                        "mutation_type": "forbidden_source_state",
+                        "expected_outcome": "rejected",
+                        "state_path_id": _sp_exp.get("state_path_id"),
+                        "state_path_proof": _sp_result.get("proofs", [{}])[0].get("proof_id") if _sp_result.get("proofs") else None,
+                    })
+                # Store state path metadata
+                _actor_matrix_meta[oid] = {
+                    "status": "STATE_PATH_EXPLORED",
+                    "state_rule": _sp_state_rule,
+                    "state_paths": _sp_result.get("state_paths", []),
+                    "proofs": _sp_result.get("proofs", []),
+                    "reachability_proof": build_reachability_proof(_sp_state_rule, _sp_result.get("state_paths", [])),
+                }
+            else:
+                # Fallback to legacy behavior
+                target_state = _text(
+                    _dict(expr).get("target_state")
+                    or _dict(expr).get("state")
+                    or _dict(expr).get("to_state")
+                )
+                if target_state:
+                    path = plan_state_path(ir, target_state)
+                    if path:
+                        multi_step_fixture = [
+                            {
+                                "operation_ref": step["operation_ref"],
+                                "intent": f"advance_to_{step['to_state']}",
+                                "expected_state": step["to_state"],
+                                "actor_ref": actor_ref,
+                            }
+                            for step in path
+                        ]
+                # Negative: attempt operation from wrong state
+                mutations = [{
+                    "mutation_id": _stable_id("state_neg", oid, "wrong_state"),
+                    "field": "state",
+                    "value": "forbidden_source_state",
+                    "mutation_type": "negative_state_transition",
+                    "expected_outcome": "rejected",
+                }]
 
         elif mechanism == MECHANISM_IDEMPOTENCY:
             # Repeat same operation, compare side effects
@@ -1210,11 +1274,63 @@ def plan_deep_experiments(
             mutations = generate_precondition_mutation(entity_ref, precond_desc, expr)
 
         elif mechanism == MECHANISM_AUTHORIZATION_MATRIX:
-            mutations = generate_authorization_mutation(operation_ref, expr, actors)
+            # Use actor matrix planning for discriminating actor combinations
+            _am_result = plan_actor_matrix(
+                expr, inv, ir, operation,
+                max_candidates=8,
+            )
+            if _am_result.get("status") == "COMPLETE":
+                # Generate mutations from discriminating pairs
+                for _pair in _am_result.get("discriminating_pairs", []):
+                    _ctrl = _dict(_pair.get("control_actor"))
+                    _viol = _dict(_pair.get("violation_actor"))
+                    _dim = _text(_pair.get("dimension_under_test"))
+                    mutations.append({
+                        "mutation_id": _stable_id("authz_mx", operation_ref, _dim, _text(_viol.get("actor_id"))),
+                        "field": "actor_relation",
+                        "value": _text(_viol.get("relation_type")),
+                        "actor_ref": _text(_viol.get("actor_id")),
+                        "control_actor_ref": _text(_ctrl.get("actor_id")),
+                        "mutation_type": f"authorization_matrix_{_dim}",
+                        "expected_outcome": "rejected",
+                        "dimension_under_test": _dim,
+                        "discrimination_quality": _text(_pair.get("discrimination_quality")),
+                        "actor_relation_proof": _pair.get("pair_id"),
+                    })
+                # Store matrix metadata on obligation for downstream use
+                _actor_matrix_meta[oid] = _am_result
+            else:
+                # Fallback to legacy fixed-role mutations
+                mutations = generate_authorization_mutation(operation_ref, expr, actors)
 
         elif mechanism == MECHANISM_TENANT_ISOLATION_MATRIX:
+            # Use actor matrix planning for tenant isolation
             entity_ref = _text(inv.get("entity_ref") or prop.get("entity_ref"))
-            mutations = generate_tenant_isolation_mutation(entity_ref, expr, actors)
+            _am_result = plan_actor_matrix(
+                expr, inv, ir, operation,
+                max_candidates=8,
+            )
+            if _am_result.get("status") == "COMPLETE":
+                for _pair in _am_result.get("discriminating_pairs", []):
+                    _ctrl = _dict(_pair.get("control_actor"))
+                    _viol = _dict(_pair.get("violation_actor"))
+                    _dim = _text(_pair.get("dimension_under_test"))
+                    mutations.append({
+                        "mutation_id": _stable_id("tenant_mx", entity_ref, _dim, _text(_viol.get("actor_id"))),
+                        "field": "actor_relation",
+                        "value": _text(_viol.get("relation_type")),
+                        "actor_ref": _text(_viol.get("actor_id")),
+                        "control_actor_ref": _text(_ctrl.get("actor_id")),
+                        "mutation_type": f"tenant_isolation_matrix_{_dim}",
+                        "expected_outcome": "rejected",
+                        "dimension_under_test": _dim,
+                        "discrimination_quality": _text(_pair.get("discrimination_quality")),
+                        "actor_relation_proof": _pair.get("pair_id"),
+                    })
+                _actor_matrix_meta[oid] = _am_result
+            else:
+                # Fallback to legacy tenant mutations
+                mutations = generate_tenant_isolation_mutation(entity_ref, expr, actors)
 
         # Build multi-step sequence if fixtures needed
         treatment_plan: list[dict[str, Any]] = []
@@ -1226,16 +1342,39 @@ def plan_deep_experiments(
             treatment_plan = sequence
         else:
             # Build Control/Violation pair
+            # For actor matrix experiments, use control_actor_ref from mutation
+            _effective_actor_ref = actor_ref
+            if mutations and _text(mutations[0].get("control_actor_ref")):
+                _effective_actor_ref = _text(mutations[0].get("control_actor_ref"))
             pair = build_control_violation_pair(
                 {"rule_id": invariant_ref or oid, "invariant_ref": invariant_ref, "obligation_id": oid},
                 mechanism,
                 operation=operation,
-                actor_ref=actor_ref,
+                actor_ref=_effective_actor_ref,
                 mutations=mutations,
             )
             treatment_plan = pair.get("treatment_plan") or []
 
         # Assemble deep experiment
+        # Include actor matrix metadata if available
+        _am_meta = _actor_matrix_meta.get(oid)
+        _actor_proofs = _list(_dict(_am_meta).get("proofs")) if _am_meta else []
+
+        # Enhanced observers for actor matrix experiments (SPEC §19, §20)
+        _observers = [
+            {"observer_id": "http_response"},
+            {"observer_id": "entity_state"},
+            {"observer_id": "business_effect"},
+        ]
+        if _am_meta:
+            # Actor matrix experiments need side-effect verification on rejection
+            _observers.append({"observer_id": "rejection_side_effect", "config": {
+                "check_root_unchanged": True,
+                "check_related_unchanged": True,
+                "check_no_async_side_effect": True,
+                "separate_authn_vs_authz": True,
+            }})
+
         deep_exp = {
             "experiment_id": _stable_id("deep", oid, mechanism),
             "obligation_id": oid,
@@ -1247,10 +1386,11 @@ def plan_deep_experiments(
                 "status": "COMPILED",
                 "reason_code": "DEEP_PLANNER_COMPILED",
                 "mechanism": mechanism,
+                "actor_matrix_expanded": bool(_am_meta),
             },
             "control_plan": [{
                 "step_id": "control_1",
-                "actor_ref": actor_ref,
+                "actor_ref": _text(mutations[0].get("control_actor_ref")) if mutations and mutations[0].get("control_actor_ref") else actor_ref,
                 "operation_ref": operation_ref,
                 "intent": "valid_source_control",
                 "protocol_step": "positive_control",
@@ -1258,11 +1398,7 @@ def plan_deep_experiments(
                 "expected_status_class": 2,
             }],
             "treatment_plan": treatment_plan,
-            "observers": [
-                {"observer_id": "http_response"},
-                {"observer_id": "entity_state"},
-                {"observer_id": "business_effect"},
-            ],
+            "observers": _observers,
             "assertion": {
                 "kind": "deep_mechanism_contrast",
                 "mechanism": mechanism,
@@ -1270,6 +1406,8 @@ def plan_deep_experiments(
             },
             "source_refs": obl.get("source_refs") or [],
             "deep_planner": True,
+            "actor_relation_proofs": _actor_proofs,
+            "actor_matrix_result": _am_meta.get("status") if _am_meta else None,
         }
 
         deep_experiments.append(deep_exp)
