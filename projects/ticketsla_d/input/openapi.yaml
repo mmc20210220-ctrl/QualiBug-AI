@@ -1,0 +1,1050 @@
+openapi: 3.0.3
+info:
+  title: TicketSLA Management API
+  description: 工单与SLA管理系统API
+  version: 1.0.0
+servers:
+  - url: http://localhost:8002
+    description: 本地测试环境
+
+security:
+  - BearerAuth: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: 使用Bearer Token认证
+
+  schemas:
+    Ticket:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        customer_id:
+          type: string
+        tenant:
+          type: string
+        priority:
+          type: string
+          enum: [LOW, MEDIUM, HIGH, CRITICAL]
+        status:
+          type: string
+          enum: [OPEN, ASSIGNED, IN_PROGRESS, RESOLVED, CLOSED]
+        category:
+          type: string
+        sla_id:
+          type: string
+        assigned_agent:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        resolved_at:
+          type: string
+          format: date-time
+          nullable: true
+        closed_at:
+          type: string
+          format: date-time
+          nullable: true
+        version:
+          type: integer
+
+    SLA:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        tenant:
+          type: string
+        priority:
+          type: string
+        response_time_hours:
+          type: number
+        resolution_time_hours:
+          type: number
+        status:
+          type: string
+          enum: [ACTIVE, BREACHED, EXPIRED]
+        created_at:
+          type: string
+          format: date-time
+
+    Agent:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        tenant:
+          type: string
+        team_id:
+          type: string
+        status:
+          type: string
+          enum: [AVAILABLE, BUSY, OFFLINE]
+        max_tickets:
+          type: integer
+        current_tickets:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    Team:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        tenant:
+          type: string
+        members:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+
+    Customer:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+        tenant:
+          type: string
+        tier:
+          type: string
+          enum: [GOLD, SILVER, BRONZE]
+        created_at:
+          type: string
+          format: date-time
+
+    Comment:
+      type: object
+      properties:
+        id:
+          type: string
+        ticket_id:
+          type: string
+        author_id:
+          type: string
+        author_name:
+          type: string
+        content:
+          type: string
+          maxLength: 5000
+        tenant:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    Attachment:
+      type: object
+      properties:
+        id:
+          type: string
+        ticket_id:
+          type: string
+        filename:
+          type: string
+        size:
+          type: integer
+          maximum: 10485760
+        uploaded_by:
+          type: string
+        tenant:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    Escalation:
+      type: object
+      properties:
+        id:
+          type: string
+        ticket_id:
+          type: string
+        escalated_by:
+          type: string
+        reason:
+          type: string
+        status:
+          type: string
+          enum: [PENDING, ESCALATED, RESOLVED]
+        tenant:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+paths:
+  /health:
+    get:
+      summary: 健康检查
+      operationId: healthCheck
+      security: []
+      responses:
+        '200':
+          description: 服务健康
+
+  /tickets:
+    get:
+      summary: 获取工单列表
+      operationId: listTickets
+      description: |
+        获取工单列表。
+        - 客户只能看到自己创建的工单
+        - 工单必须按租户过滤
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 工单列表
+    post:
+      summary: 创建工单
+      operationId: createTicket
+      description: |
+        创建新工单。只有客户角色可以创建。
+        优先级必须是LOW/MEDIUM/HIGH/CRITICAL之一。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title:
+                  type: string
+                description:
+                  type: string
+                priority:
+                  type: string
+                  enum: [LOW, MEDIUM, HIGH, CRITICAL]
+                category:
+                  type: string
+      responses:
+        '201':
+          description: 创建成功
+        '400':
+          description: 参数错误
+        '403':
+          description: 权限不足
+
+  /tickets/{ticketId}:
+    get:
+      summary: 获取工单详情
+      operationId: getTicket
+      description: |
+        获取指定工单详情。
+        只能查看本租户的工单。
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 工单详情
+        '403':
+          description: 跨租户访问被拒绝
+        '404':
+          description: 工单不存在
+    put:
+      summary: 更新工单
+      operationId: updateTicket
+      description: |
+        更新工单信息。
+        必须提供正确的version进行乐观锁控制。
+        只有工单所有者或主管/管理员可以更新。
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                description:
+                  type: string
+                priority:
+                  type: string
+                version:
+                  type: integer
+                  description: 乐观锁版本号，必须与当前版本一致
+      responses:
+        '200':
+          description: 更新成功
+        '403':
+          description: 权限不足
+        '404':
+          description: 工单不存在
+        '409':
+          description: 版本冲突
+
+  /tickets/{ticketId}/assign:
+    post:
+      summary: 分配工单
+      operationId: assignTicket
+      description: |
+        将工单分配给代理。
+        - 只有OPEN状态的工单可以被分配
+        - 只有主管或管理员可以分配
+        - 不能分配跨租户的代理
+        - 必须检查代理容量
+        - 分配后必须更新代理工作负载
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [agent_id]
+              properties:
+                agent_id:
+                  type: string
+      responses:
+        '200':
+          description: 分配成功
+        '403':
+          description: 权限不足或跨租户
+        '404':
+          description: 工单或代理不存在
+        '409':
+          description: 工单状态不允许或代理容量已满
+
+  /tickets/{ticketId}/start:
+    post:
+      summary: 开始处理工单
+      operationId: startTicket
+      description: |
+        代理开始处理工单。
+        - 只有ASSIGNED状态的工单可以开始
+        - 只有被分配的代理可以操作
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 开始成功
+        '403':
+          description: 不是分配的代理
+        '404':
+          description: 工单不存在
+        '409':
+          description: 工单状态不允许
+
+  /tickets/{ticketId}/resolve:
+    post:
+      summary: 解决工单
+      operationId: resolveTicket
+      description: |
+        代理解决工单。
+        - 只有IN_PROGRESS状态的工单可以被解决
+        - 只有被分配的代理可以操作
+        - 应检查SLA合规性
+        - 重复解决应返回409
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [resolution]
+              properties:
+                resolution:
+                  type: string
+      responses:
+        '200':
+          description: 解决成功
+        '403':
+          description: 不是分配的代理
+        '404':
+          description: 工单不存在
+        '409':
+          description: 工单状态不允许或已解决
+
+  /tickets/{ticketId}/close:
+    post:
+      summary: 关闭工单
+      operationId: closeTicket
+      description: |
+        关闭工单。
+        - 只有RESOLVED状态的工单可以被关闭
+        - 只有客户或主管可以关闭
+        - 客户只能关闭自己的工单
+        - 关闭后必须减少代理工作负载
+        - 重复关闭应返回409
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 关闭成功
+        '403':
+          description: 权限不足
+        '404':
+          description: 工单不存在
+        '409':
+          description: 工单状态不允许或已关闭
+
+  /tickets/{ticketId}/reopen:
+    post:
+      summary: 重开工单
+      operationId: reopenTicket
+      description: |
+        重开工单。
+        - 只有RESOLVED或CLOSED状态的工单可以被重开
+        - 只有客户可以重开
+        - 客户只能重开自己的工单
+        - 重开后应重新计算SLA截止时间
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: 重开成功
+        '403':
+          description: 权限不足
+        '404':
+          description: 工单不存在
+        '409':
+          description: 工单状态不允许
+
+  /tickets/{ticketId}/escalate:
+    post:
+      summary: 升级工单
+      operationId: escalateTicket
+      description: |
+        升级工单。
+        - 只有主管可以升级
+        - 已解决或已关闭的工单不能升级
+        - 升级后应提升工单优先级为CRITICAL
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+      responses:
+        '201':
+          description: 升级成功
+        '403':
+          description: 权限不足
+        '404':
+          description: 工单不存在
+        '409':
+          description: 工单状态不允许
+
+  /tickets/{ticketId}/transfer:
+    post:
+      summary: 转移工单
+      operationId: transferTicket
+      description: |
+        转移工单给其他代理。
+        - 只有主管可以转移
+        - 必须更新新旧代理工作负载
+        - 必须停用旧分配记录
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [agent_id]
+              properties:
+                agent_id:
+                  type: string
+      responses:
+        '200':
+          description: 转移成功
+        '403':
+          description: 权限不足
+        '404':
+          description: 工单或代理不存在
+
+  /tickets/{ticketId}/comments:
+    get:
+      summary: 获取工单评论
+      operationId: getTicketComments
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 评论列表
+    post:
+      summary: 添加评论
+      operationId: addComment
+      description: |
+        添加工单评论。
+        - 已关闭的工单不能添加评论
+        - 评论内容不能超过5000字符
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content:
+                  type: string
+                  maxLength: 5000
+      responses:
+        '201':
+          description: 添加成功
+        '400':
+          description: 内容过长
+        '404':
+          description: 工单不存在
+        '409':
+          description: 工单已关闭
+
+  /tickets/{ticketId}/attachments:
+    get:
+      summary: 获取工单附件
+      operationId: getTicketAttachments
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 附件列表
+    post:
+      summary: 上传附件
+      operationId: addAttachment
+      description: |
+        上传工单附件。
+        - 附件大小不能超过10MB
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filename]
+              properties:
+                filename:
+                  type: string
+                size:
+                  type: integer
+                  maximum: 10485760
+      responses:
+        '201':
+          description: 上传成功
+        '400':
+          description: 文件过大
+        '404':
+          description: 工单不存在
+
+  /tickets/{ticketId}/attachments/{attachmentId}:
+    delete:
+      summary: 删除附件
+      operationId: deleteAttachment
+      description: |
+        删除工单附件。
+        - 只能删除自己上传的附件（主管/管理员除外）
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: attachmentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 删除成功
+        '403':
+          description: 权限不足
+        '404':
+          description: 附件不存在
+
+  /tickets/merge:
+    post:
+      summary: 合并工单
+      operationId: mergeTickets
+      description: |
+        合并两个工单。
+        - 只有主管或管理员可以合并
+        - 不能合并跨租户的工单
+        - 不能合并已关闭的工单
+        - 合并后应继承较高优先级
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source_ticket_id, target_ticket_id]
+              properties:
+                source_ticket_id:
+                  type: string
+                target_ticket_id:
+                  type: string
+      responses:
+        '200':
+          description: 合并成功
+        '403':
+          description: 权限不足或跨租户
+        '404':
+          description: 工单不存在
+        '409':
+          description: 工单状态不允许
+
+  /tickets/bulk-assign:
+    post:
+      summary: 批量分配工单
+      operationId: bulkAssignTickets
+      description: |
+        批量分配工单给代理。
+        - 只有主管或管理员可以操作
+        - 只能分配OPEN状态的工单
+        - 失败时应回滚已分配的工单
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ticket_ids, agent_id]
+              properties:
+                ticket_ids:
+                  type: array
+                  items:
+                    type: string
+                agent_id:
+                  type: string
+      responses:
+        '200':
+          description: 批量分配结果
+
+  /slas:
+    get:
+      summary: 获取SLA列表
+      operationId: listSLAs
+      responses:
+        '200':
+          description: SLA列表
+    post:
+      summary: 创建SLA
+      operationId: createSLA
+      description: |
+        创建SLA。
+        - 只有管理员可以创建
+        - 解决时间必须大于等于响应时间
+        - 时间值必须大于0
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, priority]
+              properties:
+                name:
+                  type: string
+                priority:
+                  type: string
+                response_time_hours:
+                  type: number
+                  minimum: 0
+                resolution_time_hours:
+                  type: number
+                  minimum: 0
+      responses:
+        '201':
+          description: 创建成功
+        '400':
+          description: 参数错误
+        '403':
+          description: 权限不足
+
+  /slas/{slaId}:
+    get:
+      summary: 获取SLA详情
+      operationId: getSLA
+      parameters:
+        - name: slaId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: SLA详情
+        '404':
+          description: SLA不存在
+    put:
+      summary: 更新SLA
+      operationId: updateSLA
+      description: |
+        更新SLA。
+        - 只有管理员可以更新
+        - 不应影响已有活跃工单的SLA
+      parameters:
+        - name: slaId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                response_time_hours:
+                  type: number
+                resolution_time_hours:
+                  type: number
+      responses:
+        '200':
+          description: 更新成功
+        '403':
+          description: 权限不足
+        '404':
+          description: SLA不存在
+        '409':
+          description: 有活跃工单使用该SLA
+
+  /teams:
+    get:
+      summary: 获取团队列表
+      operationId: listTeams
+      responses:
+        '200':
+          description: 团队列表
+    post:
+      summary: 创建团队
+      operationId: createTeam
+      description: 只有管理员可以创建团队
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+      responses:
+        '201':
+          description: 创建成功
+        '403':
+          description: 权限不足
+
+  /teams/{teamId}:
+    get:
+      summary: 获取团队详情
+      operationId: getTeam
+      parameters:
+        - name: teamId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 团队详情
+        '404':
+          description: 团队不存在
+
+  /teams/{teamId}/members:
+    post:
+      summary: 添加团队成员
+      operationId: addTeamMember
+      description: |
+        添加团队成员。
+        - 只有主管或管理员可以操作
+        - 不能添加跨租户的代理
+        - 不能重复添加
+      parameters:
+        - name: teamId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [agent_id]
+              properties:
+                agent_id:
+                  type: string
+      responses:
+        '200':
+          description: 添加成功
+        '403':
+          description: 权限不足或跨租户
+        '404':
+          description: 团队或代理不存在
+        '409':
+          description: 成员已存在
+
+  /teams/{teamId}/members/{memberId}:
+    delete:
+      summary: 移除团队成员
+      operationId: removeTeamMember
+      description: |
+        移除团队成员。
+        - 只有主管或管理员可以操作
+        - 不能移除有活跃工单的代理
+      parameters:
+        - name: teamId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: memberId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 移除成功
+        '403':
+          description: 权限不足
+        '404':
+          description: 团队或成员不存在
+        '409':
+          description: 代理有活跃工单
+
+  /agents:
+    get:
+      summary: 获取代理列表
+      operationId: listAgents
+      responses:
+        '200':
+          description: 代理列表
+
+  /agents/{agentId}:
+    get:
+      summary: 获取代理详情
+      operationId: getAgent
+      parameters:
+        - name: agentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 代理详情
+        '404':
+          description: 代理不存在
+
+  /customers:
+    get:
+      summary: 获取客户列表
+      operationId: listCustomers
+      description: 客户列表必须按租户过滤
+      responses:
+        '200':
+          description: 客户列表
+    post:
+      summary: 创建客户
+      operationId: createCustomer
+      description: |
+        创建客户。
+        - 只有管理员可以创建
+        - 邮箱必须唯一
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email]
+              properties:
+                name:
+                  type: string
+                email:
+                  type: string
+                tier:
+                  type: string
+                  enum: [GOLD, SILVER, BRONZE]
+      responses:
+        '201':
+          description: 创建成功
+        '400':
+          description: 参数错误
+        '403':
+          description: 权限不足
+        '409':
+          description: 邮箱已存在
+
+  /customers/{customerId}:
+    get:
+      summary: 获取客户详情
+      operationId: getCustomer
+      description: 不能查看跨租户的客户信息
+      parameters:
+        - name: customerId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 客户详情
+        '403':
+          description: 跨租户访问被拒绝
+        '404':
+          description: 客户不存在
+    put:
+      summary: 更新客户
+      operationId: updateCustomer
+      description: |
+        更新客户信息。
+        - 只有管理员或客户本人可以更新
+        - 等级变更只有管理员可以操作
+      parameters:
+        - name: customerId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                email:
+                  type: string
+                tier:
+                  type: string
+      responses:
+        '200':
+          description: 更新成功
+        '403':
+          description: 权限不足
+        '404':
+          description: 客户不存在
+
+  /escalations:
+    get:
+      summary: 获取升级记录列表
+      operationId: listEscalations
+      responses:
+        '200':
+          description: 升级记录列表
+
+  /notifications:
+    get:
+      summary: 获取通知列表
+      operationId: listNotifications
+      responses:
+        '200':
+          description: 通知列表
