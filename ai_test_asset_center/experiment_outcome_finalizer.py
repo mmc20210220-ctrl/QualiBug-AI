@@ -21,6 +21,13 @@ from .experiment_runtime_support import (
     _sha256,
     _text,
 )
+from .observation_completeness import (
+    CrossEntityObservation,
+    ObservationRequirement,
+    OracleInputCompletenessProof,
+    ORACLE_INPUT_INCOMPLETE,
+    STATUS_INDETERMINATE as _OBS_STATUS_INDETERMINATE,
+)
 from .observer_contracts_base import observe_experiment_requirements
 from .runtime_binding_materializer import materialize_path as _materialize_path
 
@@ -177,6 +184,304 @@ def _classify_harness_failure(
     if observations.get("harness_error"):
         return "HARNESS_REQUEST_BUILD_FAILED"
     return "HARNESS_CONNECTION_FAILED"
+
+
+def _run_cross_entity_observation_completeness(
+    *,
+    exp: dict[str, Any],
+    observations: dict[str, Any],
+    before_states: list[dict[str, Any]],
+    after_states: list[dict[str, Any]],
+    eid: str,
+    oid: str,
+) -> dict[str, Any]:
+    """Production integration adapter for observation_completeness.py.
+
+    Called from finalize_experiment_execution() when structured expressions
+    require multi-entity observation. Compiles observation requirements from
+    assertion structure, validates completeness of available data, builds
+    scope proof / snapshot pair / delta reconstruction, and gates Oracle.
+
+    Activation is purely structural (assertion kind / structured_expression).
+    No project-specific entity names, rule IDs, or benchmark data.
+    """
+    from dataclasses import asdict as _asdict
+
+    _ce = CrossEntityObservation()
+    result: dict[str, Any] = {
+        "blocked": False,
+        "blocked_reason": "",
+        "proof": None,
+        "observation_requirement": None,
+        "scope_proof": None,
+        "snapshot_pair": None,
+        "deltas": None,
+    }
+
+    # ── Step 1: Compile Observation Requirement from assertion structure ──
+    # Derive oracle expression from assertions that have structured_expression
+    _oracle_expr = _compile_oracle_expression_from_assertions(exp)
+    if not _oracle_expr:
+        # No structured oracle expression found; cannot compile requirement.
+        # This is not a block — the existing path handles it.
+        return result
+
+    _internal_rule_id = _text(exp.get("obligation_id") or oid)
+    _requirement = _ce.compile_requirement(
+        internal_rule_id=_internal_rule_id,
+        oracle_expression=_oracle_expr,
+        experiment_id=eid,
+    )
+    result["observation_requirement"] = _safe_serialize(_requirement)
+
+    # Validate requirement compiled correctly
+    _valid, _blocked_reason = _ce.compiler.validate_requirement(_requirement)
+    if not _valid:
+        result["blocked"] = True
+        result["blocked_reason"] = _blocked_reason
+        result["proof"] = _safe_serialize(_ce.completeness_gate.build_proof(
+            internal_rule_id=_internal_rule_id,
+            experiment_id=eid,
+            requirement=_requirement,
+            root_before=None,
+            root_after=None,
+            related_before=None,
+            related_after=None,
+            scope_proof=None,
+            snapshot_pair=None,
+        ))
+        return result
+
+    # ── Step 2: Extract available observation data ──
+    _root_before = before_states[-1].get("body") if before_states else None
+    _root_after = after_states[-1].get("body") if after_states else None
+    # Related entity data from active observer execution
+    _related_multi = _dict(observations.get("related_entity_multi_state"))
+    _related_before: dict | None = None
+    _related_after: dict | None = None
+    if _related_multi:
+        # Use first available related entity state
+        for _rkey, _rstate in _related_multi.items():
+            if not isinstance(_rstate, dict):
+                continue
+            _records = _rstate.get("records", [])
+            if _records:
+                # For collection observers, use aggregate as related data
+                _related_before = _rstate
+                _related_after = _rstate
+                break
+    # Also check multi_entity_state for nested related data
+    _multi_entity = _dict(observations.get("multi_entity_state"))
+    if _related_before is None and _multi_entity:
+        _rel_data = _multi_entity.get("related")
+        if isinstance(_rel_data, dict):
+            _related_before = _rel_data.get("before")
+            _related_after = _rel_data.get("after")
+
+    # ── Step 3: Resolve Relation Scope and build Scope Proof ──
+    _scope_proof_obj = None
+    if _requirement.related_entities and _root_after and isinstance(_root_after, dict):
+        _root_id = str(_root_after.get("id") or _root_after.get("uuid") or "")
+        _tenant = str(_root_after.get("tenant_id") or "")
+        for _rel_spec in _requirement.related_entities:
+            _scope = _ce.resolve_relation_scope(
+                root_instance_id=_root_id,
+                root_data=_root_after,
+                rel_spec=_rel_spec,
+                tenant_id=_tenant,
+            )
+            # Verify scope against observed related data
+            _observed_related = _related_after if isinstance(_related_after, dict) else {}
+            _scope_proof_obj = _ce.scope_resolver.verify_scope(
+                _scope, _observed_related
+            )
+            result["scope_proof"] = _safe_serialize(_scope_proof_obj)
+            break  # first related entity scope
+
+    # ── Step 4: Build Snapshot Pair ──
+    _snapshot_pair_obj = None
+    if _root_before and _root_after and isinstance(_root_before, dict) and isinstance(_root_after, dict):
+        _root_entity_type = ""
+        if _requirement.root_entity:
+            _root_entity_type = _requirement.root_entity.entity_type
+        _root_id = str(_root_after.get("id") or _root_after.get("uuid") or eid)
+        _tenant = str(_root_after.get("tenant_id") or "")
+        _snapshot_pair_obj = _ce.build_snapshot_pair(
+            root_entity_type=_root_entity_type,
+            root_instance_id=_root_id,
+            before_data=_root_before,
+            after_data=_root_after,
+            tenant_id=_tenant,
+        )
+        result["snapshot_pair"] = _safe_serialize(_snapshot_pair_obj)
+
+    # ── Step 5: Reconstruct Deltas ──
+    _deltas_list = []
+    if _root_before and _root_after and isinstance(_root_before, dict) and isinstance(_root_after, dict):
+        _op_inputs = _extract_operation_inputs(exp)
+        _deltas_list = _ce.reconstruct_deltas(
+            requirement=_requirement,
+            root_before=_root_before,
+            root_after=_root_after,
+            related_before=_related_before if isinstance(_related_before, dict) else None,
+            related_after=_related_after if isinstance(_related_after, dict) else None,
+            operation_inputs=_op_inputs,
+        )
+        result["deltas"] = [_safe_serialize(d) for d in _deltas_list]
+
+    # ── Step 6: Completeness Gate ──
+    _proof = _ce.gate_oracle(
+        requirement=_requirement,
+        root_before=_root_before if isinstance(_root_before, dict) else None,
+        root_after=_root_after if isinstance(_root_after, dict) else None,
+        related_before=_related_before if isinstance(_related_before, dict) else None,
+        related_after=_related_after if isinstance(_related_after, dict) else None,
+        scope_proof=_scope_proof_obj,
+        snapshot_pair=_snapshot_pair_obj,
+    )
+    result["proof"] = _safe_serialize(_proof)
+
+    _gate_decision = _ce.completeness_gate.gate_oracle_call(_proof)
+    if _gate_decision != "PROCEED":
+        result["blocked"] = True
+        result["blocked_reason"] = _proof.blocked_reason or ORACLE_INPUT_INCOMPLETE
+
+    return result
+
+
+def _compile_oracle_expression_from_assertions(exp: dict[str, Any]) -> dict[str, Any]:
+    """Derive an oracle expression dict from experiment assertions.
+
+    Scans assertions for structured_expression or multi-entity kind markers.
+    Returns a dict compatible with ObservationRequirementCompiler input.
+    Returns empty dict if no cross-entity structure detected.
+    """
+    _assertions = _list(exp.get("assertions"))
+    _root_entity: dict[str, Any] = {}
+    _related_entities: list[dict[str, Any]] = []
+    _checks: list[dict[str, Any]] = []
+    _operation_inputs: list[str] = []
+
+    for _a in _assertions:
+        if not isinstance(_a, dict):
+            continue
+        _se = _dict(_a.get("structured_expression"))
+        _kind = _text(_a.get("kind"))
+        if not _se and _kind not in ("cross_entity_consistency", "limit_constraint", "conservation"):
+            continue
+
+        # Extract root entity from entity_bindings or structured_expression
+        _bindings = _dict(_a.get("entity_bindings"))
+        _root_name = _text(_a.get("root_entity"))
+        if _se.get("root_entity"):
+            _re = _dict(_se.get("root_entity"))
+            _root_entity = {
+                "type": _text(_re.get("type") or _re.get("entity")),
+                "fields": _list(_re.get("fields")),
+            }
+        elif _root_name:
+            _root_entity = {"type": _root_name, "fields": []}
+        elif _bindings:
+            for _alias, _info in _bindings.items():
+                if not isinstance(_info, dict):
+                    continue
+                if _alias == "root" or _text(_info.get("cardinality")).upper() != "MANY":
+                    _root_entity = {
+                        "type": _text(_info.get("entity_name")),
+                        "fields": _list(_info.get("required_fields")),
+                    }
+                    break
+
+        # Extract related entities - prefer structured_expression (full info)
+        for _rel in _list(_se.get("related_entities")):
+            if isinstance(_rel, dict):
+                _rel_type = _text(_rel.get("type") or _rel.get("entity") or _rel.get("entity_name"))
+                if _rel_type and not any(r.get("type") == _rel_type for r in _related_entities):
+                    _related_entities.append({
+                        "type": _rel_type,
+                        "fields": _list(_rel.get("fields") or _rel.get("required_fields")),
+                        "relation_id": _text(_rel.get("relation_id") or _rel.get("relation", {}).get("key") if isinstance(_rel.get("relation"), dict) else _rel.get("relation_id")),
+                        "correlation_keys": _list(_rel.get("correlation_keys")),
+                        "cardinality": _text(_rel.get("cardinality") or "one"),
+                        "identifier_source": _text(_rel.get("identifier_source")),
+                        "aggregation": _text(_rel.get("aggregation")),
+                    })
+        # Supplement from assertion-level related_entities (may lack fields)
+        for _rel in _list(_a.get("related_entities")):
+            if isinstance(_rel, dict):
+                _rel_type = _text(_rel.get("entity") or _rel.get("entity_name") or _rel.get("type"))
+                if _rel_type and not any(r.get("type") == _rel_type for r in _related_entities):
+                    _related_entities.append({
+                        "type": _rel_type,
+                        "fields": _list(_rel.get("required_fields") or _rel.get("fields")),
+                        "relation_id": _text(_rel.get("relation_id")),
+                        "correlation_keys": _list(_rel.get("correlation_keys")),
+                        "cardinality": _text(_rel.get("cardinality") or "one"),
+                        "identifier_source": _text(_rel.get("identifier_source")),
+                    })
+            elif isinstance(_rel, str) and _rel:
+                if not any(r.get("type") == _rel for r in _related_entities):
+                    _related_entities.append({"type": _rel, "fields": []})
+        # Also check observer_requirements for related entity info
+        for _obs_req in _list(_a.get("observer_requirements")):
+            if not isinstance(_obs_req, dict):
+                continue
+            _ent_name = _text(_obs_req.get("entity_name"))
+            if _ent_name and not any(r.get("type") == _ent_name for r in _related_entities):
+                _related_entities.append({
+                    "type": _ent_name,
+                    "fields": _list(_obs_req.get("required_fields")),
+                    "cardinality": _text(_obs_req.get("cardinality") or "one"),
+                    "relation_id": _text(_obs_req.get("relation_key")),
+                    "identifier_source": _text(_obs_req.get("identifier_source")),
+                })
+
+        # Extract checks from structured_expression
+        if _se.get("checks"):
+            _checks.extend(_list(_se.get("checks")))
+        # Infer delta check from kind
+        if _kind == "conservation" and not _checks:
+            _checks.append({"type": "delta", "entity": _text(_root_entity.get("type")), "field": "", "formula": "after - before"})
+
+        # Extract operation inputs
+        if _se.get("operation_inputs"):
+            _operation_inputs.extend(_list(_se.get("operation_inputs")))
+
+    if not _root_entity and not _related_entities:
+        return {}
+
+    return {
+        "root_entity": _root_entity,
+        "related_entities": _related_entities,
+        "checks": _checks,
+        "operation_inputs": _operation_inputs,
+    }
+
+
+def _extract_operation_inputs(exp: dict[str, Any]) -> dict[str, Any]:
+    """Extract operation input values from treatment plan body."""
+    _inputs: dict[str, Any] = {}
+    for _step in _list(exp.get("treatment_plan")):
+        if not isinstance(_step, dict):
+            continue
+        _body = _dict(_step.get("body"))
+        if _body:
+            _inputs.update(_body)
+            break
+    return _inputs
+
+
+def _safe_serialize(obj: Any) -> dict[str, Any]:
+    """Safely serialize a dataclass or dict to a plain dict."""
+    if obj is None:
+        return {}
+    if isinstance(obj, dict):
+        return obj
+    try:
+        from dataclasses import asdict
+        return asdict(obj)
+    except Exception:
+        return {"repr": str(obj)}
 
 
 def finalize_experiment_execution(
@@ -391,6 +696,38 @@ def finalize_experiment_execution(
         if _multi_entity:
             observations["multi_entity_state"] = _multi_entity
 
+    # ── Cross-Entity Observation Completeness Strategy ──
+    # Activates automatically when structured expressions require multi-entity
+    # observation. Validates Oracle input completeness BEFORE oracle call.
+    # Single-entity rules bypass this entirely (no overhead).
+    _completeness_proof: dict[str, Any] | None = None
+    _completeness_gate_blocked = False
+    _completeness_blocked_reason = ""
+    if _has_structured_expr:
+        _ce_result = _run_cross_entity_observation_completeness(
+            exp=exp,
+            observations=observations,
+            before_states=_before_states,
+            after_states=_after_states,
+            eid=eid,
+            oid=oid,
+        )
+        _completeness_proof = _ce_result.get("proof")
+        _completeness_gate_blocked = _ce_result.get("blocked", False)
+        _completeness_blocked_reason = _text(_ce_result.get("blocked_reason"))
+        # Store all completeness artifacts in observations for trace
+        if _ce_result.get("observation_requirement"):
+            observations["cross_entity_observation_requirement"] = _ce_result["observation_requirement"]
+        if _ce_result.get("scope_proof"):
+            observations["cross_entity_scope_proof"] = _ce_result["scope_proof"]
+        if _ce_result.get("snapshot_pair"):
+            observations["cross_entity_snapshot_pair"] = _ce_result["snapshot_pair"]
+        if _ce_result.get("deltas"):
+            observations["cross_entity_deltas"] = _ce_result["deltas"]
+        if _completeness_proof:
+            observations["cross_entity_completeness_proof"] = _completeness_proof
+        observations["cross_entity_completeness_gate_blocked"] = _completeness_gate_blocked
+
     # Materialize + evaluate typed assertions via contract oracle.
     assertions = []
     for raw in _list(exp.get("assertions")):
@@ -398,7 +735,20 @@ def finalize_experiment_execution(
             assertions.append(materialize_assertion(raw, observations=observations))
     exp_for_oracle = dict(exp)
     exp_for_oracle["assertions"] = assertions
-    verdict = evaluate_contract_oracle(experiment=exp_for_oracle, evidence=observations)
+    # ── Completeness Gate: block Oracle when input is incomplete ──
+    if _completeness_gate_blocked:
+        # Do NOT call Oracle with incomplete inputs. Return INDETERMINATE.
+        verdict = {
+            "status": "INDETERMINATE",
+            "verdict": "blocked_experiment",
+            "reason_codes": [_completeness_blocked_reason or ORACLE_INPUT_INCOMPLETE],
+            "assertions": [],
+            "missing_requirements": [_completeness_blocked_reason or ORACLE_INPUT_INCOMPLETE],
+            "oracle_blocked_by_completeness_gate": True,
+            "completeness_proof": _completeness_proof,
+        }
+    else:
+        verdict = evaluate_contract_oracle(experiment=exp_for_oracle, evidence=observations)
 
     # ── P0-10: Build field-level oracle trace ──
     oracle_trace: list[dict[str, Any]] = []

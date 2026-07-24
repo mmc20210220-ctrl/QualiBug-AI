@@ -15,6 +15,13 @@ import re
 from copy import deepcopy
 from typing import Any
 
+from ai_test_asset_center.temporal_experiment_planning import (
+    TemporalExperimentPlanner,
+    TemporalRuleParser,
+    BoundaryValueSolver,
+    REFERENCE_RELATED_ENTITY_FIELD,
+)
+
 # ─── Helpers ───────────────────────────────────────────────────────────────────
 
 def _dict(v: Any) -> dict[str, Any]:
@@ -51,6 +58,12 @@ MECHANISM_CAUSAL_SIDE_EFFECT = "CAUSAL_SIDE_EFFECT"
 MECHANISM_TEMPORAL = "TEMPORAL"
 MECHANISM_ROLE_TENANT = "ROLE_TENANT"
 MECHANISM_NEGATIVE_PRECONDITION = "NEGATIVE_PRECONDITION"
+# New mechanisms for missing experiment planning (SPEC: Missing Mechanism Planning)
+MECHANISM_UNIQUENESS_VIOLATION = "UNIQUENESS_VIOLATION"
+MECHANISM_FIELD_INVARIANT_VIOLATION = "FIELD_INVARIANT_VIOLATION"
+MECHANISM_PRECONDITION_VIOLATION = "PRECONDITION_VIOLATION"
+MECHANISM_AUTHORIZATION_MATRIX = "AUTHORIZATION_MATRIX"
+MECHANISM_TENANT_ISOLATION_MATRIX = "TENANT_ISOLATION_MATRIX"
 
 ALL_MECHANISMS = frozenset({
     MECHANISM_BOUNDARY,
@@ -61,18 +74,42 @@ ALL_MECHANISMS = frozenset({
     MECHANISM_TEMPORAL,
     MECHANISM_ROLE_TENANT,
     MECHANISM_NEGATIVE_PRECONDITION,
+    MECHANISM_UNIQUENESS_VIOLATION,
+    MECHANISM_FIELD_INVARIANT_VIOLATION,
+    MECHANISM_PRECONDITION_VIOLATION,
+    MECHANISM_AUTHORIZATION_MATRIX,
+    MECHANISM_TENANT_ISOLATION_MATRIX,
 })
 
 # Rule type → mechanism mapping (generic, based on expression semantics)
 _RULE_TYPE_MECHANISM: dict[str, str] = {
-    "UNIQUENESS": MECHANISM_CUMULATIVE,
-    "PRECONDITION": MECHANISM_NEGATIVE_PRECONDITION,
+    "UNIQUENESS": MECHANISM_UNIQUENESS_VIOLATION,
+    "DUPLICATE_ENTITY": MECHANISM_UNIQUENESS_VIOLATION,
+    "UNIQUE_FIELD": MECHANISM_UNIQUENESS_VIOLATION,
+    "COMPOSITE_UNIQUE": MECHANISM_UNIQUENESS_VIOLATION,
+    "FIELD_INVARIANT": MECHANISM_FIELD_INVARIANT_VIOLATION,
+    "NON_NEGATIVE": MECHANISM_FIELD_INVARIANT_VIOLATION,
+    "NON_ZERO": MECHANISM_FIELD_INVARIANT_VIOLATION,
+    "RANGE_CONSTRAINT": MECHANISM_FIELD_INVARIANT_VIOLATION,
+    "ENUM_CONSTRAINT": MECHANISM_FIELD_INVARIANT_VIOLATION,
+    "IMMUTABLE_FIELD": MECHANISM_FIELD_INVARIANT_VIOLATION,
+    "PRECONDITION": MECHANISM_PRECONDITION_VIOLATION,
+    "BUSINESS_PRECONDITION": MECHANISM_PRECONDITION_VIOLATION,
+    "CAUSAL_PRECONDITION": MECHANISM_PRECONDITION_VIOLATION,
+    "REQUIRES": MECHANISM_PRECONDITION_VIOLATION,
+    "STATE_DEPENDENCY": MECHANISM_PRECONDITION_VIOLATION,
+    "CROSS_ENTITY_PRECONDITION": MECHANISM_PRECONDITION_VIOLATION,
+    "AUTHORIZATION": MECHANISM_AUTHORIZATION_MATRIX,
+    "ROLE_PERMISSION": MECHANISM_AUTHORIZATION_MATRIX,
+    "ACTION_PERMISSION": MECHANISM_AUTHORIZATION_MATRIX,
+    "RESOURCE_PERMISSION": MECHANISM_AUTHORIZATION_MATRIX,
+    "TENANT_ISOLATION": MECHANISM_TENANT_ISOLATION_MATRIX,
+    "CROSS_TENANT_ACCESS": MECHANISM_TENANT_ISOLATION_MATRIX,
+    "TENANT_SCOPED_RESOURCE": MECHANISM_TENANT_ISOLATION_MATRIX,
     "LIMIT_CONSTRAINT": MECHANISM_BOUNDARY,
     "STATE_TRANSITION": MECHANISM_STATE_NEGATIVE,
     "IDEMPOTENCY": MECHANISM_IDEMPOTENCY,
     "TEMPORAL": MECHANISM_TEMPORAL,
-    "TENANT_ISOLATION": MECHANISM_ROLE_TENANT,
-    "AUTHORIZATION": MECHANISM_ROLE_TENANT,
     "DATA_VISIBILITY": MECHANISM_ROLE_TENANT,
     "BOUNDARY": MECHANISM_BOUNDARY,
     "CUMULATIVE": MECHANISM_CUMULATIVE,
@@ -80,13 +117,15 @@ _RULE_TYPE_MECHANISM: dict[str, str] = {
 
 # Expression type hints → mechanism
 _EXPRESSION_HINT_MECHANISM: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"(?i)(unique|duplicate|same.*number|重复|唯一)"), MECHANISM_UNIQUENESS_VIOLATION),
+    (re.compile(r"(?i)(negative|non.?negative|不得为负|非负|positive.*required|must.*positive)"), MECHANISM_FIELD_INVARIANT_VIOLATION),
     (re.compile(r"(?i)(limit|max|min|threshold|cap|quota|ceiling)"), MECHANISM_BOUNDARY),
-    (re.compile(r"(?i)(unique|duplicate|repeat|idempoten)"), MECHANISM_IDEMPOTENCY),
+    (re.compile(r"(?i)(idempoten)"), MECHANISM_IDEMPOTENCY),
     (re.compile(r"(?i)(before|after|date|deadline|expire|window|period|range)"), MECHANISM_TEMPORAL),
     (re.compile(r"(?i)(state|status|transition|phase|stage|lifecycle)"), MECHANISM_STATE_NEGATIVE),
-    (re.compile(r"(?i)(precondition|prerequisite|require|must_exist|depend)"), MECHANISM_NEGATIVE_PRECONDITION),
-    (re.compile(r"(?i)(tenant|isolation|cross.?tenant|scope)"), MECHANISM_ROLE_TENANT),
-    (re.compile(r"(?i)(role|permission|authoriz|access|forbidden)"), MECHANISM_ROLE_TENANT),
+    (re.compile(r"(?i)(precondition|prerequisite|require|must_exist|depend|must.*active|must.*approved|关联.*ACTIVE)"), MECHANISM_PRECONDITION_VIOLATION),
+    (re.compile(r"(?i)(tenant|isolation|cross.?tenant|scope|跨租户)"), MECHANISM_TENANT_ISOLATION_MATRIX),
+    (re.compile(r"(?i)(role|permission|authoriz|access|forbidden|只有.*可)"), MECHANISM_AUTHORIZATION_MATRIX),
     (re.compile(r"(?i)(cumul|sum|total|aggregate|accru)"), MECHANISM_CUMULATIVE),
 ]
 
@@ -392,6 +431,353 @@ def generate_temporal_mutation(
     return mutations
 
 
+def generate_cross_entity_temporal_mutation(
+    internal_rule_id: str,
+    expression: dict[str, Any],
+    rule_statement: str,
+    operation: dict[str, Any],
+    actor_ref: str,
+) -> list[dict[str, Any]]:
+    """Generate cross-entity temporal boundary mutations.
+
+    Uses temporal_experiment_planning module to generate Control/Violation
+    pairs for rules like "field A must not be later than field B" where
+    A and B are from different entities.
+
+    Returns mutation descriptors compatible with build_control_violation_pair.
+    """
+    planner = TemporalExperimentPlanner()
+
+    # Extract target operation ID
+    target_op = _text(
+        _dict(expression).get("target_operation")
+        or _dict(expression).get("operation_id")
+        or operation.get("id")
+        or operation.get("operation_ref")
+    )
+
+    # For cross-entity temporal rules, we need a reference value.
+    # In production, this comes from fixture receipt or observer.
+    # For planning, we use a placeholder that will be resolved at execution time.
+    reference_value = _text(
+        _dict(expression).get("reference_value")
+        or _dict(expression).get("reference_date")
+    )
+
+    # If no reference value provided, we cannot generate concrete boundary values
+    # Return empty to indicate this needs runtime resolution
+    if not reference_value:
+        # Return a marker mutation indicating temporal planning is needed
+        return [{
+            "mutation_id": _stable_id("temporal_cross", internal_rule_id, "needs_resolution"),
+            "field": _text(_dict(expression).get("subject_field") or _dict(expression).get("date_field")),
+            "value": "TEMPORAL_REFERENCE_NEEDS_RESOLUTION",
+            "mutation_type": "cross_entity_temporal",
+            "expected_outcome": "pending_reference_resolution",
+            "temporal_planning_required": True,
+            "internal_rule_id": internal_rule_id,
+            "expression": expression,
+            "rule_statement": rule_statement,
+            "target_operation": target_op,
+        }]
+
+    # Plan experiments using the temporal module
+    result = planner.plan_experiments(
+        internal_rule_id=internal_rule_id,
+        expression=expression,
+        rule_statement=rule_statement,
+        reference_value=reference_value,
+        target_operation=target_op,
+        actor=actor_ref,
+    )
+
+    if not result.get("complete"):
+        # Planning blocked - return empty
+        return []
+
+    # Convert boundary solution to mutation format
+    mutations: list[dict[str, Any]] = []
+    solution = result.get("boundary_solution", {})
+    subject_field = _text(_dict(expression).get("subject_field") or _dict(expression).get("date_field"))
+
+    # Control cases
+    for case in solution.get("control_cases", []):
+        mutations.append({
+            "mutation_id": case.get("case_id", _stable_id("temporal_ctrl", internal_rule_id, case.get("subject_value", ""))),
+            "field": subject_field,
+            "value": case.get("subject_value"),
+            "mutation_type": "temporal_control",
+            "expected_outcome": "accepted",
+            "case_type": "CONTROL",
+            "distance_from_boundary": case.get("distance_from_boundary"),
+            "temporal_plan_proof": True,
+        })
+
+    # Violation cases
+    for case in solution.get("violation_cases", []):
+        mutations.append({
+            "mutation_id": case.get("case_id", _stable_id("temporal_viol", internal_rule_id, case.get("subject_value", ""))),
+            "field": subject_field,
+            "value": case.get("subject_value"),
+            "mutation_type": "temporal_violation",
+            "expected_outcome": "rejected",
+            "case_type": "VIOLATION",
+            "distance_from_boundary": case.get("distance_from_boundary"),
+            "temporal_plan_proof": True,
+        })
+
+    return mutations
+
+
+# ─── Uniqueness Violation Mutation ─────────────────────────────────────────────
+
+def generate_uniqueness_mutation(
+    entity_ref: str,
+    unique_fields: list[str],
+    expression: Any,
+) -> list[dict[str, Any]]:
+    """Generate duplicate-entity mutations: submit same identifying fields twice.
+
+    Control: first creation succeeds.
+    Violation: second creation with same unique fields must be rejected.
+    """
+    expr = _dict(expression) if isinstance(expression, dict) else {}
+    fields = unique_fields or []
+    if not fields:
+        # Try to extract from expression
+        field_text = _text(expr.get("unique_field") or expr.get("field") or expr.get("fields"))
+        if field_text:
+            fields = [f.strip() for f in field_text.split(",") if f.strip()]
+    if not fields:
+        fields = ["identifier"]
+
+    return [
+        {
+            "mutation_id": _stable_id("uniq", entity_ref, "first_create"),
+            "field": ",".join(fields),
+            "value": "original_value",
+            "mutation_type": "uniqueness_first_create",
+            "expected_outcome": "accepted",
+            "step_index": 0,
+        },
+        {
+            "mutation_id": _stable_id("uniq", entity_ref, "duplicate"),
+            "field": ",".join(fields),
+            "value": "same_value_duplicate",
+            "mutation_type": "uniqueness_duplicate_create",
+            "expected_outcome": "rejected",
+            "step_index": 1,
+        },
+    ]
+
+
+# ─── Field Invariant Violation Mutation ────────────────────────────────────────
+
+def generate_field_invariant_mutation(
+    field_spec: dict[str, Any],
+    expression: Any,
+) -> list[dict[str, Any]]:
+    """Generate field invariant violations: negative, zero, wrong-type values.
+
+    For constraints like 'amount must not be negative' or 'field must be positive'.
+    """
+    expr = _dict(expression) if isinstance(expression, dict) else {}
+    target_field = _text(
+        field_spec.get("field") or field_spec.get("name")
+        or expr.get("field") or expr.get("name")
+    )
+    if not target_field:
+        target_field = "amount"
+
+    return [
+        {
+            "mutation_id": _stable_id("finv", target_field, "valid"),
+            "field": target_field,
+            "value": 100,
+            "mutation_type": "field_invariant_valid",
+            "expected_outcome": "accepted",
+        },
+        {
+            "mutation_id": _stable_id("finv", target_field, "negative"),
+            "field": target_field,
+            "value": -1,
+            "mutation_type": "field_invariant_negative",
+            "expected_outcome": "rejected",
+        },
+        {
+            "mutation_id": _stable_id("finv", target_field, "zero"),
+            "field": target_field,
+            "value": 0,
+            "mutation_type": "field_invariant_zero",
+            "expected_outcome": "rejected",
+        },
+    ]
+
+
+# ─── Precondition Violation Mutation ──────────────────────────────────────────
+
+def generate_precondition_mutation(
+    entity_ref: str,
+    precondition_desc: str,
+    expression: Any,
+) -> list[dict[str, Any]]:
+    """Generate precondition violation: attempt operation when precondition unmet.
+
+    Control: operation with precondition satisfied → accepted.
+    Violation: operation with precondition NOT satisfied → rejected.
+    """
+    expr = _dict(expression) if isinstance(expression, dict) else {}
+    required_state = _text(
+        expr.get("required_state") or expr.get("expected_state")
+        or expr.get("precondition_state")
+    )
+    wrong_state = _text(
+        expr.get("wrong_state") or expr.get("violation_state")
+    )
+    if not wrong_state:
+        wrong_state = "DRAFT"  # Generic non-qualifying state
+
+    return [
+        {
+            "mutation_id": _stable_id("precond", entity_ref, "satisfied"),
+            "field": "precondition_state",
+            "value": required_state or "QUALIFIED",
+            "mutation_type": "precondition_satisfied",
+            "expected_outcome": "accepted",
+            "step_index": 0,
+        },
+        {
+            "mutation_id": _stable_id("precond", entity_ref, "violated"),
+            "field": "precondition_state",
+            "value": wrong_state,
+            "mutation_type": "precondition_violated",
+            "expected_outcome": "rejected",
+            "step_index": 1,
+        },
+    ]
+
+
+# ─── Authorization Matrix Mutation ────────────────────────────────────────────
+
+def generate_authorization_mutation(
+    operation_ref: str,
+    expression: Any,
+    actors: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Generate authorization matrix: authorized role succeeds, others rejected.
+
+    Uses real actor references from Behavior IR when available.
+    """
+    expr = _dict(expression) if isinstance(expression, dict) else {}
+    authorized_role = _text(
+        expr.get("authorized_role") or expr.get("required_role")
+        or expr.get("role")
+    )
+
+    mutations = [
+        {
+            "mutation_id": _stable_id("authz", operation_ref, "authorized"),
+            "field": "actor_role",
+            "value": authorized_role or "authorized_role",
+            "mutation_type": "authorization_authorized",
+            "expected_outcome": "accepted",
+        },
+    ]
+
+    # Generate unauthorized attempts for each non-authorized actor
+    unauthorized_count = 0
+    for actor in actors:
+        if not isinstance(actor, dict):
+            continue
+        role = _text(actor.get("role"))
+        actor_id = _text(actor.get("id"))
+        if not role or not actor_id:
+            continue
+        if authorized_role and role.lower() == authorized_role.lower():
+            continue
+        unauthorized_count += 1
+        mutations.append({
+            "mutation_id": _stable_id("authz", operation_ref, f"unauth_{role}"),
+            "field": "actor_role",
+            "value": role,
+            "actor_ref": actor_id,
+            "mutation_type": f"authorization_unauthorized_{role.lower()}",
+            "expected_outcome": "rejected",
+        })
+        if unauthorized_count >= 3:
+            break
+
+    # Fallback if no actors available
+    if unauthorized_count == 0:
+        mutations.append({
+            "mutation_id": _stable_id("authz", operation_ref, "unauth_generic"),
+            "field": "actor_role",
+            "value": "unauthorized_role",
+            "mutation_type": "authorization_unauthorized",
+            "expected_outcome": "rejected",
+        })
+
+    return mutations
+
+
+# ─── Tenant Isolation Matrix Mutation ─────────────────────────────────────────
+
+def generate_tenant_isolation_mutation(
+    entity_ref: str,
+    expression: Any,
+    actors: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Generate tenant isolation matrix: same-tenant access OK, cross-tenant rejected.
+
+    Uses real actor references from different tenants when available.
+    """
+    expr = _dict(expression) if isinstance(expression, dict) else {}
+
+    # Group actors by tenant
+    tenants: dict[str, list[dict[str, Any]]] = {}
+    for actor in actors:
+        if not isinstance(actor, dict):
+            continue
+        tenant = _text(actor.get("tenant") or actor.get("tenant_id") or actor.get("org"))
+        actor_id = _text(actor.get("id"))
+        if tenant and actor_id:
+            tenants.setdefault(tenant, []).append(actor)
+
+    mutations = [
+        {
+            "mutation_id": _stable_id("tenant", entity_ref, "same_tenant"),
+            "field": "tenant_access",
+            "value": "same_tenant",
+            "mutation_type": "tenant_same_access",
+            "expected_outcome": "accepted",
+        },
+    ]
+
+    if len(tenants) >= 2:
+        # Use actors from different tenants for cross-tenant test
+        tenant_list = list(tenants.keys())
+        cross_tenant = tenant_list[1]
+        cross_actor = tenants[cross_tenant][0]
+        mutations.append({
+            "mutation_id": _stable_id("tenant", entity_ref, f"cross_{cross_tenant}"),
+            "field": "tenant_access",
+            "value": f"cross_tenant:{cross_tenant}",
+            "actor_ref": _text(cross_actor.get("id")),
+            "mutation_type": "tenant_cross_access",
+            "expected_outcome": "rejected",
+        })
+    else:
+        mutations.append({
+            "mutation_id": _stable_id("tenant", entity_ref, "cross_generic"),
+            "field": "tenant_access",
+            "value": "different_tenant",
+            "mutation_type": "tenant_cross_access",
+            "expected_outcome": "rejected",
+        })
+
+    return mutations
+
+
 # ─── Multi-Step Sequence Builder ──────────────────────────────────────────────
 
 def build_multi_step_sequence(
@@ -625,12 +1011,7 @@ def plan_deep_experiments(
         operation_ref = _text(prop.get("operation_ref"))
         actor_ref = _text(prop.get("actor_ref")) or default_actor_ref
 
-        # Check if already has a deep experiment
-        existing = _dict(experiments_by_obligation.get(oid))
-        if _text(existing.get("mechanism")) in ALL_MECHANISMS:
-            continue  # Already planned by deep planner
-
-        # Determine rule type from invariant or expression
+        # Determine rule type from invariant or expression (moved before skip check)
         inv = _dict(invariants_by_id.get(invariant_ref))
         rule_type = _text(
             inv.get("rule_type")
@@ -638,6 +1019,16 @@ def plan_deep_experiments(
             or _dict(expr).get("rule_type")
             or _dict(expr).get("type")
         )
+
+        # Check if already has a correct deep experiment for this rule type
+        existing = _dict(experiments_by_obligation.get(oid))
+        existing_mechanism = _text(existing.get("mechanism"))
+        if existing_mechanism in ALL_MECHANISMS:
+            # Only skip if existing mechanism matches what this rule type needs
+            target_mechanism = _RULE_TYPE_MECHANISM.get(_text(rule_type).upper(), "")
+            if not target_mechanism or existing_mechanism == target_mechanism:
+                continue  # Correctly planned already
+            # Otherwise: wrong mechanism was used, allow re-planning
 
         # Select mechanism
         mechanism = select_experiment_mechanism(
@@ -677,13 +1068,30 @@ def plan_deep_experiments(
             mutations = generate_cumulative_mutation(entity_ref, limit_field, expr)
 
         elif mechanism == MECHANISM_TEMPORAL:
-            date_field = _text(
-                _dict(expr).get("date_field")
-                or _dict(expr).get("field")
-                or _dict(expr).get("start_date")
-            )
-            bounds = _dict(expr).get("bounds") or _dict(expr)
-            mutations = generate_temporal_mutation(date_field, bounds)
+            # Check for cross-entity temporal structure
+            subject_entity = _text(_dict(expr).get("subject_entity") or _dict(expr).get("left", {}).get("entity"))
+            reference_entity = _text(_dict(expr).get("reference_entity") or _dict(expr).get("right", {}).get("entity"))
+            has_cross_entity = bool(subject_entity and reference_entity and subject_entity != reference_entity)
+            has_operator = bool(_text(_dict(expr).get("operator")))
+
+            if has_cross_entity and has_operator:
+                # Use new temporal experiment planning for cross-entity rules
+                mutations = generate_cross_entity_temporal_mutation(
+                    internal_rule_id=invariant_ref or oid,
+                    expression=expr,
+                    rule_statement=_text(inv.get("description") or prop.get("description") or ""),
+                    operation=operation,
+                    actor_ref=actor_ref,
+                )
+            else:
+                # Fall back to simple range boundary for single-entity rules
+                date_field = _text(
+                    _dict(expr).get("date_field")
+                    or _dict(expr).get("field")
+                    or _dict(expr).get("start_date")
+                )
+                bounds = _dict(expr).get("bounds") or _dict(expr)
+                mutations = generate_temporal_mutation(date_field, bounds)
 
         elif mechanism == MECHANISM_STATE_NEGATIVE:
             # Find forbidden transitions from state graph
@@ -780,6 +1188,33 @@ def plan_deep_experiments(
                     "mutation_type": "negative_precondition",
                     "expected_outcome": "rejected",
                 }]
+
+        elif mechanism == MECHANISM_UNIQUENESS_VIOLATION:
+            entity_ref = _text(inv.get("entity_ref") or prop.get("entity_ref"))
+            unique_fields = _list(_dict(expr).get("unique_fields") or _dict(expr).get("fields"))
+            if isinstance(unique_fields, str):
+                unique_fields = [unique_fields]
+            unique_fields = [_text(f) for f in unique_fields if _text(f)]
+            mutations = generate_uniqueness_mutation(entity_ref, unique_fields, expr)
+
+        elif mechanism == MECHANISM_FIELD_INVARIANT_VIOLATION:
+            field_spec = _dict(expr).get("field_spec") or _dict(expr)
+            mutations = generate_field_invariant_mutation(field_spec, expr)
+
+        elif mechanism == MECHANISM_PRECONDITION_VIOLATION:
+            entity_ref = _text(inv.get("entity_ref") or prop.get("entity_ref"))
+            precond_desc = _text(
+                _dict(expr).get("description") or _dict(expr).get("precondition")
+                or inv.get("description")
+            )
+            mutations = generate_precondition_mutation(entity_ref, precond_desc, expr)
+
+        elif mechanism == MECHANISM_AUTHORIZATION_MATRIX:
+            mutations = generate_authorization_mutation(operation_ref, expr, actors)
+
+        elif mechanism == MECHANISM_TENANT_ISOLATION_MATRIX:
+            entity_ref = _text(inv.get("entity_ref") or prop.get("entity_ref"))
+            mutations = generate_tenant_isolation_mutation(entity_ref, expr, actors)
 
         # Build multi-step sequence if fixtures needed
         treatment_plan: list[dict[str, Any]] = []
