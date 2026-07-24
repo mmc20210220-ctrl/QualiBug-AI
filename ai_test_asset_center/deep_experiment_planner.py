@@ -38,6 +38,10 @@ from ai_test_asset_center.cross_entity_chain_planning import (
     build_chain_proof,
     detect_cross_entity_requirement,
 )
+from ai_test_asset_center.idempotency_replay_planning import (
+    plan_idempotency_replay,
+    build_idempotency_proof,
+)
 
 # ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -1191,25 +1195,67 @@ def plan_deep_experiments(
                 }]
 
         elif mechanism == MECHANISM_IDEMPOTENCY:
-            # Repeat same operation, compare side effects
-            mutations = [
-                {
-                    "mutation_id": _stable_id("idem", oid, "first"),
-                    "field": "",
-                    "value": "first_execution",
-                    "mutation_type": "idempotency_first",
-                    "expected_outcome": "accepted",
-                    "step_index": 0,
-                },
-                {
-                    "mutation_id": _stable_id("idem", oid, "repeat"),
-                    "field": "",
-                    "value": "repeat_execution",
-                    "mutation_type": "idempotency_repeat",
-                    "expected_outcome": "no_additional_side_effect",
-                    "step_index": 1,
-                },
-            ]
+            # IDEMPOTENCY_REPETITION_NOT_GENERATED fix: build concrete replay sequence
+            _idem_result = plan_idempotency_replay(obl, ir, budget=8)
+            if _idem_result.get("status") == "REPLAY_PLANNED" and _idem_result.get("experiments"):
+                # Use concrete replay experiments
+                _idem_experiments = _idem_result.get("experiments", [])
+                _idem_sequence = _list(_idem_result.get("replay_sequence"))
+                # Build multi_step_fixture from replay sequence
+                if _idem_sequence:
+                    multi_step_fixture = [
+                        {
+                            "operation_ref": _text(step.get("operation_ref")),
+                            "intent": _text(step.get("intent")),
+                            "expected_status": step.get("expected_status"),
+                            "role": _text(step.get("role")),
+                            "actor_ref": actor_ref,
+                        }
+                        for step in _idem_sequence
+                    ]
+                for _idem_exp in _idem_experiments:
+                    mutations.append({
+                        "mutation_id": _text(_idem_exp.get("experiment_id")),
+                        "field": "idempotency_replay",
+                        "value": _text(_idem_exp.get("replay_variant")),
+                        "mutation_type": f"idempotency_{_idem_exp.get('experiment_type', 'replay').lower()}",
+                        "expected_outcome": _text(_idem_exp.get("expected_outcome") or _idem_exp.get("expected_replay")),
+                        "idempotency_replay": True,
+                        "replay_proof": _idem_result.get("replay_proof", {}).get("proof_id"),
+                        "side_effect_proof": _idem_result.get("side_effect_proof", {}).get("proof_id"),
+                        "oracle": _idem_exp.get("oracle"),
+                    })
+                # Store idempotency metadata
+                _actor_matrix_meta[oid] = {
+                    "status": "IDEMPOTENCY_REPLAY_PLANNED",
+                    "replay_proof": _idem_result.get("replay_proof"),
+                    "side_effect_proof": _idem_result.get("side_effect_proof"),
+                    "operation_identity": _idem_result.get("operation_identity"),
+                    "idempotency_key": _idem_result.get("idempotency_key"),
+                    "request_fingerprint": _idem_result.get("request_fingerprint"),
+                    "resource_scope": _idem_result.get("resource_scope"),
+                    "replay_variants": _idem_result.get("replay_variants"),
+                }
+            else:
+                # Fallback to legacy abstract descriptors
+                mutations = [
+                    {
+                        "mutation_id": _stable_id("idem", oid, "first"),
+                        "field": "",
+                        "value": "first_execution",
+                        "mutation_type": "idempotency_first",
+                        "expected_outcome": "accepted",
+                        "step_index": 0,
+                    },
+                    {
+                        "mutation_id": _stable_id("idem", oid, "repeat"),
+                        "field": "",
+                        "value": "repeat_execution",
+                        "mutation_type": "idempotency_repeat",
+                        "expected_outcome": "no_additional_side_effect",
+                        "step_index": 1,
+                    },
+                ]
 
         elif mechanism == MECHANISM_ROLE_TENANT:
             # Different role/tenant combinations
