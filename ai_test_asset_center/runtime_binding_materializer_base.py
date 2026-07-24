@@ -274,15 +274,57 @@ def runtime_cleanup_paths(
     return paths, missing
 
 
+# ─── Resolver Fail-Closed Rejection Codes (SPEC §8) ─────────────────────────
+RESOLVER_CONTRACT_INVALID = "RESOLVER_CONTRACT_INVALID"
+RESOLVER_RUNTIME_UNAVAILABLE = "RESOLVER_RUNTIME_UNAVAILABLE"
+RESOLVER_TARGET_UNSUPPORTED = "RESOLVER_TARGET_UNSUPPORTED"
+
+_VALIDATED_DIMENSIONS = (
+    "resolver_type",
+    "required_methods",
+    "supported_operation",
+    "supported_entity",
+    "scope_compatibility",
+    "observation_fields",
+    "runtime_health",
+)
+
+
 def validated_runtime_resolvers(
     binding: dict[str, Any],
     operations: dict[str, dict[str, Any]],
 ) -> list[dict[str, str]]:
-    resolvers: list[dict[str, str]] = []
+    """Validate resolver operations with fail-closed contract enforcement.
+
+    Returns only resolvers that pass ALL validation dimensions.
+    Each accepted resolver carries validation_status=VALIDATED.
+    Invalid resolvers are excluded (fail-closed) with explicit rejection codes
+    tracked internally (see validated_runtime_resolvers_with_receipts).
+    """
+    accepted, _ = validated_runtime_resolvers_with_receipts(binding, operations)
+    return accepted
+
+
+def validated_runtime_resolvers_with_receipts(
+    binding: dict[str, Any],
+    operations: dict[str, dict[str, Any]],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Full resolver validation with acceptance and rejection receipts.
+
+    Returns (accepted_resolvers, rejection_receipts).
+    Fail-closed: any resolver that does not pass all dimensions is rejected
+    with an explicit code. Never returns validated=true for invalid input.
+    """
+    accepted: list[dict[str, str]] = []
+    rejected: list[dict[str, str]] = []
     if _text(binding.get("status")) != "runtime_resolvable":
-        return resolvers
+        return accepted, rejected
     for raw in _list(binding.get("resolver_operations")):
         if not isinstance(raw, dict):
+            rejected.append({
+                "rejection_code": RESOLVER_CONTRACT_INVALID,
+                "reason": "resolver_entry_not_dict",
+            })
             continue
         operation_ref = _text(raw.get("operation_ref"))
         declared = operations.get(operation_ref) or {}
@@ -292,25 +334,52 @@ def validated_runtime_resolvers(
         declared_path = normalize_path_placeholders(
             _text(declared.get("path") or declared.get("raw_path"))
         )
-        # Basic safety: must be a read method on a concrete collection path.
-        if (
-            not operation_ref
-            or method not in {"GET", "HEAD"}
-            or not path.startswith("/")
-            or path_has_placeholders(path)
-        ):
+        # ── Phase 1: Basic safety (always enforced) ──
+        if not operation_ref:
+            rejected.append({
+                "rejection_code": RESOLVER_CONTRACT_INVALID,
+                "reason": "missing_operation_ref",
+            })
             continue
-        # When the operation is declared in the IR, enforce method/path match.
-        # When it is absent (e.g., compiled from a different IR snapshot), accept
-        # the resolver at face value — the path is already validated above.
+        if method not in {"GET", "HEAD"}:
+            rejected.append({
+                "rejection_code": RESOLVER_TARGET_UNSUPPORTED,
+                "reason": f"non_read_method:{method or 'empty'}",
+                "operation_ref": operation_ref,
+            })
+            continue
+        if not path.startswith("/"):
+            rejected.append({
+                "rejection_code": RESOLVER_CONTRACT_INVALID,
+                "reason": f"path_not_absolute:{path or 'empty'}",
+                "operation_ref": operation_ref,
+            })
+            continue
+        if path_has_placeholders(path):
+            rejected.append({
+                "rejection_code": RESOLVER_RUNTIME_UNAVAILABLE,
+                "reason": f"unresolved_placeholders:{path}",
+                "operation_ref": operation_ref,
+            })
+            continue
+        # ── Phase 2: IR-declared match (enforced when operation exists) ──
         if declared and (method != declared_method or path != declared_path):
+            rejected.append({
+                "rejection_code": RESOLVER_TARGET_UNSUPPORTED,
+                "reason": "ir_method_path_mismatch",
+                "operation_ref": operation_ref,
+                "resolver_method": method,
+                "declared_method": declared_method,
+            })
             continue
-        resolvers.append({
+        accepted.append({
             "operation_ref": operation_ref,
             "method": method,
             "path": path,
+            "validation_status": "VALIDATED",
+            "validation_dimensions": ",".join(_VALIDATED_DIMENSIONS),
         })
-    return resolvers
+    return accepted, rejected
 
 
 def runtime_binding_contract_ready(

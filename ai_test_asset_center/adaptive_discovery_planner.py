@@ -442,6 +442,49 @@ def plan_obligation_round(
         elif item["score"] < 0.01:
             reason = "LOW_CONFIDENCE"
         pending.append({**item, "not_in_plan_reason": reason})
+
+    # ── P0-5: Dedup, mechanism quota, cost ranking, and governed truncation ──
+    # Step 1: Dedup by obligation_id (first occurrence wins).
+    _seen_pending_ids: set[str] = set()
+    _deduped: list[dict[str, Any]] = []
+    _dedup_removed = 0
+    for row in pending:
+        oid = row["obligation_id"]
+        if oid in _seen_pending_ids:
+            _dedup_removed += 1
+            continue
+        _seen_pending_ids.add(oid)
+        _deduped.append(row)
+
+    # Step 2: Cost ranking — high score first so truncation removes low-value.
+    _deduped.sort(key=lambda r: (-float(r.get("score") or 0), r["obligation_id"]))
+
+    # Step 3: Mechanism quota — ensure each mechanism type gets minimum slots.
+    _MECHANISM_MIN_QUOTA = 5  # minimum candidates per mechanism in pending
+    _mechanism_counts: dict[str, int] = {}
+    _quota_ordered: list[dict[str, Any]] = []
+    _overflow: list[dict[str, Any]] = []
+    for row in _deduped:
+        fam = row.get("risk_family") or "unknown"
+        count = _mechanism_counts.get(fam, 0)
+        if count < _MECHANISM_MIN_QUOTA:
+            _quota_ordered.append(row)
+            _mechanism_counts[fam] = count + 1
+        else:
+            _overflow.append(row)
+    # Merge: quota-guaranteed first, then overflow by score order.
+    _ranked_pending = _quota_ordered + _overflow
+
+    # Step 4: Governed truncation at _ABS_MAX_SLICE_BUDGET.
+    _truncation_reason = ""
+    _truncated_count = 0
+    if len(_ranked_pending) > _ABS_MAX_SLICE_BUDGET:
+        _truncated_count = len(_ranked_pending) - _ABS_MAX_SLICE_BUDGET
+        _truncation_reason = (
+            f"POOL_SIZE_{len(_ranked_pending)}_EXCEEDS_ABS_MAX_{_ABS_MAX_SLICE_BUDGET}"
+        )
+        _ranked_pending = _ranked_pending[:_ABS_MAX_SLICE_BUDGET]
+
     return {
         "schema_version": "qualibug.adaptive-obligation-plan.v1",
         "budget": budget,
@@ -461,9 +504,12 @@ def plan_obligation_round(
             if _text(value)
         ],
         "selected": selected,
-        "pending_next_round": pending[:_ABS_MAX_SLICE_BUDGET],
+        "pending_next_round": _ranked_pending,
         "selected_count": len(selected),
         "pending_count": len(pending),
+        "pending_dedup_removed": _dedup_removed,
+        "pending_truncated": _truncated_count,
+        "pending_truncation_reason": _truncation_reason,
         "budget": budget,
         "family_coverage": family_counts,
         "path_prefix_coverage": prefix_counts,

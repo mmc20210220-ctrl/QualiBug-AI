@@ -5,6 +5,7 @@ Extracted from ``discovery_runtime_execution``. Symbols are re-exported from
 """
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -480,6 +481,7 @@ def _consume_pending_obligation_rounds(
         build_agent_intent_plan,
         plan_obligation_round,
     )
+    from .pipeline_slices import _ABS_MAX_SLICE_BUDGET
 
     plan_row = dict(_dict(obligation_plan))
     budget = int(plan_row.get("budget") or 0)
@@ -514,6 +516,16 @@ def _consume_pending_obligation_rounds(
         "HARNESS_FAILED",
         "BLOCKED_MISSING_OBSERVER",
     }
+    # ── P0-6: Early stop policy tracking ──
+    _NO_PROGRESS_LIMIT = 3   # consecutive rounds with zero new executions
+    _SAME_PLAN_LIMIT = 2     # consecutive rounds with identical plan fingerprint
+    _SAME_ERROR_LIMIT = 3    # consecutive rounds with identical dominant error
+    _no_progress_streak = 0
+    _prev_plan_fingerprint = ""
+    _same_plan_streak = 0
+    _prev_dominant_error = ""
+    _same_error_streak = 0
+    _early_stop_reason = ""
     # Round 1 already ran; additional rounds are 2..round_limit inclusive.
     for planning_round in range(2, round_limit + 1):
         pending_ids = [
@@ -579,11 +591,12 @@ def _consume_pending_obligation_rounds(
             ]
             plan_row = {
                 **plan_row,
-                "pending_next_round": pending_rows[:600],
+                "pending_next_round": pending_rows[:_ABS_MAX_SLICE_BUDGET],
                 "pending_count": len(pending_rows),
                 "stop_condition": _text(next_plan.get("stop_condition"))
                 or plan_row.get("stop_condition"),
             }
+            _early_stop_reason = "NO_SCHEDULED_EXPERIMENTS"
             break
         next_batch = execute_batch(
             next_scheduled,
@@ -614,15 +627,99 @@ def _consume_pending_obligation_rounds(
                     "planning_round": planning_round,
                 })
         follow_on_batches.append(dict(_dict(next_batch)))
+        _round_executed = int(_dict(next_batch).get("executed_count") or 0)
         follow_on_receipts.append({
             "planning_round": planning_round,
             "selected_count": int(next_plan.get("selected_count") or 0),
             "pending_count": int(next_plan.get("pending_count") or 0),
-            "executed_count": int(_dict(next_batch).get("executed_count") or 0),
+            "executed_count": _round_executed,
             "budget": budget,
             "accumulated_bindings_count": len(accumulated_bindings),
             "blocked_retry_count": len(blocked_retry_pool),
         })
+        # ── P0-6: Early stop condition checks ──
+        # (a) No progress: zero new executions
+        if _round_executed == 0:
+            _no_progress_streak += 1
+        else:
+            _no_progress_streak = 0
+        if _no_progress_streak >= _NO_PROGRESS_LIMIT:
+            _early_stop_reason = f"NO_PROGRESS_{_NO_PROGRESS_LIMIT}_CONSECUTIVE_ROUNDS"
+            pending_rows = [
+                dict(row)
+                for row in _list(next_plan.get("pending_next_round"))
+                if isinstance(row, dict)
+            ]
+            plan_row = {
+                **plan_row,
+                "pending_next_round": pending_rows[:_ABS_MAX_SLICE_BUDGET],
+                "pending_count": len(pending_rows),
+                "stop_condition": _early_stop_reason,
+                "follow_on_round_receipts": follow_on_receipts,
+                "blocked_retry_pool": blocked_retry_pool[:100],
+                "accumulated_bindings": accumulated_bindings,
+            }
+            break
+        # (b) Same plan fingerprint repeated
+        import hashlib as _hl
+        _plan_fp = _hl.sha256(
+            json.dumps(
+                [r.get("obligation_id") for r in _list(next_plan.get("selected"))],
+                sort_keys=True, default=str,
+            ).encode()
+        ).hexdigest()[:16]
+        if _plan_fp == _prev_plan_fingerprint:
+            _same_plan_streak += 1
+        else:
+            _same_plan_streak = 0
+        _prev_plan_fingerprint = _plan_fp
+        if _same_plan_streak >= _SAME_PLAN_LIMIT:
+            _early_stop_reason = f"SAME_PLAN_{_SAME_PLAN_LIMIT}_CONSECUTIVE_ROUNDS"
+            pending_rows = [
+                dict(row)
+                for row in _list(next_plan.get("pending_next_round"))
+                if isinstance(row, dict)
+            ]
+            plan_row = {
+                **plan_row,
+                "pending_next_round": pending_rows[:_ABS_MAX_SLICE_BUDGET],
+                "pending_count": len(pending_rows),
+                "stop_condition": _early_stop_reason,
+                "follow_on_round_receipts": follow_on_receipts,
+                "blocked_retry_pool": blocked_retry_pool[:100],
+                "accumulated_bindings": accumulated_bindings,
+            }
+            break
+        # (c) Same dominant error repeated
+        _error_counts: dict[str, int] = {}
+        for _r in _list(_dict(next_batch).get("results")):
+            _st = _text(_dict(_r).get("status") or _dict(_r).get("execution_status")).upper()
+            if _st in {"BLOCKED", "HARNESS_FAILED", "FAILED"}:
+                _rc = _text(_dict(_r).get("block_reason") or _dict(_r).get("failure_reason")) or "UNKNOWN"
+                _error_counts[_rc] = _error_counts.get(_rc, 0) + 1
+        _dominant_error = max(_error_counts, key=_error_counts.get) if _error_counts else ""
+        if _dominant_error and _dominant_error == _prev_dominant_error:
+            _same_error_streak += 1
+        else:
+            _same_error_streak = 0
+        _prev_dominant_error = _dominant_error
+        if _same_error_streak >= _SAME_ERROR_LIMIT:
+            _early_stop_reason = f"SAME_ERROR_{_SAME_ERROR_LIMIT}_CONSECUTIVE:{_dominant_error}"
+            pending_rows = [
+                dict(row)
+                for row in _list(next_plan.get("pending_next_round"))
+                if isinstance(row, dict)
+            ]
+            plan_row = {
+                **plan_row,
+                "pending_next_round": pending_rows[:_ABS_MAX_SLICE_BUDGET],
+                "pending_count": len(pending_rows),
+                "stop_condition": _early_stop_reason,
+                "follow_on_round_receipts": follow_on_receipts,
+                "blocked_retry_pool": blocked_retry_pool[:100],
+                "accumulated_bindings": accumulated_bindings,
+            }
+            break
         pending_rows = [
             dict(row)
             for row in _list(next_plan.get("pending_next_round"))
@@ -630,7 +727,7 @@ def _consume_pending_obligation_rounds(
         ]
         plan_row = {
             **plan_row,
-            "pending_next_round": pending_rows[:600],
+            "pending_next_round": pending_rows[:_ABS_MAX_SLICE_BUDGET],
             "pending_count": len(pending_rows),
             "stop_condition": _text(next_plan.get("stop_condition"))
             or plan_row.get("stop_condition"),
@@ -639,6 +736,10 @@ def _consume_pending_obligation_rounds(
             "accumulated_bindings": accumulated_bindings,
         }
         if not pending_rows:
+            _early_stop_reason = "PENDING_QUEUE_EMPTY"
             break
+    # Attach early stop reason to plan_row for observability.
+    if _early_stop_reason:
+        plan_row["early_stop_reason"] = _early_stop_reason
     return follow_on_batches, plan_row
 
