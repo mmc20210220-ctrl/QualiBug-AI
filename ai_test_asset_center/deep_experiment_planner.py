@@ -33,6 +33,11 @@ from ai_test_asset_center.state_path_exploration import (
     plan_state_path_experiments,
     build_reachability_proof,
 )
+from ai_test_asset_center.cross_entity_chain_planning import (
+    plan_cross_entity_experiments,
+    build_chain_proof,
+    detect_cross_entity_requirement,
+)
 
 # ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -1266,12 +1271,51 @@ def plan_deep_experiments(
             mutations = generate_field_invariant_mutation(field_spec, expr)
 
         elif mechanism == MECHANISM_PRECONDITION_VIOLATION:
-            entity_ref = _text(inv.get("entity_ref") or prop.get("entity_ref"))
-            precond_desc = _text(
-                _dict(expr).get("description") or _dict(expr).get("precondition")
-                or inv.get("description")
-            )
-            mutations = generate_precondition_mutation(entity_ref, precond_desc, expr)
+            # CROSS_ENTITY_OPERATION_CHAIN_NOT_BUILT fix: detect cross-entity scenarios
+            _xce_result = plan_cross_entity_experiments(obl, ir, budget=8)
+            if _xce_result.get("status") == "EXPLORED" and _xce_result.get("experiments"):
+                # Use cross-entity chain experiments
+                _xce_experiments = _xce_result.get("experiments", [])
+                for _xce_exp in _xce_experiments:
+                    _xce_setup = _list(_xce_exp.get("setup_chain"))
+                    if _xce_setup:
+                        multi_step_fixture = [
+                            {
+                                "operation_ref": _text(step.get("operation_ref")),
+                                "intent": _text(step.get("intent")),
+                                "expected_state": _text(step.get("expected_state")),
+                                "entity_role": _text(step.get("entity_role")),
+                                "actor_ref": actor_ref,
+                            }
+                            for step in _xce_setup
+                        ]
+                    mutations.append({
+                        "mutation_id": _text(_xce_exp.get("experiment_id")),
+                        "field": "cross_entity_precondition",
+                        "value": _text(_xce_exp.get("experiment_type")),
+                        "mutation_type": f"cross_entity_{_xce_exp.get('experiment_type', 'violation').lower()}",
+                        "expected_outcome": _text(_xce_exp.get("expected_outcome")),
+                        "cross_entity_chain": True,
+                        "chain_proof": _xce_result.get("chain_proof", {}).get("proof_id"),
+                        "dependency_proof": _xce_result.get("dependency_proof", {}).get("proof_id"),
+                    })
+                # Store cross-entity metadata
+                _actor_matrix_meta[oid] = {
+                    "status": "CROSS_ENTITY_CHAIN_BUILT",
+                    "chain_type": _xce_result.get("chain_type"),
+                    "chain_proof": _xce_result.get("chain_proof"),
+                    "dependency_proof": _xce_result.get("dependency_proof"),
+                    "entity_chains": _xce_result.get("entity_chains"),
+                    "detection_signals": _xce_result.get("detection_signals"),
+                }
+            else:
+                # Fallback to simple precondition mutation
+                entity_ref = _text(inv.get("entity_ref") or prop.get("entity_ref"))
+                precond_desc = _text(
+                    _dict(expr).get("description") or _dict(expr).get("precondition")
+                    or inv.get("description")
+                )
+                mutations = generate_precondition_mutation(entity_ref, precond_desc, expr)
 
         elif mechanism == MECHANISM_AUTHORIZATION_MATRIX:
             # Use actor matrix planning for discriminating actor combinations
