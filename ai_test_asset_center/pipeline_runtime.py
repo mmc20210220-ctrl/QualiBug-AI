@@ -105,7 +105,7 @@ def _runtime_contract(context: dict[str, Any], base_url: str, source_text: Any) 
             "source_manifest": manifest,
             "target_policy_decision": decision,
         }
-    return {
+    contract: dict[str, Any] = {
         "status": "approved",
         "reason": "",
         "missing_requirements": [],
@@ -117,6 +117,11 @@ def _runtime_contract(context: dict[str, Any], base_url: str, source_text: Any) 
         "source_manifest": manifest,
         "target_policy_decision": decision,
     }
+    # Propagate validation_phase so downstream budget enforcement respects it.
+    _vp = str(context.get("validation_phase") or "").strip().lower()
+    if _vp:
+        contract["validation_phase"] = _vp
+    return contract
 
 
 def _slice_ledger_path(root: Path, project: str) -> Path:

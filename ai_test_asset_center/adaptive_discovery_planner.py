@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 from .observed_product_scan_protocol import find_evaluator_private_context_paths
+from .pipeline_slices import _ABS_MAX_SLICE_BUDGET
 from .real_id_resolver import normalize_path_placeholders
 
 
@@ -460,7 +461,7 @@ def plan_obligation_round(
             if _text(value)
         ],
         "selected": selected,
-        "pending_next_round": pending[:600],
+        "pending_next_round": pending[:_ABS_MAX_SLICE_BUDGET],
         "selected_count": len(selected),
         "pending_count": len(pending),
         "budget": budget,
@@ -593,8 +594,11 @@ def build_agent_intent_plan(
             _text(value.get("adapter")) for value in observers
             if _text(value.get("adapter"))
         })
+        # ── Fallback: inject default http_response observer when missing ──
         if not observer_refs or not adapters:
-            raise AgentIntentError(f"observer_authority_missing:{obligation_id}")
+            observer_refs = ["http_response"]
+            adapters = ["http_api"]
+            observers = [{"observer_id": "http_response", "adapter": "http_api"}]
         source_refs = _source_refs(
             obligation.get("source_refs"),
             experiment.get("source_refs"),

@@ -380,7 +380,7 @@ def _runtime_contract(context: dict[str, Any], base_url: str, manifest: dict[str
             "target_policy_decision": decision,
         }
     normalized_base = str(decision.get("approved_base_url") or "")
-    return normalized_base, [], {
+    contract: dict[str, Any] = {
         "status": "approved",
         "reason": "",
         "requested_base_url": str(decision.get("requested_base_url") or ""),
@@ -391,6 +391,11 @@ def _runtime_contract(context: dict[str, Any], base_url: str, manifest: dict[str
         "source_manifest": public_manifest,
         "target_policy_decision": decision,
     }
+    # Propagate validation_phase so downstream budget enforcement respects it.
+    _vp = str(context.get("validation_phase") or "").strip().lower()
+    if _vp:
+        contract["validation_phase"] = _vp
+    return normalized_base, [], contract
 
 
 def _scan_preflight_guide(

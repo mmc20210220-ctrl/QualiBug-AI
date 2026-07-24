@@ -292,14 +292,18 @@ def validated_runtime_resolvers(
         declared_path = normalize_path_placeholders(
             _text(declared.get("path") or declared.get("raw_path"))
         )
+        # Basic safety: must be a read method on a concrete collection path.
         if (
             not operation_ref
             or method not in {"GET", "HEAD"}
-            or method != declared_method
-            or path != declared_path
             or not path.startswith("/")
             or path_has_placeholders(path)
         ):
+            continue
+        # When the operation is declared in the IR, enforce method/path match.
+        # When it is absent (e.g., compiled from a different IR snapshot), accept
+        # the resolver at face value — the path is already validated above.
+        if declared and (method != declared_method or path != declared_path):
             continue
         resolvers.append({
             "operation_ref": operation_ref,

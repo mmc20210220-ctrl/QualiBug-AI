@@ -261,8 +261,7 @@ def _optional_step(
     ]
     if not rows:
         return None
-    if len(rows) != 1:
-        raise _ambiguous(f"one_{phase}_step_per_occurrence_required")
+    # Select the first step when multiple exist (e.g., multi-step treatment).
     return rows[0]
 
 

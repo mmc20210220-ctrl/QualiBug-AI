@@ -1,0 +1,38 @@
+{
+  "benchmark_isolation_id": "warehouse_e_isolation_v1",
+  "created_at": "2026-07-23T00:00:00Z",
+  "qualibug_execution_workspace": {
+    "allowed_access": [
+      "projects/warehouse_e/input/BUSINESS_RULES.md",
+      "projects/warehouse_e/input/openapi.yaml",
+      "projects/warehouse_e/input/TEST_ACCOUNTS.md",
+      "projects/warehouse_e/input/DATA_DICTIONARY.md",
+      "projects/warehouse_e/mock_server.py"
+    ],
+    "forbidden_access": [
+      "_private_eval/_evaluator_private/benchmark_warehouse_e/*",
+      "projects/warehouse_e/benchmark/*"
+    ]
+  },
+  "evaluator_private_workspace": {
+    "location": "_private_eval/_evaluator_private/benchmark_warehouse_e/",
+    "contents": [
+      "ground_truth.json"
+    ],
+    "access_policy": "Evaluator only, forbidden before Finding seal"
+  },
+  "isolation_verification": {
+    "benchmark_bug_ids_in_production_code": false,
+    "benchmark_bug_titles_in_production_code": false,
+    "benchmark_mechanisms_in_prompts": false,
+    "ground_truth_in_qualibug_workspace": false
+  },
+  "truth_reveal_policy": {
+    "allowed_after": [
+      "project_e_blind_finding_ledger.json sealed",
+      "project_e_unique_root_cause_ledger.json sealed",
+      "project_e_reproduction_result.json sealed"
+    ],
+    "timestamp_field": "truth_revealed_at"
+  }
+}

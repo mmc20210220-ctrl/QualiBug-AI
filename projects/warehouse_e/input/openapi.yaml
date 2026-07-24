@@ -1,0 +1,562 @@
+openapi: 3.0.3
+info:
+  title: WMS - Warehouse Management System API
+  description: 仓储库存订单履约管理系统API
+  version: 1.0.0
+servers:
+  - url: http://localhost:8003
+    description: 本地测试环境
+
+security:
+  - BearerAuth: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: Bearer Token认证
+
+  schemas:
+    Product:
+      type: object
+      properties:
+        id: {type: string}
+        sku: {type: string}
+        name: {type: string}
+        org: {type: string}
+        unit_price: {type: number}
+        weight_kg: {type: number}
+        category: {type: string, enum: [ELECTRONICS, MECHANICAL, PACKAGING, GENERAL]}
+        status: {type: string, enum: [ACTIVE, DISCONTINUED]}
+        created_at: {type: string, format: date-time}
+
+    Warehouse:
+      type: object
+      properties:
+        id: {type: string}
+        name: {type: string}
+        org: {type: string}
+        capacity: {type: integer}
+        used_capacity: {type: integer}
+        status: {type: string, enum: [ACTIVE, INACTIVE, MAINTENANCE]}
+        created_at: {type: string, format: date-time}
+
+    InventoryBatch:
+      type: object
+      properties:
+        id: {type: string}
+        product_id: {type: string}
+        warehouse_id: {type: string}
+        org: {type: string}
+        quantity: {type: integer}
+        reserved_quantity: {type: integer}
+        status: {type: string, enum: [RECEIVED, AVAILABLE, RESERVED, PICKED, SHIPPED, EXPIRED]}
+        received_at: {type: string, format: date-time}
+        expiry_date: {type: string, format: date}
+        version: {type: integer}
+
+    Order:
+      type: object
+      properties:
+        id: {type: string}
+        order_ref: {type: string}
+        customer_id: {type: string}
+        org: {type: string}
+        warehouse_id: {type: string}
+        status: {type: string, enum: [CREATED, CONFIRMED, ALLOCATED, PICKING, PACKED, SHIPPED, DELIVERED, CANCELLED]}
+        total_amount: {type: number}
+        created_by: {type: string}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        confirmed_at: {type: string, format: date-time, nullable: true}
+        return_deadline: {type: string, format: date}
+        version: {type: integer}
+
+    OrderLine:
+      type: object
+      properties:
+        id: {type: string}
+        order_id: {type: string}
+        product_id: {type: string}
+        quantity: {type: integer}
+        unit_price: {type: number}
+        line_total: {type: number}
+
+    PickList:
+      type: object
+      properties:
+        id: {type: string}
+        order_id: {type: string}
+        warehouse_id: {type: string}
+        org: {type: string}
+        status: {type: string, enum: [CREATED, IN_PROGRESS, COMPLETED, CANCELLED]}
+        items: {type: array, items: {type: object}}
+        created_by: {type: string}
+        created_at: {type: string, format: date-time}
+
+    Shipment:
+      type: object
+      properties:
+        id: {type: string}
+        order_id: {type: string}
+        pick_list_id: {type: string}
+        warehouse_id: {type: string}
+        org: {type: string}
+        status: {type: string, enum: [PENDING, CONFIRMED, IN_TRANSIT, DELIVERED, FAILED]}
+        weight_kg: {type: number}
+        carrier: {type: string}
+        created_by: {type: string}
+        created_at: {type: string, format: date-time}
+        confirmed_at: {type: string, format: date-time, nullable: true}
+
+    Return:
+      type: object
+      properties:
+        id: {type: string}
+        order_id: {type: string}
+        customer_id: {type: string}
+        org: {type: string}
+        reason: {type: string}
+        quantity: {type: integer}
+        product_id: {type: string}
+        status: {type: string, enum: [REQUESTED, APPROVED, RECEIVED, INSPECTED, REFUNDED, REJECTED]}
+        created_at: {type: string, format: date-time}
+
+    RestockOrder:
+      type: object
+      properties:
+        id: {type: string}
+        supplier_id: {type: string}
+        product_id: {type: string}
+        quantity: {type: integer}
+        warehouse_id: {type: string}
+        org: {type: string}
+        status: {type: string, enum: [PENDING, ORDERED, RECEIVED, CANCELLED]}
+        expected_delivery: {type: string, format: date}
+        created_at: {type: string, format: date-time}
+
+    Supplier:
+      type: object
+      properties:
+        id: {type: string}
+        name: {type: string}
+        org: {type: string}
+        lead_time_days: {type: integer}
+        status: {type: string, enum: [ACTIVE, SUSPENDED]}
+        created_at: {type: string, format: date-time}
+
+    Reservation:
+      type: object
+      properties:
+        id: {type: string}
+        order_id: {type: string}
+        batch_id: {type: string}
+        product_id: {type: string}
+        quantity: {type: integer}
+        org: {type: string}
+        status: {type: string, enum: [ACTIVE, RELEASED, CONSUMED]}
+        created_at: {type: string, format: date-time}
+
+paths:
+  /health:
+    get:
+      summary: 健康检查
+      security: []
+      responses:
+        '200': {description: OK}
+
+  /products:
+    get:
+      summary: 商品列表
+      responses: {'200': {description: 商品列表}}
+    post:
+      summary: 创建商品
+      description: 仅ADMIN和MANAGER可创建商品和设定价格
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sku, name, unit_price]
+              properties:
+                sku: {type: string}
+                name: {type: string}
+                unit_price: {type: number}
+                weight_kg: {type: number}
+                category: {type: string}
+      responses: {'201': {description: 创建成功}, '403': {description: 权限不足}}
+
+  /products/{id}:
+    get:
+      summary: 商品详情
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: 商品详情}, '404': {description: 不存在}}
+    put:
+      summary: 更新商品
+      description: 价格修改仅ADMIN可执行
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: {type: string}
+                unit_price: {type: number}
+                status: {type: string}
+      responses: {'200': {description: 更新成功}}
+
+  /warehouses:
+    get:
+      summary: 仓库列表
+      description: 仅返回当前组织的仓库
+      responses: {'200': {description: 仓库列表}}
+    post:
+      summary: 创建仓库
+      description: 仅ADMIN可创建
+      responses: {'201': {description: 创建成功}, '403': {description: 权限不足}}
+
+  /warehouses/{id}:
+    get:
+      summary: 仓库详情（含实时容量统计）
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: 仓库详情}}
+    delete:
+      summary: 删除仓库
+      description: 仅ADMIN可删除仓库
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: 删除成功}, '403': {description: 权限不足}}
+
+  /batches:
+    get:
+      summary: 库存批次列表
+      description: 仅返回当前组织的批次
+      parameters:
+        - {name: warehouse_id, in: query, schema: {type: string}}
+      responses: {'200': {description: 批次列表}}
+    post:
+      summary: 批量入库
+      description: OPERATOR及以上可执行
+      responses: {'201': {description: 入库成功}}
+
+  /batches/{id}:
+    get:
+      summary: 批次详情
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: 批次详情}}
+    put:
+      summary: 更新批次
+      description: 必须携带version字段进行乐观锁校验
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                quantity: {type: integer}
+                status: {type: string}
+                version: {type: integer, description: 必须与当前version一致}
+      responses: {'200': {description: 更新成功}, '409': {description: 版本冲突}}
+
+  /batches/bulk-receive:
+    post:
+      summary: 批量入库
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      product_id: {type: string}
+                      warehouse_id: {type: string}
+                      quantity: {type: integer}
+                      expiry_date: {type: string}
+      responses: {'201': {description: 入库成功}}
+
+  /orders:
+    get:
+      summary: 订单列表
+      description: CUSTOMER仅可见自己的订单
+      parameters:
+        - {name: status, in: query, schema: {type: string}}
+      responses: {'200': {description: 订单列表}}
+    post:
+      summary: 创建订单
+      description: ORDER_MANAGER、CUSTOMER、ADMIN可创建。相同order_ref不可重复创建（幂等）
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [warehouse_id]
+              properties:
+                order_ref: {type: string, description: 唯一业务参考号}
+                customer_id: {type: string}
+                warehouse_id: {type: string}
+                return_deadline: {type: string, format: date}
+      responses: {'201': {description: 创建成功}, '409': {description: order_ref重复}}
+
+  /orders/{id}:
+    get:
+      summary: 订单详情
+      description: 仅同组织用户可访问，CUSTOMER仅可访问自己的订单
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: 订单详情}, '403': {description: 无权访问}}
+    put:
+      summary: 更新订单
+      description: 仅订单所有者或ORDER_MANAGER可修改
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: 更新成功}}
+    delete:
+      summary: 删除订单
+      description: 仅ADMIN可删除CREATED/CANCELLED状态订单
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: 删除成功}, '409': {description: 状态不允许}}
+
+  /orders/{id}/lines:
+    get:
+      summary: 订单行列表
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: 订单行列表}}
+    post:
+      summary: 添加订单行
+      description: 添加后自动重算订单总金额
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [product_id, quantity]
+              properties:
+                product_id: {type: string}
+                quantity: {type: integer}
+      responses: {'201': {description: 添加成功}}
+
+  /orders/{id}/confirm:
+    post:
+      summary: 确认订单
+      description: 仅CREATED状态可确认。ORDER_MANAGER或ADMIN可执行
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: 确认成功}, '409': {description: 状态不允许}}
+
+  /orders/{id}/allocate:
+    post:
+      summary: 分配库存
+      description: 仅CONFIRMED状态可分配。从AVAILABLE批次中预留库存
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: 分配成功}, '409': {description: 状态不允许或库存不足}}
+
+  /orders/{id}/cancel:
+    post:
+      summary: 取消订单
+      description: SHIPPED/DELIVERED状态不可取消。取消时释放已预留库存。CUSTOMER仅可取消自己的订单
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: 取消成功}, '409': {description: 状态不允许}}
+
+  /orders/bulk-allocate:
+    post:
+      summary: 批量分配
+      description: 批量分配多个订单。任一失败应全部回滚（原子操作）。每个订单需校验行项和库存
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                order_ids: {type: array, items: {type: string}}
+      responses: {'200': {description: 批量结果}}
+
+  /pick-lists:
+    get:
+      summary: 拣货单列表
+      responses: {'200': {description: 拣货单列表}}
+    post:
+      summary: 创建拣货单
+      description: 仅同仓库OPERATOR可创建。订单项必须与订单行一致
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [order_id, items]
+              properties:
+                order_id: {type: string}
+                items:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      product_id: {type: string}
+                      quantity: {type: integer}
+                      batch_id: {type: string}
+      responses: {'201': {description: 创建成功}, '403': {description: 非本仓库}}
+
+  /pick-lists/{id}:
+    get:
+      summary: 拣货单详情
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: 详情}}
+
+  /pick-lists/{id}/start:
+    post:
+      summary: 开始拣货
+      description: 仅CREATED状态可开始。关联订单必须为ALLOCATED状态
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: 开始成功}, '409': {description: 状态不允许}}
+
+  /pick-lists/{id}/complete:
+    post:
+      summary: 完成拣货
+      description: 仅IN_PROGRESS状态可完成
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: 完成成功}}
+
+  /pick-lists/{id}/cancel:
+    post:
+      summary: 取消拣货
+      description: 取消时释放已预留的库存项
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: 取消成功}}
+
+  /shipments:
+    get:
+      summary: 发货单列表
+      description: 仅返回当前组织的发货单
+      responses: {'200': {description: 发货单列表}}
+    post:
+      summary: 创建发货单
+      description: 关联拣货单必须为COMPLETED状态。发货重量应与订单行总重一致
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pick_list_id]
+              properties:
+                pick_list_id: {type: string}
+                weight_kg: {type: number}
+                carrier: {type: string}
+      responses: {'201': {description: 创建成功}, '409': {description: 拣货单未完成}}
+
+  /shipments/{id}:
+    get:
+      summary: 发货单详情
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: 详情}}
+
+  /shipments/{id}/confirm:
+    post:
+      summary: 确认发货
+      description: 仅创建者或MANAGER/ADMIN可确认。不可重复确认（幂等）。确认后扣减库存
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: 确认成功}, '409': {description: 已确认}}
+
+  /returns:
+    get:
+      summary: 退货列表
+      description: CUSTOMER仅可见自己的退货
+      responses: {'200': {description: 退货列表}}
+    post:
+      summary: 申请退货
+      description: 必须在退货期限内。退货数量不超过原订单行数量
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [order_id, product_id, quantity]
+              properties:
+                order_id: {type: string}
+                product_id: {type: string}
+                quantity: {type: integer}
+                reason: {type: string}
+      responses: {'201': {description: 申请成功}, '409': {description: 超过退货期限}}
+
+  /returns/{id}:
+    get:
+      summary: 退货详情
+      description: CUSTOMER仅可查看自己的退货
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: 详情}, '403': {description: 无权访问}}
+
+  /returns/{id}/approve:
+    post:
+      summary: 审批退货
+      description: 仅MANAGER或ADMIN可审批。仅REQUESTED状态可审批
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: 审批通过}, '403': {description: 权限不足}, '409': {description: 状态不允许}}
+
+  /returns/{id}/reject:
+    post:
+      summary: 拒绝退货
+      description: 仅MANAGER或ADMIN可拒绝
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: 已拒绝}}
+
+  /returns/{id}/receive:
+    post:
+      summary: 接收退货
+      description: 仅APPROVED状态可接收
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: 接收成功}}
+
+  /returns/{id}/refund:
+    post:
+      summary: 退款
+      description: 仅RECEIVED状态可退款。退款后恢复库存数量
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: 退款成功}}
+
+  /restock-orders:
+    get:
+      summary: 补货单列表
+      responses: {'200': {description: 补货单列表}}
+    post:
+      summary: 创建补货单
+      description: 供应商必须存在且为ACTIVE。预期到货日不得早于当天
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [supplier_id, product_id, quantity, warehouse_id]
+              properties:
+                supplier_id: {type: string}
+                product_id: {type: string}
+                quantity: {type: integer}
+                warehouse_id: {type: string}
+                expected_delivery: {type: string, format: date}
+      responses: {'201': {description: 创建成功}, '400': {description: 日期无效}}
+
+  /reservations:
+    get:
+      summary: 预留列表
+      responses: {'200': {description: 预留列表}}
+    post:
+      summary: 创建预留
+      description: 同一order+batch不可重复预留（幂等）。需原子校验可用量
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [order_id, batch_id, quantity]
+              properties:
+                order_id: {type: string}
+                batch_id: {type: string}
+                quantity: {type: integer}
+      responses: {'201': {description: 预留成功}, '409': {description: 重复预留或库存不足}}
+
+  /suppliers:
+    get:
+      summary: 供应商列表
+      description: 仅返回当前组织的供应商
+      responses: {'200': {description: 供应商列表}}
