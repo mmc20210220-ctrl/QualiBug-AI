@@ -13,15 +13,12 @@ from benchmark_evaluator.funnel_benchmark_prep import (
     should_skip_target_db_reset,
 )
 
-# ``_funnel_benchmark.py`` is an operator-local runner kept out of the repo by
-# the ``_funnel_*.*`` ignore rule. Guardrails below inspect it when an operator
-# has one; without it they skip loudly instead of asserting on a missing file.
-_RUNNER_PATH = Path(__file__).resolve().parents[1] / "_funnel_benchmark.py"
+_RUNNER_PATH = (
+    Path(__file__).resolve().parents[1] / "benchmark_evaluator" / "funnel_benchmark.py"
+)
 
 
 def _runner_source() -> str:
-    if not _RUNNER_PATH.is_file():
-        pytest.skip(f"operator-local funnel runner absent: {_RUNNER_PATH}")
     return _RUNNER_PATH.read_text(encoding="utf-8")
 
 
@@ -215,5 +212,7 @@ def test_funnel_runtime_has_no_hidden_seed_or_global_cleanup_promotion() -> None
     assert "urllib.request" not in source
     assert "apply_governed_campaign_cleanup" not in source
     assert "post_run_cleanup_readjudication" not in source
-    assert "projects\\benchmark_mall\\input\\TEST_ACCOUNTS.md" in source
-    assert source.count("platform_inputs\\benchmark_mall\\test_accounts.json") == 1
+    # Test actors come from the immutable project source document, and are
+    # materialized to exactly one location so no second copy can drift.
+    assert '"projects" / PROJECT / "input" / "TEST_ACCOUNTS.md"' in source
+    assert source.count('"platform_inputs" / PROJECT / "test_accounts.json"') == 1
