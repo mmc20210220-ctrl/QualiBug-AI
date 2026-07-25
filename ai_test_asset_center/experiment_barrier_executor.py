@@ -197,16 +197,8 @@ def execute_barrier_plans(
             runtime_bindings=runtime_bindings,
             request_body=request_body,
         )
-        if not observation_path:
-            # ── Fallback: use write path as observation path (REST convention) ──
-            _obs_candidate = path.split("?")[0] if path else ""
-            if _obs_candidate.startswith("/") and "{" not in _obs_candidate and "}" not in _obs_candidate:
-                observation_path = _obs_candidate
-        if not observation_path:
-            # ── Fallback 2: use resolved write path directly ──
-            _obs_candidate = path.split("?")[0] if path else ""
-            if _obs_candidate.startswith("/"):
-                observation_path = _obs_candidate
+        # Only a source-declared read can observe the effect; the write path is
+        # not an observation path just because it is a URL.
         if not observation_path:
             return {
                 "harness_error": False,

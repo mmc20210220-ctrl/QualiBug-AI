@@ -417,52 +417,10 @@ def execute_non_barrier_plans(
                     runtime_bindings=runtime_bindings,
                     request_body=request_body,
                 )
-                if not observation_path:
-                    # ── Fallback 1: use write path ONLY if a GET operation exists for it ──
-                    # REST convention: GET on the same resource path observes state.
-                    # But action paths like /api/orders/123/cancel don't support GET;
-                    # those must fall through to Fallback 2 (strip action suffix).
-                    _obs_candidate = path.split("?")[0] if path else ""
-                    if _obs_candidate.startswith("/") and "{" not in _obs_candidate and "}" not in _obs_candidate:
-                        _has_get = any(
-                            _text(op.get("method")).upper() == "GET"
-                            and _obs_candidate.rstrip("/").startswith(
-                                normalize_path_placeholders(
-                                    _text(op.get("path") or op.get("raw_path"))
-                                ).rstrip("/").split("{")[0].rstrip("/")
-                            )
-                            for op in ops.values()
-                            if isinstance(op, dict)
-                        )
-                        if _has_get:
-                            observation_path = _obs_candidate
-                if not observation_path:
-                    # ── Fallback 2: strip action suffix to find resource path ──
-                    # E.g. POST /api/orders/:id/ship -> GET /api/orders/:id
-                    _ACTION_SUFFIXES = {"ship", "cancel", "confirm", "approve", "reject", "pay", "use", "release", "consume", "reserve", "adjust", "reset", "login", "register"}
-                    _obs_candidate = path.split("?")[0] if path else ""
-                    if _obs_candidate.startswith("/"):
-                        segments = _obs_candidate.rstrip("/").split("/")
-                        # Strip trailing action suffix
-                        if len(segments) >= 2 and segments[-1].lower() in _ACTION_SUFFIXES:
-                            segments = segments[:-1]
-                        # Try to find a GET operation for the derived path
-                        _derived_path = "/".join(segments)
-                        if _derived_path.startswith("/"):
-                            # Check if this path (with placeholders resolved) can be observed
-                            _resolved = _derived_path
-                            for name, value in (runtime_bindings or {}).items():
-                                _resolved = _resolved.replace("{" + name + "}", str(value)).replace(":" + name, str(value))
-                            if "{" not in _resolved and "}" not in _resolved and ":" not in _resolved.split("/")[-1]:
-                                observation_path = _resolved
-                if not observation_path:
-                    # ── Fallback 3: use the resolved write path itself ──
-                    # The governed executor will attempt GET before/after on this
-                    # path. Even if GET returns 404/405, the write still executes
-                    # and we capture HTTP response evidence for the oracle.
-                    _obs_candidate = path.split("?")[0] if path else ""
-                    if _obs_candidate.startswith("/"):
-                        observation_path = _obs_candidate
+                # The observation path must be a source-declared read. Deriving
+                # one from the write path assumes a URL convention the source
+                # never stated, and reading back the write path itself makes the
+                # write its own evidence.
                 if not observation_path:
                     reason_code = "BLOCKED_MISSING_OBSERVER"
                     pre_transport_block_reasons.append(reason_code)
