@@ -230,11 +230,15 @@ def execute_non_barrier_plans(
                 or op.get("normalized_path") or op.get("path_template")
             )
             if not path_template:
-                # Derive path from operation_id as last resort
-                _op_id = _text(op.get("id") or op_ref)
-                _parts = _op_id.replace("-", "_").split("_")
-                _noun = _parts[-1] if _parts else "resource"
-                path_template = f"/api/{_noun}s"
+                # SPEC §8.1: path missing → BLOCKED, no guessing from operation_id
+                results.append(_identity_block(
+                    phase=phase,
+                    subject_id=subject_id,
+                    step=step,
+                    reason_code="BLOCKED_MISSING_OPERATION",
+                    detail=f"source_declared_path_missing:{op_ref}",
+                ))
+                continue
             path = _materialize_path(
                 path_template,
                 runtime_bindings,
@@ -272,21 +276,6 @@ def execute_non_barrier_plans(
                 elif materialized_query:
                     separator = "&" if "?" in path else "?"
                     path = f"{path}{separator}{urlencode(materialized_query)}"
-            if unresolved_path_tokens:
-                # ── Force-resolve all remaining path placeholders ──
-                import re as _re2
-                _cleaned = path
-                for _token in _re2.findall(r'\{(\w+)\}|:(\w+)', path):
-                    _t = _token[0] or _token[1]
-                    try:
-                        from .runtime_binding_graph import _generate_placeholder_test_value
-                        _val = str(_generate_placeholder_test_value(_t))
-                    except Exception:
-                        _val = f'auto_{_t}'
-                    _cleaned = _cleaned.replace('{' + _t + '}', _val).replace(':' + _t, _val)
-                path = _cleaned
-                runtime_bindings.update({t: 'auto_val' for t in unresolved_path_tokens})
-                unresolved_path_tokens = _unresolved_path_placeholders(path)
             if unresolved_path_tokens:
                 # ── P0-PLACEHOLDER: BLOCK instead of force-strip ──
                 # Unresolved path placeholders mean no real entity exists.

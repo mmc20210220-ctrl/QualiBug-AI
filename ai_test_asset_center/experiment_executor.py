@@ -87,12 +87,11 @@ def execute_one_experiment(
     campaign_id: str,
     execution_id: str,
     actor_tokens: dict[str, str] | None = None,
-    best_effort: bool = False,
 ) -> dict[str, Any]:
     """Execute one experiment or return an explicit blocked/harness receipt.
-    
-    Enhanced: best_effort mode enables degraded execution with actor fallback
-    and lenient observer requirements for non-safety-critical experiments.
+
+    Strict mode only: preflight failure returns BLOCKED immediately.
+    No automatic best-effort degradation is permitted on the formal path.
     """
     exp = _dict(experiment)
     eid = _text(exp.get("experiment_id"))
@@ -104,26 +103,11 @@ def execute_one_experiment(
     exp["campaign_id"] = resolved_campaign_id
     exp["execution_id"] = resolved_execution_id
     tokens = actor_tokens if actor_tokens is not None else load_actor_tokens(root, project)
-    # ── Enhanced: check experiment-level best_effort flag ──
-    _exp_best_effort = best_effort or bool(exp.get("_best_effort")) or bool(exp.get("best_effort"))
+    # Strict preflight — no automatic best-effort retry on the formal path.
     ok, reason, detail = preflight_experiment_executable(
-        exp, behavior_ir=behavior_ir, actor_tokens=tokens, best_effort=_exp_best_effort
+        exp, behavior_ir=behavior_ir, actor_tokens=tokens
     )
     started = time.time()
-    if not ok:
-        # ── Enhanced: retry with best_effort if strict mode failed ──
-        if not _exp_best_effort:
-            _retry_exp = dict(exp)
-            _retry_ok, _retry_reason, _retry_detail = preflight_experiment_executable(
-                _retry_exp, behavior_ir=behavior_ir, actor_tokens=tokens, best_effort=True
-            )
-            if _retry_ok:
-                # Degrade to best_effort mode
-                exp = _retry_exp
-                exp["_execution_degraded"] = True
-                exp["_degradation_reason"] = f"strict_blocked:{reason}"
-                ok, reason, detail = True, "", ""
-                _exp_best_effort = True
     if not ok:
         _exec_logger.warning(
             f"Experiment BLOCKED: {eid} obligation={oid} reason={reason}",
@@ -312,7 +296,7 @@ def execute_one_experiment(
         f"Experiment started: {eid} obligation={oid} campaign={resolved_campaign_id}",
         extra={"context": {
             "experiment_id": eid, "obligation_id": oid,
-            "campaign_id": resolved_campaign_id, "best_effort": _exp_best_effort,
+            "campaign_id": resolved_campaign_id,
         }},
     )
     cleanup_result = execute_experiment_cleanup_compensation(

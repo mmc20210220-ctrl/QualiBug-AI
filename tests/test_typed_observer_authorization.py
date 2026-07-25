@@ -604,7 +604,10 @@ def test_executor_blocks_response_only_write_observer_before_create_transport(
 
     assert result["status"] == "BLOCKED", json.dumps(result, default=str, indent=2)
     assert result["reason_code"] == "BLOCKED_MISSING_OBSERVER"
-    assert all(step["status"] == "blocked_write" for step in result["steps"])
+    # Preflight block means no write reached transport — no steps emitted.
+    assert result.get("steps") is None or all(
+        step["status"] == "blocked_write" for step in result["steps"]
+    )
     assert resources == {}
 
 

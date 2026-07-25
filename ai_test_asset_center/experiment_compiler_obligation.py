@@ -837,7 +837,6 @@ def compile_experiment_for_obligation(
                 "path": primary_path,
                 "method": primary_method,
                 "runtime_response_binding_required": "{" in primary_path,
-                "_universal_fallback": True,
             }]
         if not cleanup_plan and not cleanup_op:
             from .runtime_binding_graph import _CLEANUP_ACTION_RE, _declared_cleanup_operations
@@ -933,7 +932,6 @@ def compile_experiment_for_obligation(
                         "path": primary_path,
                         "method": primary_method,
                         "runtime_response_binding_required": True,
-                        "_universal_fallback": True,
                     }]
                 elif (
                     len(cleanup_candidates) == 1

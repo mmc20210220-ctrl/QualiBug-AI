@@ -71,8 +71,18 @@ def _pre_transport_reason_code(reasons: list[str]) -> str:
     return "BLOCKED_MISSING_BINDING"
 
 
-# ── P0-9: Harness failure sub-classification ──
+# ── P0-9: Harness failure sub-classification (SPEC §11) ──
 HARNESS_FAILURE_SUBTYPES = (
+    # Runtime transport failures
+    "HARNESS_CLEANUP_TRANSPORT_FAILED",
+    "HARNESS_CLEANUP_RESPONSE_REJECTED",
+    "HARNESS_CLEANUP_EQUIVALENCE_FAILED",
+    "HARNESS_OBSERVER_TRANSPORT_FAILED",
+    "HARNESS_OBSERVER_RESPONSE_UNREADABLE",
+    "HARNESS_RUNTIME_BINDING_LOST",
+    "HARNESS_ASYNC_CONVERGENCE_TIMEOUT",
+    "HARNESS_BARRIER_EXECUTION_FAILED",
+    # Legacy subtypes (kept for backward compatibility)
     "HARNESS_REQUEST_BUILD_FAILED",
     "HARNESS_PARAMETER_BINDING_FAILED",
     "HARNESS_AUTH_INJECTION_FAILED",
@@ -159,28 +169,73 @@ def _classify_harness_failure(
     steps_out: list[dict[str, Any]],
     observations: dict[str, Any],
     pre_transport_block_reasons: list[str],
+    cleanup_failures: int = 0,
 ) -> str:
-    """Classify why no HTTP request reached the target."""
+    """Classify why the experiment resulted in a harness failure.
+
+    SPEC §11: Only real runtime failures may remain as HARNESS_FAILED.
+    Semantic plan errors must have been caught pre-transport as BLOCKED.
+    """
     combined = " ".join(_text(r).upper() for r in pre_transport_block_reasons)
+
+    # Barrier / concurrency failures
+    if "BARRIER" in combined:
+        return "HARNESS_BARRIER_EXECUTION_FAILED"
+    if observations.get("harness_error") and _text(
+        observations.get("barrier_timeline")
+    ):
+        return "HARNESS_BARRIER_EXECUTION_FAILED"
+
+    # Cleanup runtime failures (only after real transport)
+    if cleanup_failures:
+        # Distinguish transport vs equivalence failures
+        cleanup_status = _text(observations.get("cleanup_status")).upper()
+        if cleanup_status in ("TRANSPORT_ERROR", "CONNECTION_FAILED"):
+            return "HARNESS_CLEANUP_TRANSPORT_FAILED"
+        if cleanup_status in ("REJECTED", "RESPONSE_REJECTED"):
+            return "HARNESS_CLEANUP_RESPONSE_REJECTED"
+        if cleanup_status in ("EQUIVALENCE_FAILED", "STATE_NOT_RESTORED"):
+            return "HARNESS_CLEANUP_EQUIVALENCE_FAILED"
+        return "HARNESS_CLEANUP_TRANSPORT_FAILED"
+
+    # Observer runtime failures
+    if "OBSERVER" in combined:
+        return "HARNESS_OBSERVER_TRANSPORT_FAILED"
+
+    # Binding lost at runtime (was resolved at compile, lost during execution)
     if "BINDING" in combined or "PLACEHOLDER" in combined or "PARAMETER" in combined:
-        return "HARNESS_PARAMETER_BINDING_FAILED"
+        return "HARNESS_RUNTIME_BINDING_LOST"
+
+    # Auth / actor runtime failures
     if "ACTOR" in combined or "TOKEN" in combined or "AUTH" in combined:
         return "HARNESS_AUTH_INJECTION_FAILED"
-    if "OBSERVER" in combined:
-        return "HARNESS_PRE_OBSERVATION_FAILED"
+
+    # Route failures
     if "OPERATION" in combined or "ROUTE" in combined:
         return "HARNESS_ROUTE_FAILED"
-    # Check steps for connection errors
+
+    # Check steps for connection/timeout errors
     for step in steps_out:
         if not isinstance(step, dict):
             continue
         error = _text(step.get("error"))
         status = int(step.get("status_code") or 0)
-        if "connection" in error.lower() or "timeout" in error.lower():
+        if "timeout" in error.lower() or "convergence" in error.lower():
+            return "HARNESS_ASYNC_CONVERGENCE_TIMEOUT"
+        if "connection" in error.lower():
             return "HARNESS_CONNECTION_FAILED"
         if status in (404, 503):
             return "HARNESS_ROUTE_FAILED"
-    # Check observations for harness_error flag
+
+    # Observer response unreadable
+    for step in steps_out:
+        if not isinstance(step, dict):
+            continue
+        if _text(step.get("phase")).endswith("observation"):
+            if int(step.get("status_code") or 0) == 0:
+                return "HARNESS_OBSERVER_RESPONSE_UNREADABLE"
+
+    # Fallback: generic harness failure
     if observations.get("harness_error"):
         return "HARNESS_REQUEST_BUILD_FAILED"
     return "HARNESS_CONNECTION_FAILED"
@@ -799,7 +854,10 @@ def finalize_experiment_execution(
     # ── P0-9: Fine-grained harness failure classification ──
     harness_failure_reason = ""
     if not has_http:
-        harness_failure_reason = _classify_harness_failure(steps_out, observations, pre_transport_block_reasons)
+        harness_failure_reason = _classify_harness_failure(
+            steps_out, observations, pre_transport_block_reasons,
+            cleanup_failures=cleanup_failures,
+        )
     if pre_transport_block_reasons:
         # Pre-transport blocks (binding placeholders, unresolved paths) mean the
         # request never reached the target — this is a BLOCKED outcome, not a

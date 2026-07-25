@@ -97,11 +97,32 @@ def execute_barrier_plans(
         method = _text(op.get("method") or "GET").upper()
         path_template = _text(op.get("path") or op.get("raw_path"))
         path = _materialize_path(path_template, runtime_bindings)
-        # ── Force-strip unresolved placeholders in path ──
+        # SPEC §8.3: unresolved placeholders → block, no force-strip
         if "{" in path or "}" in path:
-            import re as _re_b
-            path = _re_b.sub(r"\{[^}]*\}", "1", path)
-            path = _re_b.sub(r":[a-zA-Z_]\w*", "1", path)
+            return {
+                "harness_error": False,
+                "pre_transport_reason": "BLOCKED_MISSING_BINDING",
+                "contract_receipt": build_contract_evidence_receipt(
+                    kind=phase,
+                    experiment_id=eid,
+                    obligation_id=oid,
+                    campaign_id=resolved_campaign_id,
+                    execution_id=resolved_execution_id,
+                    subject_id=subject_id,
+                    status="BLOCKED",
+                    evidence={"reason_code": "BLOCKED_MISSING_BINDING",
+                              "detail": f"unresolved_path_placeholders:{path}"},
+                ),
+                "step": {
+                    "phase": phase,
+                    "step_id": subject_id,
+                    "status": "blocked_write",
+                    "reason": "BLOCKED_MISSING_BINDING",
+                    "detail": f"unresolved_path_placeholders:{path}",
+                    "method": method,
+                    "path": path,
+                },
+            }
         participant = _text(step.get("barrier_participant") or subject_id)
         request_body = (
             step.get("body")

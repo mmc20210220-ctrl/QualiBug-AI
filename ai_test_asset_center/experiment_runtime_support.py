@@ -455,84 +455,42 @@ def preflight_experiment_executable(
     *,
     behavior_ir: dict[str, Any],
     actor_tokens: dict[str, str],
-    best_effort: bool = False,
 ) -> tuple[bool, str, str]:
     """Return (ok, reason_code, detail). Fail closed — never COMPILED-at-runtime.
-    
-    Enhanced: best_effort mode allows degraded execution for non-safety-critical
-    experiments. Actor degradation tries fallback actors when primary is unavailable.
+
+    Strict mode: no actor substitution, no path guessing, no best-effort
+    degradation. Missing actors/operations/bindings/observers are BLOCKED.
     """
     exp = _dict(experiment)
     receipt = _dict(exp.get("compile_receipt"))
     if _text(receipt.get("status")).upper() != "COMPILED":
-        # ── Enhanced: best_effort allows degraded compilation ──
-        if best_effort and _text(receipt.get("status")).upper() in {"DEGRADED", "PARTIAL"}:
-            pass  # allow degraded in best_effort mode
-        else:
-            return False, _text(receipt.get("reason_code")) or "BLOCKED_UNSUPPORTED_ADAPTER", "not_compiled"
+        return False, _text(receipt.get("reason_code")) or "BLOCKED_UNSUPPORTED_ADAPTER", "not_compiled"
     dag = _dict(exp.get("fixture_dag"))
     if dag and _text(dag.get("status")).upper() == "BLOCKED":
         reasons = _list(dag.get("blocked_reasons"))
         code = _text(_dict(reasons[0] if reasons else {}).get("reason_code")) or "BLOCKED_MISSING_FIXTURE"
-        # ── Enhanced: best_effort allows missing fixtures for read-only ──
-        if best_effort and code == "BLOCKED_MISSING_FIXTURE":
-            pass  # allow missing fixtures in best_effort mode
-        else:
-            return False, code, _text(_dict(reasons[0] if reasons else {}).get("detail"))
+        return False, code, _text(_dict(reasons[0] if reasons else {}).get("detail"))
     ir = _dict(behavior_ir)
     actors = _index_by_id(_list(ir.get("actors")))
     ops = _index_by_id(_list(ir.get("operations")))
-    # ── Enhanced: find fallback admin actor for degradation ──
-    _fallback_admin_ref = ""
-    _fallback_admin_token = ""
-    for _aid, _actor in actors.items():
-        _role = _text(_actor.get("role")).lower()
-        if _role in {"admin", "administrator", "superuser", "root"}:
-            _secret = _text(_actor.get("credential_secret_ref") or _actor.get("secret_ref"))
-            _token = actor_tokens.get(_secret) or actor_tokens.get(_role)
-            if _token:
-                _fallback_admin_ref = _aid
-                _fallback_admin_token = _token
-                break
-    degraded_actors: list[str] = []
     for step in _list(exp.get("control_plan")) + _list(exp.get("treatment_plan")):
         if not isinstance(step, dict):
             continue
         actor_ref = _text(step.get("actor_ref"))
         op_ref = _text(step.get("operation_ref"))
         if not actor_ref or actor_ref not in actors:
-            # ── Enhanced: try fallback admin actor ──
-            if best_effort and _fallback_admin_ref:
-                step["actor_ref"] = _fallback_admin_ref
-                step["_actor_degraded"] = True
-                degraded_actors.append(actor_ref or "missing")
-                actor_ref = _fallback_admin_ref
-            else:
-                return False, "BLOCKED_MISSING_ACTOR", actor_ref or "missing"
+            return False, "BLOCKED_MISSING_ACTOR", actor_ref or "missing"
         actor = actors[actor_ref]
         role = _text(actor.get("role"))
         secret = _text(actor.get("credential_secret_ref") or actor.get("secret_ref"))
         if role.lower() not in {"anonymous", "public"}:
             if not secret:
-                # ── Enhanced: try fallback admin ──
-                if best_effort and _fallback_admin_ref and actor_ref != _fallback_admin_ref:
-                    step["actor_ref"] = _fallback_admin_ref
-                    step["_actor_degraded"] = True
-                    degraded_actors.append(actor_ref)
-                else:
-                    return False, "BLOCKED_MISSING_ACTOR", f"unresolved_secret:{actor_ref}"
+                return False, "BLOCKED_MISSING_ACTOR", f"unresolved_secret:{actor_ref}"
             elif secret not in actor_tokens and role not in actor_tokens:
-                # ── Enhanced: try fallback admin token ──
-                if best_effort and _fallback_admin_token:
-                    step["_degraded_token"] = _fallback_admin_token
-                    step["_actor_degraded"] = True
-                    degraded_actors.append(actor_ref)
-                else:
-                    return False, "BLOCKED_MISSING_ACTOR", f"token_unresolved:{actor_ref}"
+                return False, "BLOCKED_MISSING_ACTOR", f"token_unresolved:{actor_ref}"
         if not op_ref or op_ref not in ops:
             return False, "BLOCKED_MISSING_OPERATION", op_ref or "missing"
         op = ops[op_ref]
-        # ── Enhanced: prefer step-level path (set by compiler) over IR path ──
         path = _text(step.get("path") or op.get("path") or op.get("raw_path"))
         # ── Placeholder interception: BLOCK if path has unresolved placeholders ──
         # Generating qb_test_* placeholder IDs guarantees 404/400 failures and
@@ -572,12 +530,11 @@ def preflight_experiment_executable(
             return False, "BLOCKED_MISSING_BINDING", f"placeholder_id_in_path:{path[:80]}"
         method = _text(op.get("method") or "GET").upper()
         if not path.startswith("/"):
-            # ── Enhanced: aggressively fix path instead of blocking ──
             if path and not path.startswith("http"):
                 path = "/" + path
                 op["path"] = path
             elif not path:
-                # Try multiple fallback sources for path
+                # Try declared alternative path fields from source
                 _declared_path = _text(
                     op.get("raw_path") or op.get("declared_path")
                     or op.get("normalized_path") or op.get("path_template")
@@ -588,16 +545,8 @@ def preflight_experiment_executable(
                     path = _declared_path
                     op["path"] = path
                 else:
-                    # Last resort: derive from operation_id
-                    _op_id = _text(op.get("id") or op_ref)
-                    # e.g. "create_order" -> "/api/orders" (best guess)
-                    _parts = _op_id.replace("-", "_").split("_")
-                    _noun = _parts[-1] if _parts else "resource"
-                    path = f"/api/{_noun}s"
-                    op["path"] = path
-                    exp.setdefault("_degraded_bindings", []).append(
-                        f"path_derived_from_op_id:{op_ref}:{path}"
-                    )
+                    # No source-declared path available — block immediately.
+                    return False, "BLOCKED_MISSING_OPERATION", f"source_declared_path_missing:{op_ref}"
             else:
                 # http:// URL - use as-is
                 pass
@@ -634,6 +583,32 @@ def preflight_experiment_executable(
             # the business effect happened. Degrading to it would make the
             # response its own proof.
             return False, "BLOCKED_MISSING_OBSERVER", f"write_observer:{op_ref}"
+        # Collection POST create with only response-bound identity GET:
+        # the identity GET requires the write response ID, so it cannot serve
+        # as a pre-write observer. Block unless an independent pre-write
+        # observer exists (collection GET, unique-key query, or DB adapter).
+        if (
+            method == "POST"
+            and path.startswith("/")
+            and not path_has_placeholders(path)
+            and _has_response_bound_create_observers(op, ops)
+        ):
+            _has_pre_write_observer = _declared_observation_path(path, ops) and not path_has_placeholders(
+                _declared_observation_path(path, ops)
+            )
+            if not _has_pre_write_observer:
+                # Check experiment-level observers for a non-response-bound read
+                _exp_observers = _list(exp.get("observers"))
+                _has_independent_pre_write = any(
+                    isinstance(obs, dict)
+                    and _text(obs.get("surface")) != "business_effect"
+                    and _text(obs.get("observer_id")) != "http_response"
+                    and not _text(obs.get("identity_source")).startswith("write_response")
+                    for obs in _exp_observers
+                    if _text(obs.get("surface")) in {"http_api", "database", "event"}
+                )
+                if not _has_independent_pre_write:
+                    return False, "BLOCKED_MISSING_OBSERVER", "response_bound_after_without_pre_write_observer"
     if not _list(exp.get("observers")):
         return False, "BLOCKED_MISSING_OBSERVER", "none"
     assertion = _dict(_list(exp.get("assertions"))[0] if _list(exp.get("assertions")) else {})
@@ -647,9 +622,7 @@ def preflight_experiment_executable(
         require_authorization_comparison=not _is_permitted_operation_invocation(exp),
     )
     if observer_reason:
-        # ── Enhanced: best_effort allows observer validation failure ──
-        if not best_effort:
-            return False, observer_reason, observer_detail
+        return False, observer_reason, observer_detail
     safety = _dict(exp.get("safety_contract"))
     is_write = bool(safety.get("governed_write"))
     if is_write and not _list(exp.get("cleanup_plan")):
@@ -661,30 +634,15 @@ def preflight_experiment_executable(
             return False, "BLOCKED_NON_REVERSIBLE_WRITE", "cleanup_compensation_unresolved"
     cleanup_preflight_error = _cleanup_body_preflight_error(exp)
     if cleanup_preflight_error:
-        # ── Enhanced: degrade instead of hard-block for auto-generated cleanups ──
-        _has_auto_cleanup = any(
-            isinstance(c, dict) and (c.get("_auto_generated") or c.get("_universal_fallback") or c.get("_runtime_auto_injected"))
-            for c in _list(exp.get("cleanup_plan"))
-        )
-        if _has_auto_cleanup:
-            exp.setdefault("_degraded_cleanup", []).append(f"preflight_degraded:{cleanup_preflight_error}")
-        else:
-            return False, "BLOCKED_NON_REVERSIBLE_WRITE", cleanup_preflight_error
+        return False, "BLOCKED_NON_REVERSIBLE_WRITE", cleanup_preflight_error
     # Fixture nodes that require constructible disposable fixtures must be READY.
     for node in _list(dag.get("nodes")):
         if not isinstance(node, dict):
             continue
         if node.get("constructible") is False:
-            # ── Enhanced: best_effort allows non-constructible fixtures ──
-            if not best_effort:
-                return False, "BLOCKED_MISSING_FIXTURE", _text(node.get("node_id"))
+            return False, "BLOCKED_MISSING_FIXTURE", _text(node.get("node_id"))
         if _text(node.get("kind")) == "disposable_fixture" and not _text(node.get("fixture_id")):
-            if not best_effort:
-                return False, "BLOCKED_MISSING_FIXTURE", _text(node.get("node_id"))
-    # ── Enhanced: mark experiment as degraded if actors were substituted ──
-    if degraded_actors:
-        exp["_execution_degraded"] = True
-        exp["_degraded_actors"] = degraded_actors
+            return False, "BLOCKED_MISSING_FIXTURE", _text(node.get("node_id"))
     return True, "", ""
 
 
