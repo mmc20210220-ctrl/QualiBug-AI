@@ -743,6 +743,25 @@ def build_enterprise_business_knowledge_asset(project_id: str = "real_project_de
     # Entity-relation graph and cross-document conflict detection (RAGFlow-inspired)
     # Rule relationalization: structurize text rules into causal chains
     rules = _structurize_rule_causal_chains(rules)
+    # ── Phase 4: Candidate validation and promotion ──
+    from ._candidate_validation import validate_and_promote_candidates, candidates_to_behavior_ir_entries
+    _candidate_receipt = validate_and_promote_candidates(
+        semantic_candidates,
+        interfaces=interfaces,
+        tables=tables,
+        rules=rules,
+        state_machines=state_machines,
+    )
+    # Feed validated + pending candidates into entity space
+    _candidate_entities = candidates_to_behavior_ir_entries(
+        _candidate_receipt.validated,
+        _candidate_receipt.pending,
+    )
+    for _cand_ent in _candidate_entities:
+        _cand_name = str(_cand_ent.get("object") or "")
+        if _cand_name and _cand_name not in object_names:
+            objects.append(_cand_ent)
+            object_names.add(_cand_name)
     entity_relations = _extract_entity_relations(interfaces, tables, field_dictionary, rules, state_machines, permissions)
     cross_doc_conflicts = _detect_cross_document_conflicts(field_dictionary, rules, interfaces, permissions)
     # ── Phase 0: asset-level space health check ──
@@ -801,6 +820,7 @@ def build_enterprise_business_knowledge_asset(project_id: str = "real_project_de
         "cross_document_conflicts": cross_doc_conflicts,
         "semantic_candidates": semantic_candidates,
         "semantic_extraction_receipts": semantic_receipts,
+        "candidate_validation_receipt": _candidate_receipt.to_dict(),
         "oracle_library": oracles,
         "governance": {
             "no_manual_customer_industry_pack_required": True,
