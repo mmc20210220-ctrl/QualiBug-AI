@@ -1,7 +1,7 @@
 {
   "schema_version": "qualibug.regression-gate-baseline.v1",
   "note": "Tests known to fail. This set may only shrink. Regenerate with `python tools/regression_gate.py --update` after a real fix.",
-  "known_failure_count": 69,
+  "known_failure_count": 62,
   "known_failures": [
     "tests/test_architecture_extraction_contracts.py::test_extracted_modules_remain_under_architecture_budget_threshold",
     "tests/test_behavior_ir_obligation_experiment.py::test_adaptive_planner_risk_priority_comes_from_runtime_policy_data",
@@ -49,12 +49,6 @@
     "tests/test_frontend_product_closure_entrypoints.py::test_frontend_settings_and_materials_surface_readiness_and_parse_summary",
     "tests/test_frontend_run_center_one_click_entry.py::test_backend_serves_scan_preflight_on_get",
     "tests/test_frontend_scope_display_contract.py::test_dashboard_uses_one_formal_count_for_current_delivery_scope",
-    "tests/test_observer_evidence_truthfulness.py::test_business_effect_not_observed_prevents_oracle_pass",
-    "tests/test_observer_evidence_truthfulness.py::test_business_effect_observation_failed_returns_indeterminate",
-    "tests/test_observer_evidence_truthfulness.py::test_effect_window_after_get_fails_returns_indeterminate",
-    "tests/test_observer_evidence_truthfulness.py::test_effect_window_before_get_fails_returns_indeterminate",
-    "tests/test_observer_evidence_truthfulness.py::test_effect_window_both_gets_fail_returns_indeterminate",
-    "tests/test_observer_evidence_truthfulness.py::test_effect_window_no_write_response_effect_fabrication",
     "tests/test_p6_benchmark_compute.py::test_compute_benchmark_with_ground_truth",
     "tests/test_phase110_unified_scan_contract.py::test_persist_customer_ready_static_artifacts_adds_cumulative_snapshot_without_rewriting_current_run_totals",
     "tests/test_reasoner_static_guardrails.py::test_stage_reasoner_source_caps_are_enterprise_safe",
@@ -70,7 +64,6 @@
     "tests/test_typed_observer_authorization.py::test_business_key_identity_proves_same_resource",
     "tests/test_typed_observer_authorization.py::test_executor_blocks_response_only_write_observer_before_create_transport",
     "tests/test_typed_observer_authorization.py::test_executor_does_not_emit_finding_for_empty_2xx_pair",
-    "tests/test_typed_observer_authorization.py::test_write_status_pair_requires_business_effect_evidence",
     "tests/test_validation_rejection_cleanup_integrity.py::test_validation_protocol_blocks_without_source_request_material"
   ]
 }
