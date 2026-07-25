@@ -1,0 +1,1792 @@
+{
+  "schema_version": "qualibug.mes-execution-ledger.v1",
+  "run_name": "MES_REAL_EXECUTION_V1",
+  "sut": "Discrete Manufacturing MES",
+  "total_experiments": 34,
+  "findings": 28,
+  "passes": 6,
+  "execution_mode": "REAL_HTTP",
+  "duration_seconds": 216.91,
+  "experiments": [
+    {
+      "experiment_id": "EXP_AUTH_01",
+      "mechanism": "Authorization",
+      "oracle_type": "ROLE_ORACLE",
+      "description": "Operator creates product (should be PLANNER/MANAGER/ADMIN only)",
+      "oracle_result": {
+        "oracle_type": "ROLE_ORACLE",
+        "verdict": "VIOLATION",
+        "constraint_ref": "API_SPEC: POST /products on /products restricted to authorized roles only",
+        "expected_behavior": "Role OPERATOR should receive 403 Forbidden for POST /products",
+        "actual_behavior": "Role OPERATOR received 201 (success)",
+        "evidence_summary": "POST http://localhost:8020/products as OPERATOR -> 201"
+      },
+      "evidence": [
+        {
+          "method": "POST",
+          "url": "http://localhost:8020/products",
+          "actor": "operator_acme",
+          "request_body": {
+            "sku": "TEST-001",
+            "name": "Test Product",
+            "category": "RAW_MATERIAL",
+            "unit": "kg",
+            "unit_cost": 99.9
+          },
+          "status_code": 201,
+          "response_body": {
+            "id": "mat-f16d54fe",
+            "sku": "TEST-001",
+            "name": "Test Product",
+            "org": "acme",
+            "category": "RAW_MATERIAL",
+            "unit": "kg",
+            "unit_cost": 99.9,
+            "status": "ACTIVE",
+            "created_at": "2026-07-25T00:01:10.056073Z"
+          },
+          "timestamp": 1784937667.9858332,
+          "duration_ms": 2070.92
+        }
+      ],
+      "is_finding": true,
+      "timestamp": 1784937670.0565796
+    },
+    {
+      "experiment_id": "EXP_AUTH_02",
+      "mechanism": "Authorization",
+      "oracle_type": "ROLE_ORACLE",
+      "description": "Operator modifies product cost (should be MANAGER/ADMIN only)",
+      "oracle_result": {
+        "oracle_type": "ROLE_ORACLE",
+        "verdict": "VIOLATION",
+        "constraint_ref": "API_SPEC: PUT cost modification on /products/mat-001 restricted to authorized roles only",
+        "expected_behavior": "Role OPERATOR should receive 403 Forbidden for PUT cost modification",
+        "actual_behavior": "Role OPERATOR received 200 (success)",
+        "evidence_summary": "PUT http://localhost:8020/products/mat-001 as OPERATOR -> 200"
+      },
+      "evidence": [
+        {
+          "method": "GET",
+          "url": "http://localhost:8020/products",
+          "actor": "planner_acme",
+          "request_body": null,
+          "status_code": 200,
+          "response_body": {
+            "products": [
+              {
+                "id": "mat-001",
+                "sku": "RAW-STEEL-01",
+                "name": "Steel Plate 2mm",
+                "org": "acme",
+                "category": "RAW_MATERIAL",
+                "unit": "kg",
+                "unit_cost": 12.5,
+                "status": "ACTIVE",
+                "created_at": "2026-07-25T00:01:12.124927Z"
+              },
+              {
+                "id": "mat-002",
+                "sku": "RAW-ALU-01",
+                "name": "Aluminum Rod 10mm",
+                "org": "acme",
+                "category": "RAW_MATERIAL",
+                "unit": "pcs",
+                "unit_cost": 8.0,
+                "status": "ACTIVE",
+                "created_at": "2026-07-25T00:01:12.124927Z"
+              },
+              {
+                "id": "mat-003",
+                "sku": "COMP-GEAR-01",
+                "name": "Gear Module A",
+                "org": "acme",
+                "category": "COMPONENT",
+                "unit": "pcs",
+                "unit_cost": 45.0,
+                "status": "ACTIVE",
+                "created_at": "2026-07-25T00:01:12.124927Z"
+              },
+              {
+                "id": "mat-004",
+                "sku": "COMP-BEARING-01",
+                "name": "Bearing 6205",
+                "org": "acme",
+                "category": "COMPONENT",
+                "unit": "pcs",
+                "unit_cost": 22.0,
+                "status": "ACTIVE",
+                "created_at": "2026-07-25T00:01:12.124927Z"
+              },
+              {
+                "id": "mat-005",
+                "sku": "FG-REDUCER-01",
+                "name": "Planetary Reducer X1",
+                "org": "acme",
+                "category": "FINISHED_GOODS",
+                "unit": "pcs",
+                "unit_cost": 580.0,
+                "status": "ACTIVE",
+                "created_at": "2026-07-25T00:01:12.124927Z"
+              },
+              {
+                "id": "mat-006",
+                "sku": "RAW-PLASTIC-01",
+                "name": "ABS Pellets",
+                "org": "globex",
+                "category": "RAW_MATERIAL",
+                "unit": "kg",
+                "unit_cost": 6.5,
+                "status": "ACTIVE",
+                "created_at": "2026-07-25T00:01:12.124927Z"
+              },
+              {
+                "id": "mat-007",
+                "sku": "FG-HOUSING-01",
+                "name": "Motor Housing H2",
+                "org": "globex",
+                "category": "FINISHED_GOODS",
+                "unit": "pcs",
+                "unit_cost": 120.0,
+                "status": "ACTIVE",
+                "created_at": "2026-07-25T00:01:12.124927Z"
+              }
+            ],
+            "total": 7
+          },
+          "timestamp": 1784937672.1259067,
+          "duration_ms": 2060.44
+        },
+        {
+          "method": "PUT",
+          "url": "http://localhost:8020/products/mat-001",
+          "actor": "operator_acme",
+          "request_body": {
+            "unit_cost": 0.01
+          },
+          "status_code": 200,
+          "response_body": {
+            "id": "mat-001",
+            "sku": "RAW-STEEL-01",
+            "name": "Steel Plate 2mm",
+            "org": "acme",
+            "category": "RAW_MATERIAL",
+            "unit": "kg",
+            "unit_cost": 0.01,
+            "status": "ACTIVE",
+            "created_at": "2026-07-25T00:01:12.124927Z"
+          },
+          "timestamp": 1784937674.186495,
+          "duration_ms": 2082.1
+        }
+      ],
+      "is_finding": true,
+      "timestamp": 1784937676.2682621
+    },
+    {
+      "experiment_id": "EXP_AUTH_03",
+      "mechanism": "Authorization",
+      "oracle_type": "ROLE_ORACLE",
+      "description": "Operator deletes work order (should be MANAGER/ADMIN only)",
+      "oracle_result": {
+        "oracle_type": "ROLE_ORACLE",
+        "verdict": "VIOLATION",
+        "constraint_ref": "API_SPEC: DELETE /work-orders on /work-orders/wo-002 restricted to authorized roles only",
+        "expected_behavior": "Role OPERATOR should receive 403 Forbidden for DELETE /work-orders",
+        "actual_behavior": "Role OPERATOR received 200 (success)",
+        "evidence_summary": "DELETE http://localhost:8020/work-orders/wo-002 as OPERATOR -> 200"
+      },
+      "evidence": [
+        {
+          "method": "GET",
+          "url": "http://localhost:8020/work-orders?status=CREATED",
+          "actor": "manager_acme",
+          "request_body": null,
+          "status_code": 200,
+          "response_body": {
+            "work_orders": [
+              {
+                "id": "wo-002",
+                "order_ref": "WO-2026-002",
+                "production_plan_id": "pp-001",
+                "product_id": "mat-005",
+                "bom_id": "bom-001",
+                "routing_id": "rt-001",
+                "org": "acme",
+                "factory": "fac-001",
+                "planned_quantity": 50,
+                "completed_quantity": 0,
+                "status": "CREATED",
+                "priority": 2,
+                "planned_start": "2026-08-11",
+                "planned_end": "2026-08-20",
+                "created_by": "pln-001",
+                "created_at": "2026-07-25T00:01:18.314313Z",
+                "released_at": null,
+                "version": 1
+              }
+            ],
+            "total": 1
+          },
+          "timestamp": 1784937678.314313,
+          "duration_ms": 2067.68
+        },
+        {
+          "method": "DELETE",
+          "url": "http://localhost:8020/work-orders/wo-002",
+          "actor": "operator_acme",
+          "request_body": null,
+          "status_code": 200,
+          "response_body": {
+            "deleted": "wo-002"
+          },
+          "timestamp": 1784937680.3827958,
+          "duration_ms": 2069.42
+        }
+      ],
+      "is_finding": true,
+      "timestamp": 1784937682.451643
+    },
+    {
+      "experiment_id": "EXP_AUTH_04",
+      "mechanism": "Authorization",
+      "oracle_type": "ROLE_ORACLE",
+      "description": "Operator from fac-002 reports on fac-001 work order (factory scope)",
+      "oracle_result": {
+        "oracle_type": "ROLE_ORACLE",
+        "verdict": "VIOLATION",
+        "constraint_ref": "API_SPEC: Operator factory must match work order factory",
+        "expected_behavior": "Operator from fac-002 rejected for fac-001 work order (403)",
+        "actual_behavior": "Report accepted with status 201",
+        "evidence_summary": "POST /work-reports as fac-002 operator on fac-001 WO -> 201"
+      },
+      "evidence": [
+        {
+          "method": "POST",
+          "url": "http://localhost:8020/work-reports",
+          "actor": "operator_acme_f2",
+          "request_body": {
+            "work_order_id": "wo-001",
+            "operation_id": "woo-001",
+            "quantity": 5
+          },
+          "status_code": 201,
+          "response_body": {
+            "id": "wr-e320b84c",
+            "work_order_id": "wo-001",
+            "operation_id": "woo-001",
+            "quantity": 5,
+            "defect_quantity": 0,
+            "org": "acme",
+            "factory": "fac-002",
+            "reported_by": "opr-002",
+            "reported_at": "2026-07-25T00:01:26.572921Z",
+            "shift": "DAY",
+            "notes": ""
+          },
+          "timestamp": 1784937684.516611,
+          "duration_ms": 2057.5
+        }
+      ],
+      "is_finding": true,
+      "timestamp": 1784937686.573939
+    },
+    {
+      "experiment_id": "EXP_AUTH_05",
+      "mechanism": "Authorization",
+      "oracle_type": "ROLE_ORACLE",
+      "description": "Warehouse role creates BOM (should be PLANNER/MANAGER/ADMIN only)",
+      "oracle_result": {
+        "oracle_type": "ROLE_ORACLE",
+        "verdict": "PASS",
+        "constraint_ref": "API_SPEC: POST /boms on /boms role restriction",
+        "expected_behavior": "Role WAREHOUSE correctly handled",
+        "actual_behavior": "Status 403",
+        "evidence_summary": "POST http://localhost:8020/boms -> 403"
+      },
+      "evidence": [
+        {
+          "method": "POST",
+          "url": "http://localhost:8020/boms",
+          "actor": "warehouse_acme",
+          "request_body": {
+            "product_id": "mat-005",
+            "version": "2.0"
+          },
+          "status_code": 403,
+          "response_body": {
+            "error": "Forbidden"
+          },
+          "timestamp": 1784937688.6418195,
+          "duration_ms": 2073.36
+        }
+      ],
+      "is_finding": false,
+      "timestamp": 1784937690.7159414
+    },
+    {
+      "experiment_id": "EXP_AUTH_06",
+      "mechanism": "Authorization",
+      "oracle_type": "ROLE_ORACLE",
+      "description": "Inspector releases work order (should be PLANNER/MANAGER/ADMIN only)",
+      "oracle_result": {
+        "oracle_type": "ROLE_ORACLE",
+        "verdict": "PASS",
+        "constraint_ref": "API_SPEC: POST release on /work-orders/wo-002/release role restriction",
+        "expected_behavior": "Role INSPECTOR correctly handled",
+        "actual_behavior": "Status 403",
+        "evidence_summary": "POST http://localhost:8020/work-orders/wo-002/release -> 403"
+      },
+      "evidence": [
+        {
+          "method": "POST",
+          "url": "http://localhost:8020/work-orders/wo-002/release",
+          "actor": "inspector_acme",
+          "request_body": {},
+          "status_code": 403,
+          "response_body": {
+            "error": "Forbidden"
+          },
+          "timestamp": 1784937692.7993681,
+          "duration_ms": 2059.57
+        }
+      ],
+      "is_finding": false,
+      "timestamp": 1784937694.8590817
+    },
+    {
+      "experiment_id": "EXP_SCOPE_01",
+      "mechanism": "Scope Isolation",
+      "oracle_type": "SCOPE_ORACLE",
+      "description": "Globex manager lists work centers (should only see globex)",
+      "oracle_result": {
+        "oracle_type": "SCOPE_ORACLE",
+        "verdict": "VIOLATION",
+        "constraint_ref": "API_SPEC: /work-centers listing must be org-scoped (multi-tenant isolation)",
+        "expected_behavior": "Actor from 'globex' should only see globex records",
+        "actual_behavior": "Response contains 4 records from other orgs",
+        "evidence_summary": "GET http://localhost:8020/work-centers as globex -> found orgs: {'acme', 'globex'}"
+      },
+      "evidence": [
+        {
+          "method": "GET",
+          "url": "http://localhost:8020/work-centers",
+          "actor": "manager_globex",
+          "request_body": null,
+          "status_code": 200,
+          "response_body": {
+            "work_centers": [
+              {
+                "id": "wc-001",
+                "name": "CNC Machining Center 1",
+                "org": "acme",
+                "factory": "fac-001",
+                "capacity_hours_per_day": 16,
+                "status": "ACTIVE",
+                "created_at": "2026-07-25T00:01:36.952621Z"
+              },
+              {
+                "id": "wc-002",
+                "name": "Assembly Station 1",
+                "org": "acme",
+                "factory": "fac-001",
+                "capacity_hours_per_day": 8,
+                "status": "ACTIVE",
+                "created_at": "2026-07-25T00:01:36.952621Z"
+              },
+              {
+                "id": "wc-003",
+                "name": "Quality Lab",
+                "org": "acme",
+                "factory": "fac-001",
+                "capacity_hours_per_day": 8,
+                "status": "ACTIVE",
+                "created_at": "2026-07-25T00:01:36.952621Z"
+              },
+              {
+                "id": "wc-004",
+                "name": "CNC Machining Center 2",
+                "org": "acme",
+                "factory": "fac-002",
+                "capacity_hours_per_day": 16,
+                "status": "ACTIVE",
+                "created_at": "2026-07-25T00:01:36.952621Z"
+              },
+              {
+                "id": "wc-005",
+                "name": "Injection Molding 1",
+                "org": "globex",
+                "factory": "fac-003",
+                "capacity_hours_per_day": 20,
+                "status": "ACTIVE",
+                "created_at": "2026-07-25T00:01:36.952621Z"
+              }
+            ],
+            "total": 5
+          },
+          "timestamp": 1784937696.952622,
+          "duration_ms": 2070.62
+        }
+      ],
+      "is_finding": true,
+      "timestamp": 1784937699.0243192
+    },
+    {
+      "experiment_id": "EXP_SCOPE_02",
+      "mechanism": "Scope Isolation",
+      "oracle_type": "SCOPE_ORACLE",
+      "description": "Globex inspector lists inspections (should only see globex)",
+      "oracle_result": {
+        "oracle_type": "SCOPE_ORACLE",
+        "verdict": "PASS",
+        "constraint_ref": "API_SPEC: /quality-inspections org-scoped listing",
+        "expected_behavior": "Only globex records visible",
+        "actual_behavior": "All 0 records belong to globex",
+        "evidence_summary": "GET http://localhost:8020/quality-inspections -> 0 items, all org=globex"
+      },
+      "evidence": [
+        {
+          "method": "GET",
+          "url": "http://localhost:8020/quality-inspections",
+          "actor": "inspector_globex",
+          "request_body": null,
+          "status_code": 200,
+          "response_body": {
+            "inspections": [],
+            "total": 0
+          },
+          "timestamp": 1784937703.160338,
+          "duration_ms": 2070.72
+        }
+      ],
+      "is_finding": false,
+      "timestamp": 1784937705.231717
+    },
+    {
+      "experiment_id": "EXP_STATE_01",
+      "mechanism": "State Transition",
+      "oracle_type": "STATE_ORACLE",
+      "description": "Release a COMPLETED work order (should be rejected)",
+      "oracle_result": {
+        "oracle_type": "STATE_ORACLE",
+        "verdict": "VIOLATION",
+        "constraint_ref": "API_SPEC: WorkOrder transition 'release' only from ['CREATED']",
+        "expected_behavior": "Cannot release from state COMPLETED (expect 409)",
+        "actual_behavior": "Transition succeeded with status 200",
+        "evidence_summary": "WorkOrder/wo-001: COMPLETED --release--> SUCCESS"
+      },
+      "evidence": [
+        {
+          "method": "POST",
+          "url": "http://localhost:8020/work-orders/wo-001/release",
+          "actor": "planner_acme",
+          "request_body": {},
+          "status_code": 200,
+          "response_body": {
+            "id": "wo-001",
+            "order_ref": "WO-2026-001",
+            "production_plan_id": "pp-001",
+            "product_id": "mat-005",
+            "bom_id": "bom-001",
+            "routing_id": "rt-001",
+            "org": "acme",
+            "factory": "fac-001",
+            "planned_quantity": 50,
+            "completed_quantity": 50,
+            "status": "RELEASED",
+            "priority": 1,
+            "planned_start": "2026-08-01",
+            "planned_end": "2026-08-10",
+            "created_by": "pln-001",
+            "created_at": "2026-07-25T00:01:47.318722Z",
+            "released_at": "2026-07-25T00:01:53.517812Z",
+            "version": 4
+          },
+          "timestamp": 1784937711.4457383,
+          "duration_ms": 2072.35
+        }
+      ],
+      "is_finding": true,
+      "timestamp": 1784937713.5188217
+    },
+    {
+      "experiment_id": "EXP_STATE_02",
+      "mechanism": "State Transition",
+      "oracle_type": "STATE_ORACLE",
+      "description": "Close work order from IN_PRODUCTION (should require COMPLETED first)",
+      "oracle_result": {
+        "oracle_type": "STATE_ORACLE",
+        "verdict": "VIOLATION",
+        "constraint_ref": "API_SPEC: WorkOrder transition 'close' only from ['COMPLETED']",
+        "expected_behavior": "Cannot close from state IN_PRODUCTION (expect 409)",
+        "actual_behavior": "Transition succeeded with status 200",
+        "evidence_summary": "WorkOrder/wo-001: IN_PRODUCTION --close--> SUCCESS"
+      },
+      "evidence": [
+        {
+          "method": "POST",
+          "url": "http://localhost:8020/work-orders/wo-001/close",
+          "actor": "manager_acme",
+          "request_body": {},
+          "status_code": 200,
+          "response_body": {
+            "id": "wo-001",
+            "order_ref": "WO-2026-001",
+            "production_plan_id": "pp-001",
+            "product_id": "mat-005",
+            "bom_id": "bom-001",
+            "routing_id": "rt-001",
+            "org": "acme",
+            "factory": "fac-001",
+            "planned_quantity": 50,
+            "completed_quantity": 0,
+            "status": "CLOSED",
+            "priority": 1,
+            "planned_start": "2026-08-01",
+            "planned_end": "2026-08-10",
+            "created_by": "pln-001",
+            "created_at": "2026-07-25T00:01:55.574507Z",
+            "released_at": "2026-07-25T00:01:55.574507Z",
+            "version": 3
+          },
+          "timestamp": 1784937717.619012,
+          "duration_ms": 2084.08
+        }
+      ],
+      "is_finding": true,
+      "timestamp": 1784937719.702328
+    },
+    {
+      "experiment_id": "EXP_STATE_03",
+      "mechanism": "State Transition",
+      "oracle_type": "STATE_ORACLE",
+      "description": "Modify CONFIRMED production plan (should be immutable)",
+      "oracle_result": {
+        "oracle_type": "STATE_ORACLE",
+        "verdict": "VIOLATION",
+        "constraint_ref": "API_SPEC: ProductionPlan transition 'update' only from ['CREATED']",
+        "expected_behavior": "Cannot update from state CONFIRMED (expect 409)",
+        "actual_behavior": "Transition succeeded with status 200",
+        "evidence_summary": "ProductionPlan/pp-001: CONFIRMED --update--> SUCCESS"
+      },
+      "evidence": [
+        {
+          "method": "PUT",
+          "url": "http://localhost:8020/production-plans/pp-001",
+          "actor": "planner_acme",
+          "request_body": {
+            "planned_quantity": 999
+          },
+          "status_code": 200,
+          "response_body": {
+            "id": "pp-001",
+            "sales_order_id": "so-001",
+            "org": "acme",
+            "factory": "fac-001",
+            "product_id": "mat-005",
+            "planned_quantity": 999,
+            "planned_start": "2026-08-01",
+            "planned_end": "2026-08-20",
+            "status": "CONFIRMED",
+            "created_by": "pln-001",
+            "created_at": "2026-07-25T00:02:04.655991Z",
+            "version": 2
+          },
+          "timestamp": 1784937723.8287842,
+          "duration_ms": 2058.26
+        }
+      ],
+      "is_finding": true,
+      "timestamp": 1784937725.8870137
+    },
+    {
+      "experiment_id": "EXP_STATE_04",
+      "mechanism": "State Transition",
+      "oracle_type": "STATE_ORACLE",
+      "description": "Modify sales order after linked plan confirmed",
+      "oracle_result": {
+        "oracle_type": "STATE_ORACLE",
+        "verdict": "VIOLATION",
+        "constraint_ref": "API_SPEC: Cannot modify delivery_date if linked plan is CONFIRMED",
+        "expected_behavior": "Modification rejected (409) because linked plan pp-001 is CONFIRMED",
+        "actual_behavior": "Modification succeeded with status 200",
+        "evidence_summary": "PUT /sales-orders/so-001 after plan confirm -> 200"
+      },
+      "evidence": [
+        {
+          "method": "PUT",
+          "url": "http://localhost:8020/sales-orders/so-001",
+          "actor": "planner_acme",
+          "request_body": {
+            "delivery_date": "2027-01-01"
+          },
+          "status_code": 200,
+          "response_body": {
+            "id": "so-001",
+            "order_ref": "SO-2026-001",
+            "customer": "AutoParts Corp",
+            "org": "acme",
+            "product_id": "mat-005",
+            "quantity": 100,
+            "delivery_date": "2027-01-01",
+            "status": "CONFIRMED",
+            "created_at": "2026-07-25T00:02:07.934740Z",
+            "version": 2
+          },
+          "timestamp": 1784937730.0096543,
+          "duration_ms": 2060.13
+        }
+      ],
+      "is_finding": true,
+      "timestamp": 1784937732.0697782
+    },
+    {
+      "experiment_id": "EXP_STATE_05",
+      "mechanism": "State Transition",
+      "oracle_type": "CROSS_ENTITY_ORACLE",
+      "description": "Create receipt for non-COMPLETED work order",
+      "oracle_result": {
+        "oracle_type": "CROSS_ENTITY_ORACLE",
+        "verdict": "VIOLATION",
+        "constraint_ref": "API_SPEC: Work Order must be COMPLETED before receipt creation",
+        "expected_behavior": "Work Order must be COMPLETED before receipt creation",
+        "actual_behavior": "Receipt created for RELEASED WO (status 201)",
+        "evidence_summary": "POST http://localhost:8020/finished-goods-receipts -> 201: Receipt created for RELEASED WO (status 201)"
+      },
+      "evidence": [
+        {
+          "method": "POST",
+          "url": "http://localhost:8020/finished-goods-receipts",
+          "actor": "warehouse_acme",
+          "request_body": {
+            "work_order_id": "wo-001",
+            "quantity": 50
+          },
+          "status_code": 201,
+          "response_body": {
+            "id": "fgr-5a05de11",
+            "work_order_id": "wo-001",
+            "product_id": "",
+            "quantity": 50,
+            "org": "acme",
+            "factory": "fac-001",
+            "status": "CREATED",
+            "received_by": "whk-001",
+            "created_at": "2026-07-25T00:02:16.192521Z",
+            "version": 1
+          },
+          "timestamp": 1784937734.1093123,
+          "duration_ms": 2083.55
+        }
+      ],
+      "is_finding": true,
+      "timestamp": 1784937736.1925213
+    },
+    {
+      "experiment_id": "EXP_CROSS_01",
+      "mechanism": "Cross-Entity",
+      "oracle_type": "CROSS_ENTITY_ORACLE",
+      "description": "Create work order with non-existent BOM/Routing",
+      "oracle_result": {
+        "oracle_type": "CROSS_ENTITY_ORACLE",
+        "verdict": "VIOLATION",
+        "constraint_ref": "API_SPEC: Product must have active BOM and Routing (precondition)",
+        "expected_behavior": "Product must have active BOM and Routing (precondition)",
+        "actual_behavior": "WO created with invalid BOM/Routing (status 201)",
+        "evidence_summary": "POST http://localhost:8020/work-orders -> 201: WO created with invalid BOM/Routing (status 201)"
+      },
+      "evidence": [
+        {
+          "method": "POST",
+          "url": "http://localhost:8020/work-orders",
+          "actor": "planner_acme",
+          "request_body": {
+            "order_ref": "WO-TEST-NOBOM",
+            "product_id": "mat-001",
+            "bom_id": "bom-nonexist",
+            "routing_id": "rt-nonexist",
+            "factory": "fac-001",
+            "planned_quantity": 10
+          },
+          "status_code": 201,
+          "response_body": {
+            "id": "wo-4d6dac4b",
+            "order_ref": "WO-TEST-NOBOM",
+            "production_plan_id": "",
+            "product_id": "mat-001",
+            "bom_id": "bom-nonexist",
+            "routing_id": "rt-nonexist",
+            "org": "acme",
+            "factory": "fac-001",
+            "planned_quantity": 10,
+            "completed_quantity": 0,
+            "status": "CREATED",
+            "priority": 3,
+            "planned_start": "",
+            "planned_end": "",
+            "created_by": "pln-001",
+            "created_at": "2026-07-25T00:02:20.333520Z",
+            "released_at": null,
+            "version": 1
+          },
+          "timestamp": 1784937738.264213,
+          "duration_ms": 2070.57
+        }
+      ],
+      "is_finding": true,
+      "timestamp": 1784937740.334398
+    },
+    {
+      "experiment_id": "EXP_CROSS_02",
+      "mechanism": "Cross-Entity",
+      "oracle_type": "CROSS_ENTITY_ORACLE",
+      "description": "Start work order without material reservations",
+      "oracle_result": {
+        "oracle_type": "CROSS_ENTITY_ORACLE",
+        "verdict": "VIOLATION",
+        "constraint_ref": "API_SPEC: All material reservations must be RESERVED before start",
+        "expected_behavior": "All material reservations must be RESERVED before start",
+        "actual_behavior": "WO started without reservations (status 200)",
+        "evidence_summary": "POST http://localhost:8020/work-orders/wo-002/start -> 200: WO started without reservations (status 200)"
+      },
+      "evidence": [
+        {
+          "method": "POST",
+          "url": "http://localhost:8020/work-orders/wo-002/start",
+          "actor": "operator_acme",
+          "request_body": {},
+          "status_code": 200,
+          "response_body": {
+            "id": "wo-002",
+            "order_ref": "WO-2026-002",
+            "production_plan_id": "pp-001",
+            "product_id": "mat-005",
+            "bom_id": "bom-001",
+            "routing_id": "rt-001",
+            "org": "acme",
+            "factory": "fac-001",
+            "planned_quantity": 50,
+            "completed_quantity": 0,
+            "status": "IN_PRODUCTION",
+            "priority": 2,
+            "planned_start": "2026-08-11",
+            "planned_end": "2026-08-20",
+            "created_by": "pln-001",
+            "created_at": "2026-07-25T00:02:22.409897Z",
+            "released_at": "2026-07-25T00:02:24.480482Z",
+            "version": 3
+          },
+          "timestamp": 1784937744.4814827,
+          "duration_ms": 2065.92
+        }
+      ],
+      "is_finding": true,
+      "timestamp": 1784937746.5472474
+    },
+    {
+      "experiment_id": "EXP_CROSS_03",
+      "mechanism": "Cross-Entity",
+      "oracle_type": "CROSS_ENTITY_ORACLE",
+      "description": "Complete work order with pending operations",
+      "oracle_result": {
+        "oracle_type": "CROSS_ENTITY_ORACLE",
+        "verdict": "VIOLATION",
+        "constraint_ref": "API_SPEC: All operations must be COMPLETED before work order completion",
+        "expected_behavior": "All operations must be COMPLETED before work order completion",
+        "actual_behavior": "WO completed with PENDING operations (status 200)",
+        "evidence_summary": "POST http://localhost:8020/work-orders/wo-001/complete -> 200: WO completed with PENDING operations (status 200)"
+      },
+      "evidence": [
+        {
+          "method": "POST",
+          "url": "http://localhost:8020/work-orders/wo-001/complete",
+          "actor": "operator_acme",
+          "request_body": {},
+          "status_code": 200,
+          "response_body": {
+            "id": "wo-001",
+            "order_ref": "WO-2026-001",
+            "production_plan_id": "pp-001",
+            "product_id": "mat-005",
+            "bom_id": "bom-001",
+            "routing_id": "rt-001",
+            "org": "acme",
+            "factory": "fac-001",
+            "planned_quantity": 50,
+            "completed_quantity": 50,
+            "status": "COMPLETED",
+            "priority": 1,
+            "planned_start": "2026-08-01",
+            "planned_end": "2026-08-10",
+            "created_by": "pln-001",
+            "created_at": "2026-07-25T00:02:28.595473Z",
+            "released_at": "2026-07-25T00:02:28.595473Z",
+            "version": 3
+          },
+          "timestamp": 1784937750.6791239,
+          "duration_ms": 2033.27
+        }
+      ],
+      "is_finding": true,
+      "timestamp": 1784937752.7124991
+    },
+    {
+      "experiment_id": "EXP_CROSS_04",
+      "mechanism": "Cross-Entity",
+      "oracle_type": "CROSS_ENTITY_ORACLE",
+      "description": "Create rework order for PASS inspection (should require REJECT)",
+      "oracle_result": {
+        "oracle_type": "CROSS_ENTITY_ORACLE",
+        "verdict": "VIOLATION",
+        "constraint_ref": "API_SPEC: Referenced inspection must have result=REJECT for rework creation",
+        "expected_behavior": "Referenced inspection must have result=REJECT for rework creation",
+        "actual_behavior": "Rework created for PASS inspection (status 201)",
+        "evidence_summary": "POST http://localhost:8020/rework-orders -> 201: Rework created for PASS inspection (status 201)"
+      },
+      "evidence": [
+        {
+          "method": "POST",
+          "url": "http://localhost:8020/rework-orders",
+          "actor": "inspector_acme",
+          "request_body": {
+            "inspection_id": "qi-b619de21",
+            "work_order_id": "wo-001",
+            "quantity": 5,
+            "reason": "test"
+          },
+          "status_code": 201,
+          "response_body": {
+            "id": "rwk-d0e9d713",
+            "inspection_id": "qi-b619de21",
+            "work_order_id": "wo-001",
+            "quantity": 5,
+            "reason": "test",
+            "org": "acme",
+            "factory": "fac-001",
+            "status": "CREATED",
+            "created_by": "ins-001",
+            "created_at": "2026-07-25T00:02:45.025244Z",
+            "version": 1
+          },
+          "timestamp": 1784937762.9903343,
+          "duration_ms": 2035.61
+        }
+      ],
+      "is_finding": true,
+      "timestamp": 1784937765.0257516
+    },
+    {
+      "experiment_id": "EXP_CROSS_05",
+      "mechanism": "Cross-Entity",
+      "oracle_type": "CROSS_ENTITY_ORACLE",
+      "description": "Create receipt without quality inspection PASS",
+      "oracle_result": {
+        "oracle_type": "CROSS_ENTITY_ORACLE",
+        "verdict": "VIOLATION",
+        "constraint_ref": "API_SPEC: At least one Quality Inspection with PASS result required",
+        "expected_behavior": "At least one Quality Inspection with PASS result required",
+        "actual_behavior": "Receipt created without quality PASS (status 201)",
+        "evidence_summary": "POST http://localhost:8020/finished-goods-receipts -> 201: Receipt created without quality PASS (status 201)"
+      },
+      "evidence": [
+        {
+          "method": "POST",
+          "url": "http://localhost:8020/finished-goods-receipts",
+          "actor": "warehouse_acme",
+          "request_body": {
+            "work_order_id": "wo-001",
+            "quantity": 50
+          },
+          "status_code": 201,
+          "response_body": {
+            "id": "fgr-9a3dadad",
+            "work_order_id": "wo-001",
+            "product_id": "",
+            "quantity": 50,
+            "org": "acme",
+            "factory": "fac-001",
+            "status": "CREATED",
+            "received_by": "whk-001",
+            "created_at": "2026-07-25T00:02:53.237249Z",
+            "version": 1
+          },
+          "timestamp": 1784937771.1970885,
+          "duration_ms": 2041.07
+        }
+      ],
+      "is_finding": true,
+      "timestamp": 1784937773.2372494
+    },
+    {
+      "experiment_id": "EXP_CROSS_06",
+      "mechanism": "Cross-Entity",
+      "oracle_type": "CROSS_ENTITY_ORACLE",
+      "description": "Create WO with quantity exceeding production plan",
+      "oracle_result": {
+        "oracle_type": "CROSS_ENTITY_ORACLE",
+        "verdict": "VIOLATION",
+        "constraint_ref": "API_SPEC: Work order quantity should be validated against production plan",
+        "expected_behavior": "Work order quantity should be validated against production plan",
+        "actual_behavior": "WO qty 999 exceeds plan qty 100 (status 201)",
+        "evidence_summary": "POST http://localhost:8020/work-orders -> 201: WO qty 999 exceeds plan qty 100 (status 201)"
+      },
+      "evidence": [
+        {
+          "method": "POST",
+          "url": "http://localhost:8020/work-orders",
+          "actor": "planner_acme",
+          "request_body": {
+            "order_ref": "WO-EXCEED",
+            "production_plan_id": "pp-001",
+            "product_id": "mat-005",
+            "bom_id": "bom-001",
+            "routing_id": "rt-001",
+            "factory": "fac-001",
+            "planned_quantity": 999
+          },
+          "status_code": 201,
+          "response_body": {
+            "id": "wo-daf13ee4",
+            "order_ref": "WO-EXCEED",
+            "production_plan_id": "pp-001",
+            "product_id": "mat-005",
+            "bom_id": "bom-001",
+            "routing_id": "rt-001",
+            "org": "acme",
+            "factory": "fac-001",
+            "planned_quantity": 999,
+            "completed_quantity": 0,
+            "status": "CREATED",
+            "priority": 3,
+            "planned_start": "",
+            "planned_end": "",
+            "created_by": "pln-001",
+            "created_at": "2026-07-25T00:02:57.374533Z",
+            "released_at": null,
+            "version": 1
+          },
+          "timestamp": 1784937775.3113139,
+          "duration_ms": 2064.17
+        }
+      ],
+      "is_finding": true,
+      "timestamp": 1784937777.3755023
+    },
+    {
+      "experiment_id": "EXP_CONS_01",
+      "mechanism": "Conservation",
+      "oracle_type": "CONSERVATION_ORACLE",
+      "description": "Material issue exceeds reserved quantity",
+      "oracle_result": {
+        "oracle_type": "CONSERVATION_ORACLE",
+        "verdict": "VIOLATION",
+        "constraint_ref": "API_SPEC/BUSINESS_RULES: Issue quantity must not exceed reserved_quantity - issued_quantity",
+        "expected_behavior": "Issue quantity must not exceed reserved_quantity - issued_quantity",
+        "actual_behavior": "Issued 999 > reserved 200 (status 201)",
+        "evidence_summary": "POST http://localhost:8020/material-issues -> 201: Issued 999 > reserved 200 (status 201)"
+      },
+      "evidence": [
+        {
+          "method": "POST",
+          "url": "http://localhost:8020/material-issues",
+          "actor": "warehouse_acme",
+          "request_body": {
+            "reservation_id": "mr-001",
+            "work_order_id": "wo-001",
+            "material_id": "mat-003",
+            "quantity": 999
+          },
+          "status_code": 201,
+          "response_body": {
+            "id": "mi-88145dd4",
+            "work_order_id": "wo-001",
+            "reservation_id": "mr-001",
+            "material_id": "mat-003",
+            "quantity": 999,
+            "org": "acme",
+            "factory": "fac-001",
+            "status": "CREATED",
+            "issued_by": "whk-001",
+            "issued_at": null,
+            "created_at": "2026-07-25T00:03:01.517562Z",
+            "version": 1
+          },
+          "timestamp": 1784937779.443767,
+          "duration_ms": 2073.93
+        }
+      ],
+      "is_finding": true,
+      "timestamp": 1784937781.5175626
+    },
+    {
+      "experiment_id": "EXP_CONS_02",
+      "mechanism": "Conservation",
+      "oracle_type": "CONSERVATION_ORACLE",
+      "description": "Work report quantity exceeds planned quantity",
+      "oracle_result": {
+        "oracle_type": "CONSERVATION_ORACLE",
+        "verdict": "VIOLATION",
+        "constraint_ref": "API_SPEC/BUSINESS_RULES: Reported quantity must not exceed remaining planned quantity",
+        "expected_behavior": "Reported quantity must not exceed remaining planned quantity",
+        "actual_behavior": "Reported 999 > planned 50 (status 201)",
+        "evidence_summary": "POST http://localhost:8020/work-reports -> 201: Reported 999 > planned 50 (status 201)"
+      },
+      "evidence": [
+        {
+          "method": "POST",
+          "url": "http://localhost:8020/work-reports",
+          "actor": "operator_acme",
+          "request_body": {
+            "work_order_id": "wo-001",
+            "operation_id": "woo-001",
+            "quantity": 999
+          },
+          "status_code": 201,
+          "response_body": {
+            "id": "wr-45376db3",
+            "work_order_id": "wo-001",
+            "operation_id": "woo-001",
+            "quantity": 999,
+            "defect_quantity": 0,
+            "org": "acme",
+            "factory": "fac-001",
+            "reported_by": "opr-001",
+            "reported_at": "2026-07-25T00:03:05.670933Z",
+            "shift": "DAY",
+            "notes": ""
+          },
+          "timestamp": 1784937783.5884497,
+          "duration_ms": 2083.02
+        }
+      ],
+      "is_finding": true,
+      "timestamp": 1784937785.671013
+    },
+    {
+      "experiment_id": "EXP_CONS_03",
+      "mechanism": "Conservation",
+      "oracle_type": "CONSERVATION_ORACLE",
+      "description": "Inspection pass+fail exceeds sample_size",
+      "oracle_result": {
+        "oracle_type": "CONSERVATION_ORACLE",
+        "verdict": "PASS",
+        "constraint_ref": "BUSINESS_RULES: pass_quantity + fail_quantity must equal sample_size (10)",
+        "expected_behavior": "pass_quantity + fail_quantity must equal sample_size (10)",
+        "actual_behavior": "Conservation holds",
+        "evidence_summary": "POST http://localhost:8020/quality-inspections/qi-c362bc53/submit -> OK"
+      },
+      "evidence": [
+        {
+          "method": "POST",
+          "url": "http://localhost:8020/quality-inspections/qi-c362bc53/submit",
+          "actor": "inspector_acme",
+          "request_body": {
+            "pass_quantity": 15,
+            "fail_quantity": 5,
+            "result": "PASS"
+          },
+          "status_code": 404,
+          "response_body": {
+            "error": "Inspection not found"
+          },
+          "timestamp": 1784937793.9530852,
+          "duration_ms": 2068.04
+        }
+      ],
+      "is_finding": false,
+      "timestamp": 1784937796.0207214
+    },
+    {
+      "experiment_id": "EXP_CONS_04",
+      "mechanism": "Conservation",
+      "oracle_type": "CONSERVATION_ORACLE",
+      "description": "Receipt confirm does not update WO completed_quantity",
+      "oracle_result": {
+        "oracle_type": "CONSERVATION_ORACLE",
+        "verdict": "PASS",
+        "constraint_ref": "BUSINESS_RULES: Confirm receipt should update work order completed_quantity",
+        "expected_behavior": "Confirm receipt should update work order completed_quantity",
+        "actual_behavior": "Conservation holds",
+        "evidence_summary": "GET http://localhost:8020/work-orders/wo-001 -> OK"
+      },
+      "evidence": [
+        {
+          "method": "GET",
+          "url": "http://localhost:8020/work-orders/wo-001",
+          "actor": "manager_acme",
+          "request_body": null,
+          "status_code": 200,
+          "response_body": {
+            "id": "wo-001",
+            "order_ref": "WO-2026-001",
+            "production_plan_id": "pp-001",
+            "product_id": "mat-005",
+            "bom_id": "bom-001",
+            "routing_id": "rt-001",
+            "org": "acme",
+            "factory": "fac-001",
+            "planned_quantity": 50,
+            "completed_quantity": 0,
+            "status": "RELEASED",
+            "priority": 1,
+            "planned_start": "2026-08-01",
+            "planned_end": "2026-08-10",
+            "created_by": "pln-001",
+            "created_at": "2026-07-25T00:03:29.646019Z",
+            "released_at": "2026-07-25T00:03:29.646019Z",
+            "version": 1
+          },
+          "timestamp": 1784937808.4182334,
+          "duration_ms": 2049.96
+        }
+      ],
+      "is_finding": false,
+      "timestamp": 1784937810.468646
+    },
+    {
+      "experiment_id": "EXP_IDEMP_01",
+      "mechanism": "Idempotency",
+      "oracle_type": "IDEMPOTENCY_ORACLE",
+      "description": "Duplicate sales order with same order_ref (should be 409)",
+      "oracle_result": {
+        "oracle_type": "IDEMPOTENCY_ORACLE",
+        "verdict": "VIOLATION",
+        "constraint_ref": "API_SPEC: /sales-orders idempotency on order_ref (duplicate returns 409)",
+        "expected_behavior": "Duplicate order_ref should return 409 Conflict",
+        "actual_behavior": "Duplicate accepted with status 201",
+        "evidence_summary": "First: 201, Duplicate: 201 (should be 409)"
+      },
+      "evidence": [
+        {
+          "method": "POST",
+          "url": "http://localhost:8020/sales-orders",
+          "actor": "planner_acme",
+          "request_body": {
+            "order_ref": "SO-DUP-TEST",
+            "customer": "TestCorp",
+            "product_id": "mat-005",
+            "quantity": 10,
+            "delivery_date": "2026-10-01"
+          },
+          "status_code": 201,
+          "response_body": {
+            "id": "so-b7e04324",
+            "order_ref": "SO-DUP-TEST",
+            "customer": "TestCorp",
+            "org": "acme",
+            "product_id": "mat-005",
+            "quantity": 10,
+            "delivery_date": "2026-10-01",
+            "status": "CREATED",
+            "created_at": "2026-07-25T00:03:34.603207Z",
+            "version": 1
+          },
+          "timestamp": 1784937812.5353081,
+          "duration_ms": 2068.4
+        },
+        {
+          "method": "POST",
+          "url": "http://localhost:8020/sales-orders",
+          "actor": "planner_acme",
+          "request_body": {
+            "order_ref": "SO-DUP-TEST",
+            "customer": "TestCorp",
+            "product_id": "mat-005",
+            "quantity": 10,
+            "delivery_date": "2026-10-01"
+          },
+          "status_code": 201,
+          "response_body": {
+            "id": "so-33cb6dcd",
+            "order_ref": "SO-DUP-TEST",
+            "customer": "TestCorp",
+            "org": "acme",
+            "product_id": "mat-005",
+            "quantity": 10,
+            "delivery_date": "2026-10-01",
+            "status": "CREATED",
+            "created_at": "2026-07-25T00:03:36.683103Z",
+            "version": 1
+          },
+          "timestamp": 1784937814.6032076,
+          "duration_ms": 2079.9
+        }
+      ],
+      "is_finding": true,
+      "timestamp": 1784937816.6831038
+    },
+    {
+      "experiment_id": "EXP_IDEMP_02",
+      "mechanism": "Idempotency",
+      "oracle_type": "IDEMPOTENCY_ORACLE",
+      "description": "Duplicate receipt for same work order (should be 409)",
+      "oracle_result": {
+        "oracle_type": "IDEMPOTENCY_ORACLE",
+        "verdict": "VIOLATION",
+        "constraint_ref": "API_SPEC: /finished-goods-receipts idempotency on work_order_id (duplicate returns 409)",
+        "expected_behavior": "Duplicate work_order_id should return 409 Conflict",
+        "actual_behavior": "Duplicate accepted with status 201",
+        "evidence_summary": "First: 201, Duplicate: 201 (should be 409)"
+      },
+      "evidence": [
+        {
+          "method": "POST",
+          "url": "http://localhost:8020/work-orders/wo-001/start",
+          "actor": "operator_acme",
+          "request_body": {},
+          "status_code": 200,
+          "response_body": {
+            "id": "wo-001",
+            "order_ref": "WO-2026-001",
+            "production_plan_id": "pp-001",
+            "product_id": "mat-005",
+            "bom_id": "bom-001",
+            "routing_id": "rt-001",
+            "org": "acme",
+            "factory": "fac-001",
+            "planned_quantity": 50,
+            "completed_quantity": 0,
+            "status": "IN_PRODUCTION",
+            "priority": 1,
+            "planned_start": "2026-08-01",
+            "planned_end": "2026-08-10",
+            "created_by": "pln-001",
+            "created_at": "2026-07-25T00:03:38.764517Z",
+            "released_at": "2026-07-25T00:03:38.764517Z",
+            "version": 2
+          },
+          "timestamp": 1784937818.7654815,
+          "duration_ms": 2071.45
+        },
+        {
+          "method": "POST",
+          "url": "http://localhost:8020/work-orders/wo-001/complete",
+          "actor": "operator_acme",
+          "request_body": {},
+          "status_code": 409,
+          "response_body": {
+            "error": "Cannot complete in RELEASED"
+          },
+          "timestamp": 1784937820.8367798,
+          "duration_ms": 2069.35
+        },
+        {
+          "method": "POST",
+          "url": "http://localhost:8020/finished-goods-receipts",
+          "actor": "warehouse_acme",
+          "request_body": {
+            "work_order_id": "wo-001",
+            "quantity": 50
+          },
+          "status_code": 201,
+          "response_body": {
+            "id": "fgr-7ef22cd3",
+            "work_order_id": "wo-001",
+            "product_id": "",
+            "quantity": 50,
+            "org": "acme",
+            "factory": "fac-001",
+            "status": "CREATED",
+            "received_by": "whk-001",
+            "created_at": "2026-07-25T00:03:44.947863Z",
+            "version": 1
+          },
+          "timestamp": 1784937822.9061093,
+          "duration_ms": 2042.71
+        },
+        {
+          "method": "POST",
+          "url": "http://localhost:8020/finished-goods-receipts",
+          "actor": "warehouse_acme",
+          "request_body": {
+            "work_order_id": "wo-001",
+            "quantity": 50
+          },
+          "status_code": 201,
+          "response_body": {
+            "id": "fgr-18480856",
+            "work_order_id": "wo-001",
+            "product_id": "",
+            "quantity": 50,
+            "org": "acme",
+            "factory": "fac-001",
+            "status": "CREATED",
+            "received_by": "whk-001",
+            "created_at": "2026-07-25T00:03:47.032480Z",
+            "version": 1
+          },
+          "timestamp": 1784937824.9488761,
+          "duration_ms": 2084.13
+        }
+      ],
+      "is_finding": true,
+      "timestamp": 1784937827.0333421
+    },
+    {
+      "experiment_id": "EXP_COMP_01",
+      "mechanism": "Compensation",
+      "oracle_type": "COMPENSATION_ORACLE",
+      "description": "Cancel WO does not release material reservations",
+      "oracle_result": {
+        "oracle_type": "COMPENSATION_ORACLE",
+        "verdict": "VIOLATION",
+        "constraint_ref": "API_SPEC: Cancel must release all material reservations",
+        "expected_behavior": "All reservations status -> RELEASED after cancel",
+        "actual_behavior": "3 reservations still RESERVED",
+        "evidence_summary": "GET /material-reservations?work_order_id=wo-001 -> 3 still RESERVED"
+      },
+      "evidence": [
+        {
+          "method": "GET",
+          "url": "http://localhost:8020/material-reservations?work_order_id=wo-001",
+          "actor": "planner_acme",
+          "request_body": null,
+          "status_code": 200,
+          "response_body": {
+            "reservations": [
+              {
+                "id": "mr-001",
+                "work_order_id": "wo-001",
+                "material_id": "mat-003",
+                "required_quantity": 200,
+                "reserved_quantity": 200,
+                "issued_quantity": 0,
+                "org": "acme",
+                "status": "RESERVED",
+                "created_at": "2026-07-25T00:03:50.266829Z"
+              },
+              {
+                "id": "mr-002",
+                "work_order_id": "wo-001",
+                "material_id": "mat-004",
+                "required_quantity": 100,
+                "reserved_quantity": 100,
+                "issued_quantity": 0,
+                "org": "acme",
+                "status": "RESERVED",
+                "created_at": "2026-07-25T00:03:50.266829Z"
+              },
+              {
+                "id": "mr-003",
+                "work_order_id": "wo-001",
+                "material_id": "mat-001",
+                "required_quantity": 75,
+                "reserved_quantity": 75,
+                "issued_quantity": 0,
+                "org": "acme",
+                "status": "RESERVED",
+                "created_at": "2026-07-25T00:03:50.266829Z"
+              }
+            ],
+            "total": 3
+          },
+          "timestamp": 1784937831.200803,
+          "duration_ms": 2066.79
+        }
+      ],
+      "is_finding": true,
+      "timestamp": 1784937833.2667656
+    },
+    {
+      "experiment_id": "EXP_COMP_02",
+      "mechanism": "Compensation",
+      "oracle_type": "COMPENSATION_ORACLE",
+      "description": "Delete BOM leaves orphan lines",
+      "oracle_result": {
+        "oracle_type": "COMPENSATION_ORACLE",
+        "verdict": "VIOLATION",
+        "constraint_ref": "API_SPEC: DELETE /boms deletes BOM and all its lines",
+        "expected_behavior": "BOM lines deleted with parent BOM",
+        "actual_behavior": "3 orphan BOM lines remain",
+        "evidence_summary": "GET /boms/bom-001/lines after delete -> 3 lines"
+      },
+      "evidence": [
+        {
+          "method": "GET",
+          "url": "http://localhost:8020/boms/bom-001/lines",
+          "actor": "planner_acme",
+          "request_body": null,
+          "status_code": 200,
+          "response_body": {
+            "bom_id": "bom-001",
+            "lines": [
+              {
+                "id": "bl-001",
+                "bom_id": "bom-001",
+                "material_id": "mat-003",
+                "quantity_per_unit": 4,
+                "unit": "pcs",
+                "scrap_factor": 0.02
+              },
+              {
+                "id": "bl-002",
+                "bom_id": "bom-001",
+                "material_id": "mat-004",
+                "quantity_per_unit": 2,
+                "unit": "pcs",
+                "scrap_factor": 0.01
+              },
+              {
+                "id": "bl-003",
+                "bom_id": "bom-001",
+                "material_id": "mat-001",
+                "quantity_per_unit": 1.5,
+                "unit": "kg",
+                "scrap_factor": 0.05
+              }
+            ],
+            "total": 3
+          },
+          "timestamp": 1784937837.3931096,
+          "duration_ms": 2073.1
+        }
+      ],
+      "is_finding": true,
+      "timestamp": 1784937839.4665363
+    },
+    {
+      "experiment_id": "EXP_TEMP_01",
+      "mechanism": "Temporal",
+      "oracle_type": "TEMPORAL_ORACLE",
+      "description": "Create WO with planned_start after planned_end",
+      "oracle_result": {
+        "oracle_type": "TEMPORAL_ORACLE",
+        "verdict": "VIOLATION",
+        "constraint_ref": "API_SPEC/BUSINESS_RULES: planned_start must be earlier than planned_end",
+        "expected_behavior": "planned_start must be earlier than planned_end",
+        "actual_behavior": "WO created with start>end (status 201)",
+        "evidence_summary": "POST http://localhost:8020/work-orders -> 201: WO created with start>end (status 201)"
+      },
+      "evidence": [
+        {
+          "method": "POST",
+          "url": "http://localhost:8020/work-orders",
+          "actor": "planner_acme",
+          "request_body": {
+            "order_ref": "WO-TIME-BAD",
+            "product_id": "mat-005",
+            "bom_id": "bom-001",
+            "routing_id": "rt-001",
+            "factory": "fac-001",
+            "planned_quantity": 10,
+            "planned_start": "2026-09-01",
+            "planned_end": "2026-08-01"
+          },
+          "status_code": 201,
+          "response_body": {
+            "id": "wo-99b0f835",
+            "order_ref": "WO-TIME-BAD",
+            "production_plan_id": "",
+            "product_id": "mat-005",
+            "bom_id": "bom-001",
+            "routing_id": "rt-001",
+            "org": "acme",
+            "factory": "fac-001",
+            "planned_quantity": 10,
+            "completed_quantity": 0,
+            "status": "CREATED",
+            "priority": 3,
+            "planned_start": "2026-09-01",
+            "planned_end": "2026-08-01",
+            "created_by": "pln-001",
+            "created_at": "2026-07-25T00:04:03.620293Z",
+            "released_at": null,
+            "version": 1
+          },
+          "timestamp": 1784937841.552746,
+          "duration_ms": 2068.38
+        }
+      ],
+      "is_finding": true,
+      "timestamp": 1784937843.6202939
+    },
+    {
+      "experiment_id": "EXP_TEMP_02",
+      "mechanism": "Temporal",
+      "oracle_type": "TEMPORAL_ORACLE",
+      "description": "Submit inspection after expiry date",
+      "oracle_result": {
+        "oracle_type": "TEMPORAL_ORACLE",
+        "verdict": "PASS",
+        "constraint_ref": "BUSINESS_RULES: Inspection must be submitted before expiry_date",
+        "expected_behavior": "Inspection must be submitted before expiry_date",
+        "actual_behavior": "Temporal constraint enforced",
+        "evidence_summary": "POST http://localhost:8020/quality-inspections/qi-f03225b3/submit -> OK"
+      },
+      "evidence": [
+        {
+          "method": "POST",
+          "url": "http://localhost:8020/quality-inspections/qi-f03225b3/submit",
+          "actor": "inspector_acme",
+          "request_body": {
+            "pass_quantity": 8,
+            "fail_quantity": 2,
+            "result": "PASS"
+          },
+          "status_code": 404,
+          "response_body": {
+            "error": "Inspection not found"
+          },
+          "timestamp": 1784937851.8873413,
+          "duration_ms": 2056.24
+        }
+      ],
+      "is_finding": false,
+      "timestamp": 1784937853.9430175
+    },
+    {
+      "experiment_id": "EXP_TEMP_03",
+      "mechanism": "Temporal",
+      "oracle_type": "TEMPORAL_ORACLE",
+      "description": "Modify sales order after linked plan confirmed",
+      "oracle_result": {
+        "oracle_type": "TEMPORAL_ORACLE",
+        "verdict": "VIOLATION",
+        "constraint_ref": "API_SPEC/BUSINESS_RULES: Sales order immutable after linked production plan confirmed",
+        "expected_behavior": "Sales order immutable after linked production plan confirmed",
+        "actual_behavior": "SO modified after plan confirm (status 200)",
+        "evidence_summary": "PUT http://localhost:8020/sales-orders/so-001 -> 200: SO modified after plan confirm (status 200)"
+      },
+      "evidence": [
+        {
+          "method": "PUT",
+          "url": "http://localhost:8020/sales-orders/so-001",
+          "actor": "planner_acme",
+          "request_body": {
+            "quantity": 200
+          },
+          "status_code": 200,
+          "response_body": {
+            "id": "so-001",
+            "order_ref": "SO-2026-001",
+            "customer": "AutoParts Corp",
+            "org": "acme",
+            "product_id": "mat-005",
+            "quantity": 200,
+            "delivery_date": "2026-09-15",
+            "status": "CONFIRMED",
+            "created_at": "2026-07-25T00:04:17.099921Z",
+            "version": 2
+          },
+          "timestamp": 1784937858.0497246,
+          "duration_ms": 2066.09
+        }
+      ],
+      "is_finding": true,
+      "timestamp": 1784937860.1158369
+    },
+    {
+      "experiment_id": "EXP_CONC_01",
+      "mechanism": "Concurrency",
+      "oracle_type": "CONCURRENCY_ORACLE",
+      "description": "Update WO with stale version (should be 409)",
+      "oracle_result": {
+        "oracle_type": "CONCURRENCY_ORACLE",
+        "verdict": "VIOLATION",
+        "constraint_ref": "API_SPEC: /work-orders requires version check (optimistic locking, 409 on mismatch)",
+        "expected_behavior": "Update with stale version 0 should return 409",
+        "actual_behavior": "Update succeeded with status 200",
+        "evidence_summary": "PUT /work-orders/wo-001 version=0 -> 200"
+      },
+      "evidence": [
+        {
+          "method": "PUT",
+          "url": "http://localhost:8020/work-orders/wo-001",
+          "actor": "planner_acme",
+          "request_body": {
+            "version": 0,
+            "planned_quantity": 999
+          },
+          "status_code": 200,
+          "response_body": {
+            "id": "wo-001",
+            "order_ref": "WO-2026-001",
+            "production_plan_id": "pp-001",
+            "product_id": "mat-005",
+            "bom_id": "bom-001",
+            "routing_id": "rt-001",
+            "org": "acme",
+            "factory": "fac-001",
+            "planned_quantity": 999,
+            "completed_quantity": 0,
+            "status": "RELEASED",
+            "priority": 1,
+            "planned_start": "2026-08-01",
+            "planned_end": "2026-08-10",
+            "created_by": "pln-001",
+            "created_at": "2026-07-25T00:04:23.301660Z",
+            "released_at": "2026-07-25T00:04:23.301660Z",
+            "version": 2
+          },
+          "timestamp": 1784937862.1849353,
+          "duration_ms": 2082.55
+        }
+      ],
+      "is_finding": true,
+      "timestamp": 1784937864.2670069
+    },
+    {
+      "experiment_id": "EXP_CONC_02",
+      "mechanism": "Concurrency",
+      "oracle_type": "CONCURRENCY_ORACLE",
+      "description": "Return material issue with stale version",
+      "oracle_result": {
+        "oracle_type": "CONCURRENCY_ORACLE",
+        "verdict": "VIOLATION",
+        "constraint_ref": "API_SPEC: /material-issues requires version check (optimistic locking, 409 on mismatch)",
+        "expected_behavior": "Update with stale version 1 should return 409",
+        "actual_behavior": "Update succeeded with status 200",
+        "evidence_summary": "PUT /material-issues/mi-c626dfb5 version=1 -> 200"
+      },
+      "evidence": [
+        {
+          "method": "POST",
+          "url": "http://localhost:8020/material-issues/mi-c626dfb5/return",
+          "actor": "warehouse_acme",
+          "request_body": {
+            "version": 1
+          },
+          "status_code": 200,
+          "response_body": {
+            "id": "mi-c626dfb5",
+            "work_order_id": "wo-001",
+            "reservation_id": "mr-001",
+            "material_id": "mat-003",
+            "quantity": 10,
+            "org": "acme",
+            "factory": "fac-001",
+            "status": "RETURNED",
+            "issued_by": "whk-001",
+            "issued_at": "2026-07-25T00:04:32.506475Z",
+            "created_at": "2026-07-25T00:04:28.363969Z",
+            "version": 3
+          },
+          "timestamp": 1784937872.5064754,
+          "duration_ms": 2053.27
+        }
+      ],
+      "is_finding": true,
+      "timestamp": 1784937874.5601285
+    },
+    {
+      "experiment_id": "EXP_BATCH_01",
+      "mechanism": "Batch Operation",
+      "oracle_type": "BATCH_ORACLE",
+      "description": "Bulk release with one invalid WO (should all fail)",
+      "oracle_result": {
+        "oracle_type": "BATCH_ORACLE",
+        "verdict": "VIOLATION",
+        "constraint_ref": "API_SPEC: /work-orders/bulk-release batch semantics: all-or-nothing",
+        "expected_behavior": "Batch should be atomic (all-or-nothing)",
+        "actual_behavior": "Results: ['RELEASED', 'FAILED']",
+        "evidence_summary": "POST http://localhost:8020/work-orders/bulk-release -> 200: Results: ['RELEASED', 'FAILED']"
+      },
+      "evidence": [
+        {
+          "method": "POST",
+          "url": "http://localhost:8020/work-orders/bulk-release",
+          "actor": "planner_acme",
+          "request_body": {
+            "work_order_ids": [
+              "wo-002",
+              "wo-001"
+            ]
+          },
+          "status_code": 200,
+          "response_body": {
+            "results": [
+              {
+                "id": "wo-002",
+                "status": "RELEASED"
+              },
+              {
+                "id": "wo-001",
+                "status": "FAILED"
+              }
+            ],
+            "total": 2
+          },
+          "timestamp": 1784937876.6293113,
+          "duration_ms": 2051.64
+        }
+      ],
+      "is_finding": true,
+      "timestamp": 1784937878.6803374
+    },
+    {
+      "experiment_id": "EXP_BATCH_02",
+      "mechanism": "Batch Operation",
+      "oracle_type": "BATCH_ORACLE",
+      "description": "Bulk issue with invalid reservation (should be atomic)",
+      "oracle_result": {
+        "oracle_type": "BATCH_ORACLE",
+        "verdict": "VIOLATION",
+        "constraint_ref": "API_SPEC: /material-issues/bulk-issue batch semantics: atomic (if any fails, none created)",
+        "expected_behavior": "Batch should be atomic (atomic (if any fails, none created))",
+        "actual_behavior": "Created 2 issues without validation",
+        "evidence_summary": "POST http://localhost:8020/material-issues/bulk-issue -> 201: Created 2 issues without validation"
+      },
+      "evidence": [
+        {
+          "method": "POST",
+          "url": "http://localhost:8020/material-issues/bulk-issue",
+          "actor": "warehouse_acme",
+          "request_body": {
+            "items": [
+              {
+                "reservation_id": "mr-001",
+                "work_order_id": "wo-001",
+                "material_id": "mat-003",
+                "quantity": 5
+              },
+              {
+                "reservation_id": "mr-invalid",
+                "work_order_id": "wo-001",
+                "material_id": "mat-003",
+                "quantity": 5
+              }
+            ]
+          },
+          "status_code": 201,
+          "response_body": {
+            "issued": [
+              {
+                "id": "mi-e275fdba",
+                "work_order_id": "wo-001",
+                "reservation_id": "mr-001",
+                "material_id": "mat-003",
+                "quantity": 5,
+                "org": "acme",
+                "factory": "fac-001",
+                "status": "CREATED",
+                "issued_by": "whk-001",
+                "issued_at": null,
+                "created_at": "2026-07-25T00:04:42.815598Z",
+                "version": 1
+              },
+              {
+                "id": "mi-a1101e86",
+                "work_order_id": "wo-001",
+                "reservation_id": "mr-invalid",
+                "material_id": "mat-003",
+                "quantity": 5,
+                "org": "acme",
+                "factory": "fac-001",
+                "status": "CREATED",
+                "issued_by": "whk-001",
+                "issued_at": null,
+                "created_at": "2026-07-25T00:04:42.815598Z",
+                "version": 1
+              }
+            ],
+            "total": 2
+          },
+          "timestamp": 1784937880.7499835,
+          "duration_ms": 2065.77
+        }
+      ],
+      "is_finding": true,
+      "timestamp": 1784937882.8155985
+    }
+  ]
+}
