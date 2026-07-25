@@ -17,6 +17,7 @@ from .experiment_runtime_support import (
     _WRITE_METHODS,
     _declared_observation_path,
     _dict,
+    _has_response_bound_create_observers,
     _list,
     _observation_state,
     _resolve_token,
@@ -417,6 +418,12 @@ def execute_non_barrier_plans(
                     runtime_bindings=runtime_bindings,
                     request_body=request_body,
                 )
+                # Collection creates often only declare identity GETs
+                # (…/{id}). Those cannot materialize before the write; governance
+                # may observe the create collection, and effect proof comes from
+                # _response_bound_observation_path after a 2xx response.
+                if not observation_path and _has_response_bound_create_observers(op, ops):
+                    observation_path = normalize_path_placeholders(path_template)
                 # The observation path must be a source-declared read. Deriving
                 # one from the write path assumes a URL convention the source
                 # never stated, and reading back the write path itself makes the

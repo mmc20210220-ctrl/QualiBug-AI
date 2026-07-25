@@ -298,6 +298,16 @@ def declared_effect_observers(
                 and len(candidate_placeholders) == 1
                 and candidate_collection == target_path
             )
+            # Collection create (register/…): a concrete same-parent GET can
+            # observe side effects when no identity sibling list exists.
+            domain_sibling_create_match = (
+                _text(operation.get("method")).upper() == "POST"
+                and not path_has_placeholders(target_path)
+                and not candidate_placeholders
+                and path.rstrip("/").rsplit("/", 1)[0]
+                == target_path.rstrip("/").rsplit("/", 1)[0]
+                and _shares_source_domain(target_path, path)
+            )
             relation_declared_match = path == wanted and method in {"GET", "HEAD"}
             if (
                 method not in {"GET", "HEAD"}
@@ -306,6 +316,7 @@ def declared_effect_observers(
                     or body_bound_collection_match
                     or body_bound_domain_lookup_match
                     or response_bound_create_match
+                    or domain_sibling_create_match
                     or relation_declared_match
                 )
                 or not _text(candidate.get("id"))
@@ -649,6 +660,62 @@ def declared_action_compensators(
             "method": method,
             "path": path,
         })
+    return candidates
+
+
+def declared_action_recreate_primaries(
+    operation: dict[str, Any],
+    *,
+    behavior_ir: dict[str, Any],
+) -> list[dict[str, str]]:
+    """When primary is a cleanup action, return unique sibling creates it reverses.
+
+    Only siblings whose ``declared_action_compensators`` uniquely name this
+    cleanup operation qualify. Ambiguous create peers (same body shape but no
+    unique compensator link) fail closed.
+    """
+    source = _dict(operation)
+    source_id = _text(source.get("id"))
+    source_path = normalize_path_placeholders(
+        _text(source.get("path") or source.get("raw_path"))
+    ).rstrip("/")
+    if (
+        not source_id
+        or _text(source.get("method")).upper() not in {"POST", "PUT", "PATCH"}
+        or "/" not in source_path
+        or not _CLEANUP_ACTION_RE.search(source_path.rsplit("/", 1)[-1])
+        or not _list(source.get("source_refs"))
+    ):
+        return []
+    parent_path = source_path.rsplit("/", 1)[0]
+    candidates: list[dict[str, str]] = []
+    for candidate in _list(_dict(behavior_ir).get("operations")):
+        if not isinstance(candidate, dict) or _text(candidate.get("id")) == source_id:
+            continue
+        method = _text(candidate.get("method")).upper()
+        path = normalize_path_placeholders(
+            _text(candidate.get("path") or candidate.get("raw_path"))
+        ).rstrip("/")
+        if (
+            method not in {"POST", "PUT", "PATCH"}
+            or path.rsplit("/", 1)[0] != parent_path
+            or _CLEANUP_ACTION_RE.search(path.rsplit("/", 1)[-1])
+            or not _list(candidate.get("source_refs"))
+        ):
+            continue
+        compensators = declared_action_compensators(
+            candidate,
+            behavior_ir=behavior_ir,
+        )
+        if (
+            len(compensators) == 1
+            and _text(compensators[0].get("operation_ref")) == source_id
+        ):
+            candidates.append({
+                "operation_ref": _text(candidate.get("id")),
+                "method": method,
+                "path": path,
+            })
     return candidates
 
 

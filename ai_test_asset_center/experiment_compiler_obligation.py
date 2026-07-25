@@ -39,6 +39,7 @@ from .runtime_binding_graph import (
     blocked_binding_reasons,
     build_binding_plan,
     declared_action_compensators,
+    declared_action_recreate_primaries,
     declared_effect_observers,
     unresolved_placeholders,
 )
@@ -410,11 +411,22 @@ def compile_experiment_for_obligation(
     _WRITE_ONLY_OBSERVERS = frozenset({
         "entity_state", "before_state", "after_state", "final_state", "business_effect",
     })
+    primary_path_early = normalize_path_placeholders(
+        _text(primary_op.get("path") or primary_op.get("raw_path"))
+    )
     if not is_write:
         required_observers = [
             obs for obs in required_observers
             if obs not in _WRITE_ONLY_OBSERVERS
         ]
+    elif _is_ephemeral_session_path(primary_path_early):
+        # Session/token posts have no durable entity for state/effect reads.
+        required_observers = [
+            obs for obs in required_observers
+            if obs not in _WRITE_ONLY_OBSERVERS
+        ]
+        if not required_observers:
+            required_observers = ["http_response"]
     binding_plan = build_binding_plan(
         operation=primary_op,
         obligation=obl,
@@ -848,6 +860,31 @@ def compile_experiment_for_obligation(
                         "{" in _text(compensator.get("path"))
                     ),
                 }]
+            elif _CLEANUP_ACTION_RE.search(primary_path.rstrip("/")):
+                # cancel/reject/release (with or without identity segment):
+                # recreate via the unique sibling create that uniquely names
+                # this cleanup as compensator, else unique collection POST.
+                recreate_primaries = declared_action_recreate_primaries(
+                    primary_op,
+                    behavior_ir=ir,
+                )
+                create_ref = (
+                    _text(recreate_primaries[0].get("operation_ref"))
+                    if len(recreate_primaries) == 1
+                    else _unique_collection_create_ref(
+                        primary_op_id=primary_op_id,
+                        primary_path=primary_path,
+                        ops=ops,
+                    )
+                )
+                if create_ref:
+                    cleanup_op = create_ref
+                    cleanup_req = {
+                        **cleanup_req,
+                        "operation_ref": cleanup_op,
+                        "required": True,
+                        "mode": "recreate_compensated_resource",
+                    }
             elif primary_method == "POST" and "{" in primary_path:
                 parent_collection = normalize_path_placeholders(
                     collection_path(primary_path)
@@ -874,21 +911,6 @@ def compile_experiment_for_obligation(
                             "{" in _text(compensator.get("path"))
                         ),
                     }]
-                elif _CLEANUP_ACTION_RE.search(primary_path.rstrip("/")):
-                    # cancel/reject/release: recreate via unique collection POST.
-                    create_ref = _unique_collection_create_ref(
-                        primary_op_id=primary_op_id,
-                        primary_path=primary_path,
-                        ops=ops,
-                    )
-                    if create_ref:
-                        cleanup_op = create_ref
-                        cleanup_req = {
-                            **cleanup_req,
-                            "operation_ref": cleanup_op,
-                            "required": True,
-                            "mode": "recreate_compensated_resource",
-                        }
                 elif write_observers:
                     # Field/status style identity POST with an effect read:
                     # restore from the governed before snapshot on the same op.
@@ -1092,6 +1114,7 @@ def compile_experiment_for_obligation(
         is_write
         and family in {"authorization", "isolation", "visibility"}
         and not permit_only
+        and not _is_ephemeral_session_path(primary_path_early)
     ):
         observer_requirements.append("business_effect")
     observers, observer_reason, observer_detail = compile_observer_requirements(

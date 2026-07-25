@@ -18,6 +18,7 @@ from .contract_oracles import build_contract_evidence_receipt
 from .experiment_runtime_support import (
     _WRITE_METHODS,
     _dict,
+    _has_response_bound_create_observers,
     _list,
     _sha256,
     _text,
@@ -26,6 +27,7 @@ from .experiment_runtime_support import (
     _unresolved_body_placeholders,
     _unresolved_path_placeholders,
 )
+from .real_id_resolver_base import normalize_path_placeholders
 from .runtime_binding_materializer import (
     materialize_body_template as _materialize_body_template,
     materialize_path as _materialize_path,
@@ -197,8 +199,11 @@ def execute_barrier_plans(
             runtime_bindings=runtime_bindings,
             request_body=request_body,
         )
+        if not observation_path and _has_response_bound_create_observers(op, ops):
+            observation_path = normalize_path_placeholders(path_template)
         # Only a source-declared read can observe the effect; the write path is
-        # not an observation path just because it is a URL.
+        # not an observation path just because it is a URL — except for
+        # collection creates whose effect proof is response-bound after 2xx.
         if not observation_path:
             return {
                 "harness_error": False,

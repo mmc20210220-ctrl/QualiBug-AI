@@ -792,6 +792,42 @@ def _declared_effect_observer_available(
     )
 
 
+def _has_response_bound_create_observers(
+    operation: dict[str, Any],
+    operations: dict[str, dict[str, Any]],
+) -> bool:
+    """True when effect proof is an identity GET under this collection create."""
+
+    from .real_id_resolver import (
+        collection_path,
+        normalize_path_placeholders,
+        path_has_placeholders,
+    )
+
+    target = normalize_path_placeholders(
+        _text(operation.get("path") or operation.get("raw_path"))
+    )
+    if (
+        _text(operation.get("method")).upper() != "POST"
+        or not target.startswith("/")
+        or path_has_placeholders(target)
+    ):
+        return False
+    observers = declared_effect_observers(
+        operation,
+        behavior_ir={"operations": list(operations.values())},
+        max_candidates=5,
+    )
+    for observer in observers:
+        path = normalize_path_placeholders(_text(observer.get("path")))
+        if (
+            path_has_placeholders(path)
+            and normalize_path_placeholders(collection_path(path)) == target
+        ):
+            return True
+    return False
+
+
 def _response_bound_observation_path(
     operation: dict[str, Any],
     operations: dict[str, dict[str, Any]],
