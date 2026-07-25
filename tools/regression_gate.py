@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -30,12 +31,27 @@ BASELINE = ROOT / "tools" / "regression_gate_baseline.json"
 SCHEMA = "qualibug.regression-gate-baseline.v1"
 
 
+def suite_env() -> dict[str, str]:
+    """Strip product configuration so the verdict depends only on the code.
+
+    A shell that has run a benchmark or a scan carries QUALIBUG_* settings that
+    reach the suite and change outcomes: pointing probes at a live target makes
+    tests pass or fail on whether that target is up. The gate would then report
+    a regression that no commit caused.
+    """
+    env = {k: v for k, v in os.environ.items() if not k.startswith("QUALIBUG_")}
+    stripped = sorted(k for k in os.environ if k.startswith("QUALIBUG_"))
+    if stripped:
+        print(f"ignoring {len(stripped)} QUALIBUG_* variable(s) from this shell: {', '.join(stripped)}\n")
+    return env
+
+
 def run_suite() -> tuple[set[str], str]:
     # -rf keeps the "FAILED <id>" summary lines this gate parses. Never pass
     # -rN here: it suppresses them and the gate reports a clean run instead.
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", "tests", "-q", "-p", "no:randomly", "--no-header", "-rf"],
-        cwd=ROOT, capture_output=True, text=True, errors="replace",
+        cwd=ROOT, capture_output=True, text=True, errors="replace", env=suite_env(),
     )
     output = proc.stdout + proc.stderr
     failures = {m.group(1) for m in re.finditer(r"^FAILED (\S+)", output, re.M)}

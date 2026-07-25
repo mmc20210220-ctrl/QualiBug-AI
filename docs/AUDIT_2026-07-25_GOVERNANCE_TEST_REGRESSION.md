@@ -179,6 +179,63 @@ receipt the evaluator was willing to sign.
 bug discovery rate". That justification rests on the same unmeasured number and
 needs to be restated once a signed receipt exists.
 
+## Re-measurement — 2026-07-25
+
+Run: `benchmark_evaluator/funnel_benchmark.py full` against the Windows-native
+target, scored by `tools/discovery_evaluation.py evaluate` against the frozen
+131-bug manifest. Receipt `RUN_f87b125295e28cdbf7e9024a`.
+
+The evaluator returned the same verdict it returned on 07-18:
+
+```
+measurement_status    NOT_MEASURED
+not_measured_reason   obligation_campaign_degraded
+metrics               {}
+```
+
+Recall is not a number right now, and reporting one would repeat the mistake
+this audit is about. What the receipt does establish is the funnel, and the cost
+of the restoration is visible there:
+
+| | 07-18 (pre-restoration) | 07-25 (post-restoration) |
+|---|---|---|
+| selected obligations | 168 | 967 |
+| executed | 80 (48%) | 9 (0.9%) |
+| blocked | 88 | 958 |
+| formal deliverables | 36 | 2 |
+
+Both runs are `DEGRADED` and neither was scorable, so 36 was never 36 confirmed
+defects either. The comparable fact is the execution rate: restoring the
+evidence gates took it from roughly half to under one percent.
+
+Where the 958 stop:
+
+| Terminal reason | Count |
+|---|---|
+| `BLOCKED_MISSING_OBSERVER` | 428 |
+| `OBLIGATION_NOT_IN_PLAN` | 280 |
+| `BLOCKED_MISSING_BINDING` | 229 |
+| `BLOCKED_MISSING_OPERATION` | 20 |
+
+`BLOCKED_MISSING_OBSERVER` is the largest bucket and it is the same gate
+`839f1eb` disabled. Blocking is the correct behavior — an experiment with no
+source-declared way to observe its effect cannot produce evidence — but 428
+blocks means the Behavior IR carries no effect read for most operations it plans
+against. That is a comprehension gap in the enterprise material, not a runtime
+gap, and it is the real work the synthesized observers were hiding.
+
+So the sequence to a measurable number is: give the IR source-declared effect
+reads so obligations compile observers honestly, then re-run. Until the campaign
+stops being `DEGRADED` the evaluator will keep declining to score, which is the
+system behaving correctly.
+
+Two notes on the measurement itself. The HMAC key that signed the historical
+receipts (`da4b0885`) is not on this machine, so those receipts are readable but
+no longer verifiable; the numbers quoted above are taken from their contents. A
+new evaluator trust root was minted outside the workspace for this run, so
+`RUN_f87b125295e28cdbf7e9024a` is signed under key `addba98c` and is not
+comparable by signature to anything before it.
+
 ## Separately verified
 
 The six failures in `tests/test_enterprise_knowledge_center_parsing.py` are
