@@ -78,7 +78,7 @@ SOURCE_TYPES = {
     "feishu_document", "confluence_document",
     "collaboration_document", "other_document", "other",
 }
-TEXT_SUFFIXES = {".md", ".txt", ".rst", ".html", ".htm", ".yaml", ".yml", ".csv", ".sql", ".json", ".xml", ".svg", ".har", ".log"}
+TEXT_SUFFIXES = {".md", ".txt", ".rst", ".html", ".htm", ".yaml", ".yml", ".csv", ".sql", ".json", ".xml", ".svg", ".har", ".log", ".xlsx", ".xls"}
 MAX_SOURCE_BYTES = 20 * 1024 * 1024
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}

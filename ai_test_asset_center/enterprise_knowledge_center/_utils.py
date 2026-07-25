@@ -76,7 +76,7 @@ def _now() -> str:
 
 def _detected_source_format(filename: str, source_type: str, text: str, payload: Any) -> str:
     suffix = Path(filename).suffix.lower().lstrip(".")
-    if suffix in {"docx", "pdf", "har", "csv", "sql", "svg", "log", "xml", "html", "htm"}:
+    if suffix in {"docx", "pdf", "har", "csv", "sql", "svg", "log", "xml", "html", "htm", "xlsx", "xls"}:
         return suffix
     if payload is not None:
         return "json"

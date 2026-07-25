@@ -1084,6 +1084,44 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
             fake = Path(tmp) / filename
             fake.write_bytes(blob)
             text = _decode_pdf(fake, blob)
+    elif suffix in {".xlsx", ".xls"}:
+        # Excel: decode to text summary; structured tables extracted via format normalizer
+        try:
+            from ._format_normalizer import extract_tables_from_excel_bytes
+            _xl_tables = extract_tables_from_excel_bytes(blob, filename)
+            # Build a text representation for downstream text-based parsers
+            _xl_lines: list[str] = []
+            for _xl_t in _xl_tables:
+                _xl_lines.append(f"## {_xl_t.get('source_locator', 'sheet')}")
+                _xl_headers = _xl_t.get("headers") or []
+                if _xl_headers:
+                    _xl_lines.append("| " + " | ".join(_xl_headers) + " |")
+                    _xl_lines.append("|" + "|".join(["---"] * len(_xl_headers)) + "|")
+                for _xl_row in _xl_t.get("rows") or []:
+                    _xl_lines.append("| " + " | ".join(str(_xl_row.get(h, "")) for h in _xl_headers) + " |")
+                _xl_lines.append("")
+            text = "\n".join(_xl_lines)
+        except ImportError:
+            text = ""
+            parse_errors.append({
+                "stage": "decode",
+                "code": "FORMAT_DECODE_UNSUPPORTED",
+                "identity": source_id,
+                "retryability": "after_dependency_install",
+                "operator_action": "install openpyxl: pip install openpyxl",
+                "detail": "Excel parsing requires openpyxl which is not installed",
+                "gap_type": "format_decode_unsupported",
+            })
+        except Exception as xl_exc:
+            text = ""
+            parse_errors.append({
+                "stage": "decode",
+                "code": "EXCEL_DECODE_FAILED",
+                "identity": source_id,
+                "retryability": "after_source_fix",
+                "operator_action": "validate Excel file integrity",
+                "detail": f"{type(xl_exc).__name__}: {xl_exc}"[:500],
+            })
     else:
         text = blob.decode("utf-8", errors="replace")
     payload = None
@@ -1270,6 +1308,11 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
         started_at_utc=started_at_utc,
         extraction_outcome=_extraction_outcome,
     )
+    # ── Phase 1: format normalization — extract document structure view ──
+    from ._format_normalizer import extract_document_structure
+    _doc_structure = extract_document_structure(
+        text, raw_bytes=blob, filename=filename, suffix=suffix
+    )
     return {
         "text": text,
         "payload": payload,
@@ -1291,6 +1334,7 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
         "text_length": len(text),
         "parser_receipt": receipt,
         "parse_errors": parse_errors,
+        "document_structure": _doc_structure.to_dict(),
     }
 
 
