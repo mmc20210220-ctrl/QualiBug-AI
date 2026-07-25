@@ -100,6 +100,30 @@ def _identity_bound_delete_refs(
     return delete_candidates
 
 
+def _unique_collection_create_ref(
+    *,
+    primary_op_id: str,
+    primary_path: str,
+    ops: dict[str, dict[str, Any]],
+) -> str:
+    """Return the unique source-declared collection POST create, if any."""
+
+    op_collection = normalize_path_placeholders(collection_path(primary_path))
+    if not op_collection.startswith("/"):
+        return ""
+    create_refs = [
+        cand_id
+        for cand_id, cand_op in ops.items()
+        if cand_id != primary_op_id
+        and isinstance(cand_op, dict)
+        and _text(cand_op.get("method")).upper() == "POST"
+        and normalize_path_placeholders(
+            _text(cand_op.get("path") or cand_op.get("raw_path"))
+        ) == op_collection
+    ]
+    return create_refs[0] if len(create_refs) == 1 else ""
+
+
 _EPHEMERAL_SESSION_SEGMENTS = frozenset({
     "login",
     "logout",
@@ -705,9 +729,9 @@ def compile_experiment_for_obligation(
                 "runtime_response_binding_required": "{" in primary_path,
             }]
         elif (
-            # Identity-bound POST (ship/cancel/confirm/…): replaying the same
-            # transition cannot restore prior state. Require a source-declared
-            # compensates relation; otherwise fail closed as non-reversible.
+            # Identity-bound POST (ship/cancel/status/…): do not invent a
+            # compensator here; the shared fallback below binds sibling
+            # cleanup, recreate-from-create, or snapshot restore.
             primary_path.startswith("/")
             and primary_method == "POST"
             and "{" in primary_path
@@ -726,9 +750,10 @@ def compile_experiment_for_obligation(
             cleanup_plan = []
             cleanup_explicitly_not_required = True
         elif (
-            # Collection POST create: only a source-declared identity-bound
-            # DELETE on the same collection may compensate. Invented
-            # ``primary/{created_resource_id}`` DELETE paths are prohibited.
+            # Collection POST create: prefer a unique identity-bound DELETE;
+            # otherwise accept a unique source-shaped compensation action on
+            # the same collection (e.g. …/{id}/cancel). Invented DELETE paths
+            # remain prohibited.
             primary_method == "POST"
             and primary_path.startswith("/")
             and "{" not in primary_path
@@ -747,15 +772,45 @@ def compile_experiment_for_obligation(
                     "required": True,
                     "mode": "reverse_order",
                 }
+            else:
+                from .runtime_binding_graph import _declared_cleanup_operations
+
+                cleanup_candidates = [
+                    row
+                    for row in _declared_cleanup_operations(
+                        primary_path,
+                        behavior_ir=ir,
+                    )
+                    if _text(row.get("operation_ref")) != primary_op_id
+                ]
+                if len(cleanup_candidates) == 1:
+                    cleanup_op = _text(cleanup_candidates[0].get("operation_ref"))
+                    cleanup_req = {
+                        **cleanup_req,
+                        "operation_ref": cleanup_op,
+                        "required": True,
+                        "mode": "reverse_order",
+                    }
             # else: leave unresolved → BLOCKED_NON_REVERSIBLE_WRITE below
         elif (
-            # DELETE recreation requires an explicit compensates relation; do
-            # not invent snapshot_restore / POST recreate from route shape.
+            # DELETE: unique collection POST create may recreate the resource.
             primary_method == "DELETE"
             and primary_path.startswith("/")
             and not cleanup_op
         ):
-            pass
+            create_ref = _unique_collection_create_ref(
+                primary_op_id=primary_op_id,
+                primary_path=primary_path,
+                ops=ops,
+            )
+            if create_ref:
+                cleanup_op = create_ref
+                cleanup_req = {
+                    **cleanup_req,
+                    "operation_ref": cleanup_op,
+                    "required": True,
+                    "mode": "recreate_compensated_resource",
+                }
         elif (
             # In-place mutation fallback only. Collection creates without a
             # source DELETE must not compile a fake restore plan.
@@ -773,6 +828,8 @@ def compile_experiment_for_obligation(
                 "_universal_fallback": True,
             }]
         if not cleanup_plan and not cleanup_op:
+            from .runtime_binding_graph import _CLEANUP_ACTION_RE, _declared_cleanup_operations
+
             action_compensators = declared_action_compensators(
                 primary_op,
                 behavior_ir=ir,
@@ -791,7 +848,60 @@ def compile_experiment_for_obligation(
                         "{" in _text(compensator.get("path"))
                     ),
                 }]
-        if not cleanup_plan:
+            elif primary_method == "POST" and "{" in primary_path:
+                parent_collection = normalize_path_placeholders(
+                    collection_path(primary_path)
+                )
+                cleanup_candidates = [
+                    row
+                    for row in _declared_cleanup_operations(
+                        parent_collection,
+                        behavior_ir=ir,
+                    )
+                    if _text(row.get("operation_ref")) != primary_op_id
+                ]
+                if len(cleanup_candidates) == 1:
+                    compensator = cleanup_candidates[0]
+                    cleanup_plan = [{
+                        "action": "source_declared_compensation",
+                        "mode": "reverse_order",
+                        "operation_ref": _text(compensator.get("operation_ref")),
+                        "compensates_operation_ref": primary_op_id,
+                        "path": _text(compensator.get("path")),
+                        "method": _text(compensator.get("method")).upper(),
+                        "body_from_original_request": False,
+                        "runtime_response_binding_required": (
+                            "{" in _text(compensator.get("path"))
+                        ),
+                    }]
+                elif _CLEANUP_ACTION_RE.search(primary_path.rstrip("/")):
+                    # cancel/reject/release: recreate via unique collection POST.
+                    create_ref = _unique_collection_create_ref(
+                        primary_op_id=primary_op_id,
+                        primary_path=primary_path,
+                        ops=ops,
+                    )
+                    if create_ref:
+                        cleanup_op = create_ref
+                        cleanup_req = {
+                            **cleanup_req,
+                            "operation_ref": cleanup_op,
+                            "required": True,
+                            "mode": "recreate_compensated_resource",
+                        }
+                elif write_observers:
+                    # Field/status style identity POST with an effect read:
+                    # restore from the governed before snapshot on the same op.
+                    cleanup_plan = [{
+                        "action": "restore_before_snapshot",
+                        "mode": "snapshot_restore",
+                        "operation_ref": primary_op_id,
+                        "path": primary_path,
+                        "method": primary_method,
+                        "runtime_response_binding_required": True,
+                        "_universal_fallback": True,
+                    }]
+        if not cleanup_plan and not cleanup_explicitly_not_required:
             cleanup_path = normalize_path_placeholders(
                 _text(
                     _dict(ops.get(cleanup_op)).get("path")
@@ -884,6 +994,39 @@ def compile_experiment_for_obligation(
                         "body_from_original_request": True,
                         "runtime_response_binding_required": "{" in cleanup_path,
                     }]
+
+    # Recreate cleanup bodies may introduce new placeholders (addressId,
+    # order_id). Merge those into binding_plan so preflight/runtime can resolve
+    # them from source-declared list reads instead of blocking.
+    for cleanup_row in cleanup_plan:
+        if not isinstance(cleanup_row, dict):
+            continue
+        if _text(cleanup_row.get("mode")) != "recreate_compensated_resource":
+            continue
+        recreate_op = ops.get(_text(cleanup_row.get("operation_ref"))) or {}
+        if not recreate_op:
+            continue
+        recreate_bindings = build_binding_plan(
+            operation=recreate_op,
+            obligation=obl,
+            actors=[actors[aid] for aid in actors if isinstance(actors.get(aid), dict)],
+            behavior_ir=ir,
+        )
+        existing_targets = {
+            _text(row.get("target"))
+            for row in binding_plan
+            if isinstance(row, dict)
+        }
+        for row in recreate_bindings:
+            if not isinstance(row, dict):
+                continue
+            target = _text(row.get("target"))
+            if not target or target.startswith("actor:") or target in existing_targets:
+                continue
+            if _text(row.get("status")) not in {"runtime_resolvable", "bound"}:
+                continue
+            binding_plan.append(row)
+            existing_targets.add(target)
 
     control_actor = _text(
         prop.get("control_actor_ref")

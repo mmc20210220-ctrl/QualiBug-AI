@@ -505,27 +505,71 @@ def adapt_deep_experiments_for_execution(
             for step in steps
         )
         if has_write:
+            from .experiment_compiler_obligation import _is_ephemeral_session_path
+            from .real_id_resolver import (
+                collection_path,
+                normalize_path_placeholders,
+                path_has_placeholders,
+            )
+            from .runtime_binding_graph import _declared_cleanup_operations
+
+            write_ops = [
+                ir_ops.get(_text(step.get("operation_ref"))) or {}
+                for step in steps
+                if isinstance(step, dict)
+                and _text(
+                    (ir_ops.get(_text(step.get("operation_ref"))) or {}).get("method")
+                ).upper()
+                in {"POST", "PUT", "PATCH", "DELETE"}
+            ]
+            ephemeral_write = bool(write_ops) and all(
+                _is_ephemeral_session_path(
+                    normalize_path_placeholders(
+                        _text(op.get("path") or op.get("raw_path"))
+                    )
+                )
+                for op in write_ops
+                if op
+            )
             exp["safety_contract"] = {
                 "governed_write": True,
                 "require_receipt": True,
-                "require_cleanup": True,
+                "require_cleanup": not ephemeral_write,
+                "cleanup_not_required": ephemeral_write,
             }
-            # Add cleanup_plan if not present
-            if not _list(exp.get("cleanup_plan")):
-                # Find the primary write operation for cleanup
-                for step in steps:
-                    if not isinstance(step, dict):
+            # Never invent DELETE. Bind only a unique source-declared
+            # cleanup/compensation on the same collection when present.
+            if not _list(exp.get("cleanup_plan")) and not ephemeral_write:
+                for op in write_ops:
+                    if not op:
                         continue
-                    op = ir_ops.get(_text(step.get("operation_ref")))
-                    if op and _text(op.get("method")).upper() == "POST":
-                        exp["cleanup_plan"] = [{
-                            "operation_ref": _text(step.get("operation_ref")),
-                            "method": "DELETE",
-                            "mode": "reverse_order_compensation",
-                            "action": "reverse_order_compensation",
-                            "runtime_response_binding_required": True,
-                        }]
-                        break
+                    op_path = normalize_path_placeholders(
+                        _text(op.get("path") or op.get("raw_path"))
+                    )
+                    parent = normalize_path_placeholders(collection_path(op_path))
+                    create_path = parent if path_has_placeholders(op_path) else op_path
+                    candidates = [
+                        row
+                        for row in _declared_cleanup_operations(
+                            create_path,
+                            behavior_ir=ir,
+                        )
+                        if _text(row.get("operation_ref")) != _text(op.get("id"))
+                    ]
+                    if len(candidates) != 1:
+                        continue
+                    row = candidates[0]
+                    exp["cleanup_plan"] = [{
+                        "operation_ref": _text(row.get("operation_ref")),
+                        "method": _text(row.get("method")).upper(),
+                        "path": _text(row.get("path")),
+                        "mode": "reverse_order",
+                        "action": "source_declared_compensation",
+                        "runtime_response_binding_required": "{" in _text(
+                            row.get("path")
+                        ),
+                    }]
+                    break
 
         # ── Step 5: Ensure assertion is in assertions list format ──
         # The executor's outcome finalizer reads exp["assertions"] (plural)
