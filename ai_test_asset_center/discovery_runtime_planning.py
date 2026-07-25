@@ -344,6 +344,18 @@ def build_discovery_plan(
         "ui_source_spec_count": len(_list(asset.get("ui_design_specs"))),
         "runtime_interface_discovery_enabled": runtime_interface_discovery_enabled,
     }
+
+    # ── Binding Closure: construct unified binding ledger from Behavior IR ──
+    from .binding_ledger import BindingLedger
+    from .binding_builder import build_all_bindings
+    from .binding_conflict_resolver import detect_and_resolve_all
+
+    _binding_ledger = BindingLedger(project_id=inputs.project)
+    _binding_build_receipt = build_all_bindings(behavior_ir, _binding_ledger)
+    _binding_conflict_receipt = detect_and_resolve_all(
+        _binding_ledger, strategy="evidence_priority"
+    )
+
     obligation_pack = compile_obligations_from_behavior_ir(behavior_ir)
     obligations = [
         dict(row)
@@ -559,6 +571,50 @@ def build_discovery_plan(
             key=lambda o: (1 if isinstance(o, dict) and o.get("_low_confidence_source") else 0)
         )
 
+    # ── Space Coordinate Annotation + Exploration Infrastructure ──
+    from .space_coordinate import coordinate_from_obligation
+    from .invariant_graph import build_default_invariant_graph
+    from .exploration_operator_registry import (
+        ExplorationOperatorRegistry,
+        check_all_applicability,
+    )
+    from .combination_generator import generate_combinations
+
+    _space_exploration_report: dict[str, Any] = {}
+    try:
+        for _s_obl in obligations:
+            if isinstance(_s_obl, dict):
+                _s_obl["space_coordinate"] = coordinate_from_obligation(
+                    _s_obl, behavior_ir
+                )
+        _inv_graph = build_default_invariant_graph(
+            behavior_ir, project_id=inputs.project
+        )
+        _op_registry = ExplorationOperatorRegistry(project_id=inputs.project)
+        _op_registry.register_defaults()
+        _applicability = check_all_applicability(
+            _op_registry, behavior_ir=behavior_ir
+        )
+        _applicable_ops = [
+            r for r in _applicability if r.get("applicable")
+        ]
+        _combos = generate_combinations(
+            _applicable_ops,
+            max_level=3,
+            max_combinations=100,
+            behavior_ir=behavior_ir,
+        )
+        _space_exploration_report = {
+            "invariant_count": _inv_graph.size,
+            "operator_count": _op_registry.size,
+            "applicable_operators": len(_applicable_ops),
+            "combinations_generated": len(_combos) if isinstance(_combos, list) else 0,
+        }
+    except Exception as _space_exc:
+        _space_exploration_report = {
+            "error": f"{type(_space_exc).__name__}: {str(_space_exc)[:200]}",
+        }
+
     environment_type = _text(
         inputs.campaign_context.get("environment_type")
         or inputs.campaign_context.get("environment_kind")
@@ -600,6 +656,52 @@ def build_discovery_plan(
             _original = _vm.group(1)
             if _original not in by_obligation:
                 by_obligation[_original] = row
+
+    # ── Binding Completeness Gate: explicit pre-execution binding check ──
+    from .binding_completeness_gate import gate_or_block as _binding_gate_check
+
+    _binding_blocked_obls: list[str] = []
+    _binding_gate_checked = 0
+    for _g_oid, _g_obl in zip(
+        [_text(o.get("obligation_id")) for o in obligations if isinstance(o, dict)],
+        [o for o in obligations if isinstance(o, dict)],
+    ):
+        if not _g_oid:
+            continue
+        _g_exp = by_obligation.get(_g_oid)
+        if not isinstance(_g_exp, dict):
+            continue
+        _g_compile = _dict(_g_exp.get("compile_receipt"))
+        _g_status = _text(_g_compile.get("status")).upper()
+        if _g_status == "COMPILED":
+            continue  # Never downgrade already-compiled experiments
+        _binding_gate_checked += 1
+        _g_passed, _g_reason = _binding_gate_check(
+            _binding_ledger, obligation=_g_obl, behavior_ir=behavior_ir
+        )
+        if not _g_passed and _g_status != "BLOCKED":
+            _g_exp["compile_receipt"] = {
+                **_g_compile,
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_BINDING",
+                "detail": _g_reason,
+            }
+            _binding_blocked_obls.append(_g_oid)
+
+    _binding_closure_receipt: dict[str, Any] = {
+        "schema_version": "qualibug.binding-closure-receipt.v1",
+        "total_bindings": _binding_ledger.size,
+        "coverage_summary": _binding_ledger.coverage_summary(),
+        "build_receipt": _binding_build_receipt,
+        "conflict_receipt": {
+            "total_conflicts": _binding_conflict_receipt.get("total_conflicts", 0),
+            "resolved": _binding_conflict_receipt.get("resolved", 0),
+        },
+        "gate_checked": _binding_gate_checked,
+        "gate_blocked": len(_binding_blocked_obls),
+        "blocked_obligations": _binding_blocked_obls[:50],
+        "probe_status": "PROBES_SKIPPED_CONTRACT_NOT_APPROVED",
+    }
 
     # ── Deep Experiment Planner: enrich blocked/shallow obligations ──
     _deep_budget = int(
@@ -684,6 +786,57 @@ def build_discovery_plan(
         ),
         cold_start_reason=history_match_status,
     )
+
+    # ── Coverage-Guided Reorder (within selected set only, no budget change) ──
+    from .coverage_guided_scheduler import CoverageGuidedScheduler
+
+    _reorder_receipt: dict[str, Any] = {"reordered": False}
+    try:
+        _selected_rows = _list(obligation_plan.get("selected"))
+        if len(_selected_rows) > 1:
+            _cov_scheduler = CoverageGuidedScheduler(
+                project_id=inputs.project, budget=budget
+            )
+            _reorder_candidates = [
+                {
+                    "obligation_id": _text(r.get("obligation_id")),
+                    "operators": [],
+                    "categories": [_text(r.get("risk_family"))],
+                    "priority_score": float(r.get("priority_score") or 0.5),
+                }
+                for r in _selected_rows
+                if isinstance(r, dict)
+            ]
+            _reorder_result = _cov_scheduler.select_next_batch(
+                _reorder_candidates, batch_size=len(_reorder_candidates)
+            )
+            _reordered_ids = [
+                _text(e.get("obligation_id"))
+                for e in _list(_reorder_result.get("selected_experiments"))
+                if isinstance(e, dict)
+            ]
+            if _reordered_ids and _reordered_ids != [
+                _text(r.get("obligation_id")) for r in _selected_rows
+            ]:
+                _row_map = {
+                    _text(r.get("obligation_id")): r
+                    for r in _selected_rows
+                    if isinstance(r, dict)
+                }
+                obligation_plan["selected"] = [
+                    _row_map[rid] for rid in _reordered_ids if rid in _row_map
+                ]
+                _reorder_receipt = {
+                    "reordered": True,
+                    "original_count": len(_selected_rows),
+                    "reordered_count": len(_reordered_ids),
+                }
+    except Exception as _reorder_exc:
+        _reorder_receipt = {
+            "reordered": False,
+            "error": f"{type(_reorder_exc).__name__}: {str(_reorder_exc)[:200]}",
+        }
+
     budget_receipt = finalize_planning_budget_receipt(
         budget_receipt,
         consumed_budget=int(obligation_plan.get("selected_count") or 0),
@@ -732,6 +885,12 @@ def build_discovery_plan(
                 _dict(inputs.campaign_context.get("_runtime_contract"))
             ),
             "preflight_receipt": preflight_receipt,
+            "binding_closure_receipt": _binding_closure_receipt,
+            "space_exploration_receipt": {
+                "schema_version": "qualibug.space-exploration-receipt.v1",
+                **_space_exploration_report,
+                "coverage_reorder": _reorder_receipt,
+            },
             "knowledge_asset_id": _text(asset.get("asset_id")),
             # Immutable in-memory inputs for observation-driven round 2. These
             # private keys are intentionally excluded from product artifacts.

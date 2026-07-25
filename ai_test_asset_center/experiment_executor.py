@@ -518,6 +518,32 @@ def execute_one_experiment(
             )
             observations["related_entity_observer_error"] = str(_obs_exc)
 
+    # ── Multi-Layer Observation + Cross-Surface Evidence Enrichment ──
+    # Extends typed observer system; evidence only, never produces formal findings.
+    try:
+        from .multi_layer_observation import check_observation_completeness
+        from .cross_surface_oracle import detect_emergent_violation
+
+        _ml_obs = _list(observations.get("observer_receipts"))
+        _ml_completeness = check_observation_completeness(
+            exp, _ml_obs, required_layers=["API"]
+        )
+        observations["multi_layer_receipt"] = {
+            "schema_version": "qualibug.multi-layer-observation.v1",
+            "completeness": _ml_completeness,
+            "observation_count": len(_ml_obs),
+        }
+        # Cross-surface emergent violation detection (evidence only)
+        if _ml_obs:
+            _emergent = detect_emergent_violation(
+                experiment_id=eid,
+                observations=_ml_obs,
+                known_invariants=_list(ir.get("invariants")),
+            )
+            observations["cross_surface_evidence"] = _emergent
+    except Exception as _ml_exc:
+        observations["multi_layer_error"] = str(_ml_exc)[:200]
+
     _final_result = finalize_experiment_execution(
         exp=exp,
         steps_out=steps_out,

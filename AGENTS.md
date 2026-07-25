@@ -96,6 +96,32 @@ assert engine.client.config.max_tokens >= 32768, "max_tokens too low"
   `pipeline_fuzzer.py`, `pipeline_slices.py`, and `pipeline_db.py` (explicit
   imports; `import *` must not be used for `_`-prefixed symbols). Industry
   coupon DB sampling was removed from the product path.
+- Binding closure and space exploration are first-class planning-stage
+  enrichments in `discovery_runtime_planning.py`. The planning function
+  constructs a `BindingLedger` from Behavior IR via `binding_builder`,
+  resolves conflicts via `binding_conflict_resolver`, and runs
+  `binding_completeness_gate` before experiment compilation. Non-COMPILED
+  experiments that fail the gate receive `BLOCKED_MISSING_BINDING` with
+  sub-codes (`FIELD_NOT_BOUND`, `ENTITY_NOT_BOUND`, `FIXTURE_NOT_BOUND`,
+  `RELATION_NOT_BOUND`, `ACTOR_NOT_BOUND`, `STATE_NOT_REACHABLE`);
+  already-COMPILED experiments are never downgraded. The plan bundle emits
+  `binding_closure_receipt` (schema `qualibug.binding-closure-receipt.v1`)
+  and `space_exploration_receipt` (schema
+  `qualibug.space-exploration-receipt.v1`). Space coordinate annotation
+  (`space_coordinate`), invariant graph, operator registry, combination
+  generator, and coverage-guided reorder all run within the existing budget
+  envelope — no new budget expansion. Runtime binding probes are
+  contract-gated and remain `PROBES_SKIPPED_CONTRACT_NOT_APPROVED` until
+  the runtime contract is explicitly approved.
+- Multi-layer observation and cross-surface evidence are execution-stage
+  enrichments in `experiment_executor.py`. After typed observers complete,
+  `multi_layer_observation.check_observation_completeness` emits
+  `qualibug.multi-layer-observation.v1` and
+  `cross_surface_oracle.detect_emergent_violation` emits evidence-only
+  cross-surface receipts. Cross-surface oracle is NOT a discovery
+  authority: it cannot produce formal findings, activate contract oracles,
+  or influence the customer-delivery gate. It only enriches the
+  observation record for downstream diagnostic use.
 - `experiment_candidate` planning and execution live in
   `discovery_runtime.py`; selected experiments execute only through
   `experiment_executor.execute_selected_experiments`. Contract oracle evaluation
@@ -189,7 +215,7 @@ assert engine.client.config.max_tokens >= 32768, "max_tokens too low"
 
 ## Brand Direction Contract
 
-- QualiBug AI is enterprise software behavior-space infrastructure. It maps actors, states, data, rules, and real execution trajectories into a computable, verifiable, evolvable behavior-space model.
+- QualiBug AI is enterprise software behavior-space infrastructure. It maps actors, states, data, rules, and real execution trajectories into a computable, verifiable, evolvable behavior-space model. The long-term direction is to become the independent verification layer (Enterprise Behavior Layer) for enterprise-system operations in the AI era — whether performed by humans, programs, or enterprise AI agents. The target is all industries and all system types: manufacturing ERP/MES/WMS is only a beachhead market, never a product boundary, and no capability may be scoped to it. The project is currently in the deep technical-capability stage, not the customer-POC stage. Bug discovery is open-ended by design: bug types (API, UI, performance, authorization, conservation, concurrency, …) are post-hoc classification labels for reporting and regression only — discovery itself is driven by business invariants and system-space coordinate changes, and must never be capped by a fixed detector list or a closed bug-type taxonomy. Any evidenced violation of a business invariant is in scope, including types that have no name yet.
 - The governed Behavior Field mark is the brand source of truth: Q is the enterprise-system boundary, the plane is behavior space, nodes are states, and the curve is an observed behavior trajectory.
 - The login radar is an approved decorative metaphor for enterprise-system behavior observation; it is not a product-health signal and is not part of the governed logo geometry.
 - Brand and decorative product visuals use no insect, crawler, spider-web, or scraping semantics; insect, crawler, spider-web, and scraping semantics remain prohibited. `Bug` means a verified divergence between observed and expected behavior.
