@@ -1,7 +1,7 @@
 {
   "schema_version": "qualibug.regression-gate-baseline.v1",
   "note": "Tests known to fail. This set may only shrink. Regenerate with `python tools/regression_gate.py --update` after a real fix.",
-  "known_failure_count": 62,
+  "known_failure_count": 56,
   "known_failures": [
     "tests/test_architecture_extraction_contracts.py::test_extracted_modules_remain_under_architecture_budget_threshold",
     "tests/test_behavior_ir_obligation_experiment.py::test_adaptive_planner_risk_priority_comes_from_runtime_policy_data",
@@ -36,14 +36,8 @@
     "tests/test_entity_effect_and_snapshot_cleanup.py::test_cleanup_rejects_collection_delete_as_create_compensator",
     "tests/test_experiment_conflict_scope.py::test_permission_conflict_scoped_only_by_same_role_remains_fail_closed",
     "tests/test_experiment_conflict_scope.py::test_unscoped_conflict_remains_global_fail_closed",
-    "tests/test_family_experiment_protocols.py::test_accepted_fixture_without_identity_is_visible_cleanup_failure",
     "tests/test_family_experiment_protocols.py::test_barrier_unresolved_body_placeholder_blocks_before_write_transport",
-    "tests/test_family_experiment_protocols.py::test_isolation_executor_forces_owned_fixture_and_emits_ownership_receipt",
-    "tests/test_family_experiment_protocols.py::test_owner_scoped_read_binding_precedes_disposable_fixture_write",
-    "tests/test_family_experiment_protocols.py::test_runtime_preflight_blocks_unresolved_cleanup_body_before_write_transport",
     "tests/test_family_experiment_protocols.py::test_runtime_preflight_rejects_http_response_as_write_effect_observer",
-    "tests/test_family_experiment_protocols.py::test_unresolved_read_path_placeholder_blocks_before_target_transport",
-    "tests/test_family_experiment_protocols.py::test_unresolved_required_runtime_fixture_blocks_before_control_transport",
     "tests/test_family_experiment_protocols.py::test_validation_write_blocks_without_source_observation_path",
     "tests/test_frontend_product_closure_entrypoints.py::test_frontend_dashboard_and_findings_surface_regression_closure",
     "tests/test_frontend_product_closure_entrypoints.py::test_frontend_settings_and_materials_surface_readiness_and_parse_summary",

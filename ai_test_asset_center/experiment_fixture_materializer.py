@@ -716,29 +716,32 @@ def materialize_experiment_fixtures(
                     "fixture_setup_create_status": _fs_diag.get("create_status"),
                     "fixture_setup_dependency": _fs_diag.get("dependency"),
                 })
-                # ── Fallback: use synthetic_value or generated value ──
-                _fallback_val = binding.get("synthetic_value") or binding.get("generated_value")
-                if _fallback_val is not None:
-                    runtime_bindings[target] = str(_fallback_val)
-                    fixture_receipts.append({
-                        "node_id": node_id,
-                        "kind": f"{kind}_fallback",
-                        "status": "degraded_synthetic",
-                        "target": target,
-                        "value": str(_fallback_val),
-                    })
-                    continue
-                from .runtime_binding_graph import _generate_placeholder_test_value
-                _gen_val = str(_generate_placeholder_test_value(target))
-                runtime_bindings[target] = _gen_val
-                fixture_receipts.append({
-                    "node_id": node_id,
-                    "kind": f"{kind}_fallback",
-                    "status": "degraded_generated",
-                    "target": target,
-                    "value": _gen_val,
-                })
-                continue
+                # An unresolved binding must not be substituted with an invented
+                # identifier. Firing a manufactured id at the target yields an
+                # HTTP response, but that response is evidence about a resource
+                # the source never declared.
+                return {
+                    "status": "terminal",
+                    "result": {
+                        "schema_version": "qualibug.experiment-execution.v1",
+                        "experiment_id": eid,
+                        "obligation_id": oid,
+                        "status": "BLOCKED",
+                        "reason_code": "BLOCKED_MISSING_BINDING",
+                        "detail": _bind_detail,
+                        "elapsed_ms": int((time.time() - started) * 1000),
+                        "steps": steps_out,
+                        "fixture_receipts": fixture_receipts,
+                        "binding_materialization_receipts": binding_materialization_receipts,
+                        "finding": None,
+                        "cleanup_failures": cleanup_failures,
+                        "execution_receipt": {
+                            "status": "BLOCKED",
+                            "reason_code": "BLOCKED_MISSING_BINDING",
+                            "cleanup_failures": cleanup_failures,
+                        },
+                    }
+                }
             fixture_receipts.append({
                 "node_id": node_id,
                 "kind": kind,

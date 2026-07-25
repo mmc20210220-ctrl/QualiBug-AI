@@ -543,11 +543,14 @@ def preflight_experiment_executable(
             _pre_rb = _dict(exp.get("_pre_resolved_bindings"))
             _needs_resolve = []
             for _p in _params:
+                # resolver_operations is the plan-side field the compilers emit
+                # and the materializer consumes; resolver_operation_ref only
+                # appears on a receipt after resolution has already run.
                 _resolved = any(
                     b.get("target") == _p and (
                         b.get("generated_value")
                         or b.get("status") == "bound"
-                        or _text(b.get("resolver_operation_ref"))
+                        or _list(b.get("resolver_operations"))
                     )
                     for b in _bp if isinstance(b, dict)
                 )
