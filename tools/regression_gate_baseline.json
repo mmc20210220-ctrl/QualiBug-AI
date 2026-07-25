@@ -1,7 +1,7 @@
 {
   "schema_version": "qualibug.regression-gate-baseline.v1",
   "note": "Tests known to fail. This set may only shrink. Regenerate with `python tools/regression_gate.py --update` after a real fix.",
-  "known_failure_count": 46,
+  "known_failure_count": 43,
   "known_failures": [
     "tests/test_architecture_extraction_contracts.py::test_extracted_modules_remain_under_architecture_budget_threshold",
     "tests/test_behavior_ir_obligation_experiment.py::test_adaptive_planner_risk_priority_comes_from_runtime_policy_data",
@@ -30,7 +30,6 @@
     "tests/test_enterprise_knowledge_center_parsing.py::test_permission_table_rows_are_explicit_grants_and_keep_narrative_denials",
     "tests/test_experiment_conflict_scope.py::test_permission_conflict_scoped_only_by_same_role_remains_fail_closed",
     "tests/test_experiment_conflict_scope.py::test_unscoped_conflict_remains_global_fail_closed",
-    "tests/test_family_experiment_protocols.py::test_validation_write_blocks_without_source_observation_path",
     "tests/test_frontend_product_closure_entrypoints.py::test_frontend_dashboard_and_findings_surface_regression_closure",
     "tests/test_frontend_product_closure_entrypoints.py::test_frontend_settings_and_materials_surface_readiness_and_parse_summary",
     "tests/test_frontend_run_center_one_click_entry.py::test_backend_serves_scan_preflight_on_get",
@@ -44,10 +43,8 @@
     "tests/test_scan_counter_unification.py::test_scan_updates_shared_scan_counter_before_customer_ready_snapshot",
     "tests/test_state_transition_experiment_compiler.py::test_state_transition_fails_closed_without_permitted_runtime_actor",
     "tests/test_target_endpoint_contract.py::test_active_discovery_paths_never_default_target_to_qualibug_backend",
-    "tests/test_typed_observer_authorization.py::test_authorization_write_blocks_without_business_effect_observer",
     "tests/test_typed_observer_authorization.py::test_business_key_identity_proves_same_resource",
     "tests/test_typed_observer_authorization.py::test_executor_blocks_response_only_write_observer_before_create_transport",
-    "tests/test_typed_observer_authorization.py::test_executor_does_not_emit_finding_for_empty_2xx_pair",
     "tests/test_validation_rejection_cleanup_integrity.py::test_validation_protocol_blocks_without_source_request_material"
   ]
 }

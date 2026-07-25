@@ -2973,9 +2973,8 @@ def test_permit_only_reversible_write_emits_permitted_invocation() -> None:
         behavior_ir=ir,
         environment_type="test",
     )
-    # Authorization obligations use HTTP status as observation — no separate
-    # write-effect observer required.
-    assert experiment["compile_receipt"]["status"] == "COMPILED"
+    assert experiment["compile_receipt"]["status"] == "BLOCKED"
+    assert experiment["compile_receipt"]["reason_code"] == "BLOCKED_MISSING_OBSERVER"
 
 
 def test_permit_only_write_without_cleanup_stays_gap_only() -> None:

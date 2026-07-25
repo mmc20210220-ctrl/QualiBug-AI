@@ -482,22 +482,13 @@ def compile_experiment_for_obligation(
                     ":" + target, str(gen_val)
                 )
     if is_write and not write_observers:
-        # For authorization/isolation/validation, the HTTP response status
-        # code IS the observation. No separate write-effect observer needed.
-        if family in ("authorization", "isolation", "validation"):
-            write_observers = [{
-                "kind": "http_status",
-                "source": f"{family}_response",
-                "observe": "status_code",
-            }]
-        else:
-            # Auto-inject http_state_comparison observer instead of blocking
-            write_observers = [{
-                "kind": "http_state_comparison",
-                "source": "auto_injected",
-                "observe": "before_after_state",
-                "_auto_injected": True,
-            }]
+        # A synthesized observer observes nothing. Without a source-declared
+        # effect read there is no way to tell whether the write took effect.
+        return blocked_experiment(
+            oid,
+            "BLOCKED_MISSING_OBSERVER",
+            "write_observer",
+        )
 
     for fixture in required_fixtures:
         concrete = next(
@@ -529,8 +520,7 @@ def compile_experiment_for_obligation(
             )
 
     if not required_observers:
-        # Auto-inject a registry-valid observer ID (must be a string, not dict)
-        required_observers = ["http_response"]
+        return blocked_experiment(oid, "BLOCKED_MISSING_OBSERVER", "none")
 
     raw_cleanup_req = obl.get("cleanup_requirement")
     if isinstance(raw_cleanup_req, str):
@@ -926,14 +916,11 @@ def compile_experiment_for_obligation(
     }
     if effect_observer_ids:
         if not write_observers:
-            # Auto-inject state comparison observers instead of blocking
-            write_observers = [{
-                "kind": "http_state_comparison",
-                "source": "auto_injected_effect",
-                "observe": "before_after_state",
-                "_auto_injected": True,
-                "_covers_observers": sorted(effect_observer_ids),
-            }]
+            return blocked_experiment(
+                oid,
+                "BLOCKED_MISSING_OBSERVER",
+                ",".join(sorted(effect_observer_ids)),
+            )
         for observer in observers:
             if _text(observer.get("observer_id")) in effect_observer_ids:
                 observer["resolver_operations"] = write_observers
