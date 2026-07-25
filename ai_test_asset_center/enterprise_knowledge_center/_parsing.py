@@ -32,8 +32,9 @@ from ._utils import *  # noqa: F401,F403
 from ._utils import _csv_rows  # noqa: F401
 
 __all__ = [
-    "_classify_source", "_csv_rows", "_doc_bool", "_field_dictionary_entries",
+    "_classify_source", "_classify_source_multi", "_csv_rows", "_doc_bool", "_field_dictionary_entries",
     "_field_dictionary_tables", "_flatten_json_field_names", "_infer_field_rows_from_markdown",
+    "_is_field_definition_table",
     "_json_blocks", "_json_schema_tables", "_markdown_api_operations", "_markdown_table_blocks",
     "_markdown_table_rows", "_negative_permission_clause", "_openapi_operations", "_parse_source",
     "_permission_action_aliases", "_permission_action_values", "_permission_decision",
@@ -60,6 +61,18 @@ def _classify_source(name: str, text: str, explicit: str | None = None) -> str:
     """Classify a knowledge source document by file name and content preview.
 
     Rules are evaluated in priority order; the first match wins.
+    Returns the PRIMARY source_type (backward compatible).
+    Use _classify_source_multi for all matching labels.
+    """
+    labels = _classify_source_multi(name, text, explicit)
+    return labels[0] if labels else "collaboration_document"
+
+
+def _classify_source_multi(name: str, text: str, explicit: str | None = None) -> list[str]:
+    """Classify a source into MULTIPLE labels (R1 fix).
+
+    Returns all matching source_types in priority order.
+    The first element is the primary label (same as _classify_source).
     """
     explicit = str(explicit or "").strip().lower()
     name_low = _norm(name)
@@ -100,12 +113,57 @@ def _classify_source(name: str, text: str, explicit: str | None = None) -> str:
         (_has_in_text("confluence",), "confluence_document"),
         (_has_in_text("飞书", "feishu", "lark"), "feishu_document"),
     ]
+    matched: list[str] = []
     for condition, source_type in rules:
-        if condition:
-            return source_type
-    if explicit in SOURCE_TYPES:
-        return explicit
-    return "collaboration_document"
+        if condition and source_type not in matched:
+            matched.append(source_type)
+    if not matched:
+        if explicit in SOURCE_TYPES:
+            matched.append(explicit)
+        else:
+            matched.append("collaboration_document")
+    # Additional: if text contains 2D tables with field-definition headers,
+    # add db_field_dictionary as secondary label
+    if "db_field_dictionary" not in matched and "database_schema" not in matched:
+        if _text_contains_field_definition_tables(text):
+            matched.append("db_field_dictionary")
+    return matched
+
+
+def _text_contains_field_definition_tables(text: str) -> bool:
+    """Check if text contains markdown tables that look like field definitions."""
+    from ._format_normalizer import extract_tables_from_markdown
+    tables = extract_tables_from_markdown(text)
+    return any(_is_field_definition_table(t.get("headers") or []) for t in tables)
+
+
+# ── Phase 2: Generic field-definition table recognizer ──
+# Industry-neutral header semantic groups.
+_NAME_HEADERS = {
+    "field", "field_name", "fieldname", "column", "column_name", "columnname",
+    "name", "attribute", "property", "key",
+    "字段", "字段名", "列名", "属性", "属性名", "名称",
+}
+_TYPE_HEADERS = {
+    "type", "data_type", "datatype", "field_type", "fieldtype",
+    "description", "desc", "comment", "remark", "note",
+    "constraint", "constraints", "required", "nullable", "default",
+    "类型", "字段类型", "数据类型", "说明", "描述", "备注", "约束", "必填", "是否必填", "默认值",
+}
+
+
+def _is_field_definition_table(headers: list[str]) -> bool:
+    """Determine if a table's headers indicate it's a field definition table.
+
+    Requires at least one 'name-type' header AND at least one 'type/desc-type' header.
+    Industry-neutral: only uses generic field/column/type/description vocabulary.
+    """
+    if not headers:
+        return False
+    norm_headers = {_norm(h) for h in headers if h}
+    has_name = bool(norm_headers & _NAME_HEADERS)
+    has_type_or_desc = bool(norm_headers & _TYPE_HEADERS)
+    return has_name and has_type_or_desc
 
 
 def _openapi_operations(openapi: dict[str, Any], source_id: str = "") -> list[dict[str, Any]]:
@@ -1244,11 +1302,51 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
                 "operator_action": "add source-declared HTTP method and path headings",
                 "detail": "no executable API operation could be parsed from Markdown",
             })
+    # ── Phase 2: Remove classification gate (R2 fix) ──
+    # ALL sources attempt structured extraction. source_type affects confidence, not access.
+    # High-confidence: SQL DDL and JSON schema for their declared types
     tables = _sql_tables(text, source_id) if source_type == "database_schema" else []
     tables += _json_schema_tables(payload, source_id) if source_type in {"database_schema", "openapi"} else []
-    field_dictionary = _field_dictionary_entries(text, payload, source_id) if source_type in {"db_field_dictionary", "database_schema"} else []
-    if source_type == "db_field_dictionary":
+    # Field dictionary: always attempt (was gated on db_field_dictionary/database_schema)
+    field_dictionary = _field_dictionary_entries(text, payload, source_id)
+    # Generic table extraction from format normalizer (Phase 1 output)
+    from ._format_normalizer import extract_document_structure as _extract_doc_struct
+    _doc_struct = _extract_doc_struct(text, raw_bytes=blob, filename=filename, suffix=suffix)
+    for _fn_table in _doc_struct.tables:
+        _fn_headers = _fn_table.get("headers") or []
+        if _is_field_definition_table(_fn_headers):
+            # This table is a field definition — extract field records
+            _fn_locator = _fn_table.get("source_locator") or filename
+            _fn_table_name = _fn_locator.split(":")[-1] if ":" in _fn_locator else _fn_locator
+            # Derive table name from section heading
+            _section = _fn_table.get("source_locator") or ""
+            _tbl_match = re.search(r"(?i)(?:table|表|数据表)\s*[:：]?\s*([A-Za-z0-9_\-\u4e00-\u9fff]+)", _section)
+            _derived_table = _tbl_match.group(1) if _tbl_match else _section or "default"
+            for _fn_row in _fn_table.get("rows") or []:
+                _f_name = _pick_first(_fn_row, ("field", "field_name", "fieldname", "column", "column_name", "name", "attribute", "字段", "字段名", "列名", "属性", "名称"))
+                if not _f_name:
+                    continue
+                _f_type = _pick_first(_fn_row, ("type", "data_type", "datatype", "field_type", "字段类型", "类型", "数据类型"))
+                _f_desc = _pick_first(_fn_row, ("description", "desc", "comment", "remark", "note", "说明", "描述", "备注"))
+                _f_req = _pick_first(_fn_row, ("required", "nullable", "必填", "是否必填", "constraint", "约束"))
+                field_dictionary.append({
+                    "field_id": f"field:{source_id}:{_short_hash({'table': _derived_table, 'field': _f_name})}",
+                    "source_id": source_id,
+                    "table": _derived_table,
+                    "table_id": f"table:{_derived_table}",
+                    "field": _f_name,
+                    "field_path": _f_name,
+                    "type": _f_type,
+                    "required": _doc_bool(_f_req),
+                    "description": _redact_text(_f_desc, 320),
+                    "derivation": "generic_table_extraction",
+                    "tokens": sorted(_tokens(f"{_derived_table} {_f_name} {_f_type} {_f_desc}")),
+                })
+    field_dictionary = _dedupe_by_id(field_dictionary, "field_id")
+    # Build tables from field dictionary (for ALL sources, not just db_field_dictionary)
+    if field_dictionary:
         tables += _field_dictionary_tables(field_dictionary, source_id)
+        tables = _dedupe_by_id(tables, "table_id")
     ui_specs = _uiux_specs_from_text(text, source_id, source_type, filename)
     permissions = _permission_entries(text, payload, source_id)
     tickets = _ticket_rows(text, payload, source_id, source_type) if source_type in {"historical_bug", "ticket"} else []
@@ -1308,11 +1406,11 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
         started_at_utc=started_at_utc,
         extraction_outcome=_extraction_outcome,
     )
-    # ── Phase 1: format normalization — extract document structure view ──
-    from ._format_normalizer import extract_document_structure
-    _doc_structure = extract_document_structure(
-        text, raw_bytes=blob, filename=filename, suffix=suffix
-    )
+    # ── Reuse _doc_struct from Phase 2 generic extraction above ──
+    # ── Phase 2: multi-label source_types (R1 fix) ──
+    _source_types = _classify_source_multi(filename, text)
+    if source_type not in _source_types:
+        _source_types.insert(0, source_type)
     return {
         "text": text,
         "payload": payload,
@@ -1334,7 +1432,8 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
         "text_length": len(text),
         "parser_receipt": receipt,
         "parse_errors": parse_errors,
-        "document_structure": _doc_structure.to_dict(),
+        "document_structure": _doc_struct.to_dict(),
+        "source_types": _source_types,
     }
 
 
