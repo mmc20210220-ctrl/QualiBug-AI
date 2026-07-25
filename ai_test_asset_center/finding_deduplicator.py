@@ -250,5 +250,5 @@ if __name__ == "__main__":
     if "--history" in sys.argv:
         idx = sys.argv.index("--history")
         history_path = sys.argv[idx + 1]
-    result = deduplicate_and_validated(findings, rejection_memory_path=history_path)
+    result = deduplicate_and_validate(findings, rejection_memory_path=history_path)
     print(_json.dumps({"clusters": len(cluster_findings(findings)), "findings": len(result), "results": result}, indent=2, ensure_ascii=False, default=str))

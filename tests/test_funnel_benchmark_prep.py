@@ -5,13 +5,24 @@ from pathlib import Path
 
 import pytest
 
-from _funnel_benchmark_prep import (
+from benchmark_evaluator.funnel_benchmark_prep import (
     prepare_funnel_benchmark_target,
     refresh_test_account_tokens,
     reset_benchmark_target_db,
     resolve_benchmark_target_root,
     should_skip_target_db_reset,
 )
+
+# ``_funnel_benchmark.py`` is an operator-local runner kept out of the repo by
+# the ``_funnel_*.*`` ignore rule. Guardrails below inspect it when an operator
+# has one; without it they skip loudly instead of asserting on a missing file.
+_RUNNER_PATH = Path(__file__).resolve().parents[1] / "_funnel_benchmark.py"
+
+
+def _runner_source() -> str:
+    if not _RUNNER_PATH.is_file():
+        pytest.skip(f"operator-local funnel runner absent: {_RUNNER_PATH}")
+    return _RUNNER_PATH.read_text(encoding="utf-8")
 
 
 def test_resolve_benchmark_target_root_uses_env_override(tmp_path: Path):
@@ -183,8 +194,7 @@ def test_prepare_funnel_benchmark_target_passes_evaluator_env_to_token_refresh(
 
 
 def test_funnel_runtime_never_loads_or_scores_evaluator_private_ground_truth() -> None:
-    runner = Path(__file__).resolve().parents[1] / "_funnel_benchmark.py"
-    source = runner.read_text(encoding="utf-8")
+    source = _runner_source()
 
     assert "benchmark_compute" not in source
     assert "QUALIBUG_BENCHMARK_GROUND_TRUTH" not in source
@@ -199,8 +209,7 @@ def test_funnel_runtime_never_loads_or_scores_evaluator_private_ground_truth() -
 
 
 def test_funnel_runtime_has_no_hidden_seed_or_global_cleanup_promotion() -> None:
-    runner = Path(__file__).resolve().parents[1] / "_funnel_benchmark.py"
-    source = runner.read_text(encoding="utf-8")
+    source = _runner_source()
 
     assert "CART_SEED" not in source
     assert "urllib.request" not in source

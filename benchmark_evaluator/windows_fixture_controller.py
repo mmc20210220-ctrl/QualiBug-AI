@@ -11,7 +11,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from _funnel_benchmark_prep import prepare_funnel_benchmark_target
+from benchmark_evaluator.funnel_benchmark_prep import prepare_funnel_benchmark_target
 from ai_test_asset_center.benchmark_target_cleanliness import (
     assert_benchmark_target_clean,
 )

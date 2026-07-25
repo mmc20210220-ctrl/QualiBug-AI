@@ -15,6 +15,7 @@ from .private_pilot_defect_summaries import (
     _validate_api_path,
 )
 from .private_pilot_json_io import _read_json_artifact, _read_json_object, _read_json_safe
+from .real_id_resolver import normalize_path_placeholders
 from .real_project_onboarding import _safe_project_id
 
 class ReportLoadingMixin:

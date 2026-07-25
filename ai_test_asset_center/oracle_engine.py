@@ -14,11 +14,13 @@ Architecture: OracleRegistry (extensible plugin) → auto-detect from PRD keywor
 
 from __future__ import annotations
 
-import hashlib, json, re, time, uuid
+import hashlib, json, logging, re, time, uuid
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
+
+_log = logging.getLogger("OracleEngine")
 
 # First-class System Behavior Space hooks — no method replacement on OracleEngine.
 OracleEvaluateHook = Callable[..., list[Any]]
@@ -1461,8 +1463,6 @@ class OracleEngine:
         self.registry = OracleRegistry()
 
     def evaluate(self, scenario: dict, trace: dict, snapshots: Any = None) -> list[OracleResult]:
-        import logging
-        _log = logging.getLogger("OracleEngine")
         results = []
         oracles = self.registry.get_for_scenario(scenario)
         for oracle in oracles:

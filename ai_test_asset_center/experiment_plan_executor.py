@@ -302,7 +302,7 @@ def execute_non_barrier_plans(
                     "request": {},
                     "response": {"status_code": 0, "body": {}},
                 })
-                blocked_reasons.append(f"unresolved_path_placeholders:{','.join(unresolved_path_tokens[:6])}")
+                pre_transport_block_reasons.append(f"unresolved_path_placeholders:{','.join(unresolved_path_tokens[:6])}")
                 continue
             request_body = (
                 step.get("body")
@@ -334,7 +334,7 @@ def execute_non_barrier_plans(
                     "request": {"body": request_body} if request_body else {},
                     "response": {"status_code": 0, "body": {}},
                 })
-                blocked_reasons.append(f"unresolved_body_placeholders:{','.join(unresolved_body_tokens[:6])}")
+                pre_transport_block_reasons.append(f"unresolved_body_placeholders:{','.join(unresolved_body_tokens[:6])}")
                 continue
             runtime_body_plan = deepcopy(_dict(step.get("runtime_body_plan")))
             if runtime_body_plan:

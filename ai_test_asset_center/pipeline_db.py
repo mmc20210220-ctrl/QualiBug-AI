@@ -115,6 +115,11 @@ def _list_relation_columns(cur: Any, table: str, *, dialect: str, is_sqlite: boo
     return [col for col in cols if col]
 
 
+def _normalize_schema_token(value: Any) -> str:
+    """Case- and separator-insensitive key for matching schema column names."""
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+
+
 def _map_schema_columns(columns: list[str], alias_groups: dict[str, tuple[str, ...]]) -> dict[str, str]:
     normalized = {_normalize_schema_token(col): col for col in columns if str(col or "").strip()}
     mapped: dict[str, str] = {}

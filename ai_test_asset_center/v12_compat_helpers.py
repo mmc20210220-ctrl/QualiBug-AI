@@ -22,6 +22,7 @@ from .enterprise_campaign import (
     has_real_confirmation_receipt,
     source_snapshot_hash,
 )
+from .discovery_runtime_execution_support import _governed_write_block_reason
 from .pipeline_runtime import _dict, _confirmed_findings_path
 from .pipeline_slices import _behavior_slice_settings
 from .target_policy import build_target_policy_decision
@@ -321,6 +322,9 @@ def _maybe_start_behavior_contract_rerun(
     campaign_store: EnterpriseCampaignStore,
     campaign_mode: str,
 ) -> tuple[EnterpriseCampaign, EnterpriseCampaignStore, str]:
+    # Deferred import: v12_pipeline imports this module at load time.
+    from .v12_pipeline import _behavior_contract_rerun_key, _campaign_context
+
     explicit_rerun_key = str(context.get("campaign_rerun_key") or context.get("campaign_restart_key") or "").strip()
     if explicit_rerun_key or campaign.status != "completed":
         return campaign, campaign_store, campaign_mode

@@ -1,12 +1,14 @@
 """V12 scan / preflight / regression-run handlers for PrivatePilotHandler."""
 from __future__ import annotations
 
+import json
 import logging
 import time
 import uuid
 from pathlib import Path
 from typing import Any
 
+from . import db_persistence as db_persist
 from .private_pilot_debug_client import _dbg_fingerprint_payload, _dbg_report
 from .private_pilot_continuous import _update_continuous_state
 from .private_pilot_scan_prep import (

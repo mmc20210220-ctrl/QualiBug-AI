@@ -320,7 +320,7 @@ class ReportExporter:
         
         for i, finding in enumerate(self.findings, 1):
             severity_class = f"severity-{finding.severity}"
-            verdict_class = f.verdict.lower()
+            verdict_class = finding.verdict.lower()
             
             html += f"<div class='finding {severity_class} {verdict_class}'>\n"
             html += f"<h3>Finding {i}: {finding.title}</h3>\n"
@@ -328,7 +328,7 @@ class ReportExporter:
             # Tags
             html += "<p>\n"
             html += f"<span class='tag tag-severity-{finding.severity}'>{finding.severity}</span>\n"
-            html += f"<span class='tag tag-verdict-{f.verdict}'>{finding.verdict}</span>\n"
+            html += f"<span class='tag tag-verdict-{finding.verdict}'>{finding.verdict}</span>\n"
             html += f"<span>Confidence: {finding.confidence:.1%}</span>\n"
             html += "</p>\n"
             

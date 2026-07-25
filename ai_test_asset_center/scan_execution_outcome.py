@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from .enterprise_test_data_plan import build_campaign_test_data_plan
 from .product_scan_mainline import _as_dict, _first_text, _safe_project, _sha256

@@ -190,15 +190,15 @@ def _schema_for_endpoint(spec: dict[str, Any], method: str, path: str) -> dict[s
     return schema if isinstance(schema, dict) else {}
 
 
-def _schema_value(name: str, schema: dict[str, Any], seed: str) -> Any:
+def _schema_value(name: str, schema: dict[str, Any], seed: str, spec: dict[str, Any] | None = None) -> Any:
     if not isinstance(schema, dict):
         return f"qb_auto_{name}_{seed}"
     # Resolve $ref to actual schema definition
     ref = schema.get("$ref")
     if ref and isinstance(ref, str):
-        resolved = _resolve_ref(ref, _openapi_spec_cache() if hasattr(_openapi_spec_cache, '__call__') else {})
+        resolved = _resolve_ref(ref, spec if isinstance(spec, dict) else {})
         if isinstance(resolved, dict) and resolved != schema:
-            return _schema_value(name, resolved, seed)
+            return _schema_value(name, resolved, seed, spec)
         return f"qb_auto_{name}_{seed}"
     if "enum" in schema and isinstance(schema.get("enum"), list) and schema["enum"]:
         return schema["enum"][0]
@@ -211,12 +211,12 @@ def _schema_value(name: str, schema: dict[str, Any], seed: str) -> Any:
         props = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
         required = list(schema.get("required") or [])
         keys = list(dict.fromkeys(required + list(props.keys())[:10]))[:20]
-        return {str(k): _schema_value(str(k), props.get(k) if isinstance(props.get(k), dict) else {"type": "string"}, seed) for k in keys} or {"name": f"qb_auto_object_{seed}"}
+        return {str(k): _schema_value(str(k), props.get(k) if isinstance(props.get(k), dict) else {"type": "string"}, seed, spec) for k in keys} or {"name": f"qb_auto_object_{seed}"}
 
     if typ == "array":
         item_schema = schema.get("items") if isinstance(schema.get("items"), dict) else {"type": "string"}
         min_items = schema.get("minItems", 1)
-        return [_schema_value(name + "_item", item_schema, f"{seed}_{i}") for i in range(min(min_items, 3))]
+        return [_schema_value(name + "_item", item_schema, f"{seed}_{i}", spec) for i in range(min(min_items, 3))]
 
     if typ in {"integer", "number"}:
         # Respect schema constraints: minimum/maximum/exclusive bounds/multipleOf
@@ -750,7 +750,7 @@ def build_source_grounded_request_body(
         uuid.NAMESPACE_URL,
         f"qualibug-runtime:{str(method or '').upper()}:{normalize_path_placeholders(path)}",
     ).hex[:12]
-    generated = _schema_value("request", schema, seed)
+    generated = _schema_value("request", schema, seed, spec)
     return {
         "body": generated if isinstance(generated, dict) else {},
         "provenance": "documented_schema_generated",
@@ -814,7 +814,7 @@ def _make_setup_body(
     target_path: str = "",
 ) -> dict[str, Any]:
     schema = _schema_for_endpoint(spec, "POST", create_path)
-    body = _schema_value("fixture_body", schema, seed) if schema else {}
+    body = _schema_value("fixture_body", schema, seed, spec) if schema else {}
     if not isinstance(body, dict):
         body = {"value": body}
     example = _request_example_body(api_doc_text, "POST", create_path, seed, generated_id)
@@ -1220,7 +1220,7 @@ def build_auto_fixture_for_probe(probe: dict[str, Any], *, input_dir: str | Path
     generated_id = f"qb_auto_{re.sub(r'[^a-z0-9_]+', '_', cid.lower()).strip('_')}_{uuid.uuid4().hex[:8]}"
     path_params = _bind_path_params(path, generated_id)
     schema = _schema_for_endpoint(spec, method, path)
-    body = _schema_value("request_body", schema, seed) if schema else {}
+    body = _schema_value("request_body", schema, seed, spec) if schema else {}
     if not isinstance(body, dict):
         body = {"value": body}
     example_body = _request_example_body(_api_doc_text, method, path, seed, generated_id)

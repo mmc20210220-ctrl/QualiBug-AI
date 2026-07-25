@@ -32,7 +32,7 @@ def main() -> None:
 
     from ai_test_asset_center.artifact_redactor import write_json_redacted
     from ai_test_asset_center.benchmark_target_cleanliness import assert_benchmark_target_clean
-    from _funnel_benchmark_prep import prepare_funnel_benchmark_target
+    from benchmark_evaluator.funnel_benchmark_prep import prepare_funnel_benchmark_target
     from ai_test_asset_center.__main__ import scan
 
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())

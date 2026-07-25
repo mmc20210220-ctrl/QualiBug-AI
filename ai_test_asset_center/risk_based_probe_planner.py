@@ -1164,7 +1164,7 @@ def prioritize_evidence_supplementation(
         "pending_findings": pending_findings[:50],  # Top 50
         "supplementation_probes": all_probes[:100],  # Top 100
         "summary": summary,
-        "generated_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
 
 

@@ -270,7 +270,7 @@ def test_concurrency(
                 expected="并发写操作应有幂等/锁机制",
                 actual=f"{len(successes)} 次均成功",
                 evidence={"concurrent": concurrent_count, "successes": len(successes), "statuses": [r.get("status") for r in results]},
-                reproduction=[f"并发发起 {concurrent_count} 次 {method.upper()} {url}", "检查是否产生了重复数据"]
+                reproduction=[f"并发发起 {concurrent_count} 次 {method.upper()} {base_url.rstrip('/') + path}", "检查是否产生了重复数据"]
             ))
 
     return SpectrumResult(

@@ -127,7 +127,7 @@ class HttpRoutingMixin:
         # Bridge: serve V12 results in legacy format for Dashboard/Findings
         if parsed.path.startswith("/api/v1/projects/") and parsed.path.endswith("/command-center"):
             pid = parsed.path.split("/")[4] if len(parsed.path.split("/")) >= 5 else ""
-            pid = urllib.parse.unquote(pid)
+            pid = unquote(pid)
             trace_id = uuid.uuid4().hex
             started = time.perf_counter()
             _dbg_report(

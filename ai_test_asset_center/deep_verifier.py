@@ -391,7 +391,11 @@ def run_deep_tests(config: dict | None = None, routes: list[dict] | None = None)
             test_field = next(iter(body_props.keys()), "input")
             for label, template in boundary_payloads:
                 # 用实际参数名替换通用字段
-                payload = {test_field: v} if isinstance(template, dict) and "_boundary_field_" in template else template
+                payload = (
+                    {test_field: template["_boundary_field_"]}
+                    if isinstance(template, dict) and "_boundary_field_" in template
+                    else template
+                )
                 code = _http_error_code(path, method, payload, H_user)
                 if code >= 500:
                     add(f"[边界] {label}导致服务端{code}: {method} {path}", "P1", "input_validation",
