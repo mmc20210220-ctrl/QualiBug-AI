@@ -499,40 +499,23 @@ def execute_barrier_plans(
         )
         request_body = _materialize_body_template(request_body, runtime_bindings)
         unresolved_path_tokens = _unresolved_path_placeholders(path)
-        # ── P0-PLACEHOLDER: BLOCK instead of force-strip ──
-        # Unresolved path placeholders mean no real entity exists.
-        # Executing with placeholder IDs (e.g. "1") guarantees 404/400
-        # failures and wastes compute. Block until real fixture data exists.
-        if unresolved_path_tokens:
-            reason = f"BLOCKED_UNRESOLVED_PATH_PLACEHOLDERS:{','.join(unresolved_path_tokens[:6])}"
-            pre_transport_block_reasons.append(reason)
-            return _barrier_block_row(
-                item,
-                reason=reason,
-                unresolved_path_tokens=unresolved_path_tokens,
-                unresolved_body_tokens=[],
-            )
         unresolved_body_tokens = (
             _unresolved_body_placeholders(request_body, runtime_bindings)
             if method in _WRITE_METHODS
             else []
         )
-        # ── P0-PLACEHOLDER: BLOCK instead of force-fill ──
-        # Unresolved body placeholders mean fixture data is missing.
-        if unresolved_body_tokens:
-            reason = f"BLOCKED_UNRESOLVED_BODY_PLACEHOLDERS:{','.join(unresolved_body_tokens[:6])}"
-            pre_transport_block_reasons.append(reason)
-            return _barrier_block_row(
-                item,
-                reason=reason,
-                unresolved_path_tokens=[],
-                unresolved_body_tokens=unresolved_body_tokens,
-            )
+        # Unresolved placeholders mean the fixture data does not exist. Blocking
+        # here keeps a manufactured id off the target.
         reasons: list[str] = []
         if unresolved_path_tokens:
             reasons.append(
                 "path_placeholder_unresolved:"
                 + ",".join(unresolved_path_tokens)
+            )
+        if unresolved_body_tokens:
+            reasons.append(
+                "body_placeholder_unresolved:"
+                + ",".join(unresolved_body_tokens)
             )
         if not reasons:
             return None

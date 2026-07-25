@@ -1,7 +1,7 @@
 {
   "schema_version": "qualibug.regression-gate-baseline.v1",
   "note": "Tests known to fail. This set may only shrink. Regenerate with `python tools/regression_gate.py --update` after a real fix.",
-  "known_failure_count": 56,
+  "known_failure_count": 52,
   "known_failures": [
     "tests/test_architecture_extraction_contracts.py::test_extracted_modules_remain_under_architecture_budget_threshold",
     "tests/test_behavior_ir_obligation_experiment.py::test_adaptive_planner_risk_priority_comes_from_runtime_policy_data",
@@ -36,8 +36,6 @@
     "tests/test_entity_effect_and_snapshot_cleanup.py::test_cleanup_rejects_collection_delete_as_create_compensator",
     "tests/test_experiment_conflict_scope.py::test_permission_conflict_scoped_only_by_same_role_remains_fail_closed",
     "tests/test_experiment_conflict_scope.py::test_unscoped_conflict_remains_global_fail_closed",
-    "tests/test_family_experiment_protocols.py::test_barrier_unresolved_body_placeholder_blocks_before_write_transport",
-    "tests/test_family_experiment_protocols.py::test_runtime_preflight_rejects_http_response_as_write_effect_observer",
     "tests/test_family_experiment_protocols.py::test_validation_write_blocks_without_source_observation_path",
     "tests/test_frontend_product_closure_entrypoints.py::test_frontend_dashboard_and_findings_surface_regression_closure",
     "tests/test_frontend_product_closure_entrypoints.py::test_frontend_settings_and_materials_surface_readiness_and_parse_summary",
@@ -50,8 +48,6 @@
     "tests/test_runtime_interface_discovery.py::test_runtime_interface_default_actions_come_from_policy_asset",
     "tests/test_sandbox_cleanup_policy_wiring.py::test_governed_write_blocks_ambiguous_runtime_mutation_before_transport",
     "tests/test_scan_counter_unification.py::test_scan_updates_shared_scan_counter_before_customer_ready_snapshot",
-    "tests/test_stage3_s1_s2_path_reach.py::test_preflight_blocks_permit_only_write_without_effect_read",
-    "tests/test_stage3_s1_s2_path_reach.py::test_preflight_still_blocks_non_permit_write_without_effect_read",
     "tests/test_state_transition_experiment_compiler.py::test_state_transition_fails_closed_without_permitted_runtime_actor",
     "tests/test_target_endpoint_contract.py::test_active_discovery_paths_never_default_target_to_qualibug_backend",
     "tests/test_typed_observer_authorization.py::test_authorization_write_blocks_without_business_effect_observer",

@@ -624,27 +624,12 @@ def preflight_experiment_executable(
             and not _declared_observation_path(path, ops)
             and not _declared_effect_observer_available(op, ops)
         ):
-            # Authorization/isolation/validation observe via HTTP status code.
-            risk = _text(exp.get("risk_family") or "")
-            if risk not in ("authorization", "isolation", "validation"):
-                # ── Enhanced: use HTTP response as implicit observer ──
-                # Instead of blocking, mark as degraded and use response
-                # body/status as the observation evidence.
-                exp.setdefault("_degraded_observers", []).append(
-                    f"write_observer_auto:{op_ref}"
-                )
+            # A write response reports that the request was accepted, not that
+            # the business effect happened. Degrading to it would make the
+            # response its own proof.
+            return False, "BLOCKED_MISSING_OBSERVER", f"write_observer:{op_ref}"
     if not _list(exp.get("observers")):
-        risk = _text(exp.get("risk_family") or "")
-        # ── Enhanced: lenient observer for read-only and best_effort ──
-        _is_read_only = all(
-            _text(ops.get(_text(s.get("operation_ref")), {}).get("method") or "GET").upper() in {"GET", "HEAD", "OPTIONS"}
-            for s in _list(exp.get("control_plan")) + _list(exp.get("treatment_plan"))
-            if isinstance(s, dict)
-        )
-        if risk not in ("authorization", "isolation", "validation"):
-            if not _is_read_only:
-                # ── Enhanced: mark as degraded instead of blocking ──
-                exp.setdefault("_degraded_observers", []).append("no_observers_declared")
+        return False, "BLOCKED_MISSING_OBSERVER", "none"
     assertion = _dict(_list(exp.get("assertions"))[0] if _list(exp.get("assertions")) else {})
     risk_family = _text(assertion.get("kind") or assertion.get("type"))
     if risk_family == "owner_tenant_visibility":
