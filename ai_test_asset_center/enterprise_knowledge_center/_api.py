@@ -598,6 +598,33 @@ def build_enterprise_business_knowledge_asset(project_id: str = "real_project_de
                     "extraction_outcome": receipt.get("extraction_outcome", ""),
                     "operator_action": err.get("operator_action", "enhance_parser_or_provide_machine_readable_source"),
                 })
+    # ── Phase 3: LLM semantic extraction for zero-output sources ──
+    semantic_candidates: list[dict[str, Any]] = []
+    semantic_receipts: list[dict[str, Any]] = []
+    for source, parsed in parsed_rows:
+        _src_tables = len(parsed.get("tables") or [])
+        _src_fields = len(parsed.get("field_dictionary") or [])
+        _src_perms = len(parsed.get("permissions") or [])
+        _src_text = parsed.get("text") or ""
+        if _src_tables + _src_fields + _src_perms == 0 and _src_text.strip():
+            from ._semantic_extraction import run_semantic_extraction
+            _sem_receipt = run_semantic_extraction(
+                _src_text,
+                source_id=str(source.get("source_id") or ""),
+                filename=str(source.get("original_name") or ""),
+                existing_tables=_src_tables,
+                existing_fields=_src_fields,
+                existing_permissions=_src_perms,
+            )
+            semantic_receipts.append(_sem_receipt.to_dict())
+            semantic_candidates.extend(_sem_receipt.candidates_validated)
+            if _sem_receipt.status.startswith("FAILED"):
+                parse_coverage_gaps.append({
+                    "kind": "SEMANTIC_EXTRACTION_FAILED",
+                    "gap_type": "semantic_extraction_error",
+                    "source_id": source.get("source_id"),
+                    "operator_action": _sem_receipt.error[:200],
+                })
     source_texts = {f"{source.get('source_type')}:{source.get('original_name')}": parsed.get("text") or "" for source, parsed in parsed_rows if parsed.get("text")}
     openapi_parts = [parsed.get("openapi") for _, parsed in parsed_rows if isinstance(parsed.get("openapi"), dict) and parsed.get("openapi")]
     merged_openapi = _merge_openapi(openapi_parts)
@@ -772,6 +799,8 @@ def build_enterprise_business_knowledge_asset(project_id: str = "real_project_de
         "relationships": relation_edges,
         "entity_relations": entity_relations,
         "cross_document_conflicts": cross_doc_conflicts,
+        "semantic_candidates": semantic_candidates,
+        "semantic_extraction_receipts": semantic_receipts,
         "oracle_library": oracles,
         "governance": {
             "no_manual_customer_industry_pack_required": True,
