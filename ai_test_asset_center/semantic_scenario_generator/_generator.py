@@ -1470,7 +1470,7 @@ class SemanticScenarioGenerator:
         root: Any = None,
         project: str = "",
     ) -> tuple[dict[str, Any], str]:
-        from .auto_test_data_factory import build_source_grounded_request_body
+        from ..auto_test_data_factory import build_source_grounded_request_body
 
         normalized_path = normalize_path_placeholders(path)
 

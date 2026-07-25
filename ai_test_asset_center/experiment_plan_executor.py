@@ -292,7 +292,7 @@ def execute_non_barrier_plans(
                 # Executing with placeholder IDs (e.g. "1") guarantees 404/400
                 # failures and wastes compute. Block the experiment until real
                 # fixture data exists via Bootstrap.
-                steps_out.append({
+                results.append({
                     "phase": phase,
                     "subject_id": subject_id,
                     "method": method,
@@ -324,7 +324,7 @@ def execute_non_barrier_plans(
                 # Unresolved body placeholders mean fixture data is missing.
                 # Force-filling with generated values creates fake data that
                 # violates the Non-Production Execution Contract.
-                steps_out.append({
+                results.append({
                     "phase": phase,
                     "subject_id": subject_id,
                     "method": method,

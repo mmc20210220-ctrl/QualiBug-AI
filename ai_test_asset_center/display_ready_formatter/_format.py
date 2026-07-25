@@ -359,6 +359,7 @@ def _format_single_finding(finding: dict, enterprise_ctx: dict | None = None) ->
     # - 包含路径标签特征（[禁止路径] [状态破坏] 等）
     # - 与标题相同或相似
     _raw_title = _clean(finding.get("title"))
+    risk_id = _clean(finding.get("risk_id") or finding.get("id"))
     _looks_like_title = (
         not risk_id or
         len(risk_id) > 40 or

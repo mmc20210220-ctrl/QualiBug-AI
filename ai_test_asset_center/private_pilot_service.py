@@ -59,6 +59,7 @@ from .private_pilot_project_assets import (  # noqa: F401
     _truthy_env,
     _write_env_local,
 )
+from . import jwt_auth  # noqa: F401  token verification seam for the tenant auth chain
 from .private_pilot_tenant_auth import (  # noqa: F401
     PROJECT_SCOPE_HEADER,
     TenantAuthenticationError,

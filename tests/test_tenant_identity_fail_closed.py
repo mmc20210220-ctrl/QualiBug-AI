@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from ai_test_asset_center import private_pilot_service as service
+from ai_test_asset_center import private_pilot_tenant_auth as tenant_auth
 
 
 def test_invalid_bearer_token_does_not_fall_back_to_default_tenant(
@@ -75,7 +76,10 @@ def test_empty_explicit_api_key_is_rejected(tmp_path: Path) -> None:
 def test_no_explicit_tenant_credential_keeps_local_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(service, "_current_tenant", lambda: "local-default")
+    # Patch where the resolver is defined: _tenant_from_headers calls its own
+    # module-level _current_tenant, so rebinding the re-export on the facade
+    # would leave the delegation under test untouched.
+    monkeypatch.setattr(tenant_auth, "_current_tenant", lambda: "local-default")
 
     assert service._tenant_from_headers({}) == "local-default"
 

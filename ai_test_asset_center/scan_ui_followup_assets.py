@@ -10,8 +10,10 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-from .product_scan_mainline import _as_dict, _first_text, _safe_project, _sha256
 import re
+from urllib.parse import urlparse
+
+from .product_scan_mainline import _as_dict, _first_text, _safe_project, _sha256
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:

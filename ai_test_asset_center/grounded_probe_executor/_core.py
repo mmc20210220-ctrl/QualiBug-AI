@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 import threading
 import urllib.error
@@ -14,9 +15,25 @@ import urllib.request
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any
-from ._common import _append_query, _auth_boundary_plan, _configured_query_params, _find_sensitive_keys, _fixture_backed_read_probe, _fixture_control_headers, _has_business_data, _has_unresolved_placeholder, _headers_from_config, _http_request, _is_auth_boundary_risk, _join_url, _negative_headers, _read_fixture_setup_approval, _redact, _render_path, _render_query, _safe_payload_summary, _url_host  # noqa: F401
+from ._common import _append_query, _auth_boundary_plan, _configured_query_params, _find_sensitive_keys, _fixture_backed_read_probe, _fixture_control_headers, _has_business_data, _has_unresolved_placeholder, _headers_from_config, _is_auth_boundary_risk, _join_url, _negative_headers, _read_fixture_setup_approval, _redact, _render_path, _render_query, _safe_payload_summary, _url_host  # noqa: F401
 
 logger = logging.getLogger(__name__)
+
+
+def _http_request(*args: Any, **kwargs: Any) -> Any:
+    """Issue probe transport through the package facade, resolved per call.
+
+    The facade attribute is the transport seam callers and tests intercept.
+    Binding the implementation into this module at import time would keep the
+    facade in place while silently routing every probe past it.
+    """
+    from . import _common
+
+    facade = sys.modules.get(__package__)
+    impl = getattr(facade, "_http_request", None)
+    if impl is None or impl is _http_request:
+        impl = _common._http_request
+    return impl(*args, **kwargs)
 
 from ._common import *  # noqa: F401,F403
 from ._common import _approval_enabled, _get_mapping_value, _production_guard_allows  # noqa: F401
