@@ -1,0 +1,34 @@
+{
+  "schema_version": "qualibug.audited-reconciliation.v1",
+  "total_violation_candidates": 28,
+  "total_in_reproduction": 26,
+  "total_in_root_causes": 26,
+  "issues": {
+    "ghost_finding_references": [
+      "EXP_SCOPE_02"
+    ],
+    "ghost_count": 1,
+    "orphan_findings_not_in_any_root": [
+      "EXP_BATCH_01",
+      "EXP_CROSS_02",
+      "EXP_STATE_02"
+    ],
+    "orphan_count": 3,
+    "duplicate_finding_ids": {},
+    "duplicate_count": 0,
+    "findings_not_in_reproduction": [
+      "EXP_BATCH_01",
+      "EXP_CROSS_02",
+      "EXP_STATE_02"
+    ],
+    "not_in_repro_count": 3
+  },
+  "explanations": {
+    "EXP_SCOPE_02": "GHOST: Referenced in root cause RC_EXP_SCOPE_01 but never existed as a finding. The experiment only produced EXP_SCOPE_01.",
+    "EXP_STATE_02": "ORPHAN+NOT_REPRODUCED: Exists as finding but was not included in any root cause and not attempted for reproduction.",
+    "EXP_CROSS_02": "ORPHAN: Exists as finding but not mapped to any root cause in the original ledger.",
+    "EXP_BATCH_01": "ORPHAN+NOT_REPRODUCED: Exists as finding but not in any root cause and not attempted for reproduction."
+  },
+  "reproduction_denominator_explanation": "Reproduction attempted 26/28 because EXP_STATE_02 and EXP_BATCH_01 were excluded from the reproduction phase (likely due to being orphans without root cause assignment in the original run).",
+  "timestamp": 1784939867.049578
+}

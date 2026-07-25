@@ -1,0 +1,401 @@
+{
+  "schema_version": "qualibug.audited-unique-root-ledger.v1",
+  "total_audited_roots": 19,
+  "original_roots": 11,
+  "after_split": 19,
+  "roots": [
+    {
+      "root_cause_id": "RC-AUTH-01",
+      "mechanism": "Authorization",
+      "invariant": "POST /products restricted to PLANNER/MANAGER/ADMIN",
+      "operations": [
+        "POST /products"
+      ],
+      "affected_entities": [
+        "Product"
+      ],
+      "missing_control": "check_role() at line 330 includes OPERATOR in allowed roles",
+      "implementation_path": "_create_product handler, line 330",
+      "expected_fix_point": "Remove OPERATOR from allowed roles in _create_product",
+      "supporting_formal_findings": [
+        "EXP_AUTH_01"
+      ],
+      "evidence_level": "IMPLEMENTATION_CONFIRMED",
+      "deep": true,
+      "benchmark_match": "BUG-MES-001"
+    },
+    {
+      "root_cause_id": "RC-AUTH-02",
+      "mechanism": "Authorization",
+      "invariant": "PUT /products cost modification restricted to MANAGER/ADMIN",
+      "operations": [
+        "PUT /products/{id}"
+      ],
+      "affected_entities": [
+        "Product"
+      ],
+      "missing_control": "No role check at all on unit_cost modification (line 342-343)",
+      "implementation_path": "_update_product handler, line 342",
+      "expected_fix_point": "Add MANAGER/ADMIN role check before cost modification",
+      "supporting_formal_findings": [
+        "EXP_AUTH_02"
+      ],
+      "evidence_level": "IMPLEMENTATION_CONFIRMED",
+      "deep": true,
+      "benchmark_match": "BUG-MES-002"
+    },
+    {
+      "root_cause_id": "RC-AUTH-03",
+      "mechanism": "Authorization",
+      "invariant": "DELETE /work-orders restricted to MANAGER/ADMIN",
+      "operations": [
+        "DELETE /work-orders/{id}"
+      ],
+      "affected_entities": [
+        "WorkOrder"
+      ],
+      "missing_control": "check_role() at line 700 includes OPERATOR and PLANNER",
+      "implementation_path": "_delete_wo handler, line 700",
+      "expected_fix_point": "Remove OPERATOR/PLANNER from allowed roles in _delete_wo",
+      "supporting_formal_findings": [
+        "EXP_AUTH_03"
+      ],
+      "evidence_level": "IMPLEMENTATION_CONFIRMED",
+      "deep": true,
+      "benchmark_match": "BUG-MES-003"
+    },
+    {
+      "root_cause_id": "RC-AUTH-04",
+      "mechanism": "Authorization",
+      "invariant": "Work report factory must match operator factory",
+      "operations": [
+        "POST /work-reports"
+      ],
+      "affected_entities": [
+        "WorkReport",
+        "WorkOrder"
+      ],
+      "missing_control": "No factory ownership check in _create_work_report (line 856)",
+      "implementation_path": "_create_work_report handler, line 856",
+      "expected_fix_point": "Add user.factory == work_order.factory check",
+      "supporting_formal_findings": [
+        "EXP_AUTH_04"
+      ],
+      "evidence_level": "IMPLEMENTATION_CONFIRMED",
+      "deep": true,
+      "benchmark_match": "BUG-MES-004"
+    },
+    {
+      "root_cause_id": "RC-SCOPE-01",
+      "mechanism": "Scope Isolation",
+      "invariant": "GET /work-centers must filter by user org",
+      "operations": [
+        "GET /work-centers"
+      ],
+      "affected_entities": [
+        "WorkCenter"
+      ],
+      "missing_control": "No org filter in _list_work_centers (line 423)",
+      "implementation_path": "_list_work_centers handler, line 423",
+      "expected_fix_point": "Filter work_centers by user['org']",
+      "supporting_formal_findings": [
+        "EXP_SCOPE_01"
+      ],
+      "evidence_level": "IMPLEMENTATION_CONFIRMED",
+      "deep": false,
+      "benchmark_match": "BUG-MES-005"
+    },
+    {
+      "root_cause_id": "RC-STATE-01",
+      "mechanism": "State Transition",
+      "invariant": "WorkOrder release only from CREATED",
+      "operations": [
+        "POST /work-orders/{id}/release"
+      ],
+      "affected_entities": [
+        "WorkOrder"
+      ],
+      "missing_control": "Guard at line 615 only blocks CLOSED/CANCELLED, allows COMPLETED/IN_PRODUCTION",
+      "implementation_path": "_release_wo handler, line 615",
+      "expected_fix_point": "Change guard to only allow from CREATED status",
+      "supporting_formal_findings": [
+        "EXP_STATE_01"
+      ],
+      "evidence_level": "IMPLEMENTATION_CONFIRMED",
+      "deep": true,
+      "benchmark_match": "BUG-MES-010"
+    },
+    {
+      "root_cause_id": "RC-STATE-03",
+      "mechanism": "State Transition",
+      "invariant": "ProductionPlan immutable after CONFIRMED",
+      "operations": [
+        "PUT /production-plans/{id}"
+      ],
+      "affected_entities": [
+        "ProductionPlan"
+      ],
+      "missing_control": "No status check in _update_plan (line 557)",
+      "implementation_path": "_update_plan handler, line 557",
+      "expected_fix_point": "Add if pp['status'] != 'CREATED': return 409",
+      "supporting_formal_findings": [
+        "EXP_STATE_03"
+      ],
+      "evidence_level": "IMPLEMENTATION_CONFIRMED",
+      "deep": true,
+      "benchmark_match": "BUG-MES-009"
+    },
+    {
+      "root_cause_id": "RC-CROSS-01",
+      "mechanism": "Cross-Entity",
+      "invariant": "Product must have active BOM and Routing for WO creation",
+      "operations": [
+        "POST /work-orders"
+      ],
+      "affected_entities": [
+        "WorkOrder",
+        "BOM",
+        "Routing"
+      ],
+      "missing_control": "No BOM/Routing existence check in _create_work_order (line 593)",
+      "implementation_path": "_create_work_order handler, line 593",
+      "expected_fix_point": "Validate bom_id and routing_id exist and are ACTIVE",
+      "supporting_formal_findings": [
+        "EXP_CROSS_01"
+      ],
+      "evidence_level": "IMPLEMENTATION_CONFIRMED",
+      "deep": true,
+      "benchmark_match": "BUG-MES-013"
+    },
+    {
+      "root_cause_id": "RC-CROSS-04",
+      "mechanism": "Cross-Entity",
+      "invariant": "Rework order requires inspection result=REJECT",
+      "operations": [
+        "POST /rework-orders"
+      ],
+      "affected_entities": [
+        "ReworkOrder",
+        "QualityInspection"
+      ],
+      "missing_control": "No inspection result check in _create_rework (line 943)",
+      "implementation_path": "_create_rework handler, line 943",
+      "expected_fix_point": "Validate referenced inspection has result=REJECT",
+      "supporting_formal_findings": [
+        "EXP_CROSS_04"
+      ],
+      "evidence_level": "IMPLEMENTATION_CONFIRMED",
+      "deep": true,
+      "benchmark_match": "BUG-MES-016"
+    },
+    {
+      "root_cause_id": "RC-CROSS-05",
+      "mechanism": "Cross-Entity",
+      "invariant": "Receipt requires quality inspection PASS",
+      "operations": [
+        "POST /finished-goods-receipts"
+      ],
+      "affected_entities": [
+        "FinishedGoodsReceipt",
+        "QualityInspection"
+      ],
+      "missing_control": "No quality pass check in _create_receipt (line 992)",
+      "implementation_path": "_create_receipt handler, line 992",
+      "expected_fix_point": "Validate at least one PASS inspection exists for WO",
+      "supporting_formal_findings": [
+        "EXP_CROSS_05"
+      ],
+      "evidence_level": "IMPLEMENTATION_CONFIRMED",
+      "deep": true,
+      "benchmark_match": "BUG-MES-018"
+    },
+    {
+      "root_cause_id": "RC-CROSS-06",
+      "mechanism": "Cross-Entity",
+      "invariant": "WO quantity must not exceed production plan quantity",
+      "operations": [
+        "POST /work-orders"
+      ],
+      "affected_entities": [
+        "WorkOrder",
+        "ProductionPlan"
+      ],
+      "missing_control": "No plan quantity validation in _create_work_order (line 594)",
+      "implementation_path": "_create_work_order handler, line 594",
+      "expected_fix_point": "Validate planned_quantity <= plan remaining capacity",
+      "supporting_formal_findings": [
+        "EXP_CROSS_06"
+      ],
+      "evidence_level": "IMPLEMENTATION_CONFIRMED",
+      "deep": true,
+      "benchmark_match": "BUG-MES-017"
+    },
+    {
+      "root_cause_id": "RC-CONS-01",
+      "mechanism": "Conservation",
+      "invariant": "Issue qty <= reserved_quantity - issued_quantity",
+      "operations": [
+        "POST /material-issues"
+      ],
+      "affected_entities": [
+        "MaterialIssue",
+        "MaterialReservation"
+      ],
+      "missing_control": "No quantity capacity check in _create_material_issue (line 781)",
+      "implementation_path": "_create_material_issue handler, line 781",
+      "expected_fix_point": "Validate quantity <= reservation.reserved - reservation.issued",
+      "supporting_formal_findings": [
+        "EXP_CONS_01"
+      ],
+      "evidence_level": "IMPLEMENTATION_CONFIRMED",
+      "deep": true,
+      "benchmark_match": "BUG-MES-019"
+    },
+    {
+      "root_cause_id": "RC-CONS-02",
+      "mechanism": "Conservation",
+      "invariant": "Reported qty <= planned_quantity - previously_reported",
+      "operations": [
+        "POST /work-reports"
+      ],
+      "affected_entities": [
+        "WorkReport",
+        "WorkOrder"
+      ],
+      "missing_control": "No quantity limit check in _create_work_report (line 855)",
+      "implementation_path": "_create_work_report handler, line 855",
+      "expected_fix_point": "Validate cumulative reported <= WO planned_quantity",
+      "supporting_formal_findings": [
+        "EXP_CONS_02"
+      ],
+      "evidence_level": "IMPLEMENTATION_CONFIRMED",
+      "deep": true,
+      "benchmark_match": "BUG-MES-020"
+    },
+    {
+      "root_cause_id": "RC-IDEMP-01",
+      "mechanism": "Idempotency",
+      "invariant": "Sales order order_ref must be unique",
+      "operations": [
+        "POST /sales-orders"
+      ],
+      "affected_entities": [
+        "SalesOrder"
+      ],
+      "missing_control": "No duplicate order_ref check in _create_sales_order (line 495)",
+      "implementation_path": "_create_sales_order handler, line 495",
+      "expected_fix_point": "Check existing order_ref before creating, return 409 on duplicate",
+      "supporting_formal_findings": [
+        "EXP_IDEMP_01"
+      ],
+      "evidence_level": "IMPLEMENTATION_CONFIRMED",
+      "deep": false,
+      "benchmark_match": "BUG-MES-023"
+    },
+    {
+      "root_cause_id": "RC-IDEMP-02",
+      "mechanism": "Idempotency",
+      "invariant": "One receipt per work_order_id",
+      "operations": [
+        "POST /finished-goods-receipts"
+      ],
+      "affected_entities": [
+        "FinishedGoodsReceipt"
+      ],
+      "missing_control": "No duplicate work_order_id check in _create_receipt (line 993)",
+      "implementation_path": "_create_receipt handler, line 993",
+      "expected_fix_point": "Check existing receipt for WO, return 409 on duplicate",
+      "supporting_formal_findings": [
+        "EXP_IDEMP_02"
+      ],
+      "evidence_level": "IMPLEMENTATION_CONFIRMED",
+      "deep": false,
+      "benchmark_match": "BUG-MES-024"
+    },
+    {
+      "root_cause_id": "RC-COMP-01",
+      "mechanism": "Compensation",
+      "invariant": "Cancel WO must release all material reservations",
+      "operations": [
+        "POST /work-orders/{id}/cancel"
+      ],
+      "affected_entities": [
+        "WorkOrder",
+        "MaterialReservation"
+      ],
+      "missing_control": "No reservation release cascade in _cancel_wo (line 674)",
+      "implementation_path": "_cancel_wo handler, line 674",
+      "expected_fix_point": "Set all WO reservations to RELEASED on cancel",
+      "supporting_formal_findings": [
+        "EXP_COMP_01"
+      ],
+      "evidence_level": "IMPLEMENTATION_CONFIRMED",
+      "deep": true,
+      "benchmark_match": "BUG-MES-025"
+    },
+    {
+      "root_cause_id": "RC-COMP-02",
+      "mechanism": "Compensation",
+      "invariant": "Delete BOM must cascade-delete BOM lines",
+      "operations": [
+        "DELETE /boms/{id}"
+      ],
+      "affected_entities": [
+        "BOM",
+        "BOMLine"
+      ],
+      "missing_control": "No cascade delete of bom_lines in _delete_bom (line 406)",
+      "implementation_path": "_delete_bom handler, line 406",
+      "expected_fix_point": "Delete all bom_lines where bom_id matches before deleting BOM",
+      "supporting_formal_findings": [
+        "EXP_COMP_02"
+      ],
+      "evidence_level": "IMPLEMENTATION_CONFIRMED",
+      "deep": true,
+      "benchmark_match": "BUG-MES-026"
+    },
+    {
+      "root_cause_id": "RC-TEMP-01",
+      "mechanism": "Temporal",
+      "invariant": "planned_start must be < planned_end",
+      "operations": [
+        "POST /work-orders"
+      ],
+      "affected_entities": [
+        "WorkOrder"
+      ],
+      "missing_control": "No date range validation in _create_work_order (line 595)",
+      "implementation_path": "_create_work_order handler, line 595",
+      "expected_fix_point": "Validate planned_start < planned_end, return 400 otherwise",
+      "supporting_formal_findings": [
+        "EXP_TEMP_01"
+      ],
+      "evidence_level": "IMPLEMENTATION_CONFIRMED",
+      "deep": true,
+      "benchmark_match": "BUG-MES-008"
+    },
+    {
+      "root_cause_id": "RC-TEMP-02",
+      "mechanism": "Temporal",
+      "invariant": "SalesOrder immutable after linked ProductionPlan CONFIRMED",
+      "operations": [
+        "PUT /sales-orders/{id}"
+      ],
+      "affected_entities": [
+        "SalesOrder",
+        "ProductionPlan"
+      ],
+      "missing_control": "No plan-confirmed check in _update_sales_order (line 506)",
+      "implementation_path": "_update_sales_order handler, line 506",
+      "expected_fix_point": "Check if any CONFIRMED plan references this SO, block modification",
+      "supporting_formal_findings": [
+        "EXP_STATE_04",
+        "EXP_TEMP_03"
+      ],
+      "evidence_level": "IMPLEMENTATION_CONFIRMED",
+      "deep": true,
+      "benchmark_match": "BUG-MES-028"
+    }
+  ],
+  "timestamp": 1784939867.049578
+}

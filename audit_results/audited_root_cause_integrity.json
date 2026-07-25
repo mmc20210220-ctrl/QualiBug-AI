@@ -1,0 +1,13 @@
+{
+  "schema_version": "qualibug.audited-root-integrity.v1",
+  "checks": {
+    "mechanism_only_root_causes": 0,
+    "root_causes_without_formal_findings": 0,
+    "root_causes_without_invariant": 0,
+    "root_causes_without_operation": 0,
+    "root_causes_without_fix_point": 0,
+    "all_roots_have_implementation_evidence": true
+  },
+  "overall": "PASS",
+  "timestamp": 1784939867.049578
+}

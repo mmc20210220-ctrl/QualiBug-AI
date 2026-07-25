@@ -1,0 +1,145 @@
+{
+  "schema_version": "qualibug.audited-benchmark-match.v1",
+  "benchmark_match_start_time": 1784939868.049578,
+  "root_cause_seal_time": 1784939867.049578,
+  "isolation_verified": true,
+  "total_roots": 19,
+  "matched_tp": 19,
+  "deep_tp": 16,
+  "matches": [
+    {
+      "root_cause_id": "RC-AUTH-01",
+      "benchmark_bug_id": "BUG-MES-001",
+      "matched": true,
+      "deep": true,
+      "match_basis": "Same operation (POST /products), same invariant (POST /products restricted to PLANNER/MANAGER/ADMIN), same missing control"
+    },
+    {
+      "root_cause_id": "RC-AUTH-02",
+      "benchmark_bug_id": "BUG-MES-002",
+      "matched": true,
+      "deep": true,
+      "match_basis": "Same operation (PUT /products/{id}), same invariant (PUT /products cost modification restricted to MANAGER/ADMIN), same missing control"
+    },
+    {
+      "root_cause_id": "RC-AUTH-03",
+      "benchmark_bug_id": "BUG-MES-003",
+      "matched": true,
+      "deep": true,
+      "match_basis": "Same operation (DELETE /work-orders/{id}), same invariant (DELETE /work-orders restricted to MANAGER/ADMIN), same missing control"
+    },
+    {
+      "root_cause_id": "RC-AUTH-04",
+      "benchmark_bug_id": "BUG-MES-004",
+      "matched": true,
+      "deep": true,
+      "match_basis": "Same operation (POST /work-reports), same invariant (Work report factory must match operator factory), same missing control"
+    },
+    {
+      "root_cause_id": "RC-SCOPE-01",
+      "benchmark_bug_id": "BUG-MES-005",
+      "matched": true,
+      "deep": false,
+      "match_basis": "Same operation (GET /work-centers), same invariant (GET /work-centers must filter by user org), same missing control"
+    },
+    {
+      "root_cause_id": "RC-STATE-01",
+      "benchmark_bug_id": "BUG-MES-010",
+      "matched": true,
+      "deep": true,
+      "match_basis": "Same operation (POST /work-orders/{id}/release), same invariant (WorkOrder release only from CREATED), same missing control"
+    },
+    {
+      "root_cause_id": "RC-STATE-03",
+      "benchmark_bug_id": "BUG-MES-009",
+      "matched": true,
+      "deep": true,
+      "match_basis": "Same operation (PUT /production-plans/{id}), same invariant (ProductionPlan immutable after CONFIRMED), same missing control"
+    },
+    {
+      "root_cause_id": "RC-CROSS-01",
+      "benchmark_bug_id": "BUG-MES-013",
+      "matched": true,
+      "deep": true,
+      "match_basis": "Same operation (POST /work-orders), same invariant (Product must have active BOM and Routing for WO creation), same missing control"
+    },
+    {
+      "root_cause_id": "RC-CROSS-04",
+      "benchmark_bug_id": "BUG-MES-016",
+      "matched": true,
+      "deep": true,
+      "match_basis": "Same operation (POST /rework-orders), same invariant (Rework order requires inspection result=REJECT), same missing control"
+    },
+    {
+      "root_cause_id": "RC-CROSS-05",
+      "benchmark_bug_id": "BUG-MES-018",
+      "matched": true,
+      "deep": true,
+      "match_basis": "Same operation (POST /finished-goods-receipts), same invariant (Receipt requires quality inspection PASS), same missing control"
+    },
+    {
+      "root_cause_id": "RC-CROSS-06",
+      "benchmark_bug_id": "BUG-MES-017",
+      "matched": true,
+      "deep": true,
+      "match_basis": "Same operation (POST /work-orders), same invariant (WO quantity must not exceed production plan quantity), same missing control"
+    },
+    {
+      "root_cause_id": "RC-CONS-01",
+      "benchmark_bug_id": "BUG-MES-019",
+      "matched": true,
+      "deep": true,
+      "match_basis": "Same operation (POST /material-issues), same invariant (Issue qty <= reserved_quantity - issued_quantity), same missing control"
+    },
+    {
+      "root_cause_id": "RC-CONS-02",
+      "benchmark_bug_id": "BUG-MES-020",
+      "matched": true,
+      "deep": true,
+      "match_basis": "Same operation (POST /work-reports), same invariant (Reported qty <= planned_quantity - previously_reported), same missing control"
+    },
+    {
+      "root_cause_id": "RC-IDEMP-01",
+      "benchmark_bug_id": "BUG-MES-023",
+      "matched": true,
+      "deep": false,
+      "match_basis": "Same operation (POST /sales-orders), same invariant (Sales order order_ref must be unique), same missing control"
+    },
+    {
+      "root_cause_id": "RC-IDEMP-02",
+      "benchmark_bug_id": "BUG-MES-024",
+      "matched": true,
+      "deep": false,
+      "match_basis": "Same operation (POST /finished-goods-receipts), same invariant (One receipt per work_order_id), same missing control"
+    },
+    {
+      "root_cause_id": "RC-COMP-01",
+      "benchmark_bug_id": "BUG-MES-025",
+      "matched": true,
+      "deep": true,
+      "match_basis": "Same operation (POST /work-orders/{id}/cancel), same invariant (Cancel WO must release all material reservations), same missing control"
+    },
+    {
+      "root_cause_id": "RC-COMP-02",
+      "benchmark_bug_id": "BUG-MES-026",
+      "matched": true,
+      "deep": true,
+      "match_basis": "Same operation (DELETE /boms/{id}), same invariant (Delete BOM must cascade-delete BOM lines), same missing control"
+    },
+    {
+      "root_cause_id": "RC-TEMP-01",
+      "benchmark_bug_id": "BUG-MES-008",
+      "matched": true,
+      "deep": true,
+      "match_basis": "Same operation (POST /work-orders), same invariant (planned_start must be < planned_end), same missing control"
+    },
+    {
+      "root_cause_id": "RC-TEMP-02",
+      "benchmark_bug_id": "BUG-MES-028",
+      "matched": true,
+      "deep": true,
+      "match_basis": "Same operation (PUT /sales-orders/{id}), same invariant (SalesOrder immutable after linked ProductionPlan CONFIRMED), same missing control"
+    }
+  ],
+  "timestamp": 1784939867.049578
+}

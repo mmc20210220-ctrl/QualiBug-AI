@@ -1,0 +1,28 @@
+{
+  "schema_version": "qualibug.audited-root-cause-seal.v1",
+  "sealed_at": 1784939867.049578,
+  "total_roots": 19,
+  "root_ids": [
+    "RC-AUTH-01",
+    "RC-AUTH-02",
+    "RC-AUTH-03",
+    "RC-AUTH-04",
+    "RC-SCOPE-01",
+    "RC-STATE-01",
+    "RC-STATE-03",
+    "RC-CROSS-01",
+    "RC-CROSS-04",
+    "RC-CROSS-05",
+    "RC-CROSS-06",
+    "RC-CONS-01",
+    "RC-CONS-02",
+    "RC-IDEMP-01",
+    "RC-IDEMP-02",
+    "RC-COMP-01",
+    "RC-COMP-02",
+    "RC-TEMP-01",
+    "RC-TEMP-02"
+  ],
+  "hash": "39bb97bc53dd78af1f3634ba73e30108ce8f768fa2e6738d890015aced92ab2e",
+  "benchmark_not_yet_consulted": true
+}

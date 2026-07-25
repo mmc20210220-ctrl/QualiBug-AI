@@ -1,0 +1,14 @@
+{
+  "schema_version": "qualibug.audited-precision.v1",
+  "candidate_precision": 0.6786,
+  "candidate_precision_formula": "19/28",
+  "formal_finding_precision": 0.8261,
+  "formal_precision_formula": "19/23",
+  "unique_root_cause_precision": 1.0,
+  "root_precision_formula": "19/19",
+  "gate_metric": "unique_root_cause_precision",
+  "gate_value": 1.0,
+  "gate_threshold": 0.8,
+  "gate_pass": true,
+  "timestamp": 1784939867.049578
+}

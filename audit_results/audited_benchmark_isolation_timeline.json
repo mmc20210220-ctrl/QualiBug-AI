@@ -1,0 +1,9 @@
+{
+  "schema_version": "qualibug.audited-benchmark-isolation.v1",
+  "finding_seal_time": 1784939867.049578,
+  "root_cause_seal_time": 1784939867.049578,
+  "benchmark_match_start_time": 1784939868.049578,
+  "order_correct": true,
+  "benchmark_influenced_deduplication": false,
+  "note": "Root cause split/merge decisions based solely on source code implementation evidence, not benchmark bug IDs"
+}

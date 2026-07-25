@@ -1,0 +1,49 @@
+{
+  "schema_version": "qualibug.audited-unstable.v1",
+  "unstable_findings": [
+    {
+      "experiment_id": "EXP_CROSS_03",
+      "mechanism": "Cross-Entity",
+      "reproduction_rate": "0/2",
+      "classification": "UNSTABLE_FIXTURE_STATE",
+      "formal_finding": false,
+      "benchmark_tp": false,
+      "unique_root_contribution": 0,
+      "next_phase_candidate_breakpoint": "FIXTURE_RESET_NONDETERMINISTIC"
+    },
+    {
+      "experiment_id": "EXP_CONC_02",
+      "mechanism": "Concurrency",
+      "reproduction_rate": "0/2",
+      "classification": "UNSTABLE_FIXTURE_STATE",
+      "formal_finding": false,
+      "benchmark_tp": false,
+      "unique_root_contribution": 0,
+      "next_phase_candidate_breakpoint": "FIXTURE_RESET_NONDETERMINISTIC"
+    }
+  ],
+  "not_attempted_findings": [
+    {
+      "experiment_id": "EXP_STATE_02",
+      "mechanism": "State Transition",
+      "classification": "NOT_ATTEMPTED",
+      "formal_finding": false,
+      "reason": "Not included in reproduction phase (orphan finding without root cause assignment)"
+    },
+    {
+      "experiment_id": "EXP_CROSS_02",
+      "mechanism": "Cross-Entity",
+      "classification": "NOT_ATTEMPTED",
+      "formal_finding": false,
+      "reason": "Not included in reproduction phase (orphan finding without root cause assignment)"
+    },
+    {
+      "experiment_id": "EXP_BATCH_01",
+      "mechanism": "Batch Operation",
+      "classification": "NOT_ATTEMPTED",
+      "formal_finding": false,
+      "reason": "Not included in reproduction phase (orphan finding without root cause assignment)"
+    }
+  ],
+  "timestamp": 1784939867.049578
+}

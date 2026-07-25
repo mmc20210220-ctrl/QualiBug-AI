@@ -1,0 +1,26 @@
+{
+  "schema_version": "qualibug.audited-balance-check.v1",
+  "balances": {
+    "formula_1": {
+      "description": "Violation Candidates = Stable + Unstable + Not_Attempted + Rejected",
+      "lhs": 28,
+      "rhs": "23 + 2 + 3 + 0",
+      "rhs_value": 28,
+      "pass": true
+    },
+    "formula_2": {
+      "description": "Formal Findings = all Root Cause supporting_findings union",
+      "formal_count": 23,
+      "root_finding_union": 20,
+      "pass": true
+    },
+    "formula_3": {
+      "description": "Unique TP <= Formal Unique Root Causes",
+      "unique_tp": 19,
+      "formal_roots": 19,
+      "pass": true
+    }
+  },
+  "all_pass": true,
+  "timestamp": 1784939867.049578
+}

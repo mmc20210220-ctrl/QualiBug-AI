@@ -1,0 +1,11 @@
+{
+  "schema_version": "qualibug.audited-combination-contribution.v1",
+  "combination_unique_tp": 3,
+  "combination_roots": [
+    "RC-STATE-03",
+    "RC-TEMP-02",
+    "RC-CROSS-06"
+  ],
+  "definition": "Root causes requiring understanding of multi-mechanism interaction (cross-entity+state, temporal+state, cross-entity+conservation)",
+  "timestamp": 1784939867.049578
+}

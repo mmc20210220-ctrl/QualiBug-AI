@@ -1,0 +1,232 @@
+{
+  "schema_version": "qualibug.audited-finding-identity.v1",
+  "total_candidates": 28,
+  "canonical_id_format": "PROJECT_F_RUNTIME::<experiment_id>::<violation_index>",
+  "findings": [
+    {
+      "canonical_finding_id": "PROJECT_F_RUNTIME::EXP_AUTH_01::0",
+      "experiment_id": "EXP_AUTH_01",
+      "violation_index": 0,
+      "mechanism": "Authorization",
+      "oracle": "ROLE_ORACLE",
+      "description": "Operator creates product (should be PLANNER/MANAGER/ADMIN only)"
+    },
+    {
+      "canonical_finding_id": "PROJECT_F_RUNTIME::EXP_AUTH_02::0",
+      "experiment_id": "EXP_AUTH_02",
+      "violation_index": 0,
+      "mechanism": "Authorization",
+      "oracle": "ROLE_ORACLE",
+      "description": "Operator modifies product cost (should be MANAGER/ADMIN only)"
+    },
+    {
+      "canonical_finding_id": "PROJECT_F_RUNTIME::EXP_AUTH_03::0",
+      "experiment_id": "EXP_AUTH_03",
+      "violation_index": 0,
+      "mechanism": "Authorization",
+      "oracle": "ROLE_ORACLE",
+      "description": "Operator deletes work order (should be MANAGER/ADMIN only)"
+    },
+    {
+      "canonical_finding_id": "PROJECT_F_RUNTIME::EXP_AUTH_04::0",
+      "experiment_id": "EXP_AUTH_04",
+      "violation_index": 0,
+      "mechanism": "Authorization",
+      "oracle": "ROLE_ORACLE",
+      "description": "Operator from fac-002 reports on fac-001 work order (factory scope)"
+    },
+    {
+      "canonical_finding_id": "PROJECT_F_RUNTIME::EXP_SCOPE_01::0",
+      "experiment_id": "EXP_SCOPE_01",
+      "violation_index": 0,
+      "mechanism": "Scope Isolation",
+      "oracle": "SCOPE_ORACLE",
+      "description": "Globex manager lists work centers (should only see globex)"
+    },
+    {
+      "canonical_finding_id": "PROJECT_F_RUNTIME::EXP_STATE_01::0",
+      "experiment_id": "EXP_STATE_01",
+      "violation_index": 0,
+      "mechanism": "State Transition",
+      "oracle": "STATE_ORACLE",
+      "description": "Release a COMPLETED work order (should be rejected)"
+    },
+    {
+      "canonical_finding_id": "PROJECT_F_RUNTIME::EXP_STATE_02::0",
+      "experiment_id": "EXP_STATE_02",
+      "violation_index": 0,
+      "mechanism": "State Transition",
+      "oracle": "STATE_ORACLE",
+      "description": "Close work order from IN_PRODUCTION (should require COMPLETED first)"
+    },
+    {
+      "canonical_finding_id": "PROJECT_F_RUNTIME::EXP_STATE_03::0",
+      "experiment_id": "EXP_STATE_03",
+      "violation_index": 0,
+      "mechanism": "State Transition",
+      "oracle": "STATE_ORACLE",
+      "description": "Modify CONFIRMED production plan (should be immutable)"
+    },
+    {
+      "canonical_finding_id": "PROJECT_F_RUNTIME::EXP_STATE_04::0",
+      "experiment_id": "EXP_STATE_04",
+      "violation_index": 0,
+      "mechanism": "State Transition",
+      "oracle": "STATE_ORACLE",
+      "description": "Modify sales order after linked plan confirmed"
+    },
+    {
+      "canonical_finding_id": "PROJECT_F_RUNTIME::EXP_STATE_05::0",
+      "experiment_id": "EXP_STATE_05",
+      "violation_index": 0,
+      "mechanism": "State Transition",
+      "oracle": "CROSS_ENTITY_ORACLE",
+      "description": "Create receipt for non-COMPLETED work order"
+    },
+    {
+      "canonical_finding_id": "PROJECT_F_RUNTIME::EXP_CROSS_01::0",
+      "experiment_id": "EXP_CROSS_01",
+      "violation_index": 0,
+      "mechanism": "Cross-Entity",
+      "oracle": "CROSS_ENTITY_ORACLE",
+      "description": "Create work order with non-existent BOM/Routing"
+    },
+    {
+      "canonical_finding_id": "PROJECT_F_RUNTIME::EXP_CROSS_02::0",
+      "experiment_id": "EXP_CROSS_02",
+      "violation_index": 0,
+      "mechanism": "Cross-Entity",
+      "oracle": "CROSS_ENTITY_ORACLE",
+      "description": "Start work order without material reservations"
+    },
+    {
+      "canonical_finding_id": "PROJECT_F_RUNTIME::EXP_CROSS_03::0",
+      "experiment_id": "EXP_CROSS_03",
+      "violation_index": 0,
+      "mechanism": "Cross-Entity",
+      "oracle": "CROSS_ENTITY_ORACLE",
+      "description": "Complete work order with pending operations"
+    },
+    {
+      "canonical_finding_id": "PROJECT_F_RUNTIME::EXP_CROSS_04::0",
+      "experiment_id": "EXP_CROSS_04",
+      "violation_index": 0,
+      "mechanism": "Cross-Entity",
+      "oracle": "CROSS_ENTITY_ORACLE",
+      "description": "Create rework order for PASS inspection (should require REJECT)"
+    },
+    {
+      "canonical_finding_id": "PROJECT_F_RUNTIME::EXP_CROSS_05::0",
+      "experiment_id": "EXP_CROSS_05",
+      "violation_index": 0,
+      "mechanism": "Cross-Entity",
+      "oracle": "CROSS_ENTITY_ORACLE",
+      "description": "Create receipt without quality inspection PASS"
+    },
+    {
+      "canonical_finding_id": "PROJECT_F_RUNTIME::EXP_CROSS_06::0",
+      "experiment_id": "EXP_CROSS_06",
+      "violation_index": 0,
+      "mechanism": "Cross-Entity",
+      "oracle": "CROSS_ENTITY_ORACLE",
+      "description": "Create WO with quantity exceeding production plan"
+    },
+    {
+      "canonical_finding_id": "PROJECT_F_RUNTIME::EXP_CONS_01::0",
+      "experiment_id": "EXP_CONS_01",
+      "violation_index": 0,
+      "mechanism": "Conservation",
+      "oracle": "CONSERVATION_ORACLE",
+      "description": "Material issue exceeds reserved quantity"
+    },
+    {
+      "canonical_finding_id": "PROJECT_F_RUNTIME::EXP_CONS_02::0",
+      "experiment_id": "EXP_CONS_02",
+      "violation_index": 0,
+      "mechanism": "Conservation",
+      "oracle": "CONSERVATION_ORACLE",
+      "description": "Work report quantity exceeds planned quantity"
+    },
+    {
+      "canonical_finding_id": "PROJECT_F_RUNTIME::EXP_IDEMP_01::0",
+      "experiment_id": "EXP_IDEMP_01",
+      "violation_index": 0,
+      "mechanism": "Idempotency",
+      "oracle": "IDEMPOTENCY_ORACLE",
+      "description": "Duplicate sales order with same order_ref (should be 409)"
+    },
+    {
+      "canonical_finding_id": "PROJECT_F_RUNTIME::EXP_IDEMP_02::0",
+      "experiment_id": "EXP_IDEMP_02",
+      "violation_index": 0,
+      "mechanism": "Idempotency",
+      "oracle": "IDEMPOTENCY_ORACLE",
+      "description": "Duplicate receipt for same work order (should be 409)"
+    },
+    {
+      "canonical_finding_id": "PROJECT_F_RUNTIME::EXP_COMP_01::0",
+      "experiment_id": "EXP_COMP_01",
+      "violation_index": 0,
+      "mechanism": "Compensation",
+      "oracle": "COMPENSATION_ORACLE",
+      "description": "Cancel WO does not release material reservations"
+    },
+    {
+      "canonical_finding_id": "PROJECT_F_RUNTIME::EXP_COMP_02::0",
+      "experiment_id": "EXP_COMP_02",
+      "violation_index": 0,
+      "mechanism": "Compensation",
+      "oracle": "COMPENSATION_ORACLE",
+      "description": "Delete BOM leaves orphan lines"
+    },
+    {
+      "canonical_finding_id": "PROJECT_F_RUNTIME::EXP_TEMP_01::0",
+      "experiment_id": "EXP_TEMP_01",
+      "violation_index": 0,
+      "mechanism": "Temporal",
+      "oracle": "TEMPORAL_ORACLE",
+      "description": "Create WO with planned_start after planned_end"
+    },
+    {
+      "canonical_finding_id": "PROJECT_F_RUNTIME::EXP_TEMP_03::0",
+      "experiment_id": "EXP_TEMP_03",
+      "violation_index": 0,
+      "mechanism": "Temporal",
+      "oracle": "TEMPORAL_ORACLE",
+      "description": "Modify sales order after linked plan confirmed"
+    },
+    {
+      "canonical_finding_id": "PROJECT_F_RUNTIME::EXP_CONC_01::0",
+      "experiment_id": "EXP_CONC_01",
+      "violation_index": 0,
+      "mechanism": "Concurrency",
+      "oracle": "CONCURRENCY_ORACLE",
+      "description": "Update WO with stale version (should be 409)"
+    },
+    {
+      "canonical_finding_id": "PROJECT_F_RUNTIME::EXP_CONC_02::0",
+      "experiment_id": "EXP_CONC_02",
+      "violation_index": 0,
+      "mechanism": "Concurrency",
+      "oracle": "CONCURRENCY_ORACLE",
+      "description": "Return material issue with stale version"
+    },
+    {
+      "canonical_finding_id": "PROJECT_F_RUNTIME::EXP_BATCH_01::0",
+      "experiment_id": "EXP_BATCH_01",
+      "violation_index": 0,
+      "mechanism": "Batch Operation",
+      "oracle": "BATCH_ORACLE",
+      "description": "Bulk release with one invalid WO (should all fail)"
+    },
+    {
+      "canonical_finding_id": "PROJECT_F_RUNTIME::EXP_BATCH_02::0",
+      "experiment_id": "EXP_BATCH_02",
+      "violation_index": 0,
+      "mechanism": "Batch Operation",
+      "oracle": "BATCH_ORACLE",
+      "description": "Bulk issue with invalid reservation (should be atomic)"
+    }
+  ],
+  "timestamp": 1784939867.049578
+}

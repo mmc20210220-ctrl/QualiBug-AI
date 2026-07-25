@@ -1,0 +1,20 @@
+{
+  "schema_version": "qualibug.audited-reproduction.v1",
+  "reproduction_eligible": 28,
+  "reproduction_attempted": 26,
+  "not_attempted": 3,
+  "not_attempted_ids": [
+    "EXP_STATE_02",
+    "EXP_CROSS_02",
+    "EXP_BATCH_01"
+  ],
+  "stable_2_2": 23,
+  "unstable_0_2": 2,
+  "unstable_ids": [
+    "EXP_CROSS_03",
+    "EXP_CONC_02"
+  ],
+  "candidate_reproduction_yield": "23/26",
+  "formal_reproduction_rate": "100% (only stable items enter formal)",
+  "timestamp": 1784939867.049578
+}

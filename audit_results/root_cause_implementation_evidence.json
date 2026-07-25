@@ -1,0 +1,15 @@
+{
+  "schema_version": "qualibug.audited-implementation-evidence.v1",
+  "source_file": "projects/mes_f/mock_server.py",
+  "source_hash": "5bab3aae5e48bfb7073337ef0780ff5e6827d9e6f0ef93b18ddc397c86250d85",
+  "key_implementation_facts": [
+    "No shared authorization middleware - each handler has independent check_role() call",
+    "No shared state transition engine - each handler has inline status guard",
+    "No shared constraint validation engine - each handler has independent (missing) checks",
+    "No shared idempotency registry - each create handler would need its own uniqueness check",
+    "No shared compensation framework - each delete/cancel handler needs its own cascade logic",
+    "No shared tenant filter - each list handler would need its own org filter",
+    "No shared optimistic locking - each update handler would need its own version check"
+  ],
+  "timestamp": 1784939867.049578
+}

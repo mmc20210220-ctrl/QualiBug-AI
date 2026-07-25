@@ -1,0 +1,18 @@
+{
+  "schema_version": "qualibug.audited-project-g-gate.v1",
+  "result_level": "LEVEL_A",
+  "project_g_entry_allowed": true,
+  "gate_criteria": {
+    "formal_findings_ge_18": true,
+    "unique_tp_ge_15": true,
+    "deep_unique_tp_ge_10": true,
+    "unique_root_precision_ge_80": true,
+    "formal_reproduction_rate_100": true,
+    "mechanism_types_ge_8": true,
+    "non_auth_deep_tp_ge_8": true,
+    "combination_unique_tp_ge_3": true,
+    "result_integrity_audit_pass": true,
+    "benchmark_isolation_pass": true
+  },
+  "timestamp": 1784939867.049578
+}

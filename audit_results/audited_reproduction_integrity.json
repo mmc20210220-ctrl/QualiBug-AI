@@ -1,0 +1,14 @@
+{
+  "schema_version": "qualibug.audited-reproduction-integrity.v1",
+  "checks": {
+    "reproduction_uses_real_http": true,
+    "reproduction_after_reset": true,
+    "stable_means_2_2": true,
+    "unstable_correctly_excluded": true,
+    "not_attempted_correctly_excluded": true
+  },
+  "candidate_reproduction_yield": "23/26",
+  "formal_reproduction_rate": "100%",
+  "overall": "PASS",
+  "timestamp": 1784939867.049578
+}

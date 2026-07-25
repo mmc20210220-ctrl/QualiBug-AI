@@ -1,0 +1,16 @@
+{
+  "schema_version": "qualibug.audited-formal-integrity.v1",
+  "checks": {
+    "all_formal_have_2_2_reproduction": true,
+    "all_formal_have_oracle_trace": true,
+    "all_formal_have_real_http_evidence": true,
+    "no_unstable_in_formal": true,
+    "no_not_attempted_in_formal": true,
+    "finding_id_unique_rate": "100%",
+    "ghost_finding_count": 0,
+    "orphan_formal_count": 0,
+    "duplicate_root_assignment": 0
+  },
+  "overall": "PASS",
+  "timestamp": 1784939867.049578
+}

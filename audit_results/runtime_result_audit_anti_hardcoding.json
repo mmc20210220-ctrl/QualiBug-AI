@@ -1,0 +1,14 @@
+{
+  "schema_version": "qualibug.audited-anti-hardcoding.v1",
+  "checks": {
+    "no_benchmark_in_exploration": true,
+    "no_bug_id_in_oracle": true,
+    "no_answer_in_experiment_design": true,
+    "root_cause_split_not_benchmark_driven": true,
+    "split_based_on_source_code_evidence": true,
+    "audit_code_not_in_production_path": true
+  },
+  "overall": "PASS",
+  "note": "All merge/split decisions based on mock_server.py handler analysis, not benchmark ground_truth.json",
+  "timestamp": 1784939867.049578
+}

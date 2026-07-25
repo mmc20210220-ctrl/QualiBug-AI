@@ -1,0 +1,47 @@
+{
+  "schema_version": "qualibug.audited-mechanism-contribution.v1",
+  "mechanisms": [
+    {
+      "mechanism": "State Transition",
+      "formal_findings": 4,
+      "root_causes": 2
+    },
+    {
+      "mechanism": "Authorization",
+      "formal_findings": 4,
+      "root_causes": 4
+    },
+    {
+      "mechanism": "Cross-Entity",
+      "formal_findings": 4,
+      "root_causes": 4
+    },
+    {
+      "mechanism": "Compensation",
+      "formal_findings": 2,
+      "root_causes": 2
+    },
+    {
+      "mechanism": "Temporal",
+      "formal_findings": 2,
+      "root_causes": 2
+    },
+    {
+      "mechanism": "Idempotency",
+      "formal_findings": 2,
+      "root_causes": 2
+    },
+    {
+      "mechanism": "Conservation",
+      "formal_findings": 2,
+      "root_causes": 2
+    },
+    {
+      "mechanism": "Scope Isolation",
+      "formal_findings": 1,
+      "root_causes": 1
+    }
+  ],
+  "total_mechanism_types": 8,
+  "timestamp": 1784939867.049578
+}

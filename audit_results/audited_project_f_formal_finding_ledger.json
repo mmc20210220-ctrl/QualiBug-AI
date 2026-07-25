@@ -1,0 +1,387 @@
+{
+  "schema_version": "qualibug.audited-formal-finding-ledger.v1",
+  "total_formal_findings": 23,
+  "criteria": "STABLE_REPRODUCED (2/2) + real HTTP evidence + oracle trace",
+  "excluded": {
+    "unstable": [
+      "EXP_CROSS_03",
+      "EXP_CONC_02"
+    ],
+    "not_attempted": [
+      "EXP_STATE_02",
+      "EXP_CROSS_02",
+      "EXP_BATCH_01"
+    ]
+  },
+  "findings": [
+    {
+      "finding_id": "PROJECT_F_RUNTIME::EXP_AUTH_01::0",
+      "experiment_id": "EXP_AUTH_01",
+      "mechanism": "Authorization",
+      "oracle": "ROLE_ORACLE",
+      "description": "Operator creates product (should be PLANNER/MANAGER/ADMIN only)",
+      "constraint": "API_SPEC: POST /products on /products restricted to authorized roles only",
+      "expected": "Role OPERATOR should receive 403 Forbidden for POST /products",
+      "actual": "Role OPERATOR received 201 (success)",
+      "evidence": "POST http://localhost:8020/products as OPERATOR -> 201",
+      "reproduction": {
+        "attempt_1": "REPRODUCED",
+        "attempt_2": "REPRODUCED",
+        "stable": true
+      }
+    },
+    {
+      "finding_id": "PROJECT_F_RUNTIME::EXP_AUTH_02::0",
+      "experiment_id": "EXP_AUTH_02",
+      "mechanism": "Authorization",
+      "oracle": "ROLE_ORACLE",
+      "description": "Operator modifies product cost (should be MANAGER/ADMIN only)",
+      "constraint": "API_SPEC: PUT cost modification on /products/mat-001 restricted to authorized roles only",
+      "expected": "Role OPERATOR should receive 403 Forbidden for PUT cost modification",
+      "actual": "Role OPERATOR received 200 (success)",
+      "evidence": "PUT http://localhost:8020/products/mat-001 as OPERATOR -> 200",
+      "reproduction": {
+        "attempt_1": "REPRODUCED",
+        "attempt_2": "REPRODUCED",
+        "stable": true
+      }
+    },
+    {
+      "finding_id": "PROJECT_F_RUNTIME::EXP_AUTH_03::0",
+      "experiment_id": "EXP_AUTH_03",
+      "mechanism": "Authorization",
+      "oracle": "ROLE_ORACLE",
+      "description": "Operator deletes work order (should be MANAGER/ADMIN only)",
+      "constraint": "API_SPEC: DELETE /work-orders on /work-orders/wo-002 restricted to authorized roles only",
+      "expected": "Role OPERATOR should receive 403 Forbidden for DELETE /work-orders",
+      "actual": "Role OPERATOR received 200 (success)",
+      "evidence": "DELETE http://localhost:8020/work-orders/wo-002 as OPERATOR -> 200",
+      "reproduction": {
+        "attempt_1": "REPRODUCED",
+        "attempt_2": "REPRODUCED",
+        "stable": true
+      }
+    },
+    {
+      "finding_id": "PROJECT_F_RUNTIME::EXP_AUTH_04::0",
+      "experiment_id": "EXP_AUTH_04",
+      "mechanism": "Authorization",
+      "oracle": "ROLE_ORACLE",
+      "description": "Operator from fac-002 reports on fac-001 work order (factory scope)",
+      "constraint": "API_SPEC: Operator factory must match work order factory",
+      "expected": "Operator from fac-002 rejected for fac-001 work order (403)",
+      "actual": "Report accepted with status 201",
+      "evidence": "POST /work-reports as fac-002 operator on fac-001 WO -> 201",
+      "reproduction": {
+        "attempt_1": "REPRODUCED",
+        "attempt_2": "REPRODUCED",
+        "stable": true
+      }
+    },
+    {
+      "finding_id": "PROJECT_F_RUNTIME::EXP_SCOPE_01::0",
+      "experiment_id": "EXP_SCOPE_01",
+      "mechanism": "Scope Isolation",
+      "oracle": "SCOPE_ORACLE",
+      "description": "Globex manager lists work centers (should only see globex)",
+      "constraint": "API_SPEC: /work-centers listing must be org-scoped (multi-tenant isolation)",
+      "expected": "Actor from 'globex' should only see globex records",
+      "actual": "Response contains 4 records from other orgs",
+      "evidence": "GET http://localhost:8020/work-centers as globex -> found orgs: {'acme', 'globex'}",
+      "reproduction": {
+        "attempt_1": "REPRODUCED",
+        "attempt_2": "REPRODUCED",
+        "stable": true
+      }
+    },
+    {
+      "finding_id": "PROJECT_F_RUNTIME::EXP_STATE_01::0",
+      "experiment_id": "EXP_STATE_01",
+      "mechanism": "State Transition",
+      "oracle": "STATE_ORACLE",
+      "description": "Release a COMPLETED work order (should be rejected)",
+      "constraint": "API_SPEC: WorkOrder transition 'release' only from ['CREATED']",
+      "expected": "Cannot release from state COMPLETED (expect 409)",
+      "actual": "Transition succeeded with status 200",
+      "evidence": "WorkOrder/wo-001: COMPLETED --release--> SUCCESS",
+      "reproduction": {
+        "attempt_1": "REPRODUCED",
+        "attempt_2": "REPRODUCED",
+        "stable": true
+      }
+    },
+    {
+      "finding_id": "PROJECT_F_RUNTIME::EXP_STATE_03::0",
+      "experiment_id": "EXP_STATE_03",
+      "mechanism": "State Transition",
+      "oracle": "STATE_ORACLE",
+      "description": "Modify CONFIRMED production plan (should be immutable)",
+      "constraint": "API_SPEC: ProductionPlan transition 'update' only from ['CREATED']",
+      "expected": "Cannot update from state CONFIRMED (expect 409)",
+      "actual": "Transition succeeded with status 200",
+      "evidence": "ProductionPlan/pp-001: CONFIRMED --update--> SUCCESS",
+      "reproduction": {
+        "attempt_1": "REPRODUCED",
+        "attempt_2": "REPRODUCED",
+        "stable": true
+      }
+    },
+    {
+      "finding_id": "PROJECT_F_RUNTIME::EXP_STATE_04::0",
+      "experiment_id": "EXP_STATE_04",
+      "mechanism": "State Transition",
+      "oracle": "STATE_ORACLE",
+      "description": "Modify sales order after linked plan confirmed",
+      "constraint": "API_SPEC: Cannot modify delivery_date if linked plan is CONFIRMED",
+      "expected": "Modification rejected (409) because linked plan pp-001 is CONFIRMED",
+      "actual": "Modification succeeded with status 200",
+      "evidence": "PUT /sales-orders/so-001 after plan confirm -> 200",
+      "reproduction": {
+        "attempt_1": "REPRODUCED",
+        "attempt_2": "REPRODUCED",
+        "stable": true
+      }
+    },
+    {
+      "finding_id": "PROJECT_F_RUNTIME::EXP_STATE_05::0",
+      "experiment_id": "EXP_STATE_05",
+      "mechanism": "State Transition",
+      "oracle": "CROSS_ENTITY_ORACLE",
+      "description": "Create receipt for non-COMPLETED work order",
+      "constraint": "API_SPEC: Work Order must be COMPLETED before receipt creation",
+      "expected": "Work Order must be COMPLETED before receipt creation",
+      "actual": "Receipt created for RELEASED WO (status 201)",
+      "evidence": "POST http://localhost:8020/finished-goods-receipts -> 201: Receipt created for RELEASED WO (status 201)",
+      "reproduction": {
+        "attempt_1": "REPRODUCED",
+        "attempt_2": "REPRODUCED",
+        "stable": true
+      }
+    },
+    {
+      "finding_id": "PROJECT_F_RUNTIME::EXP_CROSS_01::0",
+      "experiment_id": "EXP_CROSS_01",
+      "mechanism": "Cross-Entity",
+      "oracle": "CROSS_ENTITY_ORACLE",
+      "description": "Create work order with non-existent BOM/Routing",
+      "constraint": "API_SPEC: Product must have active BOM and Routing (precondition)",
+      "expected": "Product must have active BOM and Routing (precondition)",
+      "actual": "WO created with invalid BOM/Routing (status 201)",
+      "evidence": "POST http://localhost:8020/work-orders -> 201: WO created with invalid BOM/Routing (status 201)",
+      "reproduction": {
+        "attempt_1": "REPRODUCED",
+        "attempt_2": "REPRODUCED",
+        "stable": true
+      }
+    },
+    {
+      "finding_id": "PROJECT_F_RUNTIME::EXP_CROSS_04::0",
+      "experiment_id": "EXP_CROSS_04",
+      "mechanism": "Cross-Entity",
+      "oracle": "CROSS_ENTITY_ORACLE",
+      "description": "Create rework order for PASS inspection (should require REJECT)",
+      "constraint": "API_SPEC: Referenced inspection must have result=REJECT for rework creation",
+      "expected": "Referenced inspection must have result=REJECT for rework creation",
+      "actual": "Rework created for PASS inspection (status 201)",
+      "evidence": "POST http://localhost:8020/rework-orders -> 201: Rework created for PASS inspection (status 201)",
+      "reproduction": {
+        "attempt_1": "REPRODUCED",
+        "attempt_2": "REPRODUCED",
+        "stable": true
+      }
+    },
+    {
+      "finding_id": "PROJECT_F_RUNTIME::EXP_CROSS_05::0",
+      "experiment_id": "EXP_CROSS_05",
+      "mechanism": "Cross-Entity",
+      "oracle": "CROSS_ENTITY_ORACLE",
+      "description": "Create receipt without quality inspection PASS",
+      "constraint": "API_SPEC: At least one Quality Inspection with PASS result required",
+      "expected": "At least one Quality Inspection with PASS result required",
+      "actual": "Receipt created without quality PASS (status 201)",
+      "evidence": "POST http://localhost:8020/finished-goods-receipts -> 201: Receipt created without quality PASS (status 201)",
+      "reproduction": {
+        "attempt_1": "REPRODUCED",
+        "attempt_2": "REPRODUCED",
+        "stable": true
+      }
+    },
+    {
+      "finding_id": "PROJECT_F_RUNTIME::EXP_CROSS_06::0",
+      "experiment_id": "EXP_CROSS_06",
+      "mechanism": "Cross-Entity",
+      "oracle": "CROSS_ENTITY_ORACLE",
+      "description": "Create WO with quantity exceeding production plan",
+      "constraint": "API_SPEC: Work order quantity should be validated against production plan",
+      "expected": "Work order quantity should be validated against production plan",
+      "actual": "WO qty 999 exceeds plan qty 100 (status 201)",
+      "evidence": "POST http://localhost:8020/work-orders -> 201: WO qty 999 exceeds plan qty 100 (status 201)",
+      "reproduction": {
+        "attempt_1": "REPRODUCED",
+        "attempt_2": "REPRODUCED",
+        "stable": true
+      }
+    },
+    {
+      "finding_id": "PROJECT_F_RUNTIME::EXP_CONS_01::0",
+      "experiment_id": "EXP_CONS_01",
+      "mechanism": "Conservation",
+      "oracle": "CONSERVATION_ORACLE",
+      "description": "Material issue exceeds reserved quantity",
+      "constraint": "API_SPEC/BUSINESS_RULES: Issue quantity must not exceed reserved_quantity - issued_quantity",
+      "expected": "Issue quantity must not exceed reserved_quantity - issued_quantity",
+      "actual": "Issued 999 > reserved 200 (status 201)",
+      "evidence": "POST http://localhost:8020/material-issues -> 201: Issued 999 > reserved 200 (status 201)",
+      "reproduction": {
+        "attempt_1": "REPRODUCED",
+        "attempt_2": "REPRODUCED",
+        "stable": true
+      }
+    },
+    {
+      "finding_id": "PROJECT_F_RUNTIME::EXP_CONS_02::0",
+      "experiment_id": "EXP_CONS_02",
+      "mechanism": "Conservation",
+      "oracle": "CONSERVATION_ORACLE",
+      "description": "Work report quantity exceeds planned quantity",
+      "constraint": "API_SPEC/BUSINESS_RULES: Reported quantity must not exceed remaining planned quantity",
+      "expected": "Reported quantity must not exceed remaining planned quantity",
+      "actual": "Reported 999 > planned 50 (status 201)",
+      "evidence": "POST http://localhost:8020/work-reports -> 201: Reported 999 > planned 50 (status 201)",
+      "reproduction": {
+        "attempt_1": "REPRODUCED",
+        "attempt_2": "REPRODUCED",
+        "stable": true
+      }
+    },
+    {
+      "finding_id": "PROJECT_F_RUNTIME::EXP_IDEMP_01::0",
+      "experiment_id": "EXP_IDEMP_01",
+      "mechanism": "Idempotency",
+      "oracle": "IDEMPOTENCY_ORACLE",
+      "description": "Duplicate sales order with same order_ref (should be 409)",
+      "constraint": "API_SPEC: /sales-orders idempotency on order_ref (duplicate returns 409)",
+      "expected": "Duplicate order_ref should return 409 Conflict",
+      "actual": "Duplicate accepted with status 201",
+      "evidence": "First: 201, Duplicate: 201 (should be 409)",
+      "reproduction": {
+        "attempt_1": "REPRODUCED",
+        "attempt_2": "REPRODUCED",
+        "stable": true
+      }
+    },
+    {
+      "finding_id": "PROJECT_F_RUNTIME::EXP_IDEMP_02::0",
+      "experiment_id": "EXP_IDEMP_02",
+      "mechanism": "Idempotency",
+      "oracle": "IDEMPOTENCY_ORACLE",
+      "description": "Duplicate receipt for same work order (should be 409)",
+      "constraint": "API_SPEC: /finished-goods-receipts idempotency on work_order_id (duplicate returns 409)",
+      "expected": "Duplicate work_order_id should return 409 Conflict",
+      "actual": "Duplicate accepted with status 201",
+      "evidence": "First: 201, Duplicate: 201 (should be 409)",
+      "reproduction": {
+        "attempt_1": "REPRODUCED",
+        "attempt_2": "REPRODUCED",
+        "stable": true
+      }
+    },
+    {
+      "finding_id": "PROJECT_F_RUNTIME::EXP_COMP_01::0",
+      "experiment_id": "EXP_COMP_01",
+      "mechanism": "Compensation",
+      "oracle": "COMPENSATION_ORACLE",
+      "description": "Cancel WO does not release material reservations",
+      "constraint": "API_SPEC: Cancel must release all material reservations",
+      "expected": "All reservations status -> RELEASED after cancel",
+      "actual": "3 reservations still RESERVED",
+      "evidence": "GET /material-reservations?work_order_id=wo-001 -> 3 still RESERVED",
+      "reproduction": {
+        "attempt_1": "REPRODUCED",
+        "attempt_2": "REPRODUCED",
+        "stable": true
+      }
+    },
+    {
+      "finding_id": "PROJECT_F_RUNTIME::EXP_COMP_02::0",
+      "experiment_id": "EXP_COMP_02",
+      "mechanism": "Compensation",
+      "oracle": "COMPENSATION_ORACLE",
+      "description": "Delete BOM leaves orphan lines",
+      "constraint": "API_SPEC: DELETE /boms deletes BOM and all its lines",
+      "expected": "BOM lines deleted with parent BOM",
+      "actual": "3 orphan BOM lines remain",
+      "evidence": "GET /boms/bom-001/lines after delete -> 3 lines",
+      "reproduction": {
+        "attempt_1": "REPRODUCED",
+        "attempt_2": "REPRODUCED",
+        "stable": true
+      }
+    },
+    {
+      "finding_id": "PROJECT_F_RUNTIME::EXP_TEMP_01::0",
+      "experiment_id": "EXP_TEMP_01",
+      "mechanism": "Temporal",
+      "oracle": "TEMPORAL_ORACLE",
+      "description": "Create WO with planned_start after planned_end",
+      "constraint": "API_SPEC/BUSINESS_RULES: planned_start must be earlier than planned_end",
+      "expected": "planned_start must be earlier than planned_end",
+      "actual": "WO created with start>end (status 201)",
+      "evidence": "POST http://localhost:8020/work-orders -> 201: WO created with start>end (status 201)",
+      "reproduction": {
+        "attempt_1": "REPRODUCED",
+        "attempt_2": "REPRODUCED",
+        "stable": true
+      }
+    },
+    {
+      "finding_id": "PROJECT_F_RUNTIME::EXP_TEMP_03::0",
+      "experiment_id": "EXP_TEMP_03",
+      "mechanism": "Temporal",
+      "oracle": "TEMPORAL_ORACLE",
+      "description": "Modify sales order after linked plan confirmed",
+      "constraint": "API_SPEC/BUSINESS_RULES: Sales order immutable after linked production plan confirmed",
+      "expected": "Sales order immutable after linked production plan confirmed",
+      "actual": "SO modified after plan confirm (status 200)",
+      "evidence": "PUT http://localhost:8020/sales-orders/so-001 -> 200: SO modified after plan confirm (status 200)",
+      "reproduction": {
+        "attempt_1": "REPRODUCED",
+        "attempt_2": "REPRODUCED",
+        "stable": true
+      }
+    },
+    {
+      "finding_id": "PROJECT_F_RUNTIME::EXP_CONC_01::0",
+      "experiment_id": "EXP_CONC_01",
+      "mechanism": "Concurrency",
+      "oracle": "CONCURRENCY_ORACLE",
+      "description": "Update WO with stale version (should be 409)",
+      "constraint": "API_SPEC: /work-orders requires version check (optimistic locking, 409 on mismatch)",
+      "expected": "Update with stale version 0 should return 409",
+      "actual": "Update succeeded with status 200",
+      "evidence": "PUT /work-orders/wo-001 version=0 -> 200",
+      "reproduction": {
+        "attempt_1": "REPRODUCED",
+        "attempt_2": "REPRODUCED",
+        "stable": true
+      }
+    },
+    {
+      "finding_id": "PROJECT_F_RUNTIME::EXP_BATCH_02::0",
+      "experiment_id": "EXP_BATCH_02",
+      "mechanism": "Batch Operation",
+      "oracle": "BATCH_ORACLE",
+      "description": "Bulk issue with invalid reservation (should be atomic)",
+      "constraint": "API_SPEC: /material-issues/bulk-issue batch semantics: atomic (if any fails, none created)",
+      "expected": "Batch should be atomic (atomic (if any fails, none created))",
+      "actual": "Created 2 issues without validation",
+      "evidence": "POST http://localhost:8020/material-issues/bulk-issue -> 201: Created 2 issues without validation",
+      "reproduction": {
+        "attempt_1": "REPRODUCED",
+        "attempt_2": "REPRODUCED",
+        "stable": true
+      }
+    }
+  ],
+  "timestamp": 1784939867.049578
+}

@@ -1,0 +1,41 @@
+{
+  "schema_version": "qualibug.audited-result-classification.v1",
+  "level_a_criteria": {
+    "formal_findings_ge_18": true,
+    "unique_tp_ge_15": true,
+    "deep_unique_tp_ge_10": true,
+    "unique_root_precision_ge_80": true,
+    "formal_reproduction_rate_100": true,
+    "mechanism_types_ge_8": true,
+    "non_auth_deep_tp_ge_8": true,
+    "combination_unique_tp_ge_3": true,
+    "result_integrity_audit_pass": true,
+    "benchmark_isolation_pass": true
+  },
+  "all_level_a_pass": true,
+  "actual_values": {
+    "formal_findings": 23,
+    "unique_roots": 19,
+    "unique_tp": 19,
+    "deep_unique_tp": 16,
+    "mechanism_types": 8,
+    "non_auth_deep_tp": 12,
+    "combination_unique_tp": 3,
+    "unique_root_precision": 1.0,
+    "formal_reproduction_rate": "100%",
+    "total_recall": 0.5938,
+    "deep_recall": 0.5926
+  },
+  "result_level": "LEVEL_A",
+  "project_g_entry_allowed": true,
+  "comparison_with_original": {
+    "original_level": "LEVEL_B",
+    "original_unique_tp": 11,
+    "original_deep_tp": 8,
+    "audited_level": "LEVEL_A",
+    "audited_unique_tp": 19,
+    "audited_deep_tp": 16,
+    "reason_for_change": "Original 11 roots were over-merged by mechanism category. Source code confirms each finding has distinct handler, distinct missing control, distinct fix point. Proper split yields more unique root causes."
+  },
+  "timestamp": 1784939867.049578
+}

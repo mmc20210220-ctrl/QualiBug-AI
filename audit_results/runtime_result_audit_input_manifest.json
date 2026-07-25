@@ -1,0 +1,43 @@
+{
+  "schema_version": "qualibug.audit-input-manifest.v1",
+  "audit_type": "RUNTIME_RESULT_INTEGRITY_REPRODUCTION_ROOTCAUSE_DEDUP",
+  "frozen_at": 1784939867.049578,
+  "qualibug_commit": "f50ab489470cd72db8994e79ed9ce07cd8c33b22",
+  "mes_sut_file": "projects/mes_f/mock_server.py",
+  "mes_sut_hash": "5bab3aae5e48bfb7073337ef0780ff5e6827d9e6f0ef93b18ddc397c86250d85",
+  "input_file_hashes": {
+    "runtime_execution/mes_execution_ledger.json": "68593c1462f890b6310378caf87fb73b3732ebfe51eb71d86322d37021cdec29",
+    "runtime_execution/mes_findings.json": "d50607bef5bee09f1286bd387a475f87ce52549741f1f5d964ba434e3e15140d",
+    "runtime_execution/mes_reproduction.json": "f115932c5c9d3b2216ca3c1a92401a31079066612434f9545204912d75751fec",
+    "runtime_execution/mes_root_causes.json": "b84a640ba2e2e6421f0a1acb6b8bad7e31b9247e15a5b747d53efbdf5bf4d615",
+    "project_f_runtime_execution_ledger.json": "4e9f752fa4eb18bee21450dc73f6ee88198b461d4bd72eee6bdac257152f6bcf",
+    "project_f_runtime_precision_metrics.json": "1d28449e23eb096a9111707852fc1dc06860f83ef5cc028678c516748a14c5ad",
+    "project_f_runtime_recall_metrics.json": "869b0261bc9a7d121ad0dce07c6dc9931a5f6a09dfa0222eb0a42fb467cd85b1",
+    "project_f_runtime_mechanism_contribution.json": "5a959c4099a3ba047256ef1c4ef59911f0ec374cfa0c933dd53ab0e4d137dd41",
+    "project_f_runtime_combination_contribution.json": "fc2adf88b9c11fef8c873b37bea2108717fd21008082e4e5dc13364fea4b4f7e",
+    "project_f_runtime_result_classification.json": "14cd122f0d007c93756f4d688d4fe2df69e69f2f79d580606a847e6f4555e344",
+    "project_g_entry_gate.json": "385e12229cfbfdb5e7f43cbeaf3934e8ff2eae59d2444abbf601fa41c2b76f31",
+    "project_f_runtime_effect_final_report.json": "a41ab07cca4612dcf18a49081ee71d0e654f519309064bbabae73efead4299d7"
+  },
+  "execution_baseline": {
+    "sut": "Discrete Manufacturing MES",
+    "port": 8020,
+    "execution_mode": "REAL_HTTP",
+    "total_experiments": 34,
+    "violation_candidates": 28,
+    "passes": 6,
+    "runtime_seconds": 216.91,
+    "mechanism_coverage": "10/10"
+  },
+  "reported_results_at_freeze": {
+    "reported_formal_findings": 28,
+    "reported_stable_reproduction": 24,
+    "reported_reproduction_eligible": 26,
+    "reported_unstable": 2,
+    "reported_unique_roots": 11,
+    "reported_unique_tp": 11,
+    "reported_deep_tp": 8,
+    "reported_level": "LEVEL_B",
+    "reported_project_g_entry": false
+  }
+}

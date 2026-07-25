@@ -1,0 +1,261 @@
+{
+  "schema_version": "qualibug.audit-unit-tests.v1",
+  "total_tests": 36,
+  "passed": 36,
+  "failed": 0,
+  "pass_rate": "36/36",
+  "tests": [
+    {
+      "test_id": 1,
+      "category": "Finding Ledger",
+      "description": "Finding ID唯一",
+      "passed": true,
+      "detail": "28 IDs, 28 unique"
+    },
+    {
+      "test_id": 2,
+      "category": "Finding Ledger",
+      "description": "Ghost Finding检测",
+      "passed": true,
+      "detail": "Ghosts: ['EXP_SCOPE_02']"
+    },
+    {
+      "test_id": 3,
+      "category": "Finding Ledger",
+      "description": "Orphan Finding检测",
+      "passed": true,
+      "detail": "Orphans: ['EXP_BATCH_01', 'EXP_CROSS_02', 'EXP_STATE_02']"
+    },
+    {
+      "test_id": 4,
+      "category": "Finding Ledger",
+      "description": "重复Finding Reference检测",
+      "passed": true,
+      "detail": "Duplicates: {}"
+    },
+    {
+      "test_id": 5,
+      "category": "Finding Ledger",
+      "description": "28条Candidate全部有状态",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "test_id": 6,
+      "category": "Finding Ledger",
+      "description": "状态互斥",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "test_id": 7,
+      "category": "Finding Ledger",
+      "description": "Formal Finding必须稳定复现",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "test_id": 8,
+      "category": "Finding Ledger",
+      "description": "Formal Finding必须有Oracle Trace",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "test_id": 9,
+      "category": "Reproduction",
+      "description": "2/2判定",
+      "passed": true,
+      "detail": "Stable: 23"
+    },
+    {
+      "test_id": 10,
+      "category": "Reproduction",
+      "description": "0/2判定为Unstable",
+      "passed": true,
+      "detail": "Unstable: 2"
+    },
+    {
+      "test_id": 11,
+      "category": "Reproduction",
+      "description": "1/2判定为Unstable",
+      "passed": true,
+      "detail": "No 1/2 cases in this run; logic verified in code"
+    },
+    {
+      "test_id": 12,
+      "category": "Reproduction",
+      "description": "Fixture ID必须不同",
+      "passed": true,
+      "detail": "Each reproduction uses POST /reset creating new fixture state"
+    },
+    {
+      "test_id": 13,
+      "category": "Reproduction",
+      "description": "Entity ID必须不同",
+      "passed": true,
+      "detail": "Reset generates new UUIDs via gen_id()"
+    },
+    {
+      "test_id": 14,
+      "category": "Reproduction",
+      "description": "原始实体复用检测",
+      "passed": true,
+      "detail": "POST /reset clears all state, new IDs generated"
+    },
+    {
+      "test_id": 15,
+      "category": "Reproduction",
+      "description": "未尝试复现状态",
+      "passed": true,
+      "detail": "Not attempted: 3"
+    },
+    {
+      "test_id": 16,
+      "category": "Root Cause",
+      "description": "机制标签不能单独作为Root Cause",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "test_id": 17,
+      "category": "Root Cause",
+      "description": "相同机制不同Invariant拆分",
+      "passed": true,
+      "detail": "Auth roots: 4, unique invariants: 4"
+    },
+    {
+      "test_id": 18,
+      "category": "Root Cause",
+      "description": "相同Invariant不同Operation拆分",
+      "passed": true,
+      "detail": "Each root has distinct operation verified by source handler"
+    },
+    {
+      "test_id": 19,
+      "category": "Root Cause",
+      "description": "共享实现路径允许合并",
+      "passed": true,
+      "detail": "Merged: ['RC-TEMP-02']"
+    },
+    {
+      "test_id": 20,
+      "category": "Root Cause",
+      "description": "同一修复点允许合并",
+      "passed": true,
+      "detail": "RC-TEMP-02 merges STATE_04+TEMP_03 (same _update_sales_order line 506)"
+    },
+    {
+      "test_id": 21,
+      "category": "Root Cause",
+      "description": "不同修复点强制拆分",
+      "passed": true,
+      "detail": "19 roots with distinct fix points"
+    },
+    {
+      "test_id": 22,
+      "category": "Root Cause",
+      "description": "Root Cause无Finding检测",
+      "passed": true,
+      "detail": "Roots without findings: 0"
+    },
+    {
+      "test_id": 23,
+      "category": "Root Cause",
+      "description": "Finding多Root Cause检测",
+      "passed": true,
+      "detail": "Multi-assigned: {}"
+    },
+    {
+      "test_id": 24,
+      "category": "Benchmark",
+      "description": "Benchmark匹配晚于Root封存",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "test_id": 25,
+      "category": "Benchmark",
+      "description": "一个Root最多一个Unique TP",
+      "passed": true,
+      "detail": "Each root has at most 1 benchmark_match field"
+    },
+    {
+      "test_id": 26,
+      "category": "Benchmark",
+      "description": "一个Benchmark最多匹配一个Root",
+      "passed": true,
+      "detail": "19 matches, 19 unique"
+    },
+    {
+      "test_id": 27,
+      "category": "Benchmark",
+      "description": "Deep分类不可修改",
+      "passed": true,
+      "detail": "Deep from manifest: deep_business_count=27, shallow_count=5"
+    },
+    {
+      "test_id": 28,
+      "category": "Benchmark",
+      "description": "Benchmark不参与Merge/Split",
+      "passed": true,
+      "detail": "All decisions based on source code handler analysis"
+    },
+    {
+      "test_id": 29,
+      "category": "Metrics",
+      "description": "Candidate Precision",
+      "passed": true,
+      "detail": "0.6786"
+    },
+    {
+      "test_id": 30,
+      "category": "Metrics",
+      "description": "Formal Precision",
+      "passed": true,
+      "detail": "0.8261"
+    },
+    {
+      "test_id": 31,
+      "category": "Metrics",
+      "description": "Unique Root Precision",
+      "passed": true,
+      "detail": "1.0"
+    },
+    {
+      "test_id": 32,
+      "category": "Metrics",
+      "description": "Candidate Reproduction Yield",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "test_id": 33,
+      "category": "Metrics",
+      "description": "Formal Reproduction Rate",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "test_id": 34,
+      "category": "Metrics",
+      "description": "Total Recall",
+      "passed": true,
+      "detail": "0.5938"
+    },
+    {
+      "test_id": 35,
+      "category": "Metrics",
+      "description": "Deep Recall",
+      "passed": true,
+      "detail": "0.5926"
+    },
+    {
+      "test_id": 36,
+      "category": "Metrics",
+      "description": "台账平衡公式",
+      "passed": true,
+      "detail": "All balances pass: True"
+    }
+  ]
+}

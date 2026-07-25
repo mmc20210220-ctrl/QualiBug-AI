@@ -1,0 +1,92 @@
+{
+  "schema_version": "qualibug.audited-merge-split.v1",
+  "total_decisions": 8,
+  "decisions": [
+    {
+      "finding_ids": [
+        "EXP_AUTH_01",
+        "EXP_AUTH_02",
+        "EXP_AUTH_03",
+        "EXP_AUTH_04"
+      ],
+      "original_root": "RC_EXP_AUTH_01",
+      "decision": "SPLIT",
+      "rationale": "4 different handler functions (_create_product, _update_product, _delete_wo, _create_work_report), 4 different missing controls, 4 different fix points. No shared authorization middleware exists.",
+      "evidence": "Source lines 330, 342, 700, 856 - each is independent check_role() call or missing check"
+    },
+    {
+      "finding_ids": [
+        "EXP_STATE_01",
+        "EXP_STATE_03",
+        "EXP_STATE_04"
+      ],
+      "original_root": "RC_EXP_STATE_01",
+      "decision": "SPLIT",
+      "rationale": "3 different handlers (_release_wo, _update_plan, _update_sales_order), 3 different state machines (WO, Plan, SO), 3 different fix points. No shared state transition engine.",
+      "evidence": "Source lines 615, 557, 506 - independent guard conditions"
+    },
+    {
+      "finding_ids": [
+        "EXP_CROSS_01",
+        "EXP_CROSS_03",
+        "EXP_CROSS_04",
+        "EXP_CROSS_05",
+        "EXP_CROSS_06"
+      ],
+      "original_root": "RC_EXP_CROSS_01",
+      "decision": "SPLIT",
+      "rationale": "5 different invariants (BOM existence, operation completion, rework precondition, quality gate, quantity cap), 4 different handlers. No shared constraint engine.",
+      "evidence": "Source lines 593, 645, 943, 992, 594 - each is a separate missing validation"
+    },
+    {
+      "finding_ids": [
+        "EXP_CONS_01",
+        "EXP_CONS_02"
+      ],
+      "original_root": "RC_EXP_CONS_01",
+      "decision": "SPLIT",
+      "rationale": "2 different handlers (_create_material_issue, _create_work_report), 2 different quantity constraints (reservation capacity, plan capacity), 2 different entity relationships.",
+      "evidence": "Source lines 781, 855 - independent missing checks in different domain services"
+    },
+    {
+      "finding_ids": [
+        "EXP_IDEMP_01",
+        "EXP_IDEMP_02"
+      ],
+      "original_root": "RC_EXP_IDEMP_01",
+      "decision": "SPLIT",
+      "rationale": "2 different handlers (_create_sales_order, _create_receipt), 2 different uniqueness constraints (order_ref business key vs work_order_id relational uniqueness).",
+      "evidence": "Source lines 495, 993 - different uniqueness semantics"
+    },
+    {
+      "finding_ids": [
+        "EXP_COMP_01",
+        "EXP_COMP_02"
+      ],
+      "original_root": "RC_EXP_COMP_01",
+      "decision": "SPLIT",
+      "rationale": "2 different aggregates (WorkOrder→MaterialReservation, BOM→BOMLine), 2 different compensation patterns (status cascade vs entity cascade), 2 different handlers.",
+      "evidence": "Source lines 674, 406 - different aggregate roots and compensation logic"
+    },
+    {
+      "finding_ids": [
+        "EXP_STATE_04",
+        "EXP_TEMP_03"
+      ],
+      "original_root": "separate in original",
+      "decision": "MERGE",
+      "rationale": "Same handler (_update_sales_order line 506), same missing control (no plan-confirmed immutability check), same fix point, same invariant. Both test modifying SO after linked plan confirmed.",
+      "evidence": "Source line 506: single _update_sales_order handler with BUG-MES-028"
+    },
+    {
+      "finding_ids": [
+        "EXP_SCOPE_01"
+      ],
+      "original_root": "RC_EXP_SCOPE_01 (included ghost EXP_SCOPE_02)",
+      "decision": "SPLIT",
+      "rationale": "Remove ghost reference EXP_SCOPE_02. Only EXP_SCOPE_01 exists as a real finding.",
+      "evidence": "EXP_SCOPE_02 not in findings list - ghost reference"
+    }
+  ],
+  "timestamp": 1784939867.049578
+}

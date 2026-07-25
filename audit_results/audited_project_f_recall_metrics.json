@@ -1,0 +1,10 @@
+{
+  "schema_version": "qualibug.audited-recall.v1",
+  "total_recall": 0.5938,
+  "total_recall_formula": "19/32",
+  "deep_recall": 0.5926,
+  "deep_recall_formula": "16/27",
+  "deep_benchmark_total": 27,
+  "deep_benchmark_source": "benchmark/ground_truth.json deep_business_count",
+  "timestamp": 1784939867.049578
+}
