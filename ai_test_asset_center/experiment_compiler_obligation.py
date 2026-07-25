@@ -122,7 +122,17 @@ def _is_ephemeral_session_path(path: str) -> bool:
     segments = [seg for seg in normalized.split("/") if seg]
     if not segments:
         return False
-    return segments[-1] in _EPHEMERAL_SESSION_SEGMENTS
+    if segments[-1] in _EPHEMERAL_SESSION_SEGMENTS:
+        return True
+    # Password reset / forgot flows send a token mail; they do not create a
+    # durable collection row that needs governed DELETE compensation.
+    if (
+        len(segments) >= 2
+        and segments[-2] == "password"
+        and segments[-1] in {"reset", "forgot", "recover"}
+    ):
+        return True
+    return False
 
 
 def compile_experiment_for_obligation(
@@ -557,13 +567,19 @@ def compile_experiment_for_obligation(
                     ":" + target, str(gen_val)
                 )
     if is_write and not write_observers:
-        # A synthesized observer observes nothing. Without a source-declared
-        # effect read there is no way to tell whether the write took effect.
-        return blocked_experiment(
-            oid,
-            "BLOCKED_MISSING_OBSERVER",
-            "write_observer",
+        primary_path_for_observers = normalize_path_placeholders(
+            _text(primary_op.get("path") or primary_op.get("raw_path"))
         )
+        # Session/token posts are verified by transport status alone; they do
+        # not produce a durable entity that an effect-read observer can bind.
+        if not _is_ephemeral_session_path(primary_path_for_observers):
+            # A synthesized observer observes nothing. Without a source-declared
+            # effect read there is no way to tell whether the write took effect.
+            return blocked_experiment(
+                oid,
+                "BLOCKED_MISSING_OBSERVER",
+                "write_observer",
+            )
 
     for fixture in required_fixtures:
         concrete = next(
@@ -689,22 +705,15 @@ def compile_experiment_for_obligation(
                 "runtime_response_binding_required": "{" in primary_path,
             }]
         elif (
-            # State-transition POST: operates on an existing resource (has
-            # path parameter) rather than creating a new collection item.
-            # Use before/after snapshot restore as the cleanup strategy.
+            # Identity-bound POST (ship/cancel/confirm/…): replaying the same
+            # transition cannot restore prior state. Require a source-declared
+            # compensates relation; otherwise fail closed as non-reversible.
             primary_path.startswith("/")
             and primary_method == "POST"
             and "{" in primary_path
             and not cleanup_op
         ):
-            cleanup_plan = [{
-                "action": "restore_before_snapshot",
-                "mode": "snapshot_restore",
-                "operation_ref": primary_op_id,
-                "path": primary_path,
-                "method": primary_method,
-                "runtime_response_binding_required": True,
-            }]
+            pass
         elif (
             # Ephemeral session/token posts only: identity-bound paths (/{id}/…)
             # are persistent mutations even under /api/auth/… admin routes.
