@@ -649,29 +649,10 @@ def preflight_experiment_executable(
     if is_write and not _list(exp.get("cleanup_plan")):
         # Allow writes where cleanup is explicitly declared not required
         if not safety.get("cleanup_not_required"):
-            # ── Enhanced: auto-generate snapshot_restore cleanup instead of blocking ──
-            # Instead of hard-blocking, inject a universal snapshot_restore cleanup
-            # so the experiment can proceed. The executor will capture before-state
-            # and attempt restoration after the experiment completes.
-            _treatment_steps = _list(exp.get("treatment_plan"))
-            _primary_step = next((s for s in _treatment_steps if isinstance(s, dict)), {})
-            _primary_op_ref = _text(_primary_step.get("operation_ref"))
-            _primary_op = _dict(ops.get(_primary_op_ref)) if _primary_op_ref else {}
-            _primary_path = _text(_primary_op.get("path") or _primary_op.get("raw_path") or "")
-            _primary_method = _text(_primary_op.get("method") or "POST").upper()
-            if _primary_path.startswith("/"):
-                exp["cleanup_plan"] = [{
-                    "action": "restore_before_snapshot",
-                    "mode": "snapshot_restore",
-                    "operation_ref": _primary_op_ref,
-                    "path": _primary_path,
-                    "method": _primary_method,
-                    "runtime_response_binding_required": "{" in _primary_path,
-                    "_runtime_auto_injected": True,
-                }]
-                exp.setdefault("_degraded_cleanup", []).append("auto_snapshot_restore_injected")
-            else:
-                return False, "BLOCKED_NON_REVERSIBLE_WRITE", "cleanup_compensation_unresolved"
+            # Never invent cleanup at preflight. Compilers must bind a
+            # source-declared compensator (or snapshot restore for in-place
+            # PUT/PATCH) before a write reaches transport.
+            return False, "BLOCKED_NON_REVERSIBLE_WRITE", "cleanup_compensation_unresolved"
     cleanup_preflight_error = _cleanup_body_preflight_error(exp)
     if cleanup_preflight_error:
         # ── Enhanced: degrade instead of hard-block for auto-generated cleanups ──

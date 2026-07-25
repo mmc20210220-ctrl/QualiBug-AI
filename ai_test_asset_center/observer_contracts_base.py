@@ -1806,6 +1806,7 @@ _TYPED_ASSERTION_KINDS = {
     "delta",
     "equality",
     "eventual_consistency",
+    "field_delta",
     "http_status",
     "http_status_class",
     "idempotency",
@@ -1815,11 +1816,13 @@ _TYPED_ASSERTION_KINDS = {
     "json_path_exists",
     "json_path_type",
     "owner_tenant_visibility",
+    "postcondition",
     "privacy",
     "state",
     "state_transition",
     "temporal",
     "validation",
+    "validation_rejection",
     "visibility",
 }
 

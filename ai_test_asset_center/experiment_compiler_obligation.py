@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -15,7 +16,25 @@ logger = logging.getLogger(__name__)
 from .behavior_ir import source_identity_fields_for_operation
 from .experiment_protocols import compile_family_protocol
 from .observer_contracts_base import compile_observer_requirements
-from .real_id_resolver import normalize_path_placeholders
+from .real_id_resolver import collection_path, normalize_path_placeholders
+
+# Risk-family labels are not assertion kinds. Map only when the protocol did not
+# already emit a concrete DSL kind.
+_FAMILY_ASSERTION_KIND = {
+    "authorization": "authorization",
+    "isolation": "isolation",
+    "visibility": "visibility",
+    "privacy": "privacy",
+    "validation": "validation_rejection",
+    "state_integrity": "state_transition",
+    "lifecycle": "state_transition",
+    "consistency": "cross_surface_consistency",
+    "invariant": "state_transition",
+    "conservation": "conservation",
+    "concurrency": "concurrency",
+    "idempotency": "idempotency",
+    "temporal": "temporal",
+}
 from .runtime_binding_graph import (
     blocked_binding_reasons,
     build_binding_plan,
@@ -49,6 +68,36 @@ def _list(value: Any) -> list[Any]:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _identity_bound_delete_refs(
+    *,
+    primary_op_id: str,
+    primary_path: str,
+    ops: dict[str, dict[str, Any]],
+) -> list[str]:
+    """Return unique source-declared DELETE ops on the same collection identity."""
+
+    op_collection = normalize_path_placeholders(collection_path(primary_path))
+    if not op_collection.startswith("/"):
+        return []
+    delete_candidates: list[str] = []
+    for cand_id, cand_op in ops.items():
+        if cand_id == primary_op_id or not isinstance(cand_op, dict):
+            continue
+        if _text(cand_op.get("method")).upper() != "DELETE":
+            continue
+        cand_path = normalize_path_placeholders(
+            _text(cand_op.get("path") or cand_op.get("raw_path"))
+        )
+        cand_collection = normalize_path_placeholders(collection_path(cand_path))
+        identity_suffix = cand_path[len(op_collection) :]
+        if (
+            cand_collection == op_collection
+            and re.fullmatch(r"/\{[A-Za-z_]\w*\}", identity_suffix)
+        ):
+            delete_candidates.append(cand_id)
+    return delete_candidates
 
 
 def compile_experiment_for_obligation(
@@ -637,42 +686,41 @@ def compile_experiment_for_obligation(
             cleanup_plan = []
             cleanup_explicitly_not_required = True
         elif (
-            # Collection POST: creates a new resource in a collection.
-            # Auto-generate DELETE cleanup using the response-bound resource ID.
+            # Collection POST create: only a source-declared identity-bound
+            # DELETE on the same collection may compensate. Invented
+            # ``primary/{created_resource_id}`` DELETE paths are prohibited.
             primary_method == "POST"
             and primary_path.startswith("/")
             and "{" not in primary_path
             and not cleanup_op
         ):
-            cleanup_plan = [{
-                "action": "auto_delete_created_resource",
-                "mode": "response_bound_delete",
-                "operation_ref": primary_op_id,
-                "path": primary_path + "/{created_resource_id}",
-                "method": "DELETE",
-                "runtime_response_binding_required": True,
-                "_auto_generated": True,
-            }]
+            delete_candidates = _identity_bound_delete_refs(
+                primary_op_id=primary_op_id,
+                primary_path=primary_path,
+                ops=ops,
+            )
+            if len(delete_candidates) == 1:
+                cleanup_op = delete_candidates[0]
+                cleanup_req = {
+                    **cleanup_req,
+                    "operation_ref": cleanup_op,
+                    "required": True,
+                    "mode": "reverse_order",
+                }
+            # else: leave unresolved → BLOCKED_NON_REVERSIBLE_WRITE below
         elif (
-            # DELETE operations: use snapshot_restore to re-create if needed.
+            # DELETE recreation requires an explicit compensates relation; do
+            # not invent snapshot_restore / POST recreate from route shape.
             primary_method == "DELETE"
             and primary_path.startswith("/")
             and not cleanup_op
         ):
-            cleanup_plan = [{
-                "action": "restore_before_snapshot",
-                "mode": "snapshot_restore",
-                "operation_ref": primary_op_id,
-                "path": primary_path,
-                "method": primary_method,
-                "runtime_response_binding_required": "{" in primary_path,
-            }]
+            pass
         elif (
-            # Universal fallback: any remaining write with a valid path gets
-            # snapshot_restore cleanup. The executor captures before-state and
-            # restores it after the experiment completes.
+            # In-place mutation fallback only. Collection creates without a
+            # source DELETE must not compile a fake restore plan.
             primary_path.startswith("/")
-            and primary_method in {"POST", "PUT", "PATCH", "DELETE"}
+            and primary_method in {"PUT", "PATCH"}
             and not cleanup_op
         ):
             cleanup_plan = [{
@@ -724,15 +772,10 @@ def compile_experiment_for_obligation(
                     # Cleanup explicitly not required; proceed without it.
                     cleanup_plan = []
                     cleanup_explicitly_not_required = True
-                elif family in {"authorization", "isolation"}:
-                    # Authorization/isolation probes expect the write to be
-                    # REJECTED (401/403). If rejected, no state change occurs
-                    # and no cleanup is needed. If the write unexpectedly
-                    # succeeds, that is a bug finding; the runtime attempts
-                    # best-effort cleanup via before/after snapshot restore.
-                    cleanup_plan = []
-                    cleanup_explicitly_not_required = True
                 else:
+                    # Authorization/isolation probes that expect rejection still
+                    # need a source-declared compensator when cleanup is
+                    # required: an unexpected accepted write must be reversible.
                     return blocked_experiment(
                         oid,
                         "BLOCKED_NON_REVERSIBLE_WRITE",
@@ -1030,13 +1073,14 @@ def compile_experiment_for_obligation(
     needs_control = bool(control_plan)
 
     protocol_assertion = _dict(protocol.get("assertion"))
+    assertion_kind = (
+        _text(protocol_assertion.get("kind"))
+        or _FAMILY_ASSERTION_KIND.get(family)
+        or "http_status"
+    )
     assertions = [{
         "assertion_id": f"assert_{family or 'generic'}",
-        "kind": (
-            _text(protocol_assertion.get("kind"))
-            or family
-            or "validation"
-        ),
+        "kind": assertion_kind,
         "template": _text(prop.get("template")),
         "expected_from": "source_property",
         "property": prop,
