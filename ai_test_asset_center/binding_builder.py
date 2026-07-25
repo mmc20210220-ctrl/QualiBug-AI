@@ -258,7 +258,13 @@ def _build_operation_bindings(ir: dict, ledger: BindingLedger, module: str) -> i
             evidence=evidence,
             metadata=metadata,
         )
-        _auto_promote(ledger, binding, confidence)
+        # Source-declared operations are path identities, not probe targets.
+        _auto_promote(
+            ledger,
+            binding,
+            confidence,
+            executable_without_probe=True,
+        )
         count += 1
 
     return count
@@ -522,7 +528,14 @@ def _build_actor_bindings(ir: dict, ledger: BindingLedger, module: str) -> int:
             evidence=evidence,
             metadata=metadata,
         )
-        _auto_promote(ledger, binding, confidence)
+        # A runtime-bound actor already has configured credentials. That is the
+        # confirmation probe; leaving it at HIGH_CONFIDENCE blocks every write.
+        _auto_promote(
+            ledger,
+            binding,
+            confidence,
+            executable_without_probe=actor.get("runtime_bound") is True,
+        )
         count += 1
 
     return count
@@ -839,7 +852,13 @@ def _build_oracle_input_bindings(ir: dict, ledger: BindingLedger, module: str) -
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
-def _auto_promote(ledger: BindingLedger, binding: dict[str, Any], confidence: float) -> None:
+def _auto_promote(
+    ledger: BindingLedger,
+    binding: dict[str, Any],
+    confidence: float,
+    *,
+    executable_without_probe: bool = False,
+) -> None:
     """Auto-promote binding based on confidence score."""
     binding_id = binding.get("binding_id", "")
     current_status = binding.get("status", "")
@@ -854,11 +873,16 @@ def _auto_promote(ledger: BindingLedger, binding: dict[str, Any], confidence: fl
                 reason="auto_promote:high_confidence",
                 confidence=confidence,
             )
-            # If confidence is very high and has multiple evidence dimensions, go to EXECUTABLE
-            if confidence >= 0.95:
+            # Very high confidence, or a binding whose confirmation is already
+            # present in source/runtime facts (runtime-bound actor, declared op).
+            if confidence >= 0.95 or executable_without_probe:
                 ledger.promote(
                     binding_id, BindingStatus.EXECUTABLE,
-                    reason="auto_promote:very_high_confidence",
+                    reason=(
+                        "auto_promote:source_or_runtime_confirmed"
+                        if executable_without_probe
+                        else "auto_promote:very_high_confidence"
+                    ),
                 )
         except ValueError:
             pass
@@ -869,6 +893,11 @@ def _auto_promote(ledger: BindingLedger, binding: dict[str, Any], confidence: fl
                 reason="auto_promote:moderate_confidence",
                 confidence=confidence,
             )
+            if executable_without_probe:
+                ledger.promote(
+                    binding_id, BindingStatus.EXECUTABLE,
+                    reason="auto_promote:source_or_runtime_confirmed",
+                )
         except ValueError:
             pass
 

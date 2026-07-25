@@ -904,27 +904,13 @@ def compile_experiment_for_obligation(
                     if _text(row.get("fixture_id"))
                 ]
 
-    effect_observer_ids = {
-        _text(observer.get("observer_id"))
-        for observer in observers
-        if _text(observer.get("observer_id")) in {
-            "after_state",
-            "before_state",
-            "business_effect",
-            "entity_state",
-            "final_state",
-        }
+    _EFFECT_OBSERVER_IDS = {
+        "after_state",
+        "before_state",
+        "business_effect",
+        "entity_state",
+        "final_state",
     }
-    if effect_observer_ids:
-        if not write_observers:
-            return blocked_experiment(
-                oid,
-                "BLOCKED_MISSING_OBSERVER",
-                ",".join(sorted(effect_observer_ids)),
-            )
-        for observer in observers:
-            if _text(observer.get("observer_id")) in effect_observer_ids:
-                observer["resolver_operations"] = write_observers
 
     protocol = compile_family_protocol(
         risk_family=family,
@@ -935,7 +921,9 @@ def compile_experiment_for_obligation(
         property_spec=prop,
         behavior_ir=ir,
     )
-    # Merge protocol-level observers (e.g. before_state, after_state)
+    # Merge protocol-level observers (e.g. before_state, after_state) before
+    # attaching resolvers — otherwise they enter the experiment with no way to
+    # read before/after state and finish INDETERMINATE.
     for pobs in _list(protocol.get("observers")):
         if isinstance(pobs, dict) and _text(pobs.get("observer_id")) not in {
             _text(o.get("observer_id")) for o in observers if isinstance(o, dict)
@@ -948,6 +936,22 @@ def compile_experiment_for_obligation(
             or "BLOCKED_UNSUPPORTED_ADAPTER",
             _text(protocol.get("detail")),
         )
+
+    effect_observer_ids = {
+        _text(observer.get("observer_id"))
+        for observer in observers
+        if _text(observer.get("observer_id")) in _EFFECT_OBSERVER_IDS
+    }
+    if effect_observer_ids:
+        if not write_observers:
+            return blocked_experiment(
+                oid,
+                "BLOCKED_MISSING_OBSERVER",
+                ",".join(sorted(effect_observer_ids)),
+            )
+        for observer in observers:
+            if _text(observer.get("observer_id")) in effect_observer_ids:
+                observer["resolver_operations"] = write_observers
 
     if family == "state":
         treatment_rows = [

@@ -111,52 +111,60 @@ def _determine_required_dimensions(
     obligation: dict[str, Any],
     behavior_ir: dict[str, Any],
 ) -> set[str]:
-    """Determine which binding dimensions are required for this obligation."""
+    """Determine which binding dimensions are required for this obligation.
+
+    Only dimensions the obligation actually names may block. Requiring a
+    dimension with no obligation-local refs makes the gate fail on unrelated
+    ledger rows (for example every entity CANDIDATE when the write names none).
+    """
     obl = _dict(obligation)
+    ir = _dict(behavior_ir)
     required: set[str] = set()
+    prop = _dict(obl.get("property") or obl.get("property_spec"))
 
-    # Entity binding always required if operations reference entities
-    if _list(obl.get("required_operations")):
-        required.add("entity")
+    op_refs = [_text(x) for x in _list(obl.get("required_operations")) if _text(x)]
+    if op_refs:
         required.add("operation")
+        ops_by_id = {
+            _text(op.get("id")): op
+            for op in _list(ir.get("operations"))
+            if isinstance(op, dict) and _text(op.get("id"))
+        }
+        if any(
+            _text(ops_by_id.get(op_id, {}).get("entity_ref"))
+            or _list(ops_by_id.get(op_id, {}).get("entity_refs"))
+            for op_id in op_refs
+        ):
+            required.add("entity")
 
-    # Actor binding required if actors specified
     if _list(obl.get("required_actors")):
         required.add("actor")
 
-    # Fixture binding required if fixtures specified
     if _list(obl.get("required_fixtures")):
         required.add("fixture")
 
-    # Observer binding required if observers specified
-    if _list(obl.get("required_observers")):
-        required.add("observer")
+    # required_observers names observer kinds (http_response, …), not IR
+    # binding identities. The experiment compiler already gates those.
 
-    # State binding for state family
     family = _text(obl.get("risk_family"))
-    if family == "state":
+    if family == "state" and _text(prop.get("state_ref") or prop.get("from_state")):
         required.add("state")
 
-    # Scope binding for isolation family
-    if family in ("isolation", "authorization"):
+    if family in ("isolation", "authorization") and _text(
+        prop.get("scope_ref") or prop.get("ownership_param")
+    ):
         required.add("scope")
 
-    # Field binding for validation/conservation
-    if family in ("validation", "conservation", "causal"):
+    if family in ("validation", "conservation", "causal") and _list(
+        prop.get("fields") or prop.get("required_fields")
+    ):
         required.add("field")
 
-    # Relation binding for cross-entity
-    if family in ("cross_entity", "conservation"):
+    if family in ("cross_entity", "conservation") and _text(prop.get("relation_ref")):
         required.add("relation")
 
-    # Oracle input for all write operations
-    prop = _dict(obl.get("property"))
-    if prop.get("operation_ref") or _list(obl.get("required_operations")):
+    if _text(prop.get("invariant_ref")) or _list(obl.get("relation_refs")):
         required.add("oracle_input")
-
-    # Minimum: entity + operation for any obligation
-    required.add("entity")
-    required.add("operation")
 
     return required
 
@@ -179,17 +187,12 @@ def _check_dimension(
     needed_refs = _get_needed_refs(dimension, obl, ir)
 
     if not needed_refs:
-        # No specific requirement — pass if any executable binding exists
-        if executable:
-            return {"dimension": dimension, "passed": True, "reason": "any_executable_available"}
-        # If no bindings at all exist for this dimension, check if it's truly needed
-        if not all_of_type:
-            return {"dimension": dimension, "passed": True, "reason": "no_bindings_required"}
+        # The dimension was selected without obligation-local refs. Unrelated
+        # ledger rows for the same type must not become a gate failure.
         return {
             "dimension": dimension,
-            "passed": False,
-            "reason": "no_executable_bindings",
-            "missing_bindings": [b.get("binding_id", "?") for b in all_of_type[:3]],
+            "passed": True,
+            "reason": "no_specific_refs_required",
         }
 
     # Check if needed refs have executable bindings
