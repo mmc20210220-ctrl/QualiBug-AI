@@ -7,6 +7,7 @@ from urllib.parse import quote
 
 from .real_id_resolver import (
     bind_entity_fields,
+    body_field_collection_paths,
     infer_path_params,
     normalize_path_placeholders,
     param_field_candidates,
@@ -511,6 +512,72 @@ def runtime_setup_value_from_response(body: Any, target: str) -> Any:
     return None
 
 
+def _placeholder_rows_from_template(
+    value: Any,
+    path: str = "",
+) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_path = f"{path}.{key}" if path else str(key)
+            rows.extend(_placeholder_rows_from_template(child, child_path))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            rows.extend(
+                _placeholder_rows_from_template(child, f"{path}[{index}]")
+            )
+    elif isinstance(value, str):
+        match = _BODY_PLACEHOLDER_RE.match(value)
+        if match and path:
+            rows.append({
+                "target": path,
+                "template_token": _text(match.group(1)),
+            })
+    return rows
+
+
+def _derive_body_bindings_from_template(
+    body_template: dict[str, Any],
+    *,
+    operations: dict[str, dict[str, Any]],
+    create_path: str,
+) -> list[dict[str, Any]]:
+    parts = [part for part in normalize_path_placeholders(create_path).split("/") if part]
+    api_prefix = f"/{parts[0]}" if parts else "/api"
+    derived: list[dict[str, Any]] = []
+    for row in _placeholder_rows_from_template(body_template):
+        field = _text(row.get("target")).split(".")[-1].split("[")[0]
+        token = _text(row.get("template_token"))
+        candidate_paths = body_field_collection_paths(
+            field or token,
+            api_prefix=api_prefix,
+        ) or body_field_collection_paths(token, api_prefix=api_prefix)
+        resolvers: list[dict[str, str]] = []
+        for op_id, op in operations.items():
+            if not isinstance(op, dict):
+                continue
+            if _text(op.get("method")).upper() not in {"GET", "HEAD"}:
+                continue
+            op_path = normalize_path_placeholders(
+                _text(op.get("path") or op.get("raw_path"))
+            )
+            if op_path in candidate_paths and not path_has_placeholders(op_path):
+                resolvers.append({
+                    "operation_ref": op_id,
+                    "method": _text(op.get("method")).upper(),
+                    "path": op_path,
+                })
+        # No invented fallback: unresolved dependencies stay fail-closed
+        # so validated_fixture_setup rejects the create when no GET exists.
+        derived.append({
+            "target": _text(row.get("target")),
+            "template_token": token,
+            "resolver_operations": resolvers,
+            "fallback": "",
+        })
+    return derived
+
+
 def validated_fixture_setup(
     binding: dict[str, Any],
     operations: dict[str, dict[str, Any]],
@@ -550,8 +617,18 @@ def validated_fixture_setup(
     if not body_template:
         return {}
     setup = {**setup, "body_template": body_template}
+    raw_body_bindings = _list(setup.get("body_bindings"))
+    if not raw_body_bindings:
+        # Auto-discovered fixture creates often ship only a request example.
+        # Derive dependency resolvers from placeholder tokens so fields like
+        # addressId can be filled from source-declared list reads.
+        raw_body_bindings = _derive_body_bindings_from_template(
+            body_template,
+            operations=operations,
+            create_path=path,
+        )
     body_bindings: list[dict[str, Any]] = []
-    for raw in _list(setup.get("body_bindings")):
+    for raw in raw_body_bindings:
         if not isinstance(raw, dict):
             return {}
         resolvers = validated_runtime_resolvers(

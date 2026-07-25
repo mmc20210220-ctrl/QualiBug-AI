@@ -107,6 +107,7 @@ def _auto_fixture_create_for_binding_target(
     binding: dict[str, Any],
     operations: dict[str, dict[str, Any]],
     binding_plan: dict[str, Any],
+    actors: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """Find a POST create operation at the same collection as the binding target path.
 
@@ -140,6 +141,14 @@ def _auto_fixture_create_for_binding_target(
     if not candidate_paths:
         return None
 
+    import re as _re_cleanup
+
+    _cleanup_action = _re_cleanup.compile(
+        r"(?:cancel|close|void|disable|archive|reject|release|rollback|revoke|remove|"
+        r"delete|deactivate|suspend|expire|invalidate|terminate|withdraw|abandon|"
+        r"discard|retire|freeze|reset|clear|purge)$",
+        _re_cleanup.I,
+    )
     for op_id, op in operations.items():
         if not isinstance(op, dict):
             continue
@@ -151,40 +160,56 @@ def _auto_fixture_create_for_binding_target(
         )
         op_collection = normalize_path_placeholders(_collection_path(op_path))
         if op_path in candidate_paths or op_collection in candidate_paths:
-            # Find a DELETE cleanup operation at the same collection.
-            # The fixture executor will use this to clean up the created resource.
-            cleanup_ops = []
+            # Prefer identity-bound DELETE; otherwise accept a source-shaped
+            # compensation action on the same collection (e.g. …/{id}/cancel).
+            cleanup_ops: list[dict[str, str]] = []
+            compensation_ops: list[dict[str, str]] = []
             for clean_id, clean_op in operations.items():
                 if not isinstance(clean_op, dict):
                     continue
-                if _text(clean_op.get("method")).upper() != "DELETE":
+                clean_method = _text(clean_op.get("method")).upper()
+                if clean_method not in {"DELETE", "POST", "PUT", "PATCH"}:
                     continue
                 clean_path = normalize_path_placeholders(
                     _text(clean_op.get("path") or clean_op.get("raw_path"))
                 )
-                clean_collection = normalize_path_placeholders(
-                    _collection_path(clean_path)
-                )
                 if (
-                    clean_collection == op_collection
-                    and path_has_placeholders(clean_path)
+                    not path_has_placeholders(clean_path)
+                    or not clean_path.startswith(op_collection.rstrip("/") + "/")
                 ):
-                    cleanup_ops.append({
-                        "operation_ref": clean_id,
-                        "method": "DELETE",
-                        "path": clean_path,
-                    })
-            if not cleanup_ops:
+                    continue
+                row = {
+                    "operation_ref": clean_id,
+                    "method": clean_method,
+                    "path": clean_path,
+                }
+                if clean_method == "DELETE":
+                    cleanup_ops.append(row)
+                elif _cleanup_action.search(clean_path.rstrip("/")):
+                    compensation_ops.append(row)
+            selected_cleanup = cleanup_ops or compensation_ops
+            if not selected_cleanup:
+                continue
+            owner = _text(binding.get("fixture_owner_actor_ref"))
+            actor_refs = [owner] if owner else []
+            # Auto-create has no permits-bound owner: declare every campaign
+            # actor so runtime can prefer control/treatment, then fall back
+            # when dependency rows (e.g. addresses) are owned by a buyer.
+            if not actor_refs and isinstance(actors, dict):
+                actor_refs = [
+                    _text(actor_id)
+                    for actor_id in actors
+                    if _text(actor_id)
+                ]
+            if not actor_refs:
                 continue
             return {
                 "fixture_setup": {
                     "operation_ref": op_id,
                     "method": "POST",
                     "path": op_path,
-                    "cleanup_operations": cleanup_ops,
-                    "actor_refs": [
-                        _text(binding.get("fixture_owner_actor_ref"))
-                    ] if _text(binding.get("fixture_owner_actor_ref")) else [],
+                    "cleanup_operations": selected_cleanup,
+                    "actor_refs": actor_refs,
                 },
                 "force_fixture_setup": True,
                 "create_operation_ref": op_id,
@@ -288,7 +313,7 @@ def materialize_experiment_fixtures(
                 and not binding.get("fixture_setup")
             ):
                 auto_create = _auto_fixture_create_for_binding_target(
-                    target, binding, ops, binding_plan
+                    target, binding, ops, binding_plan, actors=actors
                 )
                 if auto_create:
                     binding = {**binding, **auto_create}
@@ -358,72 +383,72 @@ def materialize_experiment_fixtures(
                 if _act_tok:
                     _actor_fallbacks.append((_act_id, _act_tok))
             for index, resolver in enumerate(resolvers):
-                _resolver_succeeded = False
-                for _fb_actor, _fb_token in _actor_fallbacks:
+                # A 2xx empty collection is not conclusive: the permitted fixture
+                # actor may simply own no rows. Keep trying other token-bearing
+                # actors before falling through to fixture create / BLOCKED.
+                for _fb_idx, (_fb_actor, _fb_token) in enumerate(_actor_fallbacks):
                     obs = _run_http_step(
                         base_url=base_url,
                         method=resolver["method"],
                         path=resolver["path"],
                         token=_fb_token,
                     )
-                    _sc = obs.get('status_code')
-                    if 200 <= int(_sc or 0) < 300:
-                        _effective_resolver_actor = _fb_actor
-                        _effective_resolver_token = _fb_token
-                        _resolver_succeeded = True
+                    obs.update({
+                        "phase": "binding_materialization",
+                        "step_id": f"bind:{target}:{index}:actor{_fb_idx}",
+                        "actor_ref": _fb_actor,
+                        "operation_ref": resolver["operation_ref"],
+                    })
+                    steps_out.append(obs)
+                    receipt.update({
+                        "resolver_path": resolver["path"],
+                        "resolver_operation_ref": resolver["operation_ref"],
+                        "resolver_actor_ref": _fb_actor,
+                        "status_code": int(obs.get("status_code") or 0),
+                    })
+                    _sc = int(obs.get("status_code") or 0)
+                    if _sc == 0:
                         break
-                    if int(_sc or 0) == 0:
-                        break
-                obs.update({
-                    "phase": "binding_materialization",
-                    "step_id": f"bind:{target}:{index}",
-                    "actor_ref": _effective_resolver_actor,
-                    "operation_ref": resolver["operation_ref"],
-                })
-                steps_out.append(obs)
-                receipt.update({
-                    "resolver_path": resolver["path"],
-                    "resolver_operation_ref": resolver["operation_ref"],
-                    "resolver_actor_ref": _effective_resolver_actor,
-                    "status_code": int(obs.get("status_code") or 0),
-                })
-                if not (200 <= int(obs.get("status_code") or 0) < 300):
-                    if int(obs.get("status_code") or 0) == 0:
-                        break
-                    continue
-                extracted = _select_runtime_binding(
-                    obs.get("body"),
-                    target_path,
-                    preferred_body=preferred_binding_body,
-                )
-                value = extracted.get(target)
-                if value in (None, "", [], {}):
-                    continue
-                runtime_bindings[target] = value
-                owner_actor_ref = _text(binding.get("fixture_owner_actor_ref"))
-                ownership_required = force_fixture_setup and bool(owner_actor_ref)
-                receipt.update({
-                    "status": "BOUND",
-                    "value_fingerprint": hashlib.sha256(
-                        str(value).encode("utf-8")
-                    ).hexdigest()[:12],
-                    "owner_actor_ref": owner_actor_ref,
-                    "ownership_proof_status": (
-                        "OBSERVED"
-                        if ownership_required and resolver_actor_ref == owner_actor_ref
-                        else "NOT_REQUIRED"
-                        if not ownership_required
-                        else "INDETERMINATE"
-                    ),
-                    "ownership_proof_source": "source_actor_bound_read",
-                })
-                break
+                    if not (200 <= _sc < 300):
+                        continue
+                    extracted = _select_runtime_binding(
+                        obs.get("body"),
+                        target_path,
+                        preferred_body=preferred_binding_body,
+                    )
+                    value = extracted.get(target)
+                    if value in (None, "", [], {}):
+                        continue
+                    _effective_resolver_actor = _fb_actor
+                    _effective_resolver_token = _fb_token
+                    runtime_bindings[target] = value
+                    owner_actor_ref = _text(binding.get("fixture_owner_actor_ref"))
+                    ownership_required = force_fixture_setup and bool(owner_actor_ref)
+                    receipt.update({
+                        "status": "BOUND",
+                        "value_fingerprint": hashlib.sha256(
+                            str(value).encode("utf-8")
+                        ).hexdigest()[:12],
+                        "owner_actor_ref": owner_actor_ref,
+                        "ownership_proof_status": (
+                            "OBSERVED"
+                            if ownership_required
+                            and _effective_resolver_actor == owner_actor_ref
+                            else "NOT_REQUIRED"
+                            if not ownership_required
+                            else "INDETERMINATE"
+                        ),
+                        "ownership_proof_source": "source_actor_bound_read",
+                    })
+                    break
+                if value not in (None, "", [], {}):
+                    break
             if value in (None, "", [], {}):
                 # Try auto-fixture: discover a POST create at the same collection.
                 # Uses the documented request_example from Behavior IR as body_template
                 # — industry-neutral, no hardcoding, works across all systems.
                 auto_create = _auto_fixture_create_for_binding_target(
-                    target, binding, ops, binding_plan
+                    target, binding, ops, binding_plan, actors=actors
                 )
                 if auto_create:
                     binding = {**binding, **auto_create}
@@ -447,6 +472,17 @@ def materialize_experiment_fixtures(
                     _fs_diag["blocked_reason"] = "fixture_setup_no_actor"
                 token_values: dict[str, Any] = {}
                 dependency_blocked = False
+                # Fixture create actors from permits may not own dependency rows
+                # (admin can create orders but addresses live under buyers).
+                _dep_actor_fallbacks: list[tuple[str, str]] = [
+                    (fixture_actor_ref, fixture_token)
+                ]
+                for _act_id, _act in actors.items():
+                    if _act_id == fixture_actor_ref:
+                        continue
+                    _act_tok = _resolve_token(_act, tokens)
+                    if _act_tok:
+                        _dep_actor_fallbacks.append((_act_id, _act_tok))
                 for dependency in _list(fixture_setup.get("body_bindings")):
                     dependency_target = _text(_dict(dependency).get("target"))
                     dependency_token = _text(_dict(dependency).get("template_token"))
@@ -456,31 +492,47 @@ def materialize_experiment_fixtures(
                     for index, resolver in enumerate(_list(_dict(dependency).get("resolver_operations"))):
                         if not isinstance(resolver, dict):
                             continue
-                        obs = _run_http_step(
-                            base_url=base_url,
-                            method=_text(resolver.get("method")).upper(),
-                            path=_text(resolver.get("path")),
-                            token=fixture_token,
-                        )
-                        obs.update({
-                            "phase": "binding_materialization_dependency",
-                            "step_id": f"bind:{target}:dependency:{dependency_token}:{index}",
-                            "actor_ref": fixture_actor_ref,
-                            "operation_ref": _text(resolver.get("operation_ref")),
-                        })
-                        steps_out.append(obs)
-                        if not (200 <= int(obs.get("status_code") or 0) < 300):
-                            if int(obs.get("status_code") or 0) == 0:
+                        for _dep_idx, (_dep_actor, _dep_token) in enumerate(
+                            _dep_actor_fallbacks
+                        ):
+                            obs = _run_http_step(
+                                base_url=base_url,
+                                method=_text(resolver.get("method")).upper(),
+                                path=_text(resolver.get("path")),
+                                token=_dep_token,
+                            )
+                            obs.update({
+                                "phase": "binding_materialization_dependency",
+                                "step_id": (
+                                    f"bind:{target}:dependency:{dependency_token}"
+                                    f":{index}:actor{_dep_idx}"
+                                ),
+                                "actor_ref": _dep_actor,
+                                "operation_ref": _text(resolver.get("operation_ref")),
+                            })
+                            steps_out.append(obs)
+                            _sc = int(obs.get("status_code") or 0)
+                            if _sc == 0:
                                 break
-                            continue
-                        dependency_leaf = dependency_target.split(".")[-1].split("[")[0]
-                        dependency_value = _runtime_value_from_response(
-                            obs.get("body"),
-                            dependency_leaf,
-                            f"/{{{dependency_leaf}}}",
-                        )
-                        if dependency_value not in (None, "", [], {}):
+                            if not (200 <= _sc < 300):
+                                continue
+                            dependency_leaf = dependency_target.split(".")[-1].split("[")[0]
+                            dependency_value = _runtime_value_from_response(
+                                obs.get("body"),
+                                dependency_leaf,
+                                f"/{{{dependency_leaf}}}",
+                            )
+                            if dependency_value in (None, "", [], {}):
+                                continue
                             token_values[dependency_token] = dependency_value
+                            # Own the created resource as the actor that can
+                            # actually see the dependency rows.
+                            if _dep_actor and _dep_actor != fixture_actor_ref:
+                                fixture_actor_ref = _dep_actor
+                                fixture_actor = actors.get(_dep_actor) or {}
+                                fixture_token = _dep_token
+                            break
+                        if dependency_value not in (None, "", [], {}):
                             break
                     # Fallback: use template literal value when no resolver
                     # exists. This is best-effort for fields (addressId,
@@ -695,6 +747,15 @@ def materialize_experiment_fixtures(
                         _bind_detail = (
                             f"runtime_read_binding_unresolved:{target}:"
                             f"resolver_no_http_response:{_resolver_path}"
+                        )
+                    elif 200 <= _resolver_status < 300:
+                        _empty_reason = _text(_fs_diag.get("blocked_reason")) or (
+                            "empty_collection"
+                        )
+                        _bind_detail = (
+                            f"runtime_read_binding_unresolved:{target}:"
+                            f"resolver_status_{_resolver_status}_"
+                            f"{_empty_reason}:{_resolver_path}"
                         )
                     else:
                         _bind_detail = (

@@ -3505,12 +3505,20 @@ def test_auto_fixture_requires_identity_bound_cleanup_operation() -> None:
             "path": "/resources",
         }],
     }
+    actors = {
+        "actor-buyer": {
+            "id": "actor-buyer",
+            "role": "buyer",
+            "credential_secret_ref": "secret_ref:test_accounts:buyer",
+        },
+    }
 
     assert _auto_fixture_create_for_binding_target(
         "id",
         binding,
         operations,
         {"id": binding},
+        actors=actors,
     ) is None
 
     operations["op-delete"] = {
@@ -3523,6 +3531,7 @@ def test_auto_fixture_requires_identity_bound_cleanup_operation() -> None:
         binding,
         operations,
         {"id": binding},
+        actors=actors,
     )
 
     assert fixture is not None
@@ -3531,6 +3540,212 @@ def test_auto_fixture_requires_identity_bound_cleanup_operation() -> None:
         "method": "DELETE",
         "path": "/resources/{id}",
     }]
+    assert fixture["fixture_setup"]["actor_refs"] == ["actor-buyer"]
+
+
+def test_runtime_binding_actor_fallback_on_empty_collection(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Primary actor 200+[] must not stop fallback to another token-bearing actor."""
+    behavior_ir = {
+        "operations": [{
+            "id": "op-list",
+            "method": "GET",
+            "path": "/api/orders",
+            "read_write": "read",
+        }, {
+            "id": "op-read",
+            "method": "GET",
+            "path": "/api/orders/{id}",
+            "read_write": "read",
+        }],
+        "actors": [
+            {
+                "id": "actor-admin",
+                "role": "admin",
+                "credential_secret_ref": "secret_ref:test_accounts:admin",
+            },
+            {
+                "id": "actor-buyer",
+                "role": "buyer",
+                "credential_secret_ref": "secret_ref:test_accounts:buyer",
+            },
+        ],
+    }
+    experiment = {
+        "experiment_id": "exp-empty-collection-fallback",
+        "obligation_id": "obl-empty-collection-fallback",
+        "compile_receipt": {"status": "COMPILED"},
+        "control_plan": [{
+            "step_id": "control_1",
+            "operation_ref": "op-read",
+            "actor_ref": "actor-admin",
+        }],
+        "treatment_plan": [{
+            "step_id": "treatment_1",
+            "operation_ref": "op-read",
+            "actor_ref": "actor-admin",
+        }],
+        "binding_plan": [{
+            "target": "id",
+            "status": "runtime_resolvable",
+            "target_path": "/api/orders/{id}",
+            "source_priority": "same_actor_list_read",
+            "fixture_owner_actor_ref": "actor-admin",
+            "resolver_operations": [{
+                "operation_ref": "op-list",
+                "method": "GET",
+                "path": "/api/orders",
+            }],
+        }],
+        "fixture_dag": {
+            "status": "READY",
+            "nodes": [{
+                "node_id": "bind-id",
+                "kind": "runtime_read_binding",
+                "target": "id",
+            }],
+            "setup_order": ["bind-id"],
+        },
+        "observers": [{"observer_id": "http_response"}],
+        "assertions": [],
+    }
+    seen_tokens: list[str] = []
+
+    def http_request(method: str, url: str, **kwargs):
+        token = str(kwargs.get("token") or "")
+        seen_tokens.append(token)
+        if token == "admin-token":
+            return {"status": 200, "body": [], "headers": {}, "duration_ms": 1}
+        if token == "buyer-token":
+            return {
+                "status": 200,
+                "body": [{"id": "order-buyer-1"}],
+                "headers": {},
+                "duration_ms": 1,
+            }
+        return {"status": 401, "body": {}, "headers": {}, "duration_ms": 1}
+
+    _patch_http_request(monkeypatch, http_request)
+    _patch_governed_write(
+        monkeypatch,
+        lambda **_kwargs: pytest.fail("empty-collection fallback must not create fixture"),
+    )
+
+    result = execute_one_experiment(
+        experiment,
+        behavior_ir=behavior_ir,
+        root=tmp_path,
+        project="project",
+        base_url="http://target.invalid",
+        runtime_contract={"environment_type": "test"},
+        campaign_id="campaign",
+        execution_id="execution-empty-collection-fallback",
+        actor_tokens={
+            "secret_ref:test_accounts:admin": "admin-token",
+            "secret_ref:test_accounts:buyer": "buyer-token",
+        },
+    )
+
+    binding = result["binding_materialization_receipts"][0]
+    assert binding["status"] == "BOUND"
+    assert binding["resolver_actor_ref"] == "actor-buyer"
+    assert "admin-token" in seen_tokens
+    assert "buyer-token" in seen_tokens
+
+
+def test_auto_fixture_accepts_source_compensation_cleanup() -> None:
+    operations = {
+        "op-create": {
+            "id": "op-create",
+            "method": "POST",
+            "path": "/api/orders",
+            "request_example": {"addressId": "<addressId>"},
+        },
+        "op-cancel": {
+            "id": "op-cancel",
+            "method": "POST",
+            "path": "/api/orders/{id}/cancel",
+        },
+    }
+    binding = {
+        "target": "order_id",
+        "target_path": "/api/orders/{id}",
+        "resolver_operations": [{
+            "operation_ref": "op-list",
+            "method": "GET",
+            "path": "/api/orders",
+        }],
+    }
+    actors = {"actor-buyer": {"id": "actor-buyer", "role": "buyer"}}
+
+    fixture = _auto_fixture_create_for_binding_target(
+        "order_id",
+        binding,
+        operations,
+        {"order_id": binding},
+        actors=actors,
+    )
+
+    assert fixture is not None
+    assert fixture["fixture_setup"]["cleanup_operations"] == [{
+        "operation_ref": "op-cancel",
+        "method": "POST",
+        "path": "/api/orders/{id}/cancel",
+    }]
+
+
+def test_validated_fixture_setup_derives_body_dependency_resolvers() -> None:
+    setup = validated_fixture_setup(
+        {
+            "fixture_setup": {
+                "operation_ref": "op-create-order",
+                "method": "POST",
+                "path": "/api/orders",
+                "actor_refs": ["actor-buyer"],
+                "cleanup_operations": [{
+                    "operation_ref": "op-cancel",
+                    "method": "POST",
+                    "path": "/api/orders/{id}/cancel",
+                }],
+            },
+        },
+        {
+            "op-create-order": {
+                "id": "op-create-order",
+                "method": "POST",
+                "path": "/api/orders",
+                "request_example": {"addressId": "<addressId>", "note": "x"},
+            },
+            "op-list-addresses": {
+                "id": "op-list-addresses",
+                "method": "GET",
+                "path": "/api/users/addresses",
+            },
+            "op-cancel": {
+                "id": "op-cancel",
+                "method": "POST",
+                "path": "/api/orders/{id}/cancel",
+            },
+        },
+        {
+            "actor-buyer": {
+                "id": "actor-buyer",
+                "role": "buyer",
+                "credential_secret_ref": "secret_ref:test_accounts:buyer",
+            },
+        },
+    )
+
+    assert setup
+    assert len(setup["body_bindings"]) == 1
+    body_binding = setup["body_bindings"][0]
+    assert body_binding["target"] == "addressId"
+    assert body_binding["template_token"] == "addressId"
+    assert body_binding["fallback"] == ""
+    assert body_binding["resolver_operations"][0]["operation_ref"] == "op-list-addresses"
+    assert body_binding["resolver_operations"][0]["path"] == "/api/users/addresses"
 
 
 def test_fixture_actor_is_not_inferred_from_admin_role() -> None:
