@@ -102,90 +102,233 @@ def _find_executable_actor(
     return ""
 
 
-def _find_read_operation_for_entity(
+def _fixture_setup_with_campaign_actors(
+    operation: dict[str, Any],
+    *,
+    target: str,
+    behavior_ir: dict[str, Any],
     ops: dict[str, dict[str, Any]],
-    entity_hint: str,
 ) -> dict[str, Any]:
-    """Find a GET list operation that can resolve entity IDs.
+    """Build create+cleanup fixture setup using credentialed IR actors.
 
-    Looks for GET operations whose path contains the entity hint (pluralized).
+    Used when permits-bound actor discovery yields no owner for a deep plan.
     """
-    if not entity_hint:
+    from .real_id_resolver import collection_path, normalize_path_placeholders
+    from .runtime_binding_graph import _declared_cleanup_operations, _request_example
+
+    path = normalize_path_placeholders(
+        _text(operation.get("path") or operation.get("raw_path"))
+    )
+    collection = normalize_path_placeholders(collection_path(path))
+    if not collection.startswith("/"):
         return {}
-    hint_lower = entity_hint.lower().rstrip("s")
-    for op in ops.values():
-        if _text(op.get("method")).upper() != "GET":
-            continue
-        path = _text(op.get("path") or op.get("raw_path"))
-        path_lower = path.lower()
-        # Match if path contains entity name (singular or plural)
-        if hint_lower in path_lower or (hint_lower + "s") in path_lower:
-            # Prefer list endpoints (no path params or fewer params)
-            params = _extract_path_params(path)
-            if not params:
-                return op
-    # Fallback: any GET with the entity in path
-    for op in ops.values():
-        if _text(op.get("method")).upper() != "GET":
-            continue
-        path = _text(op.get("path") or op.get("raw_path"))
-        if hint_lower in path.lower():
-            return op
-    return {}
+    create = next(
+        (
+            op
+            for op in ops.values()
+            if _text(op.get("method")).upper() == "POST"
+            and normalize_path_placeholders(
+                _text(op.get("path") or op.get("raw_path"))
+            ) == collection
+            and _text(op.get("id"))
+        ),
+        None,
+    )
+    if not isinstance(create, dict):
+        return {}
+    body_template = _request_example(
+        create,
+        sibling_ops=_list(behavior_ir.get("operations")),
+    )
+    if not body_template:
+        return {}
+    cleanup_operations = _declared_cleanup_operations(
+        collection,
+        behavior_ir=behavior_ir,
+    )
+    if not cleanup_operations:
+        return {}
+    actor_refs = [
+        _text(actor.get("id"))
+        for actor in _list(behavior_ir.get("actors"))
+        if isinstance(actor, dict)
+        and _text(actor.get("id"))
+        and not _is_template_actor(actor)
+        and _text(actor.get("credential_secret_ref") or actor.get("secret_ref"))
+    ]
+    if not actor_refs:
+        return {}
+    return {
+        "operation_ref": _text(create.get("id")),
+        "method": "POST",
+        "path": collection,
+        "actor_refs": actor_refs,
+        "body_template": body_template,
+        "body_bindings": [],
+        "cleanup_operations": cleanup_operations,
+    }
+
+
+def _body_placeholder_tokens(value: Any) -> list[str]:
+    """Extract `<token>` / `{token}` placeholders from a request body template."""
+    tokens: list[str] = []
+    seen: set[str] = set()
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for child in node.values():
+                walk(child)
+            return
+        if isinstance(node, list):
+            for child in node:
+                walk(child)
+            return
+        if not isinstance(node, str):
+            return
+        match = re.match(r"^\s*[<{]([A-Za-z_][A-Za-z0-9_]*)[>}]\s*$", node)
+        if not match:
+            return
+        token = _text(match.group(1))
+        if token and token not in seen:
+            seen.add(token)
+            tokens.append(token)
+
+    walk(value)
+    return tokens
 
 
 def _build_binding_plan(
     operation: dict[str, Any],
     ops: dict[str, dict[str, Any]],
     behavior_ir: dict[str, Any],
+    *,
+    step_bodies: list[Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Build a binding_plan for path placeholders in the operation.
+    """Build binding_plan for path and body placeholders on one operation.
 
-    For each placeholder, declares a runtime-resolvable binding with a
-    validated resolver operation (GET/HEAD, no placeholders in resolver path)
-    that satisfies ``validated_runtime_resolvers`` in the preflight chain.
+    Path resolvers reuse the mainline structural authority
+    (``declared_runtime_read_resolvers`` / collection parents). Body tokens
+    reuse ``body_field_collection_paths`` so deep experiments get the same
+    industry-neutral binding surface as compiled mainline experiments.
     """
-    path = _text(operation.get("path") or operation.get("raw_path"))
+    from .real_id_resolver import (
+        body_field_collection_paths,
+        collection_path,
+        normalize_path_placeholders,
+    )
+    from .runtime_binding_graph import (
+        _declared_fixture_setup,
+        declared_runtime_read_resolvers,
+    )
+
+    path = normalize_path_placeholders(
+        _text(operation.get("path") or operation.get("raw_path"))
+    )
     params = _extract_path_params(path)
-    if not params:
-        return []
-
     bindings: list[dict[str, Any]] = []
-    entities = _list(behavior_ir.get("entities"))
-    entity_names = [_text(e.get("name") or e.get("id")) for e in entities if isinstance(e, dict)]
 
+    path_resolvers = declared_runtime_read_resolvers(
+        operation,
+        behavior_ir=behavior_ir,
+        max_candidates=3,
+    )
+    primary_collection = normalize_path_placeholders(collection_path(path))
     for param in params:
-        # Infer entity from param name (e.g., contractId -> contract)
         entity_hint = re.sub(r"(_?id|_?uuid)$", "", param, flags=re.IGNORECASE)
+        if not entity_hint and primary_collection.startswith("/"):
+            entity_hint = primary_collection.rstrip("/").rsplit("/", 1)[-1]
         if not entity_hint:
             entity_hint = param
 
-        # Find a GET resolver operation (must have NO placeholders in its path)
-        resolver_op = _find_read_operation_for_entity(ops, entity_hint)
-        resolver_op_id = _text(resolver_op.get("id")) if resolver_op else ""
-        resolver_path = _text(resolver_op.get("path") or resolver_op.get("raw_path")) if resolver_op else ""
-        resolver_method = _text(resolver_op.get("method") or "GET").upper() if resolver_op else "GET"
-
-        # Build resolver_operations list (required by validated_runtime_resolvers)
-        resolver_operations: list[dict[str, Any]] = []
-        if resolver_op_id and resolver_path and not _extract_path_params(resolver_path):
-            resolver_operations.append({
-                "operation_ref": resolver_op_id,
-                "method": resolver_method,
-                "path": resolver_path,
-            })
+        resolver_operations = [dict(row) for row in path_resolvers]
+        # Bare ``{id}`` often needs the parent collection even when the param
+        # name itself is not a useful entity hint for path substring search.
+        if not resolver_operations and primary_collection.startswith("/"):
+            for op in ops.values():
+                if _text(op.get("method")).upper() not in {"GET", "HEAD"}:
+                    continue
+                op_path = normalize_path_placeholders(
+                    _text(op.get("path") or op.get("raw_path"))
+                )
+                if op_path == primary_collection and not _extract_path_params(op_path):
+                    resolver_operations.append({
+                        "operation_ref": _text(op.get("id")),
+                        "method": _text(op.get("method")).upper(),
+                        "path": op_path,
+                    })
+                    break
 
         binding: dict[str, Any] = {
             "target": param,
+            "target_path": path if path.startswith("/") else f"/{{{param}}}",
             "strategy": "runtime_resolver",
             "entity_hint": entity_hint,
-            "resolver_operation_ref": resolver_op_id,
-            "resolver_method": resolver_method,
-            "resolver_path": resolver_path,
             "status": "runtime_resolvable" if resolver_operations else "declared",
+            "source_priority": (
+                "same_actor_list_read" if resolver_operations else "fixture_create_only"
+            ),
             "resolver_operations": resolver_operations,
         }
+        if not resolver_operations:
+            fixture_setup = _declared_fixture_setup(
+                operation,
+                target=param,
+                behavior_ir=behavior_ir,
+            )
+            if not fixture_setup:
+                # Permits-bound actor refs are often absent on deep plans.
+                # Fall back to a source-declared create+cleanup with every
+                # credentialed campaign actor — runtime still materializes
+                # dependencies and selects the executable token.
+                fixture_setup = _fixture_setup_with_campaign_actors(
+                    operation,
+                    target=param,
+                    behavior_ir=behavior_ir,
+                    ops=ops,
+                )
+            if fixture_setup:
+                binding["fixture_setup"] = fixture_setup
+                binding["status"] = "runtime_resolvable"
+                binding["source_priority"] = "fixture_create_only"
         bindings.append(binding)
+
+    # Body placeholders from treatment/control request templates.
+    api_prefix = "/" + path.strip("/").split("/")[0] if path.startswith("/") else "/api"
+    body_tokens: list[str] = []
+    for body in step_bodies or []:
+        body_tokens.extend(_body_placeholder_tokens(body))
+    for token in list(dict.fromkeys(body_tokens)):
+        if any(b.get("target") == token for b in bindings):
+            continue
+        candidate_paths = body_field_collection_paths(token, api_prefix=api_prefix)
+        resolver_operations: list[dict[str, Any]] = []
+        for candidate in candidate_paths:
+            for op in ops.values():
+                if _text(op.get("method")).upper() not in {"GET", "HEAD"}:
+                    continue
+                op_path = normalize_path_placeholders(
+                    _text(op.get("path") or op.get("raw_path"))
+                )
+                if op_path == candidate and not _extract_path_params(op_path):
+                    resolver_operations.append({
+                        "operation_ref": _text(op.get("id")),
+                        "method": _text(op.get("method")).upper(),
+                        "path": op_path,
+                    })
+                    break
+            if resolver_operations:
+                break
+        if not resolver_operations:
+            continue
+        bindings.append({
+            "target": token,
+            "target_path": f"/{{{token}}}",
+            "strategy": "runtime_resolver",
+            "status": "runtime_resolvable",
+            "source_priority": "same_actor_list_read",
+            "resolver_operations": resolver_operations,
+            "body_template_paths": [token],
+        })
 
     return bindings
 
@@ -284,8 +427,18 @@ def adapt_deep_experiments_for_execution(
                 # Try to find operation by matching path/method from step
                 continue
             has_valid_op = True
-            # Build bindings for this operation's path params
-            bindings = _build_binding_plan(op, ir_ops, ir)
+            step_bodies = [
+                step.get("body"),
+                _dict(step.get("request")).get("body"),
+                _dict(op).get("request_example"),
+            ]
+            # Build bindings for path params and body placeholders.
+            bindings = _build_binding_plan(
+                op,
+                ir_ops,
+                ir,
+                step_bodies=step_bodies,
+            )
             for b in bindings:
                 # Deduplicate by target
                 if not any(eb.get("target") == b.get("target") for eb in all_bindings):
@@ -309,14 +462,21 @@ def adapt_deep_experiments_for_execution(
         # Add runtime_read_binding nodes for each binding target
         for b in all_bindings:
             _target = _text(b.get("target"))
-            if _target and _list(b.get("resolver_operations")):
-                dag_nodes.append({
-                    "node_id": f"bind_{_target}",
-                    "kind": "runtime_read_binding",
-                    "target": _target,
-                    "constructible": True,
-                    "resolver_operations": _list(b.get("resolver_operations")),
-                })
+            if not _target:
+                continue
+            if not (
+                _list(b.get("resolver_operations"))
+                or _dict(b.get("fixture_setup"))
+            ):
+                continue
+            dag_nodes.append({
+                "node_id": f"bind_{_target}",
+                "kind": "runtime_read_binding",
+                "target": _target,
+                "constructible": True,
+                "resolver_operations": _list(b.get("resolver_operations")),
+                "source_priority": _text(b.get("source_priority")),
+            })
         # Add step dependency nodes for multi-step treatments
         if len(treatment) > 1:
             for i, step in enumerate(treatment):

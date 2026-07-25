@@ -407,10 +407,19 @@ def runtime_binding_contract_ready(
     }
     return all(
         target in dag_targets
-        and bool(
-            validated_runtime_resolvers(
-                bindings.get(target) or {},
-                operations,
+        and (
+            bool(
+                validated_runtime_resolvers(
+                    bindings.get(target) or {},
+                    operations,
+                )
+            )
+            # fixture_create_only: source-declared create+cleanup with no
+            # list-read resolver is still a runtime-resolvable binding plan.
+            or (
+                _text(_dict(bindings.get(target)).get("status"))
+                == "runtime_resolvable"
+                and bool(_dict(_dict(bindings.get(target)).get("fixture_setup")))
             )
         )
         for target in targets

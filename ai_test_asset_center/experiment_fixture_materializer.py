@@ -602,7 +602,14 @@ def materialize_experiment_fixtures(
                                         setup_body[k] = prereq_ids[entity]
                             break  # only process first prerequisite_plan
 
-                    observation_path = _text(resolvers[0].get("path")) if resolvers else ""
+                    # Fixture create-only plans have no list-read resolver.
+                    # Observe the create collection itself (no placeholders) so
+                    # governance can emit before/after around the disposable write.
+                    observation_path = (
+                        _text(resolvers[0].get("path"))
+                        if resolvers
+                        else _text(fixture_setup.get("path"))
+                    )
                     governed_setup = execute_governed_control_write(
                         root=root,
                         project=project,

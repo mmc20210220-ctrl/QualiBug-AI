@@ -551,6 +551,12 @@ def preflight_experiment_executable(
                         b.get("generated_value")
                         or b.get("status") == "bound"
                         or _list(b.get("resolver_operations"))
+                        # fixture_create_only plans are runtime_resolvable with
+                        # a source-declared create+cleanup and empty resolvers.
+                        or (
+                            _text(b.get("status")) == "runtime_resolvable"
+                            and bool(_dict(b.get("fixture_setup")))
+                        )
                     )
                     for b in _bp if isinstance(b, dict)
                 )
