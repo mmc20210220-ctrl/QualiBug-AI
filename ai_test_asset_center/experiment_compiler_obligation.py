@@ -43,6 +43,7 @@ from .runtime_binding_graph import (
     declared_effect_observers,
     unresolved_placeholders,
 )
+from .cleanup_plan_validator import validate_cleanup_plan
 from .experiment_compiler_support import (
     _actor_is_executable,
     _compensates_create_operation,
@@ -841,115 +842,56 @@ def compile_experiment_for_obligation(
         if not cleanup_plan and not cleanup_op:
             from .runtime_binding_graph import _CLEANUP_ACTION_RE, _declared_cleanup_operations
 
-            action_compensators = declared_action_compensators(
-                primary_op,
-                behavior_ir=ir,
-            )
-            if len(action_compensators) == 1:
-                compensator = action_compensators[0]
+            # SPEC v1.1 §12: Removed unsafe fallbacks:
+            # - §12.1: Action → DELETE forbidden (DELETE only for collection create)
+            # - §12.2: Cancel/Reject → Collection Create forbidden without explicit proof
+            # - §12.3: Unique Candidate → Compensator forbidden (requires explicit relation)
+            #
+            # Only snapshot_restore is allowed for action POSTs with non-empty body.
+            # All other cases require explicit source-declared relations.
+
+            # Check for explicit compensates relation in Behavior IR
+            relations = _list(ir.get("relations"))
+            explicit_compensator = None
+            for rel in relations:
+                if not isinstance(rel, dict):
+                    continue
+                kind = _text(rel.get("kind"))
+                if kind not in {"compensates", "inverse", "compensation"}:
+                    continue
+                src = _text(rel.get("source") or rel.get("source_operation_ref"))
+                tgt = _text(rel.get("target") or rel.get("target_operation_ref"))
+                if src == primary_op_id and tgt and tgt in ops:
+                    explicit_compensator = _dict(ops.get(tgt))
+                    break
+                if tgt == primary_op_id and src and src in ops:
+                    explicit_compensator = _dict(ops.get(src))
+                    break
+
+            if explicit_compensator:
                 cleanup_plan = [{
                     "action": "source_declared_compensation",
-                    "mode": "reverse_order",
-                    "operation_ref": _text(compensator.get("operation_ref")),
+                    "mode": "compensator",
+                    "operation_ref": _text(explicit_compensator.get("id")),
                     "compensates_operation_ref": primary_op_id,
-                    "path": _text(compensator.get("path")),
-                    "method": _text(compensator.get("method")).upper(),
+                    "path": _text(explicit_compensator.get("path") or explicit_compensator.get("raw_path")),
+                    "method": _text(explicit_compensator.get("method")).upper(),
                     "body_from_original_request": True,
                     "runtime_response_binding_required": (
-                        "{" in _text(compensator.get("path"))
+                        "{" in _text(explicit_compensator.get("path") or explicit_compensator.get("raw_path"))
                     ),
                 }]
-            elif _CLEANUP_ACTION_RE.search(primary_path.rstrip("/")):
-                # cancel/reject/release (with or without identity segment):
-                # recreate via the unique sibling create that uniquely names
-                # this cleanup as compensator, else unique collection POST.
-                recreate_primaries = declared_action_recreate_primaries(
-                    primary_op,
-                    behavior_ir=ir,
-                )
-                create_ref = (
-                    _text(recreate_primaries[0].get("operation_ref"))
-                    if len(recreate_primaries) == 1
-                    else _unique_collection_create_ref(
-                        primary_op_id=primary_op_id,
-                        primary_path=primary_path,
-                        ops=ops,
-                    )
-                )
-                if create_ref:
-                    cleanup_op = create_ref
-                    cleanup_req = {
-                        **cleanup_req,
-                        "operation_ref": cleanup_op,
-                        "required": True,
-                        "mode": "recreate_compensated_resource",
-                    }
-            elif primary_method == "POST" and "{" in primary_path:
-                parent_collection = normalize_path_placeholders(
-                    collection_path(primary_path)
-                )
-                cleanup_candidates = [
-                    row
-                    for row in _declared_cleanup_operations(
-                        parent_collection,
-                        behavior_ir=ir,
-                    )
-                    if _text(row.get("operation_ref")) != primary_op_id
-                ]
-                delete_candidates = [
-                    row
-                    for row in cleanup_candidates
-                    if _text(row.get("method")).upper() == "DELETE"
-                ]
-                # Identity-bound action POSTs (ship/confirm/status) must not bind
-                # a sibling cancel/reject solely by collection shape — those
-                # actions often cannot reverse the mutation and fail cleanup.
-                # Prefer unique DELETE, else governed snapshot restore when an
-                # effect read exists. Text-evidence compensators were already
-                # bound above via declared_action_compensators.
-                if len(delete_candidates) == 1:
-                    compensator = delete_candidates[0]
-                    cleanup_plan = [{
-                        "action": "source_declared_compensation",
-                        "mode": "reverse_order",
-                        "operation_ref": _text(compensator.get("operation_ref")),
-                        "compensates_operation_ref": primary_op_id,
-                        "path": _text(compensator.get("path")),
-                        "method": "DELETE",
-                        "body_from_original_request": False,
-                        "runtime_response_binding_required": (
-                            "{" in _text(compensator.get("path"))
-                        ),
-                    }]
-                elif write_observers and _source_request_example(primary_op):
-                    # Snapshot restore needs restorable request fields. Empty-body
-                    # status actions (ship/confirm/approve) cannot re-post a prior
-                    # state; compiling a fake restore only produces harness failures.
-                    cleanup_plan = [{
-                        "action": "restore_before_snapshot",
-                        "mode": "snapshot_restore",
-                        "operation_ref": primary_op_id,
-                        "path": primary_path,
-                        "method": primary_method,
-                        "runtime_response_binding_required": True,
-                    }]
-                elif (
-                    len(cleanup_candidates) == 1
-                    and _CLEANUP_ACTION_RE.search(primary_path.rstrip("/"))
-                ):
-                    compensator = cleanup_candidates[0]
-                    cleanup_plan = [{
-                        "action": "source_declared_compensation",
-                        "mode": "reverse_order",
-                        "operation_ref": _text(compensator.get("operation_ref")),
-                        "compensates_operation_ref": primary_op_id,
-                        "path": _text(compensator.get("path")),
-                        "method": _text(compensator.get("method")).upper(),
-                        "body_from_original_request": False,
-                        "runtime_response_binding_required": (
-                            "{" in _text(compensator.get("path"))
-                        ),
-                    }]
+            elif primary_method == "POST" and "{" in primary_path and write_observers and _source_request_example(primary_op):
+                # SPEC §7.3: Snapshot restore for action POSTs with non-empty body.
+                # Empty-body actions (ship/confirm/approve) cannot use snapshot restore.
+                cleanup_plan = [{
+                    "action": "restore_before_snapshot",
+                    "mode": "snapshot_restore",
+                    "operation_ref": primary_op_id,
+                    "path": primary_path,
+                    "method": primary_method,
+                    "runtime_response_binding_required": True,
+                }]
         if not cleanup_plan and not cleanup_explicitly_not_required:
             cleanup_path = normalize_path_placeholders(
                 _text(
@@ -1383,7 +1325,7 @@ def compile_experiment_for_obligation(
             "require_control": needs_control,
             "_secondary_assertion": True,
         })
-    return make_experiment(
+    experiment = make_experiment(
         obligation_id=oid,
         policy_version=policy_version,
         risk_family=family,
@@ -1417,6 +1359,38 @@ def compile_experiment_for_obligation(
         },
     )
 
+    # ── SPEC v1.1 §9: Pass cleanup exemption contract from obligation ──
+    cleanup_exemption = _dict(obl.get("cleanup_exemption_contract"))
+    if cleanup_exemption:
+        experiment["cleanup_exemption_contract"] = cleanup_exemption
+
+    # ── SPEC v1.1 §8: Compile-time Cleanup Validation ──
+    # All governed writes must pass semantic cleanup validation before COMPILED.
+    if is_write:
+        validation = validate_cleanup_plan(
+            experiment,
+            ir,
+            phase="compile",
+        )
+        if not validation["valid"]:
+            return blocked_experiment(
+                oid,
+                validation["reason_code"],
+                validation["detail"],
+            )
+        # Attach proof to experiment
+        proof = validation.get("proof") or {}
+        experiment["write_reversibility_proof"] = proof
+        experiment["compile_receipt"]["write_reversibility_proof_id"] = _text(
+            proof.get("proof_id")
+        )
+        experiment["compile_receipt"]["write_reversibility_fingerprint"] = _text(
+            proof.get("fingerprint")
+        )
+        experiment["compile_receipt"]["cleanup_semantic_validated"] = True
+
+    return experiment
+
 # ── Experiment Contract (merged from experiment_contract.py) ──────────
 
 SCHEMA_VERSION = "qualibug.experiment.v1"
@@ -1430,6 +1404,8 @@ BLOCK_REASONS = (
     "BLOCKED_NON_REVERSIBLE_WRITE",
     "BLOCKED_CONFLICTING_SOURCE",
     "BLOCKED_UNSUPPORTED_ADAPTER",
+    "BLOCKED_INVALID_CLEANUP_PLAN",
+    "BLOCKED_CLEANUP_CONTRACT_DRIFT",
 )
 
 

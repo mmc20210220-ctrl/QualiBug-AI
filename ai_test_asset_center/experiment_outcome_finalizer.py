@@ -30,6 +30,7 @@ from .observation_completeness import (
 )
 from .observer_contracts_base import observe_experiment_requirements
 from .runtime_binding_materializer import materialize_path as _materialize_path
+from .cleanup_equivalence import evaluate_cleanup_equivalence
 
 
 def _extract_related_from_body(body: Any, entity_name: str) -> Any:
@@ -843,6 +844,35 @@ def finalize_experiment_execution(
         oracle_trace.append(trace_entry)
     observations["oracle_trace"] = oracle_trace
 
+    # ── SPEC v1.1 §15: Cleanup Equivalence Evaluation ──
+    # For governed writes, evaluate whether cleanup restored business state.
+    cleanup_equivalence_receipt: dict[str, Any] | None = None
+    safety = _dict(exp.get("safety_contract"))
+    is_governed_write = safety.get("governed_write")
+    if is_governed_write:
+        proof = _dict(exp.get("write_reversibility_proof"))
+        if proof and _text(proof.get("proof_status")) == "PROVEN":
+            # Extract observations for equivalence evaluation
+            before_obs = _dict(observations.get("before_state_observation"))
+            after_write_obs = _dict(observations.get("after_state_observation"))
+            after_cleanup_obs = _dict(observations.get("final_state_observation"))
+            cleanup_exec_receipt = _dict(observations.get("cleanup_execution_receipt"))
+            # If no explicit cleanup receipt, check if cleanup succeeded
+            if not cleanup_exec_receipt:
+                cleanup_exec_receipt = {
+                    "succeeded": cleanup_failures == 0,
+                    "status_code": observations.get("cleanup_status_code"),
+                }
+            cleanup_equivalence_receipt = evaluate_cleanup_equivalence(
+                proof=proof,
+                before_observation=before_obs,
+                after_write_observation=after_write_obs,
+                after_cleanup_observation=after_cleanup_obs,
+                runtime_bindings=runtime_bindings,
+                cleanup_execution_receipt=cleanup_exec_receipt,
+            )
+            observations["cleanup_equivalence_receipt"] = cleanup_equivalence_receipt
+
     finding = None
     # Execution status reflects actual HTTP activity, not oracle assessment.
     # Oracle verdict is advisory evidence quality metadata.
@@ -1149,6 +1179,7 @@ def finalize_experiment_execution(
         "finding_created": _finding_created,
         "finding_filter_reason": _finding_filter_reason,
         "cleanup_failures": cleanup_failures,
+        "cleanup_equivalence_receipt": cleanup_equivalence_receipt,
         "execution_receipt": {
             "status": status,
             "steps": len(steps_out),
@@ -1158,6 +1189,9 @@ def finalize_experiment_execution(
             "harness_failure_reason": harness_failure_reason or None,
             "finding_created": _finding_created,
             "finding_filter_reason": _finding_filter_reason or None,
+            "cleanup_equivalence_status": _text(
+                cleanup_equivalence_receipt.get("equivalence_status")
+            ) if cleanup_equivalence_receipt else None,
         },
     }
 

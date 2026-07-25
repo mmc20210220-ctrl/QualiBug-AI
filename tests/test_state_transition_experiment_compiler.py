@@ -65,7 +65,14 @@ def _state_ir() -> dict:
                 "operation_ref": "op-pay",
                 "actor_ref": "actor-buyer",
                 "status": "accepted",
-            }
+            },
+            {
+                "id": "compensate-pay-cancel",
+                "kind": "compensates",
+                "source": "op-pay",
+                "target": "op-cancel",
+                "source_refs": [{"source_id": "state-machine"}],
+            },
         ],
         "conflicts": [],
     }
@@ -89,7 +96,7 @@ def _state_obligation() -> dict:
         "cleanup_requirement": {
             "required": True,
             "operation_ref": "op-cancel",
-            "mode": "reverse_order",
+            "mode": "compensator",
         },
         "source_refs": [{"source_id": "state-machine"}],
     }

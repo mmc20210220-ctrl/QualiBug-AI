@@ -74,7 +74,14 @@ def test_ephemeral_login_strips_write_only_observers() -> None:
             "required_actors": ["actor-buyer"],
             "required_operations": ["op-login"],
             "required_observers": ["http_response", "entity_state", "business_effect"],
-            "cleanup_requirement": {"required": True},
+            # SPEC v1.1 §9: Ephemeral operations need exemption contract
+            "cleanup_requirement": {"required": False},
+            "cleanup_exemption_contract": {
+                "kind": "ephemeral_session",
+                "source_refs": [{"kind": "endpoint_contract", "file": "api.md"}],
+                "persistent_effect_absent": True,
+                "verification_basis": "source_declared",
+            },
         },
         behavior_ir={
             "operations": [{
@@ -226,8 +233,9 @@ def test_release_recreates_via_unique_sibling_reserve() -> None:
         behavior_ir=ir,
         environment_type="test",
     )
-    assert experiment["compile_receipt"]["status"] == "COMPILED", experiment[
+    # SPEC v1.1 §12.2: Cancel/Reject → Collection Create forbidden without explicit proof.
+    # Without explicit compensates relation, this must be BLOCKED.
+    assert experiment["compile_receipt"]["status"] == "BLOCKED", experiment[
         "compile_receipt"
     ]
-    assert experiment["cleanup_plan"][0]["operation_ref"] == "reserve_stock"
-    assert experiment["cleanup_plan"][0]["mode"] == "recreate_compensated_resource"
+    assert experiment["compile_receipt"]["reason_code"] == "BLOCKED_NON_REVERSIBLE_WRITE"

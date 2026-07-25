@@ -398,9 +398,13 @@ class TestWriteReversibilityProof:
             cleanup_plan=[{"action": "reverse_order_compensation",
                            "mode": "reverse_order", "operation_ref": "op-delete",
                            "method": "DELETE", "path": "/orders/{id}"}],
+            behavior_ir={"operations": [
+                {"id": "op-create", "method": "POST", "path": "/orders"},
+                {"id": "op-delete", "method": "DELETE", "path": "/orders/{id}"},
+            ]},
         )
-        assert proof["status"] == "PROVEN"
-        assert proof["cleanup_authority"] == "identity_delete"
+        assert proof["proof_status"] == "PROVEN"
+        assert proof["cleanup_authority"]["kind"] == "identity_delete"
 
     def test_empty_cleanup_plan_blocked(self) -> None:
         proof = build_reversibility_proof(
@@ -409,9 +413,9 @@ class TestWriteReversibilityProof:
             primary_path="/orders/{id}/ship",
             cleanup_plan=[],
         )
-        assert proof["status"] == "BLOCKED"
+        assert proof["proof_status"] == "BLOCKED"
         assert proof["reason_code"] == "BLOCKED_NON_REVERSIBLE_WRITE"
-        assert proof["reason_detail"] == "empty_body_action_without_explicit_inverse"
+        assert proof["reason_detail"] == "empty_cleanup_plan"
 
     def test_all_authorities_in_allowed_set(self) -> None:
         assert CLEANUP_AUTHORITIES == {
@@ -458,7 +462,10 @@ class TestCleanupPlanValidator:
             ]},
         )
         assert result["valid"] is False
-        assert result["reason_code"] == "BLOCKED_INVALID_CLEANUP_PLAN"
+        # v1.1: semantic validation catches missing op as non-reversible
+        assert result["reason_code"] in (
+            "BLOCKED_INVALID_CLEANUP_PLAN", "BLOCKED_NON_REVERSIBLE_WRITE"
+        )
 
     def test_read_only_experiment_skips_validation(self) -> None:
         result = validate_cleanup_plan(

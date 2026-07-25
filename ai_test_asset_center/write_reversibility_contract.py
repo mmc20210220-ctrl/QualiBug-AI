@@ -2,10 +2,11 @@
 
 Every write experiment must carry a verifiable WriteReversibilityProof before
 its primary write reaches transport. This module centralizes the proof schema,
-allowed cleanup authorities, and validation logic that was previously scattered
-across compiler, runtime preflight, plan executor, and cleanup executor.
+allowed cleanup authorities, and validation logic.
 
-Schema: qualibug.write-reversibility-proof.v1
+Schema: qualibug.write-reversibility-proof.v1.1
+
+SPEC v1.1: 写可逆性证明主链接线与语义验证
 """
 from __future__ import annotations
 
@@ -26,7 +27,7 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
-# ─── Allowed cleanup authorities (SPEC §5.3) ───────────────────────────────────
+# ─── Allowed cleanup authorities (SPEC §5.3 / §7) ────────────────────────────
 
 CLEANUP_AUTHORITIES = frozenset({
     "identity_delete",
@@ -37,6 +38,54 @@ CLEANUP_AUTHORITIES = frozenset({
     "verified_environment_reset",
 })
 
+# Server-managed fields that must never appear in restore bodies
+SERVER_MANAGED_FIELDS = frozenset({
+    "id", "uuid", "createdat", "updatedat", "created_at", "updated_at",
+    "version", "revision", "etag", "sequence", "audit", "createdby",
+    "updatedby", "created_by", "updated_by", "deletedat", "deleted_at",
+})
+
+
+# ─── Proof Fingerprint (SPEC §6) ─────────────────────────────────────────────
+
+
+def build_proof_fingerprint(proof: dict[str, Any]) -> str:
+    """Compute a stable, content-addressed fingerprint for a proof.
+
+    Covers all semantic fields. Excludes time, random UUIDs, runtime responses,
+    execution IDs, and campaign IDs to guarantee deterministic output.
+    """
+    content = {
+        "primary_write": _dict(proof.get("primary_write")),
+        "cleanup_authority": _dict(proof.get("cleanup_authority")),
+        "identity_contract": _dict(proof.get("identity_contract")),
+        "before_observation_contract": _dict(proof.get("before_observation_contract")),
+        "after_write_observation_contract": _dict(proof.get("after_write_observation_contract")),
+        "after_cleanup_observation_contract": _dict(proof.get("after_cleanup_observation_contract")),
+        "cleanup_request_contract": _dict(proof.get("cleanup_request_contract")),
+        "equivalence_contract": _dict(proof.get("equivalence_contract")),
+        "compile_context": _dict(proof.get("compile_context")),
+    }
+    raw = json.dumps(content, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+
+def verify_proof_fingerprint(proof: dict[str, Any]) -> tuple[bool, str]:
+    """Verify that a proof's stored fingerprint matches its content.
+
+    Returns (valid, detail). If invalid, detail explains the mismatch.
+    """
+    stored = _text(proof.get("fingerprint"))
+    if not stored:
+        return False, "proof_fingerprint_empty"
+    computed = build_proof_fingerprint(proof)
+    if computed != stored:
+        return False, f"proof_content_fingerprint_mismatch:stored={stored}:computed={computed}"
+    return True, ""
+
+
+# ─── Proof Builder ────────────────────────────────────────────────────────────
+
 
 def build_reversibility_proof(
     *,
@@ -46,82 +95,119 @@ def build_reversibility_proof(
     cleanup_plan: list[dict[str, Any]],
     source_refs: list[dict[str, Any]] | None = None,
     behavior_ir: dict[str, Any] | None = None,
+    experiment: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build a WriteReversibilityProof for a compiled experiment.
+    """Build a WriteReversibilityProof v1.1 for a compiled experiment.
 
-    Returns a proof dict with status PROVEN or BLOCKED.
+    Returns a proof dict with proof_status PROVEN or BLOCKED.
     """
+    ir = _dict(behavior_ir)
     ops = {
         _text(op.get("id")): op
-        for op in _list(_dict(behavior_ir).get("operations"))
+        for op in _list(ir.get("operations"))
         if isinstance(op, dict)
-    } if behavior_ir else {}
+    }
+    relations = _list(ir.get("relations"))
+    exp = _dict(experiment)
 
-    cleanup_authority = _classify_cleanup_authority(
+    # Classify cleanup authority with semantic validation
+    authority_result = _classify_cleanup_authority_v11(
+        primary_operation_ref=primary_operation_ref,
         primary_method=primary_method,
         primary_path=primary_path,
         cleanup_plan=cleanup_plan,
         ops=ops,
+        relations=relations,
+        experiment=exp,
     )
 
-    if cleanup_authority == "none":
-        return {
-            "schema_version": "qualibug.write-reversibility-proof.v1",
-            "proof_id": _proof_id(primary_operation_ref, primary_method, primary_path, "none"),
-            "primary_operation_ref": primary_operation_ref,
-            "primary_method": primary_method,
-            "primary_path": primary_path,
-            "cleanup_authority": "none",
-            "cleanup_operation_ref": "",
-            "proof_kind": "unproven",
-            "source_refs": source_refs or [],
-            "status": "BLOCKED",
-            "reason_code": "BLOCKED_NON_REVERSIBLE_WRITE",
-            "reason_detail": _nr_reason_detail(primary_method, primary_path, cleanup_plan),
-            "fingerprint": "",
-        }
+    authority_kind = authority_result["kind"]
 
-    cleanup_op_ref = _text(
-        _dict(cleanup_plan[0] if cleanup_plan else {}).get("operation_ref")
-    )
-    proof_content = {
-        "primary_operation_ref": primary_operation_ref,
-        "primary_method": primary_method,
-        "primary_path": primary_path,
-        "cleanup_authority": cleanup_authority,
-        "cleanup_operation_ref": cleanup_op_ref,
+    # Build primary_write block
+    primary_op = _dict(ops.get(primary_operation_ref))
+    primary_write = {
+        "operation_ref": primary_operation_ref,
+        "method": primary_method,
+        "path": primary_path,
+        "entity_ref": _text(primary_op.get("entity_ref")),
+        "request_schema_fingerprint": _sha256_stable(
+            primary_op.get("request_example") or primary_op.get("request_schema")
+        ),
+        "source_refs": _list(primary_op.get("source_refs")) or source_refs or [],
     }
-    fingerprint = hashlib.sha256(
-        json.dumps(proof_content, sort_keys=True, ensure_ascii=False).encode()
-    ).hexdigest()[:32]
 
-    return {
-        "schema_version": "qualibug.write-reversibility-proof.v1",
-        "proof_id": _proof_id(primary_operation_ref, primary_method, primary_path, cleanup_authority),
-        "primary_operation_ref": primary_operation_ref,
-        "primary_method": primary_method,
-        "primary_path": primary_path,
-        "cleanup_authority": cleanup_authority,
-        "cleanup_operation_ref": cleanup_op_ref,
-        "proof_kind": "verified",
-        "source_refs": source_refs or [],
-        "status": "PROVEN",
+    if authority_kind == "none":
+        proof = {
+            "schema_version": "qualibug.write-reversibility-proof.v1.1",
+            "proof_id": _proof_id(primary_operation_ref, primary_method, primary_path, "none"),
+            "proof_status": "BLOCKED",
+            "proof_kind": "unproven",
+            "primary_write": primary_write,
+            "cleanup_authority": {"kind": "none"},
+            "identity_contract": {},
+            "before_observation_contract": {},
+            "after_write_observation_contract": {},
+            "after_cleanup_observation_contract": {},
+            "cleanup_request_contract": {},
+            "equivalence_contract": {},
+            "compile_context": _build_compile_context(ir, exp),
+            "fingerprint": "",
+            "reason_code": "BLOCKED_NON_REVERSIBLE_WRITE",
+            "reason_detail": authority_result.get("detail")
+                or _nr_reason_detail(primary_method, primary_path, cleanup_plan),
+        }
+        return proof
+
+    # Build full proof with contracts
+    cleanup_authority_block = authority_result["authority_block"]
+    identity_contract = authority_result.get("identity_contract", {})
+    before_obs = authority_result.get("before_observation_contract", {})
+    after_write_obs = authority_result.get("after_write_observation_contract", {})
+    after_cleanup_obs = authority_result.get("after_cleanup_observation_contract", {})
+    cleanup_request = authority_result.get("cleanup_request_contract", {})
+    equivalence = authority_result.get("equivalence_contract", {})
+
+    proof = {
+        "schema_version": "qualibug.write-reversibility-proof.v1.1",
+        "proof_id": _proof_id(primary_operation_ref, primary_method, primary_path, authority_kind),
+        "proof_status": "PROVEN",
+        "proof_kind": authority_kind,
+        "primary_write": primary_write,
+        "cleanup_authority": cleanup_authority_block,
+        "identity_contract": identity_contract,
+        "before_observation_contract": before_obs,
+        "after_write_observation_contract": after_write_obs,
+        "after_cleanup_observation_contract": after_cleanup_obs,
+        "cleanup_request_contract": cleanup_request,
+        "equivalence_contract": equivalence,
+        "compile_context": _build_compile_context(ir, exp),
+        "fingerprint": "",
         "reason_code": "",
         "reason_detail": "",
-        "fingerprint": fingerprint,
     }
+    proof["fingerprint"] = build_proof_fingerprint(proof)
+    return proof
 
 
-def _classify_cleanup_authority(
+# ─── Semantic Authority Classification (SPEC §7) ─────────────────────────────
+
+
+def _classify_cleanup_authority_v11(
     *,
+    primary_operation_ref: str,
     primary_method: str,
     primary_path: str,
     cleanup_plan: list[dict[str, Any]],
     ops: dict[str, dict[str, Any]],
-) -> str:
-    """Classify the cleanup authority from the compiled cleanup plan."""
+    relations: list[Any],
+    experiment: dict[str, Any],
+) -> dict[str, Any]:
+    """Classify cleanup authority with full semantic validation.
+
+    Returns {"kind": str, "detail": str, "authority_block": dict, ...contracts}
+    """
     if not cleanup_plan:
-        return "none"
+        return {"kind": "none", "detail": "empty_cleanup_plan"}
 
     first = _dict(cleanup_plan[0])
     action = _text(first.get("action"))
@@ -129,49 +215,400 @@ def _classify_cleanup_authority(
     cleanup_op_ref = _text(first.get("operation_ref"))
     cleanup_op = _dict(ops.get(cleanup_op_ref))
     cleanup_method = _text(first.get("method") or cleanup_op.get("method")).upper()
+    cleanup_path = _text(first.get("path") or cleanup_op.get("path") or cleanup_op.get("raw_path"))
 
-    # identity_delete: POST create → DELETE /collection/{created_id}
+    # ── identity_delete (SPEC §7.1) ──
     if cleanup_method == "DELETE" and mode in {"reverse_order", "identity_delete"}:
-        return "identity_delete"
+        return _validate_identity_delete(
+            primary_method=primary_method,
+            primary_path=primary_path,
+            cleanup_op_ref=cleanup_op_ref,
+            cleanup_op=cleanup_op,
+            cleanup_path=cleanup_path,
+            ops=ops,
+        )
 
-    # explicit_compensator: source-declared inverse (reserve→release, lock→unlock)
-    if action == "source_declared_compensation" and mode == "reverse_order":
-        return "explicit_compensator"
+    # ── explicit_compensator (SPEC §7.2) ──
+    if action == "source_declared_compensation" or mode == "compensator":
+        return _validate_explicit_compensator(
+            primary_operation_ref=primary_operation_ref,
+            cleanup_op_ref=cleanup_op_ref,
+            cleanup_op=cleanup_op,
+            cleanup_method=cleanup_method,
+            cleanup_path=cleanup_path,
+            relations=relations,
+            ops=ops,
+        )
 
-    # field_snapshot_restore: PUT/PATCH in-place mutation with before observer
-    if mode == "snapshot_restore" and primary_method in {"PUT", "PATCH"}:
-        return "field_snapshot_restore"
+    # ── field_snapshot_restore (SPEC §7.3) ──
+    if mode == "snapshot_restore":
+        return _validate_field_snapshot_restore(
+            primary_method=primary_method,
+            primary_path=primary_path,
+            primary_operation_ref=primary_operation_ref,
+            cleanup_op=cleanup_op,
+            cleanup_method=cleanup_method,
+            cleanup_path=cleanup_path,
+            experiment=experiment,
+            ops=ops,
+        )
 
-    # field_snapshot_restore for POST with non-empty body (status change)
-    if mode == "snapshot_restore" and primary_method == "POST":
-        return "field_snapshot_restore"
-
-    # inverse_delta: numeric delta compensation
+    # ── inverse_delta (SPEC §7.4) ──
     if mode == "delta_inverse" or action == "inverse_delta_compensation":
-        return "inverse_delta"
+        return _validate_inverse_delta(
+            primary_operation_ref=primary_operation_ref,
+            cleanup_op_ref=cleanup_op_ref,
+            experiment=experiment,
+            ops=ops,
+        )
 
-    # exact_recreate: DELETE → POST recreate
+    # ── exact_recreate (SPEC §7.5) ──
     if mode == "recreate_compensated_resource":
-        return "exact_recreate"
+        return _validate_exact_recreate(
+            primary_method=primary_method,
+            primary_path=primary_path,
+            cleanup_op_ref=cleanup_op_ref,
+            cleanup_op=cleanup_op,
+            experiment=experiment,
+            ops=ops,
+        )
 
-    # verified_environment_reset: explicit external adapter
+    # ── verified_environment_reset (SPEC §7.6) ──
     if mode == "environment_reset" or action == "verified_environment_reset":
-        return "verified_environment_reset"
+        return _validate_environment_reset(experiment=experiment)
 
-    return "none"
+    return {"kind": "none", "detail": "cleanup_authority_unrecognized"}
 
 
-def _nr_reason_detail(
-    method: str,
-    path: str,
-    cleanup_plan: list[dict[str, Any]],
-) -> str:
+def _validate_identity_delete(
+    *,
+    primary_method: str,
+    primary_path: str,
+    cleanup_op_ref: str,
+    cleanup_op: dict[str, Any],
+    cleanup_path: str,
+    ops: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """SPEC §7.1: identity_delete semantic validation."""
+    # Primary must be collection create (POST without identity placeholder)
+    if primary_method != "POST":
+        return {"kind": "none", "detail": "identity_delete_primary_not_collection_create"}
+    if "{" in primary_path:
+        return {"kind": "none", "detail": "identity_delete_primary_not_collection_create"}
+
+    # Cleanup must be DELETE
+    cleanup_method = _text(cleanup_op.get("method")).upper()
+    if cleanup_method != "DELETE":
+        return {"kind": "none", "detail": "identity_delete_cleanup_not_delete"}
+
+    # DELETE path must be in same collection
+    primary_collection = primary_path.rstrip("/").rsplit("/", 1)[0] if "/" in primary_path else primary_path
+    cleanup_collection = cleanup_path.rstrip("/").rsplit("/", 1)[0] if "/" in cleanup_path else cleanup_path
+    # Normalize: /orders vs /orders/{id} → both under /orders
+    if primary_collection and cleanup_collection:
+        # Allow /orders and /orders/{orderId} to match
+        pc = primary_path.rstrip("/")
+        cc_base = cleanup_path.split("{")[0].rstrip("/") if "{" in cleanup_path else cleanup_collection
+        if not cc_base.startswith(pc.rstrip("/")) and not pc.rstrip("/").startswith(cc_base):
+            return {"kind": "none", "detail": "identity_delete_collection_mismatch"}
+
+    # Extract identity fields from cleanup path
+    import re
+    identity_fields = re.findall(r"\{(\w+)\}", cleanup_path)
+    if not identity_fields:
+        return {"kind": "none", "detail": "identity_delete_response_identity_unavailable"}
+
+    authority_block = {
+        "kind": "identity_delete",
+        "operation_ref": cleanup_op_ref,
+        "method": "DELETE",
+        "path": cleanup_path,
+        "source_refs": _list(cleanup_op.get("source_refs")),
+        "authority_relation_ref": "",
+    }
+    identity_contract = {
+        "identity_fields": identity_fields,
+        "primary_identity_source": "primary_write_response",
+        "cleanup_identity_targets": [f"path.{f}" for f in identity_fields],
+        "same_entity_required": True,
+        "identity_preservation_required": True,
+    }
+    return {
+        "kind": "identity_delete",
+        "detail": "",
+        "authority_block": authority_block,
+        "identity_contract": identity_contract,
+        "before_observation_contract": {
+            "required": True,
+            "observer_kind": "collection_membership",
+            "proof_semantics": "entity_absent",
+        },
+        "after_write_observation_contract": {
+            "required": True,
+            "observer_kind": "identity_read",
+            "proof_semantics": "entity_present",
+        },
+        "after_cleanup_observation_contract": {
+            "required": True,
+            "observer_kind": "identity_read",
+            "proof_semantics": "entity_absent",
+        },
+        "cleanup_request_contract": {
+            "body_strategy": "none",
+            "allowed_fields": [],
+            "required_bindings": identity_fields,
+        },
+        "equivalence_contract": {
+            "mode": "created_entity_absent",
+            "identity_required": True,
+            "compared_fields": [],
+            "ignored_server_fields": [],
+        },
+    }
+
+
+def _validate_explicit_compensator(
+    *,
+    primary_operation_ref: str,
+    cleanup_op_ref: str,
+    cleanup_op: dict[str, Any],
+    cleanup_method: str,
+    cleanup_path: str,
+    relations: list[Any],
+    ops: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """SPEC §7.2: explicit_compensator requires source-declared relation."""
+    # Must have explicit compensates relation in Behavior IR
+    has_relation = any(
+        isinstance(r, dict)
+        and _text(r.get("kind")) in {"compensates", "inverse", "compensation"}
+        and (
+            (_text(r.get("source")) == cleanup_op_ref and _text(r.get("target")) == primary_operation_ref)
+            or (_text(r.get("source")) == primary_operation_ref and _text(r.get("target")) == cleanup_op_ref)
+            or (_text(r.get("source_operation_ref")) == cleanup_op_ref and _text(r.get("target_operation_ref")) == primary_operation_ref)
+            or (_text(r.get("source_operation_ref")) == primary_operation_ref and _text(r.get("target_operation_ref")) == cleanup_op_ref)
+        )
+        for r in relations
+    )
+    if not has_relation:
+        return {"kind": "none", "detail": "explicit_compensator_no_source_relation"}
+
+    authority_block = {
+        "kind": "explicit_compensator",
+        "operation_ref": cleanup_op_ref,
+        "method": cleanup_method,
+        "path": cleanup_path,
+        "source_refs": _list(cleanup_op.get("source_refs")),
+        "authority_relation_ref": f"relation:{primary_operation_ref}:{cleanup_op_ref}",
+    }
+    return {
+        "kind": "explicit_compensator",
+        "detail": "",
+        "authority_block": authority_block,
+        "identity_contract": {
+            "identity_fields": [],
+            "primary_identity_source": "primary_request_or_response",
+            "cleanup_identity_targets": [],
+            "same_entity_required": True,
+            "identity_preservation_required": True,
+        },
+        "before_observation_contract": {"required": True, "observer_kind": "entity_read", "proof_semantics": "state_before"},
+        "after_write_observation_contract": {"required": True, "observer_kind": "entity_read", "proof_semantics": "state_changed"},
+        "after_cleanup_observation_contract": {"required": True, "observer_kind": "entity_read", "proof_semantics": "state_restored"},
+        "cleanup_request_contract": {"body_strategy": "from_source_schema", "allowed_fields": [], "required_bindings": []},
+        "equivalence_contract": {"mode": "business_state_restored", "identity_required": True, "compared_fields": [], "ignored_server_fields": []},
+    }
+
+
+def _validate_field_snapshot_restore(
+    *,
+    primary_method: str,
+    primary_path: str,
+    primary_operation_ref: str,
+    cleanup_op: dict[str, Any],
+    cleanup_method: str,
+    cleanup_path: str,
+    experiment: dict[str, Any],
+    ops: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """SPEC §7.3: field_snapshot_restore semantic validation."""
+    # Empty body action POST cannot be snapshot_restore
+    primary_op = _dict(ops.get(primary_operation_ref))
+    request_example = primary_op.get("request_example")
+    body_is_empty = not request_example or request_example == {}
+
+    if primary_method == "POST" and "{" in primary_path and body_is_empty:
+        return {"kind": "none", "detail": "empty_body_action_without_explicit_inverse"}
+
+    # Must have non-empty body for field restore
+    if body_is_empty and primary_method == "POST":
+        return {"kind": "none", "detail": "empty_body_action_without_explicit_inverse"}
+
+    # Method must be PUT/PATCH or POST with field body
+    if primary_method not in {"PUT", "PATCH", "POST"}:
+        return {"kind": "none", "detail": "field_snapshot_restore_method_invalid"}
+
+    # Extract writable fields from request schema
+    writable_fields = list(request_example.keys()) if isinstance(request_example, dict) else []
+    # Strip server-managed fields
+    restore_fields = [f for f in writable_fields if f.lower() not in SERVER_MANAGED_FIELDS]
+    if not restore_fields:
+        return {"kind": "none", "detail": "field_snapshot_restore_no_writable_fields"}
+
+    authority_block = {
+        "kind": "field_snapshot_restore",
+        "operation_ref": primary_operation_ref,
+        "method": primary_method,
+        "path": cleanup_path or primary_path,
+        "source_refs": _list(primary_op.get("source_refs")),
+        "authority_relation_ref": "",
+    }
+    return {
+        "kind": "field_snapshot_restore",
+        "detail": "",
+        "authority_block": authority_block,
+        "identity_contract": {
+            "identity_fields": [],
+            "primary_identity_source": "path_identity",
+            "cleanup_identity_targets": ["path_identity"],
+            "same_entity_required": True,
+            "identity_preservation_required": True,
+        },
+        "before_observation_contract": {"required": True, "observer_kind": "entity_read", "proof_semantics": "field_values_before"},
+        "after_write_observation_contract": {"required": True, "observer_kind": "entity_read", "proof_semantics": "field_values_changed"},
+        "after_cleanup_observation_contract": {"required": True, "observer_kind": "entity_read", "proof_semantics": "field_values_restored"},
+        "cleanup_request_contract": {
+            "body_strategy": "before_snapshot_fields",
+            "allowed_fields": restore_fields,
+            "required_bindings": [],
+        },
+        "equivalence_contract": {
+            "mode": "field_comparison",
+            "identity_required": True,
+            "compared_fields": restore_fields,
+            "ignored_server_fields": sorted(SERVER_MANAGED_FIELDS),
+        },
+    }
+
+
+def _validate_inverse_delta(
+    *,
+    primary_operation_ref: str,
+    cleanup_op_ref: str,
+    experiment: dict[str, Any],
+    ops: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """SPEC §7.4: inverse_delta semantic validation."""
+    primary_op = _dict(ops.get(primary_operation_ref))
+    request_example = _dict(primary_op.get("request_example"))
+
+    # Find delta field
+    delta_fields = [
+        k for k, v in request_example.items()
+        if isinstance(v, (int, float)) and "delta" in k.lower()
+    ]
+    if not delta_fields:
+        return {"kind": "none", "detail": "inverse_delta_no_numeric_delta_field"}
+
+    authority_block = {
+        "kind": "inverse_delta",
+        "operation_ref": cleanup_op_ref or primary_operation_ref,
+        "method": _text(primary_op.get("method")).upper(),
+        "path": _text(primary_op.get("path") or primary_op.get("raw_path")),
+        "source_refs": _list(primary_op.get("source_refs")),
+        "authority_relation_ref": "",
+    }
+    return {
+        "kind": "inverse_delta",
+        "detail": "",
+        "authority_block": authority_block,
+        "identity_contract": {"identity_fields": [], "primary_identity_source": "request_body", "cleanup_identity_targets": ["request_body"], "same_entity_required": True, "identity_preservation_required": True},
+        "before_observation_contract": {"required": True, "observer_kind": "entity_read", "proof_semantics": "conservation_before"},
+        "after_write_observation_contract": {"required": True, "observer_kind": "entity_read", "proof_semantics": "conservation_after_write"},
+        "after_cleanup_observation_contract": {"required": True, "observer_kind": "entity_read", "proof_semantics": "conservation_restored"},
+        "cleanup_request_contract": {"body_strategy": "inverse_delta", "allowed_fields": delta_fields, "required_bindings": []},
+        "equivalence_contract": {"mode": "conservation_check", "identity_required": True, "compared_fields": delta_fields, "ignored_server_fields": []},
+    }
+
+
+def _validate_exact_recreate(
+    *,
+    primary_method: str,
+    primary_path: str,
+    cleanup_op_ref: str,
+    cleanup_op: dict[str, Any],
+    experiment: dict[str, Any],
+    ops: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """SPEC §7.5: exact_recreate — highest risk, default blocked."""
+    # Primary must be DELETE
+    if primary_method != "DELETE":
+        return {"kind": "none", "detail": "exact_recreate_primary_not_delete"}
+
+    # Must have explicit source declaration allowing recreate
+    safety = _dict(experiment.get("safety_contract"))
+    if not safety.get("business_equivalence_allows_new_identity"):
+        # Default: identity changed → invalid
+        return {"kind": "none", "detail": "exact_recreate_identity_not_preserved"}
+
+    authority_block = {
+        "kind": "exact_recreate",
+        "operation_ref": cleanup_op_ref,
+        "method": _text(cleanup_op.get("method")).upper(),
+        "path": _text(cleanup_op.get("path") or cleanup_op.get("raw_path")),
+        "source_refs": _list(cleanup_op.get("source_refs")),
+        "authority_relation_ref": "",
+    }
+    return {
+        "kind": "exact_recreate",
+        "detail": "",
+        "authority_block": authority_block,
+        "identity_contract": {"identity_fields": [], "primary_identity_source": "before_snapshot", "cleanup_identity_targets": ["recreate_body"], "same_entity_required": False, "identity_preservation_required": False},
+        "before_observation_contract": {"required": True, "observer_kind": "entity_read", "proof_semantics": "full_entity_snapshot"},
+        "after_write_observation_contract": {"required": True, "observer_kind": "entity_read", "proof_semantics": "entity_absent"},
+        "after_cleanup_observation_contract": {"required": True, "observer_kind": "entity_read", "proof_semantics": "entity_restored"},
+        "cleanup_request_contract": {"body_strategy": "full_snapshot_restore", "allowed_fields": [], "required_bindings": []},
+        "equivalence_contract": {"mode": "full_entity_comparison", "identity_required": False, "compared_fields": [], "ignored_server_fields": sorted(SERVER_MANAGED_FIELDS)},
+    }
+
+
+def _validate_environment_reset(*, experiment: dict[str, Any]) -> dict[str, Any]:
+    """SPEC §7.6: verified_environment_reset — requires explicit contract."""
+    reset_contract = _dict(experiment.get("environment_reset_contract"))
+    if not reset_contract.get("verified"):
+        return {"kind": "none", "detail": "environment_reset_contract_unverified"}
+    if _text(reset_contract.get("scope")) != "per_experiment":
+        return {"kind": "none", "detail": "environment_reset_scope_not_per_experiment"}
+
+    authority_block = {
+        "kind": "verified_environment_reset",
+        "operation_ref": _text(reset_contract.get("reset_operation_ref")),
+        "method": "",
+        "path": "",
+        "source_refs": [],
+        "authority_relation_ref": "",
+    }
+    return {
+        "kind": "verified_environment_reset",
+        "detail": "",
+        "authority_block": authority_block,
+        "identity_contract": {},
+        "before_observation_contract": {"required": True, "observer_kind": "environment_snapshot", "proof_semantics": "environment_before"},
+        "after_write_observation_contract": {"required": False},
+        "after_cleanup_observation_contract": {"required": True, "observer_kind": "environment_snapshot", "proof_semantics": "environment_restored"},
+        "cleanup_request_contract": {"body_strategy": "adapter_managed", "allowed_fields": [], "required_bindings": []},
+        "equivalence_contract": {"mode": "environment_fingerprint_comparison", "identity_required": False, "compared_fields": [], "ignored_server_fields": []},
+    }
+
+
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+
+def _nr_reason_detail(method: str, path: str, cleanup_plan: list[dict[str, Any]]) -> str:
     """Generate a specific reason detail for non-reversible writes."""
     if method == "POST" and "{" in path:
-        # Identity-bound action POST
         return "empty_body_action_without_explicit_inverse"
     if method == "POST" and "{" not in path:
-        # Collection POST or domain action
         return "domain_action_without_cleanup_authority"
     if method == "DELETE":
         return "delete_without_recreate_proof"
@@ -181,4 +618,27 @@ def _nr_reason_detail(
 def _proof_id(op_ref: str, method: str, path: str, authority: str) -> str:
     """Content-addressed proof identity."""
     content = f"{op_ref}:{method}:{path}:{authority}"
-    return hashlib.sha256(content.encode()).hexdigest()[:24]
+    return "wrp_" + hashlib.sha256(content.encode()).hexdigest()[:24]
+
+
+def _sha256_stable(obj: Any) -> str:
+    """Stable SHA256 of a JSON-serializable object."""
+    if obj is None:
+        return ""
+    raw = json.dumps(obj, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+
+def _build_compile_context(ir: dict[str, Any], experiment: dict[str, Any]) -> dict[str, Any]:
+    """Build compile context for proof binding."""
+    return {
+        "behavior_ir_fingerprint": _sha256_stable(
+            _list(ir.get("operations")) + _list(ir.get("relations"))
+        ),
+        "experiment_semantic_fingerprint": _sha256_stable({
+            "obligation_id": experiment.get("obligation_id"),
+            "risk_family": experiment.get("risk_family"),
+        }),
+        "policy_version": "",
+        "compiler_version": "v1.1",
+    }

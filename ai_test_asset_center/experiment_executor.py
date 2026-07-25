@@ -27,6 +27,7 @@ from .experiment_barrier_executor import execute_barrier_plans
 from .experiment_plan_executor import execute_non_barrier_plans
 from .experiment_outcome_finalizer import finalize_experiment_execution
 from .experiment_cleanup_executor import execute_experiment_cleanup_compensation
+from .cleanup_plan_validator import validate_cleanup_plan
 from .experiment_cleanup import (  # noqa: F401
     _cleanup_compensates_created_resource,
     _cleanup_restores_governed_write,
@@ -132,6 +133,32 @@ def execute_one_experiment(
     ir = _dict(behavior_ir)
     actors = _index_by_id(_list(ir.get("actors")))
     ops = _index_by_id(_list(ir.get("operations")))
+
+    # ── SPEC v1.1 §10 Phase A: Transport-independent proof validation ──
+    # For governed writes, verify compile proof exists and is valid before fixture.
+    safety = _dict(exp.get("safety_contract"))
+    is_governed_write = safety.get("governed_write")
+    compile_proof_fingerprint = ""
+    if is_governed_write:
+        compile_proof = _dict(exp.get("write_reversibility_proof"))
+        compile_proof_fingerprint = _text(compile_proof.get("fingerprint"))
+        # Phase A: verify proof exists and fingerprint is valid
+        if not compile_proof or _text(compile_proof.get("proof_status")) != "PROVEN":
+            return {
+                "schema_version": "qualibug.experiment-execution.v1",
+                "experiment_id": eid,
+                "obligation_id": oid,
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_CLEANUP_CONTRACT_DRIFT",
+                "detail": "compile_proof_missing_or_invalid",
+                "elapsed_ms": int((time.time() - started) * 1000),
+                "finding": None,
+                "execution_receipt": {
+                    "status": "BLOCKED",
+                    "reason_code": "BLOCKED_CLEANUP_CONTRACT_DRIFT",
+                    "detail": "compile_proof_missing_or_invalid",
+                },
+            }
     steps_out: list[dict[str, Any]] = []
     request_bodies_for_cleanup: dict[str, Any] = {}
     observations: dict[str, Any] = {
@@ -226,6 +253,57 @@ def execute_one_experiment(
             "contract_evidence_receipts": contract_evidence_receipts,
         },
     )
+
+    # ── SPEC v1.1 §10 Phase B: Runtime binding validation ──
+    # After fixture materialization, verify proof fingerprint and bindings.
+    if is_governed_write:
+        runtime_validation = validate_cleanup_plan(
+            exp,
+            behavior_ir,
+            phase="runtime",
+            compile_proof_fingerprint=compile_proof_fingerprint,
+            runtime_bindings=runtime_bindings,
+            binding_receipts=binding_materialization_receipts,
+        )
+        if not runtime_validation["valid"]:
+            _exec_logger.warning(
+                f"Experiment BLOCKED at runtime proof validation: {eid} "
+                f"reason={runtime_validation['reason_code']}",
+                extra={"error_code": "QB-X005", "context": {
+                    "experiment_id": eid, "obligation_id": oid,
+                    "reason_code": runtime_validation["reason_code"],
+                    "detail": str(runtime_validation["detail"])[:300],
+                    "campaign_id": resolved_campaign_id,
+                }},
+            )
+            return {
+                "schema_version": "qualibug.experiment-execution.v1",
+                "experiment_id": eid,
+                "obligation_id": oid,
+                "status": "BLOCKED",
+                "reason_code": runtime_validation["reason_code"],
+                "detail": runtime_validation["detail"],
+                "elapsed_ms": int((time.time() - started) * 1000),
+                "finding": None,
+                "execution_receipt": {
+                    "status": "BLOCKED",
+                    "reason_code": runtime_validation["reason_code"],
+                    "detail": runtime_validation["detail"],
+                },
+                "runtime_proof_validation": {
+                    "status": "INVALID",
+                    "reason_code": runtime_validation["reason_code"],
+                    "detail": runtime_validation["detail"],
+                },
+            }
+        # Mark runtime proof validation as passed
+        exp["runtime_proof_validation"] = {
+            "status": "VALID",
+            "compile_fingerprint": compile_proof_fingerprint,
+            "runtime_fingerprint": _text(
+                _dict(runtime_validation.get("proof")).get("fingerprint")
+            ),
+        }
 
     barrier_result = execute_barrier_plans(
         control_plan=_list(exp.get("control_plan")),
