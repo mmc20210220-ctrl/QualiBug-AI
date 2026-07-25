@@ -585,6 +585,19 @@ def build_enterprise_business_knowledge_asset(project_id: str = "real_project_de
         for receipt in parser_receipts
         if str(receipt.get("parser_status") or "") in {"degraded", "failed"}
     ]
+    # ── Phase 0: per-source extraction-empty coverage gaps ──
+    for receipt in parser_receipts:
+        for err in receipt.get("errors") or []:
+            if isinstance(err, dict) and err.get("gap_type"):
+                parse_coverage_gaps.append({
+                    "kind": "STRUCTURED_EXTRACTION_EMPTY",
+                    "gap_type": err["gap_type"],
+                    "source_id": receipt.get("source_id"),
+                    "source_locator": receipt.get("source_locator"),
+                    "parser_receipt_id": receipt.get("receipt_id"),
+                    "extraction_outcome": receipt.get("extraction_outcome", ""),
+                    "operator_action": err.get("operator_action", "enhance_parser_or_provide_machine_readable_source"),
+                })
     source_texts = {f"{source.get('source_type')}:{source.get('original_name')}": parsed.get("text") or "" for source, parsed in parsed_rows if parsed.get("text")}
     openapi_parts = [parsed.get("openapi") for _, parsed in parsed_rows if isinstance(parsed.get("openapi"), dict) and parsed.get("openapi")]
     merged_openapi = _merge_openapi(openapi_parts)
@@ -705,6 +718,29 @@ def build_enterprise_business_knowledge_asset(project_id: str = "real_project_de
     rules = _structurize_rule_causal_chains(rules)
     entity_relations = _extract_entity_relations(interfaces, tables, field_dictionary, rules, state_machines, permissions)
     cross_doc_conflicts = _detect_cross_document_conflicts(field_dictionary, rules, interfaces, permissions)
+    # ── Phase 0: asset-level space health check ──
+    # If entire entity/field/permission spaces are empty, emit asset-level gaps.
+    if active and not tables and not objects:
+        parse_coverage_gaps.append({
+            "kind": "ASSET_SPACE_EMPTY",
+            "gap_type": "entity_space_empty",
+            "source_id": "*",
+            "operator_action": "no data_tables or business_objects extracted from any source; provide machine-readable schema or field definitions",
+        })
+    if active and not field_dictionary:
+        parse_coverage_gaps.append({
+            "kind": "ASSET_SPACE_EMPTY",
+            "gap_type": "field_space_empty",
+            "source_id": "*",
+            "operator_action": "no data_fields extracted from any source; provide field dictionary or schema with column definitions",
+        })
+    if active and not permissions:
+        parse_coverage_gaps.append({
+            "kind": "ASSET_SPACE_EMPTY",
+            "gap_type": "permission_space_empty",
+            "source_id": "*",
+            "operator_action": "no permission_matrix extracted; provide role-permission definitions if applicable",
+        })
     asset = {
         "phase": PHASE,
         "asset_id": f"knowledge_asset:{project}:{_short_hash({'sources': [(x.get('source_id'), x.get('content_hash'), x.get('version')) for x in active]})}",

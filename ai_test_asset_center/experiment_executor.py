@@ -542,6 +542,11 @@ def execute_one_experiment(
             )
             observations["cross_surface_evidence"] = _emergent
     except Exception as _ml_exc:
+        _exec_logger.warning(
+            "Multi-layer observation enrichment failed: %s obligation=%s error=%s",
+            eid, oid, str(_ml_exc)[:300],
+            exc_info=_ml_exc,
+        )
         observations["multi_layer_error"] = str(_ml_exc)[:200]
 
     _final_result = finalize_experiment_execution(

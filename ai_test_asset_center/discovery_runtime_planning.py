@@ -7,10 +7,13 @@ re-exported from ``discovery_runtime`` for compatibility.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from pathlib import Path
 from typing import Any
+
+_planning_logger = logging.getLogger("qualibug.discovery_planning")
 
 from .adaptive_discovery_planner import (
     build_agent_intent_plan,
@@ -611,6 +614,11 @@ def build_discovery_plan(
             "combinations_generated": len(_combos) if isinstance(_combos, list) else 0,
         }
     except Exception as _space_exc:
+        _planning_logger.warning(
+            "Space exploration enrichment failed: %s: %s",
+            type(_space_exc).__name__, str(_space_exc)[:300],
+            exc_info=_space_exc,
+        )
         _space_exploration_report = {
             "error": f"{type(_space_exc).__name__}: {str(_space_exc)[:200]}",
         }
@@ -688,6 +696,14 @@ def build_discovery_plan(
             }
             _binding_blocked_obls.append(_g_oid)
 
+    # ── B1 fix: probe_status derived from actual runtime contract state ──
+    _probe_contract = _dict(inputs.campaign_context.get("_runtime_contract"))
+    _probe_contract_approved = bool(_text(_probe_contract.get("approved_base_url")))
+    _probe_status = (
+        "PROBES_NOT_INVOKED_CONTRACT_APPROVED"
+        if _probe_contract_approved
+        else "PROBES_NOT_INVOKED_NO_APPROVED_CONTRACT"
+    )
     _binding_closure_receipt: dict[str, Any] = {
         "schema_version": "qualibug.binding-closure-receipt.v1",
         "total_bindings": _binding_ledger.size,
@@ -700,7 +716,7 @@ def build_discovery_plan(
         "gate_checked": _binding_gate_checked,
         "gate_blocked": len(_binding_blocked_obls),
         "blocked_obligations": _binding_blocked_obls[:50],
-        "probe_status": "PROBES_SKIPPED_CONTRACT_NOT_APPROVED",
+        "probe_status": _probe_status,
     }
 
     # ── Deep Experiment Planner: enrich blocked/shallow obligations ──
@@ -832,6 +848,11 @@ def build_discovery_plan(
                     "reordered_count": len(_reordered_ids),
                 }
     except Exception as _reorder_exc:
+        _planning_logger.warning(
+            "Coverage-guided reorder failed: %s: %s",
+            type(_reorder_exc).__name__, str(_reorder_exc)[:300],
+            exc_info=_reorder_exc,
+        )
         _reorder_receipt = {
             "reordered": False,
             "error": f"{type(_reorder_exc).__name__}: {str(_reorder_exc)[:200]}",

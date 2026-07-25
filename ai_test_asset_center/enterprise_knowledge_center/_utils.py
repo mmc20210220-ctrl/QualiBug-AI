@@ -100,12 +100,26 @@ def _parser_receipt(
     errors: list[dict[str, Any]],
     parse_status: str,
     started_at_utc: str,
+    extraction_outcome: str = "",
 ) -> dict[str, Any]:
-    fidelity = "full"
+    # decode_fidelity: whether the file was successfully decoded
+    decode_fidelity = "full"
     if parse_status == "metadata_only":
-        fidelity = "metadata_only"
+        decode_fidelity = "metadata_only"
     elif errors:
-        fidelity = "degraded"
+        decode_fidelity = "degraded"
+    # extraction_outcome: whether structured extraction succeeded
+    if not extraction_outcome:
+        structured_count = sum(
+            int(outputs.get(k) or 0)
+            for k in ("tables", "fields", "permissions")
+        )
+        if structured_count > 0:
+            extraction_outcome = "EXTRACTED"
+        elif parse_status == "metadata_only":
+            extraction_outcome = "SKIPPED_NOT_APPLICABLE"
+        else:
+            extraction_outcome = "EMPTY_NO_STRUCTURE_FOUND"
     receipt_key = {
         "source_id": source_id,
         "text_hash": text_hash,
@@ -123,7 +137,9 @@ def _parser_receipt(
         "detected_format": detected_format,
         "parser": parser,
         "parser_status": "degraded" if errors and parse_status != "failed" else parse_status,
-        "fidelity": fidelity,
+        "decode_fidelity": decode_fidelity,
+        "fidelity": decode_fidelity,  # backward compat alias
+        "extraction_outcome": extraction_outcome,
         "text_hash": text_hash,
         "text_length": int(text_length),
         "outputs": dict(outputs),

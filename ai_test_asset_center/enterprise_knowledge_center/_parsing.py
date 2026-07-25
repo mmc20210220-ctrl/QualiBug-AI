@@ -1228,6 +1228,34 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
         "roles": len(_roles_from_text(text, source_id)),
         "state_machines": len(_state_machines_from_text(text, source_id)),
     }
+    # ── Phase 0: zero-output coverage gap detection ──
+    # If a source SHOULD contain structured definitions but produces 0, emit gap.
+    _structured_types = {"database_schema", "db_field_dictionary", "permission_matrix"}
+    _has_2d_table = bool(_markdown_table_blocks(text)) if text.strip() else False
+    _structured_output_count = outputs["tables"] + outputs["fields"] + outputs["permissions"]
+    _extraction_outcome = ""
+    if _structured_output_count > 0:
+        _extraction_outcome = "EXTRACTED"
+    elif source_type in _structured_types or _has_2d_table:
+        # Source expected to yield structured data but produced nothing
+        _extraction_outcome = "EMPTY_NO_STRUCTURE_FOUND"
+        _gap_code = "structured_extraction_empty"
+        if suffix not in {".md", ".txt", ".rst", ".html", ".htm", ".csv", ".sql", ".json", ".yaml", ".yml", ".docx", ".pdf", ".xml"}:
+            _extraction_outcome = "EMPTY_PARSER_UNSUPPORTED_SHAPE"
+            _gap_code = "unsupported_document_shape"
+        parse_errors.append({
+            "stage": "extraction",
+            "code": "STRUCTURED_EXTRACTION_EMPTY",
+            "identity": source_id,
+            "retryability": "after_parser_enhancement",
+            "operator_action": "source appears to contain structured definitions but parser produced zero rows",
+            "detail": f"source_type={source_type} has_2d_table={_has_2d_table} tables={outputs['tables']} fields={outputs['fields']} permissions={outputs['permissions']}",
+            "gap_type": _gap_code,
+        })
+    elif parse_status == "metadata_only":
+        _extraction_outcome = "SKIPPED_NOT_APPLICABLE"
+    else:
+        _extraction_outcome = "EMPTY_NO_STRUCTURE_FOUND"
     receipt = _parser_receipt(
         source_id=source_id,
         filename=filename,
@@ -1240,6 +1268,7 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
         errors=parse_errors,
         parse_status=parse_status,
         started_at_utc=started_at_utc,
+        extraction_outcome=_extraction_outcome,
     )
     return {
         "text": text,
