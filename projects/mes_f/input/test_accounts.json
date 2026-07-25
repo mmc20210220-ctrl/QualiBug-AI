@@ -1,0 +1,18 @@
+{
+  "schema_version": "qualibug.test-accounts.v1",
+  "project": "mes_f",
+  "accounts": [
+    {"account_ref": "planner_pat", "id": "pln-001", "name": "Pat Zhang", "role": "PLANNER", "tenant": "acme", "scope": "acme", "org": "acme", "factory": "fac-001", "credential_secret_ref": "planner-pat-token", "token": "planner-pat-token", "status": "active"},
+    {"account_ref": "planner_pam", "id": "pln-002", "name": "Pam Xu", "role": "PLANNER", "tenant": "globex", "scope": "globex", "org": "globex", "factory": "fac-003", "credential_secret_ref": "planner-pam-token", "token": "planner-pam-token", "status": "active"},
+    {"account_ref": "operator_oli", "id": "opr-001", "name": "Oli Chen", "role": "OPERATOR", "tenant": "acme", "scope": "acme", "org": "acme", "factory": "fac-001", "credential_secret_ref": "operator-oli-token", "token": "operator-oli-token", "status": "active"},
+    {"account_ref": "operator_ole", "id": "opr-002", "name": "Ole Wu", "role": "OPERATOR", "tenant": "acme", "scope": "acme", "org": "acme", "factory": "fac-002", "credential_secret_ref": "operator-ole-token", "token": "operator-ole-token", "status": "active"},
+    {"account_ref": "operator_ova", "id": "opr-003", "name": "Ova Li", "role": "OPERATOR", "tenant": "globex", "scope": "globex", "org": "globex", "factory": "fac-003", "credential_secret_ref": "operator-ova-token", "token": "operator-ova-token", "status": "active"},
+    {"account_ref": "inspector_iris", "id": "ins-001", "name": "Iris Wang", "role": "INSPECTOR", "tenant": "acme", "scope": "acme", "org": "acme", "factory": "fac-001", "credential_secret_ref": "inspector-iris-token", "token": "inspector-iris-token", "status": "active"},
+    {"account_ref": "inspector_ivan", "id": "ins-002", "name": "Ivan Zhao", "role": "INSPECTOR", "tenant": "globex", "scope": "globex", "org": "globex", "factory": "fac-003", "credential_secret_ref": "inspector-ivan-token", "token": "inspector-ivan-token", "status": "active"},
+    {"account_ref": "manager_marcus", "id": "mgr-001", "name": "Marcus Sun", "role": "MANAGER", "tenant": "acme", "scope": "acme", "org": "acme", "factory": "fac-001", "credential_secret_ref": "manager-marcus-token", "token": "manager-marcus-token", "status": "active"},
+    {"account_ref": "manager_mona", "id": "mgr-002", "name": "Mona Huang", "role": "MANAGER", "tenant": "globex", "scope": "globex", "org": "globex", "factory": "fac-003", "credential_secret_ref": "manager-mona-token", "token": "manager-mona-token", "status": "active"},
+    {"account_ref": "warehouse_will", "id": "whk-001", "name": "Will Zhou", "role": "WAREHOUSE", "tenant": "acme", "scope": "acme", "org": "acme", "factory": "fac-001", "credential_secret_ref": "warehouse-will-token", "token": "warehouse-will-token", "status": "active"},
+    {"account_ref": "warehouse_wanda", "id": "whk-002", "name": "Wanda Yang", "role": "WAREHOUSE", "tenant": "globex", "scope": "globex", "org": "globex", "factory": "fac-003", "credential_secret_ref": "warehouse-wanda-token", "token": "warehouse-wanda-token", "status": "active"},
+    {"account_ref": "admin_arthur", "id": "adm-001", "name": "Arthur Liu", "role": "ADMIN", "tenant": "acme", "scope": "acme", "org": "acme", "factory": null, "credential_secret_ref": "admin-arthur-token", "token": "admin-arthur-token", "status": "active"}
+  ]
+}

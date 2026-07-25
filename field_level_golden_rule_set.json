@@ -1,0 +1,424 @@
+{
+  "schema_version": "qualibug.field-level-golden-rule-set.v1",
+  "title": "Field-Level Golden Rule Set",
+  "validation": {
+    "schema_version": "qualibug.field-level-golden-rule-set.v1",
+    "total_rules": 20,
+    "causal_count": 8,
+    "state_count": 6,
+    "conservation_count": 6,
+    "empty_terms_count": 0,
+    "meets_requirements": true,
+    "violations": [
+      "",
+      "",
+      "",
+      "",
+      ""
+    ]
+  },
+  "rules": [
+    {
+      "rule_id": "GR-CAUSAL-001",
+      "category": "causal",
+      "description": "Creating an entity with a foreign key must reference an existing parent entity",
+      "terms": [
+        {
+          "field": "parent_entity_id",
+          "field_type": "FOREIGN_KEY",
+          "role": "trigger"
+        },
+        {
+          "field": "parent_entity.id",
+          "field_type": "IDENTITY",
+          "role": "target"
+        }
+      ],
+      "expression": "parent_entity_id IN parent_entity.id_set",
+      "severity": "critical"
+    },
+    {
+      "rule_id": "GR-CAUSAL-002",
+      "category": "causal",
+      "description": "Updating a quantity field must update the corresponding balance field",
+      "terms": [
+        {
+          "field": "quantity_delta",
+          "field_type": "QUANTITY_BALANCE",
+          "role": "trigger"
+        },
+        {
+          "field": "running_balance",
+          "field_type": "QUANTITY_BALANCE",
+          "role": "effect"
+        }
+      ],
+      "expression": "running_balance_after == running_balance_before + quantity_delta",
+      "severity": "critical"
+    },
+    {
+      "rule_id": "GR-CAUSAL-003",
+      "category": "causal",
+      "description": "Changing owner_id must update the audit trail (updated_by, updated_at)",
+      "terms": [
+        {
+          "field": "owner_id",
+          "field_type": "OWNER_ID",
+          "role": "trigger"
+        },
+        {
+          "field": "updated_at",
+          "field_type": "TEMPORAL",
+          "role": "effect"
+        }
+      ],
+      "expression": "owner_id_changed IMPLIES updated_at_changed",
+      "severity": "high"
+    },
+    {
+      "rule_id": "GR-CAUSAL-004",
+      "category": "causal",
+      "description": "Setting a temporal deadline in the past must be rejected",
+      "terms": [
+        {
+          "field": "deadline",
+          "field_type": "TEMPORAL",
+          "role": "trigger"
+        },
+        {
+          "field": "current_timestamp",
+          "field_type": "TEMPORAL",
+          "role": "reference"
+        }
+      ],
+      "expression": "deadline >= current_timestamp",
+      "severity": "high"
+    },
+    {
+      "rule_id": "GR-CAUSAL-005",
+      "category": "causal",
+      "description": "Deleting a parent entity must cascade or block if children exist",
+      "terms": [
+        {
+          "field": "parent.id",
+          "field_type": "IDENTITY",
+          "role": "trigger"
+        },
+        {
+          "field": "child.parent_id",
+          "field_type": "FOREIGN_KEY",
+          "role": "dependent"
+        }
+      ],
+      "expression": "DELETE(parent) IMPLIES (child_count == 0 OR cascade_delete)",
+      "severity": "critical"
+    },
+    {
+      "rule_id": "GR-CAUSAL-006",
+      "category": "causal",
+      "description": "Modifying a unique code field must not create duplicates",
+      "terms": [
+        {
+          "field": "unique_code",
+          "field_type": "UNIQUE_CODE",
+          "role": "trigger"
+        },
+        {
+          "field": "entity.id",
+          "field_type": "IDENTITY",
+          "role": "scope"
+        }
+      ],
+      "expression": "UNIQUE(unique_code) WHERE entity.scope",
+      "severity": "critical"
+    },
+    {
+      "rule_id": "GR-CAUSAL-007",
+      "category": "causal",
+      "description": "Changing a money field must preserve currency consistency",
+      "terms": [
+        {
+          "field": "amount",
+          "field_type": "MONEY",
+          "role": "trigger"
+        },
+        {
+          "field": "currency_code",
+          "field_type": "REFERENCE_CODE",
+          "role": "constraint"
+        }
+      ],
+      "expression": "amount_changed IMPLIES currency_code_present",
+      "severity": "high"
+    },
+    {
+      "rule_id": "GR-CAUSAL-008",
+      "category": "causal",
+      "description": "Writing to a restricted field requires specific role authorization",
+      "terms": [
+        {
+          "field": "restricted_field",
+          "field_type": "MONEY",
+          "role": "trigger"
+        },
+        {
+          "field": "actor.role",
+          "field_type": "ENUM_STATUS",
+          "role": "authorization"
+        }
+      ],
+      "expression": "WRITE(restricted_field) REQUIRES actor.role IN authorized_roles",
+      "severity": "critical"
+    },
+    {
+      "rule_id": "GR-STATE-001",
+      "category": "state",
+      "description": "State field must only transition along declared transition paths",
+      "terms": [
+        {
+          "field": "status",
+          "field_type": "STATE",
+          "role": "state_field"
+        },
+        {
+          "field": "transition_operation",
+          "field_type": "IDENTITY",
+          "role": "trigger"
+        }
+      ],
+      "expression": "status_after IN allowed_transitions[status_before]",
+      "severity": "critical"
+    },
+    {
+      "rule_id": "GR-STATE-002",
+      "category": "state",
+      "description": "Terminal state must be immutable — no further transitions allowed",
+      "terms": [
+        {
+          "field": "status",
+          "field_type": "STATE",
+          "role": "state_field"
+        },
+        {
+          "field": "terminal_values",
+          "field_type": "ENUM_STATUS",
+          "role": "constraint"
+        }
+      ],
+      "expression": "status IN terminal_values IMPLIES status_after == status_before",
+      "severity": "critical"
+    },
+    {
+      "rule_id": "GR-STATE-003",
+      "category": "state",
+      "description": "Initial state must be set on entity creation",
+      "terms": [
+        {
+          "field": "status",
+          "field_type": "STATE",
+          "role": "state_field"
+        },
+        {
+          "field": "initial_value",
+          "field_type": "ENUM_STATUS",
+          "role": "default"
+        }
+      ],
+      "expression": "CREATE(entity) IMPLIES status == initial_value",
+      "severity": "high"
+    },
+    {
+      "rule_id": "GR-STATE-004",
+      "category": "state",
+      "description": "State transition must update the state timestamp field",
+      "terms": [
+        {
+          "field": "status",
+          "field_type": "STATE",
+          "role": "trigger"
+        },
+        {
+          "field": "status_changed_at",
+          "field_type": "TEMPORAL",
+          "role": "effect"
+        }
+      ],
+      "expression": "status_changed IMPLIES status_changed_at_updated",
+      "severity": "medium"
+    },
+    {
+      "rule_id": "GR-STATE-005",
+      "category": "state",
+      "description": "Concurrent state transitions must be serialized (no lost updates)",
+      "terms": [
+        {
+          "field": "status",
+          "field_type": "STATE",
+          "role": "state_field"
+        },
+        {
+          "field": "version",
+          "field_type": "QUANTITY_BALANCE",
+          "role": "optimistic_lock"
+        }
+      ],
+      "expression": "transition REQUIRES version_match",
+      "severity": "high"
+    },
+    {
+      "rule_id": "GR-STATE-006",
+      "category": "state",
+      "description": "State field value must be from declared enum set",
+      "terms": [
+        {
+          "field": "status",
+          "field_type": "STATE",
+          "role": "state_field"
+        },
+        {
+          "field": "allowed_values",
+          "field_type": "ENUM_STATUS",
+          "role": "constraint"
+        }
+      ],
+      "expression": "status IN allowed_values",
+      "severity": "critical"
+    },
+    {
+      "rule_id": "GR-CONSERV-001",
+      "category": "conservation",
+      "description": "Sum of line item quantities must equal parent order quantity",
+      "terms": [
+        {
+          "field": "order.total_quantity",
+          "field_type": "QUANTITY_BALANCE",
+          "role": "aggregate"
+        },
+        {
+          "field": "line_items[].quantity",
+          "field_type": "QUANTITY_BALANCE",
+          "role": "component"
+        }
+      ],
+      "expression": "order.total_quantity == SUM(line_items[].quantity)",
+      "severity": "critical"
+    },
+    {
+      "rule_id": "GR-CONSERV-002",
+      "category": "conservation",
+      "description": "Sum of line item amounts must equal parent total amount",
+      "terms": [
+        {
+          "field": "order.total_amount",
+          "field_type": "MONEY",
+          "role": "aggregate"
+        },
+        {
+          "field": "line_items[].amount",
+          "field_type": "MONEY",
+          "role": "component"
+        }
+      ],
+      "expression": "order.total_amount == SUM(line_items[].amount)",
+      "severity": "critical"
+    },
+    {
+      "rule_id": "GR-CONSERV-003",
+      "category": "conservation",
+      "description": "Inventory balance must equal received minus shipped",
+      "terms": [
+        {
+          "field": "inventory.balance",
+          "field_type": "QUANTITY_BALANCE",
+          "role": "state"
+        },
+        {
+          "field": "receipts.total_qty",
+          "field_type": "QUANTITY_BALANCE",
+          "role": "input"
+        },
+        {
+          "field": "shipments.total_qty",
+          "field_type": "QUANTITY_BALANCE",
+          "role": "output"
+        }
+      ],
+      "expression": "inventory.balance == receipts.total_qty - shipments.total_qty",
+      "severity": "critical"
+    },
+    {
+      "rule_id": "GR-CONSERV-004",
+      "category": "conservation",
+      "description": "Account balance must equal sum of all transactions",
+      "terms": [
+        {
+          "field": "account.balance",
+          "field_type": "MONEY",
+          "role": "state"
+        },
+        {
+          "field": "transactions[].amount",
+          "field_type": "MONEY",
+          "role": "component"
+        }
+      ],
+      "expression": "account.balance == SUM(transactions[].amount)",
+      "severity": "critical"
+    },
+    {
+      "rule_id": "GR-CONSERV-005",
+      "category": "conservation",
+      "description": "Planned quantity must equal completed plus remaining",
+      "terms": [
+        {
+          "field": "planned_qty",
+          "field_type": "QUANTITY_BALANCE",
+          "role": "total"
+        },
+        {
+          "field": "completed_qty",
+          "field_type": "QUANTITY_BALANCE",
+          "role": "done"
+        },
+        {
+          "field": "remaining_qty",
+          "field_type": "QUANTITY_BALANCE",
+          "role": "pending"
+        }
+      ],
+      "expression": "planned_qty == completed_qty + remaining_qty",
+      "severity": "high"
+    },
+    {
+      "rule_id": "GR-CONSERV-006",
+      "category": "conservation",
+      "description": "Total discount must not exceed original amount",
+      "terms": [
+        {
+          "field": "original_amount",
+          "field_type": "MONEY",
+          "role": "base"
+        },
+        {
+          "field": "discount_amount",
+          "field_type": "MONEY",
+          "role": "deduction"
+        }
+      ],
+      "expression": "discount_amount <= original_amount",
+      "severity": "high"
+    }
+  ],
+  "field_type_coverage": {
+    "QUANTITY_BALANCE": 11,
+    "MONEY": 8,
+    "STATE": 6,
+    "IDENTITY": 4,
+    "TEMPORAL": 4,
+    "ENUM_STATUS": 4,
+    "FOREIGN_KEY": 2,
+    "OWNER_ID": 1,
+    "UNIQUE_CODE": 1,
+    "REFERENCE_CODE": 1
+  }
+}
