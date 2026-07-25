@@ -8,6 +8,7 @@ accepted forbidden request into a passing result.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 from . import observer_contracts_base as _base
@@ -44,6 +45,7 @@ def observe_authorization_comparison(
     require_same_resource: bool,
     business_effect: dict[str, Any] | None = None,
     binding_materialization_receipts: list[dict[str, Any]] | None = None,
+    identity_keys: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     baseline = _original_authorization_comparison(
         control=control,
@@ -51,6 +53,7 @@ def observe_authorization_comparison(
         require_same_resource=require_same_resource,
         business_effect=business_effect,
         binding_materialization_receipts=binding_materialization_receipts,
+        identity_keys=identity_keys,
     )
     control_row = _dict(control)
     treatment_row = _dict(treatment)

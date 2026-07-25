@@ -62,11 +62,14 @@ def test_same_nonempty_resource_is_observed_authorization_violation() -> None:
 
 
 def test_business_key_identity_proves_same_resource() -> None:
+    # "sku" carries no meaning to the observer; it proves identity only because
+    # the source declared it a unique key and the caller passed it in.
     payload = {"sku": "SKU-1", "state": "active"}
     receipt = observe_authorization_comparison(
         control=_http_observation(status=200, body=payload, phase="control"),
         treatment=_http_observation(status=200, body=payload, phase="treatment"),
         require_same_resource=True,
+        identity_keys=["sku"],
     )
 
     assert receipt["status"] == "OBSERVED"

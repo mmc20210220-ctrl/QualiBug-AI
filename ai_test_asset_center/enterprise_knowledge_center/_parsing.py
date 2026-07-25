@@ -181,6 +181,43 @@ _DESCRIPTION_HEADERS = {
 }
 
 
+# ── Source-declared identity constraints ──
+# A field is an identity field when the source marks it as a primary key or a
+# unique key. Both make the value address exactly one row, which is what proves
+# two observations reached the same resource. Recognition is by constraint
+# vocabulary, never by field name, so no industry term is assumed.
+_IDENTITY_CONSTRAINT_HEADERS = {
+    "constraint", "constraints", "key", "keys", "index", "indexes",
+    "约束", "键", "主键", "索引",
+}
+_IDENTITY_CONSTRAINT_RE = re.compile(
+    r"(?i)(?:\bpk\b|\bprimary\s+key\b|\bunique\b|主键|唯一)"
+)
+# Constraint lists outside a table, e.g. "products: UNIQUE(sku), INDEX(org)".
+_IDENTITY_CONSTRAINT_CALL_RE = re.compile(
+    r"(?i)(?:primary\s+key|unique|主键|唯一)\s*\(([^)]*)\)"
+)
+
+
+def _declares_identity(constraint_text: str) -> bool:
+    text = str(constraint_text or "")
+    if not text.strip():
+        return False
+    # "FK -> work_orders.id, UNIQUE" declares identity; a bare FK does not.
+    return bool(_IDENTITY_CONSTRAINT_RE.search(text))
+
+
+def _identity_columns_from_constraint_calls(text: str) -> list[str]:
+    """Column names named inside PRIMARY KEY(...) / UNIQUE(...) declarations."""
+    found: list[str] = []
+    for match in _IDENTITY_CONSTRAINT_CALL_RE.finditer(str(text or "")):
+        for raw in match.group(1).split(","):
+            column = raw.strip().strip('`"[]')
+            if column and column not in found:
+                found.append(column)
+    return found
+
+
 def _is_entity_inventory_table(headers: list[str]) -> bool:
     """Determine if a table enumerates entities (one row per entity).
 
@@ -472,6 +509,7 @@ def _infer_field_rows_from_markdown(text: str, source_id: str = "") -> list[dict
             field_type = _pick_first(row, ("type", "data_type", "datatype", "字段类型", "类型"))
             description = _pick_first(row, ("description", "desc", "comment", "说明", "描述", "备注"))
             required = _pick_first(row, ("required", "nullable", "必填", "是否必填"))
+            constraint = _pick_first(row, tuple(sorted(_IDENTITY_CONSTRAINT_HEADERS)))
             rows.append({
                 "field_id": f"field:{source_id}:{_short_hash({'table': table_name or 'default', 'field': field_name})}",
                 "source_id": source_id,
@@ -481,6 +519,8 @@ def _infer_field_rows_from_markdown(text: str, source_id: str = "") -> list[dict
                 "field_path": field_name,
                 "type": field_type,
                 "required": _doc_bool(required),
+                "constraint": _redact_text(constraint, 160),
+                "identity": _declares_identity(constraint),
                 "description": _redact_text(description, 320),
                 "table_alias": table_alias,
                 "tokens": sorted(_tokens(f"{table_name} {table_alias} {field_name} {field_type} {description}")),
@@ -518,6 +558,7 @@ def _field_dictionary_entries(text: str, payload: Any, source_id: str) -> list[d
         field_type = _pick_first(item, ("type", "data_type", "dataType", "字段类型", "类型"))
         description = _pick_first(item, ("description", "desc", "comment", "说明", "描述", "remark", "备注"))
         required = _pick_first(item, ("required", "nullable", "必填", "is_required"))
+        constraint = _pick_first(item, tuple(sorted(_IDENTITY_CONSTRAINT_HEADERS)))
         rows.append({
             "field_id": f"field:{source_id}:{_short_hash({'table': table_name or 'default', 'field': field_name})}",
             "source_id": source_id,
@@ -527,6 +568,10 @@ def _field_dictionary_entries(text: str, payload: Any, source_id: str) -> list[d
             "field_path": field_name,
             "type": field_type,
             "required": _doc_bool(required),
+            "constraint": _redact_text(constraint, 160),
+            "identity": _declares_identity(constraint) or _doc_bool(
+                _pick_first(item, ("primary_key", "primaryKey", "unique", "is_unique", "主键", "唯一"))
+            ) is True,
             "description": _redact_text(description, 320),
             "tokens": sorted(_tokens(f"{table_name} {field_name} {field_type} {description}")),
         })
@@ -543,17 +588,78 @@ def _field_dictionary_tables(entries: list[dict[str, Any]], source_id: str = "")
     for table_name, items in grouped.items():
         columns = sorted({str(item.get("field") or "") for item in items if str(item.get("field") or "")})
         aliases = sorted({str(item.get("table_alias") or "") for item in items} - {""})
+        identity_fields = sorted({
+            str(item.get("field") or "")
+            for item in items
+            if item.get("identity") is True and str(item.get("field") or "")
+        })
         tables.append({
             "table_id": f"table:{table_name}",
             "source_id": source_id,
             "name": table_name,
             "aliases": aliases,
             "columns": columns,
+            "identity_fields": identity_fields,
             "foreign_keys": [],
             "field_dictionary": items,
             "derivation": "field_dictionary_grouping",
             "tokens": sorted(_tokens(f"{table_name} {' '.join(columns)} {' '.join(str(item.get('description') or '') for item in items[:12])}")),
         })
+    return tables
+
+
+def _constraint_list_identity_fields(text: str) -> dict[str, list[str]]:
+    """Identity columns from constraint lists that sit outside any table.
+
+    Source documents commonly summarize keys separately from the field
+    definitions, one entity per line, e.g. "products: UNIQUE(sku), INDEX(org)".
+    Only PRIMARY KEY / UNIQUE declarations are identity; INDEX is not.
+    """
+    found: dict[str, list[str]] = {}
+    for raw_line in str(text or "").splitlines():
+        line = raw_line.strip().lstrip("-*• \t")
+        label, sep, remainder = line.partition(":")
+        if not sep or not label.strip():
+            continue
+        columns = _identity_columns_from_constraint_calls(remainder)
+        if not columns:
+            continue
+        table_name, _alias = _canonical_entity_name(label)
+        if not table_name:
+            continue
+        bucket = found.setdefault(table_name, [])
+        for column in columns:
+            if column not in bucket:
+                bucket.append(column)
+    return found
+
+
+def _apply_constraint_list_identities(
+    tables: list[dict[str, Any]],
+    text: str,
+) -> list[dict[str, Any]]:
+    """Attach constraint-list identity columns to the tables they name.
+
+    A constraint list only qualifies columns of an entity the source already
+    declared; it never creates an entity on its own.
+    """
+    declared = _constraint_list_identity_fields(text)
+    if not declared:
+        return tables
+    for table in tables:
+        if not isinstance(table, dict):
+            continue
+        canonical, _alias = _canonical_entity_name(str(table.get("name") or ""))
+        columns = declared.get(canonical)
+        if not columns:
+            continue
+        known = {str(c) for c in table.get("columns") or []}
+        table["identity_fields"] = sorted(
+            {str(c) for c in table.get("identity_fields") or [] if str(c)}
+            # A constraint list can name a column the field table never defined;
+            # that is a source gap, not an identity field we can bind.
+            | {c for c in columns if c in known}
+        )
     return tables
 
 
@@ -600,6 +706,10 @@ def _merge_table_identities(tables: list[dict[str, Any]]) -> list[dict[str, Any]
             if key not in seen_fk:
                 seen_fk.add(key)
                 existing.setdefault("foreign_keys", []).append(fk)
+        existing["identity_fields"] = sorted(
+            {str(c) for c in existing.get("identity_fields") or [] if str(c)}
+            | {str(c) for c in row.get("identity_fields") or [] if str(c)}
+        )
         existing["aliases"] = sorted(
             {str(a) for a in existing.get("aliases") or [] if str(a)}
             | {str(a) for a in row.get("aliases") or [] if str(a)}
@@ -657,6 +767,7 @@ def _sql_tables(text: str, source_id: str = "") -> list[dict[str, Any]]:
         name, body = match.group(1), match.group(2)
         columns: list[str] = []
         foreign_keys: list[str] = []
+        identity_fields: list[str] = []
         for line in body.splitlines():
             clean = line.strip().strip(",")
             if not clean:
@@ -667,11 +778,18 @@ def _sql_tables(text: str, source_id: str = "") -> list[dict[str, Any]]:
             col = re.match(r"[`\"\[]?([a-zA-Z_][a-zA-Z0-9_]*)[`\"\]]?\s+", clean)
             if col and col.group(1).lower() not in {"primary", "foreign", "constraint", "unique", "key", "index"}:
                 columns.append(col.group(1))
+                # Inline form: "sku TEXT UNIQUE" / "id SERIAL PRIMARY KEY".
+                if _declares_identity(clean[col.end():]):
+                    identity_fields.append(col.group(1))
+            else:
+                # Table-constraint form: "PRIMARY KEY (id)" / "UNIQUE (sku, org)".
+                identity_fields.extend(_identity_columns_from_constraint_calls(clean))
         tables.append({
             "table_id": f"table:{name}",
             "source_id": source_id,
             "name": name,
             "columns": sorted(set(columns)),
+            "identity_fields": sorted(set(identity_fields)),
             "foreign_keys": sorted(set(foreign_keys)),
             "tokens": sorted(_tokens(f"{name} {' '.join(columns)} {' '.join(foreign_keys)}")),
         })
@@ -1641,7 +1759,7 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
     # Build tables from field dictionary (for ALL sources, not just db_field_dictionary)
     if field_dictionary:
         tables += _field_dictionary_tables(field_dictionary, source_id)
-    tables = _merge_table_identities(tables)
+    tables = _apply_constraint_list_identities(_merge_table_identities(tables), text)
     ui_specs = _uiux_specs_from_text(text, source_id, source_type, filename)
     permissions = _dedupe_by_id(
         [*_permission_entries(text, payload, source_id),

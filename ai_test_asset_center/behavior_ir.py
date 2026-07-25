@@ -846,6 +846,42 @@ def _canonical_entity_name(value: Any) -> str:
     return "_".join(parts)
 
 
+def source_identity_fields_for_operation(
+    operation: dict[str, Any],
+    behavior_ir: dict[str, Any] | None,
+) -> list[str]:
+    """Primary/unique key names the source declared for this operation's entity.
+
+    Resolution mirrors relation derivation: explicit ``entity_refs`` first, then
+    the structural path match. Returns an empty list when the source never
+    declared a key, which leaves identity proof to the observer's fallback.
+    """
+    entities = _list(_dict(behavior_ir).get("entities"))
+    if not entities:
+        return []
+    by_id = {_text(e.get("id")): e for e in entities if isinstance(e, dict)}
+    by_name = {
+        _canonical_entity_name(e.get("name")): e
+        for e in entities
+        if isinstance(e, dict)
+    }
+    resolved: list[dict[str, Any]] = []
+    for hint in _list(_dict(operation).get("entity_refs")):
+        entity = by_id.get(_text(hint)) or by_name.get(_canonical_entity_name(hint))
+        if entity is not None:
+            resolved.append(entity)
+    if not resolved:
+        structural = _operation_structural_entity(_dict(operation), entities)
+        if structural is not None:
+            resolved.append(structural)
+    fields: list[str] = []
+    for entity in resolved:
+        for name in _list(entity.get("identity_fields")):
+            if _text(name) and _text(name) not in fields:
+                fields.append(_text(name))
+    return fields
+
+
 def _operation_structural_entity(
     operation: dict[str, Any],
     entities: list[dict[str, Any]],
@@ -2651,6 +2687,10 @@ def build_behavior_ir_from_knowledge_asset(
                 _list(existing.get("fields")),
                 _list(ent.get("fields") or ent.get("columns")),
             )
+            existing["identity_fields"] = merge_unique(
+                _list(existing.get("identity_fields")),
+                _list(ent.get("identity_fields")),
+            )
             existing["source_refs"] = merge_unique(
                 _list(existing.get("source_refs")),
                 source_refs,
@@ -2668,6 +2708,9 @@ def build_behavior_ir_from_knowledge_asset(
                 "entity_kinds": [kind],
                 "source_entity_names": [name],
                 "fields": _list(ent.get("fields") or ent.get("columns")),
+                # Columns the source declares as primary or unique keys. Empty
+                # when the source never said which field identifies a row.
+                "identity_fields": _list(ent.get("identity_fields")),
             },
             source_refs=source_refs,
             confidence=float(ent.get("confidence") or 0.7),

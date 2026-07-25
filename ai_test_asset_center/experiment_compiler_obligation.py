@@ -12,6 +12,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+from .behavior_ir import source_identity_fields_for_operation
 from .experiment_protocols import compile_family_protocol
 from .observer_contracts_base import compile_observer_requirements
 from .real_id_resolver import normalize_path_placeholders
@@ -1105,6 +1106,7 @@ def compile_experiment_for_obligation(
         source_refs=list(obl.get("source_refs") or [])[:5] or [
             {"id": oid, "type": "obligation", "locator": primary_op_id or ""}
         ],
+        source_identity_fields=source_identity_fields_for_operation(primary_op, ir),
         compile_receipt={
             "status": "COMPILED",
             "reason_code": "",
@@ -1153,6 +1155,7 @@ def make_experiment(
     source_refs: list[dict[str, Any]] | None = None,
     compile_receipt: dict[str, Any] | None = None,
     experiment_id: str | None = None,
+    source_identity_fields: list[str] | None = None,
 ) -> dict[str, Any]:
     eid = _text(experiment_id) or stable_experiment_id(obligation_id, "v1")
     return {
@@ -1161,6 +1164,7 @@ def make_experiment(
         "obligation_id": _text(obligation_id),
         "policy_version": _text(policy_version),
         "risk_family": _text(risk_family),
+        "source_identity_fields": list(source_identity_fields or []),
         "control_plan": list(control_plan or []),
         "treatment_plan": list(treatment_plan or []),
         "binding_plan": list(binding_plan or []),

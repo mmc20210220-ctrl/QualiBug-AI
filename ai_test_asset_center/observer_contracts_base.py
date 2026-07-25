@@ -9,6 +9,7 @@ import copy
 import hashlib
 import json
 import re
+from collections.abc import Iterable
 from typing import Any
 
 
@@ -457,15 +458,34 @@ def _meaningful_resource_body(observation: dict[str, Any]) -> bool:
     return False
 
 
-def _identity_fingerprints(value: Any) -> set[str]:
+def _normalize_field_name(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(value).lower()).strip("_")
+
+
+def _identity_fingerprints(
+    value: Any,
+    identity_keys: Iterable[str] | None = None,
+) -> set[str]:
+    """Fingerprint the field that identifies the resource in an observed body.
+
+    ``identity_keys`` are the field names the source declared as primary or
+    unique keys for the entity under observation. They take precedence because
+    they are what the source says identifies a row. The name heuristic below is
+    a fallback for sources that never declared a key; it recognizes only a fixed
+    English vocabulary and misses identity fields named in any other way.
+    """
+    declared = {_normalize_field_name(k) for k in (identity_keys or []) if str(k).strip()}
     result: set[str] = set()
 
     def walk(node: Any) -> None:
         if isinstance(node, dict):
             scalar_identities: list[tuple[str, Any]] = []
+            declared_identities: list[tuple[str, Any]] = []
             for key, child in node.items():
-                normalized_key = re.sub(r"[^a-z0-9]+", "_", str(key).lower()).strip("_")
+                normalized_key = _normalize_field_name(key)
                 if isinstance(child, (str, int, float)) and str(child).strip():
+                    if normalized_key in declared:
+                        declared_identities.append((normalized_key, child))
                     if (
                         normalized_key in {
                             "id", "uuid", "key", "code", "slug",
@@ -474,6 +494,10 @@ def _identity_fingerprints(value: Any) -> set[str]:
                         or normalized_key.endswith(("_code", "_ref", "_number"))
                     ):
                         scalar_identities.append((normalized_key, child))
+            if declared_identities:
+                key, child = sorted(declared_identities)[0]
+                result.add(_fingerprint({"key": key, "value": child}))
+                return
             if not scalar_identities:
                 fallback_identities = []
                 for key, child in node.items():
@@ -704,8 +728,14 @@ def observe_authorization_comparison(
     require_same_resource: bool,
     business_effect: dict[str, Any] | None = None,
     binding_materialization_receipts: list[dict[str, Any]] | None = None,
+    identity_keys: Iterable[str] | None = None,
 ) -> dict[str, Any]:
-    """Compare authorized and restricted observations without status-only proof."""
+    """Compare authorized and restricted observations without status-only proof.
+
+    ``identity_keys`` carries the source-declared primary/unique key names for
+    the entity being addressed, so resource identity is decided by what the
+    source says identifies a row rather than by field-name vocabulary.
+    """
 
     control_row = _dict(control)
     treatment_row = _dict(treatment)
@@ -885,8 +915,8 @@ def observe_authorization_comparison(
     )
     bodies_equal = _canonical(control_row.get("body")) == _canonical(treatment_row.get("body"))
     identity_overlap = bool(
-        _identity_fingerprints(control_row.get("body"))
-        .intersection(_identity_fingerprints(treatment_row.get("body")))
+        _identity_fingerprints(control_row.get("body"), identity_keys)
+        .intersection(_identity_fingerprints(treatment_row.get("body"), identity_keys))
     )
     # Equal payloads alone are not resource identity: a shared login/error
     # document can be byte-identical for both actors. Require a structural
@@ -1965,6 +1995,11 @@ def observe_experiment_requirements(
                     for row in _list(evidence.get("binding_materialization_receipts"))
                     if isinstance(row, dict)
                 ],
+                identity_keys=[
+                    _text(name)
+                    for name in _list(exp.get("source_identity_fields"))
+                    if _text(name)
+                ],
             )
         elif observer_id == "business_effect":
             receipt = business_effect_receipt
@@ -2039,6 +2074,7 @@ def observe_authorization_comparison(
     require_same_resource: bool,
     business_effect: dict[str, Any] | None = None,
     binding_materialization_receipts: list[dict[str, Any]] | None = None,
+    identity_keys: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     baseline = _original_authorization_comparison(
         control=control,
@@ -2046,6 +2082,7 @@ def observe_authorization_comparison(
         require_same_resource=require_same_resource,
         business_effect=business_effect,
         binding_materialization_receipts=binding_materialization_receipts,
+        identity_keys=identity_keys,
     )
     control_row = _dict_obs(control)
     treatment_row = _dict_obs(treatment)
