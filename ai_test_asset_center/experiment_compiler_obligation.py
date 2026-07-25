@@ -100,6 +100,31 @@ def _identity_bound_delete_refs(
     return delete_candidates
 
 
+_EPHEMERAL_SESSION_SEGMENTS = frozenset({
+    "login",
+    "logout",
+    "token",
+    "refresh",
+    "session",
+    "otp",
+    "captcha",
+    "webhook",
+    "callback",
+})
+
+
+def _is_ephemeral_session_path(path: str) -> bool:
+    """True only for session/token style posts with no identity binding."""
+
+    normalized = normalize_path_placeholders(_text(path)).lower().rstrip("/")
+    if not normalized.startswith("/") or "{" in normalized:
+        return False
+    segments = [seg for seg in normalized.split("/") if seg]
+    if not segments:
+        return False
+    return segments[-1] in _EPHEMERAL_SESSION_SEGMENTS
+
+
 def compile_experiment_for_obligation(
     obligation: dict[str, Any],
     *,
@@ -581,6 +606,17 @@ def compile_experiment_for_obligation(
     cleanup_plan: list[dict[str, Any]] = []
     cleanup_explicitly_not_required = False
     if is_write:
+        primary_path_for_cleanup = normalize_path_placeholders(
+            _text(primary_op.get("path") or primary_op.get("raw_path"))
+        )
+        # Fail closed: a write may waive cleanup only for ephemeral session
+        # posts. Matrix/coverage strings like "not_required" on entity writes
+        # previously compiled accepted creates with no compensator.
+        if (
+            cleanup_req.get("required") is False
+            and not _is_ephemeral_session_path(primary_path_for_cleanup)
+        ):
+            cleanup_req = {**cleanup_req, "required": True}
         primary_method = _text(primary_op.get("method")).upper()
         primary_path = normalize_path_placeholders(
             _text(primary_op.get("path") or primary_op.get("raw_path"))
@@ -670,18 +706,13 @@ def compile_experiment_for_obligation(
                 "runtime_response_binding_required": True,
             }]
         elif (
-            # Ephemeral writes: auth/session/token operations create transient
-            # state (JWT, session) that expires naturally. No persistent entity
-            # is created, so cleanup is not required.
+            # Ephemeral session/token posts only: identity-bound paths (/{id}/…)
+            # are persistent mutations even under /api/auth/… admin routes.
+            # Match terminal path segments — never a bare "/auth/" substring.
             primary_method == "POST"
             and not cleanup_op
-            and any(
-                seg in primary_path.lower()
-                for seg in ("/auth/", "/login", "/token", "/session", "/validate",
-                            "/logout", "/refresh", "/verify", "/confirm", "/otp",
-                            "/password", "/captcha", "/webhook", "/callback",
-                            "/notify", "/event", "/search", "/query", "/check")
-            )
+            and "{" not in primary_path
+            and _is_ephemeral_session_path(primary_path)
         ):
             cleanup_plan = []
             cleanup_explicitly_not_required = True

@@ -1294,7 +1294,7 @@ def build_exhaustive_obligation_matrix(
         source_refs: list[dict[str, Any]],
         *,
         confidence: float = 0.5,
-        cleanup: str = "not_required",
+        cleanup: str | None = None,
     ) -> None:
         if len(obligations) >= max_obligations:
             return
@@ -1307,16 +1307,30 @@ def build_exhaustive_obligation_matrix(
         if not source_refs:
             skipped["no_source_ref:" + risk_family] += 1
             return
+        if cleanup is None:
+            cleanup = "not_required"
+            for op_ref in required_operations:
+                op_row = op_by_id.get(_text(op_ref)) or {}
+                method = _text(op_row.get("method")).upper()
+                if method in {"POST", "PUT", "PATCH", "DELETE"} or _text(
+                    op_row.get("read_write")
+                ) == "write":
+                    cleanup = "required"
+                    break
         sig = _coverage_signature(risk_family, *sorted(subject_refs), *sorted(required_actors))
         if sig in seen_signatures:
             return
         seen_signatures.add(sig)
         raw_id = f"obl_mtx_{sig}"
+        # Experiment compiler reads ``property`` (make_obligation SSOT). Keep
+        # ``property_spec`` only as a diagnostic mirror for matrix provenance.
+        prop = dict(property_spec or {})
         obl: dict[str, Any] = {
             "obligation_id": f"obl_{hashlib.sha256(raw_id.encode()).hexdigest()[:16]}",
             "risk_family": risk_family,
             "subject_refs": subject_refs,
-            "property_spec": property_spec,
+            "property": prop,
+            "property_spec": prop,
             "required_actors": required_actors,
             "required_operations": required_operations,
             "required_observers": list(observers),
