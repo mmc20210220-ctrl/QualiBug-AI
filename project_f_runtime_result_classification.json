@@ -1,0 +1,23 @@
+{
+  "schema_version": "qualibug.runtime-result-classification.v1",
+  "execution_mode": "REAL_HTTP",
+  "result_level": "LEVEL_B",
+  "criteria": {
+    "formal_findings_ge_18": true,
+    "unique_tp_ge_15": false,
+    "deep_unique_tp_ge_10": false,
+    "precision_ge_80": false,
+    "reproduction_100pct": false,
+    "mechanism_types_ge_8": true
+  },
+  "actual_values": {
+    "formal_findings": 28,
+    "unique_tp": 11,
+    "deep_unique_tp": 8,
+    "precision": 0.393,
+    "reproduction_rate": "24/28",
+    "mechanism_types": 10
+  },
+  "next_single_breakpoint": "UNIQUE_TP_BELOW_15",
+  "timestamp": 1784938485.1619384
+}

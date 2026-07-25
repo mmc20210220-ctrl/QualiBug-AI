@@ -1,0 +1,12 @@
+{
+  "schema_version": "qualibug.runtime-precision-metrics.v1",
+  "execution_mode": "REAL_HTTP",
+  "total_findings": 28,
+  "oracle_verified": 28,
+  "false_positives": 0,
+  "raw_finding_precision": 1.0,
+  "unique_root_causes": 11,
+  "unique_root_cause_precision": 0.393,
+  "note": "All findings verified by Oracle against API_SPEC.md constraints",
+  "timestamp": 1784938485.1619384
+}

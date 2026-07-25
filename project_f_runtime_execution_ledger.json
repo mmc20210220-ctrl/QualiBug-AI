@@ -1,0 +1,252 @@
+{
+  "schema_version": "qualibug.runtime-execution-ledger.v1",
+  "run_name": "MES_REAL_EXECUTION_V1",
+  "sut": "Discrete Manufacturing MES",
+  "execution_mode": "REAL_HTTP",
+  "total_experiments": 34,
+  "executed": 34,
+  "blocked": 0,
+  "findings": 28,
+  "duration_seconds": 216.91,
+  "experiment_summary": [
+    {
+      "experiment_id": "EXP_AUTH_01",
+      "mechanism": "Authorization",
+      "oracle_type": "ROLE_ORACLE",
+      "is_finding": true,
+      "verdict": "VIOLATION"
+    },
+    {
+      "experiment_id": "EXP_AUTH_02",
+      "mechanism": "Authorization",
+      "oracle_type": "ROLE_ORACLE",
+      "is_finding": true,
+      "verdict": "VIOLATION"
+    },
+    {
+      "experiment_id": "EXP_AUTH_03",
+      "mechanism": "Authorization",
+      "oracle_type": "ROLE_ORACLE",
+      "is_finding": true,
+      "verdict": "VIOLATION"
+    },
+    {
+      "experiment_id": "EXP_AUTH_04",
+      "mechanism": "Authorization",
+      "oracle_type": "ROLE_ORACLE",
+      "is_finding": true,
+      "verdict": "VIOLATION"
+    },
+    {
+      "experiment_id": "EXP_AUTH_05",
+      "mechanism": "Authorization",
+      "oracle_type": "ROLE_ORACLE",
+      "is_finding": false,
+      "verdict": "PASS"
+    },
+    {
+      "experiment_id": "EXP_AUTH_06",
+      "mechanism": "Authorization",
+      "oracle_type": "ROLE_ORACLE",
+      "is_finding": false,
+      "verdict": "PASS"
+    },
+    {
+      "experiment_id": "EXP_SCOPE_01",
+      "mechanism": "Scope Isolation",
+      "oracle_type": "SCOPE_ORACLE",
+      "is_finding": true,
+      "verdict": "VIOLATION"
+    },
+    {
+      "experiment_id": "EXP_SCOPE_02",
+      "mechanism": "Scope Isolation",
+      "oracle_type": "SCOPE_ORACLE",
+      "is_finding": false,
+      "verdict": "PASS"
+    },
+    {
+      "experiment_id": "EXP_STATE_01",
+      "mechanism": "State Transition",
+      "oracle_type": "STATE_ORACLE",
+      "is_finding": true,
+      "verdict": "VIOLATION"
+    },
+    {
+      "experiment_id": "EXP_STATE_02",
+      "mechanism": "State Transition",
+      "oracle_type": "STATE_ORACLE",
+      "is_finding": true,
+      "verdict": "VIOLATION"
+    },
+    {
+      "experiment_id": "EXP_STATE_03",
+      "mechanism": "State Transition",
+      "oracle_type": "STATE_ORACLE",
+      "is_finding": true,
+      "verdict": "VIOLATION"
+    },
+    {
+      "experiment_id": "EXP_STATE_04",
+      "mechanism": "State Transition",
+      "oracle_type": "STATE_ORACLE",
+      "is_finding": true,
+      "verdict": "VIOLATION"
+    },
+    {
+      "experiment_id": "EXP_STATE_05",
+      "mechanism": "State Transition",
+      "oracle_type": "CROSS_ENTITY_ORACLE",
+      "is_finding": true,
+      "verdict": "VIOLATION"
+    },
+    {
+      "experiment_id": "EXP_CROSS_01",
+      "mechanism": "Cross-Entity",
+      "oracle_type": "CROSS_ENTITY_ORACLE",
+      "is_finding": true,
+      "verdict": "VIOLATION"
+    },
+    {
+      "experiment_id": "EXP_CROSS_02",
+      "mechanism": "Cross-Entity",
+      "oracle_type": "CROSS_ENTITY_ORACLE",
+      "is_finding": true,
+      "verdict": "VIOLATION"
+    },
+    {
+      "experiment_id": "EXP_CROSS_03",
+      "mechanism": "Cross-Entity",
+      "oracle_type": "CROSS_ENTITY_ORACLE",
+      "is_finding": true,
+      "verdict": "VIOLATION"
+    },
+    {
+      "experiment_id": "EXP_CROSS_04",
+      "mechanism": "Cross-Entity",
+      "oracle_type": "CROSS_ENTITY_ORACLE",
+      "is_finding": true,
+      "verdict": "VIOLATION"
+    },
+    {
+      "experiment_id": "EXP_CROSS_05",
+      "mechanism": "Cross-Entity",
+      "oracle_type": "CROSS_ENTITY_ORACLE",
+      "is_finding": true,
+      "verdict": "VIOLATION"
+    },
+    {
+      "experiment_id": "EXP_CROSS_06",
+      "mechanism": "Cross-Entity",
+      "oracle_type": "CROSS_ENTITY_ORACLE",
+      "is_finding": true,
+      "verdict": "VIOLATION"
+    },
+    {
+      "experiment_id": "EXP_CONS_01",
+      "mechanism": "Conservation",
+      "oracle_type": "CONSERVATION_ORACLE",
+      "is_finding": true,
+      "verdict": "VIOLATION"
+    },
+    {
+      "experiment_id": "EXP_CONS_02",
+      "mechanism": "Conservation",
+      "oracle_type": "CONSERVATION_ORACLE",
+      "is_finding": true,
+      "verdict": "VIOLATION"
+    },
+    {
+      "experiment_id": "EXP_CONS_03",
+      "mechanism": "Conservation",
+      "oracle_type": "CONSERVATION_ORACLE",
+      "is_finding": false,
+      "verdict": "PASS"
+    },
+    {
+      "experiment_id": "EXP_CONS_04",
+      "mechanism": "Conservation",
+      "oracle_type": "CONSERVATION_ORACLE",
+      "is_finding": false,
+      "verdict": "PASS"
+    },
+    {
+      "experiment_id": "EXP_IDEMP_01",
+      "mechanism": "Idempotency",
+      "oracle_type": "IDEMPOTENCY_ORACLE",
+      "is_finding": true,
+      "verdict": "VIOLATION"
+    },
+    {
+      "experiment_id": "EXP_IDEMP_02",
+      "mechanism": "Idempotency",
+      "oracle_type": "IDEMPOTENCY_ORACLE",
+      "is_finding": true,
+      "verdict": "VIOLATION"
+    },
+    {
+      "experiment_id": "EXP_COMP_01",
+      "mechanism": "Compensation",
+      "oracle_type": "COMPENSATION_ORACLE",
+      "is_finding": true,
+      "verdict": "VIOLATION"
+    },
+    {
+      "experiment_id": "EXP_COMP_02",
+      "mechanism": "Compensation",
+      "oracle_type": "COMPENSATION_ORACLE",
+      "is_finding": true,
+      "verdict": "VIOLATION"
+    },
+    {
+      "experiment_id": "EXP_TEMP_01",
+      "mechanism": "Temporal",
+      "oracle_type": "TEMPORAL_ORACLE",
+      "is_finding": true,
+      "verdict": "VIOLATION"
+    },
+    {
+      "experiment_id": "EXP_TEMP_02",
+      "mechanism": "Temporal",
+      "oracle_type": "TEMPORAL_ORACLE",
+      "is_finding": false,
+      "verdict": "PASS"
+    },
+    {
+      "experiment_id": "EXP_TEMP_03",
+      "mechanism": "Temporal",
+      "oracle_type": "TEMPORAL_ORACLE",
+      "is_finding": true,
+      "verdict": "VIOLATION"
+    },
+    {
+      "experiment_id": "EXP_CONC_01",
+      "mechanism": "Concurrency",
+      "oracle_type": "CONCURRENCY_ORACLE",
+      "is_finding": true,
+      "verdict": "VIOLATION"
+    },
+    {
+      "experiment_id": "EXP_CONC_02",
+      "mechanism": "Concurrency",
+      "oracle_type": "CONCURRENCY_ORACLE",
+      "is_finding": true,
+      "verdict": "VIOLATION"
+    },
+    {
+      "experiment_id": "EXP_BATCH_01",
+      "mechanism": "Batch Operation",
+      "oracle_type": "BATCH_ORACLE",
+      "is_finding": true,
+      "verdict": "VIOLATION"
+    },
+    {
+      "experiment_id": "EXP_BATCH_02",
+      "mechanism": "Batch Operation",
+      "oracle_type": "BATCH_ORACLE",
+      "is_finding": true,
+      "verdict": "VIOLATION"
+    }
+  ],
+  "timestamp": 1784938485.1619384
+}

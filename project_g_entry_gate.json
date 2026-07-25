@@ -1,0 +1,14 @@
+{
+  "schema_version": "qualibug.project-g-entry-gate.v1",
+  "execution_mode": "REAL_HTTP",
+  "result_level": "LEVEL_B",
+  "project_g_entry_allowed": false,
+  "gate_criteria": {
+    "all_bug_yield_gates_pass": false,
+    "formal_findings": "28 (need >=18)",
+    "unique_tp": "11 (need >=15)",
+    "deep_unique_tp": "8 (need >=10)",
+    "precision": "0.393 (need >=0.8)"
+  },
+  "timestamp": 1784938485.1619384
+}

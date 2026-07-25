@@ -1,0 +1,58 @@
+{
+  "schema_version": "qualibug.runtime-mechanism-contribution.v1",
+  "execution_mode": "REAL_HTTP",
+  "mechanisms": [
+    {
+      "mechanism": "Cross-Entity",
+      "findings": 6,
+      "percentage": 21.4
+    },
+    {
+      "mechanism": "State Transition",
+      "findings": 5,
+      "percentage": 17.9
+    },
+    {
+      "mechanism": "Authorization",
+      "findings": 4,
+      "percentage": 14.3
+    },
+    {
+      "mechanism": "Conservation",
+      "findings": 2,
+      "percentage": 7.1
+    },
+    {
+      "mechanism": "Idempotency",
+      "findings": 2,
+      "percentage": 7.1
+    },
+    {
+      "mechanism": "Compensation",
+      "findings": 2,
+      "percentage": 7.1
+    },
+    {
+      "mechanism": "Temporal",
+      "findings": 2,
+      "percentage": 7.1
+    },
+    {
+      "mechanism": "Concurrency",
+      "findings": 2,
+      "percentage": 7.1
+    },
+    {
+      "mechanism": "Batch Operation",
+      "findings": 2,
+      "percentage": 7.1
+    },
+    {
+      "mechanism": "Scope Isolation",
+      "findings": 1,
+      "percentage": 3.6
+    }
+  ],
+  "total_mechanism_types": 10,
+  "timestamp": 1784938485.1619384
+}

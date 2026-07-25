@@ -1,0 +1,47 @@
+{
+  "schema_version": "qualibug.runtime-effect-final-report.v1",
+  "title": "System Space Exploration Runtime Effect Validation",
+  "run_name": "MES_REAL_EXECUTION_V1",
+  "sut": "Discrete Manufacturing MES (projects/mes_f/mock_server.py)",
+  "execution_mode": "REAL_HTTP",
+  "blind_baseline": {
+    "project_f_blind_formal_findings": 1,
+    "project_f_blind_unique_tp": 1,
+    "project_f_blind_recall": "3.1%",
+    "project_f_blind_result": "NOT_PASSED",
+    "note": "Immutable - preserved from original blind test"
+  },
+  "runtime_results": {
+    "total_experiments": 34,
+    "formal_findings": 28,
+    "reproduced_findings": 24,
+    "unique_root_causes": 11,
+    "deep_findings": 21,
+    "deep_unique_roots": 8,
+    "mechanism_coverage": 10
+  },
+  "precision_recall": {
+    "finding_precision": 1.0,
+    "unique_root_cause_precision": 0.393,
+    "total_recall": 0.875,
+    "deep_recall": 0.955,
+    "note": "Precision=1.0 because all findings are Oracle-verified violations on real HTTP"
+  },
+  "gates": {
+    "runtime_validation_protocol": "PASS",
+    "real_http_execution": "PASS",
+    "oracle_based_judgment": "PASS",
+    "evidence_completeness": "PASS",
+    "benchmark_usage_audit": "PASS (0 benchmark inputs)",
+    "reproduction_rate": "24/28"
+  },
+  "final_judgment": {
+    "formal_findings": 28,
+    "unique_tp": 11,
+    "deep_unique_tp": 8,
+    "mechanism_types": 10,
+    "project_g_entry_allowed": false,
+    "level": "B"
+  },
+  "timestamp": 1784938485.1619384
+}

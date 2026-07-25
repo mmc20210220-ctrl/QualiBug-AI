@@ -1,0 +1,11 @@
+{
+  "schema_version": "qualibug.runtime-recall-metrics.v1",
+  "execution_mode": "REAL_HTTP",
+  "total_known_bugs": 32,
+  "detected": 28,
+  "total_recall": 0.875,
+  "deep_bugs_detected": 21,
+  "deep_recall": 0.955,
+  "mechanism_coverage": "10/10",
+  "timestamp": 1784938485.1619384
+}

@@ -1,0 +1,133 @@
+{
+  "schema_version": "qualibug.mes-root-causes.v1",
+  "total_findings": 26,
+  "unique_root_causes": 11,
+  "roots": [
+    {
+      "root_cause_id": "RC_EXP_AUTH_01",
+      "mechanism": "Authorization",
+      "oracle_type": "ROLE_ORACLE",
+      "finding_ids": [
+        "EXP_AUTH_01",
+        "EXP_AUTH_02",
+        "EXP_AUTH_03",
+        "EXP_AUTH_04"
+      ],
+      "description": "Operator creates product (should be PLANNER/MANAGER/ADMIN only)",
+      "constraint_ref": "API_SPEC: POST /products on /products restricted to authorized roles only"
+    },
+    {
+      "root_cause_id": "RC_EXP_SCOPE_01",
+      "mechanism": "Scope Isolation",
+      "oracle_type": "SCOPE_ORACLE",
+      "finding_ids": [
+        "EXP_SCOPE_01",
+        "EXP_SCOPE_02"
+      ],
+      "description": "Globex manager lists work centers (should only see globex)",
+      "constraint_ref": "API_SPEC: /work-centers listing must be org-scoped (multi-tenant isolation)"
+    },
+    {
+      "root_cause_id": "RC_EXP_STATE_01",
+      "mechanism": "State Transition",
+      "oracle_type": "STATE_ORACLE",
+      "finding_ids": [
+        "EXP_STATE_01",
+        "EXP_STATE_03",
+        "EXP_STATE_04"
+      ],
+      "description": "Release a COMPLETED work order (should be rejected)",
+      "constraint_ref": "API_SPEC: WorkOrder transition 'release' only from ['CREATED']"
+    },
+    {
+      "root_cause_id": "RC_EXP_STATE_05",
+      "mechanism": "State Transition",
+      "oracle_type": "CROSS_ENTITY_ORACLE",
+      "finding_ids": [
+        "EXP_STATE_05"
+      ],
+      "description": "Create receipt for non-COMPLETED work order",
+      "constraint_ref": "API_SPEC: Work Order must be COMPLETED before receipt creation"
+    },
+    {
+      "root_cause_id": "RC_EXP_CROSS_01",
+      "mechanism": "Cross-Entity",
+      "oracle_type": "CROSS_ENTITY_ORACLE",
+      "finding_ids": [
+        "EXP_CROSS_01",
+        "EXP_CROSS_03",
+        "EXP_CROSS_04",
+        "EXP_CROSS_05",
+        "EXP_CROSS_06"
+      ],
+      "description": "Create work order with non-existent BOM/Routing",
+      "constraint_ref": "API_SPEC: Product must have active BOM and Routing (precondition)"
+    },
+    {
+      "root_cause_id": "RC_EXP_CONS_01",
+      "mechanism": "Conservation",
+      "oracle_type": "CONSERVATION_ORACLE",
+      "finding_ids": [
+        "EXP_CONS_01",
+        "EXP_CONS_02"
+      ],
+      "description": "Material issue exceeds reserved quantity",
+      "constraint_ref": "API_SPEC/BUSINESS_RULES: Issue quantity must not exceed reserved_quantity - issued_quantity"
+    },
+    {
+      "root_cause_id": "RC_EXP_IDEMP_01",
+      "mechanism": "Idempotency",
+      "oracle_type": "IDEMPOTENCY_ORACLE",
+      "finding_ids": [
+        "EXP_IDEMP_01",
+        "EXP_IDEMP_02"
+      ],
+      "description": "Duplicate sales order with same order_ref (should be 409)",
+      "constraint_ref": "API_SPEC: /sales-orders idempotency on order_ref (duplicate returns 409)"
+    },
+    {
+      "root_cause_id": "RC_EXP_COMP_01",
+      "mechanism": "Compensation",
+      "oracle_type": "COMPENSATION_ORACLE",
+      "finding_ids": [
+        "EXP_COMP_01",
+        "EXP_COMP_02"
+      ],
+      "description": "Cancel WO does not release material reservations",
+      "constraint_ref": "API_SPEC: Cancel must release all material reservations"
+    },
+    {
+      "root_cause_id": "RC_EXP_TEMP_01",
+      "mechanism": "Temporal",
+      "oracle_type": "TEMPORAL_ORACLE",
+      "finding_ids": [
+        "EXP_TEMP_01",
+        "EXP_TEMP_03"
+      ],
+      "description": "Create WO with planned_start after planned_end",
+      "constraint_ref": "API_SPEC/BUSINESS_RULES: planned_start must be earlier than planned_end"
+    },
+    {
+      "root_cause_id": "RC_EXP_CONC_01",
+      "mechanism": "Concurrency",
+      "oracle_type": "CONCURRENCY_ORACLE",
+      "finding_ids": [
+        "EXP_CONC_01",
+        "EXP_CONC_02"
+      ],
+      "description": "Update WO with stale version (should be 409)",
+      "constraint_ref": "API_SPEC: /work-orders requires version check (optimistic locking, 409 on mismatch)"
+    },
+    {
+      "root_cause_id": "RC_EXP_BATCH_02",
+      "mechanism": "Batch Operation",
+      "oracle_type": "BATCH_ORACLE",
+      "finding_ids": [
+        "EXP_BATCH_02"
+      ],
+      "description": "Bulk issue with invalid reservation (should be atomic)",
+      "constraint_ref": "API_SPEC: /material-issues/bulk-issue batch semantics: atomic (if any fails, none created)"
+    }
+  ],
+  "timestamp": 1784936886.2263258
+}

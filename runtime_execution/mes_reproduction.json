@@ -1,0 +1,191 @@
+{
+  "schema_version": "qualibug.mes-reproduction.v1",
+  "total_findings": 26,
+  "reproduced": 24,
+  "reproduction_rate": "24/26",
+  "results": [
+    {
+      "experiment_id": "EXP_AUTH_01",
+      "reproduction_1": "REPRODUCED",
+      "reproduction_2": "REPRODUCED",
+      "reproduction_rate": "2/2",
+      "stable": true
+    },
+    {
+      "experiment_id": "EXP_AUTH_02",
+      "reproduction_1": "REPRODUCED",
+      "reproduction_2": "REPRODUCED",
+      "reproduction_rate": "2/2",
+      "stable": true
+    },
+    {
+      "experiment_id": "EXP_AUTH_03",
+      "reproduction_1": "REPRODUCED",
+      "reproduction_2": "REPRODUCED",
+      "reproduction_rate": "2/2",
+      "stable": true
+    },
+    {
+      "experiment_id": "EXP_AUTH_04",
+      "reproduction_1": "REPRODUCED",
+      "reproduction_2": "REPRODUCED",
+      "reproduction_rate": "2/2",
+      "stable": true
+    },
+    {
+      "experiment_id": "EXP_SCOPE_01",
+      "reproduction_1": "REPRODUCED",
+      "reproduction_2": "REPRODUCED",
+      "reproduction_rate": "2/2",
+      "stable": true
+    },
+    {
+      "experiment_id": "EXP_SCOPE_02",
+      "reproduction_1": "REPRODUCED",
+      "reproduction_2": "REPRODUCED",
+      "reproduction_rate": "2/2",
+      "stable": true
+    },
+    {
+      "experiment_id": "EXP_STATE_01",
+      "reproduction_1": "REPRODUCED",
+      "reproduction_2": "REPRODUCED",
+      "reproduction_rate": "2/2",
+      "stable": true
+    },
+    {
+      "experiment_id": "EXP_STATE_03",
+      "reproduction_1": "REPRODUCED",
+      "reproduction_2": "REPRODUCED",
+      "reproduction_rate": "2/2",
+      "stable": true
+    },
+    {
+      "experiment_id": "EXP_STATE_04",
+      "reproduction_1": "REPRODUCED",
+      "reproduction_2": "REPRODUCED",
+      "reproduction_rate": "2/2",
+      "stable": true
+    },
+    {
+      "experiment_id": "EXP_STATE_05",
+      "reproduction_1": "REPRODUCED",
+      "reproduction_2": "REPRODUCED",
+      "reproduction_rate": "2/2",
+      "stable": true
+    },
+    {
+      "experiment_id": "EXP_CROSS_01",
+      "reproduction_1": "REPRODUCED",
+      "reproduction_2": "REPRODUCED",
+      "reproduction_rate": "2/2",
+      "stable": true
+    },
+    {
+      "experiment_id": "EXP_CROSS_03",
+      "reproduction_1": "FAILED",
+      "reproduction_2": "FAILED",
+      "reproduction_rate": "0/2",
+      "stable": false
+    },
+    {
+      "experiment_id": "EXP_CROSS_04",
+      "reproduction_1": "REPRODUCED",
+      "reproduction_2": "REPRODUCED",
+      "reproduction_rate": "2/2",
+      "stable": true
+    },
+    {
+      "experiment_id": "EXP_CROSS_05",
+      "reproduction_1": "REPRODUCED",
+      "reproduction_2": "REPRODUCED",
+      "reproduction_rate": "2/2",
+      "stable": true
+    },
+    {
+      "experiment_id": "EXP_CROSS_06",
+      "reproduction_1": "REPRODUCED",
+      "reproduction_2": "REPRODUCED",
+      "reproduction_rate": "2/2",
+      "stable": true
+    },
+    {
+      "experiment_id": "EXP_CONS_01",
+      "reproduction_1": "REPRODUCED",
+      "reproduction_2": "REPRODUCED",
+      "reproduction_rate": "2/2",
+      "stable": true
+    },
+    {
+      "experiment_id": "EXP_CONS_02",
+      "reproduction_1": "REPRODUCED",
+      "reproduction_2": "REPRODUCED",
+      "reproduction_rate": "2/2",
+      "stable": true
+    },
+    {
+      "experiment_id": "EXP_IDEMP_01",
+      "reproduction_1": "REPRODUCED",
+      "reproduction_2": "REPRODUCED",
+      "reproduction_rate": "2/2",
+      "stable": true
+    },
+    {
+      "experiment_id": "EXP_IDEMP_02",
+      "reproduction_1": "REPRODUCED",
+      "reproduction_2": "REPRODUCED",
+      "reproduction_rate": "2/2",
+      "stable": true
+    },
+    {
+      "experiment_id": "EXP_COMP_01",
+      "reproduction_1": "REPRODUCED",
+      "reproduction_2": "REPRODUCED",
+      "reproduction_rate": "2/2",
+      "stable": true
+    },
+    {
+      "experiment_id": "EXP_COMP_02",
+      "reproduction_1": "REPRODUCED",
+      "reproduction_2": "REPRODUCED",
+      "reproduction_rate": "2/2",
+      "stable": true
+    },
+    {
+      "experiment_id": "EXP_TEMP_01",
+      "reproduction_1": "REPRODUCED",
+      "reproduction_2": "REPRODUCED",
+      "reproduction_rate": "2/2",
+      "stable": true
+    },
+    {
+      "experiment_id": "EXP_TEMP_03",
+      "reproduction_1": "REPRODUCED",
+      "reproduction_2": "REPRODUCED",
+      "reproduction_rate": "2/2",
+      "stable": true
+    },
+    {
+      "experiment_id": "EXP_CONC_01",
+      "reproduction_1": "REPRODUCED",
+      "reproduction_2": "REPRODUCED",
+      "reproduction_rate": "2/2",
+      "stable": true
+    },
+    {
+      "experiment_id": "EXP_CONC_02",
+      "reproduction_1": "FAILED",
+      "reproduction_2": "FAILED",
+      "reproduction_rate": "0/2",
+      "stable": false
+    },
+    {
+      "experiment_id": "EXP_BATCH_02",
+      "reproduction_1": "REPRODUCED",
+      "reproduction_2": "REPRODUCED",
+      "reproduction_rate": "2/2",
+      "stable": true
+    }
+  ],
+  "timestamp": 1784936886.2263258
+}

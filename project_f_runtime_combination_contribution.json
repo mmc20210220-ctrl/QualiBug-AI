@@ -1,0 +1,57 @@
+{
+  "schema_version": "qualibug.runtime-combination-contribution.v1",
+  "execution_mode": "REAL_HTTP",
+  "oracle_types": [
+    {
+      "oracle_type": "CROSS_ENTITY_ORACLE",
+      "findings": 7,
+      "percentage": 25.0
+    },
+    {
+      "oracle_type": "ROLE_ORACLE",
+      "findings": 4,
+      "percentage": 14.3
+    },
+    {
+      "oracle_type": "STATE_ORACLE",
+      "findings": 4,
+      "percentage": 14.3
+    },
+    {
+      "oracle_type": "CONSERVATION_ORACLE",
+      "findings": 2,
+      "percentage": 7.1
+    },
+    {
+      "oracle_type": "IDEMPOTENCY_ORACLE",
+      "findings": 2,
+      "percentage": 7.1
+    },
+    {
+      "oracle_type": "COMPENSATION_ORACLE",
+      "findings": 2,
+      "percentage": 7.1
+    },
+    {
+      "oracle_type": "TEMPORAL_ORACLE",
+      "findings": 2,
+      "percentage": 7.1
+    },
+    {
+      "oracle_type": "CONCURRENCY_ORACLE",
+      "findings": 2,
+      "percentage": 7.1
+    },
+    {
+      "oracle_type": "BATCH_ORACLE",
+      "findings": 2,
+      "percentage": 7.1
+    },
+    {
+      "oracle_type": "SCOPE_ORACLE",
+      "findings": 1,
+      "percentage": 3.6
+    }
+  ],
+  "timestamp": 1784938485.1619384
+}
