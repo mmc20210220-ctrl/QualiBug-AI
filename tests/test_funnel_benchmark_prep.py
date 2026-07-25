@@ -105,7 +105,7 @@ def test_reset_benchmark_target_db_decodes_windows_codepage_error(tmp_path: Path
 
 
 def test_refresh_test_account_tokens_runs_for_any_mode(tmp_path: Path):
-    script = tmp_path / "_refresh_tokens.py"
+    script = tmp_path / "refresh_tokens.py"
     script.write_text("print('ok')", encoding="utf-8")
     calls: list[list[str]] = []
 
@@ -113,33 +113,33 @@ def test_refresh_test_account_tokens_runs_for_any_mode(tmp_path: Path):
         calls.append(list(cmd))
         return subprocess.CompletedProcess(cmd, 0, stdout="REFRESHED 3/3", stderr="")
 
-    result = refresh_test_account_tokens(root=tmp_path, runner=fake_run)
+    result = refresh_test_account_tokens(script=script, runner=fake_run)
     assert result["status"] == "ok"
     assert calls and str(script) in calls[0]
 
 
 def test_refresh_test_account_tokens_fails_fast_on_error(tmp_path: Path):
-    (tmp_path / "_refresh_tokens.py").write_text("raise SystemExit(1)", encoding="utf-8")
+    script = tmp_path / "refresh_tokens.py"
+    script.write_text("raise SystemExit(1)", encoding="utf-8")
 
     def fake_run(cmd, **kwargs):
         return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="0/3 logged in")
 
     with pytest.raises(RuntimeError, match="token refresh failed"):
-        refresh_test_account_tokens(root=tmp_path, runner=fake_run)
+        refresh_test_account_tokens(script=script, runner=fake_run)
 
 
 def test_prepare_funnel_benchmark_target_resets_db_then_refreshes_tokens(tmp_path: Path):
     script = tmp_path / "scripts" / "init_db_windows.ps1"
     script.parent.mkdir(parents=True)
     script.write_text("# noop", encoding="utf-8")
-    (tmp_path / "_refresh_tokens.py").write_text("print('ok')", encoding="utf-8")
     order: list[str] = []
 
     def fake_run(cmd, **kwargs):
         joined = " ".join(str(c) for c in cmd)
         if "init_db_windows.ps1" in joined:
             order.append("db")
-        elif "_refresh_tokens.py" in joined:
+        elif "refresh_tokens.py" in joined:
             order.append("tokens")
         return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
 
@@ -165,7 +165,6 @@ def test_prepare_funnel_benchmark_target_passes_evaluator_env_to_token_refresh(
     script = tmp_path / "scripts" / "init_db_windows.ps1"
     script.parent.mkdir(parents=True)
     script.write_text("# noop", encoding="utf-8")
-    (tmp_path / "_refresh_tokens.py").write_text("print('ok')", encoding="utf-8")
     captured_token_env: list[dict[str, str] | None] = []
     evaluator_env = {
         "QUALIBUG_BENCHMARK_TARGET_ROOT": str(tmp_path),
@@ -177,7 +176,7 @@ def test_prepare_funnel_benchmark_target_passes_evaluator_env_to_token_refresh(
 
     def fake_run(cmd, **kwargs):
         joined = " ".join(str(c) for c in cmd)
-        if "_refresh_tokens.py" in joined:
+        if "refresh_tokens.py" in joined:
             captured_token_env.append(kwargs.get("env"))
         return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
 

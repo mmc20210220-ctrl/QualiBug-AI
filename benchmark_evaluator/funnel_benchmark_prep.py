@@ -166,19 +166,19 @@ def reset_benchmark_target_db(
 
 def refresh_test_account_tokens(
     *,
-    root: Path,
+    script: Path | None = None,
     env: Mapping[str, str] | None = None,
     runner: RunFn = subprocess.run,
     retries: int = 5,
     retry_delay_seconds: float = 3.0,
 ) -> dict:
-    """Refresh tokens for every funnel mode 鈥?expired JWT silently kills auth probes.
+    """Refresh tokens for every funnel mode: an expired JWT silently kills auth probes.
 
     After ``init_db_windows.ps1`` the gateway can briefly refuse connections
     (HTTP 0 / timeout) while services reattach to the reseeded DB. Retry a few
     times before failing hard so prep does not flake on a healthy target.
     """
-    script = root / "_refresh_tokens.py"
+    script = Path(script) if script is not None else Path(__file__).with_name("refresh_tokens.py")
     if not script.is_file():
         raise FileNotFoundError(f"token refresh script missing: {script}")
 
@@ -208,7 +208,7 @@ def refresh_test_account_tokens(
                 "exit_code": 0,
                 "attempts": attempt,
             }
-        # Transient post-reset unavailability 鈥?retry before failing the prep.
+        # Transient post-reset unavailability: retry before failing the prep.
         transient = (
             "login rejected HTTP 0" in out
             or "timed out" in out.lower()
@@ -245,7 +245,7 @@ def prepare_funnel_benchmark_target(
     from datetime import datetime, timezone
 
     db = reset_benchmark_target_db(env=env, runner=runner)
-    tokens = refresh_test_account_tokens(root=root, env=env, runner=runner)
+    tokens = refresh_test_account_tokens(env=env, runner=runner)
     receipt_dir = Path(root) / "_funnel_runs"
     receipt_dir.mkdir(parents=True, exist_ok=True)
     receipt_path = receipt_dir / f"{project}_target_reset_receipt.json"

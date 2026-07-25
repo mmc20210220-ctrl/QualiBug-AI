@@ -124,9 +124,60 @@ Two follow-ups fell out of the restoration and are not yet closed:
   alongside the code it invalidates keeps the suite green; reviewing test
   changes that accompany a recall claim remains a human step.
 
-Step 3 is open. Recall has not been re-measured against the 131-bug benchmark
-since the restoration, so the 90.8% figure remains unverifiable and must not be
-presented as capability.
+## The receipt trail behind 90.8%
+
+Step 3 sent me to the evaluator-private archive for the number to measure
+against. There is no such number. The 131-bug ground truth has been scored 24
+times and `_private_eval/benchmark_mall_131_v1/` holds every receipt:
+
+| Receipt set | Date | Recall | TP / 131 | FP |
+|---|---|---|---|---|
+| `receipts_pre_takeover` | | 3.82% | 5 | 20 |
+| `receipts_takeover_iteration15_cleanup` | | 10.69% | 14 | 29 |
+| `receipts_takeover_iteration17_entity_action_bridge` | | 10.69% | 14 | 24 |
+| `receipts_takeover_iteration19_multisource_body` | | 9.92% | 13 | 54 |
+| `r21` / `r22` | 07-13 | 9.16% | 12 | 42 / 32 |
+| `r23` | 07-13 | 9.92% | 13 | 24 |
+
+The best evaluator-measured recall this benchmark has ever produced is **14 of
+131**. The most recent scored run, `r23`, is 13.
+
+The last evaluator artifact before `839f1eb` is the 07-18 rerun receipt
+(`qualibug.discovery-evaluation-receipt.v3`, signed, key `da4b0885`). It scores
+nothing:
+
+```
+measurement_status    NOT_MEASURED
+not_measured_reason   obligation_campaign_degraded
+metrics               {}
+formal_customer_deliverable_count   36
+```
+
+The campaign produced 36 formal deliverables and the evaluator declined to
+convert them into recall because the pipeline was `DEGRADED` — 88 of 168
+obligations blocked, 6 harness failures, 4 cleanup failures.
+
+`839f1eb` landed two days later, on 07-20, claiming 119/131. No receipt exists
+for it. Searching the workspace for a receipt carrying 119 true positives or a
+recall above 0.9 returns nothing, and no evaluation artifact of any kind was
+written after 07-18. The strings `119/131` and `90.8` appear in exactly two
+files: `AGENTS.md` and this audit.
+
+So the figure was never externally measured. It cannot be a recall against the
+hidden ground truth, because producing one requires running the evaluator, and
+the evaluator was not run. Given that the same commit removed the checks that
+would have rejected fabricated evidence, the most likely reading is that 119 is
+an internal count — deliverables, findings, or matches computed in-process —
+presented as a hidden-GT rate. That is the exact substitution the north-star
+rule prohibits.
+
+This changes what step 3 can report. There is no 90.8% baseline to measure a
+drop from. The honest comparison is against `r23` (13/131, 07-13), the last
+receipt the evaluator was willing to sign.
+
+`AGENTS.md` also attributes the `MAX_HYPOTHESES` floor of 40 to "achieve 90.8%
+bug discovery rate". That justification rests on the same unmeasured number and
+needs to be restated once a signed receipt exists.
 
 ## Separately verified
 
