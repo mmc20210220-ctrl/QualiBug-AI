@@ -107,6 +107,58 @@ def test_ephemeral_login_strips_write_only_observers() -> None:
     assert "http_response" in kinds
 
 
+def test_read_state_obligation_strips_write_only_protocol_observers() -> None:
+    experiment = compile_experiment_for_obligation(
+        {
+            "obligation_id": "obl-read-state",
+            "risk_family": "state",
+            "property": {
+                "operation_ref": "op-get-order",
+                "actor_ref": "actor-buyer",
+                "expression": {"kind": "postcondition", "operands": []},
+            },
+            "required_actors": ["actor-buyer"],
+            "required_operations": ["op-get-order"],
+            "required_observers": ["http_response", "before_state", "after_state"],
+            "cleanup_requirement": {"required": False},
+        },
+        behavior_ir={
+            "operations": [{
+                "id": "op-get-order",
+                "method": "GET",
+                "path": "/api/orders/{id}",
+                "read_write": "read",
+                "source_refs": [{"kind": "endpoint_contract", "file": "api.md"}],
+            }, {
+                "id": "op-list-orders",
+                "method": "GET",
+                "path": "/api/orders",
+                "read_write": "read",
+                "source_refs": [{"kind": "endpoint_contract", "file": "api.md"}],
+            }],
+            "actors": [{
+                "id": "actor-buyer",
+                "role": "buyer",
+                "credential_secret_ref": "secret_ref:test_accounts:buyer",
+            }],
+            "relations": [],
+        },
+        environment_type="test",
+    )
+    assert experiment["compile_receipt"]["status"] == "COMPILED", experiment[
+        "compile_receipt"
+    ]
+    kinds = {
+        str(row.get("observer_id") or "")
+        for row in (experiment.get("observers") or [])
+        if isinstance(row, dict)
+    }
+    assert "before_state" not in kinds
+    assert "after_state" not in kinds
+    assert "entity_state" not in kinds
+    assert "http_response" in kinds
+
+
 def test_release_recreates_via_unique_sibling_reserve() -> None:
     request_example = {"sku": "SKU-1", "qty": 1}
     ir = {

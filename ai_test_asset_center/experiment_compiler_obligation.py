@@ -897,7 +897,48 @@ def compile_experiment_for_obligation(
                     )
                     if _text(row.get("operation_ref")) != primary_op_id
                 ]
-                if len(cleanup_candidates) == 1:
+                delete_candidates = [
+                    row
+                    for row in cleanup_candidates
+                    if _text(row.get("method")).upper() == "DELETE"
+                ]
+                # Identity-bound action POSTs (ship/confirm/status) must not bind
+                # a sibling cancel/reject solely by collection shape — those
+                # actions often cannot reverse the mutation and fail cleanup.
+                # Prefer unique DELETE, else governed snapshot restore when an
+                # effect read exists. Text-evidence compensators were already
+                # bound above via declared_action_compensators.
+                if len(delete_candidates) == 1:
+                    compensator = delete_candidates[0]
+                    cleanup_plan = [{
+                        "action": "source_declared_compensation",
+                        "mode": "reverse_order",
+                        "operation_ref": _text(compensator.get("operation_ref")),
+                        "compensates_operation_ref": primary_op_id,
+                        "path": _text(compensator.get("path")),
+                        "method": "DELETE",
+                        "body_from_original_request": False,
+                        "runtime_response_binding_required": (
+                            "{" in _text(compensator.get("path"))
+                        ),
+                    }]
+                elif write_observers and _source_request_example(primary_op):
+                    # Snapshot restore needs restorable request fields. Empty-body
+                    # status actions (ship/confirm/approve) cannot re-post a prior
+                    # state; compiling a fake restore only produces harness failures.
+                    cleanup_plan = [{
+                        "action": "restore_before_snapshot",
+                        "mode": "snapshot_restore",
+                        "operation_ref": primary_op_id,
+                        "path": primary_path,
+                        "method": primary_method,
+                        "runtime_response_binding_required": True,
+                        "_universal_fallback": True,
+                    }]
+                elif (
+                    len(cleanup_candidates) == 1
+                    and _CLEANUP_ACTION_RE.search(primary_path.rstrip("/"))
+                ):
                     compensator = cleanup_candidates[0]
                     cleanup_plan = [{
                         "action": "source_declared_compensation",
@@ -910,18 +951,6 @@ def compile_experiment_for_obligation(
                         "runtime_response_binding_required": (
                             "{" in _text(compensator.get("path"))
                         ),
-                    }]
-                elif write_observers:
-                    # Field/status style identity POST with an effect read:
-                    # restore from the governed before snapshot on the same op.
-                    cleanup_plan = [{
-                        "action": "restore_before_snapshot",
-                        "mode": "snapshot_restore",
-                        "operation_ref": primary_op_id,
-                        "path": primary_path,
-                        "method": primary_method,
-                        "runtime_response_binding_required": True,
-                        "_universal_fallback": True,
                     }]
         if not cleanup_plan and not cleanup_explicitly_not_required:
             cleanup_path = normalize_path_placeholders(
@@ -1178,6 +1207,17 @@ def compile_experiment_for_obligation(
             _text(o.get("observer_id")) for o in observers if isinstance(o, dict)
         }:
             observers.append(dict(pobs))
+    # Family protocols (state/conservation) may re-attach write-only observers.
+    # Read primaries cannot produce governance before/after receipts — strip them
+    # again so we do not false-block with BLOCKED_MISSING_OBSERVER.
+    if not is_write:
+        observers = [
+            obs
+            for obs in observers
+            if _text(obs.get("observer_id")) not in _WRITE_ONLY_OBSERVERS
+        ]
+        if not observers:
+            observers = [{"observer_id": "http_response"}]
     if _text(protocol.get("status")) != "COMPILED":
         return blocked_experiment(
             oid,
@@ -1192,7 +1232,15 @@ def compile_experiment_for_obligation(
         if _text(observer.get("observer_id")) in _EFFECT_OBSERVER_IDS
     }
     if effect_observer_ids:
-        if not write_observers:
+        if not is_write:
+            # Defensive: write-only observers should already be stripped above.
+            observers = [
+                obs
+                for obs in observers
+                if _text(obs.get("observer_id")) not in _EFFECT_OBSERVER_IDS
+            ]
+            effect_observer_ids = set()
+        elif not write_observers:
             return blocked_experiment(
                 oid,
                 "BLOCKED_MISSING_OBSERVER",

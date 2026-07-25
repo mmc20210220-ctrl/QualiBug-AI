@@ -204,7 +204,8 @@ def test_identity_bound_status_uses_snapshot_restore_with_effect_read() -> None:
     assert experiment["cleanup_plan"][0]["mode"] == "snapshot_restore"
 
 
-def test_identity_bound_ship_uses_unique_sibling_cancel() -> None:
+def test_identity_bound_ship_blocks_when_empty_body_not_restorable() -> None:
+    """Sibling cancel does not reverse ship; empty-body snapshot is also fake."""
     experiment = compile_experiment_for_obligation(
         {
             "obligation_id": "obl-ship",
@@ -212,6 +213,8 @@ def test_identity_bound_ship_uses_unique_sibling_cancel() -> None:
             "property": {
                 "operation_ref": "op-ship",
                 "actor_ref": "actor-buyer",
+                "from_state_ref": "state-created",
+                "to_state_ref": "state-shipped",
             },
             "required_actors": ["actor-buyer"],
             "required_operations": ["op-ship"],
@@ -251,7 +254,7 @@ def test_identity_bound_ship_uses_unique_sibling_cancel() -> None:
         environment_type="test",
     )
 
-    assert experiment["compile_receipt"]["status"] == "COMPILED", experiment[
+    assert experiment["compile_receipt"]["status"] == "BLOCKED", experiment[
         "compile_receipt"
     ]
-    assert experiment["cleanup_plan"][0]["operation_ref"] == "op-cancel"
+    assert experiment["compile_receipt"]["reason_code"] == "BLOCKED_NON_REVERSIBLE_WRITE"
