@@ -32,9 +32,11 @@ from ._utils import *  # noqa: F401,F403
 from ._utils import _csv_rows  # noqa: F401
 
 __all__ = [
-    "_classify_source", "_classify_source_multi", "_csv_rows", "_doc_bool", "_field_dictionary_entries",
+    "_canonical_entity_name", "_classify_source", "_classify_source_multi", "_csv_rows", "_doc_bool",
+    "_entity_inventory_rows", "_field_dictionary_entries",
     "_field_dictionary_tables", "_flatten_json_field_names", "_infer_field_rows_from_markdown",
-    "_is_field_definition_table",
+    "_inline_qualified_field_rows", "_is_entity_inventory_table", "_is_field_definition_table",
+    "_merge_table_identities", "_permission_crosstab_entries", "_section_table_label",
     "_json_blocks", "_json_schema_tables", "_markdown_api_operations", "_markdown_table_blocks",
     "_markdown_table_rows", "_negative_permission_clause", "_openapi_operations", "_parse_source",
     "_permission_action_aliases", "_permission_action_values", "_permission_decision",
@@ -164,6 +166,148 @@ def _is_field_definition_table(headers: list[str]) -> bool:
     has_name = bool(norm_headers & _NAME_HEADERS)
     has_type_or_desc = bool(norm_headers & _TYPE_HEADERS)
     return has_name and has_type_or_desc
+
+
+# ── Entity inventory tables ──
+# A table whose rows enumerate entities rather than fields, e.g. "| 表 | 说明 |".
+_ENTITY_NAME_HEADERS = {
+    "table", "table_name", "tablename", "entity", "entity_name", "entityname",
+    "object", "object_name", "model", "collection", "schema",
+    "表", "表名", "数据表", "实体", "实体名", "对象", "模型", "集合",
+}
+_DESCRIPTION_HEADERS = {
+    "description", "desc", "comment", "remark", "note", "meaning", "purpose",
+    "说明", "描述", "备注", "含义", "用途",
+}
+
+
+def _is_entity_inventory_table(headers: list[str]) -> bool:
+    """Determine if a table enumerates entities (one row per entity).
+
+    A field-definition table always wins: when a field-name header is present the
+    rows describe fields, not entities.
+    """
+    if not headers:
+        return False
+    norm_headers = {_norm(h) for h in headers if h}
+    if norm_headers & _NAME_HEADERS:
+        return False
+    return bool(norm_headers & _ENTITY_NAME_HEADERS) and bool(norm_headers & _DESCRIPTION_HEADERS)
+
+
+# ── Entity identity canonicalization ──
+# The same entity is often declared under two labels: a data dictionary heading
+# carries a human gloss ("Product (产品)") while an OpenAPI schema uses the bare
+# identifier ("Product"). Without canonicalization one entity becomes two
+# identities and its fields are split across them.
+_ENTITY_GLOSS_RE = re.compile(r"^(?P<base>[^()（）]+?)\s*[（(](?P<gloss>[^()（）]{1,40})[）)]\s*$")
+_HEADING_ORDINAL_RE = re.compile(r"^\s*(?:\d+(?:\.\d+)+|\d+\s*[\.、)])\s*(?=\S)")
+
+
+def _canonical_entity_name(raw: str) -> tuple[str, str]:
+    """Split a declared entity label into (canonical_name, alias).
+
+    Format-level normalization only — strips a heading ordinal and a trailing
+    parenthetical gloss. The identifier itself is never rewritten.
+    """
+    label = str(raw or "").strip()
+    if not label:
+        return "", ""
+    label = _HEADING_ORDINAL_RE.sub("", label).strip()
+    match = _ENTITY_GLOSS_RE.match(label)
+    if not match:
+        return label, ""
+    base = match.group("base").strip()
+    gloss = match.group("gloss").strip()
+    if not base:
+        return label, ""
+    return base, gloss
+
+
+def _section_table_label(section: str) -> str:
+    """Reduce a section heading to the entity label it declares."""
+    label = str(section or "").strip()
+    if not label or _norm(label) == "document":
+        return ""
+    match = re.search(r"(?i)(?:table|表|数据表)\s*[:：]\s*([A-Za-z0-9_\-\u4e00-\u9fff]+)", label)
+    return match.group(1) if match else label
+
+
+def _entity_inventory_rows(text: str, source_id: str = "") -> list[dict[str, Any]]:
+    """Extract entities declared by an inventory table (one row per entity)."""
+    from ._format_normalizer import extract_tables_from_markdown
+
+    rows: list[dict[str, Any]] = []
+    for table in extract_tables_from_markdown(text):
+        headers = table.get("headers") or []
+        if not _is_entity_inventory_table(headers):
+            continue
+        for row in table.get("rows") or []:
+            raw_name = _pick_first(row, tuple(sorted(_ENTITY_NAME_HEADERS)))
+            name, alias = _canonical_entity_name(raw_name)
+            if not name:
+                continue
+            description = _pick_first(row, tuple(sorted(_DESCRIPTION_HEADERS)))
+            rows.append({
+                "table_id": f"table:{name}",
+                "source_id": source_id,
+                "name": name,
+                "aliases": [alias] if alias else [],
+                "columns": [],
+                "foreign_keys": [],
+                "field_dictionary": [],
+                "description": _redact_text(description, 320),
+                "derivation": "entity_inventory_table",
+                "tokens": sorted(_tokens(f"{name} {alias} {description}")),
+            })
+    return rows
+
+
+# Inline qualified field declarations, i.e. a backticked `<entity>.<field>` token
+# followed by its description, as used in prose and bullet lists.
+_QUALIFIED_FIELD_RE = re.compile(r"`([A-Za-z_][A-Za-z0-9_]{0,62})\.([A-Za-z_][A-Za-z0-9_]{0,62})`")
+
+
+def _inline_qualified_field_rows(
+    text: str, source_id: str, declared_entities: Iterable[str]
+) -> list[dict[str, Any]]:
+    """Extract fields written inline as `table.field` in prose or bullet lists.
+
+    Fail-closed by construction: a qualified reference is accepted only when its
+    qualifier resolves to an entity already declared in the same source. This
+    keeps unrelated dotted tokens (hostnames, filenames, module paths) out.
+    """
+    known: dict[str, str] = {}
+    for name in declared_entities:
+        label = str(name or "").strip()
+        if label:
+            known.setdefault(label.lower(), label)
+    if not known:
+        return []
+
+    rows: list[dict[str, Any]] = []
+    for line in str(text or "").splitlines():
+        for match in _QUALIFIED_FIELD_RE.finditer(line):
+            table_name = known.get(match.group(1).lower())
+            if not table_name:
+                continue
+            field_name = match.group(2)
+            trailing = line[match.end():].strip()
+            description = trailing.lstrip("：:->—-").strip().rstrip("；;。.,，")
+            rows.append({
+                "field_id": f"field:{source_id}:{_short_hash({'table': table_name, 'field': field_name})}",
+                "source_id": source_id,
+                "table": table_name,
+                "table_id": f"table:{table_name}",
+                "field": field_name,
+                "field_path": f"{table_name}.{field_name}",
+                "type": "",
+                "required": False,
+                "description": _redact_text(description, 320),
+                "derivation": "inline_qualified_reference",
+                "tokens": sorted(_tokens(f"{table_name} {field_name} {description}")),
+            })
+    return rows
 
 
 def _openapi_operations(openapi: dict[str, Any], source_id: str = "") -> list[dict[str, Any]]:
@@ -304,21 +448,24 @@ def _pick_first(item: dict[str, Any], keys: Iterable[str]) -> str:
 
 
 def _infer_field_rows_from_markdown(text: str, source_id: str = "") -> list[dict[str, Any]]:
+    """Extract field rows from Markdown pipe tables.
+
+    Section attribution is positional: each table block belongs to the heading in
+    effect at its own position. A row-level table column still wins over it.
+    """
+    from ._format_normalizer import extract_tables_from_markdown
+
     rows: list[dict[str, Any]] = []
-    current_table = ""
-    lines = str(text or "").splitlines()
-    for line in lines:
-        heading = re.match(r"^\s*#{1,6}\s*(.+?)\s*$", line)
-        if heading:
-            label = heading.group(1).strip()
-            table_match = re.search(r"(?i)(?:table|表|数据表)\s*[:：]?\s*([A-Za-z0-9_\-\u4e00-\u9fff]+)", label)
-            current_table = table_match.group(1) if table_match else label
-        inline = re.search(r"(?i)(?:table|表|数据表)\s*[:：=]\s*([A-Za-z0-9_\-\u4e00-\u9fff]+)", line)
-        if inline:
-            current_table = inline.group(1)
-    for block in _markdown_table_blocks(text):
-        for row in block:
-            table_name = _pick_first(row, ("table", "table_name", "table name", "表", "数据表")) or current_table
+    for table in extract_tables_from_markdown(text):
+        section_table, section_alias = _canonical_entity_name(
+            _section_table_label(str(table.get("source_locator") or ""))
+        )
+        for row in table.get("rows") or []:
+            explicit_table = _pick_first(row, ("table", "table_name", "table name", "表", "数据表"))
+            explicit_name, explicit_alias = _canonical_entity_name(explicit_table)
+            table_name = explicit_name or section_table
+            # The human gloss dropped by canonicalization is still source evidence.
+            table_alias = explicit_alias if explicit_name else section_alias
             field_name = _pick_first(row, ("field", "field_name", "field name", "column", "column_name", "字段", "列名", "属性"))
             if not field_name:
                 continue
@@ -335,7 +482,8 @@ def _infer_field_rows_from_markdown(text: str, source_id: str = "") -> list[dict
                 "type": field_type,
                 "required": _doc_bool(required),
                 "description": _redact_text(description, 320),
-                "tokens": sorted(_tokens(f"{table_name} {field_name} {field_type} {description}")),
+                "table_alias": table_alias,
+                "tokens": sorted(_tokens(f"{table_name} {table_alias} {field_name} {field_type} {description}")),
             })
     return rows
 
@@ -394,16 +542,78 @@ def _field_dictionary_tables(entries: list[dict[str, Any]], source_id: str = "")
     tables: list[dict[str, Any]] = []
     for table_name, items in grouped.items():
         columns = sorted({str(item.get("field") or "") for item in items if str(item.get("field") or "")})
+        aliases = sorted({str(item.get("table_alias") or "") for item in items} - {""})
         tables.append({
             "table_id": f"table:{table_name}",
             "source_id": source_id,
             "name": table_name,
+            "aliases": aliases,
             "columns": columns,
             "foreign_keys": [],
             "field_dictionary": items,
+            "derivation": "field_dictionary_grouping",
             "tokens": sorted(_tokens(f"{table_name} {' '.join(columns)} {' '.join(str(item.get('description') or '') for item in items[:12])}")),
         })
     return tables
+
+
+def _merge_table_identities(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Fold table declarations that resolve to the same canonical identity.
+
+    Once entity names are canonicalized the same entity is routinely declared more
+    than once — an inventory table, a data dictionary section and an OpenAPI schema
+    may each contribute part of it. Deduplicating by identity would silently drop
+    the later declarations along with their columns, so each one is merged in and
+    its origin retained in `source_refs` / `derivations`.
+    """
+    merged: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for row in tables:
+        if not isinstance(row, dict):
+            continue
+        table_id = str(row.get("table_id") or "")
+        if not table_id:
+            continue
+        derivation = str(row.get("derivation") or "")
+        source_id = str(row.get("source_id") or "")
+        existing = merged.get(table_id)
+        if existing is None:
+            record = dict(row)
+            record["aliases"] = sorted({str(a) for a in row.get("aliases") or [] if str(a)})
+            record["source_refs"] = sorted({source_id} - {""})
+            record["derivations"] = sorted({derivation} - {""})
+            record["declaration_count"] = 1
+            merged[table_id] = record
+            order.append(table_id)
+            continue
+        existing["columns"] = sorted(
+            {str(c) for c in existing.get("columns") or []}
+            | {str(c) for c in row.get("columns") or []}
+        )
+        existing["field_dictionary"] = _dedupe_by_id(
+            [*(existing.get("field_dictionary") or []), *(row.get("field_dictionary") or [])],
+            "field_id",
+        )
+        seen_fk = {json.dumps(fk, sort_keys=True, default=str) for fk in existing.get("foreign_keys") or []}
+        for fk in row.get("foreign_keys") or []:
+            key = json.dumps(fk, sort_keys=True, default=str)
+            if key not in seen_fk:
+                seen_fk.add(key)
+                existing.setdefault("foreign_keys", []).append(fk)
+        existing["aliases"] = sorted(
+            {str(a) for a in existing.get("aliases") or [] if str(a)}
+            | {str(a) for a in row.get("aliases") or [] if str(a)}
+        )
+        existing["source_refs"] = sorted({*(existing.get("source_refs") or []), source_id} - {""})
+        existing["derivations"] = sorted({*(existing.get("derivations") or []), derivation} - {""})
+        existing["declaration_count"] = int(existing.get("declaration_count") or 1) + 1
+        if not str(existing.get("description") or "") and row.get("description"):
+            existing["description"] = row.get("description")
+        existing["tokens"] = sorted(
+            {str(t) for t in existing.get("tokens") or []}
+            | {str(t) for t in row.get("tokens") or []}
+        )
+    return [merged[table_id] for table_id in order]
 
 
 def _markdown_api_operations(text: str, source_id: str = "") -> list[dict[str, Any]]:
@@ -694,6 +904,87 @@ def _negative_permission_clause(line: str) -> str:
         return text
     clause = re.split(r"[,;，；。！？]", clause, maxsplit=1)[0].strip()
     return clause or text
+
+
+# ── Permission crosstab tables ──
+# Rows are operations/resources, columns are roles, cells are decision glyphs.
+# Only the glyph vocabulary is fixed; role and operation names come from the source.
+_DECISION_ALLOW = {
+    "✓", "✔", "√", "yes", "y", "true", "allow", "allowed", "grant", "granted",
+    "rw", "r", "w", "是", "有", "可", "允许",
+}
+_DECISION_DENY = {
+    "✗", "✘", "×", "x", "no", "n", "false", "deny", "denied", "forbidden",
+    "-", "—", "–", "na", "n/a", "否", "无", "不可", "禁止",
+}
+
+
+def _decision_token(value: Any) -> str:
+    """Normalize a decision cell without discarding symbol glyphs.
+
+    The general `_norm` helper strips non-alphanumerics, which erases check and
+    cross marks entirely — exactly the characters a permission matrix relies on.
+    """
+    return str(value or "").strip().lower()
+
+
+def _permission_crosstab_entries(text: str, source_id: str) -> list[dict[str, Any]]:
+    """Extract permissions from role-column decision matrices.
+
+    A column qualifies as a role column when every populated cell is a decision
+    glyph and at least one of them grants. A table needs two such columns before it
+    is read as a matrix, which keeps ordinary data tables out.
+    """
+    from ._format_normalizer import extract_tables_from_markdown
+
+    rows: list[dict[str, Any]] = []
+    for table in extract_tables_from_markdown(text):
+        headers = [str(h).strip() for h in table.get("headers") or []]
+        table_rows = table.get("rows") or []
+        if len(headers) < 3 or not table_rows:
+            continue
+        subject_header = headers[0]
+        role_headers: list[str] = []
+        for header in headers[1:]:
+            if not header:
+                continue
+            values = [_decision_token(row.get(header, "")) for row in table_rows]
+            populated = [v for v in values if v]
+            if not populated:
+                continue
+            if not all(v in _DECISION_ALLOW or v in _DECISION_DENY for v in populated):
+                continue
+            if not any(v in _DECISION_ALLOW for v in populated):
+                continue
+            role_headers.append(header)
+        if len(role_headers) < 2:
+            continue
+        section = str(table.get("source_locator") or "")
+        for index, row in enumerate(table_rows):
+            subject = str(row.get(subject_header, "")).strip()
+            if not subject:
+                continue
+            for role in role_headers:
+                decision_token = _decision_token(row.get(role, ""))
+                if not decision_token:
+                    continue
+                allowed = decision_token in _DECISION_ALLOW
+                actions = _permission_action_aliases(subject) or [subject]
+                resource_aliases = _permission_resource_aliases(subject) or [subject.strip().lower()]
+                rows.append({
+                    "permission_id": f"perm:{source_id}:{_short_hash({'r': role, 's': subject, 'i': index})}",
+                    "source_id": source_id,
+                    "role": role,
+                    "resource": subject,
+                    "resource_aliases": resource_aliases,
+                    "actions": actions if allowed else [],
+                    "denied_actions": [] if allowed else actions,
+                    "decision": "allow" if allowed else "deny",
+                    "scope": "",
+                    "derivation": "permission_crosstab",
+                    "evidence": _redact_text(f"{section} | {subject} | {role} = {row.get(role, '')}", 280),
+                })
+    return rows
 
 
 def _permission_entries(text: str, payload: Any, source_id: str) -> list[dict[str, Any]]:
@@ -1316,12 +1607,10 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
         _fn_headers = _fn_table.get("headers") or []
         if _is_field_definition_table(_fn_headers):
             # This table is a field definition — extract field records
-            _fn_locator = _fn_table.get("source_locator") or filename
-            _fn_table_name = _fn_locator.split(":")[-1] if ":" in _fn_locator else _fn_locator
-            # Derive table name from section heading
-            _section = _fn_table.get("source_locator") or ""
-            _tbl_match = re.search(r"(?i)(?:table|表|数据表)\s*[:：]?\s*([A-Za-z0-9_\-\u4e00-\u9fff]+)", _section)
-            _derived_table = _tbl_match.group(1) if _tbl_match else _section or "default"
+            # Derive table name from the section heading in effect for this table,
+            # through the same canonicalization every other declaration path uses.
+            _section = str(_fn_table.get("source_locator") or "")
+            _derived_table = _canonical_entity_name(_section_table_label(_section))[0] or "default"
             for _fn_row in _fn_table.get("rows") or []:
                 _f_name = _pick_first(_fn_row, ("field", "field_name", "fieldname", "column", "column_name", "name", "attribute", "字段", "字段名", "列名", "属性", "名称"))
                 if not _f_name:
@@ -1342,13 +1631,23 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
                     "derivation": "generic_table_extraction",
                     "tokens": sorted(_tokens(f"{_derived_table} {_f_name} {_f_type} {_f_desc}")),
                 })
+    # Entities declared by an inventory table carry no fields of their own; they
+    # are what inline `table.field` references resolve against.
+    tables += _entity_inventory_rows(text, source_id)
+    _declared_entities = {str(row.get("name") or "") for row in tables}
+    _declared_entities |= {str(row.get("table") or "") for row in field_dictionary}
+    field_dictionary += _inline_qualified_field_rows(text, source_id, _declared_entities)
     field_dictionary = _dedupe_by_id(field_dictionary, "field_id")
     # Build tables from field dictionary (for ALL sources, not just db_field_dictionary)
     if field_dictionary:
         tables += _field_dictionary_tables(field_dictionary, source_id)
-        tables = _dedupe_by_id(tables, "table_id")
+    tables = _merge_table_identities(tables)
     ui_specs = _uiux_specs_from_text(text, source_id, source_type, filename)
-    permissions = _permission_entries(text, payload, source_id)
+    permissions = _dedupe_by_id(
+        [*_permission_entries(text, payload, source_id),
+         *_permission_crosstab_entries(text, source_id)],
+        "permission_id",
+    )
     tickets = _ticket_rows(text, payload, source_id, source_type) if source_type in {"historical_bug", "ticket"} else []
     parser = "yaml" if suffix in {".yaml", ".yml"} else "json" if payload is not None else suffix.lstrip(".") or "text"
     parse_status = "parsed" if text.strip() else "metadata_only"
@@ -1409,7 +1708,7 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
     # ── Reuse _doc_struct from Phase 2 generic extraction above ──
     # ── Phase 2: multi-label source_types (R1 fix) ──
     _source_types = _classify_source_multi(filename, text)
-    if source_type not in _source_types:
+    if source_type and source_type not in _source_types:
         _source_types.insert(0, source_type)
     return {
         "text": text,

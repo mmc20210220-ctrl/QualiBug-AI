@@ -16,10 +16,16 @@ import tempfile
 import time
 import zipfile
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Iterable
 
 logger = logging.getLogger(__name__)
+
+# Semantic extraction budget: one provider round-trip per zero-output source.
+_MAX_LLM_SOURCES_PER_BUILD = 12
+# Matches the project-wide parallel LLM worker default; higher hits rate limits.
+_LLM_EXTRACTION_WORKERS = 4
 
 try:
     import docx2txt
@@ -31,7 +37,7 @@ from ._common import _safe_project_id, _load_json, _write_json, _icon  # explici
 from ._utils import *  # noqa: F401,F403
 from ._utils import _hash_bytes, _short_hash, _norm, _tokens, _now, _paths, _load_registry, _save_registry, _redact_text  # noqa: F401
 from ._parsing import *  # noqa: F401,F403
-from ._parsing import _parse_source, _openapi_operations, _risk_type_from_text  # noqa: F401
+from ._parsing import _parse_source, _openapi_operations, _risk_type_from_text, _merge_table_identities  # noqa: F401
 from ._crud import *  # noqa: F401,F403
 from ._linking import *  # noqa: F401,F403
 from ._linking import (_dedupe_by_id, _authoritative_rule_to_interface_edges, _links_by_overlap,  # noqa: F401
@@ -601,35 +607,80 @@ def build_enterprise_business_knowledge_asset(project_id: str = "real_project_de
     # ── Phase 3: LLM semantic extraction for zero-output sources ──
     semantic_candidates: list[dict[str, Any]] = []
     semantic_receipts: list[dict[str, Any]] = []
-    for source, parsed in parsed_rows:
-        _src_tables = len(parsed.get("tables") or [])
-        _src_fields = len(parsed.get("field_dictionary") or [])
-        _src_perms = len(parsed.get("permissions") or [])
-        _src_text = parsed.get("text") or ""
-        if _src_tables + _src_fields + _src_perms == 0 and _src_text.strip():
-            from ._semantic_extraction import run_semantic_extraction
-            _sem_receipt = run_semantic_extraction(
-                _src_text,
-                source_id=str(source.get("source_id") or ""),
-                filename=str(source.get("original_name") or ""),
-                existing_tables=_src_tables,
-                existing_fields=_src_fields,
-                existing_permissions=_src_perms,
+    from ._semantic_extraction import (
+        run_semantic_extraction,
+        semantic_extraction_availability,
+    )
+    _sem_requested = bool(
+        options.get("enable_semantic_extraction")
+        or os.getenv("QUALIBUG_SEMANTIC_EXTRACTION", "").strip() in {"1", "true", "yes"}
+    )
+    _sem_availability = semantic_extraction_availability(_sem_requested)
+    if not _sem_availability.get("available"):
+        parse_coverage_gaps.append({
+            "kind": "SEMANTIC_EXTRACTION_UNAVAILABLE",
+            "gap_type": "semantic_extraction_unavailable",
+            "source_id": "",
+            "operator_action": (
+                f"semantic layer disabled ({_sem_availability.get('reason')}): "
+                f"{_sem_availability.get('detail')}"
+            )[:200],
+        })
+    _sem_targets: list[tuple[dict[str, Any], str]] = []
+    if _sem_availability.get("available"):
+        for source, parsed in parsed_rows:
+            _src_text = parsed.get("text") or ""
+            _src_structured = (
+                len(parsed.get("tables") or [])
+                + len(parsed.get("field_dictionary") or [])
+                + len(parsed.get("permissions") or [])
             )
+            if _src_structured == 0 and _src_text.strip():
+                _sem_targets.append((source, _src_text))
+    # Each target costs one provider round-trip, so the layer is both capped and
+    # run concurrently — otherwise a document-heavy project serializes minutes of
+    # latency into asset construction.
+    if len(_sem_targets) > _MAX_LLM_SOURCES_PER_BUILD:
+        for _skipped_source, _ in _sem_targets[_MAX_LLM_SOURCES_PER_BUILD:]:
+            parse_coverage_gaps.append({
+                "kind": "SEMANTIC_EXTRACTION_SKIPPED",
+                "gap_type": "semantic_extraction_budget_exhausted",
+                "source_id": _skipped_source.get("source_id"),
+                "operator_action": (
+                    f"per-build semantic extraction budget is "
+                    f"{_MAX_LLM_SOURCES_PER_BUILD} sources; this source was not attempted"
+                ),
+            })
+        _sem_targets = _sem_targets[:_MAX_LLM_SOURCES_PER_BUILD]
+    if _sem_targets:
+        def _run_one(target: tuple[dict[str, Any], str]) -> tuple[dict[str, Any], Any]:
+            _source, _text = target
+            return _source, run_semantic_extraction(
+                _text,
+                source_id=str(_source.get("source_id") or ""),
+                filename=str(_source.get("original_name") or ""),
+            )
+
+        with ThreadPoolExecutor(max_workers=_LLM_EXTRACTION_WORKERS) as _pool:
+            _sem_results = list(_pool.map(_run_one, _sem_targets))
+        for _source, _sem_receipt in _sem_results:
             semantic_receipts.append(_sem_receipt.to_dict())
             semantic_candidates.extend(_sem_receipt.candidates_validated)
             if _sem_receipt.status.startswith("FAILED"):
                 parse_coverage_gaps.append({
                     "kind": "SEMANTIC_EXTRACTION_FAILED",
                     "gap_type": "semantic_extraction_error",
-                    "source_id": source.get("source_id"),
+                    "source_id": _source.get("source_id"),
                     "operator_action": _sem_receipt.error[:200],
                 })
     source_texts = {f"{source.get('source_type')}:{source.get('original_name')}": parsed.get("text") or "" for source, parsed in parsed_rows if parsed.get("text")}
     openapi_parts = [parsed.get("openapi") for _, parsed in parsed_rows if isinstance(parsed.get("openapi"), dict) and parsed.get("openapi")]
     merged_openapi = _merge_openapi(openapi_parts)
     interfaces = _dedupe_by_id([row for _, parsed in parsed_rows for row in parsed.get("operations") or []], "interface_id")
-    tables = _dedupe_by_id([row for _, parsed in parsed_rows for row in parsed.get("tables") or []], "table_id")
+    # Entities are routinely declared by more than one source (a data dictionary
+    # section and an OpenAPI schema, say). Merge them so the later declaration's
+    # columns survive instead of being dropped by identity deduplication.
+    tables = _merge_table_identities([row for _, parsed in parsed_rows for row in parsed.get("tables") or []])
     field_dictionary = _dedupe_by_id([row for _, parsed in parsed_rows for row in parsed.get("field_dictionary") or []], "field_id")
     ui_specs = _dedupe_by_id([row for _, parsed in parsed_rows for row in parsed.get("ui_specs") or []], "ui_spec_id")
     known_tables = {str(row.get("table_id") or "") for row in tables}
@@ -819,6 +870,7 @@ def build_enterprise_business_knowledge_asset(project_id: str = "real_project_de
         "entity_relations": entity_relations,
         "cross_document_conflicts": cross_doc_conflicts,
         "semantic_candidates": semantic_candidates,
+        "semantic_extraction_availability": _sem_availability,
         "semantic_extraction_receipts": semantic_receipts,
         "candidate_validation_receipt": _candidate_receipt.to_dict(),
         "oracle_library": oracles,

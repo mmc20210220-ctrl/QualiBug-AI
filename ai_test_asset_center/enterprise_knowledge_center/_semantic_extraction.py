@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "run_semantic_extraction",
+    "semantic_extraction_availability",
     "validate_semantic_candidates",
     "SemanticExtractionReceipt",
 ]
@@ -59,6 +60,53 @@ Filename: {filename}
 
 Return JSON: {{"candidates": [...]}}
 """
+
+
+def semantic_extraction_availability(requested: bool = True) -> dict[str, Any]:
+    """Report once whether the semantic layer can run at all.
+
+    Checked before the per-source loop so that a layer-wide outage surfaces as a
+    single explicit signal instead of one identical failure per source. Makes no
+    provider call — configuration only.
+
+    Each triggered source costs a provider round-trip, so callers opt in rather
+    than having a paid network dependency attached to every asset build.
+    """
+    if not requested:
+        return {
+            "available": False,
+            "reason": "not_requested",
+            "detail": (
+                "semantic extraction is opt-in; pass "
+                "options['enable_semantic_extraction']=True or set "
+                "QUALIBUG_SEMANTIC_EXTRACTION=1"
+            ),
+        }
+    try:
+        from ..llm_reasoning import _get_client
+        client = _get_client()
+    except Exception as exc:
+        return {
+            "available": False,
+            "reason": "client_import_failed",
+            "detail": f"{type(exc).__name__}: {str(exc)[:200]}",
+        }
+    try:
+        enabled = bool(client.config.enabled)
+        model = str(client.config.model or "")
+    except Exception as exc:
+        return {
+            "available": False,
+            "reason": "client_config_unreadable",
+            "detail": f"{type(exc).__name__}: {str(exc)[:200]}",
+        }
+    if not enabled:
+        return {
+            "available": False,
+            "reason": "llm_not_configured",
+            "detail": "LLM_BASE_URL, LLM_API_KEY and LLM_MODEL must all be set",
+        }
+    return {"available": True, "reason": "configured", "detail": "", "model": model}
 
 
 class SemanticExtractionReceipt:
@@ -128,8 +176,8 @@ def run_semantic_extraction(
 
     # ── Get LLM client ──
     try:
-        from ..llm_reasoning import get_reasoning_client
-        client = get_reasoning_client()
+        from ..llm_reasoning import _get_client
+        client = _get_client()
     except Exception as exc:
         receipt.status = "FAILED_CLIENT_UNAVAILABLE"
         receipt.error = f"LLM client unavailable: {type(exc).__name__}: {str(exc)[:200]}"
