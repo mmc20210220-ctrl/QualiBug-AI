@@ -238,11 +238,16 @@ def execute_selected_experiments(
     _budget = get_validation_budget(runtime_contract, phase=_phase)
     _budget = max(1, min(_budget, 200))  # hard cap at 200
     _total_selected = len(selected)
+    # Rows past the per-batch budget are handed back so the caller can run them
+    # in a later round. Dropping them here leaves the obligation with no terminal
+    # receipt and makes a throttled batch look like an empty plan.
+    budget_deferred: list[dict[str, Any]] = []
     if _total_selected > _budget:
         logger.info(
-            "Experiment budget: truncating %d selected to %d (budget=%d)",
-            _total_selected, _budget, _budget,
+            "Experiment budget: deferring %d of %d selected to a later round (budget=%d)",
+            _total_selected - _budget, _total_selected, _budget,
         )
+        budget_deferred = [dict(_dict(item)) for item in selected[_budget:]]
         selected = selected[:_budget]
     budget_exceeded = _total_selected - len(selected)
     for index, item in enumerate(selected):
@@ -682,6 +687,7 @@ def execute_selected_experiments(
         "harness_failure_count": harness,
         "cleanup_failures": cleanup_failures,
         "budget_exceeded_count": budget_exceeded,
+        "budget_deferred": budget_deferred,
         "experiment_budget": _budget,
         "validation_phase": _phase,
         "findings": findings,

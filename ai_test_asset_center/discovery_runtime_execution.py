@@ -271,6 +271,31 @@ def run_experiment_candidate(
 
     follow_on_batches: list[dict[str, Any]] = []
     if runtime_approved:
+        # Round 1 runs at most the per-batch safety budget. Whatever it deferred
+        # is still a scheduled obligation, so it joins the pending queue instead
+        # of vanishing without a terminal receipt.
+        _round_one_deferred = [
+            dict(row)
+            for row in _list(batch.get("budget_deferred"))
+            if isinstance(row, dict) and _text(row.get("obligation_id"))
+        ]
+        if _round_one_deferred:
+            _already_pending = {
+                _text(row.get("obligation_id"))
+                for row in _list(_dict(obligation_plan).get("pending_next_round"))
+                if isinstance(row, dict)
+            }
+            obligation_plan = {
+                **_dict(obligation_plan),
+                "pending_next_round": [
+                    *_list(_dict(obligation_plan).get("pending_next_round")),
+                    *[
+                        row
+                        for row in _round_one_deferred
+                        if _text(row.get("obligation_id")) not in _already_pending
+                    ],
+                ],
+            }
         follow_on_batches, obligation_plan = _consume_pending_obligation_rounds(
             obligation_plan=obligation_plan,
             obligations=[

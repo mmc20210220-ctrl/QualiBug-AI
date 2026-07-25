@@ -32,6 +32,31 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _pending_with_budget_deferred(
+    plan: dict[str, Any],
+    batch: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Merge planner pending with rows this batch could not reach under budget."""
+    pending_rows = [
+        dict(row)
+        for row in _list(_dict(plan).get("pending_next_round"))
+        if isinstance(row, dict)
+    ]
+    carried = {
+        _text(row.get("obligation_id"))
+        for row in pending_rows
+        if _text(row.get("obligation_id"))
+    }
+    for row in _list(_dict(batch).get("budget_deferred")):
+        if not isinstance(row, dict):
+            continue
+        deferred_id = _text(row.get("obligation_id"))
+        if deferred_id and deferred_id not in carried:
+            pending_rows.append(dict(row))
+            carried.add(deferred_id)
+    return pending_rows
+
+
 def _governed_write_block_reason(value: Any) -> str:
     text = str(value or "").strip()
     if not text:
@@ -638,18 +663,17 @@ def _consume_pending_obligation_rounds(
             "blocked_retry_count": len(blocked_retry_pool),
         })
         # ── P0-6: Early stop condition checks ──
-        # (a) No progress: zero new executions
-        if _round_executed == 0:
+        # (a) No progress: the round attempted nothing. Walking a throttled
+        # queue where every attempt is BLOCKED still advances the plan, so
+        # only a completely empty result set counts as stuck.
+        _round_processed = len(_list(_dict(next_batch).get("results")))
+        if _round_processed == 0:
             _no_progress_streak += 1
         else:
             _no_progress_streak = 0
         if _no_progress_streak >= _NO_PROGRESS_LIMIT:
             _early_stop_reason = f"NO_PROGRESS_{_NO_PROGRESS_LIMIT}_CONSECUTIVE_ROUNDS"
-            pending_rows = [
-                dict(row)
-                for row in _list(next_plan.get("pending_next_round"))
-                if isinstance(row, dict)
-            ]
+            pending_rows = _pending_with_budget_deferred(next_plan, next_batch)
             plan_row = {
                 **plan_row,
                 "pending_next_round": pending_rows[:_ABS_MAX_SLICE_BUDGET],
@@ -675,11 +699,7 @@ def _consume_pending_obligation_rounds(
         _prev_plan_fingerprint = _plan_fp
         if _same_plan_streak >= _SAME_PLAN_LIMIT:
             _early_stop_reason = f"SAME_PLAN_{_SAME_PLAN_LIMIT}_CONSECUTIVE_ROUNDS"
-            pending_rows = [
-                dict(row)
-                for row in _list(next_plan.get("pending_next_round"))
-                if isinstance(row, dict)
-            ]
+            pending_rows = _pending_with_budget_deferred(next_plan, next_batch)
             plan_row = {
                 **plan_row,
                 "pending_next_round": pending_rows[:_ABS_MAX_SLICE_BUDGET],
@@ -690,26 +710,51 @@ def _consume_pending_obligation_rounds(
                 "accumulated_bindings": accumulated_bindings,
             }
             break
-        # (c) Same dominant error repeated
+        # (c) Same dominant error repeated — only named failure reasons count.
+        # Batch results put the code in reason_code; an empty reason must not be
+        # collapsed to "UNKNOWN" or a throttled queue will look stuck and stop.
         _error_counts: dict[str, int] = {}
         for _r in _list(_dict(next_batch).get("results")):
-            _st = _text(_dict(_r).get("status") or _dict(_r).get("execution_status")).upper()
-            if _st in {"BLOCKED", "HARNESS_FAILED", "FAILED"}:
-                _rc = _text(_dict(_r).get("block_reason") or _dict(_r).get("failure_reason")) or "UNKNOWN"
-                _error_counts[_rc] = _error_counts.get(_rc, 0) + 1
-        _dominant_error = max(_error_counts, key=_error_counts.get) if _error_counts else ""
-        if _dominant_error and _dominant_error == _prev_dominant_error:
+            _row = _dict(_r)
+            _st = _text(
+                _row.get("status") or _row.get("execution_status")
+            ).upper()
+            if _st not in {"BLOCKED", "HARNESS_FAILED", "FAILED"}:
+                continue
+            _rc = _text(
+                _row.get("reason_code")
+                or _row.get("block_reason")
+                or _row.get("failure_reason")
+            )
+            if not _rc:
+                continue
+            _error_counts[_rc] = _error_counts.get(_rc, 0) + 1
+        _dominant_error = (
+            max(_error_counts, key=_error_counts.get) if _error_counts else ""
+        )
+        # A per-batch budget leaves later rows deferred. Those later rows are new
+        # work, not a retry of the same failure, even when they share a reason
+        # code (for example many writes missing an observer). Same-error stop
+        # only applies once the batch is no longer draining deferred work.
+        _still_draining_budget = bool(
+            _list(_dict(next_batch).get("budget_deferred"))
+        )
+        if (
+            not _still_draining_budget
+            and _dominant_error
+            and _dominant_error == _prev_dominant_error
+        ):
             _same_error_streak += 1
         else:
             _same_error_streak = 0
         _prev_dominant_error = _dominant_error
         if _same_error_streak >= _SAME_ERROR_LIMIT:
-            _early_stop_reason = f"SAME_ERROR_{_SAME_ERROR_LIMIT}_CONSECUTIVE:{_dominant_error}"
-            pending_rows = [
-                dict(row)
-                for row in _list(next_plan.get("pending_next_round"))
-                if isinstance(row, dict)
-            ]
+            _early_stop_reason = (
+                f"SAME_ERROR_{_SAME_ERROR_LIMIT}_CONSECUTIVE:{_dominant_error}"
+            )
+            pending_rows = _pending_with_budget_deferred(
+                next_plan, next_batch
+            )
             plan_row = {
                 **plan_row,
                 "pending_next_round": pending_rows[:_ABS_MAX_SLICE_BUDGET],
@@ -720,11 +765,7 @@ def _consume_pending_obligation_rounds(
                 "accumulated_bindings": accumulated_bindings,
             }
             break
-        pending_rows = [
-            dict(row)
-            for row in _list(next_plan.get("pending_next_round"))
-            if isinstance(row, dict)
-        ]
+        pending_rows = _pending_with_budget_deferred(next_plan, next_batch)
         plan_row = {
             **plan_row,
             "pending_next_round": pending_rows[:_ABS_MAX_SLICE_BUDGET],

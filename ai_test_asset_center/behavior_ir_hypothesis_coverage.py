@@ -12,6 +12,7 @@ match keywords, hidden ground truth, customer names, or fixed API paths.
 
 from __future__ import annotations
 
+import collections
 import hashlib
 from typing import Any
 
@@ -1076,10 +1077,140 @@ def build_source_backed_coverage_obligations(
 # ═══════════════════════════════════════════════════════════════════
 
 
+def _request_body_schema(operation: dict[str, Any]) -> dict[str, Any]:
+    schema = operation.get("request_schema")
+    if not isinstance(schema, dict):
+        return {}
+    content = schema.get("content")
+    if isinstance(content, dict):
+        for media in content.values():
+            if isinstance(media, dict) and isinstance(media.get("schema"), dict):
+                return media["schema"]
+    return schema if isinstance(schema.get("properties"), dict) else {}
+
+
+def _declared_field_constraints(operation: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the request-field constraints the source states for this operation.
+
+    Only constraints written in the schema are returned. Each one names a rule a
+    probe can violate on purpose, so the expected rejection is the source's claim
+    rather than the harness's assumption.
+    """
+    schema = _request_body_schema(operation)
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return []
+    required = {
+        _text(name)
+        for name in (schema.get("required") if isinstance(schema.get("required"), list) else [])
+        if _text(name)
+    }
+    constraints: list[dict[str, Any]] = []
+    for name, spec in properties.items():
+        field = _text(name)
+        if not field or not isinstance(spec, dict):
+            continue
+        if field in required:
+            constraints.append({"field": field, "constraint": "required", "declared_value": True})
+        declared_type = _text(spec.get("type"))
+        if declared_type:
+            constraints.append(
+                {"field": field, "constraint": "type", "declared_value": declared_type}
+            )
+        for keyword in ("minimum", "maximum", "minLength", "maxLength", "pattern", "enum", "format"):
+            if keyword in spec:
+                constraints.append(
+                    {"field": field, "constraint": keyword, "declared_value": spec[keyword]}
+                )
+    return constraints
+
+
+# Every family this generator emits must name observers the experiment compiler
+# implements. A family absent here has no way to be observed and is not emitted.
+_MATRIX_OBSERVERS_BY_FAMILY: dict[str, list[str]] = {
+    "authorization": ["http_response", "actor_identity"],
+    "isolation": ["http_response", "resource_ownership"],
+    "validation": ["http_response", "typed_assertion"],
+    "state_integrity": ["http_response", "entity_state"],
+    "consistency": ["http_response", "entity_state"],
+    "invariant": ["http_response", "entity_state"],
+}
+
+
+def _invariant_kind(invariant: dict[str, Any]) -> str:
+    expression = invariant.get("expression")
+    if isinstance(expression, dict):
+        return _text(expression.get("kind"))
+    return _text(invariant.get("kind"))
+
+
+def _normalized_field(value: Any) -> str:
+    return "".join(ch for ch in _text(value).lower() if ch.isalnum())
+
+
+def _invariant_operation_refs(
+    invariant: dict[str, Any],
+    op_by_id: dict[str, dict[str, Any]],
+    operations: list[dict[str, Any]],
+) -> list[str]:
+    """Resolve which operations an invariant governs, from source facts only.
+
+    An explicit ``operation_refs`` wins. Otherwise the invariant's operands name
+    an entity and a field, and an operation that writes that field is one the
+    invariant constrains. Both sides come from the source, so the join adds no
+    claim of its own.
+    """
+    declared = [
+        _text(ref)
+        for ref in _list(invariant.get("operation_refs"))
+        if _text(ref) in op_by_id
+    ]
+    if declared:
+        return declared
+
+    expression = invariant.get("expression")
+    operands = _list(expression.get("operands")) if isinstance(expression, dict) else []
+    wanted_fields = {
+        _normalized_field(operand.get("field"))
+        for operand in operands
+        if isinstance(operand, dict) and _normalized_field(operand.get("field"))
+    }
+    wanted_entities = {
+        _text(operand.get("entity_ref"))
+        for operand in operands
+        if isinstance(operand, dict) and _text(operand.get("entity_ref"))
+    }
+    if not wanted_fields:
+        return []
+
+    matched: list[str] = []
+    for op in operations:
+        if _text(op.get("method")).upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
+            continue
+        op_fields = {
+            _normalized_field(name)
+            for name in [
+                *_list(op.get("affected_fields")),
+                *_list(op.get("field_dictionary")),
+                *_list(op.get("parameters")),
+            ]
+        }
+        if not op_fields & wanted_fields:
+            continue
+        op_entities = {_text(ref) for ref in _list(op.get("entity_refs")) if _text(ref)}
+        if wanted_entities and op_entities and not (op_entities & wanted_entities):
+            continue
+        op_id = _text(op.get("id"))
+        if op_id and op_id not in matched:
+            matched.append(op_id)
+    return matched
+
+
 def build_exhaustive_obligation_matrix(
     behavior_ir: dict[str, Any],
     *,
     max_obligations: int = 2000,
+    report: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Generate an exhaustive obligation matrix from Behavior IR.
 
@@ -1129,6 +1260,30 @@ def build_exhaustive_obligation_matrix(
 
     obligations: list[dict[str, Any]] = []
     seen_signatures: set[str] = set()
+    skipped: collections.Counter[str] = collections.Counter()
+
+    # (actor, operation) pairs the source actually decides. A pair the source
+    # never mentions carries no contract, so there is nothing to assert about it.
+    actor_ids = {_text(a.get("id")) for a in actors if _text(a.get("id"))}
+    decided_actor_operations: set[tuple[str, str]] = set()
+    for relation in relations:
+        if not isinstance(relation, dict):
+            continue
+        if _text(relation.get("relation_type") or relation.get("type")) not in {
+            "permits",
+            "denies",
+        }:
+            continue
+        refs = [
+            _text(relation.get(key))
+            for key in ("from_ref", "to_ref", "actor_ref", "operation_ref")
+        ]
+        for actor_ref in refs:
+            if actor_ref not in actor_ids:
+                continue
+            for op_ref in refs:
+                if op_ref in op_by_id:
+                    decided_actor_operations.add((actor_ref, op_ref))
 
     def _add_obligation(
         risk_family: str,
@@ -1143,6 +1298,15 @@ def build_exhaustive_obligation_matrix(
     ) -> None:
         if len(obligations) >= max_obligations:
             return
+        # An obligation with no observer cannot compile: the experiment compiler
+        # blocks it as BLOCKED_MISSING_OBSERVER before it ever reaches a target.
+        observers = _MATRIX_OBSERVERS_BY_FAMILY.get(risk_family)
+        if not observers:
+            skipped["unobservable_family:" + risk_family] += 1
+            return
+        if not source_refs:
+            skipped["no_source_ref:" + risk_family] += 1
+            return
         sig = _coverage_signature(risk_family, *sorted(subject_refs), *sorted(required_actors))
         if sig in seen_signatures:
             return
@@ -1155,7 +1319,7 @@ def build_exhaustive_obligation_matrix(
             "property_spec": property_spec,
             "required_actors": required_actors,
             "required_operations": required_operations,
-            "required_observers": [],
+            "required_observers": list(observers),
             "cleanup_requirement": cleanup,
             "source_refs": source_refs,
             "confidence": confidence,
@@ -1163,12 +1327,17 @@ def build_exhaustive_obligation_matrix(
         }
         obligations.append(obl)
 
-    # ── Strategy 1: Write op × each actor → authorization ──
+    # ── Strategy 1: source-decided (actor, write op) pairs → authorization ──
+    # A full cross product would assert an expectation for pairs the source never
+    # decided, which is a guess about the target rather than a contract.
     for op in write_ops:
         op_id = _text(op.get("id"))
         op_src = _list(op.get("source_refs"))
         for actor in active_actors:
             actor_id = _text(actor.get("id"))
+            if (actor_id, op_id) not in decided_actor_operations:
+                skipped["authorization_pair_not_declared"] += 1
+                continue
             actor_src = _list(actor.get("source_refs"))
             _add_obligation(
                 "authorization",
@@ -1186,26 +1355,33 @@ def build_exhaustive_obligation_matrix(
                 cleanup="required",
             )
 
-    # ── Strategy 2: Each op × boundary values → input validation ──
-    _BOUNDARY_KINDS = ["empty_body", "oversized_field", "special_characters", "negative_number", "zero_value", "null_field", "type_mismatch"]
+    # ── Strategy 2: declared request-field constraints → input validation ──
+    # A boundary probe is only a contract when the source declares the constraint
+    # it violates. A fixed list of boundary names applied to every write asserts
+    # rules the source never stated.
     for op in operations:
         op_id = _text(op.get("id"))
         method = _text(op.get("method")).upper()
         if method not in {"POST", "PUT", "PATCH"}:
             continue
         op_src = _list(op.get("source_refs"))
-        for boundary in _BOUNDARY_KINDS:
+        actor_refs = [_text(active_actors[0].get("id"))] if active_actors else []
+        for constraint in _declared_field_constraints(op):
+            field = constraint["field"]
+            kind = constraint["constraint"]
             _add_obligation(
                 "validation",
-                [op_id, f"boundary:{boundary}"],
+                [op_id, f"field:{field}", f"constraint:{kind}"],
                 {
                     "template": "input_boundary_validation",
                     "operation_ref": op_id,
                     "operation_path_prefix": _text(op.get("path")),
-                    "boundary_kind": boundary,
+                    "field": field,
+                    "declared_constraint": kind,
+                    "declared_value": constraint.get("declared_value"),
                     "_strategy": "boundary_matrix",
                 },
-                [_text(active_actors[0].get("id"))] if active_actors else [],
+                actor_refs,
                 [op_id],
                 op_src,
             )
@@ -1280,34 +1456,48 @@ def build_exhaustive_obligation_matrix(
                     ent_src + _list(actor_a.get("source_refs")) + _list(actor_b.get("source_refs")),
                 )
 
-    # ── Strategy 5: Write op × repeated submission → idempotency ──
-    for op in write_ops:
-        op_id = _text(op.get("id"))
-        method = _text(op.get("method")).upper()
-        if method not in {"POST", "PUT", "PATCH"}:
+    # ── Strategy 5: declared idempotency invariant × its operation ──
+    # A write method is not evidence that an idempotency contract exists. The
+    # source has to state one, and it has to name the operation it governs.
+    for inv in invariants:
+        if _invariant_kind(inv) != "idempotency":
             continue
-        op_src = _list(op.get("source_refs"))
-        _add_obligation(
-            "consistency",
-            [op_id, "idempotency"],
-            {
-                "template": "idempotent_write_verification",
-                "operation_ref": op_id,
-                "operation_path_prefix": _text(op.get("path")),
-                "repeat_count": 2,
-                "_strategy": "idempotency_matrix",
-            },
-            [_text(active_actors[0].get("id"))] if active_actors else [],
-            [op_id],
-            op_src,
-            cleanup="required",
-        )
+        inv_id = _text(inv.get("id"))
+        inv_src = _list(inv.get("source_refs"))
+        for op_id in _invariant_operation_refs(inv, op_by_id, operations):
+            op = op_by_id.get(op_id) or {}
+            if _text(op.get("method")).upper() not in {"POST", "PUT", "PATCH"}:
+                continue
+            _add_obligation(
+                "consistency",
+                [inv_id, op_id, "idempotency"],
+                {
+                    "template": "idempotent_write_verification",
+                    "invariant_ref": inv_id,
+                    "operation_ref": op_id,
+                    "operation_path_prefix": _text(op.get("path")),
+                    "repeat_count": 2,
+                    "_strategy": "idempotency_matrix",
+                },
+                [_text(active_actors[0].get("id"))] if active_actors else [],
+                [op_id],
+                inv_src + _list(op.get("source_refs")),
+                cleanup="required",
+            )
 
     # ── Strategy 6: Conservation relations × concurrent write → consistency ──
+    # The IR emits this relation as "conserves"; the older spellings never
+    # matched anything, so this strategy silently produced nothing.
     for rel in relations:
         rel_id = _text(rel.get("id"))
         rel_type = _text(rel.get("type") or rel.get("relation_type")).lower()
-        if rel_type not in {"conservation", "balance", "sum_constraint", "invariant_bound"}:
+        if rel_type not in {
+            "conserves",
+            "conservation",
+            "balance",
+            "sum_constraint",
+            "invariant_bound",
+        }:
             continue
         rel_src = _list(rel.get("source_refs"))
         rel_ops = [_text(r) for r in _list(rel.get("operation_refs")) if _text(r)]
@@ -1332,13 +1522,19 @@ def build_exhaustive_obligation_matrix(
             cleanup="required",
         )
 
-    # ── Strategy 7: Invariant × violating operation → invariant check ──
+    # ── Strategy 7: Invariant × the operation that can violate it ──
+    # An invariant with no operation cannot be exercised: there is nothing to
+    # send. Those are reported as a coverage gap instead of becoming an
+    # obligation that is certain to block.
     for inv in invariants:
         inv_id = _text(inv.get("id"))
         if not inv_id:
             continue
         inv_src = _list(inv.get("source_refs"))
-        inv_ops = [_text(r) for r in _list(inv.get("operation_refs")) if _text(r)]
+        inv_ops = _invariant_operation_refs(inv, op_by_id, operations)
+        if not inv_ops:
+            skipped["invariant_not_bound_to_operation"] += 1
+            continue
         _add_obligation(
             "invariant",
             [inv_id],
@@ -1346,6 +1542,7 @@ def build_exhaustive_obligation_matrix(
                 "template": "invariant_violation_detection",
                 "invariant_ref": inv_id,
                 "operation_refs": inv_ops,
+                "invariant_kind": _invariant_kind(inv),
                 "_strategy": "invariant_matrix",
             },
             [_text(active_actors[0].get("id"))] if active_actors else [],
@@ -1353,5 +1550,8 @@ def build_exhaustive_obligation_matrix(
             inv_src,
         )
 
+    if report is not None:
+        report["matrix_skipped"] = dict(skipped)
+        report["matrix_skipped_total"] = sum(skipped.values())
     return obligations
 
