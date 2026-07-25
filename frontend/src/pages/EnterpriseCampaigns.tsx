@@ -242,7 +242,6 @@ export function EnterpriseCampaigns() {
         </div>
         <div className="settings-actions">
           <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/settings', project)}>前往项目设置</button>
-          <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/materials', project)}>前往企业资料</button>
         </div>
       </div>
 
@@ -267,7 +266,7 @@ export function EnterpriseCampaigns() {
           </ul>
           <div className="settings-actions">
             <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/settings', project)}>补齐服务与鉴权</button>
-            <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/materials', project)}>补齐企业资料</button>
+            <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/settings', project)}>补齐企业资料</button>
             <button type="button" className="btn btn-secondary" onClick={() => void refreshContext()} disabled={loadingPreflight}>重新检查</button>
           </div>
         </section>

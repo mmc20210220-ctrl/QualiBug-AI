@@ -5,16 +5,11 @@ import { ScrollToTop } from './components/ScrollToTop';
 import { isAuthenticated } from './api/client';
 import { DashboardRegressionGuard } from './pages/DashboardRegressionGuard';
 import { Findings } from './pages/Findings';
-import { InternalClues } from './pages/InternalClues';
 import { EvidenceChain } from './pages/EvidenceChain';
-import { BehaviorSpace } from './pages/BehaviorSpace';
-import { TestTasks } from './pages/TestTasks';
-import { CoverageMatrix } from './pages/CoverageMatrix';
-import { EnterpriseMaterials } from './pages/EnterpriseMaterials';
-import { EnterpriseCampaigns } from './pages/EnterpriseCampaigns';
 import { ReleaseGate } from './pages/ReleaseGate';
+import { EnterpriseCampaigns } from './pages/EnterpriseCampaigns';
+import { CoverageMatrix } from './pages/CoverageMatrix';
 import { Settings } from './pages/Settings';
-import { Products } from './pages/Products';
 import { Login } from './pages/Login';
 
 function RequireAuth() {
@@ -36,18 +31,22 @@ export default function App() {
           <Route element={<RequireAuth />}>
             <Route element={<Layout />}>
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
+              {/* 成果面 */}
               <Route path="/dashboard" element={<DashboardRegressionGuard />} />
               <Route path="/findings" element={<Findings />} />
-              <Route path="/clues" element={<InternalClues />} />
               <Route path="/evidence" element={<EvidenceChain />} />
-              <Route path="/behavior-space" element={<BehaviorSpace />} />
-              <Route path="/test-tasks" element={<TestTasks />} />
-              <Route path="/coverage" element={<CoverageMatrix />} />
-              <Route path="/materials" element={<EnterpriseMaterials />} />
-              <Route path="/campaigns" element={<EnterpriseCampaigns />} />
               <Route path="/release" element={<ReleaseGate />} />
+              {/* 执行面 */}
+              <Route path="/campaigns" element={<EnterpriseCampaigns />} />
+              <Route path="/coverage" element={<CoverageMatrix />} />
+              {/* 配置 */}
               <Route path="/settings" element={<Settings />} />
-              <Route path="/products" element={<Products />} />
+              {/* 向后兼容重定向 */}
+              <Route path="/behavior-space" element={<Navigate to="/coverage" replace />} />
+              <Route path="/test-tasks" element={<Navigate to="/campaigns" replace />} />
+              <Route path="/materials" element={<Navigate to="/settings" replace />} />
+              <Route path="/clues" element={<Navigate to="/settings" replace />} />
+              <Route path="/products" element={<Navigate to="/dashboard" replace />} />
             </Route>
           </Route>
         </Routes>

@@ -1,0 +1,125 @@
+/* ═══ Findings 问题清单 — 专用样式 ═══ */
+
+/* 筛选栏 */
+.finding-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+.finding-filter-bar select,
+.finding-filter-bar input {
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  font-size: 12.5px;
+  background: var(--surface-2);
+  color: var(--ink);
+  transition: border-color var(--duration-fast);
+}
+.finding-filter-bar select:focus,
+.finding-filter-bar input:focus {
+  border-color: var(--primary);
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.finding-filter-bar input {
+  flex: 1;
+  min-width: 160px;
+}
+.finding-filter-count {
+  font-size: 12px;
+  color: var(--muted);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+/* Finding 卡片增强 */
+.finding-card {
+  transition: transform var(--duration-fast) var(--ease-out),
+              box-shadow var(--duration-fast) var(--ease-out);
+}
+.finding-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-medium);
+}
+
+/* 证据抽屉 */
+.evidence-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10,18,32,.4);
+  backdrop-filter: blur(4px);
+  z-index: 1000;
+  animation: fade-in var(--duration-fast) var(--ease-out);
+}
+.evidence-drawer-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(560px, 90vw);
+  background: var(--surface);
+  box-shadow: var(--shadow-lifted);
+  z-index: 1001;
+  overflow-y: auto;
+  padding: 28px 24px;
+  animation: drawer-in var(--duration-normal) var(--ease-out);
+}
+.evidence-drawer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 20px;
+}
+.evidence-drawer-close {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 16px;
+  transition: background var(--duration-fast);
+}
+.evidence-drawer-close:hover {
+  background: var(--danger-muted);
+  color: var(--danger);
+}
+
+/* 回归状态标签 */
+.regression-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.regression-badge.pending { background: var(--warning-muted); color: var(--warning); }
+.regression-badge.passed { background: var(--success-muted); color: var(--success); }
+.regression-badge.failed { background: var(--danger-muted); color: var(--danger); }
+
+/* 响应式 */
+@media (max-width: 640px) {
+  .finding-filter-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .finding-filter-count {
+    margin-left: 0;
+    text-align: center;
+  }
+  .evidence-drawer-panel {
+    width: 100vw;
+    padding: 20px 16px;
+  }
+}

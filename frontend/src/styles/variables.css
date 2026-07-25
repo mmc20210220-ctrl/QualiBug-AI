@@ -1,0 +1,67 @@
+/* ═══ 设计令牌 — Design Tokens ═══
+   全局 CSS 变量，所有模块共享 */
+
+:root {
+  /* 色彩 */
+  --ink: #0a1220;
+  --muted: #5b6b82;
+  --subtle: #8b9bb0;
+  --bg: #edf2f7;
+  --surface: #fff;
+  --surface-2: #f7fafc;
+  --line: #d7e0ea;
+
+  /* 品牌色 */
+  --primary: #1f4fd8;
+  --primary-bright: #2f6bff;
+  --primary-muted: #eef3ff;
+
+  /* 语义色 */
+  --success: #0c9a6a;
+  --success-muted: #ecfdf5;
+  --warning: #c9780a;
+  --warning-muted: #fff8eb;
+  --danger: #d91f45;
+  --danger-muted: #fff1f3;
+
+  /* 侧边栏 */
+  --side-bg: #0a1422;
+  --side-text: #9fb0c8;
+  --side-active: #e8eefc;
+
+  /* 圆角 */
+  --radius: 18px;
+  --radius-sm: 12px;
+  --radius-xs: 8px;
+
+  /* 字体 */
+  --font: "DM Sans", "Instrument Sans", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+  --font-display: "Instrument Sans", "DM Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "SF Mono", monospace;
+
+  /* 阴影 */
+  --focus-ring: 0 0 0 3px rgba(31,79,216,.28);
+  --shadow-soft: 0 12px 32px rgba(10, 18, 32, .06);
+  --shadow-medium: 0 18px 44px rgba(10, 18, 32, .10);
+  --shadow-lifted: 0 24px 64px rgba(10, 18, 32, .14);
+
+  /* 动效 */
+  --ease-out: cubic-bezier(.22, 1, .36, 1);
+  --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+  --duration-fast: 150ms;
+  --duration-normal: 250ms;
+  --duration-slow: 400ms;
+
+  /* 间距 */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+
+  /* 响应式断点 (仅做参考，CSS 中直接使用数值) */
+  /* mobile: < 640px */
+  /* tablet: 640px - 1024px */
+  /* desktop: > 1024px */
+}

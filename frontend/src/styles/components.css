@@ -1,0 +1,137 @@
+/* ═══ 通用组件 — Shared Components ═══ */
+
+/* 按钮系统 */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 18px;
+  border-radius: var(--radius-xs);
+  font-size: 13px;
+  font-weight: 600;
+  transition: all var(--duration-fast) var(--ease-out);
+  white-space: nowrap;
+}
+.btn:active { transform: scale(.97); }
+.btn-primary {
+  background: var(--primary);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(31,79,216,.25);
+}
+.btn-primary:hover { background: var(--primary-bright); box-shadow: 0 4px 16px rgba(31,79,216,.3); }
+.btn-primary:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+.btn-secondary {
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+.btn-secondary:hover { border-color: var(--primary); color: var(--primary); background: var(--primary-muted); }
+.btn-ghost {
+  background: transparent;
+  color: var(--muted);
+  padding: 6px 12px;
+}
+.btn-ghost:hover { color: var(--primary); background: var(--primary-muted); }
+
+/* 卡片 */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 24px;
+  box-shadow: var(--shadow-soft);
+}
+
+/* 严重度色条 */
+.severity-bar {
+  width: 4px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.severity-bar.p0 { background: var(--danger); }
+.severity-bar.p1 { background: var(--warning); }
+.severity-bar.p2 { background: var(--primary); }
+.severity-bar.p3 { background: var(--subtle); }
+
+/* 严重度标签 */
+.severity-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: .03em;
+}
+.severity-tag.p0 { background: var(--danger-muted); color: var(--danger); }
+.severity-tag.p1 { background: var(--warning-muted); color: var(--warning); }
+.severity-tag.p2 { background: var(--primary-muted); color: var(--primary); }
+
+/* 状态面板 */
+.state-panel {
+  text-align: center;
+  padding: 60px 24px;
+}
+.state-panel h2 { margin-bottom: 8px; }
+.state-panel p { color: var(--muted); font-size: 13px; max-width: 400px; margin: 0 auto; }
+
+/* 加载动画 */
+.spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--line);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.spinner-centered { margin: 0 auto 12px; }
+
+/* 摘要指标条 */
+.page-summary-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.summary-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+.summary-pill.strong { background: var(--primary-muted); color: var(--primary); border-color: transparent; }
+
+/* 工具类 */
+.mb-4 { margin-bottom: 24px; }
+.mt-3 { margin-top: 16px; }
+.muted { color: var(--muted); }
+.text-sm { font-size: 12px; }
+.text-xs { font-size: 11px; }
+.font-mono { font-family: var(--font-mono); }
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 空状态 */
+.empty-state {
+  text-align: center;
+  padding: 48px 24px;
+  color: var(--muted);
+}
+.empty-state-icon {
+  font-size: 36px;
+  margin-bottom: 12px;
+  opacity: .5;
+}
+
+/* 响应式 */
+@media (max-width: 640px) {
+  .btn { padding: 8px 14px; font-size: 12.5px; }
+  .card { padding: 16px; }
+  .page-summary-strip { gap: 6px; }
+}

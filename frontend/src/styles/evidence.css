@@ -1,0 +1,156 @@
+/* ═══ Evidence 证据中心 — 专用样式 ═══ */
+
+/* 左右分栏布局 */
+.evidence-split-layout {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 20px;
+  min-height: 60vh;
+}
+
+/* 左侧证据列表 */
+.evidence-list-panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px;
+  overflow-y: auto;
+  max-height: calc(100vh - 160px);
+  position: sticky;
+  top: 80px;
+}
+.evidence-list-item {
+  padding: 12px 14px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: background var(--duration-fast), border-color var(--duration-fast);
+  border: 1px solid transparent;
+  margin-bottom: 6px;
+}
+.evidence-list-item:hover {
+  background: var(--surface-2);
+}
+.evidence-list-item.active {
+  background: var(--primary-muted);
+  border-color: var(--primary);
+}
+.evidence-list-item .item-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  margin-bottom: 4px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.evidence-list-item .item-meta {
+  font-size: 11px;
+  color: var(--muted);
+  display: flex;
+  gap: 8px;
+}
+
+/* 右侧详情面板 */
+.evidence-detail-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.evidence-detail-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 20px 24px;
+}
+.evidence-detail-card h3 {
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* HAR 回放器 */
+.replay-panel {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.replay-entry {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  margin-bottom: 8px;
+  background: var(--surface-2);
+}
+.replay-entry .method {
+  font-weight: 700;
+  color: var(--primary);
+}
+.replay-entry .status-ok { color: var(--success); font-weight: 700; }
+.replay-entry .status-err { color: var(--danger); font-weight: 700; }
+.replay-entry .url {
+  color: var(--muted);
+  word-break: break-all;
+  margin-top: 2px;
+}
+
+/* 时间线 */
+.evidence-timeline {
+  position: relative;
+  padding-left: 24px;
+}
+.evidence-timeline::before {
+  content: '';
+  position: absolute;
+  left: 8px;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  background: var(--line);
+  border-radius: 1px;
+}
+.timeline-node {
+  position: relative;
+  padding: 8px 0 16px;
+}
+.timeline-node::before {
+  content: '';
+  position: absolute;
+  left: -20px;
+  top: 12px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--primary);
+  border: 2px solid var(--surface);
+  box-shadow: 0 0 0 2px var(--primary-muted);
+}
+.timeline-node.success::before { background: var(--success); box-shadow: 0 0 0 2px var(--success-muted); }
+.timeline-node.danger::before { background: var(--danger); box-shadow: 0 0 0 2px var(--danger-muted); }
+.timeline-node .node-time {
+  font-size: 10.5px;
+  color: var(--subtle);
+  margin-bottom: 2px;
+}
+.timeline-node .node-label {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+/* 响应式 */
+@media (max-width: 1024px) {
+  .evidence-split-layout {
+    grid-template-columns: 1fr;
+  }
+  .evidence-list-panel {
+    position: static;
+    max-height: 240px;
+  }
+}
+
+@media (max-width: 640px) {
+  .evidence-detail-card {
+    padding: 16px;
+  }
+}
