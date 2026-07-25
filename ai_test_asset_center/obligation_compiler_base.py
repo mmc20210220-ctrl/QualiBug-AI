@@ -565,15 +565,9 @@ def _cleanup_requirement(
             requirement["mode"] = "reverse_order"
             return requirement
 
-    # ── Best-effort cleanup fallback ──
-    # When no explicit compensates, DELETE, or snapshot-restore path exists,
-    # do NOT block the obligation. The per-run DB reset provides overall
-    # cleanup. Individual operation cleanup is best-effort only — the core
-    # bug discovery capability must not be gated on cleanup availability.
-    if requirement["required"] and not requirement.get("operation_ref"):
-        requirement["required"] = False
-        requirement["mode"] = "best_effort_db_reset"
-
+    # A write with no compensator keeps required=True and no operation_ref, so
+    # the obligation stays blocked. A per-run database reset is not a governed
+    # cleanup receipt for the individual write and cannot stand in for one.
     return requirement
 
 

@@ -1,7 +1,7 @@
 {
   "schema_version": "qualibug.regression-gate-baseline.v1",
   "note": "Tests known to fail. This set may only shrink. Regenerate with `python tools/regression_gate.py --update` after a real fix.",
-  "known_failure_count": 52,
+  "known_failure_count": 46,
   "known_failures": [
     "tests/test_architecture_extraction_contracts.py::test_extracted_modules_remain_under_architecture_budget_threshold",
     "tests/test_behavior_ir_obligation_experiment.py::test_adaptive_planner_risk_priority_comes_from_runtime_policy_data",
@@ -28,12 +28,6 @@
     "tests/test_enterprise_knowledge_center_parsing.py::test_parse_source_separates_forbidden_from_allowed_state_transitions",
     "tests/test_enterprise_knowledge_center_parsing.py::test_permission_scope_extracts_own_and_other_owner_from_narrative",
     "tests/test_enterprise_knowledge_center_parsing.py::test_permission_table_rows_are_explicit_grants_and_keep_narrative_denials",
-    "tests/test_entity_effect_and_snapshot_cleanup.py::test_cleanup_does_not_infer_recreation_for_delete_without_source_relation",
-    "tests/test_entity_effect_and_snapshot_cleanup.py::test_cleanup_does_not_treat_permits_relation_as_no_entity_effect",
-    "tests/test_entity_effect_and_snapshot_cleanup.py::test_cleanup_keeps_entity_producing_write_required_without_compensator",
-    "tests/test_entity_effect_and_snapshot_cleanup.py::test_cleanup_keeps_post_action_with_terminal_body_field_unschedulable",
-    "tests/test_entity_effect_and_snapshot_cleanup.py::test_cleanup_keeps_uncompensated_action_post_unschedulable",
-    "tests/test_entity_effect_and_snapshot_cleanup.py::test_cleanup_rejects_collection_delete_as_create_compensator",
     "tests/test_experiment_conflict_scope.py::test_permission_conflict_scoped_only_by_same_role_remains_fail_closed",
     "tests/test_experiment_conflict_scope.py::test_unscoped_conflict_remains_global_fail_closed",
     "tests/test_family_experiment_protocols.py::test_validation_write_blocks_without_source_observation_path",
