@@ -10,7 +10,10 @@ from collections.abc import Callable
 from typing import Any
 
 from .command_center_delivery_contract import normalize_command_center_delivery
-from .customer_delivery_gate import split_customer_delivery_tracks as _partition_delivery_tracks
+# The v1 field-inspection gate is deliberately NOT imported here. The envelope
+# normalizes an already-published payload; re-partitioning it would be a second
+# delivery authority. See command_center_delivery_contract for why re-judging
+# receipt-backed rows on v1 display fields zeroes every real result.
 from .private_pilot_command_center_helpers import (
     _annotate_ui_risk_item,
     _build_internal_clue_contract,
@@ -64,15 +67,28 @@ def _normalize_command_center_envelope_base(payload: dict[str, Any]) -> dict[str
 
     raw_defects = data.get("defects")
     raw_clues = data.get("clues")
-    legacy_risks = data.get("risks") if isinstance(data.get("risks"), list) else []
     commercial_assets = _select_commercial_assets(data.get("commercial_assets"), data.get("external_commercial_assets"))
 
     if isinstance(raw_defects, list) or isinstance(raw_clues, list):
         defects = [item for item in (raw_defects if isinstance(raw_defects, list) else []) if _keep_customer_risk(item)]
         clues = [item for item in (raw_clues if isinstance(raw_clues, list) else []) if _keep_customer_risk(item)]
     else:
-        legacy_items = [item for item in legacy_risks if _keep_customer_risk(item)]
-        defects, clues = _partition_delivery_tracks(legacy_items)
+        # Fail closed. This branch previously partitioned the legacy `data.risks`
+        # alias through the v1 field gate, which is a second delivery authority
+        # deriving customer defects from a compatibility alias. It is unreachable
+        # while normalize_command_center_delivery always emits lists, but leaving it
+        # meant the first payload-shape change would silently re-introduce v1
+        # gating. Publishing nothing and saying so is the correct answer when the
+        # authoritative lists are absent.
+        defects = []
+        clues = []
+        authority = data.get("delivery_authority")
+        if not isinstance(authority, dict):
+            authority = {}
+            data["delivery_authority"] = authority
+        authority["status"] = "UNVERIFIABLE"
+        authority.setdefault("empty_means", "AUTHORITY_UNVERIFIABLE")
+        authority["authority_reason"] = "envelope_delivery_lists_missing"
     defects = [_annotate_ui_risk_item(dict(item)) for item in defects if isinstance(item, dict)]
     clues = [_annotate_ui_risk_item(dict(item)) for item in clues if isinstance(item, dict)]
     ui_stats = _ui_verification_stats(defects + clues)
