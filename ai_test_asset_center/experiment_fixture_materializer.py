@@ -576,6 +576,40 @@ def materialize_experiment_fixtures(
                                         entity = v[1:-4]
                                         if entity in prereq_ids:
                                             dep_body[k] = prereq_ids[entity]
+                                # Observation path for the governed write.
+                                #
+                                # This used to pass observation_path="" unconditionally, and
+                                # execute_governed_control_write refuses any observation_path
+                                # that does not start with "/" -- so EVERY prerequisite-chain
+                                # write was blocked before transport with
+                                # http_attempt_count 0. The chain has never executed.
+                                #
+                                # The refusal is right: a governed write needs a before/after
+                                # observation to prove reversibility. The caller was wrong to
+                                # pass nothing. Observe the collection being written to, the
+                                # same thing the fixture-setup block below does for the same
+                                # reason.
+                                _dep_path = _text(step.get("path"))
+                                _dep_observation = (
+                                    _dep_path
+                                    if _dep_path.startswith("/")
+                                    and not path_has_placeholders(_dep_path)
+                                    else ""
+                                )
+                                if not _dep_observation:
+                                    # No observable collection, so this write cannot produce
+                                    # reversibility evidence. Record it -- the old code fell
+                                    # through silently, leaving prereq_ids empty and the
+                                    # <entity_id> placeholders unresolved with no trace.
+                                    fixture_receipts.append({
+                                        "node_id": f"prerequisite:{_text(step.get('entity'))}",
+                                        "kind": "prerequisite_chain",
+                                        "status": "blocked",
+                                        "blocked_reason":
+                                            "prerequisite_observation_path_not_source_declared",
+                                        "path": _dep_path,
+                                    })
+                                    continue
                                 dep_result = execute_governed_control_write(
                                     root=root, project=project,
                                     base_url=base_url,
@@ -587,7 +621,7 @@ def materialize_experiment_fixtures(
                                     method=step["method"],
                                     path=step["path"],
                                     body=dep_body,
-                                    observation_path="",
+                                    observation_path=_dep_observation,
                                 )
                                 dep_write = _dict(dep_result.get("write", {}))
                                 dep_status = int(dep_write.get("status") or 0)
@@ -596,6 +630,27 @@ def materialize_experiment_fixtures(
                                     rid = extract_resource_id(dep_write.get("body"), step["entity"])
                                     if rid:
                                         prereq_ids[step["entity"]] = rid
+                                    else:
+                                        fixture_receipts.append({
+                                            "node_id": f"prerequisite:{_text(step.get('entity'))}",
+                                            "kind": "prerequisite_chain",
+                                            "status": "blocked",
+                                            "blocked_reason":
+                                                "prerequisite_resource_id_not_extractable",
+                                        })
+                                else:
+                                    # A prerequisite that did not succeed leaves every later
+                                    # step's <entity_id> placeholder unresolved. Silence here
+                                    # is what made the whole chain look like it worked.
+                                    fixture_receipts.append({
+                                        "node_id": f"prerequisite:{_text(step.get('entity'))}",
+                                        "kind": "prerequisite_chain",
+                                        "status": "blocked",
+                                        "blocked_reason": (
+                                            "prerequisite_write_not_accepted:"
+                                            f"{dep_status or _text(_dict(dep_result).get('reason'))}"
+                                        ),
+                                    })
                             # Apply resolved IDs to setup_body
                             for k, v in list(setup_body.items()):
                                 if isinstance(v, str) and v.startswith("<") and v.endswith("_id>"):
