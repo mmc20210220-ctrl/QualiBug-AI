@@ -421,20 +421,59 @@ def build_reproduction_receipt(
         phase = _text(step.get("phase"))
         if phase not in {"control", "treatment"}:
             continue
-        try:
-            status_code = int(step.get("status_code") or 0)
-        except (TypeError, ValueError):
-            # Skip steps without valid HTTP status codes
-            continue
+        # THE FIFTH LINK.
+        #
+        # This loop used to require an HTTP shape unconditionally: a positive
+        # status_code as the proof of execution, and a path_template as the request
+        # identity. That made the delivery gate a second, unnamed ceiling on top of the
+        # four-link chain -- a defect on a database, message-queue, rendered-view or
+        # timing surface could have a complete obligation family, assertion kind,
+        # observer and protocol, produce valid receipts, and still be structurally
+        # incapable of becoming customer-deliverable, because its reproduction receipt
+        # could not be built.
+        #
+        # The response side was already adapter-tolerant (db_snapshot is accepted as
+        # evidence), so only the request side was blocking.
+        #
+        # Generalized by branching on the step's declared adapter. The http_api path is
+        # byte-identical -- same required fields, same fingerprint composition -- because
+        # changing the composition would invalidate every sealed receipt already on disk.
+        # A non-http step must supply an equally strong identity: its adapter, an
+        # operation_ref, an operation_locator standing in for path_template, and an
+        # explicit invocation_outcome standing in for the status code. Nothing is
+        # inferred and nothing is optional; a step that cannot state its identity is
+        # still skipped or refused exactly as before.
+        adapter = _text(step.get("adapter")) or "http_api"
+        is_http_step = adapter == "http_api"
+
         observation_receipt_id = _text(step.get("observation_receipt_id"))
-        if not observation_receipt_id:
-            raise DeliveryGateV2Error(
-                "reproduction_observation_receipt_missing"
-            )
-        if status_code <= 0:
-            # Skip steps without actual HTTP execution
-            continue
+        if is_http_step:
+            try:
+                status_code = int(step.get("status_code") or 0)
+            except (TypeError, ValueError):
+                # Skip steps without valid HTTP status codes
+                continue
+            if not observation_receipt_id:
+                raise DeliveryGateV2Error(
+                    "reproduction_observation_receipt_missing"
+                )
+            if status_code <= 0:
+                # Skip steps without actual HTTP execution
+                continue
+        else:
+            status_code = 0
+            if not observation_receipt_id:
+                raise DeliveryGateV2Error(
+                    "reproduction_observation_receipt_missing"
+                )
+            # An adapter-neutral step proves execution with an explicit outcome rather
+            # than a status code. Absent outcome means the step never ran, which is the
+            # same condition the status_code <= 0 skip covers for HTTP.
+            if not _text(step.get("invocation_outcome")):
+                continue
+
         path_template = _text(step.get("path_template"))
+        operation_locator = _text(step.get("operation_locator")) or path_template
         request_body_fingerprint = _text(step.get("request_body_fingerprint"))
         request_semantics_fingerprint = _text(
             step.get("request_semantics_fingerprint")
@@ -442,8 +481,11 @@ def build_reproduction_receipt(
         mutation_class = _text(step.get("mutation_class"))
         mutation_selector = _text(step.get("mutation_selector"))
         mutation_operator = _text(step.get("mutation_operator"))
+        _identity_present = path_template if is_http_step else (
+            operation_locator and _text(step.get("operation_ref"))
+        )
         if (
-            not path_template
+            not _identity_present
             or not mutation_class
             or not _is_sha256(request_body_fingerprint)
             or not _is_sha256(request_semantics_fingerprint)
@@ -451,20 +493,34 @@ def build_reproduction_receipt(
             raise DeliveryGateV2Error(
                 "reproduction_request_semantics_missing"
             )
-        expected_request_semantics = _fingerprint({
-            "operation_ref": _text(step.get("operation_ref")),
-            "method": _text(step.get("method")).upper(),
-            "path_template": path_template,
-            "mutation_class": mutation_class,
-            "mutation_selector": mutation_selector,
-            "mutation_operator": mutation_operator,
-            "request_body_fingerprint": request_body_fingerprint,
-        })
+        if is_http_step:
+            # Unchanged composition. Do not add fields here: every sealed receipt on
+            # disk was fingerprinted with exactly these seven.
+            expected_request_semantics = _fingerprint({
+                "operation_ref": _text(step.get("operation_ref")),
+                "method": _text(step.get("method")).upper(),
+                "path_template": path_template,
+                "mutation_class": mutation_class,
+                "mutation_selector": mutation_selector,
+                "mutation_operator": mutation_operator,
+                "request_body_fingerprint": request_body_fingerprint,
+            })
+        else:
+            expected_request_semantics = _fingerprint({
+                "adapter": adapter,
+                "operation_ref": _text(step.get("operation_ref")),
+                "operation_locator": operation_locator,
+                "invocation_outcome": _text(step.get("invocation_outcome")),
+                "mutation_class": mutation_class,
+                "mutation_selector": mutation_selector,
+                "mutation_operator": mutation_operator,
+                "request_body_fingerprint": request_body_fingerprint,
+            })
         if request_semantics_fingerprint != expected_request_semantics:
             raise DeliveryGateV2Error(
                 "reproduction_request_semantics_fingerprint_invalid"
             )
-        summaries.append({
+        summary = {
             "phase": phase,
             "step_id": _text(step.get("step_id")),
             "actor_ref": _text(step.get("actor_ref")),
@@ -480,7 +536,18 @@ def build_reproduction_receipt(
             "mutation_selector": mutation_selector,
             "mutation_operator": mutation_operator,
             "response_fingerprint": _fingerprint(step.get("body")),
-        })
+        }
+        if not is_http_step:
+            # Added ONLY for a non-http step. The reproduction receipt is sealed, and
+            # validate_customer_delivery_gate_bundle rebuilds it and demands byte
+            # equality, so adding these keys unconditionally would break replay of every
+            # artifact already on disk. An http step's summary therefore stays exactly as
+            # it was, while a non-http step carries the identity that makes it
+            # reproducible at all.
+            summary["adapter"] = adapter
+            summary["operation_locator"] = operation_locator
+            summary["invocation_outcome"] = _text(step.get("invocation_outcome"))
+        summaries.append(summary)
     phases = {_text(value.get("phase")) for value in summaries}
     execution_observation_ids = set(execution["observation_receipt_ids"])
     if any(
