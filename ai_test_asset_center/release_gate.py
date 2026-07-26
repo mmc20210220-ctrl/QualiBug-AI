@@ -30,6 +30,178 @@ def _confirmed_findings(value: Any) -> list[dict[str, Any]]:
     return results
 
 
+# Customer-facing copy for every receipt-backed readiness blocker.
+#
+# Derived from the emitting code in
+# discovery_quality_projection.build_run_delivery_readiness_projection, not from a
+# guess: tests/test_release_gate_checks.py asserts every literal code appended there
+# has an entry here, so the two cannot drift.
+#
+# Industry-neutral by contract: each line describes verification state, never a domain
+# entity. None of them may imply a clean target.
+_READINESS_CHECK_COPY: dict[str, tuple[str, str]] = {
+    "PIPELINE_HEALTH_MISSING": (
+        "执行管线健康度",
+        "缺少管线健康度回执，无法判断本次运行是否可信。",
+    ),
+    "ATTEMPT_LEDGER_MISSING": (
+        "义务尝试台账",
+        "缺少义务尝试台账，本次运行的完成情况无法核对。",
+    ),
+    "ATTEMPT_LEDGER_INCOMPLETE": (
+        "义务尝试台账",
+        "义务尝试台账不完整，存在没有终态回执的义务。",
+    ),
+    "ATTEMPT_LEDGER_IDENTITY_MISSING": (
+        "义务尝试台账身份",
+        "台账缺少运行身份绑定，无法证明这些尝试属于本次运行。",
+    ),
+    "MAINLINE_RUN_MISSING": (
+        "发现主线运行合同",
+        "缺少主线运行合同，本次运行的结论无法绑定到可验证的权威。",
+    ),
+    "MAINLINE_AUTHORITY_IDENTITY_MISSING": (
+        "发现主线权威身份",
+        "主线权威身份或合同指纹缺失，运行结论不可追溯。",
+    ),
+    "ZERO_SELECTED_OBLIGATIONS": (
+        "测试义务选取",
+        "本次运行没有选中任何测试义务；空结果不代表目标无缺陷。",
+    ),
+    "ALL_OBLIGATIONS_BLOCKED": (
+        "测试义务可执行性",
+        "全部测试义务被阻断，没有任何行为被真实验证；空结果不代表目标无缺陷。",
+    ),
+    "NO_REAL_EXECUTION": (
+        "真实执行证据",
+        "没有产生任何目标请求回执，本次运行没有真实执行证据。",
+    ),
+    "PARTIAL_OBLIGATION_EXECUTION": (
+        "测试义务执行完整性",
+        "仅部分测试义务完成执行，未执行部分的行为空间没有被验证。",
+    ),
+    "COVERAGE_GAPS_REMAIN": (
+        "行为空间覆盖缺口",
+        "仍存在未闭合的覆盖缺口，缺口范围内的缺陷既未证实也未排除。",
+    ),
+    "CLEANUP_FAILURE": (
+        "受治理写入清理",
+        "存在清理失败，目标环境可能残留测试数据。",
+    ),
+    "FORMAL_COUNT_PROJECTION_MISSING": (
+        "正式交付计数投射",
+        "缺少正式交付计数投射，可交付缺陷数量无法核对。",
+    ),
+    "FORMAL_DELIVERY_AUTHORITY_NOT_VERIFIED": (
+        "交付权威可验证性",
+        "正式交付权威无法重新推导，本次运行不能证明任何可交付缺陷。",
+    ),
+    "CUSTOMER_OUTPUTS_NOT_PUBLISHED": (
+        "客户输出发布状态",
+        "本次运行的客户输出未发布（回放 / 影子运行不对外发布）。",
+    ),
+}
+
+# Pipeline reason codes are generated as f"PIPELINE_{status}", so the tail is
+# open-ended and cannot be enumerated. Handled by prefix rather than defaulted, so a
+# new pipeline status still gets a named check instead of a raw code.
+_PIPELINE_CODE_PREFIX = "PIPELINE_"
+
+
+def _readiness_check_copy(code: str) -> tuple[str, str]:
+    """Named copy for a reason code, or an explicit unknown -- never a silent generic."""
+    if code in _READINESS_CHECK_COPY:
+        return _READINESS_CHECK_COPY[code]
+    if code.startswith(_PIPELINE_CODE_PREFIX):
+        state = code[len(_PIPELINE_CODE_PREFIX):].replace("_", " ").lower() or "unknown"
+        return (
+            "执行管线健康度",
+            f"发现管线状态为 {state}，本次运行的结论不可作为发布依据。",
+        )
+    return (
+        code,
+        "该项阻断由发现运行回执判定；本条尚无产品化说明文案，详见 reason_codes。",
+    )
+
+
+def _readiness_check_rows(readiness: dict[str, Any]) -> list[dict[str, Any]]:
+    """Turn the receipt-backed readiness verdict into explicit, named checks.
+
+    Every row is derived from run_delivery_readiness, never from finding counts. That
+    distinction matters: the browser used to synthesize five checks from the finding
+    list, so a run that published nothing rendered "无 P0 缺陷 ✓" and a permanently
+    green "DB 验证" row driven by a key the backend never emits. An unmeasured check
+    is ``pending`` here, never ``pass`` — absence of evidence is not evidence of
+    absence.
+    """
+
+    rows: list[dict[str, Any]] = []
+    status = _text(readiness.get("status")).upper()
+    release_ready = bool(readiness.get("release_ready"))
+
+    for code in _list(readiness.get("reason_codes")):
+        normalized = _text(code)
+        if not normalized:
+            continue
+        label, detail = _readiness_check_copy(normalized)
+        rows.append({
+            "name": label,
+            "status": "fail",
+            "detail": detail,
+            "code": normalized,
+            "source": "run_delivery_readiness",
+        })
+
+    executed = readiness.get("executed_obligation_count")
+    selected = readiness.get("selected_obligation_count")
+    if isinstance(executed, int) and isinstance(selected, int) and selected > 0:
+        rows.append({
+            "name": "测试义务执行率",
+            "status": "pass" if executed >= selected else "pending",
+            "detail": f"{executed}/{selected} 个测试义务完成终态执行。",
+            "code": "OBLIGATION_EXECUTION_RATIO",
+            "source": "run_delivery_readiness",
+        })
+
+    cleanup_failures = readiness.get("cleanup_failure_count")
+    if isinstance(cleanup_failures, int):
+        rows.append({
+            "name": "受治理写入清理",
+            "status": "pass" if cleanup_failures == 0 else "fail",
+            "detail": (
+                "所有受治理写入均已产出清理回执。"
+                if cleanup_failures == 0
+                else f"{cleanup_failures} 项清理失败，目标环境可能残留测试数据。"
+            ),
+            "code": "CLEANUP_RECEIPTS",
+            "source": "run_delivery_readiness",
+        })
+
+    published = readiness.get("published_formal_deliverable_count")
+    eligible = readiness.get("eligible_formal_deliverable_count")
+    if release_ready:
+        publication_detail = (
+            f"已发布 {published} 个正式可交付缺陷。"
+            if isinstance(published, int)
+            else "本次运行的正式交付结论已发布。"
+        )
+    else:
+        publication_detail = (
+            f"发布被阻断：{eligible} 个缺陷通过交付门禁但未发布，"
+            "空缺陷列表不代表目标无缺陷。"
+            if isinstance(eligible, int) and eligible > 0
+            else "发布被阻断，本次运行未产出可发布的正式交付结论。"
+        )
+    rows.append({
+        "name": "正式交付发布决定",
+        "status": "pass" if release_ready else ("fail" if status == "BLOCKED" else "pending"),
+        "detail": publication_detail,
+        "code": "FORMAL_PUBLICATION_DECISION",
+        "source": "run_delivery_readiness",
+    })
+    return rows
+
+
 def reconcile_release_gate_with_run_readiness(
     release_gate: dict[str, Any] | None,
     run_delivery_readiness: dict[str, Any],
@@ -79,6 +251,33 @@ def reconcile_release_gate_with_run_readiness(
     else:
         gate.setdefault("verdict", previous["verdict"])
         gate.setdefault("status", previous["status"])
+    # Authoritative, named checks. Emitted so no consumer has to invent a verdict:
+    # frontend/src/api/data.ts:382-392 synthesized five checks from the finding list
+    # and unconditionally merged them over whatever the backend supplied, which meant
+    # a run that published nothing rendered "无 P0 缺陷 ✓" plus a permanently green
+    # "DB 验证" row fed by data.db_verification -- a key the backend never emits.
+    existing_checks = [
+        dict(item) for item in _list(gate.get("checks")) if isinstance(item, dict)
+    ]
+    existing_names = {_text(item.get("name")) for item in existing_checks}
+    checks = list(existing_checks)
+    for row in _readiness_check_rows(readiness):
+        if _text(row.get("name")) not in existing_names:
+            checks.append(row)
+            existing_names.add(_text(row.get("name")))
+
+    fail_count = sum(1 for item in checks if _text(item.get("status")).lower() == "fail")
+    pending_count = sum(1 for item in checks if _text(item.get("status")).lower() == "pending")
+    pass_count = sum(1 for item in checks if _text(item.get("status")).lower() == "pass")
+    if fail_count:
+        overall_status = "fail"
+    elif pending_count or not checks:
+        # No checks at all is "pending", never "pass". An empty check list must not
+        # read as a clean release.
+        overall_status = "pending"
+    else:
+        overall_status = "pass"
+
     gate.update({
         "schema_version": _text(gate.get("schema_version")) or "qualibug-release-gate-v1",
         "scope": "current_run_formal_finding_publication",
@@ -88,6 +287,16 @@ def reconcile_release_gate_with_run_readiness(
         "run_delivery_readiness_schema_version": readiness["schema_version"],
         "reasons": reasons,
         "identities": dict(_record(readiness.get("identities"))),
+        "checks": checks,
+        "overall_status": overall_status,
+        "has_decision": True,
+        "blocking_check_count": fail_count,
+        "pending_check_count": pending_count,
+        "pass_check_count": pass_count,
+        # The gate decides publication readiness from receipts. It never claims
+        # external quality measurement, which stays NOT_MEASURED until an evaluator
+        # receipt exists.
+        "measurement_status": "NOT_MEASURED",
     })
     return gate
 
