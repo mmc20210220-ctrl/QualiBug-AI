@@ -740,14 +740,27 @@ def finalize_experiment_execution(
                 if not isinstance(_state, dict):
                     continue
                 _records = _state.get("records", [])
-                # Store collection data for assertion DSL
+                # Single-point observation, declared as such.
+                #
+                # This previously assigned the SAME list object to both "before" and
+                # "after" with the comment "Collection is same before/after for
+                # read-only". The value is honest for one read, but publishing it under
+                # before/after keys is not: any delta assertion over this collection
+                # then computes a difference of a list against itself, which is
+                # identically zero. A real dependent-collection change is therefore
+                # reported as "no change" -- a false PASS, which is worse than a
+                # blocker because it reads as a proven property.
+                #
+                # Keep the observed records, and mark the pair explicitly unmeasured so
+                # a delta consumer fails closed instead of trusting a fabricated zero.
                 _multi_entity[_key] = {
-                    "before": _records,  # Collection is same before/after for read-only
-                    "after": _records,
                     "records": _records,
                     "record_count": _state.get("record_count", len(_records)),
                     "pagination": _state.get("pagination", {}),
                     "collection_status": _state.get("collection_status", ""),
+                    "observation_points": 1,
+                    "delta_measurable": False,
+                    "delta_unmeasurable_reason": "SINGLE_POINT_COLLECTION_OBSERVATION",
                 }
 
         if _multi_entity:
