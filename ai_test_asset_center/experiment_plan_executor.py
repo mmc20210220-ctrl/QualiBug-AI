@@ -661,6 +661,38 @@ def execute_non_barrier_plans(
                 observations["treatment_actor_ref"] = actor_ref
                 observations["status_code"] = obs.get("status_code")
                 observations["body"] = obs.get("body")
+
+            # Per-step evidence channel, append-only and parallel to the single slots above.
+            #
+            # Every http-shaped observer and assertion reads control_observation /
+            # treatment_observation, which this loop OVERWRITES on each step. So in a plan
+            # with more than one step per phase, steps 1..N-1 leave no trace and the
+            # experiment still reports a verdict from the last one. An additive channel
+            # keyed by step_id is the only way to expose per-step evidence without changing
+            # what any existing observer sees.
+            #
+            # Guarded on len(plan) > 1, so for every existing one-step-per-phase experiment
+            # the observations dict is byte-identical and no observer's input changes.
+            #
+            # Deliberately NOT written into barrier_timeline: that observer returns
+            # INDETERMINATE without a release-class event and two distinct participants, so
+            # feeding ordinary sequential steps into it would manufacture a degraded
+            # concurrency reading out of a process that has no concurrency in it. The shape
+            # and placement copy the temporal_timeline writer above.
+            if len(plan) > 1:
+                observations.setdefault("process_timeline", []).append({
+                    "event": "step_observed",
+                    "phase": phase,
+                    "step_id": subject_id,
+                    "step_ordinal": index + 1,
+                    "step_count": len(plan),
+                    "operation_ref": op_ref,
+                    "actor_ref": actor_ref,
+                    "status_code": observed_status,
+                    "after_state": _observation_state(
+                        _dict(obs.get("governance_receipt")).get("after")
+                    ),
+                })
         return results
 
     steps: list[dict[str, Any]] = []
