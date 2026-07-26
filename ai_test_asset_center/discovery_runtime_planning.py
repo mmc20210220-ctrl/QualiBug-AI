@@ -633,11 +633,29 @@ def build_discovery_plan(
         inputs.campaign_context.get("environment_type")
         or inputs.campaign_context.get("environment_kind")
     ).lower()
+    # Observation adapters this target may be observed through, resolved from
+    # customer-declared configuration rather than hardcoded. Every call site previously
+    # pinned {"http_api"}, so a registered non-http observer could never be used on the
+    # main chain -- it compiled only in a test that passed the wider set by hand. The
+    # resolver adds an adapter only when the customer declared the thing it observes and
+    # falls back to the http_api baseline otherwise, so the failure direction is always
+    # "fewer adapters".
+    from .adapter_capability import resolve_available_adapters
+
+    # The runtime contract lives under campaign_context["_runtime_contract"], not as an
+    # attribute on inputs -- reading it as an attribute silently yielded None and made the
+    # contract-declared adapter path dead.
+    _available_adapters = resolve_available_adapters(
+        inputs.root,
+        inputs.project,
+        _dict(inputs.campaign_context.get("_runtime_contract")),
+    )
     experiment_pack = compile_experiments(
         obligations,
         behavior_ir=behavior_ir,
         environment_type=environment_type,
         policy_version=_text(inputs.campaign_context.get("policy_version")),
+        available_adapters=_available_adapters,
     )
     experiment_pack = attach_fixture_dag_to_experiments(
         experiment_pack,

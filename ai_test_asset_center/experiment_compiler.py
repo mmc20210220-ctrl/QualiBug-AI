@@ -414,12 +414,20 @@ def compile_experiments(
     behavior_ir: dict[str, Any],
     environment_type: str = "",
     policy_version: str = "",
+    available_adapters: "set[str] | frozenset[str] | None" = None,
 ) -> dict[str, Any]:
-    """Compile a batch through the explicitly selected facade dispatch."""
+    """Compile a batch through the explicitly selected facade dispatch.
+
+    ``available_adapters`` names the observation adapters this target may be observed
+    through. Omitting it keeps the http_api-only default, so every existing caller is
+    unaffected; ``adapter_capability.resolve_available_adapters`` is what supplies a wider
+    set from customer-declared configuration.
+    """
     return _base._base.compile_experiments(
         obligations,
         behavior_ir=behavior_ir,
         environment_type=environment_type,
         policy_version=policy_version,
         compile_one=compile_experiment_for_obligation,
+        available_adapters=available_adapters,
     )

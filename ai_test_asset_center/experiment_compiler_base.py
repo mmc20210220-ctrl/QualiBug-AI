@@ -55,6 +55,7 @@ def compile_experiments(
     environment_type: str = "",
     policy_version: str = "",
     compile_one: Callable[..., dict[str, Any]] | None = None,
+    available_adapters: "set[str] | frozenset[str] | None" = None,
 ) -> dict[str, Any]:
     compiler = compile_one or compile_experiment_for_obligation
     compiled: list[dict[str, Any]] = []
@@ -107,6 +108,7 @@ def compile_experiments(
                 behavior_ir=behavior_ir,
                 environment_type=environment_type,
                 policy_version=policy_version,
+                available_adapters=available_adapters,
             )
             receipt = _dict(experiment.get("compile_receipt"))
             if _text(receipt.get("status")) == "COMPILED":
