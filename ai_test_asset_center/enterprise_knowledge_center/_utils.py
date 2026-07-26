@@ -45,10 +45,45 @@ __all__ = [
 
 
 def _semantic_lexicon() -> dict[str, Any]:
+    """Load the semantic lexicon, reporting loudly when it is absent or empty.
+
+    The file used to be missing entirely, and ``_load_json(path, {})`` made that
+    indistinguishable from a lexicon that had nothing to say: all 19 ``_lexicon_*`` call
+    sites across _parsing.py, _utils.py, business_state_graph.py and
+    supplementary_behavior_slices.py received an empty list or dict, so a whole
+    policy-driven comprehension layer was inert with no signal anywhere. Two of its
+    failure modes are worse than a gap -- a FORBIDDEN state transition was classified as
+    an ALLOWED one, and the typed-constraint extractor returned nothing unconditionally.
+
+    Logged at error level rather than raised: the callers are spread across every parsing
+    path, and a raise would take down comprehension entirely for a deployment whose
+    lexicon is genuinely absent. What was missing was the SIGNAL, not the tolerance.
+    """
     global _SEMANTIC_LEXICON_CACHE
     if _SEMANTIC_LEXICON_CACHE is None:
+        exists = False
+        try:
+            exists = SEMANTIC_LEXICON_PATH.is_file()
+        except OSError:
+            exists = False
         data = _load_json(SEMANTIC_LEXICON_PATH, {})
         _SEMANTIC_LEXICON_CACHE = data if isinstance(data, dict) else {}
+        if not exists:
+            logging.getLogger(__name__).error(
+                "semantic lexicon file is MISSING at %s -- enterprise-material "
+                "comprehension is degraded: state-machine sections, forbidden vs allowed "
+                "transitions, permission grant/deny, ownership scope, typed constraints "
+                "and entity aliasing all fall back to empty vocabulary. If this is an "
+                "installed copy, the packaging is not shipping "
+                "enterprise_knowledge_center/policies/*.json.",
+                SEMANTIC_LEXICON_PATH,
+            )
+        elif not _SEMANTIC_LEXICON_CACHE:
+            logging.getLogger(__name__).error(
+                "semantic lexicon at %s loaded EMPTY -- comprehension is degraded the "
+                "same way an absent file degrades it.",
+                SEMANTIC_LEXICON_PATH,
+            )
     return _SEMANTIC_LEXICON_CACHE
 
 
