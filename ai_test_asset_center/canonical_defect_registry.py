@@ -407,26 +407,11 @@ def derive_canonical_identity_evidence(
     reproduction = _dict(bundle.get("reproduction_receipt"))
     oracle = _dict(bundle.get("oracle_receipt"))
     treatment = _one_step(reproduction, "treatment")
-    # For HTTP evidence violations, the oracle_receipt may be BLOCKED (missing
-    # activation receipts) while the finding carries a synthetic VIOLATION
-    # assertion derived from direct HTTP observation.  Fall back to the
-    # finding's failed_assertions in that case.
-    _finding_in_bundle = _dict(bundle.get("finding"))
-    if (
-        _finding_in_bundle.get("_http_evidence_violation") is True
-        and _text(oracle.get("status")).upper() != "VIOLATION"
-    ):
-        _finding_assertions = [
-            _dict(a)
-            for a in _list(_finding_in_bundle.get("failed_assertions"))
-            if _dict(a).get("status") == "VIOLATION"
-        ]
-        if _finding_assertions:
-            assertion = _finding_assertions[0]
-        else:
-            assertion = _one_violation(oracle)
-    else:
-        assertion = _one_violation(oracle)
+    # The identity-defining assertion comes from the validated oracle receipt and
+    # nowhere else.  A finding's own failed_assertions list is unsigned mutable
+    # data; letting it define canonical defect identity would let a synthetic
+    # assertion mint a customer-visible defect.
+    assertion = _one_violation(oracle)
     assertion_kind = _normalized_text(assertion.get("kind"))
     if not assertion_kind:
         raise _incomplete("assertion.kind")
@@ -491,16 +476,12 @@ def derive_canonical_identity_evidence(
     # do NOT embed the observer set into the canonical identity: the same
     # defect surface observed through different observer ensembles must
     # collapse to a single canonical defect instead of fragmenting.
-    # For HTTP evidence violations the synthetic assertion carries no
-    # observer_receipt_ids; skip the provenance check in that case.
-    if not (
-        _finding_in_bundle.get("_http_evidence_violation") is True
-        and _text(oracle.get("status")).upper() != "VIOLATION"
-    ):
-        _observer_kinds(
-            assertion,
-            _list(bundle.get("observer_receipts")),
-        )
+    # Provenance validation is unconditional: an assertion with no receipted
+    # observer lineage has no proof it was ever observed.
+    _observer_kinds(
+        assertion,
+        _list(bundle.get("observer_receipts")),
+    )
     identity = {
         "operation": {
             "adapter": adapter,

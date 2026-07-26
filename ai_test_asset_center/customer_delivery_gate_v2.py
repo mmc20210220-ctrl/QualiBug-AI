@@ -1032,27 +1032,18 @@ def build_customer_delivery_gate_receipt_v2(
         oracle_receipt=oracle_receipt,
         reproduction_receipt=reproduction_receipt,
     )
-    # HTTP evidence violation bypass: when the experiment detected a direct
-    # HTTP evidence violation (treatment 2xx for authorization/isolation/
-    # validation tests), the oracle may be BLOCKED due to missing activation
-    # receipts (control, cleanup, etc.), but the HTTP response itself IS the
-    # violation evidence.  An unauthorized actor receiving 2xx is direct proof
-    # that access control is broken, regardless of oracle activation state.
-    _finding_for_bypass = _dict(finding)
-    _oracle_status_for_bypass = _text(oracle.get("status"))
-    if (
-        _finding_for_bypass.get("_http_evidence_violation") is True
-        and _oracle_status_for_bypass == "BLOCKED"
-    ):
-        status, reason_codes = "DELIVERABLE", []
-    else:
-        status, reason_codes = _validate_active_chain(
-            execution=execution,
-            contracts=contracts,
-            observers=observers,
-            oracle=oracle,
-            reproduction=reproduction,
-        )
+    # Adjudication has exactly one authority: the validated receipt chain.
+    # A mutable field on the caller-supplied finding dict must never be able to
+    # short-circuit it (see the module docstring).  A BLOCKED oracle stays
+    # BLOCKED: "the treatment returned 2xx" is an observation, not an activated
+    # contract, and it cannot substitute for control/cleanup/reproduction proof.
+    status, reason_codes = _validate_active_chain(
+        execution=execution,
+        contracts=contracts,
+        observers=observers,
+        oracle=oracle,
+        reproduction=reproduction,
+    )
     _, _, cleanup_adjudication = _cleanup_gate_decision(
         execution=execution,
         contracts=contracts,
@@ -1159,24 +1150,12 @@ def build_customer_delivery_gate_receipt_v2(
         "cleanup": cleanup_adjudication,
         "lineage": "CONSISTENT",
     }
-    # HTTP evidence violation bypass: override adjudication to reflect the
-    # direct HTTP evidence violation.  The treatment 2xx IS the violation
-    # proof; oracle activation receipts are not required for this class.
-    if (
-        _finding_for_bypass.get("_http_evidence_violation") is True
-        and _oracle_status_for_bypass == "BLOCKED"
-        and status == "DELIVERABLE"
-    ):
-        _bypass_cleanup = cleanup_adjudication if cleanup_adjudication in {"COMPLETED", "NOT_REQUIRED"} else "NOT_REQUIRED"
-        adjudication = {
-            "execution": "EXECUTED",
-            "activation": "ACTIVE",
-            "assertion": "VIOLATION",
-            "oracle": "VIOLATION",
-            "reproduction": "REPRODUCED",
-            "cleanup": _bypass_cleanup,
-            "lineage": "CONSISTENT",
-        }
+    # The adjudication block is a transcript of the observed receipt chain and is
+    # never rewritten.  Overwriting it would seal a receipt that asserts an
+    # execution history the referenced receipts contradict, and because
+    # validate_customer_delivery_gate_receipt_v2 only checks the block against
+    # the expected clean values, such a receipt would be permanently
+    # self-consistent and undetectable by receipt validation.
     reasons = sorted(set(_text(value) for value in reason_codes if _text(value)))
     input_fingerprint = _fingerprint({
         "identity": identity,
