@@ -350,6 +350,100 @@ OBSERVER_REGISTRY: dict[str, dict[str, Any]] = {
 }
 
 
+# ── Observer registration entry point ───────────────────────────────────────
+#
+# The registry above is the built-in set. Every one of its 13 entries declares
+# adapter "http_api", which is the product's hardest breadth ceiling: a defect class
+# whose evidence lives in a database, a message queue, a rendered view or a timing
+# series has no observer that can measure it, so it is unreachable no matter how well
+# the business is understood.
+#
+# register_observer is the extension point. It is deliberately ADDITIVE -- the built-in
+# if/elif dispatch keeps working untouched and registered handlers are consulted where
+# that dispatch would otherwise return UNSUPPORTED. Rewriting a working 100-line
+# dispatch was not necessary to remove the ceiling, and would have risked the paths
+# that currently produce every real receipt.
+#
+# Handlers receive ONE typed envelope rather than positional arguments. The built-in
+# handlers each take a different shape (some take steps, some take an assertion, some
+# take the raw evidence dict), which is precisely why a non-http observer had no way to
+# be passed its own surface's evidence. A single dict keyed by surface concern is
+# adapter-agnostic and extensible without changing the call site.
+#
+# What registration does NOT change: _receipt / validate_observer_receipt /
+# bind_observer_receipt_lineage are already content-addressed over an arbitrary evidence
+# dict and fully adapter-agnostic, so a new observer must be built onto them rather than
+# beside them. That is the one core layer needing no work.
+_REGISTERED_OBSERVER_HANDLERS: dict[str, Any] = {}
+
+
+def register_observer(
+    observer_id: str,
+    *,
+    surface: str,
+    adapter: str,
+    handler: Any,
+    evidence_keys: "tuple[str, ...] | list[str]" = (),
+) -> str:
+    """Register an observer and its handler. Returns the observer id.
+
+    ``handler(envelope) -> dict`` must return a receipt built with ``_receipt`` (or an
+    equivalent that ``validate_observer_receipt`` accepts). ``envelope`` carries
+    experiment, observations, assertion, property, control and treatment.
+
+    ``evidence_keys`` names the observation keys this observer WRITES, so the
+    kind-to-evidence contract in assertion_dsl_base can tell whether an assertion kind
+    is satisfiable. Declaring them is what lets a new assertion kind stop being
+    permanently indeterminate.
+
+    Rejects a registration that cannot work rather than deferring the failure:
+    ``compile_observer_requirements`` only checks ``implemented is True``, so an entry
+    without a usable handler would compile, spend real target requests, and then fall
+    through as UNSUPPORTED. That is exactly how ``write_observer`` shipped.
+    """
+    resolved_id = _text(observer_id)
+    if not resolved_id:
+        raise ValueError("register_observer requires a non-empty observer_id")
+    if not _text(surface):
+        raise ValueError(f"observer {resolved_id!r} requires a surface")
+    if not _text(adapter):
+        raise ValueError(f"observer {resolved_id!r} requires an adapter")
+    if not callable(handler):
+        raise ValueError(
+            f"observer {resolved_id!r} requires a callable handler; an entry without "
+            "one compiles and then returns UNSUPPORTED at observation time"
+        )
+    existing = OBSERVER_REGISTRY.get(resolved_id)
+    if isinstance(existing, dict) and resolved_id not in _REGISTERED_OBSERVER_HANDLERS:
+        raise ValueError(
+            f"observer {resolved_id!r} is a built-in with its own dispatch branch; "
+            "choose a distinct id rather than shadowing it"
+        )
+    OBSERVER_REGISTRY[resolved_id] = {
+        "surface": _text(surface),
+        "adapter": _text(adapter),
+        "implemented": True,
+        "evidence_keys": tuple(_text(key) for key in evidence_keys if _text(key)),
+        "registered_at_runtime": True,
+    }
+    _REGISTERED_OBSERVER_HANDLERS[resolved_id] = handler
+    return resolved_id
+
+
+def registered_observer_ids() -> tuple[str, ...]:
+    """Observer ids added through register_observer, in registration order."""
+    return tuple(_REGISTERED_OBSERVER_HANDLERS)
+
+
+def observer_produced_evidence_keys() -> frozenset[str]:
+    """Every observation key the registered observers declare they write."""
+    produced: set[str] = set()
+    for contract in OBSERVER_REGISTRY.values():
+        if isinstance(contract, dict):
+            produced.update(contract.get("evidence_keys") or ())
+    return frozenset(produced)
+
+
 def compile_observer_requirements(
     observer_ids: list[str],
     *,
@@ -2043,6 +2137,42 @@ def observe_experiment_requirements(
             receipt = _observe_typed_assertion(exp)
         elif observer_id == "source_invariant":
             receipt = _observe_source_invariant(exp)
+        elif observer_id in _REGISTERED_OBSERVER_HANDLERS:
+            # Runtime-registered observer. Handed a single typed envelope so a handler on
+            # a non-http surface can receive its own evidence -- the built-in handlers
+            # each take a different positional shape, which is why nothing outside this
+            # module could previously be dispatched at all.
+            #
+            # A handler that raises is reported as a harness failure on that observer
+            # rather than allowed to abort every other observer's receipt: one broken
+            # extension must not erase the evidence the rest of the chain did collect.
+            try:
+                receipt = _REGISTERED_OBSERVER_HANDLERS[observer_id]({
+                    "observer_id": observer_id,
+                    "experiment": exp,
+                    "observations": evidence,
+                    "assertion": assertion,
+                    "property": prop,
+                    "control_observation": control,
+                    "treatment_observation": treatment,
+                    "execution_steps": _list(evidence.get("execution_steps")),
+                    "campaign_id": resolved_campaign_id,
+                    "execution_id": resolved_execution_id,
+                })
+            except Exception as exc:  # noqa: BLE001 - reported, never swallowed
+                receipt = _receipt(
+                    observer_id=observer_id,
+                    status="INDETERMINATE",
+                    reason_code="OBSERVER_HANDLER_FAILED",
+                    evidence={"error": f"{type(exc).__name__}: {exc}"},
+                )
+            if not isinstance(receipt, dict):
+                receipt = _receipt(
+                    observer_id=observer_id,
+                    status="INDETERMINATE",
+                    reason_code="OBSERVER_HANDLER_RETURNED_NON_RECEIPT",
+                    evidence={"returned_type": type(receipt).__name__},
+                )
         else:
             receipt = _receipt(
                 observer_id=observer_id,
