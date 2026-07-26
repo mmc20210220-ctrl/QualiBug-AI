@@ -26,10 +26,16 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-from .persistence_observer import EVIDENCE_KEY, install_persistence_observer
+from .persistence_observer import EVIDENCE_KEY, OBSERVER_ID, install_persistence_observer
 
 KIND_STATE_ENUMERATION = "persisted_state_enumeration"
 KIND_FIELD_BOUND = "persisted_field_bound"
+
+# The risk family that routes an obligation to this surface (link 1 of the chain).
+RISK_FAMILY = "persistence_integrity"
+# Relation types an obligation in this family must join to in Behavior IR. A persistence
+# check observes entity state produced by an operation, so it needs both.
+RISK_FAMILY_RELATIONS = {"produces", "observes"}
 
 # Cap on how many offending rows are named in a receipt. A violation needs enough evidence
 # to be actionable, not the whole table.
@@ -223,7 +229,6 @@ def install_persistence_surface() -> dict[str, str]:
     """
     from .assertion_dsl_base import register_assertion_kind, registered_assertion_kinds
     from .observer_contracts_base import OBSERVER_REGISTRY
-    from .persistence_observer import OBSERVER_ID
 
     installed: dict[str, str] = {}
     if OBSERVER_ID not in OBSERVER_REGISTRY:
@@ -242,5 +247,27 @@ def install_persistence_surface() -> dict[str, str]:
         installed[kind] = register_assertion_kind(
             kind, evaluator=evaluator, required_evidence_keys=(EVIDENCE_KEY,)
         )
+
+    # Link 1: the risk family that routes an obligation here. Registered through the
+    # descriptor entry point, so this adds a genuinely new bug class without editing any
+    # by-family map by hand -- which is the whole point of that entry point.
+    #
+    # protocol_template reuses "state_transition": compile_family_protocol has no branch
+    # for this family name and falls through to its generic single control + single
+    # treatment plan, which is correct for a read-side check. An N-step persistence
+    # protocol is a separate increment.
+    from .test_obligation import canonical_risk_families, register_risk_family
+
+    if RISK_FAMILY not in canonical_risk_families():
+        installed["risk_family"] = register_risk_family(
+            RISK_FAMILY,
+            relation_types=RISK_FAMILY_RELATIONS,
+            protocol_template="state_transition",
+            observers=["http_response", OBSERVER_ID],
+            assertion_kind=KIND_STATE_ENUMERATION,
+        )
+    else:
+        installed["risk_family"] = RISK_FAMILY
+
     logger.info("persistence surface installed: %s", installed)
     return installed
