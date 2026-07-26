@@ -36,6 +36,12 @@ SURFACE_WRITE_RESPONSE = "WRITE_RESPONSE_REPRESENTATION"
 SURFACE_IDENTITY_GET = "IDENTITY_GET"
 SURFACE_FILTERED_COLLECTION_GET = "FILTERED_COLLECTION_GET"
 SURFACE_DATABASE_OBSERVER = "SOURCE_DECLARED_DATABASE_OBSERVER"
+# A write observed through the entity it REFERENCES rather than the one it is named
+# after. POST /api/payments/pay declares an orderId parameter and moves the order to
+# PAID; the payment itself has no GET, so the only readback is GET /api/orders/{id}.
+# The domain check on identity GETs rejects this by design, which left every such write
+# at READBACK_SOURCE_NOT_DECLARED even though the source declares both halves.
+SURFACE_RELATED_ENTITY_GET = "RELATED_ENTITY_IDENTITY_GET"
 
 # Reserved for future expansion (§7)
 SURFACE_EVENT = "EVENT_READBACK"
@@ -320,6 +326,99 @@ def _find_identity_get_candidates(
     return candidates
 
 
+def _referenced_entity_params(write_op: dict[str, Any]) -> dict[str, str]:
+    """Declared write parameters that name another entity, as ``{param: entity}``.
+
+    Only DECLARED parameters count. A foreign key the source never declared would not
+    have a value at execution time, so binding a readback to it would produce an
+    observer that cannot run.
+    """
+    out: dict[str, str] = {}
+    for raw in _list(write_op.get("parameters")) + _list(write_op.get("field_dictionary")):
+        name = _text(raw if isinstance(raw, str) else _dict(raw).get("name"))
+        if not name or "." in name or "[" in name:
+            continue
+        lowered = name.lower()
+        # camelCase lowercases to one word, so the bare forms are needed: orderId ->
+        # "orderid" ends with "id", couponCode -> "couponcode" ends with "code". A bare
+        # two-character suffix is not included; "no" would strip "casino" to "casi".
+        # A stem this loose is safe because the domain match below is the real gate --
+        # a spurious entity name finds no identity GET and produces no candidate.
+        for suffix in ("_id", "id", "_ref", "ref", "_no", "_code", "code"):
+            if lowered.endswith(suffix) and len(lowered) > len(suffix):
+                entity = lowered[: -len(suffix)].strip("_")
+                if len(entity) >= 3:
+                    out[name] = entity
+                break
+    return out
+
+
+def _domain_matches_entity(domain: str, entity: str) -> bool:
+    """Whether a path domain such as ``orders`` names the entity ``order``."""
+    d = _text(domain).lower().strip("/")
+    e = _text(entity).lower()
+    if not d or not e:
+        return False
+    singular = d[:-1] if d.endswith("s") and not d.endswith("ss") else d
+    return e in {d, singular}
+
+
+def _find_related_entity_get_candidates(
+    write_op: dict[str, Any],
+    behavior_ir: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Identity GETs on an entity the write declares a foreign key to.
+
+    Requires all three of: the write declares the foreign-key parameter, the read is a
+    single-placeholder identity GET, and the read's domain is the entity that key names.
+    A write and a read merely sharing a word is not a relationship -- the declared
+    parameter is what makes the identity available at execution time.
+    """
+    write_path = _normalize_path(_text(write_op.get("path") or write_op.get("raw_path")))
+    write_segments = _path_segments(write_path)
+    if not write_segments:
+        return []
+    write_domain = _extract_resource_domain(write_segments)
+    referenced = _referenced_entity_params(write_op)
+    if not referenced:
+        return []
+
+    candidates: list[dict[str, Any]] = []
+    for op in _list(behavior_ir.get("operations")):
+        if not isinstance(op, dict):
+            continue
+        if _text(op.get("method")).upper() not in _READ_METHODS:
+            continue
+        op_path = _normalize_path(_text(op.get("path") or op.get("raw_path")))
+        if not op_path or not path_has_placeholders(op_path):
+            continue
+        params = _extract_path_params(op_path)
+        if len(params) != 1:
+            continue
+        op_domain = _extract_resource_domain(_path_segments(op_path))
+        if not op_domain:
+            continue
+        # Same-domain reads are already covered by the identity GET finder; this source
+        # exists only for the cross-entity case.
+        if _domain_matches_entity(op_domain, write_domain.rstrip("s")):
+            continue
+        for param_name, entity in referenced.items():
+            if not _domain_matches_entity(op_domain, entity):
+                continue
+            candidates.append({
+                "operation": op,
+                "surface_type": SURFACE_RELATED_ENTITY_GET,
+                "path": op_path,
+                "param": params[0],
+                "domain": op_domain,
+                "evidence_type": "behavior_ir_relation",
+                "related_entity": entity,
+                "write_parameter": param_name,
+            })
+            break
+    return candidates
+
+
 def _find_collection_get_candidates(
     write_op: dict[str, Any],
     behavior_ir: dict[str, Any],
@@ -549,6 +648,20 @@ def _resolve_identity_strategy(
                     "canonical_field_id": read_param,
                     "status": "RESOLVED",
                 }
+
+    # Strategy 1b: REQUEST_BODY_ID for a referenced entity.
+    # The identity is the foreign key the write itself declares, so it is known before
+    # the write runs -- which is what makes a genuine before/after read possible.
+    if surface_type == SURFACE_RELATED_ENTITY_GET:
+        write_parameter = _text(read_candidate.get("write_parameter"))
+        if write_parameter:
+            return {
+                "type": IDENTITY_REQUEST_BODY,
+                "source_path": "request." + write_parameter,
+                "target_parameter": _text(read_candidate.get("param")),
+                "canonical_field_id": write_parameter,
+                "status": "RESOLVED",
+            }
 
     # Strategy 2: WRITE_RESPONSE_ID
     # POST creates a resource and response contains the new ID
@@ -996,6 +1109,10 @@ def resolve_readback_contract(
     # 1d: Relation-declared observers from Behavior IR
     relation_candidates = _find_relation_declared_observers(write_op, behavior_ir)
     all_candidates.extend(relation_candidates)
+
+    # 1e: Identity GETs on an entity this write declares a foreign key to. Collected
+    # last so a same-domain readback always outranks a cross-entity one.
+    all_candidates.extend(_find_related_entity_get_candidates(write_op, behavior_ir))
 
     if not all_candidates:
         return _blocked_result(READBACK_SOURCE_NOT_DECLARED, 0)

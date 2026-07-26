@@ -456,8 +456,18 @@ def compile_experiment_for_obligation(
                     "identity_strategy": _readback_contract.get("identity_strategy", {}),
                     "provenance_fingerprint": _readback_contract.get("provenance_fingerprint", ""),
                 }]
-        except Exception:
-            pass  # Fail-safe: resolver failure does not change existing behavior
+        except Exception as _rb_exc:
+            # Fail-safe on the OUTCOME -- a resolver failure must not change compile
+            # behaviour -- but not silent. A bare pass here hid every defect in the
+            # resolver behind an indistinguishable BLOCKED_MISSING_OBSERVER, which is
+            # the one reason code that already accounts for most blocked obligations.
+            logging.getLogger(__name__).warning(
+                "readback resolver raised for obligation %s (%s: %s); "
+                "falling back to declared observers only",
+                oid,
+                type(_rb_exc).__name__,
+                str(_rb_exc)[:200],
+            )
     # ── Filter write-only observers for read-only operations ──
     # entity_state, before_state, after_state, final_state, business_effect
     # require write steps with governance receipts. For read-only operations,
