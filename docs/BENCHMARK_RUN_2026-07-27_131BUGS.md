@@ -290,6 +290,72 @@ abandon. Until then these obligations are correctly unreachable, and the honest 
 of `BLOCKED_NON_REVERSIBLE_WRITE: 685` is "this target cannot be safely written to in
 these ways", not "the product failed".
 
+## Second pass: precision, then a hard failure hiding behind ok: true
+
+The first pass bought reach. This one found that the four published findings were all
+fabricated, removed the three mechanisms producing them, and then found that the
+pipeline had been failing outright while the API reported success.
+
+**Three false-positive factories, one shape.** Each substituted the widest or most
+checkable assertion instead of declining when it could not determine something:
+
+1. **A deny on everything.** `action_values = _permission_action_aliases(clause) or ["*"]`
+   turned 「warehouse 可以调整库存，但不能改商品价格」 into
+   `{role: warehouse, resource: product, actions: ["*"], decision: "deny"}`. The source
+   denies one action on one field. The oracle then required `GET /api/products` to fail
+   for warehouse; it did not. An undeterminable action is now `decision: "unknown"`,
+   which the IR already maps to `permission_unknown`. Findings 4 → 2.
+2. **An expect-4xx on an unevaluable condition.** `state_audit_planner` builds a
+   read-only audit for an unbound invariant, which is sound — but these invariants are
+   prose with `operands: []` (「同一订单不能重复成功退款」), so there was nothing to check
+   a response against, and the compiler fell back to asserting the *read* must be
+   refused. Every successful read became a defect. An audit now requires an evaluable
+   expression. Findings 2 → 0.
+3. **A request compared with itself.** The validation protocol emitted control and
+   treatment with byte-identical paths while the treatment carried
+   `mutation.operator = remove_required_parameter`. Nothing in the executor reads
+   `step["mutation"]` — verified across five modules and pinned by a test that fails if
+   one ever starts — so the same request went twice, and expect-4xx saw the control's
+   own 200. The protocol now blocks when the arms do not differ.
+
+Scored by the benchmark's own scorer: **4 → 2 → 0 findings, 4 → 2 → 0 false positives.**
+Zero findings with zero false positives is strictly better than four fabricated ones.
+
+**Then the reason nothing else could be measured.** The scan endpoint hardcoded
+`ok: True` and defaulted every field, so a failed run returned
+`{ok: true, scan_id: "", grade: "", score: 0, total_ms: 0, layers: {}}` — and
+`scan_result.json` kept an older run's id. Four consecutive runs reported success while
+producing nothing, and every measurement in that window was reading a frozen artifact.
+A false success on the primary entry point is the exact failure this product exists to
+prevent.
+
+Making the envelope honest surfaced
+`v12_pipeline_failed:ValueError:contract_oracle_receipt_fields_invalid` immediately;
+making that error name its offending keys identified the cause outright. The
+completeness gate returns a deliberately minimal verdict when the Oracle must not be
+called on incomplete input, and the batch executor validated it as a full twenty-field
+receipt regardless, killing the pipeline. A gate-blocked verdict is now carried through
+as the block it is; anything claiming to be a receipt is still validated strictly.
+
+**Measured on a fresh campaign** (`mode: created`, `rerun_key` honoured — which also
+verified that `campaign_rerun_key` now reaches the pipeline, previously unreachable from
+the only entry point the product exposes):
+
+| | before | after |
+| --- | ---: | ---: |
+| `BLOCKED_BINDING_GRAPH_INVALID` | 146 | **0** |
+| `ORACLE_NOT_VIOLATED` (real verdicts) | 8 | **14** |
+| published findings | 4 | 0 |
+| false positives | 4 | **0** |
+
+The 146 were a key-name mismatch: the runtime provenance check indexed the binding graph
+by `binding_id` — an opaque hash — and compared a runtime binding key (`sku`) against it,
+while `semantic_name`, the field holding `sku`, was never read. The graph reported
+`graph_status: VALID` and its fingerprints matched exactly the whole time.
+
+Coverage is still 0 of 131. Fourteen obligations now execute and the oracle finds no
+violation on them — that is a verdict, not a failure.
+
 ## What would actually move coverage
 
 In order of measured blocking weight, not guesswork. Items 1 and 2 of the original
