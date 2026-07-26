@@ -6,11 +6,27 @@ FROM python:3.12-slim
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
-ENV QUALIBUG_PRODUCTION=1
 ENV QUALIBUG_PORT=8088
 ENV QUALIBUG_BIND_HOST=0.0.0.0
 ENV QUALIBUG_ALLOW_PUBLIC_BIND=1
 ENV QUALIBUG_FRONTEND_DIST=/app/frontend_dist
+
+# Runtime state root.  Without this, _root() falls back to the installed package's
+# parent (site-packages), which USER qualibug cannot write and which none of the
+# mounted volumes point at.  Setting it to /app makes platform_workspace/,
+# platform_outputs/ and platform_outputs/logs/ resolve under the mounts below,
+# and aligns the doctor's get_log_dir(private_root) with where logging writes.
+ENV QUALIBUG_PRIVATE_ROOT=/app
+
+# This image stores real customer credentials, so at-rest encryption is mandatory:
+# the container refuses to boot unless QUALIBUG_CRED_ENC_KEY is supplied at run
+# time.  Deliberately NOT QUALIBUG_PRODUCTION -- that variable is also read by
+# sandbox_write_executor_base._production_mode() as a global write lock, so using
+# it here disabled every governed write probe and made the image unable to do the
+# product's core job.  Target write safety is decided per project by
+# target_policy.py from the declared environment_type, never by a deploy flag.
+# Operators who do want a blanket write lock set QUALIBUG_DISABLE_SANDBOX_WRITE=1.
+ENV QUALIBUG_REQUIRE_CREDENTIAL_ENCRYPTION=1
 
 # Set working directory
 WORKDIR /app
@@ -30,15 +46,16 @@ RUN pip install --no-cache-dir .
 # Copy prebuilt customer pilot SPA so the backend serves UI + API on one port
 COPY frontend/dist ./frontend_dist/
 
-# Create necessary directories
-RUN mkdir -p /app/platform_outputs /app/platform_workspace /app/logs
+# Create necessary directories.  Logs live under platform_outputs/logs
+# (product_logging._LOG_DIR_RELATIVE), so no separate /app/logs is created.
+RUN mkdir -p /app/platform_outputs/logs /app/platform_workspace
 
 # Copy config files (if exist)
 COPY .env.local.example .env.local.example
 
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash qualibug \
-    && chown -R qualibug:qualibug /app/platform_outputs /app/platform_workspace /app/logs
+    && chown -R qualibug:qualibug /app/platform_outputs /app/platform_workspace
 USER qualibug
 
 # Health check: canonical API health path. /health remains a legacy alias.

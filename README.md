@@ -85,8 +85,13 @@ qualibug-doctor --output     # 写出交付用诊断报告
 # 构建
 docker build -t qualibug-ai:95.0.0-private-pilot .
 
-# 启动（需提供 QUALIBUG_JWT_SECRET）
-set QUALIBUG_JWT_SECRET=your-high-entropy-secret   # Windows PowerShell: $env:QUALIBUG_JWT_SECRET=...
+# 启动（两个密钥都是必填，缺任一都会 fail-closed）
+# Linux / macOS:
+export QUALIBUG_JWT_SECRET=your-high-entropy-secret
+export QUALIBUG_CRED_ENC_KEY=your-high-entropy-secret
+# Windows PowerShell:
+#   $env:QUALIBUG_JWT_SECRET="your-high-entropy-secret"
+#   $env:QUALIBUG_CRED_ENC_KEY="your-high-entropy-secret"
 docker-compose up -d
 
 # 日志与健康检查
@@ -95,6 +100,17 @@ curl http://127.0.0.1:8088/api/health
 ```
 
 容器默认映射到宿主机 `127.0.0.1:8088`。公开绑定需显式开启，并置于企业反向代理之后。更完整的私有部署说明见 [`deploy/README.md`](deploy/README.md)。
+
+容器环境变量口径：
+
+| 变量 | 是否必填 | 说明 |
+|---|---|---|
+| `QUALIBUG_JWT_SECRET` | 必填 | 租户 JWT 签发密钥 |
+| `QUALIBUG_CRED_ENC_KEY` | 必填 | 凭据静态加密主密钥。镜像内置 `QUALIBUG_REQUIRE_CREDENTIAL_ENCRYPTION=1`，缺失则拒绝启动 |
+| `QUALIBUG_PRIVATE_ROOT` | 镜像已设 `/app` | 运行态状态根目录，与挂载卷对齐 |
+| `QUALIBUG_DISABLE_SANDBOX_WRITE` | 可选 | 操作员写入熔断开关。置 `1` 时在发出请求前阻断所有写探针 |
+
+镜像**不再**设置 `QUALIBUG_PRODUCTION`。该变量同时被 `sandbox_write_executor_base._production_mode()` 当作全局写锁读取，在镜像里置 1 会让全部受治理写探针失效。目标写安全由 `target_policy.py` 按项目声明的 `environment_type` 判定（生产与未知类型 fail-closed），不由部署级开关决定。需要整体禁写请用 `QUALIBUG_DISABLE_SANDBOX_WRITE=1`。
 
 ---
 

@@ -28,8 +28,10 @@ import secrets
 logger = logging.getLogger(__name__)
 
 _MASTER_KEY_ENV = "QUALIBUG_CRED_ENC_KEY"
+_REQUIRE_ENCRYPTION_ENV = "QUALIBUG_REQUIRE_CREDENTIAL_ENCRYPTION"
 _PBKDF2_ITER = 100_000
 _PREFIX = "enc$v1$"
+_TRUTHY = ("1", "true", "yes")
 
 
 class CredentialDecryptionError(ValueError):
@@ -41,23 +43,43 @@ def _master_key() -> bytes | None:
     return raw.encode("utf-8") if raw else None
 
 
-def _is_production() -> bool:
-    return os.environ.get("QUALIBUG_PRODUCTION", "").strip() in ("1", "true", "yes")
+def _encryption_required() -> bool:
+    """Whether at-rest credential encryption is mandatory for this deployment.
+
+    ``QUALIBUG_REQUIRE_CREDENTIAL_ENCRYPTION`` is the intended flag: it states one
+    thing only — this deployment stores real customer credentials, so refuse to
+    hold them in plaintext.
+
+    ``QUALIBUG_PRODUCTION`` is still honoured for backward compatibility, but it
+    must not be used for this purpose in new deployments.  That variable is also
+    read by ``sandbox_write_executor_base._production_mode`` as a *global write
+    lock*, so setting it to require encryption silently disables every governed
+    write probe — the product's core capability.  The two meanings are opposite
+    and must stay separable.  Target write safety is decided per project by
+    ``target_policy.py`` from the declared ``environment_type``, never by a
+    deployment-level flag.
+    """
+    for name in (_REQUIRE_ENCRYPTION_ENV, "QUALIBUG_PRODUCTION"):
+        if os.environ.get(name, "").strip().lower() in _TRUTHY:
+            return True
+    return False
 
 
 def ensure_credential_key() -> str:
     """Verify the credential encryption key is configured.
 
-    Returns ``"ok"`` when available, ``"plaintext_warning"`` when missing but
-    non-production, or raises ``RuntimeError`` when missing in production.
-    Should be called at startup by every entrypoint that may write credentials.
+    Returns ``"ok"`` when available, ``"plaintext_warning"`` when missing and
+    encryption is not mandatory, or raises ``RuntimeError`` when missing while
+    mandatory.  Should be called at startup by every entrypoint that may write
+    credentials.
     """
     if _master_key():
         return "ok"
-    if _is_production():
+    if _encryption_required():
         raise RuntimeError(
             f"{_MASTER_KEY_ENV} is not set.  "
-            "Refusing to run in production with credential encryption disabled."
+            "Refusing to run with mandatory credential encryption disabled "
+            f"({_REQUIRE_ENCRYPTION_ENV} or QUALIBUG_PRODUCTION is set)."
         )
     logger.warning(
         "%s is not set --- credentials will be stored as plaintext.  "
@@ -88,18 +110,20 @@ def _keystream(key: bytes, nonce: bytes, length: int) -> bytes:
 def encrypt(plaintext: str) -> str:
     """Encrypt *plaintext*.
 
-    Returns a prefixed ciphertext string.  When no master key is configured
-    in non-production mode a warning is emitted and the plaintext is returned
-    unchanged.  In production mode the call refuses to write credentials.
+    Returns a prefixed ciphertext string.  When no master key is configured and
+    encryption is not mandatory, a warning is emitted and the plaintext is
+    returned unchanged.  When encryption is mandatory the call refuses to write
+    credentials.
     """
     if not plaintext:
         return plaintext
     master = _master_key()
     if not master:
-        if _is_production():
+        if _encryption_required():
             raise RuntimeError(
                 f"{_MASTER_KEY_ENV} is not set --- refusing to write credentials "
-                "in plaintext while QUALIBUG_PRODUCTION=1."
+                f"in plaintext while {_REQUIRE_ENCRYPTION_ENV} "
+                "(or QUALIBUG_PRODUCTION) is set."
             )
         logger.warning(
             "QUALIBUG_CRED_ENC_KEY is not set --- storing credential in plaintext.  "

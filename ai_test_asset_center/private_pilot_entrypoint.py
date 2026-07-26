@@ -383,11 +383,18 @@ def run_server() -> None:
     from ai_test_asset_center.credential_crypto import ensure_credential_key
     from ai_test_asset_center.policy_wiring import bind_product_installed_mainline_authority
 
+    # ensure_credential_key() returns a str ("ok" / "plaintext_warning") and raises
+    # when encryption is mandatory but unconfigured.  The previous isinstance(dict)
+    # guard could never be true, so the plaintext case was silently swallowed here.
     _cred_key_status = ensure_credential_key()
-    if isinstance(_cred_key_status, dict) and not _cred_key_status.get("ok", True):
-        _logger.error(
-            "Credential encryption key issue",
-            extra={"error_code": ErrorCode.KEY_MISSING.code, "context": _cred_key_status},
+    if _cred_key_status != "ok":
+        _logger.warning(
+            "Credential encryption key not configured -- credentials will be stored "
+            "as plaintext.  Set QUALIBUG_CRED_ENC_KEY to enable at-rest encryption.",
+            extra={
+                "error_code": ErrorCode.KEY_MISSING.code,
+                "context": {"credential_key_status": _cred_key_status},
+            },
         )
 
     _mainline_bind = bind_product_installed_mainline_authority()
