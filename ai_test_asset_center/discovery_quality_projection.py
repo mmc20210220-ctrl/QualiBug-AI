@@ -32,6 +32,73 @@ from .formal_delivery_scope import (
 
 SCHEMA_VERSION = "qualibug.discovery-quality-projection.v2"
 
+# A stored artifact whose authority cannot be RE-DERIVED is a different failure from
+# an artifact that contradicts itself, and the two must not share an outcome.
+#
+# "Cannot re-derive" means the proof is absent or no longer revalidates: no mainline
+# run, no attempt ledger, a ledger that fails bundle revalidation, or a row whose
+# authority fingerprint is missing. Nothing can be claimed about such an artifact, so
+# the honest projection is zero deliverables with an explicit UNVERIFIABLE status and
+# the exact reason -- the same discipline as NOT_MEASURED. Raising instead took the
+# whole response down: 4 of 8 real projects under platform_outputs/ raise one of these
+# today and return HTTP 500 from /api/v1/projects/{id}/command-center, so the console
+# is simply broken for them.
+#
+# An internal CONTRADICTION (registry authority mismatch, occurrence scope mismatch,
+# identity-consistency invalid, run-delivery contradiction) still raises. Those mean
+# the product computed two disagreeing answers, which must never be smoothed over.
+#
+# Matching is on the full token before the first ':' so a future code that merely
+# starts with one of these prefixes cannot silently inherit the degrade path.
+# NOT included, deliberately: finding_authority_fingerprint_missing / _mismatch. A row
+# sitting in an authoritative list while unable to prove it belongs there is a
+# contradiction, not an unprovable archive, and
+# tests/test_discovery_mainline_authority.py rightly pins it as raising. The reason it
+# looked like a legacy-compatibility problem is that
+# private_pilot_command_center_builder fed display rows -- which never carry a
+# fingerprint -- into the authority input; the fix is to stop doing that, not to
+# weaken the fingerprint check.
+_UNVERIFIABLE_AUTHORITY_CODES = frozenset({
+    "mainline_run_missing",
+    "attempt_ledger_missing",
+    "formal_attempt_ledger_invalid",
+})
+
+
+def _is_unverifiable_authority(exc: Exception) -> bool:
+    return str(exc).split(":", 1)[0] in _UNVERIFIABLE_AUTHORITY_CODES
+
+
+def _unverifiable_authority_projection(reason: str) -> dict[str, Any]:
+    """A zero projection that names why nothing could be proven."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "authority_status": "UNVERIFIABLE",
+        "authority_reason": reason,
+        "formal_customer_deliverable_count": 0,
+        "canonical_defect_count": 0,
+        "canonical_defect_ids": [],
+        "canonical_representative_findings": [],
+        "delivery_occurrence_count": 0,
+        "delivery_occurrence_finding_ids": [],
+        "candidate_count": 0,
+        "executed_clue_count": 0,
+        "confirmation_receipt_count": 0,
+        "funnel_validated_bug_count": 0,
+        "count_consistency": {
+            "formal_equals_funnel_validated": True,
+            "note": "authority unverifiable; all counts are 0 by refusal, not by measurement",
+        },
+    }
+
+
+_EMPTY_AUTHORITY_SCOPE: dict[str, Any] = {
+    "mainline_run": None,
+    "authoritative_findings": [],
+    "authoritative_candidates": [],
+    "shadow": [],
+}
+
 
 def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
@@ -631,10 +698,6 @@ def build_run_delivery_readiness_projection(
 def attach_quality_projection_to_scan_result(scan_result: dict[str, Any]) -> dict[str, Any]:
     """Mutate-safe: return a copy of scan_result with SSOT quality projection."""
     result = dict(scan_result or {})
-    scoped = authority_scoped_findings(result)
-    authoritative_findings = scoped["authoritative_findings"]
-    authoritative_candidates = scoped["authoritative_candidates"]
-    contract = scoped["mainline_run"]
     ledger = _dict(
         result.get("obligation_attempt_ledger")
         or _dict(result.get("v12")).get("obligation_attempt_ledger")
@@ -651,14 +714,26 @@ def attach_quality_projection_to_scan_result(scan_result: dict[str, Any]) -> dic
         result.get("canonical_defect_registry")
         or _dict(result.get("v12")).get("canonical_defect_registry")
     )
-    counts = build_formal_count_projection(
-        findings=delivery_occurrences,
-        candidate_findings=authoritative_candidates,
-        discovery_funnel=_dict(result.get("discovery_funnel")),
-        obligation_attempt_ledger=ledger or None,
-        mainline_run=contract,
-        canonical_defect_registry=canonical_registry or None,
-    )
+    try:
+        scoped = authority_scoped_findings(result)
+        counts = build_formal_count_projection(
+            findings=delivery_occurrences,
+            candidate_findings=scoped["authoritative_candidates"],
+            discovery_funnel=_dict(result.get("discovery_funnel")),
+            obligation_attempt_ledger=ledger or None,
+            mainline_run=scoped["mainline_run"],
+            canonical_defect_registry=canonical_registry or None,
+        )
+    except MainlineContractError as exc:
+        # See _UNVERIFIABLE_AUTHORITY_CODES: an unprovable stored artifact degrades
+        # visibly; a self-contradicting one still raises.
+        if not _is_unverifiable_authority(exc):
+            raise
+        scoped = dict(_EMPTY_AUTHORITY_SCOPE)
+        counts = _unverifiable_authority_projection(str(exc))
+    authoritative_findings = scoped["authoritative_findings"]
+    authoritative_candidates = scoped["authoritative_candidates"]
+    contract = scoped["mainline_run"]
     result["formal_count_projection"] = counts
     existing_external = _dict(result.get("external_evaluation"))
     external = build_external_evaluation_projection(
