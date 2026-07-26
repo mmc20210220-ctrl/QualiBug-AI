@@ -104,7 +104,7 @@ def execute_one_experiment(
         raise ValueError("experiment execution campaign_id and execution_id are required")
     exp["campaign_id"] = resolved_campaign_id
     exp["execution_id"] = resolved_execution_id
-    tokens = actor_tokens if actor_tokens is not None else load_actor_tokens(root, project)
+    tokens = actor_tokens if actor_tokens is not None else load_actor_tokens(root, project, base_url=base_url)
     # Strict preflight — no automatic best-effort retry on the formal path.
     ok, reason, detail = preflight_experiment_executable(
         exp, behavior_ir=behavior_ir, actor_tokens=tokens

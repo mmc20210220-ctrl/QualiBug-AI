@@ -394,11 +394,37 @@ def load_project_test_credentials(
                 f"test_account_catalog_invalid:{path}:{type(exc).__name__}:{exc}"
             ) from exc
         if isinstance(payload, dict):
-            rows = [
-                {"profile": str(name), **dict(value)}
-                for name, value in payload.items()
-                if isinstance(value, dict)
-            ]
+            # A container key must be unwrapped first. {"accounts": [...]} is the
+            # shape the ingest API and the frontend both write, and the dict-of-dicts
+            # comprehension below silently skips it because the value is a list --
+            # yielding zero credentials for a file that plainly holds eight accounts.
+            # load_actor_tokens already unwraps these same three keys; this path did
+            # not, so the two loaders disagreed about the same file.
+            container = (
+                payload.get("accounts")
+                or payload.get("actors")
+                or payload.get("users")
+            )
+            if isinstance(container, list):
+                rows = [
+                    {
+                        "profile": str(
+                            value.get("profile")
+                            or value.get("name")
+                            or value.get("role")
+                            or f"credential_{index}"
+                        ),
+                        **dict(value),
+                    }
+                    for index, value in enumerate(container)
+                    if isinstance(value, dict)
+                ]
+            else:
+                rows = [
+                    {"profile": str(name), **dict(value)}
+                    for name, value in payload.items()
+                    if isinstance(value, dict)
+                ]
         elif isinstance(payload, list):
             rows = [
                 {
@@ -420,6 +446,57 @@ def load_project_test_credentials(
             if key and key not in seen:
                 seen.add(key)
                 ordered.append(row)
+
+    # The JSON catalog commonly holds bearer tokens rather than passwords, and a
+    # token is a snapshot that expires. When no row carries a password, fall back
+    # to the operator's own TEST_ACCOUNTS.md so a login can actually be performed.
+    # Without this, a project whose accounts are documented and working reads as
+    # "no usable credentials" the moment its stored tokens go stale.
+    if not any(row.get("password") or row.get("pass") for row in ordered):
+        try:
+            from .experiment_runtime_support import _parse_test_accounts_md
+
+            for index, account in enumerate(_parse_test_accounts_md(root, project) or []):
+                if not isinstance(account, dict):
+                    continue
+                if not (account.get("password") and (account.get("email") or account.get("username"))):
+                    continue
+                row = {
+                    "profile": str(
+                        account.get("profile")
+                        or account.get("role")
+                        or account.get("email")
+                        or f"md_credential_{index}"
+                    ),
+                    **dict(account),
+                }
+                key = identity(row)
+                if not key:
+                    continue
+                if key in seen:
+                    # Merge, do not skip. The JSON row for this same identity is the
+                    # one that lacks a password; dropping the markdown row as a
+                    # duplicate would discard the only usable secret and leave the
+                    # catalog exactly as unusable as before.
+                    for existing in ordered:
+                        if identity(existing) != key:
+                            continue
+                        if not (existing.get("password") or existing.get("pass")):
+                            existing["password"] = account.get("password")
+                            existing.setdefault("email", account.get("email"))
+                            existing["credential_origin"] = "test_accounts_md_merge"
+                        break
+                    continue
+                seen.add(key)
+                ordered.append(row)
+        except Exception as exc:
+            # Never let a malformed markdown table break credential loading for a
+            # project whose JSON catalog was fine.
+            print(
+                f"  [WARN] {project}: TEST_ACCOUNTS.md credential fallback skipped "
+                f"({type(exc).__name__}: {exc})",
+                flush=True,
+            )
     return ordered
 
 

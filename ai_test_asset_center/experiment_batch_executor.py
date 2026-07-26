@@ -187,7 +187,7 @@ def execute_selected_experiments(
     run_contract = _dict(mainline_run)
     if not run_contract or _text(run_contract.get("campaign_id")) != _text(campaign_id):
         raise ValueError("experiment batch mainline campaign identity mismatch")
-    tokens = load_actor_tokens(root, project)
+    tokens = load_actor_tokens(root, project, base_url=base_url)
 
     # ── Phase 2: Auto-resolve runtime bindings before execution ──
     # Pre-resolve path placeholders by calling GET list endpoints from Behavior IR.

@@ -331,6 +331,24 @@ def _manual_terminal_receipts(
                 "experiment_id": _text(experiment.get("experiment_id")),
                 "cost_coverage_status": "UNKNOWN",
             }
+        elif compile_status == "DEFERRED" and _text(compile_receipt.get("reason_code")):
+            # The compiler already said WHY it deferred -- e.g.
+            # MISSING_PRIMARY_OPERATION for an obligation with no operation to
+            # call. Falling through to the branches below discarded that reason and
+            # relabelled it OBLIGATION_NOT_IN_PLAN / BUDGET_EXHAUSTED, which reads
+            # as "we ran out of budget" when the budget was never the constraint.
+            # A wrong reason code is worse than a missing one: it sends the next
+            # reader looking for capacity they already have.
+            compile_results[obligation_id] = {
+                "status": "DEFERRED",
+                "reason_code": _text(compile_receipt.get("reason_code")),
+                "detail": _text(
+                    compile_receipt.get("detail")
+                    or compile_receipt.get("reason_detail")
+                ),
+                "experiment_id": _text(experiment.get("experiment_id")),
+                "cost_coverage_status": "UNKNOWN",
+            }
         elif obligation_id in pending_ids:
             compile_results[obligation_id] = {
                 "status": "DEFERRED",
@@ -353,11 +371,16 @@ def _manual_terminal_receipts(
             }
         else:
             # Fallback: obligation compiled but not selected/blocked/deferred.
-            # Treat as DEFERRED rather than failing the entire run.
+            # Treat as DEFERRED rather than failing the entire run. Do NOT default
+            # not_in_plan_reason to BUDGET_EXHAUSTED -- this branch is reached
+            # precisely when the obligation is NOT in pending_ids, so the budget is
+            # the one explanation that cannot apply. Say it is unattributed instead.
             compile_results[obligation_id] = {
                 "status": "DEFERRED",
                 "reason_code": "OBLIGATION_NOT_IN_PLAN",
-                "not_in_plan_reason": pending_reasons.get(obligation_id, "BUDGET_EXHAUSTED"),
+                "not_in_plan_reason": pending_reasons.get(
+                    obligation_id, "NOT_IN_PLAN_REASON_UNATTRIBUTED"
+                ),
                 "detail": _text(compile_receipt.get("detail") or ""),
                 "experiment_id": _text(experiment.get("experiment_id")),
                 "cost_coverage_status": "UNKNOWN",

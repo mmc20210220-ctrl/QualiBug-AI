@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -306,12 +307,47 @@ def _inverse_delta_cleanup_body(
     return cleanup_body, f"inverse_delta:{key}"
 
 
-def load_actor_tokens(root: Path, project: str) -> dict[str, str]:
+def _jwt_expired(token: str, *, skew_seconds: int = 30) -> bool:
+    """Whether a JWT's own ``exp`` claim has passed.
+
+    Signature is not checked and must not be -- the target owns the secret. Only
+    the expiry claim is read, and a token whose claim cannot be parsed is treated
+    as usable so a non-JWT bearer (opaque token, API key) is not discarded.
+
+    A stored token is a snapshot, and a snapshot goes stale. Returning one blind
+    made the executor send a dead credential; the target answered 401 and the
+    oracle recorded that as "the endpoint rejected this actor", which is a
+    fabricated authorization defect rather than a finding about the target.
+    """
+    parts = str(token or "").split(".")
+    if len(parts) != 3:
+        return False
+    import base64
+
+    try:
+        segment = parts[1]
+        segment += "=" * (-len(segment) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(segment.encode("ascii")).decode("utf-8"))
+    except Exception:
+        return False
+    exp = claims.get("exp") if isinstance(claims, dict) else None
+    if not isinstance(exp, (int, float)):
+        return False
+    return bool(time.time() + skew_seconds >= float(exp))
+
+
+def load_actor_tokens(root: Path, project: str, *, base_url: str = "") -> dict[str, str]:
     """Map role / secret_ref → bearer token from declared test accounts only.
 
     P0-4/P0-7 enhanced: falls back to parsing TEST_ACCOUNTS.md from the
     project input directory and performing login when tokens are absent.
     Priority: test_accounts.json > TEST_ACCOUNTS.md (with login) > empty.
+
+    Stored tokens that have expired are dropped so the MD-login fallback runs,
+    rather than being handed to the executor as if they were live. ``base_url`` is
+    threaded from the caller's approved target because relying on the
+    QUALIBUG_TARGET_BASE_URL environment variable made that fallback dead under
+    the HTTP scan entrypoint, which never sets it.
     """
     path = Path(root) / "platform_inputs" / str(project) / "test_accounts.json"
     if path.exists():
@@ -320,6 +356,7 @@ def load_actor_tokens(root: Path, project: str) -> dict[str, str]:
         except (OSError, json.JSONDecodeError):
             payload = {}
         tokens: dict[str, str] = {}
+        expired_roles: list[str] = []
         rows: list[Any] = []
         if isinstance(payload, dict):
             rows = list(payload.get("accounts") or payload.get("actors") or payload.get("users") or [])
@@ -339,6 +376,11 @@ def load_actor_tokens(root: Path, project: str) -> dict[str, str]:
             token = _text(row.get("token") or row.get("access_token") or row.get("jwt"))
             if not role or not token:
                 continue
+            if _jwt_expired(token):
+                # Recorded, not silently skipped: a stale snapshot is the difference
+                # between "no credential" and "a credential the target will reject".
+                expired_roles.append(role)
+                continue
             status = _text(row.get("status") or row.get("account_status") or row.get("state") or "active").upper()
             if account_ref:
                 tokens[account_ref] = token
@@ -350,13 +392,19 @@ def load_actor_tokens(root: Path, project: str) -> dict[str, str]:
                 tokens.setdefault(f"secret_ref:actor:{role}", token)
         if tokens:
             return tokens
+        if expired_roles:
+            print(
+                f"  [STALE] {project}: {len(expired_roles)} declared token(s) expired "
+                f"({', '.join(sorted(set(expired_roles))[:6])}); re-logging in from TEST_ACCOUNTS.md",
+                flush=True,
+            )
 
     # ── P0-4: Fallback to TEST_ACCOUNTS.md with login ──
     md_accounts = _parse_test_accounts_md(root, project)
     if not md_accounts:
         return {}
     # Attempt login for each account to obtain tokens
-    base_url = _text(os.environ.get("QUALIBUG_TARGET_BASE_URL") or "")
+    base_url = _text(base_url) or _text(os.environ.get("QUALIBUG_TARGET_BASE_URL") or "")
     login_path = _text(os.environ.get("QUALIBUG_LOGIN_PATH") or "/api/auth/login")
     if not base_url:
         # Return credential info without tokens (preflight will flag this)
@@ -1035,7 +1083,10 @@ def run_environment_preflight(
     })
 
     # ── Check 4: Actor tokens loadable ──
-    actor_tokens = load_actor_tokens(root, project)
+    # base_url is in scope here and must be passed: without it the MD-login
+    # fallback cannot run, so this check reports "no tokens" for a project whose
+    # accounts are perfectly usable.
+    actor_tokens = load_actor_tokens(root, project, base_url=base_url)
     tokens_ok = len(actor_tokens) > 0
     checks.append({
         "check": "actor_tokens",
