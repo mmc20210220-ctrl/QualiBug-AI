@@ -126,6 +126,14 @@ class CredentialsHandlerMixin:
                     "type": service_data.get("auth_type", "password_login"),
                     "login_api": service_data.get("login_api", "/auth/login"),
                 }
+                # Which JSON key carries the identity in the login body. Settable
+                # here so an email-authenticating target is configured through the
+                # one entry point rather than by hand-editing the config file.
+                _identity_field = str(service_data.get("username_field") or "").strip()
+                if _identity_field:
+                    auth["username_field"] = _identity_field
+                elif isinstance(previous_auth.get("username_field"), str) and previous_auth["username_field"]:
+                    auth["username_field"] = previous_auth["username_field"]
                 # Multi-role accounts (new)
                 for ra in role_accounts:
                     if isinstance(ra, dict) and ra.get("role") and ra.get("username"):
@@ -176,6 +184,9 @@ class CredentialsHandlerMixin:
                 "type": service_data.get("auth_type", "password_login"),
                 "login_api": service_data.get("login_api", "/auth/login"),
             }
+            _identity_field = str(service_data.get("username_field") or "").strip()
+            if _identity_field:
+                auth["username_field"] = _identity_field
             # Multi-role accounts
             for ra in role_accounts:
                 if isinstance(ra, dict) and ra.get("role") and ra.get("username"):

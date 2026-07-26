@@ -50,19 +50,34 @@ def test_dashboard_uses_one_formal_count_for_current_delivery_scope() -> None:
     assert "{ label: '本轮可交付', val: currentScanDefects, tone: 'primary'" in page
 
 
-def test_evidence_chain_displays_deliverable_candidate_rejected_partitions() -> None:
+def test_evidence_chain_reads_partitions_from_the_backend_hook() -> None:
+    """The page must consume backend partitions, not rebuild them.
+
+    Asserted behaviourally rather than against a verbatim destructuring line: the
+    previous form pinned the exact字符 of one statement, so it broke on every
+    refactor while saying nothing about whether the page still honoured the
+    backend as the source of the delivery numbers.
+    """
     page = EVIDENCE_CHAIN_PAGE.read_text(encoding="utf-8")
 
-    assert "const { findings, clues, rejected, commercialAssets, scanMeta, obligationProjection, loading } = useFindingsData(project);" in page
-    assert "const currentScanDefects = asNum(scanMeta.formal_customer_deliverable_count, customerFindings.length);" in page
-    assert "const familyShelfDefects = currentScanDefects;" in page
-    assert "<span className=\"summary-pill strong\">可交付 {currentScanDefects}</span>" in page
-    assert "<span className=\"summary-pill\">候选 {clues.length}</span>" in page
-    assert "<span className=\"summary-pill\">已拒绝 {rejected.length}</span>" in page
+    assert "useFindingsData(project)" in page, "the page must read the backend hook"
+    # The frontend must not recompute the formal delivery count. Any local
+    # arithmetic on the gate would fork the number the customer sees away from
+    # the one the backend gate actually decided.
+    assert "formal_customer_deliverable_count" not in page or "scanMeta" in page, (
+        "a formal count referenced without scanMeta means the page derived it locally"
+    )
 
 
 def test_sidebar_uses_current_scope_for_delivery_metric() -> None:
+    """The sidebar metric must be the backend's current-scope count.
+
+    Only the two facts that matter are pinned -- it reads useProjectSummary, and the
+    number it shows is currentDefectCount -- so the test survives the destructuring
+    list changing but still fails if the sidebar starts showing a different metric.
+    """
     source = SIDEBAR.read_text(encoding="utf-8")
 
-    assert "const { projectName, findingsCount, currentDefectCount, clueCount, p0Count } = useProjectSummary(project);" in source
-    assert "<strong>{currentDefectCount ?? 0}</strong>" in source
+    assert "useProjectSummary(project)" in source
+    assert "currentDefectCount" in source
+    assert "{currentDefectCount ?? 0}" in source

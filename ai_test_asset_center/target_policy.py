@@ -185,3 +185,79 @@ def primary_write_block(decision: dict[str, Any]) -> str:
         if code in codes:
             return code
     return "TARGET_POLICY_BLOCKED"
+
+
+def approved_target_authority(project: Any, root: Any) -> dict[str, Any]:
+    """Return the project's approved target, as this module's own reading of it.
+
+    The SSRF guard blocks internal addresses by default. That is right for an
+    arbitrary URL and wrong for *the one target the operator approved*: private
+    pilots and on-premise systems live at localhost or an RFC1918 address, so a
+    blanket block leaves the approved target unreachable while this policy says it
+    is authorised. Callers use this to narrow the grant to the exact approved host
+    instead of reaching for the global QUALIBUG_SSRF_ALLOW_INTERNAL escape hatch,
+    which would grant every host at once.
+
+    Returns a grant with ``approved`` False whenever the config is missing,
+    unreadable or not approved -- never raises, because a caller that cannot read
+    the policy must fall back to the guard's default deny, not to an exception.
+    """
+    from pathlib import Path
+
+    grant: dict[str, Any] = {"approved": False, "host": "", "base_url": "", "reason_code": ""}
+    try:
+        config_path = Path(str(root)) / "platform_inputs" / str(project) / "real_project_config.json"
+        if not config_path.exists():
+            grant["reason_code"] = "PROJECT_TARGET_CONFIG_MISSING"
+            return grant
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        if not isinstance(config, dict):
+            grant["reason_code"] = "PROJECT_TARGET_CONFIG_INVALID"
+            return grant
+    except (OSError, ValueError) as exc:
+        grant["reason_code"] = f"PROJECT_TARGET_CONFIG_UNREADABLE:{type(exc).__name__}"
+        return grant
+
+    decision = build_target_policy_decision(
+        requested_base_url=config.get("base_url"),
+        approved_base_url=config.get("approved_base_url"),
+        environment_type=config.get("environment_type"),
+        environment_ref=config.get("environment_ref"),
+        execution_mode=config.get("execution_mode") or WRITE_EXECUTION_MODE,
+        runtime_status=config.get("runtime_status") or "approved",
+    )
+    approved_url = _text(decision.get("approved_base_url"))
+    if decision.get("status") != "approved" or not decision.get("read_allowed") or not approved_url:
+        grant["reason_code"] = primary_write_block(decision)
+        grant["decision_id"] = decision.get("decision_id", "")
+        return grant
+
+    grant.update(
+        {
+            "approved": True,
+            "host": (urlsplit(approved_url).hostname or "").lower(),
+            "base_url": approved_url,
+            "decision_id": decision.get("decision_id", ""),
+            "reason_code": "APPROVED_TARGET_HOST",
+        }
+    )
+    return grant
+
+
+def url_is_approved_target(url: Any, grant: dict[str, Any] | None) -> bool:
+    """True only when *url*'s host is the exact host the grant approved.
+
+    Host-only, not prefix-on-the-URL: a service discovered on another port of the
+    approved host is still the approved system, while a look-alike host such as
+    ``localhost.attacker.tld`` shares no host string and is refused.
+    """
+    if not isinstance(grant, dict) or not grant.get("approved"):
+        return False
+    host = _text(grant.get("host")).lower()
+    if not host:
+        return False
+    try:
+        candidate = (urlsplit(_text(url)).hostname or "").lower()
+    except ValueError:
+        return False
+    return bool(candidate) and candidate == host

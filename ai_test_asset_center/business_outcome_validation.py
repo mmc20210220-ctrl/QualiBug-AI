@@ -948,17 +948,27 @@ def _normal_token(cfg: dict[str, Any], project: str, root: Path, timeout: int) -
     login_api = str(cfg.get("login_api") or "")
     if not (base_url and login_api and username and password):
         return None
-    body = json.dumps({"username": username, "password": password}, ensure_ascii=False).encode("utf-8")
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
-    try:
-        req = urllib.request.Request(_join_url(base_url, login_api), data=body, method="POST", headers=headers)
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            data = json.loads(response.read(300_000).decode("utf-8", errors="replace"))
-            for key in ("token", "access_token", "jwt"):
-                if data.get(key):
-                    return str(data[key])
-    except Exception:
-        return None
+    # A hardcoded "username" key returns 401 against any system that authenticates
+    # by email, which reads here as "no token available" and silently degrades every
+    # authenticated probe downstream. Try the declared shape, else probe.
+    from .enterprise_credential_manager import _identity_field_candidates
+
+    for identity_field in _identity_field_candidates(
+        username, str(normal.get("username_field") or cfg.get("username_field") or "")
+    ):
+        body = json.dumps(
+            {identity_field: username, "password": password}, ensure_ascii=False
+        ).encode("utf-8")
+        try:
+            req = urllib.request.Request(_join_url(base_url, login_api), data=body, method="POST", headers=headers)
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                data = json.loads(response.read(300_000).decode("utf-8", errors="replace"))
+                for key in ("token", "access_token", "jwt"):
+                    if data.get(key):
+                        return str(data[key])
+        except Exception:
+            continue
     return None
 
 

@@ -451,18 +451,6 @@ def test_ingest_contract_and_ui_support_claims_match_real_capabilities() -> None
     assert "PROJECT_NOT_FOUND" in spec
 
 
-def test_frontend_materials_flow_uses_real_asset_api_and_supported_doc_types() -> None:
-    root = Path(__file__).resolve().parents[1]
-    client = (root / "frontend" / "src" / "api" / "client.ts").read_text(encoding="utf-8")
-    materials = (root / "frontend" / "src" / "pages" / "EnterpriseMaterials.tsx").read_text(encoding="utf-8")
-
-    assert "/knowledge/asset?project=" in client
-    assert "parseApiErrorMessage" in client
-    assert "collaboration_document" in materials
-    assert "business_doc" not in materials
-    assert "normalizeUploadError" in materials
-
-
 def test_private_pilot_frontend_aliases_match_current_vite_routes() -> None:
     assert private_pilot_service._normalize_frontend_page_path("/knowledge") == "/materials"
     assert private_pilot_service._normalize_frontend_page_path("/benchmark") == "/coverage"

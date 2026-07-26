@@ -39,13 +39,57 @@ from .credential_crypto import decrypt as _decrypt_cred
 _SERVICE_NAME_RE = re.compile(r"[a-z][a-z0-9_-]*$", re.I)
 
 
+def _approved_target_grant(project: str, root: Path) -> dict[str, Any]:
+    """Read the project's approved-target grant, denying on any failure."""
+    try:
+        from .target_policy import approved_target_authority
+
+        return approved_target_authority(project, root)
+    except Exception as exc:  # pragma: no cover - import-time guard only
+        return {"approved": False, "host": "", "reason_code": f"GRANT_UNAVAILABLE:{type(exc).__name__}"}
+
+
+def _url_is_approved_target(url: str, grant: dict[str, Any]) -> bool:
+    try:
+        from .target_policy import url_is_approved_target
+
+        return url_is_approved_target(url, grant)
+    except Exception:  # pragma: no cover - import-time guard only
+        return False
+
+
+# Identity keys seen in enterprise login bodies. "username" stays first for the
+# default case; an identity that looks like an email reorders "email" ahead of it
+# (see _identity_field_candidates) because such a system rejects "username" with
+# 401 and the probe would otherwise spend its whole budget on a shape that
+# cannot succeed.
+_IDENTITY_FIELD_CANDIDATES = ("username", "email", "account", "loginName", "mobile")
+
+
+def _identity_field_candidates(identity: str, configured: str = "") -> list[str]:
+    """Return login-body identity keys to try, most likely first.
+
+    A declared field wins outright and is used alone -- probing past an explicit
+    declaration would let a wrong-but-accepted shape mask a misconfiguration.
+    """
+    declared = str(configured or "").strip()
+    if declared:
+        return [declared]
+    candidates = list(_IDENTITY_FIELD_CANDIDATES)
+    if "@" in str(identity or ""):
+        candidates.remove("email")
+        candidates.insert(0, "email")
+    return candidates
+
+
 class ServiceCredential:
     """Credentials for a single service × role combination."""
 
     __slots__ = ("service", "role", "auth_type", "token", "refresh_token",
                  "username", "password", "api_key", "bearer_token",
                  "db_connection", "login_api", "base_url",
-                 "expires_at", "extra_headers", "login_lock")
+                 "expires_at", "extra_headers", "login_lock",
+                 "username_field", "resolved_login_shape")
 
     def __init__(self, service: str, role: str = "admin",
                  auth_type: str = "password_login"):
@@ -56,6 +100,13 @@ class ServiceCredential:
         self.refresh_token: str = ""
         self.username: str = ""
         self.password: str = ""
+        # Which JSON key carries the identity in the login body. Empty means "not
+        # declared, probe for it" -- see _identity_field_candidates. Systems that
+        # authenticate by email reject a body keyed "username" outright.
+        self.username_field: str = ""
+        # Records the (path, field) pair that actually produced a token, so a
+        # successful login is attributable rather than anonymous.
+        self.resolved_login_shape: dict[str, str] = {}
         self.api_key: str = ""
         self.bearer_token: str = ""
         self.db_connection: dict[str, str] = {}
@@ -185,6 +236,15 @@ class EnterpriseCredentialManager:
         self.store = CredentialStore()
         self._config_path: Path | None = None
         self._config_data: dict[str, Any] = {}
+        # The approved target may be internal (localhost / RFC1918), which the SSRF
+        # guard blocks by default. Resolved once here from target_policy -- the same
+        # SSOT the scan preflight uses -- so login reaches the approved target
+        # without opening internal access to every host.
+        self._target_grant: dict[str, Any] = _approved_target_grant(self.project_id, self.root)
+
+    def _allow_internal_for(self, url: str) -> bool:
+        """Whether *url* may resolve to an internal address on this project."""
+        return _url_is_approved_target(url, self._target_grant)
 
     # ── Configuration loading ──
 
@@ -225,9 +285,13 @@ class EnterpriseCredentialManager:
         """Load auth section from config — supports arbitrary role keys."""
         auth_type = auth.get("type") or auth.get("auth_type", "password_login")
         login_api = auth.get("login_api", "/auth/login")
+        username_field = str(auth.get("username_field") or "")
 
-        # Discover all role keys in the auth dict (skip metadata keys)
-        METADATA_KEYS = {"type", "auth_type", "login_api", "bearer_token", "api_key"}
+        # Discover all role keys in the auth dict (skip metadata keys). username_field
+        # is metadata too -- without it here, a service declaring it would be read as
+        # a role named "username_field" and silently produce a credential-less entry.
+        METADATA_KEYS = {"type", "auth_type", "login_api", "bearer_token", "api_key",
+                         "username_field"}
         roles_found = [k for k in auth if k not in METADATA_KEYS and isinstance(auth.get(k), dict)]
 
         # If no explicit roles, default to admin/viewer
@@ -242,6 +306,7 @@ class EnterpriseCredentialManager:
             cred.base_url = base_url
             cred.login_api = role_cfg.get("login_api", login_api)
             cred.username = str(role_cfg.get("username", ""))
+            cred.username_field = str(role_cfg.get("username_field") or username_field)
             cred.password = _decrypt_cred(str(role_cfg.get("password", "")))
             if not cred.username and not cred.password:
                 continue  # Skip empty roles
@@ -459,58 +524,81 @@ class EnterpriseCredentialManager:
                 seen.add(c)
                 unique.append(c)
 
+        identity_fields = _identity_field_candidates(username, cred.username_field)
+
         for login_path in unique:
             url = cred.base_url.rstrip("/") + "/" + login_path
-            body = json.dumps({
-                "username": username,
-                "password": password,
-            }).encode()
+            for identity_field in identity_fields:
+                body = json.dumps({
+                    identity_field: username,
+                    "password": password,
+                }).encode()
 
-            req = urllib.request.Request(
-                url, method="POST",
-                data=body,
-                headers={"Content-Type": "application/json"},
-            )
-
-            try:
-                with safe_urlopen(req, timeout=timeout) as resp:
-                    data = json.loads(resp.read().decode())
-            except Exception:
-                continue  # Try next path
-
-            # Extract token from common response patterns
-            token = (
-                (data.get("data") or {}).get("accessToken") or
-                (data.get("data") or {}).get("access_token") or
-                (data.get("data") or {}).get("token") or
-                data.get("accessToken") or
-                data.get("access_token") or
-                data.get("token") or
-                ""
-            )
-
-            if token:
-                cred.token = token
-                cred.login_api = "/" + login_path  # Remember detected path
-                # ── Extract expiry from JWT or response ──
-                cred.expires_at = self._extract_expiry(token, data)
-                # ── Extract refresh token if present ──
-                refresh = (
-                    (data.get("data") or {}).get("refreshToken") or
-                    (data.get("data") or {}).get("refresh_token") or
-                    data.get("refreshToken") or data.get("refresh_token") or ""
+                req = urllib.request.Request(
+                    url, method="POST",
+                    data=body,
+                    headers={"Content-Type": "application/json"},
                 )
-                if refresh:
-                    cred.refresh_token = refresh
-                self.store.set(cred)
-                print(f"  [OK] {role} token for {service} via "
-                      f"/{login_path} (len={len(token)}, "
-                      f"exp={time.strftime('%H:%M', time.localtime(cred.expires_at))}"
-                      f"{', refreshable' if refresh else ''})", flush=True)
-                return cred
+
+                try:
+                    with safe_urlopen(
+                        req, timeout=timeout, allow_internal=self._allow_internal_for(url)
+                    ) as resp:
+                        data = json.loads(resp.read().decode())
+                except SsrfBlockedError as exc:
+                    # Not a credential problem: the target is unreachable by policy.
+                    # Every candidate path shares this host, so retrying them all
+                    # would emit the same refusal N times and end in a "login failed"
+                    # summary that reads as "wrong password". Stop and name the cause.
+                    print(f"  [BLOCK] {service}/{role}: {url} refused by SSRF guard "
+                          f"({exc}); target grant: "
+                          f"{self._target_grant.get('reason_code') or 'none'}",
+                          flush=True)
+                    return None
+                except Exception:
+                    continue  # Try next identity shape, then the next path
+
+                # Extract token from common response patterns
+                token = (
+                    (data.get("data") or {}).get("accessToken") or
+                    (data.get("data") or {}).get("access_token") or
+                    (data.get("data") or {}).get("token") or
+                    data.get("accessToken") or
+                    data.get("access_token") or
+                    data.get("token") or
+                    ""
+                )
+
+                if token:
+                    cred.token = token
+                    cred.login_api = "/" + login_path  # Remember detected path
+                    cred.username_field = identity_field  # Remember detected shape
+                    cred.resolved_login_shape = {
+                        "login_path": "/" + login_path,
+                        "identity_field": identity_field,
+                        "declared": "yes" if len(identity_fields) == 1 else "probed",
+                    }
+                    # ── Extract expiry from JWT or response ──
+                    cred.expires_at = self._extract_expiry(token, data)
+                    # ── Extract refresh token if present ──
+                    refresh = (
+                        (data.get("data") or {}).get("refreshToken") or
+                        (data.get("data") or {}).get("refresh_token") or
+                        data.get("refreshToken") or data.get("refresh_token") or ""
+                    )
+                    if refresh:
+                        cred.refresh_token = refresh
+                    self.store.set(cred)
+                    print(f"  [OK] {role} token for {service} via "
+                          f"/{login_path} [{identity_field}] (len={len(token)}, "
+                          f"exp={time.strftime('%H:%M', time.localtime(cred.expires_at))}"
+                          f"{', refreshable' if refresh else ''})", flush=True)
+                    return cred
 
         print(f"  [WARN] {service}/{role}: login failed on all paths "
-              f"({len(unique)} tried){' (可能存在验证码)' if len(unique) <= 3 else ''}",
+              f"({len(unique)} paths x {len(identity_fields)} identity fields tried: "
+              f"{', '.join(identity_fields)})"
+              f"{' (可能存在验证码)' if len(unique) <= 3 else ''}",
               flush=True)
         return None
 

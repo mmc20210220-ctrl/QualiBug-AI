@@ -487,3 +487,111 @@ def search_chunks_by_entity(
             ):
                 results.append(chunk)
     return results
+
+
+# ── Whole-corpus binding ───────────────────────────────────────────────────
+
+COMPOSED_SOURCE_SUFFIX = "_composed_all"
+_LEGACY_COMPOSED_SUFFIXES = ("_full_docs",)
+
+
+def _is_composed_asset(source_id: str) -> bool:
+    """Aggregates must never be folded into a new aggregate.
+
+    Without this the composition includes its own previous output and each scan
+    doubles the corpus, changing the hash every run and defeating idempotence.
+    """
+    sid = str(source_id or "")
+    return sid.endswith(COMPOSED_SOURCE_SUFFIX) or sid.endswith(_LEGACY_COMPOSED_SUFFIXES)
+
+
+def compose_project_source_manifest(
+    project_id: str,
+    *,
+    root: Path,
+    actor: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Bind a campaign to every registered source, not to one arbitrary document.
+
+    The scan auto-bind used to take the first asset the registry yielded and stop,
+    so a project with nine ingested enterprise documents ran its campaign against
+    one of them -- whichever happened to be first or most recent. Preflight still
+    reported "sources: 9 passed", so the truncation was invisible: the run looked
+    fully sourced and understood an eighth of the business.
+
+    Composition keeps the immutability guarantee the single-source contract had.
+    The returned hash covers exactly the bytes the campaign reads, ordering is by
+    source_id so the same corpus always yields the same hash, and each part is
+    delimited by a header naming its source_id and hash so any obligation can be
+    traced back to the document it came from.
+
+    Returns a manifest ``{source_id, source_hash, composed_from, part_count}``.
+    ``composed_from`` is empty when a single asset made composition unnecessary.
+    """
+    project = _safe_project(project_id)
+    root_path = Path(root)
+    assets = [
+        asset for asset in list_source_assets(project, root=root_path)
+        if str(asset.get("source_id") or "").strip()
+        and _SHA256_RE.fullmatch(str(asset.get("latest_source_hash") or "").strip().lower())
+        and not _is_composed_asset(asset.get("source_id"))
+    ]
+    if not assets:
+        return {"source_id": "", "source_hash": "", "composed_from": [], "part_count": 0}
+    if len(assets) == 1:
+        only = assets[0]
+        return {
+            "source_id": str(only["source_id"]),
+            "source_hash": str(only["latest_source_hash"]).lower(),
+            "composed_from": [],
+            "part_count": 1,
+        }
+
+    parts: list[str] = []
+    composed_from: list[dict[str, str]] = []
+    for asset in assets:
+        sid = str(asset["source_id"])
+        digest = str(asset["latest_source_hash"]).lower()
+        try:
+            content = load_source_content(project, digest, root=root_path)
+        except SourceRegistryError:
+            # A missing blob must not silently shrink the corpus back toward the
+            # single-source behaviour this function exists to remove.
+            composed_from.append({"source_id": sid, "source_hash": digest, "status": "blob_missing"})
+            continue
+        parts.append(
+            f"<!-- qualibug:source source_id={sid} source_hash={digest} "
+            f"source_type={asset.get('source_type') or 'other_document'} -->\n{content}"
+        )
+        composed_from.append({"source_id": sid, "source_hash": digest, "status": "included"})
+
+    included = [item for item in composed_from if item["status"] == "included"]
+    if not included:
+        return {"source_id": "", "source_hash": "", "composed_from": composed_from, "part_count": 0}
+    if len(included) == 1:
+        return {
+            "source_id": included[0]["source_id"],
+            "source_hash": included[0]["source_hash"],
+            "composed_from": composed_from,
+            "part_count": 1,
+        }
+
+    composed_text = "\n\n".join(parts)
+    composed_id = f"src_{project}{COMPOSED_SOURCE_SUFFIX}"
+    manifest = register_source_asset(
+        project,
+        composed_id,
+        composed_text,
+        source_type="prd",
+        root=root_path,
+        actor=actor,
+        origin="composed_registered_sources",
+        filename=f"{composed_id}.md",
+        metadata={"composed_from": composed_from, "part_count": len(included)},
+    )
+    return {
+        "source_id": str(manifest.get("source_id") or composed_id),
+        "source_hash": str(manifest.get("source_hash") or "").lower(),
+        "composed_from": composed_from,
+        "part_count": len(included),
+    }

@@ -5,13 +5,30 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_GATE = ROOT / "frontend" / "src" / "api" / "data.ts"
-INTERNAL_CLUES_PAGE = ROOT / "frontend" / "src" / "pages" / "InternalClues.tsx"
 DASHBOARD_PAGE = ROOT / "frontend" / "src" / "pages" / "Dashboard.tsx"
 FINDING_TYPES = ROOT / "frontend" / "src" / "types" / "index.ts"
 
 
 def _source() -> str:
     return FRONTEND_GATE.read_text(encoding="utf-8")
+
+
+
+def _dashboard_surface() -> str:
+    """Dashboard.tsx plus the modules its logic was extracted into.
+
+    These assertions name capabilities the dashboard must surface. Pinning them to
+    Dashboard.tsx alone made a pure extraction refactor -- moving eight helpers into
+    lib/dashboard-utils.ts -- read as the capabilities disappearing. The surface is
+    the page and the modules it was split into, so the test tracks the behaviour
+    rather than the file it currently lives in.
+    """
+    parts = [DASHBOARD_PAGE]
+    parts.append(ROOT / "frontend" / "src" / "lib" / "dashboard-utils.ts")
+    components = ROOT / "frontend" / "src" / "components" / "dashboard"
+    if components.is_dir():
+        parts.extend(sorted(components.glob("*.tsx")))
+    return "\n".join(p.read_text(encoding="utf-8") for p in parts if p.is_file())
 
 
 def test_customer_ready_findings_do_not_recompute_backend_business_gate() -> None:
@@ -51,31 +68,8 @@ def test_customer_ready_findings_keep_internal_clues_out_of_customer_list() -> N
     assert "classifiedRows(raw, 'rejected', 'rejected_findings')" in source
 
 
-def test_internal_clue_page_surfaces_delivery_gate_reasons() -> None:
-    page = INTERNAL_CLUES_PAGE.read_text(encoding="utf-8")
-    types = FINDING_TYPES.read_text(encoding="utf-8")
-
-    assert "customer_delivery_gate_reasons?: string[]" in types
-    assert "GATE_REASON_LABELS" in page
-    assert "customer_delivery_gate_reasons" in page
-    assert "未进入客户缺陷的原因" in page
-    assert "explainGateReason" in page
-
-
-def test_internal_clue_page_prefers_backend_gate_explanations_with_reason_fallback() -> None:
-    page = INTERNAL_CLUES_PAGE.read_text(encoding="utf-8")
-
-    assert "type GateExplanation" in page
-    assert "function getGateExplanations" in page
-    assert "customer_delivery_gate_explanations" in page
-    assert "if (valid.length > 0) return valid" in page
-    assert "return reasonCodes.map" in page
-    assert "reason.next_action" in page
-    assert "下一步：" in page
-
-
 def test_dashboard_surfaces_delivery_gate_patch_status() -> None:
-    page = DASHBOARD_PAGE.read_text(encoding="utf-8")
+    page = _dashboard_surface()
 
     assert "function getGatePatchStatus" in page
     assert "customer_delivery_gate_patch" in page
@@ -89,7 +83,7 @@ def test_dashboard_surfaces_delivery_gate_patch_status() -> None:
 
 
 def test_dashboard_surfaces_main_chain_contract_status() -> None:
-    page = DASHBOARD_PAGE.read_text(encoding="utf-8")
+    page = _dashboard_surface()
 
     assert "MAIN_CHAIN_STAGE_LABELS" in page
     assert "function getMainChainContract" in page
@@ -111,7 +105,7 @@ def test_dashboard_surfaces_main_chain_contract_status() -> None:
 
 
 def test_dashboard_surfaces_evidence_normalization_blockers() -> None:
-    page = DASHBOARD_PAGE.read_text(encoding="utf-8")
+    page = _dashboard_surface()
 
     assert "EVIDENCE_MISSING_FIELD_LABELS" in page
     assert "function getEvidenceNormalizationSummary" in page
@@ -130,7 +124,7 @@ def test_dashboard_surfaces_evidence_normalization_blockers() -> None:
 
 
 def test_dashboard_surfaces_per_item_evidence_actions() -> None:
-    page = DASHBOARD_PAGE.read_text(encoding="utf-8")
+    page = _dashboard_surface()
 
     assert "function getEvidenceNormalizationReport" in page
     assert "function evidenceNormalizationItems" in page

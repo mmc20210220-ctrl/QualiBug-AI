@@ -182,14 +182,24 @@ class ScanHandlersMixin:
             _manifest_ok = bool(str(_manifest.get("source_id") or "").strip()) and len(str(_manifest.get("source_hash") or "").strip()) == 64
             if not _manifest_ok:
                 try:
-                    from .enterprise_source_registry import list_source_assets
-                    for _asset in list_source_assets(project, root=root):
-                        _sid = str(_asset.get("source_id") or "").strip()
-                        _sh = str(_asset.get("latest_source_hash") or "").strip().lower()
-                        if _sid and len(_sh) == 64:
-                            body = dict(body)
-                            body["source_manifest"] = {"source_id": _sid, "source_hash": _sh}
-                            break
+                    # Bind to the whole registered corpus. Taking the first asset and
+                    # stopping meant a project with nine ingested documents scanned
+                    # against one of them, while preflight still reported all nine as
+                    # passed -- the truncation left no trace anywhere in the result.
+                    from .enterprise_source_registry import compose_project_source_manifest
+                    _composed = compose_project_source_manifest(project, root=root, actor=actor)
+                    _sid = str(_composed.get("source_id") or "").strip()
+                    _sh = str(_composed.get("source_hash") or "").strip().lower()
+                    if _sid and len(_sh) == 64:
+                        body = dict(body)
+                        body["source_manifest"] = {"source_id": _sid, "source_hash": _sh}
+                        body["source_composition"] = {
+                            "part_count": _composed.get("part_count") or 0,
+                            "composed_from": _composed.get("composed_from") or [],
+                        }
+                        _dbg_report(hypothesis_id="B3", msg="[OK] auto source bind composed",
+                                    data={"source_id": _sid, "part_count": _composed.get("part_count")},
+                                    trace_id=trace_id)
                 except Exception as _bind_exc:
                     _dbg_report(hypothesis_id="B3", msg="[WARN] auto source bind skipped",
                                 data={"error": str(_bind_exc)}, trace_id=trace_id)
