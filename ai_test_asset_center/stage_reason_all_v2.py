@@ -1379,8 +1379,39 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
             }
             engine_names_for_report.append("bug_ontology")
     except Exception as e:
-        logger.warning("Ontology integration degraded: %s", e)
-        print(f"  [WARN] Ontology integration degraded: {e}", flush=True)
+        # The ontology is the product's single largest breadth mechanism: 12 risk
+        # families and 88 subtypes, and it feeds the hypothesis-generation stage
+        # that first-loss diagnosis identifies as the dominant source of missed
+        # defects. Losing it silently to a one-line warning meant a run could
+        # report success having generated zero ontology hypotheses, with no
+        # countable trace of the loss. Record it as an explicit degraded engine so
+        # the engine report carries the failure the way any other engine failure is
+        # carried, and re-raising is not needed to make it visible.
+        logger.error(
+            "Ontology hypothesis generation FAILED - breadth degraded",
+            exc_info=True,
+            extra={"context": {"engine": "bug_ontology", "error": str(e)}},
+        )
+        print(
+            f"  [ERROR] Ontology hypothesis generation FAILED: {type(e).__name__}: {e}\n"
+            f"          Breadth is degraded for this run: 0 ontology-driven "
+            f"hypotheses from 12 risk families / 88 subtypes.",
+            flush=True,
+        )
+        results_by_engine["bug_ontology"] = {
+            "engine_name": "bug_ontology",
+            "hypotheses": [],
+            "status": "failed",
+            "attempts": 1,
+            "retry_used": False,
+            "raw_chars": 0,
+            "content_chars": 0,
+            "duration_seconds": 0.0,
+            "error": f"{type(e).__name__}: {e}",
+            "degradation_reason": "ONTOLOGY_HYPOTHESIS_GENERATION_FAILED",
+        }
+        if "bug_ontology" not in engine_names_for_report:
+            engine_names_for_report.append("bug_ontology")
 
     # Merge ontology hypotheses into the main pool (with dedup weighting)
     all_hypotheses.extend(ontology_hypotheses)
