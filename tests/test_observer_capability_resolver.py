@@ -37,11 +37,28 @@ class TestObserverResolution:
             observer_requirement="before_state",
             primary_operation=ir["operations"][0],
             behavior_ir=ir,
+            required_bindings=["orderId"],
         )
         assert result["resolution_status"] == "RESOLVED"
         assert result["operation_ref"] in ("op_read", "op_list")
         assert result["method"] == "GET"
         assert result["independent_from_primary_response"] is True
+
+    def test_missing_binding_pending(self):
+        """SPEC v1.2.1 §6.2: missing bindings → PENDING_BINDING."""
+        ir = _make_ir_with_get()
+        result = resolve_observer_capability(
+            observer_requirement="before_state",
+            primary_operation=ir["operations"][0],
+            behavior_ir=ir,
+        )
+        # op_read has {orderId} but no required_bindings provided
+        if result["operation_ref"] == "op_read":
+            assert result["resolution_status"] == "PENDING_BINDING"
+            assert result["binding_dependency_status"] == "awaiting_binding_graph"
+        else:
+            # op_list has no path params → RESOLVED
+            assert result["resolution_status"] == "RESOLVED"
 
     def test_no_get_blocked(self):
         ir = _make_ir_no_get()

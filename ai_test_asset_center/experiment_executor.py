@@ -135,6 +135,29 @@ def execute_one_experiment(
     actors = _index_by_id(_list(ir.get("actors")))
     ops = _index_by_id(_list(ir.get("operations")))
 
+    # ── SPEC v1.2.1 §6.5 + §7.6: Runtime Binding Graph Validation ──
+    # Verify binding_coverage_graph fingerprint matches compile-time freeze.
+    compile_coverage_receipt = _dict(exp.get("compile_coverage_receipt"))
+    compile_binding_fp = _text(compile_coverage_receipt.get("binding_graph_fingerprint"))
+    runtime_binding_graph = _dict(exp.get("binding_coverage_graph"))
+    runtime_binding_fp = _text(runtime_binding_graph.get("binding_graph_fingerprint"))
+    if compile_binding_fp and runtime_binding_fp and compile_binding_fp != runtime_binding_fp:
+        return {
+            "schema_version": "qualibug.experiment-execution.v1",
+            "experiment_id": eid,
+            "obligation_id": oid,
+            "status": "BLOCKED",
+            "reason_code": "BLOCKED_BINDING_GRAPH_INVALID",
+            "detail": f"binding_graph_fingerprint_drift:compile={compile_binding_fp}:runtime={runtime_binding_fp}",
+            "elapsed_ms": int((time.time() - started) * 1000),
+            "finding": None,
+            "execution_receipt": {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_BINDING_GRAPH_INVALID",
+                "detail": "binding_graph_fingerprint_drift",
+            },
+        }
+
     # ── SPEC v1.1.1 §10 Phase A: Three-party fingerprint validation ──
     # A = compile_receipt.write_reversibility_fingerprint (frozen, authoritative)
     # B = attached proof recomputed fingerprint

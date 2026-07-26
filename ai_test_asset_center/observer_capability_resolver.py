@@ -215,8 +215,51 @@ def resolve_observer_capability(
             "resolution_status": "BLOCKED",
             "reason_code": "BLOCKED_MISSING_OBSERVER",
             "detail": "no_eligible_read_operation_in_behavior_ir",
+            "binding_dependency_status": "",
+            "ambiguous_candidates": [],
             "fingerprint": "",
         }
+
+    # ── SPEC v1.2.1 §6.3: Ambiguity detection ──
+    # When top two candidates have score difference < 0.05 and no stronger
+    # source relation distinguishes them, return AMBIGUOUS.
+    ambiguous_candidates: list[dict[str, Any]] = []
+    if len(candidates) >= 2:
+        score_gap = candidates[0]["score"] - candidates[1]["score"]
+        if score_gap < 0.05:
+            # Check if source relations distinguish them
+            op0 = _dict(candidates[0]["operation"])
+            op1 = _dict(candidates[1]["operation"])
+            src0 = _list(op0.get("source_refs"))
+            src1 = _list(op1.get("source_refs"))
+            # More source refs = stronger evidence
+            if len(src0) == len(src1):
+                ambiguous_candidates = [
+                    {"operation_ref": _text(op0.get("id")), "score": candidates[0]["score"]},
+                    {"operation_ref": _text(op1.get("id")), "score": candidates[1]["score"]},
+                ]
+                return {
+                    "schema_version": "qualibug.observer-resolution-plan.v1",
+                    "observer_requirement": observer_requirement,
+                    "observer_kind": observer_kind,
+                    "operation_ref": "",
+                    "method": "",
+                    "path": "",
+                    "entity_ref": "",
+                    "identity_strategy": "",
+                    "required_bindings": list(required_bindings or []),
+                    "available_bindings": [],
+                    "independent_from_primary_response": True,
+                    "source_refs": [],
+                    "confidence": 0.0,
+                    "resolution_status": "AMBIGUOUS",
+                    "reason_code": "BLOCKED_MISSING_OBSERVER",
+                    "detail": "observer_candidate_ambiguous",
+                    "binding_dependency_status": "",
+                    "ambiguous_candidates": ambiguous_candidates,
+                    "candidates_evaluated": len(candidates),
+                    "fingerprint": "",
+                }
 
     best = candidates[0]
     best_op = _dict(best["operation"])
@@ -236,12 +279,16 @@ def resolve_observer_capability(
     available_bindings = [p for p in path_params if p in (required_bindings or [])]
     missing_bindings = [p for p in path_params if p not in (required_bindings or [])]
 
+    # ── SPEC v1.2.1 §6.2: Binding-dependent resolution status ──
+    # missing_bindings non-empty → PENDING_BINDING (not RESOLVED)
+    # Binding Graph may later produce these bindings from fixture/primary response.
     if missing_bindings:
-        # Not all bindings available — still RESOLVED but note missing
-        resolution_status = "RESOLVED"
+        resolution_status = "PENDING_BINDING"
+        binding_dependency_status = "awaiting_binding_graph"
         confidence = best["score"] * 0.7
     else:
         resolution_status = "RESOLVED"
+        binding_dependency_status = "complete"
         confidence = best["score"]
 
     # Fingerprint
@@ -266,12 +313,15 @@ def resolve_observer_capability(
         "identity_strategy": identity_strategy,
         "required_bindings": list(required_bindings or []),
         "available_bindings": available_bindings,
+        "missing_bindings": missing_bindings,
         "independent_from_primary_response": best_op_id != primary_id,
         "source_refs": list(best_op.get("source_refs") or [])[:3],
         "confidence": round(confidence, 4),
         "resolution_status": resolution_status,
-        "reason_code": "",
-        "detail": "",
+        "binding_dependency_status": binding_dependency_status,
+        "ambiguous_candidates": [],
+        "reason_code": "" if resolution_status == "RESOLVED" else "PENDING_BINDING",
+        "detail": "" if resolution_status == "RESOLVED" else f"missing_bindings:{';'.join(missing_bindings[:5])}",
         "candidates_evaluated": len(candidates),
         "scoring_reasons": best["reasons"],
         "fingerprint": fingerprint,

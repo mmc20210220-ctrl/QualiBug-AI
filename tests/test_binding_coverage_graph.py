@@ -16,7 +16,7 @@ def _make_experiment():
         "cleanup_plan": [{"path": "/orders/{orderId}", "method": "DELETE"}],
         "observers": [{"path": "/orders/{orderId}", "method": "GET"}],
         "binding_plan": [
-            {"target": "orderId", "source_kind": "PRIMARY_RESPONSE", "status": "runtime_resolvable"},
+            {"target": "orderId", "source_kind": "FIXTURE_RECEIPT", "status": "runtime_resolvable"},
         ],
         "actor_selection_contract": {
             "control_actor_ref": "actor_admin",

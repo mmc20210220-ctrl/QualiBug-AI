@@ -242,6 +242,36 @@ def execute_selected_experiments(
     # in a later round. Dropping them here leaves the obligation with no terminal
     # receipt and makes a throttled batch look like an empty plan.
     budget_deferred: list[dict[str, Any]] = []
+
+    # ── SPEC v1.2.1 §12: Prioritize experiments before budget enforcement ──
+    # Use prioritizer to determine real execution order.
+    _prioritization_receipt: dict[str, Any] = {}
+    try:
+        from .safe_experiment_prioritizer import prioritize_experiments
+        _exps_for_priority = [
+            experiments_by_obligation.get(_text(_dict(s).get("obligation_id")), {})
+            for s in selected
+        ]
+        _obligations_for_priority = [
+            _dict(s) for s in selected
+        ]
+        _prioritization_receipt = prioritize_experiments(
+            experiments=_exps_for_priority,
+            obligations=_obligations_for_priority,
+            behavior_ir=behavior_ir,
+            budget=_budget,
+        )
+        _ordered_ids = _list(_prioritization_receipt.get("ordered_experiment_ids"))
+        if _ordered_ids:
+            # Reorder selected based on prioritizer output
+            _id_to_item = {_text(_dict(s).get("obligation_id")): s for s in selected}
+            _reordered = [_id_to_item[oid] for oid in _ordered_ids if oid in _id_to_item]
+            # Append any items not in the ordered list
+            _remaining = [s for s in selected if _text(_dict(s).get("obligation_id")) not in set(_ordered_ids)]
+            selected = _reordered + _remaining
+    except Exception as exc:
+        logger.debug("batch prioritization failed (non-fatal): %s", exc)
+
     if _total_selected > _budget:
         logger.info(
             "Experiment budget: deferring %d of %d selected to a later round (budget=%d)",
@@ -727,5 +757,33 @@ def execute_selected_experiments(
         phase=_phase,
     )
     _batch_result["validation_gate"] = _validation_gate
+
+    # ── SPEC v1.2.1 §12 + §13: Attach funnel, attribution, and priority receipts ──
+    try:
+        from .execution_coverage_funnel import build_execution_coverage_funnel
+        from .blocker_attribution import attribute_all_blockers
+        _all_exps = [experiments_by_obligation.get(oid, {}) for oid in selected_ids]
+        _all_obls = [_dict(s) for s in selected]
+        _all_exec_results = list(execution_results.values())
+        _funnel = build_execution_coverage_funnel(
+            obligations=_all_obls,
+            experiments=_all_exps,
+            execution_results=_all_exec_results,
+            findings=findings,
+            campaign_id=campaign_id,
+        )
+        _batch_result["execution_coverage_funnel"] = _funnel
+        _attribution = attribute_all_blockers(
+            obligations=_all_obls,
+            experiments=_all_exps,
+            execution_results=_all_exec_results,
+            behavior_ir=behavior_ir,
+        )
+        _batch_result["blocker_attribution"] = _attribution
+    except Exception as exc:
+        logger.debug("batch funnel/attribution failed (non-fatal): %s", exc)
+    if _prioritization_receipt:
+        _batch_result["prioritization_receipt"] = _prioritization_receipt
+
     return _batch_result
 

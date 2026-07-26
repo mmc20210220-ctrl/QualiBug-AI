@@ -1407,6 +1407,43 @@ def compile_experiment_for_obligation(
         },
     )
 
+    # ── SPEC v1.2.1 §5: Coverage Recovery Orchestrator ──
+    # Run all v1.2 modules in sequence; verdict directly gates COMPILED/BLOCKED.
+    from ai_test_asset_center.v12_coverage_recovery_orchestrator import prepare_experiment_v12
+    v12_result = prepare_experiment_v12(
+        obligation=obl,
+        behavior_ir=ir,
+        compiler_context={
+            "experiment": experiment,
+            "primary_operation": primary_op,
+        },
+    )
+    v12_verdict = v12_result.get("verdict", "READY")
+    if v12_verdict in ("BLOCKED", "SOURCE_DEPENDENT", "ENVIRONMENT_DEPENDENT"):
+        primary_block = v12_result.get("primary_blocking_reason") or {}
+        return blocked_experiment(
+            oid,
+            primary_block.get("reason_code", "BLOCKED_UNSUPPORTED_ADAPTER"),
+            primary_block.get("detail", "v12_coverage_recovery_blocked"),
+        )
+    # READY: attach v1.2 artifacts to experiment
+    experiment["coverage_recovery_version"] = "v1.2.1"
+    experiment["compile_coverage_receipt"] = {
+        "verdict": v12_verdict,
+        "fingerprint": v12_result.get("fingerprint", ""),
+        "binding_graph_fingerprint": _text(
+            _dict(v12_result.get("module_results", {}).get("binding_coverage_graph")).get("binding_graph_fingerprint")
+        ),
+        "observer_resolution_status": _text(
+            _dict(v12_result.get("module_results", {}).get("observer_resolution_plan")).get("resolution_status")
+        ),
+    }
+    experiment["observer_resolution_plan"] = v12_result.get("module_results", {}).get("observer_resolution_plan")
+    experiment["binding_coverage_graph"] = v12_result.get("module_results", {}).get("binding_coverage_graph")
+    experiment["oracle_input_contract"] = v12_result.get("module_results", {}).get("oracle_input_contract")
+    experiment["fixture_dependency_dag"] = v12_result.get("module_results", {}).get("fixture_dependency_dag")
+    experiment["compensation_relation_plan"] = v12_result.get("module_results", {}).get("compensation_relation_plan")
+
     # ── SPEC v1.1 §9: Pass cleanup exemption contract from obligation ──
     cleanup_exemption = _dict(obl.get("cleanup_exemption_contract"))
     if cleanup_exemption:

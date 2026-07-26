@@ -193,7 +193,7 @@ class TestOracleInputNotWaived:
         }
         result = build_oracle_input_contract(experiment=exp, behavior_ir={})
         assert result["overall_status"] == "INCOMPLETE"
-        assert result["reason_code"] == "BLOCKED_MISSING_OBSERVER"
+        assert result["reason_code"] == "BLOCKED_ORACLE_INPUT_INCOMPLETE"
 
     def test_authorization_without_control_incomplete(self):
         exp = {

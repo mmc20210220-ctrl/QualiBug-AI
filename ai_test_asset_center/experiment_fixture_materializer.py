@@ -259,7 +259,11 @@ def materialize_experiment_fixtures(
     # without a concrete create path remain BLOCKED (already caught in preflight
     # when constructible=false). Record READY nodes as resolved receipts.
     dag = _dict(exp.get("fixture_dag"))
-    for node_id in _list(dag.get("setup_order")):
+    # ── SPEC v1.2.1 §8: Use fixture_dependency_dag.execution_order if available ──
+    v12_fixture_dag = _dict(exp.get("fixture_dependency_dag"))
+    v12_execution_order = _list(v12_fixture_dag.get("execution_order")) or _list(v12_fixture_dag.get("topological_order"))
+    setup_order = v12_execution_order if v12_execution_order else _list(dag.get("setup_order"))
+    for node_id in setup_order:
         node = next((n for n in _list(dag.get("nodes")) if _text(_dict(n).get("node_id")) == node_id), {})
         kind = _text(_dict(node).get("kind"))
         if kind == "actor_context":
