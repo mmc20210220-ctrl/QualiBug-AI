@@ -1208,7 +1208,23 @@ def _permission_entries(text: str, payload: Any, source_id: str) -> list[dict[st
         resource_aliases = _permission_resource_aliases(negative_clause)
         if not roles or not resource_aliases:
             continue
-        action_values = _permission_action_aliases(negative_clause) or ["*"]
+        # An unidentified action must NOT become a wildcard deny. The source
+        # 「warehouse 可以调整库存，但不能改商品价格」 restricts one action on one field;
+        # falling back to ["*"] turned it into "warehouse is denied every action on
+        # product", and the oracle then asserted that GET /api/products must fail for
+        # warehouse. It does not, so the run reported a defect the source never claimed
+        # -- 9 of 18 deliverable findings on a real target came from this one fallback.
+        #
+        # For a DENY the fail-closed direction is to deny LESS, not more. When the
+        # action cannot be determined the row is recorded with decision "unknown", which
+        # behavior_ir maps to permission_unknown -- the relation type that exists for
+        # exactly this case -- so the restriction stays visible without becoming an
+        # assertion.
+        action_values = _permission_action_aliases(negative_clause)
+        negative_decision = "deny"
+        if not action_values:
+            action_values = ["unspecified"]
+            negative_decision = "unknown"
         for role in roles:
             role_aliases = [role, *role_words.get(role, [])]
             role_resource_aliases = set(
@@ -1230,7 +1246,7 @@ def _permission_entries(text: str, payload: Any, source_id: str) -> list[dict[st
                     "resource": resource_alias,
                     "resource_aliases": scoped_resource_aliases,
                     "actions": action_values,
-                    "decision": "deny",
+                    "decision": negative_decision,
                     "scope": _permission_scope(negative_clause),
                     "evidence": _redact_text(line, 280),
                 })
