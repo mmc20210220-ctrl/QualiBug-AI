@@ -336,6 +336,22 @@ def build_discovery_plan(
         api_operations=operations,
         runtime_actors=runtime_actors,
     )
+    # Join prose invariants to the operations they constrain. A rule extracted from a
+    # requirements document never names an endpoint, so operation_refs stayed empty and
+    # the obligation compiler deferred the obligation with MISSING_PRIMARY_OPERATION --
+    # the single largest terminal reason on a live 11-service target. The binder only
+    # writes a ref when two independent signals agree and records the basis for each,
+    # so a derived binding is auditable and an unbindable invariant keeps its gap.
+    from .invariant_operation_binder import (
+        apply_invariant_operation_bindings,
+        bind_invariants_to_operations,
+    )
+
+    invariant_binding_result = bind_invariants_to_operations(behavior_ir)
+    invariant_binding_receipt = apply_invariant_operation_bindings(
+        behavior_ir, invariant_binding_result
+    )
+
     behavior_ir_input_receipt = {
         "schema_version": "qualibug.behavior-ir-input-receipt.v1",
         "knowledge_asset_id": _text(asset.get("asset_id")),
@@ -346,6 +362,7 @@ def build_discovery_plan(
         "runtime_actor_count": len(runtime_actors),
         "ui_source_spec_count": len(_list(asset.get("ui_design_specs"))),
         "runtime_interface_discovery_enabled": runtime_interface_discovery_enabled,
+        "invariant_operation_binding": invariant_binding_receipt,
     }
 
     # ── Binding Closure: construct unified binding ledger from Behavior IR ──
