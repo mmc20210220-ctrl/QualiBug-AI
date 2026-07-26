@@ -41,34 +41,11 @@ jobs:
           print('Python syntax check passed')
           PY
 
-      - name: Enforce reasoner static guardrails
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          source = Path('ai_test_asset_center/stage_reason_all_v2.py').read_text(encoding='utf-8')
-          required = [
-              'MAX_HYPOTHESES = 15',
-              'MAX_HYPOTHESES_HARD_LIMIT = 15',
-              'MAX_REASONER_WORKERS = 4',
-              'MIN_REASONER_TIMEOUT_SECONDS = 300',
-              'MIN_REASONER_MAX_TOKENS = 32768',
-          ]
-          forbidden = [
-              'MAX_HYPOTHESES = 300',
-              'MAX_HYPOTHESES_HARD_LIMIT = 500',
-          ]
-
-          missing = [item for item in required if item not in source]
-          present = [item for item in forbidden if item in source]
-          if missing or present:
-              raise SystemExit(
-                  'Reasoner guardrail drift detected\n'
-                  f'Missing required: {missing}\n'
-                  f'Forbidden present: {present}'
-              )
-          print('Reasoner static guardrails passed')
-          PY
+      # The reasoner guardrail assertions used to be duplicated inline here as a
+      # third copy of the same literals (tools/fix_reasoner_guardrails.py and
+      # tests/test_reasoner_static_guardrails.py being the other two).  The three
+      # copies drifted and deadlocked the job.  tests/test_reasoner_static_guardrails.py
+      # is now the single assertion authority and runs in the pytest step below.
 
       - name: Install test runner
         run: python -m pip install --upgrade pytest

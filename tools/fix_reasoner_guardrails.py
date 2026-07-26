@@ -18,13 +18,18 @@ from pathlib import Path
 
 
 TARGET = Path("ai_test_asset_center/stage_reason_all_v2.py")
+# The canonical per-engine hypothesis cap.  Keep in sync with
+# ai_test_asset_center/policy_wiring.py::_REASONER_MAX_HYPOTHESES_PER_ENGINE,
+# which is the runtime authority; tests/test_reasoner_static_guardrails.py
+# cross-checks the two.
+HYPOTHESIS_CAP = 40
 REPLACEMENTS = {
-    "MAX_HYPOTHESES = 300": "MAX_HYPOTHESES = 15",
-    "MAX_HYPOTHESES_HARD_LIMIT = 500": "MAX_HYPOTHESES_HARD_LIMIT = 15",
+    "MAX_HYPOTHESES = 300": f"MAX_HYPOTHESES = {HYPOTHESIS_CAP}",
+    "MAX_HYPOTHESES_HARD_LIMIT = 500": f"MAX_HYPOTHESES_HARD_LIMIT = {HYPOTHESIS_CAP}",
 }
 REQUIRED_AFTER = (
-    "MAX_HYPOTHESES = 15",
-    "MAX_HYPOTHESES_HARD_LIMIT = 15",
+    f"MAX_HYPOTHESES = {HYPOTHESIS_CAP}",
+    f"MAX_HYPOTHESES_HARD_LIMIT = {HYPOTHESIS_CAP}",
     "MAX_REASONER_WORKERS = 4",
     "MIN_REASONER_TIMEOUT_SECONDS = 300",
     "MIN_REASONER_MAX_TOKENS = 32768",

@@ -20,7 +20,7 @@ Autonomous discovery loop:
 - Config guard: `timeout_seconds ≥ 300`, `max_tokens ≥ 32768`
 
 ### 3. Multi-Stage Reasoning (`stage_reason_all_v2.py`)
-Chains analysis stages with `MAX_HYPOTHESES=15` per engine and `max_workers=4` parallel.
+Chains analysis stages with `MAX_HYPOTHESES=40` per engine and `max_workers=4` parallel.
 
 ### 4. Self-Improving Loop (`self_improving_loop.py` / `autonomous_evolution_orchestrator.py`)
 Champion/challenger pattern with formal state machine:

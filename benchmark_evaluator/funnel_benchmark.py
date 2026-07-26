@@ -212,7 +212,7 @@ elif MODE == "llm":
 elif MODE == "llm_throughput":
     # B: 打通执行吞吐瓶颈。LLM 全开 + 提高每轮切片预算,让 366 条源绑定假设
     # 尽量在单轮内被消化(而不是 15/轮 被饿死)。抬高的是“每轮切片执行天花板”,
-    # 与 reasoner 的 MAX_HYPOTHESES=15 / max_workers=4 地板互不相干(AGENTS.md)。
+    # 与 reasoner 的 MAX_HYPOTHESES=40 / max_workers=4 地板互不相干(AGENTS.md)。
     os.environ["QUALIBUG_UNIFY_ANALYZERS"] = "1"
     os.environ["QUALIBUG_UNIFY_LLM_REASONER"] = "1"
     _cfg_file = next(

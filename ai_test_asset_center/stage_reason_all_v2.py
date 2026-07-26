@@ -925,7 +925,9 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
     from .policy_wiring import get_policy_value
     raw_max = os.environ.get("QUALIBUG_REASONER_MAX_WORKERS",
                              str(get_policy_value("reasoner", "max_workers", 4)))
-    max_hypotheses_per_engine = get_policy_value("reasoner", "max_hypotheses_per_engine", 15)
+    max_hypotheses_per_engine = get_policy_value(
+        "reasoner", "max_hypotheses_per_engine", MAX_HYPOTHESES
+    )
     max_hypothesis_chars = get_policy_value("reasoner", "max_hypothesis_chars", 500)
     retry_count = get_policy_value("reasoner", "retry_count", 1)
     timeout_seconds = get_policy_value(

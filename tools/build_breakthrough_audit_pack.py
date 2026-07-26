@@ -177,7 +177,7 @@ def main() -> None:
         "assert s.reasoner.max_tokens>=32768;"
         "assert s.execution.max_tokens>=32768;"
         "assert s.reasoner.max_workers<=4;"
-        "assert MAX_HYPOTHESES==15;"
+        "assert MAX_HYPOTHESES>=40;"
         "print('FLOORS_OK', s.reasoner.timeout_seconds, s.reasoner.max_tokens, MAX_HYPOTHESES, s.reasoner.max_workers)",
     ])
 

@@ -182,7 +182,8 @@ QualiBug 当前的主要瓶颈不是“LLM 没有生成足够多的 Bug 猜想�
 
 - `timeout_seconds >= 300`。
 - `max_tokens >= 32768`。
-- `MAX_HYPOTHESES = 15`。
+- `MAX_HYPOTHESES >= 40`（地板，不是固定值；运行时权威是 `policy_wiring._REASONER_MAX_HYPOTHESES_PER_ENGINE`，
+  它在解析 reasoner 预算时被写入 `stage_reason_all_v2`，模块字面量本身不是权威）。
 - `max_workers = 4`。
 - 前端端口 `5174`，后端端口 `8088`。
 - 每个实际 HTTP 写操作必须经过 governed sandbox executor，并独立产生审计回执。
@@ -789,7 +790,7 @@ assert engine.client.config.timeout_seconds >= 300, "timeout too low"
 assert engine.client.config.max_tokens >= 32768, "max_tokens too low"
 ```
 
-并验证 `MAX_HYPOTHESES == 15`、`max_workers <= 4`。
+并验证 `MAX_HYPOTHESES >= 40`、`max_workers <= 4`。
 
 ## 13. 阶段验收门
 

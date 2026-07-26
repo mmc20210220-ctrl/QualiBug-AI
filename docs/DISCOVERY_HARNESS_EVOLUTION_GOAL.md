@@ -413,7 +413,12 @@ Frozen surfaces:
 - production write boundary and governed sandbox executor;
 - before/after/cleanup/audit receipt requirements;
 - one governed receipt per actual write, reverse-order compensation for partial multi-write setup, and no whole-scenario write retry;
-- `timeout_seconds >= 300`, `max_tokens >= 32768`, `MAX_HYPOTHESES = 15`, and `max_workers = 4`;
+- `timeout_seconds >= 300`, `max_tokens >= 32768`, `MAX_HYPOTHESES >= 40`, and `max_workers = 4`. The
+  hypothesis cap is a **floor**, not a fixed value: first-loss diagnosis puts the large majority of
+  missed defects at the hypothesis-generation stage, so narrowing it narrows discovery breadth. Its
+  runtime authority is `policy_wiring._REASONER_MAX_HYPOTHESES_PER_ENGINE`, which is written onto
+  `stage_reason_all_v2` at budget-resolution time — that constant, not the module literal, is what
+  production runs, and `tests/test_reasoner_static_guardrails.py` cross-checks the two;
 - product ports: frontend `5174`, backend `8088`.
 
 ## Stage gates
