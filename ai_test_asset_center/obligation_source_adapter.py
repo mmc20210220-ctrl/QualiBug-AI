@@ -55,6 +55,25 @@ _TEMPLATE_BY_FAMILY = {
     "temporal": "source_declared_temporal",
     "privacy": "source_declared_privacy",
 }
+# Every entry MUST name observers present and implemented in
+# observer_contracts_base.OBSERVER_REGISTRY. compile_observer_requirements returns
+# BLOCKED_MISSING_OBSERVER for an unregistered id, so a typo here silently kills a whole
+# risk family on this path.
+#
+# It did exactly that: "resource_visibility", "clock" and "privacy_surface" were never
+# registered, so visibility, temporal and privacy -- 3 of the 10 canonical families --
+# compiled to BLOCKED_MISSING_OBSERVER every time an obligation reached this path.
+# Verified by calling compile_observer_requirements over each family's declared set.
+# Replaced with the registered observers that serve the same role:
+#   visibility  : resource_ownership -- the implemented actor-vs-resource access observer
+#                 (isolation already uses it for the same question)
+#   temporal    : temporal_window -- the implemented observer on the
+#                 temporal_convergence surface
+#   privacy     : actor_identity alongside http_response, so a field-exposure assertion
+#                 has both the response body and the identity that received it
+#
+# tests/test_family_observer_registration.py asserts every family's set compiles, so a
+# family can no longer be declared against an observer that does not exist.
 _OBSERVERS_BY_FAMILY = {
     "authorization": ["http_response", "actor_identity"],
     "isolation": ["http_response", "resource_ownership"],
@@ -63,9 +82,9 @@ _OBSERVERS_BY_FAMILY = {
     "idempotency": ["business_effect", "http_response"],
     "concurrency": ["final_state", "barrier_timeline"],
     "validation": ["http_response", "typed_assertion"],
-    "visibility": ["http_response", "resource_visibility"],
-    "temporal": ["before_state", "after_state", "clock"],
-    "privacy": ["http_response", "privacy_surface"],
+    "visibility": ["http_response", "resource_ownership"],
+    "temporal": ["before_state", "after_state", "temporal_window"],
+    "privacy": ["http_response", "actor_identity"],
 }
 
 
