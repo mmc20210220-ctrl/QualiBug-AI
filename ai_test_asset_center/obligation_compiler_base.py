@@ -1205,7 +1205,10 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
                 if actor_ref:
                     actor_property["actor_ref"] = actor_ref
                 obligations.append(make_obligation(
-                    risk_family=family if family in RISK_FAMILIES else "validation",
+                    # Pass the declared family through. make_obligation resolves it
+                    # via the registry and records the declared value plus a reason
+                    # code; pre-coercing to "validation" here discarded both.
+                    risk_family=family,
                     subject_refs=[
                         invariant_ref,
                         operation_ref,

@@ -11,7 +11,12 @@ import re
 from typing import Any
 
 from .behavior_ir import BehaviorIRError, SCHEMA_VERSION as BEHAVIOR_IR_SCHEMA
-from .test_obligation import RISK_FAMILIES, dedupe_obligations, make_obligation
+from .test_obligation import (
+    RISK_FAMILIES,
+    dedupe_obligations,
+    make_obligation,
+    resolve_risk_family,
+)
 
 
 ADAPTER_SCHEMA = "qualibug.obligation-source-adapter.v1"
@@ -22,23 +27,10 @@ _FORBIDDEN_AUTHORITY_KEYS = frozenset({
     "oracle_verdict",
     "send_request",
 })
-_FAMILY_ALIASES = {
-    "access_control": "authorization",
-    "auth": "authorization",
-    "permission": "authorization",
-    "tenant": "isolation",
-    "multi_tenant": "isolation",
-    "state_machine": "state",
-    "lifecycle": "state",
-    "money": "conservation",
-    "inventory": "conservation",
-    "stock": "conservation",
-    "race": "concurrency",
-    "cache": "validation",
-    "consistency": "validation",
-    "business_rules": "validation",
-    "invariant": "validation",
-}
+# _FAMILY_ALIASES moved to test_obligation.RISK_FAMILY_ALIASES so there is one
+# resolution authority instead of two divergent maps. Every entry was carried over
+# with the same canonical target; the one deliberate change is tenant_isolation,
+# which had no entry here and so silently became "validation".
 _RELATION_TYPES_BY_FAMILY = {
     "authorization": {"permits", "denies"},
     "isolation": {"owns", "scopes"},
@@ -120,15 +112,25 @@ def _assert_source_only(value: Any) -> None:
             _assert_source_only(item)
 
 
-def _risk_family(candidate: dict[str, Any]) -> str:
-    raw = _text(
+def _declared_risk_family(candidate: dict[str, Any]) -> str:
+    """The family as the candidate declared it, before any narrowing."""
+    return _text(
         candidate.get("risk_family")
         or candidate.get("family")
         or candidate.get("category")
         or candidate.get("risk_type")
     ).lower()
-    family = _FAMILY_ALIASES.get(raw, raw)
-    return family if family in RISK_FAMILIES else "validation"
+
+
+def _risk_family(candidate: dict[str, Any]) -> str:
+    """Resolve through the single registry authority in test_obligation.
+
+    This used to apply a private _FAMILY_ALIASES map and then silently rewrite
+    anything unrecognized to "validation" -- a second, divergent taxonomy. The
+    registry now owns aliasing, and make_obligation records the declared family
+    plus a reason code, so the narrowing is visible in the obligation.
+    """
+    return resolve_risk_family(_declared_risk_family(candidate))["canonical"]
 
 
 def _stable_gap(

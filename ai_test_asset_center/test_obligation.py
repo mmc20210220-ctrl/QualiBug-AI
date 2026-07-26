@@ -10,7 +10,28 @@ from typing import Any
 
 
 SCHEMA_VERSION = "qualibug.test-obligation.v1"
-RISK_FAMILIES = (
+
+# ── Risk family registry ────────────────────────────────────────────────────
+#
+# The bug-type list is OPEN by contract (AGENTS.md, Enterprise Business
+# Comprehension Contract): no fixed detector list, no closed taxonomy. So this is
+# a seeded registry with a registration entry point, not a closed enumeration.
+#
+# Two rules make it lossless:
+#   1. A declared family is NEVER rewritten in place. ``resolve_risk_family``
+#      returns the canonical family used for compilation *alongside* the original
+#      and a reason code, and ``make_obligation`` records all three. Previously an
+#      unrecognized family was silently reassigned to "validation", which made the
+#      capability gap invisible in the data -- nobody could see what was lost.
+#   2. A family is canonical only when it is compilable END TO END. That means
+#      obligation_source_adapter has an entry for it in all three of
+#      _RELATION_TYPES_BY_FAMILY, _TEMPLATE_BY_FAMILY and _OBSERVERS_BY_FAMILY,
+#      experiment_compiler_obligation._FAMILY_ASSERTION_KIND maps it to an
+#      assertion kind, and the assertion_dsl facade chain can evaluate that kind.
+#      Anything short of that is an alias with a reason code, never a canonical
+#      family -- a family that reaches those maps without an entry raises KeyError,
+#      and one that reaches the evaluator without a kind can never yield a verdict.
+CANONICAL_RISK_FAMILIES = (
     "authorization",
     "isolation",
     "state",
@@ -22,6 +43,214 @@ RISK_FAMILIES = (
     "temporal",
     "privacy",
 )
+
+# Families the COMPILER and EVALUATOR already understand -- they have an entry in
+# experiment_compiler_obligation._FAMILY_ASSERTION_KIND and an assertion_dsl
+# evaluator alias -- but which obligation_source_adapter's three by-family maps do
+# not yet cover. Promoting one to canonical requires adding its relation types,
+# protocol template and observer set there first; until then it resolves to a
+# canonical family and is tagged PROMOTION_CANDIDATE so the gap is countable.
+# This is the next breadth increment, ordered by how often each actually appears.
+PROMOTION_CANDIDATE_FAMILIES = {
+    "state_integrity": "state",
+    "lifecycle": "state",
+    "invariant": "state",
+    "consistency": "validation",
+}
+
+# Alias map: an incoming family name -> the canonical family used to compile it.
+# Aliasing is a deliberate, recorded narrowing, not a fallback. The keys here are
+# the vocabularies actually produced elsewhere in the product -- primarily
+# bug_ontology_registry.RISK_FAMILIES (12 families / 88 subtypes) and
+# behavior_slice_gen. tests/test_risk_family_registry.py cross-checks that every
+# ontology family resolves, so the two can never silently drift again.
+# Every value here MUST be a member of CANONICAL_RISK_FAMILIES: an alias whose
+# target is not canonical would reach obligation_source_adapter's by-family maps
+# without an entry and raise KeyError. registry_self_check() enforces this.
+RISK_FAMILY_ALIASES = {
+    # --- generic synonyms, carried over from obligation_source_adapter ---
+    "access_control": "authorization",
+    "auth": "authorization",
+    "permission": "authorization",
+    "tenant": "isolation",
+    "multi_tenant": "isolation",
+    "money": "conservation",
+    "inventory": "conservation",
+    "stock": "conservation",
+    "race": "concurrency",
+    "business_rules": "validation",
+    "cache": "validation",
+    # --- bug_ontology_registry family ids ---
+    # tenant_isolation was absent from the old alias map even though "isolation"
+    # is a first-class family, so every tenant-isolation obligation compiled as a
+    # generic validation check -- one of the product's headline defect classes,
+    # silently downgraded. Expect the compiled count to move: "isolation" requires
+    # owns/scopes relations where "validation" accepted almost anything, so an
+    # obligation without that IR relation now becomes visibly
+    # BLOCKED_MISSING_IR_RELATION instead of compiling into a check that could
+    # never have detected an isolation defect. Visibly blocked beats wrongly
+    # compiled.
+    "tenant_isolation": "isolation",
+    "state_machine": "state",
+    # input_boundary genuinely IS validation semantics -- this one was already
+    # landing correctly, by accident rather than by declaration.
+    "input_boundary": "validation",
+}
+
+# Families the COMPILER and EVALUATOR understand -- entry in
+# experiment_compiler_obligation._FAMILY_ASSERTION_KIND and an assertion_dsl
+# evaluator alias -- but which obligation_source_adapter's three by-family maps do
+# not cover. They resolve to a canonical family (preserving today's execution) and
+# are tagged so the gap is countable. Promoting one means adding its relation
+# types, protocol template and observer set to those three maps; the counts this
+# tagging produces are what should decide the order.
+# NOTE ON TARGETS: each canonical target below is deliberately the SAME family the
+# old coercion produced, so this change adds visibility without moving execution.
+# Several are semantically wrong -- "invariant" and "state_integrity" both map to
+# state_transition in _FAMILY_ASSERTION_KIND and belong under "state", not
+# "validation" -- but retargeting them narrows the required IR relations and would
+# newly block obligations. That is a promotion decision to make per family, with
+# the counts this tagging produces, not a silent side effect of this change.
+PROMOTION_CANDIDATE_FAMILIES = {
+    "state_integrity": "validation",
+    "lifecycle": "state",
+    "invariant": "validation",
+    "consistency": "validation",
+    "data_integrity": "validation",
+    "eventual_consistency": "validation",
+}
+
+# Declared and recognized, but the evidence cannot be observed at all: no
+# assertion kind and no implemented observer exist. Resolves to a canonical family
+# so existing execution is preserved, with the gap recorded rather than hidden.
+# Closing one requires all four links from AGENTS.md, observer included.
+CAPABILITY_GAP_FAMILIES = {
+    "audit_trail": "validation",
+}
+
+RISK_FAMILY_UNREGISTERED_REASON = "RISK_FAMILY_NOT_REGISTERED"
+RISK_FAMILY_ALIASED_REASON = "RISK_FAMILY_ALIASED"
+RISK_FAMILY_PROMOTION_CANDIDATE_REASON = "RISK_FAMILY_PROMOTION_CANDIDATE"
+RISK_FAMILY_CAPABILITY_GAP_REASON = "RISK_FAMILY_OBSERVER_CAPABILITY_MISSING"
+
+_REGISTERED_RISK_FAMILIES: dict[str, str] = {}
+
+
+def register_risk_family(name: str, *, canonical: str | None = None) -> str:
+    """Register a risk family at runtime and return its canonical family.
+
+    This is the open entry point: a deployment or a new capability adds a family
+    without editing this module. ``canonical`` names the family used to compile
+    it; omit it for a first-class family that compiles under its own name.
+
+    Raises ValueError when ``canonical`` is not itself canonical, because a
+    registration that cannot compile is worse than no registration -- it would
+    reintroduce silent loss one level up.
+    """
+    family = _text(name).lower()
+    if not family:
+        raise ValueError("register_risk_family requires a non-empty name")
+    target = _text(canonical).lower() or family
+    if target not in CANONICAL_RISK_FAMILIES:
+        raise ValueError(
+            f"canonical risk family {target!r} is not in CANONICAL_RISK_FAMILIES; "
+            "add it there together with a _FAMILY_ASSERTION_KIND entry and an "
+            "evaluable assertion kind first"
+        )
+    _REGISTERED_RISK_FAMILIES[family] = target
+    return target
+
+
+def registered_risk_families() -> tuple[str, ...]:
+    """Every family name that resolves today, canonical plus alias plus runtime."""
+    return tuple(sorted(
+        set(CANONICAL_RISK_FAMILIES)
+        | set(RISK_FAMILY_ALIASES)
+        | set(PROMOTION_CANDIDATE_FAMILIES)
+        | set(CAPABILITY_GAP_FAMILIES)
+        | set(_REGISTERED_RISK_FAMILIES)
+    ))
+
+
+def registry_self_check() -> None:
+    """Fail fast if any resolution target is not compilable.
+
+    Every alias / promotion-candidate / capability-gap entry must point at a
+    canonical family. A non-canonical target would reach
+    obligation_source_adapter's _RELATION_TYPES_BY_FAMILY, _TEMPLATE_BY_FAMILY and
+    _OBSERVERS_BY_FAMILY without an entry and raise KeyError deep inside
+    compilation, which is exactly the kind of late, opaque failure the fail-fast
+    rule exists to prevent. Called by tests/test_risk_family_registry.py.
+    """
+    bad: list[str] = []
+    for label, mapping in (
+        ("RISK_FAMILY_ALIASES", RISK_FAMILY_ALIASES),
+        ("PROMOTION_CANDIDATE_FAMILIES", PROMOTION_CANDIDATE_FAMILIES),
+        ("CAPABILITY_GAP_FAMILIES", CAPABILITY_GAP_FAMILIES),
+        ("_REGISTERED_RISK_FAMILIES", _REGISTERED_RISK_FAMILIES),
+    ):
+        for name, target in mapping.items():
+            if target not in CANONICAL_RISK_FAMILIES:
+                bad.append(f"{label}[{name!r}] -> {target!r}")
+    if bad:
+        raise ValueError(
+            "risk family resolution targets must be canonical: " + "; ".join(sorted(bad))
+        )
+
+
+def resolve_risk_family(risk_family: Any) -> dict[str, Any]:
+    """Resolve a declared family losslessly.
+
+    Returns ``{declared, canonical, registered, reason_code}``. The declared value
+    is always preserved. ``reason_code`` is "" for a first-class family, and
+    otherwise names why the canonical family differs -- so aliasing, capability
+    gaps and genuinely unknown families are all countable in the run data instead
+    of collapsing indistinguishably into "validation".
+    """
+    declared = _text(risk_family).lower()
+    if declared in CANONICAL_RISK_FAMILIES:
+        return {"declared": declared, "canonical": declared, "registered": True, "reason_code": ""}
+    if declared in _REGISTERED_RISK_FAMILIES:
+        return {
+            "declared": declared,
+            "canonical": _REGISTERED_RISK_FAMILIES[declared],
+            "registered": True,
+            "reason_code": RISK_FAMILY_ALIASED_REASON,
+        }
+    if declared in RISK_FAMILY_ALIASES:
+        return {
+            "declared": declared,
+            "canonical": RISK_FAMILY_ALIASES[declared],
+            "registered": True,
+            "reason_code": RISK_FAMILY_ALIASED_REASON,
+        }
+    if declared in PROMOTION_CANDIDATE_FAMILIES:
+        return {
+            "declared": declared,
+            "canonical": PROMOTION_CANDIDATE_FAMILIES[declared],
+            "registered": True,
+            "reason_code": RISK_FAMILY_PROMOTION_CANDIDATE_REASON,
+        }
+    if declared in CAPABILITY_GAP_FAMILIES:
+        return {
+            "declared": declared,
+            "canonical": CAPABILITY_GAP_FAMILIES[declared],
+            "registered": True,
+            "reason_code": RISK_FAMILY_CAPABILITY_GAP_REASON,
+        }
+    return {
+        "declared": declared,
+        "canonical": "validation",
+        "registered": False,
+        "reason_code": RISK_FAMILY_UNREGISTERED_REASON,
+    }
+
+
+# Backward compatibility. Existing call sites test ``family in RISK_FAMILIES``;
+# they keep working and now accept the promoted families too. New code should call
+# resolve_risk_family() so the declared value and reason code are not discarded.
+RISK_FAMILIES = CANONICAL_RISK_FAMILIES
+
 COMPILE_STATUSES = ("PENDING", "COMPILED", "BLOCKED", "UNSUPPORTED")
 
 
@@ -54,9 +283,8 @@ def make_obligation(
     compile_status: str = "PENDING",
     obligation_id: str | None = None,
 ) -> dict[str, Any]:
-    family = _text(risk_family).lower()
-    if family not in RISK_FAMILIES:
-        family = "validation"
+    resolution = resolve_risk_family(risk_family)
+    family = resolution["canonical"]
     status = compile_status if compile_status in COMPILE_STATUSES else "PENDING"
     oid = _text(obligation_id) or stable_obligation_id(
         family,
@@ -67,6 +295,10 @@ def make_obligation(
         "schema_version": SCHEMA_VERSION,
         "obligation_id": oid,
         "risk_family": family,
+        # The declared family and the reason it was narrowed are retained so a
+        # breadth gap is measurable. Only ``risk_family`` drives compilation.
+        "declared_risk_family": resolution["declared"],
+        "risk_family_resolution": dict(resolution),
         "subject_refs": [ _text(x) for x in subject_refs if _text(x) ],
         "property": dict(property_spec or {}),
         "required_actors": [ _text(x) for x in (required_actors or []) if _text(x) ],
