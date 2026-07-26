@@ -331,11 +331,22 @@ OBSERVER_REGISTRY: dict[str, dict[str, Any]] = {
         "adapter": "http_api",
         "implemented": True,
     },
-    "write_observer": {
-        "surface": "business_effect",
-        "adapter": "http_api",
-        "implemented": True,
-    },
+    # "write_observer" was registered here with implemented=True and no dispatch
+    # branch in observe_experiment_requirements, so anything requiring it would pass
+    # compile_observer_requirements (which only checks implemented is True) and then
+    # fall to the else branch at runtime as UNSUPPORTED /
+    # OBSERVER_IMPLEMENTATION_MISSING -- a compiled experiment that spends real target
+    # requests and can never yield an observation.
+    #
+    # It was never an observation surface: "write_observer" is the name of the
+    # per-write governance CALLBACK parameter (sandbox_write_executor_base.py:1059
+    # inspects it by parameter name) and a human-readable detail string on a
+    # BLOCKED_MISSING_OBSERVER receipt (experiment_compiler_obligation.py:695).
+    # Nothing requires it as an observer id. Removed so that if anything ever does,
+    # compile_observer_requirements blocks it visibly at compile time.
+    #
+    # tests/test_assertion_evidence_contract.py asserts every implemented=True entry
+    # has a dispatch branch, so this class of misregistration cannot return.
 }
 
 

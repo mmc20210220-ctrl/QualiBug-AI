@@ -13,6 +13,119 @@ ASSERTION_RECEIPT_SCHEMA = "qualibug.assertion-receipt.v1"
 ASSERTION_STATUSES = frozenset({"PASS", "VIOLATION", "INDETERMINATE"})
 _MISSING = object()
 
+# Family-shaped assertion kind -> evaluator-shaped kind.
+#
+# Hoisted to module level from inside evaluate_assertion so the kind-to-evidence
+# contract resolves a kind exactly the way the evaluator will. Without that,
+# _FAMILY_ASSERTION_KIND emits "concurrency" while the dead kind is registered as
+# "concurrency_final_invariant", and the compile-time block silently misses it.
+#
+# Note what this collapses: authorization / isolation / visibility / privacy all
+# evaluate as owner_tenant_visibility, and validation evaluates as a bare
+# http_status check. Four distinct defect families share one evaluation semantic —
+# a depth limitation recorded here rather than hidden inside a function body.
+KIND_ALIASES: dict[str, str] = {
+    "authorization": "owner_tenant_visibility",
+    "isolation": "owner_tenant_visibility",
+    "visibility": "owner_tenant_visibility",
+    "privacy": "owner_tenant_visibility",
+    "validation": "http_status",
+    "state": "state_transition",
+    "state_integrity": "state_transition",
+    "lifecycle": "state_transition",
+    "invariant": "state_transition",
+    "idempotency": "idempotency_effect",
+    "concurrency": "concurrency_final_invariant",
+    "temporal": "eventual_consistency",
+    "consistency": "cross_surface_consistency",
+}
+
+
+# ── Kind-to-evidence contract ───────────────────────────────────────────────
+#
+# Each assertion kind reads specific keys out of the observation dict. When no
+# observer produces a required key, the kind is not "sometimes indeterminate" — it
+# is PERMANENTLY indeterminate, and that outcome is folded away downstream, so the
+# capability appears to exist while never being able to return a verdict.
+#
+# Three kinds are in that state today. Verified by enumerating every
+# ``observations["..."] =`` assignment across ai_test_asset_center (58 distinct keys):
+# "collection", "invariant_held" and "surfaces_agree" are written by nothing.
+# Consequence worth stating plainly: the concurrency family has never been
+# falsifiable — invariant_held is null in every recorded row — so no historical
+# concurrency PASS is evidence that a concurrency property holds.
+#
+# ``temporal_date_boundary`` is the same defect one step earlier: it is compiled as an
+# assertion kind (experiment_protocols_base.py:652) but appears in no SUPPORTED_KINDS
+# set, so evaluate_assertion raises unsupported_assertion_kind and the experiment
+# lands as a harness error.
+#
+# These are blocked at COMPILE time by experiment_compiler_obligation rather than left
+# to die at evaluation, so the gap is visible and countable as a coverage statement
+# instead of silent.
+#
+# To retire an entry: implement an observer that writes the named key into the
+# observation dict, then delete the entry. tests/test_assertion_evidence_contract.py
+# derives the produced-key set from source and fails if a kind requires a key nothing
+# writes, so this cannot silently regrow.
+KIND_REQUIRED_OBSERVATION_KEYS: dict[str, tuple[str, ...]] = {
+    "cardinality": ("collection",),
+    "concurrency_final_invariant": ("invariant_held",),
+    "cross_surface_consistency": ("surfaces_agree",),
+}
+
+# Blocked at compile time only where executing is PURE WASTE -- the verdict cannot be
+# computed AND no working machinery would be lost. That distinction matters because
+# executing a write experiment means real mutations against a customer system.
+#
+# Measured across 296 stored artifacts: "consistency"/cross_surface_consistency
+# produced 78 receipts, every one INDETERMINATE with CROSS_SURFACE_EVIDENCE_MISSING,
+# zero PASS and zero VIOLATION; cardinality and temporal_date_boundary produced no
+# receipt at all. So nothing that works is lost by blocking these three.
+#
+# concurrency_final_invariant is deliberately NOT here. Its evidence key
+# (invariant_held) is equally unproduced, but unlike the others its machinery is real
+# and exercised: the barrier protocol releases control and treatment concurrently, and
+# the barrier_timeline and final_state observers both have dispatch branches and emit
+# receipts. Blocking it would discard working concurrency evidence to suppress a
+# missing verdict, and the missing verdict is already visible -- an INDETERMINATE
+# oracle becomes a BLOCKED terminal with reason ASSERTION_INDETERMINATE
+# (customer_delivery_gate_v2.py:800-801), which is countable in the attempt ledger.
+# The correct fix there is to compute invariant_held from the source-declared invariant
+# plus the observed before/after values, not to stop collecting the evidence.
+UNPRODUCIBLE_ASSERTION_KINDS: dict[str, str] = {
+    "cardinality": "collection",
+    "cross_surface_consistency": "surfaces_agree",
+    # Compiled by experiment_protocols_base but has no evaluator in any facade, so it
+    # can only ever land as a harness error.
+    "temporal_date_boundary": "<no evaluator registered>",
+}
+
+# Evidence keys no observer writes today, recorded for the coverage statement even
+# where the kind is still allowed to compile. Retire an entry by implementing a
+# producer, not by deleting the entry.
+UNPRODUCED_OBSERVATION_KEYS: dict[str, str] = {
+    "collection": "cardinality",
+    "invariant_held": "concurrency_final_invariant",
+    "surfaces_agree": "cross_surface_consistency",
+}
+
+
+def unproducible_assertion_evidence(kind: str) -> str:
+    """Return the missing evidence key for *kind*, or "" when it is satisfiable.
+
+    Checked both before and after alias resolution, because a protocol may emit the
+    family-shaped name ("concurrency") while the dead kind is registered under the
+    evaluator-shaped name ("concurrency_final_invariant"). Matching only one of the
+    two is how this gate would silently miss the concurrency family entirely.
+    """
+    normalized = str(kind or "").strip()
+    missing = UNPRODUCIBLE_ASSERTION_KINDS.get(normalized, "")
+    if missing:
+        return missing
+    return UNPRODUCIBLE_ASSERTION_KINDS.get(KIND_ALIASES.get(normalized, normalized), "")
+
+
 SUPPORTED_KINDS = {
     "http_status",
     "http_status_class",
@@ -339,8 +452,27 @@ def _evaluate_state_implication(
                 break
 
     if not condition_met:
-        # Condition not met → implication is vacuously true
-        return ("", {"implication": "vacuously_true"}, {"condition_met": False})
+        # Trigger not observed → the implication was NOT TESTED.
+        #
+        # An empty reason_code here means PASS, so this branch used to report a green
+        # result from zero evidence: "if the root entity reached state X then the
+        # related entity must satisfy C" passed whenever X was never observed.
+        # Vacuous truth is sound for an invariant evaluated over arbitrary given data,
+        # but it is not sound here, because establishing the trigger state is the
+        # experiment's OWN job. A failure to reach state X -- an unestablished
+        # precondition, a state field read from the wrong key, a write that silently
+        # did not apply -- is indistinguishable from "the trigger legitimately did not
+        # occur", and the first three are exactly the conditions the experiment exists
+        # to detect.
+        #
+        # Reported as INDETERMINATE with a named reason (no "VIOLATED" substring, so the
+        # caller at the cross_entity_consistency branch treats it as missing evidence
+        # rather than a violation). Untested must never read as verified.
+        return (
+            "STATE_IMPLICATION_TRIGGER_NOT_OBSERVED",
+            {"implication": "not_tested", "required_root_state": root_value},
+            {"condition_met": False, "observed_root_field": root_field},
+        )
 
     # Condition met → check constraint on related entities
     related_data = _dict(mes.get(related_entity))
@@ -734,22 +866,7 @@ def evaluate_assertion(
             execution_id=resolved_execution_id,
         )
 
-    aliases = {
-        "authorization": "owner_tenant_visibility",
-        "isolation": "owner_tenant_visibility",
-        "visibility": "owner_tenant_visibility",
-        "privacy": "owner_tenant_visibility",
-        "validation": "http_status",
-        "state": "state_transition",
-        "state_integrity": "state_transition",
-        "lifecycle": "state_transition",
-        "invariant": "state_transition",
-        "idempotency": "idempotency_effect",
-        "concurrency": "concurrency_final_invariant",
-        "temporal": "eventual_consistency",
-        "consistency": "cross_surface_consistency",
-    }
-    effective_kind = aliases.get(kind, kind)
+    effective_kind = KIND_ALIASES.get(kind, kind)
 
     try:
         if effective_kind not in SUPPORTED_KINDS:

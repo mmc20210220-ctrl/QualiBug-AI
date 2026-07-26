@@ -43,6 +43,7 @@ from .runtime_binding_graph import (
     declared_effect_observers,
     unresolved_placeholders,
 )
+from .assertion_dsl_base import unproducible_assertion_evidence
 from .cleanup_plan_validator import validate_cleanup_plan
 from .experiment_compiler_support import (
     _actor_is_executable,
@@ -1387,6 +1388,40 @@ def compile_experiment_for_obligation(
         for row in _list(protocol.get("treatment_plan"))
         if isinstance(row, dict)
     ]
+    # Binder-location materializability gate.
+    #
+    # A protocol may place a distinguishing mutation in query, path, header or body
+    # (see the ownership binder in experiment_protocols_base). The executor only
+    # materializes step["query"] (experiment_plan_executor.py:247-278) and
+    # _http_request builds a fixed header set -- Accept, trace context, Content-Type,
+    # Authorization -- with no custom headers (sandbox_write_executor_base.py:339-348).
+    # step["path_params"] has zero read points anywhere in the executor chain.
+    #
+    # So a header- or path-located binder is silently DROPPED: the treatment request
+    # goes out without the mutation, becomes identical to control, and the assertion
+    # PASSES. For an isolation or authorization obligation that is a fabricated
+    # "boundary verified" result -- strictly worse than a blocker, because a blocker
+    # is visible and this reads as a proven property.
+    #
+    # Blocked here until the transport can carry these locations. Detected by the
+    # presence of an unresolved placeholder token, so a literal value that happens to
+    # sit in one of these keys is not affected.
+    _UNMATERIALIZABLE_STEP_KEYS = ("headers", "path_params")
+    for _step in control_plan + treatment_plan:
+        for _location in _UNMATERIALIZABLE_STEP_KEYS:
+            _spec = _dict(_step.get(_location))
+            _tokens = [
+                _text(name)
+                for name, value in _spec.items()
+                if isinstance(value, str) and "{" in value and "}" in value
+            ]
+            if _tokens:
+                return blocked_experiment(
+                    oid,
+                    "BLOCKED_BINDING_LOCATION_NOT_MATERIALIZABLE",
+                    f"location={_location}:params={','.join(sorted(_tokens))}",
+                )
+
     # ── Enhanced: propagate resolved path to steps for runtime preflight ──
     _resolved_path = _text(primary_op.get("path"))
     if _resolved_path and "{" not in _resolved_path:
@@ -1401,6 +1436,18 @@ def compile_experiment_for_obligation(
         or _FAMILY_ASSERTION_KIND.get(family)
         or "http_status"
     )
+    # Kind-to-evidence contract. An assertion kind whose required observation key no
+    # observer writes can never return a verdict; compiling it produces an experiment
+    # that executes, consumes budget, and dies as a permanent INDETERMINATE that is
+    # folded away downstream — the capability looks present while being unfalsifiable.
+    # Block it here so the gap is a visible, countable coverage statement instead.
+    _missing_evidence = unproducible_assertion_evidence(assertion_kind)
+    if _missing_evidence:
+        return blocked_experiment(
+            oid,
+            "BLOCKED_ASSERTION_EVIDENCE_UNPRODUCIBLE",
+            f"assertion_kind={assertion_kind}:missing_observation_key={_missing_evidence}",
+        )
     assertions = [{
         "assertion_id": f"assert_{family or 'generic'}",
         "kind": assertion_kind,
@@ -1613,6 +1660,12 @@ BLOCK_REASONS = (
     "BLOCKED_COVERAGE_RECOVERY_RECEIPT_MISSING",
     "BLOCKED_OBSERVER_CONTRACT_DRIFT",
     "BLOCKED_BINDING_GRAPH_INVALID",
+    # Kind-to-evidence contract: the assertion kind requires an observation key that
+    # no observer writes, so it could never return a verdict.
+    "BLOCKED_ASSERTION_EVIDENCE_UNPRODUCIBLE",
+    # The distinguishing mutation sits in a request location the transport cannot
+    # carry, so the treatment request would execute without it and PASS.
+    "BLOCKED_BINDING_LOCATION_NOT_MATERIALIZABLE",
     "BLOCKED_FIXTURE_DAG_DRIFT",
 )
 
