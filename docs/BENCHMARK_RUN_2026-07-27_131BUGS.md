@@ -231,11 +231,37 @@ So the block is substantially **correct**. These obligations write to pre-existi
 customer-owned entities, and the target's API declares no way to undo those writes.
 Refusing is the right answer.
 
-The real increment is in the **planning layer, not the gate**: a write assertion should
-operate on a disposable subject the run creates, not on data that was already there.
-The machinery is in place — `test_data_plan.strategy` is `create_disposable` and its
-status is `ready` — and obligations simply do not declare fixtures. 5 of 685 is the
-number that should be close to 685 for write assertions.
+The next guess was the planning layer: a write assertion should operate on a disposable
+subject the run creates. Testing that guess before building it showed it is also wrong.
+
+**All 7 obligations that DO declare a fixture still block**, and every one of them has
+`binding_fixtures: 0` — the fixture was declared and never bound. Declaring more fixtures
+would only convert `BLOCKED_NON_REVERSIBLE_WRITE` into `BLOCKED_MISSING_FIXTURE`.
+
+The missing link is the fixture **binder**, and it exists.
+`auto_test_data_factory.build_auto_fixture_for_probe` resolves create and delete
+candidates for a resource — exactly the `create_path` the compiler demands at
+`experiment_compiler_obligation.py:715`. It is called from **one** place,
+`test_data_receipt_bootstrap.py:319`, and referenced **zero** times from the compile or
+planning path.
+
+So the complete chain behind the 685:
+
+```
+invariant binder produces write obligations        (works)
+  -> block on BLOCKED_NON_REVERSIBLE_WRITE: needs a cleanup plan
+    -> cleanup for a self-created subject = fixture teardown
+      -> teardown needs binding_plan{fixture_id, create_path}
+        -> only build_auto_fixture_for_probe produces those
+          -> never called from the compile path; runs in the
+             bootstrap at __main__.py:397, after compile at :212
+```
+
+The fixture binder exists, works, and runs at the wrong time. This is the same ordering
+defect as layer 3 above, now pinned to the specific function that would supply the
+missing link — and it is an architectural two-phase change, not a patch. Sequencing it
+wrongly would either compile against fixtures that do not exist yet or bootstrap against
+a plan that has not been made.
 
 ## What would actually move coverage
 
