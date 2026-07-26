@@ -50,6 +50,12 @@ _REQUEST_TRACE_HEADERS = {
 _REQUEST_TRACE_CONTEXT: contextvars.ContextVar[dict[str, str]] = (
     contextvars.ContextVar("qualibug_request_trace", default={})
 )
+# Methods whose re-send is provably effect-free, so a transient-error retry cannot
+# create a second effect. Everything else is not retried: a timeout on a mutating
+# request means the response was lost, not that the write was rejected, and re-sending
+# it would both violate the never-retry-after-possible-acceptance rule and make the
+# harness's own duplicate indistinguishable from a target idempotency defect.
+_RETRY_SAFE_METHODS = frozenset({"GET", "HEAD"})
 # Non-production environment kinds where read+write probing is the product's
 # intended mode of operation (customer test / pre-release / staging systems).
 _TEST_ENV_TOKENS = frozenset({
@@ -347,7 +353,11 @@ def _http_request(
     if token:
         headers["Authorization"] = f"Bearer {token}"
     started = time.time()
-    # ── Enhanced: retry with exponential backoff for transient errors ──
+    # ── Retry with exponential backoff, for effect-free methods only ──
+    # NOTE ON TIMING: `started` is deliberately captured before the retry loop, so
+    # duration_ms of a retried request INCLUDES client-side backoff sleep. Any future
+    # latency measurement must read _attempts and refuse to treat a multi-attempt
+    # duration as a target response time.
     _retry_delays = [1.0, 3.0]  # exponential backoff delays
     last_exc: Exception | None = None
     for attempt in range(max_retries + 1):
@@ -383,12 +393,39 @@ def _http_request(
                 "_attempts": attempt + 1,
             }
         except (TimeoutError, OSError, ConnectionError) as exc:
-            # Transient network errors - retry with backoff
             last_exc = exc
-            if attempt < max_retries:
+            # Retry ONLY methods that cannot create a second effect.
+            #
+            # A transient error on a mutating request does not mean the request was
+            # rejected -- a timeout most often means the response was lost, not that
+            # the server refused. Re-sending it then creates a duplicate effect, and
+            # AGENTS.md is explicit: never retry after any write may have been
+            # accepted. Worse, the harness's own duplicate is indistinguishable from a
+            # target idempotency defect, so an idempotency verdict computed over a
+            # retried write measures this transport, not the system under test.
+            #
+            # GET/HEAD are the only methods whose re-send is provably effect-free.
+            # PUT/DELETE are HTTP-idempotent but not business-idempotent (a PATCH-like
+            # PUT, a delete-then-recreate race), so they are not retried either.
+            if method.upper() in _RETRY_SAFE_METHODS and attempt < max_retries:
                 delay = _retry_delays[min(attempt, len(_retry_delays) - 1)]
                 time.sleep(delay)
                 continue
+            if method.upper() not in _RETRY_SAFE_METHODS:
+                return {
+                    "method": method.upper(),
+                    "url": url,
+                    "status": 0,
+                    "body": {"error": f"{type(exc).__name__}: {exc}"},
+                    "headers": {},
+                    "duration_ms": int((time.time() - started) * 1000),
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "_attempts": attempt + 1,
+                    # The server may or may not have applied this write. Downstream
+                    # must treat the effect as unknown rather than assume rejection.
+                    "_write_acceptance_indeterminate": True,
+                    "_not_retried_reason": "MUTATING_METHOD_NOT_RETRY_SAFE",
+                }
         except Exception as exc:
             return {
                 "method": method.upper(),
