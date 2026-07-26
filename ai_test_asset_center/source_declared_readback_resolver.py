@@ -419,6 +419,116 @@ def _find_related_entity_get_candidates(
     return candidates
 
 
+def _db_surface_available(behavior_ir: dict[str, Any]) -> bool:
+    """Whether the operator declared a database this target may be read through.
+
+    Read from the IR's own observation_surfaces so this answers the same question the
+    observer gate does. A database readback is only offered when the operator declared
+    the connection -- inferring one would produce an observer that cannot connect.
+    """
+    for node in _list(_dict(behavior_ir).get("observation_surfaces")):
+        row = _dict(node)
+        if _text(row.get("surface")) == "db_snapshot":
+            return bool(row.get("available"))
+    return False
+
+
+def _find_database_readback_candidates(
+    write_op: dict[str, Any],
+    behavior_ir: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Data-layer readback for a write whose entity has a source-declared table.
+
+    Every leg is source-declared, which is what SURFACE_DATABASE_OBSERVER requires and
+    why this is not inference: the table and its identity column come from the ingested
+    DDL (they arrive as IR entities carrying ``fields`` and ``identity_fields``), and
+    the connection comes from the operator's own declaration.
+
+    This is the only readback available for an entity the API never exposes for reading.
+    On the benchmark target the refund endpoints are exactly that case -- the source
+    declares no GET for refunds, while ``refunds`` is a real table with a real primary
+    key. Without this the assertion cannot be observed at all, and the alternative is
+    not a weaker observation but none.
+    """
+    if not _db_surface_available(behavior_ir):
+        return []
+
+    write_path = _normalize_path(_text(write_op.get("path") or write_op.get("raw_path")))
+    write_segments = _path_segments(write_path)
+    if not write_segments:
+        return []
+    write_domain = _extract_resource_domain(write_segments)
+    if not write_domain:
+        return []
+
+    write_path_params = _extract_path_params(write_path)
+    referenced = _referenced_entity_params(write_op)
+
+    candidates: list[dict[str, Any]] = []
+    for node in _list(_dict(behavior_ir).get("entities")):
+        entity = _dict(node)
+        table = _text(entity.get("name"))
+        if not table:
+            continue
+        identity_fields = [_text(f) for f in _list(entity.get("identity_fields")) if _text(f)]
+        if not identity_fields:
+            continue  # no declared key means no way to read one row back
+
+        # The write's own entity, or one it declares a foreign key to.
+        own = _domain_matches_entity(table, write_domain.rstrip("s"))
+        referenced_param = ""
+        if not own:
+            for param_name, referenced_entity in referenced.items():
+                if _domain_matches_entity(table, referenced_entity):
+                    referenced_param = param_name
+                    break
+            if not referenced_param:
+                continue
+
+        if own and write_path_params:
+            identity = {
+                "type": IDENTITY_REQUEST_PATH,
+                "source_path": write_path,
+                "target_parameter": identity_fields[0],
+                "canonical_field_id": write_path_params[0],
+                "status": "RESOLVED",
+            }
+        elif referenced_param:
+            identity = {
+                "type": IDENTITY_REQUEST_BODY,
+                "source_path": "request." + referenced_param,
+                "target_parameter": identity_fields[0],
+                "canonical_field_id": referenced_param,
+                "status": "RESOLVED",
+            }
+        else:
+            # A create with no identity yet. The write response would have to supply it,
+            # which is the write-response surface's job, not this one.
+            continue
+
+        candidates.append({
+            "operation": {
+                "id": "db:" + table,
+                "operation_id": "db_select_" + table,
+                "method": "SELECT",
+                "path": "db://" + table,
+                "parameters": [_text(f) for f in _list(entity.get("fields")) if _text(f)],
+            },
+            "surface_type": SURFACE_DATABASE_OBSERVER,
+            "path": "db://" + table,
+            "param": identity_fields[0],
+            "domain": table,
+            # Use the name this module already declares in EVIDENCE_PRIORITY and
+            # _RESOLVABLE_EVIDENCE. Inventing a second name for the same evidence class
+            # is how two halves of one system start disagreeing.
+            "evidence_type": "database_schema_observer",
+            "table": table,
+            "identity_column": identity_fields[0],
+            "_identity_strategy": identity,
+        })
+    return candidates
+
+
 def _find_collection_get_candidates(
     write_op: dict[str, Any],
     behavior_ir: dict[str, Any],
@@ -1114,6 +1224,10 @@ def resolve_readback_contract(
     # last so a same-domain readback always outranks a cross-entity one.
     all_candidates.extend(_find_related_entity_get_candidates(write_op, behavior_ir))
 
+    # 1f: Data-layer readback, last of all. Its cost weight already ranks it below every
+    # HTTP surface, so it is reached only when the API declares no read at all.
+    all_candidates.extend(_find_database_readback_candidates(write_op, behavior_ir))
+
     if not all_candidates:
         return _blocked_result(READBACK_SOURCE_NOT_DECLARED, 0)
 
@@ -1121,6 +1235,13 @@ def resolve_readback_contract(
     viable_candidates: list[dict[str, Any]] = []
     for cand in all_candidates:
         if cand.get("blocked"):
+            continue
+        pre_resolved = _dict(cand.get("_identity_strategy"))
+        if pre_resolved.get("status") == "RESOLVED":
+            # A schema-derived candidate carries its own identity: the table's declared
+            # key column paired with the write's declared parameter. Re-deriving it
+            # through the HTTP path strategies would fail and discard a viable readback.
+            viable_candidates.append(cand)
             continue
         identity = _resolve_identity_strategy(write_op, cand, behavior_ir)
         cand["_identity_strategy"] = identity
