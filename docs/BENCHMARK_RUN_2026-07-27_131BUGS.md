@@ -201,9 +201,41 @@ from an action name, without the source saying so, is a false PASS about cleanup
 the `SOURCE_EXPLICIT` requirement exists precisely to prevent it.
 
 The source does state the compensation: BUSINESS_RULES.md says
-「已支付订单不能直接取消，只能发起退款」. So the correct next increment is deriving
-compensation relations from rule text, the same way invariants are now bound to
-operations — not guessing them from a verb table.
+「已支付订单不能直接取消，只能发起退款」. So the first instinct was deriving compensation
+relations from rule text, the same way invariants are now bound to operations.
+
+Tracing it to the bottom showed that is **not** where the fix belongs. Four layers, each
+measured:
+
+1. **The declared state machine does not supply the missing compensations.** A sound
+   compensation needs a declared transition ending in a *terminal* reversal state.
+   `PENDING_PAYMENT → CANCELLED` qualifies, and the existing code already derives it.
+   `PAID → REFUND_REQUESTED` does not — it reaches an intermediate, and a refund
+   *request* does not reverse a payment. So the rule text adds nothing here.
+2. **`cleanup_exemption_contract` is the wrong vehicle.** The mechanism is fully built
+   and validated, and nothing at the obligation level ever produces one. But its
+   validator requires `persistent_effect_absent`, and a disposable-fixture write *does*
+   leave a persistent effect until teardown. Using it would mean lying to the validator.
+3. **The compiler cannot see the test-data contract, and could not even if threaded.**
+   `run_v12_pipeline` compiles at `__main__.py:212`; the test-data bootstrap runs at
+   `:397`. The reversibility decision is made before the mechanism that could satisfy it
+   has run — and the ordering is circular, because the bootstrap needs the plan the
+   pipeline produces.
+4. **The decisive number.** Of the 685 obligations blocked on
+   `BLOCKED_NON_REVERSIBLE_WRITE`, **only 5 declare `required_fixtures`; 680 declare
+   none.** The blocked experiments carry zero cleanup plans and zero fixture bindings,
+   and the receipt detail is `cleanup_unresolved:` with an empty operation ref — no
+   candidate was ever found.
+
+So the block is substantially **correct**. These obligations write to pre-existing,
+customer-owned entities, and the target's API declares no way to undo those writes.
+Refusing is the right answer.
+
+The real increment is in the **planning layer, not the gate**: a write assertion should
+operate on a disposable subject the run creates, not on data that was already there.
+The machinery is in place — `test_data_plan.strategy` is `create_disposable` and its
+status is `ready` — and obligations simply do not declare fixtures. 5 of 685 is the
+number that should be close to 685 for write assertions.
 
 ## What would actually move coverage
 
@@ -211,8 +243,9 @@ In order of measured blocking weight, not guesswork. Items 1 and 2 of the origin
 list are now done and are recorded above; this is the remaining list against the
 latest run:
 
-1. Derive compensation relations from rule text (686 obligations). The largest
-   blocker, and the reason it is not a quick fix is in the section above.
+1. Make write assertions operate on disposable subjects the run creates (685
+   obligations). Only 5 of 685 declare a fixture today. This is a planning-layer
+   change; the gate itself is behaving correctly and must not be touched.
 2. Close the remaining observer gap (122 obligations, down from 463).
 3. Repair the binding graph (130 obligations, `BLOCKED_BINDING_GRAPH_INVALID`).
 4. Generate obligations for facts the product already observes but discards. H1 is the
