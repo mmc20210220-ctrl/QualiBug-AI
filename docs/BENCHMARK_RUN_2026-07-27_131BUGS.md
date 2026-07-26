@@ -142,6 +142,7 @@ which is the honest shape of progress here: reach improved every time, verdicts 
 | 4 | 435 | `MISSING_PRIMARY_OPERATION` | 174 | 2 |
 | 5 | 1218 | `BLOCKED_MISSING_OBSERVER` | 463 | 4 |
 | 7 | 1218 | `BLOCKED_NON_REVERSIBLE_WRITE` | 575 | 4 |
+| 8 | 1218 | `BLOCKED_NON_REVERSIBLE_WRITE` | 686 | 4 |
 
 What each step bought:
 
@@ -161,6 +162,15 @@ What each step bought:
    `POST /api/payments/pay` declares `orderId` and moves that order to PAID, so
    `GET /api/orders/{id}` is its readback. `BLOCKED_MISSING_OBSERVER` 463→237, with
    exactly 226 landing on the next gate.
+5. **Data-layer readback.** `SURFACE_DATABASE_OBSERVER` was in the allowed surface set
+   with a cost weight and no finder ever emitted it. The refund endpoints are the case
+   it exists for: no GET for refunds anywhere in the source, while `refunds` is a real
+   table with a real key. `BLOCKED_MISSING_OBSERVER` 237→122.
+
+Across the pass, `BLOCKED_MISSING_OBSERVER` went **463 → 122**, a 74% reduction, and
+observable writes went 9 of 17 to 13 of 17. The four still unresolved are correct:
+login, register and coupon-validate produce no durable entity to read back, and
+`POST /api/item` is a spurious operation.
 
 Two silent failures were removed on the way: an obligation the compiler deferred with
 `MISSING_PRIMARY_OPERATION` was relabelled `BUDGET_EXHAUSTED` on a branch reached only
@@ -176,7 +186,7 @@ fallback was removed rather than the compiler's refusal weakened.
 
 ### The current blocker, and why it is not being fixed by inference
 
-`BLOCKED_NON_REVERSIBLE_WRITE`, 575 of 1218. The IR declares exactly **two**
+`BLOCKED_NON_REVERSIBLE_WRITE`, 686 of 1218 after the observer work landed on it. The IR declares exactly **two**
 compensation relations — `cancel` compensates `POST /api/orders`, `reject` compensates
 `POST /api/refunds` — and `resolve_compensation_relation` resolves nothing for any of
 the 17 writes, because it requires `SOURCE_EXPLICIT` evidence.
@@ -201,11 +211,9 @@ In order of measured blocking weight, not guesswork. Items 1 and 2 of the origin
 list are now done and are recorded above; this is the remaining list against the
 latest run:
 
-1. Derive compensation relations from rule text (575 obligations). The largest
+1. Derive compensation relations from rule text (686 obligations). The largest
    blocker, and the reason it is not a quick fix is in the section above.
-2. Close the remaining observer gap (237 obligations). The database surface is now
-   declared available, so an entity with no HTTP read — refunds here — is reachable
-   through a `db_snapshot` observer that nothing yet builds.
+2. Close the remaining observer gap (122 obligations, down from 463).
 3. Repair the binding graph (130 obligations, `BLOCKED_BINDING_GRAPH_INVALID`).
 4. Generate obligations for facts the product already observes but discards. H1 is the
    proof case: the login status was read, recorded as `disabled_buyer: true` by the
