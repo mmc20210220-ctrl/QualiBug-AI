@@ -1,5 +1,4 @@
 
-调用这个开源项目方式写代码 https://github.com/DietrichGebert/ponytail
 ## Product Health Checks
 
 When evaluating product readiness or dogfooding bug-finding features, verify observable behavior from the running product and code before reporting status. Treat configured-but-unverified integrations as not online: for model providers, a saved key or endpoint only means "configured" until a real health check succeeds, and failures must be shown as failed/offline rather than healthy.
@@ -212,6 +211,18 @@ assert engine.client.config.max_tokens >= 32768, "max_tokens too low"
 - Cleanup requirement detection must compare all non-server-managed business fields on the same observed entity, not only fields echoed by the write response. A write response that returns only an identity still requires cleanup when governed before/after snapshots prove business state changed.
 - Empty formal delivery projections may synthesize an explicit empty defect-identity consistency receipt only when there are zero delivery occurrences, zero canonical registry rows, and zero formal customer deliverables. Any non-empty formal delivery scope must validate real canonical identity consistency and fail closed on missing or mismatched scopes.
 - Adaptive obligation planning binds the configured slice limit in `qualibug.adaptive-planning-budget.v1`; runtime must never silently increase it. Prior-run `qualibug.adaptive-planning-history.v1` may influence compile/execution conversion only when policy id, policy version, strategy fingerprint, and receipt fingerprint match. Product-owned history must keep formal yield, model cost, and unit deliverable cost `NOT_MEASURED` until authoritative external or provider receipts exist; missing or non-matching history is an explicit cold start.
+
+## Enterprise Business Comprehension Contract
+
+**This is the product's core capability and its current binding constraint. Read it before proposing any discovery-capability work.**
+
+- The product's core competence is **deep comprehension of real enterprise business**, not probe volume, detector count, or funnel throughput. Only a system that genuinely understands the customer's business can find that customer's real defects. Every capability decision is judged by whether it deepens comprehension, not by whether it adds a mechanism.
+- The final goal is **to find every bug in the enterprise system** — full depth and full breadth. Depth means reasoning through multi-step business causality, cross-entity state, and long-running lifecycle, not single-request assertions. Breadth means every operation, actor, state transition, invariant, and cross-system/cross-service/cross-database/cross-message-chain path, not a sampled subset. Anything that structurally caps depth or breadth is a defect in the harness, not an acceptable trade-off.
+- **No limitation is acceptable by construction.** Fixed detector lists, closed bug-type taxonomies, capped hypothesis budgets, closed risk-family enumerations that silently coerce unknown families, and single-service assumptions are all prohibited as *structural* limits. Where a bound must exist for cost or safety, it must be an explicit, receipted, operator-visible budget with a named reason code — never a silent truncation and never a hidden default. A bound that cannot be seen in a receipt is a capability ceiling masquerading as a configuration value.
+- The scope is **multi-system, multi-service, multi-database, multi-message-chain** enterprise topology, across all industries and all system types. A capability that only holds for one service, one datastore, or one synchronous request path is incomplete, not shipped.
+- The verification layer must hold **regardless of who or what operates the system** — human operators, programs, or enterprise AI agents. Actor identity is an input to verification, never an assumption baked into a detector.
+- **Comprehension is the measured bottleneck, not a hypothesis.** The authenticated benchmark run recorded in `docs/DISCOVERY_HARNESS_EVOLUTION_GOAL.md` attributes the large majority of missed defects to first loss at the **hypothesis-generation / business-comprehension stage**, upstream of compilation and execution. Therefore: capability work that adds execution mechanism while leaving comprehension untouched must not be presented as a recall improvement, and a coverage-recovery change is only credible when a re-run shows the blocked-obligation count actually fall.
+- Comprehension gains are still bound by every existing evidence rule. Understanding the business better must never become permission to infer request bodies, credentials, business rules, entity/table names, SQL, or impact conclusions; a deeper hypothesis still has to become a source-grounded obligation, a governed experiment, and a receipted observation before it is a finding. Better comprehension raises what QualiBug can legitimately *test*, never what it may *assert without evidence*.
 
 ## Brand Direction Contract
 
