@@ -244,6 +244,32 @@ def _semantic_marker_set(key: str) -> frozenset[str]:
     return markers
 
 
+def _semantic_lexicon_groups(key: str) -> list[list[str]]:
+    """Return a lexicon section shaped as a list of alias groups.
+
+    ``_semantic_marker_set`` flattens to a set of tokens, which loses the grouping that
+    makes an alias group meaningful. Absence degrades to no aliases rather than raising:
+    the caller then resolves fewer references and records the rest as visible gaps, which
+    is the "fewer capabilities" failure direction, not a broken build.
+    """
+    path = Path(__file__).resolve().parent / "policies" / "semantic_lexicon.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return []
+    raw = payload.get(key) if isinstance(payload, dict) else None
+    if not isinstance(raw, list):
+        return []
+    groups: list[list[str]] = []
+    for row in raw:
+        if not isinstance(row, list):
+            continue
+        members = [_text(item) for item in row if _text(item)]
+        if len(members) > 1:
+            groups.append(members)
+    return groups
+
+
 def _endpoint_action_markers() -> frozenset[str]:
     global _ENDPOINT_ACTION_MARKERS
     if _ENDPOINT_ACTION_MARKERS is not None:
@@ -2426,6 +2452,115 @@ def migrate_behavior_ir_v1_to_v2(value: dict[str, Any]) -> dict[str, Any]:
     return migrated
 
 
+def _node_reference_index(model: dict[str, Any]) -> dict[str, str]:
+    """Map every name a node answers to onto its node id.
+
+    Behavior IR v2's contract is that relations reference node IDS, not names -- an
+    obligation resolves a relation endpoint to a node and reads its typed fields. A
+    relation carrying a raw name resolves to nothing, so it is inert while looking
+    present, and nothing downstream can tell the difference.
+    """
+    index: dict[str, str] = {}
+
+    def _register(key: Any, node_id: str) -> None:
+        text = _text(key).lower()
+        if text and node_id and text not in index:
+            index[text] = node_id
+
+    def _register_with_number_forms(key: Any, node_id: str) -> None:
+        """Register a name under both its plural and singular form.
+
+        Entities arrive named for their tables (``orders``) while permission rows name
+        the business object (``order``). Without this, 34 declared role permissions on a
+        real target resolved to nothing purely because of an "s".
+        """
+        text = _text(key)
+        _register(text, node_id)
+        lowered = text.lower()
+        if lowered.endswith("ies") and len(lowered) > 3:
+            _register(lowered[:-3] + "y", node_id)
+        elif lowered.endswith("ses") and len(lowered) > 3:
+            _register(lowered[:-2], node_id)
+        elif lowered.endswith("s") and not lowered.endswith("ss") and len(lowered) > 1:
+            _register(lowered[:-1], node_id)
+        else:
+            _register(lowered + "s", node_id)
+
+    for collection, name_keys in (
+        ("entities", ("name", "entity")),
+        ("states", ("name", "state", "value")),
+        ("operations", ("operation_id", "path")),
+        ("actors", ("role", "name", "actor")),
+        ("invariants", ("description",)),
+    ):
+        for node in _list(model.get(collection)):
+            row = _dict(node)
+            node_id = _text(row.get("id"))
+            if not node_id:
+                continue
+            for key in name_keys:
+                if collection in ("entities", "actors"):
+                    _register_with_number_forms(row.get(key), node_id)
+                else:
+                    _register(row.get(key), node_id)
+            for alias in _list(row.get("source_entity_names")):
+                _register_with_number_forms(alias, node_id)
+
+    # Interface ids of the form ``<parser>:<METHOD>:<path>`` name an operation by its
+    # method and path. The knowledge asset emits them for operates_on relations.
+    for node in _list(model.get("operations")):
+        row = _dict(node)
+        node_id = _text(row.get("id"))
+        method = _text(row.get("method")).upper()
+        path = _text(row.get("path") or row.get("raw_path"))
+        if node_id and method and path:
+            _register(f"{method}:{path}", node_id)
+
+    # Declared alias groups. A permission matrix names the business object ("stock",
+    # "item") while the schema names the table ("inventory", "products"). The lexicon
+    # already declares these equivalences in entity_alias_groups, so this is a
+    # declaration lookup rather than a similarity guess -- an alias the operator did not
+    # declare stays unresolved and becomes a visible gap.
+    for group in _semantic_lexicon_groups("entity_alias_groups"):
+        if not isinstance(group, list):
+            continue
+        members = [_text(item).lower() for item in group if _text(item)]
+        resolved = next((index[name] for name in members if name in index), "")
+        if not resolved:
+            continue
+        for name in members:
+            _register(name, resolved)
+    return index
+
+
+def _resolve_node_reference(raw: Any, index: dict[str, str]) -> str:
+    """Resolve one relation endpoint to a node id, or "" when it names nothing.
+
+    Handles the composite ``entity:STATE`` form the knowledge asset emits by trying the
+    whole token first and then its trailing segment, so ``order:CANCELLED`` reaches the
+    CANCELLED state node rather than being dropped.
+    """
+    text = _text(raw)
+    if not text:
+        return ""
+    if text.startswith("bir_"):
+        return text
+    lowered = text.lower()
+    if lowered in index:
+        return index[lowered]
+    if ":" in text:
+        parts = [part.strip() for part in text.split(":") if part.strip()]
+        # <parser>:<METHOD>:<path> -> METHOD:path
+        if len(parts) >= 3:
+            candidate = f"{parts[-2].upper()}:{parts[-1]}".lower()
+            if candidate in index:
+                return index[candidate]
+        tail = parts[-1].lower() if parts else ""
+        if tail in index:
+            return index[tail]
+    return ""
+
+
 def build_behavior_ir_from_knowledge_asset(
     asset: dict[str, Any] | None,
     *,
@@ -3507,6 +3642,21 @@ def build_behavior_ir_from_knowledge_asset(
         "transitions": "transitions",
         "constrains": "scopes",
     }
+    _node_index = _node_reference_index(model)
+    _field_of_suppressed = 0
+
+    def _field_of_entity(field_name: str, entity_node_id: str, built: dict[str, Any]) -> bool:
+        """Whether *field_name* is a field the entity node already declares."""
+        target = _text(field_name).lower()
+        if not target:
+            return False
+        for node in _list(built.get("entities")):
+            row = _dict(node)
+            if _text(row.get("id")) != entity_node_id:
+                continue
+            return any(_text(f).lower() == target for f in _list(row.get("fields")))
+        return False
+
     for rel in _list(data.get("entity_relations")):
         if not isinstance(rel, dict):
             continue
@@ -3524,12 +3674,64 @@ def build_behavior_ir_from_knowledge_asset(
         chunk_id = _text(rel.get("source_chunk_id"))
         source_id = _text(rel.get("source_id")) or "entity_relations"
         locator = f"chunk_id={chunk_id}" if chunk_id else f"{from_e}->{to_e}"
+        # Resolve names to node ids. Passing the raw names through produced relations
+        # whose endpoints matched no node in the model -- 254 of them on a real target,
+        # about 40% of all relations, including declared state transitions that then
+        # contributed no obligations while appearing present in the IR.
+        from_ref = _resolve_node_reference(from_e, _node_index)
+        to_ref = _resolve_node_reference(to_e, _node_index)
+        if not from_ref or not to_ref:
+            # A field-of relation is not a gap. ``balance owns users`` says the column
+            # belongs to the table, which entities[].fields already records -- every one
+            # of the 175 such rows on a real target named a field the entity already
+            # declares. Recording them as gaps would bury the genuine unresolved
+            # endpoints under redundant noise, and the release gate counts gaps.
+            if to_ref and ir_type == "owns" and _field_of_entity(from_e, to_ref, model):
+                _field_of_suppressed += 1
+                continue
+            # Otherwise fail closed and visibly. A dangling relation is worse than a
+            # recorded gap: the gap says "this fact could not be attached", the relation
+            # says "it was".
+            model["coverage_gaps"].append(_fact_node(
+                node_id=_stable_id("gap", "entity_relation_endpoint_unresolved", from_e, to_e, raw_type),
+                typed_fields={
+                    "gap_type": "entity_relation_endpoint_unresolved",
+                    "reason_code": "RELATION_ENDPOINT_NOT_A_NODE",
+                    "relation_type": ir_type,
+                    "from_entity": from_e,
+                    "to_entity": to_e,
+                    "unresolved_side": (
+                        "both" if not from_ref and not to_ref else ("from" if not from_ref else "to")
+                    ),
+                    "description": "Source relation endpoint does not name any Behavior IR node",
+                },
+                source_refs=[_source_ref(source_id, locator=locator, kind=f"entity_relation:{raw_type}")],
+                confidence=1.0,
+                derivation="explicit",
+                status="unsupported",
+            ))
+            continue
         model["relations"].append(_relation_node(
             relation_type=ir_type,
-            from_ref=from_e,
-            to_ref=to_e,
+            from_ref=from_ref,
+            to_ref=to_ref,
             source_refs=[_source_ref(source_id, locator=locator, kind=f"entity_relation:{raw_type}")],
             confidence=float(rel.get("confidence") or 0.7),
+            derivation="schema-derived",
+        ))
+
+    if _field_of_suppressed:
+        # Counted, not silent: a reader must be able to see that N source relations were
+        # recognised as already-modelled rather than wonder where they went.
+        model["capabilities"].append(_fact_node(
+            node_id=_stable_id("cap", "entity_relation_field_of_suppressed"),
+            typed_fields={
+                "capability": "entity_relation_field_of_suppressed",
+                "adapter": "behavior_ir",
+                "suppressed_count": _field_of_suppressed,
+                "reason": "field-of relations are already represented in entities[].fields",
+            },
+            confidence=1.0,
             derivation="schema-derived",
         ))
 
