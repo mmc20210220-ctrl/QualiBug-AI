@@ -131,17 +131,87 @@ A side note from H2: the two `DELETED` rows are `qb_auto_sku_QBBOOTSTRAP_*`, the
 product's own governed writes. Cleanup soft-deleted them and they remain visible in the
 catalog.
 
+## Backend optimisation pass — the funnel, measured at each step
+
+Seven runs against the same live target. Each fix moved obligations to the next gate,
+which is the honest shape of progress here: reach improved every time, verdicts did not.
+
+| run | obligations | top blocker | count | findings |
+| --- | ---: | --- | ---: | ---: |
+| 3 | 354 | `MISSING_PRIMARY_OPERATION` | 174 | 1 |
+| 4 | 435 | `MISSING_PRIMARY_OPERATION` | 174 | 2 |
+| 5 | 1218 | `BLOCKED_MISSING_OBSERVER` | 463 | 4 |
+| 7 | 1218 | `BLOCKED_NON_REVERSIBLE_WRITE` | 575 | 4 |
+
+What each step bought:
+
+1. **One semantic lexicon instead of two.** Two copies sat at different paths, read by
+   disjoint module sets, with 30 conflicting verb meanings and each holding vocabulary
+   the other lacked. Unified by union with a superset assertion against both. On the 27
+   real documents: permissions 378→412, ownership scopes 12→18, and forbidden
+   transitions 0→6. Those six moved *out* of the allowed-transition count — 58+0 and
+   52+6 both total 58 — so six false-defect generators became six real questions.
+2. **Prose invariants joined to operations.** The largest blocker at 40% of the run.
+   Invariants with refs 6→102, obligations 435→1218, and four risk families that had
+   produced literally zero obligations began producing them.
+3. **Observation surfaces declared, not hardcoded.** The IR said no database while
+   `adapter_capability` said yes off the same config. Fixed, verified — and it moved
+   nothing, 463→463. Declaring a surface is necessary and not sufficient.
+4. **Cross-entity readback.** A write is observable through the entity it references:
+   `POST /api/payments/pay` declares `orderId` and moves that order to PAID, so
+   `GET /api/orders/{id}` is its readback. `BLOCKED_MISSING_OBSERVER` 463→237, with
+   exactly 226 landing on the next gate.
+
+Two silent failures were removed on the way: an obligation the compiler deferred with
+`MISSING_PRIMARY_OPERATION` was relabelled `BUDGET_EXHAUSTED` on a branch reached only
+when budget was *not* the constraint, and the readback resolver was called inside
+`except Exception: pass`, so any defect in it became an indistinguishable
+`BLOCKED_MISSING_OBSERVER` — the one code that already explained most blocks.
+
+`auto_observer_injector.py` turned out to be entirely dead, all five public functions
+unreferenced. Its own fallback was the reason: it returned
+`observation_mode: "response_body_only"` when no read existed, so "cancelling an order
+releases its inventory" would have been checked against the cancel response. The
+fallback was removed rather than the compiler's refusal weakened.
+
+### The current blocker, and why it is not being fixed by inference
+
+`BLOCKED_NON_REVERSIBLE_WRITE`, 575 of 1218. The IR declares exactly **two**
+compensation relations — `cancel` compensates `POST /api/orders`, `reject` compensates
+`POST /api/refunds` — and `resolve_compensation_relation` resolves nothing for any of
+the 17 writes, because it requires `SOURCE_EXPLICIT` evidence.
+
+An inverse-action table (cancel↔create, refund↔pay, release↔reserve) would unblock
+several hundred obligations in one commit. It is deliberately **not** being added.
+
+A compensation relation is the claim "this write can be undone", and cleanup receipts
+are part of the evidence chain. A refund does not restore the pre-payment state in a
+real system: it leaves audit rows and may not return inventory. Asserting reversibility
+from an action name, without the source saying so, is a false PASS about cleanup — and
+the `SOURCE_EXPLICIT` requirement exists precisely to prevent it.
+
+The source does state the compensation: BUSINESS_RULES.md says
+「已支付订单不能直接取消，只能发起退款」. So the correct next increment is deriving
+compensation relations from rule text, the same way invariants are now bound to
+operations — not guessing them from a verb table.
+
 ## What would actually move coverage
 
-In order of measured blocking weight, not guesswork:
+In order of measured blocking weight, not guesswork. Items 1 and 2 of the original
+list are now done and are recorded above; this is the remaining list against the
+latest run:
 
-1. Bind invariants to operations (174 + 20 obligations). Until a rule references
-   something callable, no amount of comprehension reaches the target.
-2. Declare observers for the effects obligations assert (123 obligations).
-3. Generate obligations for facts the product already observes but discards — H1 is the
-   proof case: the login status was read and no assertion was compiled from it.
-4. Enable the browser UI probe. Two live frontends were never touched; the only
-   remaining coverage gap is `E_BROWSER_UI_DISABLED`.
+1. Derive compensation relations from rule text (575 obligations). The largest
+   blocker, and the reason it is not a quick fix is in the section above.
+2. Close the remaining observer gap (237 obligations). The database surface is now
+   declared available, so an entity with no HTTP read — refunds here — is reachable
+   through a `db_snapshot` observer that nothing yet builds.
+3. Repair the binding graph (130 obligations, `BLOCKED_BINDING_GRAPH_INVALID`).
+4. Generate obligations for facts the product already observes but discards. H1 is the
+   proof case: the login status was read, recorded as `disabled_buyer: true` by the
+   product's own credential check, and no assertion was ever compiled from it.
+5. Enable the browser UI probe. Two live frontends were never touched; the only
+   coverage gap outside the ledger is `E_BROWSER_UI_DISABLED`.
 
 ## Reproducing
 
