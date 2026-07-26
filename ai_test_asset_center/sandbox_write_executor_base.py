@@ -557,7 +557,15 @@ def _materialize_source_observed_mutation(
         if filtered:
             rows = filtered
     if not rows:
-        return {}, {}, "runtime_mutation_target_ambiguous"
+        # This return said "runtime_mutation_target_ambiguous", which it never is.
+        # Genuine ambiguity is handled two lines below -- "use first row when multiple
+        # match instead of blocking" -- so the only way here is ZERO rows. 70 attempts on
+        # a live target carried the ambiguity label while the truth was an empty
+        # before-state read, sending any reader looking for a disambiguation rule that
+        # would not have helped.
+        if before_body in (None, "", [], {}):
+            return {}, {}, "runtime_mutation_before_state_absent"
+        return {}, {}, "runtime_mutation_before_state_has_no_entity_rows"
     # ── Degraded: use first row when multiple match instead of blocking ──
     row = rows[0]
     supported: list[tuple[int, str, Any, str]] = []
