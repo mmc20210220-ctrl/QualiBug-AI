@@ -247,6 +247,15 @@ def build_campaign_context_from_scan_body(body: dict[str, Any]) -> dict[str, Any
         "target_environment",
         "execution_approval_id",
         "execution_mode",
+        # v12_pipeline reads context["campaign_rerun_key"] / ["campaign_restart_key"] to
+        # start a fresh campaign instead of resuming one. Neither was in this passthrough,
+        # so the mechanism was unreachable from the only entry point the product exposes:
+        # a campaign that considered itself complete replayed its cached attempt ledger on
+        # every subsequent scan (campaign_mode "resumed", attempted_slice_count 0). An
+        # operator who fixed their system had no way to re-verify, and no execution-layer
+        # change could be measured end to end.
+        "campaign_rerun_key",
+        "campaign_restart_key",
     ):
         value = as_text(body.get(key))
         if value:
