@@ -1395,6 +1395,47 @@ def compile_experiment_for_obligation(
         for row in _list(protocol.get("treatment_plan"))
         if isinstance(row, dict)
     ]
+    # Plan step-identity gate. Runs for EVERY protocol, built-in or registered.
+    #
+    # A step's id is its contract subject: contract_oracles._plan_subjects derives each
+    # activation subject as `step_id or id` and then collapses the list with
+    # dict.fromkeys. So an empty or repeated step_id silently shrinks required[phase],
+    # shifts every positional lookup after it, and finally trips the delivery gate's
+    # duplicate-subject check -- after the experiment has already issued real requests.
+    # Blocking at compile time makes it one visible reason code instead of a confusing
+    # late failure.
+    #
+    # Safe for existing plans: every built-in protocol branch emits exactly one literal
+    # 'control_1' and/or one 'treatment_1', so no current plan has an empty or duplicated
+    # step_id. Verified against the built-in branches before adding this.
+    for _phase_name, _phase_plan in (("control", control_plan), ("treatment", treatment_plan)):
+        _seen_step_ids: set[str] = set()
+        for _plan_step in _phase_plan:
+            _step_identity = _text(_plan_step.get("step_id"))
+            if not _step_identity:
+                return blocked_experiment(
+                    oid,
+                    "BLOCKED_PLAN_STEP_IDENTITY_INVALID",
+                    f"{_phase_name}:missing_step_id",
+                )
+            if _step_identity in _seen_step_ids:
+                return blocked_experiment(
+                    oid,
+                    "BLOCKED_PLAN_STEP_IDENTITY_INVALID",
+                    f"{_phase_name}:duplicate:{_step_identity}",
+                )
+            _seen_step_ids.add(_step_identity)
+
+    # A multi-step plan whose steps cannot each be observed must not execute. Per-phase
+    # observation keeps only the first and last governed write, so steps 2..N-1 would
+    # vanish and the experiment would still report a verdict from partial evidence.
+    if len(treatment_plan) > 1 and not bool(protocol.get("per_step_evidence")):
+        return blocked_experiment(
+            oid,
+            "BLOCKED_STEP_EVIDENCE_UNOBSERVABLE",
+            f"treatment_steps={len(treatment_plan)}:per_step_evidence_not_declared",
+        )
+
     # Binder-location materializability gate.
     #
     # A protocol may place a distinguishing mutation in query, path, header or body
@@ -1679,6 +1720,10 @@ BLOCK_REASONS = (
     # A registered protocol returned an unusable plan or raised. Distinct from an adapter
     # problem: the cause is the registration, not the target.
     "BLOCKED_REGISTERED_PROTOCOL_INVALID",
+    # A plan step has no id or repeats one, so its contract subject would collide.
+    "BLOCKED_PLAN_STEP_IDENTITY_INVALID",
+    # A multi-step plan with no per-step observation would lose its middle steps.
+    "BLOCKED_STEP_EVIDENCE_UNOBSERVABLE",
     "BLOCKED_FIXTURE_DAG_DRIFT",
 )
 

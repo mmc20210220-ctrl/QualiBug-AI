@@ -171,11 +171,34 @@ def execute_non_barrier_plans(
                 continue
             actor_ref = _text(step.get("actor_ref"))
             op_ref = _text(step.get("operation_ref"))
+            # Contract subject identity is step_id-authoritative, not positional.
+            #
+            # This fixes a live misalignment, not just a future N-step concern.
+            # `planned_subjects` is activation_requirements[phase], built by
+            # contract_oracles._plan_subjects over the UNFILTERED plan and then de-duplicated
+            # with dict.fromkeys. But `plan` here is the barrier-FILTERED list built at the
+            # two _exec_plan call sites, which drop every step already consumed as a barrier
+            # participant. So any phase mixing barrier and non-barrier steps mislabels every
+            # step after the first barrier step, filing its contract evidence receipt under
+            # another step's identity.
+            #
+            # Provably identical for every existing plan: _plan_subjects derives each subject
+            # as `step_id or id`, and every built-in protocol branch emits a literal
+            # 'control_1' / 'treatment_1'. For a one-step phase planned_subjects is exactly
+            # ['control_1'] or ['treatment_1'] and the step's own step_id is that same
+            # literal, so the declared branch returns what planned_subjects[index] returned.
+            # The positional and generated fallbacks are retained unchanged for a step that
+            # declares no id.
+            declared_step_id = _text(step.get("step_id"))
             subject_id = (
-                planned_subjects[index]
-                if index < len(planned_subjects)
-                else _text(step.get("step_id"))
-                or f"{phase}:{op_ref or 'operation'}:{index + 1}"
+                declared_step_id
+                if declared_step_id and declared_step_id in planned_subjects
+                else (
+                    planned_subjects[index]
+                    if index < len(planned_subjects)
+                    else declared_step_id
+                    or f"{phase}:{op_ref or 'operation'}:{index + 1}"
+                )
             )
             if phase == "treatment" and source_body_control_blocked:
                 reason = "control_body_binding_blocked"
