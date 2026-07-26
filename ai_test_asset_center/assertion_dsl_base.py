@@ -111,6 +111,178 @@ UNPRODUCED_OBSERVATION_KEYS: dict[str, str] = {
 }
 
 
+# ── Assertion kind registration entry point ─────────────────────────────────
+#
+# SUPPORTED_KINDS is a literal set and the evaluator is a hardcoded if/elif chain, so a
+# new assertion kind previously required editing this module. The facade set-union
+# pattern (assertion_dsl.py, assertion_dsl_validation_base.py) can add a NAME to
+# SUPPORTED_KINDS but cannot add a dispatch branch -- which is exactly how
+# temporal_date_boundary became a compiled kind with no evaluator that raises
+# unsupported_assertion_kind.
+#
+# Registration is ADDITIVE: a registered kind returns its receipt before the built-in
+# chain runs, so the chain that produces every real assertion today is untouched.
+_REGISTERED_ASSERTION_EVALUATORS: dict[str, Any] = {}
+_REGISTERED_KIND_EVIDENCE_KEYS: dict[str, tuple[str, ...]] = {}
+
+
+def register_assertion_kind(
+    kind: str,
+    *,
+    evaluator: Any,
+    required_evidence_keys: "tuple[str, ...] | list[str]" = (),
+) -> str:
+    """Register an assertion kind and its evaluator. Returns the kind.
+
+    ``evaluator(envelope) -> dict`` must return ``{"passed": True|False|None,
+    "expected": Any, "actual": Any, "reason_code": str}``. ``passed`` follows the
+    existing contract: True is PASS, False is VIOLATION, None is INDETERMINATE.
+    ``envelope`` carries kind, spec and observations.
+
+    ``required_evidence_keys`` names the observation keys the evaluator reads. They are
+    checked against what observers declare they produce, so a kind cannot be registered
+    into the state that made three built-in kinds permanently indeterminate: present in
+    SUPPORTED_KINDS, compiled, executed, and structurally unable to return a verdict.
+    """
+    normalized = _text(kind)
+    if not normalized:
+        raise ValueError("register_assertion_kind requires a non-empty kind")
+    if not callable(evaluator):
+        raise ValueError(f"assertion kind {normalized!r} requires a callable evaluator")
+    if normalized in SUPPORTED_KINDS and normalized not in _REGISTERED_ASSERTION_EVALUATORS:
+        raise ValueError(
+            f"assertion kind {normalized!r} is a built-in with its own dispatch branch; "
+            "choose a distinct kind rather than shadowing it"
+        )
+    if normalized in KIND_ALIASES:
+        raise ValueError(
+            f"assertion kind {normalized!r} is a family alias for "
+            f"{KIND_ALIASES[normalized]!r}; register the evaluator-shaped kind instead"
+        )
+
+    keys = tuple(_text(item) for item in required_evidence_keys if _text(item))
+    if keys:
+        from .observer_contracts_base import observer_produced_evidence_keys
+
+        producible = observer_produced_evidence_keys()
+        missing = [key for key in keys if key not in producible]
+        if missing:
+            raise ValueError(
+                f"assertion kind {normalized!r} requires observation keys no registered "
+                f"observer declares it produces: {sorted(missing)}. Register the "
+                "observer with evidence_keys first, or the kind can never return a "
+                "verdict."
+            )
+
+    _REGISTERED_ASSERTION_EVALUATORS[normalized] = evaluator
+    _REGISTERED_KIND_EVIDENCE_KEYS[normalized] = keys
+    SUPPORTED_KINDS.add(normalized)
+    return normalized
+
+
+def registered_assertion_kinds() -> tuple[str, ...]:
+    """Assertion kinds added through register_assertion_kind."""
+    return tuple(_REGISTERED_ASSERTION_EVALUATORS)
+
+
+def _evaluate_registered_assertion_kind(
+    evaluator: Any,
+    *,
+    assertion_id: str,
+    kind: str,
+    effective_kind: str,
+    spec: dict[str, Any],
+    obs: dict[str, Any],
+    observer_receipt_ids: Any,
+    source_refs: Any,
+    campaign_id: str,
+    execution_id: str,
+) -> dict[str, Any]:
+    """Run a registered evaluator and seal its verdict through the shared receipt."""
+
+    error = ""
+    harness_error = False
+    expected: Any = None
+    actual: Any = None
+    reason_code = ""
+    passed: Any = None
+
+    # Enforce the kind-to-evidence contract BEFORE the evaluator runs.
+    #
+    # Without this, a registered evaluator that forgets to check for evidence presence
+    # reports a VIOLATION from absent observations -- e.g. comparing an expected delta
+    # of 1 against a missing value yields False, which seals as VIOLATION. That is the
+    # mirror of the false-PASS class fixed elsewhere in this module: unmeasured must
+    # never read as violated any more than untested may read as verified. Making it
+    # structural means it does not depend on every evaluator author remembering.
+    _required = _REGISTERED_KIND_EVIDENCE_KEYS.get(effective_kind) or ()
+    _observations = _dict(obs)
+    _absent = [key for key in _required if _observations.get(key) in (None, {}, [], "")]
+    if _absent:
+        return _assertion_receipt(
+            assertion_id=assertion_id,
+            kind=kind,
+            status="INDETERMINATE",
+            reason_code="ASSERTION_EVIDENCE_MISSING",
+            expected={"required_observation_keys": list(_required)},
+            actual={"absent_observation_keys": _absent},
+            error="",
+            observer_receipt_ids=observer_receipt_ids,
+            source_refs=source_refs,
+            harness_error=False,
+            campaign_id=campaign_id,
+            execution_id=execution_id,
+        )
+
+    try:
+        result = evaluator({
+            "kind": kind,
+            "effective_kind": effective_kind,
+            "spec": _dict(spec),
+            "observations": _dict(obs),
+        })
+        if not isinstance(result, dict):
+            raise TypeError(
+                f"evaluator returned {type(result).__name__}, expected dict"
+            )
+        passed = result.get("passed")
+        # Identity, not equality. `1 in (True, False, None)` is True in Python because
+        # 1 == True, so an equality check accepts 1 and 0 as verdicts. A verdict must be
+        # an explicit boolean or an explicit "no verdict", never a value that merely
+        # compares equal to one -- the same discipline this module applies to evidence.
+        if passed is not True and passed is not False and passed is not None:
+            raise ValueError(
+                f"evaluator returned passed={passed!r} ({type(passed).__name__}); "
+                "must be exactly True, False or None"
+            )
+        expected = result.get("expected")
+        actual = result.get("actual")
+        reason_code = _text(result.get("reason_code"))
+    except Exception as exc:  # noqa: BLE001 - reported as a harness error, never hidden
+        error = f"{type(exc).__name__}: {exc}"
+        reason_code = "ASSERTION_EVALUATION_ERROR"
+        harness_error = True
+        passed = None
+
+    status = "INDETERMINATE" if passed is None else "PASS" if passed else "VIOLATION"
+    if status == "INDETERMINATE" and not reason_code:
+        reason_code = "ASSERTION_EVIDENCE_MISSING"
+    return _assertion_receipt(
+        assertion_id=assertion_id,
+        kind=kind,
+        status=status,
+        reason_code=reason_code,
+        expected=expected,
+        actual=actual,
+        error=error,
+        observer_receipt_ids=observer_receipt_ids,
+        source_refs=source_refs,
+        harness_error=harness_error,
+        campaign_id=campaign_id,
+        execution_id=execution_id,
+    )
+
+
 def unproducible_assertion_evidence(kind: str) -> str:
     """Return the missing evidence key for *kind*, or "" when it is satisfiable.
 
@@ -867,6 +1039,25 @@ def evaluate_assertion(
         )
 
     effective_kind = KIND_ALIASES.get(kind, kind)
+
+    # Runtime-registered assertion kind. Handled before the built-in chain so the
+    # chain needs no re-indentation: a registered kind returns its receipt here, and
+    # everything below is untouched. See register_assertion_kind for why this is
+    # additive rather than a rewrite of the dispatch.
+    _registered_evaluator = _REGISTERED_ASSERTION_EVALUATORS.get(effective_kind)
+    if _registered_evaluator is not None:
+        return _evaluate_registered_assertion_kind(
+            _registered_evaluator,
+            assertion_id=assertion_id,
+            kind=kind,
+            effective_kind=effective_kind,
+            spec=spec,
+            obs=obs,
+            observer_receipt_ids=observer_ids,
+            source_refs=refs,
+            campaign_id=resolved_campaign_id,
+            execution_id=resolved_execution_id,
+        )
 
     try:
         if effective_kind not in SUPPORTED_KINDS:
