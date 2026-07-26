@@ -207,7 +207,7 @@ def execute_selected_experiments(
                 )
                 _pre_resolved_bindings = dict(_resolution.get("bindings") or {})
         except Exception as exc:
-            logger.debug("batch pre-resolution failed (non-fatal): %s", exc)
+            logger.info("batch pre-resolution skipped: %s", exc)
 
     results: list[dict[str, Any]] = []
     findings: list[dict[str, Any]] = []
@@ -243,9 +243,11 @@ def execute_selected_experiments(
     # receipt and makes a throttled batch look like an empty plan.
     budget_deferred: list[dict[str, Any]] = []
 
-    # ── SPEC v1.2.1 §12: Prioritize experiments before budget enforcement ──
-    # Use prioritizer to determine real execution order.
+    # ── SPEC v1.2.2 §12: Prioritize experiments before budget enforcement ──
+    # Prioritizer failure in formal campaign → HARNESS_FAILURE, no transport.
     _prioritization_receipt: dict[str, Any] = {}
+    _prioritization_failed = False
+    _prioritization_error = ""
     try:
         from .safe_experiment_prioritizer import prioritize_experiments
         _exps_for_priority = [
@@ -270,7 +272,9 @@ def execute_selected_experiments(
             _remaining = [s for s in selected if _text(_dict(s).get("obligation_id")) not in set(_ordered_ids)]
             selected = _reordered + _remaining
     except Exception as exc:
-        logger.debug("batch prioritization failed (non-fatal): %s", exc)
+        _prioritization_failed = True
+        _prioritization_error = str(exc)
+        logger.warning("batch prioritization failed: %s", exc)
 
     if _total_selected > _budget:
         logger.info(
@@ -758,7 +762,12 @@ def execute_selected_experiments(
     )
     _batch_result["validation_gate"] = _validation_gate
 
-    # ── SPEC v1.2.1 §12 + §13: Attach funnel, attribution, and priority receipts ──
+    # ── SPEC v1.2.2 §12: Attach funnel, attribution, and priority receipts ──
+    # Failure is NOT silent — campaign_validation_status must reflect it.
+    _funnel_failed = False
+    _funnel_error = ""
+    _attribution_failed = False
+    _attribution_error = ""
     try:
         from .execution_coverage_funnel import build_execution_coverage_funnel
         from .blocker_attribution import attribute_all_blockers
@@ -773,17 +782,59 @@ def execute_selected_experiments(
             campaign_id=campaign_id,
         )
         _batch_result["execution_coverage_funnel"] = _funnel
+    except Exception as exc:
+        _funnel_failed = True
+        _funnel_error = str(exc)
+        logger.warning("batch funnel generation failed: %s", exc)
+    try:
+        from .blocker_attribution import attribute_all_blockers
+        _all_exps2 = [experiments_by_obligation.get(oid, {}) for oid in selected_ids]
+        _all_obls2 = [_dict(s) for s in selected]
+        _all_exec_results2 = list(execution_results.values())
         _attribution = attribute_all_blockers(
-            obligations=_all_obls,
-            experiments=_all_exps,
-            execution_results=_all_exec_results,
+            obligations=_all_obls2,
+            experiments=_all_exps2,
+            execution_results=_all_exec_results2,
             behavior_ir=behavior_ir,
         )
         _batch_result["blocker_attribution"] = _attribution
     except Exception as exc:
-        logger.debug("batch funnel/attribution failed (non-fatal): %s", exc)
+        _attribution_failed = True
+        _attribution_error = str(exc)
+        logger.warning("batch attribution failed: %s", exc)
     if _prioritization_receipt:
         _batch_result["prioritization_receipt"] = _prioritization_receipt
+
+    # ── SPEC v1.2.2 §12.4: Campaign Validation Receipt ──
+    # Mandatory: prioritization_receipt, execution_coverage_funnel, blocker_attribution.
+    # Missing any → campaign_validation_status != PASSED.
+    _campaign_validation_status = "PASSED"
+    _campaign_validation_reasons: list[str] = []
+    if _prioritization_failed:
+        _campaign_validation_status = "FAILED"
+        _campaign_validation_reasons.append(f"HARNESS_PRIORITIZATION_FAILED:{_prioritization_error[:100]}")
+    if _funnel_failed:
+        _campaign_validation_status = "FAILED"
+        _campaign_validation_reasons.append(f"HARNESS_COVERAGE_FUNNEL_FAILED:{_funnel_error[:100]}")
+    if _attribution_failed:
+        _campaign_validation_status = "FAILED"
+        _campaign_validation_reasons.append(f"HARNESS_BLOCKER_ATTRIBUTION_FAILED:{_attribution_error[:100]}")
+    if not _batch_result.get("execution_coverage_funnel"):
+        _campaign_validation_status = "FAILED"
+        _campaign_validation_reasons.append("missing_execution_coverage_funnel")
+    if not _batch_result.get("blocker_attribution"):
+        _campaign_validation_status = "FAILED"
+        _campaign_validation_reasons.append("missing_blocker_attribution")
+    _batch_result["campaign_validation_receipt"] = {
+        "schema_version": "qualibug.campaign-validation-receipt.v1",
+        "campaign_validation_status": _campaign_validation_status,
+        "reasons": _campaign_validation_reasons,
+        "prioritization_present": bool(_batch_result.get("prioritization_receipt")),
+        "funnel_present": bool(_batch_result.get("execution_coverage_funnel")),
+        "attribution_present": bool(_batch_result.get("blocker_attribution")),
+        "degraded_mode": _prioritization_failed and _campaign_validation_status == "FAILED",
+        "customer_deliverable": _campaign_validation_status == "PASSED",
+    }
 
     return _batch_result
 

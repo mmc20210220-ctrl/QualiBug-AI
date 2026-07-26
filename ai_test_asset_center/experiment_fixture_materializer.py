@@ -322,17 +322,15 @@ def materialize_experiment_fixtures(
                 if auto_create:
                     binding = {**binding, **auto_create}
                 else:
-                    # ── Fallback: use synthetic_value directly as binding ──
-                    # The value was already generated during compilation;
-                    # proceed with it and let the target respond naturally.
-                    _synth_val = binding.get("synthetic_value")
-                    runtime_bindings[target] = str(_synth_val)
+                    # ── SPEC v1.2.2 §9: Synthetic binding FORBIDDEN ──
+                    # No verified runtime source → BLOCKED, no transport.
                     fixture_receipts.append({
                         "node_id": node_id,
                         "kind": kind,
-                        "status": "degraded_synthetic",
+                        "status": "blocked",
                         "target": target,
-                        "value": str(_synth_val),
+                        "reason_code": "BLOCKED_MISSING_BINDING",
+                        "detail": f"binding_has_no_verified_runtime_source:{target}",
                     })
                     continue
             resolvers = _validated_runtime_resolvers(binding, ops)
@@ -929,14 +927,14 @@ def materialize_experiment_fixtures(
             row for row in fixture_receipts
             if _text(_dict(row).get("node_id")) == fixture_id
         ]
-        # Prefer degraded_synthetic/degraded_generated over BLOCKED
-        _preferred_statuses = {"degraded_synthetic", "degraded_generated", "bound", "completed", "ready", "resolved"}
+        # Prefer valid statuses over BLOCKED (degraded_synthetic removed in v1.2.2)
+        _preferred_statuses = {"bound", "completed", "ready", "resolved"}
         fixture = next(
             (row for row in matching_fixtures if _text(_dict(row).get("status")).lower() in _preferred_statuses),
             next(iter(matching_fixtures), {}),
         )
         fixture_status = _text(_dict(fixture).get("status")).lower()
-        observed = fixture_status in {"bound", "completed", "ready", "resolved", "degraded_synthetic", "degraded_generated"}
+        observed = fixture_status in {"bound", "completed", "ready", "resolved"}
         contract_evidence_receipts.append(build_contract_evidence_receipt(
             kind="fixture",
             experiment_id=eid,

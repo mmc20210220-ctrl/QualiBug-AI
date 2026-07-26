@@ -1407,8 +1407,8 @@ def compile_experiment_for_obligation(
         },
     )
 
-    # ── SPEC v1.2.1 §5: Coverage Recovery Orchestrator ──
-    # Run all v1.2 modules in sequence; verdict directly gates COMPILED/BLOCKED.
+    # ── SPEC v1.2.2 §4: Coverage Recovery Orchestrator — Fail-Closed Gate ──
+    # All five modules are hard gates. Any BLOCKED → experiment BLOCKED.
     from ai_test_asset_center.v12_coverage_recovery_orchestrator import prepare_experiment_v12
     v12_result = prepare_experiment_v12(
         obligation=obl,
@@ -1423,14 +1423,15 @@ def compile_experiment_for_obligation(
         primary_block = v12_result.get("primary_blocking_reason") or {}
         return blocked_experiment(
             oid,
-            primary_block.get("reason_code", "BLOCKED_UNSUPPORTED_ADAPTER"),
+            primary_block.get("reason_code", "BLOCKED_COVERAGE_RECOVERY_RECEIPT_MISSING"),
             primary_block.get("detail", "v12_coverage_recovery_blocked"),
         )
     # READY: attach v1.2 artifacts to experiment
-    experiment["coverage_recovery_version"] = "v1.2.1"
+    experiment["coverage_recovery_version"] = "v1.2.2"
     experiment["compile_coverage_receipt"] = {
         "verdict": v12_verdict,
         "fingerprint": v12_result.get("fingerprint", ""),
+        "gate_receipts": v12_result.get("gate_receipts", []),
         "binding_graph_fingerprint": _text(
             _dict(v12_result.get("module_results", {}).get("binding_coverage_graph")).get("binding_graph_fingerprint")
         ),
@@ -1511,6 +1512,14 @@ BLOCK_REASONS = (
     "BLOCKED_UNSUPPORTED_ADAPTER",
     "BLOCKED_INVALID_CLEANUP_PLAN",
     "BLOCKED_CLEANUP_CONTRACT_DRIFT",
+    # v1.2.2 hard gate reason codes
+    "BLOCKED_ORACLE_INPUT_INCOMPLETE",
+    "BLOCKED_BINDING_CYCLE",
+    "BLOCKED_FORBIDDEN_BINDING_SOURCE",
+    "BLOCKED_COVERAGE_RECOVERY_RECEIPT_MISSING",
+    "BLOCKED_OBSERVER_CONTRACT_DRIFT",
+    "BLOCKED_BINDING_GRAPH_INVALID",
+    "BLOCKED_FIXTURE_DAG_DRIFT",
 )
 
 

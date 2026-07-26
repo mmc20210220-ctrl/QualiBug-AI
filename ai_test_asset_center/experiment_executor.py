@@ -340,6 +340,57 @@ def execute_one_experiment(
         },
     )
 
+    # ── SPEC v1.2.2 §10: Runtime Binding Provenance Validation ──
+    # Verify all runtime bindings have legitimate sources from compile graph.
+    # Synthetic/degraded values must NOT reach transport.
+    _compile_graph = _dict(exp.get("binding_coverage_graph"))
+    _compile_nodes = _list(_compile_graph.get("nodes"))
+    _compile_node_targets = {
+        _text(n.get("binding_id") or n.get("target")): n
+        for n in _compile_nodes if isinstance(n, dict)
+    }
+    _FORBIDDEN_RUNTIME_SOURCES = {"degraded_synthetic", "synthetic_value", "random_placeholder", "invented"}
+    _provenance_violations: list[str] = []
+    for _bk, _bv in runtime_bindings.items():
+        # Check binding value is not synthetic
+        _bv_str = str(_bv or "")
+        if _bv_str.startswith("qb_test_") or _bv_str.startswith("qb-test-"):
+            _provenance_violations.append(f"synthetic_binding_reaching_transport:{_bk}")
+            continue
+        # Check binding exists in compile graph (if graph has nodes)
+        if _compile_node_targets and _bk not in _compile_node_targets:
+            # Only flag if compile graph explicitly covers this binding
+            _plan_targets = {_text(bp.get("target")) for bp in _list(exp.get("binding_plan")) if isinstance(bp, dict)}
+            if _bk in _plan_targets:
+                _provenance_violations.append(f"undeclared_runtime_binding:{_bk}")
+    # Check fixture receipts for degraded/synthetic status
+    for _fr in fixture_receipts:
+        _fr_status = _text(_dict(_fr).get("status")).lower()
+        if _fr_status in _FORBIDDEN_RUNTIME_SOURCES:
+            _provenance_violations.append(
+                f"forbidden_fixture_source:{_text(_dict(_fr).get('target'))}:{_fr_status}"
+            )
+    if _provenance_violations:
+        return {
+            "schema_version": "qualibug.experiment-execution.v1",
+            "experiment_id": eid,
+            "obligation_id": oid,
+            "status": "BLOCKED",
+            "reason_code": "BLOCKED_BINDING_GRAPH_INVALID",
+            "detail": ";".join(_provenance_violations[:5]),
+            "elapsed_ms": int((time.time() - started) * 1000),
+            "finding": None,
+            "execution_receipt": {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_BINDING_GRAPH_INVALID",
+                "detail": "runtime_binding_provenance_invalid",
+            },
+            "runtime_binding_provenance": {
+                "status": "INVALID",
+                "violations": _provenance_violations[:10],
+            },
+        }
+
     # ── SPEC v1.1 §10 Phase B: Runtime binding validation ──
     # After fixture materialization, verify proof fingerprint and bindings.
     if is_governed_write:

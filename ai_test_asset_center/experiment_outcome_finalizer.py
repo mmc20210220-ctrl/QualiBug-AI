@@ -805,7 +805,30 @@ def finalize_experiment_execution(
             "completeness_proof": _completeness_proof,
         }
     else:
-        verdict = evaluate_contract_oracle(experiment=exp_for_oracle, evidence=observations)
+        # ── SPEC v1.2.2 §6.2: Runtime Oracle Input Validation ──
+        # Verify actual observation data exists before calling Oracle.
+        # Empty body / status-code-only receipts are NOT complete input.
+        _runtime_oracle_blocked = False
+        _runtime_oracle_reason = ""
+        _obs_steps = _list(observations.get("steps")) or _list(observations.get("after_states"))
+        _has_assertions = bool(_list(exp.get("assertions")))
+        if _has_assertions and not _obs_steps:
+            # No observation data at all — check if observations have any content
+            _obs_keys = {k for k, v in observations.items() if v and k not in ("cross_entity_completeness_gate_blocked",)}
+            if not _obs_keys:
+                _runtime_oracle_blocked = True
+                _runtime_oracle_reason = "no_observation_data_for_assertions"
+        if _runtime_oracle_blocked:
+            verdict = {
+                "status": "INDETERMINATE",
+                "verdict": "blocked_experiment",
+                "reason_codes": ["BLOCKED_ORACLE_INPUT_INCOMPLETE"],
+                "assertions": [],
+                "missing_requirements": [_runtime_oracle_reason],
+                "oracle_blocked_by_runtime_input_gate": True,
+            }
+        else:
+            verdict = evaluate_contract_oracle(experiment=exp_for_oracle, evidence=observations)
 
     # ── P0-10: Build field-level oracle trace ──
     oracle_trace: list[dict[str, Any]] = []

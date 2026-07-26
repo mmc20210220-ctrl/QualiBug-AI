@@ -39,9 +39,9 @@ class TestOrchestratorVerdict:
             behavior_ir=_make_ir(),
             compiler_context={"experiment": _make_experiment(), "primary_operation": _make_ir()["operations"][0]},
         )
-        assert result["schema_version"] == "qualibug.v12-coverage-recovery-orchestrator.v1"
+        assert result["schema_version"] == "qualibug.v12-coverage-recovery-orchestrator.v2"
         assert result["verdict"] == VERDICT_READY
-        assert result["coverage_recovery_version"] == "v1.2.1"
+        assert result["coverage_recovery_version"] == "v1.2.2"
 
     def test_module_results_attached(self):
         result = prepare_experiment_v12(
