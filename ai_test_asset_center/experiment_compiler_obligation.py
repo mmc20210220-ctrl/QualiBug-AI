@@ -1676,6 +1676,9 @@ BLOCK_REASONS = (
     # The distinguishing mutation sits in a request location the transport cannot
     # carry, so the treatment request would execute without it and PASS.
     "BLOCKED_BINDING_LOCATION_NOT_MATERIALIZABLE",
+    # A registered protocol returned an unusable plan or raised. Distinct from an adapter
+    # problem: the cause is the registration, not the target.
+    "BLOCKED_REGISTERED_PROTOCOL_INVALID",
     "BLOCKED_FIXTURE_DAG_DRIFT",
 )
 
