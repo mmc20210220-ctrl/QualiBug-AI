@@ -40,6 +40,7 @@ from .runtime_binding_materializer import (
     materialize_path as _materialize_path,
     runtime_cleanup_paths as _runtime_cleanup_paths,
 )
+from .cleanup_execution_receipt import build_cleanup_execution_receipt
 from .sandbox_write_executor import (
     _restore_payload,
     execute_governed_control_write,
@@ -1001,6 +1002,21 @@ def execute_experiment_cleanup_compensation(
                 "audit_receipt_ids": audit_receipt_ids,
             },
         ))
+
+    # ── SPEC v1.1.1 §6: Emit explicit Cleanup Execution Receipt ──
+    safety = _dict(exp.get("safety_contract"))
+    if safety.get("governed_write"):
+        proof = _dict(exp.get("write_reversibility_proof"))
+        cleanup_exec_receipt = build_cleanup_execution_receipt(
+            experiment_id=eid,
+            proof_id=_text(proof.get("proof_id")),
+            cleanup_plan=_list(exp.get("cleanup_plan")),
+            steps_out=steps_out,
+            cleanup_failures=cleanup_failures,
+            cleanup_status=_text(observations.get("cleanup_status")),
+            proof=proof,
+        )
+        observations["cleanup_execution_receipt"] = cleanup_exec_receipt
 
     return {
         "steps_out": steps_out,

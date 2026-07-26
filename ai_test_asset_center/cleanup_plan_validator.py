@@ -261,14 +261,23 @@ def _validate_runtime_bindings(
     """Validate runtime bindings against the frozen proof contract.
 
     Checks that runtime materialization has not drifted from compile-time proof.
+    Identity fields sourced from the primary write response are resolved during
+    cleanup execution, not at fixture time — they are exempt from pre-write
+    binding requirements.
     """
     identity_contract = _dict(proof.get("identity_contract"))
     cleanup_authority = _dict(proof.get("cleanup_authority"))
     cleanup_request = _dict(proof.get("cleanup_request_contract"))
 
-    # Verify identity fields are bound
+    # Identity fields sourced from the primary write response are resolved
+    # during cleanup execution, not at fixture materialization time.
+    identity_from_write_response = _text(
+        identity_contract.get("primary_identity_source")
+    ) == "primary_write_response"
+
+    # Verify identity fields are bound (only when NOT from write response)
     identity_fields = _list(identity_contract.get("identity_fields"))
-    if identity_fields:
+    if identity_fields and not identity_from_write_response:
         for field in identity_fields:
             if field not in runtime_bindings:
                 return {
@@ -278,8 +287,12 @@ def _validate_runtime_bindings(
                 }
 
     # Verify cleanup required bindings are available
+    # Skip identity fields that are resolved from the primary write response.
     required_bindings = _list(cleanup_request.get("required_bindings"))
+    identity_field_set = set(identity_fields) if identity_from_write_response else set()
     for binding in required_bindings:
+        if binding in identity_field_set:
+            continue  # resolved from write response during cleanup
         if binding not in runtime_bindings:
             return {
                 "valid": False,

@@ -193,6 +193,15 @@ def compile_experiment_for_obligation(
     required_actors = [
         _text(x) for x in _list(obl.get("required_actors")) if _text(x)
     ]
+    # ── SPEC v1.1.1 §11: Actor Selection Contract detection ──
+    # Explicit actors: obligation directly names actors or property has actor refs.
+    _explicit_actor_fields = ("actor_ref", "owner_actor_ref", "viewer_actor_ref",
+                              "control_actor_ref", "treatment_actor_ref")
+    _has_explicit_actor_from_obl = bool(required_actors)
+    _has_explicit_actor_from_prop = any(
+        _text(prop.get(f)) for f in _explicit_actor_fields
+    )
+    _actor_selection_explicit = _has_explicit_actor_from_obl or _has_explicit_actor_from_prop
     required_fixtures = [
         _text(x) for x in _list(obl.get("required_fixtures")) if _text(x)
     ]
@@ -315,7 +324,10 @@ def compile_experiment_for_obligation(
             }
     for actor_id in required_actors:
         if actor_id not in actors:
-            # ── Enhanced: try fallback actor instead of hard-blocking ──
+            # ── SPEC v1.1.1 §11.1: Explicit actors must NOT be substituted ──
+            if _actor_selection_explicit:
+                return blocked_experiment(oid, "BLOCKED_MISSING_ACTOR", actor_id)
+            # Constraint-based: try fallback actor
             _fallback = next(
                 (
                     aid for aid, a in actors.items()
@@ -346,7 +358,14 @@ def compile_experiment_for_obligation(
             and _text(actors[actor_id].get("role")).lower()
             not in {"anonymous", "public"}
         ):
-            # ── Enhanced: try fallback actor with valid secret ──
+            # ── SPEC v1.1.1 §11.1: Explicit actors must NOT be substituted ──
+            if _actor_selection_explicit:
+                return blocked_experiment(
+                    oid,
+                    "BLOCKED_MISSING_ACTOR",
+                    f"missing_secret_ref:{actor_id}",
+                )
+            # Constraint-based: try fallback actor with valid secret
             _fallback = next(
                 (
                     aid for aid, a in actors.items()
@@ -681,32 +700,60 @@ def compile_experiment_for_obligation(
         if not cleanup_op:
             # Bind unique source compensates relation when the obligation left
             # cleanup unresolved but Behavior IR already declared it.
-            relation_compensators = {
-                _text(relation.get("operation_ref") or relation.get("from_ref"))
-                for relation in _list(ir.get("relations"))
-                if isinstance(relation, dict)
-                and _text(relation.get("relation_type")) == "compensates"
-                and (
-                    _text(relation.get("to_ref")) == primary_op_id
-                    or any(
-                        isinstance(effect, dict)
-                        and _text(effect.get("cleanup_target_operation_ref"))
-                        == primary_op_id
-                        for effect in _list(relation.get("effects"))
-                    )
+            # Accepts both relation_type/kind and from/to/source/target formats.
+            relation_compensators = set()
+            for relation in _list(ir.get("relations")):
+                if not isinstance(relation, dict):
+                    continue
+                rel_kind = _text(relation.get("relation_type") or relation.get("kind"))
+                if rel_kind not in {"compensates", "inverse", "compensation"}:
+                    continue
+                # Determine compensator op ref from relation fields
+                comp_ref = _text(
+                    relation.get("operation_ref")
+                    or relation.get("from_ref")
+                    or relation.get("from")
+                    or relation.get("source")
                 )
-                and _text(relation.get("operation_ref") or relation.get("from_ref"))
-                in ops
-                and _text(relation.get("operation_ref") or relation.get("from_ref"))
-                != primary_op_id
-            }
+                # Determine target (the primary being compensated)
+                target_ref = _text(
+                    relation.get("to_ref")
+                    or relation.get("to")
+                    or relation.get("target")
+                )
+                # Check if this relation compensates the primary operation
+                if target_ref == primary_op_id and comp_ref in ops and comp_ref != primary_op_id:
+                    relation_compensators.add(comp_ref)
+                elif comp_ref == primary_op_id:
+                    # Reverse direction: source is primary, target is compensator
+                    alt_ref = target_ref
+                    if alt_ref in ops and alt_ref != primary_op_id:
+                        relation_compensators.add(alt_ref)
+                # Also check effects list
+                if any(
+                    isinstance(effect, dict)
+                    and _text(effect.get("cleanup_target_operation_ref"))
+                    == primary_op_id
+                    for effect in _list(relation.get("effects"))
+                ):
+                    if comp_ref in ops and comp_ref != primary_op_id:
+                        relation_compensators.add(comp_ref)
             if len(relation_compensators) == 1:
                 cleanup_op = next(iter(relation_compensators))
+                # Determine mode from cleanup operation method:
+                # DELETE → reverse_order; POST/PUT/PATCH → compensator
+                _cleanup_op_method = _text(
+                    _dict(ops.get(cleanup_op)).get("method")
+                ).upper()
+                _relation_mode = (
+                    "reverse_order" if _cleanup_op_method == "DELETE"
+                    else "compensator"
+                )
                 cleanup_req = {
                     **cleanup_req,
                     "operation_ref": cleanup_op,
                     "required": True,
-                    "mode": _text(cleanup_req.get("mode") or "reverse_order"),
+                    "mode": _text(cleanup_req.get("mode") or _relation_mode),
                 }
         delta_field, inverse_delta_body = _inverse_delta_cleanup_spec(primary_op)
         cleanup_op_method = _text(
@@ -1035,11 +1082,12 @@ def compile_experiment_for_obligation(
             else control_actor
         )
     )
-    # ── Enhanced: For authorization/isolation/visibility tests, ensure proper actor roles ──
+    # ── SPEC v1.1.1 §11.1: For authorization/isolation/visibility tests ──
     # Control = authorized actor (higher privilege), Treatment = unauthorized (lower privilege)
+    # When actors are explicitly specified, NO swap or substitution is allowed.
     _high_privilege_roles = {"admin", "administrator", "superadmin", "root", "system"}
     _lower_privilege_roles = {"buyer", "customer", "user", "viewer", "guest", "anonymous", "public"}
-    if family in {"authorization", "isolation", "visibility"}:
+    if family in {"authorization", "isolation", "visibility"} and not _actor_selection_explicit:
         _control_role = _text(actors.get(control_actor, {}).get("role")).lower()
         _treatment_role = _text(actors.get(treatment_actor, {}).get("role")).lower()
         # If treatment has higher privilege than control, swap them
@@ -1363,6 +1411,26 @@ def compile_experiment_for_obligation(
     cleanup_exemption = _dict(obl.get("cleanup_exemption_contract"))
     if cleanup_exemption:
         experiment["cleanup_exemption_contract"] = cleanup_exemption
+    elif cleanup_explicitly_not_required and is_write:
+        # Compiler-detected ephemeral session: auto-generate exemption contract
+        # so the compile-time validator can verify the waiver.
+        experiment["cleanup_exemption_contract"] = {
+            "kind": "ephemeral_session",
+            "source_refs": _list(primary_op.get("source_refs"))[:3],
+            "persistent_effect_absent": True,
+            "verification_basis": "source_declared",
+        }
+
+    # ── SPEC v1.1.1 §11: Actor Selection Contract ──
+    experiment["actor_selection_contract"] = {
+        "selection_mode": "explicit" if _actor_selection_explicit else "constraint_based",
+        "control_actor_ref": control_actor,
+        "treatment_actor_ref": treatment_actor,
+        "required_roles": [],
+        "constraints": [],
+        "source_refs": list(obl.get("source_refs") or [])[:3],
+        "substitution_allowed": not _actor_selection_explicit,
+    }
 
     # ── SPEC v1.1 §8: Compile-time Cleanup Validation ──
     # All governed writes must pass semantic cleanup validation before COMPILED.

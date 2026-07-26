@@ -31,6 +31,7 @@ from .observation_completeness import (
 from .observer_contracts_base import observe_experiment_requirements
 from .runtime_binding_materializer import materialize_path as _materialize_path
 from .cleanup_equivalence import evaluate_cleanup_equivalence
+from .cleanup_observation_adapter import build_cleanup_equivalence_inputs
 
 
 def _extract_related_from_body(body: Any, entity_name: str) -> Any:
@@ -852,17 +853,18 @@ def finalize_experiment_execution(
     if is_governed_write:
         proof = _dict(exp.get("write_reversibility_proof"))
         if proof and _text(proof.get("proof_status")) == "PROVEN":
-            # Extract observations for equivalence evaluation
-            before_obs = _dict(observations.get("before_state_observation"))
-            after_write_obs = _dict(observations.get("after_state_observation"))
-            after_cleanup_obs = _dict(observations.get("final_state_observation"))
-            cleanup_exec_receipt = _dict(observations.get("cleanup_execution_receipt"))
-            # If no explicit cleanup receipt, check if cleanup succeeded
-            if not cleanup_exec_receipt:
-                cleanup_exec_receipt = {
-                    "succeeded": cleanup_failures == 0,
-                    "status_code": observations.get("cleanup_status_code"),
-                }
+            # SPEC v1.1.1 §5: Use canonical adapter for observation extraction
+            equiv_inputs = build_cleanup_equivalence_inputs(
+                exp=exp,
+                observations=observations,
+                steps_out=steps_out,
+                cleanup_result=_dict(observations.get("cleanup_result")),
+            )
+            before_obs = equiv_inputs["before_observation"]
+            after_write_obs = equiv_inputs["after_write_observation"]
+            after_cleanup_obs = equiv_inputs["after_cleanup_observation"]
+            cleanup_exec_receipt = equiv_inputs["cleanup_execution_receipt"]
+            observations["cleanup_observation_source_trace"] = equiv_inputs["source_trace"]
             cleanup_equivalence_receipt = evaluate_cleanup_equivalence(
                 proof=proof,
                 before_observation=before_obs,
@@ -872,6 +874,23 @@ def finalize_experiment_execution(
                 cleanup_execution_receipt=cleanup_exec_receipt,
             )
             observations["cleanup_equivalence_receipt"] = cleanup_equivalence_receipt
+
+    # ── SPEC v1.1.1 §8: Equivalence Hard Gate ──
+    # NOT_EQUIVALENT or INDETERMINATE blocks finding creation.
+    cleanup_gate = "PASSED"
+    cleanup_gate_reason = ""
+    if cleanup_equivalence_receipt:
+        equiv_status = _text(cleanup_equivalence_receipt.get("equivalence_status")).upper()
+        if equiv_status == "NOT_EQUIVALENT":
+            cleanup_gate = "FAILED"
+            cleanup_gate_reason = "HARNESS_CLEANUP_EQUIVALENCE_FAILED"
+        elif equiv_status == "INDETERMINATE":
+            cleanup_gate = "BLOCKED"
+            cleanup_gate_reason = "BLOCKED_CLEANUP_EQUIVALENCE_INDETERMINATE"
+        elif equiv_status == "EQUIVALENT":
+            cleanup_gate = "PASSED"
+        # NOT_APPLICABLE allows finding (read-only or exempted)
+    observations["cleanup_gate"] = cleanup_gate
 
     finding = None
     # Execution status reflects actual HTTP activity, not oracle assessment.
@@ -922,6 +941,61 @@ def finalize_experiment_execution(
         }
     if verdict.get("verdict") == "harness_failure" and not has_http:
         status = "HARNESS_FAILURE"
+    # ── SPEC v1.1.1 §8.2: NOT_EQUIVALENT → block customer-deliverable findings ──
+    # Only block when there would be a customer-deliverable finding.
+    elif (
+        cleanup_gate == "FAILED"
+        and verdict.get("customer_deliverable_candidate") is True
+    ):
+        status = "HARNESS_FAILURE"
+        reason = cleanup_gate_reason
+        detail = _text(cleanup_equivalence_receipt.get("detail")) if cleanup_equivalence_receipt else ""
+        return {
+            "schema_version": "qualibug.experiment-execution.v1",
+            "experiment_id": eid,
+            "obligation_id": oid,
+            "status": status,
+            "reason_code": reason,
+            "detail": detail,
+            "elapsed_ms": int((time.time() - started) * 1000),
+            "steps": steps_out,
+            "fixture_receipts": fixture_receipts,
+            "binding_materialization_receipts": binding_materialization_receipts,
+            "observer_receipts": observer_receipts,
+            "contract_evidence_receipts": contract_evidence_receipts,
+            "oracle_verdict": verdict,
+            "finding": None,
+            "cleanup_failures": cleanup_failures,
+            "cleanup_equivalence_receipt": cleanup_equivalence_receipt,
+            "execution_receipt": {"status": status, "reason_code": reason, "detail": detail},
+        }
+    # ── SPEC v1.1.1 §8.3: INDETERMINATE → block customer-deliverable findings ──
+    elif (
+        cleanup_gate == "BLOCKED"
+        and verdict.get("customer_deliverable_candidate") is True
+    ):
+        status = "BLOCKED"
+        reason = cleanup_gate_reason
+        detail = _text(cleanup_equivalence_receipt.get("detail")) if cleanup_equivalence_receipt else ""
+        return {
+            "schema_version": "qualibug.experiment-execution.v1",
+            "experiment_id": eid,
+            "obligation_id": oid,
+            "status": status,
+            "reason_code": reason,
+            "detail": detail,
+            "elapsed_ms": int((time.time() - started) * 1000),
+            "steps": steps_out,
+            "fixture_receipts": fixture_receipts,
+            "binding_materialization_receipts": binding_materialization_receipts,
+            "observer_receipts": observer_receipts,
+            "contract_evidence_receipts": contract_evidence_receipts,
+            "oracle_verdict": verdict,
+            "finding": None,
+            "cleanup_failures": cleanup_failures,
+            "cleanup_equivalence_receipt": cleanup_equivalence_receipt,
+            "execution_receipt": {"status": status, "reason_code": reason, "detail": detail},
+        }
     elif (
         verdict.get("verdict") == "blocked_experiment"
         or verdict.get("status") == "INDETERMINATE"

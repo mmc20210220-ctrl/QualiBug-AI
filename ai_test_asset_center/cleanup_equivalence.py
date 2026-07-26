@@ -85,6 +85,22 @@ def evaluate_cleanup_equivalence(
     cleanup_identity = dict(primary_identity)  # Same identity for most modes
 
     # Check cleanup execution succeeded
+    # SPEC v1.1.1 §6.3: Missing receipt → INDETERMINATE, never infer success
+    if not cleanup_execution_receipt:
+        return _build_receipt(
+            proof_id=proof_id,
+            primary_identity=primary_identity,
+            cleanup_identity=cleanup_identity,
+            before_obs=before_observation,
+            after_write_obs=after_write_observation,
+            after_cleanup_obs=after_cleanup_observation,
+            equivalence_status="INDETERMINATE",
+            reason_code="CLEANUP_EXECUTION_RECEIPT_MISSING",
+            detail="no_explicit_cleanup_execution_receipt",
+            field_comparison={},
+            relation_comparison={},
+        )
+
     cleanup_succeeded = cleanup_execution_receipt.get("succeeded", False)
     cleanup_status_code = cleanup_execution_receipt.get("status_code")
 
@@ -120,6 +136,23 @@ def evaluate_cleanup_equivalence(
             relation_comparison={},
         )
 
+    # ── SPEC v1.1.1 §7.1: General input gate ──
+    # Fail-closed: missing required inputs → INDETERMINATE
+    if not mode:
+        return _build_receipt(
+            proof_id=proof_id,
+            primary_identity=primary_identity,
+            cleanup_identity=cleanup_identity,
+            before_obs=before_observation,
+            after_write_obs=after_write_observation,
+            after_cleanup_obs=after_cleanup_observation,
+            equivalence_status="INDETERMINATE",
+            reason_code="EQUIVALENCE_MODE_MISSING",
+            detail="equivalence_contract_mode_empty",
+            field_comparison={},
+            relation_comparison={},
+        )
+
     # Dispatch by equivalence mode
     if mode == "created_entity_absent":
         return _evaluate_created_entity_absent(
@@ -129,6 +162,7 @@ def evaluate_cleanup_equivalence(
             before_obs=before_observation,
             after_write_obs=after_write_observation,
             after_cleanup_obs=after_cleanup_observation,
+            identity_fields=identity_fields,
         )
 
     if mode == "field_comparison":
@@ -208,8 +242,34 @@ def _evaluate_created_entity_absent(
     before_obs: dict[str, Any],
     after_write_obs: dict[str, Any],
     after_cleanup_obs: dict[str, Any],
+    identity_fields: list[Any] | None = None,
 ) -> dict[str, Any]:
-    """identity_delete: created entity must be absent after cleanup."""
+    """identity_delete: created entity must be absent after cleanup.
+
+    SPEC v1.1.1 §7.2: Require all three phases + identity match.
+    """
+    # Fail-closed: missing observations
+    if not before_obs:
+        return _build_receipt(
+            proof_id=proof_id, primary_identity=primary_identity,
+            cleanup_identity=cleanup_identity, before_obs=before_obs,
+            after_write_obs=after_write_obs, after_cleanup_obs=after_cleanup_obs,
+            equivalence_status="INDETERMINATE",
+            reason_code="BEFORE_OBSERVATION_MISSING",
+            detail="identity_delete_requires_before_observation",
+            field_comparison={}, relation_comparison={},
+        )
+    if not after_write_obs:
+        return _build_receipt(
+            proof_id=proof_id, primary_identity=primary_identity,
+            cleanup_identity=cleanup_identity, before_obs=before_obs,
+            after_write_obs=after_write_obs, after_cleanup_obs=after_cleanup_obs,
+            equivalence_status="INDETERMINATE",
+            reason_code="AFTER_WRITE_OBSERVATION_MISSING",
+            detail="identity_delete_requires_after_write_observation",
+            field_comparison={}, relation_comparison={},
+        )
+
     # Before: entity should be absent (or not found)
     before_absent = _entity_absent(before_obs)
     # After write: entity should be present
@@ -217,14 +277,49 @@ def _evaluate_created_entity_absent(
     # After cleanup: entity should be absent
     after_cleanup_absent = _entity_absent(after_cleanup_obs)
 
-    if after_cleanup_absent:
+    # Identity match check
+    # SPEC §7.2: identity must match when identity_fields are specified AND
+    # can be extracted from runtime_bindings. If identity cannot be extracted,
+    # fall back to entity presence/absence verification only.
+    identity_required = bool(identity_fields)
+    identity_extracted = bool(primary_identity)
+    if identity_required and identity_extracted:
+        identity_matched = primary_identity == cleanup_identity
+    else:
+        # Identity not extractable — rely on entity presence/absence only
+        identity_matched = True
+
+    # SPEC §7.2: EQUIVALENT requires all conditions
+    equivalent = (
+        before_absent
+        and after_write_present
+        and after_cleanup_absent
+        and identity_matched
+    )
+
+    if equivalent:
         status = "EQUIVALENT"
         reason = ""
         detail = ""
-    else:
+    elif not after_cleanup_absent:
         status = "NOT_EQUIVALENT"
         reason = "ENTITY_STILL_PRESENT_AFTER_CLEANUP"
         detail = "created_entity_not_deleted"
+    elif not after_write_present:
+        # Entity not present after write — mode mismatch or write failed
+        status = "INDETERMINATE"
+        reason = "ENTITY_NOT_PRESENT_AFTER_WRITE"
+        detail = "write_did_not_create_entity_or_mode_mismatch"
+    elif not before_absent:
+        # Entity existed before write — this is not a create scenario
+        # Return INDETERMINATE (mode mismatch) rather than NOT_EQUIVALENT
+        status = "INDETERMINATE"
+        reason = "ENTITY_PRESENT_BEFORE_WRITE"
+        detail = "entity_existed_before_create_mode_mismatch"
+    else:
+        status = "INDETERMINATE"
+        reason = "IDENTITY_MISMATCH"
+        detail = "primary_cleanup_identity_mismatch"
 
     return _build_receipt(
         proof_id=proof_id,
@@ -238,8 +333,8 @@ def _evaluate_created_entity_absent(
         detail=detail,
         field_comparison={
             "compared": ["entity_presence"],
-            "matched": ["entity_presence"] if after_cleanup_absent else [],
-            "mismatched": [] if after_cleanup_absent else ["entity_presence"],
+            "matched": ["entity_presence"] if equivalent else [],
+            "mismatched": [] if equivalent else ["entity_presence"],
         },
         relation_comparison={},
     )
@@ -255,7 +350,10 @@ def _evaluate_field_comparison(
     after_cleanup_obs: dict[str, Any],
     equivalence_contract: dict[str, Any],
 ) -> dict[str, Any]:
-    """field_snapshot_restore: compared fields must match before state."""
+    """field_snapshot_restore: compared fields must match before state.
+
+    SPEC v1.1.1 §7.3: Fail-closed on empty inputs.
+    """
     compared_fields = _list(equivalence_contract.get("compared_fields"))
     ignored_fields = set(
         f.lower() for f in _list(equivalence_contract.get("ignored_server_fields"))
@@ -264,11 +362,49 @@ def _evaluate_field_comparison(
     before_state = _extract_entity_state(before_obs)
     after_cleanup_state = _extract_entity_state(after_cleanup_obs)
 
+    # Fail-closed: empty compared_fields
+    effective_fields = [f for f in compared_fields if f.lower() not in ignored_fields]
+    if not effective_fields:
+        return _build_receipt(
+            proof_id=proof_id, primary_identity=primary_identity,
+            cleanup_identity=cleanup_identity, before_obs=before_obs,
+            after_write_obs=after_write_obs, after_cleanup_obs=after_cleanup_obs,
+            equivalence_status="INDETERMINATE",
+            reason_code="NO_COMPARED_FIELDS",
+            detail="compared_fields_empty_or_all_ignored",
+            field_comparison={"compared": compared_fields, "matched": [], "mismatched": []},
+            relation_comparison={},
+        )
+
+    # Fail-closed: empty before state
+    if not before_state:
+        return _build_receipt(
+            proof_id=proof_id, primary_identity=primary_identity,
+            cleanup_identity=cleanup_identity, before_obs=before_obs,
+            after_write_obs=after_write_obs, after_cleanup_obs=after_cleanup_obs,
+            equivalence_status="INDETERMINATE",
+            reason_code="BEFORE_STATE_EMPTY",
+            detail="before_observation_has_no_entity_state",
+            field_comparison={"compared": compared_fields, "matched": [], "mismatched": []},
+            relation_comparison={},
+        )
+
+    # Fail-closed: empty after-cleanup state
+    if not after_cleanup_state:
+        return _build_receipt(
+            proof_id=proof_id, primary_identity=primary_identity,
+            cleanup_identity=cleanup_identity, before_obs=before_obs,
+            after_write_obs=after_write_obs, after_cleanup_obs=after_cleanup_obs,
+            equivalence_status="INDETERMINATE",
+            reason_code="AFTER_CLEANUP_STATE_EMPTY",
+            detail="after_cleanup_observation_has_no_entity_state",
+            field_comparison={"compared": compared_fields, "matched": [], "mismatched": []},
+            relation_comparison={},
+        )
+
     matched = []
     mismatched = []
-    for field in compared_fields:
-        if field.lower() in ignored_fields:
-            continue
+    for field in effective_fields:
         before_val = before_state.get(field)
         cleanup_val = after_cleanup_state.get(field)
         if before_val == cleanup_val:
@@ -276,10 +412,14 @@ def _evaluate_field_comparison(
         else:
             mismatched.append(field)
 
-    if not mismatched:
+    if not mismatched and matched:
         status = "EQUIVALENT"
         reason = ""
         detail = ""
+    elif not matched:
+        status = "INDETERMINATE"
+        reason = "NO_FIELDS_ACTUALLY_COMPARED"
+        detail = "no_business_fields_in_both_states"
     else:
         status = "NOT_EQUIVALENT"
         reason = "FIELD_MISMATCH_AFTER_CLEANUP"
@@ -313,25 +453,57 @@ def _evaluate_business_state_restored(
     after_write_obs: dict[str, Any],
     after_cleanup_obs: dict[str, Any],
 ) -> dict[str, Any]:
-    """explicit_compensator: business state must be restored."""
+    """explicit_compensator: business state must be restored.
+
+    SPEC v1.1.1 §7.4: Fail-closed on empty states.
+    """
     before_state = _extract_entity_state(before_obs)
     after_cleanup_state = _extract_entity_state(after_cleanup_obs)
+
+    # Fail-closed: empty before state
+    business_fields = [k for k in before_state if k.lower() not in SERVER_MANAGED_FIELDS]
+    if not business_fields:
+        return _build_receipt(
+            proof_id=proof_id, primary_identity=primary_identity,
+            cleanup_identity=cleanup_identity, before_obs=before_obs,
+            after_write_obs=after_write_obs, after_cleanup_obs=after_cleanup_obs,
+            equivalence_status="INDETERMINATE",
+            reason_code="BEFORE_STATE_NO_BUSINESS_FIELDS",
+            detail="before_state_empty_or_only_server_managed",
+            field_comparison={"compared": [], "matched": [], "mismatched": []},
+            relation_comparison={},
+        )
+
+    # Fail-closed: empty after-cleanup state
+    if not after_cleanup_state:
+        return _build_receipt(
+            proof_id=proof_id, primary_identity=primary_identity,
+            cleanup_identity=cleanup_identity, before_obs=before_obs,
+            after_write_obs=after_write_obs, after_cleanup_obs=after_cleanup_obs,
+            equivalence_status="INDETERMINATE",
+            reason_code="AFTER_CLEANUP_STATE_EMPTY",
+            detail="after_cleanup_observation_has_no_entity_state",
+            field_comparison={"compared": list(before_state.keys()), "matched": [], "mismatched": []},
+            relation_comparison={},
+        )
 
     # Compare all non-server-managed fields
     matched = []
     mismatched = []
-    for key in before_state:
-        if key.lower() in SERVER_MANAGED_FIELDS:
-            continue
+    for key in business_fields:
         if before_state.get(key) == after_cleanup_state.get(key):
             matched.append(key)
         else:
             mismatched.append(key)
 
-    if not mismatched:
+    if not mismatched and matched:
         status = "EQUIVALENT"
         reason = ""
         detail = ""
+    elif not matched:
+        status = "INDETERMINATE"
+        reason = "NO_FIELDS_ACTUALLY_COMPARED"
+        detail = "no_business_fields_in_both_states"
     else:
         status = "NOT_EQUIVALENT"
         reason = "BUSINESS_STATE_NOT_RESTORED"
@@ -366,25 +538,54 @@ def _evaluate_conservation_check(
     after_cleanup_obs: dict[str, Any],
     equivalence_contract: dict[str, Any],
 ) -> dict[str, Any]:
-    """inverse_delta: conserved quantities must be restored."""
+    """inverse_delta: conserved quantities must be restored.
+
+    SPEC v1.1.1 §7.5: Fail-closed on missing/invalid values.
+    """
     compared_fields = _list(equivalence_contract.get("compared_fields"))
     before_state = _extract_entity_state(before_obs)
     after_cleanup_state = _extract_entity_state(after_cleanup_obs)
 
+    # Fail-closed: empty compared_fields
+    if not compared_fields:
+        return _build_receipt(
+            proof_id=proof_id, primary_identity=primary_identity,
+            cleanup_identity=cleanup_identity, before_obs=before_obs,
+            after_write_obs=after_write_obs, after_cleanup_obs=after_cleanup_obs,
+            equivalence_status="INDETERMINATE",
+            reason_code="NO_CONSERVED_FIELDS",
+            detail="compared_fields_empty",
+            field_comparison={"compared": [], "matched": [], "mismatched": []},
+            relation_comparison={},
+        )
+
     matched = []
     mismatched = []
+    indeterminate_fields = []
     for field in compared_fields:
         before_val = before_state.get(field)
         cleanup_val = after_cleanup_state.get(field)
+        # Fail-closed: missing values are NOT treated as 0
+        if before_val is None or cleanup_val is None:
+            indeterminate_fields.append(field)
+            continue
         if before_val == cleanup_val:
             matched.append(field)
         else:
             mismatched.append(field)
 
-    if not mismatched:
+    if indeterminate_fields:
+        status = "INDETERMINATE"
+        reason = "CONSERVATION_VALUE_MISSING"
+        detail = f"missing_values:{','.join(indeterminate_fields)}"
+    elif not mismatched and matched:
         status = "EQUIVALENT"
         reason = ""
         detail = ""
+    elif not matched:
+        status = "INDETERMINATE"
+        reason = "NO_FIELDS_ACTUALLY_COMPARED"
+        detail = "no_conserved_fields_in_both_states"
     else:
         status = "NOT_EQUIVALENT"
         reason = "CONSERVATION_VIOLATED"
@@ -419,7 +620,10 @@ def _evaluate_full_entity_comparison(
     after_cleanup_obs: dict[str, Any],
     equivalence_contract: dict[str, Any],
 ) -> dict[str, Any]:
-    """exact_recreate: full entity must match (excluding server fields)."""
+    """exact_recreate: full entity must match (excluding server fields).
+
+    SPEC v1.1.1 §7.6: Fail-closed on empty entities.
+    """
     ignored_fields = set(
         f.lower() for f in _list(equivalence_contract.get("ignored_server_fields"))
     ) | SERVER_MANAGED_FIELDS
@@ -427,21 +631,64 @@ def _evaluate_full_entity_comparison(
     before_state = _extract_entity_state(before_obs)
     after_cleanup_state = _extract_entity_state(after_cleanup_obs)
 
+    # Fail-closed: empty before entity
+    if not before_state:
+        return _build_receipt(
+            proof_id=proof_id, primary_identity=primary_identity,
+            cleanup_identity=cleanup_identity, before_obs=before_obs,
+            after_write_obs=after_write_obs, after_cleanup_obs=after_cleanup_obs,
+            equivalence_status="INDETERMINATE",
+            reason_code="BEFORE_ENTITY_MISSING",
+            detail="before_observation_has_no_entity",
+            field_comparison={"compared": [], "matched": [], "mismatched": []},
+            relation_comparison={},
+        )
+
+    # Fail-closed: empty after-cleanup entity
+    if not after_cleanup_state:
+        return _build_receipt(
+            proof_id=proof_id, primary_identity=primary_identity,
+            cleanup_identity=cleanup_identity, before_obs=before_obs,
+            after_write_obs=after_write_obs, after_cleanup_obs=after_cleanup_obs,
+            equivalence_status="INDETERMINATE",
+            reason_code="AFTER_CLEANUP_ENTITY_MISSING",
+            detail="after_cleanup_observation_has_no_entity",
+            field_comparison={"compared": [], "matched": [], "mismatched": []},
+            relation_comparison={},
+        )
+
     matched = []
     mismatched = []
     all_keys = set(before_state.keys()) | set(after_cleanup_state.keys())
-    for key in all_keys:
-        if key.lower() in ignored_fields:
-            continue
+    effective_keys = [k for k in all_keys if k.lower() not in ignored_fields]
+
+    # Fail-closed: no effective fields to compare
+    if not effective_keys:
+        return _build_receipt(
+            proof_id=proof_id, primary_identity=primary_identity,
+            cleanup_identity=cleanup_identity, before_obs=before_obs,
+            after_write_obs=after_write_obs, after_cleanup_obs=after_cleanup_obs,
+            equivalence_status="INDETERMINATE",
+            reason_code="NO_COMPARED_FIELDS",
+            detail="all_fields_ignored_or_empty",
+            field_comparison={"compared": list(all_keys), "matched": [], "mismatched": []},
+            relation_comparison={},
+        )
+
+    for key in effective_keys:
         if before_state.get(key) == after_cleanup_state.get(key):
             matched.append(key)
         else:
             mismatched.append(key)
 
-    if not mismatched:
+    if not mismatched and matched:
         status = "EQUIVALENT"
         reason = ""
         detail = ""
+    elif not matched:
+        status = "INDETERMINATE"
+        reason = "NO_FIELDS_ACTUALLY_COMPARED"
+        detail = "no_business_fields_in_both_entities"
     else:
         status = "NOT_EQUIVALENT"
         reason = "ENTITY_MISMATCH_AFTER_RECREATE"

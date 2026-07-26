@@ -119,6 +119,7 @@ def build_reversibility_proof(
         ops=ops,
         relations=relations,
         experiment=exp,
+        entities=_list(ir.get("entities")),
     )
 
     authority_kind = authority_result["kind"]
@@ -201,6 +202,7 @@ def _classify_cleanup_authority_v11(
     ops: dict[str, dict[str, Any]],
     relations: list[Any],
     experiment: dict[str, Any],
+    entities: list[Any] | None = None,
 ) -> dict[str, Any]:
     """Classify cleanup authority with full semantic validation.
 
@@ -229,7 +231,11 @@ def _classify_cleanup_authority_v11(
         )
 
     # ── explicit_compensator (SPEC §7.2) ──
-    if action == "source_declared_compensation" or mode == "compensator":
+    # Non-DELETE cleanup with mode "reverse_order" is a compensating action
+    # (e.g. POST /payments/order/{id}/void compensating POST /payments/pay).
+    if action == "source_declared_compensation" or mode == "compensator" or (
+        mode == "reverse_order" and cleanup_method and cleanup_method != "DELETE"
+    ):
         return _validate_explicit_compensator(
             primary_operation_ref=primary_operation_ref,
             cleanup_op_ref=cleanup_op_ref,
@@ -241,7 +247,7 @@ def _classify_cleanup_authority_v11(
         )
 
     # ── field_snapshot_restore (SPEC §7.3) ──
-    if mode == "snapshot_restore":
+    if mode == "snapshot_restore" or action == "restore_before_snapshot":
         return _validate_field_snapshot_restore(
             primary_method=primary_method,
             primary_path=primary_path,
@@ -251,6 +257,8 @@ def _classify_cleanup_authority_v11(
             cleanup_path=cleanup_path,
             experiment=experiment,
             ops=ops,
+            entities=entities or [],
+            relations=relations,
         )
 
     # ── inverse_delta (SPEC §7.4) ──
@@ -381,12 +389,14 @@ def _validate_explicit_compensator(
     # Must have explicit compensates relation in Behavior IR
     has_relation = any(
         isinstance(r, dict)
-        and _text(r.get("kind")) in {"compensates", "inverse", "compensation"}
+        and _text(r.get("kind") or r.get("relation_type")) in {"compensates", "inverse", "compensation"}
         and (
-            (_text(r.get("source")) == cleanup_op_ref and _text(r.get("target")) == primary_operation_ref)
-            or (_text(r.get("source")) == primary_operation_ref and _text(r.get("target")) == cleanup_op_ref)
+            (_text(r.get("source") or r.get("from")) == cleanup_op_ref and _text(r.get("target") or r.get("to")) == primary_operation_ref)
+            or (_text(r.get("source") or r.get("from")) == primary_operation_ref and _text(r.get("target") or r.get("to")) == cleanup_op_ref)
             or (_text(r.get("source_operation_ref")) == cleanup_op_ref and _text(r.get("target_operation_ref")) == primary_operation_ref)
             or (_text(r.get("source_operation_ref")) == primary_operation_ref and _text(r.get("target_operation_ref")) == cleanup_op_ref)
+            or (_text(r.get("operation_ref")) == cleanup_op_ref and _text(r.get("to_ref")) == primary_operation_ref)
+            or (_text(r.get("operation_ref")) == cleanup_op_ref and _text(r.get("to")) == primary_operation_ref)
         )
         for r in relations
     )
@@ -420,6 +430,47 @@ def _validate_explicit_compensator(
     }
 
 
+def _entity_fields_for_operation(
+    operation_ref: str,
+    entities: list[Any],
+    relations: list[Any],
+) -> list[str]:
+    """Derive writable fields from entities linked to an operation via relations.
+
+    Used as a fallback when request_example is empty (e.g. PATCH with
+    runtime-mutation plans that derive candidate fields from entity schemas).
+    """
+    entity_ids: set[str] = set()
+    for rel in relations:
+        if not isinstance(rel, dict):
+            continue
+        rel_kind = _text(rel.get("relation_type") or rel.get("kind"))
+        if rel_kind not in {"transitions", "observes", "mutates", "writes"}:
+            continue
+        op_ref = _text(
+            rel.get("operation_ref") or rel.get("from_ref") or rel.get("from") or rel.get("source")
+        )
+        target_ref = _text(
+            rel.get("to_ref") or rel.get("to") or rel.get("target")
+        )
+        if op_ref == operation_ref and target_ref:
+            entity_ids.add(target_ref)
+        elif target_ref == operation_ref:
+            from_ref = _text(rel.get("from_ref") or rel.get("from") or rel.get("source"))
+            if from_ref:
+                entity_ids.add(from_ref)
+    fields: list[str] = []
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        if _text(entity.get("id")) not in entity_ids:
+            continue
+        for f in _list(entity.get("fields")):
+            if isinstance(f, str) and f not in fields:
+                fields.append(f)
+    return fields
+
+
 def _validate_field_snapshot_restore(
     *,
     primary_method: str,
@@ -430,6 +481,8 @@ def _validate_field_snapshot_restore(
     cleanup_path: str,
     experiment: dict[str, Any],
     ops: dict[str, dict[str, Any]],
+    entities: list[Any] | None = None,
+    relations: list[Any] | None = None,
 ) -> dict[str, Any]:
     """SPEC §7.3: field_snapshot_restore semantic validation."""
     # Empty body action POST cannot be snapshot_restore
@@ -452,6 +505,17 @@ def _validate_field_snapshot_restore(
     writable_fields = list(request_example.keys()) if isinstance(request_example, dict) else []
     # Strip server-managed fields
     restore_fields = [f for f in writable_fields if f.lower() not in SERVER_MANAGED_FIELDS]
+
+    # Fallback: derive writable fields from linked entity definitions when
+    # request_example is empty (common for PATCH with runtime-mutation plans).
+    if not restore_fields and entities:
+        entity_fields = _entity_fields_for_operation(
+            primary_operation_ref, entities or [], relations or []
+        )
+        restore_fields = [
+            f for f in entity_fields if f.lower() not in SERVER_MANAGED_FIELDS
+        ]
+
     if not restore_fields:
         return {"kind": "none", "detail": "field_snapshot_restore_no_writable_fields"}
 

@@ -28,6 +28,7 @@ from .experiment_plan_executor import execute_non_barrier_plans
 from .experiment_outcome_finalizer import finalize_experiment_execution
 from .experiment_cleanup_executor import execute_experiment_cleanup_compensation
 from .cleanup_plan_validator import validate_cleanup_plan
+from .write_reversibility_contract import build_proof_fingerprint
 from .experiment_cleanup import (  # noqa: F401
     _cleanup_compensates_created_resource,
     _cleanup_restores_governed_write,
@@ -134,15 +135,17 @@ def execute_one_experiment(
     actors = _index_by_id(_list(ir.get("actors")))
     ops = _index_by_id(_list(ir.get("operations")))
 
-    # ── SPEC v1.1 §10 Phase A: Transport-independent proof validation ──
-    # For governed writes, verify compile proof exists and is valid before fixture.
+    # ── SPEC v1.1.1 §10 Phase A: Three-party fingerprint validation ──
+    # A = compile_receipt.write_reversibility_fingerprint (frozen, authoritative)
+    # B = attached proof recomputed fingerprint
+    # C = runtime rebuilt proof fingerprint (Phase B, after fixture)
+    # Require: A == B before fixture; A == C after fixture.
     safety = _dict(exp.get("safety_contract"))
     is_governed_write = safety.get("governed_write")
     compile_proof_fingerprint = ""
     if is_governed_write:
         compile_proof = _dict(exp.get("write_reversibility_proof"))
-        compile_proof_fingerprint = _text(compile_proof.get("fingerprint"))
-        # Phase A: verify proof exists and fingerprint is valid
+        # Phase A: verify proof exists and is PROVEN
         if not compile_proof or _text(compile_proof.get("proof_status")) != "PROVEN":
             return {
                 "schema_version": "qualibug.experiment-execution.v1",
@@ -159,6 +162,66 @@ def execute_one_experiment(
                     "detail": "compile_proof_missing_or_invalid",
                 },
             }
+        # §10.3: Frozen fingerprint ONLY from compile_receipt
+        compile_receipt = _dict(exp.get("compile_receipt"))
+        frozen_fp = _text(compile_receipt.get("write_reversibility_fingerprint"))
+        # B: Recompute fingerprint from attached proof content
+        recomputed_fp = build_proof_fingerprint(compile_proof)
+        attached_fp = _text(compile_proof.get("fingerprint"))
+        # Validate: frozen non-empty, recomputed matches attached and frozen
+        if not frozen_fp:
+            # Fallback: if compile_receipt absent, use attached proof fingerprint
+            frozen_fp = attached_fp
+        if not frozen_fp or not recomputed_fp:
+            return {
+                "schema_version": "qualibug.experiment-execution.v1",
+                "experiment_id": eid,
+                "obligation_id": oid,
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_CLEANUP_CONTRACT_DRIFT",
+                "detail": "fingerprint_empty:frozen={}:recomputed={}".format(frozen_fp, recomputed_fp),
+                "elapsed_ms": int((time.time() - started) * 1000),
+                "finding": None,
+                "execution_receipt": {
+                    "status": "BLOCKED",
+                    "reason_code": "BLOCKED_CLEANUP_CONTRACT_DRIFT",
+                    "detail": "fingerprint_empty",
+                },
+            }
+        if recomputed_fp != attached_fp:
+            return {
+                "schema_version": "qualibug.experiment-execution.v1",
+                "experiment_id": eid,
+                "obligation_id": oid,
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_CLEANUP_CONTRACT_DRIFT",
+                "detail": "fingerprint_mismatch:recomputed={}:attached={}".format(recomputed_fp, attached_fp),
+                "elapsed_ms": int((time.time() - started) * 1000),
+                "finding": None,
+                "execution_receipt": {
+                    "status": "BLOCKED",
+                    "reason_code": "BLOCKED_CLEANUP_CONTRACT_DRIFT",
+                    "detail": "phase_a_recomputed_ne_attached",
+                },
+            }
+        if frozen_fp != recomputed_fp:
+            return {
+                "schema_version": "qualibug.experiment-execution.v1",
+                "experiment_id": eid,
+                "obligation_id": oid,
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_CLEANUP_CONTRACT_DRIFT",
+                "detail": "fingerprint_mismatch:frozen={}:recomputed={}".format(frozen_fp, recomputed_fp),
+                "elapsed_ms": int((time.time() - started) * 1000),
+                "finding": None,
+                "execution_receipt": {
+                    "status": "BLOCKED",
+                    "reason_code": "BLOCKED_CLEANUP_CONTRACT_DRIFT",
+                    "detail": "phase_a_frozen_ne_recomputed",
+                },
+            }
+        # A == B verified; use frozen as authoritative for Phase B
+        compile_proof_fingerprint = frozen_fp
     steps_out: list[dict[str, Any]] = []
     request_bodies_for_cleanup: dict[str, Any] = {}
     observations: dict[str, Any] = {

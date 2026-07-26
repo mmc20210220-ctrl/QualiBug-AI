@@ -2035,7 +2035,13 @@ def test_experiment_compiler_uses_unique_source_declared_action_compensator() ->
         behavior_ir={
             "operations": operations,
             "actors": [{"id": "operator", "role": "public"}],
-            "relations": [],
+            "relations": [{
+                "id": "rel-reserve-release",
+                "kind": "compensates",
+                "source": "reserve_capacity",
+                "target": "release_capacity",
+                "source_refs": [{"source_id": "api"}],
+            }],
         },
         environment_type="test",
     )
@@ -2132,7 +2138,13 @@ def test_recreate_cleanup_reuses_compensator_primary_request_body() -> None:
         behavior_ir={
             "operations": operations,
             "actors": [{"id": "operator", "role": "public"}],
-            "relations": [],
+            "relations": [{
+                "id": "rel-release-reserve",
+                "kind": "compensates",
+                "source": "release_stock",
+                "target": "reserve_stock",
+                "source_refs": [{"source_id": "api"}],
+            }],
         },
         environment_type="test",
     )
@@ -2214,7 +2226,13 @@ def test_relation_bound_compensation_reuses_original_request_body() -> None:
         behavior_ir={
             "operations": operations,
             "actors": [{"id": "operator", "role": "public"}],
-            "relations": [],
+            "relations": [{
+                "id": "rel-reserve-release",
+                "kind": "compensates",
+                "source": "reserve_capacity",
+                "target": "release_capacity",
+                "source_refs": [{"source_id": "api"}],
+            }],
         },
         environment_type="test",
     )

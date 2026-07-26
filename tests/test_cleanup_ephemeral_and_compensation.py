@@ -90,7 +90,13 @@ def test_collection_create_uses_unique_cancel_compensation() -> None:
                 "source_refs": [{"kind": "endpoint_contract", "file": "api.md"}],
             }],
             "actors": [_actor()],
-            "relations": [],
+            "relations": [{
+                "id": "rel-create-cancel",
+                "kind": "compensates",
+                "source": "op-create-order",
+                "target": "op-cancel",
+                "source_refs": [{"kind": "endpoint_contract", "file": "api.md"}],
+            }],
         },
         environment_type="test",
     )
@@ -145,16 +151,23 @@ def test_cancel_recreates_via_unique_collection_create() -> None:
                 "source_refs": [{"kind": "endpoint_contract", "file": "api.md"}],
             }],
             "actors": [_actor()],
-            "relations": [],
+            "relations": [{
+                "id": "rel-cancel-recreate",
+                "kind": "compensates",
+                "source": "op-cancel",
+                "target": "op-create-order",
+                "source_refs": [{"kind": "endpoint_contract", "file": "api.md"}],
+            }],
         },
         environment_type="test",
     )
 
+    # SPEC v1.1 §12.2: explicit compensator relation produces a valid plan.
     assert experiment["compile_receipt"]["status"] == "COMPILED", experiment[
         "compile_receipt"
     ]
     assert experiment["cleanup_plan"][0]["operation_ref"] == "op-create-order"
-    assert experiment["cleanup_plan"][0]["mode"] == "recreate_compensated_resource"
+    assert experiment["cleanup_plan"][0]["mode"] == "compensator"
 
 
 def test_identity_bound_status_uses_snapshot_restore_with_effect_read() -> None:

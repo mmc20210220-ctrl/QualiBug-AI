@@ -9,6 +9,7 @@ import pytest
 
 from ai_test_asset_center.experiment_compiler_base import compile_experiment_for_obligation
 from ai_test_asset_center.experiment_executor import execute_one_experiment
+from ai_test_asset_center.write_reversibility_contract import build_reversibility_proof
 
 
 def _create_delete_ir() -> dict:
@@ -208,9 +209,24 @@ def _run_create_delete_experiment(
         "compile_receipt": {"status": "COMPILED", "reason_code": ""},
     }
 
+    # SPEC v1.1: attach write reversibility proof for governed writes.
+    _ir = _create_delete_ir()
+    _proof = build_reversibility_proof(
+        primary_operation_ref="op-create",
+        primary_method="POST",
+        primary_path="/resources",
+        cleanup_plan=cleanup_plan,
+        behavior_ir=_ir,
+        experiment=experiment,
+    )
+    experiment["write_reversibility_proof"] = _proof
+    experiment["compile_receipt"]["write_reversibility_fingerprint"] = _proof.get(
+        "fingerprint", ""
+    )
+
     result = execute_one_experiment(
         experiment,
-        behavior_ir=_create_delete_ir(),
+        behavior_ir=_ir,
         root=tmp_path,
         project="project",
         base_url="http://target.invalid",
@@ -365,18 +381,21 @@ def test_cleanup_uses_each_write_actor_for_actor_scoped_collections(
                 "path": "/carts",
                 "read_write": "write",
                 "request_example": {"name": "item"},
+                "source_refs": [{"source_id": "api", "locator": "POST /carts"}],
             },
             {
                 "id": "op-list",
                 "method": "GET",
                 "path": "/carts",
                 "read_write": "read",
+                "source_refs": [{"source_id": "api", "locator": "GET /carts"}],
             },
             {
                 "id": "op-delete",
                 "method": "DELETE",
                 "path": "/carts/{id}",
                 "read_write": "write",
+                "source_refs": [{"source_id": "api", "locator": "DELETE /carts/{id}"}],
             },
         ],
         "actors": [
@@ -445,6 +464,20 @@ def test_cleanup_uses_each_write_actor_for_actor_scoped_collections(
         "source_refs": [{"source_id": "api", "kind": "api_operation"}],
         "compile_receipt": {"status": "COMPILED", "reason_code": ""},
     }
+
+    # SPEC v1.1: attach write reversibility proof for governed writes.
+    _proof_cross = build_reversibility_proof(
+        primary_operation_ref="op-create",
+        primary_method="POST",
+        primary_path="/carts",
+        cleanup_plan=experiment["cleanup_plan"],
+        behavior_ir=behavior_ir,
+        experiment=experiment,
+    )
+    experiment["write_reversibility_proof"] = _proof_cross
+    experiment["compile_receipt"]["write_reversibility_fingerprint"] = _proof_cross.get(
+        "fingerprint", ""
+    )
 
     result = execute_one_experiment(
         experiment,

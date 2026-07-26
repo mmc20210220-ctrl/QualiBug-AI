@@ -26,6 +26,7 @@ from ai_test_asset_center.runtime_binding_materializer import (
     validated_fixture_setup,
 )
 from ai_test_asset_center.runtime_binding_graph import _declared_fixture_actor_refs
+from ai_test_asset_center.write_reversibility_contract import build_reversibility_proof
 
 
 def _patch_http_request(monkeypatch: pytest.MonkeyPatch, http_request) -> None:
@@ -1310,6 +1311,11 @@ def test_fixture_cleanup_runs_after_experiment_write_compensations(
             "read_write": "read",
         },
     ])
+    ir["relations"].append({
+        "kind": "compensates",
+        "source": "op-release",
+        "target": "op-reserve",
+    })
     experiment = compile_experiment_for_obligation(
         _isolation_obligation(),
         behavior_ir=ir,
@@ -1343,6 +1349,15 @@ def test_fixture_cleanup_runs_after_experiment_write_compensations(
         **experiment.get("safety_contract", {}),
         "governed_write": True,
     }
+    experiment["write_reversibility_proof"] = build_reversibility_proof(
+        primary_operation_ref="op-reserve",
+        primary_method="POST",
+        primary_path="/capacity/reserve",
+        cleanup_plan=experiment["cleanup_plan"],
+        source_refs=experiment.get("source_refs") or [],
+        behavior_ir=ir,
+        experiment=experiment,
+    )
     phases: list[str] = []
     capacity = 2
 
@@ -1810,6 +1825,7 @@ def test_runtime_mutation_block_is_blocked_before_transport_without_cleanup_fail
                 "method": "PATCH",
                 "path": "/settings",
                 "read_write": "write",
+                "request_example": {"selected": False},
             },
             {
                 "id": "op-read",
@@ -1844,6 +1860,7 @@ def test_runtime_mutation_block_is_blocked_before_transport_without_cleanup_fail
         }],
         "cleanup_plan": [{
             "action": "restore_before_snapshot",
+            "mode": "snapshot_restore",
             "operation_ref": "op-patch",
             "method": "PATCH",
             "path": "/settings",
@@ -1853,6 +1870,14 @@ def test_runtime_mutation_block_is_blocked_before_transport_without_cleanup_fail
         "observers": [{"observer_id": "http_response"}],
         "assertions": [],
     }
+    experiment["write_reversibility_proof"] = build_reversibility_proof(
+        primary_operation_ref="op-patch",
+        primary_method="PATCH",
+        primary_path="/settings",
+        cleanup_plan=experiment["cleanup_plan"],
+        behavior_ir=behavior_ir,
+        experiment=experiment,
+    )
     governed_calls: list[str] = []
 
     def governed_write(**kwargs):
@@ -1931,6 +1956,11 @@ def test_unresolved_body_placeholder_blocks_before_any_write_transport(
             "method": "GET",
             "path": "/resources",
             "read_write": "read",
+        }, {
+            "id": "op-delete",
+            "method": "DELETE",
+            "path": "/resources/{id}",
+            "read_write": "write",
         }],
         "actors": [{"id": "actor-control", "role": "public"}],
     }
@@ -1951,9 +1981,10 @@ def test_unresolved_body_placeholder_blocks_before_any_write_transport(
             "body": {"resource_id": "<missing_id>"},
         }],
         "cleanup_plan": [{
-            "operation_ref": "op-create",
-            "method": "POST",
-            "path": "/resources",
+            "operation_ref": "op-delete",
+            "mode": "reverse_order",
+            "method": "DELETE",
+            "path": "/resources/{id}",
         }],
         "safety_contract": {"governed_write": True},
         "fixture_dag": {"status": "READY", "nodes": [], "setup_order": []},
@@ -1964,6 +1995,14 @@ def test_unresolved_body_placeholder_blocks_before_any_write_transport(
         ],
         "assertions": [],
     }
+    experiment["write_reversibility_proof"] = build_reversibility_proof(
+        primary_operation_ref="op-create",
+        primary_method="POST",
+        primary_path="/resources",
+        cleanup_plan=experiment["cleanup_plan"],
+        behavior_ir=behavior_ir,
+        experiment=experiment,
+    )
     monkeypatch.setattr(
         "ai_test_asset_center.experiment_executor.sandbox_write_allowed",
         lambda **_kwargs: (True, ""),
@@ -2227,6 +2266,11 @@ def test_sandbox_denial_stops_write_before_governed_transport(
             "method": "GET",
             "path": "/resources",
             "read_write": "read",
+        }, {
+            "id": "op-delete",
+            "method": "DELETE",
+            "path": "/resources/{id}",
+            "read_write": "write",
         }],
         "actors": [{"id": "actor-writer", "role": "public"}],
     }
@@ -2242,15 +2286,24 @@ def test_sandbox_denial_stops_write_before_governed_transport(
             "body": {"name": "source-declared"},
         }],
         "cleanup_plan": [{
-            "operation_ref": "op-write",
-            "method": "POST",
-            "path": "/resources",
+            "operation_ref": "op-delete",
+            "mode": "reverse_order",
+            "method": "DELETE",
+            "path": "/resources/{id}",
         }],
         "safety_contract": {"governed_write": True},
         "fixture_dag": {"status": "READY", "nodes": [], "setup_order": []},
         "observers": [{"observer_id": "http_response"}],
         "assertions": [],
     }
+    experiment["write_reversibility_proof"] = build_reversibility_proof(
+        primary_operation_ref="op-write",
+        primary_method="POST",
+        primary_path="/resources",
+        cleanup_plan=experiment["cleanup_plan"],
+        behavior_ir=behavior_ir,
+        experiment=experiment,
+    )
     monkeypatch.setattr(
         "ai_test_asset_center.experiment_plan_executor.sandbox_write_allowed",
         lambda **_kwargs: (False, "READ_ONLY_MODE"),
@@ -2410,6 +2463,7 @@ def test_barrier_unresolved_body_placeholder_blocks_before_write_transport(
         }],
         "cleanup_plan": [{
             "operation_ref": "op-delete",
+            "mode": "reverse_order",
             "method": "DELETE",
             "path": "/resources/{id}",
         }],
@@ -2422,6 +2476,14 @@ def test_barrier_unresolved_body_placeholder_blocks_before_write_transport(
         ],
         "assertions": [],
     }
+    experiment["write_reversibility_proof"] = build_reversibility_proof(
+        primary_operation_ref="op-create",
+        primary_method="POST",
+        primary_path="/resources",
+        cleanup_plan=experiment["cleanup_plan"],
+        behavior_ir=behavior_ir,
+        experiment=experiment,
+    )
     monkeypatch.setattr(
         "ai_test_asset_center.experiment_executor.sandbox_write_allowed",
         lambda **_kwargs: (True, ""),
@@ -3284,6 +3346,13 @@ def test_write_effect_observer_uses_source_declared_body_bound_lookup() -> None:
                 "id": "actor-writer",
                 "role": "public",
                 "account_status": "active",
+            },
+        ],
+        "relations": [
+            {
+                "kind": "compensates",
+                "source": "op-void-payment",
+                "target": "op-pay",
             },
         ],
     }
