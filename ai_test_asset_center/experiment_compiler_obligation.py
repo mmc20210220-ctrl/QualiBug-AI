@@ -1327,7 +1327,65 @@ def compile_experiment_for_obligation(
                     )
                     observer["observer_compile_status"] = "COMPILED"
 
-    if family == "state":
+    # Registered-protocol extensions. Guarded on the marker, which experiment_protocols sets
+    # in exactly one place after a registry hit -- so this block never runs for a built-in
+    # protocol and the state rewrite below evaluates identically for every existing state
+    # obligation. tests/test_experiment_protocol_registry.py asserts, for all six built-in
+    # families, that no built-in result carries the marker.
+    _registry_protocol_id = _text(protocol.get("_registry_protocol_id"))
+    _precondition_plan: list[dict[str, Any]] = []
+    if _registry_protocol_id:
+        # Establish the declared source state before the measured window.
+        #
+        # Without this, experiment_compiler_support strips the entity_in_state:* fixtures a
+        # state obligation requests and substitutes the literal "unknown_state", which the
+        # state_transition evaluator degrades from "did the declared transition happen" into
+        # "did anything change at all".
+        if protocol.get("requires_state_precondition") is True:
+            from .state_precondition_planner import plan_state_precondition
+
+            _precondition = plan_state_precondition(
+                behavior_ir=ir,
+                from_state=_text(prop.get("from_state")),
+                actors=[_text(actor) for actor in required_actors if _text(actor)],
+            )
+            if _text(_precondition.get("status")) != "PLANNED":
+                return blocked_experiment(
+                    oid,
+                    "BLOCKED_PRECONDITION_UNREACHABLE",
+                    f"{_registry_protocol_id}:{_text(_precondition.get('reason_code'))}",
+                )
+            _precondition_plan = [
+                row for row in _list(_precondition.get("steps")) if isinstance(row, dict)
+            ]
+
+        # Cleanup coverage across EVERY write, not just the first.
+        #
+        # _identify_primary_write proves reversibility for the first treatment write only, so
+        # an N-step process whose later steps create entities under different operations
+        # would carry a compile-time proof covering step 1 and leave the rest as residue.
+        # Blocking is the fail-closed answer; AGENTS.md forbids waiving cleanup.
+        _declared_compensated_ops = {
+            _text(_dict(row).get("operation_ref"))
+            for row in _list(protocol.get("cleanup_plan"))
+            if _text(_dict(row).get("operation_ref"))
+        }
+        _write_ops_needing_cleanup = {
+            _text(_dict(row).get("operation_ref"))
+            for row in [*_precondition_plan, *_list(protocol.get("treatment_plan"))]
+            if _text(_dict(row).get("operation_ref"))
+            and _text(_dict(ops.get(_text(_dict(row).get("operation_ref")))).get("read_write"))
+            == "write"
+        }
+        _uncovered = sorted(_write_ops_needing_cleanup - _declared_compensated_ops)
+        if _uncovered and _list(protocol.get("cleanup_plan")):
+            return blocked_experiment(
+                oid,
+                "BLOCKED_STEP_CLEANUP_UNCOVERED",
+                f"{_registry_protocol_id}:{','.join(_uncovered)}",
+            )
+
+    if family == "state" and not _registry_protocol_id:
         treatment_rows = [
             row
             for row in _list(protocol.get("treatment_plan"))
@@ -1556,6 +1614,8 @@ def compile_experiment_for_obligation(
         # Record the adapter set this compile was gated against, so runtime validation
         # agrees with it instead of re-asserting a hardcoded http_api-only world.
         compiled_adapters=adapters,
+        # Empty for every built-in compile, so the key is not emitted at all there.
+        precondition_plan=_precondition_plan,
         control_plan=control_plan,
         treatment_plan=treatment_plan,
         binding_plan=binding_plan,
@@ -1724,6 +1784,10 @@ BLOCK_REASONS = (
     "BLOCKED_PLAN_STEP_IDENTITY_INVALID",
     # A multi-step plan with no per-step observation would lose its middle steps.
     "BLOCKED_STEP_EVIDENCE_UNOBSERVABLE",
+    # The declared source state cannot be established from the declared transition graph.
+    "BLOCKED_PRECONDITION_UNREACHABLE",
+    # A write in the plan has no declared compensator, so it would leave residue.
+    "BLOCKED_STEP_CLEANUP_UNCOVERED",
     "BLOCKED_FIXTURE_DAG_DRIFT",
 )
 
@@ -1752,9 +1816,10 @@ def make_experiment(
     experiment_id: str | None = None,
     source_identity_fields: list[str] | None = None,
     compiled_adapters: "set[str] | list[str] | None" = None,
+    precondition_plan: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     eid = _text(experiment_id) or stable_experiment_id(obligation_id, "v1")
-    return {
+    experiment = {
         "schema_version": SCHEMA_VERSION,
         "experiment_id": eid,
         # The adapter capability set this experiment was COMPILED against. Runtime
@@ -1783,6 +1848,15 @@ def make_experiment(
         "source_refs": list(source_refs or []),
         "compile_receipt": dict(compile_receipt or {"status": "COMPILED"}),
     }
+    # Emitted CONDITIONALLY. An unconditional "precondition_plan": [] would add a key to
+    # every experiment dict the product has ever produced, changing the shape of ~3100
+    # stored artifacts for no benefit. Only a plan that actually establishes something
+    # carries the key.
+    if precondition_plan:
+        experiment["precondition_plan"] = [
+            dict(row) for row in precondition_plan if isinstance(row, dict)
+        ]
+    return experiment
 
 
 def blocked_experiment(obligation_id: str, reason_code: str, detail: str = "") -> dict[str, Any]:
