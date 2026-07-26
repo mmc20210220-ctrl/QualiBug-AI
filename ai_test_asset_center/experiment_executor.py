@@ -345,10 +345,21 @@ def execute_one_experiment(
     # Synthetic/degraded values must NOT reach transport.
     _compile_graph = _dict(exp.get("binding_coverage_graph"))
     _compile_nodes = _list(_compile_graph.get("nodes"))
-    _compile_node_targets = {
-        _text(n.get("binding_id") or n.get("target")): n
-        for n in _compile_nodes if isinstance(n, dict)
-    }
+    # A node is looked up by every name that identifies it. Keying only by binding_id
+    # compared a runtime binding key ("sku") against an opaque hash
+    # ("bind_0573d5af75dc5986"), which can never match: the set was non-empty, so the
+    # guard fired, and semantic_name -- the field that actually holds "sku" -- was never
+    # read. 146 experiments on a live target compiled successfully and were then blocked
+    # at execution with undeclared_runtime_binding:sku / :id while the graph itself
+    # reported graph_status VALID.
+    _compile_node_targets: dict[str, dict[str, Any]] = {}
+    for n in _compile_nodes:
+        if not isinstance(n, dict):
+            continue
+        for _key in (n.get("semantic_name"), n.get("binding_id"), n.get("target"), n.get("name")):
+            _key_text = _text(_key)
+            if _key_text:
+                _compile_node_targets.setdefault(_key_text, n)
     _FORBIDDEN_RUNTIME_SOURCES = {"degraded_synthetic", "synthetic_value", "random_placeholder", "invented"}
     _provenance_violations: list[str] = []
     for _bk, _bv in runtime_bindings.items():
