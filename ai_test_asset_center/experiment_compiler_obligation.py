@@ -26,6 +26,13 @@ _FAMILY_ASSERTION_KIND = {
     "visibility": "visibility",
     "privacy": "privacy",
     "validation": "validation_rejection",
+    # "state" was absent, so a state obligation whose protocol did not supply a kind
+    # fell through to the `or "http_status"` default at the call site -- a lifecycle
+    # transition asserted as a bare status-code check. The state protocol branch does
+    # supply state_transition today, so this is a latent fallback rather than an active
+    # defect, but the default is the wrong shape for this family and matches the
+    # evaluator's own "state" -> state_transition alias.
+    "state": "state_transition",
     "state_integrity": "state_transition",
     "lifecycle": "state_transition",
     "consistency": "cross_surface_consistency",

@@ -44,13 +44,6 @@ CANONICAL_RISK_FAMILIES = (
     "privacy",
 )
 
-# Families the COMPILER and EVALUATOR already understand -- they have an entry in
-# experiment_compiler_obligation._FAMILY_ASSERTION_KIND and an assertion_dsl
-# evaluator alias -- but which obligation_source_adapter's three by-family maps do
-# not yet cover. Promoting one to canonical requires adding its relation types,
-# protocol template and observer set there first; until then it resolves to a
-# canonical family and is tagged PROMOTION_CANDIDATE so the gap is countable.
-# This is the next breadth increment, ordered by how often each actually appears.
 # Alias map: an incoming family name -> the canonical family used to compile it.
 # Aliasing is a deliberate, recorded narrowing, not a fallback. The keys here are
 # the vocabularies actually produced elsewhere in the product -- primarily
@@ -129,29 +122,138 @@ RISK_FAMILY_CAPABILITY_GAP_REASON = "RISK_FAMILY_OBSERVER_CAPABILITY_MISSING"
 _REGISTERED_RISK_FAMILIES: dict[str, str] = {}
 
 
-def register_risk_family(name: str, *, canonical: str | None = None) -> str:
-    """Register a risk family at runtime and return its canonical family.
+# Families promoted to canonical at runtime through a full descriptor. Kept separate
+# from the CANONICAL_RISK_FAMILIES literal so the built-in set stays readable.
+_RUNTIME_CANONICAL_FAMILIES: dict[str, dict[str, Any]] = {}
 
-    This is the open entry point: a deployment or a new capability adds a family
-    without editing this module. ``canonical`` names the family used to compile
-    it; omit it for a first-class family that compiles under its own name.
 
-    Raises ValueError when ``canonical`` is not itself canonical, because a
-    registration that cannot compile is worse than no registration -- it would
-    reintroduce silent loss one level up.
+def canonical_risk_families() -> tuple[str, ...]:
+    """Built-in canonical families plus any registered at runtime."""
+    return CANONICAL_RISK_FAMILIES + tuple(sorted(_RUNTIME_CANONICAL_FAMILIES))
+
+
+def register_risk_family(
+    name: str,
+    *,
+    canonical: str | None = None,
+    relation_types: "set[str] | frozenset[str] | list[str] | None" = None,
+    protocol_template: str | None = None,
+    observers: "list[str] | None" = None,
+    assertion_kind: str | None = None,
+) -> str:
+    """Register a risk family at runtime. This is the open entry point.
+
+    Two modes:
+
+    * ALIAS -- pass ``canonical``. The new name compiles as an existing canonical
+      family. Cheap, and correct when the new label is a synonym or a narrower case.
+
+    * DESCRIPTOR -- pass ``relation_types`` + ``protocol_template`` + ``observers``
+      (and optionally ``assertion_kind``). The family becomes canonical in its own
+      right and this function writes the downstream by-family maps for it, so adding
+      a genuinely new bug class needs no edit to core code. That is the point: the
+      bug-type list is open by contract, and a taxonomy that requires editing five
+      hand-maintained maps per addition is a structural ceiling wearing a registry's
+      clothes.
+
+    Every link is validated HERE rather than deferred, because each deferred failure
+    has a known bad shape in this codebase:
+
+    * an unregistered observer id compiles to BLOCKED_MISSING_OBSERVER, which silently
+      killed 3 of the 10 built-in families ("resource_visibility", "clock",
+      "privacy_surface" were never registered)
+    * a missing by-family map entry raises KeyError deep inside compilation
+    * an assertion kind whose evidence nothing produces executes and then dies as a
+      permanent INDETERMINATE
+
+    Imports are deferred to call time: obligation_source_adapter imports this module,
+    so a module-level import here would be circular, and AGENTS.md requires importing
+    the package to stay side-effect free.
     """
     family = _text(name).lower()
     if not family:
         raise ValueError("register_risk_family requires a non-empty name")
-    target = _text(canonical).lower() or family
-    if target not in CANONICAL_RISK_FAMILIES:
+
+    descriptor_given = any(
+        value is not None for value in (relation_types, protocol_template, observers)
+    )
+    if descriptor_given and canonical:
         raise ValueError(
-            f"canonical risk family {target!r} is not in CANONICAL_RISK_FAMILIES; "
-            "add it there together with a _FAMILY_ASSERTION_KIND entry and an "
-            "evaluable assertion kind first"
+            "register_risk_family takes either canonical= (alias mode) or a full "
+            "descriptor, not both"
         )
-    _REGISTERED_RISK_FAMILIES[family] = target
-    return target
+
+    if not descriptor_given:
+        target = _text(canonical).lower() or family
+        if target not in canonical_risk_families():
+            raise ValueError(
+                f"canonical risk family {target!r} is not canonical; either register "
+                "it first with a full descriptor (relation_types, protocol_template, "
+                "observers) or alias onto an existing canonical family"
+            )
+        _REGISTERED_RISK_FAMILIES[family] = target
+        return target
+
+    # ── Descriptor mode: validate all four links before anything is written ──
+    relations = {_text(item) for item in (relation_types or set()) if _text(item)}
+    if not relations:
+        raise ValueError(
+            f"risk family {family!r} needs at least one IR relation type; without one "
+            "every obligation in it blocks with BLOCKED_MISSING_IR_RELATION"
+        )
+    template = _text(protocol_template)
+    if not template:
+        raise ValueError(f"risk family {family!r} needs a protocol_template")
+    observer_ids = [_text(item) for item in (observers or []) if _text(item)]
+    if not observer_ids:
+        raise ValueError(
+            f"risk family {family!r} needs at least one observer; an obligation with "
+            "no observer cannot produce evidence"
+        )
+
+    from .observer_contracts_base import OBSERVER_REGISTRY
+
+    unknown = [
+        observer_id
+        for observer_id in observer_ids
+        if not isinstance(OBSERVER_REGISTRY.get(observer_id), dict)
+        or OBSERVER_REGISTRY[observer_id].get("implemented") is not True
+    ]
+    if unknown:
+        raise ValueError(
+            f"risk family {family!r} declares observers that are not registered and "
+            f"implemented in OBSERVER_REGISTRY: {sorted(unknown)}"
+        )
+
+    kind = _text(assertion_kind)
+    if kind:
+        from .assertion_dsl_base import unproducible_assertion_evidence
+
+        missing = unproducible_assertion_evidence(kind)
+        if missing:
+            raise ValueError(
+                f"risk family {family!r} declares assertion kind {kind!r} whose "
+                f"required evidence {missing!r} no observer produces; implement the "
+                "producer first or the family can never return a verdict"
+            )
+
+    from . import obligation_source_adapter as _adapter
+
+    _adapter._RELATION_TYPES_BY_FAMILY[family] = relations
+    _adapter._TEMPLATE_BY_FAMILY[family] = template
+    _adapter._OBSERVERS_BY_FAMILY[family] = list(observer_ids)
+    if kind:
+        from . import experiment_compiler_obligation as _compiler
+
+        _compiler._FAMILY_ASSERTION_KIND.setdefault(family, kind)
+
+    _RUNTIME_CANONICAL_FAMILIES[family] = {
+        "relation_types": sorted(relations),
+        "protocol_template": template,
+        "observers": list(observer_ids),
+        "assertion_kind": kind,
+    }
+    return family
 
 
 def registered_risk_families() -> tuple[str, ...]:
@@ -162,6 +264,7 @@ def registered_risk_families() -> tuple[str, ...]:
         | set(PROMOTION_CANDIDATE_FAMILIES)
         | set(CAPABILITY_GAP_FAMILIES)
         | set(_REGISTERED_RISK_FAMILIES)
+        | set(_RUNTIME_CANONICAL_FAMILIES)
     ))
 
 
@@ -182,8 +285,9 @@ def registry_self_check() -> None:
         ("CAPABILITY_GAP_FAMILIES", CAPABILITY_GAP_FAMILIES),
         ("_REGISTERED_RISK_FAMILIES", _REGISTERED_RISK_FAMILIES),
     ):
+        _canonical = canonical_risk_families()
         for name, target in mapping.items():
-            if target not in CANONICAL_RISK_FAMILIES:
+            if target not in _canonical:
                 bad.append(f"{label}[{name!r}] -> {target!r}")
     if bad:
         raise ValueError(
@@ -201,7 +305,7 @@ def resolve_risk_family(risk_family: Any) -> dict[str, Any]:
     of collapsing indistinguishably into "validation".
     """
     declared = _text(risk_family).lower()
-    if declared in CANONICAL_RISK_FAMILIES:
+    if declared in canonical_risk_families():
         return {"declared": declared, "canonical": declared, "registered": True, "reason_code": ""}
     if declared in _REGISTERED_RISK_FAMILIES:
         return {
