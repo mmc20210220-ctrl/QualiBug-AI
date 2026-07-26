@@ -1,0 +1,3323 @@
+{
+  "schema_version": "qualibug.v123-readback-gap-map.v1",
+  "generated_from": "v122_obligation_funnel_ledger.json",
+  "total_candidates": 138,
+  "unique_write_operations": 14,
+  "gap_type_summary": {
+    "NO_SOURCE_DECLARED_READBACK": 111,
+    "OBSERVER_EXISTS_BUT_NOT_BOUND": 27
+  },
+  "entries": [
+    {
+      "obligation_id": "obl_ec8619222400cecbbe95",
+      "write_operation_id": "bir_9c52e8f65cb8c3d7",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_1eb0cc37209954e9a7e2",
+      "write_operation_id": "bir_9c52e8f65cb8c3d7",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_934dc95a6f1f8a7af01e",
+      "write_operation_id": "bir_9c52e8f65cb8c3d7",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_071f425f733cc71469f0",
+      "write_operation_id": "bir_9c52e8f65cb8c3d7",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_7b9512a74c2fa1c6695c",
+      "write_operation_id": "bir_9c52e8f65cb8c3d7",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_7860812de9c13899c3e7",
+      "write_operation_id": "bir_9c52e8f65cb8c3d7",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_e828dc93a054217324a9",
+      "write_operation_id": "bir_fb65377cb16a3e9f",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_ee54813e9f8de8051058",
+      "write_operation_id": "bir_cd93d22bc648c06d",
+      "write_method": "POST",
+      "write_path": "/api/orders",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [
+        {
+          "operation_ref": "bir_4652619ca59aca8e",
+          "method": "GET",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "operation_ref": "bir_5320292f347504f1",
+          "method": "GET",
+          "path": "/api/orders"
+        }
+      ],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": true,
+      "collection_get_ops": [
+        {
+          "id": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [
+        {
+          "type": "IDENTITY_GET",
+          "operation_ref": "bir_4652619ca59aca8e",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "type": "COLLECTION_GET",
+          "operation_ref": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "gap_type": "OBSERVER_EXISTS_BUT_NOT_BOUND"
+    },
+    {
+      "obligation_id": "obl_b438ccf8d513175e25fd",
+      "write_operation_id": "bir_4652619ca59aca8e",
+      "write_method": "GET",
+      "write_path": "/api/orders/:id",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [
+        {
+          "operation_ref": "bir_4652619ca59aca8e",
+          "method": "GET",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "operation_ref": "bir_5320292f347504f1",
+          "method": "GET",
+          "path": "/api/orders"
+        }
+      ],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": true,
+      "collection_get_ops": [
+        {
+          "id": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [
+        {
+          "type": "IDENTITY_GET",
+          "operation_ref": "bir_4652619ca59aca8e",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "type": "COLLECTION_GET",
+          "operation_ref": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "gap_type": "OBSERVER_EXISTS_BUT_NOT_BOUND"
+    },
+    {
+      "obligation_id": "obl_512efa9fd5a54b8b5fd5",
+      "write_operation_id": "bir_cf029884ce1a1add",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_0d91b66f534834571f81",
+      "write_operation_id": "bir_cf029884ce1a1add",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_9b0553d7a798b01f0739",
+      "write_operation_id": "bir_cf029884ce1a1add",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_ec973151b2780174ada8",
+      "write_operation_id": "bir_cf029884ce1a1add",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_df69efb08f95049947f5",
+      "write_operation_id": "bir_cf029884ce1a1add",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_bfc0e2c0d79dbf16e6a3",
+      "write_operation_id": "bir_cf029884ce1a1add",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_18e09289d73605c6675b",
+      "write_operation_id": "bir_a8bfa9adba97dcc6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_b09eead96501cb9b813b",
+      "write_operation_id": "bir_5ac20bf28da670d7",
+      "write_method": "POST",
+      "write_path": "/api/refunds",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_090f520c44ea641db917",
+      "write_operation_id": "bir_e0c761a57de2b5a5",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_287dab1cc88b18d2cc0a",
+      "write_operation_id": "bir_e0c761a57de2b5a5",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_9bd2ef6d3750b9bd1684",
+      "write_operation_id": "bir_ce6beb2b9a731cd5",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_9b77cecff3f833d6ef39",
+      "write_operation_id": "bir_ce6beb2b9a731cd5",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_e42b1a6ad3f371f75dfb",
+      "write_operation_id": "bir_ce6beb2b9a731cd5",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_303605fd90485d98e940",
+      "write_operation_id": "bir_ce6beb2b9a731cd5",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_791be857c12d144a9eb3",
+      "write_operation_id": "bir_ce6beb2b9a731cd5",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_5a62ee8c56d8e3af67d2",
+      "write_operation_id": "bir_ce6beb2b9a731cd5",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_d4ce4c4c05613d36dbb2",
+      "write_operation_id": "bir_3b6bdcc9dfed31f6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_44fea80f9a5f50050cd9",
+      "write_operation_id": "bir_3b6bdcc9dfed31f6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_38226328e6c9aee21c2e",
+      "write_operation_id": "bir_3b6bdcc9dfed31f6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_1178b60d4b606dec9bed",
+      "write_operation_id": "bir_3b6bdcc9dfed31f6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_bff7412575139cfde801",
+      "write_operation_id": "bir_3b6bdcc9dfed31f6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_4eb29b4f6dfa62a166f2",
+      "write_operation_id": "bir_3b6bdcc9dfed31f6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_1b06eccc2382a1791e9e",
+      "write_operation_id": "bir_fb65377cb16a3e9f",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_c4fab00db48f16f1675a",
+      "write_operation_id": "bir_5320292f347504f1",
+      "write_method": "GET",
+      "write_path": "/api/orders",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [
+        {
+          "operation_ref": "bir_5320292f347504f1",
+          "method": "GET",
+          "path": "/api/orders"
+        }
+      ],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": true,
+      "collection_get_ops": [
+        {
+          "id": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [
+        {
+          "type": "COLLECTION_GET",
+          "operation_ref": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "gap_type": "OBSERVER_EXISTS_BUT_NOT_BOUND"
+    },
+    {
+      "obligation_id": "obl_f2df1c288b08460f1f02",
+      "write_operation_id": "bir_10cbf007f41df22a",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_179b0d36345754fec323",
+      "write_operation_id": "bir_5320292f347504f1",
+      "write_method": "GET",
+      "write_path": "/api/orders",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [
+        {
+          "operation_ref": "bir_5320292f347504f1",
+          "method": "GET",
+          "path": "/api/orders"
+        }
+      ],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": true,
+      "collection_get_ops": [
+        {
+          "id": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [
+        {
+          "type": "COLLECTION_GET",
+          "operation_ref": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "gap_type": "OBSERVER_EXISTS_BUT_NOT_BOUND"
+    },
+    {
+      "obligation_id": "obl_0fbaebb17cabee714fcf",
+      "write_operation_id": "bir_10cbf007f41df22a",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_1e457fe32a24b1a5a09b",
+      "write_operation_id": "bir_9c52e8f65cb8c3d7",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_fee1f9211aa38e23dfe0",
+      "write_operation_id": "bir_3b6bdcc9dfed31f6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_daf44d720a543dd65e22",
+      "write_operation_id": "bir_fb65377cb16a3e9f",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_c73f1f7cf66c406dafe0",
+      "write_operation_id": "bir_cd93d22bc648c06d",
+      "write_method": "POST",
+      "write_path": "/api/orders",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [
+        {
+          "operation_ref": "bir_4652619ca59aca8e",
+          "method": "GET",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "operation_ref": "bir_5320292f347504f1",
+          "method": "GET",
+          "path": "/api/orders"
+        }
+      ],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": true,
+      "collection_get_ops": [
+        {
+          "id": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [
+        {
+          "type": "IDENTITY_GET",
+          "operation_ref": "bir_4652619ca59aca8e",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "type": "COLLECTION_GET",
+          "operation_ref": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "gap_type": "OBSERVER_EXISTS_BUT_NOT_BOUND"
+    },
+    {
+      "obligation_id": "obl_7f92297953304d129d6f",
+      "write_operation_id": "bir_cf029884ce1a1add",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_ef0fb998afe244a11232",
+      "write_operation_id": "bir_5ac20bf28da670d7",
+      "write_method": "POST",
+      "write_path": "/api/refunds",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_31b95700c256995b",
+      "write_operation_id": "bir_a73918f040a7a086",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_ffbed596825e6190",
+      "write_operation_id": "bir_a73918f040a7a086",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_474e4a77b219151b",
+      "write_operation_id": "bir_fb65377cb16a3e9f",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_2a73792321f2c4ce",
+      "write_operation_id": "bir_a73918f040a7a086",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_3ce717190b41ea62",
+      "write_operation_id": "bir_3b6bdcc9dfed31f6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_002db26e30225a51",
+      "write_operation_id": "bir_a73918f040a7a086",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_c7f83ac97a39671c",
+      "write_operation_id": "bir_a73918f040a7a086",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_fdbc967357053390",
+      "write_operation_id": "bir_9c52e8f65cb8c3d7",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_a247d45db741509e",
+      "write_operation_id": "bir_9c52e8f65cb8c3d7",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_98472733bfc53af6",
+      "write_operation_id": "bir_9c52e8f65cb8c3d7",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_3cb7f31e5ff90b52",
+      "write_operation_id": "bir_9c52e8f65cb8c3d7",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_b9db03fa4073564b",
+      "write_operation_id": "bir_9c52e8f65cb8c3d7",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_d18d9f146aaa150a",
+      "write_operation_id": "bir_9c52e8f65cb8c3d7",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_cec3c4d640a99228",
+      "write_operation_id": "bir_9c52e8f65cb8c3d7",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_35b7e892754adb7a",
+      "write_operation_id": "bir_9c52e8f65cb8c3d7",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_57e43f118ceecea7",
+      "write_operation_id": "bir_9c52e8f65cb8c3d7",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_fa661ad1fb998c32",
+      "write_operation_id": "bir_9c52e8f65cb8c3d7",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_8f48c504606beddd",
+      "write_operation_id": "bir_9c52e8f65cb8c3d7",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_140d1d52fc988eb8",
+      "write_operation_id": "bir_9c52e8f65cb8c3d7",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_da990c22f33b8bb8",
+      "write_operation_id": "bir_a73918f040a7a086",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_279011bbc56b22d7",
+      "write_operation_id": "bir_fb65377cb16a3e9f",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_ee589dbaebd52deb",
+      "write_operation_id": "bir_cd93d22bc648c06d",
+      "write_method": "POST",
+      "write_path": "/api/orders",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [
+        {
+          "operation_ref": "bir_4652619ca59aca8e",
+          "method": "GET",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "operation_ref": "bir_5320292f347504f1",
+          "method": "GET",
+          "path": "/api/orders"
+        }
+      ],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": true,
+      "collection_get_ops": [
+        {
+          "id": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [
+        {
+          "type": "IDENTITY_GET",
+          "operation_ref": "bir_4652619ca59aca8e",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "type": "COLLECTION_GET",
+          "operation_ref": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "gap_type": "OBSERVER_EXISTS_BUT_NOT_BOUND"
+    },
+    {
+      "obligation_id": "obl_dbe320061b96e4b1",
+      "write_operation_id": "bir_5ac20bf28da670d7",
+      "write_method": "POST",
+      "write_path": "/api/refunds",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_6d305a32dcd5a220",
+      "write_operation_id": "bir_3b6bdcc9dfed31f6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_7756696634a77c5c",
+      "write_operation_id": "bir_3b6bdcc9dfed31f6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_466e79a8cbecebb4",
+      "write_operation_id": "bir_3b6bdcc9dfed31f6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_346508a847c26afa",
+      "write_operation_id": "bir_3b6bdcc9dfed31f6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_73692cfd1fd34baa",
+      "write_operation_id": "bir_3b6bdcc9dfed31f6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_ec036b58b5faf9a9",
+      "write_operation_id": "bir_3b6bdcc9dfed31f6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_d513f8c195687752",
+      "write_operation_id": "bir_3b6bdcc9dfed31f6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_68487c14a4c725b2",
+      "write_operation_id": "bir_3b6bdcc9dfed31f6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_71802ed7e33a04e9",
+      "write_operation_id": "bir_3b6bdcc9dfed31f6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_8fa00a3a88595f05",
+      "write_operation_id": "bir_3b6bdcc9dfed31f6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_45f1598a17781183",
+      "write_operation_id": "bir_3b6bdcc9dfed31f6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_7a0ba555423e2acb",
+      "write_operation_id": "bir_3b6bdcc9dfed31f6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_6e95be775eefd257",
+      "write_operation_id": "bir_9c52e8f65cb8c3d7",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_aa015fe9a1d38ad5",
+      "write_operation_id": "bir_9c52e8f65cb8c3d7",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_59f9c7391c7ec30c",
+      "write_operation_id": "bir_a73918f040a7a086",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_c88e65f1c709e6ba",
+      "write_operation_id": "bir_a73918f040a7a086",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_39f902d9a61ccc27",
+      "write_operation_id": "bir_a73918f040a7a086",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_83f28622dccc6a3e",
+      "write_operation_id": "bir_a73918f040a7a086",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_327559f851c8e299",
+      "write_operation_id": "bir_fb65377cb16a3e9f",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_ee091b1377003c12",
+      "write_operation_id": "bir_fb65377cb16a3e9f",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_05b6ea0aecbe43e4",
+      "write_operation_id": "bir_fb65377cb16a3e9f",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_4ec4d502fa06c0cd",
+      "write_operation_id": "bir_fb65377cb16a3e9f",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_2251977d141ac61f",
+      "write_operation_id": "bir_fb65377cb16a3e9f",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_e05cde707b00e925",
+      "write_operation_id": "bir_fb65377cb16a3e9f",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_d4eae56c1e5228b3",
+      "write_operation_id": "bir_cd93d22bc648c06d",
+      "write_method": "POST",
+      "write_path": "/api/orders",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [
+        {
+          "operation_ref": "bir_4652619ca59aca8e",
+          "method": "GET",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "operation_ref": "bir_5320292f347504f1",
+          "method": "GET",
+          "path": "/api/orders"
+        }
+      ],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": true,
+      "collection_get_ops": [
+        {
+          "id": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [
+        {
+          "type": "IDENTITY_GET",
+          "operation_ref": "bir_4652619ca59aca8e",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "type": "COLLECTION_GET",
+          "operation_ref": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "gap_type": "OBSERVER_EXISTS_BUT_NOT_BOUND"
+    },
+    {
+      "obligation_id": "obl_5b8cc3f141a6a821",
+      "write_operation_id": "bir_cd93d22bc648c06d",
+      "write_method": "POST",
+      "write_path": "/api/orders",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [
+        {
+          "operation_ref": "bir_4652619ca59aca8e",
+          "method": "GET",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "operation_ref": "bir_5320292f347504f1",
+          "method": "GET",
+          "path": "/api/orders"
+        }
+      ],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": true,
+      "collection_get_ops": [
+        {
+          "id": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [
+        {
+          "type": "IDENTITY_GET",
+          "operation_ref": "bir_4652619ca59aca8e",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "type": "COLLECTION_GET",
+          "operation_ref": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "gap_type": "OBSERVER_EXISTS_BUT_NOT_BOUND"
+    },
+    {
+      "obligation_id": "obl_ee7fc51cb92b8d1c",
+      "write_operation_id": "bir_cd93d22bc648c06d",
+      "write_method": "POST",
+      "write_path": "/api/orders",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [
+        {
+          "operation_ref": "bir_4652619ca59aca8e",
+          "method": "GET",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "operation_ref": "bir_5320292f347504f1",
+          "method": "GET",
+          "path": "/api/orders"
+        }
+      ],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": true,
+      "collection_get_ops": [
+        {
+          "id": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [
+        {
+          "type": "IDENTITY_GET",
+          "operation_ref": "bir_4652619ca59aca8e",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "type": "COLLECTION_GET",
+          "operation_ref": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "gap_type": "OBSERVER_EXISTS_BUT_NOT_BOUND"
+    },
+    {
+      "obligation_id": "obl_03c4916f25430078",
+      "write_operation_id": "bir_cd93d22bc648c06d",
+      "write_method": "POST",
+      "write_path": "/api/orders",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [
+        {
+          "operation_ref": "bir_4652619ca59aca8e",
+          "method": "GET",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "operation_ref": "bir_5320292f347504f1",
+          "method": "GET",
+          "path": "/api/orders"
+        }
+      ],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": true,
+      "collection_get_ops": [
+        {
+          "id": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [
+        {
+          "type": "IDENTITY_GET",
+          "operation_ref": "bir_4652619ca59aca8e",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "type": "COLLECTION_GET",
+          "operation_ref": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "gap_type": "OBSERVER_EXISTS_BUT_NOT_BOUND"
+    },
+    {
+      "obligation_id": "obl_c9b29f06df0b83a2",
+      "write_operation_id": "bir_cd93d22bc648c06d",
+      "write_method": "POST",
+      "write_path": "/api/orders",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [
+        {
+          "operation_ref": "bir_4652619ca59aca8e",
+          "method": "GET",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "operation_ref": "bir_5320292f347504f1",
+          "method": "GET",
+          "path": "/api/orders"
+        }
+      ],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": true,
+      "collection_get_ops": [
+        {
+          "id": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [
+        {
+          "type": "IDENTITY_GET",
+          "operation_ref": "bir_4652619ca59aca8e",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "type": "COLLECTION_GET",
+          "operation_ref": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "gap_type": "OBSERVER_EXISTS_BUT_NOT_BOUND"
+    },
+    {
+      "obligation_id": "obl_001d8b9073878191",
+      "write_operation_id": "bir_cd93d22bc648c06d",
+      "write_method": "POST",
+      "write_path": "/api/orders",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [
+        {
+          "operation_ref": "bir_4652619ca59aca8e",
+          "method": "GET",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "operation_ref": "bir_5320292f347504f1",
+          "method": "GET",
+          "path": "/api/orders"
+        }
+      ],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": true,
+      "collection_get_ops": [
+        {
+          "id": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [
+        {
+          "type": "IDENTITY_GET",
+          "operation_ref": "bir_4652619ca59aca8e",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "type": "COLLECTION_GET",
+          "operation_ref": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "gap_type": "OBSERVER_EXISTS_BUT_NOT_BOUND"
+    },
+    {
+      "obligation_id": "obl_378d2d61f5c3fa44",
+      "write_operation_id": "bir_5ac20bf28da670d7",
+      "write_method": "POST",
+      "write_path": "/api/refunds",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_bb34d68dfe315ffb",
+      "write_operation_id": "bir_5ac20bf28da670d7",
+      "write_method": "POST",
+      "write_path": "/api/refunds",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_d6994119cb8ade13",
+      "write_operation_id": "bir_5ac20bf28da670d7",
+      "write_method": "POST",
+      "write_path": "/api/refunds",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_517bc38b67de23e7",
+      "write_operation_id": "bir_5ac20bf28da670d7",
+      "write_method": "POST",
+      "write_path": "/api/refunds",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_139565c37fecfaa7",
+      "write_operation_id": "bir_5ac20bf28da670d7",
+      "write_method": "POST",
+      "write_path": "/api/refunds",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_0f9353629605d30c",
+      "write_operation_id": "bir_5ac20bf28da670d7",
+      "write_method": "POST",
+      "write_path": "/api/refunds",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_7fd74c7d6a2d09a4",
+      "write_operation_id": "bir_3b6bdcc9dfed31f6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_579353a34057b261",
+      "write_operation_id": "bir_3b6bdcc9dfed31f6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_54197bc6b4db093f",
+      "write_operation_id": "bir_3b6bdcc9dfed31f6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_2c50669f5e59212e",
+      "write_operation_id": "bir_3b6bdcc9dfed31f6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_13d83f717ba5fc50",
+      "write_operation_id": "bir_fb65377cb16a3e9f",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_86d27342f7d14290",
+      "write_operation_id": "bir_5320292f347504f1",
+      "write_method": "GET",
+      "write_path": "/api/orders",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [
+        {
+          "operation_ref": "bir_5320292f347504f1",
+          "method": "GET",
+          "path": "/api/orders"
+        }
+      ],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": true,
+      "collection_get_ops": [
+        {
+          "id": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [
+        {
+          "type": "COLLECTION_GET",
+          "operation_ref": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "gap_type": "OBSERVER_EXISTS_BUT_NOT_BOUND"
+    },
+    {
+      "obligation_id": "obl_506d1632a82f548c",
+      "write_operation_id": "bir_10cbf007f41df22a",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_d1612448696d3143",
+      "write_operation_id": "bir_5320292f347504f1",
+      "write_method": "GET",
+      "write_path": "/api/orders",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [
+        {
+          "operation_ref": "bir_5320292f347504f1",
+          "method": "GET",
+          "path": "/api/orders"
+        }
+      ],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": true,
+      "collection_get_ops": [
+        {
+          "id": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [
+        {
+          "type": "COLLECTION_GET",
+          "operation_ref": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "gap_type": "OBSERVER_EXISTS_BUT_NOT_BOUND"
+    },
+    {
+      "obligation_id": "obl_29a76b6622cf34b4",
+      "write_operation_id": "bir_10cbf007f41df22a",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_23e6caf220fa839b9f67",
+      "write_operation_id": "bir_4652619ca59aca8e",
+      "write_method": "GET",
+      "write_path": "/api/orders/:id",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [
+        {
+          "operation_ref": "bir_4652619ca59aca8e",
+          "method": "GET",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "operation_ref": "bir_5320292f347504f1",
+          "method": "GET",
+          "path": "/api/orders"
+        }
+      ],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": true,
+      "collection_get_ops": [
+        {
+          "id": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [
+        {
+          "type": "IDENTITY_GET",
+          "operation_ref": "bir_4652619ca59aca8e",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "type": "COLLECTION_GET",
+          "operation_ref": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "gap_type": "OBSERVER_EXISTS_BUT_NOT_BOUND"
+    },
+    {
+      "obligation_id": "obl_e4bf0c756cadbfcac5c6",
+      "write_operation_id": "bir_a8bfa9adba97dcc6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_72bf34e25a834f06a0c8",
+      "write_operation_id": "bir_e0c761a57de2b5a5",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_5b9f74c0ad763aa90906",
+      "write_operation_id": "bir_e0c761a57de2b5a5",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_b68681d9dfc6bc8d2a09",
+      "write_operation_id": "bir_22139cba4727aacf",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_5003d82e4aa633fa942c",
+      "write_operation_id": "bir_a8bfa9adba97dcc6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_5d95ac64266333d879ee",
+      "write_operation_id": "bir_4652619ca59aca8e",
+      "write_method": "GET",
+      "write_path": "/api/orders/:id",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [
+        {
+          "operation_ref": "bir_4652619ca59aca8e",
+          "method": "GET",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "operation_ref": "bir_5320292f347504f1",
+          "method": "GET",
+          "path": "/api/orders"
+        }
+      ],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": true,
+      "collection_get_ops": [
+        {
+          "id": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [
+        {
+          "type": "IDENTITY_GET",
+          "operation_ref": "bir_4652619ca59aca8e",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "type": "COLLECTION_GET",
+          "operation_ref": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "gap_type": "OBSERVER_EXISTS_BUT_NOT_BOUND"
+    },
+    {
+      "obligation_id": "obl_1390cd90d81cec652bad",
+      "write_operation_id": "bir_4652619ca59aca8e",
+      "write_method": "GET",
+      "write_path": "/api/orders/:id",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [
+        {
+          "operation_ref": "bir_4652619ca59aca8e",
+          "method": "GET",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "operation_ref": "bir_5320292f347504f1",
+          "method": "GET",
+          "path": "/api/orders"
+        }
+      ],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": true,
+      "collection_get_ops": [
+        {
+          "id": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [
+        {
+          "type": "IDENTITY_GET",
+          "operation_ref": "bir_4652619ca59aca8e",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "type": "COLLECTION_GET",
+          "operation_ref": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "gap_type": "OBSERVER_EXISTS_BUT_NOT_BOUND"
+    },
+    {
+      "obligation_id": "obl_3db2689ef1d0bbeb981a",
+      "write_operation_id": "bir_4652619ca59aca8e",
+      "write_method": "GET",
+      "write_path": "/api/orders/:id",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [
+        {
+          "operation_ref": "bir_4652619ca59aca8e",
+          "method": "GET",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "operation_ref": "bir_5320292f347504f1",
+          "method": "GET",
+          "path": "/api/orders"
+        }
+      ],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": true,
+      "collection_get_ops": [
+        {
+          "id": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [
+        {
+          "type": "IDENTITY_GET",
+          "operation_ref": "bir_4652619ca59aca8e",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "type": "COLLECTION_GET",
+          "operation_ref": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "gap_type": "OBSERVER_EXISTS_BUT_NOT_BOUND"
+    },
+    {
+      "obligation_id": "obl_1391d971c111832b7c0a",
+      "write_operation_id": "bir_4652619ca59aca8e",
+      "write_method": "GET",
+      "write_path": "/api/orders/:id",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [
+        {
+          "operation_ref": "bir_4652619ca59aca8e",
+          "method": "GET",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "operation_ref": "bir_5320292f347504f1",
+          "method": "GET",
+          "path": "/api/orders"
+        }
+      ],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": true,
+      "collection_get_ops": [
+        {
+          "id": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [
+        {
+          "type": "IDENTITY_GET",
+          "operation_ref": "bir_4652619ca59aca8e",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "type": "COLLECTION_GET",
+          "operation_ref": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "gap_type": "OBSERVER_EXISTS_BUT_NOT_BOUND"
+    },
+    {
+      "obligation_id": "obl_1e2466a4babcd4cdb40e",
+      "write_operation_id": "bir_4652619ca59aca8e",
+      "write_method": "GET",
+      "write_path": "/api/orders/:id",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [
+        {
+          "operation_ref": "bir_4652619ca59aca8e",
+          "method": "GET",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "operation_ref": "bir_5320292f347504f1",
+          "method": "GET",
+          "path": "/api/orders"
+        }
+      ],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": true,
+      "collection_get_ops": [
+        {
+          "id": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [
+        {
+          "type": "IDENTITY_GET",
+          "operation_ref": "bir_4652619ca59aca8e",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "type": "COLLECTION_GET",
+          "operation_ref": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "gap_type": "OBSERVER_EXISTS_BUT_NOT_BOUND"
+    },
+    {
+      "obligation_id": "obl_79f728b7f70b719e1d8e",
+      "write_operation_id": "bir_e0c761a57de2b5a5",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_acf9ea1208c1e4db81f8",
+      "write_operation_id": "bir_10cbf007f41df22a",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_011f84f025ca4003fc5b",
+      "write_operation_id": "bir_4652619ca59aca8e",
+      "write_method": "GET",
+      "write_path": "/api/orders/:id",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [
+        {
+          "operation_ref": "bir_4652619ca59aca8e",
+          "method": "GET",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "operation_ref": "bir_5320292f347504f1",
+          "method": "GET",
+          "path": "/api/orders"
+        }
+      ],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": true,
+      "collection_get_ops": [
+        {
+          "id": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [
+        {
+          "type": "IDENTITY_GET",
+          "operation_ref": "bir_4652619ca59aca8e",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "type": "COLLECTION_GET",
+          "operation_ref": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "gap_type": "OBSERVER_EXISTS_BUT_NOT_BOUND"
+    },
+    {
+      "obligation_id": "obl_cd11c7c0a514eccc4e6f",
+      "write_operation_id": "bir_a8bfa9adba97dcc6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_5b24f54feec9bdaaeb76",
+      "write_operation_id": "bir_a8bfa9adba97dcc6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_fbe5f05143cd74c483c1",
+      "write_operation_id": "bir_a8bfa9adba97dcc6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_1314b5d141c107b30262",
+      "write_operation_id": "bir_22139cba4727aacf",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_a68b2ddd9a82caecfb93",
+      "write_operation_id": "bir_a8bfa9adba97dcc6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_f2d2731f916f6fa564e1",
+      "write_operation_id": "bir_4652619ca59aca8e",
+      "write_method": "GET",
+      "write_path": "/api/orders/:id",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [
+        {
+          "operation_ref": "bir_4652619ca59aca8e",
+          "method": "GET",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "operation_ref": "bir_5320292f347504f1",
+          "method": "GET",
+          "path": "/api/orders"
+        }
+      ],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": true,
+      "collection_get_ops": [
+        {
+          "id": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [
+        {
+          "type": "IDENTITY_GET",
+          "operation_ref": "bir_4652619ca59aca8e",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "type": "COLLECTION_GET",
+          "operation_ref": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "gap_type": "OBSERVER_EXISTS_BUT_NOT_BOUND"
+    },
+    {
+      "obligation_id": "obl_37ac77ceff21d5c743f3",
+      "write_operation_id": "bir_4652619ca59aca8e",
+      "write_method": "GET",
+      "write_path": "/api/orders/:id",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [
+        {
+          "operation_ref": "bir_4652619ca59aca8e",
+          "method": "GET",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "operation_ref": "bir_5320292f347504f1",
+          "method": "GET",
+          "path": "/api/orders"
+        }
+      ],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": true,
+      "collection_get_ops": [
+        {
+          "id": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [
+        {
+          "type": "IDENTITY_GET",
+          "operation_ref": "bir_4652619ca59aca8e",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "type": "COLLECTION_GET",
+          "operation_ref": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "gap_type": "OBSERVER_EXISTS_BUT_NOT_BOUND"
+    },
+    {
+      "obligation_id": "obl_f9b7b173194b95322b40",
+      "write_operation_id": "bir_4652619ca59aca8e",
+      "write_method": "GET",
+      "write_path": "/api/orders/:id",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [
+        {
+          "operation_ref": "bir_4652619ca59aca8e",
+          "method": "GET",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "operation_ref": "bir_5320292f347504f1",
+          "method": "GET",
+          "path": "/api/orders"
+        }
+      ],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": true,
+      "collection_get_ops": [
+        {
+          "id": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [
+        {
+          "type": "IDENTITY_GET",
+          "operation_ref": "bir_4652619ca59aca8e",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "type": "COLLECTION_GET",
+          "operation_ref": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "gap_type": "OBSERVER_EXISTS_BUT_NOT_BOUND"
+    },
+    {
+      "obligation_id": "obl_29afd489354312479b7e",
+      "write_operation_id": "bir_4652619ca59aca8e",
+      "write_method": "GET",
+      "write_path": "/api/orders/:id",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [
+        {
+          "operation_ref": "bir_4652619ca59aca8e",
+          "method": "GET",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "operation_ref": "bir_5320292f347504f1",
+          "method": "GET",
+          "path": "/api/orders"
+        }
+      ],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": true,
+      "collection_get_ops": [
+        {
+          "id": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [
+        {
+          "type": "IDENTITY_GET",
+          "operation_ref": "bir_4652619ca59aca8e",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "type": "COLLECTION_GET",
+          "operation_ref": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "gap_type": "OBSERVER_EXISTS_BUT_NOT_BOUND"
+    },
+    {
+      "obligation_id": "obl_52c27148a151c35a56bd",
+      "write_operation_id": "bir_4652619ca59aca8e",
+      "write_method": "GET",
+      "write_path": "/api/orders/:id",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [
+        {
+          "operation_ref": "bir_4652619ca59aca8e",
+          "method": "GET",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "operation_ref": "bir_5320292f347504f1",
+          "method": "GET",
+          "path": "/api/orders"
+        }
+      ],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": true,
+      "collection_get_ops": [
+        {
+          "id": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [
+        {
+          "type": "IDENTITY_GET",
+          "operation_ref": "bir_4652619ca59aca8e",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "type": "COLLECTION_GET",
+          "operation_ref": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "gap_type": "OBSERVER_EXISTS_BUT_NOT_BOUND"
+    },
+    {
+      "obligation_id": "obl_2e62072802c992bc5d3b",
+      "write_operation_id": "bir_e0c761a57de2b5a5",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_a19e769e2853fab561de",
+      "write_operation_id": "bir_10cbf007f41df22a",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "BLOCKED",
+      "current_block": "OBSERVER_COMPILE_NOT_GROUNDED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    },
+    {
+      "obligation_id": "obl_63cab09784eb75685eb0",
+      "write_operation_id": "bir_4652619ca59aca8e",
+      "write_method": "GET",
+      "write_path": "/api/orders/:id",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [
+        {
+          "operation_ref": "bir_4652619ca59aca8e",
+          "method": "GET",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "operation_ref": "bir_5320292f347504f1",
+          "method": "GET",
+          "path": "/api/orders"
+        }
+      ],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": true,
+      "collection_get_ops": [
+        {
+          "id": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [
+        {
+          "type": "IDENTITY_GET",
+          "operation_ref": "bir_4652619ca59aca8e",
+          "path": "/api/orders/{id}"
+        },
+        {
+          "type": "COLLECTION_GET",
+          "operation_ref": "bir_5320292f347504f1",
+          "path": "/api/orders"
+        }
+      ],
+      "gap_type": "OBSERVER_EXISTS_BUT_NOT_BOUND"
+    },
+    {
+      "obligation_id": "obl_4673a470113c99fae11c",
+      "write_operation_id": "bir_a8bfa9adba97dcc6",
+      "write_method": "",
+      "write_path": "",
+      "target_entity_id": "",
+      "required_after_fields": [],
+      "current_observer_status": "NOT_ATTEMPTED",
+      "current_block": "BINDING_GRAPH_BLOCKED",
+      "declared_effect_observers": [],
+      "identity_get_available": false,
+      "identity_get_ops": [],
+      "collection_get_available": false,
+      "collection_get_ops": [],
+      "write_response_has_body": false,
+      "identity_source": "UNKNOWN",
+      "readback_surface_candidates": [],
+      "gap_type": "NO_SOURCE_DECLARED_READBACK"
+    }
+  ]
+}

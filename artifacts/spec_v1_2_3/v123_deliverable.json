@@ -1,0 +1,63 @@
+{
+  "schema_version": "qualibug.v123-deliverable.v1",
+  "created_at": "2026-07-26T10:54:42.192991Z",
+  "spec_version": "V1.2.3",
+  "target_breakpoint": "SOURCE_DECLARED_READBACK_NOT_RESOLVED",
+  "baseline": {
+    "v122_total_obligations": 452,
+    "v122_total_experiments": 240,
+    "v122_transport_eligible": 13,
+    "v122_formal_findings": 9,
+    "v123_blocked_candidates": 138,
+    "v123_binding_block": 96,
+    "v123_observer_compile_block": 42
+  },
+  "implementation": {
+    "core_module": "ai_test_asset_center/source_declared_readback_resolver.py",
+    "core_module_lines": 1370,
+    "integration_file": "ai_test_asset_center/experiment_compiler_obligation.py",
+    "schemas": [
+      "qualibug.source-declared-readback-resolver.v1",
+      "qualibug.readback-contract.v1",
+      "qualibug.runtime-readback-receipt.v1"
+    ],
+    "surface_types": [
+      "WRITE_RESPONSE_REPRESENTATION",
+      "IDENTITY_GET",
+      "FILTERED_COLLECTION_GET",
+      "SOURCE_DECLARED_DATABASE_OBSERVER"
+    ],
+    "identity_strategies": [
+      "REQUEST_PATH_ID",
+      "REQUEST_BODY_ID",
+      "FIXTURE_OUTPUT_ID",
+      "WRITE_RESPONSE_ID",
+      "CANONICAL_BUSINESS_KEY",
+      "SOURCE_DECLARED_CORRELATION_KEY"
+    ],
+    "forbidden_strategies": [
+      "FIRST_RESPONSE_ITEM",
+      "LATEST_CREATED_RECORD",
+      "MAX_DATABASE_ID",
+      "CURRENT_TIMESTAMP_NEAREST",
+      "STRING_SIMILARITY_ONLY"
+    ],
+    "fail_closed_breakpoints": 15
+  },
+  "validation": {
+    "knowledge_asset_ir_ops": 22,
+    "knowledge_asset_write_ops": 14,
+    "knowledge_asset_resolved": 6,
+    "knowledge_asset_rate": 0.4286,
+    "specialized_tests": 56,
+    "tests_passed": 56,
+    "regression_passed": 2085,
+    "regression_new_failures": 0
+  },
+  "deliverables": [
+    "artifacts/spec_v1_2_3/v123_readback_baseline.json",
+    "artifacts/spec_v1_2_3/v123_readback_gap_map.json",
+    "ai_test_asset_center/source_declared_readback_resolver.py",
+    "tests/test_source_declared_readback_resolver.py"
+  ]
+}

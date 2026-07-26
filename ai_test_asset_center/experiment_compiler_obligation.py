@@ -424,6 +424,32 @@ def compile_experiment_for_obligation(
         if is_write
         else []
     )
+    # ── V1.2.3: Source-Declared Readback Resolver enhancement ──
+    # When the existing declared_effect_observers finds nothing, try the
+    # readback resolver which uses deeper source-evidence analysis including
+    # domain matching, identity strategy resolution, and response-bound creates.
+    _readback_contract: dict | None = None
+    if is_write and not write_observers:
+        try:
+            from .source_declared_readback_resolver import (
+                resolve_readback_contract as _resolve_readback,
+                STATUS_RESOLVED as _READBACK_RESOLVED,
+            )
+            _rb_result = _resolve_readback(primary_op, behavior_ir=ir)
+            if _rb_result.get("status") == _READBACK_RESOLVED and _rb_result.get("contract"):
+                _readback_contract = _rb_result["contract"]
+                # Convert resolved contract to write_observers format
+                write_observers = [{
+                    "operation_ref": _readback_contract.get("read_operation_id", ""),
+                    "method": _readback_contract.get("method", "GET"),
+                    "path": _readback_contract.get("endpoint_template", ""),
+                    "readback_contract_id": _readback_contract.get("contract_id", ""),
+                    "readback_surface_type": _readback_contract.get("readback_surface_type", ""),
+                    "identity_strategy": _readback_contract.get("identity_strategy", {}),
+                    "provenance_fingerprint": _readback_contract.get("provenance_fingerprint", ""),
+                }]
+        except Exception:
+            pass  # Fail-safe: resolver failure does not change existing behavior
     # ── Filter write-only observers for read-only operations ──
     # entity_state, before_state, after_state, final_state, business_effect
     # require write steps with governance receipts. For read-only operations,
@@ -453,6 +479,37 @@ def compile_experiment_for_obligation(
         actors=[actors[a] for a in required_actors if a in actors],
         behavior_ir=ir,
     )
+    # ── V1.2.3 §15: Write Readback Contract into Binding Graph ──
+    # The readback binding entry tells the runtime how to resolve the
+    # readback operation's path parameter from the write response.
+    if _readback_contract:
+        _rb_identity = _dict(_readback_contract.get("identity_strategy"))
+        _rb_target_param = _text(_rb_identity.get("target_parameter")) or "id"
+        _rb_endpoint = _text(_readback_contract.get("endpoint_template"))
+        # Only add if the readback endpoint has a path parameter to resolve
+        if "{" in _rb_endpoint and not any(
+            _text(row.get("target")) == f"__readback_{_rb_target_param}"
+            for row in binding_plan
+            if isinstance(row, dict)
+        ):
+            binding_plan.append({
+                "target": f"__readback_{_rb_target_param}",
+                "target_path": _rb_endpoint,
+                "status": "runtime_resolvable",
+                "source_priority": "readback_contract",
+                "binding_type": "READBACK_IDENTITY",
+                "readback_contract_id": _text(_readback_contract.get("contract_id")),
+                "write_operation_id": _text(_readback_contract.get("write_operation_id")),
+                "read_operation_id": _text(_readback_contract.get("read_operation_id")),
+                "identity_strategy_type": _text(_rb_identity.get("type")),
+                "identity_source_path": _text(_rb_identity.get("source_path")),
+                "resolver_operations": [{
+                    "operation_ref": _text(_readback_contract.get("read_operation_id")),
+                    "method": _text(_readback_contract.get("method")) or "GET",
+                    "path": _rb_endpoint,
+                }],
+                "value_fingerprint": "",
+            })
     # ── Placeholder interception: block if any binding is unresolvable ──
     _blocked_reasons = blocked_binding_reasons(binding_plan)
     if _blocked_reasons:
@@ -1237,6 +1294,30 @@ def compile_experiment_for_obligation(
         for observer in observers:
             if _text(observer.get("observer_id")) in effect_observer_ids:
                 observer["resolver_operations"] = write_observers
+                # ── V1.2.3 §16: Observer Compiler consumes Readback Contract ──
+                if _readback_contract:
+                    observer["readback_contract_id"] = _text(
+                        _readback_contract.get("contract_id")
+                    )
+                    observer["readback_surface_type"] = _text(
+                        _readback_contract.get("readback_surface_type")
+                    )
+                    observer["identity_bindings"] = _dict(
+                        _readback_contract.get("identity_strategy")
+                    )
+                    observer["required_fields"] = _list(
+                        _readback_contract.get("required_fields")
+                    )
+                    observer["scope_validation"] = _dict(
+                        _readback_contract.get("scope_bindings")
+                    )
+                    observer["async_policy"] = _dict(
+                        _readback_contract.get("async_policy")
+                    ) or {"mode": "synchronous"}
+                    observer["provenance_fingerprint"] = _text(
+                        _readback_contract.get("provenance_fingerprint")
+                    )
+                    observer["observer_compile_status"] = "COMPILED"
 
     if family == "state":
         treatment_rows = [
@@ -1444,6 +1525,19 @@ def compile_experiment_for_obligation(
     experiment["oracle_input_contract"] = v12_result.get("module_results", {}).get("oracle_input_contract")
     experiment["fixture_dependency_dag"] = v12_result.get("module_results", {}).get("fixture_dependency_dag")
     experiment["compensation_relation_plan"] = v12_result.get("module_results", {}).get("compensation_relation_plan")
+
+    # ── V1.2.3: Attach Readback Contract for runtime receipt generation ──
+    if _readback_contract:
+        experiment["readback_contract"] = _readback_contract
+        experiment["compile_receipt"]["readback_contract_id"] = _text(
+            _readback_contract.get("contract_id")
+        )
+        experiment["compile_receipt"]["readback_surface_type"] = _text(
+            _readback_contract.get("readback_surface_type")
+        )
+        experiment["compile_receipt"]["readback_provenance_fingerprint"] = _text(
+            _readback_contract.get("provenance_fingerprint")
+        )
 
     # ── SPEC v1.1 §9: Pass cleanup exemption contract from obligation ──
     cleanup_exemption = _dict(obl.get("cleanup_exemption_contract"))
