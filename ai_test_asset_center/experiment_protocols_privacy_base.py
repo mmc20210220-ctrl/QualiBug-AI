@@ -541,6 +541,31 @@ def compile_family_protocol(
             control_plan[0]["body"] = deepcopy(control)
             treatment_plan[0]["body"] = deepcopy(treatment)
         treatment_plan[0]["mutation"] = mutation
+
+        # A validation experiment proves nothing unless the treatment request actually
+        # differs from the control. Measured on a live target, both plans came out with
+        # path "/api/products/:sku" byte-identical while the mutation descriptor claimed
+        # remove_required_parameter -- so the executor sent the same request twice, the
+        # oracle expected 4xx, saw the control's own 200, and reported a violation. Every
+        # read returning 200 became a "validation not enforced" defect.
+        #
+        # Blocking here is the same discipline the compiler already applies to a
+        # synthesized observer: a probe that cannot distinguish its two arms must not
+        # run, because its only possible output is a fabricated finding.
+        _comparable = ("path", "query", "header", "body")
+        if all(
+            control_plan[0].get(field) == treatment_plan[0].get(field)
+            for field in _comparable
+        ):
+            return {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_BINDING",
+                "detail": (
+                    "validation_treatment_identical_to_control:"
+                    + _text(mutation.get("operator") or "unapplied_mutation")
+                ),
+            }
+
         result = {
             **result,
             "control_plan": control_plan,

@@ -12,6 +12,7 @@ verification. No write execution, no safety risk.
 from __future__ import annotations
 
 import re
+import logging
 from typing import Any
 
 from .test_obligation import make_obligation, stable_obligation_id
@@ -104,6 +105,21 @@ def _extract_entity_type(invariant: dict[str, Any]) -> str:
             return entity
 
     return ""
+
+
+def _evaluable_expression(expression: dict[str, Any]) -> bool:
+    """Whether an invariant expression carries something a response can be checked against.
+
+    Prose with an empty operand list is not evaluable. A structured condition, an
+    equation, or at least one operand is.
+    """
+    expr = _dict(expression)
+    if _list(expr.get("operands")):
+        return True
+    for key in ("structured_expression", "condition", "equation", "predicate"):
+        if expr.get(key):
+            return True
+    return False
 
 
 def _classify_invariant_family(invariant: dict[str, Any]) -> str:
@@ -236,6 +252,10 @@ def build_readonly_state_audit_obligations(
     audit_actor_id = _text(audit_actor.get("id")) if audit_actor else ""
 
     obligations: list[dict[str, Any]] = []
+    # Invariants whose expression cannot be evaluated against a response. Collected so
+    # the skip is visible: silently emitting fewer audits reads the same as there being
+    # nothing to audit.
+    skipped_unevaluable: list[dict[str, Any]] = []
     seen_entities: set[str] = set()
 
     for inv in invariants:
@@ -273,6 +293,26 @@ def build_readonly_state_audit_obligations(
 
         # Build the audit obligation
         expr = _dict(inv.get("expression"))
+
+        # An audit reads the entity and checks the invariant against what came back.
+        # That needs an evaluable condition. These invariants arrive as prose with
+        # ``operands: []`` -- 「同一订单不能重复成功退款」 has nothing a response can be
+        # compared against -- and with no condition to evaluate the compiler fell back
+        # to a validation_rejection assertion expecting HTTP 4xx. That asserts the READ
+        # must be refused, which is meaningless for an audit, so every successful read
+        # became a defect. Both remaining published findings on a live target were this.
+        #
+        # Emitting nothing is the honest outcome: an audit that cannot evaluate its own
+        # condition can only produce a fabricated verdict.
+        if not _evaluable_expression(expr):
+            skipped_unevaluable.append({
+                "invariant_ref": inv_id,
+                "reason_code": "AUDIT_EXPRESSION_NOT_EVALUABLE",
+                "expression_kind": _text(expr.get("kind")),
+                "statement": _text(inv.get("description") or expr.get("raw"))[:160],
+            })
+            continue
+
         property_spec = {
             "template": f"readonly_audit_{family}",
             "invariant_ref": inv_id,
@@ -314,4 +354,13 @@ def build_readonly_state_audit_obligations(
         if len(obligations) >= max_obligations:
             break
 
+    if skipped_unevaluable:
+        logging.getLogger(__name__).info(
+            "state_audit_planner: %d invariant(s) skipped as non-evaluable for read-only "
+            "audit (%s)",
+            len(skipped_unevaluable),
+            ", ".join(
+                sorted({_text(row.get("expression_kind")) or "unknown" for row in skipped_unevaluable})
+            ),
+        )
     return obligations
