@@ -263,6 +263,33 @@ missing link — and it is an architectural two-phase change, not a patch. Seque
 wrongly would either compile against fixtures that do not exist yet or bootstrap against
 a plan that has not been made.
 
+### And the gate is reading the target correctly
+
+`_declared_cleanup_operations` resolves a compensator for **2 of 17** writes:
+
+| write | declared compensator |
+| --- | --- |
+| `POST /api/orders` | `POST /api/orders/:id/cancel` |
+| `POST /api/refunds` | `POST /api/refunds/:id/reject` |
+| the other 15 | none |
+
+Checked against the target's API, that is right. There is no DELETE for products (only a
+malformed singular `DELETE /api/product`), no DELETE for cart items (only PATCH), no
+reversal for `POST /api/payments/pay`, no un-ship, no un-confirm.
+
+**So the 685 is not over-blocking. It is the product correctly refusing to make
+unreversible changes to a system that offers no way to undo them.** Every cheaper
+alternative was tested and rejected: the state machine supplies no further terminal
+reversals, the exemption contract would require lying to its validator, declaring more
+fixtures only moves the block, and an inverse-action table would assert reversibility
+the source never states.
+
+That leaves exactly one sound path, and it is the ordering fix: run the fixture binding
+at compile time so a write assertion can operate on a subject the run created and can
+abandon. Until then these obligations are correctly unreachable, and the honest reading
+of `BLOCKED_NON_REVERSIBLE_WRITE: 685` is "this target cannot be safely written to in
+these ways", not "the product failed".
+
 ## What would actually move coverage
 
 In order of measured blocking weight, not guesswork. Items 1 and 2 of the original
