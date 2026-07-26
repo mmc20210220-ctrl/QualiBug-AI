@@ -116,36 +116,46 @@ def build_http_state_observer(
     read_op: dict[str, Any] | None,
     *,
     actor_ref: str = "",
-) -> dict[str, Any]:
-    """Build an http_state_comparison observer for a write operation.
+) -> dict[str, Any] | None:
+    """Build a before/after observer over a SOURCE-DECLARED read endpoint.
 
-    The observer performs:
-    1. Before: GET read endpoint (if available)
-    2. Execute: the write operation
-    3. After: GET read endpoint (if available)
-    4. Compare: before vs after state
+    Returns None when there is no such read. That refusal is the point.
+
+    The previous version fell back to ``observation_mode: "response_body_only"``,
+    reading only the write's own response. An assertion like "cancelling an order
+    releases its inventory" would then be checked against the cancel response, pass on
+    a 200, and never look at inventory at all -- the write's own claim standing in for
+    evidence that it took effect. The experiment compiler refuses synthesized observers
+    for exactly this reason, and it is right to.
+
+    A discovered observer is a different thing from a synthesized one: ``read_op`` is a
+    GET that the source specification actually declares, over the entity the write
+    mutates. Comparing it before and after is real evidence. The distinction is
+    recorded in ``observation_basis`` so a reader can tell the two apart.
     """
-    observer: dict[str, Any] = {
+    if not read_op:
+        return None
+    read_path = _text(read_op.get("path") or read_op.get("raw_path"))
+    if not read_path:
+        return None
+    if not _text(write_op.get("id")):
+        # A treatment step whose operation_ref did not resolve in the IR. Binding an
+        # observer to an unidentified write would produce evidence nobody can trace.
+        return None
+
+    return {
         "observer_type": "http_state_comparison",
         "schema_version": _SCHEMA,
         "write_operation_ref": _text(write_op.get("id")),
         "write_method": _text(write_op.get("method")).upper(),
         "write_path": _text(write_op.get("path") or write_op.get("raw_path")),
         "actor_ref": actor_ref,
+        "read_operation_ref": _text(read_op.get("id")),
+        "read_path": read_path,
+        "read_method": "GET",
+        "observation_mode": "before_after_comparison",
+        "observation_basis": "discovered_source_declared_read",
     }
-
-    if read_op:
-        observer["read_operation_ref"] = _text(read_op.get("id"))
-        observer["read_path"] = _text(read_op.get("path") or read_op.get("raw_path"))
-        observer["read_method"] = "GET"
-        observer["observation_mode"] = "before_after_comparison"
-    else:
-        # Fallback: use write response as observation
-        observer["observation_mode"] = "response_body_only"
-        observer["read_operation_ref"] = ""
-        observer["read_path"] = ""
-
-    return observer
 
 
 def inject_observers_for_experiment(
@@ -201,9 +211,17 @@ def inject_observers_for_experiment(
             actor_ref = _text(step.get("actor_ref"))
             break
 
+    unobservable_writes: list[str] = []
     for write_op in write_ops[:3]:  # Limit to 3 observers per experiment
         read_op = find_read_endpoint_for_write(write_op, behavior_ir)
         observer = build_http_state_observer(write_op, read_op, actor_ref=actor_ref)
+        if observer is None:
+            # Recorded, not dropped. A write with no declared effect read must stay
+            # blocked, and the caller needs to know which write that was.
+            unobservable_writes.append(
+                _text(write_op.get("path") or write_op.get("raw_path")) or "<unresolved>"
+            )
+            continue
         injected_observers.append(observer)
 
     if injected_observers:
@@ -211,6 +229,11 @@ def inject_observers_for_experiment(
         exp["observers"] = injected_observers
         exp["_auto_injected_observers"] = True
         exp["_observer_injection_schema"] = _SCHEMA
+        if unobservable_writes:
+            exp["_observer_injection_unobservable_writes"] = unobservable_writes
+    elif unobservable_writes:
+        exp = dict(exp)
+        exp["_observer_injection_unobservable_writes"] = unobservable_writes
 
     return exp
 

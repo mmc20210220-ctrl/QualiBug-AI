@@ -2433,10 +2433,17 @@ def build_behavior_ir_from_knowledge_asset(
     source_snapshot_hash: str = "",
     api_operations: list[dict[str, Any]] | None = None,
     runtime_actors: list[dict[str, Any]] | None = None,
+    available_surfaces: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
     """Build Behavior IR from enterprise knowledge asset + optional OpenAPI ops.
 
     Fully generic: binds only to structured fields present in the asset.
+
+    ``available_surfaces`` declares which observation surfaces this target may be
+    observed through, as ``{surface_name: available}``. Build it from
+    ``adapter_capability.observation_surfaces_for_adapters`` so the IR and the
+    experiment compiler answer the same question the same way. Omitting it keeps the
+    historical http-only default.
     """
     model = empty_behavior_ir(project_id=project_id, source_snapshot_hash=source_snapshot_hash)
     data = _dict(asset)
@@ -3600,22 +3607,62 @@ def build_behavior_ir_from_knowledge_asset(
             status="unsupported",
         ))
 
-    # Default observation surfaces based on available capabilities
+    # Observation surfaces. Availability was the literal ``surface_id == "http_api"``,
+    # so a project with a declared and reachable database still carried
+    # ``db_snapshot: available=false`` -- while adapter_capability was already returning
+    # db_sql to the experiment compiler off the same config. Two parts of one run
+    # disagreed about the same capability, and it is the IR that the observer gate
+    # reads, so every data-layer assertion blocked as BLOCKED_MISSING_OBSERVER against a
+    # database the operator had configured and the product could query.
+    #
+    # ``available_surfaces`` is a declaration passed in by the caller, never inferred
+    # here. Omitting it keeps the previous http-only behaviour, so the failure direction
+    # stays "fewer surfaces".
+    declared_surfaces = available_surfaces if isinstance(available_surfaces, dict) else None
     surfaces = [("http_api", "HTTP/API"), ("ui_browser", "Browser/UI"), ("db_snapshot", "DB read snapshot")]
     for surface_id, label in surfaces:
+        if declared_surfaces is None:
+            is_available = surface_id == "http_api"
+            basis = "builder_default"
+        else:
+            is_available = bool(declared_surfaces.get(surface_id))
+            basis = "declared_adapter_capability"
+        typed: dict[str, Any] = {
+            "surface": surface_id,
+            "label": label,
+            "available": is_available,
+            # _DERIVATIONS is a closed vocabulary and validate_behavior_ir rejects
+            # anything outside it, so the declared-vs-default distinction lives in its
+            # own field. An operator-declared database is "explicit": the operator
+            # stated it, the model did not infer it.
+            "availability_basis": basis,
+        }
         model["observation_surfaces"].append(_fact_node(
             node_id=_stable_id("surface", surface_id),
-            typed_fields={"surface": surface_id, "label": label, "available": surface_id == "http_api"},
-            confidence=1.0 if surface_id == "http_api" else 0.3,
-            derivation="schema-derived",
-            status="accepted" if surface_id == "http_api" else "unknown",
+            typed_fields=typed,
+            confidence=1.0 if is_available else 0.3,
+            derivation="explicit" if basis == "declared_adapter_capability" else "schema-derived",
+            status="accepted" if is_available else "unknown",
         ))
-    model["capabilities"].append(_fact_node(
-        node_id=_stable_id("cap", "http_execute"),
-        typed_fields={"capability": "http_execute", "adapter": "http_api"},
-        confidence=1.0,
-        derivation="schema-derived",
-    ))
+
+    _surface_capabilities = [("http_api", "http_execute")]
+    if declared_surfaces is not None:
+        _surface_capabilities = [
+            (surface_id, capability)
+            for surface_id, capability in (
+                ("http_api", "http_execute"),
+                ("db_snapshot", "db_read"),
+                ("ui_browser", "ui_execute"),
+            )
+            if declared_surfaces.get(surface_id)
+        ]
+    for surface_id, capability in _surface_capabilities:
+        model["capabilities"].append(_fact_node(
+            node_id=_stable_id("cap", capability),
+            typed_fields={"capability": capability, "adapter": surface_id},
+            confidence=1.0,
+            derivation="explicit" if declared_surfaces is not None else "schema-derived",
+        ))
 
     if not model["operations"]:
         model["coverage_gaps"].append(_fact_node(

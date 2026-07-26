@@ -327,6 +327,23 @@ def build_discovery_plan(
         inputs.project,
         inputs.campaign_context,
     )
+    # Resolve adapter capability BEFORE the IR is built, so the IR's observation
+    # surfaces and the experiment compiler's adapter set come from one computation.
+    # They used to disagree: the IR hardcoded db_snapshot as unavailable while this
+    # same resolver returned db_sql for a project with a declared database, and the
+    # observer gate reads the IR -- so data-layer assertions blocked as
+    # BLOCKED_MISSING_OBSERVER against a database the product could query.
+    from .adapter_capability import (
+        observation_surfaces_for_adapters,
+        resolve_available_adapters,
+    )
+
+    _available_adapters = resolve_available_adapters(
+        inputs.root,
+        inputs.project,
+        _dict(inputs.campaign_context.get("_runtime_contract")),
+    )
+
     behavior_ir = build_behavior_ir_from_knowledge_asset(
         asset,
         project_id=inputs.project,
@@ -335,6 +352,7 @@ def build_discovery_plan(
         ),
         api_operations=operations,
         runtime_actors=runtime_actors,
+        available_surfaces=observation_surfaces_for_adapters(_available_adapters),
     )
     # Join prose invariants to the operations they constrain. A rule extracted from a
     # requirements document never names an endpoint, so operation_refs stayed empty and
@@ -657,16 +675,13 @@ def build_discovery_plan(
     # resolver adds an adapter only when the customer declared the thing it observes and
     # falls back to the http_api baseline otherwise, so the failure direction is always
     # "fewer adapters".
-    from .adapter_capability import resolve_available_adapters
-
+    # Reuse the set resolved before the IR build rather than recomputing it. Two
+    # computations of the same declaration can drift, and this pair drifting is exactly
+    # what made the IR and the compiler disagree about the database.
+    #
     # The runtime contract lives under campaign_context["_runtime_contract"], not as an
     # attribute on inputs -- reading it as an attribute silently yielded None and made the
     # contract-declared adapter path dead.
-    _available_adapters = resolve_available_adapters(
-        inputs.root,
-        inputs.project,
-        _dict(inputs.campaign_context.get("_runtime_contract")),
-    )
     experiment_pack = compile_experiments(
         obligations,
         behavior_ir=behavior_ir,

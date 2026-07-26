@@ -120,3 +120,49 @@ def missing_declaration_reason(adapter: str) -> str:
     if requirement:
         return f"adapter_not_declared:{adapter}:requires:{requirement}"
     return f"adapter_unknown:{adapter}"
+
+
+# Adapter name -> Behavior IR observation-surface name. The IR built its surfaces from
+# the literal ``available = (surface_id == "http_api")``, so a project with a declared
+# and reachable database still carried ``db_snapshot: available=false`` while this
+# module was already returning ``db_sql`` to the experiment compiler. Two parts of the
+# same run disagreed about the same capability, and the IR's answer is the one the
+# observer gate reads -- which is why data-layer assertions blocked as
+# BLOCKED_MISSING_OBSERVER on a target whose database was configured and queryable.
+ADAPTER_TO_OBSERVATION_SURFACE: dict[str, str] = {
+    "http_api": "http_api",
+    "db_sql": "db_snapshot",
+    "ui_browser": "ui_browser",
+}
+
+# The capability node an available adapter justifies, so downstream consumers that read
+# capabilities rather than surfaces see the same truth.
+ADAPTER_TO_CAPABILITY: dict[str, str] = {
+    "http_api": "http_execute",
+    "db_sql": "db_read",
+    "ui_browser": "ui_execute",
+}
+
+
+def observation_surfaces_for_adapters(adapters: Any) -> dict[str, bool]:
+    """Map resolved adapters to ``{surface_name: available}``.
+
+    Every known surface appears, so a caller receives an explicit False rather than a
+    missing key -- an absent surface would read as "not considered" instead of
+    "considered and unavailable".
+    """
+    resolved = {_text(name) for name in _list(list(adapters or []))} if adapters else set()
+    return {
+        surface: adapter in resolved
+        for adapter, surface in ADAPTER_TO_OBSERVATION_SURFACE.items()
+    }
+
+
+def capabilities_for_adapters(adapters: Any) -> list[str]:
+    """Capability names justified by the resolved adapters, in a stable order."""
+    resolved = {_text(name) for name in _list(list(adapters or []))} if adapters else set()
+    return sorted(
+        capability
+        for adapter, capability in ADAPTER_TO_CAPABILITY.items()
+        if adapter in resolved
+    )
