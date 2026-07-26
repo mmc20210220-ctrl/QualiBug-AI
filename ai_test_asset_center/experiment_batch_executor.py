@@ -528,7 +528,21 @@ def execute_selected_experiments(
         observation_receipt_ids = list(dict.fromkeys(observation_receipt_ids))
         oracle_verdict = _dict(outcome.get("oracle_verdict"))
         oracle_receipt_id = ""
-        if oracle_verdict:
+        # A completeness-gate block is NOT an oracle receipt. The finalizer returns a
+        # deliberately minimal verdict -- {status, verdict, reason_codes, assertions,
+        # missing_requirements, oracle_blocked_by_completeness_gate, completeness_proof}
+        # -- precisely because the Oracle must not be called on incomplete input.
+        # Validating it as a full 20-field receipt raised
+        # contract_oracle_receipt_fields_invalid and killed the entire pipeline: on a live
+        # target the scan failed outright while the HTTP envelope still said ok: true.
+        #
+        # Anything CLAIMING to be a receipt is still validated strictly. Only a verdict
+        # that carries neither schema_version nor receipt_id, and says why it was blocked,
+        # is carried through as the block it is.
+        _is_gate_block = bool(oracle_verdict.get("oracle_blocked_by_completeness_gate")) and not (
+            _text(oracle_verdict.get("schema_version")) or _text(oracle_verdict.get("receipt_id"))
+        )
+        if oracle_verdict and not _is_gate_block:
             validated_oracle = validate_contract_oracle_receipt(oracle_verdict)
             oracle_receipt_id = _text(validated_oracle.get("receipt_id"))
             outcome["oracle_verdict"] = validated_oracle

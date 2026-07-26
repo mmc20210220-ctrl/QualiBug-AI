@@ -670,7 +670,18 @@ def validate_contract_oracle_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
         "demotion_reason",
     }
     if set(row) != required_fields:
-        raise ValueError("contract_oracle_receipt_fields_invalid")
+        # Name the offending keys. "contract_oracle_receipt_fields_invalid" on its own
+        # cannot be acted on: the receipt has twenty fields and the check is exact set
+        # equality, so the reader has to diff by hand against a list in the source. This
+        # exact error failed the whole pipeline on a live target while the scan API
+        # reported ok: true, and the message was the only thing available.
+        _unexpected = sorted(set(row) - required_fields)
+        _absent = sorted(required_fields - set(row))
+        raise ValueError(
+            "contract_oracle_receipt_fields_invalid"
+            + (f":unexpected={','.join(_unexpected)}" if _unexpected else "")
+            + (f":missing={','.join(_absent)}" if _absent else "")
+        )
     if row.get("schema_version") != CONTRACT_ORACLE_RECEIPT_SCHEMA:
         raise ValueError("contract_oracle_receipt_schema_invalid")
     activation = validate_contract_oracle_activation_receipt(

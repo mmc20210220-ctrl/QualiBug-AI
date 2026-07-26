@@ -22,6 +22,10 @@ from .scan_counter import increment_scan_counter
 
 _scan_logger = logging.getLogger("qualibug.scan")
 
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
 class ScanHandlersMixin:
     def _handle_scan_preflight(self, project: str, root: Path, body: dict[str, Any] | None = None) -> None:
         """Customer-facing readiness check: surface actionable blockers BEFORE a scan
@@ -441,6 +445,34 @@ class ScanHandlersMixin:
 
             # Update continuous state for manual scans too
             _update_continuous_state(root, project, result)
+
+            # The envelope used to hardcode ok: True regardless of what scan() returned.
+            # A failed or short-circuited scan came back as {"ok": true, "scan_id": "",
+            # "grade": "", "score": 0, "total_ms": 0, "layers": {}, "release_gate": {}} --
+            # every field defaulted, success asserted. Four consecutive runs on a live
+            # target reported ok: true while producing nothing, which is the one failure
+            # mode this product exists to prevent, sitting on its primary entry point.
+            #
+            # A result is a success only if it says so. scan() sets success: True and a
+            # scan_id on its completion path; anything else is reported as it is.
+            _scan_failed = (
+                result.get("success") is False
+                or bool(result.get("error"))
+                or not _text(result.get("scan_id"))
+            )
+            if _scan_failed:
+                return self._json({
+                    "ok": False,
+                    "error": _text(result.get("error")) or "SCAN_PRODUCED_NO_RESULT",
+                    "message": _text(result.get("message"))
+                    or "扫描未产出结果，请查看 execution_status 与 failure_stage。",
+                    "project": project,
+                    "scan_id": _text(result.get("scan_id")),
+                    "execution_status": _text(result.get("execution_status")),
+                    "customer_output_status": _text(result.get("customer_output_status")),
+                    "failure_stage": _text(result.get("failure_stage")),
+                    "result_keys": sorted(result)[:24],
+                }, 500)
 
             return self._json({"ok": True, "scan_id": result.get("scan_id",""), "grade": result.get("grade",""),
                 "score": result.get("score",0), "coverage": result.get("coverage",0),
