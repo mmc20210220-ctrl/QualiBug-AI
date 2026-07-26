@@ -1,0 +1,11 @@
+{
+  "schema_version": "qualibug.v122-observer-gate-audit.v1",
+  "generated_at": "2026-07-26T13:22:07.843912",
+  "observer_compile_complete": 410,
+  "observer_compile_blocked": 42,
+  "observer_compile_ambiguous": 0,
+  "observer_runtime_complete": 13,
+  "observer_runtime_incomplete": 0,
+  "oracle_after_observer_block": 0,
+  "gate_authority": "PASS"
+}

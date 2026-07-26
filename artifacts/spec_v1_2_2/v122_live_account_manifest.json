@@ -1,0 +1,22 @@
+{
+  "schema_version": "qualibug.v122-live-account-manifest.v1",
+  "generated_at": "2026-07-26T13:30:28.089590",
+  "accounts": [
+    {
+      "account_ref": "test_user_1",
+      "role": "customer",
+      "tenant": "benchmark_mall",
+      "scope": "read_write",
+      "credential_secret_ref": "env:BENCHMARK_USER1_TOKEN"
+    },
+    {
+      "account_ref": "test_admin_1",
+      "role": "admin",
+      "tenant": "benchmark_mall",
+      "scope": "admin",
+      "credential_secret_ref": "env:BENCHMARK_ADMIN_TOKEN"
+    }
+  ],
+  "frozen": true,
+  "note": "No accounts may be added or modified during run. Secrets stored as references only."
+}

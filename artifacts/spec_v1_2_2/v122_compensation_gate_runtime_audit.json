@@ -1,0 +1,12 @@
+{
+  "schema_version": "qualibug.v122-compensation-gate-audit.v1",
+  "generated_at": "2026-07-26T13:22:07.843912",
+  "governed_writes": 145,
+  "compensation_required": 135,
+  "source_explicit_compensation": 0,
+  "snapshot_restore_authorized": 0,
+  "recreate_restore_authorized": 0,
+  "non_reversible_blocked": 114,
+  "unauthorized_write_executions": 0,
+  "gate_authority": "PASS"
+}

@@ -1,0 +1,9 @@
+{
+  "schema_version": "qualibug.v122-funnel-attribution-integrity.v1",
+  "generated_at": "2026-07-26T13:22:07.843912",
+  "funnel_monotonic_decrease": true,
+  "obligation_terminal_unique": true,
+  "experiment_first_breakpoint_unique": true,
+  "no_double_counting": true,
+  "integrity_result": "PASS"
+}

@@ -1,0 +1,17 @@
+{
+  "schema_version": "qualibug.v122-live-start-manifest.v1",
+  "run_name": "V1_2_2_LIVE_RUNTIME_EFFECT_VALIDATION_V1",
+  "release_commit": "3992b7076f1e0db3343eb6535c6660d6b0bd2c95",
+  "tree_hash": "b64a4a70485558696f41495ac042f228c9006084",
+  "working_tree_clean": true,
+  "target_manifest_hash": "16a5c03104d43f899b035e53a4a47c5245a218f2d611d8ddc3812d6ac190e846",
+  "budget_manifest_hash": "d9e8a746b62dd7d80f723ea58fa074414063407a3a2d593269e8bfb19ebb84cf",
+  "document_manifest_hash": "0be1f6e059dcfacf7089b3aeb634b4b951d56bda95e892c9e3724cc704f632fa",
+  "prompt_hash": "NOT_FOUND",
+  "model_hash": "frozen_at_runtime",
+  "planner_hash": "9e83696bdcdb6a6f3e63ea298d76df6328125358b4bba7a3cef2c65ec515833c",
+  "oracle_hash": "5e1afd7b93fe913ac47e6c8c394221a053b8f70217bc18d1404e235b8a986669",
+  "risk_policy_hash": "63b564ec38af00f23004adac7f7c60bdf16c8bfb9012637fe8dece064650559f",
+  "start_time": "2026-07-26T13:05:18.502929",
+  "run_started": true
+}

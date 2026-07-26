@@ -1,0 +1,122 @@
+{
+  "schema_version": "qualibug.v122-live-runtime-effect-final-report.v1",
+  "generated_at": "2026-07-26T13:22:07.843912",
+  "run_name": "V1_2_2_LIVE_RUNTIME_EFFECT_VALIDATION_V1",
+  "release_commit": "3992b7076f1e0db3343eb6535c6660d6b0bd2c95",
+  "run_id": "RUN_bd12ec4b638eb690d5c53c87",
+  "campaign_id": "CMP_eec4785a7108a6bef0de7ec6",
+  "campaign_status": "completed",
+  "result_level": "B",
+  "gates": {
+    "binding_gate_authority": "PASS",
+    "observer_gate_authority": "PASS",
+    "compensation_gate_authority": "PASS",
+    "fixture_gate_authority": "PASS",
+    "oracle_gate_authority": "PASS"
+  },
+  "runtime_provenance_rate": 1.0,
+  "funnel_integrity": "PASS",
+  "attribution_integrity": "PASS",
+  "campaign_summary": {
+    "total_obligations": 452,
+    "total_experiments_scheduled": 240,
+    "transport_eligible": 13,
+    "real_http_executed": 13,
+    "runtime_provenance_verified": 13,
+    "oracle_evaluated": 13,
+    "violation_candidates": 9,
+    "formal_findings": 9,
+    "unique_root_causes": 9
+  },
+  "funnel_stages": [
+    {
+      "stage": "obligation_generation",
+      "input": 452,
+      "passed": 452,
+      "blocked": 0
+    },
+    {
+      "stage": "experiment_compile",
+      "input": 452,
+      "passed": 240,
+      "blocked": 212
+    },
+    {
+      "stage": "binding_materialization",
+      "input": 452,
+      "passed": 240,
+      "blocked": 212
+    },
+    {
+      "stage": "fixture_setup",
+      "input": 240,
+      "passed": 240,
+      "blocked": 0
+    },
+    {
+      "stage": "governed_execution",
+      "input": 240,
+      "passed": 13,
+      "blocked": 227
+    },
+    {
+      "stage": "observation",
+      "input": 13,
+      "passed": 13,
+      "blocked": 0
+    },
+    {
+      "stage": "assertion",
+      "input": 13,
+      "passed": 13,
+      "blocked": 0
+    },
+    {
+      "stage": "oracle_resolution",
+      "input": 13,
+      "passed": 13,
+      "blocked": 0
+    },
+    {
+      "stage": "delivery_gate",
+      "input": 13,
+      "passed": 13,
+      "blocked": 0
+    },
+    {
+      "stage": "cleanup",
+      "input": 13,
+      "passed": 13,
+      "blocked": 0
+    },
+    {
+      "stage": "formal_projection",
+      "input": 452,
+      "passed": 452,
+      "blocked": 0
+    }
+  ],
+  "top_breakpoints": {
+    "NON_REVERSIBLE_WRITE_BLOCKED": 114,
+    "BUDGET_NOT_SELECTED": 97,
+    "BINDING_GRAPH_BLOCKED": 96,
+    "TRANSPORT_FAILED": 49,
+    "OBSERVER_COMPILE_NOT_GROUNDED": 42
+  },
+  "next_single_breakpoint": "SOURCE_DECLARED_READBACK_NOT_RESOLVED",
+  "regression": {
+    "before_run": {"passed": 2029, "failed": 46, "new_regressions": 0},
+    "after_run": {"passed": 2029, "failed": 46, "new_regressions": 0},
+    "verdict": "PASS"
+  },
+  "post_start_code_changes": 0,
+  "project_g_entry_allowed": false,
+  "conclusions": {
+    "V1_2_2_ENGINEERING_GATE": "PASS",
+    "V1_2_2_RUNTIME_GATE_AUTHORITY": "PASS",
+    "V1_2_2_RUNTIME_PROVENANCE": "PASS",
+    "V1_2_2_TRUSTWORTHINESS": "PASS",
+    "V1_2_2_DISCOVERY_EXPANSION": "NOT_PROVEN",
+    "PROJECT_G_ENTRY_ALLOWED": false
+  }
+}

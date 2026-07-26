@@ -1,0 +1,41 @@
+{
+  "schema_version": "qualibug.v122-breakpoint-root-cause-map.v1",
+  "generated_at": "2026-07-26T13:22:07.843912",
+  "root_causes": {
+    "NON_REVERSIBLE_WRITE_BLOCKED": {
+      "root_cause": "COMPENSATION_AUTHORITY_NOT_PROVEN",
+      "mechanism": "Write operations without source-declared cleanup/compensation are blocked by the compensation gate",
+      "affected_operations": "All POST/PUT/DELETE operations requiring cleanup"
+    },
+    "BINDING_GRAPH_BLOCKED": {
+      "root_cause": "SOURCE_DECLARED_READBACK_NOT_RESOLVED",
+      "mechanism": "After write, no source-declared GET readback surface exists to bind runtime state observation",
+      "affected_operations": "Operations requiring path/resource binding resolution"
+    },
+    "OBSERVER_COMPILE_NOT_GROUNDED": {
+      "root_cause": "SOURCE_DECLARED_READBACK_NOT_RESOLVED",
+      "mechanism": "Observer compiler cannot map assertions to a concrete readback surface",
+      "affected_operations": "Operations needing after-state observation"
+    },
+    "TRANSPORT_FAILED": {
+      "root_cause": "TARGET_POLICY_EXECUTION_MODE",
+      "mechanism": "Target policy blocks execution_mode for certain obligation types",
+      "affected_operations": "Obligations requiring write execution mode not approved by policy"
+    },
+    "COMPENSATION_AUTHORITY_NOT_PROVEN": {
+      "root_cause": "COMPENSATION_AUTHORITY_NOT_PROVEN",
+      "mechanism": "Cleanup contract drift: declared cleanup no longer matches compiled experiment",
+      "affected_operations": "Operations with stale cleanup contracts"
+    },
+    "OPERATION_BINDING_NOT_RESOLVED": {
+      "root_cause": "OPERATION_BINDING_NOT_RESOLVED",
+      "mechanism": "Behavior IR operation not found for obligation",
+      "affected_operations": "Obligations referencing non-existent operations"
+    },
+    "BUDGET_NOT_SELECTED": {
+      "root_cause": "BUDGET_NOT_SELECTED",
+      "mechanism": "Obligation not included in the execution plan (deferred by prioritizer)",
+      "affected_operations": "Low-priority obligations outside budget"
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "schema_version": "qualibug.v122-live-regression-after-run.v1",
+  "generated_at": "2026-07-26T13:30:28.089590",
+  "before_run": {
+    "passed": 2029,
+    "failed": 46,
+    "new_regressions": 0
+  },
+  "after_run": {
+    "passed": 2029,
+    "failed": 46,
+    "new_regressions": 0
+  },
+  "regression_delta": 0,
+  "passed_delta": 0,
+  "failed_delta": 0,
+  "verdict": "PASS",
+  "criteria": {
+    "passed_gte_2029": true,
+    "failed_lte_46": true,
+    "new_regressions_eq_0": true
+  }
+}

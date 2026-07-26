@@ -1,0 +1,52 @@
+{
+  "schema_version": "qualibug.v122-violation-candidate-ledger.v1",
+  "generated_at": "2026-07-26T13:22:07.843912",
+  "total_candidates": 9,
+  "candidates": [
+    {
+      "finding_id": "finding_d528ebc39b5f720ac8af",
+      "title": "[ContractOracle] validation_rejection: admin GET /api/products/SKU-DRAFT-006",
+      "severity": "P1"
+    },
+    {
+      "finding_id": "finding_ce39cddf88f1e705f7ac",
+      "title": "[ContractOracle] http_status_class: admin GET /api/reports/sales",
+      "severity": "P1"
+    },
+    {
+      "finding_id": "finding_14775b6f0885979b3205",
+      "title": "[ContractOracle] http_status_class: admin GET /api/users/addresses",
+      "severity": "P1"
+    },
+    {
+      "finding_id": "finding_450cc8747fbfe402f577",
+      "title": "[ContractOracle] http_status_class: admin GET /api/auth/me",
+      "severity": "P1"
+    },
+    {
+      "finding_id": "finding_7abaec9f82cbfd40755c",
+      "title": "[ContractOracle] http_status_class: admin GET /api/reports/users",
+      "severity": "P1"
+    },
+    {
+      "finding_id": "finding_310a60a226332efbf8f8",
+      "title": "[ContractOracle] http_status_class: admin GET /api/coupons",
+      "severity": "P1"
+    },
+    {
+      "finding_id": "finding_fab6629978d14eb9a782",
+      "title": "[ContractOracle] http_status_class: admin GET /api/orders",
+      "severity": "P1"
+    },
+    {
+      "finding_id": "finding_d6d59ab0983010c26b93",
+      "title": "[ContractOracle] http_status_class: admin GET /api/reports/inventory-risk",
+      "severity": "P1"
+    },
+    {
+      "finding_id": "finding_ea8a76bfb4fe9cfeffd6",
+      "title": "[ContractOracle] http_status_class: admin GET /api/cart/items",
+      "severity": "P1"
+    }
+  ]
+}

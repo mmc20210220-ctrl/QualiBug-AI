@@ -1,0 +1,15 @@
+{
+  "schema_version": "qualibug.v122-live-budget-manifest.v1",
+  "budget": {
+    "max_obligations": 200,
+    "max_planned_experiments": 200,
+    "max_executed_experiments": 100,
+    "max_http_requests": 2000,
+    "max_rounds": 3,
+    "max_runtime_seconds": 1800,
+    "max_runtime_binding_probes": 500,
+    "max_reproduction_attempts": 2
+  },
+  "auto_scale_disabled": true,
+  "budget_source": "manifest_hard_override"
+}

@@ -1,0 +1,17 @@
+{
+  "schema_version": "qualibug.v122-breakpoint-funnel.v1",
+  "generated_at": "2026-07-26T13:22:07.843912",
+  "total_obligations": 452,
+  "total_blocked": 439,
+  "total_deliverable": 10,
+  "total_oracle_not_violated": 3,
+  "breakpoints": {
+    "NON_REVERSIBLE_WRITE_BLOCKED": 114,
+    "BUDGET_NOT_SELECTED": 97,
+    "BINDING_GRAPH_BLOCKED": 96,
+    "TRANSPORT_FAILED": 49,
+    "OBSERVER_COMPILE_NOT_GROUNDED": 42,
+    "COMPENSATION_AUTHORITY_NOT_PROVEN": 21,
+    "OPERATION_BINDING_NOT_RESOLVED": 20
+  }
+}

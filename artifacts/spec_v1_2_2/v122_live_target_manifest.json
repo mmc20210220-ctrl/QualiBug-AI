@@ -1,0 +1,41 @@
+{
+  "schema_version": "qualibug.v122-live-target-manifest.v1",
+  "target_url": "http://localhost:8080",
+  "check_time": "2026-07-26T13:04:36.795882",
+  "product_list": {
+    "status": 200,
+    "reachable": true
+  },
+  "order_list": {
+    "status": 401,
+    "reachable": true
+  },
+  "category_list": {
+    "status": 404,
+    "reachable": true
+  },
+  "target_reachable": true,
+  "target_environment": "local_development",
+  "environment_type": "test",
+  "target_version": "benchmark_mall_docker_compose",
+  "target_ports": {
+    "api_gateway": 8080,
+    "customer_ui": 3001,
+    "admin_ui": 3002,
+    "postgresql": 5432
+  },
+  "source_document_hashes": {
+    "API_SPEC.md": "0be1f6e059dcfacf7089b3aeb634b4b951d56bda95e892c9e3724cc704f632fa",
+    "BUSINESS_RULES.md": "7281f5ea807243b251057aa1e68b849f88502f43484ace634ce0dc3f2e42a1c0",
+    "DB_SCHEMA.md": "98c746a6cc652a53b15b273e9b9e2c4edeaff2d5265f483384cd2290b7711cf9",
+    "DEPLOYMENT.md": "4b01056338819469f00e6e46a03c8da2fde34c44619f3c93dc8123a9ccf21f48",
+    "HISTORICAL_BUGS.md": "afe2648ab17bd23c48b3abab0af10effc01b89d57f74810e1f2cb523edd6a0fd",
+    "PRD.md": "99a0209c562b736d13a2bd35a81ba6d2b2a5b2f00941a806f1d7ed3118b57703",
+    "TEST_ACCOUNTS.md": "67b5e510721eda6605b2befb686404461df943df4dd21cebd709bf94700fb756",
+    "USER_ROLES.md": "e8055f5c16359079a0ad800959fb59602e9bf9b66a4ef4ee082a5211110511c5",
+    "WINDOWS_NATIVE_START.md": "c6030927f71e2bacbd649940677c8295684eee2cfef044760ddf93e40e92ae3d",
+    "test_accounts.json": "1dae351810c0b297b65194312c26fe8dcc4e9e940643fd48b83de413ce33b34d"
+  },
+  "source_document_count": 10,
+  "test_accounts_hash": "1dae351810c0b297b65194312c26fe8dcc4e9e940643fd48b83de413ce33b34d"
+}

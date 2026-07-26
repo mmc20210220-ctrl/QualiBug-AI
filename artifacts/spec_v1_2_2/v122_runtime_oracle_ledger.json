@@ -1,0 +1,7 @@
+{
+  "schema_version": "qualibug.v122-runtime-oracle-ledger.v1",
+  "generated_at": "2026-07-26T13:22:07.843912",
+  "total_oracle_evaluations": 13,
+  "oracle_evaluated": 13,
+  "oracle_blocked": 0
+}

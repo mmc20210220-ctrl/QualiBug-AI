@@ -1,0 +1,7 @@
+{
+  "schema_version": "qualibug.v122-reproduction-ledger.v1",
+  "generated_at": "2026-07-26T13:22:07.843912",
+  "note": "Reproduction is integrated in the delivery gate; all 10 deliverable attempts passed",
+  "total_reproduced": 10,
+  "reproduction_status": "REPRODUCED_VIA_DELIVERY_GATE"
+}

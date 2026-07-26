@@ -1,0 +1,27 @@
+{
+  "schema_version": "qualibug.v122-live-release-manifest.v1",
+  "run_name": "V1_2_2_LIVE_RUNTIME_EFFECT_VALIDATION_V1",
+  "commit_sha": "3992b7076f1e0db3343eb6535c6660d6b0bd2c95",
+  "parent_commit_sha": "449ed48e90624264d710d8ae12c756eb2df2f170",
+  "tree_hash": "b64a4a70485558696f41495ac042f228c9006084",
+  "branch": "main",
+  "commit_time": "2026-07-26T12:55:49.581164",
+  "production_file_hashes": {
+    "ai_test_asset_center/experiment_fixture_materializer.py": "521d521dc22d3891ae985290849b0a2d6a84bb031e8854b6affed55d82200f75",
+    "ai_test_asset_center/v12_coverage_recovery_orchestrator.py": "8efc160d4cf30de4961b419be25d6891416c5fe5427206488767ca251cd16fd6",
+    "ai_test_asset_center/experiment_executor.py": "9777aa99c1c9faee9bc21889004d428582308cbde27353cba8ecfdab06619006",
+    "ai_test_asset_center/experiment_outcome_finalizer.py": "ec1a054aada6e9dfaf59e8deff1a3552b38c4468aaf188eb6a8997ce3fca01a1",
+    "ai_test_asset_center/experiment_batch_executor.py": "df99544bf22b6fa38e18f0bf9ce16a3240c980289c84cf550349a959110a417e",
+    "ai_test_asset_center/experiment_compiler_obligation.py": "9e83696bdcdb6a6f3e63ea298d76df6328125358b4bba7a3cef2c65ec515833c",
+    "ai_test_asset_center/observer_capability_resolver.py": "e15d9ba87c3cd26819e4772dabc4c9a1372a4e4bf57c60427477955369b85bcb",
+    "ai_test_asset_center/oracle_input_contract.py": "8cf210070a9366f87461cd25d1d2e981752743d689b4a689c66eb1fdb2b12064",
+    "ai_test_asset_center/binding_coverage_graph.py": "b9a082f240a3b659fabb03840284dc2fba29120df4d3b8b30bd84a9d459eb104",
+    "ai_test_asset_center/fixture_dependency_dag.py": "3f6402262cf6d4bd47d3e75a8a57e6a6c51cb74582778801d207637636f60fec",
+    "ai_test_asset_center/compensation_relation_resolver.py": "b2385124f59b11c0e8a96e6be085faa1cb520828ce73817fe31570cce4a83693",
+    "ai_test_asset_center/write_reversibility_contract.py": "10a6244c7993352f38c038068409d95516aefe986b8fdb210f66fde3ffe26d60",
+    "ai_test_asset_center/cleanup_plan_validator.py": "5a1e03a506b267416186a70af8ffeac5a930e1292bb0319f83574ca701190b13",
+    "ai_test_asset_center/experiment_prioritizer.py": "NOT_FOUND",
+    "ai_test_asset_center/execution_coverage_funnel.py": "a1ff78e6976c308dc0a2f36927410777f67e77cb521aa930ce931583aaa48648",
+    "ai_test_asset_center/blocker_attribution.py": "46d6ca5eb18835f6d7af615d2e440dd8d892f8e18f3ccdf68060a546ba206452"
+  }
+}

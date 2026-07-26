@@ -1,0 +1,9 @@
+{
+  "schema_version": "qualibug.v122-anti-hardcoding-audit.v1",
+  "generated_at": "2026-07-26T13:22:07.843912",
+  "no_benchmark_answers_in_runtime": true,
+  "no_evaluator_private_in_prompts": true,
+  "source_origin": "registered_source_registry",
+  "target_from_configuration": true,
+  "audit_result": "PASS"
+}

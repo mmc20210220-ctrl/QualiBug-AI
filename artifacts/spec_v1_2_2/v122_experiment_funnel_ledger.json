@@ -1,0 +1,1213 @@
+{
+  "schema_version": "qualibug.v122-experiment-funnel-ledger.v1",
+  "run_id": "RUN_bd12ec4b638eb690d5c53c87",
+  "generated_at": "2026-07-26T13:22:07.843912",
+  "scheduled_count": 240,
+  "executed_count": 13,
+  "blocked_count": 19,
+  "every_experiment_has_receipt": true,
+  "experiments": [
+    {
+      "experiment_id": "exp_fafedc03e243f5c9c059",
+      "obligation_id": "obl_1b06eccc2382a1791e9e",
+      "binding_gate": {
+        "entered": true,
+        "passed": false,
+        "blocking_issues": [
+          "BLOCKED_MISSING_BINDING"
+        ]
+      },
+      "observer_gate": {
+        "entered": false,
+        "passed": true,
+        "status": "PASS"
+      },
+      "compensation_gate": {
+        "required": false,
+        "source_explicit": false,
+        "proof_status": "NOT_REQUIRED"
+      },
+      "fixture_gate": {
+        "entered": false,
+        "passed": false,
+        "blocked_nodes": []
+      },
+      "oracle_compile_gate": {
+        "entered": false,
+        "passed": false,
+        "missing_inputs": []
+      },
+      "prioritization": {
+        "entered": true,
+        "selected": true,
+        "failure_reason": ""
+      },
+      "transport": {
+        "eligible": false,
+        "started": false,
+        "completed": false
+      },
+      "runtime_binding_receipt": {
+        "created": false,
+        "provenance_verified": false,
+        "provenance_failures": []
+      },
+      "observer_runtime": {
+        "complete": false,
+        "missing_observations": []
+      },
+      "oracle_runtime": {
+        "evaluated": false,
+        "result": "not_evaluated"
+      },
+      "outcome": {
+        "finalized": true,
+        "finding_created": false,
+        "formal_finding": false
+      },
+      "terminal_status": "BLOCKED",
+      "terminal_reason": "BINDING_GRAPH_BLOCKED"
+    },
+    {
+      "experiment_id": "exp_f006e1ab3973bd195a03",
+      "obligation_id": "obl_ad77ab4ad72b659dc997",
+      "binding_gate": {
+        "entered": true,
+        "passed": true,
+        "blocking_issues": []
+      },
+      "observer_gate": {
+        "entered": true,
+        "passed": true,
+        "status": "PASS"
+      },
+      "compensation_gate": {
+        "required": false,
+        "source_explicit": false,
+        "proof_status": "NOT_REQUIRED"
+      },
+      "fixture_gate": {
+        "entered": false,
+        "passed": false,
+        "blocked_nodes": []
+      },
+      "oracle_compile_gate": {
+        "entered": false,
+        "passed": false,
+        "missing_inputs": []
+      },
+      "prioritization": {
+        "entered": true,
+        "selected": true,
+        "failure_reason": ""
+      },
+      "transport": {
+        "eligible": false,
+        "started": false,
+        "completed": false
+      },
+      "runtime_binding_receipt": {
+        "created": false,
+        "provenance_verified": false,
+        "provenance_failures": []
+      },
+      "observer_runtime": {
+        "complete": false,
+        "missing_observations": []
+      },
+      "oracle_runtime": {
+        "evaluated": false,
+        "result": "not_evaluated"
+      },
+      "outcome": {
+        "finalized": true,
+        "finding_created": false,
+        "formal_finding": false
+      },
+      "terminal_status": "BLOCKED",
+      "terminal_reason": "TRANSPORT_FAILED"
+    },
+    {
+      "experiment_id": "deep_8a163a70a1c74c09",
+      "obligation_id": "obl_06fc6175736a0898eb22",
+      "binding_gate": {
+        "entered": true,
+        "passed": true,
+        "blocking_issues": []
+      },
+      "observer_gate": {
+        "entered": true,
+        "passed": true,
+        "status": "PASS"
+      },
+      "compensation_gate": {
+        "required": true,
+        "source_explicit": false,
+        "proof_status": "BLOCKED"
+      },
+      "fixture_gate": {
+        "entered": false,
+        "passed": false,
+        "blocked_nodes": []
+      },
+      "oracle_compile_gate": {
+        "entered": false,
+        "passed": false,
+        "missing_inputs": []
+      },
+      "prioritization": {
+        "entered": true,
+        "selected": true,
+        "failure_reason": ""
+      },
+      "transport": {
+        "eligible": false,
+        "started": false,
+        "completed": false
+      },
+      "runtime_binding_receipt": {
+        "created": false,
+        "provenance_verified": false,
+        "provenance_failures": []
+      },
+      "observer_runtime": {
+        "complete": false,
+        "missing_observations": []
+      },
+      "oracle_runtime": {
+        "evaluated": false,
+        "result": "not_evaluated"
+      },
+      "outcome": {
+        "finalized": true,
+        "finding_created": false,
+        "formal_finding": false
+      },
+      "terminal_status": "BLOCKED",
+      "terminal_reason": "COMPENSATION_AUTHORITY_NOT_PROVEN"
+    },
+    {
+      "experiment_id": "deep_b8241010c3ecc607",
+      "obligation_id": "obl_0e418d410bb5fd163129",
+      "binding_gate": {
+        "entered": true,
+        "passed": true,
+        "blocking_issues": []
+      },
+      "observer_gate": {
+        "entered": true,
+        "passed": true,
+        "status": "PASS"
+      },
+      "compensation_gate": {
+        "required": true,
+        "source_explicit": false,
+        "proof_status": "BLOCKED"
+      },
+      "fixture_gate": {
+        "entered": false,
+        "passed": false,
+        "blocked_nodes": []
+      },
+      "oracle_compile_gate": {
+        "entered": false,
+        "passed": false,
+        "missing_inputs": []
+      },
+      "prioritization": {
+        "entered": true,
+        "selected": true,
+        "failure_reason": ""
+      },
+      "transport": {
+        "eligible": false,
+        "started": false,
+        "completed": false
+      },
+      "runtime_binding_receipt": {
+        "created": false,
+        "provenance_verified": false,
+        "provenance_failures": []
+      },
+      "observer_runtime": {
+        "complete": false,
+        "missing_observations": []
+      },
+      "oracle_runtime": {
+        "evaluated": false,
+        "result": "not_evaluated"
+      },
+      "outcome": {
+        "finalized": true,
+        "finding_created": false,
+        "formal_finding": false
+      },
+      "terminal_status": "BLOCKED",
+      "terminal_reason": "NON_REVERSIBLE_WRITE_BLOCKED"
+    },
+    {
+      "experiment_id": "exp_6b2abce71303a29ef71d",
+      "obligation_id": "obl_0fbaebb17cabee714fcf",
+      "binding_gate": {
+        "entered": true,
+        "passed": true,
+        "blocking_issues": []
+      },
+      "observer_gate": {
+        "entered": true,
+        "passed": false,
+        "status": "BLOCKED"
+      },
+      "compensation_gate": {
+        "required": false,
+        "source_explicit": false,
+        "proof_status": "NOT_REQUIRED"
+      },
+      "fixture_gate": {
+        "entered": false,
+        "passed": false,
+        "blocked_nodes": []
+      },
+      "oracle_compile_gate": {
+        "entered": false,
+        "passed": false,
+        "missing_inputs": []
+      },
+      "prioritization": {
+        "entered": true,
+        "selected": true,
+        "failure_reason": ""
+      },
+      "transport": {
+        "eligible": false,
+        "started": false,
+        "completed": false
+      },
+      "runtime_binding_receipt": {
+        "created": false,
+        "provenance_verified": false,
+        "provenance_failures": []
+      },
+      "observer_runtime": {
+        "complete": false,
+        "missing_observations": []
+      },
+      "oracle_runtime": {
+        "evaluated": false,
+        "result": "not_evaluated"
+      },
+      "outcome": {
+        "finalized": true,
+        "finding_created": false,
+        "formal_finding": false
+      },
+      "terminal_status": "BLOCKED",
+      "terminal_reason": "OBSERVER_COMPILE_NOT_GROUNDED"
+    },
+    {
+      "experiment_id": "exp_ac2941e999c862fe83fe",
+      "obligation_id": "obl_1314b5d141c107b30262",
+      "binding_gate": {
+        "entered": true,
+        "passed": false,
+        "blocking_issues": [
+          "BLOCKED_MISSING_BINDING"
+        ]
+      },
+      "observer_gate": {
+        "entered": false,
+        "passed": true,
+        "status": "PASS"
+      },
+      "compensation_gate": {
+        "required": false,
+        "source_explicit": false,
+        "proof_status": "NOT_REQUIRED"
+      },
+      "fixture_gate": {
+        "entered": false,
+        "passed": false,
+        "blocked_nodes": []
+      },
+      "oracle_compile_gate": {
+        "entered": false,
+        "passed": false,
+        "missing_inputs": []
+      },
+      "prioritization": {
+        "entered": true,
+        "selected": true,
+        "failure_reason": ""
+      },
+      "transport": {
+        "eligible": false,
+        "started": false,
+        "completed": false
+      },
+      "runtime_binding_receipt": {
+        "created": false,
+        "provenance_verified": false,
+        "provenance_failures": []
+      },
+      "observer_runtime": {
+        "complete": false,
+        "missing_observations": []
+      },
+      "oracle_runtime": {
+        "evaluated": false,
+        "result": "not_evaluated"
+      },
+      "outcome": {
+        "finalized": true,
+        "finding_created": false,
+        "formal_finding": false
+      },
+      "terminal_status": "BLOCKED",
+      "terminal_reason": "BINDING_GRAPH_BLOCKED"
+    },
+    {
+      "experiment_id": "exp_a940ef913f0b19ac861d",
+      "obligation_id": "obl_1391d971c111832b7c0a",
+      "binding_gate": {
+        "entered": true,
+        "passed": false,
+        "blocking_issues": [
+          "BLOCKED_MISSING_BINDING"
+        ]
+      },
+      "observer_gate": {
+        "entered": false,
+        "passed": true,
+        "status": "PASS"
+      },
+      "compensation_gate": {
+        "required": false,
+        "source_explicit": false,
+        "proof_status": "NOT_REQUIRED"
+      },
+      "fixture_gate": {
+        "entered": false,
+        "passed": false,
+        "blocked_nodes": []
+      },
+      "oracle_compile_gate": {
+        "entered": false,
+        "passed": false,
+        "missing_inputs": []
+      },
+      "prioritization": {
+        "entered": true,
+        "selected": true,
+        "failure_reason": ""
+      },
+      "transport": {
+        "eligible": false,
+        "started": false,
+        "completed": false
+      },
+      "runtime_binding_receipt": {
+        "created": false,
+        "provenance_verified": false,
+        "provenance_failures": []
+      },
+      "observer_runtime": {
+        "complete": false,
+        "missing_observations": []
+      },
+      "oracle_runtime": {
+        "evaluated": false,
+        "result": "not_evaluated"
+      },
+      "outcome": {
+        "finalized": true,
+        "finding_created": false,
+        "formal_finding": false
+      },
+      "terminal_status": "BLOCKED",
+      "terminal_reason": "BINDING_GRAPH_BLOCKED"
+    },
+    {
+      "experiment_id": "exp_d11a226c005bb51ec5f5",
+      "obligation_id": "obl_179b0d36345754fec323",
+      "binding_gate": {
+        "entered": true,
+        "passed": true,
+        "blocking_issues": []
+      },
+      "observer_gate": {
+        "entered": true,
+        "passed": false,
+        "status": "BLOCKED"
+      },
+      "compensation_gate": {
+        "required": false,
+        "source_explicit": false,
+        "proof_status": "NOT_REQUIRED"
+      },
+      "fixture_gate": {
+        "entered": false,
+        "passed": false,
+        "blocked_nodes": []
+      },
+      "oracle_compile_gate": {
+        "entered": false,
+        "passed": false,
+        "missing_inputs": []
+      },
+      "prioritization": {
+        "entered": true,
+        "selected": true,
+        "failure_reason": ""
+      },
+      "transport": {
+        "eligible": false,
+        "started": false,
+        "completed": false
+      },
+      "runtime_binding_receipt": {
+        "created": false,
+        "provenance_verified": false,
+        "provenance_failures": []
+      },
+      "observer_runtime": {
+        "complete": false,
+        "missing_observations": []
+      },
+      "oracle_runtime": {
+        "evaluated": false,
+        "result": "not_evaluated"
+      },
+      "outcome": {
+        "finalized": true,
+        "finding_created": false,
+        "formal_finding": false
+      },
+      "terminal_status": "BLOCKED",
+      "terminal_reason": "OBSERVER_COMPILE_NOT_GROUNDED"
+    },
+    {
+      "experiment_id": "exp_6c18241e8052105b72c1",
+      "obligation_id": "obl_29afd489354312479b7e",
+      "binding_gate": {
+        "entered": true,
+        "passed": false,
+        "blocking_issues": [
+          "BLOCKED_MISSING_BINDING"
+        ]
+      },
+      "observer_gate": {
+        "entered": false,
+        "passed": true,
+        "status": "PASS"
+      },
+      "compensation_gate": {
+        "required": false,
+        "source_explicit": false,
+        "proof_status": "NOT_REQUIRED"
+      },
+      "fixture_gate": {
+        "entered": false,
+        "passed": false,
+        "blocked_nodes": []
+      },
+      "oracle_compile_gate": {
+        "entered": false,
+        "passed": false,
+        "missing_inputs": []
+      },
+      "prioritization": {
+        "entered": true,
+        "selected": true,
+        "failure_reason": ""
+      },
+      "transport": {
+        "eligible": false,
+        "started": false,
+        "completed": false
+      },
+      "runtime_binding_receipt": {
+        "created": false,
+        "provenance_verified": false,
+        "provenance_failures": []
+      },
+      "observer_runtime": {
+        "complete": false,
+        "missing_observations": []
+      },
+      "oracle_runtime": {
+        "evaluated": false,
+        "result": "not_evaluated"
+      },
+      "outcome": {
+        "finalized": true,
+        "finding_created": false,
+        "formal_finding": false
+      },
+      "terminal_status": "BLOCKED",
+      "terminal_reason": "BINDING_GRAPH_BLOCKED"
+    },
+    {
+      "experiment_id": "exp_4ed9eb76650fa8f520e4",
+      "obligation_id": "obl_2e62072802c992bc5d3b",
+      "binding_gate": {
+        "entered": true,
+        "passed": false,
+        "blocking_issues": [
+          "BLOCKED_MISSING_BINDING"
+        ]
+      },
+      "observer_gate": {
+        "entered": false,
+        "passed": true,
+        "status": "PASS"
+      },
+      "compensation_gate": {
+        "required": false,
+        "source_explicit": false,
+        "proof_status": "NOT_REQUIRED"
+      },
+      "fixture_gate": {
+        "entered": false,
+        "passed": false,
+        "blocked_nodes": []
+      },
+      "oracle_compile_gate": {
+        "entered": false,
+        "passed": false,
+        "missing_inputs": []
+      },
+      "prioritization": {
+        "entered": true,
+        "selected": true,
+        "failure_reason": ""
+      },
+      "transport": {
+        "eligible": false,
+        "started": false,
+        "completed": false
+      },
+      "runtime_binding_receipt": {
+        "created": false,
+        "provenance_verified": false,
+        "provenance_failures": []
+      },
+      "observer_runtime": {
+        "complete": false,
+        "missing_observations": []
+      },
+      "oracle_runtime": {
+        "evaluated": false,
+        "result": "not_evaluated"
+      },
+      "outcome": {
+        "finalized": true,
+        "finding_created": false,
+        "formal_finding": false
+      },
+      "terminal_status": "BLOCKED",
+      "terminal_reason": "BINDING_GRAPH_BLOCKED"
+    },
+    {
+      "experiment_id": "exp_9a0724b2c4afe7bc0606",
+      "obligation_id": "obl_3db2689ef1d0bbeb981a",
+      "binding_gate": {
+        "entered": true,
+        "passed": false,
+        "blocking_issues": [
+          "BLOCKED_MISSING_BINDING"
+        ]
+      },
+      "observer_gate": {
+        "entered": false,
+        "passed": true,
+        "status": "PASS"
+      },
+      "compensation_gate": {
+        "required": false,
+        "source_explicit": false,
+        "proof_status": "NOT_REQUIRED"
+      },
+      "fixture_gate": {
+        "entered": false,
+        "passed": false,
+        "blocked_nodes": []
+      },
+      "oracle_compile_gate": {
+        "entered": false,
+        "passed": false,
+        "missing_inputs": []
+      },
+      "prioritization": {
+        "entered": true,
+        "selected": true,
+        "failure_reason": ""
+      },
+      "transport": {
+        "eligible": false,
+        "started": false,
+        "completed": false
+      },
+      "runtime_binding_receipt": {
+        "created": false,
+        "provenance_verified": false,
+        "provenance_failures": []
+      },
+      "observer_runtime": {
+        "complete": false,
+        "missing_observations": []
+      },
+      "oracle_runtime": {
+        "evaluated": false,
+        "result": "not_evaluated"
+      },
+      "outcome": {
+        "finalized": true,
+        "finding_created": false,
+        "formal_finding": false
+      },
+      "terminal_status": "BLOCKED",
+      "terminal_reason": "BINDING_GRAPH_BLOCKED"
+    },
+    {
+      "experiment_id": "exp_5c8e2ccdd4a528885160",
+      "obligation_id": "obl_5003d82e4aa633fa942c",
+      "binding_gate": {
+        "entered": true,
+        "passed": false,
+        "blocking_issues": [
+          "BLOCKED_MISSING_BINDING"
+        ]
+      },
+      "observer_gate": {
+        "entered": false,
+        "passed": true,
+        "status": "PASS"
+      },
+      "compensation_gate": {
+        "required": false,
+        "source_explicit": false,
+        "proof_status": "NOT_REQUIRED"
+      },
+      "fixture_gate": {
+        "entered": false,
+        "passed": false,
+        "blocked_nodes": []
+      },
+      "oracle_compile_gate": {
+        "entered": false,
+        "passed": false,
+        "missing_inputs": []
+      },
+      "prioritization": {
+        "entered": true,
+        "selected": true,
+        "failure_reason": ""
+      },
+      "transport": {
+        "eligible": false,
+        "started": false,
+        "completed": false
+      },
+      "runtime_binding_receipt": {
+        "created": false,
+        "provenance_verified": false,
+        "provenance_failures": []
+      },
+      "observer_runtime": {
+        "complete": false,
+        "missing_observations": []
+      },
+      "oracle_runtime": {
+        "evaluated": false,
+        "result": "not_evaluated"
+      },
+      "outcome": {
+        "finalized": true,
+        "finding_created": false,
+        "formal_finding": false
+      },
+      "terminal_status": "BLOCKED",
+      "terminal_reason": "BINDING_GRAPH_BLOCKED"
+    },
+    {
+      "experiment_id": "exp_36673739ff0ded2dd495",
+      "obligation_id": "obl_287dab1cc88b18d2cc0a",
+      "binding_gate": {
+        "entered": true,
+        "passed": false,
+        "blocking_issues": [
+          "BLOCKED_MISSING_BINDING"
+        ]
+      },
+      "observer_gate": {
+        "entered": false,
+        "passed": true,
+        "status": "PASS"
+      },
+      "compensation_gate": {
+        "required": false,
+        "source_explicit": false,
+        "proof_status": "NOT_REQUIRED"
+      },
+      "fixture_gate": {
+        "entered": false,
+        "passed": false,
+        "blocked_nodes": []
+      },
+      "oracle_compile_gate": {
+        "entered": false,
+        "passed": false,
+        "missing_inputs": []
+      },
+      "prioritization": {
+        "entered": true,
+        "selected": true,
+        "failure_reason": ""
+      },
+      "transport": {
+        "eligible": false,
+        "started": false,
+        "completed": false
+      },
+      "runtime_binding_receipt": {
+        "created": false,
+        "provenance_verified": false,
+        "provenance_failures": []
+      },
+      "observer_runtime": {
+        "complete": false,
+        "missing_observations": []
+      },
+      "oracle_runtime": {
+        "evaluated": false,
+        "result": "not_evaluated"
+      },
+      "outcome": {
+        "finalized": true,
+        "finding_created": false,
+        "formal_finding": false
+      },
+      "terminal_status": "BLOCKED",
+      "terminal_reason": "BINDING_GRAPH_BLOCKED"
+    },
+    {
+      "experiment_id": "exp_82df73a99eafa524febe",
+      "obligation_id": "obl_06d5edea852584be3cd5",
+      "binding_gate": {
+        "entered": true,
+        "passed": true,
+        "blocking_issues": []
+      },
+      "observer_gate": {
+        "entered": true,
+        "passed": true,
+        "status": "PASS"
+      },
+      "compensation_gate": {
+        "required": false,
+        "source_explicit": false,
+        "proof_status": "NOT_REQUIRED"
+      },
+      "fixture_gate": {
+        "entered": false,
+        "passed": false,
+        "blocked_nodes": []
+      },
+      "oracle_compile_gate": {
+        "entered": false,
+        "passed": false,
+        "missing_inputs": []
+      },
+      "prioritization": {
+        "entered": true,
+        "selected": true,
+        "failure_reason": ""
+      },
+      "transport": {
+        "eligible": false,
+        "started": false,
+        "completed": false
+      },
+      "runtime_binding_receipt": {
+        "created": false,
+        "provenance_verified": false,
+        "provenance_failures": []
+      },
+      "observer_runtime": {
+        "complete": false,
+        "missing_observations": []
+      },
+      "oracle_runtime": {
+        "evaluated": false,
+        "result": "not_evaluated"
+      },
+      "outcome": {
+        "finalized": true,
+        "finding_created": false,
+        "formal_finding": false
+      },
+      "terminal_status": "BLOCKED",
+      "terminal_reason": "TRANSPORT_FAILED"
+    },
+    {
+      "experiment_id": "exp_f0b45f87e8fa800ba442",
+      "obligation_id": "obl_071f425f733cc71469f0",
+      "binding_gate": {
+        "entered": true,
+        "passed": false,
+        "blocking_issues": [
+          "BLOCKED_MISSING_BINDING"
+        ]
+      },
+      "observer_gate": {
+        "entered": false,
+        "passed": true,
+        "status": "PASS"
+      },
+      "compensation_gate": {
+        "required": false,
+        "source_explicit": false,
+        "proof_status": "NOT_REQUIRED"
+      },
+      "fixture_gate": {
+        "entered": false,
+        "passed": false,
+        "blocked_nodes": []
+      },
+      "oracle_compile_gate": {
+        "entered": false,
+        "passed": false,
+        "missing_inputs": []
+      },
+      "prioritization": {
+        "entered": true,
+        "selected": true,
+        "failure_reason": ""
+      },
+      "transport": {
+        "eligible": false,
+        "started": false,
+        "completed": false
+      },
+      "runtime_binding_receipt": {
+        "created": false,
+        "provenance_verified": false,
+        "provenance_failures": []
+      },
+      "observer_runtime": {
+        "complete": false,
+        "missing_observations": []
+      },
+      "oracle_runtime": {
+        "evaluated": false,
+        "result": "not_evaluated"
+      },
+      "outcome": {
+        "finalized": true,
+        "finding_created": false,
+        "formal_finding": false
+      },
+      "terminal_status": "BLOCKED",
+      "terminal_reason": "BINDING_GRAPH_BLOCKED"
+    },
+    {
+      "experiment_id": "exp_16d457c1bfef3df83288",
+      "obligation_id": "obl_075dda97a52884adae49",
+      "binding_gate": {
+        "entered": true,
+        "passed": true,
+        "blocking_issues": []
+      },
+      "observer_gate": {
+        "entered": true,
+        "passed": true,
+        "status": "PASS"
+      },
+      "compensation_gate": {
+        "required": false,
+        "source_explicit": false,
+        "proof_status": "NOT_REQUIRED"
+      },
+      "fixture_gate": {
+        "entered": true,
+        "passed": true,
+        "blocked_nodes": []
+      },
+      "oracle_compile_gate": {
+        "entered": true,
+        "passed": true,
+        "missing_inputs": []
+      },
+      "prioritization": {
+        "entered": true,
+        "selected": true,
+        "failure_reason": ""
+      },
+      "transport": {
+        "eligible": true,
+        "started": true,
+        "completed": true
+      },
+      "runtime_binding_receipt": {
+        "created": true,
+        "provenance_verified": true,
+        "provenance_failures": []
+      },
+      "observer_runtime": {
+        "complete": true,
+        "missing_observations": []
+      },
+      "oracle_runtime": {
+        "evaluated": true,
+        "result": "evaluated"
+      },
+      "outcome": {
+        "finalized": true,
+        "finding_created": true,
+        "formal_finding": true
+      },
+      "terminal_status": "EXECUTED",
+      "terminal_reason": "DELIVERABLE"
+    },
+    {
+      "experiment_id": "exp_ad3528ddb7520fc6e46c",
+      "obligation_id": "obl_090f520c44ea641db917",
+      "binding_gate": {
+        "entered": true,
+        "passed": false,
+        "blocking_issues": [
+          "BLOCKED_MISSING_BINDING"
+        ]
+      },
+      "observer_gate": {
+        "entered": false,
+        "passed": true,
+        "status": "PASS"
+      },
+      "compensation_gate": {
+        "required": false,
+        "source_explicit": false,
+        "proof_status": "NOT_REQUIRED"
+      },
+      "fixture_gate": {
+        "entered": false,
+        "passed": false,
+        "blocked_nodes": []
+      },
+      "oracle_compile_gate": {
+        "entered": false,
+        "passed": false,
+        "missing_inputs": []
+      },
+      "prioritization": {
+        "entered": true,
+        "selected": true,
+        "failure_reason": ""
+      },
+      "transport": {
+        "eligible": false,
+        "started": false,
+        "completed": false
+      },
+      "runtime_binding_receipt": {
+        "created": false,
+        "provenance_verified": false,
+        "provenance_failures": []
+      },
+      "observer_runtime": {
+        "complete": false,
+        "missing_observations": []
+      },
+      "oracle_runtime": {
+        "evaluated": false,
+        "result": "not_evaluated"
+      },
+      "outcome": {
+        "finalized": true,
+        "finding_created": false,
+        "formal_finding": false
+      },
+      "terminal_status": "BLOCKED",
+      "terminal_reason": "BINDING_GRAPH_BLOCKED"
+    },
+    {
+      "experiment_id": "deep_b19cd34e22baa4a7",
+      "obligation_id": "obl_0d91b66f534834571f81",
+      "binding_gate": {
+        "entered": true,
+        "passed": true,
+        "blocking_issues": []
+      },
+      "observer_gate": {
+        "entered": true,
+        "passed": false,
+        "status": "BLOCKED"
+      },
+      "compensation_gate": {
+        "required": false,
+        "source_explicit": false,
+        "proof_status": "NOT_REQUIRED"
+      },
+      "fixture_gate": {
+        "entered": false,
+        "passed": false,
+        "blocked_nodes": []
+      },
+      "oracle_compile_gate": {
+        "entered": false,
+        "passed": false,
+        "missing_inputs": []
+      },
+      "prioritization": {
+        "entered": true,
+        "selected": true,
+        "failure_reason": ""
+      },
+      "transport": {
+        "eligible": false,
+        "started": false,
+        "completed": false
+      },
+      "runtime_binding_receipt": {
+        "created": false,
+        "provenance_verified": false,
+        "provenance_failures": []
+      },
+      "observer_runtime": {
+        "complete": false,
+        "missing_observations": []
+      },
+      "oracle_runtime": {
+        "evaluated": false,
+        "result": "not_evaluated"
+      },
+      "outcome": {
+        "finalized": true,
+        "finding_created": false,
+        "formal_finding": false
+      },
+      "terminal_status": "BLOCKED",
+      "terminal_reason": "OBSERVER_COMPILE_NOT_GROUNDED"
+    },
+    {
+      "experiment_id": "exp_bc4c8ab055bb1c3bf4e4",
+      "obligation_id": "obl_1178b60d4b606dec9bed",
+      "binding_gate": {
+        "entered": true,
+        "passed": false,
+        "blocking_issues": [
+          "BLOCKED_MISSING_BINDING"
+        ]
+      },
+      "observer_gate": {
+        "entered": false,
+        "passed": true,
+        "status": "PASS"
+      },
+      "compensation_gate": {
+        "required": false,
+        "source_explicit": false,
+        "proof_status": "NOT_REQUIRED"
+      },
+      "fixture_gate": {
+        "entered": false,
+        "passed": false,
+        "blocked_nodes": []
+      },
+      "oracle_compile_gate": {
+        "entered": false,
+        "passed": false,
+        "missing_inputs": []
+      },
+      "prioritization": {
+        "entered": true,
+        "selected": true,
+        "failure_reason": ""
+      },
+      "transport": {
+        "eligible": false,
+        "started": false,
+        "completed": false
+      },
+      "runtime_binding_receipt": {
+        "created": false,
+        "provenance_verified": false,
+        "provenance_failures": []
+      },
+      "observer_runtime": {
+        "complete": false,
+        "missing_observations": []
+      },
+      "oracle_runtime": {
+        "evaluated": false,
+        "result": "not_evaluated"
+      },
+      "outcome": {
+        "finalized": true,
+        "finding_created": false,
+        "formal_finding": false
+      },
+      "terminal_status": "BLOCKED",
+      "terminal_reason": "BINDING_GRAPH_BLOCKED"
+    },
+    {
+      "experiment_id": "exp_159fe1f12e4240465d78",
+      "obligation_id": "obl_149db9d9d838d35adf07",
+      "binding_gate": {
+        "entered": true,
+        "passed": true,
+        "blocking_issues": []
+      },
+      "observer_gate": {
+        "entered": true,
+        "passed": true,
+        "status": "PASS"
+      },
+      "compensation_gate": {
+        "required": false,
+        "source_explicit": false,
+        "proof_status": "NOT_REQUIRED"
+      },
+      "fixture_gate": {
+        "entered": false,
+        "passed": false,
+        "blocked_nodes": []
+      },
+      "oracle_compile_gate": {
+        "entered": false,
+        "passed": false,
+        "missing_inputs": []
+      },
+      "prioritization": {
+        "entered": true,
+        "selected": true,
+        "failure_reason": ""
+      },
+      "transport": {
+        "eligible": false,
+        "started": false,
+        "completed": false
+      },
+      "runtime_binding_receipt": {
+        "created": false,
+        "provenance_verified": false,
+        "provenance_failures": []
+      },
+      "observer_runtime": {
+        "complete": false,
+        "missing_observations": []
+      },
+      "oracle_runtime": {
+        "evaluated": false,
+        "result": "not_evaluated"
+      },
+      "outcome": {
+        "finalized": true,
+        "finding_created": false,
+        "formal_finding": false
+      },
+      "terminal_status": "BLOCKED",
+      "terminal_reason": "TRANSPORT_FAILED"
+    }
+  ]
+}

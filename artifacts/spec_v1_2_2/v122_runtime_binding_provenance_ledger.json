@@ -1,0 +1,11 @@
+{
+  "schema_version": "qualibug.v122-runtime-binding-provenance.v1",
+  "generated_at": "2026-07-26T13:22:07.843912",
+  "total_transports": 13,
+  "provenance_verified": 13,
+  "provenance_mismatch": 0,
+  "provenance_missing": 0,
+  "provenance_ambiguous": 0,
+  "verification_rate": 1.0,
+  "every_experiment_has_receipt": true
+}

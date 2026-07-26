@@ -1,0 +1,13 @@
+{
+  "schema_version": "qualibug.v122-campaign-validation-receipt.v1",
+  "generated_at": "2026-07-26T13:22:07.843912",
+  "campaign_id": "CMP_eec4785a7108a6bef0de7ec6",
+  "campaign_status": "completed",
+  "obligation_ledger_complete": true,
+  "funnel_artifact_present": true,
+  "attribution_artifact_present": true,
+  "execution_ledger_present": true,
+  "runtime_binding_provenance_present": true,
+  "finding_ledger_present": true,
+  "validation_result": "PASS"
+}

@@ -1,0 +1,67 @@
+{
+  "schema_version": "qualibug.v122-live-source-asset-manifest.v1",
+  "generated_at": "2026-07-26T13:30:28.089590",
+  "source_document_count": 9,
+  "api_spec_path": "platform_inputs\\benchmark_mall\\API_SPEC.md",
+  "api_spec_sha256": "0be1f6e059dcfacf7089b3aeb634b4b951d56bda95e892c9e3724cc704f632fa",
+  "prd_path": "platform_inputs\\benchmark_mall\\PRD.md",
+  "prd_sha256": "99a0209c562b736d13a2bd35a81ba6d2b2a5b2f00941a806f1d7ed3118b57703",
+  "source_documents": [
+    {
+      "source_id": "src_498df55e6ff42b3d",
+      "title": "",
+      "content_hash": "0be1f6e059dcfacf7089b3aeb634b4b951d56bda95e892c9e3724cc704f632fa",
+      "version": 1
+    },
+    {
+      "source_id": "src_5d2c1bbc2c9bfd4c",
+      "title": "",
+      "content_hash": "7281f5ea807243b251057aa1e68b849f88502f43484ace634ce0dc3f2e42a1c0",
+      "version": 1
+    },
+    {
+      "source_id": "src_4442e111d01c778e",
+      "title": "",
+      "content_hash": "98c746a6cc652a53b15b273e9b9e2c4edeaff2d5265f483384cd2290b7711cf9",
+      "version": 1
+    },
+    {
+      "source_id": "src_1b15bc0b509e8a5c",
+      "title": "",
+      "content_hash": "4b01056338819469f00e6e46a03c8da2fde34c44619f3c93dc8123a9ccf21f48",
+      "version": 1
+    },
+    {
+      "source_id": "src_6a7118ddc5186876",
+      "title": "",
+      "content_hash": "afe2648ab17bd23c48b3abab0af10effc01b89d57f74810e1f2cb523edd6a0fd",
+      "version": 1
+    },
+    {
+      "source_id": "src_eb577a789e4a9c63",
+      "title": "",
+      "content_hash": "99a0209c562b736d13a2bd35a81ba6d2b2a5b2f00941a806f1d7ed3118b57703",
+      "version": 1
+    },
+    {
+      "source_id": "src_f17aec01dac429f0",
+      "title": "",
+      "content_hash": "e8055f5c16359079a0ad800959fb59602e9bf9b66a4ef4ee082a5211110511c5",
+      "version": 1
+    },
+    {
+      "source_id": "src_af446bdae7c72dea",
+      "title": "",
+      "content_hash": "c6030927f71e2bacbd649940677c8295684eee2cfef044760ddf93e40e92ae3d",
+      "version": 1
+    },
+    {
+      "source_id": "src_fe4c9062370d3c58",
+      "title": "",
+      "content_hash": "4333816fe3f9dc42f5f47da1edf4344d732cdcd09ea5e1e0015c01640172fa49",
+      "version": 2
+    }
+  ],
+  "frozen": true,
+  "note": "No documents may be added during run"
+}
