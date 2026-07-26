@@ -51,13 +51,6 @@ CANONICAL_RISK_FAMILIES = (
 # protocol template and observer set there first; until then it resolves to a
 # canonical family and is tagged PROMOTION_CANDIDATE so the gap is countable.
 # This is the next breadth increment, ordered by how often each actually appears.
-PROMOTION_CANDIDATE_FAMILIES = {
-    "state_integrity": "state",
-    "lifecycle": "state",
-    "invariant": "state",
-    "consistency": "validation",
-}
-
 # Alias map: an incoming family name -> the canonical family used to compile it.
 # Aliasing is a deliberate, recorded narrowing, not a fallback. The keys here are
 # the vocabularies actually produced elsewhere in the product -- primarily

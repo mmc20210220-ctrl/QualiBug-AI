@@ -15,6 +15,9 @@ Comprehension Contract). These tests pin the three properties that make that rea
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 import pytest
 
 from ai_test_asset_center.bug_ontology_registry import RISK_FAMILIES as ONTOLOGY_FAMILIES
@@ -32,6 +35,40 @@ from ai_test_asset_center.test_obligation import (
     registry_self_check,
     resolve_risk_family,
 )
+
+
+TEST_OBLIGATION_SOURCE = (
+    Path(__file__).resolve().parents[1] / "ai_test_asset_center" / "test_obligation.py"
+)
+
+
+def test_no_registry_constant_is_defined_twice() -> None:
+    """A shadowed module-level map is a silently divergent second taxonomy.
+
+    This module exists to collapse several divergent family maps into one authority,
+    so a duplicated definition here is the same defect it was written to remove --
+    and it is invisible, because the later assignment simply wins.
+    ``PROMOTION_CANDIDATE_FAMILIES`` really was defined twice during this refactor.
+    """
+    tree = ast.parse(TEST_OBLIGATION_SOURCE.read_text(encoding="utf-8"))
+    seen: dict[str, int] = {}
+    duplicates: list[str] = []
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if not isinstance(target, ast.Name):
+                continue
+            name = target.id
+            if name.isupper() or name.startswith("_") and name.upper() == name:
+                if name in seen:
+                    duplicates.append(f"{name} (lines {seen[name]} and {node.lineno})")
+                else:
+                    seen[name] = node.lineno
+    assert not duplicates, (
+        "module-level constants assigned more than once in test_obligation.py; the "
+        f"later assignment silently shadows the earlier one: {duplicates}"
+    )
 
 
 def test_every_resolution_target_is_canonical() -> None:
