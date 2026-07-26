@@ -210,6 +210,53 @@ def test_built_in_observers_cannot_be_shadowed() -> None:
         )
 
 
+def test_compiled_adapters_is_recorded_and_defaults_to_http_api() -> None:
+    """Runtime validation must agree with what compilation approved.
+
+    experiment_runtime_support re-validated observers against a hardcoded
+    {"http_api"}, so an experiment compiled with a wider adapter set -- the entire
+    point of registering a database, queue, view or timing observer -- would compile
+    and then be rejected at runtime as BLOCKED_UNSUPPORTED_ADAPTER. The set is now
+    recorded on the experiment, keeping the drift check without pinning the value.
+    """
+    from ai_test_asset_center.experiment_compiler_obligation import make_experiment
+
+    assert make_experiment(obligation_id="o1")["compiled_adapters"] == ["http_api"]
+    assert make_experiment(
+        obligation_id="o1", compiled_adapters={"db_sql", "http_api"}
+    )["compiled_adapters"] == ["db_sql", "http_api"]
+    # An empty declaration must not widen to "anything goes".
+    assert make_experiment(obligation_id="o1", compiled_adapters=set())["compiled_adapters"] == [
+        "http_api"
+    ]
+
+
+def test_runtime_validation_honours_the_recorded_adapter_set(cleanup_registrations) -> None:
+    from ai_test_asset_center.observer_contracts_base import validate_observer_declarations
+
+    observer_id = "test_only_db_state_probe"
+    register_observer(
+        observer_id, surface="persistence_state", adapter="db_sql",
+        handler=_ok_handler(observer_id),
+    )
+    cleanup_registrations.append(observer_id)
+
+    observers = [{"observer_id": observer_id, "surface": "persistence_state", "adapter": "db_sql"}]
+
+    reason, detail = validate_observer_declarations(
+        observers, risk_family="state", available_adapters={"http_api"},
+        require_authorization_comparison=False,
+    )
+    assert reason == "BLOCKED_UNSUPPORTED_ADAPTER"
+    assert detail == "db_sql"
+
+    reason, _detail = validate_observer_declarations(
+        observers, risk_family="state", available_adapters={"http_api", "db_sql"},
+        require_authorization_comparison=False,
+    )
+    assert not reason
+
+
 def test_registration_does_not_leak_between_tests() -> None:
     """Guards the fixture itself: a leaked id changes what other tests compile."""
     leaked = [

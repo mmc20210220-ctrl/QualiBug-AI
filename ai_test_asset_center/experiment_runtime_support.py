@@ -615,10 +615,23 @@ def preflight_experiment_executable(
     risk_family = _text(assertion.get("kind") or assertion.get("type"))
     if risk_family == "owner_tenant_visibility":
         risk_family = "authorization"
+    # Adapter set recorded at compile time, not a hardcoded {"http_api"}.
+    #
+    # Hardcoding it here meant an experiment compiled with a wider adapter set -- the
+    # entire point of being able to register a database, queue, view or timing observer
+    # -- would compile and then be rejected at runtime with
+    # BLOCKED_UNSUPPORTED_ADAPTER. This keeps the drift check (the observers must still
+    # be within what compilation approved) without pinning the value.
+    #
+    # Legacy experiments compiled before compiled_adapters existed fall back to the
+    # http_api baseline, which is exactly the set they were gated against.
+    _compiled_adapters = {
+        _text(item) for item in _list(exp.get("compiled_adapters")) if _text(item)
+    } or {"http_api"}
     observer_reason, observer_detail = validate_observer_declarations(
         [row for row in _list(exp.get("observers")) if isinstance(row, dict)],
         risk_family=risk_family,
-        available_adapters={"http_api"},
+        available_adapters=_compiled_adapters,
         require_authorization_comparison=not _is_permitted_operation_invocation(exp),
     )
     if observer_reason:

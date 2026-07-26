@@ -1512,6 +1512,9 @@ def compile_experiment_for_obligation(
         obligation_id=oid,
         policy_version=policy_version,
         risk_family=family,
+        # Record the adapter set this compile was gated against, so runtime validation
+        # agrees with it instead of re-asserting a hardcoded http_api-only world.
+        compiled_adapters=adapters,
         control_plan=control_plan,
         treatment_plan=treatment_plan,
         binding_plan=binding_plan,
@@ -1700,11 +1703,22 @@ def make_experiment(
     compile_receipt: dict[str, Any] | None = None,
     experiment_id: str | None = None,
     source_identity_fields: list[str] | None = None,
+    compiled_adapters: "set[str] | list[str] | None" = None,
 ) -> dict[str, Any]:
     eid = _text(experiment_id) or stable_experiment_id(obligation_id, "v1")
     return {
         "schema_version": SCHEMA_VERSION,
         "experiment_id": eid,
+        # The adapter capability set this experiment was COMPILED against. Runtime
+        # validation re-checks the observers against this recorded set instead of a
+        # hardcoded {"http_api"}: hardcoding it meant an experiment compiled with a
+        # wider set -- the whole point of registering a non-http observer -- would
+        # compile and then be rejected at runtime as BLOCKED_UNSUPPORTED_ADAPTER.
+        # Recording it keeps the drift check (compile and runtime must agree) without
+        # pinning the value, the same pattern as the binding-graph fingerprint.
+        "compiled_adapters": sorted(
+            {_text(item) for item in (compiled_adapters or {"http_api"}) if _text(item)}
+        ) or ["http_api"],
         "obligation_id": _text(obligation_id),
         "policy_version": _text(policy_version),
         "risk_family": _text(risk_family),
