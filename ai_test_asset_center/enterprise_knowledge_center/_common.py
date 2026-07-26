@@ -139,7 +139,15 @@ SECRET_PATTERNS = [
     re.compile(r"(?i)(password\s*[:=]\s*)([^\s,;]+)"),
     re.compile(r"(?i)(token\s*[:=]\s*)([^\s,;]+)"),
 ]
-SEMANTIC_LEXICON_PATH = Path(__file__).resolve().parent / "policies" / "semantic_lexicon.json"
+# The one canonical lexicon, shared with behavior_ir, business_state_graph,
+# bug_pattern_library, enterprise_test_knowledge, phase103 and
+# runtime_interface_discovery. A second copy used to sit under this package's own
+# policies/ directory: the two were read by disjoint module sets, 30 verb keys
+# carried conflicting meanings, and each held vocabulary the other lacked. Adding
+# a term to one silently left the other half of the product not knowing it.
+SEMANTIC_LEXICON_PATH = (
+    Path(__file__).resolve().parents[1] / "policies" / "semantic_lexicon.json"
+)
 _SEMANTIC_LEXICON_CACHE: dict[str, Any] | None = None
 
 

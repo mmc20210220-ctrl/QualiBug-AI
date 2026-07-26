@@ -74,6 +74,10 @@ include = ["aitestops*", "ai_test_asset_center*"]
 # policies/ has no __init__.py on purpose: it is data inside a package, not a package.
 [tool.setuptools.package-data]
 ai_test_asset_center = [
+    # The canonical semantic lexicon and its sibling policy files. Previously this
+    # listed enterprise_knowledge_center/policies/ instead, which is where a second,
+    # diverging copy of the lexicon lived; the two are now unified under policies/.
+    "policies/*.json",
     "enterprise_knowledge_center/policies/*.json",
     "*.json",
 ]

@@ -2,156 +2,1863 @@
   "version": 1,
   "purpose": "Configurable semantic hints for enterprise knowledge parsing. Product teams may replace or extend this asset per deployment without changing parser code.",
   "role_words": {
-    "admin": ["admin", "administrator", "\u7ba1\u7406\u5458", "\u7cfb\u7edf\u7ba1\u7406\u5458"],
-    "buyer": ["buyer", "customer", "\u4e70\u5bb6", "\u8d2d\u4e70\u8005"],
-    "seller": ["seller", "merchant", "\u5356\u5bb6", "\u5546\u5bb6"],
-    "warehouse": ["warehouse", "stock keeper", "\u4ed3\u5e93", "\u5e93\u7ba1"],
-    "auditor": ["auditor", "audit", "\u5ba1\u8ba1", "\u7a3d\u6838"],
-    "operator": ["operator", "\u8fd0\u8425", "\u64cd\u4f5c\u5458", "\u5ba2\u670d"],
-    "approver": ["approver", "approve", "\u5ba1\u6279\u4eba", "\u5ba1\u6838\u4eba", "\u590d\u6838\u4eba"],
-    "finance": ["finance", "accountant", "\u8d22\u52a1", "\u4f1a\u8ba1", "\u51fa\u7eb3"],
-    "owner": ["owner", "\u8d1f\u8d23\u4eba", "\u5f52\u5c5e\u4eba", "\u5ba2\u6237\u7ecf\u7406"],
-    "tenant_user": ["tenant", "workspace", "\u7ec4\u7ec7\u6210\u5458", "\u79df\u6237\u7528\u6237"],
-    "doctor": ["doctor", "physician", "\u533b\u751f", "\u533b\u5e08"],
-    "teacher": ["teacher", "instructor", "\u8001\u5e08", "\u6559\u5e08"],
-    "student": ["student", "learner", "\u5b66\u751f", "\u5b66\u5458"]
+    "admin": [
+      "admin",
+      "administrator",
+      "管理员",
+      "系统管理员"
+    ],
+    "buyer": [
+      "buyer",
+      "customer",
+      "买家",
+      "购买者",
+      "purchaser",
+      "shopper",
+      "采购员"
+    ],
+    "seller": [
+      "seller",
+      "merchant",
+      "卖家",
+      "商家",
+      "vendor",
+      "供应商"
+    ],
+    "warehouse": [
+      "warehouse",
+      "stock keeper",
+      "仓库",
+      "库管"
+    ],
+    "auditor": [
+      "auditor",
+      "audit",
+      "审计",
+      "稽核"
+    ],
+    "operator": [
+      "operator",
+      "运营",
+      "操作员",
+      "客服"
+    ],
+    "approver": [
+      "approver",
+      "approve",
+      "审批人",
+      "审核人",
+      "复核人"
+    ],
+    "finance": [
+      "finance",
+      "accountant",
+      "财务",
+      "会计",
+      "出纳"
+    ],
+    "owner": [
+      "owner",
+      "负责人",
+      "归属人",
+      "客户经理"
+    ],
+    "tenant_user": [
+      "tenant",
+      "workspace",
+      "组织成员",
+      "租户用户"
+    ],
+    "doctor": [
+      "doctor",
+      "physician",
+      "医生",
+      "医师"
+    ],
+    "teacher": [
+      "teacher",
+      "instructor",
+      "老师",
+      "教师"
+    ],
+    "student": [
+      "student",
+      "learner",
+      "学生",
+      "学员"
+    ],
+    "viewer": [
+      "guest",
+      "reader",
+      "viewer",
+      "只读",
+      "访客"
+    ],
+    "support": [
+      "helpdesk",
+      "support",
+      "客服",
+      "支持"
+    ]
   },
   "risk_terms": {
-    "permission_boundary": ["permission", "role", "access", "\u6743\u9650", "\u8d8a\u6743", "\u4ec5\u80fd", "\u53ea\u80fd", "tenant", "\u79df\u6237", "\u6240\u5c5e"],
-    "state_machine": ["status", "state", "transition", "\u72b6\u6001", "\u6d41\u8f6c", "\u7ec8\u6001", "\u64a4\u9500", "\u53d6\u6d88", "\u5ba1\u6279"],
-    "data_conservation": ["balance", "amount", "ledger", "inventory", "stock", "quota", "available_qty", "locked_qty", "\u91d1\u989d", "\u4f59\u989d", "\u8d26\u672c", "\u5e93\u5b58", "\u989d\u5ea6", "\u6570\u91cf", "\u8d1f\u6570", "\u975e\u8d1f", "\u5b88\u6052"],
-    "data_reconciliation": ["reconcile", "match", "consistency", "\u5bf9\u8d26", "\u4e00\u81f4", "\u5339\u914d", "\u540c\u6b65"],
-    "idempotency": ["idempotent", "duplicate", "retry", "idempotency", "idempotencyKey", "idempotency_key", "\u5e42\u7b49", "\u91cd\u590d", "\u91cd\u8bd5"],
-    "concurrency": ["concurrent", "concurrency", "parallel", "race condition", "mutual exclusion", "oversell", "\u5e76\u53d1", "\u7ade\u6001", "\u4e92\u65a5", "\u8d85\u5356"],
-    "async_event": ["callback", "webhook", "event", "message", "notify", "queue", "sms", "back_in_stock", "restock", "inventory_sync", "inventory_restore", "\u56de\u8c03", "\u4e8b\u4ef6", "\u6d88\u606f", "\u901a\u77e5", "\u77ed\u4fe1", "\u5f02\u6b65", "\u5230\u8d27\u63d0\u9192", "\u8865\u8d27\u63d0\u9192", "\u5e93\u5b58\u540c\u6b65", "\u5e93\u5b58\u6062\u590d", "\u6062\u590d\u5e93\u5b58", "\u5e93\u5b58\u56de\u8865"],
-    "sensitive_data": ["medical", "patient", "pii", "personal", "\u654f\u611f", "\u75c5\u5386", "\u9690\u79c1", "\u8eab\u4efd\u8bc1"],
-    "historical_regression": ["bug", "defect", "incident", "issue", "\u7f3a\u9677", "\u6545\u969c", "\u5de5\u5355", "\u4e8b\u6545"]
+    "permission_boundary": [
+      "permission",
+      "role",
+      "access",
+      "权限",
+      "越权",
+      "仅能",
+      "只能",
+      "tenant",
+      "租户",
+      "所属"
+    ],
+    "state_machine": [
+      "status",
+      "state",
+      "transition",
+      "状态",
+      "流转",
+      "终态",
+      "撤销",
+      "取消",
+      "审批"
+    ],
+    "data_conservation": [
+      "balance",
+      "amount",
+      "ledger",
+      "inventory",
+      "stock",
+      "quota",
+      "available_qty",
+      "locked_qty",
+      "金额",
+      "余额",
+      "账本",
+      "库存",
+      "额度",
+      "数量",
+      "负数",
+      "非负",
+      "守恒"
+    ],
+    "data_reconciliation": [
+      "reconcile",
+      "match",
+      "consistency",
+      "对账",
+      "一致",
+      "匹配",
+      "同步"
+    ],
+    "idempotency": [
+      "idempotent",
+      "duplicate",
+      "retry",
+      "idempotency",
+      "idempotencyKey",
+      "idempotency_key",
+      "幂等",
+      "重复",
+      "重试"
+    ],
+    "concurrency": [
+      "concurrent",
+      "concurrency",
+      "parallel",
+      "race condition",
+      "mutual exclusion",
+      "oversell",
+      "并发",
+      "竞态",
+      "互斥",
+      "超卖",
+      "deadlock",
+      "lock",
+      "locking",
+      "optimistic",
+      "race",
+      "simultaneous",
+      "version",
+      "乐观锁",
+      "同时",
+      "死锁",
+      "版本号",
+      "锁"
+    ],
+    "async_event": [
+      "callback",
+      "webhook",
+      "event",
+      "message",
+      "notify",
+      "queue",
+      "sms",
+      "back_in_stock",
+      "restock",
+      "inventory_sync",
+      "inventory_restore",
+      "回调",
+      "事件",
+      "消息",
+      "通知",
+      "短信",
+      "异步",
+      "到货提醒",
+      "补货提醒",
+      "库存同步",
+      "库存恢复",
+      "恢复库存",
+      "库存回补"
+    ],
+    "sensitive_data": [
+      "medical",
+      "patient",
+      "pii",
+      "personal",
+      "敏感",
+      "病历",
+      "隐私",
+      "身份证"
+    ],
+    "historical_regression": [
+      "bug",
+      "defect",
+      "incident",
+      "issue",
+      "缺陷",
+      "故障",
+      "工单",
+      "事故"
+    ],
+    "temporal": [
+      "cron",
+      "deadline",
+      "expire",
+      "expiry",
+      "schedule",
+      "timeout",
+      "window",
+      "定时",
+      "截止",
+      "时效",
+      "窗口",
+      "超时",
+      "过期"
+    ]
   },
   "risk_hints": {
     "comment": "Data-driven risk-signal keywords for enterprise_test_knowledge risk inference. Merged (union) over the built-in fallback in code; replace or extend per-industry deployment WITHOUT touching parser code.",
-    "permission_bypass": ["admin", "manage", "manager", "\u540e\u53f0", "\u7ba1\u7406\u5458", "\u6743\u9650", "role", "rbac", "approve"],
-    "idor": ["{id}", "order", "profile", "address", "user", "customer", "\u8be6\u60c5", "\u4ed6\u4eba", "\u5f52\u5c5e"],
-    "tenant_isolation": ["tenant", "org", "organization", "\u79df\u6237", "\u7ec4\u7ec7"],
-    "money_consistency": ["amount", "balance", "ledger", "price", "wallet", "\u91d1\u989d", "\u4f59\u989d", "\u6d41\u6c34", "\u4ef7\u683c"],
-    "payment": ["payment", "pay", "callback", "transaction", "\u652f\u4ed8", "\u56de\u8c03", "\u5165\u8d26"],
-    "refund": ["refund", "return", "\u9000\u6b3e", "\u9000\u8d27"],
-    "coupon_abuse": ["coupon", "voucher", "discount", "\u4f18\u60e0", "\u6298\u6263"],
-    "stock_consistency": ["stock", "inventory", "sku", "\u5e93\u5b58", "\u6263\u51cf"],
-    "idempotency": ["create", "submit", "pay", "callback", "approve", "book", "publish", "\u521b\u5efa", "\u63d0\u4ea4", "\u652f\u4ed8", "\u5ba1\u6279", "\u9884\u7ea6"],
-    "approval_bypass": ["approval", "approve", "workflow", "review", "expense", "\u5ba1\u6279", "\u5ba1\u6838", "\u62a5\u9500"],
-    "privacy_leak": ["patient", "medical", "record", "customer", "student", "\u60a3\u8005", "\u75c5\u5386", "\u5ba2\u6237", "\u5b66\u751f"],
-    "state_transition": ["status", "state", "cancel", "close", "publish", "\u72b6\u6001", "\u6d41\u8f6c", "\u53d6\u6d88", "\u53d1\u5e03"]
+    "permission_bypass": [
+      "admin",
+      "manage",
+      "manager",
+      "后台",
+      "管理员",
+      "权限",
+      "role",
+      "rbac",
+      "approve"
+    ],
+    "idor": [
+      "{id}",
+      "order",
+      "profile",
+      "address",
+      "user",
+      "customer",
+      "详情",
+      "他人",
+      "归属"
+    ],
+    "tenant_isolation": [
+      "tenant",
+      "org",
+      "organization",
+      "租户",
+      "组织"
+    ],
+    "money_consistency": [
+      "amount",
+      "balance",
+      "ledger",
+      "price",
+      "wallet",
+      "金额",
+      "余额",
+      "流水",
+      "价格"
+    ],
+    "payment": [
+      "payment",
+      "pay",
+      "callback",
+      "transaction",
+      "支付",
+      "回调",
+      "入账"
+    ],
+    "refund": [
+      "refund",
+      "return",
+      "退款",
+      "退货"
+    ],
+    "coupon_abuse": [
+      "coupon",
+      "voucher",
+      "discount",
+      "优惠",
+      "折扣"
+    ],
+    "stock_consistency": [
+      "stock",
+      "inventory",
+      "sku",
+      "库存",
+      "扣减"
+    ],
+    "idempotency": [
+      "create",
+      "submit",
+      "pay",
+      "callback",
+      "approve",
+      "book",
+      "publish",
+      "创建",
+      "提交",
+      "支付",
+      "审批",
+      "预约"
+    ],
+    "approval_bypass": [
+      "approval",
+      "approve",
+      "workflow",
+      "review",
+      "expense",
+      "审批",
+      "审核",
+      "报销"
+    ],
+    "privacy_leak": [
+      "patient",
+      "medical",
+      "record",
+      "customer",
+      "student",
+      "患者",
+      "病历",
+      "客户",
+      "学生"
+    ],
+    "state_transition": [
+      "status",
+      "state",
+      "cancel",
+      "close",
+      "publish",
+      "状态",
+      "流转",
+      "取消",
+      "发布"
+    ]
   },
   "probe_gating_keywords": {
     "comment": "Data-driven probe-type gating for phase103 test-plan generation. Which business flows earn a state-consistency or report-accuracy probe is decided by these customer-declared vocab terms, replaceable per-industry deployment WITHOUT touching plan code.",
-    "state_consistency": ["\u652f\u4ed8", "\u4ea4\u6613", "\u5e93\u5b58", "\u5de5\u5355", "\u7ed3\u7b97", "\u8ba1\u8d39", "\u8ba2\u5355"],
-    "report_accuracy": ["\u62a5\u8868", "\u8d22\u52a1", "\u5bf9\u8d26", "\u5ba1\u8ba1"]
+    "state_consistency": [
+      "支付",
+      "交易",
+      "库存",
+      "工单",
+      "结算",
+      "计费",
+      "订单"
+    ],
+    "report_accuracy": [
+      "报表",
+      "财务",
+      "对账",
+      "审计"
+    ]
   },
   "state_aliases": {
-    "DRAFT": ["draft", "\u8349\u7a3f", "\u672a\u53d1\u5e03"],
-    "OFF_SALE": ["off_sale", "offsale", "\u4e0b\u67b6", "\u505c\u552e", "\u9690\u85cf"],
-    "DELETED": ["deleted", "delete", "\u5220\u9664", "\u5df2\u5220\u9664", "\u5185\u90e8", "\u5185\u90e8\u5546\u54c1"],
-    "ON_SALE": ["on_sale", "onsale", "active", "enabled", "\u4e0a\u67b6", "\u5728\u552e", "\u53ef\u552e", "\u542f\u7528"]
+    "DRAFT": [
+      "draft",
+      "草稿",
+      "未发布"
+    ],
+    "OFF_SALE": [
+      "off_sale",
+      "offsale",
+      "下架",
+      "停售",
+      "隐藏"
+    ],
+    "DELETED": [
+      "deleted",
+      "delete",
+      "删除",
+      "已删除",
+      "内部",
+      "内部商品"
+    ],
+    "ON_SALE": [
+      "on_sale",
+      "onsale",
+      "active",
+      "enabled",
+      "上架",
+      "在售",
+      "可售",
+      "启用"
+    ]
   },
-  "state_tokens": ["active", "applied", "approved", "archived", "cancelled", "canceled", "closed", "complete", "completed", "confirmed", "created", "deleted", "delivered", "disabled", "done", "draft", "enabled", "expired", "failed", "finished", "inactive", "init", "new", "paid", "pending", "processing", "received", "refunded", "refunding", "rejected", "returned", "returning", "settled", "shipped", "submitted", "success", "void", "wait_return"],
-  "state_hints": ["\u5f85", "\u5df2", "\u5ba1\u6838", "\u5ba1\u6279", "\u901a\u8fc7", "\u62d2\u7edd", "\u9a73\u56de", "\u652f\u4ed8", "\u4ed8\u6b3e", "\u53d1\u8d27", "\u6536\u8d27", "\u5b8c\u6210", "\u53d6\u6d88", "\u5173\u95ed", "\u9000\u6b3e", "\u9000\u8d27", "\u5f52\u6863", "\u6210\u529f", "\u5931\u8d25", "\u5904\u7406\u4e2d", "\u521b\u5efa", "\u65b0\u5efa", "\u63d0\u4ea4", "\u53d7\u7406", "\u914d\u9001", "\u8349\u7a3f", "\u542f\u7528", "\u505c\u7528"],
-  "state_machine_heading_markers": ["state machine", "state-machine", "state_machine", "workflow", "lifecycle", "\u72b6\u6001\u673a", "\u72b6\u6001\u6d41\u8f6c", "\u5de5\u4f5c\u6d41", "\u751f\u547d\u5468\u671f"],
-  "allowed_transition_markers": ["allowed transitions", "valid transitions", "legal transitions", "\u5141\u8bb8\u72b6\u6001\u6d41\u8f6c", "\u5408\u6cd5\u72b6\u6001\u6d41\u8f6c"],
-  "forbidden_transition_markers": ["forbidden transitions", "prohibited transitions", "invalid transitions", "illegal transitions", "\u7981\u6b62\u72b6\u6001\u6d41\u8f6c", "\u4e0d\u5141\u8bb8\u72b6\u6001\u6d41\u8f6c", "\u975e\u6cd5\u72b6\u6001\u6d41\u8f6c"],
+  "state_tokens": [
+    "active",
+    "applied",
+    "approved",
+    "archived",
+    "cancelled",
+    "canceled",
+    "closed",
+    "complete",
+    "completed",
+    "confirmed",
+    "created",
+    "deleted",
+    "delivered",
+    "disabled",
+    "done",
+    "draft",
+    "enabled",
+    "expired",
+    "failed",
+    "finished",
+    "inactive",
+    "init",
+    "new",
+    "paid",
+    "pending",
+    "processing",
+    "received",
+    "refunded",
+    "refunding",
+    "rejected",
+    "returned",
+    "returning",
+    "settled",
+    "shipped",
+    "submitted",
+    "success",
+    "void",
+    "wait_return",
+    "in_progress",
+    "unpaid",
+    "locked",
+    "requested",
+    "reversed"
+  ],
+  "state_hints": [
+    "待",
+    "已",
+    "审核",
+    "审批",
+    "通过",
+    "拒绝",
+    "驳回",
+    "支付",
+    "付款",
+    "发货",
+    "收货",
+    "完成",
+    "取消",
+    "关闭",
+    "退款",
+    "退货",
+    "归档",
+    "成功",
+    "失败",
+    "处理中",
+    "创建",
+    "新建",
+    "提交",
+    "受理",
+    "配送",
+    "草稿",
+    "启用",
+    "停用",
+    "status",
+    "state",
+    "stage",
+    "phase",
+    "lifecycle_state",
+    "order_status",
+    "current_status",
+    "状态",
+    "阶段"
+  ],
+  "state_machine_heading_markers": [
+    "state machine",
+    "state-machine",
+    "state_machine",
+    "workflow",
+    "lifecycle",
+    "状态机",
+    "状态流转",
+    "工作流",
+    "生命周期",
+    "state diagram",
+    "state transitions",
+    "状态迁移",
+    "流程"
+  ],
+  "allowed_transition_markers": [
+    "allowed transitions",
+    "valid transitions",
+    "legal transitions",
+    "允许状态流转",
+    "合法状态流转",
+    "permitted transitions",
+    "allowed state transitions",
+    "允许的状态迁移",
+    "允许的流转",
+    "合法迁移",
+    "正常流转"
+  ],
+  "forbidden_transition_markers": [
+    "forbidden transitions",
+    "prohibited transitions",
+    "invalid transitions",
+    "illegal transitions",
+    "禁止状态流转",
+    "不允许状态流转",
+    "非法状态流转",
+    "forbidden state transitions",
+    "disallowed transitions",
+    "not allowed transitions",
+    "禁止的状态迁移",
+    "禁止的流转",
+    "不允许的状态迁移",
+    "非法迁移",
+    "禁止迁移"
+  ],
   "permission_decision_markers": {
-    "allow": ["allow", "allowed", "grant", "permit", "\u5141\u8bb8", "\u6388\u6743", "\u53ef\u4ee5", "\u53ef"],
-    "deny": ["deny", "denied", "forbid", "forbidden", "not allowed", "cannot", "prohibit", "\u4e0d\u5f97", "\u7981\u6b62", "\u4e0d\u80fd", "\u4e0d\u5141\u8bb8"]
+    "allow": [
+      "allow",
+      "allowed",
+      "grant",
+      "permit",
+      "允许",
+      "授权",
+      "可以",
+      "可",
+      "permitted",
+      "can",
+      "may",
+      "granted",
+      "authorized",
+      "授予",
+      "有权"
+    ],
+    "deny": [
+      "deny",
+      "denied",
+      "forbid",
+      "forbidden",
+      "not allowed",
+      "cannot",
+      "prohibit",
+      "不得",
+      "禁止",
+      "不能",
+      "不允许",
+      "not permitted",
+      "can not",
+      "must not",
+      "may not",
+      "prohibited",
+      "restricted",
+      "no access",
+      "unauthorized",
+      "不可以",
+      "不可",
+      "无权",
+      "拒绝"
+    ]
   },
-  "endpoint_action_markers": ["approve", "reject", "cancel", "confirm", "ship", "deliver", "pay", "refund", "validate", "verify", "adjust", "reserve", "release", "consume", "use", "activate", "deactivate", "enable", "disable", "lock", "unlock", "freeze", "unfreeze", "close", "reopen", "submit", "publish", "archive", "restore", "retry", "reset", "search", "login", "logout", "register", "upload", "download", "import", "export", "assign"],
-  "runtime_interface_discovery_actions": ["all", "export", "search", "history", "audit", "audit-logs", "debug", "health", "metrics", "stats", "status", "list", "detail", "preview", "validate", "verify", "simulate", "test", "replay", "retry", "reconcile", "close", "me", "info", "view", "summary", "overview", "count", "raw", "table", "data", "records", "logs", "activity", "events", "recent", "latest", "current", "active", "available", "pending", "completed", "archived", "notifications", "messages", "alerts", "usage", "quota", "balance", "transactions", "ledger", "profile", "addresses", "contacts", "users", "roles", "permissions", "sessions", "tokens", "keys", "webhooks", "callbacks", "subscriptions", "billing", "invoices", "receipts", "sales", "revenue", "reports", "analytics", "dashboard", "home", "feed", "catalog", "categories", "tags", "versions", "drafts", "templates", "send", "check", "fetch", "query", "find", "lookup", "download", "upload", "sync", "refresh"],
-  "runtime_interface_discovery_subresources": ["admin", "otp", "token", "tokens", "password", "passwords", "code", "codes", "lock", "locks", "phone", "profile", "profiles", "order", "orders", "item", "items", "user", "users", "recommendation", "recommendations", "finance", "debug", "customer", "customers", "seller", "sellers", "address", "addresses", "sale", "sales", "report", "reports", "audit", "log", "logs", "history", "data", "raw", "table", "home", "info", "status", "config", "settings", "meta", "internal", "system", "bulk", "batch", "quick", "manual", "default", "custom", "public", "private", "hidden", "archived", "payment", "payments", "refund", "refunds", "coupon", "coupons", "cart", "carts", "inventory", "stock", "product", "products", "category", "categories"],
-  "runtime_interface_discovery_resources": ["users", "user", "accounts", "account", "inventory", "stock", "items", "products", "product", "orders", "order", "payments", "payment", "refunds", "refund", "coupons", "coupon", "cart", "carts", "reports", "report", "auth", "addresses", "address", "profile", "profiles", "admin", "catalog", "categories", "category", "transactions", "transaction", "ledger", "wallet", "wallets", "subscriptions", "subscription", "invoices", "invoice", "notifications", "messages", "settings", "config", "analytics", "dashboard", "audit", "logs", "health", "search", "me"],
+  "endpoint_action_markers": [
+    "approve",
+    "reject",
+    "cancel",
+    "confirm",
+    "ship",
+    "deliver",
+    "pay",
+    "refund",
+    "validate",
+    "verify",
+    "adjust",
+    "reserve",
+    "release",
+    "consume",
+    "use",
+    "activate",
+    "deactivate",
+    "enable",
+    "disable",
+    "lock",
+    "unlock",
+    "freeze",
+    "unfreeze",
+    "close",
+    "reopen",
+    "submit",
+    "publish",
+    "archive",
+    "restore",
+    "retry",
+    "reset",
+    "search",
+    "login",
+    "logout",
+    "register",
+    "upload",
+    "download",
+    "import",
+    "export",
+    "assign"
+  ],
+  "runtime_interface_discovery_actions": [
+    "all",
+    "export",
+    "search",
+    "history",
+    "audit",
+    "audit-logs",
+    "debug",
+    "health",
+    "metrics",
+    "stats",
+    "status",
+    "list",
+    "detail",
+    "preview",
+    "validate",
+    "verify",
+    "simulate",
+    "test",
+    "replay",
+    "retry",
+    "reconcile",
+    "close",
+    "me",
+    "info",
+    "view",
+    "summary",
+    "overview",
+    "count",
+    "raw",
+    "table",
+    "data",
+    "records",
+    "logs",
+    "activity",
+    "events",
+    "recent",
+    "latest",
+    "current",
+    "active",
+    "available",
+    "pending",
+    "completed",
+    "archived",
+    "notifications",
+    "messages",
+    "alerts",
+    "usage",
+    "quota",
+    "balance",
+    "transactions",
+    "ledger",
+    "profile",
+    "addresses",
+    "contacts",
+    "users",
+    "roles",
+    "permissions",
+    "sessions",
+    "tokens",
+    "keys",
+    "webhooks",
+    "callbacks",
+    "subscriptions",
+    "billing",
+    "invoices",
+    "receipts",
+    "sales",
+    "revenue",
+    "reports",
+    "analytics",
+    "dashboard",
+    "home",
+    "feed",
+    "catalog",
+    "categories",
+    "tags",
+    "versions",
+    "drafts",
+    "templates",
+    "send",
+    "check",
+    "fetch",
+    "query",
+    "find",
+    "lookup",
+    "download",
+    "upload",
+    "sync",
+    "refresh"
+  ],
+  "runtime_interface_discovery_subresources": [
+    "admin",
+    "otp",
+    "token",
+    "tokens",
+    "password",
+    "passwords",
+    "code",
+    "codes",
+    "lock",
+    "locks",
+    "phone",
+    "profile",
+    "profiles",
+    "order",
+    "orders",
+    "item",
+    "items",
+    "user",
+    "users",
+    "recommendation",
+    "recommendations",
+    "finance",
+    "debug",
+    "customer",
+    "customers",
+    "seller",
+    "sellers",
+    "address",
+    "addresses",
+    "sale",
+    "sales",
+    "report",
+    "reports",
+    "audit",
+    "log",
+    "logs",
+    "history",
+    "data",
+    "raw",
+    "table",
+    "home",
+    "info",
+    "status",
+    "config",
+    "settings",
+    "meta",
+    "internal",
+    "system",
+    "bulk",
+    "batch",
+    "quick",
+    "manual",
+    "default",
+    "custom",
+    "public",
+    "private",
+    "hidden",
+    "archived",
+    "payment",
+    "payments",
+    "refund",
+    "refunds",
+    "coupon",
+    "coupons",
+    "cart",
+    "carts",
+    "inventory",
+    "stock",
+    "product",
+    "products",
+    "category",
+    "categories"
+  ],
+  "runtime_interface_discovery_resources": [
+    "users",
+    "user",
+    "accounts",
+    "account",
+    "inventory",
+    "stock",
+    "items",
+    "products",
+    "product",
+    "orders",
+    "order",
+    "payments",
+    "payment",
+    "refunds",
+    "refund",
+    "coupons",
+    "coupon",
+    "cart",
+    "carts",
+    "reports",
+    "report",
+    "auth",
+    "addresses",
+    "address",
+    "profile",
+    "profiles",
+    "admin",
+    "catalog",
+    "categories",
+    "category",
+    "transactions",
+    "transaction",
+    "ledger",
+    "wallet",
+    "wallets",
+    "subscriptions",
+    "subscription",
+    "invoices",
+    "invoice",
+    "notifications",
+    "messages",
+    "settings",
+    "config",
+    "analytics",
+    "dashboard",
+    "audit",
+    "logs",
+    "health",
+    "search",
+    "me"
+  ],
   "runtime_interface_discovery_max_candidates": 2500,
-  "read_like_post_action_markers": ["validate", "verify", "check", "preview", "calculate", "compute", "estimate", "quote", "search", "query", "lookup", "simulate", "dry_run", "eligibility", "availability", "\u6821\u9a8c", "\u9a8c\u8bc1", "\u68c0\u67e5", "\u9884\u89c8", "\u8ba1\u7b97", "\u8bd5\u7b97", "\u4f30\u7b97", "\u67e5\u8be2", "\u641c\u7d22", "\u67e5\u627e", "\u6a21\u62df", "\u62a5\u4ef7"],
-  "mutating_action_markers": ["write", "mutate", "change", "set", "create", "add", "insert", "update", "modify", "edit", "delete", "remove", "save", "submit", "approve", "reject", "cancel", "confirm", "ship", "deliver", "pay", "refund", "charge", "checkout", "reserve", "release", "consume", "use", "redeem", "apply", "adjust", "activate", "deactivate", "enable", "disable", "lock", "unlock", "freeze", "unfreeze", "close", "reopen", "publish", "archive", "restore", "retry", "reset", "upload", "import", "assign", "register", "login", "logout", "\u5199\u5165", "\u53d8\u66f4", "\u4fee\u6539", "\u8bbe\u7f6e", "\u521b\u5efa", "\u65b0\u5efa", "\u65b0\u589e", "\u66f4\u65b0", "\u7f16\u8f91", "\u5220\u9664", "\u79fb\u9664", "\u4fdd\u5b58", "\u63d0\u4ea4", "\u5ba1\u6279", "\u6279\u51c6", "\u9a73\u56de", "\u62d2\u7edd", "\u53d6\u6d88", "\u786e\u8ba4", "\u53d1\u8d27", "\u652f\u4ed8", "\u4ed8\u6b3e", "\u9000\u6b3e", "\u6263\u51cf", "\u9884\u7559", "\u91ca\u653e", "\u6d88\u8017", "\u4f7f\u7528", "\u6838\u9500", "\u5e94\u7528", "\u8c03\u6574", "\u542f\u7528", "\u505c\u7528", "\u6fc0\u6d3b", "\u9501\u5b9a", "\u89e3\u9501", "\u51bb\u7ed3", "\u89e3\u51bb", "\u5173\u95ed", "\u91cd\u5f00", "\u53d1\u5e03", "\u5f52\u6863", "\u6062\u590d", "\u91cd\u8bd5", "\u91cd\u7f6e", "\u4e0a\u4f20", "\u5bfc\u5165", "\u5206\u914d", "\u6ce8\u518c", "\u767b\u5f55", "\u767b\u51fa"],
-  "positive_integer_markers": ["positive integer", "strictly positive integer", "must be positive", "greater than zero integer", "正整数", "大于零的整数"],
-  "entity_alias_groups": [["address", "addresse", "addresses"], ["cart", "cart_item", "cart_items", "item", "items"], ["coupon", "coupons", "coupon_usage"], ["payment", "payments"], ["refund", "refunds"], ["order", "orders", "order_item", "order_items"], ["product", "products", "inventory"]],
-  "observation_action_markers": ["validate", "query", "search", "list", "detail", "lookup", "report", "check", "verify", "\u67e5\u8be2", "\u6821\u9a8c", "\u9a8c\u8bc1", "\u62a5\u8868", "\u5217\u8868", "\u8be6\u60c5"],
-  "binding_stop_words": ["must", "shall", "cannot", "equal", "only", "true", "false", "with", "from", "that", "this", "where", "when", "then", "status", "state", "type", "name", "code", "date", "time", "value", "count", "total", "amount", "identifier"],
+  "read_like_post_action_markers": [
+    "validate",
+    "verify",
+    "check",
+    "preview",
+    "calculate",
+    "compute",
+    "estimate",
+    "quote",
+    "search",
+    "query",
+    "lookup",
+    "simulate",
+    "dry_run",
+    "eligibility",
+    "availability",
+    "校验",
+    "验证",
+    "检查",
+    "预览",
+    "计算",
+    "试算",
+    "估算",
+    "查询",
+    "搜索",
+    "查找",
+    "模拟",
+    "报价"
+  ],
+  "mutating_action_markers": [
+    "write",
+    "mutate",
+    "change",
+    "set",
+    "create",
+    "add",
+    "insert",
+    "update",
+    "modify",
+    "edit",
+    "delete",
+    "remove",
+    "save",
+    "submit",
+    "approve",
+    "reject",
+    "cancel",
+    "confirm",
+    "ship",
+    "deliver",
+    "pay",
+    "refund",
+    "charge",
+    "checkout",
+    "reserve",
+    "release",
+    "consume",
+    "use",
+    "redeem",
+    "apply",
+    "adjust",
+    "activate",
+    "deactivate",
+    "enable",
+    "disable",
+    "lock",
+    "unlock",
+    "freeze",
+    "unfreeze",
+    "close",
+    "reopen",
+    "publish",
+    "archive",
+    "restore",
+    "retry",
+    "reset",
+    "upload",
+    "import",
+    "assign",
+    "register",
+    "login",
+    "logout",
+    "写入",
+    "变更",
+    "修改",
+    "设置",
+    "创建",
+    "新建",
+    "新增",
+    "更新",
+    "编辑",
+    "删除",
+    "移除",
+    "保存",
+    "提交",
+    "审批",
+    "批准",
+    "驳回",
+    "拒绝",
+    "取消",
+    "确认",
+    "发货",
+    "支付",
+    "付款",
+    "退款",
+    "扣减",
+    "预留",
+    "释放",
+    "消耗",
+    "使用",
+    "核销",
+    "应用",
+    "调整",
+    "启用",
+    "停用",
+    "激活",
+    "锁定",
+    "解锁",
+    "冻结",
+    "解冻",
+    "关闭",
+    "重开",
+    "发布",
+    "归档",
+    "恢复",
+    "重试",
+    "重置",
+    "上传",
+    "导入",
+    "分配",
+    "注册",
+    "登录",
+    "登出"
+  ],
+  "positive_integer_markers": [
+    "positive integer",
+    "strictly positive integer",
+    "must be positive",
+    "greater than zero integer",
+    "正整数",
+    "大于零的整数",
+    "positive whole number",
+    "greater than zero",
+    "greater than 0",
+    "must be > 0",
+    "at least 1",
+    "大于零",
+    "大于 0",
+    "大于0",
+    "最小为 1"
+  ],
+  "entity_alias_groups": [
+    [
+      "address",
+      "addresse",
+      "addresses"
+    ],
+    [
+      "cart",
+      "cart_item",
+      "cart_items",
+      "item",
+      "items"
+    ],
+    [
+      "coupon",
+      "coupons",
+      "coupon_usage"
+    ],
+    [
+      "payment",
+      "payments"
+    ],
+    [
+      "refund",
+      "refunds"
+    ],
+    [
+      "order",
+      "orders",
+      "order_item",
+      "order_items"
+    ],
+    [
+      "product",
+      "products",
+      "inventory"
+    ],
+    [
+      "product",
+      "item",
+      "sku",
+      "goods",
+      "商品",
+      "产品"
+    ],
+    [
+      "order",
+      "purchase order",
+      "sales order",
+      "订单"
+    ],
+    [
+      "user",
+      "account",
+      "member",
+      "用户",
+      "账户"
+    ],
+    [
+      "customer",
+      "client",
+      "buyer",
+      "客户"
+    ],
+    [
+      "payment",
+      "transaction",
+      "支付",
+      "付款"
+    ],
+    [
+      "inventory",
+      "stock",
+      "库存"
+    ],
+    [
+      "organization",
+      "org",
+      "tenant",
+      "company",
+      "组织",
+      "租户"
+    ],
+    [
+      "employee",
+      "staff",
+      "员工"
+    ],
+    [
+      "warehouse",
+      "location",
+      "site",
+      "仓库"
+    ]
+  ],
+  "observation_action_markers": [
+    "validate",
+    "query",
+    "search",
+    "list",
+    "detail",
+    "lookup",
+    "report",
+    "check",
+    "verify",
+    "查询",
+    "校验",
+    "验证",
+    "报表",
+    "列表",
+    "详情",
+    "view",
+    "read",
+    "get",
+    "fetch",
+    "retrieve",
+    "show",
+    "display",
+    "export",
+    "download",
+    "查看",
+    "读取",
+    "导出",
+    "下载"
+  ],
+  "binding_stop_words": [
+    "must",
+    "shall",
+    "cannot",
+    "equal",
+    "only",
+    "true",
+    "false",
+    "with",
+    "from",
+    "that",
+    "this",
+    "where",
+    "when",
+    "then",
+    "status",
+    "state",
+    "type",
+    "name",
+    "code",
+    "date",
+    "time",
+    "value",
+    "count",
+    "total",
+    "amount",
+    "identifier",
+    "the",
+    "a",
+    "an",
+    "and",
+    "or",
+    "of",
+    "for",
+    "to",
+    "in",
+    "on",
+    "by",
+    "at",
+    "is",
+    "are",
+    "be",
+    "all",
+    "any",
+    "each",
+    "其",
+    "的",
+    "和",
+    "与",
+    "或",
+    "在",
+    "对",
+    "从",
+    "被"
+  ],
   "verb_action_lexicon": {
     "comment": "Language-neutral Chinese->English action-verb bridge. Maps narrative PRD verbs to API action tokens so prose state transitions can be routed to concrete endpoints WITHOUT per-domain hardcoding. Extend per deployment.",
-    "\u652f\u4ed8": ["pay", "payment", "checkout", "charge"],
-    "\u4ed8\u6b3e": ["pay", "payment"],
-    "\u9000\u6b3e": ["refund"],
-    "\u9000\u8d27": ["refund"],
-    "\u53d6\u6d88": ["cancel"],
-    "\u64a4\u5355": ["cancel"],
-    "\u53d1\u8d27": ["ship", "deliver"],
-    "\u914d\u9001": ["ship", "deliver"],
-    "\u786e\u8ba4": ["confirm", "receive"],
-    "\u6536\u8d27": ["confirm", "receive"],
-    "\u4e0b\u5355": ["order", "create", "submit", "place"],
-    "\u63d0\u4ea4\u8ba2\u5355": ["order", "submit", "place"],
-    "\u521b\u5efa": ["create"],
-    "\u65b0\u5efa": ["create"],
-    "\u65b0\u589e": ["create"],
-    "\u66f4\u65b0": ["update"],
-    "\u4fee\u6539": ["update", "modify"],
-    "\u7f16\u8f91": ["update", "edit"],
-    "\u5220\u9664": ["delete", "remove"],
-    "\u767b\u5f55": ["login", "signin", "auth"],
-    "\u6ce8\u518c": ["register", "signup"],
-    "\u5ba1\u6279": ["approve", "reject", "review"],
-    "\u6279\u51c6": ["approve"],
-    "\u9a73\u56de": ["reject"],
-    "\u62d2\u7edd": ["reject"],
-    "\u9501\u5b9a": ["lock"],
-    "\u89e3\u9501": ["unlock", "release"],
-    "\u91ca\u653e": ["release", "unlock"],
-    "\u6fc0\u6d3b": ["activate", "enable"],
-    "\u505c\u7528": ["disable", "deactivate"],
-    "\u542f\u7528": ["enable", "activate"],
-    "\u6821\u9a8c": ["validate", "verify"],
-    "\u9a8c\u8bc1": ["validate", "verify"],
-    "\u5206\u914d": ["assign"],
-    "\u4e0a\u4f20": ["upload"],
-    "\u4e0b\u8f7d": ["download"],
-    "\u5bfc\u51fa": ["export"],
-    "\u5bfc\u5165": ["import"],
-    "\u51bb\u7ed3": ["freeze", "lock"],
-    "\u89e3\u51bb": ["unfreeze", "unlock"],
-    "\u67e5\u770b": ["read", "view", "list"],
-    "\u6d4f\u89c8": ["read", "view", "list"],
-    "\u67e5\u8be2": ["read", "query", "list"],
-    "\u7ba1\u7406": ["manage"],
-    "\u8c03\u6574": ["adjust", "update"],
-    "\u7533\u8bf7": ["apply", "request", "create"],
-    "\u5904\u7406": ["process", "review", "update"],
-    "read": ["read", "view", "list", "get"],
-    "create": ["create", "add", "post"],
-    "update": ["update", "modify", "edit", "patch"],
-    "delete": ["delete", "remove"],
-    "manage": ["manage"]
+    "支付": [
+      "pay",
+      "payment",
+      "checkout",
+      "charge"
+    ],
+    "付款": [
+      "pay",
+      "payment"
+    ],
+    "退款": [
+      "refund"
+    ],
+    "退货": [
+      "refund"
+    ],
+    "取消": [
+      "cancel"
+    ],
+    "撤单": [
+      "cancel"
+    ],
+    "发货": [
+      "ship",
+      "deliver"
+    ],
+    "配送": [
+      "ship",
+      "deliver"
+    ],
+    "确认": [
+      "confirm",
+      "receive"
+    ],
+    "收货": [
+      "confirm",
+      "receive"
+    ],
+    "下单": [
+      "order",
+      "create",
+      "submit",
+      "place"
+    ],
+    "提交订单": [
+      "order",
+      "submit",
+      "place"
+    ],
+    "创建": [
+      "create"
+    ],
+    "新建": [
+      "create"
+    ],
+    "新增": [
+      "create"
+    ],
+    "更新": [
+      "update"
+    ],
+    "修改": [
+      "update",
+      "modify"
+    ],
+    "编辑": [
+      "update",
+      "edit"
+    ],
+    "删除": [
+      "delete",
+      "remove"
+    ],
+    "登录": [
+      "login",
+      "signin",
+      "auth"
+    ],
+    "注册": [
+      "register",
+      "signup"
+    ],
+    "审批": [
+      "approve",
+      "reject",
+      "review"
+    ],
+    "批准": [
+      "approve"
+    ],
+    "驳回": [
+      "reject"
+    ],
+    "拒绝": [
+      "reject"
+    ],
+    "锁定": [
+      "lock",
+      "reserve"
+    ],
+    "解锁": [
+      "unlock",
+      "release"
+    ],
+    "释放": [
+      "release",
+      "unlock"
+    ],
+    "激活": [
+      "activate",
+      "enable"
+    ],
+    "停用": [
+      "disable",
+      "deactivate",
+      "suspend"
+    ],
+    "启用": [
+      "enable",
+      "activate"
+    ],
+    "校验": [
+      "validate",
+      "verify"
+    ],
+    "验证": [
+      "validate",
+      "verify"
+    ],
+    "分配": [
+      "assign",
+      "transfer"
+    ],
+    "上传": [
+      "upload"
+    ],
+    "下载": [
+      "download"
+    ],
+    "导出": [
+      "export",
+      "read"
+    ],
+    "导入": [
+      "import"
+    ],
+    "冻结": [
+      "freeze",
+      "lock",
+      "suspend"
+    ],
+    "解冻": [
+      "unfreeze",
+      "unlock",
+      "enable"
+    ],
+    "查看": [
+      "read",
+      "view",
+      "list"
+    ],
+    "浏览": [
+      "read",
+      "view",
+      "list"
+    ],
+    "查询": [
+      "read",
+      "query",
+      "list"
+    ],
+    "管理": [
+      "manage"
+    ],
+    "调整": [
+      "adjust",
+      "update"
+    ],
+    "申请": [
+      "apply",
+      "request",
+      "create"
+    ],
+    "处理": [
+      "process",
+      "review",
+      "update"
+    ],
+    "read": [
+      "read",
+      "view",
+      "list",
+      "get"
+    ],
+    "create": [
+      "create",
+      "add",
+      "post"
+    ],
+    "update": [
+      "update",
+      "modify",
+      "edit",
+      "patch"
+    ],
+    "delete": [
+      "delete",
+      "remove"
+    ],
+    "manage": [
+      "manage"
+    ],
+    "add": [
+      "create"
+    ],
+    "new": [
+      "create"
+    ],
+    "register": [
+      "create"
+    ],
+    "submit": [
+      "create"
+    ],
+    "insert": [
+      "create"
+    ],
+    "开通": [
+      "create"
+    ],
+    "提交": [
+      "create"
+    ],
+    "view": [
+      "read"
+    ],
+    "list": [
+      "read"
+    ],
+    "query": [
+      "read"
+    ],
+    "search": [
+      "read"
+    ],
+    "export": [
+      "read"
+    ],
+    "modify": [
+      "update"
+    ],
+    "edit": [
+      "update"
+    ],
+    "change": [
+      "update"
+    ],
+    "adjust": [
+      "update"
+    ],
+    "变更": [
+      "update"
+    ],
+    "remove": [
+      "delete"
+    ],
+    "void": [
+      "cancel",
+      "delete"
+    ],
+    "archive": [
+      "delete"
+    ],
+    "移除": [
+      "delete"
+    ],
+    "作废": [
+      "cancel",
+      "delete"
+    ],
+    "approve": [
+      "approve"
+    ],
+    "authorize": [
+      "approve"
+    ],
+    "核准": [
+      "approve"
+    ],
+    "reject": [
+      "reject"
+    ],
+    "decline": [
+      "reject"
+    ],
+    "transfer": [
+      "transfer"
+    ],
+    "assign": [
+      "assign",
+      "transfer"
+    ],
+    "reassign": [
+      "transfer"
+    ],
+    "转移": [
+      "transfer"
+    ],
+    "调拨": [
+      "transfer"
+    ],
+    "settle": [
+      "settle"
+    ],
+    "reconcile": [
+      "settle"
+    ],
+    "结算": [
+      "settle"
+    ],
+    "对账": [
+      "settle"
+    ],
+    "撤销": [
+      "cancel"
+    ],
+    "废弃": [
+      "cancel"
+    ],
+    "cancel": [
+      "cancel"
+    ],
+    "revoke": [
+      "cancel"
+    ],
+    "缴费": [
+      "pay"
+    ],
+    "扣款": [
+      "pay"
+    ],
+    "payment": [
+      "pay"
+    ],
+    "checkout": [
+      "pay"
+    ],
+    "出库": [
+      "ship"
+    ],
+    "发运": [
+      "ship"
+    ],
+    "deliver": [
+      "ship"
+    ],
+    "dispatch": [
+      "ship"
+    ],
+    "shipment": [
+      "ship"
+    ],
+    "确认收货": [
+      "confirm"
+    ],
+    "签收": [
+      "confirm"
+    ],
+    "confirm": [
+      "confirm"
+    ],
+    "acknowledge": [
+      "confirm"
+    ],
+    "退回": [
+      "reject"
+    ],
+    "退费": [
+      "refund"
+    ],
+    "refund": [
+      "refund"
+    ],
+    "chargeback": [
+      "refund"
+    ],
+    "回滚库存": [
+      "release"
+    ],
+    "release": [
+      "release"
+    ],
+    "unlock": [
+      "release"
+    ],
+    "unreserve": [
+      "release"
+    ],
+    "占用": [
+      "reserve"
+    ],
+    "预占": [
+      "reserve"
+    ],
+    "reserve": [
+      "reserve"
+    ],
+    "核验": [
+      "validate"
+    ],
+    "validate": [
+      "validate"
+    ],
+    "verify": [
+      "validate"
+    ],
+    "核销": [
+      "consume"
+    ],
+    "抵扣": [
+      "consume"
+    ],
+    "redeem": [
+      "consume"
+    ],
+    "consume": [
+      "consume"
+    ],
+    "关闭": [
+      "close"
+    ],
+    "结案": [
+      "close"
+    ],
+    "完成": [
+      "close"
+    ],
+    "close": [
+      "close"
+    ],
+    "finalize": [
+      "close"
+    ],
+    "禁用": [
+      "suspend"
+    ],
+    "suspend": [
+      "suspend"
+    ],
+    "disable": [
+      "suspend"
+    ],
+    "freeze": [
+      "suspend"
+    ],
+    "enable": [
+      "enable"
+    ],
+    "activate": [
+      "enable"
+    ],
+    "指派": [
+      "assign"
+    ],
+    "派单": [
+      "assign"
+    ],
+    "开单": [
+      "create"
+    ],
+    "报名": [
+      "create"
+    ],
+    "审核": [
+      "approve"
+    ],
+    "通过": [
+      "approve"
+    ]
   },
   "entity_token_lexicon": {
     "comment": "Language-neutral Chinese->English ENTITY noun bridge. Lets PRD sections written in Chinese (e.g. '退款', '订单') bind to the correct source-derived entity (refund/order) when the API catalog is English-only. Extend per deployment; not domain hardcoding.",
-    "\u8ba2\u5355": ["order"],
-    "\u4e0b\u5355": ["order"],
-    "\u5546\u54c1": ["product", "item"],
-    "\u5e93\u5b58": ["inventory", "stock"],
-    "\u4f18\u60e0\u5238": ["coupon"],
-    "\u8d2d\u7269\u8f66": ["cart"],
-    "\u7528\u6237": ["user", "account"],
-    "\u62a5\u8868": ["report"],
-    "\u5730\u5740": ["address"],
-    "\u652f\u4ed8": ["payment", "pay"],
-    "\u9000\u6b3e": ["refund"],
-    "\u53d1\u8d27": ["shipment", "shipping"],
-    "\u53d6\u6d88": ["cancel"],
-    "\u53d1\u7968": ["invoice"],
-    "\u8ba2\u9605": ["subscription"],
-    "\u804a\u5929": ["chat", "message"],
-    "\u6587\u4ef6": ["file", "document"],
-    "\u5ba1\u8ba1": ["audit"],
-    "\u65e5\u5fd7": ["log"],
-    "\u6d41\u6c34": ["transaction", "ledger"],
-    "\u8d22\u52a1": ["finance"],
-    "\u5bc6\u7801": ["password", "credential"],
-    "\u4f59\u989d": ["balance", "wallet"]
-  }
+    "订单": [
+      "order"
+    ],
+    "下单": [
+      "order"
+    ],
+    "商品": [
+      "product",
+      "item"
+    ],
+    "库存": [
+      "inventory",
+      "stock"
+    ],
+    "优惠券": [
+      "coupon"
+    ],
+    "购物车": [
+      "cart"
+    ],
+    "用户": [
+      "user",
+      "account"
+    ],
+    "报表": [
+      "report"
+    ],
+    "地址": [
+      "address"
+    ],
+    "支付": [
+      "payment",
+      "pay"
+    ],
+    "退款": [
+      "refund"
+    ],
+    "发货": [
+      "shipment",
+      "shipping"
+    ],
+    "取消": [
+      "cancel"
+    ],
+    "发票": [
+      "invoice"
+    ],
+    "订阅": [
+      "subscription"
+    ],
+    "聊天": [
+      "chat",
+      "message"
+    ],
+    "文件": [
+      "file",
+      "document"
+    ],
+    "审计": [
+      "audit"
+    ],
+    "日志": [
+      "log"
+    ],
+    "流水": [
+      "transaction",
+      "ledger"
+    ],
+    "财务": [
+      "finance"
+    ],
+    "密码": [
+      "password",
+      "credential"
+    ],
+    "余额": [
+      "balance",
+      "wallet"
+    ],
+    "产品": [
+      "product"
+    ],
+    "客户": [
+      "customer"
+    ],
+    "账户": [
+      "account"
+    ],
+    "账号": [
+      "account"
+    ],
+    "付款": [
+      "payment"
+    ],
+    "工单": [
+      "ticket"
+    ],
+    "合同": [
+      "contract"
+    ],
+    "采购": [
+      "purchase"
+    ],
+    "审批": [
+      "approval"
+    ],
+    "角色": [
+      "role"
+    ],
+    "权限": [
+      "permission"
+    ],
+    "租户": [
+      "tenant"
+    ],
+    "组织": [
+      "organization"
+    ],
+    "部门": [
+      "department"
+    ],
+    "员工": [
+      "employee"
+    ],
+    "物料": [
+      "material"
+    ],
+    "仓库": [
+      "warehouse"
+    ],
+    "批次": [
+      "batch"
+    ],
+    "设备": [
+      "equipment"
+    ],
+    "凭证": [
+      "voucher"
+    ],
+    "台账": [
+      "ledger"
+    ],
+    "券": [
+      "coupon"
+    ],
+    "促销": [
+      "promotion"
+    ],
+    "对账": [
+      "reconciliation"
+    ],
+    "结算": [
+      "settlement"
+    ],
+    "物流": [
+      "shipment"
+    ],
+    "发货单": [
+      "shipment"
+    ]
+  },
+  "_doc": [
+    "Semantic lexicon for enterprise-material comprehension.",
+    "",
+    "This file was ABSENT. _semantic_lexicon() loads it with a {} default, so every one of",
+    "the 19 _lexicon_* call sites across _parsing.py, _utils.py, business_state_graph.py and",
+    "supplementary_behavior_slices.py silently received an empty list or dict. An entire",
+    "policy-driven comprehension layer was inert, and two of its failure modes are worse than",
+    "a gap: with no forbidden_transition_markers a FORBIDDEN transition is classified as an",
+    "ALLOWED one, so the product asserts the transition should succeed and reports a false",
+    "defect when the target correctly refuses it; with no positive_integer_markers the typed",
+    "constraint extractor returns {} unconditionally.",
+    "",
+    "WHAT BELONGS HERE: document-structure and language vocabulary -- how enterprise material",
+    "SAYS things. Section headings, grant/deny phrasing, ownership scoping, comparison words,",
+    "and cross-language equivalents for common business nouns.",
+    "",
+    "WHAT DOES NOT BELONG HERE: any customer's business rules, entity semantics, or",
+    "industry-specific taxonomy. This file must never encode what a defect IS, only how a",
+    "document expresses a fact. Deployments extend it for their own vocabulary; that",
+    "extensibility is what keeps the vocabulary out of the code.",
+    "",
+    "entity_token_lexicon is a LANGUAGE aid, not an industry model: without cross-language",
+    "noun equivalence a Chinese-language PRD cannot have its state-machine subject resolved at",
+    "all, which would restrict the product to English material -- a far worse coupling than a",
+    "translation table. Add terms for the language a deployment actually receives."
+  ],
+  "_verb_action_lexicon_shape": [
+    "KEY is the word as a document writes it; VALUE is the canonical action it maps to.",
+    "This is the same direction as entity_token_lexicon, and it matters: the consumer does",
+    "actions.extend(target_tokens) on a match, so a {canonical: [synonyms...]} shape would",
+    "emit every synonym as a granted action. A permission row would then claim actions the",
+    "document never granted, and obligations would be compiled for them -- exactly the",
+    "over-broad inference the evidence rules forbid. A canonical word maps to itself."
+  ],
+  "_unified": "Single canonical semantic lexicon. Two copies existed at ai_test_asset_center/policies/ and enterprise_knowledge_center/policies/, read by disjoint sets of modules and silently diverging: 30 verb keys carried conflicting meanings and each file held vocabulary the other lacked. Unified by union so no consumer loses an entry. Do not re-fork -- add here."
 }
