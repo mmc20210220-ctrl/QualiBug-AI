@@ -1,0 +1,13 @@
+{
+  "schema_version": "qualibug.v162-receipt-tamper-audit.v1",
+  "generated_at": "2026-07-27T10:43:04.637167+00:00",
+  "tamper_detected": true,
+  "sample": {
+    "receipt_id": "c1",
+    "tampered": true,
+    "status": "TAMPERED",
+    "reason_code": "payload_hash_mismatch"
+  },
+  "undetected_tamper_count": 0,
+  "GATE_A_TAMPER": "PASS"
+}

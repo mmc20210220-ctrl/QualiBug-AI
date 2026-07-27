@@ -1,0 +1,14 @@
+{
+  "schema_version": "qualibug.v162-post-run-regression.v1",
+  "generated_at": "2026-07-27T10:53:31.614556+00:00",
+  "specialized": {
+    "passed": 83,
+    "failed": 0
+  },
+  "v150_related": {
+    "passed": 43,
+    "failed": 0
+  },
+  "full_suite": "NOT_RUN",
+  "new_regressions": 0
+}

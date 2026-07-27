@@ -1,0 +1,41 @@
+{
+  "schema_version": "qualibug.v162-fixture-provenance-receipts.v1",
+  "generated_at": "2026-07-27T10:43:04.637167+00:00",
+  "sample": {
+    "schema_version": "qualibug.canonical-receipt-envelope.v1",
+    "receipt_type": "qualibug.fixture-provenance-receipt.v1",
+    "receipt_id": "fp1",
+    "campaign_id": "CMP_A",
+    "run_id": "RUN_A",
+    "obligation_id": "obl_a",
+    "experiment_id": "exp_a",
+    "fixture_id": "fx_a",
+    "protocol_id": "proto_a",
+    "producer_module": "ai_test_asset_center.disposable_fixture_contract",
+    "producer_version": "v1.6.2-receipt-bundle-finalizer",
+    "code_commit_sha": "7a6895a34905bbc08d519d88c3187b825a4304cf",
+    "tree_hash": "8c09f57c6711d0bada039ef7420e55a1aedc615d",
+    "parent_receipt_ids": [],
+    "source_contract_ids": [
+      "fx_a"
+    ],
+    "payload": {
+      "schema_version": "qualibug.fixture-provenance-receipt.v1",
+      "fixture_id": "fx_a",
+      "entity_id": "ent_a",
+      "scope_id": "scope_a",
+      "ownership": "experiment_disposable",
+      "identity_stable": true,
+      "scope_stable": true,
+      "create_identity": "id-1",
+      "readback_identity": "id-1",
+      "operation_identity": "id-1",
+      "observer_identity": "id-1",
+      "cleanup_identity": "id-1"
+    },
+    "payload_hash": "449fd376029c131572e3761b9c1ba91de3d36b2c97f08c358f45ac854e0f6c4a",
+    "produced_at": "2026-07-27T10:43:04.648155+00:00",
+    "status": "VALID",
+    "receipt_hash": "9faa28c1347562feee5b1d764322534927754bedd78b92ee2458a566a29a4ead"
+  }
+}

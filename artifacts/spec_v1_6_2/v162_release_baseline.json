@@ -1,0 +1,46 @@
+{
+  "schema_version": "qualibug.v162-release-baseline.v1",
+  "spec_version": "V1.6.2",
+  "generated_at": "2026-07-27T10:29:32.870405+00:00",
+  "release_baseline": {
+    "commit_sha": "afdfdef017f17eb1b63eeb2303a0796341d78357",
+    "parent_commit_sha": "7a6895a34905bbc08d519d88c3187b825a4304cf",
+    "tree_hash": "d4166ae8ded86cbf2a177a0685d8fc71be1fe852",
+    "branch": "main",
+    "working_tree_clean": false,
+    "pushed_to_origin": true,
+    "origin_sync": {
+      "behind": 0,
+      "ahead": 0
+    },
+    "v161_release_commit_note": "7a6895a is the V1.6.0/V1.6.1 Field Oracle Trace closure commit on origin/main; f440c3d is NOT the V1.6.1 release commit",
+    "noise_policy": "Leftover untracked/deleted non-V1.6.1 files stashed as v162-freeze-noise; not part of release freeze",
+    "source_asset_hash": "503317304928d072811692cedd110d09e9dcc0d9c6128cff382f7613ca03c545",
+    "target_hash": "cd37ffed0fa5eded061e6042a8b9aa68d9e500255897bc7cab1bc7be522f82ca",
+    "database_seed_hash": "NOT_CAPTURED_AT_FREEZE_USE_TARGET_RECEIPT",
+    "account_manifest_hash": "917198f62b664b72bb90a84d72ad533dd9c9a296720fa8648362ce0febb682c6",
+    "budget_hash": "e5fdf5755e83d1441451ba9265eb81b9ca36b74f122b8e5afd7fe3eae7a0774f",
+    "budget_payload": {
+      "slice_budget": 1200,
+      "automatic_round_limit": 8,
+      "policy_version": "v1.0.0-baseline"
+    },
+    "working_tree_note": "Only untracked artifacts/spec_v1_6_2 evidence; product code clean and pushed"
+  },
+  "file_hashes": {
+    "process_step_execution": "b005db6a4aee93c1c92e1cc34c3e719603f7c82859f23fc7388c592e0fe8caff",
+    "experiment_outcome_finalizer": "1598e5797bca2e82f19d1db8edeb4d1923d28b8f9b6f169cc6b9948b4fe206a4",
+    "operational_receipts": "b00e560fe0a4e643ebcd51c49addfc29cc85b14c06d501bbb8f9460a44847410",
+    "disposable_fixture_contract": "bc65cfcb20d29ddb22602399d98622300db49dac0de50f557e9fe390d76a7f7a",
+    "cleanup_execution_receipt": "ae776c1a403691e5986175f7d341e169725384ce8a49e290edab4cf259260741",
+    "contract_oracles": "90e0b9fa16587a95bcdcd628333416ead83ebd2eda6797fdac1c4c6f6966a7c2",
+    "discovery_quality_projection": "c916d74d2b0fb7d5f19a52df55923a5452e3d76178185bdb3342eeee9b8d5a09"
+  },
+  "canonical_obligation": {
+    "CANONICAL_OBLIGATION_COUNT": 1498,
+    "manifest_hash": "0c692b5ee288abf4bf540b3d57d5395fee552c6163b3df56fe42d445033dd4cd",
+    "supersedes_1189": true,
+    "seal_status": "SEALED"
+  },
+  "updated_at": "2026-07-27T10:53:31.614556+00:00"
+}

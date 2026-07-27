@@ -1,0 +1,8 @@
+{
+  "schema_version": "qualibug.receipt-parent-chain-audit.v1",
+  "generated_at": "2026-07-27T10:43:04.637167+00:00",
+  "receipt_count": 9,
+  "intact": true,
+  "broken_links": [],
+  "GATE_A_PARENT_CHAIN": "PASS"
+}

@@ -1,0 +1,11 @@
+{
+  "schema_version": "qualibug.v162-fixture-provenance-contracts.v1",
+  "generated_at": "2026-07-27T10:43:04.637167+00:00",
+  "authority": "operational_receipts.build_fixture_provenance_receipt",
+  "identity_stability_required": true,
+  "customer_owned_forbidden": true,
+  "heuristic_strategies_forbidden": [
+    "latest_record",
+    "max_id"
+  ]
+}

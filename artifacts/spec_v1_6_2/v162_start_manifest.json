@@ -1,0 +1,31 @@
+{
+  "schema_version": "qualibug.v162-start-manifest.v1",
+  "spec_version": "V1.6.2",
+  "run_name": "V1_6_2_RECEIPT_AUTHORITY_COVERAGE_V1",
+  "frozen_at": "2026-07-27T10:47:32.006156+00:00",
+  "commit_sha": "afdfdef017f17eb1b63eeb2303a0796341d78357",
+  "tree_hash": "d4166ae8ded86cbf2a177a0685d8fc71be1fe852",
+  "working_tree_dirty": true,
+  "dirty_policy": "artifacts/spec_v1_6_2 untracked evidence only; product code committed+pushed",
+  "canonical_obligation_count": 1498,
+  "canonical_obligation_manifest_hash": "0c692b5ee288abf4bf540b3d57d5395fee552c6163b3df56fe42d445033dd4cd",
+  "shared_fix_point": "FINALIZATION_RECEIPT_FROM_BUNDLE",
+  "candidate_unlock_set_size": 61,
+  "candidate_unlock_set_frozen": true,
+  "file_hashes": {
+    "operational_receipts": "3a252221affc624b7394f6208d7e46b8c1ab0a1d50024022cebf99f9d025a5c8",
+    "experiment_outcome_finalizer": "627ddac7ac0b8628310229c4aef08f4f56c2db3c74e08e817035c6310b3fad50"
+  },
+  "entry_request": {
+    "method": "POST",
+    "url": "http://127.0.0.1:8088/api/v1/scan",
+    "body": {
+      "project_id": "benchmark_mall_131",
+      "base_url": "http://127.0.0.1:8080",
+      "approved_base_url": "http://127.0.0.1:8080",
+      "environment_type": "test",
+      "environment_ref": "sandbox"
+    }
+  },
+  "post_start_tuning_forbidden": true
+}

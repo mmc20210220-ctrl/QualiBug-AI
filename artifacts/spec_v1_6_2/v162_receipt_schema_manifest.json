@@ -1,0 +1,30 @@
+{
+  "schema_version": "qualibug.v162-receipt-schema-manifest.v1",
+  "generated_at": "2026-07-27T10:43:04.637167+00:00",
+  "canonical_envelope_schema": "qualibug.canonical-receipt-envelope.v1",
+  "execution_receipt_bundle_schema": "qualibug.execution-receipt-bundle.v1",
+  "execution_finalization_receipt_schema": "qualibug.execution-finalization-receipt.v1",
+  "required_formal_receipt_types": [
+    "qualibug.compile-receipt.v1",
+    "qualibug.fixture-contract-receipt.v1",
+    "qualibug.fixture-materialization-receipt.v1",
+    "qualibug.fixture-identity-receipt.v1",
+    "qualibug.fixture-scope-receipt.v1",
+    "qualibug.process-step-receipt.v1",
+    "qualibug.transport-receipt.v1",
+    "qualibug.observation-receipt.v1",
+    "qualibug.oracle-invocation-receipt.v1",
+    "qualibug.oracle-trace-receipt.v1",
+    "qualibug.cleanup-execution-receipt.v1",
+    "qualibug.cleanup-verification-receipt.v1",
+    "qualibug.environment-restoration-receipt.v1",
+    "qualibug.execution-finalization-receipt.v1",
+    "qualibug.finding-delivery-gate-receipt.v1",
+    "qualibug.report-metric-receipt.v1"
+  ],
+  "authority_module": "ai_test_asset_center.operational_receipts",
+  "finalizer_module": "ai_test_asset_center.experiment_outcome_finalizer",
+  "canonical_obligation_count": 1498,
+  "canonical_obligation_manifest_hash": "0c692b5ee288abf4bf540b3d57d5395fee552c6163b3df56fe42d445033dd4cd",
+  "receipt_schema_hash": "8e2ee6e119612c0a49115bf7180bbea10dbd7be515bbbb5be265387920895153"
+}

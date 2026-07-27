@@ -1,0 +1,83 @@
+{
+  "schema_version": "qualibug.v162-receipt-runtime-funnel.v1",
+  "generated_at": "2026-07-27T10:52:38.889455+00:00",
+  "scan_id": "scan_benchmark_mall_131_1785149252101",
+  "campaign": {
+    "campaign_id": "CMP_4d07614f012f301939d34b75",
+    "campaign_status": "degraded",
+    "project_id": "benchmark_mall_131",
+    "scope_id": "private_default",
+    "environment_ref": "sandbox",
+    "source_id": "src_benchmark_mall_131_composed_all",
+    "source_hash": "503317304928d072811692cedd110d09e9dcc0d9c6128cff382f7613ca03c545",
+    "source_snapshot_hash": "d9d814fe08b1d9537f107e08d9873a5d96de0bdad6a6b1330a5c939866d465e2",
+    "policy_version": "v1.0.0-baseline",
+    "lineage_campaign_id": "CMP_4d07614f012f301939d34b75",
+    "rerun_key": "",
+    "rerun_reason": "",
+    "run_count": 19,
+    "round_count": 0,
+    "slice_budget": 926,
+    "automatic_round_limit": 8,
+    "attempted_slice_count": 0,
+    "confirmed_slice_count": 0,
+    "obligation_attempt_selected_count": 1498,
+    "obligation_attempt_terminal_count": 1498,
+    "obligation_attempt_ledger_fingerprint": "aaec1124f44af52f0dfa19b9f59f44d7b2acb59f2c64a977a150974a788cffc9",
+    "coverage_deferred_reason": "",
+    "next_campaign_reason": "",
+    "completion_authority": "obligation_attempt_ledger",
+    "completion_is_formal": true,
+    "campaign_mode": "resumed"
+  },
+  "execution_status": "completed",
+  "total_ms": 194156,
+  "canonical_obligation_count": 1498,
+  "selected": 1498,
+  "terminal": 1498,
+  "ledger_fingerprint": "4588ac7883b72a7c6c2c803dec02dd1b3737f7808013c2ec76bdf0d3a6e02429",
+  "real_executed": 163,
+  "unique_oracle_evaluations": 284,
+  "raw_oracle_traces": 0,
+  "cleanup_verified": 274,
+  "true_completed": 0,
+  "terminal_status_counts": {
+    "REJECTED": 61,
+    "BLOCKED": 1107,
+    "HARNESS_FAILED": 15,
+    "DELIVERABLE": 1,
+    "DEFERRED": 314
+  },
+  "reason_code_counts": {
+    "STATE_RULE_PRECONDITION_NOT_ESTABLISHED": 287,
+    "OBLIGATION_BUDGET_REACHED": 234,
+    "BLOCKED_NON_REVERSIBLE_WRITE": 205,
+    "BLOCKED_MISSING_OBSERVER": 106,
+    "BLOCKED_EMPTY_CONSERVATION_TERMS": 100,
+    "ASSERTION_INDETERMINATE": 86,
+    "BLOCKED_ASSERTION_EVIDENCE_UNPRODUCIBLE": 82,
+    "MISSING_PRIMARY_OPERATION": 80,
+    "BLOCKED_CONFLICTING_SOURCE": 68,
+    "ORACLE_NOT_VIOLATED": 61,
+    "FIELD_LEVEL_RULE_NOT_EXECUTABLE": 61,
+    "BLOCKED_MISSING_OPERATION": 44,
+    "BLOCKED_MISSING_BINDING": 33,
+    "BLOCKED_CLEANUP_EQUIVALENCE_INDETERMINATE": 21,
+    "CONTRACT_ORACLE_HARNESS_FAILED": 15,
+    "BLOCKED_BINDING_GRAPH_INVALID": 11,
+    "BLOCKED_CLEANUP_CONTRACT_DRIFT": 3,
+    "": 1
+  },
+  "unlock_set": {
+    "N": 61,
+    "shared_fix_point": "FINALIZATION_RECEIPT_FROM_BUNDLE",
+    "executed_in_unlock_set": 61,
+    "true_completed_in_unlock_set": 0,
+    "terminal_status": {
+      "REJECTED": 61
+    },
+    "reason_code": {
+      "ORACLE_NOT_VIOLATED": 61
+    }
+  }
+}

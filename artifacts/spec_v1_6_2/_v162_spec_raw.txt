@@ -1,0 +1,1714 @@
+<timestamp>Monday, Jul 27, 2026, 6:24 PM (UTC+8)</timestamp>
+<user_query>
+QualiBug V1.6.2 Receipt-Driven Execution Authority、Fixture Provenance 与 Obligation Coverage Expansion SPEC
+Receipt-Driven Completion, Provenance Closure and Real Execution Coverage
+
+项目： QualiBug-AI
+任务级别： P0 / 核心执行权威与覆盖率突破
+执行对象： Code Agent
+实施分支： main
+阶段性质： 现有主链原位收敛，不扩业务域、不增加义务类型
+预期Canonical Obligation基线： 1189
+PROJECT_G_ENTRY_ALLOWED： false
+
+由于当前最高优先级已经从“继续寻找字段Violation”调整为“执行权威Receipt化与真实覆盖率扩大”，原计划中的Field-Level Violation、2/2 Reproduction与外部Evaluator顺延至V1.6.3。
+
+1. 当前正式能力基线
+
+当前已经具备：
+
+企业资料理解
+→ Canonical Field
+→ 业务义务
+→ Disposable Fixture
+→ 多步骤业务实验
+→ Field Observation
+→ Typed Oracle
+→ Field Oracle Trace
+→ Cleanup
+→ Environment Restoration
+
+已经证明：
+
+COMPLEX_BUSINESS_EXPERIMENT_SKELETON = PASS
+SAFE_WRITE_GOVERNANCE = PASS
+MULTI_STEP_RUNTIME = PASS
+FIELD_ORACLE_TRACE_RUNTIME = PASS
+ARCHITECTURE_AUTHORITY = PASS
+
+当前仍未完全证明：
+
+TRUE_COMPLETED_RECEIPT_AUTHORITY = PARTIAL
+FIXTURE_PROVENANCE_END_TO_END = PARTIAL
+FORMAL_REPORT_RECEIPT_SSOT = PARTIAL
+REAL_EXECUTION_COVERAGE = LOW
+DEEP_BUG_DISCOVERY_PROOF = NOT_MEASURED
+
+当前关键判断：
+
+QualiBug已经具备安全执行复杂业务实验的骨架，但“实验真正完成”“Fixture始终属于当前实验”“验收报告中的数字可信”仍未完全由不可变Receipt证明；同时1189条义务中真正到达Target、Oracle、Cleanup和TRUE_COMPLETED的比例仍然过低。
+
+2. 本阶段唯一总目标
+
+本阶段必须完成两个连续Gate。
+
+Gate A：Receipt Authority Closure
+
+将以下能力全部改成Receipt驱动：
+
+TRUE_COMPLETED
+Fixture Provenance
+Real Executed
+Oracle Evaluated
+Cleanup Verified
+Environment Restored
+Formal Finding
+正式验收报告
+
+任何裸布尔值、临时状态字段、内存计数器只能作为Receipt结果的缓存投影，不能继续作为正式事实源。
+
+Gate B：Obligation Coverage Expansion
+
+对Canonical 1189条义务完成100%第一终止断点归因，选择累计解锁价值最高、且不会破坏安全门禁的一个共享修复点，显著扩大：
+
+Real Transport Executed
+→ Observation Completed
+→ Oracle Evaluated
+→ Cleanup Verified
+→ Receipt-Verified TRUE_COMPLETED
+
+本阶段不通过放宽Gate提高覆盖率。
+
+3. 当前核心断点
+
+统一父断点：
+
+RECEIPT_DRIVEN_EXECUTION_AUTHORITY_AND_OBLIGATION_COVERAGE_NOT_CLOSED
+
+拆分为：
+
+TRUE_COMPLETED_NOT_RECEIPT_DERIVED
+FIXTURE_PROVENANCE_CHAIN_INCOMPLETE
+FORMAL_REPORT_NOT_RECEIPT_DRIVEN
+CANONICAL_OBLIGATION_DENOMINATOR_NOT_SEALED
+OBLIGATION_FIRST_TERMINAL_NOT_FULLY_ATTRIBUTED
+SAFE_EXECUTION_COVERAGE_TOO_LOW
+4. 本阶段非目标
+
+禁止：
+
+不新增Golden Rule；
+不增加义务类型；
+不扩大业务域；
+不增加通用探针；
+不增加第二套Fixture系统；
+不增加第二套Finalizer；
+不增加第二套Report Generator；
+不增加第二套Receipt Ledger；
+不增加第二套Oracle；
+不修改字段公式以制造Violation；
+不根据Benchmark答案提高覆盖率；
+不取消状态前置验证；
+不允许无Readback写实验；
+不允许无Cleanup写实验；
+不允许环境未恢复时标记完成；
+不把Compiled、Planned或Trace数量当作真实执行覆盖；
+不通过增大预算掩盖Binding问题；
+不执行外部Evaluator；
+不启动Project G。
+
+本阶段完成后才允许进入：
+
+V1.6.3 Field-Level Violation
+→ 2/2 Reproduction
+→ External Discovery Proof
+5. 最高架构约束
+
+所有改造必须基于现有主链原位完成。
+
+优先复用：
+
+现有Experiment Compiler
+现有Disposable Fixture Contract
+现有Fixture Materializer
+现有Runtime Binding
+现有Experiment Executor
+现有Process Step Ledger
+现有Observation Receipts
+现有Oracle Registry
+现有Field Oracle Trace
+现有Database Cleanup Executor
+现有Environment Restoration
+现有Outcome Finalizer
+现有Finding Gate
+现有Artifact/Ledger设施
+
+禁止新建平行：
+
+receipt_engine_v2
+fixture_provenance_v2
+completion_finalizer_v2
+acceptance_report_v2
+execution_coverage_v2
+
+新增文件仅允许承担当前没有权威承载点的单一职责，并必须在最终报告说明：
+
+现有模块为什么不能承载；
+新模块的唯一职责；
+输入来自哪个现有事实源；
+输出进入哪个现有主链节点；
+为什么不会形成第二事实源。
+6. Phase 0：封存当前真实实现
+
+V1.6.1正式运行曾使用Dirty Working Tree，因此本阶段开始前必须先完成可复现封存。
+
+6.1 强制提交
+
+必须：
+
+提交V1.6.0/V1.6.1全部生产代码改动
+提交必要测试与Schema
+推送origin/main
+记录新的Commit SHA
+记录Tree Hash
+确认git status clean
+
+禁止继续将旧Commit f440c3d称为包含V1.6.1全部实现的正式Release Commit。
+
+生成：
+
+artifacts/spec_v1_6_2/v162_release_baseline.json
+
+至少包含：
+
+release_baseline:
+  commit_sha:
+  parent_commit_sha:
+  tree_hash:
+  branch:
+  working_tree_clean:
+  pushed_to_origin:
+  source_asset_hash:
+  target_hash:
+  database_seed_hash:
+  account_manifest_hash:
+  budget_hash:
+6.2 冻结Canonical义务分母
+
+预期主口径：
+
+CANONICAL_OBLIGATION_COUNT = 1189
+
+必须从正式Canonical Obligation Manifest读取，而不是从某次运行中的selected、expanded或derived总数读取。
+
+生成：
+
+v162_canonical_obligation_manifest.json
+
+Manifest至少包含：
+
+canonical_obligation_manifest:
+  manifest_id:
+  schema_version:
+  obligation_count:
+  obligation_ids:
+  source_asset_hash:
+  behavior_ir_hash:
+  generator_version:
+  manifest_hash:
+
+必须满足：
+
+obligation_count = 1189
+
+如果实际Manifest不等于1189：
+
+CANONICAL_OBLIGATION_BASELINE_MISMATCH
+
+立即停止，先解释：
+
+1189与1498之间的关系；
+是否包含派生义务；
+是否重复展开；
+是否发生版本漂移；
+哪个才是正式分母。
+
+不得在正式运行中静默改变分母。
+
+7. Gate A：Receipt Authority Closure
+7.1 Canonical Receipt Envelope
+
+所有正式Receipt必须使用统一外壳：
+
+receipt:
+  schema_version:
+  receipt_type:
+  receipt_id:
+
+  campaign_id:
+  run_id:
+  obligation_id:
+  experiment_id:
+  fixture_id:
+  protocol_id:
+
+  producer_module:
+  producer_version:
+  code_commit_sha:
+  tree_hash:
+
+  parent_receipt_ids:
+  source_contract_ids:
+
+  payload:
+  payload_hash:
+  receipt_hash:
+
+  produced_at:
+  status:
+    VALID
+    INVALID
+    INCOMPLETE
+    TAMPERED
+
+不适用的ID必须明确为NOT_APPLICABLE，不能被悄悄省略导致身份链断裂。
+
+7.2 Receipt不可变原则
+
+Receipt必须满足：
+
+Append-Only
+Immutable
+Hash-Verified
+Parent-Linked
+Identity-Bound
+Replay-Auditable
+
+禁止：
+
+运行后覆盖旧Receipt
+修改Receipt payload但不改变hash
+用新Receipt ID替换失败Receipt
+删除失败Receipt只保留成功结果
+人工编辑验收数字
+
+更正只能通过追加：
+
+CORRECTION_RECEIPT
+SUPERSEDES_RECEIPT_ID
+
+原Receipt必须继续保留。
+
+7.3 必需Receipt类型
+
+生产主链至少必须具有：
+
+qualibug.compile-receipt.v1
+qualibug.fixture-contract-receipt.v1
+qualibug.fixture-materialization-receipt.v1
+qualibug.fixture-identity-receipt.v1
+qualibug.fixture-scope-receipt.v1
+qualibug.process-step-receipt.v1
+qualibug.transport-receipt.v1
+qualibug.observation-receipt.v1
+qualibug.oracle-invocation-receipt.v1
+qualibug.oracle-trace-receipt.v1
+qualibug.cleanup-execution-receipt.v1
+qualibug.cleanup-verification-receipt.v1
+qualibug.environment-restoration-receipt.v1
+qualibug.execution-finalization-receipt.v1
+qualibug.finding-delivery-gate-receipt.v1
+qualibug.report-metric-receipt.v1
+
+已有Receipt结构应原位增强，不得重复新建同义Receipt。
+
+8. TRUE_COMPLETED Receipt化
+8.1 唯一权威原则
+
+TRUE_COMPLETED不再是某个模块直接写入的状态。
+
+它必须是对完整Receipt Bundle验证后的派生结论。
+
+唯一公式：
+
+TRUE_COMPLETED =
+Compile Receipt有效
+AND Fixture Provenance Bundle有效
+AND Required Process Step Receipts完整
+AND Required Transport Receipts完整
+AND Required Observation Receipts完整
+AND Required Oracle Receipt存在
+AND Cleanup Execution Receipts完整
+AND Cleanup Verification Receipts全部通过
+AND Environment Restoration Receipt通过
+AND 所有Receipt身份与协议指纹一致
+8.2 Execution Receipt Bundle
+
+每个Experiment必须形成：
+
+execution_receipt_bundle:
+  schema_version: qualibug.execution-receipt-bundle.v1
+
+  bundle_id:
+  campaign_id:
+  run_id:
+  obligation_id:
+  experiment_id:
+  fixture_id:
+  protocol_id:
+
+  compile_receipt_id:
+  fixture_provenance_receipt_ids:
+  required_step_receipt_ids:
+  transport_receipt_ids:
+  observation_receipt_ids:
+  oracle_invocation_receipt_ids:
+  oracle_trace_receipt_ids:
+  cleanup_execution_receipt_ids:
+  cleanup_verification_receipt_ids:
+  environment_restoration_receipt_id:
+
+  required_receipt_set_hash:
+  actual_receipt_set_hash:
+
+  identity_consistent:
+  protocol_consistent:
+  complete:
+  validation_errors:
+8.3 Finalization Receipt
+
+只能由现有Outcome Finalizer生成：
+
+execution_finalization_receipt:
+  schema_version: qualibug.execution-finalization-receipt.v1
+
+  finalization_receipt_id:
+  execution_receipt_bundle_id:
+
+  receipt_bundle_valid:
+  missing_receipt_ids:
+  invalid_receipt_ids:
+  identity_mismatch_receipt_ids:
+  protocol_mismatch_receipt_ids:
+
+  oracle_evaluated:
+  cleanup_verified:
+  environment_restored:
+
+  derived_terminal_status:
+    TRUE_COMPLETED
+    RECEIPT_INCOMPLETE
+    ORACLE_NOT_EVALUATED
+    CLEANUP_FAILED
+    ENVIRONMENT_DIRTY
+    IDENTITY_MISMATCH
+    PROTOCOL_MISMATCH
+    INDETERMINATE
+
+  derivation_version:
+  finalization_hash:
+8.4 禁止直接完成赋值
+
+生产代码中禁止：
+
+status = TRUE_COMPLETED
+status = COMPLETED
+completed = true
+
+绕过Receipt Bundle Validator。
+
+合法出现范围仅限：
+
+枚举声明
+Schema定义
+测试断言
+Finalizer内部派生结果写入
+
+验收指标：
+
+direct_true_completed_assignment_count = 0
+true_completed_without_finalization_receipt = 0
+true_completed_with_invalid_bundle = 0
+9. Fixture Provenance端到端闭环
+9.1 Provenance必须覆盖完整生命周期
+
+正确链路：
+
+Compile-Time Fixture Contract
+→ Create Request Receipt
+→ Create Response Receipt
+→ Runtime Identity Receipt
+→ Readback Receipt
+→ Scope Verification Receipt
+→ Process Step Mutation Receipts
+→ Field Observation Receipts
+→ Oracle Trace Receipts
+→ Cleanup Receipts
+→ Environment Restoration Receipt
+9.2 Fixture Provenance Contract
+fixture_provenance_contract:
+  schema_version: qualibug.fixture-provenance-contract.v1
+
+  fixture_contract_id:
+  campaign_id:
+  run_id:
+  obligation_id:
+  experiment_id:
+  fixture_id:
+
+  primary_entity_id:
+  related_entity_ids:
+
+  create_operation_ids:
+  expected_identity_sources:
+  expected_scope_fields:
+  expected_readback_contract_ids:
+  expected_cleanup_contract_ids:
+
+  fixture_contract_fingerprint:
+  source_asset_refs:
+  status:
+9.3 Fixture Provenance Receipt
+fixture_provenance_receipt:
+  schema_version: qualibug.fixture-provenance-receipt.v1
+
+  fixture_id:
+  fixture_contract_id:
+  fixture_contract_fingerprint:
+
+  create_request_receipt_ids:
+  create_response_receipt_ids:
+  runtime_identity_receipt_ids:
+  readback_receipt_ids:
+  scope_receipt_ids:
+
+  runtime_identity:
+  business_keys:
+  tenant_scope:
+  owner_scope:
+  organization_scope:
+
+  process_step_receipt_ids:
+  observation_receipt_ids:
+  cleanup_receipt_ids:
+  restoration_receipt_id:
+
+  identity_stable_across_lifecycle:
+  scope_stable_across_lifecycle:
+  campaign_owned:
+  customer_preexisting:
+
+  final_status:
+    COMPLETE
+    INCOMPLETE
+    IDENTITY_DRIFT
+    SCOPE_DRIFT
+    OWNERSHIP_UNPROVEN
+9.4 Identity一致性
+
+整个生命周期必须使用同一个运行时身份。
+
+禁止：
+
+第一次读取第一条记录
+选择最新创建记录
+选择最大ID
+按时间最近匹配
+按名称相似重新选择
+在Cleanup时重新搜索“可能的测试数据”
+
+必须满足：
+
+create_identity
+=
+readback_identity
+=
+operation_identity
+=
+observation_identity
+=
+cleanup_identity
+
+身份不一致：
+
+FIXTURE_PROVENANCE_IDENTITY_DRIFT
+
+实验不得被标记TRUE_COMPLETED。
+
+9.5 Ownership证明
+
+Fixture必须证明：
+
+campaign_owned = true
+customer_preexisting = false
+
+证明依据至少包含：
+
+Create Transport Receipt
+Create Response/Identity Receipt
+Campaign/Experiment绑定
+Fixture Contract Fingerprint
+Runtime Readback
+
+禁止只依赖：
+
+created_at接近运行时间
+字段里带test字符串
+ID处于某个范围
+10. Formal Acceptance Report Receipt化
+10.1 唯一报告事实源
+
+正式报告只能读取：
+
+Frozen Manifests
+Canonical Receipt Ledger
+Finalization Receipts
+Finding Delivery Gate Receipts
+
+禁止直接读取：
+
+内存计数器
+临时状态字段
+日志行数量
+数据库status列
+旧Artifact中的人工汇总
+10.2 Metric Receipt
+
+每一个正式报告数字必须产生：
+
+report_metric_receipt:
+  schema_version: qualibug.report-metric-receipt.v1
+
+  metric_name:
+  metric_version:
+
+  numerator_receipt_ids:
+  denominator_manifest_ids:
+  excluded_ids:
+  exclusion_reasons:
+
+  calculation_rule:
+  calculation_code_hash:
+  source_ledger_hash:
+
+  result:
+  generated_at:
+  receipt_hash:
+10.3 各指标权威依据
+指标	唯一权威
+Canonical Obligations	Canonical Obligation Manifest
+Selected	Selection Receipt
+Compiled	Valid Compile Receipt
+Real Executed	Target-Reached Transport Receipt
+Observed	Valid Observation Receipt
+Oracle Evaluated	Completed Oracle Invocation Receipt
+Trace Produced	Valid Oracle Trace Receipt
+Cleanup Executed	Cleanup Execution Receipt
+Cleanup Verified	Cleanup Verification Receipt
+Environment Restored	Restoration Receipt
+TRUE_COMPLETED	Finalization Receipt
+Formal Finding	Finding Delivery Gate Receipt
+External TP	Signed External Evaluator Receipt
+10.4 报告一致性检查
+
+必须程序化验证：
+
+report_real_executed
+=
+count(valid target-reached transport receipt bundles)
+
+report_oracle_evaluated
+=
+count(valid completed oracle invocation bundles)
+
+report_true_completed
+=
+count(valid finalization receipts with TRUE_COMPLETED)
+
+报告数字与Receipt Ledger不一致：
+
+FORMAL_REPORT_RECEIPT_COUNT_MISMATCH
+
+报告生成必须失败，不能继续输出近似数字。
+
+11. Trace去重与独立评估口径
+
+当前已出现大量Field Oracle Trace，必须防止轮询、重试或重复持久化造成虚增。
+
+唯一Oracle Evaluation Key：
+
+rule_id
++ experiment_id
++ fixture_id
++ assertion_payload_fingerprint
++ observation_pair_fingerprint
+
+必须统计：
+
+raw_trace_count
+unique_oracle_evaluation_count
+duplicate_trace_count
+polling_trace_count
+retry_trace_count
+reproduction_trace_count
+
+禁止将：
+
+raw_trace_count
+
+直接作为Oracle覆盖数量。
+
+断点：
+
+FIELD_ORACLE_TRACE_IDENTITY_NOT_UNIQUE
+FIELD_ORACLE_TRACE_DUPLICATE_PERSISTENCE
+FIELD_ORACLE_TRACE_RETRY_NOT_CLASSIFIED
+12. Gate A验收指标
+
+Gate A必须全部满足：
+
+Canonical Receipt Envelope Coverage = 100%
+
+Real Executed with Valid Transport Receipt = 100%
+Materialized Fixture with Provenance Receipt = 100%
+Oracle Evaluation with Invocation Receipt = 100%
+Cleanup Verified with Verification Receipt = 100%
+Environment Restored with Restoration Receipt = 100%
+
+TRUE_COMPLETED with Valid Finalization Receipt = 100%
+TRUE_COMPLETED without Receipt Bundle = 0
+Direct TRUE_COMPLETED Assignment = 0
+
+Fixture Identity Drift = 0
+Fixture Scope Drift = 0
+Customer-Owned Fixture Misclassification = 0
+
+Formal Report Metric Receipt Coverage = 100%
+Formal Report/Receipt Count Mismatch = 0
+Receipt Tamper Undetected = 0
+
+Gate A任一失败：
+
+GATE_B_ENTRY_ALLOWED = false
+
+不得继续宣称覆盖率提升。
+
+13. Gate B：Canonical义务第一终止断点归因
+13.1 每条义务只能有一个第一终止断点
+
+必须为Canonical 1189条义务生成：
+
+v162_obligation_first_terminal_ledger.json
+
+结构：
+
+obligation_terminal:
+  obligation_id:
+  source_sufficient:
+  selected:
+  compile_attempted:
+
+  first_terminal_stage:
+  first_terminal_reason:
+
+  downstream_stages_not_reached:
+  shared_fix_point:
+  safely_unlockable:
+  unlock_confidence:
+
+必须满足：
+
+Canonical Obligation Count = 1189
+Terminal Ledger Rows = 1189
+Missing Rows = 0
+Duplicate Rows = 0
+
+并且：
+
+所有第一终止分类数量之和 = 1189
+13.2 第一终止类别
+
+至少统一为：
+
+SOURCE_ASSET_INSUFFICIENT
+RULE_OR_OBLIGATION_NOT_EXECUTABLE
+OPERATION_BINDING_MISSING
+ACTOR_BINDING_MISSING
+FIXTURE_CONTRACT_MISSING
+FIXTURE_PROVENANCE_INCOMPLETE
+READBACK_NOT_RESOLVED
+STATE_PRECONDITION_UNREACHABLE
+OBSERVER_NOT_RESOLVED
+ORACLE_RUNTIME_CONTRACT_MISSING
+CLEANUP_NOT_RESOLVED
+BUDGET_NOT_SELECTED
+REAL_TRANSPORT_NOT_REACHED
+ORACLE_NOT_EVALUATED
+CLEANUP_NOT_VERIFIED
+ENVIRONMENT_NOT_RESTORED
+TRUE_COMPLETION_RECEIPT_INCOMPLETE
+TRUE_COMPLETED
+
+禁止使用：
+
+UNKNOWN
+FAILED
+OTHER
+NOT_RUN
+
+作为大规模最终分类。
+
+14. Source-Sufficient与Source-Limited分离
+
+必须明确区分：
+
+产品主链缺陷
+
+和：
+
+企业资料本身不充分
+
+SOURCE_ASSET_INSUFFICIENT至少要求指出缺少：
+
+Create Operation
+Request Schema
+Runtime Identity
+Readback Surface
+State Transition
+Actor
+Observer
+Cleanup Authority
+Field Formula
+Scope Field
+
+不能仅凭“无法执行”就归为资料不足。
+
+只有经过程序化检查，确认不存在来源声明能力时，才能标记：
+
+SOURCE_ASSET_INSUFFICIENT
+15. Obligation Unlock Map
+
+必须生成：
+
+v162_obligation_unlock_map.json
+
+每个共享修复候选至少包含：
+
+unlock_candidate:
+  shared_fix_point:
+  affected_obligation_ids:
+  affected_count:
+
+  source_sufficient_count:
+  source_limited_count:
+
+  expected_unlock_count:
+  unlock_confidence:
+
+  required_modules:
+  estimated_complexity:
+  safety_risk:
+  regression_risk:
+
+  downstream_receipt_coverage:
+  expected_oracle_reach:
+  expected_cleanup_reach:
+
+  unlock_score:
+
+推荐排序逻辑：
+
+unlock_score =
+source_sufficient_affected_count
+× unlock_confidence
+× expected_downstream_reach
+÷ complexity_and_safety_cost
+
+最终只能选择一个最高价值共享修复点进入本阶段实施。
+
+不得同时大范围修复多个独立断点。
+
+16. 共享修复点选择限制
+
+允许优先选择：
+
+字段或身份在主链中丢失
+合法Readback未被消费
+Compile-Time Fixture Contract未进入执行
+已有Observer未被调度
+已有Cleanup Contract未被绑定
+Receipt生成后未进入Finalizer
+来源充分的状态前置未被物化
+
+禁止选择：
+
+取消状态前置
+允许猜测Readback
+允许Customer-Owned对象直接写入
+允许无Cleanup执行
+允许无Observer执行Oracle
+将INDETERMINATE改成PASS
+降低Finding Gate
+扩大预算代替修复
+17. Coverage Expansion实施原则
+
+选择共享修复点后：
+
+冻结Candidate Unlock Set；
+冻结对应Obligation ID；
+冻结代码、Target、Seed、账号和预算；
+实施一个共享修复；
+运行专项测试；
+只通过正式产品入口执行；
+对比修复前后Receipt漏斗；
+不在正式运行中继续修代码；
+输出实际解锁率；
+停止。
+18. 正式覆盖率定义
+
+必须同时输出以下覆盖率。
+
+18.1 Raw Real Execution Coverage
+raw_execution_coverage
+=
+receipt_verified_real_executed
+/
+1189
+18.2 Source-Eligible Execution Coverage
+source_eligible_execution_coverage
+=
+receipt_verified_real_executed
+/
+source_sufficient_obligations
+18.3 Oracle Coverage
+oracle_coverage
+=
+unique_receipt_verified_oracle_evaluations
+/
+1189
+18.4 Cleanup Coverage
+cleanup_verified_coverage
+=
+receipt_verified_cleanup
+/
+receipt_verified_real_executed
+18.5 TRUE_COMPLETED Coverage
+true_completion_coverage
+=
+receipt_verified_true_completed
+/
+1189
+18.6 Receipt Integrity Coverage
+receipt_integrity_coverage
+=
+experiments_with_complete_valid_bundle
+/
+experiments_reaching_real_transport
+
+禁止使用以下指标替代：
+
+Compiled / 1189
+Planned / 1189
+Trace Rows / 1189
+Findings / 1189
+19. Gate B最低验收线
+
+设：
+
+B = 冻结基线中的Receipt-Verified Real Executed数量
+N = Candidate Unlock Set数量
+D = 本轮新增Receipt-Verified Real Executed数量
+
+必须满足：
+
+First Terminal Classification Coverage = 100%
+Candidate Unlock Set Frozen = true
+Post-Start Code Changes = 0
+
+显著覆盖提升最低要求：
+
+D >= 80% × N
+
+并且：
+
+D >= max(20, ceil(0.5 × B))
+
+若N < 20，必须输出明确的SOURCE_ASSET_LIMITED证据，本阶段最高为LEVEL B。
+
+下游质量要求：
+
+New Oracle Evaluated
+>= 80% × D
+
+New Cleanup Verified
+>= 90% × D
+
+New TRUE_COMPLETED
+>= 90% × New Cleanup Verified
+
+安全硬门禁：
+
+False Completed = 0
+Fixture Provenance Failure = 0
+Customer-Owned Data Damage = 0
+Unbounded DB Operations = 0
+Receipt Tamper Undetected = 0
+Formal Report Count Mismatch = 0
+New Regressions = 0
+20. 覆盖提升基线冻结
+
+正式运行前必须生成：
+
+v162_coverage_baseline.json
+
+至少包含：
+
+coverage_baseline:
+  canonical_obligations: 1189
+  source_sufficient:
+  source_limited:
+
+  receipt_verified_compiled:
+  receipt_verified_real_executed:
+  unique_oracle_evaluated:
+  cleanup_verified:
+  environment_restored:
+  true_completed:
+
+  raw_execution_coverage:
+  source_eligible_execution_coverage:
+  oracle_coverage:
+  true_completion_coverage:
+
+  first_terminal_distribution:
+  baseline_hash:
+
+没有Receipt证明的历史数字不得进入正式基线。
+
+21. 正式运行入口
+
+必须只通过正式入口：
+
+POST http://127.0.0.1:8088/api/v1/scan
+→ scan()
+→ discovery mainline
+→ compiler
+→ fixture/runtime binding
+→ executor
+→ observer
+→ oracle
+→ cleanup
+→ finalizer
+→ report generator
+
+禁止直接调用：
+
+Fixture Materializer
+Oracle Handler
+Cleanup Executor
+Finalizer
+Report Aggregator
+Receipt Bundle Validator
+
+作为正式运行证明。
+
+22. 正式运行冻结
+
+正式运行名称：
+
+V1_6_2_RECEIPT_AUTHORITY_COVERAGE_EXPANSION_V1
+
+运行前冻结：
+
+commit_sha
+tree_hash
+canonical_obligation_manifest_hash
+candidate_unlock_set_hash
+receipt_schema_hash
+finalization_formula_hash
+fixture_provenance_schema_hash
+report_metric_formula_hash
+target_hash
+database_seed_hash
+source_asset_hash
+account_manifest_hash
+budget_hash
+
+运行开始后修改任一项：
+
+INVALID_POST_START_TUNING
+23. 新增断点代码
+
+至少增加或统一：
+
+CANONICAL_OBLIGATION_BASELINE_MISMATCH
+CANONICAL_OBLIGATION_DENOMINATOR_DRIFT
+
+RECEIPT_ENVELOPE_INVALID
+RECEIPT_PAYLOAD_HASH_MISMATCH
+RECEIPT_PARENT_CHAIN_BROKEN
+RECEIPT_IDENTITY_MISMATCH
+RECEIPT_PROTOCOL_FINGERPRINT_MISMATCH
+RECEIPT_TAMPER_DETECTED
+
+EXECUTION_RECEIPT_BUNDLE_INCOMPLETE
+TRUE_COMPLETED_WITHOUT_FINALIZATION_RECEIPT
+TRUE_COMPLETION_FORMULA_MISMATCH
+DIRECT_TRUE_COMPLETED_ASSIGNMENT_BLOCKED
+
+FIXTURE_PROVENANCE_INCOMPLETE
+FIXTURE_PROVENANCE_IDENTITY_DRIFT
+FIXTURE_PROVENANCE_SCOPE_DRIFT
+FIXTURE_OWNERSHIP_NOT_PROVEN
+
+FORMAL_REPORT_METRIC_RECEIPT_MISSING
+FORMAL_REPORT_RECEIPT_COUNT_MISMATCH
+FORMAL_REPORT_LEDGER_HASH_MISMATCH
+
+OBLIGATION_FIRST_TERMINAL_MISSING
+OBLIGATION_FIRST_TERMINAL_DUPLICATE
+OBLIGATION_FIRST_TERMINAL_UNKNOWN
+UNLOCK_SET_NOT_FROZEN
+UNLOCK_SET_REAL_EXECUTION_NOT_REACHED
+
+统一父断点：
+
+RECEIPT_DRIVEN_EXECUTION_AUTHORITY_AND_OBLIGATION_COVERAGE_NOT_CLOSED
+24. 自动化测试要求
+
+至少新增70项专项测试。
+
+24.1 Receipt Envelope
+合法Envelope通过；
+缺receipt_id阻塞；
+缺experiment_id阻塞；
+payload hash不一致阻塞；
+parent chain断裂阻塞；
+code commit不一致阻塞；
+Receipt篡改可检测；
+Correction Receipt不删除原Receipt。
+24.2 TRUE_COMPLETED
+完整Bundle推导TRUE_COMPLETED；
+缺Compile Receipt不能完成；
+缺Fixture Provenance不能完成；
+缺Step Receipt不能完成；
+缺Observation Receipt不能完成；
+缺Oracle Receipt不能完成；
+Cleanup失败不能完成；
+Environment Dirty不能完成；
+Identity不一致不能完成；
+Protocol Fingerprint不一致不能完成；
+Finalizer外直接赋值被检测；
+状态布尔不能替代Receipt。
+24.3 Fixture Provenance
+Create身份贯穿Readback；
+Readback身份贯穿Operation；
+Operation身份贯穿Observer；
+Observer身份贯穿Cleanup；
+身份漂移阻塞；
+Scope漂移阻塞；
+Customer-Owned对象不能冒充Fixture；
+Latest Record策略被拒绝；
+Max ID策略被拒绝；
+多实体Fixture Provenance完整。
+24.4 Formal Report
+Compiled来自Compile Receipt；
+Real Executed来自Transport Receipt；
+Oracle Evaluated来自Invocation Receipt；
+Cleanup Verified来自Verification Receipt；
+TRUE_COMPLETED来自Finalization Receipt；
+每个Metric都有Receipt；
+数字不一致时报告失败；
+Ledger Hash变化时报告失败；
+人工状态字段不影响正式数字；
+报告指标可反查ID集合。
+24.5 Trace去重
+相同Evaluation Key去重；
+Polling Trace正确分类；
+Retry Trace正确分类；
+Reproduction Trace正确分类；
+重复持久化被检测；
+Raw Trace不冒充Unique Evaluation。
+24.6 Obligation Classification
+1189条全部分类；
+每条只能有一个First Terminal；
+Missing Terminal被检测；
+Duplicate Terminal被检测；
+UNKNOWN大类被拒绝；
+Source Limited需要缺失证据；
+产品断点不能冒充Source Limited；
+分类总数必须等于Canonical分母。
+24.7 Unlock Map
+affected count正确；
+source-sufficient count正确；
+安全风险进入评分；
+Gate放宽候选被拒绝；
+Candidate Unlock Set冻结；
+运行后修改Unlock Set无效。
+24.8 Coverage
+Raw Execution Coverage正确；
+Source-Eligible Coverage正确；
+Oracle Coverage正确；
+Cleanup Coverage正确；
+TRUE_COMPLETED Coverage正确；
+Compiled不计Real Execution；
+Trace Row不计Oracle Unique Evaluation；
+没有Receipt的历史状态不进入基线。
+24.9 安全与回归
+无Cleanup写实验继续Fail-Closed；
+无Readback写实验继续Fail-Closed；
+Customer-Owned数据保护保持；
+Environment Dirty不进入Formal；
+Benchmark硬编码检测；
+第二套Receipt Ledger检测。
+25. 行业无关集成测试
+
+必须构建通用无行业模型：
+
+Entity A
+Entity B
+Entity C
+
+流程：
+
+Compile Obligation
+→ Create Fixture A/B/C
+→ Capture Provenance
+→ Execute Multi-Step Protocol
+→ Observe
+→ Oracle
+→ Cleanup
+→ Restore
+→ Finalize
+→ Generate Acceptance Report
+
+必须证明：
+
+完整Receipt Bundle → TRUE_COMPLETED
+缺一个Receipt → 不完成
+Fixture Identity Drift → 不完成
+Report数字可反查Receipt
+覆盖率来自Canonical Manifest
+
+不得包含Benchmark实体、路径、Bug ID或业务硬编码。
+
+26. 结果等级
+LEVEL A — Receipt权威与显著覆盖提升全部通过
+
+必须满足：
+
+Gate A全部通过
+Canonical 1189全部第一终止归因
+Candidate Unlock Set冻结
+新增真实执行达到双重最低线
+Oracle/Cleanup/TRUE_COMPLETED达到下游比例
+Formal Report完全Receipt驱动
+False Completed = 0
+Fixture Provenance Failure = 0
+New Regressions = 0
+
+输出：
+
+V1_6_2_RESULT_LEVEL = A
+
+RECEIPT_AUTHORITY_CLOSURE = PASS
+TRUE_COMPLETION_AUTHORITY = PASS
+FIXTURE_PROVENANCE_CLOSURE = PASS
+FORMAL_REPORT_RECEIPT_SSOT = PASS
+OBLIGATION_FIRST_TERMINAL_ATTRIBUTION = PASS
+REAL_EXECUTION_COVERAGE_EXPANSION = PASS
+
+V1_6_3_ENTRY_ALLOWED = true
+PROJECT_G_ENTRY_ALLOWED = false
+LEVEL B — Receipt权威通过，覆盖受来源能力限制
+
+满足：
+
+Gate A全部通过
+所有执行结果可信
+1189条全部完成第一终止归因
+无安全或报告完整性问题
+
+但：
+
+Candidate Unlock Set小于绝对最低线
+或
+来源充分义务数量不足
+
+且有程序化SOURCE_ASSET_LIMITED证据。
+
+输出：
+
+V1_6_2_RESULT_LEVEL = B
+
+RECEIPT_AUTHORITY_CLOSURE = PASS
+FORMAL_REPORT_RECEIPT_SSOT = PASS
+REAL_EXECUTION_COVERAGE_EXPANSION = SOURCE_ASSET_LIMITED
+
+V1_6_3_ENTRY_ALLOWED = CONDITIONAL
+PROJECT_G_ENTRY_ALLOWED = false
+
+V1.6.3只能使用Receipt Bundle完整的实验。
+
+LEVEL C — Receipt权威完成，覆盖提升未达到显著标准
+
+例如：
+
+Receipt化已完成
+但共享修复点没有实际解锁足够Real Transport
+或新执行大量停留在Oracle/Cleanup之前
+
+输出：
+
+V1_6_2_RESULT_LEVEL = C
+
+RECEIPT_AUTHORITY_CLOSURE = PASS
+REAL_EXECUTION_COVERAGE_EXPANSION = PARTIAL
+
+V1_6_3_ENTRY_ALLOWED = false
+
+必须输出唯一下一断点。
+
+LEVEL D — Post-Start Tuning或分母漂移
+
+出现：
+
+运行开始后修改代码
+修改Canonical分母
+修改Unlock Set
+修改预算
+修改安全Gate
+人工修改报告数字
+
+输出：
+
+V1_6_2_RESULT_LEVEL = D
+
+INVALID_POST_START_TUNING
+V1_6_3_ENTRY_ALLOWED = false
+LEVEL E — Receipt完整性或安全失败
+
+出现任一：
+
+无Receipt仍TRUE_COMPLETED
+Receipt身份不一致仍完成
+Fixture Provenance漂移未阻断
+报告数字与Receipt不一致
+Receipt被覆盖或伪造
+Customer-Owned数据损伤
+环境未恢复仍进入Formal
+
+输出：
+
+V1_6_2_RESULT_LEVEL = E
+
+RECEIPT_EXECUTION_INTEGRITY_FAIL
+V1_6_3_ENTRY_ALLOWED = false
+27. P0执行任务
+Gate A
+P0-1
+
+提交并推送当前V1.6.1全部真实实现。
+
+P0-2
+
+确认工作树干净并冻结Tree Hash。
+
+P0-3
+
+冻结Canonical 1189 Obligation Manifest。
+
+P0-4
+
+统一Canonical Receipt Envelope。
+
+P0-5
+
+接通Receipt Hash、Parent Chain和身份验证。
+
+P0-6
+
+建立Execution Receipt Bundle。
+
+P0-7
+
+将TRUE_COMPLETED改为Receipt Bundle派生结果。
+
+P0-8
+
+清除Finalizer外直接完成赋值。
+
+P0-9
+
+接通Fixture Provenance完整生命周期。
+
+P0-10
+
+接通Fixture Identity和Scope稳定性验证。
+
+P0-11
+
+将正式报告全部改为Metric Receipt驱动。
+
+P0-12
+
+接通报告数字与Receipt Ledger平衡审计。
+
+P0-13
+
+接通Trace唯一Evaluation去重。
+
+P0-14
+
+完成Receipt篡改与重复检测。
+
+P0-15
+
+运行Gate A专项测试。
+
+P0-16
+
+Gate A失败则停止。
+
+Gate B
+P0-17
+
+对1189条义务完成第一终止断点归因。
+
+P0-18
+
+区分Source Limited与产品主链断点。
+
+P0-19
+
+生成Obligation Unlock Map。
+
+P0-20
+
+按安全解锁价值选择一个共享修复点。
+
+P0-21
+
+冻结Candidate Unlock Set。
+
+P0-22
+
+原位修复共享断点。
+
+P0-23
+
+新增对应专项测试。
+
+P0-24
+
+冻结正式运行代码、Target、Seed、账号和预算。
+
+P0-25
+
+只通过POST /api/v1/scan正式运行。
+
+P0-26
+
+生成修复后Receipt漏斗。
+
+P0-27
+
+计算五类正式覆盖率。
+
+P0-28
+
+验证新增执行、Oracle、Cleanup、TRUE_COMPLETED比例。
+
+P0-29
+
+重新生成完全Receipt驱动的验收报告。
+
+P0-30
+
+执行全量回归。
+
+P0-31
+
+输出A/B/C/D/E结论。
+
+P0-32
+
+决定V1.6.3入口。
+
+P0-33
+
+停止，不继续选择第二共享修复点。
+
+28. 必须生成的交付物
+
+统一保存到：
+
+artifacts/spec_v1_6_2/
+
+至少包括：
+
+v162_release_baseline.json
+v162_entry_regression.json
+v162_canonical_obligation_manifest.json
+v162_receipt_schema_manifest.json
+
+v162_receipt_envelope_audit.json
+v162_receipt_parent_chain_audit.json
+v162_receipt_tamper_audit.json
+v162_execution_receipt_bundles.json
+v162_finalization_receipts.json
+v162_direct_completion_assignment_audit.json
+
+v162_fixture_provenance_contracts.json
+v162_fixture_provenance_receipts.json
+v162_fixture_identity_stability_audit.json
+v162_fixture_scope_stability_audit.json
+v162_fixture_ownership_audit.json
+
+v162_report_metric_receipts.json
+v162_formal_report_receipt_balance.json
+v162_formal_acceptance_report.json
+
+v162_trace_identity_ledger.json
+v162_trace_deduplication_audit.json
+
+v162_obligation_first_terminal_ledger.json
+v162_first_terminal_distribution.json
+v162_source_asset_limitation_ledger.json
+v162_obligation_unlock_map.json
+v162_candidate_unlock_set.json
+
+v162_coverage_baseline.json
+v162_start_manifest.json
+v162_scan_response.json
+v162_receipt_runtime_funnel.json
+v162_coverage_comparison.json
+v162_post_run_regression.json
+
+v162_v163_entry_decision.json
+v162_final_report.json
+29. Definition of Done
+
+只有以下全部满足，本阶段才算完成：
+
+V1.6.1全部真实生产代码已提交。
+新Commit已推送origin/main。
+正式运行前工作树干净。
+Canonical Obligation Manifest已冻结。
+Canonical义务数量为1189，或基线差异已先被明确解决。
+正式运行中Canonical分母未变化。
+所有正式Receipt使用统一Envelope。
+所有Receipt具有Payload Hash。
+所有Receipt Parent Chain可验证。
+Receipt篡改能够被检测。
+失败Receipt不会被覆盖或删除。
+每个真实执行Experiment具有Receipt Bundle。
+TRUE_COMPLETED完全由Receipt Bundle派生。
+Finalizer外直接赋值完成状态数量为0。
+无Finalization Receipt的TRUE_COMPLETED数量为0。
+每个Materialized Fixture具有Provenance Receipt。
+Fixture身份贯穿创建、执行、观察和Cleanup。
+Fixture Scope贯穿完整生命周期。
+Fixture身份漂移进入TRUE_COMPLETED数量为0。
+Customer-Owned对象误判为Fixture数量为0。
+所有正式报告指标都有Metric Receipt。
+报告数字可反查Receipt ID集合。
+报告数字与Ledger不一致数量为0。
+Raw Trace与Unique Evaluation已明确区分。
+Poll、Retry和Reproduction Trace已分类。
+1189条义务全部拥有第一终止断点。
+第一终止断点缺失数量为0。
+第一终止断点重复数量为0。
+UNKNOWN终止大类数量为0。
+Source Limited均有具体缺失证据。
+产品断点不会被伪装为Source Limited。
+Obligation Unlock Map完整生成。
+只选择一个共享修复点。
+Candidate Unlock Set在运行前冻结。
+共享修复没有放宽安全门禁。
+新增Real Executed达到Unlock Set的80%以上。
+新增Real Executed达到绝对显著提升线，或有来源限制证据。
+新增Oracle Evaluated达到新执行的80%以上。
+新增Cleanup Verified达到新执行的90%以上。
+新增TRUE_COMPLETED达到Cleanup Verified的90%以上。
+Raw Execution Coverage按1189计算。
+Source-Eligible Coverage已单独计算。
+Oracle Coverage使用Unique Evaluation而非Raw Trace。
+TRUE_COMPLETED Coverage使用Finalization Receipt。
+False Completed数量为0。
+Receipt Provenance Failure数量为0。
+Customer-Owned数据损伤数量为0。
+无界数据库写或清理数量为0。
+正式运行只通过产品入口。
+正式运行开始后生产代码修改为0。
+新增专项测试不少于70项。
+行业无关Receipt集成测试通过。
+全量回归新增失败为0。
+最终结果属于A/B/C/D/E之一。
+V1.6.3入口得到明确决定。
+Deep Bug Discovery仍保持诚实状态。
+Project G仍未启动。
+完成后停止。
+30. Code Agent最终报告格式
+1. Release Freeze
+Commit SHA:
+Tree Hash:
+Working Tree:
+Origin Push:
+Canonical Obligation Manifest Hash:
+Canonical Obligation Count:
+Receipt Schema Hash:
+Target Hash:
+Seed Hash:
+Budget Hash:
+Start Time:
+End Time:
+Post-Start Changes:
+2. Receipt Authority
+Real Executed:
+Valid Transport Receipts:
+Execution Receipt Bundles:
+Valid Finalization Receipts:
+TRUE_COMPLETED:
+TRUE_COMPLETED Without Finalization Receipt:
+Direct Completion Assignments:
+Receipt Identity Mismatches:
+Receipt Tamper Detected:
+3. Fixture Provenance
+Materialized Fixtures:
+Complete Provenance Chains:
+Identity Drift:
+Scope Drift:
+Ownership Unproven:
+Customer-Owned Misclassification:
+4. Formal Report
+Report Metrics:
+Metric Receipts:
+Metrics with Missing Receipt:
+Report/Receipt Count Mismatch:
+Ledger Hash Mismatch:
+5. Canonical Obligation Funnel
+阶段	数量	Receipt权威
+Canonical Obligations		Manifest
+Source Sufficient		Classification
+Operation Bound		Compile Receipt
+Fixture Resolved		Fixture Contract Receipt
+Readback Resolved		Readback Receipt
+Observer Resolved		Observation Contract
+Cleanup Resolved		Cleanup Contract
+Real Executed		Transport Receipt
+Oracle Evaluated		Oracle Invocation Receipt
+Cleanup Verified		Verification Receipt
+Environment Restored		Restoration Receipt
+TRUE_COMPLETED		Finalization Receipt
+6. First Terminal Distribution
+First Terminal Reason	数量	Source Limited	Safely Unlockable
+
+必须满足总数为1189。
+
+7. Unlock Set
+Selected Shared Fix Point:
+Affected Obligations:
+Source-Sufficient Obligations:
+Candidate Unlock Set:
+Expected Unlock:
+Actual New Real Executed:
+Actual Unlock Rate:
+8. Coverage
+Baseline Real Executed:
+After Real Executed:
+Delta Real Executed:
+
+Raw Execution Coverage:
+Source-Eligible Execution Coverage:
+Oracle Coverage:
+Cleanup Verified Coverage:
+TRUE_COMPLETED Coverage:
+Receipt Integrity Coverage:
+9. Downstream Quality
+New Real Executed:
+New Oracle Evaluated:
+New Cleanup Verified:
+New Environment Restored:
+New TRUE_COMPLETED:
+
+False Completed:
+Fixture Provenance Failures:
+Customer-Owned Data Damage:
+10. 回归
+V1.6.2 Specialized:
+Full Regression:
+Known Failures:
+New Regressions:
+11. 最终判定
+V1_6_2_RESULT_LEVEL = A/B/C/D/E
+
+RECEIPT_AUTHORITY_CLOSURE =
+TRUE_COMPLETION_AUTHORITY =
+FIXTURE_PROVENANCE_CLOSURE =
+FORMAL_REPORT_RECEIPT_SSOT =
+TRACE_IDENTITY_INTEGRITY =
+OBLIGATION_FIRST_TERMINAL_ATTRIBUTION =
+REAL_EXECUTION_COVERAGE_EXPANSION =
+SAFETY_GATE =
+HISTORICAL_REGRESSION =
+
+V1_6_3_ENTRY_ALLOWED =
+DEEP_BUG_DISCOVERY_PROOF = NOT_MEASURED
+PROJECT_G_ENTRY_ALLOWED = false
+
+未通过时：
+
+NEXT_SINGLE_BREAKPOINT =
+AFFECTED_OBLIGATIONS =
+FIRST_TERMINAL_STAGE =
+CUMULATIVE_UNLOCK =
+SHARED_FIX_POINT =
+31. 最终执行指令
+
+不要增加更多规则。
+
+不要扩展更多业务域。
+
+不要继续用状态字段证明实验完成。
+
+不要用内存计数器生成正式报告。
+
+不要把Raw Trace数量当作Oracle覆盖率。
+
+不要在Cleanup时重新猜Fixture身份。
+
+不要为了提高执行数取消安全Gate。
+
+不要同时修复多个共享断点。
+
+不要在正式运行开始后修改代码或分母。
+
+本阶段只完成两件事：
+
+第一，让每一个“执行了、观察了、判断了、清理了、恢复了、完成了”都能由同一身份链上的不可变Receipt证明。
+
+第二，对Canonical 1189条义务完成第一终止断点归因，通过一个最高累计解锁价值的安全共享修复点，显著提高真实Target执行、Oracle、Cleanup和Receipt-Verified TRUE_COMPLETED覆盖率。
+
+正式执行顺序：
+
+提交封存当前实现
+→ 冻结1189 Canonical Manifest
+→ 统一Receipt Envelope
+→ Execution Receipt Bundle
+→ Receipt-Driven TRUE_COMPLETED
+→ Fixture Provenance Closure
+→ Receipt-Driven Formal Report
+→ Trace去重
+→ 1189义务第一终止归因
+→ Obligation Unlock Map
+→ 选择一个共享修复点
+→ 冻结Candidate Unlock Set
+→ 原位修复
+→ 正式产品入口运行
+→ Receipt漏斗
+→ 覆盖率对比
+→ 全量回归
+→ V1.6.3入口决定
+→ 停止
+</user_query>

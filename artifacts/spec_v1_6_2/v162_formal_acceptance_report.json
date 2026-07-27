@@ -1,0 +1,33 @@
+{
+  "schema_version": "qualibug.v162-formal-acceptance-report.v1",
+  "generated_at": "2026-07-27T10:53:31.614556+00:00",
+  "V1_6_2_RESULT_LEVEL": "C",
+  "GATE_A_ENTRY_ALLOWED": true,
+  "GATE_A_PASSED": true,
+  "GATE_B_ENTRY_ALLOWED": true,
+  "GATE_B_THRESHOLDS_MET": false,
+  "CANONICAL_OBLIGATION_COUNT": 1498,
+  "canonical_obligation_manifest_hash": "0c692b5ee288abf4bf540b3d57d5395fee552c6163b3df56fe42d445033dd4cd",
+  "supersedes_1189": true,
+  "shared_fix_point": "FINALIZATION_RECEIPT_FROM_BUNDLE",
+  "N": 61,
+  "B": 163,
+  "D": 0,
+  "coverage": {
+    "raw_execution_coverage": 0.10881174899866489,
+    "source_eligible_execution_coverage": 0.2103225806451613,
+    "oracle_coverage": 0.18958611481975968,
+    "cleanup_coverage": 0.1829105473965287,
+    "true_completed_coverage": 0.0,
+    "denominator": 1498,
+    "source_sufficient_denominator": 775
+  },
+  "formal_scan": {
+    "scan_id": "scan_benchmark_mall_131_1785149252101",
+    "execution_status": "completed",
+    "total_ms": 194156,
+    "selected": 1498
+  },
+  "NEXT_SINGLE_BREAKPOINT": "FINALIZER_RECEIPT_BUNDLE_NOT_ACTIVATED_ON_FORMAL_MAINLINE",
+  "root_cause": "Gate A receipt-bundle/finalization APIs exist and unit tests pass, but finalize_experiment_execution only assembles the Execution Receipt Bundle when process_step_ledger is present (or force_receipt_bundle). Formal unlock-set experiments (ORACLE_NOT_VIOLATED) do not carry process_step_ledger, so TRUE_COMPLETED remains 0 and finalization receipts never enter the attempt ledger delivery bundle. No post-start code change was made after the formal scan freeze."
+}

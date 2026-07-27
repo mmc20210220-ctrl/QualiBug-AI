@@ -1,0 +1,11 @@
+{
+  "schema_version": "qualibug.v162-coverage-baseline.v1",
+  "generated_at": "2026-07-27T10:47:31.898879+00:00",
+  "canonical_obligation_count": 1498,
+  "B_receipt_verified_real_executed": 163,
+  "ledger_fingerprint": "6c579887a72ea2def2bb620d3c9e8b72c659f87d397d593c74cb05c84f3a7c8a",
+  "run_id": "RUN_c558c1dadd1b95668e06301e",
+  "N_unlock_set": 61,
+  "shared_fix_point": "FINALIZATION_RECEIPT_FROM_BUNDLE",
+  "note": "Pre-formal-scan baseline from last live ledger before V1.6.2 formal entry"
+}

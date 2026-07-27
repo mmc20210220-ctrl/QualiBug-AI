@@ -1,0 +1,181 @@
+{
+  "schema_version": "qualibug.v162-final-report.v1",
+  "spec_version": "V1.6.2",
+  "generated_at": "2026-07-27T10:53:31.614556+00:00",
+  "V1_6_2_RESULT_LEVEL": "C",
+  "RECEIPT_AUTHORITY_CLOSURE": "PASS",
+  "TRUE_COMPLETION_AUTHORITY": "PARTIAL",
+  "FIXTURE_PROVENANCE_CLOSURE": "PASS",
+  "FORMAL_REPORT_RECEIPT_SSOT": "PASS",
+  "TRACE_IDENTITY_INTEGRITY": "PASS",
+  "OBLIGATION_FIRST_TERMINAL_ATTRIBUTION": "PASS",
+  "REAL_EXECUTION_COVERAGE_EXPANSION": "PARTIAL",
+  "SAFETY_GATE": "HOLD",
+  "HISTORICAL_REGRESSION": "PARTIAL_PASS",
+  "V1_6_3_ENTRY_ALLOWED": false,
+  "DEEP_BUG_DISCOVERY_PROOF": "NOT_MEASURED",
+  "PROJECT_G_ENTRY_ALLOWED": false,
+  "GATE_A_ENTRY_ALLOWED": true,
+  "GATE_B_ENTRY_ALLOWED": true,
+  "NEXT_SINGLE_BREAKPOINT": "FINALIZER_RECEIPT_BUNDLE_NOT_ACTIVATED_ON_FORMAL_MAINLINE",
+  "AFFECTED_OBLIGATIONS": 61,
+  "FIRST_TERMINAL_STAGE": "TRUE_COMPLETION_RECEIPT_INCOMPLETE",
+  "CUMULATIVE_UNLOCK": 0,
+  "SHARED_FIX_POINT": "FINALIZATION_RECEIPT_FROM_BUNDLE",
+  "release_freeze": {
+    "commit_sha": "afdfdef017f17eb1b63eeb2303a0796341d78357",
+    "tree_hash": "d4166ae8ded86cbf2a177a0685d8fc71be1fe852",
+    "working_tree": "clean_product_code_untracked_artifacts_only",
+    "origin_push": true,
+    "canonical_obligation_manifest_hash": "0c692b5ee288abf4bf540b3d57d5395fee552c6163b3df56fe42d445033dd4cd",
+    "canonical_obligation_count": 1498,
+    "canonical_obligation_count_superseded": 1189,
+    "receipt_schema_hash": "8e2ee6e119612c0a49115bf7180bbea10dbd7be515bbbb5be265387920895153",
+    "note": "1189 superseded by user-approved seal of live 1498 after CANONICAL_OBLIGATION_BASELINE_MISMATCH."
+  },
+  "canonical_denominator": {
+    "CANONICAL_OBLIGATION_COUNT": 1498,
+    "supersedes": 1189,
+    "reason": "User decision option 1: seal live unique selected set after denominator drift",
+    "manifest_hash": "0c692b5ee288abf4bf540b3d57d5395fee552c6163b3df56fe42d445033dd4cd"
+  },
+  "receipt_authority": {
+    "status": "PASS",
+    "specialized_tests_passed": 77,
+    "gate_b_tests_passed": 6,
+    "direct_true_completed_outside_finalizer": 0
+  },
+  "first_terminal_distribution": {
+    "BUDGET_NOT_SELECTED": 234,
+    "STATE_PRECONDITION_UNREACHABLE": 287,
+    "CLEANUP_NOT_VERIFIED": 21,
+    "OPERATION_BINDING_MISSING": 135,
+    "OBSERVER_NOT_RESOLVED": 106,
+    "ORACLE_RUNTIME_CONTRACT_MISSING": 97,
+    "RULE_OR_OBLIGATION_NOT_EXECUTABLE": 161,
+    "READBACK_NOT_RESOLVED": 33,
+    "CLEANUP_NOT_RESOLVED": 208,
+    "SOURCE_ASSET_INSUFFICIENT": 68,
+    "ORACLE_NOT_EVALUATED": 86,
+    "TRUE_COMPLETION_RECEIPT_INCOMPLETE": 61,
+    "TRUE_COMPLETED": 1
+  },
+  "unlock_set": {
+    "status": "FROZEN",
+    "shared_fix_point": "FINALIZATION_RECEIPT_FROM_BUNDLE",
+    "N": 61
+  },
+  "funnel": {
+    "schema_version": "qualibug.v162-receipt-runtime-funnel.v1",
+    "generated_at": "2026-07-27T10:52:38.889455+00:00",
+    "scan_id": "scan_benchmark_mall_131_1785149252101",
+    "campaign": {
+      "campaign_id": "CMP_4d07614f012f301939d34b75",
+      "campaign_status": "degraded",
+      "project_id": "benchmark_mall_131",
+      "scope_id": "private_default",
+      "environment_ref": "sandbox",
+      "source_id": "src_benchmark_mall_131_composed_all",
+      "source_hash": "503317304928d072811692cedd110d09e9dcc0d9c6128cff382f7613ca03c545",
+      "source_snapshot_hash": "d9d814fe08b1d9537f107e08d9873a5d96de0bdad6a6b1330a5c939866d465e2",
+      "policy_version": "v1.0.0-baseline",
+      "lineage_campaign_id": "CMP_4d07614f012f301939d34b75",
+      "rerun_key": "",
+      "rerun_reason": "",
+      "run_count": 19,
+      "round_count": 0,
+      "slice_budget": 926,
+      "automatic_round_limit": 8,
+      "attempted_slice_count": 0,
+      "confirmed_slice_count": 0,
+      "obligation_attempt_selected_count": 1498,
+      "obligation_attempt_terminal_count": 1498,
+      "obligation_attempt_ledger_fingerprint": "aaec1124f44af52f0dfa19b9f59f44d7b2acb59f2c64a977a150974a788cffc9",
+      "coverage_deferred_reason": "",
+      "next_campaign_reason": "",
+      "completion_authority": "obligation_attempt_ledger",
+      "completion_is_formal": true,
+      "campaign_mode": "resumed"
+    },
+    "execution_status": "completed",
+    "total_ms": 194156,
+    "canonical_obligation_count": 1498,
+    "selected": 1498,
+    "terminal": 1498,
+    "ledger_fingerprint": "4588ac7883b72a7c6c2c803dec02dd1b3737f7808013c2ec76bdf0d3a6e02429",
+    "real_executed": 163,
+    "unique_oracle_evaluations": 284,
+    "raw_oracle_traces": 0,
+    "cleanup_verified": 274,
+    "true_completed": 0,
+    "terminal_status_counts": {
+      "REJECTED": 61,
+      "BLOCKED": 1107,
+      "HARNESS_FAILED": 15,
+      "DELIVERABLE": 1,
+      "DEFERRED": 314
+    },
+    "reason_code_counts": {
+      "STATE_RULE_PRECONDITION_NOT_ESTABLISHED": 287,
+      "OBLIGATION_BUDGET_REACHED": 234,
+      "BLOCKED_NON_REVERSIBLE_WRITE": 205,
+      "BLOCKED_MISSING_OBSERVER": 106,
+      "BLOCKED_EMPTY_CONSERVATION_TERMS": 100,
+      "ASSERTION_INDETERMINATE": 86,
+      "BLOCKED_ASSERTION_EVIDENCE_UNPRODUCIBLE": 82,
+      "MISSING_PRIMARY_OPERATION": 80,
+      "BLOCKED_CONFLICTING_SOURCE": 68,
+      "ORACLE_NOT_VIOLATED": 61,
+      "FIELD_LEVEL_RULE_NOT_EXECUTABLE": 61,
+      "BLOCKED_MISSING_OPERATION": 44,
+      "BLOCKED_MISSING_BINDING": 33,
+      "BLOCKED_CLEANUP_EQUIVALENCE_INDETERMINATE": 21,
+      "CONTRACT_ORACLE_HARNESS_FAILED": 15,
+      "BLOCKED_BINDING_GRAPH_INVALID": 11,
+      "BLOCKED_CLEANUP_CONTRACT_DRIFT": 3,
+      "": 1
+    },
+    "unlock_set": {
+      "N": 61,
+      "shared_fix_point": "FINALIZATION_RECEIPT_FROM_BUNDLE",
+      "executed_in_unlock_set": 61,
+      "true_completed_in_unlock_set": 0,
+      "terminal_status": {
+        "REJECTED": 61
+      },
+      "reason_code": {
+        "ORACLE_NOT_VIOLATED": 61
+      }
+    }
+  },
+  "coverage": {
+    "raw_execution_coverage": 0.10881174899866489,
+    "source_eligible_execution_coverage": 0.2103225806451613,
+    "oracle_coverage": 0.18958611481975968,
+    "cleanup_coverage": 0.1829105473965287,
+    "true_completed_coverage": 0.0,
+    "denominator": 1498,
+    "source_sufficient_denominator": 775
+  },
+  "gate_b_thresholds": {
+    "D_ge_80pct_N": false,
+    "D_ge_max20_halfB": false,
+    "need_80pct_N": 48.800000000000004,
+    "need_max20_halfB": 82
+  },
+  "GATE_B_THRESHOLDS_MET": false,
+  "regression": {
+    "v162_specialized": "83 passed (77 Gate A + 6 Gate B)",
+    "v150_related": "43 passed",
+    "full_regression": "NOT_RUN_FULL_SUITE",
+    "new_regressions": 0
+  },
+  "result_level_reason": "LEVEL C: Gate A receipt authority closed and 1498 first-terminal attribution complete; formal scan completed with sealed denominator 1498; selected FINALIZATION_RECEIPT_FROM_BUNDLE did not produce enough new TRUE_COMPLETED (D=0 vs need >=82) because mainline finalizer bundle activation still depends on process_step_ledger.",
+  "INVALID_POST_START_TUNING": false,
+  "CANONICAL_OBLIGATION_DENOMINATOR_DRIFT": false,
+  "new_files_justification": [
+    "tests/test_v162_gate_a_receipt_authority.py \u2014 Gate A \u00a724 specialized tests (no existing authority)",
+    "tests/test_v162_gate_b_unlock_coverage.py \u2014 Gate B unlock/denominator tests",
+    "artifacts/spec_v1_6_2/* \u2014 SPEC \u00a728 evidence artifacts"
+  ]
+}

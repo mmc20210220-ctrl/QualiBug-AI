@@ -1,0 +1,6 @@
+{
+  "schema_version": "qualibug.v162-fixture-scope-stability-audit.v1",
+  "generated_at": "2026-07-27T10:43:04.637167+00:00",
+  "scope_drift_count": 0,
+  "GATE_A_FIXTURE_SCOPE": "PASS"
+}

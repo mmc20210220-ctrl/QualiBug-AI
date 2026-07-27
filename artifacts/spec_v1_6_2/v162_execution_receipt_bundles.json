@@ -1,0 +1,51 @@
+{
+  "schema_version": "qualibug.v162-execution-receipt-bundles.v1",
+  "generated_at": "2026-07-27T10:43:04.637167+00:00",
+  "sample_bundle": {
+    "schema_version": "qualibug.execution-receipt-bundle.v1",
+    "bundle_id": "erb_gate_a_sample",
+    "campaign_id": "CMP_A",
+    "run_id": "RUN_A",
+    "obligation_id": "obl_a",
+    "experiment_id": "exp_a",
+    "fixture_id": "fx_a",
+    "protocol_id": "proto_a",
+    "compile_receipt_id": "c1",
+    "fixture_provenance_receipt_ids": [
+      "fp1"
+    ],
+    "required_step_receipt_ids": [
+      "s1"
+    ],
+    "transport_receipt_ids": [
+      "t1"
+    ],
+    "observation_receipt_ids": [
+      "o1"
+    ],
+    "oracle_invocation_receipt_ids": [
+      "oi1"
+    ],
+    "oracle_trace_receipt_ids": [],
+    "cleanup_execution_receipt_ids": [
+      "ce1"
+    ],
+    "cleanup_verification_receipt_ids": [
+      "cv1"
+    ],
+    "environment_restoration_receipt_id": "er1",
+    "required_receipt_set_hash": "0c6b594e3e6ef6dc32f52b290dc83d1e03e061bc986c2346a82d9cbb5a168343",
+    "actual_receipt_set_hash": "0c6b594e3e6ef6dc32f52b290dc83d1e03e061bc986c2346a82d9cbb5a168343",
+    "identity_consistent": true,
+    "protocol_consistent": true,
+    "complete": true,
+    "validation_errors": [],
+    "missing_receipt_ids": [],
+    "invalid_receipt_ids": [],
+    "identity_mismatch_receipt_ids": [],
+    "protocol_mismatch_receipt_ids": [],
+    "bundle_hash": "e9d4fca00d1434a377fc3c799c624b764cb22b4664c2a69ed72f6e999b5d857c"
+  },
+  "receipt_count": 9,
+  "complete": true
+}

@@ -1,0 +1,24 @@
+{
+  "schema_version": "qualibug.v162-finalization-receipts.v1",
+  "generated_at": "2026-07-27T10:43:04.637167+00:00",
+  "sample": {
+    "schema_version": "qualibug.execution-finalization-receipt.v1",
+    "finalization_receipt_id": "fin_gate_a_sample",
+    "execution_receipt_bundle_id": "erb_gate_a_sample",
+    "receipt_bundle_valid": true,
+    "bundle_structurally_complete": true,
+    "missing_receipt_ids": [],
+    "invalid_receipt_ids": [],
+    "identity_mismatch_receipt_ids": [],
+    "protocol_mismatch_receipt_ids": [],
+    "oracle_evaluated": true,
+    "cleanup_verified": true,
+    "environment_restored": true,
+    "derived_terminal_status": "TRUE_COMPLETED",
+    "true_completed": true,
+    "derivation_version": "v1.6.2-receipt-bundle-finalizer",
+    "finalization_hash": "4d5af7f1f376848466824afb7eacb82a886f565f861c93a8b23a5284a786d98f",
+    "lifecycle_state": "TRUE_COMPLETED"
+  },
+  "TRUE_COMPLETED_from_bundle": true
+}

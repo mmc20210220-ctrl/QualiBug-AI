@@ -1,0 +1,536 @@
+{
+  "schema_version": "qualibug.v162-source-asset-limitation-ledger.v1",
+  "generated_at": "2026-07-27T10:45:56.497699+00:00",
+  "source_limited_count": 723,
+  "source_sufficient_count": 775,
+  "missing_evidence_counts": {
+    "StateTransition": 266,
+    "CreateOperation": 80,
+    "FieldFormula": 100,
+    "CleanupAuthority": 187,
+    "ConflictingSource": 68,
+    "Observer": 22
+  },
+  "sample": [
+    {
+      "obligation_id": "obl_001a859fc74c97bc5240",
+      "source_sufficient": false,
+      "source_missing_evidence": [
+        "StateTransition"
+      ],
+      "selected": true,
+      "compile_attempted": true,
+      "first_terminal_stage": "STATE_PRECONDITION_UNREACHABLE",
+      "first_terminal_reason": "STATE_RULE_PRECONDITION_NOT_ESTABLISHED",
+      "first_terminal_detail": "state_transition_requires_concrete_from_to",
+      "raw_terminal_stage": "compile",
+      "raw_terminal_status": "BLOCKED",
+      "risk_family": "state",
+      "adapter": "unavailable",
+      "downstream_stages_not_reached": [
+        "execution",
+        "oracle",
+        "cleanup",
+        "gate",
+        "finalization"
+      ],
+      "shared_fix_point": "SOURCE_STATE_TRANSITION_MISSING",
+      "safely_unlockable": false,
+      "unlock_confidence": 0.2
+    },
+    {
+      "obligation_id": "obl_00e71efe22065bf4fadd",
+      "source_sufficient": false,
+      "source_missing_evidence": [
+        "StateTransition"
+      ],
+      "selected": true,
+      "compile_attempted": true,
+      "first_terminal_stage": "STATE_PRECONDITION_UNREACHABLE",
+      "first_terminal_reason": "STATE_RULE_PRECONDITION_NOT_ESTABLISHED",
+      "first_terminal_detail": "state_transition_requires_concrete_from_to",
+      "raw_terminal_stage": "compile",
+      "raw_terminal_status": "BLOCKED",
+      "risk_family": "state",
+      "adapter": "unavailable",
+      "downstream_stages_not_reached": [
+        "execution",
+        "oracle",
+        "cleanup",
+        "gate",
+        "finalization"
+      ],
+      "shared_fix_point": "SOURCE_STATE_TRANSITION_MISSING",
+      "safely_unlockable": false,
+      "unlock_confidence": 0.2
+    },
+    {
+      "obligation_id": "obl_01286dd37f89fdd3",
+      "source_sufficient": false,
+      "source_missing_evidence": [
+        "CreateOperation"
+      ],
+      "selected": true,
+      "compile_attempted": true,
+      "first_terminal_stage": "OPERATION_BINDING_MISSING",
+      "first_terminal_reason": "MISSING_PRIMARY_OPERATION",
+      "first_terminal_detail": "none",
+      "raw_terminal_stage": "compile",
+      "raw_terminal_status": "DEFERRED",
+      "risk_family": "invariant",
+      "adapter": "unavailable",
+      "downstream_stages_not_reached": [
+        "execution",
+        "oracle",
+        "cleanup",
+        "gate",
+        "finalization"
+      ],
+      "shared_fix_point": "BIND_TRANSITION_TO_OPERATION",
+      "safely_unlockable": false,
+      "unlock_confidence": 0.2
+    },
+    {
+      "obligation_id": "obl_02bc476911097d5a",
+      "source_sufficient": false,
+      "source_missing_evidence": [
+        "CreateOperation"
+      ],
+      "selected": true,
+      "compile_attempted": true,
+      "first_terminal_stage": "OPERATION_BINDING_MISSING",
+      "first_terminal_reason": "MISSING_PRIMARY_OPERATION",
+      "first_terminal_detail": "none",
+      "raw_terminal_stage": "compile",
+      "raw_terminal_status": "DEFERRED",
+      "risk_family": "invariant",
+      "adapter": "unavailable",
+      "downstream_stages_not_reached": [
+        "execution",
+        "oracle",
+        "cleanup",
+        "gate",
+        "finalization"
+      ],
+      "shared_fix_point": "BIND_TRANSITION_TO_OPERATION",
+      "safely_unlockable": false,
+      "unlock_confidence": 0.2
+    },
+    {
+      "obligation_id": "obl_02c7cf2c848e9fb91cf9",
+      "source_sufficient": false,
+      "source_missing_evidence": [
+        "FieldFormula"
+      ],
+      "selected": true,
+      "compile_attempted": true,
+      "first_terminal_stage": "RULE_OR_OBLIGATION_NOT_EXECUTABLE",
+      "first_terminal_reason": "BLOCKED_EMPTY_CONSERVATION_TERMS",
+      "first_terminal_detail": "conservation_requires_non_empty_equation_terms",
+      "raw_terminal_stage": "compile",
+      "raw_terminal_status": "BLOCKED",
+      "risk_family": "conservation",
+      "adapter": "unavailable",
+      "downstream_stages_not_reached": [
+        "execution",
+        "oracle",
+        "cleanup",
+        "gate",
+        "finalization"
+      ],
+      "shared_fix_point": "SOURCE_CONSERVATION_FORMULA_MISSING",
+      "safely_unlockable": false,
+      "unlock_confidence": 0.2
+    },
+    {
+      "obligation_id": "obl_0302553ae5479243",
+      "source_sufficient": false,
+      "source_missing_evidence": [
+        "CleanupAuthority"
+      ],
+      "selected": true,
+      "compile_attempted": true,
+      "first_terminal_stage": "CLEANUP_NOT_RESOLVED",
+      "first_terminal_reason": "BLOCKED_NON_REVERSIBLE_WRITE",
+      "first_terminal_detail": "field_snapshot_restore_no_writable_fields",
+      "raw_terminal_stage": "compile",
+      "raw_terminal_status": "BLOCKED",
+      "risk_family": "authorization",
+      "adapter": "unavailable",
+      "downstream_stages_not_reached": [
+        "execution",
+        "oracle",
+        "cleanup",
+        "gate",
+        "finalization"
+      ],
+      "shared_fix_point": "BIND_DECLARED_CLEANUP_COMPENSATION",
+      "safely_unlockable": false,
+      "unlock_confidence": 0.2
+    },
+    {
+      "obligation_id": "obl_030629a7b7c6ef982098",
+      "source_sufficient": false,
+      "source_missing_evidence": [
+        "ConflictingSource"
+      ],
+      "selected": true,
+      "compile_attempted": true,
+      "first_terminal_stage": "SOURCE_ASSET_INSUFFICIENT",
+      "first_terminal_reason": "BLOCKED_CONFLICTING_SOURCE",
+      "first_terminal_detail": "bir_e5b6362e3f15f6f3",
+      "raw_terminal_stage": "compile",
+      "raw_terminal_status": "BLOCKED",
+      "risk_family": "state",
+      "adapter": "unavailable",
+      "downstream_stages_not_reached": [
+        "execution",
+        "oracle",
+        "cleanup",
+        "gate",
+        "finalization"
+      ],
+      "shared_fix_point": "TERMINAL_BLOCKED_CONFLICTING_SOURCE",
+      "safely_unlockable": false,
+      "unlock_confidence": 0.2
+    },
+    {
+      "obligation_id": "obl_033826c04b1bb348ed99",
+      "source_sufficient": false,
+      "source_missing_evidence": [
+        "FieldFormula"
+      ],
+      "selected": true,
+      "compile_attempted": true,
+      "first_terminal_stage": "RULE_OR_OBLIGATION_NOT_EXECUTABLE",
+      "first_terminal_reason": "BLOCKED_EMPTY_CONSERVATION_TERMS",
+      "first_terminal_detail": "conservation_requires_non_empty_equation_terms",
+      "raw_terminal_stage": "compile",
+      "raw_terminal_status": "BLOCKED",
+      "risk_family": "conservation",
+      "adapter": "unavailable",
+      "downstream_stages_not_reached": [
+        "execution",
+        "oracle",
+        "cleanup",
+        "gate",
+        "finalization"
+      ],
+      "shared_fix_point": "SOURCE_CONSERVATION_FORMULA_MISSING",
+      "safely_unlockable": false,
+      "unlock_confidence": 0.2
+    },
+    {
+      "obligation_id": "obl_0343375f155e9dde2c57",
+      "source_sufficient": false,
+      "source_missing_evidence": [
+        "StateTransition"
+      ],
+      "selected": true,
+      "compile_attempted": true,
+      "first_terminal_stage": "STATE_PRECONDITION_UNREACHABLE",
+      "first_terminal_reason": "STATE_RULE_PRECONDITION_NOT_ESTABLISHED",
+      "first_terminal_detail": "state_transition_requires_concrete_from_to",
+      "raw_terminal_stage": "compile",
+      "raw_terminal_status": "BLOCKED",
+      "risk_family": "state",
+      "adapter": "unavailable",
+      "downstream_stages_not_reached": [
+        "execution",
+        "oracle",
+        "cleanup",
+        "gate",
+        "finalization"
+      ],
+      "shared_fix_point": "SOURCE_STATE_TRANSITION_MISSING",
+      "safely_unlockable": false,
+      "unlock_confidence": 0.2
+    },
+    {
+      "obligation_id": "obl_03744d2335482ee81ff7",
+      "source_sufficient": false,
+      "source_missing_evidence": [
+        "CleanupAuthority"
+      ],
+      "selected": true,
+      "compile_attempted": true,
+      "first_terminal_stage": "CLEANUP_NOT_RESOLVED",
+      "first_terminal_reason": "BLOCKED_NON_REVERSIBLE_WRITE",
+      "first_terminal_detail": "field_snapshot_restore_no_writable_fields",
+      "raw_terminal_stage": "compile",
+      "raw_terminal_status": "BLOCKED",
+      "risk_family": "validation",
+      "adapter": "unavailable",
+      "downstream_stages_not_reached": [
+        "execution",
+        "oracle",
+        "cleanup",
+        "gate",
+        "finalization"
+      ],
+      "shared_fix_point": "BIND_DECLARED_CLEANUP_COMPENSATION",
+      "safely_unlockable": false,
+      "unlock_confidence": 0.2
+    },
+    {
+      "obligation_id": "obl_0480026b25df700a94ec",
+      "source_sufficient": false,
+      "source_missing_evidence": [
+        "Observer"
+      ],
+      "selected": true,
+      "compile_attempted": true,
+      "first_terminal_stage": "RULE_OR_OBLIGATION_NOT_EXECUTABLE",
+      "first_terminal_reason": "FIELD_LEVEL_RULE_NOT_EXECUTABLE",
+      "first_terminal_detail": "state_missing_field_observer",
+      "raw_terminal_stage": "compile",
+      "raw_terminal_status": "BLOCKED",
+      "risk_family": "state",
+      "adapter": "unavailable",
+      "downstream_stages_not_reached": [
+        "execution",
+        "oracle",
+        "cleanup",
+        "gate",
+        "finalization"
+      ],
+      "shared_fix_point": "FIELD_OBSERVER_SURFACE_BINDING",
+      "safely_unlockable": false,
+      "unlock_confidence": 0.2
+    },
+    {
+      "obligation_id": "obl_04c9dd2260ca91c3",
+      "source_sufficient": false,
+      "source_missing_evidence": [
+        "ConflictingSource"
+      ],
+      "selected": true,
+      "compile_attempted": true,
+      "first_terminal_stage": "SOURCE_ASSET_INSUFFICIENT",
+      "first_terminal_reason": "BLOCKED_CONFLICTING_SOURCE",
+      "first_terminal_detail": "bir_e5b6362e3f15f6f3",
+      "raw_terminal_stage": "compile",
+      "raw_terminal_status": "BLOCKED",
+      "risk_family": "consistency",
+      "adapter": "unavailable",
+      "downstream_stages_not_reached": [
+        "execution",
+        "oracle",
+        "cleanup",
+        "gate",
+        "finalization"
+      ],
+      "shared_fix_point": "TERMINAL_BLOCKED_CONFLICTING_SOURCE",
+      "safely_unlockable": false,
+      "unlock_confidence": 0.2
+    },
+    {
+      "obligation_id": "obl_04d42a30fe244ac8fa95",
+      "source_sufficient": false,
+      "source_missing_evidence": [
+        "CleanupAuthority"
+      ],
+      "selected": true,
+      "compile_attempted": true,
+      "first_terminal_stage": "CLEANUP_NOT_RESOLVED",
+      "first_terminal_reason": "BLOCKED_NON_REVERSIBLE_WRITE",
+      "first_terminal_detail": "exact_recreate_primary_not_delete",
+      "raw_terminal_stage": "compile",
+      "raw_terminal_status": "BLOCKED",
+      "risk_family": "conservation",
+      "adapter": "unavailable",
+      "downstream_stages_not_reached": [
+        "execution",
+        "oracle",
+        "cleanup",
+        "gate",
+        "finalization"
+      ],
+      "shared_fix_point": "BIND_DECLARED_CLEANUP_COMPENSATION",
+      "safely_unlockable": false,
+      "unlock_confidence": 0.2
+    },
+    {
+      "obligation_id": "obl_04e870eac2c5d50d",
+      "source_sufficient": false,
+      "source_missing_evidence": [
+        "StateTransition"
+      ],
+      "selected": true,
+      "compile_attempted": true,
+      "first_terminal_stage": "STATE_PRECONDITION_UNREACHABLE",
+      "first_terminal_reason": "STATE_RULE_PRECONDITION_NOT_ESTABLISHED",
+      "first_terminal_detail": "state_transition_requires_concrete_from_to",
+      "raw_terminal_stage": "compile",
+      "raw_terminal_status": "BLOCKED",
+      "risk_family": "invariant",
+      "adapter": "unavailable",
+      "downstream_stages_not_reached": [
+        "execution",
+        "oracle",
+        "cleanup",
+        "gate",
+        "finalization"
+      ],
+      "shared_fix_point": "SOURCE_STATE_TRANSITION_MISSING",
+      "safely_unlockable": false,
+      "unlock_confidence": 0.2
+    },
+    {
+      "obligation_id": "obl_062a230522b6690a",
+      "source_sufficient": false,
+      "source_missing_evidence": [
+        "CreateOperation"
+      ],
+      "selected": true,
+      "compile_attempted": true,
+      "first_terminal_stage": "OPERATION_BINDING_MISSING",
+      "first_terminal_reason": "MISSING_PRIMARY_OPERATION",
+      "first_terminal_detail": "none",
+      "raw_terminal_stage": "compile",
+      "raw_terminal_status": "DEFERRED",
+      "risk_family": "invariant",
+      "adapter": "unavailable",
+      "downstream_stages_not_reached": [
+        "execution",
+        "oracle",
+        "cleanup",
+        "gate",
+        "finalization"
+      ],
+      "shared_fix_point": "BIND_TRANSITION_TO_OPERATION",
+      "safely_unlockable": false,
+      "unlock_confidence": 0.2
+    },
+    {
+      "obligation_id": "obl_068d67378f157b56757a",
+      "source_sufficient": false,
+      "source_missing_evidence": [
+        "CleanupAuthority"
+      ],
+      "selected": true,
+      "compile_attempted": true,
+      "first_terminal_stage": "CLEANUP_NOT_RESOLVED",
+      "first_terminal_reason": "BLOCKED_NON_REVERSIBLE_WRITE",
+      "first_terminal_detail": "field_snapshot_restore_no_writable_fields",
+      "raw_terminal_stage": "compile",
+      "raw_terminal_status": "BLOCKED",
+      "risk_family": "validation",
+      "adapter": "unavailable",
+      "downstream_stages_not_reached": [
+        "execution",
+        "oracle",
+        "cleanup",
+        "gate",
+        "finalization"
+      ],
+      "shared_fix_point": "BIND_DECLARED_CLEANUP_COMPENSATION",
+      "safely_unlockable": false,
+      "unlock_confidence": 0.2
+    },
+    {
+      "obligation_id": "obl_06a20452fb466bfe1706",
+      "source_sufficient": false,
+      "source_missing_evidence": [
+        "CleanupAuthority"
+      ],
+      "selected": true,
+      "compile_attempted": true,
+      "first_terminal_stage": "CLEANUP_NOT_RESOLVED",
+      "first_terminal_reason": "BLOCKED_NON_REVERSIBLE_WRITE",
+      "first_terminal_detail": "field_snapshot_restore_no_writable_fields",
+      "raw_terminal_stage": "compile",
+      "raw_terminal_status": "BLOCKED",
+      "risk_family": "validation",
+      "adapter": "unavailable",
+      "downstream_stages_not_reached": [
+        "execution",
+        "oracle",
+        "cleanup",
+        "gate",
+        "finalization"
+      ],
+      "shared_fix_point": "BIND_DECLARED_CLEANUP_COMPENSATION",
+      "safely_unlockable": false,
+      "unlock_confidence": 0.2
+    },
+    {
+      "obligation_id": "obl_06ec2ad2c841749802d3",
+      "source_sufficient": false,
+      "source_missing_evidence": [
+        "Observer"
+      ],
+      "selected": true,
+      "compile_attempted": true,
+      "first_terminal_stage": "RULE_OR_OBLIGATION_NOT_EXECUTABLE",
+      "first_terminal_reason": "FIELD_LEVEL_RULE_NOT_EXECUTABLE",
+      "first_terminal_detail": "state_missing_field_observer",
+      "raw_terminal_stage": "compile",
+      "raw_terminal_status": "BLOCKED",
+      "risk_family": "state",
+      "adapter": "unavailable",
+      "downstream_stages_not_reached": [
+        "execution",
+        "oracle",
+        "cleanup",
+        "gate",
+        "finalization"
+      ],
+      "shared_fix_point": "FIELD_OBSERVER_SURFACE_BINDING",
+      "safely_unlockable": false,
+      "unlock_confidence": 0.2
+    },
+    {
+      "obligation_id": "obl_06f95df384b6ac86c7d2",
+      "source_sufficient": false,
+      "source_missing_evidence": [
+        "Observer"
+      ],
+      "selected": true,
+      "compile_attempted": true,
+      "first_terminal_stage": "RULE_OR_OBLIGATION_NOT_EXECUTABLE",
+      "first_terminal_reason": "FIELD_LEVEL_RULE_NOT_EXECUTABLE",
+      "first_terminal_detail": "state_missing_field_observer",
+      "raw_terminal_stage": "compile",
+      "raw_terminal_status": "BLOCKED",
+      "risk_family": "state",
+      "adapter": "unavailable",
+      "downstream_stages_not_reached": [
+        "execution",
+        "oracle",
+        "cleanup",
+        "gate",
+        "finalization"
+      ],
+      "shared_fix_point": "FIELD_OBSERVER_SURFACE_BINDING",
+      "safely_unlockable": false,
+      "unlock_confidence": 0.2
+    },
+    {
+      "obligation_id": "obl_070e7d18a1cacfcfcbd1",
+      "source_sufficient": false,
+      "source_missing_evidence": [
+        "FieldFormula"
+      ],
+      "selected": true,
+      "compile_attempted": true,
+      "first_terminal_stage": "RULE_OR_OBLIGATION_NOT_EXECUTABLE",
+      "first_terminal_reason": "BLOCKED_EMPTY_CONSERVATION_TERMS",
+      "first_terminal_detail": "conservation_requires_non_empty_equation_terms",
+      "raw_terminal_stage": "compile",
+      "raw_terminal_status": "BLOCKED",
+      "risk_family": "conservation",
+      "adapter": "unavailable",
+      "downstream_stages_not_reached": [
+        "execution",
+        "oracle",
+        "cleanup",
+        "gate",
+        "finalization"
+      ],
+      "shared_fix_point": "SOURCE_CONSERVATION_FORMULA_MISSING",
+      "safely_unlockable": false,
+      "unlock_confidence": 0.2
+    }
+  ]
+}

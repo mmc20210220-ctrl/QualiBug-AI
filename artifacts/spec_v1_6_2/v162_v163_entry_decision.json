@@ -1,0 +1,11 @@
+{
+  "schema_version": "qualibug.v162-v163-entry-decision.v1",
+  "V1_6_3_ENTRY_ALLOWED": false,
+  "PROJECT_G_ENTRY_ALLOWED": false,
+  "reason": "LEVEL C \u2014 coverage expansion partial; finalization bundle not activated on formal mainline",
+  "based_on_level": "C",
+  "NEXT_SINGLE_BREAKPOINT": "FINALIZER_RECEIPT_BUNDLE_NOT_ACTIVATED_ON_FORMAL_MAINLINE",
+  "CANONICAL_OBLIGATION_COUNT": 1498,
+  "canonical_obligation_manifest_hash": "0c692b5ee288abf4bf540b3d57d5395fee552c6163b3df56fe42d445033dd4cd",
+  "updated_at": "2026-07-27T10:53:31.614556+00:00"
+}

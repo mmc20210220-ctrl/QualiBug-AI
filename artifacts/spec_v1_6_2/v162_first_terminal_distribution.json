@@ -1,0 +1,22 @@
+{
+  "schema_version": "qualibug.v162-first-terminal-distribution.v1",
+  "generated_at": "2026-07-27T10:45:56.497699+00:00",
+  "canonical_obligation_count": 1498,
+  "distribution": {
+    "BUDGET_NOT_SELECTED": 234,
+    "STATE_PRECONDITION_UNREACHABLE": 287,
+    "CLEANUP_NOT_VERIFIED": 21,
+    "OPERATION_BINDING_MISSING": 135,
+    "OBSERVER_NOT_RESOLVED": 106,
+    "ORACLE_RUNTIME_CONTRACT_MISSING": 97,
+    "RULE_OR_OBLIGATION_NOT_EXECUTABLE": 161,
+    "READBACK_NOT_RESOLVED": 33,
+    "CLEANUP_NOT_RESOLVED": 208,
+    "SOURCE_ASSET_INSUFFICIENT": 68,
+    "ORACLE_NOT_EVALUATED": 86,
+    "TRUE_COMPLETION_RECEIPT_INCOMPLETE": 61,
+    "TRUE_COMPLETED": 1
+  },
+  "sum": 1498,
+  "PASS": true
+}

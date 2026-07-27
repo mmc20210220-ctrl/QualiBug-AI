@@ -1,0 +1,19 @@
+{
+  "schema_version": "qualibug.v162-receipt-envelope-audit.v1",
+  "generated_at": "2026-07-27T10:43:04.637167+00:00",
+  "canonical_envelope_coverage": "100%",
+  "sample_receipt_ids": [
+    "c1",
+    "fp1",
+    "s1",
+    "t1",
+    "o1",
+    "oi1",
+    "ce1",
+    "cv1",
+    "er1"
+  ],
+  "all_identity_fields_present": true,
+  "not_applicable_policy": "explicit NOT_APPLICABLE required",
+  "GATE_A_ENVELOPE": "PASS"
+}

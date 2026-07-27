@@ -1,0 +1,206 @@
+{
+  "schema_version": "qualibug.v162-canonical-obligation-baseline-mismatch.v1",
+  "breakpoint": "CANONICAL_OBLIGATION_BASELINE_MISMATCH",
+  "parent_breakpoint": "RECEIPT_DRIVEN_EXECUTION_AUTHORITY_AND_OBLIGATION_COVERAGE_NOT_CLOSED",
+  "expected_canonical_obligation_count": 1189,
+  "current_live_selected_count": 1498,
+  "current_live_unique_obligation_ids": 1498,
+  "delta": 309,
+  "current_ledger_fingerprint": "6c579887a72ea2def2bb620d3c9e8b72c659f87d397d593c74cb05c84f3a7c8a",
+  "v151_baseline_ledger_fingerprint": "529a1f23908c204ee63c78b0d5c8753f56422cc3da6669ddcacc9a2317ddef6c",
+  "v151_executed_baseline_ledger_fingerprint": "c1a596c1044dee956015b04eba9f3c6e085d54ad09d0b2af04298ebb5eba7edc",
+  "first_observed_1498_at_utc": "2026-07-27T08:43:26Z",
+  "first_observed_1498_context": "V1.6.0 Field-Level Oracle formal run (scan_benchmark_mall_131_1785141701072 / RUN_759828cc1f111aa50c4c3e54)",
+  "explanation": {
+    "relation_1189_vs_1498": "1189 is the V1.5.1 Formal Experiment Frozen / obligation_attempt_selected_count sealed in v151_runtime_funnel and v160_field_grounding_baseline.V1_5_1_runtime_baseline.total_obligations. 1498 is the live selected_count on V1.6.0+ formal scans after field-level/golden-rule planning expansion entered the same campaign.",
+    "includes_derived_obligations": true,
+    "derived_note": "Delta of +309 coincides with V1.6.0 deep-field / golden-rule planning path (v160_runtime_funnel Obligations Selected=1498; deep field gates fired on 580). Not a silent duplicate expansion of the same 1189 IDs — live ledger has 1498 unique obligation_ids.",
+    "duplicate_expansion": false,
+    "unique_ids_in_current_ledger": 1498,
+    "version_drift": true,
+    "version_drift_detail": "Denominator drifted between V1.5.1 seal (1189) and V1.6.0 first formal field-oracle run (1498) without a sealed Canonical Obligation Manifest that reconciles the two.",
+    "which_is_formal_denominator": "User-approved: CANONICAL_OBLIGATION_COUNT=1498 is the sealed V1.6.2 denominator. Historical 1189 (V1.5.1) is superseded.",
+    "v151_id_list_recoverable_in_workspace": false,
+    "v151_id_list_note": "Campaign/evidence bundles retain selected_count=1189 and ledger fingerprints, but no persisted obligation_id list for the 1189 set was found under platform_outputs/artifacts/platform_workspace. Cannot invent IDs."
+  },
+  "current_risk_family_distribution": {
+    "authorization": 119,
+    "isolation": 12,
+    "state": 537,
+    "conservation": 220,
+    "visibility": 24,
+    "concurrency": 12,
+    "validation": 244,
+    "idempotency": 32,
+    "consistency": 88,
+    "state_integrity": 20,
+    "invariant": 190
+  },
+  "non_closed_risk_family_counts": {
+    "consistency": 88,
+    "state_integrity": 20,
+    "invariant": 190
+  },
+  "adapter_distribution": {
+    "http_api": 554,
+    "unavailable": 944
+  },
+  "campaign_selected_count_history": [
+    {
+      "at_utc": "2026-07-26T19:40:59Z",
+      "selected": 435,
+      "terminal": 435,
+      "ledger_fingerprint": "5f5736e1ce17a1295b830a041d70b25368210072152214b206d3c7d89581b99e",
+      "status": "completed",
+      "executed_attempt_count": 22
+    },
+    {
+      "at_utc": "2026-07-26T20:07:50Z",
+      "selected": 1218,
+      "terminal": 1218,
+      "ledger_fingerprint": "4e7593b57c689579304417b5ed8c46e181ca289aede94789b0434ecf99e3da8e",
+      "status": "completed",
+      "executed_attempt_count": 23
+    },
+    {
+      "at_utc": "2026-07-26T20:18:24Z",
+      "selected": 1218,
+      "terminal": 1218,
+      "ledger_fingerprint": "dac2c5deec9a53da70d663de72430d8cafa86122e941d63ec72cbc39ddf696ca",
+      "status": "completed",
+      "executed_attempt_count": 23
+    },
+    {
+      "at_utc": "2026-07-26T20:34:14Z",
+      "selected": 1218,
+      "terminal": 1218,
+      "ledger_fingerprint": "7716936a2228da3462da4740050a145ce85e7a8a87d2489dbdc6635ada41254c",
+      "status": "completed",
+      "executed_attempt_count": 23
+    },
+    {
+      "at_utc": "2026-07-26T20:45:19Z",
+      "selected": 1218,
+      "terminal": 1218,
+      "ledger_fingerprint": "4e4c32973e4b2b6042f15749badbefc0525f361119f28df48ca68ca891672aa7",
+      "status": "completed",
+      "executed_attempt_count": 23
+    },
+    {
+      "at_utc": "2026-07-26T21:06:02Z",
+      "selected": 1218,
+      "terminal": 1218,
+      "ledger_fingerprint": "c87f83e612ef8f28b772f6edd74ba00db1c1c64a5b24e2248d9deeb363c9b168",
+      "status": "completed",
+      "executed_attempt_count": 23
+    },
+    {
+      "at_utc": "2026-07-26T21:29:50Z",
+      "selected": 1203,
+      "terminal": 1203,
+      "ledger_fingerprint": "602b57f53031b29c9fba524f044f52c1b0e569f2e7d50c5a3ce0dd10d49caeaa",
+      "status": "completed",
+      "executed_attempt_count": 17
+    },
+    {
+      "at_utc": "2026-07-26T21:40:53Z",
+      "selected": 1203,
+      "terminal": 1203,
+      "ledger_fingerprint": "6c61df6c032736b3a36d22582914e3ac37508f17f0d63ab543bc598d61b7a285",
+      "status": "completed",
+      "executed_attempt_count": 17
+    },
+    {
+      "at_utc": "2026-07-26T21:50:25Z",
+      "selected": 1189,
+      "terminal": 1189,
+      "ledger_fingerprint": "8456aa440552faa7b145d885638781f28b4cd909e3881f9354c16756a03e0aaa",
+      "status": "completed",
+      "executed_attempt_count": 8
+    },
+    {
+      "at_utc": "2026-07-27T06:24:33Z",
+      "selected": 1189,
+      "terminal": 1189,
+      "ledger_fingerprint": "529a1f23908c204ee63c78b0d5c8753f56422cc3da6669ddcacc9a2317ddef6c",
+      "status": "blocked",
+      "executed_attempt_count": 0
+    },
+    {
+      "at_utc": "2026-07-27T06:40:23Z",
+      "selected": 1189,
+      "terminal": 1189,
+      "ledger_fingerprint": "c1a596c1044dee956015b04eba9f3c6e085d54ad09d0b2af04298ebb5eba7edc",
+      "status": "degraded",
+      "executed_attempt_count": 23
+    },
+    {
+      "at_utc": "2026-07-27T08:43:26Z",
+      "selected": 1498,
+      "terminal": 1498,
+      "ledger_fingerprint": "c8a5a8903137d4dfe223172184f116746fa3e6a2730964decfc1604b3e429a0c",
+      "status": "completed",
+      "executed_attempt_count": 39
+    },
+    {
+      "at_utc": "2026-07-27T09:23:25Z",
+      "selected": 1498,
+      "terminal": 1498,
+      "ledger_fingerprint": "4259e6dd9f403a5e9be0a2987746132f13765d82de6a99ed6a89db1f78610544",
+      "status": "completed",
+      "executed_attempt_count": 39
+    },
+    {
+      "at_utc": "2026-07-27T09:38:23Z",
+      "selected": 1498,
+      "terminal": 1498,
+      "ledger_fingerprint": "f0170ddb08b0d238a26038eb67ac4744ee2286c652ab4029c8f8fe445c480817",
+      "status": "degraded",
+      "executed_attempt_count": 24
+    },
+    {
+      "at_utc": "2026-07-27T09:45:41Z",
+      "selected": 1498,
+      "terminal": 1498,
+      "ledger_fingerprint": "d239cd3e6d4f706aea51fca95cba2752dbde74285d6802d67eeec156f322c9f0",
+      "status": "degraded",
+      "executed_attempt_count": 23
+    },
+    {
+      "at_utc": "2026-07-27T09:54:09Z",
+      "selected": 1498,
+      "terminal": 1498,
+      "ledger_fingerprint": "f2095864b2bdaf7a35343ffdb25eb6613ef6c6f4f773b9c8855dd021879f4aae",
+      "status": "degraded",
+      "executed_attempt_count": 77
+    },
+    {
+      "at_utc": "2026-07-27T10:02:01Z",
+      "selected": 1498,
+      "terminal": 1498,
+      "ledger_fingerprint": "58468cf3cf813cdec7d084bb9cff4d5fdc8fd6cfe48ed7db1de670b6eb93c206",
+      "status": "degraded",
+      "executed_attempt_count": 77
+    },
+    {
+      "at_utc": "2026-07-27T10:09:17Z",
+      "selected": 1498,
+      "terminal": 1498,
+      "ledger_fingerprint": "e28ce3f66eda973f26601f2daba63c96079531c37c1a5327b31686d6bdd2f68a",
+      "status": "degraded",
+      "executed_attempt_count": 163
+    }
+  ],
+  "GATE_A_ENTRY_ALLOWED": true,
+  "GATE_B_ENTRY_ALLOWED": false,
+  "stop_reason": "RESOLVED — proceed Gate A with CANONICAL_OBLIGATION_COUNT=1498",
+  "resolution": {
+    "status": "RESOLVED",
+    "resolved_at": "2026-07-27T10:34:44.240225+00:00",
+    "resolution_code": "USER_APPROVED_DENOMINATOR_SEAL_1498",
+    "sealed_canonical_obligation_count": 1498,
+    "supersedes_1189": true,
+    "manifest_hash": "0c692b5ee288abf4bf540b3d57d5395fee552c6163b3df56fe42d445033dd4cd",
+    "note": "CANONICAL_OBLIGATION_BASELINE_MISMATCH resolved by sealing live 1498 (user option 1), not by silently changing mid-run and not by inventing 1189 IDs."
+  }
+}

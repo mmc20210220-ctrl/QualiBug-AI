@@ -1,0 +1,34 @@
+{
+  "schema_version": "qualibug.v162-coverage-comparison.v1",
+  "generated_at": "2026-07-27T10:52:38.891456+00:00",
+  "canonical_obligation_count": 1498,
+  "B": 163,
+  "N": 61,
+  "D_new_true_completed_in_unlock_set": 0,
+  "D_executed_in_unlock_set": 61,
+  "D_used_for_threshold": 0,
+  "D_definition": "new TRUE_COMPLETED within frozen unlock set (FINALIZATION_RECEIPT_FROM_BUNDLE); unlock set already had prior real execution",
+  "thresholds": {
+    "D_ge_80pct_N": false,
+    "D_ge_max20_halfB": false,
+    "need_80pct_N": 48.800000000000004,
+    "need_max20_halfB": 82
+  },
+  "downstream": {
+    "oracle_on_D": 0,
+    "cleanup_on_D": 0,
+    "oracle_rate": 0,
+    "cleanup_rate": 0,
+    "true_completed_of_cleanup_verified_new": null
+  },
+  "coverage": {
+    "raw_execution_coverage": 0.10881174899866489,
+    "source_eligible_execution_coverage": 0.2103225806451613,
+    "oracle_coverage": 0.18958611481975968,
+    "cleanup_coverage": 0.1829105473965287,
+    "true_completed_coverage": 0.0,
+    "denominator": 1498,
+    "source_sufficient_denominator": 775
+  },
+  "GATE_B_THRESHOLDS_MET": false
+}

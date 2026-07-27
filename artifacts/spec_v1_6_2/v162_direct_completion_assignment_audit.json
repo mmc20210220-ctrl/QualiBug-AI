@@ -1,0 +1,7 @@
+{
+  "schema_version": "qualibug.v162-direct-completion-assignment-audit.v1",
+  "generated_at": "2026-07-27T10:43:04.637167+00:00",
+  "direct_true_completed_assignments_outside_finalizer": [],
+  "count": 0,
+  "GATE_A_DIRECT_ASSIGNMENT": "PASS"
+}
