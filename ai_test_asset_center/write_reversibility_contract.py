@@ -46,16 +46,24 @@ CLEANUP_AUTHORITIES = frozenset({
 # the difference between testing most writes and refusing to.
 #
 # Admitting it into CLEANUP_AUTHORITIES was tried and MEASURED, and it is switched off
-# again because the measurement showed the honest result: 517 obligations passed the
-# reversibility gate and reached execution, and the cleanup did not run. The compiled
-# plans were correct -- 784 steps carried adapter db_sql, table and identity column --
-# but the cleanup executor's adapter branch was never reached at runtime, so the writes
-# went ahead and the target gained rows instead of losing them: qb_auto products 15->16
-# and cart_items 21->46 in one run.
+# again for one reason: the cleanup executor's adapter branch produced ZERO receipts, so
+# there is no evidence it ever ran. The compiled plans were correct -- 784 steps carried
+# adapter db_sql, table and identity column -- and the gate movement was real
+# (BLOCKED_NON_REVERSIBLE_WRITE 668 -> 151, BLOCKED_INVALID_CLEANUP_PLAN 517 -> 0), but a
+# compensator with no execution evidence is not a compensator.
 #
-# Authorising a write whose compensator does not execute is worse than blocking the
-# write. It converts "this cannot be tested safely" into "this was tested and left
-# residue", and the customer discovers it in their own database.
+# Attribution, corrected: the 517 unblocked obligations reached PLANNING, not execution --
+# they landed on OBLIGATION_BUDGET_REACHED. The run performed 14 treatment writes and 3
+# cleanups. Target residue observed at the time (qb_auto products, cart_items) is
+# substantially from the test-data BOOTSTRAP, which creates one probe product per
+# campaign and was already leaving them before any of this work -- the first benchmark
+# run recorded qb_auto_sku_QBBOOTSTRAP_* rows with status DELETED still visible in the
+# catalogue. An earlier version of this comment blamed the residue on this change; that
+# causal claim was not supported and is withdrawn.
+#
+# The caution stands on its own ground: authorising a write whose compensator has never
+# been observed to execute converts "this cannot be tested safely" into "this was tested
+# and may have left residue", and the customer would discover it in their own database.
 #
 # What is already in place and does not depend on this switch:
 #   - cleanup_adapter_ladder: the tier resolution, the ownership proof, the guarded
