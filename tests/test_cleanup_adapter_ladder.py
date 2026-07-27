@@ -435,3 +435,83 @@ def test_a_foreign_key_violation_is_reported_not_swallowed() -> None:
     assert receipt["status"] == "FAILED"
     assert "ForeignKey" in receipt["detail"] or "CLEANUP_DB_DELETE_FAILED" in receipt["reason_code"]
     assert receipt["rows_deleted"] == 0
+
+
+# ── dependency-ordered deletion ─────────────────────────────────────────────
+
+SCHEMA_ENTITIES = [
+    {"name": "products", "fields": ["sku", "price", "status"], "identity_fields": ["sku"]},
+    {"name": "inventory", "fields": ["sku", "available_qty"], "identity_fields": ["sku"]},
+    {"name": "cart_items", "fields": ["id", "sku", "user_id"], "identity_fields": ["id"]},
+    {"name": "order_items", "fields": ["id", "sku", "order_id"], "identity_fields": ["id"]},
+    {"name": "orders", "fields": ["id", "user_id", "status"], "identity_fields": ["id"]},
+    {"name": "refunds", "fields": ["id", "order_id"], "identity_fields": ["id"]},
+]
+
+
+def test_dependents_are_found_by_the_owners_own_column() -> None:
+    """products.sku is carried verbatim by every table that references it."""
+    from ai_test_asset_center.cleanup_adapter_ladder import dependent_tables_for
+
+    assert dependent_tables_for("products", "sku", SCHEMA_ENTITIES) == [
+        "cart_items", "inventory", "order_items",
+    ]
+
+
+def test_dependents_are_found_by_conventional_foreign_key_naming() -> None:
+    """orders.id is carried as order_id, which is how most schemas name it."""
+    from ai_test_asset_center.cleanup_adapter_ladder import dependent_tables_for
+
+    assert dependent_tables_for("orders", "id", SCHEMA_ENTITIES) == ["order_items", "refunds"]
+
+
+def test_a_bare_id_column_is_not_treated_as_a_reference() -> None:
+    """Every table has an "id"; matching on it alone would make everything a dependent."""
+    from ai_test_asset_center.cleanup_adapter_ladder import dependent_tables_for
+
+    dependents = dependent_tables_for("refunds", "id", SCHEMA_ENTITIES)
+    assert "cart_items" not in dependents
+    assert "orders" not in dependents
+
+
+def test_the_owner_is_never_its_own_dependent() -> None:
+    from ai_test_asset_center.cleanup_adapter_ladder import dependent_tables_for
+
+    assert "products" not in dependent_tables_for("products", "sku", SCHEMA_ENTITIES)
+
+
+def test_the_plan_deletes_dependents_first_and_the_owner_last() -> None:
+    """The order the ForeignKeyViolations demanded: 16 product deletes all failed until
+    inventory and order_items went first."""
+    from ai_test_asset_center.cleanup_adapter_ladder import build_ordered_delete_plan
+
+    plan = build_ordered_delete_plan(
+        table="products", identity_column="sku",
+        identity_value="qb_auto_sku_1", entities=SCHEMA_ENTITIES,
+    )
+    assert [s["table"] for s in plan][-1] == "products"
+    assert all(s["delete_order"] == "dependent" for s in plan[:-1])
+    assert plan[-1]["delete_order"] == "owner"
+
+
+def test_every_step_carries_the_ownership_requirement() -> None:
+    """A dependent delete is as dangerous as an owner delete and gets the same guard."""
+    from ai_test_asset_center.cleanup_adapter_ladder import build_ordered_delete_plan
+
+    plan = build_ordered_delete_plan(
+        table="products", identity_column="sku",
+        identity_value="qb_auto_sku_1", entities=SCHEMA_ENTITIES,
+    )
+    assert all(s["requires_ownership_proof"] is True for s in plan)
+    assert all(s["scope"] == "run_created_only" for s in plan)
+
+
+def test_an_entity_with_no_dependents_yields_a_single_step() -> None:
+    from ai_test_asset_center.cleanup_adapter_ladder import build_ordered_delete_plan
+
+    plan = build_ordered_delete_plan(
+        table="refunds", identity_column="id",
+        identity_value="qb_auto_r1", entities=SCHEMA_ENTITIES,
+    )
+    assert len(plan) == 1
+    assert plan[0]["table"] == "refunds"

@@ -393,3 +393,82 @@ def execute_declared_adapter_cleanup(
         except Exception:
             pass
     return receipt
+
+
+def dependent_tables_for(
+    table: str,
+    identity_column: str,
+    entities: Any,
+) -> list[str]:
+    """Tables that reference *table* through the same identity column.
+
+    Derived from the source-declared schema: an entity whose declared fields include the
+    identity column of another table references it. Running this against the live target,
+    products.sku is referenced by inventory, cart_items, inventory_locks and order_items,
+    which is why deleting a product directly raised ForeignKeyViolation on every attempt
+    while cart_items deleted cleanly.
+
+    Returns dependents only -- never *table* itself -- so a caller deletes these first and
+    the owning row last.
+    """
+    target = _text(table).lower()
+    column = _text(identity_column).lower()
+    if not target or not column:
+        return []
+    singular = target[:-1] if target.endswith("s") and not target.endswith("ss") else target
+    # The two ways a dependent names its reference: the owner's own column verbatim
+    # (products.sku -> inventory.sku) or the conventional foreign key
+    # (orders.id -> order_items.order_id). "id" alone is too common to be evidence, so
+    # it is only honoured in the qualified form.
+    reference_names = {f"{singular}_{column}", f"{singular}{column}"}
+    if column != "id":
+        reference_names.add(column)
+
+    out: list[str] = []
+    for node in _list(entities):
+        row = _dict(node)
+        name = _text(row.get("name"))
+        if not name or name.lower() == target:
+            continue
+        fields = {_text(f).lower() for f in _list(row.get("fields"))}
+        if fields & reference_names:
+            out.append(name)
+    return sorted(out)
+
+
+def build_ordered_delete_plan(
+    *,
+    table: str,
+    identity_column: str,
+    identity_value: Any,
+    entities: Any,
+) -> list[dict[str, Any]]:
+    """Delete steps for one row, dependents first, owner last.
+
+    Every step carries the same ownership requirement as a single-table delete: the
+    executor re-checks the identity and refuses a row this run did not create.
+    """
+    steps: list[dict[str, Any]] = []
+    for dependent in dependent_tables_for(table, identity_column, entities):
+        steps.append({
+            "adapter": "db_sql",
+            "mode": "row_delete",
+            "table": dependent,
+            "identity_column": identity_column,
+            "identity_value": _text(identity_value),
+            "scope": "run_created_only",
+            "requires_ownership_proof": True,
+            "delete_order": "dependent",
+            "owner_table": _text(table),
+        })
+    steps.append({
+        "adapter": "db_sql",
+        "mode": "row_delete",
+        "table": _text(table),
+        "identity_column": _text(identity_column),
+        "identity_value": _text(identity_value),
+        "scope": "run_created_only",
+        "requires_ownership_proof": True,
+        "delete_order": "owner",
+    })
+    return steps
