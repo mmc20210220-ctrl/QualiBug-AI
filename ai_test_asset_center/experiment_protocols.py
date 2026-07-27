@@ -10,6 +10,22 @@ from .experiment_protocols_privacy_base import *  # noqa: F401,F403
 
 PRIVACY_FIELD_ASSERTION_KIND = "privacy_field_policy"
 
+# ── V1.5.0: Lazy one-time registration of multi-step protocols ──
+_v150_protocols_registered = False
+
+
+def _ensure_v150_protocols() -> None:
+    """Register V1.5.0 multi-step protocols once (idempotent)."""
+    global _v150_protocols_registered
+    if _v150_protocols_registered:
+        return
+    _v150_protocols_registered = True
+    try:
+        from .multi_step_protocol import register_v150_multi_step_protocols
+        register_v150_multi_step_protocols()
+    except Exception:  # noqa: BLE001 - registration failure must not abort compile
+        pass
+
 
 def __getattr__(name: str) -> Any:
     return getattr(_base, name)
@@ -93,6 +109,9 @@ def compile_family_protocol(
     property_spec: dict[str, Any],
     behavior_ir: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    # V1.5.0: ensure multi-step protocols are registered before first resolution
+    _ensure_v150_protocols()
+
     # Registered protocol, consulted first and additively.
     #
     # On a MISS everything below runs verbatim, so all six family branches, both actor

@@ -1307,6 +1307,40 @@ def finalize_experiment_execution(
     else:
         _lifecycle_state = LIFECYCLE_EXPERIMENT_COMPLETED
 
+    # ── V1.5.0 §31: TRUE_COMPLETED Formula ──
+    # Only the Finalizer may compute TRUE_COMPLETED. No caller may directly
+    # write COMPLETED bypassing this formula.
+    _v150_true_completion: dict[str, Any] = {}
+    _process_ledger = observations.get("process_step_ledger")
+    if _process_ledger is not None:
+        from .process_step_execution import evaluate_true_completed as _eval_true_completed
+        _planned_steps = _list(observations.get("planned_step_ids"))
+        _executed_steps = _list(observations.get("executed_step_ids"))
+        _evidence_receipt = _dict(observations.get("per_step_evidence_completeness"))
+        _oracle_evaluated = bool(verdict and verdict.get("verdict"))
+        _cleanup_exec = cleanup_failures == 0 and bool(steps_out)
+        _cleanup_ver = cleanup_gate not in ("FAILED", "BLOCKED")
+        _v150_true_completion = _eval_true_completed(
+            fixture_materialized=bool(fixture_receipts),
+            state_precondition_established=observations.get(
+                "state_precondition_established", True
+            ),
+            all_required_steps_executed=(
+                set(_planned_steps) <= set(_executed_steps)
+                if _planned_steps else bool(_executed_steps)
+            ),
+            per_step_evidence_complete=bool(_evidence_receipt.get("complete", False)),
+            minimal_oracle_evaluated=_oracle_evaluated,
+            cleanup_executed=_cleanup_exec,
+            cleanup_verified=_cleanup_ver,
+            environment_restored=bool(_env_restored),
+        )
+        # Override lifecycle_state with V1.5.0 terminal state
+        if _v150_true_completion.get("true_completed"):
+            _lifecycle_state = "TRUE_COMPLETED"
+        elif _v150_true_completion.get("terminal_state"):
+            _lifecycle_state = _v150_true_completion["terminal_state"]
+
     # Environment restoration is a hard gate for EXPERIMENT_COMPLETED.
     # Cleanup failures downgrade status.
     if cleanup_failures and status == "EXECUTED":
@@ -1352,6 +1386,7 @@ def finalize_experiment_execution(
         "cleanup_equivalence_receipt": cleanup_equivalence_receipt,
         "lifecycle_state": _lifecycle_state,
         "environment_restored": _env_restored,
+        "v150_true_completion": _v150_true_completion,
         "execution_receipt": {
             "status": status,
             "steps": len(steps_out),

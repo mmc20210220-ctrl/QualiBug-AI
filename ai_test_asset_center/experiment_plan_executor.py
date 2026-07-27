@@ -123,6 +123,12 @@ def execute_non_barrier_plans(
     request_bodies_for_cleanup: dict[str, Any] = {}
     pre_transport_block_reasons: list[str] = []
 
+    # ── V1.5.0 §21: Per-Step Execution Ledger ──
+    from .process_step_execution import ProcessStepLedger
+    _fixture_id = _text(_dict(observations.get("disposable_fixture_contract")).get("fixture_id"))
+    process_ledger = ProcessStepLedger(experiment_id=eid, fixture_id=_fixture_id)
+    observations["process_step_ledger"] = process_ledger
+
     source_observed_control_bodies: dict[str, Any] = {}
     source_body_control_blocked = False
 
@@ -647,6 +653,32 @@ def execute_non_barrier_plans(
                 },
             ))
             results.append(obs)
+            # ── V1.5.0 §21: Record step in ProcessStepLedger ──
+            process_ledger.record_step_execution(
+                step_id=subject_id,
+                phase=phase,
+                operation_ref=op_ref,
+                actor_ref=actor_ref,
+                runtime_identity=runtime_bindings,
+                request_receipt_id=request_body_fingerprint,
+                response_receipt_id=_sha256(obs.get("body")),
+                before_state_receipt_id=_text(
+                    _dict(_dict(obs.get("governance_receipt")).get("before")).get("status")
+                ),
+                after_state_receipt_id=_text(
+                    _dict(_dict(obs.get("governance_receipt")).get("after")).get("status")
+                ),
+                cleanup_contract_id=_text(step.get("cleanup_contract_id")),
+                status_code=observed_status,
+                final_status="EXECUTED" if observed_status > 0 else "BLOCKED",
+            )
+            process_ledger.record_timeline_event(
+                step_id=subject_id,
+                phase=phase,
+                event_type="STEP_COMPLETED" if observed_status > 0 else "STEP_FAILED",
+                operation_ref=op_ref,
+                actor_ref=actor_ref,
+            )
             if response_bound_observation:
                 results.append(response_bound_observation)
             if phase == "control":
@@ -716,4 +748,8 @@ def execute_non_barrier_plans(
         "request_bodies_for_cleanup": request_bodies_for_cleanup,
         "pre_transport_block_reasons": pre_transport_block_reasons,
         "cleanup_failures": cleanup_failures,
+        "process_step_ledger": process_ledger,
+        "process_timeline": process_ledger.build_timeline_receipt(),
+        "planned_step_ids": process_ledger.executed_step_ids(),
+        "executed_step_ids": process_ledger.executed_step_ids(),
     }

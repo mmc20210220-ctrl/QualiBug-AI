@@ -1286,6 +1286,65 @@ def compile_experiment_for_obligation(
             binding_plan.append(row)
             existing_targets.add(target)
 
+    # ── V1.5.0 §10: Compile-Time Fixture Binding ──
+    # Discover fixture candidates and build Disposable Fixture Contract BEFORE
+    # final experiment assembly. Write experiments that create persistent entities
+    # carry a resolved contract; multi-step protocols consume it.
+    _disposable_fixture_contract: dict | None = None
+    _fixture_dag: dict | None = None
+    if is_write and not _is_ephemeral_session_path(primary_path_early):
+        try:
+            from .disposable_fixture_contract import (
+                discover_fixture_candidates as _discover_fixture_candidates,
+                build_disposable_fixture_contract as _build_fixture_contract,
+                build_fixture_dag as _build_fixture_dag,
+                STATUS_RESOLVED as _FIXTURE_RESOLVED,
+            )
+            _fixture_candidates = _discover_fixture_candidates(
+                ir,
+                entity_ids=[
+                    _text(ref)
+                    for ref in _list(primary_op.get("entity_refs"))
+                    if _text(ref)
+                ] or None,
+            )
+            if _fixture_candidates:
+                # Use the first resolved candidate (primary entity)
+                _best_candidate = next(
+                    (c for c in _fixture_candidates if c.get("status") == _FIXTURE_RESOLVED),
+                    _fixture_candidates[0],
+                )
+                _disposable_fixture_contract = _build_fixture_contract(
+                    obligation_id=oid,
+                    experiment_id=f"exp_{oid}",
+                    campaign_id="",  # bound at runtime
+                    candidate=_best_candidate,
+                    behavior_ir=ir,
+                    actor_ref=control_actor or (required_actors[0] if required_actors else ""),
+                )
+                # Build DAG if multiple candidates (multi-entity fixture)
+                if len(_fixture_candidates) > 1:
+                    _multi_contracts = [
+                        _build_fixture_contract(
+                            obligation_id=oid,
+                            experiment_id=f"exp_{oid}",
+                            campaign_id="",
+                            candidate=cand,
+                            behavior_ir=ir,
+                            actor_ref=control_actor or (required_actors[0] if required_actors else ""),
+                        )
+                        for cand in _fixture_candidates
+                    ]
+                    _fixture_dag = _build_fixture_dag(
+                        _multi_contracts,
+                        behavior_ir=ir,
+                    )
+        except Exception as _fc_exc:
+            logger.debug(
+                "V1.5.0 fixture contract discovery failed for %s: %s",
+                oid, _fc_exc,
+            )
+
     control_actor = _text(
         prop.get("control_actor_ref")
         or prop.get("owner_actor_ref")
@@ -1597,6 +1656,32 @@ def compile_experiment_for_obligation(
                     "to_state_ref": _text(prop.get("to_state_ref")),
                 },
             }
+        # ── V1.5.0 §16: State Precondition Planning for built-in state family ──
+        # Plan the path to establish from_state before the measured window.
+        _from_state = _text(prop.get("from_state"))
+        if _from_state and _from_state.lower() not in ("", "unknown_state", "unknown"):
+            from .state_precondition_planner import (
+                plan_state_precondition as _plan_precondition,
+                STATUS_PLANNED as _PRECOND_PLANNED,
+            )
+            _precond_result = _plan_precondition(
+                behavior_ir=ir,
+                from_state=_from_state,
+                actors=[_text(a) for a in required_actors if _text(a)],
+            )
+            if _text(_precond_result.get("status")) == _PRECOND_PLANNED:
+                _precondition_plan = [
+                    row for row in _list(_precond_result.get("steps"))
+                    if isinstance(row, dict)
+                ]
+            # BLOCKED precondition is not fatal for built-in state family;
+            # the experiment can still execute with runtime binding.
+            # But we record it for observability.
+            elif _text(_precond_result.get("status")) == "BLOCKED":
+                logger.debug(
+                    "V1.5.0 state precondition blocked for %s: %s",
+                    oid, _precond_result.get("reason_code"),
+                )
 
     control_plan = [
         row
@@ -1850,6 +1935,24 @@ def compile_experiment_for_obligation(
         )
         experiment["compile_receipt"]["readback_provenance_fingerprint"] = _text(
             _readback_contract.get("provenance_fingerprint")
+        )
+
+    # ── V1.5.0 §10: Attach Disposable Fixture Contract ──
+    if _disposable_fixture_contract:
+        experiment["disposable_fixture_contract"] = _disposable_fixture_contract
+        experiment["compile_receipt"]["fixture_contract_id"] = _text(
+            _disposable_fixture_contract.get("fixture_id")
+        )
+        experiment["compile_receipt"]["fixture_contract_status"] = _text(
+            _disposable_fixture_contract.get("status")
+        )
+    if _fixture_dag:
+        experiment["fixture_dag"] = _fixture_dag
+        experiment["compile_receipt"]["fixture_dag_id"] = _text(
+            _fixture_dag.get("fixture_dag_id")
+        )
+        experiment["compile_receipt"]["fixture_dag_status"] = _text(
+            _fixture_dag.get("status")
         )
 
     # ── SPEC v1.1 §9: Pass cleanup exemption contract from obligation ──
