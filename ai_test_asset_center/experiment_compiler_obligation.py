@@ -169,6 +169,97 @@ def _is_ephemeral_session_path(path: str) -> bool:
     return False
 
 
+def _resolve_fallback_cleanup_tier(
+    *,
+    primary_op: dict[str, Any],
+    behavior_ir: dict[str, Any],
+    available_adapters: Any,
+    environment_type: str = "",
+) -> dict[str, Any]:
+    """A cleanup plan from a non-HTTP adapter, when the API declares no compensator.
+
+    Returns {} unless every leg holds: the adapter is declared, the environment permits
+    writes, the entity is a source-declared table, and that table declares an identity
+    column. The row's ownership cannot be checked here -- the identity is a runtime value
+    -- so the plan carries requires_ownership_proof and the executor must refuse any row
+    this run did not create.
+    """
+    from .cleanup_adapter_ladder import (
+        LADDER_SCHEMA,
+        TIER_DB,
+        resolve_cleanup_adapter,
+    )
+    from .target_policy import is_nonproduction_environment
+
+    if not is_nonproduction_environment(environment_type):
+        return {}
+
+    entity = _entity_for_operation(primary_op, behavior_ir)
+    if not entity:
+        return {}
+
+    resolved = resolve_cleanup_adapter(
+        available_adapters=available_adapters,
+        api_compensator=None,
+        ui_cleanup_declared=False,
+        entity=entity,
+        identity_value="",
+        creation_receipts=[],
+        target_write_approved=True,
+        # Compile has no row identity; ownership is proven at runtime against the real
+        # value. A placeholder identity would simply always fail the ownership gate,
+        # which is why the tier never resolved here before.
+        availability_only=True,
+    )
+    tier = _text(resolved.get("tier"))
+    if tier != TIER_DB:
+        # Only the data-layer tier can be pre-authorised from static facts. A UI cleanup
+        # needs a declared flow, which is not derivable here.
+        return {}
+    plan = dict(_dict(resolved.get("plan")))
+    plan.pop("identity_value", None)
+    plan.pop("ownership_basis", None)
+    return {
+        "schema_version": LADDER_SCHEMA,
+        "tier": tier,
+        "mode": "adapter_row_delete",
+        "requires_ownership_proof": True,
+        "plan": plan,
+    }
+
+
+def _entity_for_operation(
+    operation: dict[str, Any],
+    behavior_ir: dict[str, Any],
+) -> dict[str, Any]:
+    """The source-declared entity an operation's path names, if the IR declares one."""
+    path = _text(_dict(operation).get("path") or _dict(operation).get("raw_path")).lower()
+    if not path:
+        return {}
+    # A table name joins words with "_" while a path joins them with "/", so
+    # /api/cart/items and the cart_items table never matched literally. Compare both
+    # with separators removed; the longest match still wins, so "cart_items" beats
+    # "items" rather than the other way round.
+    flat_path = path.replace("_", "").replace("-", "")
+    squashed_path = flat_path.replace("/", "")
+    best: dict[str, Any] = {}
+    for node in _list(_dict(behavior_ir).get("entities")):
+        row = _dict(node)
+        name = _text(row.get("name")).lower()
+        if not name or not _list(row.get("identity_fields")):
+            continue
+        flat_name = name.replace("_", "").replace("-", "")
+        singular = flat_name[:-1] if flat_name.endswith("s") and not flat_name.endswith("ss") else flat_name
+        matched = (
+            f"/{flat_name}" in flat_path
+            or f"/{singular}" in flat_path
+            or (len(flat_name) >= 6 and flat_name in squashed_path)
+        )
+        if matched and len(name) > len(_text(best.get("name"))):
+            best = row
+    return best
+
+
 def compile_experiment_for_obligation(
     obligation: dict[str, Any],
     *,
@@ -926,6 +1017,32 @@ def compile_experiment_for_obligation(
                         "required": True,
                         "mode": "reverse_order",
                     }
+                else:
+                    # No API compensator. "The API has no undo" is not "this cannot be
+                    # cleaned up": a run that creates its own row can delete that row
+                    # through an adapter the operator declared. Measured on a live
+                    # target, only 2 of 17 writes had an API compensator and 680
+                    # obligations blocked here, so refusing to look further turned a
+                    # capability gap into a coverage gap.
+                    #
+                    # Compile decides only that the tier is AVAILABLE -- the declared
+                    # adapter, a source-declared table, a declared identity column. The
+                    # concrete row identity is not known until runtime, so the ownership
+                    # proof is deferred and carried as requires_ownership_proof: a
+                    # data-layer delete may only ever touch a row this run created.
+                    _fallback = _resolve_fallback_cleanup_tier(
+                        primary_op=primary_op,
+                        behavior_ir=ir,
+                        available_adapters=available_adapters,
+                        environment_type=environment_type,
+                    )
+                    if _fallback:
+                        cleanup_req = {
+                            **cleanup_req,
+                            "required": True,
+                            "mode": _text(_fallback.get("mode")) or "adapter_cleanup",
+                            "adapter_cleanup": _fallback,
+                        }
             # else: leave unresolved → BLOCKED_NON_REVERSIBLE_WRITE below
         elif (
             # DELETE: unique collection POST create may recreate the resource.
@@ -1031,10 +1148,38 @@ def compile_experiment_for_obligation(
                 or cleanup_method not in {"POST", "PUT", "PATCH", "DELETE"}
                 or not cleanup_path.startswith("/")
             ):
+                # Resolve the fallback tier HERE, at the point of blocking, rather than
+                # relying on one upstream branch. That branch only runs for paths with no
+                # placeholder, which excludes most writes -- the ladder was wired where it
+                # could not fire.
+                _adapter_cleanup = _dict(cleanup_req.get("adapter_cleanup"))
+                if not _adapter_cleanup.get("plan") and cleanup_req.get("required") is not False:
+                    _adapter_cleanup = _resolve_fallback_cleanup_tier(
+                        primary_op=primary_op,
+                        behavior_ir=ir,
+                        available_adapters=available_adapters,
+                        environment_type=environment_type,
+                    )
                 if cleanup_req.get("required") is False:
                     # Cleanup explicitly not required; proceed without it.
                     cleanup_plan = []
                     cleanup_explicitly_not_required = True
+                elif _adapter_cleanup.get("plan"):
+                    # No API compensator, but the operator declared an adapter that can
+                    # undo this write. The requirement is unchanged -- a real, executable
+                    # compensator that leaves a receipt -- only the surface differs.
+                    #
+                    # requires_ownership_proof travels with the plan and the executor
+                    # must refuse any row this run did not create. Compile cannot check
+                    # it: the row identity is a runtime value.
+                    cleanup_plan = [{
+                        "action": "declared_adapter_cleanup",
+                        "mode": _text(_adapter_cleanup.get("mode")) or "adapter_row_delete",
+                        "adapter": _text(_dict(_adapter_cleanup.get("plan")).get("adapter")),
+                        "requires_ownership_proof": True,
+                        "compensates_operation_ref": primary_op_id,
+                        **_dict(_adapter_cleanup.get("plan")),
+                    }]
                 else:
                     # Authorization/isolation probes that expect rejection still
                     # need a source-declared compensator when cleanup is

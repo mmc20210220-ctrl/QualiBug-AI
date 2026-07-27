@@ -418,10 +418,68 @@ class TestWriteReversibilityProof:
         assert proof["reason_detail"] == "empty_cleanup_plan"
 
     def test_all_authorities_in_allowed_set(self) -> None:
+        """The set is pinned exactly so admitting a new authority is a conscious act.
+
+        declared_adapter_cleanup was added deliberately. On a live 11-service target only
+        2 of 17 writes had a source-declared API compensator -- the API genuinely offers
+        no DELETE for products, none for cart items, no reversal for a payment -- and 668
+        obligations blocked on BLOCKED_NON_REVERSIBLE_WRITE as a result. "The API has no
+        undo" is not "this cannot be cleaned up": a run that creates its own row can
+        delete that row through an adapter the operator declared.
+
+        It is the same authority as identity_delete, reached through a different surface,
+        and it is admitted only with the table, the identity column, run_created_only
+        scope and a requires_ownership_proof flag -- see
+        test_declared_adapter_cleanup_requires_every_leg below.
+        """
         assert CLEANUP_AUTHORITIES == {
             "identity_delete", "explicit_compensator", "field_snapshot_restore",
             "inverse_delta", "exact_recreate", "verified_environment_reset",
         }
+        from ai_test_asset_center.write_reversibility_contract import (
+            ADAPTER_CLEANUP_AUTHORITY,
+        )
+
+        assert ADAPTER_CLEANUP_AUTHORITY not in CLEANUP_AUTHORITIES, (
+            "declared_adapter_cleanup stays out until the cleanup executor demonstrably "
+            "deletes the row; admitting it let 517 writes proceed with no cleanup and "
+            "the target gained rows"
+        )
+
+    def test_declared_adapter_cleanup_requires_every_leg(self) -> None:
+        """Each missing leg is refused by name, so a partial plan never passes."""
+        from ai_test_asset_center.write_reversibility_contract import (
+            _classify_cleanup_authority_v11,
+        )
+
+        good = {
+            "action": "declared_adapter_cleanup",
+            "mode": "adapter_row_delete",
+            "adapter": "db_sql",
+            "table": "orders",
+            "identity_column": "id",
+            "requires_ownership_proof": True,
+            "scope": "run_created_only",
+        }
+        common = dict(primary_method="POST", primary_operation_ref="op1",
+                      primary_path="/api/orders", ops={}, relations=[], experiment={})
+
+        assert _classify_cleanup_authority_v11(cleanup_plan=[good], **common)["kind"] == (
+            "declared_adapter_cleanup"
+        )
+
+        for mutation, expected in (
+            ({"requires_ownership_proof": False}, "adapter_cleanup_ownership_proof_not_required"),
+            ({"scope": "everything"}, "adapter_cleanup_scope_not_run_created_only"),
+            ({"table": ""}, "adapter_cleanup_table_or_identity_not_declared"),
+            ({"identity_column": ""}, "adapter_cleanup_table_or_identity_not_declared"),
+            ({"adapter": "ftp"}, "adapter_cleanup_unsupported_adapter:ftp"),
+        ):
+            result = _classify_cleanup_authority_v11(
+                cleanup_plan=[dict(good, **mutation)], **common
+            )
+            assert result["kind"] == "none", mutation
+            assert result["detail"] == expected, mutation
 
 
 # ─── Cleanup Plan Validator unit tests ────────────────────────────────────────

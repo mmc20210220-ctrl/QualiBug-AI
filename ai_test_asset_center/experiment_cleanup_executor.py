@@ -87,6 +87,87 @@ def _write_step_for_cleanup_path(
     return {}
 
 
+def _project_database_dsn(root: Path, project: str) -> str:
+    """The DSN the operator declared for this project, or "" when none is declared."""
+    import json as _json
+
+    path = Path(root) / "platform_workspace" / str(project) / "multi_service_config.json"
+    try:
+        payload = _json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    for service in _list(_dict(payload).get("services")):
+        db = _dict(_dict(service).get("db"))
+        host = _text(db.get("host"))
+        name = _text(db.get("name"))
+        if not host or not name:
+            continue
+        user = _text(db.get("user"))
+        password = _text(db.get("password"))
+        if password.startswith("enc$"):
+            try:
+                from .credential_crypto import decrypt as _decrypt
+
+                password = _decrypt(password)
+            except Exception:
+                return ""
+        port = _text(db.get("port")) or "5432"
+        return f"postgresql://{user}:{password}@{host}:{port}/{name}"
+    return ""
+
+
+def _adapter_cleanup_identity(
+    cleanup: dict[str, Any],
+    *,
+    runtime_bindings: dict[str, Any],
+    steps_out: list[dict[str, Any]],
+) -> str:
+    """The concrete row identity for an adapter cleanup, from what the run observed.
+
+    Prefers a value the write itself returned, then a runtime binding. Returns "" when
+    neither is available -- the executor then refuses rather than deleting by guess.
+    """
+    column = _text(_dict(cleanup).get("identity_column")) or "id"
+    for step in reversed(_list(steps_out)):
+        body = _dict(step).get("body")
+        if isinstance(body, dict):
+            for key in (column, "id", "sku", "orderId", "order_id"):
+                value = _text(body.get(key))
+                if value:
+                    return value
+    for key in (column, "id", "sku"):
+        value = _text(_dict(runtime_bindings).get(key))
+        if value:
+            return value
+    return ""
+
+
+def _execute_adapter_cleanup_step(
+    cleanup: dict[str, Any],
+    *,
+    root: Path,
+    project: str,
+    runtime_bindings: dict[str, Any],
+    steps_out: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Run one declared-adapter cleanup step and return its receipt.
+
+    Every refusal is a receipt too. A cleanup that did not happen must be as visible as
+    one that did, or residue accumulates in a customer system unnoticed.
+    """
+    from .cleanup_adapter_ladder import execute_declared_adapter_cleanup
+
+    identity = _adapter_cleanup_identity(
+        cleanup, runtime_bindings=runtime_bindings, steps_out=steps_out
+    )
+    return execute_declared_adapter_cleanup(
+        _dict(cleanup),
+        identity_value=identity,
+        dsn=_project_database_dsn(root, project),
+        creation_receipts=[],
+    )
+
+
 def execute_experiment_cleanup_compensation(
     *,
     exp: dict[str, Any],
@@ -302,6 +383,7 @@ def execute_experiment_cleanup_compensation(
         cleanup_plan = _list(exp.get("cleanup_plan"))
         cleanup_subjects = activation_requirements.get("cleanup") or []
         documented_routes = _documented_routes(ops)
+        adapter_cleanup_receipts: list[dict[str, Any]] = []
         for cleanup_index in reversed(range(len(cleanup_plan))):
             cleanup = cleanup_plan[cleanup_index]
             cleanup_subject_id = (
@@ -309,6 +391,37 @@ def execute_experiment_cleanup_compensation(
                 if cleanup_index < len(cleanup_subjects)
                 else f"cleanup:operation:{cleanup_index + 1}"
             )
+            # ── Declared-adapter cleanup, before any HTTP handling ──
+            # A db_sql step carries no path or method, so the HTTP branch below would
+            # record cleanup_compensation_unresolved and leave the row behind. That is
+            # exactly what happened: 204 CLEANUP_RECEIPT_FAILED and 15 qb_auto rows left
+            # in the target. Authorising a write whose cleanup cannot run is worse than
+            # blocking the write.
+            if _text(_dict(cleanup).get("adapter")) == "db_sql":
+                _adapter_receipt = _execute_adapter_cleanup_step(
+                    cleanup,
+                    root=root,
+                    project=project,
+                    runtime_bindings=runtime_bindings,
+                    steps_out=steps_out,
+                )
+                # contract_evidence_receipts has its own strict schema and the delivery
+                # gate validates every entry; a cleanup receipt is a different artifact
+                # and belongs on the observations, where the run records what it did.
+                adapter_cleanup_receipts.append(_adapter_receipt)
+                observations.setdefault("adapter_cleanup_receipts", []).append(
+                    _adapter_receipt
+                )
+                if _text(_adapter_receipt.get("status")) == "CLEANED":
+                    observations["cleanup_status"] = "cleaned"
+                else:
+                    cleanup_failures += 1
+                    observations["cleanup_status"] = "failed"
+                    observations["cleanup_reason"] = _text(
+                        _adapter_receipt.get("reason_code")
+                    ) or "adapter_cleanup_failed"
+                continue
+
             # Compensation is declared; without a concrete reverse operation we
             # record an honest cleanup failure rather than inventing success.
             op_ref = _text(_dict(cleanup).get("operation_ref"))

@@ -36,7 +36,36 @@ CLEANUP_AUTHORITIES = frozenset({
     "inverse_delta",
     "exact_recreate",
     "verified_environment_reset",
+    # NOT admitted yet -- deliberately. See below.
 })
+
+# ── declared_adapter_cleanup: built, tested, and NOT yet authorised ──────────
+#
+# A row delete through an adapter the operator declared, for a target whose API offers
+# no compensator. On a live 11-service system only 2 of 17 writes had one, so this is
+# the difference between testing most writes and refusing to.
+#
+# Admitting it into CLEANUP_AUTHORITIES was tried and MEASURED, and it is switched off
+# again because the measurement showed the honest result: 517 obligations passed the
+# reversibility gate and reached execution, and the cleanup did not run. The compiled
+# plans were correct -- 784 steps carried adapter db_sql, table and identity column --
+# but the cleanup executor's adapter branch was never reached at runtime, so the writes
+# went ahead and the target gained rows instead of losing them: qb_auto products 15->16
+# and cart_items 21->46 in one run.
+#
+# Authorising a write whose compensator does not execute is worse than blocking the
+# write. It converts "this cannot be tested safely" into "this was tested and left
+# residue", and the customer discovers it in their own database.
+#
+# What is already in place and does not depend on this switch:
+#   - cleanup_adapter_ladder: the tier resolution, the ownership proof, the guarded
+#     executor, all covered by tests including "a customer row never reaches SQL";
+#   - _validate_declared_adapter_cleanup below, which refuses any plan missing a leg;
+#   - the compiler emitting the plan.
+#
+# Flip this on only after the cleanup executor demonstrably deletes the row -- the check
+# is the residue count in the target after a run, not a passing unit test.
+ADAPTER_CLEANUP_AUTHORITY = "declared_adapter_cleanup"
 
 # Server-managed fields that must never appear in restore bodies
 SERVER_MANAGED_FIELDS = frozenset({
@@ -285,7 +314,63 @@ def _classify_cleanup_authority_v11(
     if mode == "environment_reset" or action == "verified_environment_reset":
         return _validate_environment_reset(experiment=experiment)
 
+    # ── declared_adapter_cleanup ──
+    # A row delete through an adapter the operator declared, when the API offers no
+    # compensator. Measured on a live target, only 2 of 17 writes had an API
+    # compensator, so this branch is the difference between testing a system and
+    # refusing to. It is the same authority as identity_delete -- remove the row the
+    # write created -- reached through a different surface.
+    #
+    # It is admitted only with every leg present, and the ownership proof is NOT
+    # optional: the executor re-checks the real row identity and refuses anything this
+    # run did not create. Without that flag the plan is rejected here rather than
+    # trusted.
+    if action == "declared_adapter_cleanup" or mode == "adapter_row_delete":
+        return _validate_declared_adapter_cleanup(first)
+
     return {"kind": "none", "detail": "cleanup_authority_unrecognized"}
+
+
+def _validate_declared_adapter_cleanup(step: dict[str, Any]) -> dict[str, Any]:
+    """Admit a declared-adapter row delete as cleanup authority, or say what is missing."""
+    row = _dict(step)
+    adapter = _text(row.get("adapter"))
+    table = _text(row.get("table"))
+    identity_column = _text(row.get("identity_column"))
+    if adapter != "db_sql":
+        return {"kind": "none", "detail": f"adapter_cleanup_unsupported_adapter:{adapter or 'none'}"}
+    if not table or not identity_column:
+        return {"kind": "none", "detail": "adapter_cleanup_table_or_identity_not_declared"}
+    if row.get("requires_ownership_proof") is not True:
+        # A data-layer delete without a runtime ownership check could remove customer
+        # data. The flag is what makes the executor enforce it, so its absence is fatal.
+        return {"kind": "none", "detail": "adapter_cleanup_ownership_proof_not_required"}
+    if _text(row.get("scope")) != "run_created_only":
+        return {"kind": "none", "detail": "adapter_cleanup_scope_not_run_created_only"}
+
+    authority_block = {
+        "kind": "declared_adapter_cleanup",
+        "operation_ref": "",
+        "method": "DELETE",
+        "path": f"db://{table}",
+        "adapter": adapter,
+        "source_refs": [],
+        "authority_relation_ref": "",
+    }
+    identity_contract = {
+        "identity_fields": [identity_column],
+        "primary_identity_source": "primary_write_response",
+        "cleanup_identity_targets": [f"row.{identity_column}"],
+        "same_entity_required": True,
+        "identity_preservation_required": True,
+        "ownership_proof_required": True,
+    }
+    return {
+        "kind": "declared_adapter_cleanup",
+        "detail": f"{adapter}:{table}.{identity_column}",
+        "authority_block": authority_block,
+        "identity_contract": identity_contract,
+    }
 
 
 def _validate_identity_delete(
