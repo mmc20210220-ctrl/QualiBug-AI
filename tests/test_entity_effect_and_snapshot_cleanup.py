@@ -160,6 +160,57 @@ def test_cleanup_keeps_entity_producing_write_required_without_compensator() -> 
     assert _cleanup_is_schedulable(req) is False
 
 
+def test_identity_action_write_prefers_entity_get_over_collection() -> None:
+    """POST /resources/{id}/confirm must observe GET /resources/{id}, not list."""
+    from ai_test_asset_center.experiment_runtime_support import (
+        _declared_observation_path,
+    )
+
+    ops_list = [
+        {
+            "id": "op-confirm",
+            "method": "POST",
+            "path": "/api/orders/{id}/confirm",
+            "read_write": "write",
+        },
+        {
+            "id": "op-get",
+            "method": "GET",
+            "path": "/api/orders/{id}",
+            "read_write": "read",
+        },
+        {
+            "id": "op-list",
+            "method": "GET",
+            "path": "/api/orders",
+            "read_write": "read",
+        },
+    ]
+    behavior_ir = {"operations": ops_list}
+    resolvers = declared_effect_observers(
+        ops_list[0],
+        behavior_ir=behavior_ir,
+        max_candidates=5,
+    )
+    assert resolvers[0]["path"] == "/api/orders/{id}"
+    assert any(row["path"] == "/api/orders" for row in resolvers)
+
+    ops = {row["id"]: row for row in ops_list}
+    assert (
+        _declared_observation_path(
+            "/api/orders/{id}/confirm",
+            ops,
+            runtime_bindings={"id": "ord-1"},
+        )
+        == "/api/orders/ord-1"
+    )
+    # Without identity binding, collection remains the only materializable fallback.
+    assert (
+        _declared_observation_path("/api/orders/{id}/confirm", ops)
+        == "/api/orders"
+    )
+
+
 def test_entity_join_finds_payment_order_read() -> None:
     behavior_ir = {
         "entities": [{"id": "ent-pay", "name": "payment", "kind": "business_object"}],

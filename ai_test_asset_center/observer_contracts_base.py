@@ -666,14 +666,101 @@ def _without_server_managed_fields(value: Any) -> Any:
     return value
 
 
+_COLLECTION_WRAPPER_KEYS = ("records", "data", "items", "results", "rows")
+
+# Pagination / list-envelope metadata. Industry-neutral vocabulary for detecting
+# a collection wrapper that should unwrap to nested rows — not a primary entity.
+_COLLECTION_ENVELOPE_META_KEYS = frozenset({
+    "page",
+    "pages",
+    "total",
+    "count",
+    "size",
+    "limit",
+    "offset",
+    "next",
+    "previous",
+    "prev",
+    "cursor",
+    "has_more",
+    "meta",
+    "links",
+    "pagination",
+    "total_count",
+    "totalcount",
+    "page_size",
+    "pagesize",
+    "page_number",
+    "pagenumber",
+    "per_page",
+    "perpage",
+    "number_of_elements",
+    "numberofelements",
+})
+
+
+def _dict_has_resource_identity(value: dict[str, Any]) -> bool:
+    """True when the object itself carries a primary resource identity scalar."""
+    for key, child in value.items():
+        if not isinstance(child, (str, int, float)) or not str(child).strip():
+            continue
+        normalized = re.sub(r"[^a-z0-9]+", "_", str(key).lower()).strip("_")
+        if normalized in {"id", "uuid", "key"}:
+            return True
+    return False
+
+
+def _dict_has_primary_entity_scalars(
+    value: dict[str, Any],
+    *,
+    skip_key: str,
+) -> bool:
+    """True when parent has non-envelope business scalars beyond a nested list.
+
+    Distinguishes ``{id, status, discount_amount, items:[...]}`` (primary entity
+    with embedded children) from ``{items:[...], total: N}`` (collection envelope).
+    """
+    for key, child in value.items():
+        if key == skip_key:
+            continue
+        if isinstance(child, (dict, list, bool)) or child is None:
+            continue
+        normalized = re.sub(r"[^a-z0-9]+", "_", str(key).lower()).strip("_")
+        if (
+            normalized in {"id", "uuid", "key"}
+            or normalized.endswith("_id")
+            or normalized in _COLLECTION_ENVELOPE_META_KEYS
+            or _server_managed_field(key)
+        ):
+            continue
+        if isinstance(child, (str, int, float)) and str(child).strip():
+            return True
+    return False
+
+
 def _entity_rows(value: Any) -> list[dict[str, Any]]:
+    """Project an observed body into entity row dicts for field extraction.
+
+    Collection envelopes (``{items: [...], total: N}``) unwrap to nested rows.
+    Primary resources that embed a child collection (``{id, status, amounts,
+    items: [...]}``) keep the parent row and also expose nested children so
+    conservation/state terms can resolve on either surface. Silently discarding
+    the parent caused CONSERVATION_VALUES_MISSING when terms lived on the
+    parent while ``items`` triggered unwrap.
+    """
     if isinstance(value, list):
         return [dict(item) for item in value if isinstance(item, dict)]
     if isinstance(value, dict):
-        for key in ("records", "data", "items", "results", "rows"):
+        for key in _COLLECTION_WRAPPER_KEYS:
             nested = value.get(key)
             if isinstance(nested, list):
-                return [dict(item) for item in nested if isinstance(item, dict)]
+                nested_rows = [dict(item) for item in nested if isinstance(item, dict)]
+                if _dict_has_resource_identity(value) and _dict_has_primary_entity_scalars(
+                    value,
+                    skip_key=key,
+                ):
+                    return [dict(value), *nested_rows]
+                return nested_rows
         return [dict(value)]
     return []
 
@@ -1535,7 +1622,12 @@ def _observe_entity_state(
             "after_values": after_values,
         })
     elif conservation_terms:
-        # Terms specified but not found in snapshots
+        # Terms specified but not found in snapshots — keep terms visible.
+        evidence.update({
+            "conservation_terms": conservation_terms,
+            "before_values": {},
+            "after_values": {},
+        })
         return _receipt(
             observer_id="entity_state",
             status="INDETERMINATE",

@@ -298,6 +298,11 @@ def _append_adapter_cleanup_runtime_step(
                     },
                 },
                 "after": after_payload,
+                # Adapter DB cleanup is not HTTP transport. Emit explicit zeros so
+                # operational receipts stay fail-closed without None coercion.
+                "http_attempt_count": 0,
+                "write_request_attempt_count": 0,
+                "production_http_requests": 0,
             },
         }
     )
@@ -337,31 +342,107 @@ def _project_database_dsn(root: Path, project: str) -> tuple[str, str]:
     decrypt failure indistinguishable from "no database configured" -- two
     different problems with two different fixes -- so the caller must branch
     on this before ever reaching the "not configured" reason code.
+
+    Resolution order (never invents secrets):
+    1. ``QUALIBUG_DB_DSN`` operator override
+    2. Declared ``multi_service_config.json`` db block, decrypting ``enc$`` with
+       the same local/env key the credential-save path uses
+    3. Per-field env overrides (``QUALIBUG_DB_*`` / ``QUALIBUG_SVC_<NAME>_DB_*``)
+       when the on-disk password cannot be decrypted
     """
     import json as _json
+    import os as _os
+    import re as _re
+
+    env_dsn = _text(_os.environ.get("QUALIBUG_DB_DSN"))
+    if env_dsn:
+        return env_dsn, ""
+
+    # Same key file the credentials handler provisions when saving secrets.
+    # Without this, adapter cleanup saw enc$ blobs while HTTP writes still
+    # succeeded via test_accounts tokens that never need decrypt.
+    # Only *load* an existing key here -- never provision a new one from a
+    # cleanup DSN lookup against an arbitrary root (tests use /nonexistent).
+    key_path = (
+        Path(root) / "platform_workspace" / ".secrets" / "credential_encryption.key"
+    )
+    if key_path.is_file():
+        try:
+            from .private_pilot_credentials_patch import (
+                ensure_local_credential_encryption_key,
+            )
+
+            ensure_local_credential_encryption_key(Path(root))
+        except Exception:
+            # Decrypt below fail-closes visibly when the key is still unavailable.
+            pass
 
     path = Path(root) / "platform_workspace" / str(project) / "multi_service_config.json"
     try:
         payload = _json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return "", ""
+        payload = {}
+
+    def _env_db_override(service_name: str = "") -> tuple[str, str, str, str, str]:
+        """Return (host, port, name, user, password) from env when declared."""
+        safe = _re.sub(r"[^A-Za-z0-9]+", "_", service_name.upper()).strip("_")
+        prefixes: list[str] = []
+        if safe:
+            # Matches enterprise_credential_manager: QUALIBUG_SVC_<SERVICE>_DB_PASS
+            prefixes.append(f"QUALIBUG_SVC_{safe}_DB_")
+        prefixes.append("QUALIBUG_DB_")
+        host = port = name = user = password = ""
+        for prefix in prefixes:
+            host = host or _text(_os.environ.get(f"{prefix}HOST"))
+            port = port or _text(_os.environ.get(f"{prefix}PORT"))
+            name = name or _text(_os.environ.get(f"{prefix}NAME"))
+            user = user or _text(_os.environ.get(f"{prefix}USER"))
+            password = password or _text(_os.environ.get(f"{prefix}PASS"))
+        return host, port, name, user, password
+
+    decrypt_error = ""
     for service in _list(_dict(payload).get("services")):
-        db = _dict(_dict(service).get("db"))
+        svc = _dict(service)
+        db = _dict(svc.get("db"))
         host = _text(db.get("host"))
         name = _text(db.get("name"))
         if not host or not name:
             continue
         user = _text(db.get("user"))
         password = _text(db.get("password"))
+        port = _text(db.get("port")) or "5432"
         if password.startswith("enc$"):
             try:
                 from .credential_crypto import decrypt as _decrypt
 
                 password = _decrypt(password)
             except Exception as exc:
-                return "", f"CREDENTIAL_DECRYPT_FAILED:{type(exc).__name__}"
-        port = _text(db.get("port")) or "5432"
+                decrypt_error = f"CREDENTIAL_DECRYPT_FAILED:{type(exc).__name__}"
+                # Operator may still supply a plaintext DB password via env
+                # without rewriting the encrypted on-disk blob.
+                env_host, env_port, env_name, env_user, env_password = _env_db_override(
+                    _text(svc.get("name"))
+                )
+                if env_password:
+                    host = env_host or host
+                    port = env_port or port
+                    name = env_name or name
+                    user = env_user or user
+                    password = env_password
+                    decrypt_error = ""
+                else:
+                    continue
         return f"postgresql://{user}:{password}@{host}:{port}/{name}", ""
+
+    # No declared db block, but operator may still point cleanup at a DSN via env.
+    env_host, env_port, env_name, env_user, env_password = _env_db_override("")
+    if env_host and env_name and env_user and env_password:
+        return (
+            f"postgresql://{env_user}:{env_password}@{env_host}:{env_port or '5432'}/{env_name}",
+            "",
+        )
+    if decrypt_error:
+        return "", decrypt_error
     return "", ""
 
 
@@ -391,6 +472,60 @@ def _adapter_cleanup_identity(
     return ""
 
 
+def _mutation_restore_fields_from_steps(
+    steps_out: list[dict[str, Any]],
+    *,
+    identity_value: str = "",
+) -> dict[str, Any]:
+    """Scalar fields a governed write changed, restored from before-state.
+
+    Used when adapter cleanup would otherwise row-delete an existing entity the
+    run only mutated (action POSTs like ship/confirm). Server-managed timestamps
+    are excluded so timestamp-only noise cannot drive a restore.
+    """
+    from .cleanup_equivalence import SERVER_MANAGED_FIELDS
+
+    identity = _text(identity_value)
+    for step in reversed(_list(steps_out)):
+        if _text(step.get("phase")) not in {"control", "treatment"}:
+            continue
+        gov = _dict(step.get("governance_receipt"))
+        if not gov:
+            continue
+        before_body = _dict(_dict(gov.get("before")).get("body"))
+        after_body = _dict(_dict(gov.get("after")).get("body"))
+        if not before_body or not after_body:
+            continue
+        if identity:
+            before_id = _text(
+                before_body.get("id")
+                or before_body.get("orderId")
+                or before_body.get("order_id")
+            )
+            after_id = _text(
+                after_body.get("id")
+                or after_body.get("orderId")
+                or after_body.get("order_id")
+            )
+            if before_id and before_id != identity and after_id and after_id != identity:
+                continue
+        restore: dict[str, Any] = {}
+        for key, before_val in before_body.items():
+            field = _text(key)
+            if not field or field.lower() in SERVER_MANAGED_FIELDS:
+                continue
+            if isinstance(before_val, (dict, list)):
+                continue
+            after_val = after_body.get(key)
+            if isinstance(after_val, (dict, list)):
+                continue
+            if before_val != after_val:
+                restore[field] = before_val
+        if restore:
+            return restore
+    return {}
+
+
 def _execute_adapter_cleanup_step(
     cleanup: dict[str, Any],
     *,
@@ -405,11 +540,15 @@ def _execute_adapter_cleanup_step(
 
     Every refusal is a receipt too. A cleanup that did not happen must be as visible as
     one that did, or residue accumulates in a customer system unnoticed.
+
+    Prefer field restore when governed before/after prove this write mutated an
+    existing row. Row delete remains for run-created identities only.
     """
     from .cleanup_adapter_ladder import (
         EXECUTION_SCHEMA,
         build_ordered_delete_plan,
         execute_declared_adapter_cleanup,
+        execute_declared_adapter_field_restore,
     )
 
     identity = _adapter_cleanup_identity(
@@ -434,6 +573,24 @@ def _execute_adapter_cleanup_step(
             "rows_deleted": 0,
             "dependent_receipts": [],
         }
+
+    restore_fields = _mutation_restore_fields_from_steps(
+        steps_out, identity_value=identity
+    )
+    if restore_fields:
+        receipt = execute_declared_adapter_field_restore(
+            step,
+            identity_value=identity,
+            restore_fields=restore_fields,
+            dsn=dsn,
+            root=root,
+            project=project,
+            runtime_contract=runtime_contract,
+        )
+        summary = dict(receipt)
+        summary["dependent_receipts"] = []
+        summary["rows_deleted"] = int(receipt.get("rows_updated") or 0)
+        return summary
 
     # Dependents first, owner last. A single-table delete raised ForeignKeyViolation on
     # every run-created product against the live target, because inventory, cart_items,
@@ -739,7 +896,11 @@ def execute_experiment_cleanup_compensation(
                     campaign_id=resolved_campaign_id,
                     execution_id=resolved_execution_id,
                     subject_id=cleanup_subject_id,
-                    status="EXECUTED" if _adapter_cleaned else "FAILED",
+                    # Contract-evidence statuses are COMPLETED/FAILED/NOT_REQUIRED/...
+                    # EXECUTED is an experiment-lifecycle term and raises
+                    # contract_evidence_status_invalid — which is why V9 only
+                    # survived while every adapter cleanup FAILED.
+                    status="COMPLETED" if _adapter_cleaned else "FAILED",
                     evidence={
                         "accepted_write_count": len(accepted_governed_writes),
                         "cleanup_write_count": int(
@@ -751,6 +912,7 @@ def execute_experiment_cleanup_compensation(
                         "cleanup_adapter": _text(_adapter_receipt.get("adapter")),
                         "cleanup_table": _text(_adapter_receipt.get("table")),
                         "ownership_basis": _text(_adapter_receipt.get("ownership_basis")),
+                        "cleanup_mode": _text(_adapter_receipt.get("mode")),
                     },
                 ))
                 # Seal post-cleanup readback + emit a cleanup-phase runtime step so

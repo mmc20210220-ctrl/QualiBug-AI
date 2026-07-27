@@ -38,9 +38,11 @@ from .discovery_runtime_execution_support import (  # noqa: F401
     _legacy_experiment_execution_batch,
     _list,
     _manual_terminal_receipts,
+    _merge_experiment_execution_results,
     _operational_summary_from_attempt_ledger,
     _project_gate_results_for_authority,
     _selected_rows,
+    _sum_batch_int,
     _text,
 )
 from .experiment_executor import execute_selected_experiments
@@ -657,26 +659,28 @@ def run_experiment_candidate(
                 + int(surface_execution.get("selected_count") or 0)
             ),
             "executed_count": executed_count,
-            "blocked_count": (
-                int(batch.get("blocked_count") or 0)
-                + int(round_two_batch.get("blocked_count") or 0)
-                + int(surface_execution.get("blocked_count") or 0)
+            "blocked_count": _sum_batch_int(
+                [batch, *follow_on_batches, round_two_batch, surface_execution],
+                "blocked_count",
             ),
-            "harness_failure_count": (
-                int(batch.get("harness_failure_count") or 0)
-                + int(round_two_batch.get("harness_failure_count") or 0)
-                + int(surface_execution.get("harness_failure_count") or 0)
+            "harness_failure_count": _sum_batch_int(
+                [batch, *follow_on_batches, round_two_batch, surface_execution],
+                "harness_failure_count",
             ),
-            "cleanup_failures": (
-                int(batch.get("cleanup_failures") or 0)
-                + int(round_two_batch.get("cleanup_failures") or 0)
-                + int(surface_execution.get("cleanup_failures") or 0)
+            "cleanup_failures": _sum_batch_int(
+                [batch, *follow_on_batches, round_two_batch, surface_execution],
+                "cleanup_failures",
             ),
             "every_experiment_has_receipt": bool(ledger.get("complete")),
             "operational_receipt_summary": operational_summary,
-            "results": (
-                list(batch.get("results") or [])
-                + list(round_two_batch.get("results") or [])
+            # Finalizer TRUE_COMPLETED / EQUIVALENT live on full outcome rows.
+            # Follow-on and surface batches must be retained here — ledger cleanup
+            # COMPLETED alone cannot reconstruct Finalizer receipts.
+            "results": _merge_experiment_execution_results(
+                batch,
+                *follow_on_batches,
+                round_two_batch,
+                surface_execution,
             ),
         },
         "operational_receipt_summary": operational_summary,

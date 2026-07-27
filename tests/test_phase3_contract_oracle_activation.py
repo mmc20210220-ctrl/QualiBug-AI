@@ -619,6 +619,59 @@ def test_not_required_cleanup_is_valid_only_when_no_write_was_accepted() -> None
     assert activation["status"] == "ACTIVE"
 
 
+def test_not_required_cleanup_accepts_accepted_write_state_unchanged() -> None:
+    experiment = _experiment()
+    evidence = _evidence()
+    evidence["contract_evidence_receipts"] = [
+        (
+            build_contract_evidence_receipt(
+                kind="cleanup",
+                experiment_id="exp-1",
+                obligation_id="obl-1",
+                campaign_id=CAMPAIGN_ID,
+                execution_id=EXECUTION_ID,
+                subject_id="cleanup-1",
+                status="NOT_REQUIRED",
+                evidence={
+                    "accepted_write_count": 1,
+                    "cleanup_write_count": 0,
+                    "state_unchanged": True,
+                    "reason_code": "ACCEPTED_WRITE_STATE_UNCHANGED",
+                    "audit_receipt_ids": ["audit-accepted-write"],
+                },
+            )
+            if receipt["kind"] == "cleanup"
+            else receipt
+        )
+        for receipt in evidence["contract_evidence_receipts"]
+    ]
+
+    activation = build_contract_oracle_activation_receipt(
+        experiment=experiment,
+        evidence=evidence,
+    )
+
+    assert activation["status"] == "ACTIVE"
+    assert activation["verified_receipt_ids"]["cleanup"]
+
+
+def test_soft_field_oracle_cleanup_deferral_blocks_delivery_not_crash() -> None:
+    evidence = _evidence()
+    oracle = evaluate_contract_oracle(experiment=_experiment(), evidence=evidence)
+    oracle["activation_receipt"]["field_oracle_soft_activation"] = True
+    oracle["activation_receipt"]["verified_receipt_ids"]["cleanup"] = []
+    # Fingerprint reseal not required for this unit path; validate chain only.
+    status, reasons = _validate_active_chain(
+        execution={"observation_receipt_ids": []},
+        contracts=evidence["contract_evidence_receipts"],
+        observers=evidence["observer_receipts"],
+        oracle=oracle,
+        reproduction={},
+    )
+    assert status == "BLOCKED"
+    assert "CLEANUP_PROOF_DEFERRED_FIELD_ORACLE" in reasons
+
+
 def test_cross_execution_receipts_cannot_activate_oracle() -> None:
     evidence = _evidence()
     evidence["contract_evidence_receipts"][0] = build_contract_evidence_receipt(

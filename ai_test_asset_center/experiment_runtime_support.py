@@ -799,7 +799,14 @@ def _declared_observation_path(
     runtime_bindings: dict[str, Any] | None = None,
     request_body: Any = None,
 ) -> str:
-    """Return a source-declared effect observer through the shared graph."""
+    """Return a source-declared effect observer through the shared graph.
+
+    Prefer identity-bound (entity-scoped) observers that share write-path
+    placeholders and can be fully materialized from known bindings. Collection
+    GETs remain a fallback only when no entity observer can be bound — never
+    preferred when an entity GET is available; otherwise identity-write state
+    changes stay invisible and falsely look unchanged.
+    """
     operation = _operation_for_observation_path(path, operations)
     observers = declared_effect_observers(
         operation,
@@ -811,12 +818,37 @@ def _declared_observation_path(
         **_scalar_body_bindings(request_body),
         **(runtime_bindings or {}),
     }
+    write_placeholders = set(infer_path_params(normalize_path_placeholders(path)))
+    entity_bound: list[str] = []
+    collection_bound: list[str] = []
     for observer in observers:
-        materialized = _text(observer.get("path"))
+        template = _text(observer.get("path"))
+        materialized = template
         for name, value in binding_values.items():
-            materialized = materialized.replace("{" + name + "}", quote(str(value), safe=""))
-        if materialized.startswith("/") and not path_has_placeholders(materialized):
-            return materialized
+            if value in (None, ""):
+                continue
+            materialized = materialized.replace(
+                "{" + name + "}",
+                quote(str(value), safe=""),
+            )
+        if not (
+            materialized.startswith("/")
+            and not path_has_placeholders(materialized)
+        ):
+            continue
+        obs_placeholders = set(infer_path_params(template))
+        if obs_placeholders and (
+            not write_placeholders or (obs_placeholders & write_placeholders)
+        ):
+            entity_bound.append(materialized)
+        elif obs_placeholders:
+            entity_bound.append(materialized)
+        else:
+            collection_bound.append(materialized)
+    if entity_bound:
+        return entity_bound[0]
+    if collection_bound:
+        return collection_bound[0]
     return ""
 
 

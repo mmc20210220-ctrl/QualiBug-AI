@@ -1,0 +1,680 @@
+{
+  "schema_version": "qualibug.v162-cleanup-reval-coverage.v1",
+  "generated_at": "2026-07-27T15:24:35.876052+00:00",
+  "run_name": "V1_6_2_CLEANUP_EQUIVALENCE_ROOTCAUSE_REVAL_V14",
+  "scan_id": "scan_benchmark_mall_131_1785165636907",
+  "campaign_id": "CMP_88f1834f5884dbb974238430",
+  "campaign_rerun_key": "v162_cleanup_equivalence_reval_v14",
+  "execution_status": "completed",
+  "http_status": 200,
+  "elapsed_ms": 163246,
+  "canonical_selected": 1317,
+  "canonical_terminal": 1317,
+  "N": 61,
+  "unlock_ids_seen": 61,
+  "unlock_with_finalization": 61,
+  "unlock_true_completed": 61,
+  "unlock_equivalence_equivalent": 54,
+  "unlock_equivalence_not_applicable": 0,
+  "lifecycle_distribution": {
+    "TRUE_COMPLETED": 61
+  },
+  "equivalence_distribution": {
+    "EQUIVALENT": 54
+  },
+  "equivalence_reason_distribution": {
+    "<none>": 54
+  },
+  "cleanup_contract_status": {
+    "COMPLETED": 54
+  },
+  "cleanup_contract_reason": {
+    "<none>": 54
+  },
+  "terminal_status_distribution": {
+    "REJECTED": 61
+  },
+  "terminal_stage_distribution": {
+    "gate": 61
+  },
+  "reason_code_distribution": {
+    "ORACLE_NOT_VIOLATED": 61
+  },
+  "family_distribution": {
+    "authorization": 7,
+    "conservation": 54
+  },
+  "conservation_assertion_status": {
+    "PASS": 54
+  },
+  "conservation_assertion_reason": {
+    "<none>": 54
+  },
+  "entity_state_status": {
+    "OBSERVED:": 54
+  },
+  "baseline_r1": {
+    "finalizations": 8,
+    "true_completed": 0
+  },
+  "delta_vs_r1": {
+    "true_completed": 61,
+    "finalizations_seen_in_unlock": 53
+  },
+  "closed_breakpoint": "UNLOCK_FINALIZER_FOLLOW_ON_RESULT_DROPPED",
+  "next_breakpoint": "UNLOCK_COVERAGE_D_GE_49",
+  "root_cause": "experiment_execution.results merged only primary+round_two batches while executed_count/ledger included follow-on rounds. Finalizer TRUE_COMPLETED/EQUIVALENT lived on follow-on outcomes but were dropped from the retained projection, so Unlock D stayed at 8 despite cleanup COMPLETED 54. TRUE_COMPLETED is Spec §31 execution completeness (not a finding); PROPERTY_HELD may still be TRUE_COMPLETED with oracle_property_held.",
+  "note": "TRUE_COMPLETED counted only from retained v12.experiment_execution.results (61 Unlock rows retained of 61; missing_retention=0). Cleanup contract: {'COMPLETED': 54} / {'<none>': 54}. Equivalence: {'EQUIVALENT': 54} / reasons={'<none>': 54}. TRUE_COMPLETED=61, EQUIVALENT=54, D_ge_49=True.",
+  "rows": [
+    {
+      "obligation_id": "obl_05735d43d702fa55ec7e",
+      "experiment_id": "exp_13612138afacd72a32cf",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_117cdff8c039543a6281",
+      "experiment_id": "exp_39b0ecc9eb46b1f8ef4f",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_1306106ec75a1286f34c",
+      "experiment_id": "exp_bc8c58969ef105d9bb1b",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_138425ca076a8809a7a1",
+      "experiment_id": "exp_3fe8247aa1da033a224b",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_1f70ed35bc590890f773",
+      "experiment_id": "exp_092aadbf1a14df6ecead",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_1f76afc07d7551da1822",
+      "experiment_id": "exp_7e5f2bff44ae7b3da80a",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_22f01fa3d443895e6ef2",
+      "experiment_id": "exp_d20ecde459361910f9e4",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_2d01364e54507dde85f6",
+      "experiment_id": "exp_c5639e638619cec9ffe1",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_2d18f0b588e4ea53e5d9",
+      "experiment_id": "exp_6f5539301692d469abc6",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_3294d745034aa6e62037",
+      "experiment_id": "exp_e40b322cde160df139d2",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_34a30c0be9554666518d",
+      "experiment_id": "exp_dcd9368333699dd68f46",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_395b9972b3bc17a07215",
+      "experiment_id": "exp_fc25d602cf44826ad833",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_3d3827c0aa1ed055d4a9",
+      "experiment_id": "exp_740fb195a3f344f642d1",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_4564918976e7e86a7a7b",
+      "experiment_id": "exp_81843864089a245ad5b7",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_4568530e032fd5434846",
+      "experiment_id": "exp_5538bbfc6bb9b1a92824",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_473706f571b14266ea02",
+      "experiment_id": "exp_d8facba64478f3c3e280",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_4861cca0b69e7cba8d15",
+      "experiment_id": "exp_5b70cdc73acabc2f03ef",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_52bf7becdb4a3b6ee4eb",
+      "experiment_id": "exp_ccc7a642472f29078868",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_54643aea66659597b73e",
+      "experiment_id": "exp_5c34edc2f4c37958272d",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_5a0bae398dc26fdef3d2",
+      "experiment_id": "exp_1ce95c8d1066d2ff5f29",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_63e18c0d4d260addf254",
+      "experiment_id": "exp_04aa9f93130b04a332cf",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_691b948d4c8a29ea2072",
+      "experiment_id": "exp_b355659e712dbd33da70",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_6d1b9d3229fcbe6b32f5",
+      "experiment_id": "exp_a89154b3efb723e287bb",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_7b01375e46f49937d4ed",
+      "experiment_id": "exp_d5a7e2868287aa46a870",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_7b8f35d8e4ce2738c1d5",
+      "experiment_id": "exp_f48c434c1e1a83fc2373",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_7c32dc5fcda5cb18d030",
+      "experiment_id": "exp_f0d5fa51cec15f06ea80",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_8133cf97aac393005966",
+      "experiment_id": "exp_26defd1e8cc5b75947a0",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_84ed070ffa6d68552dc9",
+      "experiment_id": "exp_4e0466227b5fdb103fcb",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_85267b672be4e0275d42",
+      "experiment_id": "exp_4fa8745f406455baa7f6",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_9343659f8e3d121588ab",
+      "experiment_id": "exp_e737ce5fff45ae3dac7d",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_972fcc85f3701b63bd65",
+      "experiment_id": "exp_2b8b25e326aa7d5303de",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_9814a5bcac50c83f961c",
+      "experiment_id": "exp_397d2b84b99438ca73f7",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_9d445921cea2cee9ec16",
+      "experiment_id": "exp_6c68d1b59defb445b695",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_9df103b607759b2ae5be",
+      "experiment_id": "exp_a2e3b4168a82cbfd6230",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_9ea107cf53d191cedd33",
+      "experiment_id": "exp_75f8e64e8652ae515c69",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_a1f653cd9f4cd2254215",
+      "experiment_id": "exp_cdd087ecc78e7fe5ebbf",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_a6053fe5b2e58ef64d20",
+      "experiment_id": "exp_882b789bc0c2377c8695",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_a6fcf9a3e84b5eac0680",
+      "experiment_id": "exp_17953479a7daa92e8ed2",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_a943c47856fd463d34c0",
+      "experiment_id": "exp_d7df48d48453acb43b89",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_ab046c487eca2ef849ba",
+      "experiment_id": "exp_042c81312a625a366074",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_ab482d101884a3b17dcc",
+      "experiment_id": "exp_d80b21b305fd52c7e6f0",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_adf2b1fd4dfafe8fcf7c",
+      "experiment_id": "exp_7a8ade00cb52a9dda200",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_b303ece769aed9820e6d",
+      "experiment_id": "exp_929a993870756105468f",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_b7c8920ba7ff7380f094",
+      "experiment_id": "exp_c0e69b1f62b841e46573",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_b9283171d2b0f03b3089",
+      "experiment_id": "exp_e674054d3740d3420f00",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_ba72cf551d5e4d0d201f",
+      "experiment_id": "exp_441f29c867ec601d9263",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_be9a5f25d6579a5b48c0",
+      "experiment_id": "exp_ea40fb195fd4256d2f90",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_c466c4dd1fbd4f4459fc",
+      "experiment_id": "exp_271c452a1af2c6d12dd4",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_c6fbbfa75c193e09de00",
+      "experiment_id": "exp_47f6f78eefbe65ecc51b",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_c7061feecdba8b35bd2f",
+      "experiment_id": "exp_6d5863b8666e43a0498b",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_d0fec405b905ea329563",
+      "experiment_id": "exp_ecc551b348cf51a7e8ae",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_d15e9659a84b9da95ee9",
+      "experiment_id": "exp_5d2bd162dd806660a207",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_dae69b2d3442c44aeb9e",
+      "experiment_id": "exp_bfab791acd810f7206df",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_e4c4b9aaccd38718617f",
+      "experiment_id": "exp_107a764c2f9a02ae83b0",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_e9625322110c5ae2ceb9",
+      "experiment_id": "exp_e6a6ed3b35291d9a5ac8",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_edecfd9851cf49169980",
+      "experiment_id": "exp_22d85533cdfc9e6150d2",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_eedcb602a40131aa0a91",
+      "experiment_id": "exp_9bf0b02af648ed7989d2",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_f725529edb3511137735",
+      "experiment_id": "exp_d423331143b684ce16f9",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_f85f558ab018f5b77b62",
+      "experiment_id": "exp_f7a57ad2959281dc1e4a",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_f8883076c0810e3e6449",
+      "experiment_id": "exp_12e8414e7f68ac737eb8",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "EQUIVALENT",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    },
+    {
+      "obligation_id": "obl_f9fc1a84d02cc4e121e4",
+      "experiment_id": "exp_407310fae33c81d8eeb4",
+      "lifecycle_state": "TRUE_COMPLETED",
+      "equivalence_status": "",
+      "equivalence_reason": "",
+      "true_completed": true,
+      "has_finalization": true,
+      "source": "platform_outputs/benchmark_mall_131/scan_result.json#v12.experiment_execution.results"
+    }
+  ]
+}

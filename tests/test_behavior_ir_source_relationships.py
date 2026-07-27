@@ -103,12 +103,74 @@ def test_source_grounded_business_semantic_frame_survives_into_invariant() -> No
 
     invariant = ir["invariants"][0]
     assert invariant["semantic_frame"] == frame
-    assert invariant["expression"]["modality"] == "PROHIBITED"
-    assert invariant["expression"]["polarity"] == "negative"
-    assert invariant["expression"]["condition"] == "account status is DISABLED"
-    assert invariant["expression"]["subject"] == "account"
-    assert invariant["expression"]["behavior"] == "sign in"
+    # Semantic frame must not pollute expression — that rotates obligation_id.
+    assert "modality" not in invariant["expression"]
+    assert "polarity" not in invariant["expression"]
+    assert "condition" not in invariant["expression"]
+    assert "subject" not in invariant["expression"]
+    assert "behavior" not in invariant["expression"]
     assert invariant["source_refs"][0]["locator"] == "line:7"
+
+
+def test_semantic_frame_does_not_rotate_obligation_ids() -> None:
+    """Enrichment on invariants must not change stable obligation_id fingerprints."""
+    base_rule = {
+        "rule_id": "rule-qty-conserved",
+        "statement": "The declared quantity equation must be conserved.",
+        "kind": "conservation",
+        "source_id": "requirements",
+        "source_locator": "line:1",
+    }
+    frame = {
+        "schema_version": "qualibug.business-semantic-frame.v1",
+        "modality": "INVARIANT",
+        "polarity": "positive",
+        "condition": "",
+        "subject": "",
+        "behavior": "The declared quantity equation must be conserved.",
+        "source_anchors": ["quantity equation"],
+        "source_grounded": True,
+    }
+    shared = {
+        "interfaces": [{
+            "interface_id": "api:POST:/transfers",
+            "operation_id": "create_transfer",
+            "method": "POST",
+            "path": "/transfers",
+            "source_id": "openapi",
+        }],
+        "relationships": [{
+            "edge_id": "edge-rule-operation",
+            "from": "rule-qty-conserved",
+            "to": "api:POST:/transfers",
+            "relation": "rule_to_interface",
+            "confidence": 0.9,
+            "source_id": "requirements",
+        }],
+    }
+    ir_plain = build_behavior_ir_from_knowledge_asset(
+        {"rule_library": [dict(base_rule)], **shared},
+        project_id="project",
+    )
+    ir_framed = build_behavior_ir_from_knowledge_asset(
+        {"rule_library": [{**base_rule, "semantic_frame": frame}], **shared},
+        project_id="project",
+    )
+    assert ir_framed["invariants"][0]["semantic_frame"] == frame
+    assert "modality" not in ir_framed["invariants"][0]["expression"]
+
+    plain_ids = {
+        row["obligation_id"]
+        for row in compile_obligations_from_behavior_ir(ir_plain)["obligations"]
+        if row.get("risk_family") == "conservation"
+    }
+    framed_ids = {
+        row["obligation_id"]
+        for row in compile_obligations_from_behavior_ir(ir_framed)["obligations"]
+        if row.get("risk_family") == "conservation"
+    }
+    assert plain_ids
+    assert plain_ids == framed_ids
 
 
 def test_business_semantic_frame_rejects_invented_subject() -> None:

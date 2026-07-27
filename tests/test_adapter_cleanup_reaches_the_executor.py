@@ -20,6 +20,8 @@ What is proven here:
 from __future__ import annotations
 
 import inspect
+import json
+import os
 
 import pytest
 
@@ -229,3 +231,184 @@ def test_a_failed_adapter_cleanup_counts_as_a_cleanup_failure() -> None:
 def test_the_dsn_comes_from_the_operators_declared_config() -> None:
     """Never a hardcoded connection; absence yields empty and the executor refuses."""
     assert cleanup_mod._project_database_dsn("/nonexistent", "absent") == ("", "")
+
+
+def test_dsn_loads_existing_local_encryption_key(tmp_path, monkeypatch) -> None:
+    """Cleanup must decrypt with the same local key the credential-save path uses."""
+    from ai_test_asset_center.credential_crypto import encrypt
+
+    monkeypatch.delenv("QUALIBUG_CRED_ENC_KEY", raising=False)
+    monkeypatch.delenv("QUALIBUG_DB_DSN", raising=False)
+    key_dir = tmp_path / "platform_workspace" / ".secrets"
+    key_dir.mkdir(parents=True)
+    key = "unit-test-cleanup-credential-key-value"
+    (key_dir / "credential_encryption.key").write_text(key, encoding="utf-8")
+    monkeypatch.setenv("QUALIBUG_CRED_ENC_KEY", key)
+    encrypted = encrypt("db-secret-pass")
+    monkeypatch.delenv("QUALIBUG_CRED_ENC_KEY", raising=False)
+
+    project = "proj"
+    cfg_dir = tmp_path / "platform_workspace" / project
+    cfg_dir.mkdir(parents=True)
+    (cfg_dir / "multi_service_config.json").write_text(
+        json.dumps(
+            {
+                "services": [
+                    {
+                        "name": "gateway",
+                        "db": {
+                            "host": "localhost",
+                            "port": 5432,
+                            "name": "app",
+                            "user": "u",
+                            "password": encrypted,
+                        },
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    dsn, err = cleanup_mod._project_database_dsn(tmp_path, project)
+    assert err == ""
+    assert dsn == "postgresql://u:db-secret-pass@localhost:5432/app"
+    assert os.environ.get("QUALIBUG_CRED_ENC_KEY") == key
+
+
+def test_mutation_restore_fields_from_governed_before_after() -> None:
+    """Action POSTs expose status diffs that field-restore must reverse."""
+    fields = cleanup_mod._mutation_restore_fields_from_steps(
+        [
+            {
+                "phase": "treatment",
+                "governance_receipt": {
+                    "accepted": True,
+                    "before": {
+                        "body": {
+                            "id": "ord-1",
+                            "status": "SHIPPED",
+                            "updated_at": "t0",
+                        }
+                    },
+                    "after": {
+                        "body": {
+                            "id": "ord-1",
+                            "status": "COMPLETED",
+                            "updated_at": "t1",
+                        }
+                    },
+                },
+            }
+        ],
+        identity_value="ord-1",
+    )
+    assert fields == {"status": "SHIPPED"}
+
+
+def test_adapter_prefers_field_restore_over_row_delete_for_mutations(monkeypatch) -> None:
+    """Existing-entity mutations must not attempt run-owned row delete."""
+    restored: list[dict] = []
+
+    def _fake_restore(step, *, identity_value, restore_fields, dsn="", **kwargs):
+        restored.append(
+            {
+                "identity_value": identity_value,
+                "restore_fields": dict(restore_fields),
+                "dsn": dsn,
+            }
+        )
+        return {
+            "schema_version": "qualibug.cleanup-adapter-execution.v1",
+            "adapter": "db_sql",
+            "table": "orders",
+            "identity_value": identity_value,
+            "status": "CLEANED",
+            "reason_code": "",
+            "rows_updated": 1,
+            "mode": "field_restore",
+            "restored_fields": sorted(restore_fields),
+        }
+
+    monkeypatch.setattr(
+        cleanup_mod, "_project_database_dsn", lambda root, project: ("postgresql://x/y", "")
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.cleanup_adapter_ladder.execute_declared_adapter_field_restore",
+        _fake_restore,
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.cleanup_adapter_ladder.execute_declared_adapter_cleanup",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not row-delete")),
+    )
+
+    receipt = cleanup_mod._execute_adapter_cleanup_step(
+        {
+            "adapter": "db_sql",
+            "table": "orders",
+            "identity_column": "id",
+            "requires_ownership_proof": True,
+        },
+        root=".",
+        project="p",
+        runtime_bindings={},
+        steps_out=[
+            {
+                "phase": "treatment",
+                "body": {"id": "ord-1", "status": "COMPLETED"},
+                "governance_receipt": {
+                    "accepted": True,
+                    "before": {"body": {"id": "ord-1", "status": "SHIPPED"}},
+                    "after": {"body": {"id": "ord-1", "status": "COMPLETED"}},
+                },
+            }
+        ],
+        runtime_contract=_APPROVED_RUNTIME_CONTRACT,
+    )
+    assert receipt["status"] == "CLEANED"
+    assert receipt["mode"] == "field_restore"
+    assert restored and restored[0]["restore_fields"] == {"status": "SHIPPED"}
+
+
+def test_field_restore_updates_observed_scalars(monkeypatch) -> None:
+    """Field restore issues UPDATE, not DELETE, under the same target-policy gate."""
+    from ai_test_asset_center.cleanup_adapter_ladder import (
+        execute_declared_adapter_field_restore,
+    )
+
+    executed: list[tuple] = []
+
+    class _Cursor:
+        rowcount = 1
+
+        def execute(self, sql, params):
+            executed.append((sql, params))
+
+    class _Conn:
+        def cursor(self):
+            return _Cursor()
+
+        def commit(self):
+            return None
+
+        def rollback(self):
+            return None
+
+        def close(self):
+            return None
+
+    receipt = execute_declared_adapter_field_restore(
+        {"adapter": "db_sql", "table": "orders", "identity_column": "id"},
+        identity_value="ord-1",
+        restore_fields={"status": "SHIPPED"},
+        dsn="postgresql://x/y",
+        connect=lambda: _Conn(),
+        policy_decision={"write_allowed": True},
+    )
+    assert receipt["status"] == "CLEANED"
+    assert receipt["rows_updated"] == 1
+    assert executed
+    sql, params = executed[0]
+    assert "UPDATE" in sql.upper()
+    assert "DELETE" not in sql.upper()
+    assert params == ["SHIPPED", "ord-1"]

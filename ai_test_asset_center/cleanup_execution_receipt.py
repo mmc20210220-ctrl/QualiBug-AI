@@ -181,6 +181,28 @@ def build_cleanup_execution_receipt(
                 reason_code=_text(fail_row.get("reason_code")) or "ADAPTER_CLEANUP_FAILED",
                 detail=_text(fail_row.get("detail")) or "adapter_cleanup_not_cleaned",
             )
+        # Explicit NOT_REQUIRED must not be rewritten as NOT_ATTEMPTED/failed
+        # transport — that poisons cleanup equivalence into INDETERMINATE.
+        if cleanup_status.lower() in {"not_required"}:
+            return _build_receipt(
+                experiment_id=experiment_id,
+                proof_id=proof_id,
+                cleanup_operation_ref=cleanup_operation_ref,
+                cleanup_authority=cleanup_authority,
+                attempted=False,
+                transport_reached=False,
+                method=_first_cleanup_method(cleanup_plan),
+                path_template=_first_cleanup_path(cleanup_plan),
+                materialized_path="",
+                request_body_fingerprint="",
+                identity_bindings={},
+                status_code=0,
+                response_body_fingerprint="",
+                succeeded=False,
+                status=STATUS_NOT_REQUIRED,
+                reason_code="CLEANUP_NOT_REQUIRED",
+                detail="accepted_write_state_unchanged_or_explicit_not_required",
+            )
         # Determine why: blocked or not attempted
         if cleanup_status == "blocked":
             status = STATUS_BLOCKED

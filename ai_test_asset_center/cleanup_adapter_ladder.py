@@ -331,6 +331,127 @@ def _adapter_write_policy_allowed(
     return True, ""
 
 
+def execute_declared_adapter_field_restore(
+    step: dict[str, Any],
+    *,
+    identity_value: Any,
+    restore_fields: dict[str, Any],
+    dsn: str = "",
+    connect: Any = None,
+    root: Any = None,
+    project: str = "",
+    runtime_contract: dict[str, Any] | None = None,
+    policy_decision: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Restore source-observed scalar fields on an existing row this run mutated.
+
+    Identity-bound action POSTs (ship/confirm/…) mutate customer rows. Row delete
+    is the wrong compensator: ownership refuses them, and deleting would destroy
+    pre-existing data. The honest undo is an UPDATE of exactly the scalar fields
+    the governed before/after snapshots prove this write changed.
+    """
+    plan = _dict(step)
+    receipt: dict[str, Any] = {
+        "schema_version": EXECUTION_SCHEMA,
+        "adapter": _text(plan.get("adapter")) or "db_sql",
+        "table": _text(plan.get("table")),
+        "identity_column": _text(plan.get("identity_column")) or "id",
+        "identity_value": _text(identity_value),
+        "status": "REFUSED",
+        "reason_code": "",
+        "rows_deleted": 0,
+        "rows_updated": 0,
+        "mode": "field_restore",
+        "restored_fields": sorted(str(k) for k in _dict(restore_fields).keys()),
+    }
+
+    if _text(plan.get("adapter")) not in {"", "db_sql"}:
+        receipt["reason_code"] = "CLEANUP_ADAPTER_NOT_SUPPORTED"
+        return receipt
+
+    policy_allowed, policy_reason_code = _adapter_write_policy_allowed(
+        root=root,
+        project=project,
+        runtime_contract=runtime_contract,
+        policy_decision=policy_decision,
+    )
+    if not policy_allowed:
+        receipt["reason_code"] = policy_reason_code
+        return receipt
+
+    table = _text(plan.get("table"))
+    column = _text(plan.get("identity_column")) or "id"
+    if not _IDENTIFIER_RE.match(table) or not _IDENTIFIER_RE.match(column):
+        receipt["reason_code"] = "CLEANUP_IDENTIFIER_NOT_SAFE"
+        return receipt
+    if not _text(identity_value):
+        receipt["reason_code"] = REASON_NO_IDENTITY
+        return receipt
+
+    safe_fields: dict[str, Any] = {}
+    for key, value in _dict(restore_fields).items():
+        field = _text(key)
+        if not field or not _IDENTIFIER_RE.match(field):
+            receipt["reason_code"] = "CLEANUP_IDENTIFIER_NOT_SAFE"
+            receipt["detail"] = f"unsafe_restore_field:{field or '?'}"
+            return receipt
+        if isinstance(value, (dict, list)):
+            continue
+        safe_fields[field] = value
+    if not safe_fields:
+        receipt["reason_code"] = DB_RESTORE_FIELD_SET_EMPTY
+        return receipt
+    receipt["restored_fields"] = sorted(safe_fields.keys())
+
+    opener = connect
+    if opener is None:
+        if not _text(dsn):
+            receipt["reason_code"] = "CLEANUP_DB_CONNECTION_NOT_CONFIGURED"
+            return receipt
+
+        def opener():  # type: ignore[misc]
+            import psycopg2
+
+            return psycopg2.connect(_text(dsn))
+
+    try:
+        connection = opener()
+    except Exception as exc:
+        receipt["status"] = "FAILED"
+        receipt["reason_code"] = f"CLEANUP_DB_CONNECT_FAILED:{type(exc).__name__}"
+        receipt["detail"] = str(exc)[:200]
+        return receipt
+
+    assignments = ", ".join(f'"{field}" = %s' for field in safe_fields)
+    values = list(safe_fields.values()) + [_text(identity_value)]
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            f'UPDATE "{table}" SET {assignments} WHERE "{column}" = %s',  # noqa: S608
+            values,
+        )
+        updated = int(getattr(cursor, "rowcount", 0) or 0)
+        connection.commit()
+        receipt["status"] = "CLEANED" if updated > 0 else "REFUSED"
+        receipt["rows_updated"] = updated
+        if updated == 0:
+            receipt["reason_code"] = "CLEANUP_ROW_ALREADY_ABSENT"
+    except Exception as exc:
+        try:
+            connection.rollback()
+        except Exception:
+            pass
+        receipt["status"] = "FAILED"
+        receipt["reason_code"] = f"CLEANUP_DB_RESTORE_FAILED:{type(exc).__name__}"
+        receipt["detail"] = str(exc)[:200]
+    finally:
+        try:
+            connection.close()
+        except Exception:
+            pass
+    return receipt
+
+
 def execute_declared_adapter_cleanup(
     step: dict[str, Any],
     *,

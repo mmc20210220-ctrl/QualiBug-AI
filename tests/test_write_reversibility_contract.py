@@ -479,6 +479,64 @@ class TestWriteReversibilityProof:
             assert result["kind"] == "none", mutation
             assert result["detail"] == expected, mutation
 
+        # Collection create → row-delete equivalence (created_entity_absent).
+        create_result = _classify_cleanup_authority_v11(cleanup_plan=[good], **common)
+        assert create_result["equivalence_contract"]["mode"] == "created_entity_absent"
+        assert create_result["equivalence_contract"]["mode"]
+
+    def test_declared_adapter_mutation_emits_business_state_equivalence(self) -> None:
+        """Empty-body identity POSTs must not compile with an empty equivalence mode.
+
+        V12 Unlock breakpoint UNLOCK_CLEANUP_EQUIVALENCE_MODE_MISSING: adapter
+        field_restore COMPLETED, but WRP.equivalence_contract was {} so equivalence
+        stayed INDETERMINATE. Identity mutations restore fields and must carry
+        business_state_restored.
+        """
+        from ai_test_asset_center.write_reversibility_contract import (
+            _classify_cleanup_authority_v11,
+            build_reversibility_proof,
+        )
+
+        plan = {
+            "action": "declared_adapter_cleanup",
+            "mode": "row_delete",
+            "adapter": "db_sql",
+            "table": "orders",
+            "identity_column": "id",
+            "requires_ownership_proof": True,
+            "scope": "run_created_only",
+        }
+        ops = {
+            "op_confirm": {
+                "id": "op_confirm",
+                "method": "POST",
+                "path": "/api/orders/:id/confirm",
+                "request_example": {},
+            }
+        }
+        result = _classify_cleanup_authority_v11(
+            cleanup_plan=[plan],
+            primary_method="POST",
+            primary_operation_ref="op_confirm",
+            primary_path="/api/orders/:id/confirm",
+            ops=ops,
+            relations=[],
+            experiment={},
+        )
+        assert result["kind"] == "declared_adapter_cleanup"
+        assert result["equivalence_contract"]["mode"] == "business_state_restored"
+        assert result["authority_block"]["cleanup_surface"] == "field_restore"
+
+        proof = build_reversibility_proof(
+            primary_operation_ref="op_confirm",
+            primary_method="POST",
+            primary_path="/api/orders/:id/confirm",
+            cleanup_plan=[plan],
+            behavior_ir={"operations": list(ops.values())},
+        )
+        assert proof["proof_status"] == "PROVEN"
+        assert proof["equivalence_contract"]["mode"] == "business_state_restored"
+
 
 # ─── Cleanup Plan Validator unit tests ────────────────────────────────────────
 

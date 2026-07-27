@@ -420,13 +420,23 @@ def build_contract_oracle_activation_receipt(
                     and int(receipt_evidence.get("cleanup_write_count") or 0) > 0
                     and bool(audit_receipt_ids)
                 )
-                not_required_with_proof = (
+                accepted_unchanged = (
+                    receipt_status == "NOT_REQUIRED"
+                    and _text(receipt_evidence.get("reason_code"))
+                    == "ACCEPTED_WRITE_STATE_UNCHANGED"
+                    and int(receipt_evidence.get("accepted_write_count") or 0) > 0
+                    and int(receipt_evidence.get("cleanup_write_count") or 0) == 0
+                    and receipt_evidence.get("state_unchanged") is True
+                    and bool(audit_receipt_ids)
+                )
+                rejected_unchanged = (
                     receipt_status == "NOT_REQUIRED"
                     and int(receipt_evidence.get("accepted_write_count") or 0) == 0
                     and int(receipt_evidence.get("cleanup_write_count") or 0) == 0
                     and receipt_evidence.get("state_unchanged") is True
                     and bool(audit_receipt_ids)
                 )
+                not_required_with_proof = accepted_unchanged or rejected_unchanged
                 if completed_with_proof or not_required_with_proof:
                     verified[kind].append(_text(receipt.get("receipt_id")))
                     continue

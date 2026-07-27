@@ -290,23 +290,71 @@ def materialize_experiment_fixtures(
             target = _text(_dict(node).get("target"))
             binding = binding_plan.get(target) or {}
             # ── Shortcut: pre-resolved binding with generated_value ──
-            # Batch-level auto_resolve_bindings already called the GET endpoint and
-            # obtained a real entity ID. Use it directly without re-resolving.
+            # Batch pre-resolution may supply a value, but only after a source
+            # identity GET proves that value is observable on THIS binding's
+            # collection. A cart-item {id} must never bind into /api/orders/{id}.
             if binding.get("generated_value") and _text(binding.get("status")) == "bound":
+                from .runtime_binding_resolver import collection_segment_for_placeholder
+
                 _pre_val = str(binding["generated_value"])
-                runtime_bindings[target] = _pre_val
-                fixture_receipts.append({
-                    "node_id": node_id,
-                    "kind": kind,
-                    "status": "resolved",
-                    "target": target,
-                    "value": _pre_val,
-                    "value_fingerprint": hashlib.sha256(
-                        _pre_val.encode("utf-8")
-                    ).hexdigest()[:12],
-                    "source": "pre_resolved_binding",
-                })
-                continue
+                _target_path = normalize_path_placeholders(
+                    _text(binding.get("target_path"))
+                )
+                _proof_paths: list[str] = []
+                if _target_path.startswith("/") and ("{" + target + "}") in _target_path:
+                    _materialized = _target_path.replace("{" + target + "}", _pre_val)
+                    _segs = [s for s in _materialized.strip("/").split("/") if s]
+                    if _pre_val in _segs:
+                        _id_idx = _segs.index(_pre_val)
+                        _proof_paths.append("/" + "/".join(_segs[: _id_idx + 1]))
+                for _resolver in _list(binding.get("resolver_operations")):
+                    if not isinstance(_resolver, dict):
+                        continue
+                    _rpath = _text(_resolver.get("path")).rstrip("/")
+                    if _rpath.startswith("/") and not path_has_placeholders(_rpath):
+                        _candidate = f"{_rpath}/{_pre_val}"
+                        if _candidate not in _proof_paths:
+                            _proof_paths.append(_candidate)
+                _proved = False
+                if not _proof_paths:
+                    # No path context → cannot safely accept a global {id}.
+                    _proved = False
+                else:
+                    for _proof_path in _proof_paths[:3]:
+                        _proof_obs = _run_http_step(
+                            base_url=base_url,
+                            method="GET",
+                            path=_proof_path,
+                            token=resolver_token,
+                        )
+                        _proof_obs.update({
+                            "phase": "binding_identity_proof",
+                            "step_id": f"bind-proof:{target}",
+                            "actor_ref": resolver_actor_ref,
+                            "operation_ref": "",
+                        })
+                        steps_out.append(_proof_obs)
+                        if 200 <= int(_proof_obs.get("status_code") or 0) < 300:
+                            _proved = True
+                            break
+                if _proved:
+                    runtime_bindings[target] = _pre_val
+                    fixture_receipts.append({
+                        "node_id": node_id,
+                        "kind": kind,
+                        "status": "resolved",
+                        "target": target,
+                        "value": _pre_val,
+                        "value_fingerprint": hashlib.sha256(
+                            _pre_val.encode("utf-8")
+                        ).hexdigest()[:12],
+                        "source": "pre_resolved_binding",
+                        "collection_segment": collection_segment_for_placeholder(
+                            _target_path, target
+                        ),
+                    })
+                    continue
+                # Fall through to path-scoped resolvers when identity proof fails.
             # Invented identifiers are forbidden. A synthetic_value without a
             # source-declared GET/HEAD resolver or fixture setup remains blocked.
             # Before blocking, try to auto-discover a create operation on the

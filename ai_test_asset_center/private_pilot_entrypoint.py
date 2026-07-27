@@ -15,6 +15,7 @@ import socket
 import sys
 import time
 import traceback
+from pathlib import Path
 from typing import Any
 
 from ai_test_asset_center import private_pilot_service as _service
@@ -391,6 +392,24 @@ def run_server() -> None:
     install_runtime_patches()
     from ai_test_asset_center.credential_crypto import ensure_credential_key
     from ai_test_asset_center.policy_wiring import bind_product_installed_mainline_authority
+    from ai_test_asset_center.private_pilot_credentials_patch import (
+        ensure_local_credential_encryption_key,
+    )
+
+    # Credentials saved through the product are encrypted with the local private
+    # key file (or QUALIBUG_CRED_ENC_KEY). Load that key into the process env
+    # before any scan path decrypts multi_service_config secrets. Skipping this
+    # left cleanup/adapter DSN decrypt failing with CREDENTIAL_DECRYPT_FAILED
+    # while HTTP writes still worked via test_accounts tokens.
+    try:
+        _cred_key_source = ensure_local_credential_encryption_key(Path.cwd())
+    except Exception as exc:
+        _logger.warning(
+            "Local credential encryption key not loaded: %s",
+            exc,
+            extra={"error_code": ErrorCode.KEY_MISSING.code},
+        )
+        _cred_key_source = "unavailable"
 
     # ensure_credential_key() returns a str ("ok" / "plaintext_warning") and raises
     # when encryption is mandatory but unconfigured.  The previous isinstance(dict)
@@ -402,7 +421,10 @@ def run_server() -> None:
             "as plaintext.  Set QUALIBUG_CRED_ENC_KEY to enable at-rest encryption.",
             extra={
                 "error_code": ErrorCode.KEY_MISSING.code,
-                "context": {"credential_key_status": _cred_key_status},
+                "context": {
+                    "credential_key_status": _cred_key_status,
+                    "credential_key_source": _cred_key_source,
+                },
             },
         )
 

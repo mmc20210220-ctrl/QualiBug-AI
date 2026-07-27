@@ -154,6 +154,23 @@ def declared_effect_observers(
     if not target_path.startswith("/"):
         return []
     candidate_paths = [target_path]
+    segments = [segment for segment in target_path.strip("/").split("/") if segment]
+    # Identity-bound action writes (e.g. POST /resources/{id}/confirm) must
+    # prefer the source-declared entity GET (/resources/{id}) before the
+    # collection GET. collection_path truncates at the first placeholder, so
+    # without this ordering the collection always outranks the entity observer
+    # and state changes become invisible (false ACCEPTED_WRITE_STATE_UNCHANGED).
+    placeholder_positions = [
+        index
+        for index, segment in enumerate(segments)
+        if _PLACEHOLDER_RE.fullmatch(segment)
+    ]
+    if placeholder_positions and placeholder_positions[-1] < len(segments) - 1:
+        parent_resource = "/" + "/".join(
+            segments[: placeholder_positions[-1] + 1]
+        )
+        if parent_resource.startswith("/") and parent_resource not in candidate_paths:
+            candidate_paths.append(parent_resource)
     collection = normalize_path_placeholders(collection_path(target_path))
     if collection.startswith("/") and collection not in candidate_paths:
         candidate_paths.append(collection)
@@ -161,7 +178,6 @@ def declared_effect_observers(
         normalized_alternate = normalize_path_placeholders(alternate)
         if normalized_alternate.startswith("/") and normalized_alternate not in candidate_paths:
             candidate_paths.append(normalized_alternate)
-    segments = [segment for segment in target_path.strip("/").split("/") if segment]
     for index in range(2, len(segments)):
         prefix = "/" + "/".join(segments[:index])
         if (
@@ -170,17 +186,6 @@ def declared_effect_observers(
             and prefix not in candidate_paths
         ):
             candidate_paths.append(prefix)
-    placeholder_positions = [
-        index
-        for index, segment in enumerate(segments)
-        if _PLACEHOLDER_RE.fullmatch(segment)
-    ]
-    if placeholder_positions and placeholder_positions[-1] < len(segments) - 1:
-        parent_resource = "/" + "/".join(
-            segments[:placeholder_positions[-1] + 1]
-        )
-        if parent_resource not in candidate_paths:
-            candidate_paths.append(parent_resource)
 
     # Source-declared observes/produces/consumes joins may name an effect-read
     # operation even when path heuristics miss the sibling GET.

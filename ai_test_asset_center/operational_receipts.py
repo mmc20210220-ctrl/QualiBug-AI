@@ -253,12 +253,19 @@ def build_execution_operational_receipt(
             write_request_attempts += write_attempts
             production_requests += production
             accepted = governance.get("accepted") is True
+            method = _text(governance.get("method") or step.get("method")).upper()
+            # Adapter DB cleanup is not HTTP transport. Counting it as an accepted
+            # write with write_request_attempt_count=0 trips
+            # accepted_write_count_exceeds_write_attempts — which only surfaces once
+            # decrypt/field-restore actually succeed (FAILED receipts stay accepted=False).
+            is_adapter_cleanup = method.startswith("ADAPTER_")
             if phase in _CLEANUP_PHASES:
-                if attempts:
+                if attempts or is_adapter_cleanup:
                     cleanup_attempted += 1
                 if accepted:
-                    accepted_cleanup += 1
                     cleanup_completed += 1
+                    if not is_adapter_cleanup:
+                        accepted_cleanup += 1
             elif accepted:
                 accepted_non_cleanup += 1
             continue

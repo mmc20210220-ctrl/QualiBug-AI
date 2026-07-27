@@ -162,6 +162,51 @@ def _operational_summary_from_attempt_ledger(
     }
 
 
+def _merge_experiment_execution_results(
+    *batches: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Retain Finalizer outcomes from every execution batch.
+
+    Primary, follow-on, round-two, and surface batches all run
+    ``finalize_experiment_execution``. Counts merge every batch, but the
+    persisted ``experiment_execution.results`` projection historically omitted
+    follow-on (and surface) rows — dropping TRUE_COMPLETED / EQUIVALENT
+    receipts while the obligation ledger still showed cleanup COMPLETED.
+    """
+
+    merged: list[dict[str, Any]] = []
+    seen_execution_ids: set[str] = set()
+    seen_obligation_ids: set[str] = set()
+    for batch in batches:
+        if not isinstance(batch, dict):
+            continue
+        for row in _list(batch.get("results")):
+            if not isinstance(row, dict):
+                continue
+            execution_id = _text(row.get("execution_id"))
+            obligation_id = _text(row.get("obligation_id"))
+            if execution_id and execution_id in seen_execution_ids:
+                continue
+            if not execution_id and obligation_id and obligation_id in seen_obligation_ids:
+                continue
+            if execution_id:
+                seen_execution_ids.add(execution_id)
+            if obligation_id:
+                seen_obligation_ids.add(obligation_id)
+            merged.append(dict(row))
+    return merged
+
+
+def _sum_batch_int(batches: list[dict[str, Any]], key: str) -> int:
+    """Sum an integer counter across execution batches."""
+
+    total = 0
+    for batch in batches:
+        if isinstance(batch, dict):
+            total += int(batch.get(key) or 0)
+    return total
+
+
 def _legacy_experiment_execution_batch(
     *,
     selected_rows: list[dict[str, Any]],

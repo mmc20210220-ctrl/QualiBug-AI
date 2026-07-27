@@ -366,14 +366,69 @@ def _classify_cleanup_authority_v11(
     # optional: the executor re-checks the real row identity and refuses anything this
     # run did not create. Without that flag the plan is rejected here rather than
     # trusted.
-    if action == "declared_adapter_cleanup" or mode == "adapter_row_delete":
-        return _validate_declared_adapter_cleanup(first)
+    if (
+        action == "declared_adapter_cleanup"
+        or mode in {
+            "adapter_row_delete",
+            "row_delete",
+            "field_restore",
+            "adapter_field_restore",
+        }
+    ):
+        return _validate_declared_adapter_cleanup(
+            first,
+            primary_method=primary_method,
+            primary_path=primary_path,
+            primary_op=_dict(ops.get(primary_operation_ref)),
+        )
 
     return {"kind": "none", "detail": "cleanup_authority_unrecognized"}
 
 
-def _validate_declared_adapter_cleanup(step: dict[str, Any]) -> dict[str, Any]:
-    """Admit a declared-adapter row delete as cleanup authority, or say what is missing."""
+def _adapter_cleanup_is_field_restore(
+    step: dict[str, Any],
+    *,
+    primary_method: str,
+    primary_path: str,
+    primary_op: dict[str, Any],
+) -> bool:
+    """True when adapter cleanup must restore mutated fields, not delete a created row.
+
+    Empty-body identity POSTs (ship/confirm/approve) and PUT/PATCH on an addressed
+    entity mutate pre-existing rows. Row-delete equivalence (created_entity_absent)
+    is the wrong contract for those writes — runtime field_restore leaves the entity
+    present and must be judged by business_state_restored.
+    """
+    from .real_id_resolver_base import path_has_placeholders
+
+    step_mode = _text(step.get("mode")).lower()
+    if step_mode in {"field_restore", "adapter_field_restore", "snapshot_restore"}:
+        return True
+    method = _text(primary_method).upper()
+    if not path_has_placeholders(primary_path):
+        return False
+    if method in {"PUT", "PATCH"}:
+        return True
+    if method != "POST":
+        return False
+    request_example = primary_op.get("request_example")
+    body_empty = not request_example or request_example == {}
+    return body_empty
+
+
+def _validate_declared_adapter_cleanup(
+    step: dict[str, Any],
+    *,
+    primary_method: str = "",
+    primary_path: str = "",
+    primary_op: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Admit a declared-adapter cleanup as authority, or say what is missing.
+
+    Always emits an equivalence_contract. A PROVEN adapter proof with an empty mode
+    leaves cleanup equivalence permanently INDETERMINATE (EQUIVALENCE_MODE_MISSING)
+    even after a successful field_restore / row delete.
+    """
     row = _dict(step)
     adapter = _text(row.get("adapter"))
     table = _text(row.get("table"))
@@ -389,14 +444,21 @@ def _validate_declared_adapter_cleanup(step: dict[str, Any]) -> dict[str, Any]:
     if _text(row.get("scope")) != "run_created_only":
         return {"kind": "none", "detail": "adapter_cleanup_scope_not_run_created_only"}
 
+    field_restore = _adapter_cleanup_is_field_restore(
+        row,
+        primary_method=primary_method,
+        primary_path=primary_path,
+        primary_op=_dict(primary_op),
+    )
     authority_block = {
         "kind": "declared_adapter_cleanup",
         "operation_ref": "",
-        "method": "DELETE",
+        "method": "UPDATE" if field_restore else "DELETE",
         "path": f"db://{table}",
         "adapter": adapter,
         "source_refs": [],
         "authority_relation_ref": "",
+        "cleanup_surface": "field_restore" if field_restore else "row_delete",
     }
     identity_contract = {
         "identity_fields": [identity_column],
@@ -406,11 +468,74 @@ def _validate_declared_adapter_cleanup(step: dict[str, Any]) -> dict[str, Any]:
         "identity_preservation_required": True,
         "ownership_proof_required": True,
     }
+    if field_restore:
+        return {
+            "kind": "declared_adapter_cleanup",
+            "detail": f"{adapter}:{table}.{identity_column}:field_restore",
+            "authority_block": authority_block,
+            "identity_contract": identity_contract,
+            "before_observation_contract": {
+                "required": True,
+                "observer_kind": "entity_read",
+                "proof_semantics": "field_values_before",
+            },
+            "after_write_observation_contract": {
+                "required": True,
+                "observer_kind": "entity_read",
+                "proof_semantics": "field_values_changed",
+            },
+            "after_cleanup_observation_contract": {
+                "required": True,
+                "observer_kind": "entity_read",
+                "proof_semantics": "field_values_restored",
+            },
+            "cleanup_request_contract": {
+                "body_strategy": "before_snapshot_fields",
+                "allowed_fields": [],
+                "required_bindings": [identity_column],
+            },
+            # business_state_restored compares all non-server-managed fields from the
+            # sealed before vs after-cleanup observations — no compile-time field list
+            # required, and no waiver of missing after-cleanup proof.
+            "equivalence_contract": {
+                "mode": "business_state_restored",
+                "identity_required": True,
+                "compared_fields": [],
+                "ignored_server_fields": sorted(SERVER_MANAGED_FIELDS),
+            },
+        }
+
     return {
         "kind": "declared_adapter_cleanup",
         "detail": f"{adapter}:{table}.{identity_column}",
         "authority_block": authority_block,
         "identity_contract": identity_contract,
+        "before_observation_contract": {
+            "required": True,
+            "observer_kind": "collection_membership",
+            "proof_semantics": "entity_absent",
+        },
+        "after_write_observation_contract": {
+            "required": True,
+            "observer_kind": "identity_read",
+            "proof_semantics": "entity_present",
+        },
+        "after_cleanup_observation_contract": {
+            "required": True,
+            "observer_kind": "identity_read",
+            "proof_semantics": "entity_absent",
+        },
+        "cleanup_request_contract": {
+            "body_strategy": "none",
+            "allowed_fields": [],
+            "required_bindings": [identity_column],
+        },
+        "equivalence_contract": {
+            "mode": "created_entity_absent",
+            "identity_required": True,
+            "compared_fields": [],
+            "ignored_server_fields": [],
+        },
     }
 
 

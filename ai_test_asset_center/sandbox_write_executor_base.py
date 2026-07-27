@@ -630,6 +630,42 @@ def _materialize_source_observed_mutation(
     return body, receipt, ""
 
 
+def _identity_scoped_entity_observation(write_path: str, observation_path: str) -> bool:
+    """True when observation is the entity identity under an identity-bound write.
+
+    Examples:
+    - write ``/api/orders/{id}/confirm``, observe ``/api/orders/{id}`` → True
+    - write ``/api/orders/{id}``, observe ``/api/orders/{id}`` → True
+    - write ``/api/orders``, observe ``/api/orders`` → False (collection)
+    """
+    write = normalize_path_placeholders(_text(write_path)).split("?", 1)[0].rstrip("/")
+    observe = normalize_path_placeholders(_text(observation_path)).split("?", 1)[0].rstrip("/")
+    if not write.startswith("/") or not observe.startswith("/"):
+        return False
+    write_segs = [segment for segment in write.strip("/").split("/") if segment]
+    observe_segs = [segment for segment in observe.strip("/").split("/") if segment]
+    if len(observe_segs) < 2:
+        return False
+
+    def _looks_like_identity(segment: str) -> bool:
+        token = _text(segment)
+        if not token or token.startswith("{") or token.startswith(":"):
+            return False
+        if token.isdigit():
+            return True
+        # UUID-like or opaque resource ids — not static vocabulary segments.
+        return bool(re.fullmatch(r"[0-9a-fA-F-]{8,}|[A-Za-z0-9_-]{12,}", token))
+
+    if write == observe:
+        return _looks_like_identity(observe_segs[-1])
+    # Action-on-entity: observation is a strict prefix ending at the identity.
+    if len(write_segs) <= len(observe_segs):
+        return False
+    if write_segs[: len(observe_segs)] != observe_segs:
+        return False
+    return _looks_like_identity(observe_segs[-1])
+
+
 def execute_governed_control_write(
     *,
     root: Path,
@@ -711,6 +747,50 @@ def execute_governed_control_write(
             reason = identity_block_reason
     base = _text(base_url).rstrip("/")
     before = _http_request("GET", base + observation_path, token=actor_token) if allowed else {}
+    # Identity-scoped entity observation (e.g. GET /orders/{id} before
+    # POST /orders/{id}/confirm) must be observable before the write. A 404
+    # here means the path identity is unbound/wrong-collection — never treat
+    # a later 2xx write + 404/404 as "accepted state unchanged".
+    if allowed and _identity_scoped_entity_observation(path, observation_path):
+        before_status = int(before.get("status") or 0)
+        if not (200 <= before_status < 300):
+            identity_reason = "governed_write_identity_unobservable"
+            record = {
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "actor_role": actor_identity,
+                "method": method,
+                "path": path,
+                "before_ref": f"control_before:{observation_path}:{before_status}",
+                "after_ref": "",
+                "cleanup_status": "not_applicable",
+                "cleanup_reason": identity_reason,
+                "operation_phase": phase,
+                "operation_accepted": False,
+                "campaign_id": campaign_id,
+                "slice_id": "evaluation_fixture_control",
+                "environment_kind": resolve_environment_kind(root, project, runtime_contract),
+                "approved_base_url": _text(runtime_contract.get("approved_base_url")),
+                "http_status": 0,
+            }
+            audit_path = _append_audit(root, project, record)
+            return {
+                "status": "blocked",
+                "reason": identity_reason,
+                "accepted": False,
+                "method": method,
+                "path": path,
+                "observation_path": observation_path,
+                "before": before,
+                "write": {"status": 0, "body": "", "headers": {}, "error": identity_reason},
+                "after": {},
+                "before_ref": record["before_ref"],
+                "after_ref": "",
+                "audit_path": str(audit_path),
+                "audit_record": record,
+                "http_attempt_count": 1,
+                "write_request_attempt_count": 0,
+                "production_http_requests": 0,
+            }
     runtime_body_receipt: dict[str, Any] = {}
     if allowed and runtime_body_plan:
         body, runtime_body_receipt, mutation_reason = _materialize_source_observed_mutation(

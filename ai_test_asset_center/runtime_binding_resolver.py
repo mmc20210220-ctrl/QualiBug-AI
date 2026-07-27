@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import re
-import time
 import urllib.request
 import urllib.error
 from typing import Any
@@ -42,22 +41,57 @@ def _extract_placeholders(path: str) -> list[str]:
     return results
 
 
+def collection_segment_for_placeholder(path: str, placeholder_name: str) -> str:
+    """Return the path segment that owns ``placeholder_name``.
+
+    ``/api/orders/{id}/confirm`` → ``orders``
+    ``/api/cart/items/{id}`` → ``items``
+    ``/api/orders/:orderId/ship`` → ``orders``
+
+    Empty when the placeholder is absent or has no owning collection segment.
+    Never invents a collection: the segment is taken verbatim from the path.
+    """
+    normalized = _text(path)
+    if not normalized.startswith("/"):
+        return ""
+    ph = _text(placeholder_name)
+    if not ph:
+        return ""
+    markers = {f"{{{ph}}}", f":{ph}"}
+    segments = [segment for segment in normalized.strip("/").split("/") if segment]
+    for index, segment in enumerate(segments):
+        if segment in markers:
+            if index == 0:
+                return ""
+            return segments[index - 1].lower()
+    return ""
+
+
+def _entity_hint(placeholder_name: str) -> str:
+    ph_lower = _text(placeholder_name).lower()
+    return re.sub(r"(id|_id|Id)$", "", ph_lower).strip("_")
+
+
 def _find_list_endpoints_for_entity(
     behavior_ir: dict[str, Any],
     placeholder_name: str,
+    *,
+    collection_hints: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Find GET endpoints that can resolve a placeholder.
 
-    Strategy: match placeholder name to entity/collection names in the IR.
-    E.g. {orderId} matches GET /api/orders or GET /api/v1/orders.
+    Strategy: match placeholder name and/or owning collection segment(s) from
+    the write paths that need the binding. Generic ``{id}`` must never match
+    every list endpoint — that cross-binds cart item ids into order confirms.
     """
     operations = _list(behavior_ir.get("operations"))
     candidates: list[dict[str, Any]] = []
-
-    # Normalize placeholder: orderId -> order, userId -> user, id -> generic
-    ph_lower = placeholder_name.lower()
-    # Strip common suffixes
-    entity_hint = re.sub(r"(id|_id|Id)$", "", ph_lower).strip("_")
+    entity_hint = _entity_hint(placeholder_name)
+    hints = {
+        _text(hint).lower()
+        for hint in (collection_hints or set())
+        if _text(hint)
+    }
 
     for op in operations:
         if not isinstance(op, dict):
@@ -71,12 +105,21 @@ def _find_list_endpoints_for_entity(
         # Skip paths with unresolved placeholders (can't call them)
         if _PLACEHOLDER_RE.search(path) or _COLON_PARAM_RE.search(path):
             continue
-        # Match: path contains the entity hint
         path_lower = path.lower()
-        if entity_hint and entity_hint in path_lower:
+        path_segments = {
+            segment.lower()
+            for segment in path.strip("/").split("/")
+            if segment
+        }
+        if hints:
+            if not (hints & path_segments):
+                continue
             candidates.append(op)
-        elif not entity_hint:
-            # Generic {id} - match any list endpoint
+            continue
+        # No collection context: only named placeholders (orderId → order)
+        # may match by entity hint. Bare {id} stays unresolved so the
+        # per-experiment path-scoped materializer can bind correctly.
+        if entity_hint and entity_hint in path_lower:
             candidates.append(op)
 
     return candidates
@@ -100,6 +143,27 @@ def _call_get_endpoint(
         return json.loads(body)
     except (urllib.error.URLError, urllib.error.HTTPError, OSError, json.JSONDecodeError):
         return None
+
+
+def _call_get_status(
+    base_url: str,
+    path: str,
+    token: str,
+    timeout: int = _BINDING_TIMEOUT,
+) -> int:
+    """Return HTTP status for a GET, or 0 on transport failure."""
+    url = base_url.rstrip("/") + "/" + path.lstrip("/")
+    headers = {"Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return int(resp.status)
+    except urllib.error.HTTPError as exc:
+        return int(exc.code)
+    except (urllib.error.URLError, OSError):
+        return 0
 
 
 def _extract_id_from_response(response: Any, placeholder_name: str) -> str:
@@ -141,7 +205,7 @@ def _extract_id_from_response(response: Any, placeholder_name: str) -> str:
 
     # Try common ID field names
     ph_lower = placeholder_name.lower()
-    entity_hint = re.sub(r"(id|_id|Id)$", "", ph_lower).strip("_")
+    entity_hint = _entity_hint(placeholder_name)
 
     # Exact match first
     for field in (placeholder_name, ph_lower, f"{entity_hint}_id", f"{entity_hint}Id"):
@@ -158,12 +222,22 @@ def _extract_id_from_response(response: Any, placeholder_name: str) -> str:
     return ""
 
 
+def _entity_get_path(list_path: str, resource_id: str) -> str:
+    """Build the sibling entity GET path from a collection list path + id."""
+    base = _text(list_path).rstrip("/")
+    value = _text(resource_id)
+    if not base.startswith("/") or not value:
+        return ""
+    return f"{base}/{value}"
+
+
 def auto_resolve_bindings(
     behavior_ir: dict[str, Any],
     actor_tokens: dict[str, str],
     base_url: str,
     *,
     required_placeholders: set[str] | None = None,
+    placeholder_collection_hints: dict[str, set[str]] | None = None,
     max_resolution_attempts: int = 20,
 ) -> dict[str, Any]:
     """Automatically resolve path placeholders by calling GET endpoints.
@@ -173,6 +247,11 @@ def auto_resolve_bindings(
         actor_tokens: Map of role/secret_ref -> bearer token.
         base_url: Target base URL.
         required_placeholders: If provided, only resolve these placeholders.
+        placeholder_collection_hints: Map of placeholder -> owning collection
+            segments derived from the write paths that need the binding. When a
+            placeholder maps to multiple collections (orders vs cart items),
+            batch resolution leaves it unbound (fail closed) so the
+            path-scoped per-experiment materializer can bind correctly.
         max_resolution_attempts: Max GET calls to make.
 
     Returns:
@@ -227,6 +306,16 @@ def auto_resolve_bindings(
     if not token and actor_tokens:
         token = next(iter(actor_tokens.values()), "")
 
+    hints_by_placeholder = {
+        _text(name): {
+            _text(hint).lower()
+            for hint in (hints or set())
+            if _text(hint)
+        }
+        for name, hints in _dict(placeholder_collection_hints).items()
+        if _text(name)
+    }
+
     bindings: dict[str, str] = {}
     receipts: list[dict[str, Any]] = []
     attempts = 0
@@ -237,10 +326,35 @@ def auto_resolve_bindings(
         if placeholder in bindings:
             continue
 
-        # Find GET endpoints that can resolve this placeholder
-        candidates = _find_list_endpoints_for_entity(behavior_ir, placeholder)
-        resolved = False
+        hints = hints_by_placeholder.get(placeholder) or set()
+        # Conflicting collections for the same placeholder name cannot share one
+        # batch value — cart item ids must never become order ids.
+        if len(hints) > 1:
+            receipts.append({
+                "placeholder": placeholder,
+                "endpoint": "",
+                "status": "ambiguous_collection_context",
+                "collection_hints": sorted(hints),
+                "value_fingerprint": "",
+            })
+            continue
 
+        candidates = _find_list_endpoints_for_entity(
+            behavior_ir,
+            placeholder,
+            collection_hints=hints or None,
+        )
+        if not candidates:
+            receipts.append({
+                "placeholder": placeholder,
+                "endpoint": "",
+                "status": "unresolved_no_collection_affinity",
+                "collection_hints": sorted(hints),
+                "value_fingerprint": "",
+            })
+            continue
+
+        resolved = False
         for endpoint in candidates[:3]:  # Try up to 3 endpoints per placeholder
             if attempts >= max_resolution_attempts:
                 break
@@ -259,23 +373,45 @@ def auto_resolve_bindings(
                 continue
 
             value = _extract_id_from_response(response, placeholder)
-            if value:
-                bindings[placeholder] = value
-                receipts.append({
-                    "placeholder": placeholder,
-                    "endpoint": path,
-                    "status": "resolved",
-                    "value_fingerprint": value[:8] + "..." if len(value) > 8 else value,
-                })
-                resolved = True
-                break
-            else:
+            if not value:
                 receipts.append({
                     "placeholder": placeholder,
                     "endpoint": path,
                     "status": "empty_response",
                     "value_fingerprint": "",
                 })
+                continue
+
+            # Prove the bound identity is observable on the sibling entity GET.
+            # List rows from the wrong collection (or stale ids) fail closed here.
+            entity_path = _entity_get_path(path, value)
+            entity_status = (
+                _call_get_status(base_url, entity_path, token)
+                if entity_path
+                else 0
+            )
+            if not (200 <= entity_status < 300):
+                receipts.append({
+                    "placeholder": placeholder,
+                    "endpoint": path,
+                    "entity_path": entity_path,
+                    "entity_status": entity_status,
+                    "status": "identity_unobservable",
+                    "value_fingerprint": "",
+                })
+                continue
+
+            bindings[placeholder] = value
+            receipts.append({
+                "placeholder": placeholder,
+                "endpoint": path,
+                "entity_path": entity_path,
+                "entity_status": entity_status,
+                "status": "resolved",
+                "value_fingerprint": value[:8] + "..." if len(value) > 8 else value,
+            })
+            resolved = True
+            break
 
         if not resolved and placeholder not in bindings:
             receipts.append({
@@ -303,12 +439,24 @@ def collect_required_placeholders(
     behavior_ir: dict[str, Any],
 ) -> set[str]:
     """Collect all unresolved placeholders from a batch of experiments."""
+    return set(collect_placeholder_collection_hints(experiments, behavior_ir))
+
+
+def collect_placeholder_collection_hints(
+    experiments: list[dict[str, Any]],
+    behavior_ir: dict[str, Any],
+) -> dict[str, set[str]]:
+    """Map each required placeholder to owning collection segments.
+
+    Used so batch pre-resolution cannot bind a cart-item ``id`` into an
+    ``/api/orders/{id}/confirm`` write.
+    """
     ops_by_id = {
         _text(op.get("id")): op
         for op in _list(behavior_ir.get("operations"))
         if isinstance(op, dict) and _text(op.get("id"))
     }
-    placeholders: set[str] = set()
+    hints: dict[str, set[str]] = {}
 
     for exp in experiments:
         if not isinstance(exp, dict):
@@ -321,6 +469,9 @@ def collect_required_placeholders(
                 op = ops_by_id.get(op_ref, {})
                 path = _text(step.get("path") or op.get("path") or op.get("raw_path"))
                 for ph in _extract_placeholders(path):
-                    placeholders.add(ph)
+                    segment = collection_segment_for_placeholder(path, ph)
+                    bucket = hints.setdefault(ph, set())
+                    if segment:
+                        bucket.add(segment)
 
-    return placeholders
+    return hints

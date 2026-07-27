@@ -127,6 +127,171 @@ def test_equivalence_equivalent_when_create_deleted_and_receipt_succeeded() -> N
     assert receipt["equivalence_status"] == "EQUIVALENT"
 
 
+def test_cer_not_required_when_cleanup_status_not_required() -> None:
+    receipt = build_cleanup_execution_receipt(
+        experiment_id="exp_1",
+        proof_id="wrp_1",
+        cleanup_plan=[{"adapter": "db_sql", "table": "orders", "identity_column": "id"}],
+        steps_out=[],
+        cleanup_failures=0,
+        cleanup_status="not_required",
+        proof=_proof(),
+        adapter_cleanup_receipts=[],
+    )
+    assert receipt["status"] == "NOT_REQUIRED"
+    assert receipt["attempted"] is False
+    assert receipt["succeeded"] is False
+    assert receipt["reason_code"] == "CLEANUP_NOT_REQUIRED"
+
+
+def test_equivalence_not_applicable_for_honest_not_required_cer() -> None:
+    receipt = evaluate_cleanup_equivalence(
+        proof=_proof(mode="created_entity_absent"),
+        before_observation={"status_code": 200, "body": {"id": "o-1", "status": "PENDING"}},
+        after_write_observation={
+            "status_code": 200,
+            "body": {"id": "o-1", "status": "PENDING"},
+        },
+        after_cleanup_observation={},
+        runtime_bindings={"id": "o-1"},
+        cleanup_execution_receipt={
+            "schema_version": "qualibug.cleanup-execution-receipt.v1",
+            "status": "NOT_REQUIRED",
+            "succeeded": False,
+            "attempted": False,
+            "status_code": 0,
+            "reason_code": "CLEANUP_NOT_REQUIRED",
+        },
+    )
+    assert receipt["equivalence_status"] == "NOT_APPLICABLE"
+    assert receipt["reason_code"] == "CLEANUP_NOT_REQUIRED"
+
+
+def test_equivalence_still_indeterminate_when_cer_not_attempted() -> None:
+    receipt = evaluate_cleanup_equivalence(
+        proof=_proof(mode="created_entity_absent"),
+        before_observation={"status_code": 200, "body": {"id": "o-1"}},
+        after_write_observation={"status_code": 200, "body": {"id": "o-1"}},
+        after_cleanup_observation={},
+        runtime_bindings={"id": "o-1"},
+        cleanup_execution_receipt={
+            "schema_version": "qualibug.cleanup-execution-receipt.v1",
+            "status": "NOT_ATTEMPTED",
+            "succeeded": False,
+            "attempted": False,
+            "status_code": 0,
+        },
+    )
+    assert receipt["equivalence_status"] == "INDETERMINATE"
+    assert receipt["reason_code"] == "CLEANUP_EXECUTION_FAILED"
+
+
+def test_equivalence_mode_missing_when_contract_empty() -> None:
+    receipt = evaluate_cleanup_equivalence(
+        proof={
+            "proof_id": "wrp_empty_mode",
+            "proof_status": "PROVEN",
+            "equivalence_contract": {},
+            "identity_contract": {"identity_fields": ["id"]},
+        },
+        before_observation={"status_code": 200, "body": {"id": "o-1", "status": "PENDING"}},
+        after_write_observation={
+            "status_code": 200,
+            "body": {"id": "o-1", "status": "PAID"},
+        },
+        after_cleanup_observation={
+            "status_code": 200,
+            "body": {"id": "o-1", "status": "PENDING"},
+        },
+        runtime_bindings={"id": "o-1"},
+        cleanup_execution_receipt={
+            "schema_version": "qualibug.cleanup-execution-receipt.v1",
+            "succeeded": True,
+            "attempted": True,
+            "status_code": 200,
+        },
+    )
+    assert receipt["equivalence_status"] == "INDETERMINATE"
+    assert receipt["reason_code"] == "EQUIVALENCE_MODE_MISSING"
+
+
+def test_field_restore_business_state_equivalent_with_after_cleanup_proof() -> None:
+    """Adapter field_restore must reach EQUIVALENT from real before/after-cleanup bodies.
+
+    No waiver: after_cleanup observation is required and fields must actually match.
+    """
+    before = {
+        "status_code": 200,
+        "body": {
+            "id": "o-1",
+            "status": "PENDING_PAYMENT",
+            "total_amount": "10.00",
+            "updated_at": "t0",
+        },
+    }
+    after_write = {
+        "status_code": 200,
+        "body": {
+            "id": "o-1",
+            "status": "PAID",
+            "total_amount": "10.00",
+            "updated_at": "t1",
+        },
+    }
+    after_cleanup = {
+        "status_code": 200,
+        "body": {
+            "id": "o-1",
+            "status": "PENDING_PAYMENT",
+            "total_amount": "10.00",
+            "updated_at": "t2",
+        },
+    }
+    receipt = evaluate_cleanup_equivalence(
+        proof=_proof(mode="business_state_restored"),
+        before_observation=before,
+        after_write_observation=after_write,
+        after_cleanup_observation=after_cleanup,
+        runtime_bindings={"id": "o-1"},
+        cleanup_execution_receipt={
+            "schema_version": "qualibug.cleanup-execution-receipt.v1",
+            "succeeded": True,
+            "attempted": True,
+            "status_code": 200,
+        },
+    )
+    assert receipt["equivalence_status"] == "EQUIVALENT"
+    assert "status" in receipt["field_comparison"]["matched"]
+    assert "updated_at" not in receipt["field_comparison"]["mismatched"]
+
+
+def test_field_restore_not_equivalent_when_business_field_differs() -> None:
+    receipt = evaluate_cleanup_equivalence(
+        proof=_proof(mode="business_state_restored"),
+        before_observation={
+            "status_code": 200,
+            "body": {"id": "o-1", "status": "PENDING_PAYMENT"},
+        },
+        after_write_observation={
+            "status_code": 200,
+            "body": {"id": "o-1", "status": "PAID"},
+        },
+        after_cleanup_observation={
+            "status_code": 200,
+            "body": {"id": "o-1", "status": "PAID"},
+        },
+        runtime_bindings={"id": "o-1"},
+        cleanup_execution_receipt={
+            "schema_version": "qualibug.cleanup-execution-receipt.v1",
+            "succeeded": True,
+            "attempted": True,
+            "status_code": 200,
+        },
+    )
+    assert receipt["equivalence_status"] == "NOT_EQUIVALENT"
+    assert receipt["reason_code"] == "BUSINESS_STATE_NOT_RESTORED"
+
+
 def test_final_state_uses_cleanup_phase_when_present() -> None:
     receipts = observe_experiment_requirements(
         {

@@ -140,14 +140,104 @@ def _meaningful_observation_state(value: Any) -> dict[str, Any]:
     }
 
 
+_COLLECTION_WRAPPER_KEYS = ("records", "data", "items", "results", "rows")
+
+# Pagination / list-envelope metadata. Industry-neutral vocabulary for detecting
+# a collection wrapper that should unwrap to nested rows — not a primary entity.
+_COLLECTION_ENVELOPE_META_KEYS = frozenset({
+    "page",
+    "pages",
+    "total",
+    "count",
+    "size",
+    "limit",
+    "offset",
+    "next",
+    "previous",
+    "prev",
+    "cursor",
+    "has_more",
+    "meta",
+    "links",
+    "pagination",
+    "total_count",
+    "totalcount",
+    "page_size",
+    "pagesize",
+    "page_number",
+    "pagenumber",
+    "per_page",
+    "perpage",
+    "number_of_elements",
+    "numberofelements",
+})
+
+
+def _normalized_field_key(value: Any) -> str:
+    return "".join(ch for ch in str(value or "").lower() if ch.isalnum())
+
+
+def _dict_has_resource_identity(value: dict[str, Any]) -> bool:
+    """True when the object itself carries a primary resource identity scalar."""
+    for key, child in value.items():
+        if not isinstance(child, (str, int, float)) or not str(child).strip():
+            continue
+        if _normalized_field_key(key) in {"id", "uuid", "key"}:
+            return True
+    return False
+
+
+def _dict_has_primary_entity_scalars(
+    value: dict[str, Any],
+    *,
+    skip_key: str,
+) -> bool:
+    """True when parent has non-envelope business scalars beyond a nested list.
+
+    Distinguishes ``{id, status, discount_amount, items:[...]}`` (primary entity
+    with embedded children) from ``{items:[...], total: N}`` (collection envelope).
+    """
+    for key, child in value.items():
+        if key == skip_key:
+            continue
+        if isinstance(child, (dict, list, bool)) or child is None:
+            continue
+        normalized = _normalized_field_key(key)
+        if (
+            normalized in {"id", "uuid", "key"}
+            or normalized.endswith("id")
+            or normalized in _COLLECTION_ENVELOPE_META_KEYS
+            or _server_managed_field(key)
+        ):
+            continue
+        if isinstance(child, (str, int, float)) and str(child).strip():
+            return True
+    return False
+
+
 def _entity_rows(value: Any) -> list[dict[str, Any]]:
+    """Project an observed body into entity row dicts for field comparison.
+
+    Collection envelopes (``{items: [...], total: N}``) unwrap to nested rows.
+    Primary resources that embed a child collection (``{id, status, amounts,
+    items: [...]}``) keep the parent row and also expose nested children.
+    Silently discarding the parent made ``_governed_write_changed_state`` compare
+    only unchanged line items and emit ACCEPTED_WRITE_STATE_UNCHANGED while the
+    parent status/amounts actually mutated.
+    """
     if isinstance(value, list):
         return [dict(item) for item in value if isinstance(item, dict)]
     if isinstance(value, dict):
-        for key in ("records", "data", "items", "results", "rows"):
+        for key in _COLLECTION_WRAPPER_KEYS:
             nested = value.get(key)
             if isinstance(nested, list):
-                return [dict(item) for item in nested if isinstance(item, dict)]
+                nested_rows = [dict(item) for item in nested if isinstance(item, dict)]
+                if _dict_has_resource_identity(value) and _dict_has_primary_entity_scalars(
+                    value,
+                    skip_key=key,
+                ):
+                    return [dict(value), *nested_rows]
+                return nested_rows
         return [dict(value)]
     return []
 
@@ -158,7 +248,7 @@ def _entity_matches_identity(entity: dict[str, Any], identities: set[str]) -> bo
     for key, value in entity.items():
         if isinstance(value, (dict, list)):
             continue
-        normalized = "".join(ch for ch in str(key).lower() if ch.isalnum())
+        normalized = _normalized_field_key(key)
         if (
             normalized in {"id", "uuid", "key"}
             or normalized.endswith("id")
@@ -170,12 +260,39 @@ def _entity_matches_identity(entity: dict[str, Any], identities: set[str]) -> bo
     )
 
 
+def _entity_primary_identity_match(
+    entity: dict[str, Any],
+    identities: set[str],
+) -> bool:
+    """True when a primary id/uuid/key scalar matches — not a foreign key."""
+    if not identities:
+        return False
+    for key, value in entity.items():
+        if isinstance(value, (dict, list)):
+            continue
+        if _normalized_field_key(key) in {"id", "uuid", "key"} and _text(value) in identities:
+            return True
+    return False
+
+
 def _single_entity_for_restoration(value: Any, identities: set[str]) -> dict[str, Any]:
     matches = [
         row for row in _entity_rows(value)
         if _entity_matches_identity(row, identities)
     ]
-    return dict(matches[0]) if len(matches) == 1 else {}
+    if len(matches) == 1:
+        return dict(matches[0])
+    # Parent + embedded child may both match via id / order_id. Prefer the
+    # primary resource identity so status/amount mutations on the parent are
+    # not shadowed by an unchanged line item.
+    if len(matches) > 1 and identities:
+        primary = [
+            row for row in matches
+            if _entity_primary_identity_match(row, identities)
+        ]
+        if len(primary) == 1:
+            return dict(primary[0])
+    return {}
 
 
 def _cleanup_restores_mutated_fields(
@@ -437,8 +554,10 @@ def _governed_write_changed_state(attempt: dict[str, Any]) -> bool:
     row = _dict(attempt)
     if row.get("accepted") is not True:
         return False
-    before_state = _observation_state(row.get("before"))
-    after_state = _observation_state(row.get("response_bound_after") or row.get("after"))
+    before_obs = row.get("before")
+    after_obs = row.get("response_bound_after") or row.get("after")
+    before_state = _observation_state(before_obs)
+    after_state = _observation_state(after_obs)
     if before_state.get("status") != after_state.get("status"):
         return True
 
@@ -468,15 +587,19 @@ def _governed_write_changed_state(attempt: dict[str, Any]) -> bool:
                 for field in comparable_fields
             ):
                 return True
-            return (
+            if (
                 _without_server_managed_fields(before_entity)
                 != _without_server_managed_fields(after_entity)
-            )
-        if identities and bool(before_entity) != bool(after_entity):
+            ):
+                return True
+            # Matched-subset equality is not proof of unchanged business state.
+            # Fall through to full observation compare so embedded-child
+            # projections cannot waive a real parent mutation.
+        elif identities and bool(before_entity) != bool(after_entity):
             return True
 
-    return _meaningful_observation_state(row.get("before")) != _meaningful_observation_state(
-        row.get("response_bound_after") or row.get("after")
+    return _meaningful_observation_state(before_obs) != _meaningful_observation_state(
+        after_obs
     )
 
 

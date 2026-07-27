@@ -940,6 +940,7 @@ def _validate_active_chain(
     ):
         return "BLOCKED", ["ACTOR_SENSITIVE_CONTROL_MISSING"]
     verified = _dict(activation.get("verified_receipt_ids"))
+    soft_field_oracle = activation.get("field_oracle_soft_activation") is True
     for kind in ("control", "treatment", "actor", "fixture", "cleanup"):
         required_subjects = {
             _text(value) for value in _list(required.get(kind)) if _text(value)
@@ -968,6 +969,20 @@ def _validate_active_chain(
             for value in subject_receipts
         }
         if matching != verified_ids:
+            # Soft field-oracle activation intentionally defers cleanup proof so
+            # Trace can emit before restoration is sealed. Fail closed as BLOCKED
+            # delivery — never crash the campaign, never waive as deliverable.
+            if (
+                soft_field_oracle
+                and kind == "cleanup"
+                and not verified_ids
+                and matching
+            ):
+                return "BLOCKED", ["CLEANUP_PROOF_DEFERRED_FIELD_ORACLE"]
+            # Cleanup activation mismatch is incomplete restoration proof, not a
+            # campaign-aborting harness crash.
+            if kind == "cleanup":
+                return "BLOCKED", ["CLEANUP_ACTIVATION_REFERENCE_MISMATCH"]
             raise DeliveryGateV2Error(
                 f"delivery_{kind}_activation_reference_mismatch"
             )
@@ -975,9 +990,12 @@ def _validate_active_chain(
         _text(value) for value in _list(verified.get("observer")) if _text(value)
     }
     if verified_observers != observer_ids:
-        raise DeliveryGateV2Error(
-            "delivery_observer_activation_reference_mismatch"
-        )
+        # Soft field-oracle may activate before observer receipts are sealed.
+        if soft_field_oracle and not verified_observers and observer_ids:
+            return "BLOCKED", ["OBSERVER_PROOF_DEFERRED_FIELD_ORACLE"]
+        # Observer activation mismatch blocks delivery for this attempt; it must
+        # not abort ledger construction for the whole campaign.
+        return "BLOCKED", ["OBSERVER_ACTIVATION_REFERENCE_MISMATCH"]
     if not contract_ids.issubset(set(execution["observation_receipt_ids"])):
         raise DeliveryGateV2Error("execution_contract_receipts_missing")
     if not observer_ids.issubset(set(execution["observation_receipt_ids"])):

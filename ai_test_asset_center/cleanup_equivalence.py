@@ -101,6 +101,30 @@ def evaluate_cleanup_equivalence(
             relation_comparison={},
         )
 
+    cleanup_receipt_status = _text(
+        cleanup_execution_receipt.get("status")
+    ).upper()
+    # Honest NOT_REQUIRED (e.g. accepted write with proven unchanged state)
+    # is not a restoration comparison — do not poison as INDETERMINATE.
+    # Callers must only emit CER NOT_REQUIRED when state change was actually
+    # observed-absent, never when the observer merely missed the entity.
+    if cleanup_receipt_status == "NOT_REQUIRED":
+        return _build_receipt(
+            proof_id=proof_id,
+            primary_identity=primary_identity,
+            cleanup_identity=cleanup_identity,
+            before_obs=before_observation,
+            after_write_obs=after_write_observation,
+            after_cleanup_obs=after_cleanup_observation,
+            equivalence_status="NOT_APPLICABLE",
+            reason_code="CLEANUP_NOT_REQUIRED",
+            detail=_text(cleanup_execution_receipt.get("detail"))
+            or _text(cleanup_execution_receipt.get("reason_code"))
+            or "cleanup_execution_receipt_not_required",
+            field_comparison={},
+            relation_comparison={},
+        )
+
     cleanup_succeeded = cleanup_execution_receipt.get("succeeded", False)
     cleanup_status_code = cleanup_execution_receipt.get("status_code")
 
@@ -412,18 +436,20 @@ def _evaluate_field_comparison(
         else:
             mismatched.append(field)
 
-    if not mismatched and matched:
-        status = "EQUIVALENT"
-        reason = ""
-        detail = ""
-    elif not matched:
-        status = "INDETERMINATE"
-        reason = "NO_FIELDS_ACTUALLY_COMPARED"
-        detail = "no_business_fields_in_both_states"
-    else:
+    # Observed mismatches are NOT_EQUIVALENT. INDETERMINATE only when no
+    # effective field could be compared at all (missing on both sides).
+    if mismatched:
         status = "NOT_EQUIVALENT"
         reason = "FIELD_MISMATCH_AFTER_CLEANUP"
         detail = f"mismatched_fields:{','.join(mismatched)}"
+    elif matched:
+        status = "EQUIVALENT"
+        reason = ""
+        detail = ""
+    else:
+        status = "INDETERMINATE"
+        reason = "NO_FIELDS_ACTUALLY_COMPARED"
+        detail = "no_business_fields_in_both_states"
 
     return _build_receipt(
         proof_id=proof_id,
@@ -496,18 +522,20 @@ def _evaluate_business_state_restored(
         else:
             mismatched.append(key)
 
-    if not mismatched and matched:
-        status = "EQUIVALENT"
-        reason = ""
-        detail = ""
-    elif not matched:
-        status = "INDETERMINATE"
-        reason = "NO_FIELDS_ACTUALLY_COMPARED"
-        detail = "no_business_fields_in_both_states"
-    else:
+    # Observed mismatches are NOT_EQUIVALENT. INDETERMINATE only when no
+    # business field could be compared at all.
+    if mismatched:
         status = "NOT_EQUIVALENT"
         reason = "BUSINESS_STATE_NOT_RESTORED"
         detail = f"mismatched_fields:{','.join(mismatched[:5])}"
+    elif matched:
+        status = "EQUIVALENT"
+        reason = ""
+        detail = ""
+    else:
+        status = "INDETERMINATE"
+        reason = "NO_FIELDS_ACTUALLY_COMPARED"
+        detail = "no_business_fields_in_both_states"
 
     return _build_receipt(
         proof_id=proof_id,
@@ -681,18 +709,18 @@ def _evaluate_full_entity_comparison(
         else:
             mismatched.append(key)
 
-    if not mismatched and matched:
-        status = "EQUIVALENT"
-        reason = ""
-        detail = ""
-    elif not matched:
-        status = "INDETERMINATE"
-        reason = "NO_FIELDS_ACTUALLY_COMPARED"
-        detail = "no_business_fields_in_both_entities"
-    else:
+    if mismatched:
         status = "NOT_EQUIVALENT"
         reason = "ENTITY_MISMATCH_AFTER_RECREATE"
         detail = f"mismatched_fields:{','.join(mismatched[:5])}"
+    elif matched:
+        status = "EQUIVALENT"
+        reason = ""
+        detail = ""
+    else:
+        status = "INDETERMINATE"
+        reason = "NO_FIELDS_ACTUALLY_COMPARED"
+        detail = "no_business_fields_in_both_entities"
 
     return _build_receipt(
         proof_id=proof_id,

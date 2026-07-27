@@ -4099,20 +4099,16 @@ def build_behavior_ir_from_knowledge_asset(
                         "operator": "unchanged_sum",
                         "terms": _terms,
                     }
+        # Keep expression identity-stable. Semantic-frame enrichment is recorded on
+        # the invariant node only — merging modality/polarity/condition/subject/
+        # behavior into expression changes property fingerprints and silently
+        # rotates stable obligation_id values (V1.6.2 Unlock Set underselection).
         _expression: dict[str, Any] = {
             "kind": _rule_kind,
             "operator": _text(rule.get("operator") or "must_hold"),
             "operands": _rule_operands,
             "raw": statement,
         }
-        if _semantic_frame:
-            _expression.update({
-                "modality": _semantic_frame["modality"],
-                "polarity": _semantic_frame["polarity"],
-                "condition": _semantic_frame["condition"],
-                "subject": _semantic_frame["subject"],
-                "behavior": _semantic_frame["behavior"],
-            })
         if _rule_equation:
             _expression["equation"] = _rule_equation
         # V1.4.0/V1.6.0: collect Canonical Field IDs (cf_*) when present; else names.

@@ -318,11 +318,10 @@ def execute_one_experiment(
         fixture_state.get("binding_materialization_receipts") or []
     )
     runtime_bindings = dict(fixture_state.get("runtime_bindings") or {})
-    # Merge pre-resolved bindings from batch-level auto-resolution
-    _pre_bindings = _dict(exp.get("_pre_resolved_bindings"))
-    if _pre_bindings:
-        for _bk, _bv in _pre_bindings.items():
-            runtime_bindings.setdefault(_bk, _bv)
+    # Do NOT merge batch _pre_resolved_bindings here. A global {id} from
+    # /api/cart/items previously overwrote /api/orders/{id} after materialization
+    # skipped or failed proof. Path-scoped materialization (with identity proof)
+    # is the only authority that may populate runtime_bindings for transport.
     pending_fixture_cleanups = list(fixture_state.get("pending_fixture_cleanups") or [])
     cleanup_failures = int(fixture_state.get("cleanup_failures") or 0)
     contract_evidence_receipts = list(

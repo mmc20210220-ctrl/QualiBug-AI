@@ -194,16 +194,23 @@ def execute_selected_experiments(
     _pre_resolved_bindings: dict[str, str] = {}
     if base_url and tokens:
         try:
-            from .runtime_binding_resolver import auto_resolve_bindings, collect_required_placeholders
+            from .runtime_binding_resolver import (
+                auto_resolve_bindings,
+                collect_placeholder_collection_hints,
+            )
             _exps_for_placeholders = [
                 experiments_by_obligation.get(_text(_dict(s).get("obligation_id")), {})
                 for s in selected
             ]
-            _required_phs = collect_required_placeholders(_exps_for_placeholders, behavior_ir)
+            _ph_hints = collect_placeholder_collection_hints(
+                _exps_for_placeholders, behavior_ir
+            )
+            _required_phs = set(_ph_hints)
             if _required_phs:
                 _resolution = auto_resolve_bindings(
                     behavior_ir, tokens, base_url,
                     required_placeholders=_required_phs,
+                    placeholder_collection_hints=_ph_hints,
                 )
                 _pre_resolved_bindings = dict(_resolution.get("bindings") or {})
         except Exception as exc:
