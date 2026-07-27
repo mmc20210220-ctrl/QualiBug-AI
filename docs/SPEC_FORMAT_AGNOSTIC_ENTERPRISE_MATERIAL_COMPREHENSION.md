@@ -1,6 +1,6 @@
 # SPEC:格式无关的企业资料认知能力(实体/字段/权限空间不再为空)
 
-> 文档状态:待实施
+> 文档状态:持续演进（Phase 0–4 已进入现有知识资产主链；Phase 5 增强深层业务语义理解）
 > 面向执行者:code agent
 > 断点编号:`ENTERPRISE_SOURCE_STRUCTURED_EXTRACTION_EMPTY`
 > 上位约束:`AGENTS.md`、`docs/DISCOVERY_HARNESS_EVOLUTION_GOAL.md`、项目全景文档
@@ -134,6 +134,15 @@
    - `VALIDATED` 候选正常进入实体空间;
    - `CANDIDATE` / `PENDING_VALIDATION` 可进入但必须带低置信标记,且**不得单独支撑 formal finding**;
    - `CONFLICTED` 必须作为显式冲突可见,不得静默择一。
+
+### Phase 5 — 来源约束的专家级业务语义理解
+
+1. 规则抽取不再把 Markdown 表格整行当成业务规则。只保留包含规则语义的单元格，避免把邮箱、密码和账号示例带入规则文本或模型 prompt。
+2. 每条显式规则生成 `qualibug.business-semantic-frame.v1`，保留来源定位、义务模态（必须/禁止/仅限）、正负极性、前置条件、受约束主体、受约束行为和原文锚点；所有字段必须能回到原始 statement，不能由模型补写。
+3. Behavior IR 原位承接并校验 semantic frame。schema、模态、极性、来源锚点或原文定位不一致时 fail-fast，禁止静默降级成普通文本。
+4. 既有 `agent_semantic_linker` 在有界批次内读取规则、接口 schema、实体/字段、角色/权限、状态机和关系事实，按“产品专家 + 测试专家”视角形成规则到接口的实验意图。
+5. 每条规则必须得到 `LINKED`、`NO_EXECUTABLE_INTERFACE` 或 `AMBIGUOUS` 终态；接受的关系必须引用输入中真实存在的 rule/interface/supporting-fact ID。模型解释仅是 synthetic rationale，不能成为业务事实、Oracle 或 finding 证据。
+6. Prompt 进入既有 `artifact_redactor` 边界，不携带 credential value 或 request-example value。缺失评估、虚构 ID、虚构证据、低置信度、重复、超预算和上下文截断都进入可观察回执，不得假装“已理解”。
 
 ---
 

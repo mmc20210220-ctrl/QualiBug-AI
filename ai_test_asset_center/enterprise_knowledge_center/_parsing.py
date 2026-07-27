@@ -93,6 +93,17 @@ def _classify_source_multi(name: str, text: str, explicit: str | None = None) ->
         (suffix == ".har" or (suffix == ".json" and isinstance(data, dict) and "log" in data), "har"),
         (suffix == ".log" or (suffix == ".txt" and _has("log", "日志", "access", "error")), "application_log"),
         (suffix == ".svg" or "<svg" in str(text or "").lower(), "uiux_svg"),
+        (
+            _has("business_rule", "business-rule", "domain_rule", "domain-rule", "业务规则", "业务约束")
+            or (
+                not _has("prd", "mrd")
+                and any(
+                    _norm(marker) in low
+                    for marker in _lexicon_list("business_rule_document_markers")
+                )
+            ),
+            "business_rules",
+        ),
         (_has("permission", "permissions", "matrix", "权限矩阵", "rbac", "acl"), "permission_matrix"),
         (_has("historical_bug", "historical-bug", "bugs", "bug", "defect", "缺陷"), "historical_bug"),
         (_has("ticket", "issue", "jira", "zentao", "工单"), "ticket"),
@@ -1367,41 +1378,217 @@ def _typed_validation_constraint(text: str) -> dict[str, Any]:
     }
 
 
-def _rules_from_text(text: str, source_id: str, source_type: str) -> list[dict[str, Any]]:
+def _rule_markers(name: str, fallback: tuple[str, ...]) -> tuple[str, ...]:
+    configured = tuple(
+        marker
+        for marker in (_norm(value) for value in _lexicon_list(name))
+        if marker
+    )
+    return configured or fallback
+
+
+def _rule_modality(
+    statement: str,
+) -> tuple[str, str, str, str]:
+    """Return modality, polarity, governed behavior, and written marker."""
+
+    normalized = _norm(statement)
+    prohibited = _rule_markers(
+        "rule_prohibited_markers",
+        (
+            "mustnot", "shallnot", "shouldnot", "doesnot", "donot",
+            "cannot", "notallowed", "forbidden", "prohibited",
+            "不得", "不能", "不可", "不应", "禁止",
+        ),
+    )
+    required = _rule_markers(
+        "rule_required_markers",
+        (
+            "must", "shall", "should", "required", "require",
+            "必须", "应当", "应该", "需要", "须", "确保",
+        ),
+    )
+    exclusive = _rule_markers(
+        "rule_exclusive_markers",
+        ("only", "onlyallowed", "仅限", "只能", "仅能"),
+    )
+
+    def _matched(markers: tuple[str, ...]) -> str:
+        matches = [marker for marker in markers if marker and marker in normalized]
+        return max(matches, key=len) if matches else ""
+
+    marker = _matched(prohibited)
+    if marker:
+        modality, polarity = "PROHIBITED", "negative"
+    else:
+        marker = _matched(exclusive)
+        if marker:
+            modality, polarity = "EXCLUSIVE", "positive"
+        else:
+            marker = _matched(required)
+            if marker:
+                modality, polarity = "REQUIRED", "positive"
+            else:
+                return "", "", "", ""
+
+    behavior = statement
+    written = ""
+    if marker:
+        marker_match = re.search(re.escape(marker), _norm(statement))
+        if marker_match:
+            # _norm removes spaces and punctuation, so locate the written marker
+            # independently before falling back to the whole exact statement.
+            written_matches = [
+                candidate
+                for candidate in (
+                    *_lexicon_list("rule_prohibited_markers"),
+                    *_lexicon_list("rule_exclusive_markers"),
+                    *_lexicon_list("rule_required_markers"),
+                )
+                if (
+                    candidate
+                    and _norm(candidate) == marker
+                    and re.search(re.escape(candidate), statement, flags=re.I)
+                )
+            ]
+            written = max(written_matches, key=len) if written_matches else ""
+            if written:
+                remainder = re.split(
+                    re.escape(written),
+                    statement,
+                    maxsplit=1,
+                    flags=re.I,
+                )[-1].strip(" :：,，;；")
+                negated_actions = {
+                    _norm(value)
+                    for value in _lexicon_list("rule_negated_action_markers")
+                    if _norm(value)
+                }
+                behavior = (
+                    written[1:] + remainder
+                    if _norm(written) in negated_actions
+                    else remainder
+                )
+    return modality, polarity, behavior, written
+
+
+def _semantic_rule_frame(
+    statement: str,
+) -> dict[str, Any]:
+    modality, polarity, behavior, written_marker = _rule_modality(statement)
+    if not modality:
+        return {}
+
+    condition = ""
+    subject = ""
+    condition_markers = _lexicon_list("rule_condition_markers")
+    for marker in condition_markers:
+        match = re.match(
+            rf"\s*{re.escape(marker)}\s+(?P<condition>.+?)[,，;；]\s*(?P<behavior>.+)",
+            statement,
+            flags=re.I,
+        )
+        if match:
+            condition = match.group("condition").strip()
+            behavior = match.group("behavior").strip()
+            break
+    if not condition:
+        state_condition = re.match(
+            r"\s*(?:(?P<subject>[^:：,，;；]+)\s*[:：]\s*)?"
+            r"(?P<condition>.*?(?:status|state|状态)\s*(?:=|is|为)\s*[^,，;；]+)"
+            r"[,，;；]\s*(?P<behavior>.+)",
+            statement,
+            flags=re.I,
+        )
+        if state_condition:
+            subject = (state_condition.group("subject") or "").strip()
+            condition = state_condition.group("condition").strip()
+            remainder = state_condition.group("behavior").strip()
+            _, _, parsed_behavior, _ = _rule_modality(remainder)
+            behavior = parsed_behavior or remainder
+
+    if not subject and not condition and written_marker:
+        marker_match = re.search(
+            re.escape(written_marker),
+            statement,
+            flags=re.I,
+        )
+        if marker_match and marker_match.start() > 0:
+            marker_prefix = statement[:marker_match.start()]
+            if not re.search(r"[,，;；]", marker_prefix):
+                subject = marker_prefix.strip(" :：,，;；")
+    if condition and subject.casefold() == condition.casefold():
+        subject = ""
+    if not condition:
+        state_subject = re.match(
+            r"(?P<condition>.+?(?:status|state|状态))的(?P<subject>.+)",
+            subject,
+            flags=re.I,
+        )
+        if state_subject:
+            condition = state_subject.group("condition").strip()
+            subject = state_subject.group("subject").strip()
+
+    anchors = list(dict.fromkeys([
+        *re.findall(r"`([^`]+)`", statement),
+        *re.findall(r"\b[A-Z][A-Z0-9_]{2,}\b", statement),
+    ]))
+    return {
+        "schema_version": "qualibug.business-semantic-frame.v1",
+        "modality": modality,
+        "polarity": polarity,
+        "condition": condition,
+        "subject": subject,
+        "behavior": behavior,
+        "source_anchors": anchors[:20],
+        "source_grounded": True,
+    }
+
+
+def _rule_clause_candidates(line: str) -> list[str]:
+    """Keep semantic cells from tabular rows instead of credential columns."""
+
+    stripped = line.strip(" -•\t")
+    if not stripped or re.fullmatch(r"\|?[\s:|-]+\|?", stripped):
+        return []
+    cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+    if len(cells) <= 1:
+        return [stripped]
+    semantic_cells = [
+        cell
+        for cell in cells
+        if cell and _semantic_rule_frame(cell)
+    ]
+    return semantic_cells
+
+
+def _rules_from_text(
+    text: str,
+    source_id: str,
+    source_type: str,
+) -> list[dict[str, Any]]:
     rules: list[dict[str, Any]] = []
     allow_relaxed_async_rules = source_type == "collaboration_document"
     seen_statements: set[str] | None = set() if source_type == "collaboration_document" else None
-    lines = [line.strip(" -•\t") for line in re.split(r"[\n。.!?；;]", text) if line.strip()]
-    for idx, line in enumerate(lines):
+    lines: list[tuple[int, str]] = []
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+        for clause in re.split(r"[。.!?；;]", raw_line):
+            lines.extend(
+                (line_number, candidate)
+                for candidate in _rule_clause_candidates(
+                    clause,
+                )
+            )
+    for idx, (line_number, line) in enumerate(lines):
         norm = _norm(line)
         if len(norm) < 8:
             continue
-        indicator = any(
-            marker in norm
-            for marker in (
-                "必须",
-                "不得",
-                "不能",
-                "不可",
-                "不应",
-                "只能",
-                "禁止",
-                "应当",
-                "应该",
-                "should",
-                "must",
-                "only",
-                "not allowed",
-                "cannot",
-                "must not",
-                "require",
-                "一致",
-                "守恒",
-                "审批",
-            )
-        )
+        semantic_frame = _semantic_rule_frame(line)
         rule_type = _rule_type_from_text(line)
-        if not indicator and not (allow_relaxed_async_rules and rule_type in {"idempotency", "async_event"}):
+        if not semantic_frame and not (
+            allow_relaxed_async_rules
+            and rule_type in {"idempotency", "async_event"}
+        ):
             continue
         statement = _redact_text(line, 720)
         if seen_statements is not None:
@@ -1413,12 +1600,15 @@ def _rules_from_text(text: str, source_id: str, source_type: str) -> list[dict[s
             "rule_id": f"rule:{source_id}:{idx+1}",
             "source_id": source_id,
             "source_type": source_type,
+            "source_locator": f"line:{line_number}",
             "statement": statement,
             "rule_type": rule_type,
             "risk_type": _risk_type_from_text(line),
             "severity": "P0" if rule_type in {"conservation", "permission"} and any(x in norm for x in ("资金", "余额", "账本", "payment", "balance", "tenant", "租户", "病历")) else "P1" if rule_type in {"conservation", "permission", "reconciliation"} else "P2",
             "tokens": sorted(_tokens(line)),
         }
+        if semantic_frame:
+            rule["semantic_frame"] = semantic_frame
         rule.update(_typed_validation_constraint(line))
         rules.append(rule)
     return rules[:180]

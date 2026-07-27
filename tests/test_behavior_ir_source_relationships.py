@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from ai_test_asset_center.behavior_ir import (
+    BehaviorIRError,
     build_behavior_ir_from_knowledge_asset,
     validate_behavior_ir,
 )
@@ -72,6 +75,65 @@ def test_rule_to_interface_relationship_becomes_exact_ir_relation() -> None:
         and obligation["property"]["operation_ref"] == operation_ref
         for obligation in compiled["obligations"]
     )
+
+
+def test_source_grounded_business_semantic_frame_survives_into_invariant() -> None:
+    frame = {
+        "schema_version": "qualibug.business-semantic-frame.v1",
+        "modality": "PROHIBITED",
+        "polarity": "negative",
+        "condition": "account status is DISABLED",
+        "subject": "account",
+        "behavior": "sign in",
+        "source_anchors": ["DISABLED"],
+        "source_grounded": True,
+    }
+    asset = {
+        "rule_library": [{
+            "rule_id": "rule-disabled-sign-in",
+            "statement": "account status is DISABLED, cannot sign in",
+            "rule_type": "state_transition",
+            "semantic_frame": frame,
+            "source_id": "test-accounts",
+            "source_locator": "line:7",
+        }],
+    }
+
+    ir = build_behavior_ir_from_knowledge_asset(asset, project_id="project")
+
+    invariant = ir["invariants"][0]
+    assert invariant["semantic_frame"] == frame
+    assert invariant["expression"]["modality"] == "PROHIBITED"
+    assert invariant["expression"]["polarity"] == "negative"
+    assert invariant["expression"]["condition"] == "account status is DISABLED"
+    assert invariant["expression"]["subject"] == "account"
+    assert invariant["expression"]["behavior"] == "sign in"
+    assert invariant["source_refs"][0]["locator"] == "line:7"
+
+
+def test_business_semantic_frame_rejects_invented_subject() -> None:
+    asset = {
+        "rule_library": [{
+            "rule_id": "rule-disabled-sign-in",
+            "statement": "account status is DISABLED, cannot sign in",
+            "semantic_frame": {
+                "schema_version": "qualibug.business-semantic-frame.v1",
+                "modality": "PROHIBITED",
+                "polarity": "negative",
+                "condition": "account status is DISABLED",
+                "subject": "invented administrator",
+                "behavior": "sign in",
+                "source_anchors": ["DISABLED"],
+                "source_grounded": True,
+            },
+        }],
+    }
+
+    with pytest.raises(
+        BehaviorIRError,
+        match="business_semantic_frame_subject_not_in_source",
+    ):
+        build_behavior_ir_from_knowledge_asset(asset, project_id="project")
 
 
 def test_dangling_rule_to_interface_relationship_is_a_typed_gap() -> None:

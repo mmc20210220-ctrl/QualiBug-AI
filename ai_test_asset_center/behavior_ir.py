@@ -3991,6 +3991,59 @@ def build_behavior_ir_from_knowledge_asset(
         "data consistency", "system security", "business correctness",
         "amount accuracy", "system stability", "high availability",
     )
+
+    def _validated_semantic_frame(
+        rule: dict[str, Any],
+        statement: str,
+    ) -> dict[str, Any]:
+        raw = rule.get("semantic_frame")
+        if raw in (None, {}):
+            return {}
+        if not isinstance(raw, dict):
+            raise BehaviorIRError("business_semantic_frame_not_object")
+        if _text(raw.get("schema_version")) != "qualibug.business-semantic-frame.v1":
+            raise BehaviorIRError("business_semantic_frame_schema_invalid")
+        modality = _text(raw.get("modality")).upper()
+        polarity = _text(raw.get("polarity")).lower()
+        if modality not in {"REQUIRED", "PROHIBITED", "EXCLUSIVE", "INVARIANT", "DECLARED"}:
+            raise BehaviorIRError("business_semantic_frame_modality_invalid")
+        if polarity not in {"positive", "negative"}:
+            raise BehaviorIRError("business_semantic_frame_polarity_invalid")
+        if raw.get("source_grounded") is not True:
+            raise BehaviorIRError("business_semantic_frame_not_source_grounded")
+        condition = _text(raw.get("condition"))
+        subject = _text(raw.get("subject"))
+        behavior = _text(raw.get("behavior"))
+        if not behavior:
+            raise BehaviorIRError("business_semantic_frame_behavior_empty")
+        statement_folded = statement.casefold()
+        for field_name, value in (
+            ("condition", condition),
+            ("subject", subject),
+            ("behavior", behavior),
+        ):
+            if value and value.casefold() not in statement_folded:
+                raise BehaviorIRError(
+                    f"business_semantic_frame_{field_name}_not_in_source"
+                )
+        anchors = _list(raw.get("source_anchors"))
+        if any(not isinstance(anchor, str) or not anchor.strip() for anchor in anchors):
+            raise BehaviorIRError("business_semantic_frame_source_anchors_invalid")
+        if any(anchor.casefold() not in statement_folded for anchor in anchors):
+            raise BehaviorIRError(
+                "business_semantic_frame_source_anchor_not_in_source"
+            )
+        return {
+            "schema_version": "qualibug.business-semantic-frame.v1",
+            "modality": modality,
+            "polarity": polarity,
+            "condition": condition,
+            "subject": subject,
+            "behavior": behavior,
+            "source_anchors": list(dict.fromkeys(anchors))[:20],
+            "source_grounded": True,
+        }
+
     for rule in _list(data.get("rule_library") or data.get("rules")):
         if not isinstance(rule, dict):
             continue
@@ -3998,6 +4051,7 @@ def build_behavior_ir_from_knowledge_asset(
         if not statement:
             continue
         rid = _text(rule.get("rule_id") or rule.get("id")) or _stable_id("inv", statement)
+        _semantic_frame = _validated_semantic_frame(rule, statement)
 
         # V1.4.0: Detect Umbrella Rules — broad statements without concrete
         # entity/field references that cannot produce testable experiments.
@@ -4051,6 +4105,14 @@ def build_behavior_ir_from_knowledge_asset(
             "operands": _rule_operands,
             "raw": statement,
         }
+        if _semantic_frame:
+            _expression.update({
+                "modality": _semantic_frame["modality"],
+                "polarity": _semantic_frame["polarity"],
+                "condition": _semantic_frame["condition"],
+                "subject": _semantic_frame["subject"],
+                "behavior": _semantic_frame["behavior"],
+            })
         if _rule_equation:
             _expression["equation"] = _rule_equation
         # V1.4.0/V1.6.0: collect Canonical Field IDs (cf_*) when present; else names.
@@ -4080,6 +4142,8 @@ def build_behavior_ir_from_knowledge_asset(
         }
         if _inv_field_ids:
             _inv_typed["field_ids"] = _inv_field_ids
+        if _semantic_frame:
+            _inv_typed["semantic_frame"] = _semantic_frame
         # V1.4.0: infer operation_refs from field_ids / entity_refs when no explicit refs
         if not _inv_typed["operation_refs"] and not _is_umbrella:
             _inv_fset = {f.lower() for f in _inv_field_ids}
@@ -4136,7 +4200,11 @@ def build_behavior_ir_from_knowledge_asset(
         model["invariants"].append(_fact_node(
             node_id=rid if rid.startswith("bir_") else _stable_id("inv", rid),
             typed_fields=_inv_typed,
-            source_refs=[_source_ref(_text(rule.get("source_id")) or "rule_library", quote=statement[:200])],
+            source_refs=[_source_ref(
+                _text(rule.get("source_id")) or "rule_library",
+                locator=_text(rule.get("source_locator")),
+                quote=statement[:200],
+            )],
             confidence=float(rule.get("confidence") or 0.7),
             derivation="explicit",
         ))

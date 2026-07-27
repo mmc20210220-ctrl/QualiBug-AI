@@ -87,7 +87,11 @@ def _llm_metrics(scan_result: dict[str, Any]) -> tuple[int, float, float | None]
 
     agent = _dict(v12.get("agent_semantic_link_receipt"))
     agent_status = str(agent.get("status") or "").strip().upper()
-    if agent_status in {"VERIFIED", "VERIFIED_WITH_REJECTIONS"}:
+    if agent_status in {
+        "VERIFIED",
+        "VERIFIED_WITH_REJECTIONS",
+        "VERIFIED_WITH_GAPS",
+    }:
         usage = _dict(agent.get("usage"))
         if not usage:
             raise OperationalMetricsNotMeasured(

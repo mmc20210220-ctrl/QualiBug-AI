@@ -65,6 +65,10 @@ def test_classify_source_distinguishes_new_document_types() -> None:
     prd_text = "# PRD\nThis product requirement references an API appendix."
 
     assert _classify_source("PRD.md", prd_text) == "prd"
+    assert _classify_source(
+        "BUSINESS_RULES.md",
+        "# Business rules\n- A disabled account cannot sign in.",
+    ) == "business_rules"
     assert _classify_source("API_DOCS.md", MARKDOWN_API_DOC) == "markdown_api"
     assert _classify_source("db_field_dictionary.csv", "table,field,type,description\norders,amount,decimal,payable amount\n") == "db_field_dictionary"
     assert _classify_source("checkout_flow.svg", SVG_DOC) == "uiux_svg"
@@ -206,6 +210,88 @@ def test_parse_source_extracts_async_event_rule_without_must_keywords() -> None:
 
     assert any(row.get("rule_type") == "async_event" for row in parsed.get("rules") or [])
     assert any(row.get("risk_type") == "async_event" for row in parsed.get("rules") or [])
+
+
+def test_business_rule_document_extracts_declarative_negative_rule() -> None:
+    doc = """# Business rules
+
+- Customer UI does not display draft, archived, or internal records.
+"""
+    parsed = _parse_source(
+        doc.encode("utf-8"),
+        "BUSINESS_RULES.md",
+        "business_rules",
+        "src_rules",
+    )
+
+    rule = next(
+        row
+        for row in parsed["rules"]
+        if "does not display" in row.get("statement", "")
+    )
+    assert rule["semantic_frame"]["modality"] == "PROHIBITED"
+    assert rule["semantic_frame"]["polarity"] == "negative"
+    assert rule["semantic_frame"]["subject"] == "Customer UI"
+    assert rule["semantic_frame"]["behavior"] == (
+        "display draft, archived, or internal records"
+    )
+    assert rule["source_locator"].startswith("line:")
+
+
+def test_business_rule_semantics_distinguish_negation_from_different() -> None:
+    doc = """# 业务规则
+
+- 用户端不展示下架商品、草稿商品、内部商品。
+- 管理端不同角色应展示不同菜单。
+- 已支付订单不能直接取消，只能发起退款。
+"""
+    parsed = _parse_source(
+        doc.encode("utf-8"),
+        "BUSINESS_RULES.md",
+        "business_rules",
+        "src_rules",
+    )
+    rules = {row["statement"]: row["semantic_frame"] for row in parsed["rules"]}
+
+    hidden = rules["用户端不展示下架商品、草稿商品、内部商品"]
+    assert hidden["modality"] == "PROHIBITED"
+    assert hidden["subject"] == "用户端"
+    assert hidden["behavior"] == "展示下架商品、草稿商品、内部商品"
+
+    role_menu = rules["管理端不同角色应展示不同菜单"]
+    assert role_menu["modality"] == "REQUIRED"
+    assert role_menu["subject"] == "管理端不同角色"
+    assert role_menu["behavior"] == "不同菜单"
+
+    cancellation = rules["已支付订单不能直接取消，只能发起退款"]
+    assert cancellation["subject"] == "已支付订单"
+    assert cancellation["behavior"] == "直接取消，只能发起退款"
+
+
+def test_rule_extraction_keeps_semantics_and_drops_tabular_credentials() -> None:
+    doc = """# Test accounts
+
+| Role | Email | Password | Notes |
+| --- | --- | --- | --- |
+| Disabled buyer | buyer@example.com | Test@123456 | status is DISABLED, cannot sign in or submit |
+"""
+    parsed = _parse_source(
+        doc.encode("utf-8"),
+        "TEST_ACCOUNTS.md",
+        "permission_matrix",
+        "src_accounts",
+    )
+
+    rule = next(
+        row for row in parsed["rules"] if "status is DISABLED" in row["statement"]
+    )
+    assert rule["statement"] == "status is DISABLED, cannot sign in or submit"
+    assert "buyer@example.com" not in rule["statement"]
+    assert "Test@123456" not in rule["statement"]
+    assert rule["semantic_frame"]["condition"] == "status is DISABLED"
+    assert rule["semantic_frame"]["subject"] == ""
+    assert rule["semantic_frame"]["modality"] == "PROHIBITED"
+    assert rule["semantic_frame"]["behavior"] == "sign in or submit"
 
 
 def test_permission_table_rows_are_explicit_grants_and_keep_narrative_denials() -> None:

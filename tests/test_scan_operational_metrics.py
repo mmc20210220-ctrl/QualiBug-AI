@@ -5,7 +5,11 @@ from ai_test_asset_center.scan_operational_metrics import (
 )
 
 
-def _scan_result(*, usage: dict[str, float]) -> dict:
+def _scan_result(
+    *,
+    usage: dict[str, float],
+    agent_status: str = "VERIFIED_WITH_REJECTIONS",
+) -> dict:
     return {
         "v12": {
             "phases": {
@@ -17,7 +21,7 @@ def _scan_result(*, usage: dict[str, float]) -> dict:
                 },
             },
             "agent_semantic_link_receipt": {
-                "status": "VERIFIED_WITH_REJECTIONS",
+                "status": agent_status,
                 "usage": usage,
             },
         },
@@ -71,3 +75,22 @@ def test_agent_model_cost_is_measured_only_from_provider_usage() -> None:
 
     assert metrics["estimated_cost_usd"] == 0.42
     assert metrics["model_cost_status"] == "MEASURED"
+
+
+def test_agent_semantic_gap_status_keeps_observed_usage_measurable() -> None:
+    metrics = collect_observed_scan_operational_metrics(
+        scan_result=_scan_result(
+            agent_status="VERIFIED_WITH_GAPS",
+            usage={
+                "request_count": 2,
+                "total_tokens": 1800,
+                "cost_usd": 0.0,
+                "responses_with_cost": 0,
+            },
+        ),
+        wall_clock_seconds=12.5,
+        runtime_view=_runtime_view(),
+    )
+
+    assert metrics["model_request_count"] == 2
+    assert metrics["engine_success_rate"] == 1.0
