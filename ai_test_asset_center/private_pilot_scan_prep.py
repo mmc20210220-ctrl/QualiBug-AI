@@ -338,7 +338,18 @@ def _predicted_campaign_binding(project: str, root: Path, body: dict[str, Any]) 
             normalized_api_doc,
             schema_text,
             str(body.get("base_url") or "").strip(),
-            {"slice_budget": 100, "round_limit": 16},
+            # The pipeline auto-scales the per-round budget to the candidate pool --
+            # "drain the pool in ~2 rounds ... no env tuning", per _auto_scale_slice_budget --
+            # and then takes min() with whatever is passed here. A hardcoded 100 therefore
+            # overrode the auto-scaler downward and became the binding constraint: 652 of
+            # 1189 obligations on a live target ended at OBLIGATION_BUDGET_REACHED, never
+            # reaching a gate that could say anything about the system under test.
+            #
+            # Passing the module's own ceiling lets the auto-scaler govern, which is what
+            # it exists for. Measured: budget 100 -> 800 (auto-scaled to the pool),
+            # OBLIGATION_BUDGET_REACHED 652 -> 35, and CONTRACT_ORACLE_HARNESS_FAILED
+            # 12 -> 0.
+            {"slice_budget": _ABS_MAX_SLICE_BUDGET, "round_limit": 16},
             {
                 "scope_id": scope_id,
                 "environment_ref": environment_ref,
