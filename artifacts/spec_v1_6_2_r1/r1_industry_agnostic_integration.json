@@ -1,0 +1,12 @@
+{
+  "schema_version": "qualibug.v162r1-industry-agnostic-integration.v1",
+  "spec_version": "V1.6.2-R1",
+  "generated_at": "2026-07-27T11:42:00+00:00",
+  "entities": ["entity_a", "entity_b", "entity_c"],
+  "tests": [
+    "test_61_entity_finalizer_receives_ledger_id",
+    "test_62_entity_finalizer_bundle_or_honest_block"
+  ],
+  "hardcoding_forbidden": true,
+  "status": "PASS"
+}

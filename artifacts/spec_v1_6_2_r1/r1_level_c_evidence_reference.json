@@ -1,0 +1,30 @@
+{
+  "schema_version": "qualibug.v162r1-level-c-evidence-reference.v1",
+  "spec_version": "V1.6.2-R1",
+  "generated_at": "2026-07-27T11:05:00+00:00",
+  "level_c_stop": {
+    "evidence_commit_sha": "2d5e8b3151e6a2f95472e7afdd859b26cc7e546e",
+    "tree_hash": "4dd9d85ada530ab8e02432811d68ba4acf903b39",
+    "tag": "qualibug-v1.6.2-level-c-stop",
+    "tag_message": "V1.6.2 Level C: canonical 1498, Gate A pass, Gate B D=0",
+    "pushed_to_origin": true,
+    "product_code_baseline": "afdfdef017f17eb1b63eeb2303a0796341d78357",
+    "evidence_commit_contains_r1_production_code": false
+  },
+  "frozen_inputs": {
+    "canonical_manifest_hash": "0c692b5ee288abf4bf540b3d57d5395fee552c6163b3df56fe42d445033dd4cd",
+    "canonical_obligation_count": 1498,
+    "candidate_unlock_set_hash": "8001dff09ce870c598545365d94365f419bf5fb1893023fd72fbc8e1de9f12a1",
+    "candidate_unlock_set_sorted_ids_hash": "a5d7096eda1ef0cab0d27a2a3c9f327580b09b3d30fc98f0466a64c6f0a309b6",
+    "candidate_unlock_set_N": 61,
+    "final_report_hash": "d2e2111a94a475c4863e25573619e61014f16c0e8e483aea9beacec6635df94f",
+    "shared_fix_point": "FINALIZATION_RECEIPT_FROM_BUNDLE",
+    "NEXT_SINGLE_BREAKPOINT": "FINALIZER_RECEIPT_BUNDLE_NOT_ACTIVATED_ON_FORMAL_MAINLINE"
+  },
+  "source_artifacts": {
+    "directory": "artifacts/spec_v1_6_2/",
+    "canonical_obligation_manifest": "v162_canonical_obligation_manifest.json",
+    "candidate_unlock_set": "v162_candidate_unlock_set.json",
+    "final_report": "v162_final_report.json"
+  }
+}

@@ -123,11 +123,35 @@ def execute_non_barrier_plans(
     request_bodies_for_cleanup: dict[str, Any] = {}
     pre_transport_block_reasons: list[str] = []
 
-    # ── V1.5.0 §21: Per-Step Execution Ledger ──
-    from .process_step_execution import ProcessStepLedger
+    # ── V1.5.0 §21 / V1.6.2-R1: Per-Step Execution Ledger ──
+    from .process_step_execution import ProcessStepLedger, attach_ledger_refs_to_observations
     _fixture_id = _text(_dict(observations.get("disposable_fixture_contract")).get("fixture_id"))
-    process_ledger = ProcessStepLedger(experiment_id=eid, fixture_id=_fixture_id)
-    observations["process_step_ledger"] = process_ledger
+    _protocol_id = _text(
+        observations.get("protocol_id")
+        or (
+            _dict(observations.get("protocol")).get("protocol_id")
+            if isinstance(observations.get("protocol"), dict)
+            else ""
+        )
+    )
+    # Required step identities come from activation_requirements (compile/plan SSOT),
+    # never forged from final HTTP responses.
+    _required_step_ids: list[str] = []
+    for _phase_key in ("control", "treatment"):
+        for _sid in list(activation_requirements.get(_phase_key) or []):
+            _text_sid = _text(_sid)
+            if _text_sid and _text_sid not in _required_step_ids:
+                _required_step_ids.append(_text_sid)
+    process_ledger = ProcessStepLedger(
+        experiment_id=eid,
+        fixture_id=_fixture_id,
+        campaign_id=_text(resolved_campaign_id or campaign_id),
+        run_id=_text(resolved_execution_id),
+        obligation_id=_text(oid),
+        protocol_id=_protocol_id,
+        required_step_ids=_required_step_ids,
+    )
+    attach_ledger_refs_to_observations(observations, process_ledger)
 
     source_observed_control_bodies: dict[str, Any] = {}
     source_body_control_blocked = False
@@ -654,6 +678,8 @@ def execute_non_barrier_plans(
             ))
             results.append(obs)
             # ── V1.5.0 §21: Record step in ProcessStepLedger ──
+            _gov = _dict(obs.get("governance_receipt"))
+            _transport_rid = _text(_gov.get("receipt_id") or request_body_fingerprint)
             process_ledger.record_step_execution(
                 step_id=subject_id,
                 phase=phase,
@@ -662,15 +688,17 @@ def execute_non_barrier_plans(
                 runtime_identity=runtime_bindings,
                 request_receipt_id=request_body_fingerprint,
                 response_receipt_id=_sha256(obs.get("body")),
+                transport_receipt_id=_transport_rid,
                 before_state_receipt_id=_text(
-                    _dict(_dict(obs.get("governance_receipt")).get("before")).get("status")
+                    _dict(_gov.get("before")).get("status")
                 ),
                 after_state_receipt_id=_text(
-                    _dict(_dict(obs.get("governance_receipt")).get("after")).get("status")
+                    _dict(_gov.get("after")).get("status")
                 ),
                 cleanup_contract_id=_text(step.get("cleanup_contract_id")),
                 status_code=observed_status,
                 final_status="EXECUTED" if observed_status > 0 else "BLOCKED",
+                target_reached=observed_status > 0,
             )
             process_ledger.record_timeline_event(
                 step_id=subject_id,
@@ -678,6 +706,7 @@ def execute_non_barrier_plans(
                 event_type="STEP_COMPLETED" if observed_status > 0 else "STEP_FAILED",
                 operation_ref=op_ref,
                 actor_ref=actor_ref,
+                receipt_id=_transport_rid,
             )
             if response_bound_observation:
                 results.append(response_bound_observation)
@@ -742,6 +771,8 @@ def execute_non_barrier_plans(
         ],
         phase="treatment",
     ))
+    # Refresh id/hash + step sets after real event rows are written.
+    attach_ledger_refs_to_observations(observations, process_ledger)
     return {
         "steps": steps,
         "contract_evidence_receipts": contract_evidence_receipts,
@@ -749,7 +780,12 @@ def execute_non_barrier_plans(
         "pre_transport_block_reasons": pre_transport_block_reasons,
         "cleanup_failures": cleanup_failures,
         "process_step_ledger": process_ledger,
+        "process_step_ledger_id": process_ledger.ledger_id,
+        "process_step_ledger_hash": process_ledger.compute_hash(),
         "process_timeline": process_ledger.build_timeline_receipt(),
-        "planned_step_ids": process_ledger.executed_step_ids(),
+        "required_step_ids": list(process_ledger.required_step_ids),
+        "planned_step_ids": list(
+            process_ledger.required_step_ids or process_ledger.executed_step_ids()
+        ),
         "executed_step_ids": process_ledger.executed_step_ids(),
     }

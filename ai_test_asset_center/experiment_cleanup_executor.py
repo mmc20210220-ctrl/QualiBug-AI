@@ -1188,6 +1188,12 @@ def execute_experiment_cleanup_compensation(
             proof=proof,
         )
         observations["cleanup_execution_receipt"] = cleanup_exec_receipt
+        observations["cleanup_execution_receipts"] = [cleanup_exec_receipt]
+        _cleanup_rid = _text(cleanup_exec_receipt.get("receipt_id"))
+        if _cleanup_rid:
+            observations.setdefault("cleanup_execution_receipt_ids", [])
+            if _cleanup_rid not in observations["cleanup_execution_receipt_ids"]:
+                observations["cleanup_execution_receipt_ids"].append(_cleanup_rid)
 
     # ── V1.3.0-A: Database Cleanup Receipt + Environment Restoration Receipt ──
     # Wire the structured DB receipts into the main execution chain.
@@ -1266,6 +1272,12 @@ def execute_experiment_cleanup_compensation(
             dependency_graph=_dict(_db_contract.get("dependency_graph")),
         )
         observations["cleanup_verification"] = _verification
+        observations["cleanup_verification_receipts"] = [_verification]
+        _ver_rid = _text(_verification.get("receipt_id") or _verification.get("verification_id"))
+        if _ver_rid:
+            observations.setdefault("cleanup_verification_receipt_ids", [])
+            if _ver_rid not in observations["cleanup_verification_receipt_ids"]:
+                observations["cleanup_verification_receipt_ids"].append(_ver_rid)
 
         # Fixture row lineage for created test objects
         _lineage_receipts: list[dict] = []

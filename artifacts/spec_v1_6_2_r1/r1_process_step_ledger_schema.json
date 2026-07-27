@@ -1,0 +1,35 @@
+{
+  "schema_version": "qualibug.process-step-ledger.v1",
+  "spec_version": "V1.6.2-R1",
+  "fields": [
+    "campaign_id",
+    "run_id",
+    "obligation_id",
+    "experiment_id",
+    "fixture_id",
+    "protocol_id",
+    "required_step_ids",
+    "rows",
+    "ledger_hash",
+    "process_step_ledger_id"
+  ],
+  "row_fields": [
+    "step_id",
+    "step_ordinal",
+    "phase",
+    "operation_id",
+    "request_receipt_id",
+    "transport_receipt_id",
+    "response_receipt_id",
+    "observation_receipt_ids",
+    "oracle_receipt_ids",
+    "cleanup_receipt_ids",
+    "transport_started",
+    "target_reached",
+    "transport_completed",
+    "final_step_status"
+  ],
+  "forged_from_plan_forbidden": true,
+  "append_only_receipt_refs": true,
+  "module": "ai_test_asset_center/process_step_execution.py"
+}

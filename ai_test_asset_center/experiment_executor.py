@@ -537,6 +537,26 @@ def execute_one_experiment(
         list(plan_result.get("pre_transport_block_reasons") or [])
     )
     cleanup_failures = int(plan_result.get("cleanup_failures") or cleanup_failures)
+    # V1.6.2-R1: propagate ledger id/hash + step id sets into Finalizer observations.
+    # Live ProcessStepLedger remains SSOT on observations; do not drop step lists.
+    from .process_step_execution import attach_ledger_refs_to_observations as _attach_ledger
+    _plan_ledger = plan_result.get("process_step_ledger") or observations.get(
+        "process_step_ledger"
+    )
+    if _plan_ledger is not None:
+        _attach_ledger(observations, _plan_ledger)
+    else:
+        for _k in (
+            "process_step_ledger_id",
+            "process_step_ledger_hash",
+            "required_step_ids",
+            "planned_step_ids",
+            "executed_step_ids",
+            "process_timeline",
+            "transport_receipt_ids",
+        ):
+            if plan_result.get(_k) is not None:
+                observations[_k] = plan_result[_k]
 
     _exec_logger.info(
         f"Experiment started: {eid} obligation={oid} campaign={resolved_campaign_id}",

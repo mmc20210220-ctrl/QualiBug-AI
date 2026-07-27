@@ -1,0 +1,1394 @@
+
+QualiBug V1.6.2-R1 正式主链 Finalizer Receipt Bundle 激活与冻结 Unlock Set 复验 SPEC
+Formal Mainline Finalizer Receipt Bundle Activation
+
+项目： QualiBug-AI
+目标版本： V1.6.2-R1
+任务级别： P0 / 单一断点修复
+执行对象： Code Agent
+实施分支： main
+产品代码基线： afdfdef
+Canonical Obligation Manifest： 已封存 1498 条
+Candidate Unlock Set： 已冻结 61 条
+当前结果： V1_6_2_RESULT_LEVEL = C
+V1.6.3入口： false
+
+唯一下一断点：
+
+FINALIZER_RECEIPT_BUNDLE_NOT_ACTIVATED_ON_FORMAL_MAINLINE
+
+已确认的直接原因：
+
+正式产品入口执行
+→ 业务步骤发生
+→ process_step_ledger 未进入正式 Finalizer 输入
+→ Execution Receipt Bundle 未激活
+→ Finalization Receipt 未产生
+→ Receipt-Verified TRUE_COMPLETED = 0
+→ Candidate Unlock Set N=61，实际新增 D=0
+1. 当前冻结基线
+1.1 V1.6.2停机结论
+V1_6_2_RESULT_LEVEL = C
+
+CANONICAL_OBLIGATION_COUNT = 1498
+CANONICAL_MANIFEST_SEALED = true
+
+GATE_A_RECEIPT_AUTHORITY = PASS
+GATE_B_COVERAGE_EXPANSION = FAIL
+
+CANDIDATE_UNLOCK_SET = 61
+NEW_RECEIPT_VERIFIED_REAL_EXECUTED = 0
+ACTUAL_UNLOCK_RATE = 0%
+
+V1_6_3_ENTRY_ALLOWED = false
+PROJECT_G_ENTRY_ALLOWED = false
+1.2 当前代码与产物状态
+PRODUCT_CODE_COMMIT = afdfdef
+PRODUCT_CODE_PUSHED = true
+
+artifacts/spec_v1_6_2/
+= untracked
+
+本阶段开始前，必须先把LEVEL C停机产物单独提交并推送。
+
+不得把停机证据提交与R1生产代码修复混在同一个Commit中。
+
+2. 本阶段唯一目标
+
+将正式产品主线真实产生的Process Step Ledger、Transport Receipt、Observation Receipt、Oracle Receipt、Cleanup Receipt和Restoration Receipt传递给现有Outcome Finalizer，使Finalizer能够在正式POST /api/v1/scan主链上构建并验证Execution Receipt Bundle，生成Finalization Receipt，并仅在完整Receipt Bundle有效时派生TRUE_COMPLETED。
+
+修复完成后，使用原封不动的：
+
+Canonical Manifest = 1498
+Candidate Unlock Set = 61
+Target
+Seed
+Account Manifest
+Budget
+Safety Gates
+Receipt Schemas
+TRUE_COMPLETED公式
+
+重新执行正式运行。
+
+3. 本阶段不重新实施的内容
+
+以下已经完成，本轮禁止重做：
+
+Canonical 1498 Manifest封存
+统一Receipt Envelope
+Receipt Hash与Parent Chain
+Fixture Provenance模型
+Receipt驱动正式报告
+Trace唯一性与去重
+1189/1498口径争议处理
+Obligation First Terminal分类
+Obligation Unlock Map
+Candidate Unlock Set选择
+
+本轮不重新选择第二个共享断点。
+
+本轮不修改Gate A结论。
+
+4. 本阶段非目标
+
+禁止：
+
+不修改Canonical 1498 Manifest；
+不改变Canonical Obligation ID集合；
+不修改Candidate Unlock Set 61；
+不重新选择共享修复点；
+不增加Golden Rule；
+不扩大义务或业务域；
+不增加执行预算；
+不修改Target或数据库Seed；
+不放宽Readback Gate；
+不放宽Observer Gate；
+不放宽Cleanup Gate；
+不放宽Environment Restoration Gate；
+不修改TRUE_COMPLETED派生公式；
+不将Transport成功直接视为TRUE_COMPLETED；
+不在报告生成层补造Finalization Receipt；
+不在Finalizer内部伪造Process Step Ledger；
+不根据计划步骤构造虚假的执行步骤；
+不将历史布尔状态作为Receipt替代品；
+不启动V1.6.3；
+不执行外部Evaluator；
+不启动Project G。
+5. 最高架构约束
+
+本轮必须复用现有：
+
+Experiment Compiler
+Experiment Plan Executor
+Process Step Execution
+Process Step Ledger
+Transport Receipts
+Observation Receipts
+Oracle Invocation Receipts
+Oracle Trace Receipts
+Cleanup Executor
+Environment Restoration
+Outcome Finalizer
+Execution Receipt Bundle
+Finalization Receipt
+Receipt-Driven Report Generator
+
+禁止新增平行：
+
+process_step_ledger_v2
+execution_bundle_v2
+formal_finalizer_v2
+completion_receipt_v2
+formal_report_patch_generator
+
+本轮允许新增的只是最小适配逻辑，例如：
+
+将现有Process Step Ledger引用挂入正式执行结果
+将正式执行上下文传到现有Finalizer
+将现有Receipt ID集合转换为Finalizer输入
+
+不能新增第二事实源。
+
+6. Phase 0：先封存LEVEL C停机证据
+6.1 只提交证据产物
+
+本阶段编码前执行：
+
+git status --short
+
+git add artifacts/spec_v1_6_2/
+
+git commit -m "chore(audit): seal V1.6.2 level C receipt authority results"
+
+git push origin main
+
+建议建立冻结标签：
+
+git tag -a qualibug-v1.6.2-level-c-stop \
+  -m "V1.6.2 Level C: canonical 1498, Gate A pass, Gate B D=0"
+
+git push origin qualibug-v1.6.2-level-c-stop
+
+保存：
+
+v162_level_c_evidence_commit_sha
+v162_level_c_tree_hash
+v162_level_c_tag
+canonical_manifest_hash
+candidate_unlock_set_hash
+final_report_hash
+
+必须满足：
+
+git status = clean
+
+完成后才能开始R1生产代码修复。
+
+7. Phase 1：正式主链现状映射
+
+编码前必须生成：
+
+artifacts/spec_v1_6_2_r1/
+r1_finalizer_activation_gap_map.json
+
+至少映射以下链路：
+
+节点	现有文件/函数	输入	输出	是否含Ledger	当前断点
+Experiment Compile					
+Plan Materialization					
+Batch Scheduling					
+Step Execution					
+Process Step Ledger写入					
+Transport Receipt汇总					
+Observation Receipt汇总					
+Oracle Receipt汇总					
+Cleanup Receipt汇总					
+Restoration Receipt汇总					
+Outcome Finalizer调用					
+Receipt Bundle Builder					
+Finalization Receipt					
+Report Metric Receipt					
+
+必须回答：
+
+正式POST /api/v1/scan最终调用哪个Executor；
+Process Step Ledger在哪个函数中产生；
+Ledger当前保存在局部变量、Experiment对象还是Runtime Context中；
+哪一层返回时Ledger被剥离；
+Batch Executor是否只保留最后状态；
+Finalizer实际接收哪些参数；
+Finalizer是否看到required_step_ids；
+Finalizer是否看到真实executed_step_ids；
+Transport Receipt ID集合在哪里；
+Observation和Oracle Receipt ID集合在哪里；
+Cleanup与Restoration Receipt是否晚于第一次Finalizer调用；
+Finalizer当前是否被调用一次以上；
+是否存在“业务结束时Finalizer”和“清理结束后Finalizer”两个时点；
+当前Execution Receipt Bundle激活条件是什么；
+为什么专项测试能够激活，但正式主链不能激活；
+哪些正式实验拥有真实步骤Receipt但缺Ledger容器；
+是否存在调用方在Finalizer前后直接写终态；
+正式报告当前读取的是Finalization Receipt还是旧状态字段。
+
+未完成该映射，不得编码。
+
+8. 权威数据结构约束
+8.1 Process Step Ledger不是计划步骤表
+
+权威Ledger必须由真实运行事件写入。
+
+最低结构：
+
+process_step_ledger:
+  schema_version: qualibug.process-step-ledger.v1
+
+  campaign_id:
+  run_id:
+  obligation_id:
+  experiment_id:
+  fixture_id:
+  protocol_id:
+
+  required_step_ids:
+  rows:
+    - step_id:
+      step_ordinal:
+      phase:
+      operation_id:
+
+      request_receipt_id:
+      transport_receipt_id:
+      response_receipt_id:
+      observation_receipt_ids:
+      oracle_receipt_ids:
+
+      transport_started:
+      target_reached:
+      transport_completed:
+      step_completed:
+      step_failed:
+
+      mutation_occurred:
+      cleanup_contract_id:
+      cleanup_receipt_ids:
+
+      final_step_status:
+
+  ledger_hash:
+
+禁止从以下事实补造Ledger：
+
+Experiment Plan
+预计步骤数量
+Protocol Template
+operation_id列表
+最终HTTP响应
+8.2 正式步骤身份
+
+每条Ledger Row必须绑定：
+
+campaign_id
+run_id
+obligation_id
+experiment_id
+fixture_id
+protocol_id
+step_id
+
+必须满足：
+
+Compile required_step_id
+=
+Runtime executed step_id
+=
+Transport receipt step_id
+=
+Observation receipt step_id
+=
+Cleanup source step_id
+
+不一致时：
+
+PROCESS_STEP_RECEIPT_IDENTITY_MISMATCH
+
+不能激活Finalizer。
+
+9. Phase 2：Formal Mainline Ledger Propagation
+
+必须沿现有主链传递Ledger引用：
+
+Step Executor
+→ Experiment Execution Result
+→ Batch Result
+→ Campaign Runtime Result
+→ Outcome Finalizer Input
+
+推荐只传递：
+
+process_step_ledger_id
+process_step_ledger_hash
+receipt_id集合
+
+不要复制完整Ledger形成第二份可变对象。
+
+正确形式：
+
+experiment_runtime_result:
+  experiment_id:
+  process_step_ledger_id:
+  process_step_ledger_hash:
+
+  transport_receipt_ids:
+  observation_receipt_ids:
+  oracle_invocation_receipt_ids:
+  oracle_trace_receipt_ids:
+  cleanup_execution_receipt_ids:
+  cleanup_verification_receipt_ids:
+  restoration_receipt_id:
+
+任何中间层不得：
+
+重新计算executed=true
+根据status重建Receipt集合
+过滤失败步骤
+只保留最后一步
+丢弃Fixture Phase步骤
+10. Ledger写入时点
+10.1 Step执行开始
+
+产生：
+
+STEP_RUNTIME_STARTED
+
+并写入：
+
+step_id
+operation_id
+request_receipt_id
+transport_receipt_id
+10.2 Target到达
+
+只有真实Transport Receipt证明：
+
+target_reached = true
+10.3 Observation完成
+
+追加：
+
+observation_receipt_ids
+10.4 Oracle完成
+
+追加：
+
+oracle_receipt_ids
+oracle_trace_receipt_ids
+10.5 Cleanup完成
+
+追加：
+
+cleanup_receipt_ids
+cleanup_verified
+
+Receipt只能追加引用，不得覆盖原步骤事实。
+
+11. Phase 3：Finalizer激活时机
+11.1 不允许过早Finalization
+
+Finalizer不能在以下时点派生最终终态：
+
+业务Operation刚结束
+Oracle刚结束
+Cleanup尚未执行
+Restoration尚未验证
+
+可以生成中间状态Receipt，但不能生成最终TRUE_COMPLETED。
+
+11.2 唯一最终激活时点
+
+最终Finalizer必须在：
+
+Business Steps Terminated
+AND Oracle Phase Terminated
+AND Cleanup Phase Terminated
+AND Environment Restoration Phase Terminated
+
+之后执行。
+
+正确顺序：
+
+Execute Business Steps
+→ Oracle
+→ Cleanup
+→ Cleanup Verification
+→ Environment Restoration
+→ Build Execution Receipt Bundle
+→ Validate Bundle
+→ Generate Finalization Receipt
+→ Derive Terminal Status
+→ Generate Report Metric Receipts
+12. Execution Receipt Bundle激活条件
+
+Finalizer只能在以下输入存在时构建Bundle：
+
+compile_receipt_id
+fixture_provenance_receipt_id
+process_step_ledger_id
+required_step_ids
+transport_receipt_ids
+observation_receipt_ids
+oracle_receipt_ids
+cleanup_receipt_ids
+restoration_receipt_id
+
+缺少process_step_ledger_id时：
+
+FINALIZER_PROCESS_STEP_LEDGER_MISSING
+
+不得：
+
+跳过Bundle
+返回普通COMPLETED
+根据Transport数量推断完整
+13. Required/Actual Step平衡
+
+Bundle Builder必须验证：
+
+required_business_step_ids
+=
+ledger_executed_required_step_ids
+
+并分别验证：
+
+required_observed_step_ids
+⊆ steps_with_observation_receipts
+
+required_oracle_step_ids
+⊆ steps_with_oracle_receipts
+
+successful_mutation_step_ids
+=
+cleanup_covered_source_step_ids
+
+输出：
+
+process_step_receipt_balance:
+  experiment_id:
+  required_step_ids:
+  executed_step_ids:
+  observed_step_ids:
+  oracle_evaluated_step_ids:
+  successful_mutation_step_ids:
+  cleanup_covered_step_ids:
+
+  missing_execution:
+  missing_observation:
+  missing_oracle:
+  missing_cleanup:
+  duplicate_steps:
+
+  balanced:
+14. TRUE_COMPLETED权威公式
+
+本轮不得修改既有语义，只激活其正式运行。
+
+TRUE_COMPLETED =
+Valid Compile Receipt
+AND Complete Fixture Provenance
+AND Process Step Ledger Present
+AND Required Steps Executed
+AND Required Observations Present
+AND Required Oracle Evaluation Present
+AND Successful Writes Cleanup-Covered
+AND Cleanup Verification Passed
+AND Environment Restoration Passed
+AND Receipt Identity Consistent
+AND Protocol Fingerprint Consistent
+
+本轮必须满足：
+
+TRUE_COMPLETED_WITHOUT_PROCESS_STEP_LEDGER = 0
+TRUE_COMPLETED_WITHOUT_FINALIZATION_RECEIPT = 0
+DIRECT_TRUE_COMPLETED_ASSIGNMENT = 0
+15. 非TRUE_COMPLETED终态
+
+正式Finalizer必须诚实派生：
+
+RECEIPT_BUNDLE_INCOMPLETE
+PROCESS_STEP_LEDGER_MISSING
+PROCESS_STEP_EXECUTION_INCOMPLETE
+OBSERVATION_RECEIPT_INCOMPLETE
+ORACLE_RECEIPT_INCOMPLETE
+CLEANUP_RECEIPT_INCOMPLETE
+CLEANUP_FAILED
+ENVIRONMENT_NOT_RESTORED
+FIXTURE_PROVENANCE_INCOMPLETE
+RECEIPT_IDENTITY_MISMATCH
+PROTOCOL_FINGERPRINT_MISMATCH
+INDETERMINATE
+TRUE_COMPLETED
+
+不能统一压缩为：
+
+FAILED
+BLOCKED
+COMPLETED
+16. Trace与Cleanup时序边界
+
+V1.6.1已经确认：
+
+Oracle Trace可在Cleanup前产生
+
+本轮继续保持：
+
+Oracle Trace存在
+≠
+TRUE_COMPLETED
+≠
+Formal Finding
+
+合法情况：
+
+Oracle Trace = PASS/VIOLATION/INDETERMINATE
+Cleanup = FAILED
+Final Status = CLEANUP_FAILED
+Formal Finding = false
+
+不得因为Cleanup失败删除Oracle Trace。
+
+17. Fixture Provenance接入Finalizer
+
+Finalizer必须直接消费现有：
+
+fixture_provenance_receipt_id
+
+并验证：
+
+fixture_id一致
+experiment_id一致
+runtime_identity一致
+scope一致
+campaign_owned=true
+customer_preexisting=false
+
+缺少或不一致：
+
+FINALIZER_FIXTURE_PROVENANCE_INVALID
+
+不能进入TRUE_COMPLETED。
+
+不得在Finalizer中重新搜索Fixture。
+
+18. Formal Report激活
+
+正式验收报告只能统计拥有合法Receipt的结果。
+
+18.1 Real Executed
+存在target_reached=true的Transport Receipt
+18.2 Oracle Evaluated
+存在completed Oracle Invocation Receipt
+18.3 Cleanup Verified
+存在Cleanup Verification Receipt且passed=true
+18.4 TRUE_COMPLETED
+存在有效Finalization Receipt
+且derived_terminal_status=TRUE_COMPLETED
+
+必须保证：
+
+report_true_completed
+=
+valid_true_completed_finalization_receipt_count
+19. Phase 4：Candidate Unlock Set保持冻结
+
+必须原样复用V1.6.2产物中的：
+
+Candidate Unlock Set = 61
+
+建立：
+
+v162r1_candidate_unlock_set_reuse_receipt.json
+
+至少包含：
+
+unlock_set_reuse:
+  original_manifest_hash:
+  original_unlock_set_hash:
+  obligation_ids:
+  count: 61
+
+  modified_after_freeze: false
+  added_ids: []
+  removed_ids: []
+
+不允许因为部分义务难以完成而替换ID。
+
+20. 覆盖提升验收公式
+
+设：
+
+N = 61
+D = 本轮新增Receipt-Verified Real Executed
+
+最低显著解锁线：
+
+D >= ceil(0.8 × 61)
+D >= 49
+
+下游最低要求：
+
+New Oracle Evaluated >= ceil(0.8 × D)
+New Cleanup Verified >= ceil(0.9 × D)
+New TRUE_COMPLETED >= ceil(0.9 × New Cleanup Verified)
+
+例如D=49时，最低为：
+
+New Oracle Evaluated >= 40
+New Cleanup Verified >= 45
+New TRUE_COMPLETED >= 41
+
+所有计算以实际整数向上取整。
+
+21. 覆盖口径
+
+必须分别输出：
+
+receipt_verified_real_executed
+receipt_verified_oracle_evaluated
+receipt_verified_cleanup_verified
+receipt_verified_environment_restored
+receipt_verified_true_completed
+
+不能用：
+
+selected
+compiled
+scheduled
+transport attempted
+raw trace rows
+delivered findings
+
+替代。
+
+22. Phase 5：正式运行冻结
+
+正式运行名称：
+
+V1_6_2_R1_FINALIZER_RECEIPT_BUNDLE_ACTIVATION_V1
+
+运行前冻结：
+
+commit_sha
+tree_hash
+canonical_manifest_hash
+candidate_unlock_set_hash
+process_step_ledger_schema_hash
+execution_receipt_bundle_schema_hash
+finalization_formula_hash
+fixture_provenance_schema_hash
+report_metric_formula_hash
+target_hash
+database_seed_hash
+account_manifest_hash
+budget_hash
+cleanup_policy_hash
+
+正式运行开始后修改任一项：
+
+INVALID_POST_START_TUNING
+
+本轮结果无效。
+
+23. 正式运行入口
+
+只允许：
+
+POST http://127.0.0.1:8088/api/v1/scan
+→ scan()
+→ discovery mainline
+→ experiment compile
+→ executor
+→ process step ledger
+→ observer
+→ oracle
+→ cleanup
+→ restoration
+→ finalizer
+→ report
+
+禁止直接调用：
+
+Process Step Ledger Builder
+Execution Receipt Bundle Builder
+Outcome Finalizer
+Finalization Receipt Generator
+Report Metric Aggregator
+
+作为正式运行证明。
+
+24. 正式运行漏斗
+
+必须输出：
+
+阶段	基线	R1结果	增量
+Candidate Unlock Set	61	61	0
+Compile Receipt Valid			
+Process Step Ledger Present	0或基线值		
+Real Transport Executed			
+Observation Receipt Complete			
+Oracle Receipt Complete			
+Cleanup Receipt Complete			
+Environment Restored			
+Execution Bundle Built	0		
+Finalization Receipt Generated	0		
+TRUE_COMPLETED	0		
+
+每个未达到下一阶段的义务必须有唯一第一终止断点。
+
+25. 新增断点代码
+
+至少增加或统一：
+
+FORMAL_MAINLINE_PROCESS_STEP_LEDGER_NOT_PROPAGATED
+FINALIZER_PROCESS_STEP_LEDGER_MISSING
+FINALIZER_RECEIPT_BUNDLE_NOT_ACTIVATED
+FINALIZER_FIXTURE_PROVENANCE_INVALID
+
+PROCESS_STEP_LEDGER_IDENTITY_MISMATCH
+PROCESS_STEP_LEDGER_HASH_MISMATCH
+PROCESS_STEP_REQUIRED_SET_MISMATCH
+PROCESS_STEP_OBSERVATION_SET_INCOMPLETE
+PROCESS_STEP_ORACLE_SET_INCOMPLETE
+PROCESS_STEP_CLEANUP_SET_INCOMPLETE
+
+EXECUTION_RECEIPT_BUNDLE_NOT_BUILT
+EXECUTION_RECEIPT_BUNDLE_VALIDATION_FAILED
+FINALIZATION_RECEIPT_NOT_GENERATED
+FINALIZATION_RECEIPT_IDENTITY_MISMATCH
+
+TRUE_COMPLETED_WITHOUT_PROCESS_STEP_LEDGER
+TRUE_COMPLETED_WITHOUT_FINALIZATION_RECEIPT
+FORMAL_REPORT_FINALIZATION_RECEIPT_MISMATCH
+
+统一父断点：
+
+FINALIZER_RECEIPT_BUNDLE_NOT_ACTIVATED_ON_FORMAL_MAINLINE
+26. 自动化测试要求
+
+至少新增55项专项测试。
+
+26.1 Ledger生产与传播
+Step Executor产生Ledger Row；
+Fixture Step保留；
+Business Step保留；
+Failed Step保留；
+未执行Step不伪造Row；
+Step ID贯穿Transport Receipt；
+Ledger ID进入Experiment Result；
+Ledger ID进入Batch Result；
+Ledger ID进入Finalizer Input；
+中间层不复制可变Ledger。
+26.2 Identity与Hash
+Ledger Hash稳定；
+Ledger篡改被检测；
+Experiment ID不一致阻塞；
+Fixture ID不一致阻塞；
+Protocol ID不一致阻塞；
+Step ID不一致阻塞；
+Receipt Parent Chain断裂阻塞。
+26.3 Finalizer Activation
+有Ledger时激活Bundle；
+无Ledger时明确阻塞；
+无Compile Receipt不构建Bundle；
+无Fixture Provenance不构建Bundle；
+无Transport Receipt不构建完整Bundle；
+无Observation Receipt不能完成；
+无Oracle Receipt不能完成；
+Cleanup未结束不能最终Finalization；
+Restoration未结束不能最终Finalization。
+26.4 Step集合平衡
+Required=Executed通过；
+缺一个Required Step阻塞；
+重复Step阻塞；
+缺Observation Step阻塞；
+缺Oracle Step阻塞；
+成功写步骤全部Cleanup覆盖；
+未执行步骤不要求Cleanup；
+失败前成功写步骤仍要求Cleanup。
+26.5 TRUE_COMPLETED
+完整Bundle派生TRUE_COMPLETED；
+Ledger缺失不能完成；
+Cleanup失败不能完成；
+Environment Dirty不能完成；
+Identity Drift不能完成；
+Protocol Fingerprint不同不能完成；
+Finalizer外直接赋值被检测；
+Oracle Trace存在但Cleanup失败不完成。
+26.6 Formal Report
+TRUE_COMPLETED来自Finalization Receipt；
+无Finalization Receipt不进入报告完成数；
+报告数字与Receipt集合一致；
+报告可反查Finalization Receipt ID；
+旧status字段不影响正式数字；
+Ledger Hash不一致报告失败。
+26.7 Unlock Set
+原61条ID全部复用；
+新增ID被拒绝；
+删除ID被拒绝；
+Unlock Set Hash变化被拒绝；
+D按Receipt-Verified Real Executed计算；
+Compiled不计入D；
+Transport Attempted不计入D。
+
+建议继续覆盖并发、Batch Result合并和重复Finalizer调用。
+
+27. 行业无关集成测试
+
+构造：
+
+Entity A
+Entity B
+Entity C
+
+流程：
+
+Compile
+→ Fixture
+→ Step A
+→ Step B
+→ Observation
+→ Oracle
+→ Cleanup
+→ Restoration
+→ Finalizer
+→ Receipt Report
+
+必须验证：
+
+真实Step Ledger进入Finalizer；
+完整Bundle产生Finalization Receipt；
+完整Bundle产生TRUE_COMPLETED；
+删除一个Step Receipt后不能完成；
+删除一个Observation Receipt后不能完成；
+Cleanup失败时保留Oracle Trace但不完成；
+Fixture身份漂移时不完成；
+正式报告数字来自Finalization Receipt；
+没有Benchmark业务名称或路径；
+没有第二套Finalizer或Ledger。
+28. Gate与结果等级
+LEVEL A — Finalizer激活且显著解锁通过
+
+全部满足：
+
+Process Step Ledger Formal Mainline Coverage = 100%
+Execution Receipt Bundle Built > 0
+Finalization Receipt Generated > 0
+
+N = 61
+D >= 49
+
+New Oracle Evaluated >= 80% × D
+New Cleanup Verified >= 90% × D
+New TRUE_COMPLETED >= 90% × New Cleanup Verified
+
+TRUE_COMPLETED Without Ledger = 0
+TRUE_COMPLETED Without Finalization Receipt = 0
+False Completed = 0
+Fixture Provenance Failure = 0
+Formal Report Count Mismatch = 0
+New Regressions = 0
+
+输出：
+
+V1_6_2_R1_RESULT_LEVEL = A
+
+FORMAL_MAINLINE_LEDGER_PROPAGATION = PASS
+EXECUTION_RECEIPT_BUNDLE_ACTIVATION = PASS
+FINALIZATION_RECEIPT_AUTHORITY = PASS
+TRUE_COMPLETION_AUTHORITY = PASS
+FORMAL_REPORT_RECEIPT_SSOT = PASS
+REAL_EXECUTION_COVERAGE_EXPANSION = PASS
+
+V1_6_3_ENTRY_ALLOWED = true
+PROJECT_G_ENTRY_ALLOWED = false
+LEVEL B — Finalizer激活通过，但部分义务受真实下游限制
+
+满足：
+
+Ledger、Bundle、Finalization Receipt正式主链闭环
+不存在False Completed
+报告完全Receipt驱动
+
+但D未达到49，并且剩余义务具有明确且新的下游终止原因，例如：
+
+SOURCE_ASSET_INSUFFICIENT
+STATE_PRECONDITION_UNREACHABLE
+CLEANUP_NOT_RESOLVED
+TARGET_CAPABILITY_LIMITED
+
+不能继续归因于Finalizer未激活。
+
+输出：
+
+V1_6_2_R1_RESULT_LEVEL = B
+
+FINALIZER_ACTIVATION = PASS
+COVERAGE_EXPANSION = DOWNSTREAM_LIMITED
+
+V1_6_3_ENTRY_ALLOWED = CONDITIONAL
+PROJECT_G_ENTRY_ALLOWED = false
+
+V1.6.3只能使用完整Finalization Receipt的实验。
+
+LEVEL C — Finalizer部分激活
+
+例如：
+
+测试路径能够构建Bundle
+正式主链仍有部分Batch路径缺Ledger
+或
+Finalization Receipt产生，但TRUE_COMPLETED报告仍未消费
+
+输出：
+
+V1_6_2_R1_RESULT_LEVEL = C
+
+FINALIZER_ACTIVATION = PARTIAL
+V1_6_3_ENTRY_ALLOWED = false
+
+必须输出新的唯一断点。
+
+LEVEL D — Freeze失效
+
+出现：
+
+运行开始后修改代码
+修改61条Unlock Set
+修改1498 Manifest
+修改预算
+修改安全Gate
+修改TRUE_COMPLETED公式
+
+输出：
+
+V1_6_2_R1_RESULT_LEVEL = D
+INVALID_POST_START_TUNING
+V1_6_3_ENTRY_ALLOWED = false
+LEVEL E — Completion完整性失败
+
+出现任一：
+
+无Ledger仍TRUE_COMPLETED
+根据计划补造Ledger
+无Finalization Receipt进入正式完成数
+Cleanup失败仍完成
+Fixture身份漂移仍完成
+报告数字与Receipt不一致
+
+输出：
+
+V1_6_2_R1_RESULT_LEVEL = E
+FINALIZATION_RECEIPT_INTEGRITY_FAIL
+V1_6_3_ENTRY_ALLOWED = false
+29. P0执行任务
+封存
+P0-1
+
+提交并推送artifacts/spec_v1_6_2/停机证据。
+
+P0-2
+
+建立LEVEL C冻结Tag。
+
+P0-3
+
+确认工作树干净。
+
+分析
+P0-4
+
+生成Finalizer激活Gap Map。
+
+P0-5
+
+定位Process Step Ledger真实生产点。
+
+P0-6
+
+定位Ledger从正式主链丢失的准确函数边界。
+
+P0-7
+
+确认Finalizer唯一最终调用时点。
+
+实施
+P0-8
+
+将Ledger ID挂入Experiment Runtime Result。
+
+P0-9
+
+将Ledger ID贯穿Batch/Campaign结果。
+
+P0-10
+
+将真实Receipt集合传入Finalizer。
+
+P0-11
+
+接通Required/Executed/Observed/Oracle/Cleanup集合平衡。
+
+P0-12
+
+激活现有Execution Receipt Bundle Builder。
+
+P0-13
+
+激活现有Finalization Receipt生成。
+
+P0-14
+
+确保TRUE_COMPLETED只由Finalization Receipt派生。
+
+P0-15
+
+确保正式报告消费Finalization Receipt。
+
+P0-16
+
+确保Oracle Trace不会因Cleanup失败丢失。
+
+测试
+P0-17
+
+新增至少55项专项测试。
+
+P0-18
+
+完成行业无关正式Finalizer集成测试。
+
+P0-19
+
+执行架构重复权威审计。
+
+正式运行
+P0-20
+
+冻结修复Commit和Tree Hash。
+
+P0-21
+
+复用原1498 Manifest。
+
+P0-22
+
+复用原61条Candidate Unlock Set。
+
+P0-23
+
+冻结Target、Seed、账号、预算和安全策略。
+
+P0-24
+
+只通过POST /api/v1/scan运行。
+
+P0-25
+
+生成正式Ledger传播漏斗。
+
+P0-26
+
+生成Bundle与Finalization Receipt平衡。
+
+P0-27
+
+计算D及下游比例。
+
+P0-28
+
+重新生成Receipt驱动正式报告。
+
+P0-29
+
+执行全量回归。
+
+P0-30
+
+输出A/B/C/D/E结论。
+
+P0-31
+
+决定V1.6.3入口。
+
+P0-32
+
+停止，不自动选择第二共享断点。
+
+30. 必须生成的交付物
+
+统一保存到：
+
+artifacts/spec_v1_6_2_r1/
+
+至少包括：
+
+r1_release_baseline.json
+r1_level_c_evidence_reference.json
+r1_finalizer_activation_gap_map.json
+r1_architecture_authority_audit.json
+
+r1_process_step_ledger_schema.json
+r1_process_step_ledger_runtime.json
+r1_ledger_propagation_audit.json
+r1_ledger_identity_balance.json
+
+r1_finalizer_input_ledger.json
+r1_execution_receipt_bundles.json
+r1_execution_bundle_validation.json
+r1_finalization_receipts.json
+r1_true_completion_authority_audit.json
+
+r1_fixture_provenance_finalizer_audit.json
+r1_oracle_trace_cleanup_boundary_audit.json
+r1_formal_report_receipt_balance.json
+
+r1_candidate_unlock_set_reuse_receipt.json
+r1_start_manifest.json
+r1_scan_response.json
+r1_runtime_funnel.json
+r1_first_terminal_ledger.json
+r1_coverage_comparison.json
+
+r1_specialized_tests.json
+r1_industry_agnostic_integration.json
+r1_post_run_regression.json
+
+r1_v163_entry_decision.json
+r1_final_report.json
+31. Definition of Done
+
+只有以下全部满足，本阶段才算完成：
+
+V1.6.2 LEVEL C产物已经单独提交。
+停机证据Commit已经推送。
+LEVEL C冻结Tag已经建立。
+R1编码前工作树干净。
+Product基线afdfdef与证据Commit关系明确。
+Canonical Manifest仍为1498。
+Candidate Unlock Set仍为61。
+Manifest Hash未变化。
+Unlock Set Hash未变化。
+找到Process Step Ledger正式生产函数。
+找到Ledger丢失的准确调用边界。
+没有建立第二套Process Step Ledger。
+Ledger由真实运行事件产生。
+未执行步骤不会被补造为Ledger Row。
+Failed Step不会从Ledger中删除。
+Step ID贯穿Compile、Runtime和Receipt。
+Ledger ID进入Experiment Runtime Result。
+Ledger ID进入Batch/Campaign Result。
+Finalizer正式输入包含Ledger ID。
+Finalizer正式输入包含真实Receipt集合。
+Finalizer不会根据布尔状态重建Receipt。
+Finalizer最终调用发生在Cleanup和Restoration之后。
+Execution Receipt Bundle正式主链产生。
+Bundle包含Compile Receipt。
+Bundle包含Fixture Provenance。
+Bundle包含Process Step Ledger。
+Bundle包含Transport Receipt。
+Bundle包含Observation Receipt。
+Bundle包含Oracle Receipt。
+Bundle包含Cleanup Receipt。
+Bundle包含Restoration Receipt。
+Required/Executed Step集合完成平衡。
+Successful Write/Cleanup集合完成平衡。
+Receipt身份一致性完成验证。
+Protocol Fingerprint一致性完成验证。
+Finalization Receipt正式主链产生。
+TRUE_COMPLETED只能由Finalization Receipt派生。
+无Ledger的TRUE_COMPLETED数量为0。
+无Finalization Receipt的TRUE_COMPLETED数量为0。
+Finalizer外直接完成赋值数量为0。
+Cleanup失败不会删除Oracle Trace。
+Cleanup失败不会进入TRUE_COMPLETED。
+Environment Dirty不会进入TRUE_COMPLETED。
+Fixture Provenance不完整不会进入TRUE_COMPLETED。
+正式报告只统计Finalization Receipt。
+报告与Receipt数量不一致为0。
+原61条Unlock Set未被替换。
+正式运行开始后生产代码修改为0。
+D按照Receipt-Verified Real Executed计算。
+D达到49，或明确转移到新的下游第一终止断点。
+新Oracle Evaluated达到D的80%以上。
+新Cleanup Verified达到D的90%以上。
+新TRUE_COMPLETED达到Cleanup Verified的90%以上。
+False Completed为0。
+Fixture Provenance Failure为0。
+Customer-Owned数据损伤为0。
+专项测试不少于55项。
+行业无关正式Finalizer集成测试通过。
+全量回归新增失败为0。
+最终结果属于A/B/C/D/E之一。
+V1.6.3入口获得明确决定。
+Project G仍未启动。
+完成后停止。
+32. Code Agent最终报告格式
+1. Seal状态
+Product Baseline Commit:
+LEVEL C Evidence Commit:
+LEVEL C Tag:
+R1 Commit:
+R1 Tree Hash:
+Working Tree:
+Origin Push:
+2. 冻结输入
+Canonical Manifest Count: 1498
+Canonical Manifest Hash:
+Candidate Unlock Set Count: 61
+Candidate Unlock Set Hash:
+Target:
+Seed:
+Accounts:
+Budget:
+Post-Start Changes:
+3. 根因
+
+明确回答：
+
+Process Step Ledger在哪里产生
+在哪个函数边界丢失
+为什么专项测试通过而正式主链未激活
+Finalizer此前实际收到了什么
+为什么Execution Receipt Bundle为0
+4. 修改文件
+文件	原职责	修改内容	是否正式主链
+5. Ledger传播
+Experiments Reaching Runtime:
+Experiments with Ledger:
+Batch Results with Ledger ID:
+Finalizer Inputs with Ledger ID:
+Missing Ledger:
+Identity Mismatches:
+Hash Mismatches:
+6. Bundle与Finalization
+Execution Receipt Bundles Built:
+Valid Bundles:
+Invalid Bundles:
+Finalization Receipts:
+TRUE_COMPLETED:
+TRUE_COMPLETED Without Ledger:
+TRUE_COMPLETED Without Finalization Receipt:
+Direct Completion Assignments:
+7. Step平衡
+Required Steps:
+Executed Steps:
+Observed Steps:
+Oracle-Evaluated Steps:
+Successful Write Steps:
+Cleanup-Covered Steps:
+
+Missing Execution:
+Missing Observation:
+Missing Oracle:
+Missing Cleanup:
+Duplicate Steps:
+8. 覆盖复验
+N = 61
+Baseline D = 0
+R1 D =
+Unlock Rate =
+
+New Oracle Evaluated =
+New Cleanup Verified =
+New Environment Restored =
+New TRUE_COMPLETED =
+9. 正式报告
+Report Real Executed:
+Transport Receipt Count:
+Report Oracle Evaluated:
+Oracle Receipt Count:
+Report TRUE_COMPLETED:
+Finalization Receipt Count:
+Count Mismatches:
+10. 安全
+False Completed:
+Fixture Identity Drift:
+Fixture Scope Drift:
+Customer-Owned Data Damage:
+Cleanup-Failed TRUE_COMPLETED:
+Environment-Dirty TRUE_COMPLETED:
+Receipt Tamper Undetected:
+Benchmark Hardcoding:
+
+全部必须为0。
+
+11. 回归
+R1 Specialized Tests:
+Industry-Agnostic Integration:
+Full Regression:
+Known Failures:
+New Regressions:
+12. 最终判定
+V1_6_2_R1_RESULT_LEVEL = A/B/C/D/E
+
+FORMAL_MAINLINE_LEDGER_PROPAGATION =
+EXECUTION_RECEIPT_BUNDLE_ACTIVATION =
+FINALIZATION_RECEIPT_AUTHORITY =
+TRUE_COMPLETION_AUTHORITY =
+FIXTURE_PROVENANCE_FINALIZATION =
+FORMAL_REPORT_RECEIPT_SSOT =
+REAL_EXECUTION_COVERAGE_EXPANSION =
+SAFETY_GATE =
+HISTORICAL_REGRESSION =
+
+V1_6_3_ENTRY_ALLOWED =
+DEEP_BUG_DISCOVERY_PROOF = NOT_MEASURED
+PROJECT_G_ENTRY_ALLOWED = false
+
+未通过时：
+
+NEXT_SINGLE_BREAKPOINT =
+AFFECTED_OBLIGATIONS =
+FIRST_TERMINAL_STAGE =
+CUMULATIVE_UNLOCK =
+SHARED_FIX_POINT =
+33. 最终执行指令
+
+不要改1498 Manifest。
+
+不要改61条Unlock Set。
+
+不要增加预算。
+
+不要放宽安全Gate。
+
+不要根据计划补造Process Step Ledger。
+
+不要在报告层补造Finalization Receipt。
+
+不要用旧布尔状态替代Receipt Bundle。
+
+不要因为有Oracle Trace就标记TRUE_COMPLETED。
+
+不要同时修第二个断点。
+
+本阶段只完成一件事：
+
+将正式产品主线上已经真实发生的Process Step、Transport、Observation、Oracle、Cleanup和Restoration Receipt完整传递给现有Outcome Finalizer，使Execution Receipt Bundle和Finalization Receipt真正激活，并在原冻结61条Unlock Set上证明Receipt-Driven TRUE_COMPLETED与真实执行覆盖率提升。
+
+正式执行顺序：
+
+提交LEVEL C停机证据
+→ 建立冻结Tag
+→ 确认工作树干净
+→ Finalizer主链Gap Map
+→ 定位Ledger丢失边界
+→ Ledger贯穿Experiment/Batch/Campaign Result
+→ Finalizer接收真实Receipt集合
+→ Build Execution Receipt Bundle
+→ Generate Finalization Receipt
+→ Receipt-Derived TRUE_COMPLETED
+→ Formal Report Receipt Balance
+→ 原61条Unlock Set正式复验
+→ 全量回归
+→ V1.6.3入口决定
+→ 停止

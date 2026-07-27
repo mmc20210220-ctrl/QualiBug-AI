@@ -1,0 +1,23 @@
+{
+  "schema_version": "qualibug.v162r1-architecture-authority-audit.v1",
+  "spec_version": "V1.6.2-R1",
+  "generated_at": "2026-07-27T11:42:00+00:00",
+  "single_authorities": {
+    "process_step_ledger": "ai_test_asset_center/process_step_execution.py::ProcessStepLedger",
+    "outcome_finalizer": "ai_test_asset_center/experiment_outcome_finalizer.py::finalize_experiment_execution",
+    "execution_receipt_bundle": "ai_test_asset_center/operational_receipts.py::assemble_bundle_from_finalizer_observations",
+    "finalization_receipt": "ai_test_asset_center/operational_receipts.py::build_execution_finalization_receipt",
+    "formal_scan_executor": "ai_test_asset_center/experiment_executor.py::execute_one_experiment"
+  },
+  "forbidden_parallel_modules_absent": [
+    "process_step_ledger_v2",
+    "execution_bundle_v2",
+    "formal_finalizer_v2",
+    "completion_receipt_v2",
+    "formal_report_patch_generator"
+  ],
+  "finalizer_call_sites_on_formal_path": 1,
+  "mutable_ledger_second_copy": false,
+  "propagation_mechanism": "process_step_ledger_id + process_step_ledger_hash + receipt id collections; live ledger remains SSOT on observations",
+  "audit_status": "PASS"
+}

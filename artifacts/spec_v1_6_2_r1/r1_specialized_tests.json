@@ -1,0 +1,24 @@
+{
+  "schema_version": "qualibug.v162r1-specialized-tests.v1",
+  "spec_version": "V1.6.2-R1",
+  "generated_at": "2026-07-27T11:42:00+00:00",
+  "test_file": "tests/test_v162r1_finalizer_receipt_bundle_activation.py",
+  "passed": 69,
+  "failed": 0,
+  "minimum_required": 55,
+  "sections_covered": [
+    "26.1_ledger_production_propagation",
+    "26.2_identity_hash",
+    "26.3_finalizer_activation",
+    "26.4_step_set_balance",
+    "26.5_true_completed",
+    "26.6_formal_report",
+    "26.7_unlock_set",
+    "27_industry_agnostic_entity_a_b_c"
+  ],
+  "regression": {
+    "test_v150_process_step_execution": "PASS",
+    "test_v162_gate_a_receipt_authority": "PASS",
+    "combined_passed": 107
+  }
+}

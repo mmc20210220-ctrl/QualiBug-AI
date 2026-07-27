@@ -1,0 +1,192 @@
+{
+  "schema_version": "qualibug.v162r1-finalizer-activation-gap-map.v1",
+  "spec_version": "V1.6.2-R1",
+  "generated_at": "2026-07-27T11:12:00+00:00",
+  "breakpoint": "FINALIZER_RECEIPT_BUNDLE_NOT_ACTIVATED_ON_FORMAL_MAINLINE",
+  "product_baseline": "afdfdef017f17eb1b63eeb2303a0796341d78357",
+  "level_c_evidence_commit": "2d5e8b3151e6a2f95472e7afdd859b26cc7e546e",
+  "architecture_policy": {
+    "reuse_only": true,
+    "forbidden_parallel_modules": [
+      "process_step_ledger_v2",
+      "execution_bundle_v2",
+      "formal_finalizer_v2",
+      "completion_receipt_v2",
+      "formal_report_patch_generator"
+    ],
+    "allowed_change": "minimal adapter: propagate process_step_ledger_id/hash + receipt id sets into existing Finalizer input"
+  },
+  "formal_mainline_chain": [
+    "POST /api/v1/scan",
+    "private_pilot_http_routing._handle_v12_scan",
+    "__main__.scan / _scan_impl",
+    "v12_pipeline.run_v12_pipeline",
+    "discovery_mainline.run_discovery_mainline",
+    "discovery_runtime_execution.run_experiment_candidate",
+    "experiment_batch_executor.execute_selected_experiments",
+    "experiment_executor.execute_one_experiment",
+    "experiment_plan_executor.execute_non_barrier_plans",
+    "experiment_cleanup_executor.execute_experiment_cleanup_compensation",
+    "experiment_outcome_finalizer.finalize_experiment_execution"
+  ],
+  "node_map": [
+    {
+      "node": "Experiment Compile",
+      "file": "ai_test_asset_center/experiment_compiler_obligation.py",
+      "has_ledger": false,
+      "breakpoint": null
+    },
+    {
+      "node": "Plan Materialization",
+      "file": "ai_test_asset_center/experiment_executor.py::execute_one_experiment",
+      "has_ledger": false,
+      "breakpoint": null
+    },
+    {
+      "node": "Batch Scheduling",
+      "file": "ai_test_asset_center/experiment_batch_executor.py::execute_selected_experiments",
+      "has_ledger": false,
+      "note": "passes through per-experiment results; does not strip ledger if present on result",
+      "breakpoint": null
+    },
+    {
+      "node": "Step Execution",
+      "file": "ai_test_asset_center/experiment_plan_executor.py::execute_non_barrier_plans",
+      "has_ledger": true,
+      "breakpoint": null
+    },
+    {
+      "node": "Process Step Ledger write",
+      "file": "ai_test_asset_center/process_step_execution.py::ProcessStepLedger.record_step_execution",
+      "call_site": "experiment_plan_executor.py:657-681",
+      "storage": "observations['process_step_ledger'] = ProcessStepLedger object (L130); also returned in plan_result L751",
+      "has_ledger": true,
+      "breakpoint": null
+    },
+    {
+      "node": "Transport / Observation / Oracle receipt aggregation",
+      "file": "ai_test_asset_center/experiment_outcome_finalizer.py",
+      "has_ledger": false,
+      "note": "synthesized inside Finalizer seek path from steps_out/verdict; not pre-aggregated as ID sets on formal path",
+      "breakpoint": "receipt ID collections not explicit on observations before Finalizer"
+    },
+    {
+      "node": "Cleanup / Restoration receipt aggregation",
+      "file": "ai_test_asset_center/experiment_cleanup_executor.py",
+      "writes": [
+        "observations['cleanup_execution_receipt'] (singular)",
+        "observations['cleanup_verification']",
+        "observations['environment_restoration_receipt']"
+      ],
+      "finalizer_reads": [
+        "cleanup_execution_receipts (plural)",
+        "cleanup_verification_receipts (plural)",
+        "environment_restoration_receipt"
+      ],
+      "has_ledger": false,
+      "breakpoint": "key name mismatch for cleanup execution/verification"
+    },
+    {
+      "node": "Outcome Finalizer call",
+      "file": "ai_test_asset_center/experiment_executor.py:782",
+      "timing": "ONCE after cleanup + restoration + related-entity/multi-layer enrichment",
+      "business_end_finalizer": false,
+      "cleanup_end_finalizer": true,
+      "has_ledger": "object may be present on observations; step ID lists / ledger_id missing",
+      "breakpoint": "FINALIZER_RECEIPT_BUNDLE_NOT_ACTIVATED_ON_FORMAL_MAINLINE"
+    },
+    {
+      "node": "Receipt Bundle Builder",
+      "file": "ai_test_asset_center/operational_receipts.py::assemble_bundle_from_finalizer_observations",
+      "activation_gate": "experiment_outcome_finalizer.py L1372 outer + L1508-1521 _seek_true_completed",
+      "has_ledger": "requires process_step_ledger OR force_receipt_bundle; inner seek needs step IDs",
+      "breakpoint": "inner seek fails on formal path"
+    },
+    {
+      "node": "Finalization Receipt",
+      "file": "ai_test_asset_center/operational_receipts.py::build_execution_finalization_receipt",
+      "has_ledger": false,
+      "breakpoint": "never reached when seek fails"
+    },
+    {
+      "node": "Report Metric Receipt",
+      "file": "ai_test_asset_center/operational_receipts.py / discovery_quality_projection",
+      "reads": "execution_finalization_receipt when present; otherwise falls back to status fields",
+      "breakpoint": "formal report sees TRUE_COMPLETION_RECEIPT_INCOMPLETE for unlock set"
+    }
+  ],
+  "spec_section_7_answers": {
+    "which_executor_on_formal_scan": "experiment_executor.execute_one_experiment (via batch → discovery_mainline → v12_pipeline → POST /api/v1/scan)",
+    "where_ledger_produced": "experiment_plan_executor.execute_non_barrier_plans L127-130 construct; L657-681 record rows via ProcessStepLedger",
+    "where_ledger_stored": "observations['process_step_ledger'] (in-memory object) and plan_result['process_step_ledger']; NOT as process_step_ledger_id/hash",
+    "where_ledger_stripped": "Primary LOSS: experiment_executor.execute_one_experiment L529-539 merges steps/evidence/bodies/pre_transport/cleanup_failures but does NOT copy planned_step_ids, executed_step_ids, process_timeline from plan_result into observations. Finalizer reads those observation keys (L1337-1338), not ledger.executed_step_ids(). Secondary: cleanup writes singular receipt keys; Finalizer reads plural. Tertiary: Finalizer return omits ledger id/hash (L1580-1619).",
+    "batch_keeps_only_last_status": false,
+    "batch_note": "Batch keeps full per-experiment result dicts; stripping happens before Finalizer inside execute_one_experiment, not in batch merge.",
+    "finalizer_params_on_formal_path": {
+      "exp": "experiment dict",
+      "steps_out": "list",
+      "observations": "may contain process_step_ledger object; typically missing planned_step_ids/executed_step_ids/process_step_ledger_id/force_receipt_bundle",
+      "fixture_receipts": "list",
+      "contract_evidence_receipts": "list",
+      "binding_materialization_receipts": "list",
+      "cleanup_failures": "int",
+      "identity": "eid/oid/campaign/execution ids"
+    },
+    "finalizer_sees_required_step_ids": false,
+    "finalizer_sees_real_executed_step_ids": false,
+    "transport_receipt_id_set_location": "Not pre-written on formal path; Finalizer synthesizes from steps_out only inside seek path L1425-1439",
+    "observation_oracle_receipt_id_set_location": "observer_receipts list may exist; oracle_invocation/trace receipts synthesized inside seek path L1453-1467 only when seek activates",
+    "cleanup_restoration_later_than_first_finalizer": false,
+    "cleanup_restoration_order": "plan → cleanup (writes receipts) → Finalizer once. No second Finalizer.",
+    "finalizer_called_more_than_once": false,
+    "business_end_and_cleanup_end_sites": "No. Single cleanup-end call at experiment_executor.py:782",
+    "execution_receipt_bundle_activation_condition": "Outer L1372: process_step_ledger is not None OR force_receipt_bundle. Inner L1508-1521: force_receipt_bundle OR v150 true_completed OR (fixtures AND (executed|planned step ids) AND oracle_evaluated AND cleanup_ver AND env_restored). Then assemble + finalization.",
+    "why_unit_tests_pass_formal_fails": "Gate A / V1.5.0 tests call operational_receipts APIs or evaluate_true_completed with synthetic complete receipt sets / forced booleans / force_receipt_bundle. Formal mainline never sets force_receipt_bundle and never copies plan_result step ID lists into observations, so _seek_true_completed stays false → empty bundle → no finalization → D=0.",
+    "experiments_with_real_steps_missing_ledger_container": "Unlock-set ORACLE_NOT_VIOLATED experiments execute real steps and create ProcessStepLedger object, but Finalizer lacks process_step_ledger_id + observation step ID lists → container effectively invisible to bundle seek",
+    "direct_terminal_write_outside_finalizer": {
+      "TRUE_COMPLETED_outside_finalizer": 0,
+      "inside_finalizer_pre_bundle_lifecycle": "heuristic lifecycle_state L1319-1332 before bundle; may be overwritten by bundle-derived status"
+    },
+    "formal_report_reads": "Prefers receipt-backed metrics when present; without finalization receipts falls back to incomplete true-completion classification for unlock-set obligations"
+  },
+  "loss_sites": [
+    {
+      "id": "LOSS_1_PLAN_RESULT_NOT_MERGED",
+      "file": "ai_test_asset_center/experiment_executor.py",
+      "function": "execute_one_experiment",
+      "lines": "529-539",
+      "fix": "merge planned_step_ids/executed_step_ids/process_timeline + ledger id/hash/receipt id refs into observations"
+    },
+    {
+      "id": "LOSS_2_FINALIZER_IGNORES_LEDGER_ROWS",
+      "file": "ai_test_asset_center/experiment_outcome_finalizer.py",
+      "function": "finalize_experiment_execution",
+      "lines": "1336-1353,1508-1521",
+      "fix": "derive planned/executed/required step ids from ledger when observation keys empty; require process_step_ledger_id; emit FINALIZER_PROCESS_STEP_LEDGER_MISSING"
+    },
+    {
+      "id": "LOSS_3_REQUIRED_STEP_IDS_NEVER_EXIST",
+      "file": "ai_test_asset_center/process_step_execution.py + experiment_plan_executor.py",
+      "fix": "capture required_step_ids from plan subject_ids into ledger; expose on observations"
+    },
+    {
+      "id": "LOSS_4_CLEANUP_RECEIPT_KEY_MISMATCH",
+      "file": "ai_test_asset_center/experiment_cleanup_executor.py",
+      "fix": "also write plural cleanup_execution_receipts / cleanup_verification_receipts keys Finalizer expects"
+    },
+    {
+      "id": "LOSS_5_RESULT_OMITS_LEDGER_IDS",
+      "file": "ai_test_asset_center/experiment_outcome_finalizer.py return payload",
+      "fix": "include process_step_ledger_id/hash and receipt id collections on experiment result for batch/campaign/report"
+    }
+  ],
+  "minimal_fix_points": [
+    "process_step_execution.ProcessStepLedger — ledger_id/hash, required_step_ids, append-only receipt refs, schema export",
+    "experiment_plan_executor.execute_non_barrier_plans — set required_step_ids; emit ledger id/hash on observations",
+    "experiment_executor.execute_one_experiment — merge plan_result step/ledger refs into observations before cleanup/Finalizer",
+    "experiment_cleanup_executor — dual-write plural cleanup receipt keys",
+    "experiment_outcome_finalizer.finalize_experiment_execution — consume ledger id + step sets; fail closed without ledger id; activate existing bundle path"
+  ],
+  "gap_map_complete": true,
+  "coding_allowed_after_this_artifact": true
+}

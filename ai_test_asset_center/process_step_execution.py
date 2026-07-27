@@ -11,9 +11,12 @@ This module is consumed by ``experiment_plan_executor`` during multi-step
 execution and by ``experiment_outcome_finalizer`` for TRUE_COMPLETED evaluation.
 
 Schema: qualibug.process-step-execution.v1
+V1.6.2-R1 authority ledger export: qualibug.process-step-ledger.v1
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 import logging
 from typing import Any
@@ -22,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 # Schema versions
 STEP_EXECUTION_SCHEMA = "qualibug.process-step-execution.v1"
+PROCESS_STEP_LEDGER_SCHEMA = "qualibug.process-step-ledger.v1"
 TIMELINE_SCHEMA = "qualibug.process-timeline.v1"
 EVIDENCE_SCHEMA = "qualibug.per-step-evidence-completeness.v1"
 COMPLETION_ORACLE_SCHEMA = "qualibug.process-completion.v1"
@@ -47,7 +51,7 @@ PROCESS_PARTIALLY_EXECUTED = "PROCESS_PARTIALLY_EXECUTED"
 PROCESS_FAILED = "PROCESS_FAILED"
 PROCESS_EVIDENCE_INCOMPLETE = "PROCESS_EVIDENCE_INCOMPLETE"
 
-# Breakpoint codes (SPEC §35)
+# Breakpoint codes (SPEC §35 + V1.6.2-R1 §25)
 PROCESS_EVIDENCE_INCOMPLETE_CODE = "PROCESS_EVIDENCE_INCOMPLETE"
 PROCESS_STEP_NOT_EXECUTED = "PROCESS_STEP_NOT_EXECUTED"
 PROCESS_STEP_NOT_OBSERVED = "PROCESS_STEP_NOT_OBSERVED"
@@ -58,6 +62,18 @@ REVERSE_CLEANUP_PLAN_INCOMPLETE = "REVERSE_CLEANUP_PLAN_INCOMPLETE"
 REVERSE_CLEANUP_FAILED = "REVERSE_CLEANUP_FAILED"
 MULTI_STEP_ENVIRONMENT_NOT_RESTORED = "MULTI_STEP_ENVIRONMENT_NOT_RESTORED"
 FALSE_COMPLETED_BLOCKED = "FALSE_COMPLETED_BLOCKED"
+FORMAL_MAINLINE_PROCESS_STEP_LEDGER_NOT_PROPAGATED = (
+    "FORMAL_MAINLINE_PROCESS_STEP_LEDGER_NOT_PROPAGATED"
+)
+FINALIZER_PROCESS_STEP_LEDGER_MISSING = "FINALIZER_PROCESS_STEP_LEDGER_MISSING"
+FINALIZER_RECEIPT_BUNDLE_NOT_ACTIVATED = "FINALIZER_RECEIPT_BUNDLE_NOT_ACTIVATED"
+PROCESS_STEP_LEDGER_IDENTITY_MISMATCH = "PROCESS_STEP_LEDGER_IDENTITY_MISMATCH"
+PROCESS_STEP_LEDGER_HASH_MISMATCH = "PROCESS_STEP_LEDGER_HASH_MISMATCH"
+PROCESS_STEP_REQUIRED_SET_MISMATCH = "PROCESS_STEP_REQUIRED_SET_MISMATCH"
+PROCESS_STEP_RECEIPT_IDENTITY_MISMATCH = "PROCESS_STEP_RECEIPT_IDENTITY_MISMATCH"
+PROCESS_STEP_OBSERVATION_SET_INCOMPLETE = "PROCESS_STEP_OBSERVATION_SET_INCOMPLETE"
+PROCESS_STEP_ORACLE_SET_INCOMPLETE = "PROCESS_STEP_ORACLE_SET_INCOMPLETE"
+PROCESS_STEP_CLEANUP_SET_INCOMPLETE = "PROCESS_STEP_CLEANUP_SET_INCOMPLETE"
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -83,14 +99,61 @@ class ProcessStepLedger:
     Each real step produces exactly one authoritative execution row, keyed by
     step_id. The step_id is the identity that threads through compile → execute
     → observe → oracle → cleanup → timeline.
+
+    V1.6.2-R1: exposes stable ``ledger_id`` / ``ledger_hash`` and append-only
+    receipt reference fields so Finalizer can activate Execution Receipt Bundle
+    without copying a second mutable ledger.
     """
 
-    def __init__(self, experiment_id: str, fixture_id: str = ""):
+    def __init__(
+        self,
+        experiment_id: str,
+        fixture_id: str = "",
+        *,
+        campaign_id: str = "",
+        run_id: str = "",
+        obligation_id: str = "",
+        protocol_id: str = "",
+        required_step_ids: "list[str] | None" = None,
+    ):
         self.experiment_id = experiment_id
         self.fixture_id = fixture_id
+        self.campaign_id = _text(campaign_id)
+        self.run_id = _text(run_id)
+        self.obligation_id = _text(obligation_id)
+        self.protocol_id = _text(protocol_id)
+        self._required_step_ids: list[str] = [
+            _text(sid) for sid in list(required_step_ids or []) if _text(sid)
+        ]
         self._rows: dict[str, dict[str, Any]] = {}
         self._timeline_events: list[dict[str, Any]] = []
         self._ordinal_counter = 0
+        seed = "|".join(
+            [
+                _text(experiment_id),
+                _text(fixture_id),
+                self.campaign_id,
+                self.run_id,
+                self.obligation_id,
+                self.protocol_id,
+            ]
+        )
+        self.ledger_id = f"psl_{hashlib.sha256(seed.encode('utf-8')).hexdigest()[:24]}"
+
+    def set_required_step_ids(self, step_ids: "list[str]") -> None:
+        """Record compile/plan-required step identities (not forged from responses)."""
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for sid in list(step_ids or []):
+            text = _text(sid)
+            if text and text not in seen:
+                seen.add(text)
+                ordered.append(text)
+        self._required_step_ids = ordered
+
+    @property
+    def required_step_ids(self) -> list[str]:
+        return list(self._required_step_ids)
 
     def record_step_execution(
         self,
@@ -102,38 +165,99 @@ class ProcessStepLedger:
         runtime_identity: dict[str, Any] | None = None,
         request_receipt_id: str = "",
         response_receipt_id: str = "",
+        transport_receipt_id: str = "",
         before_state_receipt_id: str = "",
         after_state_receipt_id: str = "",
         observer_receipt_ids: "list[str] | None" = None,
+        oracle_receipt_ids: "list[str] | None" = None,
         cleanup_contract_id: str = "",
+        cleanup_receipt_ids: "list[str] | None" = None,
         status_code: int = 0,
         final_status: str = "EXECUTED",
+        mutation_occurred: bool | None = None,
+        target_reached: bool | None = None,
     ) -> dict[str, Any]:
         """Record one authoritative execution row for a step."""
         self._ordinal_counter += 1
+        transport_started = time.time()
+        observed_status = int(status_code or 0)
+        reached = bool(target_reached) if target_reached is not None else observed_status > 0
         row = {
             "schema_version": STEP_EXECUTION_SCHEMA,
+            "campaign_id": self.campaign_id,
+            "run_id": self.run_id,
+            "obligation_id": self.obligation_id,
             "experiment_id": self.experiment_id,
             "fixture_id": self.fixture_id,
+            "protocol_id": self.protocol_id,
             "step_id": step_id,
             "step_ordinal": self._ordinal_counter,
             "phase": phase,
             "operation_ref": operation_ref,
+            "operation_id": operation_ref,
             "actor_ref": actor_ref,
             "runtime_identity": _dict(runtime_identity),
             "request_receipt_id": request_receipt_id,
             "response_receipt_id": response_receipt_id,
+            "transport_receipt_id": transport_receipt_id or request_receipt_id,
             "before_state_receipt_id": before_state_receipt_id,
             "after_state_receipt_id": after_state_receipt_id,
             "observer_receipt_ids": list(observer_receipt_ids or []),
+            "observation_receipt_ids": list(observer_receipt_ids or []),
+            "oracle_receipt_ids": list(oracle_receipt_ids or []),
             "cleanup_contract_id": cleanup_contract_id,
-            "transport_started": time.time(),
+            "cleanup_receipt_ids": list(cleanup_receipt_ids or []),
+            "transport_started": transport_started,
+            "target_reached": reached,
             "transport_completed": time.time(),
-            "status_code": status_code,
+            "step_completed": final_status == "EXECUTED" and observed_status > 0,
+            "step_failed": final_status in {"FAILED", "BLOCKED"} or observed_status >= 400,
+            "mutation_occurred": mutation_occurred,
+            "status_code": observed_status,
             "final_status": final_status,
+            "final_step_status": final_status,
         }
         self._rows[step_id] = row
         return row
+
+    def append_receipt_ref(
+        self,
+        step_id: str,
+        field: str,
+        receipt_id: str,
+    ) -> bool:
+        """Append-only receipt reference on an existing step row (SPEC §10)."""
+        rid = _text(receipt_id)
+        row = self._rows.get(step_id)
+        if not rid or row is None:
+            return False
+        list_fields = {
+            "observer_receipt_ids",
+            "observation_receipt_ids",
+            "oracle_receipt_ids",
+            "cleanup_receipt_ids",
+        }
+        scalar_fields = {
+            "request_receipt_id",
+            "response_receipt_id",
+            "transport_receipt_id",
+            "before_state_receipt_id",
+            "after_state_receipt_id",
+        }
+        if field in list_fields:
+            bucket = list(row.get(field) or [])
+            if rid not in bucket:
+                bucket.append(rid)
+                row[field] = bucket
+            return True
+        if field in scalar_fields:
+            existing = _text(row.get(field))
+            if existing and existing != rid:
+                # Never overwrite an established receipt id; keep first fact.
+                return False
+            row[field] = rid
+            return True
+        return False
 
     def record_timeline_event(
         self,
@@ -188,6 +312,60 @@ class ProcessStepLedger:
             or int(row.get("status_code") or 0) >= 400
         ]
 
+    def compute_hash(self) -> str:
+        """Stable hash over identity + required set + executed rows (no timestamps)."""
+        payload = {
+            "schema_version": PROCESS_STEP_LEDGER_SCHEMA,
+            "ledger_id": self.ledger_id,
+            "campaign_id": self.campaign_id,
+            "run_id": self.run_id,
+            "obligation_id": self.obligation_id,
+            "experiment_id": self.experiment_id,
+            "fixture_id": self.fixture_id,
+            "protocol_id": self.protocol_id,
+            "required_step_ids": list(self._required_step_ids),
+            "rows": [
+                {
+                    "step_id": row.get("step_id"),
+                    "step_ordinal": row.get("step_ordinal"),
+                    "phase": row.get("phase"),
+                    "operation_id": row.get("operation_id") or row.get("operation_ref"),
+                    "request_receipt_id": row.get("request_receipt_id"),
+                    "transport_receipt_id": row.get("transport_receipt_id"),
+                    "response_receipt_id": row.get("response_receipt_id"),
+                    "observation_receipt_ids": list(row.get("observation_receipt_ids") or []),
+                    "oracle_receipt_ids": list(row.get("oracle_receipt_ids") or []),
+                    "cleanup_receipt_ids": list(row.get("cleanup_receipt_ids") or []),
+                    "final_step_status": row.get("final_step_status") or row.get("final_status"),
+                    "target_reached": bool(row.get("target_reached")),
+                }
+                for row in self.all_rows()
+            ],
+        }
+        raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    @property
+    def ledger_hash(self) -> str:
+        return self.compute_hash()
+
+    def to_authority_dict(self) -> dict[str, Any]:
+        """Export immutable authority snapshot (SPEC §8.1)."""
+        return {
+            "schema_version": PROCESS_STEP_LEDGER_SCHEMA,
+            "process_step_ledger_id": self.ledger_id,
+            "ledger_id": self.ledger_id,
+            "campaign_id": self.campaign_id,
+            "run_id": self.run_id,
+            "obligation_id": self.obligation_id,
+            "experiment_id": self.experiment_id,
+            "fixture_id": self.fixture_id,
+            "protocol_id": self.protocol_id,
+            "required_step_ids": list(self._required_step_ids),
+            "rows": [dict(row) for row in self.all_rows()],
+            "ledger_hash": self.compute_hash(),
+        }
+
     def build_timeline_receipt(self) -> dict[str, Any]:
         """Build the formal process timeline receipt."""
         return {
@@ -196,6 +374,126 @@ class ProcessStepLedger:
             "events": list(self._timeline_events),
             "event_count": len(self._timeline_events),
         }
+
+
+def attach_ledger_refs_to_observations(
+    observations: dict[str, Any],
+    ledger: ProcessStepLedger,
+) -> dict[str, Any]:
+    """Propagate ledger id/hash + step id sets without copying mutable ledger twice.
+
+    The live ``ProcessStepLedger`` object remains the single source of truth on
+    ``observations['process_step_ledger']``. Callers pass id/hash + id lists to
+    Finalizer/batch/campaign layers.
+    """
+    target = observations if isinstance(observations, dict) else {}
+    target["process_step_ledger"] = ledger
+    target["process_step_ledger_id"] = ledger.ledger_id
+    target["process_step_ledger_hash"] = ledger.compute_hash()
+    required = list(ledger.required_step_ids) or list(ledger.executed_step_ids())
+    executed = list(ledger.executed_step_ids())
+    target["required_step_ids"] = required
+    target["planned_step_ids"] = list(required)
+    target["executed_step_ids"] = executed
+    target["process_timeline"] = ledger.build_timeline_receipt()
+    # Collect append-only receipt id sets from real step rows only.
+    transport_ids: list[str] = []
+    observation_ids: list[str] = []
+    oracle_ids: list[str] = []
+    cleanup_ids: list[str] = []
+    for row in ledger.all_rows():
+        for rid in (
+            _text(row.get("transport_receipt_id")),
+            _text(row.get("request_receipt_id")),
+        ):
+            if rid and rid not in transport_ids:
+                transport_ids.append(rid)
+        for rid in list(row.get("observation_receipt_ids") or []) + list(
+            row.get("observer_receipt_ids") or []
+        ):
+            text = _text(rid)
+            if text and text not in observation_ids:
+                observation_ids.append(text)
+        for rid in list(row.get("oracle_receipt_ids") or []):
+            text = _text(rid)
+            if text and text not in oracle_ids:
+                oracle_ids.append(text)
+        for rid in list(row.get("cleanup_receipt_ids") or []):
+            text = _text(rid)
+            if text and text not in cleanup_ids:
+                cleanup_ids.append(text)
+    if transport_ids:
+        target["transport_receipt_ids"] = transport_ids
+    if observation_ids:
+        target["observation_receipt_ids"] = observation_ids
+    if oracle_ids:
+        target["oracle_invocation_receipt_ids"] = oracle_ids
+    if cleanup_ids:
+        target["cleanup_execution_receipt_ids"] = cleanup_ids
+    return target
+
+
+def validate_required_actual_step_balance(
+    *,
+    required_step_ids: "list[str]",
+    executed_step_ids: "list[str]",
+    observed_step_ids: "list[str] | None" = None,
+    oracle_step_ids: "list[str] | None" = None,
+    cleanup_step_ids: "list[str] | None" = None,
+) -> dict[str, Any]:
+    """Required/actual step set balance for Finalizer bundle activation (SPEC §13)."""
+    required = [_text(s) for s in list(required_step_ids or []) if _text(s)]
+    executed = [_text(s) for s in list(executed_step_ids or []) if _text(s)]
+    observed = (
+        [_text(s) for s in list(observed_step_ids) if _text(s)]
+        if observed_step_ids is not None
+        else list(executed)
+    )
+    oracle = (
+        [_text(s) for s in list(oracle_step_ids) if _text(s)]
+        if oracle_step_ids is not None
+        else list(executed)
+    )
+    cleanup = [_text(s) for s in list(cleanup_step_ids or []) if _text(s)]
+    req_set = set(required)
+    exe_set = set(executed)
+    if len(executed) != len(exe_set):
+        return {
+            "balanced": False,
+            "reason_code": PROCESS_STEP_REQUIRED_SET_MISMATCH,
+            "detail": "duplicate_executed_step_id",
+        }
+    if req_set != exe_set:
+        return {
+            "balanced": False,
+            "reason_code": PROCESS_STEP_REQUIRED_SET_MISMATCH,
+            "missing_executed": sorted(req_set - exe_set),
+            "unexpected_executed": sorted(exe_set - req_set),
+        }
+    if req_set - set(observed):
+        return {
+            "balanced": False,
+            "reason_code": PROCESS_STEP_OBSERVATION_SET_INCOMPLETE,
+            "missing_observed": sorted(req_set - set(observed)),
+        }
+    if req_set - set(oracle):
+        return {
+            "balanced": False,
+            "reason_code": PROCESS_STEP_ORACLE_SET_INCOMPLETE,
+            "missing_oracle": sorted(req_set - set(oracle)),
+        }
+    if cleanup and (exe_set - set(cleanup)):
+        return {
+            "balanced": False,
+            "reason_code": PROCESS_STEP_CLEANUP_SET_INCOMPLETE,
+            "missing_cleanup": sorted(exe_set - set(cleanup)),
+        }
+    return {
+        "balanced": True,
+        "reason_code": "",
+        "required_step_ids": required,
+        "executed_step_ids": executed,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
