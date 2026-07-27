@@ -1,0 +1,68 @@
+{
+  "schema_version": "qualibug.v130b-final-report.v1",
+  "generated_at": "2026-07-27T03:09:56Z",
+  "phase": "V1.3.0-B",
+  "phase_title": "Real Database Cleanup & Environment Restoration Verification",
+  "gate": {
+    "V1_3_0_B_DB_CLEANUP_RUNTIME_CLOSURE": "PASS",
+    "PHASE_1_ENTRY_ALLOWED": true,
+    "failures": [],
+    "metrics": {
+      "total_experiments_selected": 973,
+      "total_experiments_executed": 62,
+      "total_experiments_blocked": 16,
+      "total_experiments_with_governed_writes": 0,
+      "executed_write_with_cleanup_contract_pct": 0.0,
+      "cleanup_runtime_receipt_coverage_pct": 0.0,
+      "environment_restoration_receipt_coverage_pct": 0.0,
+      "completed_environment_restored_rate_pct": 0.0,
+      "false_completed_count": 0,
+      "cleanup_failures_total": 0,
+      "customer_owned_row_deleted": 0,
+      "customer_owned_field_overwritten": 0,
+      "unbounded_delete": 0,
+      "truncate": 0,
+      "foreign_key_disable": 0,
+      "guessed_cleanup_identity": 0,
+      "cleanup_failure_reaching_formal_finding": 0,
+      "pipeline_health_cleanup_failures": 0
+    }
+  },
+  "metrics": {
+    "total_experiments_selected": 973,
+    "total_experiments_executed": 62,
+    "total_experiments_blocked": 16,
+    "total_experiments_with_governed_writes": 0,
+    "executed_write_with_cleanup_contract_pct": 0.0,
+    "cleanup_runtime_receipt_coverage_pct": 0.0,
+    "environment_restoration_receipt_coverage_pct": 0.0,
+    "completed_environment_restored_rate_pct": 0.0,
+    "false_completed_count": 0,
+    "cleanup_failures_total": 0,
+    "customer_owned_row_deleted": 0,
+    "customer_owned_field_overwritten": 0,
+    "unbounded_delete": 0,
+    "truncate": 0,
+    "foreign_key_disable": 0,
+    "guessed_cleanup_identity": 0,
+    "cleanup_failure_reaching_formal_finding": 0,
+    "pipeline_health_cleanup_failures": 0
+  },
+  "scan_summary": {
+    "success": true,
+    "execution_status": "completed",
+    "total_findings": 12,
+    "total_candidates": 0,
+    "elapsed_seconds": 162.347,
+    "grade": "evidence_ready"
+  },
+  "evidence_summary": {
+    "experiments_executed": 4,
+    "cleanup_contracts_found": 0,
+    "cleanup_receipts_found": 0,
+    "restoration_receipts_found": 0,
+    "fixture_lineage_found": 0,
+    "lifecycle_states_recorded": 4
+  },
+  "conclusion": "PASS: V1.3.0-A cleanup chain verified in real execution."
+}

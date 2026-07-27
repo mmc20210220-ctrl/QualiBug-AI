@@ -1,0 +1,25 @@
+{
+  "schema_version": "qualibug.v130b-database-baseline.v1",
+  "generated_at": "2026-07-27T03:09:56Z",
+  "database_type": "PostgreSQL",
+  "host": "localhost",
+  "port": 5432,
+  "database": "benchmark_mall",
+  "connection_status": "CONNECTED",
+  "table_count": 13,
+  "tables": [
+    "addresses",
+    "audit_logs",
+    "cart_items",
+    "coupon_usage",
+    "coupons",
+    "inventory",
+    "inventory_locks",
+    "order_items",
+    "orders",
+    "payments",
+    "products",
+    "refunds",
+    "users"
+  ]
+}

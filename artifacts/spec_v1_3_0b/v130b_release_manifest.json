@@ -1,0 +1,12 @@
+{
+  "schema_version": "qualibug.v130b-release-manifest.v1",
+  "generated_at": "2026-07-27T03:09:56Z",
+  "commit_sha": "fb7a400d637ada883b44976eb211ba2bae034a6a",
+  "tree_hash": "7d9ce2eef8393d3dbc2886b9303b4db526085f2c",
+  "branch": "main",
+  "target": "http://localhost:8080",
+  "project": "benchmark_mall",
+  "environment_type": "test",
+  "scan_elapsed_seconds": 162.347,
+  "working_tree": "clean"
+}

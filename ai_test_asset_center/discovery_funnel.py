@@ -477,10 +477,19 @@ def build_pipeline_health(v12_result: dict[str, Any]) -> dict[str, Any]:
         if _text(row.get("status")).lower()
         not in {"ok", "healthy", "completed", "success", "succeeded"}
     ]
+    # Count attempt-level cleanup failures. Evidence-validation reason codes
+    # (CLEANUP_EVIDENCE_INCOMPLETE, CLEANUP_WRITE_COVERAGE_MISMATCH) are gate
+    # validation issues, not actual cleanup execution failures, and must not
+    # inflate the operational cleanup failure count.
+    _EVIDENCE_ONLY_CLEANUP_REASONS = {
+        "CLEANUP_EVIDENCE_INCOMPLETE",
+        "CLEANUP_WRITE_COVERAGE_MISMATCH",
+    }
     attempt_cleanup_failures = sum(
         1
         for attempt in attempts
         if "CLEANUP" in _text(attempt.get("reason_code")).upper()
+        and _text(attempt.get("reason_code")).upper() not in _EVIDENCE_ONLY_CLEANUP_REASONS
         and _text(attempt.get("terminal_status")).upper() == "HARNESS_FAILED"
     )
     operational_cleanup_failures = _operational_cleanup_failure_count(result)

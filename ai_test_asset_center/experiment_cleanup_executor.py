@@ -1229,6 +1229,13 @@ def execute_experiment_cleanup_compensation(
             )
             _db_receipts.append(_db_r)
 
+        # Safely collect API cleanup receipt IDs from all evidence receipts
+        _api_cleanup_ids = sorted({
+            _text(r.get("receipt_id"))
+            for r in contract_evidence_receipts
+            if _text(r.get("receipt_id"))
+        })
+
         # Environment restoration receipt
         _env_receipt = _build_env_receipt(
             experiment_id=eid,
@@ -1236,7 +1243,7 @@ def execute_experiment_cleanup_compensation(
             database_cleanup_receipt_ids=[
                 _text(r.get("receipt_id")) for r in _db_receipts
             ],
-            api_cleanup_receipt_ids=audit_receipt_ids,
+            api_cleanup_receipt_ids=_api_cleanup_ids,
             fixture_receipt_ids=[
                 _text(r.get("receipt_id")) for r in _list(observations.get("fixture_receipts"))
             ],
