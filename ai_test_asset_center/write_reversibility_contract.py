@@ -36,7 +36,7 @@ CLEANUP_AUTHORITIES = frozenset({
     "inverse_delta",
     "exact_recreate",
     "verified_environment_reset",
-    # NOT admitted -- the live check said no. See below.
+    # NOT admitted. Three live checks, three times zero receipts. See below.
 })
 
 # ── declared_adapter_cleanup: built, tested, and NOT yet authorised ──────────
@@ -89,10 +89,18 @@ CLEANUP_AUTHORITIES = frozenset({
 # from this. An earlier version of this note said the branch was not reached because
 # something upstream was unsatisfied; that reading was wrong and is corrected here.
 #
-# The binding constraint is now the slice budget, not this gate. Exercising this tier
-# means letting those obligations execute, and only then does the residue count mean
-# anything about it. Until an experiment with a db_sql plan actually writes and the
-# receipt shows CLEANED, "built and tested" is all that can honestly be claimed.
+# THIRD CHECK, with the slice-budget fix in place so obligations actually execute
+# (budget 1200, OBLIGATION_BUDGET_REACHED no longer the wall it was): still ZERO adapter
+# cleanup receipts, and CONTRACT_ORACLE_HARNESS_FAILED returned to 99. So raising the
+# budget was not the missing piece either.
+#
+# Three checks, three zeros. Whatever prevents an experiment carrying a db_sql plan from
+# reaching an accepted governed write has not been found, and each hypothesis so far --
+# the branch is unreachable, the guard is unsatisfied, the budget starves it -- has been
+# disproved by the next measurement. "Built and tested, never exercised" remains the
+# whole claim, and the next attempt should start by instrumenting which experiments carry
+# a db_sql plan and where each one actually terminates, rather than by proposing another
+# cause.
 ADAPTER_CLEANUP_AUTHORITY = "declared_adapter_cleanup"
 
 # Server-managed fields that must never appear in restore bodies

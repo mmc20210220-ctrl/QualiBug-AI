@@ -441,9 +441,9 @@ class TestWriteReversibilityProof:
         )
 
         assert ADAPTER_CLEANUP_AUTHORITY not in CLEANUP_AUTHORITIES, (
-            "unexercised, not broken: the 784 db_sql cleanup plans belong to "
-            "experiments that never executed (652 on OBLIGATION_BUDGET_REACHED), so no "
-            "run has yet produced a CLEANED receipt from this tier"
+            "three live checks, three times zero adapter cleanup receipts -- including "
+            "one with the slice-budget fix in place, which disproved the budget "
+            "hypothesis too"
         )
 
     def test_declared_adapter_cleanup_requires_every_leg(self) -> None:
