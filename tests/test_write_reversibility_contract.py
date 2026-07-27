@@ -441,9 +441,9 @@ class TestWriteReversibilityProof:
         )
 
         assert ADAPTER_CLEANUP_AUTHORITY not in CLEANUP_AUTHORITIES, (
-            "the live check ran twice and said no: with the authority on and the branch "
-            "proven reachable in isolation, a real run produced zero adapter cleanup "
-            "receipts and the target gained rows (products 6->7, cart_items 46->67)"
+            "unexercised, not broken: the 784 db_sql cleanup plans belong to "
+            "experiments that never executed (652 on OBLIGATION_BUDGET_REACHED), so no "
+            "run has yet produced a CLEANED receipt from this tier"
         )
 
     def test_declared_adapter_cleanup_requires_every_leg(self) -> None:

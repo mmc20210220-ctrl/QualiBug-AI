@@ -74,14 +74,25 @@ CLEANUP_AUTHORITIES = frozenset({
 # Flip this on only after the cleanup executor demonstrably deletes the row -- the check
 # is the residue count in the target after a run, not a passing unit test.
 #
-# THE CHECK WAS RUN, twice, and it says no. With the authority on, dependency-ordered
-# deletion wired, and the branch proven reachable in isolation
-# (tests/test_adapter_cleanup_reaches_the_executor.py), a live run still produced ZERO
-# adapter cleanup receipts and the target gained rows: products 6 -> 7, inventory 6 -> 7,
-# cart_items 46 -> 67 against a measured baseline. The branch is guarded by
-# accepted_governed_writes_requiring_cleanup, and something upstream of that guard is not
-# satisfied on the real path. Finding what is the remaining work; until then the honest
-# state is that this tier is built and unproven.
+# THE CHECK WAS RUN, twice, and the honest state is UNEXERCISED rather than broken.
+#
+# With the authority on, dependency-ordered deletion wired and the branch proven
+# reachable in isolation (tests/test_adapter_cleanup_reaches_the_executor.py), a live run
+# produced zero adapter cleanup receipts. Tracing why: the run carried 13 governance
+# receipts, all accepted -- 10 treatment writes and 3 cleanups -- so the cleanup loop DID
+# run. Those three cleanups took the HTTP path because their plans were HTTP plans. The
+# 784 db_sql plans belong to experiments that never executed at all: they sit on
+# OBLIGATION_BUDGET_REACHED, 652 of them. No write, no cleanup, no receipt.
+#
+# So the tier has never had an experiment with both an accepted write and a db_sql plan
+# reach it, and the target residue in that run came from the ten HTTP-path writes, not
+# from this. An earlier version of this note said the branch was not reached because
+# something upstream was unsatisfied; that reading was wrong and is corrected here.
+#
+# The binding constraint is now the slice budget, not this gate. Exercising this tier
+# means letting those obligations execute, and only then does the residue count mean
+# anything about it. Until an experiment with a db_sql plan actually writes and the
+# receipt shows CLEANED, "built and tested" is all that can honestly be claimed.
 ADAPTER_CLEANUP_AUTHORITY = "declared_adapter_cleanup"
 
 # Server-managed fields that must never appear in restore bodies
