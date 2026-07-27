@@ -325,15 +325,26 @@ def _write_step_for_cleanup_path(
     return {}
 
 
-def _project_database_dsn(root: Path, project: str) -> str:
-    """The DSN the operator declared for this project, or "" when none is declared."""
+def _project_database_dsn(root: Path, project: str) -> tuple[str, str]:
+    """The DSN the operator declared for this project.
+
+    Returns ``(dsn, error_code)``. ``error_code`` is empty both when a DSN was
+    resolved and when none was declared at all -- the caller's own
+    ``CLEANUP_DB_CONNECTION_NOT_CONFIGURED`` already covers "not declared" and
+    must stay distinguishable from a real failure. ``error_code`` is set only
+    when credentials WERE declared but could not be used, e.g.
+    ``CREDENTIAL_DECRYPT_FAILED``. Collapsing that into an empty string made a
+    decrypt failure indistinguishable from "no database configured" -- two
+    different problems with two different fixes -- so the caller must branch
+    on this before ever reaching the "not configured" reason code.
+    """
     import json as _json
 
     path = Path(root) / "platform_workspace" / str(project) / "multi_service_config.json"
     try:
         payload = _json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return ""
+        return "", ""
     for service in _list(_dict(payload).get("services")):
         db = _dict(_dict(service).get("db"))
         host = _text(db.get("host"))
@@ -347,11 +358,11 @@ def _project_database_dsn(root: Path, project: str) -> str:
                 from .credential_crypto import decrypt as _decrypt
 
                 password = _decrypt(password)
-            except Exception:
-                return ""
+            except Exception as exc:
+                return "", f"CREDENTIAL_DECRYPT_FAILED:{type(exc).__name__}"
         port = _text(db.get("port")) or "5432"
-        return f"postgresql://{user}:{password}@{host}:{port}/{name}"
-    return ""
+        return f"postgresql://{user}:{password}@{host}:{port}/{name}", ""
+    return "", ""
 
 
 def _adapter_cleanup_identity(
@@ -387,6 +398,7 @@ def _execute_adapter_cleanup_step(
     project: str,
     runtime_bindings: dict[str, Any],
     steps_out: list[dict[str, Any]],
+    runtime_contract: dict[str, Any] | None = None,
     behavior_ir: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run one declared-adapter cleanup step and return its receipt.
@@ -395,6 +407,7 @@ def _execute_adapter_cleanup_step(
     one that did, or residue accumulates in a customer system unnoticed.
     """
     from .cleanup_adapter_ladder import (
+        EXECUTION_SCHEMA,
         build_ordered_delete_plan,
         execute_declared_adapter_cleanup,
     )
@@ -402,8 +415,25 @@ def _execute_adapter_cleanup_step(
     identity = _adapter_cleanup_identity(
         cleanup, runtime_bindings=runtime_bindings, steps_out=steps_out
     )
-    dsn = _project_database_dsn(root, project)
+    dsn, dsn_error_code = _project_database_dsn(root, project)
     step = _dict(cleanup)
+
+    # A declared-but-unusable credential (decrypt failure) is a different fault than
+    # "no database configured" and must never be silently collapsed into the latter --
+    # continuing with dsn="" would relabel a real credential failure as
+    # CLEANUP_DB_CONNECTION_NOT_CONFIGURED, hiding the actual root cause.
+    if dsn_error_code:
+        return {
+            "schema_version": EXECUTION_SCHEMA,
+            "adapter": _text(step.get("adapter")),
+            "table": _text(step.get("table")),
+            "identity_column": _text(step.get("identity_column")),
+            "identity_value": identity,
+            "status": "REFUSED",
+            "reason_code": dsn_error_code,
+            "rows_deleted": 0,
+            "dependent_receipts": [],
+        }
 
     # Dependents first, owner last. A single-table delete raised ForeignKeyViolation on
     # every run-created product against the live target, because inventory, cart_items,
@@ -417,7 +447,13 @@ def _execute_adapter_cleanup_step(
 
     receipts = [
         execute_declared_adapter_cleanup(
-            sub_step, identity_value=identity, dsn=dsn, creation_receipts=[]
+            sub_step,
+            identity_value=identity,
+            dsn=dsn,
+            creation_receipts=[],
+            root=root,
+            project=project,
+            runtime_contract=runtime_contract,
         )
         for sub_step in ordered
     ]
@@ -670,6 +706,7 @@ def execute_experiment_cleanup_compensation(
                     project=project,
                     runtime_bindings=runtime_bindings,
                     steps_out=steps_out,
+                    runtime_contract=runtime_contract,
                     behavior_ir={"entities": _list(_dict(exp.get("behavior_ir")).get("entities"))}
                     if exp.get("behavior_ir") else {"entities": []},
                 )

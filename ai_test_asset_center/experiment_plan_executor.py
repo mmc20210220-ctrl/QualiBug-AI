@@ -44,9 +44,6 @@ from .sandbox_write_executor import (
 from .sandbox_write_executor_base import evaluator_request_trace
 
 
-# ── P0-4: Route resolution with service-direct fallback ──
-import os as _os
-
 def _resolve_route_with_fallback(
     *,
     base_url: str,
@@ -54,41 +51,27 @@ def _resolve_route_with_fallback(
     path: str,
     token: str,
 ) -> dict[str, Any]:
-    """Execute HTTP step; on 404 try alternative service base URLs.
+    """Execute one HTTP step against the single approved, campaign-bound base URL.
 
-    Returns the observation dict with an added ``resolved_route`` field.
+    This used to retry a 404 against arbitrary alternate hosts named by the
+    operator-settable ``QUALIBUG_SERVICE_URLS`` environment variable, replaying the
+    same actor token against every one of them. That let a single approved-target
+    campaign spray a live actor credential across hosts nobody in the campaign
+    contract approved -- an env-controlled bypass of the whole non-production
+    target-policy gate. Multi-service discovery belongs to the declared connector /
+    approved-target registry (``target_policy`` / ``enterprise_pilot_runtime``), not
+    to a token replay loop reading process environment variables at request time.
+
+    Returns the observation dict with a ``resolved_route`` field so downstream
+    reporting keeps the same shape as before.
     """
     obs = _run_http_step(base_url=base_url, method=method, path=path, token=token)
-    status = int(obs.get("status_code") or 0)
-    resolved_route = {
-        "strategy": "gateway",
+    obs["resolved_route"] = {
+        "strategy": "approved_target",
         "base_url": base_url,
         "path": path,
-        "status_code": status,
+        "status_code": int(obs.get("status_code") or 0),
     }
-    if status == 404:
-        # Try alternative service URLs from environment
-        alt_urls = [
-            u.strip()
-            for u in _os.environ.get("QUALIBUG_SERVICE_URLS", "").split(",")
-            if u.strip()
-        ]
-        for alt_url in alt_urls:
-            if alt_url.rstrip("/") == base_url.rstrip("/"):
-                continue
-            retry = _run_http_step(base_url=alt_url, method=method, path=path, token=token)
-            retry_status = int(retry.get("status_code") or 0)
-            if retry_status != 404 and retry_status > 0:
-                obs = retry
-                resolved_route = {
-                    "strategy": "service_direct",
-                    "base_url": alt_url,
-                    "path": path,
-                    "status_code": retry_status,
-                    "original_gateway_status": 404,
-                }
-                break
-    obs["resolved_route"] = resolved_route
     return obs
 
 

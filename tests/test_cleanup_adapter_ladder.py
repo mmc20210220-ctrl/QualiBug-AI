@@ -40,6 +40,12 @@ from ai_test_asset_center.cleanup_adapter_ladder import (
 
 ORDERS = {"name": "orders", "fields": ["id", "status"], "identity_fields": ["id"]}
 
+# execute_declared_adapter_cleanup gates every DELETE behind the same
+# TargetPolicyDecision authority as a governed HTTP write. Tests that exercise
+# the ownership/identifier/DSN guards inject an already-approved decision so
+# those guards -- not the (separately tested) policy gate -- are what's proven.
+APPROVED_POLICY = {"write_allowed": True}
+
 
 def _resolve(**kw):
     base = dict(
@@ -255,7 +261,8 @@ def test_a_customer_row_never_reaches_sql() -> None:
         return _FakeConn(sink)
 
     receipt = execute_declared_adapter_cleanup(
-        DB_STEP, identity_value="982ab14f-real-order", connect=_connect
+        DB_STEP, identity_value="982ab14f-real-order", connect=_connect,
+        policy_decision=APPROVED_POLICY,
     )
     assert receipt["status"] == "REFUSED"
     assert receipt["reason_code"] == REASON_NOT_RUN_OWNED
@@ -268,7 +275,8 @@ def test_a_run_created_row_is_deleted_with_a_parameterised_query() -> None:
 
     sink = []
     receipt = execute_declared_adapter_cleanup(
-        DB_STEP, identity_value="qb_auto_order_1", connect=lambda: _FakeConn(sink)
+        DB_STEP, identity_value="qb_auto_order_1", connect=lambda: _FakeConn(sink),
+        policy_decision=APPROVED_POLICY,
     )
     assert receipt["status"] == "CLEANED"
     assert receipt["rows_deleted"] == 1
@@ -284,7 +292,8 @@ def test_an_unsafe_identifier_never_reaches_sql() -> None:
     sink = []
     step = dict(DB_STEP, table='orders"; DROP TABLE users; --')
     receipt = execute_declared_adapter_cleanup(
-        step, identity_value="qb_auto_1", connect=lambda: _FakeConn(sink)
+        step, identity_value="qb_auto_1", connect=lambda: _FakeConn(sink),
+        policy_decision=APPROVED_POLICY,
     )
     assert receipt["reason_code"] == "CLEANUP_IDENTIFIER_NOT_SAFE"
     assert sink == []
@@ -294,7 +303,8 @@ def test_a_missing_row_is_reported_not_claimed_as_cleaned() -> None:
     from ai_test_asset_center.cleanup_adapter_ladder import execute_declared_adapter_cleanup
 
     receipt = execute_declared_adapter_cleanup(
-        DB_STEP, identity_value="qb_auto_gone", connect=lambda: _FakeConn([], rowcount=0)
+        DB_STEP, identity_value="qb_auto_gone", connect=lambda: _FakeConn([], rowcount=0),
+        policy_decision=APPROVED_POLICY,
     )
     assert receipt["rows_deleted"] == 0
     assert receipt["reason_code"] == "CLEANUP_ROW_ALREADY_ABSENT"
@@ -308,7 +318,8 @@ def test_a_connection_failure_is_a_receipt_not_a_crash() -> None:
         raise OSError("refused")
 
     receipt = execute_declared_adapter_cleanup(
-        DB_STEP, identity_value="qb_auto_1", connect=_boom
+        DB_STEP, identity_value="qb_auto_1", connect=_boom,
+        policy_decision=APPROVED_POLICY,
     )
     assert receipt["status"] == "FAILED"
     assert receipt["reason_code"].startswith("CLEANUP_DB_CONNECT_FAILED")
@@ -317,7 +328,9 @@ def test_a_connection_failure_is_a_receipt_not_a_crash() -> None:
 def test_no_dsn_and_no_connector_is_refused() -> None:
     from ai_test_asset_center.cleanup_adapter_ladder import execute_declared_adapter_cleanup
 
-    receipt = execute_declared_adapter_cleanup(DB_STEP, identity_value="qb_auto_1")
+    receipt = execute_declared_adapter_cleanup(
+        DB_STEP, identity_value="qb_auto_1", policy_decision=APPROVED_POLICY,
+    )
     assert receipt["reason_code"] == "CLEANUP_DB_CONNECTION_NOT_CONFIGURED"
 
 
@@ -328,6 +341,49 @@ def test_a_non_database_step_is_not_executed_here() -> None:
         {"adapter": "http_api"}, identity_value="qb_auto_1"
     )
     assert receipt["reason_code"] == "CLEANUP_ADAPTER_NOT_SUPPORTED"
+
+
+# ── target-policy gate: a DB DELETE is a write, and clears the same gate ────
+
+
+def test_a_write_with_no_policy_context_at_all_is_refused() -> None:
+    """No injected decision and no root/project means the gate cannot evaluate."""
+    from ai_test_asset_center.cleanup_adapter_ladder import execute_declared_adapter_cleanup
+
+    receipt = execute_declared_adapter_cleanup(
+        DB_STEP,
+        identity_value="qb_auto_1",
+        connect=lambda: (_ for _ in ()).throw(AssertionError("must not connect")),
+    )
+    assert receipt["status"] == "REFUSED"
+    assert receipt["reason_code"] == "CLEANUP_TARGET_POLICY_UNAVAILABLE"
+
+
+def test_a_production_or_unapproved_target_never_opens_a_connection() -> None:
+    """The identical fail-closed authority a governed HTTP write clears."""
+    from ai_test_asset_center.cleanup_adapter_ladder import execute_declared_adapter_cleanup
+
+    receipt = execute_declared_adapter_cleanup(
+        DB_STEP,
+        identity_value="qb_auto_1",
+        connect=lambda: (_ for _ in ()).throw(AssertionError("must not connect")),
+        policy_decision={"write_allowed": False, "blocking_codes": ["PRODUCTION_WRITE_BLOCKED"]},
+    )
+    assert receipt["status"] == "REFUSED"
+    assert receipt["reason_code"] == "PRODUCTION_WRITE_BLOCKED"
+
+
+def test_a_read_only_execution_mode_refuses_the_delete() -> None:
+    from ai_test_asset_center.cleanup_adapter_ladder import execute_declared_adapter_cleanup
+
+    receipt = execute_declared_adapter_cleanup(
+        DB_STEP,
+        identity_value="qb_auto_1",
+        connect=lambda: (_ for _ in ()).throw(AssertionError("must not connect")),
+        policy_decision={"write_allowed": False, "blocking_codes": ["READ_ONLY_MODE"]},
+    )
+    assert receipt["status"] == "REFUSED"
+    assert receipt["reason_code"] == "READ_ONLY_MODE"
 
 
 # ── compile-time availability probing ───────────────────────────────────────
@@ -358,7 +414,8 @@ def test_an_availability_plan_can_never_delete_on_its_own() -> None:
     assert "identity_value" not in plan, "an availability plan names no row"
 
     receipt = execute_declared_adapter_cleanup(
-        plan, identity_value="982ab14f-real", connect=lambda: None
+        plan, identity_value="982ab14f-real", connect=lambda: None,
+        policy_decision=APPROVED_POLICY,
     )
     assert receipt["reason_code"] == REASON_NOT_RUN_OWNED
 
@@ -430,7 +487,8 @@ def test_a_foreign_key_violation_is_reported_not_swallowed() -> None:
             pass
 
     receipt = execute_declared_adapter_cleanup(
-        DB_STEP, identity_value="qb_auto_product_1", connect=_FKConn
+        DB_STEP, identity_value="qb_auto_product_1", connect=_FKConn,
+        policy_decision=APPROVED_POLICY,
     )
     assert receipt["status"] == "FAILED"
     assert "ForeignKey" in receipt["detail"] or "CLEANUP_DB_DELETE_FAILED" in receipt["reason_code"]

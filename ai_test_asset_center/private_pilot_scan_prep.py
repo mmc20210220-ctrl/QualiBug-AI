@@ -133,10 +133,14 @@ def _resolve_ui_base_url_from_profile(profile: dict[str, Any]) -> tuple[str, boo
     return "", len(candidates) > 1, ""
 def _is_local_private_service(server: Any) -> bool:
     server_host = str(getattr(server, "server_address", ("", 0))[0] or "")
+    # Same fail-closed opt-in as AuthScopeMixin: QUALIBUG_LOCAL_DEV_ACTOR defaults
+    # OFF. Default-on here previously treated every localhost private-pilot bind as
+    # "local dev mode" for SSRF allow_internal and scan prep, even when auth was
+    # requiring real actor headers -- an inconsistent, invisible safety hole.
     return (
         server_host in {"127.0.0.1", "localhost", "::1"}
         and os.environ.get("QUALIBUG_ALLOW_PUBLIC_BIND") != "1"
-        and _truthy_env("QUALIBUG_LOCAL_DEV_ACTOR", "1")
+        and _truthy_env("QUALIBUG_LOCAL_DEV_ACTOR", "")
     )
 def _validate_scan_base_url(base_url: str, *, local_dev_mode: bool) -> None:
     if not str(base_url or "").strip():

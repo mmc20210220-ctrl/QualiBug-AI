@@ -54,6 +54,7 @@ from ai_test_asset_center.private_pilot_no_fix_advice_patch import (
     install_no_fix_advice_patch,
     restore_no_fix_advice_patch,
 )
+from ai_test_asset_center.persistence_assertions import install_persistence_surface
 from ai_test_asset_center.private_pilot_regression_oracle_patch import (
     install_regression_oracle_patch,
     restore_regression_oracle_patch,
@@ -177,6 +178,14 @@ def install_runtime_patches() -> None:
         ("regression_oracle", install_regression_oracle_patch, (), {"patch_source": PATCH_SOURCE}),
         ("regression_suite_refresh", install_regression_suite_refresh_patch, (), {"patch_source": PATCH_SOURCE}),
         ("system_behavior_runtime_chain", install_system_behavior_runtime_patch_chain, (), {}),
+        # The persistence surface is the first non-http_api observer: it closes the
+        # observer -> assertion-DSL -> risk-family chain for database-level defect
+        # classes (state enumeration, field bounds) that every other observer is
+        # structurally blind to (see AGENTS.md "Enterprise Business Comprehension
+        # Contract"). Registration is idempotent and side-effect free at import time
+        # (see persistence_observer.py); it only opens a connection when an
+        # experiment actually requires this surface at run time.
+        ("persistence_surface", install_persistence_surface, (), {}),
         ("coverage_matrix", install_coverage_matrix_patch, (), {"patch_source": PATCH_SOURCE, "root": _service._root()}),
         ("regression_run_visibility", install_regression_run_visibility_patch, (), {"patch_source": PATCH_SOURCE, "root": _service._root()}),
         ("display_ready_no_fix_advice", install_display_ready_no_fix_advice_patch, (), {"patch_source": PATCH_SOURCE}),

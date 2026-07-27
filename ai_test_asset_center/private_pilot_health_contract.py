@@ -224,14 +224,38 @@ def build_private_pilot_health_payload(
     llm_health = _handler_llm_health(handler)
     root_ok = root.exists()
     system_behavior = system_behavior_runtime_status()
-    api_status = "healthy"  # serving this response proves API liveness
-    llm_status = llm_health.get("status", "offline")
+    api_status = "healthy"  # serving this response proves API liveness only
+    llm_available = bool(llm_health.get("available"))
+    llm_status = str(llm_health.get("status") or "offline")
     sb_ready = bool(system_behavior.get("ready"))
     sb_status = "healthy" if sb_ready else "degraded"
-    overall_ok = True
+
+    # Overall health is derived from every subsystem, not just API liveness.
+    # Serving this response proves the HTTP process is up; it proves nothing
+    # about LLM connectivity, System Behavior Space readiness, or whether the
+    # private-deployment root even exists. A hardcoded ``True`` here hid every
+    # one of those failures behind a "healthy" banner.
+    offline_reasons: list[str] = []
+    degraded_reasons: list[str] = []
+    if not root_ok:
+        offline_reasons.append("private_root_missing")
+    if not llm_available or llm_status in {"offline", "failed", "error"}:
+        offline_reasons.append(f"llm_{llm_status}")
+    if not sb_ready:
+        degraded_reasons.append("system_behavior_not_ready")
+
+    if offline_reasons:
+        overall_status = "offline"
+    elif degraded_reasons:
+        overall_status = "degraded"
+    else:
+        overall_status = "healthy"
+    overall_ok = overall_status == "healthy"
     return {
         "ok": overall_ok,
-        "status": "healthy" if overall_ok else "degraded",
+        "status": overall_status,
+        "offline_reasons": offline_reasons,
+        "degraded_reasons": degraded_reasons,
         "service": "qualibug_private_pilot",
         "product": PRODUCT_NAME,
         "version": PRODUCT_VERSION,
@@ -267,11 +291,16 @@ def build_private_pilot_health_payload(
             },
             "llm": {
                 "status": llm_status,
-                "available": bool(llm_health.get("available")),
+                "available": llm_available,
             },
             "system_behavior": {
                 "status": sb_status,
                 "ready": sb_ready,
+            },
+            "private_root": {
+                "status": "healthy" if root_ok else "offline",
+                "exists": root_ok,
+                "path": str(root),
             },
         },
     }

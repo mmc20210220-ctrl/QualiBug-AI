@@ -174,6 +174,18 @@ class ScanHandlersMixin:
             )
             trace_id = str(uuid.uuid4())
 
+            # A caller-declared read_only:true is an explicit safety request, not a
+            # hint. ``default_scan_execution_mode`` only falls back to
+            # safe_read_only when ``execution_mode`` is absent entirely -- an
+            # explicit (or stale/cached) ``execution_mode: approved_sandbox_write``
+            # would silently override read_only and let the run open write
+            # transport. Preflight already treats read_only as authoritative; the
+            # actual scan must honor the same single contract instead of a
+            # second, looser one.
+            if bool(body.get("read_only")):
+                body = dict(body)
+                body["execution_mode"] = "safe_read_only"
+
             # Fill api_doc / source_manifest gaps from the immutable registry before
             # the rest of scan prep. Never invent a source — only bind registered ones.
             body = prepare_scan_body_for_campaign(project, root, body)

@@ -207,19 +207,32 @@ def execute_governed_control_write(
     if write_status <= 0 or not _audited_business_state_changed(receipt):
         return receipt
 
-    receipt["accepted"] = True
-    receipt["effectively_accepted"] = True
-    receipt["accepted_due_to_observed_effect"] = True
-    receipt["status"] = "executed_with_rejected_transport_side_effect"
+    # The transport itself rejected this write (non-2xx). Business state moving
+    # anyway is a target-system anomaly -- e.g. a partial commit before a late
+    # validation failure -- not a successful governed write. This branch used
+    # to flip ``accepted`` to True so the anomaly would not go unnoticed, but
+    # that silently promoted a rejected request into an "accepted write" for
+    # every downstream consumer that gates on ``accepted is True``: cleanup
+    # selection (``accepted_governed_writes``) and the customer-delivery gate.
+    # A caller was told the write failed; it must never be countable as an
+    # accepted write for cleanup/delivery. Downstream cleanup evaluation
+    # already has a dedicated fail-closed path for a rejected-but-effectful
+    # write (``_rejected_writes_left_state_unchanged`` /
+    # ``REJECTED_WRITE_STATE_NOT_PROVEN_UNCHANGED``); leaving ``accepted``
+    # False here is what lets that path run instead of the accepted-write path.
+    receipt["accepted"] = False
+    receipt["effectively_accepted"] = False
+    receipt["indeterminate_side_effect_detected"] = True
+    receipt["status"] = "rejected_with_indeterminate_side_effect"
     receipt["reason"] = "rejected_transport_but_business_state_changed"
 
     audit_record = deepcopy(_dict(receipt.get("audit_record")))
     audit_record.update({
-        "record_type": "effectful_rejected_write_correction",
-        "operation_accepted": True,
+        "record_type": "rejected_transport_indeterminate_side_effect",
+        "operation_accepted": False,
         "transport_accepted": False,
-        "effectively_accepted": True,
-        "accepted_due_to_observed_effect": True,
+        "effectively_accepted": False,
+        "indeterminate_side_effect_detected": True,
         "cleanup_status": "required",
         "cleanup_reason": "rejected_transport_side_effect_requires_cleanup",
         "http_status": write_status,

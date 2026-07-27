@@ -288,6 +288,48 @@ _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 EXECUTION_SCHEMA = "qualibug.cleanup-adapter-execution.v1"
 
+# Reason codes for the target-policy gate, mirroring the HTTP governed-write gate
+# (``target_policy.build_target_policy_decision`` / ``primary_write_block``) so an
+# operator sees the identical vocabulary regardless of which adapter refused.
+REASON_TARGET_POLICY_UNAVAILABLE = "CLEANUP_TARGET_POLICY_UNAVAILABLE"
+
+
+def _adapter_write_policy_allowed(
+    *,
+    root: Any,
+    project: str,
+    runtime_contract: dict[str, Any] | None,
+    policy_decision: dict[str, Any] | None,
+) -> tuple[bool, str]:
+    """Gate a data-layer write behind the identical authority as governed HTTP writes.
+
+    A database DELETE is a write like any other -- it has no HTTP status code to fail
+    closed on, so the same non-production/approval decision must be computed and checked
+    before a connection is even opened.  ``policy_decision`` lets a caller that already
+    holds a ``TargetPolicyDecision`` (or a test) reuse it directly instead of forcing a
+    re-read of project config from disk.
+    """
+    from .target_policy import primary_write_block
+
+    if policy_decision is not None:
+        decision = _dict(policy_decision)
+    elif root is not None and _text(project):
+        from pathlib import Path
+
+        from .sandbox_write_executor_base import target_policy_decision as _tpd
+
+        decision = _tpd(
+            root=Path(root), project=str(project), runtime_contract=dict(runtime_contract or {})
+        )
+    else:
+        # Neither a precomputed decision nor enough identity to compute one.
+        # Fail closed rather than assume an unevaluated target is safe.
+        return False, REASON_TARGET_POLICY_UNAVAILABLE
+
+    if not bool(decision.get("write_allowed")):
+        return False, primary_write_block(decision)
+    return True, ""
+
 
 def execute_declared_adapter_cleanup(
     step: dict[str, Any],
@@ -296,6 +338,10 @@ def execute_declared_adapter_cleanup(
     dsn: str = "",
     creation_receipts: Any = None,
     connect: Any = None,
+    root: Any = None,
+    project: str = "",
+    runtime_contract: dict[str, Any] | None = None,
+    policy_decision: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run one data-layer cleanup step, refusing anything this run did not create.
 
@@ -305,6 +351,12 @@ def execute_declared_adapter_cleanup(
 
     ``connect`` is injectable so the guard logic is testable without a database. It must
     return a DB-API connection.
+
+    Before any connection is opened, the write must also clear the same non-production
+    target-policy gate a governed HTTP write clears. Supply either ``policy_decision``
+    (a precomputed/injected ``TargetPolicyDecision``) or ``root``/``project`` (plus
+    optionally ``runtime_contract``) so the gate can compute one. Missing both fails
+    closed -- an unevaluated target is never assumed safe.
     """
     plan = _dict(step)
     receipt: dict[str, Any] = {
@@ -320,6 +372,16 @@ def execute_declared_adapter_cleanup(
 
     if _text(plan.get("adapter")) != "db_sql":
         receipt["reason_code"] = "CLEANUP_ADAPTER_NOT_SUPPORTED"
+        return receipt
+
+    policy_allowed, policy_reason_code = _adapter_write_policy_allowed(
+        root=root,
+        project=project,
+        runtime_contract=runtime_contract,
+        policy_decision=policy_decision,
+    )
+    if not policy_allowed:
+        receipt["reason_code"] = policy_reason_code
         return receipt
 
     # The ownership proof is the whole safety argument and is checked before anything

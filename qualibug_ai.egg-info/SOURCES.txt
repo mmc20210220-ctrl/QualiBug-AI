@@ -283,7 +283,6 @@ ai_test_asset_center/log_analyzer.py
 ai_test_asset_center/loop_runtime.py
 ai_test_asset_center/loop_watchdog.py
 ai_test_asset_center/main_chain_contract.py
-ai_test_asset_center/mes_source_contract_audit.py
 ai_test_asset_center/metamorphic_differential_reasoning.py
 ai_test_asset_center/million_dataset_card.py
 ai_test_asset_center/mobile_app_detector.py

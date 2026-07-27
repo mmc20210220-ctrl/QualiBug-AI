@@ -694,6 +694,21 @@ def execute_governed_control_write(
         actor_token=actor_token,
         actor_identity=actor_identity,
     )
+    if allowed:
+        # Same protected-identity guard ``execute_with_sandbox_write`` applies before
+        # its primary write. A governed control write (fixture setup/cleanup) is a
+        # write like any other and must not be a side door around it.
+        identity_block_reason = _protected_runtime_identity_write_block_reason(
+            root=root,
+            project=project,
+            scenario=None,
+            method=method,
+            path=path,
+            body=body,
+        )
+        if identity_block_reason:
+            allowed = False
+            reason = identity_block_reason
     base = _text(base_url).rstrip("/")
     before = _http_request("GET", base + observation_path, token=actor_token) if allowed else {}
     runtime_body_receipt: dict[str, Any] = {}

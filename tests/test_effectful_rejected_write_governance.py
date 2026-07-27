@@ -83,16 +83,26 @@ def test_rejected_transport_with_business_side_effect_requires_cleanup(
 
     assert result["write"]["status"] == 422
     assert result["transport_accepted"] is False
-    assert result["effectively_accepted"] is True
-    assert result["accepted"] is True
-    assert result["accepted_due_to_observed_effect"] is True
+    # A rejected write must never be laundered into an "accepted" one just
+    # because a side effect was observed underneath it -- that would let a
+    # technically-failed request satisfy the delivery gate's accepted-write
+    # bookkeeping. The anomaly stays fail-visible via a distinct status and
+    # audit trail instead of a false acceptance.
+    assert result["effectively_accepted"] is False
+    assert result["accepted"] is False
+    assert result["indeterminate_side_effect_detected"] is True
+    assert result["status"] == "rejected_with_indeterminate_side_effect"
     assert (
         result["reason"]
         == "rejected_transport_but_business_state_changed"
     )
     assert result["audit_record"]["cleanup_status"] == "required"
+    assert result["audit_record"]["operation_accepted"] is False
     assert len(result["_appended_records"]) == 1
-    assert _governed_write_changed_state(result) is True
+    # Because it is correctly not "accepted", this write is excluded from the
+    # accepted-write cleanup path and instead falls into the dedicated
+    # rejected-but-effectful fail-closed branch downstream.
+    assert _governed_write_changed_state(result) is False
 
 
 def test_rejected_transport_without_side_effect_stays_rejected(

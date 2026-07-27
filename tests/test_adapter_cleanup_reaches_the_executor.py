@@ -25,6 +25,19 @@ import pytest
 
 from ai_test_asset_center import experiment_cleanup_executor as cleanup_mod
 
+# An approved non-production target-policy contract, injected so these tests
+# exercise the real ownership/DSN guards without also having to stand up a
+# project config on disk just to clear the (separately tested) target-policy
+# gate added to ``execute_declared_adapter_cleanup``.
+_APPROVED_RUNTIME_CONTRACT = {
+    "approved_base_url": "http://qb-test.local",
+    "requested_base_url": "http://qb-test.local",
+    "environment_ref": "qb-test-env",
+    "environment_type": "test",
+    "execution_mode": "approved_sandbox_write",
+    "status": "approved",
+}
+
 
 def test_the_adapter_branch_precedes_the_http_path_logic() -> None:
     """A db_sql step carries no path or method.
@@ -52,7 +65,18 @@ def test_a_db_step_produces_a_receipt_and_deletes(monkeypatch) -> None:
     """The whole point: reach the branch, run the guarded executor, get a receipt."""
     executed: list[dict] = []
 
-    def _fake_execute(step, *, identity_value, dsn="", creation_receipts=None, connect=None):
+    def _fake_execute(
+        step,
+        *,
+        identity_value,
+        dsn="",
+        creation_receipts=None,
+        connect=None,
+        root=None,
+        project="",
+        runtime_contract=None,
+        policy_decision=None,
+    ):
         executed.append({"step": dict(step), "identity_value": identity_value, "dsn": dsn})
         return {
             "schema_version": "qualibug.cleanup-adapter-execution.v1",
@@ -69,7 +93,7 @@ def test_a_db_step_produces_a_receipt_and_deletes(monkeypatch) -> None:
         _fake_execute,
     )
     monkeypatch.setattr(
-        cleanup_mod, "_project_database_dsn", lambda root, project: "postgresql://x/y"
+        cleanup_mod, "_project_database_dsn", lambda root, project: ("postgresql://x/y", "")
     )
 
     step = {
@@ -87,6 +111,7 @@ def test_a_db_step_produces_a_receipt_and_deletes(monkeypatch) -> None:
         project="p",
         runtime_bindings={"sku": "qb_auto_sku_1"},
         steps_out=[],
+        runtime_contract=_APPROVED_RUNTIME_CONTRACT,
     )
     assert receipt["status"] == "CLEANED"
     assert receipt["rows_deleted"] == 1
@@ -114,7 +139,7 @@ def test_no_observed_identity_yields_nothing_rather_than_a_guess() -> None:
 def test_a_customer_row_is_refused_before_any_connection(monkeypatch) -> None:
     """End to end through the executor's own guard, not a stub."""
     monkeypatch.setattr(
-        cleanup_mod, "_project_database_dsn", lambda root, project: "postgresql://x/y"
+        cleanup_mod, "_project_database_dsn", lambda root, project: ("postgresql://x/y", "")
     )
     receipt = cleanup_mod._execute_adapter_cleanup_step(
         {
@@ -125,6 +150,7 @@ def test_a_customer_row_is_refused_before_any_connection(monkeypatch) -> None:
         project="p",
         runtime_bindings={"id": "982ab14f-a-real-customer-order"},
         steps_out=[],
+        runtime_contract=_APPROVED_RUNTIME_CONTRACT,
     )
     assert receipt["status"] == "REFUSED"
     assert receipt["reason_code"] == "CLEANUP_ROW_NOT_CREATED_BY_THIS_RUN"
@@ -141,9 +167,52 @@ def test_an_undeclared_database_is_refused_not_skipped() -> None:
         project="absent",
         runtime_bindings={"id": "qb_auto_1"},
         steps_out=[],
+        runtime_contract=_APPROVED_RUNTIME_CONTRACT,
     )
     assert receipt["status"] in ("REFUSED", "FAILED")
     assert receipt["reason_code"] == "CLEANUP_DB_CONNECTION_NOT_CONFIGURED"
+
+
+def test_a_credential_decrypt_failure_is_not_collapsed_into_not_configured(monkeypatch) -> None:
+    """A declared-but-broken credential is a different fault than "not configured"."""
+    monkeypatch.setattr(
+        cleanup_mod,
+        "_project_database_dsn",
+        lambda root, project: ("", "CREDENTIAL_DECRYPT_FAILED:ValueError"),
+    )
+    receipt = cleanup_mod._execute_adapter_cleanup_step(
+        {
+            "adapter": "db_sql", "table": "orders", "identity_column": "id",
+            "scope": "run_created_only", "requires_ownership_proof": True,
+        },
+        root=".",
+        project="p",
+        runtime_bindings={"id": "qb_auto_1"},
+        steps_out=[],
+        runtime_contract=_APPROVED_RUNTIME_CONTRACT,
+    )
+    assert receipt["status"] == "REFUSED"
+    assert receipt["reason_code"].startswith("CREDENTIAL_DECRYPT_FAILED")
+
+
+def test_a_write_without_target_policy_context_is_refused(monkeypatch) -> None:
+    """No policy_decision and no root/project means the gate cannot evaluate -- refuse."""
+    monkeypatch.setattr(
+        cleanup_mod, "_project_database_dsn", lambda root, project: ("postgresql://x/y", "")
+    )
+    from ai_test_asset_center.cleanup_adapter_ladder import execute_declared_adapter_cleanup
+
+    receipt = execute_declared_adapter_cleanup(
+        {
+            "adapter": "db_sql", "table": "orders", "identity_column": "id",
+            "requires_ownership_proof": True,
+        },
+        identity_value="qb_auto_1",
+        dsn="postgresql://x/y",
+        connect=lambda: (_ for _ in ()).throw(AssertionError("must not connect")),
+    )
+    assert receipt["status"] == "REFUSED"
+    assert receipt["reason_code"] == "CLEANUP_TARGET_POLICY_UNAVAILABLE"
 
 
 def test_a_failed_adapter_cleanup_counts_as_a_cleanup_failure() -> None:
@@ -159,4 +228,4 @@ def test_a_failed_adapter_cleanup_counts_as_a_cleanup_failure() -> None:
 
 def test_the_dsn_comes_from_the_operators_declared_config() -> None:
     """Never a hardcoded connection; absence yields empty and the executor refuses."""
-    assert cleanup_mod._project_database_dsn("/nonexistent", "absent") == ""
+    assert cleanup_mod._project_database_dsn("/nonexistent", "absent") == ("", "")

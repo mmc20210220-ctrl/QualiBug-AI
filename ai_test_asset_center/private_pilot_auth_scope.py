@@ -142,8 +142,17 @@ class AuthScopeMixin:
         actor = _actor(self.headers)
         if actor is None:
             server_host = str(getattr(self.server, "server_address", ("", 0))[0] or "")
+            # Fail-closed by construction: the synthetic local-dev actor is a
+            # deliberate, explicit opt-in (QUALIBUG_LOCAL_DEV_ACTOR=1), never a
+            # default. A default-on flag silently authenticated every unauthenticated
+            # localhost request as a real actor, including in CI/container images
+            # that happen to bind to 127.0.0.1. When enabled, the synthetic actor
+            # also never defaults to project_owner: an operator must explicitly opt
+            # into an elevated role via QUALIBUG_LOCAL_ROLE, otherwise it gets the
+            # lowest-privilege role so local dev cannot silently exercise
+            # owner-only paths (destructive project/campaign operations).
             local_dev_actor_allowed = (
-                _truthy_env("QUALIBUG_LOCAL_DEV_ACTOR", "1")
+                _truthy_env("QUALIBUG_LOCAL_DEV_ACTOR", "")
                 and server_host in {"127.0.0.1", "localhost", "::1"}
                 and os.environ.get("QUALIBUG_ALLOW_PUBLIC_BIND") != "1"
                 and str(self.headers.get("X-QualiBug-No-Local-Dev") or "").strip() != "1"
@@ -151,7 +160,7 @@ class AuthScopeMixin:
             if local_dev_actor_allowed:
                 return {
                     "name": os.environ.get("QUALIBUG_LOCAL_ACTOR", "local_dev")[:120],
-                    "role": os.environ.get("QUALIBUG_LOCAL_ROLE", "project_owner")[:64],
+                    "role": os.environ.get("QUALIBUG_LOCAL_ROLE", "viewer")[:64],
                 }
         if actor is None:
             self._json(
@@ -199,7 +208,7 @@ class AuthScopeMixin:
         local_development = (
             server_host in {"127.0.0.1", "localhost", "::1"}
             and os.environ.get("QUALIBUG_ALLOW_PUBLIC_BIND") != "1"
-            and _truthy_env("QUALIBUG_LOCAL_DEV_ACTOR", "1")
+            and _truthy_env("QUALIBUG_LOCAL_DEV_ACTOR", "")
         )
         if local_development:
             return True

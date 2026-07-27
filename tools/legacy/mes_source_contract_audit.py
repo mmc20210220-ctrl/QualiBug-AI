@@ -11,6 +11,17 @@ identity, unsafe response construction, or missing state/transaction checks.
 It is a manufacturing domain profile, not a ground-truth lookup.  A rule is
 activated only when the supplied documentation contains its business terms and
 only reports the exact source route/line that violates the documented contract.
+
+NOT part of the product package. QualiBug is an all-industry, all-system-type
+platform (see AGENTS.md Brand Direction Contract); a hardcoded manufacturing
+``RULES``/``EXTENDED_RULES`` catalog keyed to fixed MES route paths and
+Chinese-language MES business terms cannot ship inside ``ai_test_asset_center``
+without becoming an implicit industry boundary. This module is dead code with
+respect to the shipped product and test suite (nothing under
+``ai_test_asset_center`` or ``tests`` imports ``audit_mes_source_contracts``);
+it is kept here only as reference material for a manufacturing-specific
+evaluation harness, never wired into ``run_v12_pipeline`` or any other
+customer-facing discovery path.
 """
 
 import ast
