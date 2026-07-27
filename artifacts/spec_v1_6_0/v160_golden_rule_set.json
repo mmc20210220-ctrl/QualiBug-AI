@@ -1,0 +1,1192 @@
+{
+  "schema_version": "qualibug.field-level-golden-rule-set.v1",
+  "generated_at": "2026-07-27T08:28:23.274009+00:00",
+  "baseline_commit": "f440c3df96aadc32f578ab976a35b558bcb5eefb",
+  "golden_rule_set_hash": "e92bb9c7838cee63205790f36e35cecf77d3720369f8dc048223b266040b6306",
+  "GOLDEN_RULE_SOURCE_ASSET_LIMITED": true,
+  "counts": {
+    "frozen": 20,
+    "resolved": 12,
+    "incomplete": 8,
+    "causal_postcondition": 8,
+    "state_transition": 6,
+    "conservation": 6
+  },
+  "minimums": {
+    "causal_postcondition": 8,
+    "state_transition": 6,
+    "conservation": 6,
+    "total": 20
+  },
+  "rules": [
+    {
+      "schema_version": "qualibug.field-level-business-rule.v1",
+      "rule_id": "bir_b78bdd1dded0db2f",
+      "rule_version": "1",
+      "rule_type": "causal_postcondition",
+      "business_description": "After 订单, 处于 `PENDING_PAYMENT` 状态",
+      "source_evidence": [
+        {
+          "source_id": "behavior_ir.invariants",
+          "location": "bir_b78bdd1dded0db2f",
+          "original_text_fingerprint": "b29bc72d5ac8b2af",
+          "evidence_type": "behavior_ir_invariant",
+          "confidence": 0.8,
+          "source_rule_refs": [
+            "rule:src_6efcb7cd38ce74d3:47"
+          ]
+        }
+      ],
+      "expression": {
+        "kind": "postcondition",
+        "operator": "must_hold",
+        "operands": [
+          {
+            "entity_ref": "",
+            "field": "",
+            "expected_value": "",
+            "must_create": false
+          }
+        ],
+        "raw": "After 订单, 处于 `PENDING_PAYMENT` 状态"
+      },
+      "execution_precondition": {
+        "field_binding_resolved": false,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": false,
+        "after_observer_available": false,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_4652619ca59aca8e"
+        ]
+      },
+      "status": "INCOMPLETE",
+      "rule_fingerprint": "5da31916d62eb459c815950a94445459cac6c7d4efbf98fc26045fb4e73f33de"
+    },
+    {
+      "schema_version": "qualibug.field-level-business-rule.v1",
+      "rule_id": "bir_811f5e375a921e84",
+      "rule_version": "1",
+      "rule_type": "causal_postcondition",
+      "business_description": "After 支付金额, 等于订单应付金额",
+      "source_evidence": [
+        {
+          "source_id": "behavior_ir.invariants",
+          "location": "bir_811f5e375a921e84",
+          "original_text_fingerprint": "bbe5d5b3fa794646",
+          "evidence_type": "behavior_ir_invariant",
+          "confidence": 0.8,
+          "source_rule_refs": [
+            "rule:src_6efcb7cd38ce74d3:49"
+          ]
+        }
+      ],
+      "expression": {
+        "kind": "postcondition",
+        "operator": "must_hold",
+        "operands": [
+          {
+            "entity_ref": "",
+            "field": "",
+            "expected_value": "",
+            "must_create": false
+          }
+        ],
+        "raw": "After 支付金额, 等于订单应付金额"
+      },
+      "execution_precondition": {
+        "field_binding_resolved": false,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": false,
+        "after_observer_available": false,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_cd93d22bc648c06d",
+          "bir_4652619ca59aca8e",
+          "bir_5320292f347504f1",
+          "bir_3b3a5b5ce2e90655",
+          "bir_6876d72b3664fd4c",
+          "bir_aad54f95dc2b53f2",
+          "bir_9c14fd249f745565"
+        ]
+      },
+      "status": "INCOMPLETE",
+      "rule_fingerprint": "50f0737db7b5f295800eea273d6508cca636ddce5a342ec84f8824958a006e83"
+    },
+    {
+      "schema_version": "qualibug.field-level-business-rule.v1",
+      "rule_id": "bir_56a85442c836c317",
+      "rule_version": "1",
+      "rule_type": "causal_postcondition",
+      "business_description": "After 取消订单, 库存 must be created",
+      "source_evidence": [
+        {
+          "source_id": "behavior_ir.invariants",
+          "location": "bir_56a85442c836c317",
+          "original_text_fingerprint": "a3392a1be0e8f567",
+          "evidence_type": "behavior_ir_invariant",
+          "confidence": 0.8,
+          "source_rule_refs": [
+            "rule:src_6efcb7cd38ce74d3:63"
+          ]
+        }
+      ],
+      "expression": {
+        "kind": "postcondition",
+        "operator": "must_create",
+        "operands": [
+          {
+            "entity_ref": "库存",
+            "field": "",
+            "expected_value": "",
+            "must_create": true
+          }
+        ],
+        "raw": "After 取消订单, 库存 must be created"
+      },
+      "execution_precondition": {
+        "field_binding_resolved": false,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": false,
+        "after_observer_available": false,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_3b3a5b5ce2e90655"
+        ]
+      },
+      "status": "INCOMPLETE",
+      "rule_fingerprint": "7eaf5c891e373400b922bf5b04fc6272fcfd7ae3867482a7460974eede9f035d"
+    },
+    {
+      "schema_version": "qualibug.field-level-business-rule.v1",
+      "rule_id": "bir_706118abab1f3b0a",
+      "rule_version": "1",
+      "rule_type": "causal_postcondition",
+      "business_description": "After 优惠券, 在有效期内",
+      "source_evidence": [
+        {
+          "source_id": "behavior_ir.invariants",
+          "location": "bir_706118abab1f3b0a",
+          "original_text_fingerprint": "aa937b169aa56465",
+          "evidence_type": "behavior_ir_invariant",
+          "confidence": 0.8,
+          "source_rule_refs": [
+            "rule:src_6efcb7cd38ce74d3:93"
+          ]
+        }
+      ],
+      "expression": {
+        "kind": "postcondition",
+        "operator": "must_hold",
+        "operands": [
+          {
+            "entity_ref": "",
+            "field": "",
+            "expected_value": "",
+            "must_create": false
+          }
+        ],
+        "raw": "After 优惠券, 在有效期内"
+      },
+      "execution_precondition": {
+        "field_binding_resolved": false,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": false,
+        "after_observer_available": false,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_7a77b73d03e4b80b"
+        ]
+      },
+      "status": "INCOMPLETE",
+      "rule_fingerprint": "a6bd53a87f8e09e7a979fe5c80b3c86ac49f8b4345d9bf2721a725c60bd9178f"
+    },
+    {
+      "schema_version": "qualibug.field-level-business-rule.v1",
+      "rule_id": "bir_bed2f0958491c903",
+      "rule_version": "1",
+      "rule_type": "causal_postcondition",
+      "business_description": "After 优惠券状态, 为 ACTIVE",
+      "source_evidence": [
+        {
+          "source_id": "behavior_ir.invariants",
+          "location": "bir_bed2f0958491c903",
+          "original_text_fingerprint": "7e8279051ce6211e",
+          "evidence_type": "behavior_ir_invariant",
+          "confidence": 0.8,
+          "source_rule_refs": [
+            "rule:src_6efcb7cd38ce74d3:95"
+          ]
+        }
+      ],
+      "expression": {
+        "kind": "postcondition",
+        "operator": "must_hold",
+        "operands": [
+          {
+            "entity_ref": "",
+            "field": "",
+            "expected_value": "",
+            "must_create": false
+          }
+        ],
+        "raw": "After 优惠券状态, 为 ACTIVE"
+      },
+      "execution_precondition": {
+        "field_binding_resolved": false,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": false,
+        "after_observer_available": false,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_7a77b73d03e4b80b"
+        ]
+      },
+      "status": "INCOMPLETE",
+      "rule_fingerprint": "ba1e28d6f917bc1697d14c2e56b8d89c094f8d4c9f081e5bb197e6b4e0f741b1"
+    },
+    {
+      "schema_version": "qualibug.field-level-business-rule.v1",
+      "rule_id": "bir_20aba204212a2b93",
+      "rule_version": "1",
+      "rule_type": "causal_postcondition",
+      "business_description": "After 折扣券, 遵守封顶金额",
+      "source_evidence": [
+        {
+          "source_id": "behavior_ir.invariants",
+          "location": "bir_20aba204212a2b93",
+          "original_text_fingerprint": "8a88a5be6f9d72d2",
+          "evidence_type": "behavior_ir_invariant",
+          "confidence": 0.8,
+          "source_rule_refs": [
+            "rule:src_6efcb7cd38ce74d3:105"
+          ]
+        }
+      ],
+      "expression": {
+        "kind": "postcondition",
+        "operator": "must_hold",
+        "operands": [
+          {
+            "entity_ref": "",
+            "field": "",
+            "expected_value": "",
+            "must_create": false
+          }
+        ],
+        "raw": "After 折扣券, 遵守封顶金额"
+      },
+      "execution_precondition": {
+        "field_binding_resolved": false,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": false,
+        "after_observer_available": false,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_7a77b73d03e4b80b",
+          "bir_9c14fd249f745565"
+        ]
+      },
+      "status": "INCOMPLETE",
+      "rule_fingerprint": "f59924144b371ab2d4b570f50525104f124a177d005e87f87e9ea63002ca01cb"
+    },
+    {
+      "schema_version": "qualibug.field-level-business-rule.v1",
+      "rule_id": "bir_052a8a7b61603894",
+      "rule_version": "1",
+      "rule_type": "causal_postcondition",
+      "business_description": "After 支付金额, 等于订单应付金额",
+      "source_evidence": [
+        {
+          "source_id": "behavior_ir.invariants",
+          "location": "bir_052a8a7b61603894",
+          "original_text_fingerprint": "bbe5d5b3fa794646",
+          "evidence_type": "behavior_ir_invariant",
+          "confidence": 0.8,
+          "source_rule_refs": [
+            "rule:src_5ed2a5b28086f333:23"
+          ]
+        }
+      ],
+      "expression": {
+        "kind": "postcondition",
+        "operator": "must_hold",
+        "operands": [
+          {
+            "entity_ref": "",
+            "field": "",
+            "expected_value": "",
+            "must_create": false
+          }
+        ],
+        "raw": "After 支付金额, 等于订单应付金额"
+      },
+      "execution_precondition": {
+        "field_binding_resolved": false,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": false,
+        "after_observer_available": false,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_cd93d22bc648c06d",
+          "bir_4652619ca59aca8e",
+          "bir_5320292f347504f1",
+          "bir_3b3a5b5ce2e90655",
+          "bir_6876d72b3664fd4c",
+          "bir_aad54f95dc2b53f2",
+          "bir_9c14fd249f745565"
+        ]
+      },
+      "status": "INCOMPLETE",
+      "rule_fingerprint": "1601a9d83c9614cb3f9f7ac8f204b6334909fb34179c138c5aec674078c64088"
+    },
+    {
+      "schema_version": "qualibug.field-level-business-rule.v1",
+      "rule_id": "bir_ce10ecec560c1d45",
+      "rule_version": "1",
+      "rule_type": "causal_postcondition",
+      "business_description": "After 后台接口, 校验角色",
+      "source_evidence": [
+        {
+          "source_id": "behavior_ir.invariants",
+          "location": "bir_ce10ecec560c1d45",
+          "original_text_fingerprint": "ceb0865cb894eec4",
+          "evidence_type": "behavior_ir_invariant",
+          "confidence": 0.8,
+          "source_rule_refs": [
+            "rule:src_5ed2a5b28086f333:35"
+          ]
+        }
+      ],
+      "expression": {
+        "kind": "postcondition",
+        "operator": "must_hold",
+        "operands": [
+          {
+            "entity_ref": "",
+            "field": "",
+            "expected_value": "",
+            "must_create": false
+          }
+        ],
+        "raw": "After 后台接口, 校验角色"
+      },
+      "execution_precondition": {
+        "field_binding_resolved": false,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": false,
+        "after_observer_available": false,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_588a7915b5421e5e",
+          "bir_ac0e035f9eb4b43a"
+        ]
+      },
+      "status": "INCOMPLETE",
+      "rule_fingerprint": "a3980d8d560029a85f7fe93cb8b36499491fce5fbb31ee124b293c479548113d"
+    },
+    {
+      "schema_version": "qualibug.field-level-business-rule.v1",
+      "rule_id": "bir_84f580d31e814d01",
+      "rule_version": "1",
+      "rule_type": "state_transition",
+      "business_description": "order must not transition from CANCELLED to PAID",
+      "source_evidence": [
+        {
+          "source_id": "behavior_ir.invariants",
+          "location": "bir_84f580d31e814d01",
+          "original_text_fingerprint": "04a5b5461031055e",
+          "evidence_type": "behavior_ir_invariant",
+          "confidence": 0.8,
+          "source_rule_refs": [
+            "state:src_5ed2a5b28086f333:1"
+          ]
+        }
+      ],
+      "expression": {
+        "kind": "forbidden_state_transition",
+        "operator": "must_not_transition",
+        "operands": [
+          {
+            "entity_ref": "order",
+            "from_state": "CANCELLED",
+            "to_state": "PAID"
+          }
+        ],
+        "raw": "CANCELLED -/-> PAID"
+      },
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": true,
+        "after_observer_available": true,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_9c14fd249f745565"
+        ]
+      },
+      "status": "RESOLVED",
+      "rule_fingerprint": "7ea007832429aed4892f0f8492a58b4352cf65da41ee4d9d5cc6455b3224d2c7"
+    },
+    {
+      "schema_version": "qualibug.field-level-business-rule.v1",
+      "rule_id": "bir_e53fdd784643a70e",
+      "rule_version": "1",
+      "rule_type": "state_transition",
+      "business_description": "order must not transition from CANCELLED to SHIPPED",
+      "source_evidence": [
+        {
+          "source_id": "behavior_ir.invariants",
+          "location": "bir_e53fdd784643a70e",
+          "original_text_fingerprint": "65cebd91240dae00",
+          "evidence_type": "behavior_ir_invariant",
+          "confidence": 0.8,
+          "source_rule_refs": [
+            "state:src_5ed2a5b28086f333:1"
+          ]
+        }
+      ],
+      "expression": {
+        "kind": "forbidden_state_transition",
+        "operator": "must_not_transition",
+        "operands": [
+          {
+            "entity_ref": "order",
+            "from_state": "CANCELLED",
+            "to_state": "SHIPPED"
+          }
+        ],
+        "raw": "CANCELLED -/-> SHIPPED"
+      },
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": true,
+        "after_observer_available": true,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_6876d72b3664fd4c"
+        ]
+      },
+      "status": "RESOLVED",
+      "rule_fingerprint": "39499f6d2af6aa1e2bd8e2f0498004f4ff59ec6f95141141cc81c935897b597a"
+    },
+    {
+      "schema_version": "qualibug.field-level-business-rule.v1",
+      "rule_id": "bir_33d7612ce28b8311",
+      "rule_version": "1",
+      "rule_type": "state_transition",
+      "business_description": "order must not transition from CANCELLED to COMPLETED",
+      "source_evidence": [
+        {
+          "source_id": "behavior_ir.invariants",
+          "location": "bir_33d7612ce28b8311",
+          "original_text_fingerprint": "4c5c79a3dc441ab8",
+          "evidence_type": "behavior_ir_invariant",
+          "confidence": 0.8,
+          "source_rule_refs": [
+            "state:src_5ed2a5b28086f333:1"
+          ]
+        }
+      ],
+      "expression": {
+        "kind": "forbidden_state_transition",
+        "operator": "must_not_transition",
+        "operands": [
+          {
+            "entity_ref": "order",
+            "from_state": "CANCELLED",
+            "to_state": "COMPLETED"
+          }
+        ],
+        "raw": "CANCELLED -/-> COMPLETED"
+      },
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": true,
+        "after_observer_available": true,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_cd93d22bc648c06d",
+          "bir_4652619ca59aca8e",
+          "bir_5320292f347504f1",
+          "bir_3b3a5b5ce2e90655",
+          "bir_6876d72b3664fd4c",
+          "bir_aad54f95dc2b53f2"
+        ]
+      },
+      "status": "RESOLVED",
+      "rule_fingerprint": "c6d0dbc7f4eeb2865325c07a1d969130421bcb6ee4da17cac3c352e540ffe6a4"
+    },
+    {
+      "schema_version": "qualibug.field-level-business-rule.v1",
+      "rule_id": "bir_af02df02844b670b",
+      "rule_version": "1",
+      "rule_type": "state_transition",
+      "business_description": "order must not transition from REFUNDED to SHIPPED",
+      "source_evidence": [
+        {
+          "source_id": "behavior_ir.invariants",
+          "location": "bir_af02df02844b670b",
+          "original_text_fingerprint": "81f2f20e834cbfc6",
+          "evidence_type": "behavior_ir_invariant",
+          "confidence": 0.8,
+          "source_rule_refs": [
+            "state:src_5ed2a5b28086f333:1"
+          ]
+        }
+      ],
+      "expression": {
+        "kind": "forbidden_state_transition",
+        "operator": "must_not_transition",
+        "operands": [
+          {
+            "entity_ref": "order",
+            "from_state": "REFUNDED",
+            "to_state": "SHIPPED"
+          }
+        ],
+        "raw": "REFUNDED -/-> SHIPPED"
+      },
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": true,
+        "after_observer_available": true,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_6876d72b3664fd4c"
+        ]
+      },
+      "status": "RESOLVED",
+      "rule_fingerprint": "4b5f0050be84ed428b091fe8997fa23dfb11ef8773d611de4ced4d2aa326af3a"
+    },
+    {
+      "schema_version": "qualibug.field-level-business-rule.v1",
+      "rule_id": "bir_66379f022f07b749",
+      "rule_version": "1",
+      "rule_type": "state_transition",
+      "business_description": "order must not transition from REFUNDED to PAID",
+      "source_evidence": [
+        {
+          "source_id": "behavior_ir.invariants",
+          "location": "bir_66379f022f07b749",
+          "original_text_fingerprint": "fb4ea7fb35a289ee",
+          "evidence_type": "behavior_ir_invariant",
+          "confidence": 0.8,
+          "source_rule_refs": [
+            "state:src_5ed2a5b28086f333:1"
+          ]
+        }
+      ],
+      "expression": {
+        "kind": "forbidden_state_transition",
+        "operator": "must_not_transition",
+        "operands": [
+          {
+            "entity_ref": "order",
+            "from_state": "REFUNDED",
+            "to_state": "PAID"
+          }
+        ],
+        "raw": "REFUNDED -/-> PAID"
+      },
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": true,
+        "after_observer_available": true,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_9c14fd249f745565"
+        ]
+      },
+      "status": "RESOLVED",
+      "rule_fingerprint": "70ec2d25d4898815739f3bac9e3da338339df71fa502d2041c832423cbd48011"
+    },
+    {
+      "schema_version": "qualibug.field-level-business-rule.v1",
+      "rule_id": "bir_113b030a9cf6505f",
+      "rule_version": "1",
+      "rule_type": "state_transition",
+      "business_description": "order must not transition from CLOSED to 任意状态",
+      "source_evidence": [
+        {
+          "source_id": "behavior_ir.invariants",
+          "location": "bir_113b030a9cf6505f",
+          "original_text_fingerprint": "be390d73e9d22278",
+          "evidence_type": "behavior_ir_invariant",
+          "confidence": 0.8,
+          "source_rule_refs": [
+            "state:src_5ed2a5b28086f333:1"
+          ]
+        }
+      ],
+      "expression": {
+        "kind": "forbidden_state_transition",
+        "operator": "must_not_transition",
+        "operands": [
+          {
+            "entity_ref": "order",
+            "from_state": "CLOSED",
+            "to_state": "任意状态"
+          }
+        ],
+        "raw": "CLOSED -/-> 任意状态"
+      },
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": true,
+        "after_observer_available": true,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_cd93d22bc648c06d",
+          "bir_4652619ca59aca8e",
+          "bir_5320292f347504f1",
+          "bir_3b3a5b5ce2e90655",
+          "bir_6876d72b3664fd4c",
+          "bir_aad54f95dc2b53f2"
+        ]
+      },
+      "status": "RESOLVED",
+      "rule_fingerprint": "7a0792821c03207b0ed0b6d0e53da974b964dc6756421cb13b3431a583659902"
+    },
+    {
+      "schema_version": "qualibug.field-level-business-rule.v1",
+      "rule_id": "bir_87594a78bf66ac1c",
+      "rule_version": "1",
+      "rule_type": "conservation",
+      "business_description": "`discount_amount` 不能小于 0",
+      "source_evidence": [
+        {
+          "source_id": "behavior_ir.invariants",
+          "location": "bir_87594a78bf66ac1c",
+          "original_text_fingerprint": "757a5313a8e7f89e",
+          "evidence_type": "behavior_ir_invariant",
+          "confidence": 0.8,
+          "source_rule_refs": [
+            "rule:src_5ed2a5b28086f333:20"
+          ]
+        }
+      ],
+      "expression": {
+        "kind": "data_conservation",
+        "operator": "must_hold",
+        "operands": [
+          {
+            "entity_ref": "bir_93d7ca86485df7fa",
+            "field": "discount_amount",
+            "field_id": "cf_5d199eeb7e2b671a",
+            "semantic_type": "QUANTITY_DELTA"
+          }
+        ],
+        "raw": "`discount_amount` 不能小于 0",
+        "equation": {
+          "operator": "unchanged_sum",
+          "terms": [
+            "cf_5d199eeb7e2b671a"
+          ]
+        }
+      },
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": true,
+        "after_observer_available": true,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": true,
+        "canonical_field_ids": [
+          "cf_5d199eeb7e2b671a"
+        ],
+        "semantic_types": [
+          "QUANTITY_DELTA"
+        ],
+        "operation_refs": [
+          "bir_cd93d22bc648c06d",
+          "bir_4652619ca59aca8e",
+          "bir_5320292f347504f1",
+          "bir_3b3a5b5ce2e90655",
+          "bir_6876d72b3664fd4c",
+          "bir_aad54f95dc2b53f2"
+        ]
+      },
+      "status": "RESOLVED",
+      "rule_fingerprint": "91bba5ca4fbdb3452fe86e11bf72eafc707efb5780cfeb053238781060dc928a"
+    },
+    {
+      "schema_version": "qualibug.field-level-business-rule.v1",
+      "rule_id": "bir_8134f35e8a6c3c78",
+      "rule_version": "1",
+      "rule_type": "conservation",
+      "business_description": "`discount_amount` 不能大于 `total_amount`",
+      "source_evidence": [
+        {
+          "source_id": "behavior_ir.invariants",
+          "location": "bir_8134f35e8a6c3c78",
+          "original_text_fingerprint": "f276bcfb082aefa5",
+          "evidence_type": "behavior_ir_invariant",
+          "confidence": 0.8,
+          "source_rule_refs": [
+            "rule:src_5ed2a5b28086f333:21"
+          ]
+        }
+      ],
+      "expression": {
+        "kind": "data_conservation",
+        "operator": "must_hold",
+        "operands": [
+          {
+            "entity_ref": "bir_93d7ca86485df7fa",
+            "field": "discount_amount",
+            "field_id": "cf_5d199eeb7e2b671a",
+            "semantic_type": "QUANTITY_DELTA"
+          },
+          {
+            "entity_ref": "bir_93d7ca86485df7fa",
+            "field": "total_amount",
+            "field_id": "cf_5fc2db1f52c929ea",
+            "semantic_type": "AMOUNT_BALANCE"
+          }
+        ],
+        "raw": "`discount_amount` 不能大于 `total_amount`",
+        "equation": {
+          "operator": "unchanged_sum",
+          "terms": [
+            "cf_5d199eeb7e2b671a",
+            "cf_5fc2db1f52c929ea"
+          ]
+        }
+      },
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": true,
+        "after_observer_available": true,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": true,
+        "canonical_field_ids": [
+          "cf_5d199eeb7e2b671a",
+          "cf_5fc2db1f52c929ea"
+        ],
+        "semantic_types": [
+          "QUANTITY_DELTA",
+          "AMOUNT_BALANCE"
+        ],
+        "operation_refs": [
+          "bir_cd93d22bc648c06d",
+          "bir_4652619ca59aca8e",
+          "bir_5320292f347504f1",
+          "bir_3b3a5b5ce2e90655",
+          "bir_6876d72b3664fd4c",
+          "bir_aad54f95dc2b53f2"
+        ]
+      },
+      "status": "RESOLVED",
+      "rule_fingerprint": "a127e9f756c8e5e84f91ed2f1040940ce9afa7bc01107146792ec0517c68a09a"
+    },
+    {
+      "schema_version": "qualibug.field-level-business-rule.v1",
+      "rule_id": "src_md:payable_eq_total_minus_discount",
+      "rule_version": "1",
+      "rule_type": "conservation",
+      "business_description": "payable_amount = total_amount - discount_amount",
+      "source_evidence": [
+        {
+          "source_id": "BUSINESS_RULES.md",
+          "location": "platform_workspace/benchmark_mall_131/input/BUSINESS_RULES.md",
+          "original_text_fingerprint": "93ec0594442a2ecd",
+          "evidence_type": "markdown_business_rule",
+          "confidence": 0.9
+        }
+      ],
+      "entities": {
+        "primary_entity_id": "bir_93d7ca86485df7fa",
+        "related_entity_ids": [
+          "bir_93d7ca86485df7fa"
+        ]
+      },
+      "expected_field_changes": [
+        {
+          "entity_id": "bir_93d7ca86485df7fa",
+          "field_id": "cf_be96302b1f5a31a6",
+          "field_name": "payable_amount",
+          "semantic_type": "AMOUNT_BALANCE"
+        },
+        {
+          "entity_id": "bir_93d7ca86485df7fa",
+          "field_id": "cf_5fc2db1f52c929ea",
+          "field_name": "total_amount",
+          "semantic_type": "AMOUNT_BALANCE"
+        },
+        {
+          "entity_id": "bir_93d7ca86485df7fa",
+          "field_id": "cf_5d199eeb7e2b671a",
+          "field_name": "discount_amount",
+          "semantic_type": "QUANTITY_DELTA"
+        }
+      ],
+      "oracle": {
+        "assertion_kind": "conservation",
+        "typed_expression": {
+          "op": "EQ",
+          "left": {
+            "op": "FIELD",
+            "field": "payable_amount"
+          },
+          "right": {
+            "op": "SUBTRACT",
+            "args": [
+              {
+                "op": "FIELD",
+                "field": "total_amount"
+              },
+              {
+                "op": "FIELD",
+                "field": "discount_amount"
+              }
+            ]
+          }
+        }
+      },
+      "operation": {
+        "operation_refs": [
+          "bir_cd93d22bc648c06d",
+          "bir_4652619ca59aca8e"
+        ]
+      },
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "inventory_http_op_absent": false
+      },
+      "status": "RESOLVED",
+      "rule_fingerprint": "06f0181d347385dd146638ac0815a3326a9f4ea748b109c00f11e24a4f95c7bd"
+    },
+    {
+      "schema_version": "qualibug.field-level-business-rule.v1",
+      "rule_id": "src_md:discount_not_negative",
+      "rule_version": "1",
+      "rule_type": "conservation",
+      "business_description": "discount_amount cannot be less than 0",
+      "source_evidence": [
+        {
+          "source_id": "BUSINESS_RULES.md",
+          "location": "platform_workspace/benchmark_mall_131/input/BUSINESS_RULES.md",
+          "original_text_fingerprint": "030538229dcdae66",
+          "evidence_type": "markdown_business_rule",
+          "confidence": 0.9
+        }
+      ],
+      "entities": {
+        "primary_entity_id": "bir_93d7ca86485df7fa",
+        "related_entity_ids": [
+          "bir_93d7ca86485df7fa"
+        ]
+      },
+      "expected_field_changes": [
+        {
+          "entity_id": "bir_93d7ca86485df7fa",
+          "field_id": "cf_5d199eeb7e2b671a",
+          "field_name": "discount_amount",
+          "semantic_type": "QUANTITY_DELTA"
+        }
+      ],
+      "oracle": {
+        "assertion_kind": "conservation",
+        "typed_expression": {
+          "op": "GTE",
+          "left": {
+            "op": "FIELD",
+            "field": "discount_amount"
+          },
+          "right": {
+            "op": "LITERAL",
+            "value": "0"
+          }
+        }
+      },
+      "operation": {
+        "operation_refs": [
+          "bir_cd93d22bc648c06d",
+          "bir_4652619ca59aca8e"
+        ]
+      },
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "inventory_http_op_absent": false
+      },
+      "status": "RESOLVED",
+      "rule_fingerprint": "aa1332948311e136c92f8d7aaf24c102b179be92a4fc3e6fddd97314b96602af"
+    },
+    {
+      "schema_version": "qualibug.field-level-business-rule.v1",
+      "rule_id": "src_md:discount_lte_total",
+      "rule_version": "1",
+      "rule_type": "conservation",
+      "business_description": "discount_amount cannot exceed total_amount",
+      "source_evidence": [
+        {
+          "source_id": "BUSINESS_RULES.md",
+          "location": "platform_workspace/benchmark_mall_131/input/BUSINESS_RULES.md",
+          "original_text_fingerprint": "c4b70b78bf7485c0",
+          "evidence_type": "markdown_business_rule",
+          "confidence": 0.9
+        }
+      ],
+      "entities": {
+        "primary_entity_id": "bir_93d7ca86485df7fa",
+        "related_entity_ids": [
+          "bir_93d7ca86485df7fa"
+        ]
+      },
+      "expected_field_changes": [
+        {
+          "entity_id": "bir_93d7ca86485df7fa",
+          "field_id": "cf_5d199eeb7e2b671a",
+          "field_name": "discount_amount",
+          "semantic_type": "QUANTITY_DELTA"
+        },
+        {
+          "entity_id": "bir_93d7ca86485df7fa",
+          "field_id": "cf_5fc2db1f52c929ea",
+          "field_name": "total_amount",
+          "semantic_type": "AMOUNT_BALANCE"
+        }
+      ],
+      "oracle": {
+        "assertion_kind": "conservation",
+        "typed_expression": {
+          "op": "LTE",
+          "left": {
+            "op": "FIELD",
+            "field": "discount_amount"
+          },
+          "right": {
+            "op": "FIELD",
+            "field": "total_amount"
+          }
+        }
+      },
+      "operation": {
+        "operation_refs": [
+          "bir_cd93d22bc648c06d",
+          "bir_4652619ca59aca8e"
+        ]
+      },
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "inventory_http_op_absent": false
+      },
+      "status": "RESOLVED",
+      "rule_fingerprint": "b4fc17584d0fa2b8ee7e04d7b51cff4cbd09c548c91068318d867b6a818dd986"
+    },
+    {
+      "schema_version": "qualibug.field-level-business-rule.v1",
+      "rule_id": "src_md:pay_amount_eq_payable",
+      "rule_version": "1",
+      "rule_type": "conservation",
+      "business_description": "payment amount must equal order payable_amount",
+      "source_evidence": [
+        {
+          "source_id": "BUSINESS_RULES.md",
+          "location": "platform_workspace/benchmark_mall_131/input/BUSINESS_RULES.md",
+          "original_text_fingerprint": "fa63dbcf5150b286",
+          "evidence_type": "markdown_business_rule",
+          "confidence": 0.9
+        }
+      ],
+      "entities": {
+        "primary_entity_id": "bir_d6cd8f5d82b31d1e",
+        "related_entity_ids": [
+          "bir_93d7ca86485df7fa",
+          "bir_d6cd8f5d82b31d1e"
+        ]
+      },
+      "expected_field_changes": [
+        {
+          "entity_id": "bir_d6cd8f5d82b31d1e",
+          "field_id": "cf_943618e7da26d36e",
+          "field_name": "amount",
+          "semantic_type": "AMOUNT_DELTA"
+        },
+        {
+          "entity_id": "bir_93d7ca86485df7fa",
+          "field_id": "cf_be96302b1f5a31a6",
+          "field_name": "payable_amount",
+          "semantic_type": "AMOUNT_BALANCE"
+        }
+      ],
+      "oracle": {
+        "assertion_kind": "conservation",
+        "typed_expression": {
+          "op": "EQ",
+          "left": {
+            "op": "FIELD",
+            "field": "payments.amount"
+          },
+          "right": {
+            "op": "FIELD",
+            "field": "orders.payable_amount"
+          }
+        }
+      },
+      "operation": {
+        "operation_refs": [
+          "bir_9c14fd249f745565",
+          "bir_4652619ca59aca8e"
+        ]
+      },
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "inventory_http_op_absent": false
+      },
+      "status": "RESOLVED",
+      "rule_fingerprint": "31577bb2006368896f52d24a40f257210114387b5244b790126f9eea184e0f34"
+    }
+  ],
+  "freeze_policy": "Formal runtime must not mutate this set after start. INCOMPLETE rules stay blocked by completeness gate.",
+  "max_result_level_if_source_limited": "B"
+}

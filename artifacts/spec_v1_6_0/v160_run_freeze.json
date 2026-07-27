@@ -1,0 +1,61 @@
+{
+  "schema_version": "qualibug.v160-run-freeze.v1",
+  "spec_version": "V1.6.0",
+  "run_name": "V1_6_0_FIELD_LEVEL_BUSINESS_ORACLE_RUNTIME_V1",
+  "frozen_at": "2026-07-27T08:38:12.560141+00:00",
+  "baseline_input_commit": "f440c3df96aadc32f578ab976a35b558bcb5eefb",
+  "commit_sha": "f440c3df96aadc32f578ab976a35b558bcb5eefb",
+  "tree_hash": "a722cc6d5ed45ff704a2d47adc482fb57d0188c8",
+  "working_tree_dirty": true,
+  "dirty_policy": "V1.6.0 in-place Stage A edits are intentionally included in run freeze; no further code/rule changes after this freeze",
+  "golden_rule_set_hash": "e92bb9c7838cee63205790f36e35cecf77d3720369f8dc048223b266040b6306",
+  "GOLDEN_RULE_SOURCE_ASSET_LIMITED": true,
+  "field_binding_hash": "7face8198d8759f4db337001ef098339c50e279d4a165ae31cec7ca383c00cb8",
+  "operation_binding_hash": "24272e9cffdd959ea060197b33970235431da79234260ddf52dfb58e1bb640de",
+  "observer_contract_hash": "d85c712a0f00b91620d440f0a451a4b0e12a9c7f08d8d982449c5bf9682ed625",
+  "typed_expression_hash": "208e56df902f1e81d739f7e696663aa448773ec7565d1012ab4036a6b43c1a1a",
+  "oracle_registry_hash": "72f6cf9b3a4fba15b9ab9db93ba5de18c0e1aedc29a718ad0781483398031493",
+  "fixture_policy_hash": "bc65cfcb20d29ddb22602399d98622300db49dac0de50f557e9fe390d76a7f7a",
+  "cleanup_policy_hash": "4f8b9c2836db63ac32365123c5e67702926e96ee16aed4158c750850277490ab",
+  "target": {
+    "project_id": "benchmark_mall_131",
+    "base_url": "http://localhost:8080",
+    "approved_base_url": "http://localhost:8080",
+    "environment_type": "test",
+    "environment_ref": "sandbox",
+    "product_backend": "http://localhost:8088",
+    "product_frontend": "http://localhost:5174"
+  },
+  "target_hash": "cd37ffed0fa5eded061e6042a8b9aa68d9e500255897bc7cab1bc7be522f82ca",
+  "account_manifest_hash": "917198f62b664b72bb90a84d72ad533dd9c9a296720fa8648362ce0febb682c6",
+  "budget_hash": "e03da8720c0c2812f6d3fb53d8373219098b081166887d266734a6f9e1d29a35",
+  "database_seed_hash": "NOT_CAPTURED_AT_FREEZE_USE_TARGET_RECEIPT",
+  "freeze_bundle_hash": "3aebafe88eb6b973aa01f97d639f7114bf4f7602e7e47cc351c8f0d5bdd046b2",
+  "file_hashes": {
+    "ai_test_asset_center/behavior_ir.py": "7face8198d8759f4db337001ef098339c50e279d4a165ae31cec7ca383c00cb8",
+    "ai_test_asset_center/experiment_compiler_obligation.py": "24272e9cffdd959ea060197b33970235431da79234260ddf52dfb58e1bb640de",
+    "ai_test_asset_center/experiment_protocols_base.py": "f8f2cb7f0498c1a41ccb4d69c2cc3aca434764fb69e9ed13d91b174399c9b8ef",
+    "ai_test_asset_center/observer_contracts_base.py": "d85c712a0f00b91620d440f0a451a4b0e12a9c7f08d8d982449c5bf9682ed625",
+    "ai_test_asset_center/assertion_dsl_base.py": "208e56df902f1e81d739f7e696663aa448773ec7565d1012ab4036a6b43c1a1a",
+    "ai_test_asset_center/oracle_expression_resolver.py": "61f27becddd9b67b2a8f46ea7b59ad72325b2bb7f04429f080a868e9949e8cb8",
+    "ai_test_asset_center/customer_delivery_gate_v2.py": "4f8b9c2836db63ac32365123c5e67702926e96ee16aed4158c750850277490ab",
+    "ai_test_asset_center/contract_oracles.py": "72f6cf9b3a4fba15b9ab9db93ba5de18c0e1aedc29a718ad0781483398031493",
+    "ai_test_asset_center/disposable_fixture_contract.py": "bc65cfcb20d29ddb22602399d98622300db49dac0de50f557e9fe390d76a7f7a",
+    "ai_test_asset_center/source_declared_readback_resolver.py": "0ceb15c62d40d820e223274f09d770585ffb74bf7cb89d8d82e0eb9c48d254e3",
+    "ai_test_asset_center/state_precondition_planner.py": "abad2471c6592ee72a7cb475439f5f522787f483818176b293516dafd5957a04",
+    "artifacts/spec_v1_6_0/v160_golden_rule_set.json": "bf98ad52ab4c258fbfdc151d93a290f791fc9fa2b87406dbde8267e494751ee6"
+  },
+  "entry_request": {
+    "method": "POST",
+    "url": "http://localhost:8088/api/v1/scan",
+    "body": {
+      "project_id": "benchmark_mall_131",
+      "base_url": "http://localhost:8080",
+      "approved_base_url": "http://localhost:8080",
+      "environment_type": "test",
+      "environment_ref": "sandbox"
+    }
+  },
+  "post_start_tuning_forbidden": true,
+  "INVALID_POST_START_TUNING_policy": "any hash drift after freeze invalidates run"
+}

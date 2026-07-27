@@ -1,0 +1,54 @@
+{
+  "schema_version": "qualibug.v160-release-manifest.v1",
+  "spec_version": "V1.6.0",
+  "run_name": "V1_6_0_FIELD_LEVEL_BUSINESS_ORACLE_RUNTIME_V1",
+  "phase": "P0-1_BASELINE_FREEZE",
+  "branch": "main",
+  "commit_sha": "f440c3df96aadc32f578ab976a35b558bcb5eefb",
+  "tree_hash": "a722cc6d5ed45ff704a2d47adc482fb57d0188c8",
+  "commit_time": "2026-07-27T15:38:52+08:00",
+  "working_tree_policy": "baseline_commit_clean; untracked artifacts/_funnel_runs and website ignored for freeze",
+  "upstream_baselines": {
+    "V1_4_0_COMMIT": "6ee1e8bde0a44d809b4f8604c3a7b1951760e104",
+    "V1_4_0_FIELD_COMPREHENSION": "PASS",
+    "V1_5_1_COMMIT": "f440c3df96aadc32f578ab976a35b558bcb5eefb",
+    "V1_5_1_RESULT_LEVEL": "B",
+    "RUNTIME_INTEGRITY": "PASS",
+    "FIELD_LEVEL_ORACLE_ENTRY_ALLOWED": true,
+    "EXECUTION_EXPANSION": "SOURCE_ASSET_LIMITED",
+    "PROJECT_G_ENTRY_ALLOWED": false
+  },
+  "frozen_baseline_hashes": {
+    "v140_field_comprehension_gate": "048D32EC06180C68",
+    "v151_field_level_oracle_entry_decision": "24D7E4B1F9D868E9",
+    "v151_post_run_regression": "A10E707AC797C850"
+  },
+  "reuse_only_modules": [
+    "ai_test_asset_center/behavior_ir.py",
+    "ai_test_asset_center/invariant_operation_binder.py",
+    "ai_test_asset_center/obligation_compiler_base.py",
+    "ai_test_asset_center/experiment_compiler_obligation.py",
+    "ai_test_asset_center/experiment_protocols_base.py",
+    "ai_test_asset_center/observer_contracts_base.py",
+    "ai_test_asset_center/assertion_dsl_base.py",
+    "ai_test_asset_center/contract_oracles.py",
+    "ai_test_asset_center/experiment_outcome_finalizer.py",
+    "ai_test_asset_center/customer_delivery_gate_v2.py",
+    "ai_test_asset_center/disposable_fixture_contract.py",
+    "ai_test_asset_center/source_declared_readback_resolver.py",
+    "ai_test_asset_center/state_precondition_planner.py",
+    "ai_test_asset_center/binding_builder.py",
+    "ai_test_asset_center/oracle_expression_resolver.py"
+  ],
+  "do_not_expand_as_parallel_authority": [
+    "ai_test_asset_center/field_level_golden_rules.py"
+  ],
+  "architecture_policy": {
+    "new_modules_allowed": false,
+    "parallel_field_model_allowed": false,
+    "parallel_rule_engine_allowed": false,
+    "parallel_oracle_allowed": false,
+    "in_place_only": true
+  },
+  "generated_at": "2026-07-27T08:12:00Z"
+}

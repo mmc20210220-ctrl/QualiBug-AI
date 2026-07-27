@@ -1,0 +1,495 @@
+{
+  "schema_version": "qualibug.v160-rule-completeness-ledger.v1",
+  "generated_at": "2026-07-27T08:28:23.275011+00:00",
+  "parent_breakpoint": "FIELD_LEVEL_RULE_NOT_EXECUTABLE",
+  "rows": [
+    {
+      "rule_id": "bir_b78bdd1dded0db2f",
+      "rule_type": "causal_postcondition",
+      "status": "INCOMPLETE",
+      "execution_precondition": {
+        "field_binding_resolved": false,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": false,
+        "after_observer_available": false,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_4652619ca59aca8e"
+        ]
+      },
+      "blocked_reason": "FIELD_LEVEL_RULE_NOT_EXECUTABLE"
+    },
+    {
+      "rule_id": "bir_811f5e375a921e84",
+      "rule_type": "causal_postcondition",
+      "status": "INCOMPLETE",
+      "execution_precondition": {
+        "field_binding_resolved": false,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": false,
+        "after_observer_available": false,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_cd93d22bc648c06d",
+          "bir_4652619ca59aca8e",
+          "bir_5320292f347504f1",
+          "bir_3b3a5b5ce2e90655",
+          "bir_6876d72b3664fd4c",
+          "bir_aad54f95dc2b53f2",
+          "bir_9c14fd249f745565"
+        ]
+      },
+      "blocked_reason": "FIELD_LEVEL_RULE_NOT_EXECUTABLE"
+    },
+    {
+      "rule_id": "bir_56a85442c836c317",
+      "rule_type": "causal_postcondition",
+      "status": "INCOMPLETE",
+      "execution_precondition": {
+        "field_binding_resolved": false,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": false,
+        "after_observer_available": false,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_3b3a5b5ce2e90655"
+        ]
+      },
+      "blocked_reason": "FIELD_LEVEL_RULE_NOT_EXECUTABLE"
+    },
+    {
+      "rule_id": "bir_706118abab1f3b0a",
+      "rule_type": "causal_postcondition",
+      "status": "INCOMPLETE",
+      "execution_precondition": {
+        "field_binding_resolved": false,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": false,
+        "after_observer_available": false,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_7a77b73d03e4b80b"
+        ]
+      },
+      "blocked_reason": "FIELD_LEVEL_RULE_NOT_EXECUTABLE"
+    },
+    {
+      "rule_id": "bir_bed2f0958491c903",
+      "rule_type": "causal_postcondition",
+      "status": "INCOMPLETE",
+      "execution_precondition": {
+        "field_binding_resolved": false,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": false,
+        "after_observer_available": false,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_7a77b73d03e4b80b"
+        ]
+      },
+      "blocked_reason": "FIELD_LEVEL_RULE_NOT_EXECUTABLE"
+    },
+    {
+      "rule_id": "bir_20aba204212a2b93",
+      "rule_type": "causal_postcondition",
+      "status": "INCOMPLETE",
+      "execution_precondition": {
+        "field_binding_resolved": false,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": false,
+        "after_observer_available": false,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_7a77b73d03e4b80b",
+          "bir_9c14fd249f745565"
+        ]
+      },
+      "blocked_reason": "FIELD_LEVEL_RULE_NOT_EXECUTABLE"
+    },
+    {
+      "rule_id": "bir_052a8a7b61603894",
+      "rule_type": "causal_postcondition",
+      "status": "INCOMPLETE",
+      "execution_precondition": {
+        "field_binding_resolved": false,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": false,
+        "after_observer_available": false,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_cd93d22bc648c06d",
+          "bir_4652619ca59aca8e",
+          "bir_5320292f347504f1",
+          "bir_3b3a5b5ce2e90655",
+          "bir_6876d72b3664fd4c",
+          "bir_aad54f95dc2b53f2",
+          "bir_9c14fd249f745565"
+        ]
+      },
+      "blocked_reason": "FIELD_LEVEL_RULE_NOT_EXECUTABLE"
+    },
+    {
+      "rule_id": "bir_ce10ecec560c1d45",
+      "rule_type": "causal_postcondition",
+      "status": "INCOMPLETE",
+      "execution_precondition": {
+        "field_binding_resolved": false,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": false,
+        "after_observer_available": false,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_588a7915b5421e5e",
+          "bir_ac0e035f9eb4b43a"
+        ]
+      },
+      "blocked_reason": "FIELD_LEVEL_RULE_NOT_EXECUTABLE"
+    },
+    {
+      "rule_id": "bir_84f580d31e814d01",
+      "rule_type": "state_transition",
+      "status": "RESOLVED",
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": true,
+        "after_observer_available": true,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_9c14fd249f745565"
+        ]
+      },
+      "blocked_reason": null
+    },
+    {
+      "rule_id": "bir_e53fdd784643a70e",
+      "rule_type": "state_transition",
+      "status": "RESOLVED",
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": true,
+        "after_observer_available": true,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_6876d72b3664fd4c"
+        ]
+      },
+      "blocked_reason": null
+    },
+    {
+      "rule_id": "bir_33d7612ce28b8311",
+      "rule_type": "state_transition",
+      "status": "RESOLVED",
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": true,
+        "after_observer_available": true,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_cd93d22bc648c06d",
+          "bir_4652619ca59aca8e",
+          "bir_5320292f347504f1",
+          "bir_3b3a5b5ce2e90655",
+          "bir_6876d72b3664fd4c",
+          "bir_aad54f95dc2b53f2"
+        ]
+      },
+      "blocked_reason": null
+    },
+    {
+      "rule_id": "bir_af02df02844b670b",
+      "rule_type": "state_transition",
+      "status": "RESOLVED",
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": true,
+        "after_observer_available": true,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_6876d72b3664fd4c"
+        ]
+      },
+      "blocked_reason": null
+    },
+    {
+      "rule_id": "bir_66379f022f07b749",
+      "rule_type": "state_transition",
+      "status": "RESOLVED",
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": true,
+        "after_observer_available": true,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_9c14fd249f745565"
+        ]
+      },
+      "blocked_reason": null
+    },
+    {
+      "rule_id": "bir_113b030a9cf6505f",
+      "rule_type": "state_transition",
+      "status": "RESOLVED",
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": true,
+        "after_observer_available": true,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_cd93d22bc648c06d",
+          "bir_4652619ca59aca8e",
+          "bir_5320292f347504f1",
+          "bir_3b3a5b5ce2e90655",
+          "bir_6876d72b3664fd4c",
+          "bir_aad54f95dc2b53f2"
+        ]
+      },
+      "blocked_reason": null
+    },
+    {
+      "rule_id": "bir_87594a78bf66ac1c",
+      "rule_type": "conservation",
+      "status": "RESOLVED",
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": true,
+        "after_observer_available": true,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": true,
+        "canonical_field_ids": [
+          "cf_5d199eeb7e2b671a"
+        ],
+        "semantic_types": [
+          "QUANTITY_DELTA"
+        ],
+        "operation_refs": [
+          "bir_cd93d22bc648c06d",
+          "bir_4652619ca59aca8e",
+          "bir_5320292f347504f1",
+          "bir_3b3a5b5ce2e90655",
+          "bir_6876d72b3664fd4c",
+          "bir_aad54f95dc2b53f2"
+        ]
+      },
+      "blocked_reason": null
+    },
+    {
+      "rule_id": "bir_8134f35e8a6c3c78",
+      "rule_type": "conservation",
+      "status": "RESOLVED",
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": true,
+        "after_observer_available": true,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": true,
+        "canonical_field_ids": [
+          "cf_5d199eeb7e2b671a",
+          "cf_5fc2db1f52c929ea"
+        ],
+        "semantic_types": [
+          "QUANTITY_DELTA",
+          "AMOUNT_BALANCE"
+        ],
+        "operation_refs": [
+          "bir_cd93d22bc648c06d",
+          "bir_4652619ca59aca8e",
+          "bir_5320292f347504f1",
+          "bir_3b3a5b5ce2e90655",
+          "bir_6876d72b3664fd4c",
+          "bir_aad54f95dc2b53f2"
+        ]
+      },
+      "blocked_reason": null
+    },
+    {
+      "rule_id": "src_md:payable_eq_total_minus_discount",
+      "rule_type": "conservation",
+      "status": "RESOLVED",
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "inventory_http_op_absent": false
+      },
+      "blocked_reason": null
+    },
+    {
+      "rule_id": "src_md:discount_not_negative",
+      "rule_type": "conservation",
+      "status": "RESOLVED",
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "inventory_http_op_absent": false
+      },
+      "blocked_reason": null
+    },
+    {
+      "rule_id": "src_md:discount_lte_total",
+      "rule_type": "conservation",
+      "status": "RESOLVED",
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "inventory_http_op_absent": false
+      },
+      "blocked_reason": null
+    },
+    {
+      "rule_id": "src_md:pay_amount_eq_payable",
+      "rule_type": "conservation",
+      "status": "RESOLVED",
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "inventory_http_op_absent": false
+      },
+      "blocked_reason": null
+    }
+  ]
+}

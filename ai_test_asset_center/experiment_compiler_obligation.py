@@ -1644,21 +1644,44 @@ def compile_experiment_for_obligation(
                 },
             }
         else:
+            # V1.6.1: lift from/to from expression operands when top-level absent.
+            _st_expr = _dict(prop.get("expression"))
+            _st_from = _text(prop.get("from_state") or prop.get("from_state_ref"))
+            _st_to = _text(prop.get("to_state") or prop.get("to_state_ref"))
+            if not _st_from or not _st_to:
+                for _op in _list(_st_expr.get("operands")):
+                    if not isinstance(_op, dict):
+                        continue
+                    if not _st_from:
+                        _st_from = _text(_op.get("from_state") or _op.get("from_state_ref"))
+                    if not _st_to:
+                        _st_to = _text(_op.get("to_state") or _op.get("to_state_ref"))
+            _st_kind = (
+                "forbidden_state_transition"
+                if _text(_st_expr.get("kind")) == "forbidden_state_transition"
+                or _text(_st_expr.get("operator")).lower() == "must_not_transition"
+                else "state_transition"
+            )
             protocol = {
                 **protocol,
                 "control_plan": [],
                 "treatment_plan": treatment_rows,
                 "assertion": {
-                    "kind": "state_transition",
-                    "from_state": _text(prop.get("from_state")),
-                    "to_state": _text(prop.get("to_state")),
-                    "from_state_ref": _text(prop.get("from_state_ref")),
-                    "to_state_ref": _text(prop.get("to_state_ref")),
+                    "kind": _st_kind,
+                    "from_state": _st_from,
+                    "to_state": _st_to,
+                    "operator": _text(_st_expr.get("operator")) or "must_transition",
+                    "operands": _list(_st_expr.get("operands")),
+                    "invariant_ref": _text(prop.get("invariant_ref")),
+                    "rule_id": _text(prop.get("invariant_ref")),
                 },
             }
         # ── V1.5.0 §16: State Precondition Planning for built-in state family ──
         # Plan the path to establish from_state before the measured window.
-        _from_state = _text(prop.get("from_state"))
+        _from_state = _text(
+            _dict(protocol.get("assertion")).get("from_state")
+            or prop.get("from_state")
+        )
         if _from_state and _from_state.lower() not in ("", "unknown_state", "unknown"):
             from .state_precondition_planner import (
                 plan_state_precondition as _plan_precondition,
@@ -1794,6 +1817,17 @@ def compile_experiment_for_obligation(
             "BLOCKED_ASSERTION_EVIDENCE_UNPRODUCIBLE",
             f"assertion_kind={assertion_kind}:missing_observation_key={_missing_evidence}",
         )
+    # V1.6.1: propagate field_rule_binding into assertion + experiment contract.
+    _frb = _dict(prop.get("field_rule_binding"))
+    if not _frb and _text(prop.get("invariant_ref")):
+        _frb = {
+            "rule_id": _text(prop.get("invariant_ref")),
+            "rule_fingerprint": _text(prop.get("invariant_ref")),
+            "rule_type": family,
+            "required_field_ids": [],
+            "typed_expression": _dict(prop.get("expression")),
+            "operation_id": primary_op_id,
+        }
     assertions = [{
         "assertion_id": f"assert_{family or 'generic'}",
         "kind": assertion_kind,
@@ -1801,12 +1835,16 @@ def compile_experiment_for_obligation(
         "expected_from": "source_property",
         "property": prop,
         "require_control": needs_control,
+        "rule_id": _text(_frb.get("rule_id") or prop.get("invariant_ref")),
+        "invariant_ref": _text(prop.get("invariant_ref")),
         **{
             key: value
             for key, value in protocol_assertion.items()
             if key != "kind"
         },
     }]
+    if _frb:
+        assertions[0]["field_rule_binding"] = dict(_frb)
     # ── Enhanced: add secondary assertions for deeper bug detection ──
     # For authorization/isolation/visibility: add response body leakage check
     if family in ("authorization", "isolation", "visibility") and not permit_only:
@@ -1847,6 +1885,59 @@ def compile_experiment_for_obligation(
             "require_control": needs_control,
             "_secondary_assertion": True,
         })
+
+    # ── V1.6.0 P0-6: Field-Level Rule Completeness Gate ──
+    # Fail closed before COMPILED when deep families lack bound fields/formula/
+    # observers. Authorization/HTTP families are intentionally excluded.
+    _field_gate = _field_level_rule_completeness_gate(
+        family=family,
+        assertion_kind=assertion_kind,
+        protocol_assertion=protocol_assertion,
+        prop=prop,
+        observers=observers,
+        cleanup_plan=cleanup_plan,
+        is_write=is_write,
+    )
+    if _field_gate:
+        return blocked_experiment(oid, _field_gate[0], _field_gate[1])
+
+    # V1.6.0 P0-11: attach field observation contract onto field observers.
+    _req_field_ids: list[str] = []
+    for _asrt in assertions:
+        if not isinstance(_asrt, dict):
+            continue
+        for _op in _list(_asrt.get("operands") or _asrt.get("fields")):
+            if isinstance(_op, dict):
+                _fid = _text(_op.get("field_id") or _op.get("field"))
+                if _fid:
+                    _req_field_ids.append(_fid)
+        _eq = _dict(_asrt.get("equation"))
+        for _term in _list(_eq.get("terms") or _eq.get("fields")):
+            if isinstance(_term, dict):
+                _fid = _text(_term.get("field_id") or _term.get("field"))
+                if _fid:
+                    _req_field_ids.append(_fid)
+            elif _text(_term):
+                _req_field_ids.append(_text(_term))
+    _req_field_ids = list(dict.fromkeys(_req_field_ids))
+    if _req_field_ids:
+        for _obs in observers:
+            if not isinstance(_obs, dict):
+                continue
+            if _text(_obs.get("observer_id")) in {
+                "entity_state",
+                "before_state",
+                "after_state",
+                "business_effect",
+                "final_state",
+            }:
+                _obs["required_field_ids"] = list(_req_field_ids)
+                _obs["field_observation_contract"] = {
+                    "schema_version": "qualibug.field-observation-contract.v1",
+                    "required_field_ids": list(_req_field_ids),
+                    "scan_unscoped_numerics": False,
+                }
+
     experiment = make_experiment(
         obligation_id=oid,
         policy_version=policy_version,
@@ -2032,6 +2123,37 @@ def compile_experiment_for_obligation(
         # enforces cleanup via the existing validate_cleanup_plan gate above.
         # UNSAFE/NOT_DECLARED is recorded for observability, not blocking here.
 
+    # V1.6.1: Field Oracle Runtime Contract on compiled experiments.
+    if _frb or assertion_kind in {
+        "conservation",
+        "field_delta",
+        "postcondition",
+        "state_transition",
+        "forbidden_state_transition",
+        "cross_entity_consistency",
+    }:
+        _a0 = assertions[0] if assertions and isinstance(assertions[0], dict) else {}
+        experiment["field_oracle_runtime_contract"] = {
+            "schema_version": "qualibug.field-oracle-runtime-contract.v1",
+            "rule_id": _text(_frb.get("rule_id") or _a0.get("rule_id") or prop.get("invariant_ref")),
+            "rule_fingerprint": _text(_frb.get("rule_fingerprint") or prop.get("invariant_ref")),
+            "rule_type": family,
+            "operation_id": primary_op_id,
+            "required_field_ids": list(_req_field_ids or _frb.get("required_field_ids") or []),
+            "scope_field_ids": [],
+            "before_observation_contract": "before_state",
+            "after_observation_contract": "after_state",
+            "assertion_kind": assertion_kind,
+            "typed_expression": _dict(prop.get("expression") or _frb.get("typed_expression")),
+            "fixture_contract_id": "",
+            "cleanup_contract_ids": [
+                _text(row.get("action") or row.get("step_id"))
+                for row in cleanup_plan
+                if isinstance(row, dict)
+            ][:5],
+            "status": "RESOLVED",
+        }
+
     return experiment
 
 # ── Experiment Contract (merged from experiment_contract.py) ──────────
@@ -2079,6 +2201,10 @@ BLOCK_REASONS = (
     "DB_ROW_IDENTITY_NOT_BOUND",
     "DB_DEPENDENCY_GRAPH_INCOMPLETE",
     "DB_PREIMAGE_NOT_CAPTURED",
+    # V1.6.0 field-level oracle completeness
+    "FIELD_LEVEL_RULE_NOT_EXECUTABLE",
+    "BLOCKED_EMPTY_CONSERVATION_TERMS",
+    "STATE_RULE_PRECONDITION_NOT_ESTABLISHED",
 )
 
 
@@ -2160,3 +2286,160 @@ def blocked_experiment(obligation_id: str, reason_code: str, detail: str = "") -
         },
         experiment_id=stable_experiment_id(obligation_id, code),
     )
+
+
+def _field_level_rule_completeness_gate(
+    *,
+    family: str,
+    assertion_kind: str,
+    protocol_assertion: dict[str, Any],
+    prop: dict[str, Any],
+    observers: list[Any],
+    cleanup_plan: list[Any],
+    is_write: bool,
+) -> tuple[str, str] | None:
+    """Return (reason_code, detail) when a field-level rule cannot execute.
+
+    Parent reason is FIELD_LEVEL_RULE_NOT_EXECUTABLE except empty conservation
+    terms which keep BLOCKED_EMPTY_CONSERVATION_TERMS for funnel continuity.
+    """
+    deep_kinds = {
+        "conservation",
+        "field_delta",
+        "postcondition",
+        "state_transition",
+        "cross_entity_consistency",
+    }
+    deep_families = {"conservation", "state", "state_integrity", "lifecycle", "invariant"}
+    if assertion_kind not in deep_kinds and family not in deep_families:
+        return None
+
+    expression = _dict(prop.get("expression") or protocol_assertion.get("expression"))
+    equation = _dict(
+        protocol_assertion.get("equation")
+        or prop.get("equation")
+        or expression.get("equation")
+    )
+    operands = _list(
+        protocol_assertion.get("operands")
+        or protocol_assertion.get("fields")
+        or expression.get("operands")
+    )
+    field_ids = []
+    for item in operands:
+        if isinstance(item, dict):
+            fid = _text(item.get("field_id") or item.get("field"))
+            if fid:
+                field_ids.append(fid)
+    for term in _list(equation.get("terms") or equation.get("fields")):
+        if isinstance(term, dict):
+            fid = _text(term.get("field_id") or term.get("field"))
+            if fid:
+                field_ids.append(fid)
+        elif _text(term):
+            field_ids.append(_text(term))
+
+    observer_ids = {
+        _text(row.get("observer_id"))
+        for row in observers
+        if isinstance(row, dict) and _text(row.get("observer_id"))
+    }
+    field_observers = observer_ids & {
+        "entity_state",
+        "before_state",
+        "after_state",
+        "business_effect",
+        "final_state",
+    }
+
+    if assertion_kind == "conservation" or family == "conservation":
+        if not field_ids:
+            return (
+                "BLOCKED_EMPTY_CONSERVATION_TERMS",
+                "missing_equation_terms_or_field_operands",
+            )
+        if not field_observers:
+            return (
+                "FIELD_LEVEL_RULE_NOT_EXECUTABLE",
+                "conservation_missing_field_observer",
+            )
+        if is_write and not cleanup_plan:
+            return (
+                "FIELD_LEVEL_RULE_NOT_EXECUTABLE",
+                "conservation_missing_cleanup",
+            )
+        return None
+
+    if assertion_kind in {"state_transition", "forbidden_state_transition"} or (
+        family in {"state", "state_integrity", "lifecycle"}
+        and assertion_kind not in {"conservation", "field_delta", "postcondition"}
+    ):
+        from_state = _text(
+            protocol_assertion.get("from_state") or prop.get("from_state")
+        )
+        to_state = _text(
+            protocol_assertion.get("to_state") or prop.get("to_state")
+        )
+        if not from_state or not to_state:
+            # V1.6.1: lift endpoints from expression operands before fail-closed.
+            for _op in operands:
+                if not isinstance(_op, dict):
+                    continue
+                if not from_state:
+                    from_state = _text(_op.get("from_state"))
+                if not to_state:
+                    to_state = _text(_op.get("to_state"))
+        from_state_l = from_state.lower()
+        to_state_l = to_state.lower()
+        if from_state_l in {"", "unknown_state", "unknown"} or to_state_l in {
+            "",
+            "unknown_state",
+            "unknown",
+        }:
+            return (
+                "STATE_RULE_PRECONDITION_NOT_ESTABLISHED",
+                "state_transition_requires_concrete_from_to",
+            )
+        if not field_observers:
+            return (
+                "FIELD_LEVEL_RULE_NOT_EXECUTABLE",
+                "state_missing_field_observer",
+            )
+        return None
+
+    if assertion_kind in {"postcondition", "field_delta"}:
+        if assertion_kind == "field_delta" and not field_ids:
+            return (
+                "FIELD_LEVEL_RULE_NOT_EXECUTABLE",
+                "field_delta_missing_field_operands",
+            )
+        if assertion_kind == "postcondition":
+            has_create = any(
+                isinstance(op, dict) and bool(op.get("must_create")) for op in operands
+            )
+            has_expected = any(
+                isinstance(op, dict)
+                and (
+                    op.get("expected_value") is not None
+                    or _text(op.get("field_id") or op.get("field"))
+                )
+                for op in operands
+            )
+            if not has_create and not has_expected:
+                return (
+                    "FIELD_LEVEL_RULE_NOT_EXECUTABLE",
+                    "postcondition_missing_bound_field_or_expected_value",
+                )
+        if not field_observers:
+            return (
+                "FIELD_LEVEL_RULE_NOT_EXECUTABLE",
+                f"{assertion_kind}_missing_field_observer",
+            )
+        if is_write and not cleanup_plan:
+            return (
+                "FIELD_LEVEL_RULE_NOT_EXECUTABLE",
+                f"{assertion_kind}_missing_cleanup",
+            )
+        return None
+
+    return None

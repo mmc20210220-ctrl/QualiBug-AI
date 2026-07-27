@@ -1,0 +1,3 @@
+Preflight check failed: jwt_secret - QUALIBUG_JWT_SECRET not set (optional for local dev)
+{"ts": "2026-07-27T17:09:02.640Z", "level": "WARNING", "logger": "ai_test_asset_center.credential_crypto", "msg": "QUALIBUG_CRED_ENC_KEY is not set --- credentials will be stored as plaintext.  Set this environment variable to enable at-rest encryption.", "src": "credential_crypto.py:84"}
+Credential encryption key not configured -- credentials will be stored as plaintext.  Set QUALIBUG_CRED_ENC_KEY to enable at-rest encryption.

@@ -1,0 +1,14 @@
+{
+  "schema_version": "qualibug.v160-root-cause-ledger.v1",
+  "generated_at": "2026-07-27T08:46:42.739149+00:00",
+  "scan_id": "scan_benchmark_mall_131_1785141701072",
+  "canonical_defect_count": 3,
+  "canonical_defect_ids": [
+    "cdef_4b238e2a504dc839b49ed7f1d95de129",
+    "cdef_53436873451e829c9efca17c2619306f",
+    "cdef_7627c4fb5408ab756a3d0167f945528f"
+  ],
+  "field_level_unique_roots": [],
+  "count": 0,
+  "note": "No formal field-level findings; shallow formal defects are auth/validation/http_status_class only"
+}

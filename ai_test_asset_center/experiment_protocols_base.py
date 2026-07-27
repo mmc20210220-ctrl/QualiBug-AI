@@ -551,32 +551,65 @@ def compile_family_protocol(
             body = _minimal_body_from_schema(operation)
         expression = _dict(property_spec.get("expression"))
         equation = _dict(property_spec.get("equation") or expression.get("equation"))
-        # ── Multi-entity resolution: when equation is empty, resolve from raw + IR ──
-        resolved_expr: dict[str, Any] = {}
-        _resolve_error = ""
-        if not equation and behavior_ir:
-            _inv_for_resolve = {
-                "expression": expression,
-                "description": _text(property_spec.get("template") or expression.get("raw")),
+        # Prefer structured operands over NL guessing when present.
+        if not equation:
+            _op_terms: list[str] = []
+            for _op in _list(expression.get("operands")):
+                if not isinstance(_op, dict):
+                    continue
+                _f = _text(_op.get("field_id") or _op.get("field"))
+                if _f:
+                    _op_terms.append(_f)
+            if _op_terms:
+                equation = {
+                    "operator": _text(expression.get("operator")) or "unchanged_sum",
+                    "terms": list(dict.fromkeys(_op_terms)),
+                }
+        # V1.6.0: never invent conservation terms via NL guessing when structure
+        # is empty. Empty terms must block before planner/executor/oracle.
+        _term_rows = [
+            t for t in _list(equation.get("terms") or equation.get("fields"))
+            if _text(t) or isinstance(t, dict)
+        ]
+        if not equation or not _term_rows:
+            return {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_EMPTY_CONSERVATION_TERMS",
+                "detail": "conservation_requires_non_empty_equation_terms",
             }
-            _resolve_result = resolve_expression_from_invariant(_inv_for_resolve, behavior_ir, operation=operation)
-            if _resolve_result.get("status") == "RESOLVED":
-                resolved_expr = _resolve_result
+        # Prefer JSON field names over cf_* for observer/assertion key alignment.
+        _name_by_cf: dict[str, str] = {}
+        for _op in _list(expression.get("operands")):
+            if isinstance(_op, dict) and _text(_op.get("field_id")) and _text(_op.get("field")):
+                _name_by_cf[_text(_op.get("field_id"))] = _text(_op.get("field"))
+        _normalized_terms: list[str] = []
+        for _t in _term_rows:
+            if isinstance(_t, dict):
+                _normalized_terms.append(
+                    _text(_t.get("field") or _t.get("field_id"))
+                )
             else:
-                _resolve_error = _text(_resolve_result.get("error_code"))
+                _tt = _text(_t)
+                _normalized_terms.append(_name_by_cf.get(_tt, _tt))
+        _normalized_terms = [t for t in _normalized_terms if t]
+        if not _normalized_terms:
+            return {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_EMPTY_CONSERVATION_TERMS",
+                "detail": "conservation_requires_non_empty_equation_terms",
+            }
+        equation = {
+            **equation,
+            "terms": list(dict.fromkeys(_normalized_terms)),
+            "operator": _text(equation.get("operator")) or "unchanged_sum",
+        }
         _cons_assertion: dict[str, Any] = {
             "kind": "conservation",
             "equation": equation,
+            "operands": _list(expression.get("operands")),
+            "invariant_ref": _text(property_spec.get("invariant_ref")),
+            "rule_id": _text(property_spec.get("invariant_ref")),
         }
-        if resolved_expr:
-            _cons_assertion["structured_expression"] = resolved_expr.get("expression", {})
-            _cons_assertion["entity_bindings"] = resolved_expr.get("entity_bindings", {})
-            _cons_assertion["join_plan"] = resolved_expr.get("join_plan", {})
-            _cons_assertion["observer_requirements"] = resolved_expr.get("observer_requirements", [])
-            _cons_assertion["scope_fields"] = resolved_expr.get("scope_fields", [])
-            _cons_assertion["expression_type"] = resolved_expr.get("expression_type", "")
-        elif _resolve_error:
-            _cons_assertion["compile_diagnostic"] = _resolve_error
         return {
             "status": "COMPILED",
             "control_plan": [],
@@ -804,8 +837,17 @@ def compile_family_protocol(
                 },
             }
         # ── Cross-entity state consistency: resolve from raw + IR when no explicit states ──
-        _state_from = _text(property_spec.get("from_state_ref"))
-        _state_to = _text(property_spec.get("to_state_ref"))
+        _state_from = _text(property_spec.get("from_state_ref") or property_spec.get("from_state"))
+        _state_to = _text(property_spec.get("to_state_ref") or property_spec.get("to_state"))
+        # V1.6.1: lift concrete from/to from expression operands (forbidden_state_transition).
+        if not _state_from or not _state_to:
+            for _op in _list(_expr.get("operands")):
+                if not isinstance(_op, dict):
+                    continue
+                if not _state_from:
+                    _state_from = _text(_op.get("from_state") or _op.get("from_state_ref"))
+                if not _state_to:
+                    _state_to = _text(_op.get("to_state") or _op.get("to_state_ref"))
         _state_resolved: dict[str, Any] = {}
         if not _state_from and not _state_to and behavior_ir:
             _state_inv = {
@@ -869,99 +911,28 @@ def compile_family_protocol(
                 {"observer_id": "after_state"},
             ],
             "assertion": {
-                "kind": "state_transition",
+                "kind": (
+                    "forbidden_state_transition"
+                    if _text(_expr.get("kind")) == "forbidden_state_transition"
+                    or _text(_expr.get("operator")).lower() == "must_not_transition"
+                    else "state_transition"
+                ),
                 "from_state": _state_from,
                 "to_state": _state_to,
+                "operator": _text(_expr.get("operator")) or "must_transition",
+                "operands": _list(_expr.get("operands")),
+                "invariant_ref": _text(property_spec.get("invariant_ref")),
+                "rule_id": _text(property_spec.get("invariant_ref")),
             },
         }
 
     if family == "conservation":
-        # ── Phase 4: derive conservation equation from expression operands ──
-        # When property_spec lacks an explicit equation but carries an expression
-        # with operands (entity_ref + field), build a structured equation so the
-        # entity_state observer can extract concrete before/after field values.
-        _cons_expr = _dict(property_spec.get("expression"))
-        _cons_equation = _dict(
-            property_spec.get("equation")
-            or _cons_expr.get("equation")
-        )
-        if not _cons_equation:
-            _cons_operands = _list(_cons_expr.get("operands"))
-            _cons_terms: list[str] = []
-            for _cons_op in _cons_operands:
-                if not isinstance(_cons_op, dict):
-                    continue
-                _cons_field = _text(_cons_op.get("field"))
-                if _cons_field:
-                    _cons_terms.append(_cons_field)
-            if _cons_terms:
-                _cons_equation = {
-                    "operator": _text(_cons_expr.get("operator")) or "unchanged_sum",
-                    "terms": _cons_terms,
-                }
-        # ── Multi-entity resolution fallback: operands empty → resolve from raw + IR ──
-        _cons_resolved: dict[str, Any] = {}
-        _cons_resolve_error = ""
-        if not _cons_equation and behavior_ir:
-            _cons_inv = {
-                "expression": _cons_expr,
-                "description": _text(
-                    property_spec.get("template")
-                    or _cons_expr.get("raw")
-                    or property_spec.get("invariant_ref")
-                ),
-            }
-            _cons_rr = resolve_expression_from_invariant(_cons_inv, behavior_ir, operation=operation)
-            if _cons_rr.get("status") == "RESOLVED":
-                _cons_resolved = _cons_rr
-            else:
-                _cons_resolve_error = _text(_cons_rr.get("error_code"))
-        _cons_assertion: dict[str, Any] = {
-            "kind": "conservation",
-            "equation": _cons_equation or _dict(property_spec),
-        }
-        if _cons_resolved:
-            _cons_assertion["structured_expression"] = _cons_resolved.get("expression", {})
-            _cons_assertion["entity_bindings"] = _cons_resolved.get("entity_bindings", {})
-            _cons_assertion["join_plan"] = _cons_resolved.get("join_plan", {})
-            _cons_assertion["observer_requirements"] = _cons_resolved.get("observer_requirements", [])
-            _cons_assertion["scope_fields"] = _cons_resolved.get("scope_fields", [])
-            _cons_assertion["expression_type"] = _cons_resolved.get("expression_type", "")
-            _cons_assertion["root_entity"] = _cons_resolved.get("root_entity", "")
-            _cons_assertion["related_entities"] = _cons_resolved.get("related_entities", [])
-        elif _cons_resolve_error:
-            _cons_assertion["compile_diagnostic"] = _cons_resolve_error
-        # Add json_path hints when operands declare entity_ref + field
-        _cons_expr = _dict(property_spec.get("expression"))
-        _cons_operands = _list(_cons_expr.get("operands"))
-        if _cons_operands and isinstance(_cons_operands[0], dict):
-            _cons_first = _cons_operands[0]
-            _cons_entity = _text(_cons_first.get("entity_ref"))
-            _cons_field = _text(_cons_first.get("field"))
-            if _cons_entity and _cons_field:
-                _cons_assertion["before_json_path"] = f"$.{_cons_entity}.{_cons_field}"
-                _cons_assertion["after_json_path"] = f"$.{_cons_entity}.{_cons_field}"
+        # Dead-path safeguard: the live conservation branch returns earlier.
+        # Keep fail-closed here so reordering cannot reintroduce NL guessing.
         return {
-            "status": "COMPILED",
-            "control_plan": [{
-                "step_id": "control_1",
-                "actor_ref": control_actor_ref or treatment_actor_ref,
-                "operation_ref": operation_ref,
-                "intent": "conservation_control",
-                "protocol_step": "positive_control",
-            }],
-            "treatment_plan": [{
-                "step_id": "treatment_1",
-                "actor_ref": treatment_actor_ref,
-                "operation_ref": operation_ref,
-                "intent": "conservation_treatment",
-                "protocol_step": "treatment",
-            }],
-            "observers": [
-                {"observer_id": "business_effect"},
-                {"observer_id": "entity_state"},
-            ],
-            "assertion": _cons_assertion,
+            "status": "BLOCKED",
+            "reason_code": "BLOCKED_EMPTY_CONSERVATION_TERMS",
+            "detail": "conservation_requires_non_empty_equation_terms",
         }
 
     write_body: dict[str, Any] = {}

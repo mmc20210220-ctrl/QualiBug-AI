@@ -1,0 +1,17 @@
+{
+  "schema_version": "qualibug.v160-cleanup-restoration-ledger.v1",
+  "generated_at": "2026-07-27T08:46:42.739149+00:00",
+  "scan_id": "scan_benchmark_mall_131_1785141701072",
+  "executed_obligation_count": 39,
+  "cleanup_failure_count": 26,
+  "cleanup_verified_rate": 0.3333,
+  "environment_restoration_rate": null,
+  "false_completed": 0,
+  "readiness_reason_codes": [
+    "PIPELINE_DEGRADED",
+    "PARTIAL_OBLIGATION_EXECUTION",
+    "CLEANUP_FAILURE",
+    "COVERAGE_GAPS_REMAIN"
+  ],
+  "note": "Restoration rate not separately attested; cleanup_failure_count from run_delivery_readiness"
+}

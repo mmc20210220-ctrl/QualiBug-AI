@@ -1,0 +1,39 @@
+{
+  "schema_version": "qualibug.v160-field-grounding-baseline.v1",
+  "spec_version": "V1.6.0",
+  "V1_4_0_COMMIT": "6ee1e8bde0a44d809b4f8604c3a7b1951760e104",
+  "V1_4_0_FIELD_COMPREHENSION": "PASS",
+  "canonical_field_semantic_types": 16,
+  "canonical_fields_classified": "40/41",
+  "unknown_fields_policy": "semantic_type=UNKNOWN; status=EXPLICITLY_UNRESOLVED; must not force 41/41",
+  "api_db_field_binding_rate_pct": 100.0,
+  "scope_formalization_coverage_pct": 100.0,
+  "rule_operation_dual_signal_binding": "PASS",
+  "umbrella_rule_filtering": "PASS",
+  "stats_from_v140_gate": {
+    "total_entities": 13,
+    "total_fields": 41,
+    "classified_fields": 40,
+    "bound_fields": 41,
+    "total_invariants": 65,
+    "high_conf_rules": 25,
+    "high_conf_bound": 23
+  },
+  "V1_5_1_runtime_baseline": {
+    "total_obligations": 1189,
+    "compiled_experiments": 320,
+    "real_executed_experiments": 23,
+    "delivered_results": 11,
+    "cleanup_completed": 23,
+    "environment_restoration_rate_pct": 100,
+    "false_completed": 0,
+    "EXTERNAL_UNIQUE_TP_BASELINE": "NOT_MEASURED",
+    "EXTERNAL_RECALL_BASELINE": "NOT_MEASURED",
+    "note": "11 Delivered Results != 11 External True Positives"
+  },
+  "field_level_carrier_status": {
+    "executed_experiments_that_can_carry_field_golden_rules": 0,
+    "delivered_results_that_are_http_or_auth_only": 11,
+    "reason": "All 23 executed / 11 gated V1.5.1 results are authorization/http_status_class; none carry field-delta/state-field/conservation terms"
+  }
+}

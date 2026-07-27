@@ -1069,9 +1069,33 @@ def finalize_experiment_execution(
         verdict.get("verdict") == "blocked_experiment"
         or verdict.get("status") == "INDETERMINATE"
     ):
-        status = "BLOCKED"
-        reason = "BLOCKED_MISSING_OBSERVER"
-        detail = ",".join(_list(verdict.get("missing_requirements"))[:8])
+        field_traces = [
+            row
+            for row in _list(verdict.get("field_oracle_traces"))
+            if isinstance(row, dict)
+        ]
+        assertion_traces = [
+            row
+            for row in _list(verdict.get("assertions"))
+            if isinstance(row, dict) and isinstance(row.get("field_oracle_trace"), dict)
+        ]
+        if field_traces or assertion_traces:
+            # V1.6.1: Field Oracle Trace may be INDETERMINATE and still counts as
+            # an evaluated Trace. Collapsing to BLOCKED_MISSING_OBSERVER hid Traces
+            # for RESOLVED state rules after oracle evaluation.
+            status = "EXECUTED"
+            reason = _text(verdict.get("status")) or "INDETERMINATE"
+            detail = ",".join(
+                [
+                    _text(item.get("reason_code"))
+                    for item in (_list(verdict.get("assertions")) + field_traces)
+                    if isinstance(item, dict) and _text(item.get("reason_code"))
+                ][:8]
+            ) or ",".join(_list(verdict.get("missing_requirements"))[:8])
+        else:
+            status = "BLOCKED"
+            reason = "BLOCKED_MISSING_OBSERVER"
+            detail = ",".join(_list(verdict.get("missing_requirements"))[:8])
         return {
             "schema_version": "qualibug.experiment-execution.v1",
             "experiment_id": eid,

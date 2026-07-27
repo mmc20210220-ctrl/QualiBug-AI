@@ -1,0 +1,37 @@
+{
+  "schema_version": "qualibug.v161-rule-runtime-gap-map.v1",
+  "generated_at": "2026-07-27T09:04:27.864395+00:00",
+  "first_breakpoint": "OBLIGATION_TO_EXPERIMENT",
+  "latent_hard_break": "ORACLE_TO_TRACE",
+  "breakpoints": [
+    {
+      "code": "RULE_TO_OBLIGATION_LINEAGE_LOST",
+      "status": "PARTIAL",
+      "detail": "src_md:* never enter IR; bir_* lack field_rule_binding persistence in attempt ledger"
+    },
+    {
+      "code": "OBLIGATION_TO_EXPERIMENT",
+      "status": "PRIMARY",
+      "detail": "state from/to not lifted from expression.operands; conservation empty terms; FIELD_LEVEL_RULE_NOT_EXECUTABLE",
+      "fix_points": [
+        "experiment_protocols_base.compile_family_protocol state branch",
+        "experiment_compiler_obligation._field_level_rule_completeness_gate"
+      ]
+    },
+    {
+      "code": "ORACLE_TO_TRACE",
+      "status": "LATENT_HARD",
+      "detail": "validate_assertion_receipt rejects field_oracle_trace key",
+      "fix_points": [
+        "assertion_dsl_base.validate_assertion_receipt"
+      ]
+    },
+    {
+      "code": "CAUSAL_SOURCE_ASSET_LIMITED",
+      "status": "SOURCE_ASSET_LIMITED",
+      "detail": "0 of 12 RESOLVED rules are causal_postcondition"
+    }
+  ],
+  "in_place_only": true,
+  "gap_map_complete": true
+}

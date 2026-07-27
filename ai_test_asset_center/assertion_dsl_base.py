@@ -34,6 +34,7 @@ KIND_ALIASES: dict[str, str] = {
     "state_integrity": "state_transition",
     "lifecycle": "state_transition",
     "invariant": "state_transition",
+    "forbidden_state_transition": "state_transition",
     "idempotency": "idempotency_effect",
     "concurrency": "concurrency_final_invariant",
     "temporal": "eventual_consistency",
@@ -798,7 +799,13 @@ def validate_assertion_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
         "source_refs",
         "harness_error",
     }
-    if set(row) != required_fields:
+    # V1.6.1: field_oracle_trace is an optional persisted enrichment on deep
+    # assertion kinds. Exact-key equality previously stripped every Trace.
+    optional_fields = {"field_oracle_trace"}
+    keys = set(row)
+    if not required_fields.issubset(keys):
+        raise ValueError("assertion_receipt_fields_invalid")
+    if keys - required_fields - optional_fields:
         raise ValueError("assertion_receipt_fields_invalid")
     if row.get("schema_version") != ASSERTION_RECEIPT_SCHEMA:
         raise ValueError("assertion_receipt_schema_invalid")
@@ -824,9 +831,14 @@ def validate_assertion_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
         campaign_id=_text(row.get("campaign_id")),
         execution_id=_text(row.get("execution_id")),
     )
-    if row != expected:
+    base_row = {key: row[key] for key in required_fields}
+    if base_row != expected:
         raise ValueError("assertion_receipt_fingerprint_invalid")
-    return dict(expected)
+    out = dict(expected)
+    trace = row.get("field_oracle_trace")
+    if isinstance(trace, dict):
+        out["field_oracle_trace"] = dict(trace)
+    return out
 
 
 def _typed_observer_receipts(
@@ -1008,20 +1020,36 @@ def evaluate_assertion(
     if non_observed:
         first = non_observed[0]
         observer_status = _text(first.get("status")).upper()
-        return _assertion_receipt(
-            assertion_id=assertion_id,
-            kind=kind,
-            status="INDETERMINATE",
-            reason_code=f"OBSERVER_EVIDENCE_{observer_status}",
-            expected=expected,
-            actual=actual,
-            error=_text(first.get("reason_code")),
-            observer_receipt_ids=observer_ids,
-            source_refs=refs,
-            harness_error=observer_status in {"FAILED", "UNSUPPORTED"},
-            campaign_id=resolved_campaign_id,
-            execution_id=resolved_execution_id,
-        )
+        # V1.6.1: Field Oracle kinds must still evaluate and emit Trace even when
+        # some typed observers remain INDETERMINATE (e.g. typed_assertion lineage
+        # observer). Hard-stopping here produced Trace=0 with silent terminal loss.
+        _effective_for_trace = KIND_ALIASES.get(kind, kind)
+        _field_oracle_kinds = {
+            "conservation",
+            "field_delta",
+            "postcondition",
+            "state_transition",
+            "cross_entity_consistency",
+        }
+        if (
+            _effective_for_trace not in _field_oracle_kinds
+            and kind not in _field_oracle_kinds
+            and kind != "forbidden_state_transition"
+        ):
+            return _assertion_receipt(
+                assertion_id=assertion_id,
+                kind=kind,
+                status="INDETERMINATE",
+                reason_code=f"OBSERVER_EVIDENCE_{observer_status}",
+                expected=expected,
+                actual=actual,
+                error=_text(first.get("reason_code")),
+                observer_receipt_ids=observer_ids,
+                source_refs=refs,
+                harness_error=observer_status in {"FAILED", "UNSUPPORTED"},
+                campaign_id=resolved_campaign_id,
+                execution_id=resolved_execution_id,
+            )
     if harness_error:
         return _assertion_receipt(
             assertion_id=assertion_id,
@@ -1226,10 +1254,24 @@ def evaluate_assertion(
                 or "from_state" not in spec
                 or "to_state" not in spec
             ):
+                # V1.6.1: lift from/to from expression operands when top-level absent.
+                _st_ops = _list(spec.get("operands"))
+                _st0 = _st_ops[0] if _st_ops and isinstance(_st_ops[0], dict) else {}
+                if "from_state" not in spec and _text(_st0.get("from_state")):
+                    spec = {**spec, "from_state": _text(_st0.get("from_state"))}
+                if "to_state" not in spec and _text(_st0.get("to_state")):
+                    spec = {**spec, "to_state": _text(_st0.get("to_state"))}
+            if (
+                "before_state" not in obs
+                or "after_state" not in obs
+                or not _text(spec.get("from_state"))
+                or not _text(spec.get("to_state"))
+            ):
                 reason_code = "STATE_TRANSITION_EVIDENCE_MISSING"
-            elif _text(spec.get("from_state")) == "unknown_state":
-                # Synthetic state values — just check if state changed
-                passed = _state_token(obs["before_state"]) != _state_token(obs["after_state"])
+            elif _text(spec.get("from_state")).lower() in {"", "unknown_state", "unknown"}:
+                # V1.6.0: unknown_state is not a business transition contract.
+                # Refuse fingerprint any-change — that invented PASS/VIOLATION.
+                reason_code = "STATE_RULE_PRECONDITION_NOT_ESTABLISHED"
             else:
                 actual = {
                     "before": obs["before_state"],
@@ -1239,12 +1281,25 @@ def evaluate_assertion(
                     "before": spec["from_state"],
                     "after": spec["to_state"],
                 }
+                _forbidden = _text(spec.get("operator")).lower() in {
+                    "must_not_transition",
+                    "forbidden",
+                    "must_not",
+                } or _text(spec.get("kind")).lower() == "forbidden_state_transition"
                 if _state_token(obs["before_state"]) != _state_token(
                     spec["from_state"]
                 ):
                     # A wrong source state means the experiment precondition was
                     # not established. It is not product-defect evidence.
                     reason_code = "STATE_PRECONDITION_NOT_MET"
+                elif _forbidden:
+                    # Forbidden transition: VIOLATION only when after reaches to_state.
+                    reached = _state_token(obs["after_state"]) == _state_token(
+                        spec["to_state"]
+                    )
+                    passed = not reached
+                    if reached:
+                        reason_code = "FORBIDDEN_STATE_TRANSITION"
                 else:
                     passed = _state_token(
                         obs["after_state"]
@@ -1259,7 +1314,7 @@ def evaluate_assertion(
             pc_operands = spec.get("operands") or []
             pc_operand = pc_operands[0] if pc_operands and isinstance(pc_operands[0], dict) else {}
             entity_ref = _text(pc_operand.get("entity_ref"))
-            field_ref = _text(pc_operand.get("field"))
+            field_ref = _text(pc_operand.get("field_id") or pc_operand.get("field"))
             expected_value = pc_operand.get("expected_value")
             must_create = bool(pc_operand.get("must_create"))
             # Gather entity_state evidence from observations
@@ -1284,6 +1339,15 @@ def evaluate_assertion(
                 passed = identity_increase or int(effect_count or 0) > 0
                 if not passed:
                     reason_code = "POSTCONDITION_ENTITY_NOT_CREATED"
+            elif not field_ref and expected_value is None:
+                # V1.6.0: refuse "any change" postcondition without bound fields.
+                reason_code = "FIELD_LEVEL_RULE_NOT_EXECUTABLE"
+                expected = {"entity": entity_ref, "field": field_ref}
+                actual = {
+                    "state_change_count": state_change_count,
+                    "effect_count": effect_count,
+                    "detail": "postcondition_requires_bound_field_or_expected_value",
+                }
             else:
                 # must_become: verify state changed to expected value
                 expected = {"entity": entity_ref, "field": field_ref, "must_become": expected_value}
@@ -1316,15 +1380,10 @@ def evaluate_assertion(
                                 reason_code = "POSTCONDITION_VALUE_MISMATCH"
                                 _pc_value_verified = True
                 if not _pc_value_verified:
-                    # Fallback: no field-level evidence — use fingerprint change
-                    if int(state_change_count or 0) > 0:
-                        passed = True
-                    elif int(effect_count or 0) > 0:
-                        # Effect detected but fingerprint unchanged — partial pass
-                        passed = True
-                    else:
-                        passed = False
-                        reason_code = "POSTCONDITION_STATE_NOT_CHANGED"
+                    # Field declared but no typed after_values — fail closed.
+                    # Do not treat fingerprint/effect_count as field oracle evidence.
+                    reason_code = "POSTCONDITION_FIELD_EVIDENCE_MISSING"
+                    passed = False
         elif effective_kind == "field_delta":
             # ── P0-5: field-level causal delta verification ──
             # Compares before/after values for specific fields and verifies
@@ -1677,7 +1736,7 @@ def evaluate_assertion(
     )
     if status == "INDETERMINATE" and not reason_code:
         reason_code = "ASSERTION_EVIDENCE_MISSING"
-    return _assertion_receipt(
+    receipt = _assertion_receipt(
         assertion_id=assertion_id,
         kind=kind,
         status=status,
@@ -1691,6 +1750,27 @@ def evaluate_assertion(
         campaign_id=resolved_campaign_id,
         execution_id=resolved_execution_id,
     )
+    # V1.6.0 P0-15: field oracle trace for deep assertion kinds.
+    if effective_kind in {
+        "conservation",
+        "field_delta",
+        "postcondition",
+        "state_transition",
+        "cross_entity_consistency",
+    }:
+        receipt["field_oracle_trace"] = {
+            "schema_version": "qualibug.field-oracle-trace.v1",
+            "assertion_id": assertion_id,
+            "kind": effective_kind,
+            "rule_id": _text(spec.get("invariant_ref") or spec.get("rule_id")),
+            "expected": expected,
+            "actual": actual,
+            "before_values": obs.get("before_values"),
+            "after_values": obs.get("after_values"),
+            "status": status,
+            "reason_code": reason_code,
+        }
+    return receipt
 
 
 def evaluate_assertions(

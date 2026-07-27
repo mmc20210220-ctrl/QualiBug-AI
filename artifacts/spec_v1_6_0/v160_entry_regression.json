@@ -1,0 +1,19 @@
+{
+  "schema_version": "qualibug.v160-entry-regression.v1",
+  "spec_version": "V1.6.0",
+  "baseline_commit": "f440c3df96aadc32f578ab976a35b558bcb5eefb",
+  "source": "artifacts/spec_v1_5_1/v151_post_run_regression.json",
+  "v151_specialized_tests": {
+    "passed": 86,
+    "failed": 0,
+    "total": 86
+  },
+  "full_regression": {
+    "passed": 2732,
+    "failed": 35,
+    "skipped": 13
+  },
+  "new_regressions_at_entry": 0,
+  "known_failures_frozen": 35,
+  "note": "V1.6.0 entry baseline is the frozen V1.5.1 post-run regression. Architectural coding must not begin until Gap Map is accepted; post-run regression must remain 0 new failures."
+}

@@ -1,0 +1,44 @@
+{
+  "schema_version": "qualibug.v161-start-manifest.v1",
+  "spec_version": "V1.6.1",
+  "run_name": "V1_6_1_RESOLVED_RULE_ORACLE_TRACE_RUNTIME_V1",
+  "frozen_at": "2026-07-27T10:05:57.736663+00:00",
+  "commit_sha": "f440c3df96aadc32f578ab976a35b558bcb5eefb",
+  "tree_hash": "a722cc6d5ed45ff704a2d47adc482fb57d0188c8",
+  "working_tree_dirty": true,
+  "dirty_policy": "SPEC prefers clean; freeze includes intentional V1.6.0/V1.6.1 in-place edits. Post-start code/rule/hash drift = INVALID_POST_START_TUNING.",
+  "minimal_rule_manifest_hash": "a22e7709614f3cf53239d5d8b20d97cd09fe13931ba6037ab2002731f23ef5bd",
+  "golden_rule_set_hash": "e92bb9c7838cee63205790f36e35cecf77d3720369f8dc048223b266040b6306",
+  "file_hashes": {
+    "assertion_dsl": "400961607a8a768cbf2e648eae2be8a056431f78acdfb73440a2277ea794c0b0",
+    "compiler": "0c57717746af88c82efdd765563887ff556ba5db6dce8023338ceee47e0263e5",
+    "protocols": "171278bdc902c0e02746f9c333d007acdade812e5caa9eb4c272b8472652013c",
+    "observer": "bee7a37fafd97df5fb05a1dc29762170ff0466b5e349ebf50834f905a8ce4d70",
+    "obligation": "d9ff50ee3a0693ab8fb8b3bf0377c96abb30c54fb40528a0f19b35510278454e",
+    "contract_oracles": "90e0b9fa16587a95bcdcd628333416ead83ebd2eda6797fdac1c4c6f6966a7c2",
+    "delivery_gate": "4e27636d2f0fe8884a271753f9d925497956a037f9b2a2770273ae14ee2e7fc9",
+    "minimal_manifest": "36d7ef5b07d297db7f785a48978d8e7da1674f2c2e1404d2519e4ffaf730ea69",
+    "golden_set": "bf98ad52ab4c258fbfdc151d93a290f791fc9fa2b87406dbde8267e494751ee6"
+  },
+  "freeze_bundle_hash": "eeeec3ec3227bfed27fa0ae23993a8f75c362831cbef929fa315ad18b397184e",
+  "entry_request": {
+    "method": "POST",
+    "url": "http://127.0.0.1:8088/api/v1/scan",
+    "body": {
+      "project_id": "benchmark_mall_131",
+      "base_url": "http://127.0.0.1:8080",
+      "approved_base_url": "http://127.0.0.1:8080",
+      "environment_type": "test",
+      "environment_ref": "sandbox"
+    }
+  },
+  "post_start_tuning_forbidden": true,
+  "V161_MINIMAL_SET_SOURCE_ASSET_LIMITED": true,
+  "entry_response_status": 200,
+  "total_ms": 279461,
+  "scan_id": "scan_benchmark_mall_131_1785146757851",
+  "run_id": null,
+  "campaign_id": null,
+  "completed_at": "2026-07-27T10:10:37.203458+00:00",
+  "execution_status": "completed"
+}

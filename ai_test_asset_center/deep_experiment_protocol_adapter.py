@@ -579,7 +579,79 @@ def adapt_deep_experiments_for_execution(
             _a_kind = _text(assertion.get("kind"))
             if _a_kind == "deep_mechanism_contrast":
                 _mechanism = _text(assertion.get("mechanism")).upper()
-                if _mechanism == "IDEMPOTENCY":
+                _family = _text(exp.get("risk_family"))
+                _rule_id = _text(exp.get("rule_id"))
+                _inv = next(
+                    (
+                        row
+                        for row in _list(ir.get("invariants"))
+                        if isinstance(row, dict) and _text(row.get("id")) == _rule_id
+                    ),
+                    None,
+                )
+                _expr = _dict((_inv or {}).get("expression"))
+                # V1.6.1: preserve field-level oracle kinds for state/conservation.
+                if _family in {"state", "state_integrity"} and _expr:
+                    _ops = _list(_expr.get("operands"))
+                    _op0 = _ops[0] if _ops and isinstance(_ops[0], dict) else {}
+                    _from = _text(_op0.get("from_state") or _expr.get("from_state"))
+                    _to = _text(_op0.get("to_state") or _expr.get("to_state"))
+                    if _from and _to:
+                        assertion = {
+                            "kind": (
+                                "forbidden_state_transition"
+                                if _text(_expr.get("kind")) == "forbidden_state_transition"
+                                or _text(_expr.get("operator")).lower()
+                                == "must_not_transition"
+                                else "state_transition"
+                            ),
+                            "from_state": _from,
+                            "to_state": _to,
+                            "operator": _text(_expr.get("operator"))
+                            or "must_not_transition",
+                            "operands": _ops,
+                            "rule_id": _rule_id,
+                            "invariant_ref": _rule_id,
+                            "control_must_succeed": True,
+                        }
+                    elif _mechanism == "IDEMPOTENCY":
+                        assertion = {
+                            "kind": "http_status_class",
+                            "expected": 2,
+                            "control_must_succeed": True,
+                        }
+                    elif _mechanism in {
+                        "STATE_NEGATIVE",
+                        "CUMULATIVE",
+                        "CAUSAL_SIDE_EFFECT",
+                    }:
+                        assertion = {
+                            "kind": "http_status_class",
+                            "expected": 4,
+                            "control_must_succeed": True,
+                        }
+                    else:
+                        assertion = {"kind": "http_status_class", "expected": 2}
+                elif _family == "conservation" and _expr:
+                    _equation = _dict(_expr.get("equation"))
+                    assertion = {
+                        "kind": "conservation",
+                        "equation": _equation
+                        or {
+                            "operator": "unchanged_sum",
+                            "terms": [
+                                _text(t.get("field") or t.get("field_id") or t)
+                                if isinstance(t, dict)
+                                else _text(t)
+                                for t in _list(_expr.get("operands"))
+                            ],
+                        },
+                        "operands": _list(_expr.get("operands")),
+                        "rule_id": _rule_id,
+                        "invariant_ref": _rule_id,
+                        "control_must_succeed": True,
+                    }
+                elif _mechanism == "IDEMPOTENCY":
                     # Idempotency: treatment (repeat) should also succeed (2xx)
                     assertion = {
                         "kind": "http_status_class",

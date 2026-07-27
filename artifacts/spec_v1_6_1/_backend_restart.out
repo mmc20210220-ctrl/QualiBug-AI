@@ -1,0 +1,5 @@
+
+  [WARNING] 启动自检发现 1 个问题（非致命，服务继续启动）:
+    - jwt_secret: QUALIBUG_JWT_SECRET not set (optional for local dev) (QB-S005)
+  如问题持续，请运行: qualibug-doctor --export-bundle
+

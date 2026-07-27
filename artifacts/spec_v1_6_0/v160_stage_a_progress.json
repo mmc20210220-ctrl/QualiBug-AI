@@ -1,0 +1,53 @@
+{
+  "schema_version": "qualibug.v160-stage-a-progress.v1",
+  "spec_version": "V1.6.0",
+  "baseline_commit": "f440c3df96aadc32f578ab976a35b558bcb5eefb",
+  "updated_at": "2026-07-27T09:05:00Z",
+  "architecture_policy": "in_place_only",
+  "stage_a_status": "ENGINEERING_CLOSED_PENDING_FREEZE_RUN",
+  "completed": {
+    "P0-1": "baseline freeze artifacts",
+    "P0-2": "v160_field_oracle_gap_map.json gap_map_complete=true",
+    "P0-3": "golden rule candidate ledger",
+    "P0-4": "frozen golden rule set 20 (8/6/6); SOURCE_ASSET_LIMITED=true; resolved=12",
+    "P0-5": "cf_* propagate in behavior_ir; field_delta/postcondition field binding",
+    "P0-6": "FIELD_LEVEL_RULE_NOT_EXECUTABLE completeness gate in experiment_compiler_obligation",
+    "P0-7": "typed DSL refuse unknown_state any-change and field-less postcondition",
+    "P0-8": "causal postcondition requires bound field + after_values",
+    "P0-9": "state unknown_state -> STATE_RULE_PRECONDITION_NOT_ESTABLISHED",
+    "P0-10": "conservation empty terms BLOCKED at protocol compile + eval",
+    "P0-11": "observer empty terms fail-closed; required_field_ids contract attached",
+    "P0-15": "field_oracle_trace on deep assertion receipts",
+    "P0-16": "delivery gate requires field_oracle_trace for field kinds",
+    "P0-17": "tests/test_v160_field_oracle_closure.py — 70 passed",
+    "P0-18": "tests/test_v160_industry_neutral_field_oracle.py — 2 passed"
+  },
+  "partial": {
+    "P0-12": "scope validation already before oracle; field-level scope_role keys not fully extended",
+    "P0-13": "fixture field preconditions reuse disposable_fixture_contract; not newly extended",
+    "P0-14": "async convergence uses existing readback async_policy; not newly closed"
+  },
+  "pending": {
+    "P0-19_to_P0-28": "freeze run / product entry / cleanup / 2/2 repro / evaluator / level conclusion"
+  },
+  "in_place_modules_touched": [
+    "behavior_ir.py",
+    "observer_contracts_base.py",
+    "assertion_dsl_base.py",
+    "experiment_protocols_base.py",
+    "experiment_compiler_obligation.py",
+    "oracle_expression_resolver.py",
+    "customer_delivery_gate_v2.py"
+  ],
+  "strangler": {
+    "field_level_golden_rules.py": "not expanded as delivery authority",
+    "oracle_expression_resolver NL": "skipped when structured operands present"
+  },
+  "next_breakpoint": "FIELD_LEVEL_BUSINESS_ORACLE_NOT_PROVEN",
+  "notes": [
+    "Stage A proves engineering closure only — not Unique TP",
+    "Golden Rule Set SOURCE_ASSET_LIMITED: API IR lacks inventory HTTP ops for several conservation formulas",
+    "Do not start Project G",
+    "External Unique TP remains NOT_MEASURED until Stage C"
+  ]
+}

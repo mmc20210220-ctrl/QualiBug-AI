@@ -1,0 +1,24 @@
+{
+  "schema_version": "qualibug.v161-oracle-trace-balance-audit.v1",
+  "field_oracle_invocations": 595,
+  "field_oracle_receipts": 300,
+  "field_oracle_traces": 595,
+  "invocation_receipt_mismatch": 295,
+  "receipt_trace_mismatch": 0,
+  "silent_trace_loss": 295,
+  "by_rule_type": {
+    "causal_postcondition": {
+      "frozen": 0,
+      "with_trace": 0
+    },
+    "state_transition": {
+      "frozen": 2,
+      "with_trace": 1
+    },
+    "conservation": {
+      "frozen": 2,
+      "with_trace": 2
+    }
+  },
+  "causal_source_asset_limited": true
+}

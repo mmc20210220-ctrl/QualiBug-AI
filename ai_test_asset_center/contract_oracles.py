@@ -177,6 +177,33 @@ def _assertions_require_control(experiment: dict[str, Any]) -> bool:
     return False
 
 
+def _experiment_has_field_oracle_assertions(experiment: dict[str, Any]) -> bool:
+    """True when experiment carries deep field-oracle assertion kinds.
+
+    V1.6.1 SPEC orders Trace before Cleanup Formal Finding. Activation must not
+    suppress Field Oracle evaluation solely for cleanup restoration or soft
+    INDETERMINATE observers; those remain visible on the Trace / reason codes.
+    """
+    deep = {
+        "conservation",
+        "field_delta",
+        "postcondition",
+        "state_transition",
+        "forbidden_state_transition",
+        "cross_entity_consistency",
+    }
+    for raw in _list(experiment.get("assertions")):
+        if not isinstance(raw, dict):
+            continue
+        kind = _text(raw.get("kind")).lower()
+        if kind in deep:
+            return True
+    contract = _dict(experiment.get("field_oracle_runtime_contract"))
+    if contract and _text(contract.get("status")).upper() == "RESOLVED":
+        return True
+    return False
+
+
 def _any_assertion_has_template(experiment: dict[str, Any], template: str) -> bool:
     """True when any assertion in the experiment uses the given template."""
     for raw in _list(experiment.get("assertions")):
@@ -404,9 +431,15 @@ def build_contract_oracle_activation_receipt(
                     verified[kind].append(_text(receipt.get("receipt_id")))
                     continue
                 if receipt_status not in {"FAILED", "BLOCKED"}:
-                    blockers.append(
-                        f"CLEANUP_RESTORATION_NOT_PROVEN:{subject}"
-                    )
+                    # V1.6.1: Field Oracle Trace must be generated before Formal
+                    # Finding waits on cleanup. Defer cleanup proof for deep kinds.
+                    if not (
+                        kind == "cleanup"
+                        and _experiment_has_field_oracle_assertions(exp)
+                    ):
+                        blockers.append(
+                            f"CLEANUP_RESTORATION_NOT_PROVEN:{subject}"
+                        )
                 continue
             if receipt_status != "OBSERVED":
                 if receipt_status not in {"FAILED", "BLOCKED"}:
@@ -467,7 +500,10 @@ def build_contract_oracle_activation_receipt(
             continue
         if _text(observer.get("status")).upper() != "OBSERVED":
             if _text(observer.get("status")).upper() == "INDETERMINATE":
-                blockers.append(f"OBSERVER_RECEIPT_INDETERMINATE:{observer_id}")
+                # V1.6.1: allow Field Oracle evaluation to emit an INDETERMINATE
+                # Trace rather than suppressing the oracle call entirely.
+                if not _experiment_has_field_oracle_assertions(exp):
+                    blockers.append(f"OBSERVER_RECEIPT_INDETERMINATE:{observer_id}")
             continue
         verified["observer"].append(_text(observer.get("receipt_id")))
 
@@ -478,6 +514,9 @@ def build_contract_oracle_activation_receipt(
         else "BLOCKED"
         if blockers
         else "ACTIVE"
+    )
+    field_oracle_soft = bool(
+        _experiment_has_field_oracle_assertions(exp) and status == "ACTIVE"
     )
     payload = {
         "schema_version": ACTIVATION_RECEIPT_SCHEMA,
@@ -493,6 +532,9 @@ def build_contract_oracle_activation_receipt(
         },
         "source_refs": source_refs,
     }
+    if field_oracle_soft:
+        # Optional enrichment — Trace-before-cleanup soft activation.
+        payload["field_oracle_soft_activation"] = True
     return _content_receipt("activation_", payload)
 
 
@@ -514,7 +556,15 @@ def validate_contract_oracle_activation_receipt(
         "source_refs",
     }
     if set(row) != required_fields:
-        raise ValueError("activation_receipt_fields_invalid")
+        optional_fields = {"field_oracle_soft_activation"}
+        unexpected = sorted(set(row) - required_fields - optional_fields)
+        absent = sorted(required_fields - set(row))
+        if unexpected or absent:
+            raise ValueError(
+                "activation_receipt_fields_invalid"
+                + (f":unexpected={','.join(unexpected)}" if unexpected else "")
+                + (f":missing={','.join(absent)}" if absent else "")
+            )
     if row.get("schema_version") != ACTIVATION_RECEIPT_SCHEMA:
         raise ValueError("activation_receipt_schema_invalid")
     if _text(row.get("status")) not in {"ACTIVE", "BLOCKED", "HARNESS_FAILED"}:
@@ -558,6 +608,7 @@ def validate_contract_oracle_activation_receipt(
         raise ValueError("activation_receipt_requirement_content_invalid")
     status = _text(row.get("status"))
     reason_codes = [_text(item) for item in _list(row.get("reason_codes"))]
+    soft_field_oracle = row.get("field_oracle_soft_activation") is True
     if (
         (status == "ACTIVE" and reason_codes)
         or (status != "ACTIVE" and not reason_codes)
@@ -569,6 +620,9 @@ def validate_contract_oracle_activation_receipt(
                 or any(
                     len(verified[key]) != len(required[key])
                     for key in requirement_keys
+                    if not (
+                        soft_field_oracle and key in {"cleanup", "observer"}
+                    )
                 )
             )
         )
@@ -615,6 +669,11 @@ def _contract_oracle_receipt(
     indeterminate = [
         item for item in assertions if item.get("status") == "INDETERMINATE"
     ]
+    field_oracle_traces = [
+        dict(item.get("field_oracle_trace"))
+        for item in assertions
+        if isinstance(item, dict) and isinstance(item.get("field_oracle_trace"), dict)
+    ]
     payload = {
         "schema_version": CONTRACT_ORACLE_RECEIPT_SCHEMA,
         "experiment_id": _text(experiment.get("experiment_id")),
@@ -638,6 +697,9 @@ def _contract_oracle_receipt(
         ],
         "assertions": [dict(item) for item in assertions],
         "failed_assertions": [dict(item) for item in violations],
+        # V1.6.1: surface Field Oracle Traces at receipt root for audit walkers.
+        "field_oracle_traces": field_oracle_traces,
+        "field_oracle_trace_count": len(field_oracle_traces),
         "missing_requirements": sorted(
             set(_text(item) for item in missing_requirements if _text(item))
         ),
@@ -670,18 +732,21 @@ def validate_contract_oracle_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
         "demotion_reason",
     }
     if set(row) != required_fields:
-        # Name the offending keys. "contract_oracle_receipt_fields_invalid" on its own
-        # cannot be acted on: the receipt has twenty fields and the check is exact set
-        # equality, so the reader has to diff by hand against a list in the source. This
-        # exact error failed the whole pipeline on a live target while the scan API
-        # reported ok: true, and the message was the only thing available.
-        _unexpected = sorted(set(row) - required_fields)
-        _absent = sorted(required_fields - set(row))
-        raise ValueError(
-            "contract_oracle_receipt_fields_invalid"
-            + (f":unexpected={','.join(_unexpected)}" if _unexpected else "")
-            + (f":missing={','.join(_absent)}" if _absent else "")
-        )
+        # V1.6.1: field_oracle_traces are optional enrichments on deep oracle receipts.
+        optional_fields = {"field_oracle_traces", "field_oracle_trace_count"}
+        unexpected = sorted(set(row) - required_fields - optional_fields)
+        absent = sorted(required_fields - set(row))
+        if unexpected or absent:
+            # Name the offending keys. "contract_oracle_receipt_fields_invalid" on its own
+            # cannot be acted on: the receipt has twenty fields and the check is exact set
+            # equality, so the reader has to diff by hand against a list in the source. This
+            # exact error failed the whole pipeline on a live target while the scan API
+            # reported ok: true, and the message was the only thing available.
+            raise ValueError(
+                "contract_oracle_receipt_fields_invalid"
+                + (f":unexpected={','.join(unexpected)}" if unexpected else "")
+                + (f":missing={','.join(absent)}" if absent else "")
+            )
     if row.get("schema_version") != CONTRACT_ORACLE_RECEIPT_SCHEMA:
         raise ValueError("contract_oracle_receipt_schema_invalid")
     activation = validate_contract_oracle_activation_receipt(

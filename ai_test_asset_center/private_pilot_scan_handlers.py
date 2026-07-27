@@ -496,7 +496,17 @@ class ScanHandlersMixin:
                 "benchmark_metrics": result.get("benchmark_metrics", {}),
                 "cumulative": merge_result,})
         except Exception as e:
-            return self._json({"ok": False, "error": "V12_SCAN_FAILED", "message": str(e)[:500]}, 500)
+            import traceback as _tb
+
+            return self._json(
+                {
+                    "ok": False,
+                    "error": "V12_SCAN_FAILED",
+                    "message": str(e)[:500],
+                    "traceback": _tb.format_exc()[-4000:],
+                },
+                500,
+            )
 
     def _handle_regression_run(self, project: str, root: Path, body: dict[str, Any]) -> None:
         if not self._require_known_project(project, root):

@@ -217,7 +217,14 @@ def build_delivery_execution_receipt(
         raise DeliveryGateV2Error(
             f"delivery_execution_dependency_invalid:{type(exc).__name__}:{exc}"
         ) from exc
-    if _text(operational.get("execution_status")).upper() not in ("EXECUTED", "DELIVERABLE"):
+    if _text(operational.get("execution_status")).upper() not in (
+        "EXECUTED",
+        "DELIVERABLE",
+        # V1.6.1: oracle may have evaluated before cleanup failed. Keep the
+        # delivery execution receipt so Field Oracle Traces remain auditable;
+        # Formal Finding / TRUE_COMPLETED stay gated separately on cleanup.
+        "EXECUTED_BUT_NOT_RESTORED",
+    ):
         raise DeliveryGateV2Error("delivery_execution_not_executed")
     operational_fingerprint = _text(operational.get("receipt_fingerprint"))
     if not operational_fingerprint:
@@ -901,6 +908,27 @@ def _validate_active_chain(
         violations = [_specific[0]] if _specific else [violations[0]]
     if len(violations) != 1:
         return "BLOCKED", ["AMBIGUOUS_MULTI_ASSERTION_OCCURRENCE"]
+    # V1.6.0 P0-16: field-level formal findings require a field oracle trace.
+    # HTTP-only assertions remain on the shallow delivery path and are not
+    # upgraded to field-oracle formal evidence by status codes alone.
+    _primary_violation = violations[0]
+    _FIELD_ORACLE_KINDS = {
+        "conservation",
+        "field_delta",
+        "postcondition",
+        "state_transition",
+        "cross_entity_consistency",
+    }
+    if _text(_primary_violation.get("kind")) in _FIELD_ORACLE_KINDS:
+        if not isinstance(_primary_violation.get("field_oracle_trace"), dict):
+            return "BLOCKED", ["FIELD_ORACLE_TRACE_MISSING"]
+        _trace = _dict(_primary_violation.get("field_oracle_trace"))
+        if not (
+            _trace.get("before_values") is not None
+            or _trace.get("after_values") is not None
+            or _trace.get("actual") is not None
+        ):
+            return "BLOCKED", ["FIELD_ORACLE_EVIDENCE_INCOMPLETE"]
     contract_ids = {_text(value.get("receipt_id")) for value in contracts}
     observer_ids = {_text(value.get("receipt_id")) for value in observers}
     required = _dict(activation.get("required"))

@@ -447,6 +447,13 @@ def resolve_expression_from_invariant(
     """
     inv = _dict(invariant)
     expr = _dict(inv.get("expression"))
+    # V1.6.0: when structured operands/equation already exist, do not invent
+    # fields via NL guessing. Callers must compile from structure or block.
+    structured_operands = _list(expr.get("operands"))
+    structured_equation = _dict(expr.get("equation") or inv.get("equation"))
+    if structured_operands or structured_equation:
+        return _unresolved("STRUCTURED_EXPRESSION_PRESENT_SKIP_NL_GUESS")
+
     raw = _text(expr.get("raw") or inv.get("description"))
     if not raw:
         return _unresolved("EMPTY_INVARIANT_RAW")

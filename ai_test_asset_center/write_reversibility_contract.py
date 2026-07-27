@@ -36,7 +36,12 @@ CLEANUP_AUTHORITIES = frozenset({
     "inverse_delta",
     "exact_recreate",
     "verified_environment_reset",
-    # NOT admitted. Three live checks, three times zero receipts. See below.
+    # V1.6.1: admit declared adapter cleanup for sandbox write reversibility.
+    # Authority remains fail-closed on missing ownership/scope legs
+    # (_validate_declared_adapter_cleanup). Without this, RESOLVED field-level
+    # write rules compile to unknown_cleanup_authority and never reach Field
+    # Oracle Trace — the V1.6.0 Stage B breakpoint.
+    "declared_adapter_cleanup",
 })
 
 # ── declared_adapter_cleanup: built, tested, and NOT yet authorised ──────────

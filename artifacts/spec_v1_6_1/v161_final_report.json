@@ -1,0 +1,96 @@
+{
+  "schema_version": "qualibug.v161-final-report.v1",
+  "V1_6_1_RESULT_LEVEL": "B",
+  "TYPE_COVERAGE": "SOURCE_ASSET_LIMITED",
+  "RULE_RUNTIME_MATERIALIZATION": "PASS",
+  "FIELD_OBSERVATION_RUNTIME": "PASS",
+  "FIELD_ASSERTION_PAYLOAD": "PASS",
+  "FIELD_ORACLE_DISPATCH": "PASS",
+  "FIELD_ORACLE_TRACE_CLOSURE": "PASS",
+  "CLEANUP_AND_RESTORATION": "PARTIAL_ORACLE_BEFORE_CLEANUP",
+  "FIELD_VIOLATION_REPRODUCTION_ENTRY_ALLOWED": true,
+  "PROJECT_G_ENTRY_ALLOWED": false,
+  "DEEP_BUG_DISCOVERY_PROOF": "NOT_MEASURED",
+  "NEXT_SINGLE_BREAKPOINT": null,
+  "balance": {
+    "schema_version": "qualibug.v161-oracle-trace-balance-audit.v1",
+    "field_oracle_invocations": 595,
+    "field_oracle_receipts": 300,
+    "field_oracle_traces": 595,
+    "invocation_receipt_mismatch": 295,
+    "receipt_trace_mismatch": 0,
+    "silent_trace_loss": 295,
+    "by_rule_type": {
+      "causal_postcondition": {
+        "frozen": 0,
+        "with_trace": 0
+      },
+      "state_transition": {
+        "frozen": 2,
+        "with_trace": 1
+      },
+      "conservation": {
+        "frozen": 2,
+        "with_trace": 2
+      }
+    },
+    "causal_source_asset_limited": true
+  },
+  "funnel": {
+    "schema_version": "qualibug.v161-runtime-funnel.v1",
+    "scan_id": "scan_benchmark_mall_131_1785146757851",
+    "run_id": null,
+    "frozen_resolved_minimal": {
+      "causal": 0,
+      "state": 2,
+      "conservation": 2,
+      "total": 4,
+      "SOURCE_ASSET_LIMITED_causal": true
+    },
+    "field_oracle_traces_total": 595,
+    "minimal_state_with_trace": 1,
+    "minimal_conservation_with_trace": 2,
+    "lineage_rows": [
+      {
+        "rule_id": "bir_84f580d31e814d01",
+        "rule_type": "state_transition",
+        "rule_fingerprint": "7ea007832429aed4892f0f8492a58b4352cf65da41ee4d9d5cc6455b3224d2c7",
+        "trace_count": 0,
+        "terminal_stage": "assertion_or_compile_blocked",
+        "terminal_reason": "NO_TRACE_FOR_RULE_IN_REPORT",
+        "sample_trace_status": null
+      },
+      {
+        "rule_id": "bir_e53fdd784643a70e",
+        "rule_type": "state_transition",
+        "rule_fingerprint": "39499f6d2af6aa1e2bd8e2f0498004f4ff59ec6f95141141cc81c935897b597a",
+        "trace_count": 20,
+        "terminal_stage": "oracle_trace_created",
+        "terminal_reason": "FIELD_ORACLE_TRACE_CREATED",
+        "sample_trace_status": "INDETERMINATE"
+      },
+      {
+        "rule_id": "bir_87594a78bf66ac1c",
+        "rule_type": "conservation",
+        "rule_fingerprint": "91bba5ca4fbdb3452fe86e11bf72eafc707efb5780cfeb053238781060dc928a",
+        "trace_count": 42,
+        "terminal_stage": "oracle_trace_created",
+        "terminal_reason": "FIELD_ORACLE_TRACE_CREATED",
+        "sample_trace_status": "PASS"
+      },
+      {
+        "rule_id": "bir_8134f35e8a6c3c78",
+        "rule_type": "conservation",
+        "rule_fingerprint": "a127e9f756c8e5e84f91ed2f1040940ce9afa7bc01107146792ec0517c68a09a",
+        "trace_count": 38,
+        "terminal_stage": "oracle_trace_created",
+        "terminal_reason": "FIELD_ORACLE_TRACE_CREATED",
+        "sample_trace_status": "PASS"
+      }
+    ]
+  },
+  "causal_note": "V161_MINIMAL_SET_SOURCE_ASSET_LIMITED: 0 RESOLVED causal rules",
+  "SCOPE_VALIDATION_INTEGRITY": "PASS",
+  "ARCHITECTURE_AUTHORITY": "PASS",
+  "HISTORICAL_REGRESSION": "NOT_FULLY_RERUN"
+}

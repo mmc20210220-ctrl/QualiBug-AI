@@ -1,0 +1,799 @@
+{
+  "schema_version": "qualibug.v161-resolved-rule-inventory.v1",
+  "generated_at": "2026-07-27T09:04:27.854415+00:00",
+  "golden_rule_set_hash": "e92bb9c7838cee63205790f36e35cecf77d3720369f8dc048223b266040b6306",
+  "resolved_count": 12,
+  "by_type": {
+    "state_transition": 6,
+    "conservation": 6
+  },
+  "causal_postcondition_resolved": 0,
+  "V161_MINIMAL_SET_SOURCE_ASSET_LIMITED_CAUSAL": true,
+  "note": "V1.6.0 RESOLVED set has 0 causal_postcondition (6 state + 6 conservation). Causal minimal slots cannot be filled without inventing rules.",
+  "rules": [
+    {
+      "rule_id": "bir_84f580d31e814d01",
+      "rule_version": "1",
+      "rule_fingerprint": "7ea007832429aed4892f0f8492a58b4352cf65da41ee4d9d5cc6455b3224d2c7",
+      "rule_type": "state_transition",
+      "business_description": "order must not transition from CANCELLED to PAID",
+      "source_refs": [
+        {
+          "source_id": "behavior_ir.invariants",
+          "location": "bir_84f580d31e814d01",
+          "original_text_fingerprint": "04a5b5461031055e",
+          "evidence_type": "behavior_ir_invariant",
+          "confidence": 0.8,
+          "source_rule_refs": [
+            "state:src_5ed2a5b28086f333:1"
+          ]
+        }
+      ],
+      "entity_ids": [],
+      "field_ids": [],
+      "operation_ids": [
+        "bir_9c14fd249f745565"
+      ],
+      "scope_field_ids": [],
+      "before_observer_contract_ids": [
+        "before_state",
+        "entity_state"
+      ],
+      "after_observer_contract_ids": [
+        "after_state",
+        "entity_state"
+      ],
+      "typed_expression": {
+        "kind": "forbidden_state_transition",
+        "operator": "must_not_transition",
+        "operands": [
+          {
+            "entity_ref": "order",
+            "from_state": "CANCELLED",
+            "to_state": "PAID"
+          }
+        ],
+        "raw": "CANCELLED -/-> PAID"
+      },
+      "fixture_contract_id": "",
+      "cleanup_contract_ids": [],
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": true,
+        "after_observer_available": true,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_9c14fd249f745565"
+        ]
+      },
+      "v160_runtime_status": "NO_DIRECT_RULE_ID_IN_LEDGER",
+      "v160_experiment_ids": [],
+      "v160_trace_count": 0
+    },
+    {
+      "rule_id": "bir_e53fdd784643a70e",
+      "rule_version": "1",
+      "rule_fingerprint": "39499f6d2af6aa1e2bd8e2f0498004f4ff59ec6f95141141cc81c935897b597a",
+      "rule_type": "state_transition",
+      "business_description": "order must not transition from CANCELLED to SHIPPED",
+      "source_refs": [
+        {
+          "source_id": "behavior_ir.invariants",
+          "location": "bir_e53fdd784643a70e",
+          "original_text_fingerprint": "65cebd91240dae00",
+          "evidence_type": "behavior_ir_invariant",
+          "confidence": 0.8,
+          "source_rule_refs": [
+            "state:src_5ed2a5b28086f333:1"
+          ]
+        }
+      ],
+      "entity_ids": [],
+      "field_ids": [],
+      "operation_ids": [
+        "bir_6876d72b3664fd4c"
+      ],
+      "scope_field_ids": [],
+      "before_observer_contract_ids": [
+        "before_state",
+        "entity_state"
+      ],
+      "after_observer_contract_ids": [
+        "after_state",
+        "entity_state"
+      ],
+      "typed_expression": {
+        "kind": "forbidden_state_transition",
+        "operator": "must_not_transition",
+        "operands": [
+          {
+            "entity_ref": "order",
+            "from_state": "CANCELLED",
+            "to_state": "SHIPPED"
+          }
+        ],
+        "raw": "CANCELLED -/-> SHIPPED"
+      },
+      "fixture_contract_id": "",
+      "cleanup_contract_ids": [],
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": true,
+        "after_observer_available": true,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_6876d72b3664fd4c"
+        ]
+      },
+      "v160_runtime_status": "NO_DIRECT_RULE_ID_IN_LEDGER",
+      "v160_experiment_ids": [],
+      "v160_trace_count": 0
+    },
+    {
+      "rule_id": "bir_33d7612ce28b8311",
+      "rule_version": "1",
+      "rule_fingerprint": "c6d0dbc7f4eeb2865325c07a1d969130421bcb6ee4da17cac3c352e540ffe6a4",
+      "rule_type": "state_transition",
+      "business_description": "order must not transition from CANCELLED to COMPLETED",
+      "source_refs": [
+        {
+          "source_id": "behavior_ir.invariants",
+          "location": "bir_33d7612ce28b8311",
+          "original_text_fingerprint": "4c5c79a3dc441ab8",
+          "evidence_type": "behavior_ir_invariant",
+          "confidence": 0.8,
+          "source_rule_refs": [
+            "state:src_5ed2a5b28086f333:1"
+          ]
+        }
+      ],
+      "entity_ids": [],
+      "field_ids": [],
+      "operation_ids": [
+        "bir_cd93d22bc648c06d",
+        "bir_4652619ca59aca8e",
+        "bir_5320292f347504f1",
+        "bir_3b3a5b5ce2e90655",
+        "bir_6876d72b3664fd4c",
+        "bir_aad54f95dc2b53f2"
+      ],
+      "scope_field_ids": [],
+      "before_observer_contract_ids": [
+        "before_state",
+        "entity_state"
+      ],
+      "after_observer_contract_ids": [
+        "after_state",
+        "entity_state"
+      ],
+      "typed_expression": {
+        "kind": "forbidden_state_transition",
+        "operator": "must_not_transition",
+        "operands": [
+          {
+            "entity_ref": "order",
+            "from_state": "CANCELLED",
+            "to_state": "COMPLETED"
+          }
+        ],
+        "raw": "CANCELLED -/-> COMPLETED"
+      },
+      "fixture_contract_id": "",
+      "cleanup_contract_ids": [],
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": true,
+        "after_observer_available": true,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_cd93d22bc648c06d",
+          "bir_4652619ca59aca8e",
+          "bir_5320292f347504f1",
+          "bir_3b3a5b5ce2e90655",
+          "bir_6876d72b3664fd4c",
+          "bir_aad54f95dc2b53f2"
+        ]
+      },
+      "v160_runtime_status": "NO_DIRECT_RULE_ID_IN_LEDGER",
+      "v160_experiment_ids": [],
+      "v160_trace_count": 0
+    },
+    {
+      "rule_id": "bir_af02df02844b670b",
+      "rule_version": "1",
+      "rule_fingerprint": "4b5f0050be84ed428b091fe8997fa23dfb11ef8773d611de4ced4d2aa326af3a",
+      "rule_type": "state_transition",
+      "business_description": "order must not transition from REFUNDED to SHIPPED",
+      "source_refs": [
+        {
+          "source_id": "behavior_ir.invariants",
+          "location": "bir_af02df02844b670b",
+          "original_text_fingerprint": "81f2f20e834cbfc6",
+          "evidence_type": "behavior_ir_invariant",
+          "confidence": 0.8,
+          "source_rule_refs": [
+            "state:src_5ed2a5b28086f333:1"
+          ]
+        }
+      ],
+      "entity_ids": [],
+      "field_ids": [],
+      "operation_ids": [
+        "bir_6876d72b3664fd4c"
+      ],
+      "scope_field_ids": [],
+      "before_observer_contract_ids": [
+        "before_state",
+        "entity_state"
+      ],
+      "after_observer_contract_ids": [
+        "after_state",
+        "entity_state"
+      ],
+      "typed_expression": {
+        "kind": "forbidden_state_transition",
+        "operator": "must_not_transition",
+        "operands": [
+          {
+            "entity_ref": "order",
+            "from_state": "REFUNDED",
+            "to_state": "SHIPPED"
+          }
+        ],
+        "raw": "REFUNDED -/-> SHIPPED"
+      },
+      "fixture_contract_id": "",
+      "cleanup_contract_ids": [],
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": true,
+        "after_observer_available": true,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_6876d72b3664fd4c"
+        ]
+      },
+      "v160_runtime_status": "NO_DIRECT_RULE_ID_IN_LEDGER",
+      "v160_experiment_ids": [],
+      "v160_trace_count": 0
+    },
+    {
+      "rule_id": "bir_66379f022f07b749",
+      "rule_version": "1",
+      "rule_fingerprint": "70ec2d25d4898815739f3bac9e3da338339df71fa502d2041c832423cbd48011",
+      "rule_type": "state_transition",
+      "business_description": "order must not transition from REFUNDED to PAID",
+      "source_refs": [
+        {
+          "source_id": "behavior_ir.invariants",
+          "location": "bir_66379f022f07b749",
+          "original_text_fingerprint": "fb4ea7fb35a289ee",
+          "evidence_type": "behavior_ir_invariant",
+          "confidence": 0.8,
+          "source_rule_refs": [
+            "state:src_5ed2a5b28086f333:1"
+          ]
+        }
+      ],
+      "entity_ids": [],
+      "field_ids": [],
+      "operation_ids": [
+        "bir_9c14fd249f745565"
+      ],
+      "scope_field_ids": [],
+      "before_observer_contract_ids": [
+        "before_state",
+        "entity_state"
+      ],
+      "after_observer_contract_ids": [
+        "after_state",
+        "entity_state"
+      ],
+      "typed_expression": {
+        "kind": "forbidden_state_transition",
+        "operator": "must_not_transition",
+        "operands": [
+          {
+            "entity_ref": "order",
+            "from_state": "REFUNDED",
+            "to_state": "PAID"
+          }
+        ],
+        "raw": "REFUNDED -/-> PAID"
+      },
+      "fixture_contract_id": "",
+      "cleanup_contract_ids": [],
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": true,
+        "after_observer_available": true,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_9c14fd249f745565"
+        ]
+      },
+      "v160_runtime_status": "NO_DIRECT_RULE_ID_IN_LEDGER",
+      "v160_experiment_ids": [],
+      "v160_trace_count": 0
+    },
+    {
+      "rule_id": "bir_113b030a9cf6505f",
+      "rule_version": "1",
+      "rule_fingerprint": "7a0792821c03207b0ed0b6d0e53da974b964dc6756421cb13b3431a583659902",
+      "rule_type": "state_transition",
+      "business_description": "order must not transition from CLOSED to 任意状态",
+      "source_refs": [
+        {
+          "source_id": "behavior_ir.invariants",
+          "location": "bir_113b030a9cf6505f",
+          "original_text_fingerprint": "be390d73e9d22278",
+          "evidence_type": "behavior_ir_invariant",
+          "confidence": 0.8,
+          "source_rule_refs": [
+            "state:src_5ed2a5b28086f333:1"
+          ]
+        }
+      ],
+      "entity_ids": [],
+      "field_ids": [],
+      "operation_ids": [
+        "bir_cd93d22bc648c06d",
+        "bir_4652619ca59aca8e",
+        "bir_5320292f347504f1",
+        "bir_3b3a5b5ce2e90655",
+        "bir_6876d72b3664fd4c",
+        "bir_aad54f95dc2b53f2"
+      ],
+      "scope_field_ids": [],
+      "before_observer_contract_ids": [
+        "before_state",
+        "entity_state"
+      ],
+      "after_observer_contract_ids": [
+        "after_state",
+        "entity_state"
+      ],
+      "typed_expression": {
+        "kind": "forbidden_state_transition",
+        "operator": "must_not_transition",
+        "operands": [
+          {
+            "entity_ref": "order",
+            "from_state": "CLOSED",
+            "to_state": "任意状态"
+          }
+        ],
+        "raw": "CLOSED -/-> 任意状态"
+      },
+      "fixture_contract_id": "",
+      "cleanup_contract_ids": [],
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": true,
+        "after_observer_available": true,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": false,
+        "canonical_field_ids": [],
+        "semantic_types": [],
+        "operation_refs": [
+          "bir_cd93d22bc648c06d",
+          "bir_4652619ca59aca8e",
+          "bir_5320292f347504f1",
+          "bir_3b3a5b5ce2e90655",
+          "bir_6876d72b3664fd4c",
+          "bir_aad54f95dc2b53f2"
+        ]
+      },
+      "v160_runtime_status": "NO_DIRECT_RULE_ID_IN_LEDGER",
+      "v160_experiment_ids": [],
+      "v160_trace_count": 0
+    },
+    {
+      "rule_id": "bir_87594a78bf66ac1c",
+      "rule_version": "1",
+      "rule_fingerprint": "91bba5ca4fbdb3452fe86e11bf72eafc707efb5780cfeb053238781060dc928a",
+      "rule_type": "conservation",
+      "business_description": "`discount_amount` 不能小于 0",
+      "source_refs": [
+        {
+          "source_id": "behavior_ir.invariants",
+          "location": "bir_87594a78bf66ac1c",
+          "original_text_fingerprint": "757a5313a8e7f89e",
+          "evidence_type": "behavior_ir_invariant",
+          "confidence": 0.8,
+          "source_rule_refs": [
+            "rule:src_5ed2a5b28086f333:20"
+          ]
+        }
+      ],
+      "entity_ids": [],
+      "field_ids": [
+        "cf_5d199eeb7e2b671a"
+      ],
+      "operation_ids": [
+        "bir_cd93d22bc648c06d",
+        "bir_4652619ca59aca8e",
+        "bir_5320292f347504f1",
+        "bir_3b3a5b5ce2e90655",
+        "bir_6876d72b3664fd4c",
+        "bir_aad54f95dc2b53f2"
+      ],
+      "scope_field_ids": [],
+      "before_observer_contract_ids": [
+        "before_state",
+        "entity_state"
+      ],
+      "after_observer_contract_ids": [
+        "after_state",
+        "entity_state"
+      ],
+      "typed_expression": {
+        "kind": "data_conservation",
+        "operator": "must_hold",
+        "operands": [
+          {
+            "entity_ref": "bir_93d7ca86485df7fa",
+            "field": "discount_amount",
+            "field_id": "cf_5d199eeb7e2b671a",
+            "semantic_type": "QUANTITY_DELTA"
+          }
+        ],
+        "raw": "`discount_amount` 不能小于 0",
+        "equation": {
+          "operator": "unchanged_sum",
+          "terms": [
+            "cf_5d199eeb7e2b671a"
+          ]
+        }
+      },
+      "fixture_contract_id": "",
+      "cleanup_contract_ids": [],
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": true,
+        "after_observer_available": true,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": true,
+        "canonical_field_ids": [
+          "cf_5d199eeb7e2b671a"
+        ],
+        "semantic_types": [
+          "QUANTITY_DELTA"
+        ],
+        "operation_refs": [
+          "bir_cd93d22bc648c06d",
+          "bir_4652619ca59aca8e",
+          "bir_5320292f347504f1",
+          "bir_3b3a5b5ce2e90655",
+          "bir_6876d72b3664fd4c",
+          "bir_aad54f95dc2b53f2"
+        ]
+      },
+      "v160_runtime_status": "NO_DIRECT_RULE_ID_IN_LEDGER",
+      "v160_experiment_ids": [],
+      "v160_trace_count": 0
+    },
+    {
+      "rule_id": "bir_8134f35e8a6c3c78",
+      "rule_version": "1",
+      "rule_fingerprint": "a127e9f756c8e5e84f91ed2f1040940ce9afa7bc01107146792ec0517c68a09a",
+      "rule_type": "conservation",
+      "business_description": "`discount_amount` 不能大于 `total_amount`",
+      "source_refs": [
+        {
+          "source_id": "behavior_ir.invariants",
+          "location": "bir_8134f35e8a6c3c78",
+          "original_text_fingerprint": "f276bcfb082aefa5",
+          "evidence_type": "behavior_ir_invariant",
+          "confidence": 0.8,
+          "source_rule_refs": [
+            "rule:src_5ed2a5b28086f333:21"
+          ]
+        }
+      ],
+      "entity_ids": [],
+      "field_ids": [
+        "cf_5d199eeb7e2b671a",
+        "cf_5fc2db1f52c929ea"
+      ],
+      "operation_ids": [
+        "bir_cd93d22bc648c06d",
+        "bir_4652619ca59aca8e",
+        "bir_5320292f347504f1",
+        "bir_3b3a5b5ce2e90655",
+        "bir_6876d72b3664fd4c",
+        "bir_aad54f95dc2b53f2"
+      ],
+      "scope_field_ids": [],
+      "before_observer_contract_ids": [
+        "before_state",
+        "entity_state"
+      ],
+      "after_observer_contract_ids": [
+        "after_state",
+        "entity_state"
+      ],
+      "typed_expression": {
+        "kind": "data_conservation",
+        "operator": "must_hold",
+        "operands": [
+          {
+            "entity_ref": "bir_93d7ca86485df7fa",
+            "field": "discount_amount",
+            "field_id": "cf_5d199eeb7e2b671a",
+            "semantic_type": "QUANTITY_DELTA"
+          },
+          {
+            "entity_ref": "bir_93d7ca86485df7fa",
+            "field": "total_amount",
+            "field_id": "cf_5fc2db1f52c929ea",
+            "semantic_type": "AMOUNT_BALANCE"
+          }
+        ],
+        "raw": "`discount_amount` 不能大于 `total_amount`",
+        "equation": {
+          "operator": "unchanged_sum",
+          "terms": [
+            "cf_5d199eeb7e2b671a",
+            "cf_5fc2db1f52c929ea"
+          ]
+        }
+      },
+      "fixture_contract_id": "",
+      "cleanup_contract_ids": [],
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "scope_binding_resolved": true,
+        "disposable_fixture_contract_resolved": true,
+        "fixture_identity_verifiable": true,
+        "state_precondition_establishable_when_required": true,
+        "before_observer_available": true,
+        "after_observer_available": true,
+        "cleanup_contract_resolved": true,
+        "environment_restoration_verifiable": true,
+        "has_typed_operands": true,
+        "has_equation_terms": true,
+        "canonical_field_ids": [
+          "cf_5d199eeb7e2b671a",
+          "cf_5fc2db1f52c929ea"
+        ],
+        "semantic_types": [
+          "QUANTITY_DELTA",
+          "AMOUNT_BALANCE"
+        ],
+        "operation_refs": [
+          "bir_cd93d22bc648c06d",
+          "bir_4652619ca59aca8e",
+          "bir_5320292f347504f1",
+          "bir_3b3a5b5ce2e90655",
+          "bir_6876d72b3664fd4c",
+          "bir_aad54f95dc2b53f2"
+        ]
+      },
+      "v160_runtime_status": "NO_DIRECT_RULE_ID_IN_LEDGER",
+      "v160_experiment_ids": [],
+      "v160_trace_count": 0
+    },
+    {
+      "rule_id": "src_md:payable_eq_total_minus_discount",
+      "rule_version": "1",
+      "rule_fingerprint": "06f0181d347385dd146638ac0815a3326a9f4ea748b109c00f11e24a4f95c7bd",
+      "rule_type": "conservation",
+      "business_description": "payable_amount = total_amount - discount_amount",
+      "source_refs": [
+        {
+          "source_id": "BUSINESS_RULES.md",
+          "location": "platform_workspace/benchmark_mall_131/input/BUSINESS_RULES.md",
+          "original_text_fingerprint": "93ec0594442a2ecd",
+          "evidence_type": "markdown_business_rule",
+          "confidence": 0.9
+        }
+      ],
+      "entity_ids": [],
+      "field_ids": [],
+      "operation_ids": [],
+      "scope_field_ids": [],
+      "before_observer_contract_ids": [
+        "before_state",
+        "entity_state"
+      ],
+      "after_observer_contract_ids": [
+        "after_state",
+        "entity_state"
+      ],
+      "typed_expression": null,
+      "fixture_contract_id": "",
+      "cleanup_contract_ids": [],
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "inventory_http_op_absent": false
+      },
+      "v160_runtime_status": "NO_DIRECT_RULE_ID_IN_LEDGER",
+      "v160_experiment_ids": [],
+      "v160_trace_count": 0
+    },
+    {
+      "rule_id": "src_md:discount_not_negative",
+      "rule_version": "1",
+      "rule_fingerprint": "aa1332948311e136c92f8d7aaf24c102b179be92a4fc3e6fddd97314b96602af",
+      "rule_type": "conservation",
+      "business_description": "discount_amount cannot be less than 0",
+      "source_refs": [
+        {
+          "source_id": "BUSINESS_RULES.md",
+          "location": "platform_workspace/benchmark_mall_131/input/BUSINESS_RULES.md",
+          "original_text_fingerprint": "030538229dcdae66",
+          "evidence_type": "markdown_business_rule",
+          "confidence": 0.9
+        }
+      ],
+      "entity_ids": [],
+      "field_ids": [],
+      "operation_ids": [],
+      "scope_field_ids": [],
+      "before_observer_contract_ids": [
+        "before_state",
+        "entity_state"
+      ],
+      "after_observer_contract_ids": [
+        "after_state",
+        "entity_state"
+      ],
+      "typed_expression": null,
+      "fixture_contract_id": "",
+      "cleanup_contract_ids": [],
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "inventory_http_op_absent": false
+      },
+      "v160_runtime_status": "NO_DIRECT_RULE_ID_IN_LEDGER",
+      "v160_experiment_ids": [],
+      "v160_trace_count": 0
+    },
+    {
+      "rule_id": "src_md:discount_lte_total",
+      "rule_version": "1",
+      "rule_fingerprint": "b4fc17584d0fa2b8ee7e04d7b51cff4cbd09c548c91068318d867b6a818dd986",
+      "rule_type": "conservation",
+      "business_description": "discount_amount cannot exceed total_amount",
+      "source_refs": [
+        {
+          "source_id": "BUSINESS_RULES.md",
+          "location": "platform_workspace/benchmark_mall_131/input/BUSINESS_RULES.md",
+          "original_text_fingerprint": "c4b70b78bf7485c0",
+          "evidence_type": "markdown_business_rule",
+          "confidence": 0.9
+        }
+      ],
+      "entity_ids": [],
+      "field_ids": [],
+      "operation_ids": [],
+      "scope_field_ids": [],
+      "before_observer_contract_ids": [
+        "before_state",
+        "entity_state"
+      ],
+      "after_observer_contract_ids": [
+        "after_state",
+        "entity_state"
+      ],
+      "typed_expression": null,
+      "fixture_contract_id": "",
+      "cleanup_contract_ids": [],
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "inventory_http_op_absent": false
+      },
+      "v160_runtime_status": "NO_DIRECT_RULE_ID_IN_LEDGER",
+      "v160_experiment_ids": [],
+      "v160_trace_count": 0
+    },
+    {
+      "rule_id": "src_md:pay_amount_eq_payable",
+      "rule_version": "1",
+      "rule_fingerprint": "31577bb2006368896f52d24a40f257210114387b5244b790126f9eea184e0f34",
+      "rule_type": "conservation",
+      "business_description": "payment amount must equal order payable_amount",
+      "source_refs": [
+        {
+          "source_id": "BUSINESS_RULES.md",
+          "location": "platform_workspace/benchmark_mall_131/input/BUSINESS_RULES.md",
+          "original_text_fingerprint": "fa63dbcf5150b286",
+          "evidence_type": "markdown_business_rule",
+          "confidence": 0.9
+        }
+      ],
+      "entity_ids": [],
+      "field_ids": [],
+      "operation_ids": [],
+      "scope_field_ids": [],
+      "before_observer_contract_ids": [
+        "before_state",
+        "entity_state"
+      ],
+      "after_observer_contract_ids": [
+        "after_state",
+        "entity_state"
+      ],
+      "typed_expression": null,
+      "fixture_contract_id": "",
+      "cleanup_contract_ids": [],
+      "execution_precondition": {
+        "field_binding_resolved": true,
+        "operation_binding_resolved": true,
+        "inventory_http_op_absent": false
+      },
+      "v160_runtime_status": "NO_DIRECT_RULE_ID_IN_LEDGER",
+      "v160_experiment_ids": [],
+      "v160_trace_count": 0
+    }
+  ]
+}

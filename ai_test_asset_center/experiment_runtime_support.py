@@ -622,10 +622,32 @@ def preflight_experiment_executable(
             return False, "BLOCKED_MISSING_BINDING", f"unresolvable_placeholders_last_resort:{';'.join(_unresolved[:6])}"
         if not method:
             return False, "BLOCKED_MISSING_OPERATION", f"missing_method:{op_ref}"
+        # V1.6.1: honor compile-time readback resolvers on effect observers.
+        # Runtime previously re-checked IR-only declared_effect_observers and ignored
+        # resolver_operations/readback_contract_id already attached at compile, turning
+        # COMPILED field-oracle experiments into BLOCKED_MISSING_OBSERVER:write_observer.
+        _exp_has_compiled_effect_resolvers = any(
+            isinstance(obs, dict)
+            and _text(obs.get("observer_id"))
+            in {
+                "entity_state",
+                "before_state",
+                "after_state",
+                "final_state",
+                "business_effect",
+            }
+            and (
+                bool(_list(obs.get("resolver_operations")))
+                or bool(_text(obs.get("readback_contract_id")))
+            )
+            for obs in _list(exp.get("observers"))
+        )
         if (
             method in _WRITE_METHODS
             and not _declared_observation_path(path, ops)
             and not _declared_effect_observer_available(op, ops)
+            and not _exp_has_compiled_effect_resolvers
+            and not _is_permitted_operation_invocation(exp)
         ):
             # A write response reports that the request was accepted, not that
             # the business effect happened. Degrading to it would make the

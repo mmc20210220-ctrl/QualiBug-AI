@@ -1,0 +1,12 @@
+{
+  "schema_version": "qualibug.v161-specialized-tests.v1",
+  "generated_at": "2026-07-27T10:11:11.166612+00:00",
+  "v160_baseline_passed": 72,
+  "v161_specialized_collected": 50,
+  "v161_industry_neutral": 3,
+  "status": "PASS",
+  "suites": [
+    "tests/test_v161_rule_runtime_trace_closure.py",
+    "tests/test_v161_industry_neutral_oracle_trace.py"
+  ]
+}

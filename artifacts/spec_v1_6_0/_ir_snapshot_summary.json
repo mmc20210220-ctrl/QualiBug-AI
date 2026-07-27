@@ -1,0 +1,378 @@
+{
+  "operations": 24,
+  "invariants": 65,
+  "entities": 14,
+  "fields": 151,
+  "unknown_fields": 31,
+  "kinds": {
+    "forbidden_state_transition": 6,
+    "state_machine": 9,
+    "permission_boundary": 8,
+    "data_conservation": 13,
+    "idempotency": 3,
+    "concurrency": 2,
+    "business_rule": 13,
+    "postcondition": 11
+  },
+  "with_field_ids": 3,
+  "with_operands": 20,
+  "with_oprefs": 24,
+  "samples": [
+    {
+      "id": "bir_84f580d31e814d01",
+      "kind": "forbidden_state_transition",
+      "field_ids": [],
+      "operands": [
+        {
+          "entity_ref": "order",
+          "from_state": "CANCELLED",
+          "to_state": "PAID"
+        }
+      ],
+      "oprefs": [
+        "bir_9c14fd249f745565"
+      ],
+      "raw": "CANCELLED -/-> PAID"
+    },
+    {
+      "id": "bir_e53fdd784643a70e",
+      "kind": "forbidden_state_transition",
+      "field_ids": [],
+      "operands": [
+        {
+          "entity_ref": "order",
+          "from_state": "CANCELLED",
+          "to_state": "SHIPPED"
+        }
+      ],
+      "oprefs": [
+        "bir_6876d72b3664fd4c"
+      ],
+      "raw": "CANCELLED -/-> SHIPPED"
+    },
+    {
+      "id": "bir_33d7612ce28b8311",
+      "kind": "forbidden_state_transition",
+      "field_ids": [],
+      "operands": [
+        {
+          "entity_ref": "order",
+          "from_state": "CANCELLED",
+          "to_state": "COMPLETED"
+        }
+      ],
+      "oprefs": [
+        "bir_cd93d22bc648c06d",
+        "bir_4652619ca59aca8e",
+        "bir_5320292f347504f1"
+      ],
+      "raw": "CANCELLED -/-> COMPLETED"
+    },
+    {
+      "id": "bir_af02df02844b670b",
+      "kind": "forbidden_state_transition",
+      "field_ids": [],
+      "operands": [
+        {
+          "entity_ref": "order",
+          "from_state": "REFUNDED",
+          "to_state": "SHIPPED"
+        }
+      ],
+      "oprefs": [
+        "bir_6876d72b3664fd4c"
+      ],
+      "raw": "REFUNDED -/-> SHIPPED"
+    },
+    {
+      "id": "bir_66379f022f07b749",
+      "kind": "forbidden_state_transition",
+      "field_ids": [],
+      "operands": [
+        {
+          "entity_ref": "order",
+          "from_state": "REFUNDED",
+          "to_state": "PAID"
+        }
+      ],
+      "oprefs": [
+        "bir_9c14fd249f745565"
+      ],
+      "raw": "REFUNDED -/-> PAID"
+    },
+    {
+      "id": "bir_113b030a9cf6505f",
+      "kind": "forbidden_state_transition",
+      "field_ids": [],
+      "operands": [
+        {
+          "entity_ref": "order",
+          "from_state": "CLOSED",
+          "to_state": "任意状态"
+        }
+      ],
+      "oprefs": [
+        "bir_cd93d22bc648c06d",
+        "bir_4652619ca59aca8e",
+        "bir_5320292f347504f1"
+      ],
+      "raw": "CLOSED -/-> 任意状态"
+    },
+    {
+      "id": "bir_87594a78bf66ac1c",
+      "kind": "data_conservation",
+      "field_ids": [
+        "discount_amount"
+      ],
+      "operands": [
+        {
+          "entity_ref": "bir_93d7ca86485df7fa",
+          "field": "discount_amount"
+        }
+      ],
+      "oprefs": [
+        "bir_cd93d22bc648c06d",
+        "bir_4652619ca59aca8e",
+        "bir_5320292f347504f1"
+      ],
+      "raw": "`discount_amount` 不能小于 0"
+    },
+    {
+      "id": "bir_8134f35e8a6c3c78",
+      "kind": "data_conservation",
+      "field_ids": [
+        "discount_amount",
+        "total_amount"
+      ],
+      "operands": [
+        {
+          "entity_ref": "bir_93d7ca86485df7fa",
+          "field": "discount_amount"
+        },
+        {
+          "entity_ref": "bir_93d7ca86485df7fa",
+          "field": "total_amount"
+        }
+      ],
+      "oprefs": [
+        "bir_cd93d22bc648c06d",
+        "bir_4652619ca59aca8e",
+        "bir_5320292f347504f1"
+      ],
+      "raw": "`discount_amount` 不能大于 `total_amount`"
+    },
+    {
+      "id": "bir_2346f6a3c8f8d2d9",
+      "kind": "data_conservation",
+      "field_ids": [
+        "available_qty",
+        "locked_qty"
+      ],
+      "operands": [
+        {
+          "entity_ref": "bir_c62542c74b63e71f",
+          "field": "available_qty"
+        },
+        {
+          "entity_ref": "bir_c62542c74b63e71f",
+          "field": "locked_qty"
+        }
+      ],
+      "oprefs": [],
+      "raw": "available_qty、locked_qty 均不能为负数"
+    },
+    {
+      "id": "bir_b78bdd1dded0db2f",
+      "kind": "postcondition",
+      "field_ids": [],
+      "operands": [
+        {
+          "entity_ref": "",
+          "field": "",
+          "expected_value": "",
+          "must_create": false
+        }
+      ],
+      "oprefs": [
+        "bir_4652619ca59aca8e"
+      ],
+      "raw": "After 订单, 处于 `PENDING_PAYMENT` 状态"
+    },
+    {
+      "id": "bir_811f5e375a921e84",
+      "kind": "postcondition",
+      "field_ids": [],
+      "operands": [
+        {
+          "entity_ref": "",
+          "field": "",
+          "expected_value": "",
+          "must_create": false
+        }
+      ],
+      "oprefs": [
+        "bir_cd93d22bc648c06d",
+        "bir_4652619ca59aca8e",
+        "bir_5320292f347504f1"
+      ],
+      "raw": "After 支付金额, 等于订单应付金额"
+    },
+    {
+      "id": "bir_56a85442c836c317",
+      "kind": "postcondition",
+      "field_ids": [],
+      "operands": [
+        {
+          "entity_ref": "库存",
+          "field": "",
+          "expected_value": "",
+          "must_create": true
+        }
+      ],
+      "oprefs": [
+        "bir_3b3a5b5ce2e90655"
+      ],
+      "raw": "After 取消订单, 库存 must be created"
+    },
+    {
+      "id": "bir_706118abab1f3b0a",
+      "kind": "postcondition",
+      "field_ids": [],
+      "operands": [
+        {
+          "entity_ref": "",
+          "field": "",
+          "expected_value": "",
+          "must_create": false
+        }
+      ],
+      "oprefs": [
+        "bir_7a77b73d03e4b80b"
+      ],
+      "raw": "After 优惠券, 在有效期内"
+    },
+    {
+      "id": "bir_bed2f0958491c903",
+      "kind": "postcondition",
+      "field_ids": [],
+      "operands": [
+        {
+          "entity_ref": "",
+          "field": "",
+          "expected_value": "",
+          "must_create": false
+        }
+      ],
+      "oprefs": [
+        "bir_7a77b73d03e4b80b"
+      ],
+      "raw": "After 优惠券状态, 为 ACTIVE"
+    },
+    {
+      "id": "bir_20aba204212a2b93",
+      "kind": "postcondition",
+      "field_ids": [],
+      "operands": [
+        {
+          "entity_ref": "",
+          "field": "",
+          "expected_value": "",
+          "must_create": false
+        }
+      ],
+      "oprefs": [
+        "bir_7a77b73d03e4b80b",
+        "bir_9c14fd249f745565"
+      ],
+      "raw": "After 折扣券, 遵守封顶金额"
+    },
+    {
+      "id": "bir_052a8a7b61603894",
+      "kind": "postcondition",
+      "field_ids": [],
+      "operands": [
+        {
+          "entity_ref": "",
+          "field": "",
+          "expected_value": "",
+          "must_create": false
+        }
+      ],
+      "oprefs": [
+        "bir_cd93d22bc648c06d",
+        "bir_4652619ca59aca8e",
+        "bir_5320292f347504f1"
+      ],
+      "raw": "After 支付金额, 等于订单应付金额"
+    },
+    {
+      "id": "bir_ce10ecec560c1d45",
+      "kind": "postcondition",
+      "field_ids": [],
+      "operands": [
+        {
+          "entity_ref": "",
+          "field": "",
+          "expected_value": "",
+          "must_create": false
+        }
+      ],
+      "oprefs": [
+        "bir_588a7915b5421e5e",
+        "bir_ac0e035f9eb4b43a"
+      ],
+      "raw": "After 后台接口, 校验角色"
+    },
+    {
+      "id": "bir_2970ae2889e13744",
+      "kind": "postcondition",
+      "field_ids": [],
+      "operands": [
+        {
+          "entity_ref": "",
+          "field": "",
+          "expected_value": "",
+          "must_create": false
+        }
+      ],
+      "oprefs": [],
+      "raw": "After 禁用状态的操作按钮, 不可点击"
+    },
+    {
+      "id": "bir_d8a7bbc03cb0244a",
+      "kind": "postcondition",
+      "field_ids": [],
+      "operands": [
+        {
+          "entity_ref": "",
+          "field": "",
+          "expected_value": "",
+          "must_create": false
+        }
+      ],
+      "oprefs": [
+        "bir_588a7915b5421e5e",
+        "bir_ac0e035f9eb4b43a"
+      ],
+      "raw": "After com | Test@123456 | 状态为 DISABL, 原则上不能登录和下单 |"
+    },
+    {
+      "id": "bir_23242af78ad9951d",
+      "kind": "postcondition",
+      "field_ids": [],
+      "operands": [
+        {
+          "entity_ref": "",
+          "field": "",
+          "expected_value": "",
+          "must_create": false
+        }
+      ],
+      "oprefs": [
+        "bir_588a7915b5421e5e",
+        "bir_ac0e035f9eb4b43a"
+      ],
+      "raw": "After 所有, 校验角色"
+    }
+  ]
+}

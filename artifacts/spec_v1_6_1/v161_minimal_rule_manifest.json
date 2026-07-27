@@ -1,0 +1,150 @@
+{
+  "schema_version": "qualibug.v161-minimal-rule-manifest.v1",
+  "generated_at": "2026-07-27T09:04:27.863391+00:00",
+  "golden_rule_set_hash": "e92bb9c7838cee63205790f36e35cecf77d3720369f8dc048223b266040b6306",
+  "minimal_rule_manifest_hash": "a22e7709614f3cf53239d5d8b20d97cd09fe13931ba6037ab2002731f23ef5bd",
+  "target_counts": {
+    "causal_postcondition": 2,
+    "state_transition": 2,
+    "conservation": 2
+  },
+  "actual_counts": {
+    "state_transition": 2,
+    "conservation": 2
+  },
+  "V161_MINIMAL_SET_SOURCE_ASSET_LIMITED": true,
+  "limited": [
+    {
+      "rule_type": "causal_postcondition",
+      "available": 0,
+      "needed": 2,
+      "code": "V161_MINIMAL_SET_SOURCE_ASSET_LIMITED"
+    }
+  ],
+  "rules": [
+    {
+      "rule_id": "bir_84f580d31e814d01",
+      "rule_fingerprint": "7ea007832429aed4892f0f8492a58b4352cf65da41ee4d9d5cc6455b3224d2c7",
+      "rule_type": "state_transition",
+      "field_ids": [],
+      "operation_ids": [
+        "bir_9c14fd249f745565"
+      ],
+      "typed_expression": {
+        "kind": "forbidden_state_transition",
+        "operator": "must_not_transition",
+        "operands": [
+          {
+            "entity_ref": "order",
+            "from_state": "CANCELLED",
+            "to_state": "PAID"
+          }
+        ],
+        "raw": "CANCELLED -/-> PAID"
+      },
+      "selection_reason": "highest_executable_score_among_resolved"
+    },
+    {
+      "rule_id": "bir_e53fdd784643a70e",
+      "rule_fingerprint": "39499f6d2af6aa1e2bd8e2f0498004f4ff59ec6f95141141cc81c935897b597a",
+      "rule_type": "state_transition",
+      "field_ids": [],
+      "operation_ids": [
+        "bir_6876d72b3664fd4c"
+      ],
+      "typed_expression": {
+        "kind": "forbidden_state_transition",
+        "operator": "must_not_transition",
+        "operands": [
+          {
+            "entity_ref": "order",
+            "from_state": "CANCELLED",
+            "to_state": "SHIPPED"
+          }
+        ],
+        "raw": "CANCELLED -/-> SHIPPED"
+      },
+      "selection_reason": "highest_executable_score_among_resolved"
+    },
+    {
+      "rule_id": "bir_87594a78bf66ac1c",
+      "rule_fingerprint": "91bba5ca4fbdb3452fe86e11bf72eafc707efb5780cfeb053238781060dc928a",
+      "rule_type": "conservation",
+      "field_ids": [
+        "cf_5d199eeb7e2b671a"
+      ],
+      "operation_ids": [
+        "bir_cd93d22bc648c06d",
+        "bir_4652619ca59aca8e",
+        "bir_5320292f347504f1",
+        "bir_3b3a5b5ce2e90655",
+        "bir_6876d72b3664fd4c",
+        "bir_aad54f95dc2b53f2"
+      ],
+      "typed_expression": {
+        "kind": "data_conservation",
+        "operator": "must_hold",
+        "operands": [
+          {
+            "entity_ref": "bir_93d7ca86485df7fa",
+            "field": "discount_amount",
+            "field_id": "cf_5d199eeb7e2b671a",
+            "semantic_type": "QUANTITY_DELTA"
+          }
+        ],
+        "raw": "`discount_amount` 不能小于 0",
+        "equation": {
+          "operator": "unchanged_sum",
+          "terms": [
+            "cf_5d199eeb7e2b671a"
+          ]
+        }
+      },
+      "selection_reason": "highest_executable_score_among_resolved"
+    },
+    {
+      "rule_id": "bir_8134f35e8a6c3c78",
+      "rule_fingerprint": "a127e9f756c8e5e84f91ed2f1040940ce9afa7bc01107146792ec0517c68a09a",
+      "rule_type": "conservation",
+      "field_ids": [
+        "cf_5d199eeb7e2b671a",
+        "cf_5fc2db1f52c929ea"
+      ],
+      "operation_ids": [
+        "bir_cd93d22bc648c06d",
+        "bir_4652619ca59aca8e",
+        "bir_5320292f347504f1",
+        "bir_3b3a5b5ce2e90655",
+        "bir_6876d72b3664fd4c",
+        "bir_aad54f95dc2b53f2"
+      ],
+      "typed_expression": {
+        "kind": "data_conservation",
+        "operator": "must_hold",
+        "operands": [
+          {
+            "entity_ref": "bir_93d7ca86485df7fa",
+            "field": "discount_amount",
+            "field_id": "cf_5d199eeb7e2b671a",
+            "semantic_type": "QUANTITY_DELTA"
+          },
+          {
+            "entity_ref": "bir_93d7ca86485df7fa",
+            "field": "total_amount",
+            "field_id": "cf_5fc2db1f52c929ea",
+            "semantic_type": "AMOUNT_BALANCE"
+          }
+        ],
+        "raw": "`discount_amount` 不能大于 `total_amount`",
+        "equation": {
+          "operator": "unchanged_sum",
+          "terms": [
+            "cf_5d199eeb7e2b671a",
+            "cf_5fc2db1f52c929ea"
+          ]
+        }
+      },
+      "selection_reason": "highest_executable_score_among_resolved"
+    }
+  ]
+}

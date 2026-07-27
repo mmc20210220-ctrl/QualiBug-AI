@@ -1,0 +1,1213 @@
+{
+  "schema_version": "qualibug.v160-field-semantic-ledger.v1",
+  "fields": [
+    {
+      "field_id": "cf_bea055465aefde4e",
+      "name": "balance",
+      "entity_id": "bir_3bf5ab29312673c9",
+      "semantic_type": "AMOUNT_BALANCE",
+      "confidence": 0.9,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_d7047963c886f1f2",
+      "name": "created_at",
+      "entity_id": "bir_3bf5ab29312673c9",
+      "semantic_type": "TIMESTAMP",
+      "confidence": 0.85,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_a8cec99542aa7ae3",
+      "name": "email",
+      "entity_id": "bir_3bf5ab29312673c9",
+      "semantic_type": "IDENTITY",
+      "confidence": 0.95,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_869e186de0d37d77",
+      "name": "id",
+      "entity_id": "bir_3bf5ab29312673c9",
+      "semantic_type": "IDENTITY",
+      "confidence": 0.95,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_7c5e32a3e4a91cdc",
+      "name": "name",
+      "entity_id": "bir_3bf5ab29312673c9",
+      "semantic_type": "IDENTITY",
+      "confidence": 0.6,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_762970a5f79b0210",
+      "name": "password",
+      "entity_id": "bir_3bf5ab29312673c9",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_2e28c95f5788ae7e",
+      "name": "phone",
+      "entity_id": "bir_3bf5ab29312673c9",
+      "semantic_type": "IDENTITY",
+      "confidence": 0.6,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_e2ef2b6d947b8c18",
+      "name": "role",
+      "entity_id": "bir_3bf5ab29312673c9",
+      "semantic_type": "ENUM_VALUE",
+      "confidence": 0.7,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_8a8d739f3afe7842",
+      "name": "status",
+      "entity_id": "bir_3bf5ab29312673c9",
+      "semantic_type": "STATE",
+      "confidence": 0.9,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_1fa9f6fbe568fe60",
+      "name": "city",
+      "entity_id": "bir_262119465d4ac21e",
+      "semantic_type": "ENUM_VALUE",
+      "confidence": 0.7,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_745fe5b0d83ce6f7",
+      "name": "created_at",
+      "entity_id": "bir_262119465d4ac21e",
+      "semantic_type": "TIMESTAMP",
+      "confidence": 0.85,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_8c8da2a0585fb34c",
+      "name": "detail",
+      "entity_id": "bir_262119465d4ac21e",
+      "semantic_type": "AUDIT_FIELD",
+      "confidence": 0.7,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_18c52790348bc499",
+      "name": "id",
+      "entity_id": "bir_262119465d4ac21e",
+      "semantic_type": "IDENTITY",
+      "confidence": 0.95,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_1bef14c128bd85c2",
+      "name": "is_default",
+      "entity_id": "bir_262119465d4ac21e",
+      "semantic_type": "BOOLEAN_FLAG",
+      "confidence": 0.8,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_d5cb20cb6ed2b032",
+      "name": "phone",
+      "entity_id": "bir_262119465d4ac21e",
+      "semantic_type": "IDENTITY",
+      "confidence": 0.6,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_842e8e5e6e7c7256",
+      "name": "province",
+      "entity_id": "bir_262119465d4ac21e",
+      "semantic_type": "ENUM_VALUE",
+      "confidence": 0.7,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_6e44d53dcf49ec2f",
+      "name": "receiver",
+      "entity_id": "bir_262119465d4ac21e",
+      "semantic_type": "IDENTITY",
+      "confidence": 0.6,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_1261d2afe26ada48",
+      "name": "user_id",
+      "entity_id": "bir_262119465d4ac21e",
+      "semantic_type": "OWNER_ID",
+      "confidence": 0.85,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_c4c4be0523aa36c9",
+      "name": "category",
+      "entity_id": "bir_ef676344645d010b",
+      "semantic_type": "ENUM_VALUE",
+      "confidence": 0.7,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_acded9642da2ceae",
+      "name": "created_at",
+      "entity_id": "bir_ef676344645d010b",
+      "semantic_type": "TIMESTAMP",
+      "confidence": 0.85,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_caca7882adc26e65",
+      "name": "id",
+      "entity_id": "bir_ef676344645d010b",
+      "semantic_type": "IDENTITY",
+      "confidence": 0.95,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_2c21ed28f5be17c9",
+      "name": "original_price",
+      "entity_id": "bir_ef676344645d010b",
+      "semantic_type": "AMOUNT_DELTA",
+      "confidence": 0.7,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_8b651e1cadda7625",
+      "name": "price",
+      "entity_id": "bir_ef676344645d010b",
+      "semantic_type": "AMOUNT_DELTA",
+      "confidence": 0.7,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_6d33babf9f72a7fc",
+      "name": "seller_id",
+      "entity_id": "bir_ef676344645d010b",
+      "semantic_type": "FOREIGN_KEY",
+      "confidence": 0.8,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_54208597e82098c9",
+      "name": "sku",
+      "entity_id": "bir_ef676344645d010b",
+      "semantic_type": "IDENTITY",
+      "confidence": 0.95,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_e52c37770e421b73",
+      "name": "status",
+      "entity_id": "bir_ef676344645d010b",
+      "semantic_type": "STATE",
+      "confidence": 0.9,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_c52f21772a60487f",
+      "name": "title",
+      "entity_id": "bir_ef676344645d010b",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_dd3bfaaad61b9df1",
+      "name": "updated_at",
+      "entity_id": "bir_ef676344645d010b",
+      "semantic_type": "TIMESTAMP",
+      "confidence": 0.85,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_18f38a780c0384a3",
+      "name": "available_qty",
+      "entity_id": "bir_c62542c74b63e71f",
+      "semantic_type": "QUANTITY_BALANCE",
+      "confidence": 0.9,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_52060ec63697c14e",
+      "name": "locked_qty",
+      "entity_id": "bir_c62542c74b63e71f",
+      "semantic_type": "QUANTITY_BALANCE",
+      "confidence": 0.9,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_ecbe3f61df3a55f9",
+      "name": "safety_stock",
+      "entity_id": "bir_c62542c74b63e71f",
+      "semantic_type": "QUANTITY_BALANCE",
+      "confidence": 0.9,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_519a80fe90a4e8a9",
+      "name": "sku",
+      "entity_id": "bir_c62542c74b63e71f",
+      "semantic_type": "IDENTITY",
+      "confidence": 0.95,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_8b09fc6eddcad888",
+      "name": "updated_at",
+      "entity_id": "bir_c62542c74b63e71f",
+      "semantic_type": "TIMESTAMP",
+      "confidence": 0.85,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_406caf6933f5788c",
+      "name": "warehouse_code",
+      "entity_id": "bir_c62542c74b63e71f",
+      "semantic_type": "IDENTITY",
+      "confidence": 0.7,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_f05b16993c44cb6f",
+      "name": "created_at",
+      "entity_id": "bir_addd8655753e3bf9",
+      "semantic_type": "TIMESTAMP",
+      "confidence": 0.85,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_8ea001462f3e07b5",
+      "name": "id",
+      "entity_id": "bir_addd8655753e3bf9",
+      "semantic_type": "IDENTITY",
+      "confidence": 0.95,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_3d80d5b7d41f5e5d",
+      "name": "order_id",
+      "entity_id": "bir_addd8655753e3bf9",
+      "semantic_type": "FOREIGN_KEY",
+      "confidence": 0.8,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_8472ddd188fad3af",
+      "name": "qty",
+      "entity_id": "bir_addd8655753e3bf9",
+      "semantic_type": "QUANTITY_BALANCE",
+      "confidence": 0.8,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_f6aa64966ac11701",
+      "name": "sku",
+      "entity_id": "bir_addd8655753e3bf9",
+      "semantic_type": "IDENTITY",
+      "confidence": 0.7,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_79a7eab168b44d96",
+      "name": "status",
+      "entity_id": "bir_addd8655753e3bf9",
+      "semantic_type": "STATE",
+      "confidence": 0.9,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_250b07cf7dab7f06",
+      "name": "created_at",
+      "entity_id": "bir_1c8e4e4790e48276",
+      "semantic_type": "TIMESTAMP",
+      "confidence": 0.85,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_663231d46348ddb6",
+      "name": "id",
+      "entity_id": "bir_1c8e4e4790e48276",
+      "semantic_type": "IDENTITY",
+      "confidence": 0.95,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_8e152b0de552893c",
+      "name": "price_snapshot",
+      "entity_id": "bir_1c8e4e4790e48276",
+      "semantic_type": "AMOUNT_DELTA",
+      "confidence": 0.7,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_0518ec904ccc6908",
+      "name": "qty",
+      "entity_id": "bir_1c8e4e4790e48276",
+      "semantic_type": "QUANTITY_DELTA",
+      "confidence": 0.7,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_27b41cc5be2ac667",
+      "name": "selected",
+      "entity_id": "bir_1c8e4e4790e48276",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_25bad6161fc4e3ed",
+      "name": "sku",
+      "entity_id": "bir_1c8e4e4790e48276",
+      "semantic_type": "IDENTITY",
+      "confidence": 0.7,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_0e30d199aad1461c",
+      "name": "user_id",
+      "entity_id": "bir_1c8e4e4790e48276",
+      "semantic_type": "OWNER_ID",
+      "confidence": 0.85,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_d51160a823d07d32",
+      "name": "amount",
+      "entity_id": "bir_10aa57442e49cb43",
+      "semantic_type": "AMOUNT_DELTA",
+      "confidence": 0.7,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_a18ff7f9701fddbc",
+      "name": "category_scope",
+      "entity_id": "bir_10aa57442e49cb43",
+      "semantic_type": "ENUM_VALUE",
+      "confidence": 0.7,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_b1732d00fb756ecd",
+      "name": "code",
+      "entity_id": "bir_10aa57442e49cb43",
+      "semantic_type": "IDENTITY",
+      "confidence": 0.95,
+      "binding_status": "RESOLVED"
+    },
+    {
+      "field_id": "cf_2e39fc69c5f5600a",
+      "name": "expires_at",
+      "entity_id": "bir_10aa57442e49cb43",
+      "semantic_type": "TIMESTAMP",
+      "confidence": 0.85,
+      "binding_status": "INCOMPLETE"
+    },
+    {
+      "field_id": "cf_e5eac70b4bd50e1b",
+      "name": "global_limit",
+      "entity_id": "bir_10aa57442e49cb43",
+      "semantic_type": "QUANTITY_DELTA",
+      "confidence": 0.7,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_3513dcfb9c3792b9",
+      "name": "id",
+      "entity_id": "bir_10aa57442e49cb43",
+      "semantic_type": "IDENTITY",
+      "confidence": 0.95,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_cfff858ea045eb43",
+      "name": "max_discount",
+      "entity_id": "bir_10aa57442e49cb43",
+      "semantic_type": "QUANTITY_DELTA",
+      "confidence": 0.7,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_c5fa80f1fa0bee5f",
+      "name": "min_order_amount",
+      "entity_id": "bir_10aa57442e49cb43",
+      "semantic_type": "AMOUNT_DELTA",
+      "confidence": 0.7,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_14ec385da21ccb8b",
+      "name": "name",
+      "entity_id": "bir_10aa57442e49cb43",
+      "semantic_type": "IDENTITY",
+      "confidence": 0.6,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_47609d5a552a368d",
+      "name": "starts_at",
+      "entity_id": "bir_10aa57442e49cb43",
+      "semantic_type": "TIMESTAMP",
+      "confidence": 0.85,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_ab7ae3e03fb721dd",
+      "name": "status",
+      "entity_id": "bir_10aa57442e49cb43",
+      "semantic_type": "STATE",
+      "confidence": 0.9,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_041b0d931e4919f3",
+      "name": "type",
+      "entity_id": "bir_10aa57442e49cb43",
+      "semantic_type": "ENUM_VALUE",
+      "confidence": 0.7,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_fe8bec4911bc74bb",
+      "name": "user_limit",
+      "entity_id": "bir_10aa57442e49cb43",
+      "semantic_type": "QUANTITY_DELTA",
+      "confidence": 0.7,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_f9d4f4af8f59c22e",
+      "name": "items",
+      "entity_id": "bir_10aa57442e49cb43",
+      "semantic_type": "FOREIGN_KEY",
+      "confidence": 0.5,
+      "binding_status": "RESOLVED"
+    },
+    {
+      "field_id": "cf_806e269b89334dc1",
+      "name": "totalamount",
+      "entity_id": "bir_10aa57442e49cb43",
+      "semantic_type": "AMOUNT_BALANCE",
+      "confidence": 0.9,
+      "binding_status": "RESOLVED"
+    },
+    {
+      "field_id": "cf_2b4ed1efbfa87e6d",
+      "name": "items[].price",
+      "entity_id": "bir_10aa57442e49cb43",
+      "semantic_type": "AMOUNT_DELTA",
+      "confidence": 0.7,
+      "binding_status": "RESOLVED"
+    },
+    {
+      "field_id": "cf_3ac6058fc0172864",
+      "name": "items[].qty",
+      "entity_id": "bir_10aa57442e49cb43",
+      "semantic_type": "QUANTITY_DELTA",
+      "confidence": 0.7,
+      "binding_status": "RESOLVED"
+    },
+    {
+      "field_id": "cf_086ad8cf6a0c00b6",
+      "name": "items[].sku",
+      "entity_id": "bir_10aa57442e49cb43",
+      "semantic_type": "FOREIGN_KEY",
+      "confidence": 0.6,
+      "binding_status": "RESOLVED"
+    },
+    {
+      "field_id": "cf_3ec3642f0631f585",
+      "name": "coupon_id",
+      "entity_id": "bir_bc8191bd66c5481d",
+      "semantic_type": "FOREIGN_KEY",
+      "confidence": 0.8,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_1c9413c22d79a396",
+      "name": "id",
+      "entity_id": "bir_bc8191bd66c5481d",
+      "semantic_type": "IDENTITY",
+      "confidence": 0.95,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_47aa7af0eba3ee4f",
+      "name": "order_id",
+      "entity_id": "bir_bc8191bd66c5481d",
+      "semantic_type": "FOREIGN_KEY",
+      "confidence": 0.8,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_08f82dd55e705b27",
+      "name": "used_at",
+      "entity_id": "bir_bc8191bd66c5481d",
+      "semantic_type": "TIMESTAMP",
+      "confidence": 0.85,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_c7823982ae600a5a",
+      "name": "user_id",
+      "entity_id": "bir_bc8191bd66c5481d",
+      "semantic_type": "OWNER_ID",
+      "confidence": 0.85,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_f9004080e6d04995",
+      "name": "address_id",
+      "entity_id": "bir_93d7ca86485df7fa",
+      "semantic_type": "FOREIGN_KEY",
+      "confidence": 0.8,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_1b587e791d3bb95e",
+      "name": "cancelled_at",
+      "entity_id": "bir_93d7ca86485df7fa",
+      "semantic_type": "TIMESTAMP",
+      "confidence": 0.85,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_c321fd77eb6d9965",
+      "name": "coupon_code",
+      "entity_id": "bir_93d7ca86485df7fa",
+      "semantic_type": "IDENTITY",
+      "confidence": 0.7,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_8236db6463c96b2b",
+      "name": "created_at",
+      "entity_id": "bir_93d7ca86485df7fa",
+      "semantic_type": "TIMESTAMP",
+      "confidence": 0.85,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_5d199eeb7e2b671a",
+      "name": "discount_amount",
+      "entity_id": "bir_93d7ca86485df7fa",
+      "semantic_type": "QUANTITY_DELTA",
+      "confidence": 0.7,
+      "binding_status": "INCOMPLETE"
+    },
+    {
+      "field_id": "cf_cf216e5d1cefb4db",
+      "name": "id",
+      "entity_id": "bir_93d7ca86485df7fa",
+      "semantic_type": "IDENTITY",
+      "confidence": 0.95,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_e26baf2b549a2fe7",
+      "name": "order_no",
+      "entity_id": "bir_93d7ca86485df7fa",
+      "semantic_type": "IDENTITY",
+      "confidence": 0.95,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_4b30edffe87c9333",
+      "name": "paid_at",
+      "entity_id": "bir_93d7ca86485df7fa",
+      "semantic_type": "TIMESTAMP",
+      "confidence": 0.85,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_be96302b1f5a31a6",
+      "name": "payable_amount",
+      "entity_id": "bir_93d7ca86485df7fa",
+      "semantic_type": "AMOUNT_BALANCE",
+      "confidence": 0.9,
+      "binding_status": "INCOMPLETE"
+    },
+    {
+      "field_id": "cf_0a9b92121307a464",
+      "name": "status",
+      "entity_id": "bir_93d7ca86485df7fa",
+      "semantic_type": "STATE",
+      "confidence": 0.9,
+      "binding_status": "INCOMPLETE"
+    },
+    {
+      "field_id": "cf_5fc2db1f52c929ea",
+      "name": "total_amount",
+      "entity_id": "bir_93d7ca86485df7fa",
+      "semantic_type": "AMOUNT_BALANCE",
+      "confidence": 0.9,
+      "binding_status": "INCOMPLETE"
+    },
+    {
+      "field_id": "cf_8580d4ed9d306938",
+      "name": "updated_at",
+      "entity_id": "bir_93d7ca86485df7fa",
+      "semantic_type": "TIMESTAMP",
+      "confidence": 0.85,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_ea529fcd2e7bb4fb",
+      "name": "user_id",
+      "entity_id": "bir_93d7ca86485df7fa",
+      "semantic_type": "OWNER_ID",
+      "confidence": 0.85,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_6592bf5052785ebe",
+      "name": "addressid",
+      "entity_id": "bir_93d7ca86485df7fa",
+      "semantic_type": "FOREIGN_KEY",
+      "confidence": 0.8,
+      "binding_status": "RESOLVED"
+    },
+    {
+      "field_id": "cf_a7f62924f5d3fcfc",
+      "name": "couponcode",
+      "entity_id": "bir_93d7ca86485df7fa",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": "RESOLVED"
+    },
+    {
+      "field_id": "cf_ef131e59690c4e29",
+      "name": "items",
+      "entity_id": "bir_93d7ca86485df7fa",
+      "semantic_type": "FOREIGN_KEY",
+      "confidence": 0.5,
+      "binding_status": "RESOLVED"
+    },
+    {
+      "field_id": "cf_4d4af34dbbfe68c3",
+      "name": "items[].qty",
+      "entity_id": "bir_93d7ca86485df7fa",
+      "semantic_type": "QUANTITY_DELTA",
+      "confidence": 0.7,
+      "binding_status": "RESOLVED"
+    },
+    {
+      "field_id": "cf_b260f7e446af64fd",
+      "name": "items[].sku",
+      "entity_id": "bir_93d7ca86485df7fa",
+      "semantic_type": "FOREIGN_KEY",
+      "confidence": 0.6,
+      "binding_status": "RESOLVED"
+    },
+    {
+      "field_id": "cf_f702d0d150b073ed",
+      "name": "id",
+      "entity_id": "bir_9b3958b2e582e109",
+      "semantic_type": "IDENTITY",
+      "confidence": 0.95,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_5917704ba1f8cb97",
+      "name": "line_amount",
+      "entity_id": "bir_9b3958b2e582e109",
+      "semantic_type": "AMOUNT_DELTA",
+      "confidence": 0.7,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_c752031e67f8f3d6",
+      "name": "order_id",
+      "entity_id": "bir_9b3958b2e582e109",
+      "semantic_type": "FOREIGN_KEY",
+      "confidence": 0.8,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_07bb829dd15473b7",
+      "name": "price",
+      "entity_id": "bir_9b3958b2e582e109",
+      "semantic_type": "AMOUNT_DELTA",
+      "confidence": 0.7,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_cc4d9bc3db6eeb63",
+      "name": "qty",
+      "entity_id": "bir_9b3958b2e582e109",
+      "semantic_type": "QUANTITY_DELTA",
+      "confidence": 0.7,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_c9febccb0559c85a",
+      "name": "sku",
+      "entity_id": "bir_9b3958b2e582e109",
+      "semantic_type": "IDENTITY",
+      "confidence": 0.7,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_71b948a4e41b513c",
+      "name": "title",
+      "entity_id": "bir_9b3958b2e582e109",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_c4c2eec52b1819e1",
+      "name": "amount",
+      "entity_id": "bir_96f28a8258a09cc3",
+      "semantic_type": "AMOUNT_DELTA",
+      "confidence": 0.7,
+      "binding_status": "RESOLVED"
+    },
+    {
+      "field_id": "cf_443d12111de940b4",
+      "name": "channel",
+      "entity_id": "bir_96f28a8258a09cc3",
+      "semantic_type": "ENUM_VALUE",
+      "confidence": 0.7,
+      "binding_status": "RESOLVED"
+    },
+    {
+      "field_id": "cf_dfb07c484dee9a3f",
+      "name": "created_at",
+      "entity_id": "bir_96f28a8258a09cc3",
+      "semantic_type": "TIMESTAMP",
+      "confidence": 0.85,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_867cb3db2da58229",
+      "name": "id",
+      "entity_id": "bir_96f28a8258a09cc3",
+      "semantic_type": "IDENTITY",
+      "confidence": 0.95,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_49caef538a000506",
+      "name": "idempotency_key",
+      "entity_id": "bir_96f28a8258a09cc3",
+      "semantic_type": "IDEMPOTENCY_KEY",
+      "confidence": 0.9,
+      "binding_status": "INCOMPLETE"
+    },
+    {
+      "field_id": "cf_69a103a67ab1155e",
+      "name": "order_id",
+      "entity_id": "bir_96f28a8258a09cc3",
+      "semantic_type": "FOREIGN_KEY",
+      "confidence": 0.8,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_881924c2f453dc97",
+      "name": "payment_no",
+      "entity_id": "bir_96f28a8258a09cc3",
+      "semantic_type": "IDENTITY",
+      "confidence": 0.95,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_3e27d79c3d64753d",
+      "name": "status",
+      "entity_id": "bir_96f28a8258a09cc3",
+      "semantic_type": "STATE",
+      "confidence": 0.9,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_8bacb94b5c668c86",
+      "name": "user_id",
+      "entity_id": "bir_96f28a8258a09cc3",
+      "semantic_type": "OWNER_ID",
+      "confidence": 0.85,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_d000fe04f0bf6d7e",
+      "name": "idempotencykey",
+      "entity_id": "bir_96f28a8258a09cc3",
+      "semantic_type": "IDEMPOTENCY_KEY",
+      "confidence": 0.9,
+      "binding_status": "RESOLVED"
+    },
+    {
+      "field_id": "cf_5244357b9585a557",
+      "name": "orderid",
+      "entity_id": "bir_96f28a8258a09cc3",
+      "semantic_type": "FOREIGN_KEY",
+      "confidence": 0.8,
+      "binding_status": "RESOLVED"
+    },
+    {
+      "field_id": "cf_943618e7da26d36e",
+      "name": "amount",
+      "entity_id": "bir_d6cd8f5d82b31d1e",
+      "semantic_type": "AMOUNT_DELTA",
+      "confidence": 0.7,
+      "binding_status": "RESOLVED"
+    },
+    {
+      "field_id": "cf_4c54c0b377e1876b",
+      "name": "created_at",
+      "entity_id": "bir_d6cd8f5d82b31d1e",
+      "semantic_type": "TIMESTAMP",
+      "confidence": 0.85,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_081ed5d6ea6df063",
+      "name": "id",
+      "entity_id": "bir_d6cd8f5d82b31d1e",
+      "semantic_type": "IDENTITY",
+      "confidence": 0.95,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_c990cda40a09331b",
+      "name": "order_id",
+      "entity_id": "bir_d6cd8f5d82b31d1e",
+      "semantic_type": "FOREIGN_KEY",
+      "confidence": 0.8,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_b4b1b38a1d58cf10",
+      "name": "reason",
+      "entity_id": "bir_d6cd8f5d82b31d1e",
+      "semantic_type": "AUDIT_FIELD",
+      "confidence": 0.7,
+      "binding_status": "RESOLVED"
+    },
+    {
+      "field_id": "cf_9107d3799eab9336",
+      "name": "refund_no",
+      "entity_id": "bir_d6cd8f5d82b31d1e",
+      "semantic_type": "IDENTITY",
+      "confidence": 0.95,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_c50bda04443c6943",
+      "name": "status",
+      "entity_id": "bir_d6cd8f5d82b31d1e",
+      "semantic_type": "STATE",
+      "confidence": 0.9,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_e818188cfb9a3051",
+      "name": "updated_at",
+      "entity_id": "bir_d6cd8f5d82b31d1e",
+      "semantic_type": "TIMESTAMP",
+      "confidence": 0.85,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_57f8294e1b748a7e",
+      "name": "user_id",
+      "entity_id": "bir_d6cd8f5d82b31d1e",
+      "semantic_type": "OWNER_ID",
+      "confidence": 0.85,
+      "binding_status": "NOT_DECLARED"
+    },
+    {
+      "field_id": "cf_702c53896d38c72a",
+      "name": "orderid",
+      "entity_id": "bir_d6cd8f5d82b31d1e",
+      "semantic_type": "FOREIGN_KEY",
+      "confidence": 0.8,
+      "binding_status": "RESOLVED"
+    },
+    {
+      "field_id": "cf_7a92d25f7132834f",
+      "name": "action",
+      "entity_id": "bir_1093a43df9259ae6",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_038f15c683dd3d0c",
+      "name": "actor_id",
+      "entity_id": "bir_1093a43df9259ae6",
+      "semantic_type": "FOREIGN_KEY",
+      "confidence": 0.8,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_a64ef20e8a421f77",
+      "name": "created_at",
+      "entity_id": "bir_1093a43df9259ae6",
+      "semantic_type": "TIMESTAMP",
+      "confidence": 0.85,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_e9677cb396ba9a80",
+      "name": "id",
+      "entity_id": "bir_1093a43df9259ae6",
+      "semantic_type": "IDENTITY",
+      "confidence": 0.95,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_09ab3e55eec6bfa8",
+      "name": "payload",
+      "entity_id": "bir_1093a43df9259ae6",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_5133b18bab96a9e9",
+      "name": "target_id",
+      "entity_id": "bir_1093a43df9259ae6",
+      "semantic_type": "FOREIGN_KEY",
+      "confidence": 0.8,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_bf216651c19b20ba",
+      "name": "target_type",
+      "entity_id": "bir_1093a43df9259ae6",
+      "semantic_type": "ENUM_VALUE",
+      "confidence": 0.7,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_8e6e75bbf4b70a15",
+      "name": "'上海市'",
+      "entity_id": "bir_11e298a51dc415e0",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_4f460bbdeeea9f6f",
+      "name": "'买家一号'",
+      "entity_id": "bir_11e298a51dc415e0",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_05a359c7e9866da4",
+      "name": "'买家二号'",
+      "entity_id": "bir_11e298a51dc415e0",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_3f5468ff1eeaea3b",
+      "name": "'仓库一号'",
+      "entity_id": "bir_11e298a51dc415e0",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_44aeca1cea1dd3a4",
+      "name": "'商家一号'",
+      "entity_id": "bir_11e298a51dc415e0",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_3a5da481c64d9ab6",
+      "name": "'审计一号'",
+      "entity_id": "bir_11e298a51dc415e0",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_141a5df7033a2721",
+      "name": "'禁用买家'",
+      "entity_id": "bir_11e298a51dc415e0",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_247c153e7ee4f48c",
+      "name": "'系统管理员'",
+      "entity_id": "bir_11e298a51dc415e0",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_d11a3b6867c2a20b",
+      "name": "'苏州市'",
+      "entity_id": "bir_11e298a51dc415e0",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_1c903732211af538",
+      "name": "'财务一号'",
+      "entity_id": "bir_11e298a51dc415e0",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_3c6e0ac61b32b6bb",
+      "name": "1)",
+      "entity_id": "bir_11e298a51dc415e0",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_0bcde83c956df9f2",
+      "name": "1);",
+      "entity_id": "bir_11e298a51dc415e0",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_234442d81608e7f9",
+      "name": "10)",
+      "entity_id": "bir_11e298a51dc415e0",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_88ba89081591a038",
+      "name": "100.00",
+      "entity_id": "bir_11e298a51dc415e0",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_e6477abf2d09bfe4",
+      "name": "1000.00",
+      "entity_id": "bir_11e298a51dc415e0",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_594bede5a76d11d8",
+      "name": "129.90",
+      "entity_id": "bir_11e298a51dc415e0",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_3ce955bb93a26e1d",
+      "name": "2)",
+      "entity_id": "bir_11e298a51dc415e0",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_830a7f9bd8cd2770",
+      "name": "2199.00",
+      "entity_id": "bir_11e298a51dc415e0",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_419d0b4c275f306c",
+      "name": "30.00",
+      "entity_id": "bir_11e298a51dc415e0",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_e3bcd03eb664e9f9",
+      "name": "399.00",
+      "entity_id": "bir_11e298a51dc415e0",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_d13630070710705d",
+      "name": "500.00",
+      "entity_id": "bir_11e298a51dc415e0",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_fc681d4901936259",
+      "name": "7599.00",
+      "entity_id": "bir_11e298a51dc415e0",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_fdac1b37df6d2bfa",
+      "name": "999.00",
+      "entity_id": "bir_11e298a51dc415e0",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_6c5dccd561403e3f",
+      "name": "9999.00",
+      "entity_id": "bir_11e298a51dc415e0",
+      "semantic_type": "UNKNOWN",
+      "confidence": 0.3,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_8794773bdd77f8ca",
+      "name": "city",
+      "entity_id": "bir_11e298a51dc415e0",
+      "semantic_type": "ENUM_VALUE",
+      "confidence": 0.7,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_7391e551d68efb11",
+      "name": "min_order_amount",
+      "entity_id": "bir_11e298a51dc415e0",
+      "semantic_type": "AMOUNT_DELTA",
+      "confidence": 0.7,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_48c5d5b5ee65498f",
+      "name": "original_price",
+      "entity_id": "bir_11e298a51dc415e0",
+      "semantic_type": "AMOUNT_DELTA",
+      "confidence": 0.7,
+      "binding_status": ""
+    },
+    {
+      "field_id": "cf_2b1ebd808f0db33f",
+      "name": "safety_stock) VALUES",
+      "entity_id": "bir_11e298a51dc415e0",
+      "semantic_type": "QUANTITY_BALANCE",
+      "confidence": 0.9,
+      "binding_status": ""
+    }
+  ]
+}

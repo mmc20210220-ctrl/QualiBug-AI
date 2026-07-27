@@ -1,0 +1,210 @@
+{
+  "schema_version": "qualibug.v160-runtime-funnel.v1",
+  "spec_version": "V1.6.0",
+  "run_name": "V1_6_0_FIELD_LEVEL_BUSINESS_ORACLE_RUNTIME_V1",
+  "generated_at": "2026-07-27T08:46:42.737150+00:00",
+  "scan_id": "scan_benchmark_mall_131_1785141701072",
+  "run_id": "RUN_759828cc1f111aa50c4c3e54",
+  "campaign_id": "CMP_4d07614f012f301939d34b75",
+  "report_path": "D:\\QualiBug-AI\\QualiBug-AI-main\\platform_outputs\\benchmark_mall_131\\intelligence_report.json",
+  "execution_status": "completed",
+  "terminal_status_counts": {
+    "REJECTED": 7,
+    "BLOCKED": 1379,
+    "DELIVERABLE": 32,
+    "DEFERRED": 80
+  },
+  "top_reason_codes": [
+    [
+      "STATE_RULE_PRECONDITION_NOT_ESTABLISHED",
+      441
+    ],
+    [
+      "BLOCKED_INVALID_CLEANUP_PLAN",
+      274
+    ],
+    [
+      "BLOCKED_NON_REVERSIBLE_WRITE",
+      207
+    ],
+    [
+      "BLOCKED_EMPTY_CONSERVATION_TERMS",
+      100
+    ],
+    [
+      "BLOCKED_ASSERTION_EVIDENCE_UNPRODUCIBLE",
+      82
+    ],
+    [
+      "BLOCKED_MISSING_OBSERVER",
+      81
+    ],
+    [
+      "MISSING_PRIMARY_OPERATION",
+      80
+    ],
+    [
+      "BLOCKED_CONFLICTING_SOURCE",
+      68
+    ],
+    [
+      "BLOCKED_MISSING_OPERATION",
+      44
+    ],
+    [
+      "FIELD_LEVEL_RULE_NOT_EXECUTABLE",
+      39
+    ],
+    [
+      "BLOCKED_MISSING_BINDING",
+      36
+    ],
+    [
+      "ORACLE_NOT_VIOLATED",
+      7
+    ],
+    [
+      "BLOCKED_CLEANUP_CONTRACT_DRIFT",
+      7
+    ]
+  ],
+  "deep_field_gate_blocks": {
+    "STATE_RULE_PRECONDITION_NOT_ESTABLISHED": 441,
+    "BLOCKED_EMPTY_CONSERVATION_TERMS": 100,
+    "FIELD_LEVEL_RULE_NOT_EXECUTABLE": 39
+  },
+  "funnel": [
+    {
+      "stage": "Golden Rule Frozen",
+      "entered": 20,
+      "passed": 20,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "Rule Contract Resolved",
+      "entered": 20,
+      "passed": 12,
+      "blocked": 8,
+      "failed": 0,
+      "SOURCE_ASSET_LIMITED": true
+    },
+    {
+      "stage": "Formal Product Entry",
+      "entered": 1,
+      "passed": 1,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "Obligations Selected",
+      "entered": 1498,
+      "passed": 1498,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "Obligations Executed",
+      "entered": 1498,
+      "passed": 39,
+      "blocked": 1459,
+      "failed": 0
+    },
+    {
+      "stage": "Deep Field Gates Fired",
+      "entered": 580,
+      "passed": 0,
+      "blocked": 580,
+      "failed": 0,
+      "by_reason": {
+        "STATE_RULE_PRECONDITION_NOT_ESTABLISHED": 441,
+        "BLOCKED_EMPTY_CONSERVATION_TERMS": 100,
+        "FIELD_LEVEL_RULE_NOT_EXECUTABLE": 39
+      }
+    },
+    {
+      "stage": "Field Oracle Evaluated",
+      "entered": 0,
+      "passed": 0,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "Formal Findings",
+      "entered": 3,
+      "passed": 3,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "Formal Field-Level Findings",
+      "entered": 0,
+      "passed": 0,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "Cleanup Failures",
+      "entered": 39,
+      "passed": 13,
+      "blocked": 0,
+      "failed": 26
+    },
+    {
+      "stage": "External Unique TP",
+      "entered": 0,
+      "passed": 0,
+      "blocked": 0,
+      "failed": 0,
+      "status": "NOT_MEASURED"
+    }
+  ],
+  "runtime_metrics": {
+    "Golden Rule Contracts Resolved": 12,
+    "Golden Rules Real Executed": 0,
+    "Field Oracles Evaluated": 0,
+    "Causal Oracles Evaluated": 0,
+    "State Oracles Evaluated": 0,
+    "Conservation Oracles Evaluated": 0,
+    "Executed Empty Conservation Terms": 0,
+    "Cleanup Failure Count": 26,
+    "Executed Obligation Count": 39,
+    "Blocked Obligation Count": 1459,
+    "False Completed": 0,
+    "SOURCE_ASSET_LIMITED": true,
+    "Formal Customer Deliverable Count": 3,
+    "Formal Field-Level Finding Count": 0,
+    "Formal Shallow Finding Count": 3
+  },
+  "readiness": {
+    "status": "NOT_READY",
+    "release_ready": false,
+    "reason_codes": [
+      "PIPELINE_DEGRADED",
+      "PARTIAL_OBLIGATION_EXECUTION",
+      "CLEANUP_FAILURE",
+      "COVERAGE_GAPS_REMAIN"
+    ],
+    "pipeline_health_status": "DEGRADED",
+    "cleanup_failure_count": 26,
+    "executed_obligation_count": 39
+  },
+  "shallow_formal_findings": [
+    {
+      "title": "[ContractOracle] http_status_class: admin GET /api/orders/898ec9a1-f3cd-4f30-ad3f-300107c89f7f",
+      "risk_family": "authorization",
+      "severity": "P1"
+    },
+    {
+      "title": "[ContractOracle] validation_rejection: buyer GET /api/products/qb_auto_sku_QBBOOTSTRAP_CMP_4d07614f012f301939d3_20260727064028_a094b4",
+      "risk_family": "validation",
+      "severity": "P1"
+    },
+    {
+      "title": "[ContractOracle] http_status_class: admin GET /api/orders",
+      "risk_family": "state",
+      "severity": "P1"
+    }
+  ],
+  "field_formal_findings": []
+}

@@ -1,0 +1,721 @@
+{
+  "ok": true,
+  "scan_id": "scan_benchmark_mall_131_1785146757851",
+  "grade": "evidence_ready",
+  "score": 6.0,
+  "coverage": 1.0,
+  "total_findings": 1,
+  "total_ms": 206347,
+  "layers": {
+    "source_grounded_discovery": {
+      "tool": "V12 enterprise campaign",
+      "findings": 1,
+      "candidates": 0,
+      "ms": 65016,
+      "execution_status": "completed",
+      "campaign_id": "CMP_4d07614f012f301939d34b75"
+    },
+    "external_signals": {
+      "tool": "explicit_external_signal_requests",
+      "findings": 0,
+      "candidates": 0,
+      "ms": 0,
+      "execution_status": "not_requested",
+      "provider_distribution": {}
+    },
+    "ui_execution": {
+      "tool": "explicit_ui_execution_requests",
+      "findings": 0,
+      "candidates": 0,
+      "ms": 0,
+      "execution_status": "not_requested",
+      "provider_distribution": {},
+      "artifact_count": 0,
+      "evidence_captured_count": 0,
+      "created_data_count": 0,
+      "verified_candidates": 0,
+      "high_confidence_candidates": 0
+    },
+    "legacy_domain_layers": {
+      "tool": "disabled",
+      "findings": 0,
+      "candidates": 0,
+      "ms": 0,
+      "reason": "source_bound_scope_fixture_actor_cleanup_contract_required"
+    }
+  },
+  "spectrum": {},
+  "auto_har": {
+    "status": "receipt_backed",
+    "entry_count": 655
+  },
+  "execution_status": "completed",
+  "campaign": {
+    "campaign_id": "CMP_4d07614f012f301939d34b75",
+    "campaign_status": "degraded",
+    "project_id": "benchmark_mall_131",
+    "scope_id": "private_default",
+    "environment_ref": "sandbox",
+    "source_id": "src_benchmark_mall_131_composed_all",
+    "source_hash": "503317304928d072811692cedd110d09e9dcc0d9c6128cff382f7613ca03c545",
+    "source_snapshot_hash": "d9d814fe08b1d9537f107e08d9873a5d96de0bdad6a6b1330a5c939866d465e2",
+    "policy_version": "v1.0.0-baseline",
+    "lineage_campaign_id": "CMP_4d07614f012f301939d34b75",
+    "rerun_key": "",
+    "rerun_reason": "",
+    "run_count": 18,
+    "round_count": 0,
+    "slice_budget": 926,
+    "automatic_round_limit": 8,
+    "attempted_slice_count": 0,
+    "confirmed_slice_count": 0,
+    "obligation_attempt_selected_count": 1498,
+    "obligation_attempt_terminal_count": 1498,
+    "obligation_attempt_ledger_fingerprint": "e28ce3f66eda973f26601f2daba63c96079531c37c1a5327b31686d6bdd2f68a",
+    "coverage_deferred_reason": "",
+    "next_campaign_reason": "",
+    "completion_authority": "obligation_attempt_ledger",
+    "completion_is_formal": true,
+    "campaign_mode": "resumed"
+  },
+  "coverage_gaps": [
+    {
+      "family": "ui_visual",
+      "reason_code": "E_BROWSER_UI_DISABLED",
+      "message": "Browser UI smoke probe is disabled."
+    }
+  ],
+  "runtime_contract": {
+    "status": "approved",
+    "reason": "",
+    "missing_requirements": [],
+    "requested_base_url": "http://127.0.0.1:8080",
+    "approved_base_url": "http://127.0.0.1:8080",
+    "environment_ref": "sandbox",
+    "environment_kind": "test",
+    "execution_mode": "approved_sandbox_write",
+    "source_manifest": {
+      "source_id": "src_benchmark_mall_131_composed_all",
+      "source_hash": "503317304928d072811692cedd110d09e9dcc0d9c6128cff382f7613ca03c545",
+      "source_origin": "registered_source_registry",
+      "source_version_id": "srcv_503317304928d072811692ce"
+    },
+    "target_policy_decision": {
+      "schema_version": "qualibug.target-policy-decision.v1",
+      "decision_id": "tpd_b8f318490541af12819d",
+      "status": "approved",
+      "requested_base_url": "http://127.0.0.1:8080",
+      "approved_base_url": "http://127.0.0.1:8080",
+      "environment_type": "test",
+      "environment_ref": "sandbox",
+      "execution_mode": "approved_sandbox_write",
+      "runtime_status": "approved",
+      "read_allowed": true,
+      "write_allowed": true,
+      "blocking_codes": [],
+      "exact_target_match": true,
+      "authorization_basis": "explicit_environment_and_exact_target"
+    },
+    "execution_approval": {
+      "approval_id": "eap_64aeb53668071a8f365382c2",
+      "campaign_id": "CMP_4d07614f012f301939d34b75",
+      "scope_id": "private_default",
+      "environment_ref": "sandbox",
+      "source_hash": "503317304928d072811692cedd110d09e9dcc0d9c6128cff382f7613ca03c545",
+      "target_origin": "http://127.0.0.1:8080",
+      "execution_mode": "approved_sandbox_write",
+      "expires_at_utc": "2026-07-27T11:03:23Z",
+      "actor": {
+        "name": "local_dev",
+        "role": "project_owner"
+      },
+      "issued_at_utc": "2026-07-27T10:03:23Z",
+      "approval_hash": "09e0708fc47dacfc76dd52be615be86e9d72181beb32b793bfcc81cd4ce4836f"
+    }
+  },
+  "test_data_plan": {
+    "schema_version": "enterprise-test-data-plan-v2",
+    "campaign_id": "CMP_4d07614f012f301939d34b75",
+    "status": "ready",
+    "strategy": "create_disposable",
+    "environment_ref": "sandbox",
+    "scope_id": "private_default",
+    "write_approved": true,
+    "receipt_validation": "verified",
+    "missing_requirements": [],
+    "plans": [],
+    "coverage_gaps": []
+  },
+  "release_gate": {
+    "schema_version": "qualibug-release-gate-v1",
+    "verdict": "not_ready",
+    "status": "inconclusive",
+    "campaign_id": "CMP_4d07614f012f301939d34b75",
+    "campaign_status": "degraded",
+    "execution_status": "completed",
+    "runtime_contract_status": "approved",
+    "confirmed_finding_count": 0,
+    "confirmed_p0_count": 0,
+    "confirmed_p1_count": 0,
+    "evidence_bundle_id": "evb_71482c0b05bf90255da5c759",
+    "evidence_bundle_verified": true,
+    "reasons": [
+      {
+        "code": "CAMPAIGN_NOT_COMPLETED",
+        "detail": "degraded"
+      },
+      {
+        "code": "PIPELINE_DEGRADED",
+        "detail": "current_run_formal_finding_publication_not_ready",
+        "source": "run_delivery_readiness"
+      },
+      {
+        "code": "PARTIAL_OBLIGATION_EXECUTION",
+        "detail": "current_run_formal_finding_publication_not_ready",
+        "source": "run_delivery_readiness"
+      },
+      {
+        "code": "CLEANUP_FAILURE",
+        "detail": "current_run_formal_finding_publication_not_ready",
+        "source": "run_delivery_readiness"
+      },
+      {
+        "code": "COVERAGE_GAPS_REMAIN",
+        "detail": "current_run_formal_finding_publication_not_ready",
+        "source": "run_delivery_readiness"
+      }
+    ],
+    "p3_20_coverage_risk": null,
+    "scope": "current_run_formal_finding_publication",
+    "release_ready": false,
+    "eligibility_status": "NOT_READY",
+    "pre_reconciliation": {
+      "verdict": "not_ready",
+      "status": "inconclusive"
+    },
+    "run_delivery_readiness_schema_version": "qualibug.run-delivery-readiness.v1",
+    "identities": {
+      "campaign_id": "CMP_4d07614f012f301939d34b75",
+      "run_id": "RUN_c558c1dadd1b95668e06301e",
+      "mainline_authority": "experiment_candidate",
+      "mainline_contract_fingerprint": "47e1aa33ff696325c3885abee95f64cfb94abce7d7b3efbb2acc42ee0f588bc1",
+      "attempt_ledger_fingerprint": "e28ce3f66eda973f26601f2daba63c96079531c37c1a5327b31686d6bdd2f68a",
+      "evidence_bundle_id": "evb_71482c0b05bf90255da5c759"
+    },
+    "checks": [
+      {
+        "name": "执行管线健康度",
+        "status": "fail",
+        "detail": "发现管线状态为 degraded，本次运行的结论不可作为发布依据。",
+        "code": "PIPELINE_DEGRADED",
+        "source": "run_delivery_readiness"
+      },
+      {
+        "name": "测试义务执行完整性",
+        "status": "fail",
+        "detail": "仅部分测试义务完成执行，未执行部分的行为空间没有被验证。",
+        "code": "PARTIAL_OBLIGATION_EXECUTION",
+        "source": "run_delivery_readiness"
+      },
+      {
+        "name": "受治理写入清理",
+        "status": "fail",
+        "detail": "存在清理失败，目标环境可能残留测试数据。",
+        "code": "CLEANUP_FAILURE",
+        "source": "run_delivery_readiness"
+      },
+      {
+        "name": "行为空间覆盖缺口",
+        "status": "fail",
+        "detail": "仍存在未闭合的覆盖缺口，缺口范围内的缺陷既未证实也未排除。",
+        "code": "COVERAGE_GAPS_REMAIN",
+        "source": "run_delivery_readiness"
+      },
+      {
+        "name": "测试义务执行率",
+        "status": "pending",
+        "detail": "163/1498 个测试义务完成终态执行。",
+        "code": "OBLIGATION_EXECUTION_RATIO",
+        "source": "run_delivery_readiness"
+      },
+      {
+        "name": "正式交付发布决定",
+        "status": "pending",
+        "detail": "发布被阻断：1 个缺陷通过交付门禁但未发布，空缺陷列表不代表目标无缺陷。",
+        "code": "FORMAL_PUBLICATION_DECISION",
+        "source": "run_delivery_readiness"
+      }
+    ],
+    "overall_status": "fail",
+    "has_decision": true,
+    "blocking_check_count": 4,
+    "pending_check_count": 2,
+    "pass_check_count": 0,
+    "measurement_status": "NOT_MEASURED"
+  },
+  "execution_evidence_summary": {
+    "status": "not_requested",
+    "requested": 0,
+    "executed": 0,
+    "failed": 0,
+    "blocked": 0,
+    "finding_count": 0,
+    "artifact_count": 0,
+    "created_data_count": 0,
+    "evidence_captured_count": 0,
+    "provider_distribution": {},
+    "bridge_provider_distribution": {},
+    "artifact_refs": [],
+    "current_url_samples": [],
+    "summary": "UI execution not requested."
+  },
+  "report_path": "D:\\QualiBug-AI\\QualiBug-AI-main\\platform_outputs\\benchmark_mall_131\\intelligence_report.json",
+  "benchmark_metrics": {
+    "benchmark_active": false,
+    "ground_truth_available": false,
+    "measurement_status": "NOT_MEASURED",
+    "reason": "external_evaluator_receipt_required",
+    "coverage_matrix": {
+      "schema_version": "qualibug.risk-invariant-coverage.v2",
+      "ontology_family_count": 12,
+      "ontology_invariant_count": 36,
+      "covered_family_count": 1,
+      "confirmed_family_count": 1,
+      "family_coverage_rate": 0.0833,
+      "confirmed_family_rate": 0.0833,
+      "unclassified_signal_count": 0,
+      "families": [
+        {
+          "family": "authorization",
+          "display_name": "Authorization & Access Control",
+          "target_invariant_count": 3,
+          "confirmed_count": 1,
+          "candidate_count": 0,
+          "evidence_complete_count": 1,
+          "touched_invariants": [
+            "actor.role >= endpoint.required_role",
+            "resource.owner_id == actor.id for non-admin reads",
+            "actor.role in endpoint.allowed_roles for mutating operations"
+          ],
+          "coverage_status": "confirmed_with_evidence",
+          "touched_invariant_count": 3
+        },
+        {
+          "family": "audit_trail",
+          "display_name": "Audit Trail",
+          "target_invariant_count": 3,
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "touched_invariants": [],
+          "coverage_status": "gap",
+          "touched_invariant_count": 0
+        },
+        {
+          "family": "concurrency",
+          "display_name": "Concurrency Consistency",
+          "target_invariant_count": 3,
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "touched_invariants": [],
+          "coverage_status": "gap",
+          "touched_invariant_count": 0
+        },
+        {
+          "family": "conservation",
+          "display_name": "Monetary / Quantity Conservation",
+          "target_invariant_count": 3,
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "touched_invariants": [],
+          "coverage_status": "gap",
+          "touched_invariant_count": 0
+        },
+        {
+          "family": "data_integrity",
+          "display_name": "Data Integrity",
+          "target_invariant_count": 3,
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "touched_invariants": [],
+          "coverage_status": "gap",
+          "touched_invariant_count": 0
+        },
+        {
+          "family": "eventual_consistency",
+          "display_name": "Eventual Consistency",
+          "target_invariant_count": 3,
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "touched_invariants": [],
+          "coverage_status": "gap",
+          "touched_invariant_count": 0
+        },
+        {
+          "family": "idempotency",
+          "display_name": "Idempotency",
+          "target_invariant_count": 3,
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "touched_invariants": [],
+          "coverage_status": "gap",
+          "touched_invariant_count": 0
+        },
+        {
+          "family": "input_boundary",
+          "display_name": "Input Boundary",
+          "target_invariant_count": 3,
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "touched_invariants": [],
+          "coverage_status": "gap",
+          "touched_invariant_count": 0
+        },
+        {
+          "family": "lifecycle",
+          "display_name": "Lifecycle Integrity",
+          "target_invariant_count": 3,
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "touched_invariants": [],
+          "coverage_status": "gap",
+          "touched_invariant_count": 0
+        },
+        {
+          "family": "state_machine",
+          "display_name": "State Machine Integrity",
+          "target_invariant_count": 3,
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "touched_invariants": [],
+          "coverage_status": "gap",
+          "touched_invariant_count": 0
+        },
+        {
+          "family": "tenant_isolation",
+          "display_name": "Tenant Data Isolation",
+          "target_invariant_count": 3,
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "touched_invariants": [],
+          "coverage_status": "gap",
+          "touched_invariant_count": 0
+        },
+        {
+          "family": "visibility",
+          "display_name": "Visibility Control",
+          "target_invariant_count": 3,
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "touched_invariants": [],
+          "coverage_status": "gap",
+          "touched_invariant_count": 0
+        }
+      ],
+      "invariants": [
+        {
+          "invariant": "actor.role >= endpoint.required_role",
+          "family": "authorization",
+          "confirmed_count": 1,
+          "candidate_count": 0,
+          "evidence_complete_count": 1,
+          "coverage_status": "confirmed_with_evidence"
+        },
+        {
+          "invariant": "actor.role in endpoint.allowed_roles for mutating operations",
+          "family": "authorization",
+          "confirmed_count": 1,
+          "candidate_count": 0,
+          "evidence_complete_count": 1,
+          "coverage_status": "confirmed_with_evidence"
+        },
+        {
+          "invariant": "resource.owner_id == actor.id for non-admin reads",
+          "family": "authorization",
+          "confirmed_count": 1,
+          "candidate_count": 0,
+          "evidence_complete_count": 1,
+          "coverage_status": "confirmed_with_evidence"
+        },
+        {
+          "invariant": "audit log is append-only; no UPDATE or DELETE on audit table",
+          "family": "audit_trail",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "every mutating operation generates an audit log entry",
+          "family": "audit_trail",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "update → updated_at and updated_by are set to current time and actor",
+          "family": "audit_trail",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "concurrent reads and writes produce consistent results",
+          "family": "concurrency",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "lock acquisition order is consistent across transactions",
+          "family": "concurrency",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "optimistic lock version check prevents lost updates",
+          "family": "concurrency",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "balance >= 0 at all times (unless overdraft allowed)",
+          "family": "conservation",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "each debit has a unique transaction_id and is processed exactly once",
+          "family": "conservation",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "sum(before) == sum(after) for conserved quantity",
+          "family": "conservation",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "api_response.data == db_select_result for the same entity",
+          "family": "data_integrity",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "cache[key].data == db.record.data for cached entities",
+          "family": "data_integrity",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "replication_lag < acceptable_threshold for read replicas",
+          "family": "data_integrity",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "dependent events are processed in causal order",
+          "family": "eventual_consistency",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "each message_id is processed at most once (or idempotently)",
+          "family": "eventual_consistency",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "published_message_count == consumed_message_count over time window",
+          "family": "eventual_consistency",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "approval.idempotency_key → at most one approval action",
+          "family": "idempotency",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "idempotency_key → exactly one created resource",
+          "family": "idempotency",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "payment_idempotency_key → at most one charge",
+          "family": "idempotency",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "price >= 0 and quantity >= 0 for non-refund operations",
+          "family": "input_boundary",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "user input in response is HTML-entity-escaped",
+          "family": "input_boundary",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "user input is parameterized; no raw SQL concatenation responds with injection pattern",
+          "family": "input_boundary",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "cascade rules are explicit; no surprise deletion",
+          "family": "lifecycle",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "entity can only archive when all dependent workflows are complete",
+          "family": "lifecycle",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "only CANCELLED/EXPIRED entities can be physically deleted",
+          "family": "lifecycle",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "entity.state.is_final → entity is immutable",
+          "family": "state_machine",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "state_history contains all mandatory intermediate states",
+          "family": "state_machine",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "target_state in current_state.allowed_next_states",
+          "family": "state_machine",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "data.tenant_id == actor.tenant_id for all reads",
+          "family": "tenant_isolation",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "request.tenant_id is ignored; server uses token.tenant_id",
+          "family": "tenant_isolation",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "write.target_tenant_id == actor.tenant_id",
+          "family": "tenant_isolation",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "PII fields are masked according to policy in non-admin responses",
+          "family": "visibility",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "fields_visible_to(role_a) ∩ fields_visible_to(role_b) == allowed_overlap",
+          "family": "visibility",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        },
+        {
+          "invariant": "sensitive fields (password, token, ssn) NOT in any API response",
+          "family": "visibility",
+          "confirmed_count": 0,
+          "candidate_count": 0,
+          "evidence_complete_count": 0,
+          "coverage_status": "gap"
+        }
+      ],
+      "honesty_note": "Risk/invariant coverage from current scan outputs; not Bug recall."
+    },
+    "commercial_quality_suppressed": true,
+    "display_note": "尚未完成外部质量评测；内部 benchmark_metrics 不得作为商业能力主张。"
+  },
+  "cumulative": {}
+}

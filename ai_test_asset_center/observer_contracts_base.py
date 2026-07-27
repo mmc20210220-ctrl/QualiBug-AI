@@ -1354,9 +1354,13 @@ def _conservation_terms_from_experiment(experiment: dict[str, Any]) -> list[str]
             or prop.get("kind")
             or expression.get("kind")
         ).lower()
-        if kind == "field_delta":
-            # ── P0-9: extract field references from field_delta assertions ──
-            for field_spec in _list(assertion.get("fields") or assertion.get("operands")):
+        if kind in {"field_delta", "postcondition"}:
+            # V1.6.0: observe only rule-declared field operands (cf_* or name).
+            for field_spec in _list(
+                assertion.get("fields")
+                or assertion.get("operands")
+                or expression.get("operands")
+            ):
                 if isinstance(field_spec, dict):
                     _f = _text(field_spec.get("field_id") or field_spec.get("field"))
                     if _f:
@@ -1364,8 +1368,27 @@ def _conservation_terms_from_experiment(experiment: dict[str, Any]) -> list[str]
         elif kind != "conservation" and kind not in ("cross_entity_consistency", "limit_constraint") and not equation:
             continue
         for term in _list(equation.get("terms") or equation.get("fields")):
-            if _text(term):
-                terms.append(_text(term))
+            if isinstance(term, dict):
+                # Prefer JSON field name over cf_* so observer evidence keys match bodies.
+                _tf = _text(term.get("field") or term.get("field_id"))
+                if _tf:
+                    terms.append(_tf)
+            elif _text(term):
+                raw_term = _text(term)
+                mapped = False
+                for field_spec in _list(
+                    assertion.get("operands") or expression.get("operands")
+                ):
+                    if not isinstance(field_spec, dict):
+                        continue
+                    if _text(field_spec.get("field_id")) == raw_term and _text(
+                        field_spec.get("field")
+                    ):
+                        terms.append(_text(field_spec.get("field")))
+                        mapped = True
+                        break
+                if not mapped:
+                    terms.append(raw_term)
         # ── Extract fields from structured_expression (multi-entity resolver output) ──
         structured = _dict(assertion.get("structured_expression"))
         if structured:
@@ -1389,8 +1412,21 @@ def _conservation_terms_from_experiment(experiment: dict[str, Any]) -> list[str]
     return list(dict.fromkeys(terms))
 
 
-def _numeric_snapshot_values(body: Any, terms: list[str]) -> dict[str, int | float]:
+def _numeric_snapshot_values(
+    body: Any,
+    terms: list[str],
+    *,
+    allow_unscoped_numeric: bool = False,
+) -> dict[str, int | float]:
+    """Extract numeric values for explicitly required field terms.
+
+    V1.6.0 conservation/oracle path: empty ``terms`` must fail closed — never
+    invent a formula by scanning every JSON numeric. Final-state fingerprinting
+    may pass ``allow_unscoped_numeric=True`` for a non-oracle identity marker only.
+    """
     term_lookup = {_normalized_field_name(term): term for term in terms if _text(term)}
+    if not term_lookup and not allow_unscoped_numeric:
+        return {}
     values: dict[str, int | float] = {}
     for row in _entity_rows(body):
         cleaned = _without_server_managed_fields(row)
@@ -1470,6 +1506,18 @@ def _observe_entity_state(
         })
 
     conservation_terms = _conservation_terms_from_experiment(_dict(experiment))
+    # Prefer compile-time field observation contracts when present.
+    for _obs in _list(_dict(experiment).get("observers")):
+        if not isinstance(_obs, dict):
+            continue
+        for _fid in _list(_obs.get("required_field_ids")):
+            if _text(_fid):
+                conservation_terms.append(_text(_fid))
+        _foc = _dict(_obs.get("field_observation_contract"))
+        for _fid in _list(_foc.get("required_field_ids")):
+            if _text(_fid):
+                conservation_terms.append(_text(_fid))
+    conservation_terms = list(dict.fromkeys(conservation_terms))
     first_governance = _dict(write_steps[0].get("governance_receipt"))
     last_governance = _dict(write_steps[-1].get("governance_receipt"))
     before_values = _numeric_snapshot_values(
@@ -1575,7 +1623,7 @@ def _final_entity_snapshot_marker(value: Any) -> tuple[str, str]:
     Lifecycle before/after observers must not use this fallback.
     """
 
-    numeric_values = _numeric_snapshot_values(value, [])
+    numeric_values = _numeric_snapshot_values(value, [], allow_unscoped_numeric=True)
     if numeric_values:
         fingerprint = _fingerprint(numeric_values)
         return fingerprint, "entity_numeric_snapshot"
@@ -1644,8 +1692,14 @@ def _state_snapshot_evidence(
             evidence["final_state_kind"] = "entity_snapshot"
             before_body = _dict(governance.get("before")).get("body")
             after_body = snapshot.get("body")
-            before_values = _numeric_snapshot_values(before_body, [])
-            after_values = _numeric_snapshot_values(after_body, [])
+            # Fingerprint-only context: not a conservation formula. Oracle
+            # evaluation must still require explicit required_field_ids.
+            before_values = _numeric_snapshot_values(
+                before_body, [], allow_unscoped_numeric=True,
+            )
+            after_values = _numeric_snapshot_values(
+                after_body, [], allow_unscoped_numeric=True,
+            )
             if before_values or after_values:
                 evidence["before_values"] = before_values
                 evidence["after_values"] = after_values
@@ -1912,6 +1966,7 @@ _TYPED_ASSERTION_KINDS = {
     "equality",
     "eventual_consistency",
     "field_delta",
+    "forbidden_state_transition",
     "http_status",
     "http_status_class",
     "idempotency",

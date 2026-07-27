@@ -1,0 +1,8 @@
+{
+  "schema_version": "qualibug.v161-architecture-authority-audit.v1",
+  "duplicate_oracle_authority": 0,
+  "new_parallel_modules": 0,
+  "forbidden_files_absent": true,
+  "in_place_only": true,
+  "status": "PASS"
+}

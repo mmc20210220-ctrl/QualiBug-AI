@@ -1,0 +1,95 @@
+{
+  "schema_version": "qualibug.v160-final-report.v1",
+  "spec_version": "V1.6.0",
+  "run_name": "V1_6_0_FIELD_LEVEL_BUSINESS_ORACLE_RUNTIME_V1",
+  "generated_at": "2026-07-27T08:46:42.741149+00:00",
+  "baseline_commit": "f440c3df96aadc32f578ab976a35b558bcb5eefb",
+  "run_commit": "f440c3df96aadc32f578ab976a35b558bcb5eefb",
+  "freeze_bundle_hash": "3aebafe88eb6b973aa01f97d639f7114bf4f7602e7e47cc351c8f0d5bdd046b2",
+  "golden_rule_set_hash": "e92bb9c7838cee63205790f36e35cecf77d3720369f8dc048223b266040b6306",
+  "scan_id": "scan_benchmark_mall_131_1785141701072",
+  "run_id": "RUN_759828cc1f111aa50c4c3e54",
+  "campaign_id": "CMP_4d07614f012f301939d34b75",
+  "product_entry": {
+    "url": "http://localhost:8088/api/v1/scan",
+    "status": 200,
+    "total_ms": 163668
+  },
+  "target": {
+    "project_id": "benchmark_mall_131",
+    "base_url": "http://localhost:8080",
+    "approved_base_url": "http://localhost:8080",
+    "environment_type": "test",
+    "environment_ref": "sandbox",
+    "product_backend": "http://localhost:8088",
+    "product_frontend": "http://localhost:5174"
+  },
+  "stage_a": "PASS_ENGINEERING_CLOSED",
+  "stage_b": {
+    "formal_product_entry": true,
+    "field_oracles_evaluated": 0,
+    "golden_rules_real_executed": 0,
+    "cleanup_failure_count": 26,
+    "status": "PARTIAL"
+  },
+  "stage_c": {
+    "external_unique_tp": "NOT_MEASURED",
+    "new_non_authorization_unique_tp": "NOT_MEASURED",
+    "signed_evaluator_receipt": false,
+    "status": "NOT_MEASURED"
+  },
+  "V1_6_0_RESULT_LEVEL": "B",
+  "level_reasons": [
+    "FIELD_LEVEL_BUSINESS_ORACLE_NOT_PROVEN",
+    "GOLDEN_RULES_REAL_EXECUTED_BELOW_MINIMUM",
+    "FIELD_ORACLES_EVALUATED_BELOW_MINIMUM",
+    "GOLDEN_RULE_SOURCE_ASSET_LIMITED",
+    "CLEANUP_FAILURES_PRESENT",
+    "NO_FORMAL_FIELD_LEVEL_FINDING",
+    "EXTERNAL_UNIQUE_TP_NOT_MEASURED"
+  ],
+  "FIELD_LEVEL_ORACLE_ENTRY_ALLOWED": true,
+  "PROJECT_G_ENTRY_ALLOWED": false,
+  "next_breakpoint": "FIELD_LEVEL_BUSINESS_ORACLE_NOT_PROVEN",
+  "runtime_metrics": {
+    "Golden Rule Contracts Resolved": 12,
+    "Golden Rules Real Executed": 0,
+    "Field Oracles Evaluated": 0,
+    "Causal Oracles Evaluated": 0,
+    "State Oracles Evaluated": 0,
+    "Conservation Oracles Evaluated": 0,
+    "Executed Empty Conservation Terms": 0,
+    "Cleanup Failure Count": 26,
+    "Executed Obligation Count": 39,
+    "Blocked Obligation Count": 1459,
+    "False Completed": 0,
+    "SOURCE_ASSET_LIMITED": true,
+    "Formal Customer Deliverable Count": 3,
+    "Formal Field-Level Finding Count": 0,
+    "Formal Shallow Finding Count": 3
+  },
+  "deep_field_gate_blocks": {
+    "STATE_RULE_PRECONDITION_NOT_ESTABLISHED": 441,
+    "BLOCKED_EMPTY_CONSERVATION_TERMS": 100,
+    "FIELD_LEVEL_RULE_NOT_EXECUTABLE": 39
+  },
+  "formal_shallow_findings": [
+    {
+      "title": "[ContractOracle] http_status_class: admin GET /api/orders/898ec9a1-f3cd-4f30-ad3f-300107c89f7f",
+      "risk_family": "authorization",
+      "severity": "P1"
+    },
+    {
+      "title": "[ContractOracle] validation_rejection: buyer GET /api/products/qb_auto_sku_QBBOOTSTRAP_CMP_4d07614f012f301939d3_20260727064028_a094b4",
+      "risk_family": "validation",
+      "severity": "P1"
+    },
+    {
+      "title": "[ContractOracle] http_status_class: admin GET /api/orders",
+      "risk_family": "state",
+      "severity": "P1"
+    }
+  ],
+  "stop": true,
+  "stop_reason": "P0-28: do not expand business domain or rule count in this phase"
+}

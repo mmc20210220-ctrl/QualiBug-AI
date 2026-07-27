@@ -1,0 +1,253 @@
+{
+  "schema_version": "qualibug.v160-field-oracle-gap-map.v1",
+  "spec_version": "V1.6.0",
+  "generated_at": "2026-07-27T08:15:00Z",
+  "baseline_commit": "f440c3df96aadc32f578ab976a35b558bcb5eefb",
+  "architecture_policy": {
+    "in_place_only": true,
+    "new_modules_forbidden_unless_existing_cannot_carry": true,
+    "parallel_authorities_forbidden": [
+      "field_model",
+      "rule_engine",
+      "observer_system",
+      "assertion_dsl",
+      "oracle",
+      "finding_fact_source"
+    ]
+  },
+  "production_mainline": [
+    "Knowledge Asset",
+    "behavior_ir._build_canonical_fields",
+    "behavior_ir invariant construction",
+    "invariant_operation_binder / obligation_compiler_base",
+    "experiment_compiler_obligation + experiment_protocols_base",
+    "observer_contracts_base",
+    "experiment_outcome_finalizer → contract_oracles → assertion_dsl_base",
+    "customer_delivery_gate_v2 → Finding"
+  ],
+  "capability_map": [
+    {
+      "capability": "Canonical Field",
+      "current_file": "ai_test_asset_center/behavior_ir.py",
+      "current_function": "_build_canonical_fields",
+      "current_input": "knowledge_asset data_tables/field_dictionary/operation schemas",
+      "current_output": "entity.fields[] with field_id=cf_*, semantic_type, api/db bindings",
+      "current_breakpoint": "cf_* IDs are built but not propagated into invariant operands / experiment assertions",
+      "in_place_fix": "Attach cf_* into invariant operands and keep through property_spec → assertion.fields"
+    },
+    {
+      "capability": "字段语义分类",
+      "current_file": "ai_test_asset_center/behavior_ir.py + project_context_compiler.py",
+      "current_function": "_classify_field_semantics / classify_field_semantic_multi_evidence",
+      "current_input": "field name/type/flags",
+      "current_output": "semantic_type (16 types; UNKNOWN allowed)",
+      "current_breakpoint": "Dual classifiers exist; UNKNOWN must remain EXPLICITLY_UNRESOLVED (40/41 ok)",
+      "in_place_fix": "Reuse single classifier inside _build_canonical_fields only; do not add a third classifier module"
+    },
+    {
+      "capability": "API Request绑定",
+      "current_file": "ai_test_asset_center/behavior_ir.py",
+      "current_function": "_build_canonical_fields (api_request_bindings)",
+      "current_input": "operation request_schema properties",
+      "current_output": "field.api_request_bindings[{operation_id,json_path}]",
+      "current_breakpoint": "Bindings exist on IR fields but observers/assertions do not consume them",
+      "in_place_fix": "Observer extract uses field.api_request_bindings / api_response_bindings json_path only"
+    },
+    {
+      "capability": "API Response绑定",
+      "current_file": "ai_test_asset_center/behavior_ir.py",
+      "current_function": "_build_canonical_fields (api_response_bindings)",
+      "current_input": "operation response/schema/examples",
+      "current_output": "field.api_response_bindings",
+      "current_breakpoint": "Same as request: IR-only; not on Observation Contract",
+      "in_place_fix": "Compile field_observation_contract.required_field_ids from rule + response bindings"
+    },
+    {
+      "capability": "DB Column绑定",
+      "current_file": "ai_test_asset_center/behavior_ir.py",
+      "current_function": "_build_canonical_fields (database_bindings)",
+      "current_input": "data_tables[].columns",
+      "current_output": "field.database_bindings[{table,column}]",
+      "current_breakpoint": "DB bindings present; SOURCE_DECLARED_DATABASE_OBSERVER rarely selected for Golden Rules",
+      "in_place_fix": "When source declares DB readback, bind same cf_* into observer_bindings; no second field model"
+    },
+    {
+      "capability": "Fixture Output绑定",
+      "current_file": "ai_test_asset_center/disposable_fixture_contract.py",
+      "current_function": "fixture identity / canonical_field_id attach",
+      "current_input": "create response + binding plan",
+      "current_output": "identity bindings; optional canonical_field_id",
+      "current_breakpoint": "Identity fields may use generic names, not always cf_* of rule terms",
+      "in_place_fix": "Map fixture output_path → rule required cf_* before precondition/operation"
+    },
+    {
+      "capability": "Observer Field绑定",
+      "current_file": "ai_test_asset_center/observer_contracts_base.py",
+      "current_function": "_observe_entity_state / _numeric_snapshot_values / _conservation_terms_from_experiment",
+      "current_input": "execution body + optional assertion terms",
+      "current_output": "before_values/after_values or conservation_terms=[]",
+      "current_breakpoint": "Empty terms → scan all numeric fields OR emit terms=[]; observer ids have no required_field_ids list",
+      "in_place_fix": "Observe ONLY rule-declared required_field_ids via bound json_paths; empty terms fail closed"
+    },
+    {
+      "capability": "Rule-Operation绑定",
+      "current_file": "ai_test_asset_center/invariant_operation_binder.py",
+      "current_function": "bind_invariants_to_operations",
+      "current_input": "invariants + operations + dual signals",
+      "current_output": "operation_refs on invariants",
+      "current_breakpoint": "Does not join via cf_* → api_request_bindings; still name/token oriented for field join",
+      "in_place_fix": "Prefer field_id→api_request_bindings join when present; keep dual-signal fail-closed"
+    },
+    {
+      "capability": "causal编译",
+      "current_file": "ai_test_asset_center/experiment_protocols_base.py + behavior_ir.py",
+      "current_function": "compile_family_protocol (postcondition/field_delta) / causal operand emit",
+      "current_input": "property_spec.expression",
+      "current_output": "assertion kind postcondition|field_delta",
+      "current_breakpoint": "Without expected_delta markers → postcondition 'any change'; delta direction often heuristic; related-entity fields not observed",
+      "in_place_fix": "Require non-empty field operands + expected_after/delta expression from source; refuse any-change"
+    },
+    {
+      "capability": "state编译",
+      "current_file": "ai_test_asset_center/experiment_protocols_base.py + experiment_compiler_obligation.py + assertion_dsl_base.py",
+      "current_function": "state_transition protocol / unknown_state path / evaluate_assertion",
+      "current_input": "from_state_ref/to_state_ref or unknown_state",
+      "current_output": "state_transition assertion",
+      "current_breakpoint": "unknown_state or missing field evidence → success if before!=after or effect_count>0",
+      "in_place_fix": "Bind STATE semantic_type cf_*; require from/to; STATE_RULE_PRECONDITION_NOT_ESTABLISHED fail-closed"
+    },
+    {
+      "capability": "conservation编译",
+      "current_file": "ai_test_asset_center/experiment_protocols_base.py + assertion_dsl_base.py",
+      "current_function": "conservation protocol / evaluate_assertion unchanged_sum",
+      "current_input": "equation.terms / NL raw via oracle_expression_resolver",
+      "current_output": "conservation assertion or BLOCKED_EMPTY_CONSERVATION_TERMS",
+      "current_breakpoint": "Empty equation falls back to NL guessing; observer may still fingerprint all numerics",
+      "in_place_fix": "Compile-time require non-empty before_terms/after_terms with cf_*; never call NL guess when structure present"
+    },
+    {
+      "capability": "规则完整性Gate",
+      "current_file": "ai_test_asset_center/experiment_compiler_obligation.py",
+      "current_function": "compile_experiment_for_obligation (partial gates only)",
+      "current_input": "obligation + IR + fixture/cleanup/observer",
+      "current_output": "COMPILED/BLOCKED",
+      "current_breakpoint": "No unified FIELD_LEVEL_RULE_NOT_EXECUTABLE gate covering field+formula+scope+fixture+observers+cleanup",
+      "in_place_fix": "Add completeness checks inside existing compile_experiment_for_obligation; parent reason FIELD_LEVEL_RULE_NOT_EXECUTABLE"
+    },
+    {
+      "capability": "Before字段观察",
+      "current_file": "ai_test_asset_center/observer_contracts_base.py",
+      "current_function": "before_state / entity_state",
+      "current_input": "governance before body + heuristic state field names",
+      "current_output": "before snapshot",
+      "current_breakpoint": "Uses _STATE_FIELD_NAMES heuristics; not rule required_field_ids",
+      "in_place_fix": "Pass required_field_ids from assertion into observer compile/observe"
+    },
+    {
+      "capability": "After字段观察",
+      "current_file": "ai_test_asset_center/observer_contracts_base.py",
+      "current_function": "after_state / entity_state / _final_entity_snapshot_marker",
+      "current_input": "governance after body",
+      "current_output": "after snapshot; may scan all numerics",
+      "current_breakpoint": "_numeric_snapshot_values(..., []) scans all numeric fields",
+      "in_place_fix": "Forbid empty term_lookup for oracle evidence; BLOCKED_REQUIRED_FIELD_NOT_OBSERVED instead of 0"
+    },
+    {
+      "capability": "Scope复核",
+      "current_file": "ai_test_asset_center/experiment_outcome_finalizer.py + disposable_fixture_contract.py",
+      "current_function": "_run_cross_entity_observation_completeness / fixture scope verify",
+      "current_input": "fixture scope + related observation",
+      "current_output": "scope_proof before oracle gate",
+      "current_breakpoint": "Scope is before Oracle (good) but not yet field-level tenant/owner/business_key from canonical scope_role",
+      "in_place_fix": "Extend existing scope_proof with field-level keys from canonical scope fields; OBSERVER_SCOPE_MISMATCH"
+    },
+    {
+      "capability": "Assertion DSL",
+      "current_file": "ai_test_asset_center/assertion_dsl_base.py",
+      "current_function": "evaluate_assertion (field_delta/postcondition/state_transition/conservation)",
+      "current_input": "assertion + observer evidence",
+      "current_output": "PASS/VIOLATION/INDETERMINATE/BLOCKED",
+      "current_breakpoint": "Empty conservation terms blocked (good); postcondition any-change still allowed; no Decimal-safe typed expression tree for EQ/SUBTRACT/DELTA",
+      "in_place_fix": "Extend existing DSL kinds/ops in assertion_dsl_base; no second DSL; refuse postcondition-without-fields"
+    },
+    {
+      "capability": "Oracle Trace",
+      "current_file": "ai_test_asset_center/contract_oracles.py + assertion_dsl_base.py",
+      "current_function": "evaluate_contract_oracle / assertion evaluation receipts",
+      "current_input": "experiment + evidence receipts",
+      "current_output": "oracle verdict (+ partial traces)",
+      "current_breakpoint": "No formal causal_oracle_trace / state_transition_trace / conservation_trace with cf_* before/after/expected",
+      "in_place_fix": "Emit field traces from existing assertion evaluation path; attach to oracle receipt"
+    },
+    {
+      "capability": "Finding Evidence",
+      "current_file": "ai_test_asset_center/customer_delivery_gate_v2.py + canonical_defect_registry.py",
+      "current_function": "delivery gate / registry",
+      "current_input": "oracle + cleanup + reproduction",
+      "current_output": "formal finding",
+      "current_breakpoint": "Delivered V1.5.1 findings are http_status_class/authorization; no field violation evidence bundle",
+      "in_place_fix": "Require field_oracle_trace_id + violated_field_assertions for deep findings; HTTP alone cannot enter deep formal"
+    }
+  ],
+  "spec_answers": {
+    "terms_empty_produced_at": [
+      "observer_contracts_base._observe_entity_state → conservation_terms=[]",
+      "observer_contracts_base._conservation_terms_from_experiment empty return",
+      "experiment_protocols_base conservation assertion with empty equation.terms",
+      "precondition_reachability aggregate proofs hardcoded terms=[]"
+    ],
+    "canonical_field_id_lost_at": "behavior_ir invariant/operand emit uses field names, not entity.fields[].field_id (cf_*); downstream never sees cf_*",
+    "structured_formula_downgraded_to_nl_at": "behavior_ir invariant stores expression.raw; empty equation → oracle_expression_resolver re-parses NL",
+    "state_downgraded_to_any_change_at": "assertion_dsl_base unknown_state / postcondition without fields; experiment_compiler_obligation unknown_state path",
+    "causal_no_real_delta_because": [
+      "expected_delta often missing; direction heuristic only",
+      "entity_state observes same-entity write body, not related-entity fields",
+      "without delta markers compiles as postcondition any-change"
+    ],
+    "conservation_scans_all_numerics_because": "observer_contracts_base._numeric_snapshot_values with empty term_lookup skips filter; _final_entity_snapshot_marker passes []",
+    "observer_knows_required_fields": "partial — only if assertion already carries terms; compile_observer_requirements registers observer ids only",
+    "api_db_observer_share_canonical_field_id": "API+DB share cf_* on IR; Observer evidence keys are raw JSON names — NO",
+    "scope_validation_vs_oracle": "BEFORE Oracle (fixture scope + experiment_outcome_finalizer scope_proof)",
+    "structurally_indeterminate_assertion_kinds": [
+      "cardinality (UNPRODUCIBLE)",
+      "cross_surface_consistency (UNPRODUCIBLE)",
+      "temporal_date_boundary (no evaluator)",
+      "concurrency_final_invariant (invariant_held often unproduced)"
+    ],
+    "rules_lacking_fixture_or_readback": "V1.5.1: 869 DISPOSABLE_FIXTURE_NOT_RESOLVED; conservation/state mostly BLOCKED_MISSING_OBSERVER/BINDING; template golden rules have no source fixture contracts",
+    "v151_executed_that_can_carry_field_golden_rules": 0,
+    "v151_delivered_http_or_auth_only": 11,
+    "field_info_only_in_v140_artifacts": [
+      "comprehension gate stats / gap answers",
+      "cf_* semantic_type/scope_role/binding_status not copied into experiment assertion fields"
+    ],
+    "oracle_end_field_guessing": true,
+    "oracle_end_field_guessing_sites": [
+      "oracle_expression_resolver._find_field_references / _infer_entities_from_operation / _find_amount_fields / _find_status_fields",
+      "behavior_ir causal delta direction heuristics"
+    ]
+  },
+  "strangler_do_not_expand": [
+    {
+      "module": "ai_test_asset_center/field_level_golden_rules.py",
+      "reason": "Template parallel catalog (planning via invariant_graph only); not source-bound delivery authority. Consume as pattern checks against source IR invariants — do not compile a second experiment path.",
+      "action": "strangler_consume"
+    },
+    {
+      "module": "ai_test_asset_center/oracle_expression_resolver.py NL guessing arms",
+      "reason": "Oracle-end field guessing fights structured operands",
+      "action": "fail_closed_when_structure_present; keep only as last-resort blocked/INDETERMINATE path, not PASS/VIOLATION authority"
+    }
+  ],
+  "first_in_place_fix_order": [
+    "Propagate cf_* + non-empty terms: behavior_ir → obligation property_spec → experiment_protocols_base → observer_contracts_base → assertion_dsl_base",
+    "Refuse unknown_state/postcondition-any-change without bound STATE/causal fields",
+    "Block empty conservation terms before planner/executor (already partially in assertion_dsl_base)",
+    "Stop numeric all-scan when terms empty",
+    "Select Golden Rules only from source-resolved IR + V1.5.1 executable fixture/readback/cleanup chains — do not invent from field_level_golden_rules templates"
+  ],
+  "next_single_breakpoint": "FIELD_LEVEL_BUSINESS_ORACLE_NOT_PROVEN",
+  "gap_map_complete": true,
+  "architectural_coding_entry_allowed": true,
+  "note": "Gap Map complete. Coding must remain in-place on listed modules only; no new parallel Field/Rule/Oracle modules."
+}

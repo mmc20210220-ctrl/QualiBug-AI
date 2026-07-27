@@ -1,0 +1,1945 @@
+<timestamp>Monday, Jul 27, 2026, 4:12 PM (UTC+8)</timestamp>
+<user_query>
+QualiBug V1.6.0 字段级业务规则落地、Oracle闭环与深层Bug证明 SPEC
+Field-Level Business Rule Grounding and Oracle Closure
+
+项目： QualiBug-AI
+任务级别： P0 / 核心能力突破
+执行对象： Code Agent
+实施分支： main
+前置提交： f440c3d
+当前入口状态：
+
+V1_5_1_RESULT_LEVEL = B
+RUNTIME_INTEGRITY = PASS
+FIELD_LEVEL_ORACLE_ENTRY_ALLOWED = true
+EXECUTION_EXPANSION = SOURCE_ASSET_LIMITED
+
+当前唯一核心断点：
+
+FIELD_LEVEL_BUSINESS_ORACLE_NOT_PROVEN
+
+本阶段最终目标：
+
+将V1.4.0已经理解出的实体、字段、Scope、Operation和规则，与V1.5.1已经证明可执行、可逐步观察、可清理、可恢复的实验链结合，形成字段明确、公式明确、作用范围明确、可独立复现的字段级业务Oracle，并至少发现一个非权限、非校验、非单纯HTTP异常的新增唯一真实Bug。
+
+1. 当前权威基线
+1.1 Field Comprehension基线
+V1_4_0_FIELD_COMPREHENSION = PASS
+V1_4_0_COMMIT = 6ee1e8b
+
+Canonical Field Semantic Types = 16
+Canonical Fields Classified = 40/41
+API/DB Field Binding Rate = 100%
+Scope Formalization Coverage = 100%
+Rule-Operation Dual-Signal Binding = PASS
+Umbrella Rule Filtering = PASS
+
+剩余未分类字段必须继续保持：
+
+semantic_type = UNKNOWN
+status = EXPLICITLY_UNRESOLVED
+
+不得为了达到41/41而强制归类。
+
+1.2 Runtime Execution基线
+V1_5_1_COMMIT = f440c3d
+
+Total Obligations = 1189
+Compiled Experiments = 320
+Real Executed Experiments = 23
+Delivered Results = 11
+Cleanup Completed = 23
+
+Environment Restoration Rate = 100%
+False Completed = 0
+
+Sequence Oracle Authority Count = 1
+Protocol Registry Authority Count = 1
+Concurrent Registration = 20 threads / 0 conflicts
+
+Specialized Tests = 86 passed
+Full Regression = 2732 passed / 35 known failures
+New Regressions = 0
+
+必须明确：
+
+11 Delivered Results
+≠
+11 External True Positives
+
+除非存在与当前冻结Commit、Campaign、Finding集合绑定的有效外部签名Evaluator Receipt，否则：
+
+EXTERNAL_UNIQUE_TP_BASELINE = NOT_MEASURED
+EXTERNAL_RECALL_BASELINE = NOT_MEASURED
+2. 本阶段核心主链
+
+本阶段必须打通：
+
+Enterprise Source
+→ Canonical Field
+→ Field-Level Business Rule
+→ Rule Completeness Gate
+→ Operation Binding
+→ Disposable Fixture
+→ State/Field Preconditions
+→ Before Field Observation
+→ Real Business Operation
+→ Async Convergence
+→ After Field Observation
+→ Scope Revalidation
+→ Typed Field Oracle
+→ Field-Level Violation
+→ Reverse Cleanup
+→ Environment Restoration
+→ New-Fixture Reproduction 2/2
+→ Root-Cause Deduplication
+→ External Evaluator
+
+本阶段不以以下指标作为成功证明：
+
+生成更多Obligation
+生成更多Experiment
+发送更多HTTP请求
+产生更多Candidate
+产生更多Internal Finding
+产生更多Oracle Receipt
+
+唯一最终能力证明是：
+
+字段级规则
++
+真实字段证据
++
+真实Violation
++
+环境恢复
++
+独立复现
++
+外部新增Unique TP
+3. 阶段结果分层
+
+本SPEC包含三个连续阶段。
+
+Stage A：工程闭环
+
+证明：
+
+字段规则能够编译
+字段能够绑定
+Observer能够读取
+Oracle能够计算
+Trace能够生成
+测试能够通过
+
+Stage A通过不能宣称已经发现深层Bug。
+
+Stage B：真实运行闭环
+
+证明：
+
+字段规则通过正式产品入口
+在真实Target上执行
+产生真实Before/After字段
+完成真实Oracle
+完成Cleanup与环境恢复
+
+Stage B通过仍不能自动宣称新增TP。
+
+Stage C：外部发现证明
+
+证明：
+
+字段级Violation
+→ 新Fixture 2/2复现
+→ Root Cause去重
+→ 外部Evaluator确认新增Unique TP
+
+只有Stage C通过，V1.6.0整体才可判定完整成功。
+
+4. 本阶段非目标
+
+禁止：
+
+不增加新的义务大类；
+不扩大1189个义务总量；
+不增加通用探针数量；
+不扩行业范围；
+不优先优化authorization；
+不优化单纯HTTP状态异常；
+不降低Oracle门槛；
+不通过404、403、500直接生成深层Finding；
+不重写V1.4.0 Canonical Field体系；
+不建立第二套Field Model；
+不建立第二套Rule Engine；
+不建立第二套Observer体系；
+不建立第二套Assertion DSL；
+不建立第二套Oracle；
+不建立第二套Finding事实源；
+不重新改造V1.5.1 Fixture和多步骤架构，除非运行证据证明它们是第一终止断点；
+不根据Benchmark Bug答案编写规则；
+不将隐藏Ground Truth输入产品运行；
+不启动Project G。
+5. 最高架构约束
+
+所有改造必须基于现有生产主链原位完成。
+
+优先复用：
+
+V1.4.0 Canonical Field与Field Binding能力
+invariant_operation_binder
+experiment_compiler_obligation
+disposable_fixture_contract
+state_precondition_planner
+multi_step_protocol
+process_step_execution
+process_step_observer
+source_declared_readback_resolver
+observer_contracts
+assertion_dsl
+experiment_executor
+database_cleanup_executor
+experiment_outcome_finalizer
+customer_delivery_gate
+canonical_defect_registry
+
+以仓库实际文件名和调用路径为准。
+
+优先顺序：
+
+复用现有字段模型
+→ 扩展现有规则Property
+→ 补全字段信息传递
+→ 注册新的Typed Assertion Kind
+→ 接入现有Observer Registry
+→ 接入现有Oracle Receipt
+→ 最后才允许新增最小职责模块
+
+新增模块必须在最终报告中说明：
+
+现有模块为什么不能承载；
+新模块的唯一职责；
+消费哪个现有权威事实源；
+输出给哪个现有生产节点；
+为什么不会形成平行规则或Oracle权威。
+6. 编码前强制Gap Map
+
+编码前必须生成：
+
+artifacts/spec_v1_6_0/v160_field_oracle_gap_map.json
+
+并输出《字段级业务规则生产主链现状映射》。
+
+至少覆盖：
+
+能力	现有文件/函数	当前输入	当前输出	当前断点	原位修复点
+Canonical Field					
+字段语义分类					
+API Request绑定					
+API Response绑定					
+DB Column绑定					
+Fixture Output绑定					
+Observer Field绑定					
+Rule-Operation绑定					
+causal编译					
+state编译					
+conservation编译					
+规则完整性Gate					
+Before字段观察					
+After字段观察					
+Scope复核					
+Assertion DSL					
+Oracle Trace					
+Finding Evidence					
+
+必须回答：
+
+terms=[]目前在哪个生产函数产生；
+哪一步丢失Canonical Field ID；
+哪一步把结构化公式降级为自然语言描述；
+哪一步把状态规则降级为“任意变化”；
+causal规则为何不能得到真实before/after delta；
+conservation为何可能扫描所有数字字段；
+Observer当前是否知道规则要求哪些字段；
+API字段、DB字段和Observer字段是否使用同一Canonical Field；
+Scope Validation发生在Oracle之前还是之后；
+哪些Assertion Kind结构上永久INDETERMINATE；
+哪些规则缺少可执行Fixture或Readback；
+当前23个Executed实验中，哪些可以承载字段级Golden Rule；
+当前11个Delivered结果中，哪些只有HTTP或权限语义；
+哪些字段级信息只存在于V1.4.0产物，没有进入生产Experiment；
+是否存在Oracle末端重新猜字段的逻辑。
+
+未完成Gap Map不得开始架构性编码。
+
+7. Golden Rule选择范围
+
+本阶段不得覆盖全部1189个义务。
+
+只从以下集合选择：
+
+V1.5.1中具备完整执行链的实验
++
+V1.4.0中Field/Scope/Operation Binding为RESOLVED的规则
++
+具备来源声明Readback和Cleanup Contract的业务对象
+
+优先业务域：
+
+商品
+→ SKU
+→ 库存
+→ 购物车
+→ 订单
+→ 支付
+→ 取消
+→ 退款
+
+Golden Rule必须首先通过以下执行资格Gate：
+
+execution_precondition:
+  field_binding_resolved: true
+  operation_binding_resolved: true
+  scope_binding_resolved: true
+  disposable_fixture_contract_resolved: true
+  fixture_identity_verifiable: true
+  state_precondition_establishable_when_required: true
+  before_observer_available: true
+  after_observer_available: true
+  cleanup_contract_resolved: true
+  environment_restoration_verifiable: true
+
+缺少任何一项，不得进入正式Golden Rule Set。
+
+8. Golden Rule Set
+
+必须冻结：
+
+v160_golden_rule_set.json
+
+最低构成：
+
+类型	最低数量
+causal_postcondition	8
+state_transition	6
+conservation	6
+合计	≥20
+
+可以增加：
+
+cross_entity_consistency
+idempotency
+compensation_integrity
+process_sequence
+
+但不能替代8/6/6最低构成。
+
+每条规则必须拥有固定：
+
+rule_id
+rule_version
+rule_fingerprint
+source_refs
+
+正式运行开始后不得根据Benchmark结果修改规则集合。
+
+如果来源资料无法支持20条完整规则：
+
+GOLDEN_RULE_SOURCE_ASSET_LIMITED
+
+不得编造字段、公式、Operation或Observer补足数量。
+
+此时本阶段最高只能获得技术级别B，不能获得完整能力PASS。
+
+9. 字段级规则统一Contract
+
+每条规则必须符合：
+
+field_level_business_rule:
+  schema_version: qualibug.field-level-business-rule.v1
+
+  rule_id:
+  rule_version:
+  rule_type:
+  business_description:
+
+  source_evidence:
+    - source_id:
+      location:
+      original_text_fingerprint:
+      evidence_type:
+      confidence:
+
+  entities:
+    primary_entity_id:
+    related_entity_ids:
+
+  scope:
+    tenant_field_id:
+    owner_field_id:
+    organization_field_id:
+    business_key_field_ids:
+    correlation_field_ids:
+
+  preconditions:
+    - entity_id:
+      field_id:
+      operator:
+      expected_value:
+      expected_expression:
+
+  operation:
+    operation_id:
+    actor_role:
+    request_field_bindings:
+    target_identity_bindings:
+
+  expected_field_changes:
+    - entity_id:
+      field_id:
+      before_expression:
+      expected_after_expression:
+      expected_delta_expression:
+      comparison:
+      tolerance:
+
+  unchanged_fields:
+    - entity_id:
+      field_id:
+
+  forbidden_field_changes:
+    - entity_id:
+      field_id:
+      forbidden_expression:
+
+  observation_plan:
+    before_observer_contract_ids:
+    after_observer_contract_ids:
+    required_field_ids:
+    async_policy:
+
+  oracle:
+    assertion_kind:
+    typed_expression:
+    expected_relation:
+    tolerance:
+    unit:
+    currency:
+
+  execution_precondition:
+    disposable_fixture_contract_id:
+    state_precondition_plan_id:
+    cleanup_contract_ids:
+    environment_restoration_required:
+
+  status:
+    RESOLVED
+    INCOMPLETE
+    AMBIGUOUS
+    CONFLICTED
+    UNSAFE
+
+只有：
+
+status = RESOLVED
+
+允许进入实验编译。
+
+10. Rule Completeness Gate
+
+必须在Experiment最终编译前增加或接通字段规则完整性Gate。
+
+Gate必须验证：
+
+Source Evidence
+Entity
+Field
+Operation
+Actor
+Scope
+Fixture
+Before Observer
+After Observer
+Oracle Expression
+Cleanup
+Environment Restoration
+
+任一缺失时保持Blocked。
+
+禁止：
+
+规则缺字段 → Oracle运行时猜字段
+规则缺公式 → 泛化扫描数字字段
+规则缺Scope → 使用第一条匹配记录
+规则缺Observer → 使用HTTP状态替代字段证据
+
+统一父断点：
+
+FIELD_LEVEL_RULE_NOT_EXECUTABLE
+11. Canonical Field约束
+
+必须复用V1.4.0字段事实源。
+
+核心字段语义包括：
+
+IDENTITY
+FOREIGN_KEY
+OWNER_ID
+TENANT_ID
+STATE
+QUANTITY_BALANCE
+QUANTITY_DELTA
+AMOUNT_BALANCE
+AMOUNT_DELTA
+VERSION
+TIMESTAMP
+IDEMPOTENCY_KEY
+BOOLEAN_FLAG
+ENUM_VALUE
+AUDIT_FIELD
+UNKNOWN
+
+任何UNKNOWN字段：
+
+不得进入高置信Golden Rule
+不得进入正式Field Oracle
+不得参与Conservation Formula
+11.1 Balance和Delta强制区分
+
+必须区分：
+
+available_qty → QUANTITY_BALANCE
+reserved_qty  → QUANTITY_BALANCE
+adjust_qty    → QUANTITY_DELTA
+change_amount → QUANTITY_DELTA
+
+以下必须编译失败：
+
+Balance与Delta在没有明确公式的情况下直接求和
+Amount字段与Quantity字段混合计算
+不同单位字段直接比较
+不同币种金额直接相加
+
+断点：
+
+FIELD_SEMANTIC_TYPE_INCOMPATIBLE
+FIELD_UNIT_MISMATCH
+FIELD_CURRENCY_MISMATCH
+BALANCE_DELTA_MIXED_WITHOUT_FORMULA
+12. Field Binding权威
+
+每个Golden Rule字段必须绑定到适用的真实位置：
+
+field_binding:
+  canonical_field_id:
+
+  api_request_bindings:
+    - operation_id:
+      json_path:
+
+  api_response_bindings:
+    - operation_id:
+      json_path:
+
+  database_bindings:
+    - datastore_id:
+      table:
+      column:
+
+  fixture_bindings:
+    - fixture_step_id:
+      output_path:
+
+  observer_bindings:
+    - observer_contract_id:
+      evidence_path:
+
+  binding_evidence:
+  confidence:
+  status:
+
+允许：
+
+confidence >= 0.85
+status = RESOLVED
+
+进入Golden Oracle。
+
+以下只能保留为候选：
+
+0.65 <= confidence < 0.85
+
+以下不得进入：
+
+confidence < 0.65
+status = AMBIGUOUS / CONFLICTED / NOT_DECLARED
+
+不能只靠名称相似度完成绑定。
+
+13. Typed Expression DSL
+
+必须扩展现有Assertion DSL，不得使用eval或执行任意代码。
+
+最低支持：
+
+FIELD
+LITERAL
+ADD
+SUBTRACT
+MULTIPLY
+DIVIDE
+NEGATE
+ABS
+EQ
+NE
+GT
+GTE
+LT
+LTE
+IN
+DELTA
+UNCHANGED
+STATE_TRANSITION
+SUM
+
+表达式示例：
+
+typed_expression:
+  op: EQ
+  left:
+    op: FIELD
+    field_id: inventory.available_qty.after
+  right:
+    op: SUBTRACT
+    args:
+      - op: FIELD
+        field_id: inventory.available_qty.before
+      - op: FIELD
+        field_id: order.quantity
+
+所有金额计算必须使用Decimal语义，不得使用二进制浮点直接判断业务金额。
+
+除法必须显式处理：
+
+除零
+精度
+舍入规则
+币种
+14. Causal Postcondition闭环
+14.1 最低要求
+
+每条causal规则必须具有：
+
+明确操作
+明确前置字段
+至少一个明确变化字段
+明确变化方向
+明确delta或after表达式
+至少一个独立Before值
+至少一个独立After值
+明确Scope
+独立Observer
+
+禁止：
+
+操作后库存应变化
+订单应该更新
+支付应该成功
+
+必须转化为：
+
+available_qty_after
+=
+available_qty_before - order.quantity
+14.2 Causal Oracle
+
+输出：
+
+causal_oracle_trace:
+  rule_id:
+  experiment_id:
+  fixture_id:
+
+  operation_id:
+  scope_validation:
+
+  field_assertions:
+    - field_id:
+      before:
+      after:
+      expected_after:
+      actual_delta:
+      expected_delta:
+      tolerance:
+      result:
+
+  unchanged_field_assertions:
+    - field_id:
+      before:
+      after:
+      result:
+
+  final_status:
+    PASS
+    VIOLATION
+    INDETERMINATE
+
+缺少Before、After或Operation输入值时：
+
+CAUSAL_REQUIRED_EVIDENCE_MISSING
+
+不得判为Violation。
+
+15. State Transition闭环
+15.1 强制字段绑定
+
+每条state规则必须明确：
+
+实体
+Canonical状态字段
+From State
+Operation
+To State
+来源声明状态关系
+
+不得再将：
+
+任何字段发生变化
+
+视为状态转换成功。
+
+15.2 状态归一
+
+可以复用现有状态归一能力，将：
+
+PAID
+paid
+PAY_SUCCESS
+已支付
+
+映射到Canonical State。
+
+但必须保留：
+
+raw_before
+raw_after
+canonical_before
+canonical_after
+normalization_evidence
+
+未知状态不得自动映射。
+
+15.3 跨实体副作用
+
+至少一条state规则必须同时观察：
+
+主实体状态
+关联实体状态
+业务数量或金额字段
+业务交易身份
+
+例如支付操作可以观察：
+
+order.status
+payment.status
+payment.transaction_id
+inventory.reserved_qty
+
+具体字段必须来自来源资料，不得将示例硬编码为通用规则。
+
+15.4 State Oracle Trace
+state_transition_trace:
+  rule_id:
+  experiment_id:
+
+  entity_id:
+  state_field_id:
+
+  raw_before:
+  canonical_before:
+  operation_id:
+  raw_after:
+  canonical_after:
+
+  expected_from:
+  expected_to:
+  transition_allowed:
+
+  side_effect_checks:
+  final_status:
+
+前置状态未建立：
+
+STATE_RULE_PRECONDITION_NOT_ESTABLISHED
+
+不得继续计算目标转换。
+
+16. Conservation闭环
+16.1 空公式强制阻塞
+
+任何：
+
+terms = []
+
+必须在编译阶段阻塞：
+
+BLOCKED_EMPTY_CONSERVATION_TERMS
+
+不得进入Planner、Executor或Oracle。
+
+16.2 明确公式结构
+conservation_expression:
+  expression_type: BEFORE_AFTER_EQUALITY
+
+  before_terms:
+    - field_id:
+      coefficient:
+      sign:
+      unit:
+
+  after_terms:
+    - field_id:
+      coefficient:
+      sign:
+      unit:
+
+  relation: EQ
+
+  tolerance:
+    value:
+    unit:
+
+  source_refs:
+
+或者：
+
+conservation_expression:
+  expression_type: CROSS_ENTITY_EQUATION
+
+  left_expression:
+  right_expression:
+  relation:
+  tolerance:
+16.3 禁止泛化数字扫描
+
+禁止：
+
+读取整个JSON
+→ 找出全部数字字段
+→ 自动求和
+→ 将变化判为守恒Violation
+
+Oracle只能读取规则声明的：
+
+required_field_ids
+
+任何额外字段不得自动加入公式。
+
+16.4 数量守恒
+
+至少一条数量类规则必须来自真实资料并表达类似：
+
+physical_total
+=
+available_qty
++ reserved_qty
++ locked_qty
++ allocated_qty
+
+具体Term必须来自实际字段语义。
+
+16.5 金额关系
+
+至少一条金额规则必须来自真实资料并表达类似：
+
+payable_amount
+=
+item_total
++ shipping_fee
++ tax
+- discount_amount
+- coupon_amount
+
+或：
+
+refund_amount
+<=
+paid_amount - previous_refund_amount
+
+具体公式必须来自来源事实。
+
+16.6 Conservation Trace
+conservation_trace:
+  rule_id:
+  experiment_id:
+  scope_keys:
+
+  before_terms:
+    - field_id:
+      raw_value:
+      normalized_value:
+      coefficient:
+      signed_value:
+
+  after_terms:
+    - field_id:
+      raw_value:
+      normalized_value:
+      coefficient:
+      signed_value:
+
+  before_expression_result:
+  after_expression_result:
+  expected_relation:
+  tolerance:
+  difference:
+
+  final_status:
+17. Observer字段计划
+
+Observer必须根据规则声明字段编译精确Observation Contract。
+
+field_observation_contract:
+  observer_contract_id:
+  rule_id:
+  experiment_id:
+
+  entity_id:
+  surface_type:
+  read_operation_id:
+  identity_bindings:
+  scope_bindings:
+  required_field_ids:
+  evidence_paths:
+
+  async_policy:
+  status:
+
+允许的观察面：
+
+WRITE_RESPONSE_REPRESENTATION
+IDENTITY_GET
+FILTERED_COLLECTION_GET
+SOURCE_DECLARED_DATABASE_OBSERVER
+RELATED_ENTITY_IDENTITY_GET
+
+禁止：
+
+第一条集合记录
+最新记录
+最大ID
+任意全表扫描
+任意JSON数字扫描
+
+必需字段未观察：
+
+BLOCKED_REQUIRED_FIELD_NOT_OBSERVED
+
+不得按0处理。
+
+18. Scope Validation
+
+Before、After和Operation输入必须属于同一业务范围。
+
+至少校验适用项：
+
+campaign_id
+experiment_id
+fixture_id
+tenant_id
+owner_id
+organization_id
+primary_entity_id
+business_key
+foreign_key
+warehouse_id
+sku_id
+
+输出：
+
+field_scope_validation:
+  rule_id:
+  before_scope:
+  after_scope:
+  operation_scope:
+
+  tenant_match:
+  owner_match:
+  primary_entity_match:
+  business_key_match:
+  correlation_keys_match:
+
+  passed:
+
+Scope不一致：
+
+OBSERVER_SCOPE_MISMATCH
+
+不得进入Oracle。
+
+19. Fixture前置字段验证
+
+Fixture Materialized后、目标Operation执行前，必须验证规则前置字段。
+
+field_precondition_receipt:
+  rule_id:
+  experiment_id:
+  fixture_id:
+
+  checks:
+    - field_id:
+      expected_operator:
+      expected_value:
+      actual_value:
+      passed:
+
+  all_passed:
+
+失败时：
+
+BLOCKED_PRECONDITION_NOT_SATISFIED
+
+不得执行目标业务操作。
+
+20. 异步策略
+
+支付、退款、库存、履约等可能存在异步更新。
+
+每条适用规则必须具有：
+
+async_policy:
+  consistency_model:
+  expected_max_delay_ms:
+  poll_interval_ms:
+  max_attempts:
+  terminal_condition:
+  stable_read_count:
+
+执行顺序：
+
+Before Observation
+→ Operation
+→ Poll
+→ Terminal Condition
+→ Stable Observation
+→ Oracle
+
+禁止第一次读取未变化就直接产生Bug。
+
+超时必须区分：
+
+ASYNC_CONVERGENCE_TIMEOUT
+ASYNC_TERMINAL_STATE_NOT_REACHED
+ASYNC_OBSERVATION_UNSTABLE
+
+默认结果为INDETERMINATE，不能自动判Violation。
+
+21. Golden Rule完整执行链
+
+每条Golden Rule必须经过：
+
+Rule Contract Validation
+→ Field Binding Validation
+→ Scope Binding Validation
+→ Fixture Contract
+→ Fixture Materialization
+→ Field Preconditions
+→ Before Field Observation
+→ Real Business Operation
+→ Async Convergence
+→ After Field Observation
+→ Scope Revalidation
+→ Typed Field Oracle
+→ Reverse Cleanup
+→ Environment Restoration
+→ New-Fixture Reproduction
+→ Root Cause Deduplication
+→ External Evaluation
+
+每个阶段必须有唯一终态。
+
+输出：
+
+field_rule_pipeline:
+  rule_id:
+  rule_type:
+
+  contract_resolved:
+  fields_resolved:
+  operation_bound:
+  scope_resolved:
+  fixture_materialized:
+  preconditions_verified:
+  before_observed:
+  operation_executed:
+  after_observed:
+  oracle_evaluated:
+  cleanup_verified:
+  environment_restored:
+  finding_created:
+  reproduced:
+  externally_matched:
+
+  blocked_stage:
+  blocked_reason:
+22. Finding Gate
+
+字段级Finding至少包含：
+
+finding:
+  finding_id:
+  rule_id:
+  rule_type:
+  source_evidence:
+
+  campaign_id:
+  experiment_id:
+  fixture_id:
+
+  actor:
+  scope:
+
+  operation:
+    operation_id:
+    request_receipt_id:
+    response_receipt_id:
+
+  before_fields:
+  after_fields:
+
+  expected_expression:
+  actual_expression:
+  field_oracle_trace_id:
+  violated_field_assertions:
+
+  observer_receipt_ids:
+  cleanup_receipt_ids:
+  environment_restoration_receipt_id:
+
+  reproduction_receipt_ids:
+  root_signature:
+
+深层Finding不能只依赖：
+
+HTTP 403
+HTTP 404
+HTTP 500
+响应success=false
+接口超时
+
+必须有字段级业务规则Violation证据。
+
+23. Reproduction
+
+每个字段级业务Finding必须使用全新Fixture独立复现2次。
+
+每次必须满足：
+
+new_fixture_id = true
+new_business_identity = true
+same_rule_fingerprint = true
+same_operation = true
+same_violation_mechanism = true
+cleanup_verified = true
+environment_restored = true
+
+不得复用：
+
+同一数据库行
+同一Fixture
+污染环境
+旧Before/After证据
+旧Oracle Receipt
+24. Root Cause去重
+
+Root Signature至少包括：
+
+root_signature:
+  rule_id:
+  rule_type:
+  affected_operation:
+  primary_entity:
+  related_entities:
+  first_divergent_step:
+  first_divergent_field:
+  expected_expression_fingerprint:
+  actual_difference_class:
+  implementation_surface:
+  causal_path:
+
+禁止只按：
+
+标题相似
+实体相同
+HTTP状态相同
+规则类型相同
+
+合并Root。
+
+25. 外部Evaluator
+
+产品运行过程中禁止读取隐藏GT。
+
+运行结束后才允许独立Evaluator消费：
+
+Formal Field-Level Findings
+Reproduction Receipts
+Root Signatures
+Hidden Ground Truth
+
+新增Unique TP必须同时满足：
+
+外部Evaluator Receipt有效；
+匹配明确Bug ID；
+业务动作一致；
+受影响实体一致；
+违规机制一致；
+不是已有Root重复；
+2/2稳定复现；
+属于深层业务类型；
+不属于authorization、validation或单纯HTTP异常。
+26. 编码任务
+P0-1：冻结基线
+
+冻结：
+
+Commit f440c3d
+V1.4.0 Field Comprehension产物
+V1.5.1 Runtime产物
+86项专项测试
+2732/35全量回归基线
+P0-2：生成Gap Map
+
+完成字段从资料到Oracle的真实生产路径映射。
+
+P0-3：确定Golden Rule可执行候选集
+
+只从已有完整Fixture、Readback、Scope和Cleanup链的规则中选择。
+
+P0-4：冻结Golden Rule Set
+
+冻结至少20条规则，运行开始后不得修改。
+
+P0-5：接通Field Rule Contract
+
+不得建立平行Rule Engine。
+
+P0-6：接通Rule Completeness Gate
+
+所有缺字段、公式、Observer或Scope的规则Fail-Closed。
+
+P0-7：扩展现有Typed Expression DSL
+
+禁止eval。
+
+P0-8：闭环Causal规则
+
+完成字段级delta、after和unchanged检查。
+
+P0-9：闭环State规则
+
+完成真实状态字段、转换和副作用检查。
+
+P0-10：闭环Conservation规则
+
+消除全部执行态terms=[]。
+
+P0-11：接通Field Observation Contract
+
+Observer只读取规则要求字段。
+
+P0-12：接通Scope Validation
+
+Before、After、Operation必须是同一业务对象。
+
+P0-13：接通Fixture Field Preconditions
+
+前置字段不满足不得执行。
+
+P0-14：接通Async Convergence
+
+避免首次读取未变化产生假Bug。
+
+P0-15：接通Field Oracle Trace
+
+完整记录字段计算过程。
+
+P0-16：接通Finding Evidence
+
+Formal Finding必须引用完整字段级证据。
+
+P0-17：新增专项测试
+
+至少新增70项专项测试。
+
+P0-18：执行行业无关集成测试
+
+证明没有Benchmark业务硬编码。
+
+P0-19：冻结真实运行
+
+冻结代码、规则、Target、Seed、账号、预算和场景。
+
+P0-20：通过正式产品入口执行
+
+禁止直接调用内部Oracle作为正式效果证明。
+
+P0-21：执行Golden Rule Set
+
+记录完整漏斗。
+
+P0-22：执行Cleanup与环境恢复
+
+所有完成实验环境恢复率必须100%。
+
+P0-23：2/2独立复现
+
+所有Formal字段级Finding均需独立复现。
+
+P0-24：Root Cause去重
+
+生成唯一Root Ledger。
+
+P0-25：外部Evaluator评估
+
+验证是否新增非权限Unique TP。
+
+P0-26：全量回归
+
+新失败为0。
+
+P0-27：输出等级结论
+
+输出A/B/C/D/E。
+
+P0-28：停止
+
+不在本阶段继续扩大业务域或新增规则数量。
+
+27. 自动化测试要求
+
+至少新增70项专项测试。
+
+27.1 Rule Contract
+缺Field ID时阻塞；
+缺Operation时阻塞；
+缺Scope时阻塞；
+缺Before Observer时阻塞；
+缺After Observer时阻塞；
+缺Oracle表达式时阻塞；
+CONFLICTED规则不能执行；
+UNKNOWN字段不能进入Golden Rule。
+27.2 Field Semantics
+Quantity Balance识别；
+Quantity Delta识别；
+Amount Balance识别；
+Amount Delta识别；
+Balance/Delta混用阻塞；
+单位不一致阻塞；
+币种不一致阻塞；
+Decimal精度正确。
+27.3 Field Binding
+API Request字段绑定；
+API Response字段绑定；
+DB字段绑定；
+Fixture Output绑定；
+Observer Evidence绑定；
+低置信绑定阻塞；
+多候选冲突阻塞；
+不允许仅名称相似自动通过。
+27.4 Causal
+正确delta返回PASS；
+错误delta返回VIOLATION；
+Before缺失返回INDETERMINATE；
+After缺失返回INDETERMINATE；
+Operation参数缺失返回INDETERMINATE；
+Unchanged Field变化返回VIOLATION；
+Scope不一致不执行Oracle；
+缺少明确变化字段不能编译。
+27.5 State
+合法状态转换PASS；
+错误状态转换VIOLATION；
+未建立From State阻塞；
+未知状态不自动归一；
+Raw State保留；
+跨实体副作用PASS；
+跨实体副作用缺失VIOLATION；
+Observer缺状态字段时INDETERMINATE。
+27.6 Conservation
+terms=[]编译阻塞；
+明确数量守恒PASS；
+数量守恒破坏VIOLATION；
+金额公式PASS；
+金额公式破坏VIOLATION；
+Delta字段不会自动加入Balance Sum；
+不同单位不能求和；
+不同币种不能求和；
+缺Term字段INDETERMINATE；
+禁止全JSON数字扫描。
+27.7 Observer与Scope
+只读取Required Fields；
+多余字段不会进入公式；
+Tenant不一致阻塞；
+Owner不一致阻塞；
+Business Key不一致阻塞；
+Before/After不同实体阻塞；
+Filtered Readback返回多行时阻塞；
+缺字段不按0处理。
+27.8 Async
+终态及时到达；
+多次Poll后到达；
+超时返回INDETERMINATE；
+不稳定读取不能判PASS；
+第一次未变化不产生Violation；
+Terminal Condition来源明确。
+27.9 Finding与复现
+只有字段Violation才能进入Deep Finding；
+HTTP 500单独不能进入Deep Finding；
+Cleanup失败不能进入Formal；
+环境未恢复不能进入Formal；
+复用同一Fixture不计2/2；
+新Fixture稳定复现可进入Formal。
+
+建议继续覆盖Root Signature、Evaluator隔离和Anti-Hardcoding。
+
+28. 行业无关集成测试
+
+必须构造无业务行业名称的通用系统：
+
+Entity A
+Entity B
+Entity C
+
+A.balance
+A.state
+B.quantity
+C.delta
+
+流程：
+
+Create A/B/C
+→ Establish A state
+→ Execute Operation X
+→ Observe A/B/C fields
+→ Evaluate Causal Rule
+→ Evaluate State Rule
+→ Evaluate Conservation Rule
+→ Cleanup
+→ Environment Restored
+
+必须验证：
+
+Canonical Field贯穿全链；
+Causal delta能够计算；
+State Transition能够计算；
+Conservation明确公式能够计算；
+Scope不一致时阻塞；
+terms=[]不能执行；
+Observer不会扫描所有数字字段；
+Cleanup后环境恢复；
+无Benchmark实体或路径硬编码；
+无第二套Oracle。
+29. 真实运行冻结
+
+正式运行名称：
+
+V1_6_0_FIELD_LEVEL_BUSINESS_ORACLE_RUNTIME_V1
+
+运行前冻结：
+
+commit_sha
+tree_hash
+golden_rule_set_hash
+field_binding_hash
+operation_binding_hash
+observer_contract_hash
+typed_expression_hash
+oracle_registry_hash
+fixture_policy_hash
+cleanup_policy_hash
+target_hash
+database_seed_hash
+account_manifest_hash
+budget_hash
+
+运行开始后修改任何冻结项：
+
+INVALID_POST_START_TUNING
+30. 真实运行漏斗
+
+必须输出：
+
+阶段	Entered	Passed	Blocked	Failed
+Golden Rule Frozen				
+Rule Contract Resolved				
+Fields Resolved				
+Operation Bound				
+Scope Bound				
+Fixture Materialized				
+Preconditions Verified				
+Before Observed				
+Operation Executed				
+After Observed				
+Scope Revalidated				
+Field Oracle Evaluated				
+Violation Candidate				
+Cleanup Verified				
+Environment Restored				
+Reproduced 2/2				
+Formal Finding				
+External Unique TP				
+
+每条规则必须拥有唯一第一终止断点。
+
+31. 验收指标
+31.1 工程指标
+Golden Rules >= 20
+Causal Rules >= 8
+State Rules >= 6
+Conservation Rules >= 6
+
+Executed Empty Conservation Terms = 0
+Golden Rule Field Binding Rate = 100%
+Operation Binding Rate = 100%
+Scope Binding Rate = 100%
+Observer Binding Rate = 100%
+Fixture Precondition Validation Rate = 100%
+
+Duplicate Field Fact Authorities = 0
+Duplicate Rule Authorities = 0
+Duplicate Oracle Authorities = 0
+Benchmark Hardcoding = 0
+New Regressions = 0
+31.2 运行指标
+
+最低要求：
+
+Golden Rule Contracts Resolved >= 20
+Golden Rules Real Executed >= 18
+Field Oracles Evaluated >= 18
+
+Causal Oracles Evaluated >= 7
+State Oracles Evaluated >= 5
+Conservation Oracles Evaluated >= 5
+
+Cleanup Verified Rate = 100%
+Completed Environment Restoration Rate = 100%
+False Completed = 0
+Field Mapping False Judgment = 0
+
+规则因真实来源资料不足而阻塞时必须有SOURCE_ASSET_LIMITED证据，不能补造。
+
+31.3 最终能力指标
+Deep Business Findings >= 1
+Formal Field-Level Findings Reproduction Rate = 100%
+External Signed Evaluator Receipt = true
+New Non-Authorization Unique TP >= 1
+New Deep Unique TP >= 1
+New P0/P1 False Positive on Clean Control = 0
+32. 结果等级
+LEVEL A — 字段级业务Oracle与深层发现完整通过
+
+全部满足：
+
+工程Gate全部通过
+Golden Rules >= 20
+Real Executed >= 18
+Field Oracle Evaluated >= 18
+Cleanup/Environment Restoration = 100%
+False Completed = 0
+2/2 Reproduction = 100%
+External New Non-Authorization Unique TP >= 1
+Benchmark Leakage = 0
+New Regressions = 0
+
+输出：
+
+V1_6_0_RESULT_LEVEL = A
+
+FIELD_LEVEL_RULE_GROUNDING = PASS
+CAUSAL_ORACLE_CLOSURE = PASS
+STATE_ORACLE_CLOSURE = PASS
+CONSERVATION_ORACLE_CLOSURE = PASS
+FIELD_OBSERVATION_INTEGRITY = PASS
+DEEP_BUG_DISCOVERY_PROOF = PASS
+
+PROJECT_G_ENTRY_ALLOWED = false
+LEVEL B — 字段级运行闭环通过，但外部TP尚未证明
+
+满足：
+
+规则、字段、Observer、Oracle真实闭环
+Golden Rule真实执行达到门槛
+Cleanup和环境恢复100%
+无字段误判
+无假Formal Finding
+
+但：
+
+External New Unique TP = 0
+或
+External Evaluator Receipt = NOT_MEASURED
+
+输出：
+
+V1_6_0_RESULT_LEVEL = B
+
+FIELD_LEVEL_RULE_GROUNDING = PASS
+FIELD_LEVEL_ORACLE_RUNTIME = PASS
+DEEP_BUG_DISCOVERY_PROOF = NOT_PROVEN
+
+NEXT_SINGLE_BREAKPOINT =
+由字段规则漏斗确定
+
+PROJECT_G_ENTRY_ALLOWED = false
+
+不得宣称字段级Bug发现能力已经成功。
+
+LEVEL C — 部分Oracle闭环
+
+例如：
+
+causal已闭环
+state或conservation仍结构性INDETERMINATE
+
+输出：
+
+V1_6_0_RESULT_LEVEL = C
+FIELD_LEVEL_ORACLE_RUNTIME = PARTIAL
+DEEP_BUG_DISCOVERY_PROOF = NOT_PROVEN
+LEVEL D — Post-Start Tuning无效
+
+正式运行开始后修改：
+
+规则
+字段绑定
+公式
+Observer
+Oracle
+预算
+场景
+Cleanup
+Finding Gate
+
+输出：
+
+V1_6_0_RESULT_LEVEL = D
+INVALID_POST_START_TUNING
+LEVEL E — 字段判断完整性失败
+
+出现任一：
+
+Oracle末端猜字段
+terms=[]仍执行
+缺失字段按0处理
+Balance和Delta无公式混用
+Scope不一致仍进入Oracle
+HTTP错误直接冒充深层Finding
+环境未恢复仍进入Formal
+Benchmark答案进入产品规则
+第二套Oracle参与交付
+
+输出：
+
+V1_6_0_RESULT_LEVEL = E
+FIELD_LEVEL_ORACLE_INTEGRITY_FAIL
+33. 新增断点代码
+
+至少增加或统一：
+
+FIELD_LEVEL_RULE_NOT_EXECUTABLE
+FIELD_RULE_SOURCE_NOT_CONFIRMED
+FIELD_RULE_CONFLICTED
+FIELD_BINDING_NOT_RESOLVED
+FIELD_BINDING_AMBIGUOUS
+FIELD_SEMANTIC_TYPE_UNKNOWN
+FIELD_SEMANTIC_TYPE_INCOMPATIBLE
+FIELD_UNIT_MISMATCH
+FIELD_CURRENCY_MISMATCH
+BALANCE_DELTA_MIXED_WITHOUT_FORMULA
+
+BLOCKED_EMPTY_CONSERVATION_TERMS
+CONSERVATION_REQUIRED_TERM_NOT_BOUND
+CONSERVATION_REQUIRED_FIELD_NOT_OBSERVED
+CONSERVATION_EXPRESSION_INVALID
+
+CAUSAL_REQUIRED_EVIDENCE_MISSING
+CAUSAL_DELTA_EXPRESSION_INVALID
+CAUSAL_UNCHANGED_FIELD_NOT_OBSERVED
+
+STATE_RULE_PRECONDITION_NOT_ESTABLISHED
+STATE_FIELD_NOT_BOUND
+STATE_VALUE_NOT_NORMALIZED
+STATE_SIDE_EFFECT_NOT_OBSERVED
+
+BLOCKED_REQUIRED_FIELD_NOT_OBSERVED
+OBSERVER_SCOPE_MISMATCH
+FIELD_PRECONDITION_NOT_SATISFIED
+
+ASYNC_CONVERGENCE_TIMEOUT
+ASYNC_TERMINAL_STATE_NOT_REACHED
+ASYNC_OBSERVATION_UNSTABLE
+
+FIELD_ORACLE_INDETERMINATE
+FIELD_ORACLE_RUNTIME_ERROR
+FIELD_FINDING_REPRODUCTION_FAILED
+
+统一父断点：
+
+FIELD_LEVEL_BUSINESS_ORACLE_NOT_PROVEN
+34. 必须生成的交付物
+
+统一保存到：
+
+artifacts/spec_v1_6_0/
+
+至少包括：
+
+v160_release_manifest.json
+v160_entry_regression.json
+v160_field_oracle_gap_map.json
+v160_field_grounding_baseline.json
+
+v160_golden_rule_candidate_ledger.json
+v160_golden_rule_set.json
+v160_rule_completeness_ledger.json
+v160_rule_source_evidence_ledger.json
+v160_rule_conflict_ledger.json
+
+v160_field_semantic_ledger.json
+v160_field_binding_ledger.json
+v160_field_scope_ledger.json
+v160_field_observation_contracts.json
+v160_field_precondition_receipts.json
+
+v160_causal_rule_compile_ledger.json
+v160_state_rule_compile_ledger.json
+v160_conservation_rule_compile_ledger.json
+v160_empty_terms_audit.json
+
+v160_causal_oracle_traces.json
+v160_state_transition_traces.json
+v160_conservation_traces.json
+v160_field_oracle_receipts.json
+
+v160_fixture_cleanup_integrity.json
+v160_environment_restoration_ledger.json
+v160_field_finding_ledger.json
+v160_reproduction_ledger.json
+v160_unique_root_ledger.json
+
+v160_live_scenario_manifest.json
+v160_start_manifest.json
+v160_runtime_funnel.json
+v160_breakpoint_funnel.json
+
+v160_evaluator_submission.json
+v160_external_evaluator_receipt.json
+v160_baseline_comparison.json
+
+v160_specialized_tests.json
+v160_post_run_regression.json
+v160_architecture_redundancy_audit.json
+v160_final_report.json
+35. Definition of Done
+
+只有以下全部满足，本阶段才算完成：
+
+Commit f440c3d已作为输入基线冻结。
+86项专项测试基线已保存。
+2732/35全量回归基线已保存。
+字段从资料到Oracle的主链已完成映射。
+找到真实字段信息丢失点。
+修复发生信息丢失的现有模块。
+未建立第二套字段模型。
+未建立第二套规则引擎。
+未建立第二套Oracle。
+至少20条Golden Rule在运行前冻结。
+causal规则至少8条。
+state规则至少6条。
+conservation规则至少6条。
+所有Golden Rule来源可追溯。
+所有Golden Rule Field Binding为RESOLVED。
+所有Golden Rule Operation Binding为RESOLVED。
+所有Golden Rule Scope Binding为RESOLVED。
+所有Golden Rule Observer Contract为RESOLVED。
+UNKNOWN字段进入Golden Rule数量为0。
+执行态terms=[]数量为0。
+Balance与Delta无公式混用数量为0。
+不同单位无转换直接计算数量为0。
+不同币种无转换直接计算数量为0。
+causal规则能够计算字段级delta。
+causal规则能够验证unchanged field。
+state规则绑定真实状态字段。
+state规则能够验证来源声明转换。
+至少一条state规则验证跨实体副作用。
+conservation规则只使用明确Terms。
+conservation规则不会扫描所有数字字段。
+Observer只读取规则声明字段。
+必需字段缺失不会按0处理。
+Before、After和Operation Scope一致。
+Fixture执行前验证字段前置条件。
+异步规则执行Poll和终态判断。
+第一次读取未变化不会直接产生Finding。
+Oracle输出完整字段计算Trace。
+深层Finding具备字段级Violation证据。
+Cleanup失败进入Formal数量为0。
+环境未恢复进入Formal数量为0。
+所有Formal字段Finding使用新Fixture复现2/2。
+Root Cause使用实现级字段签名去重。
+Benchmark Ground Truth未进入产品运行。
+全量回归新增失败为0。
+最终结果归类为A/B/C/D/E之一。
+如果无新增外部Unique TP，明确标记DEEP_BUG_DISCOVERY_PROOF = NOT_PROVEN。
+Project G仍未启动。
+完成后停止。
+36. Code Agent最终报告格式
+1. Release Freeze
+Commit SHA:
+Tree Hash:
+Working Tree:
+Golden Rule Set Hash:
+Field Binding Hash:
+Oracle Registry Hash:
+Target:
+Database Seed Hash:
+Budget Hash:
+Start Time:
+End Time:
+Post-Start Changes:
+2. 基线
+Total Obligations: 1189
+Compiled Experiments: 320
+Real Executed: 23
+Delivered: 11
+Cleaned: 23
+Environment Restoration: 100%
+False Completed: 0
+External Unique TP Baseline:
+3. 根因
+
+必须回答：
+
+causal为什么此前不能形成字段Violation
+state为什么此前不能判断真实状态字段
+conservation为什么产生terms=[]
+Observer为什么可能读取过多字段
+字段在哪个主链阶段丢失
+哪些改造真正进入生产路径
+4. 修改文件
+文件	原职责	修改内容	是否生产主链
+5. Golden Rule Set
+Rule ID	类型	字段	Operation	Observer	公式	来源	状态
+6. 字段绑定
+实体	核心字段	Resolved	Ambiguous	Unknown	Conflicted
+7. 规则漏斗
+类型	Frozen	Contract	Executed	Oracle	Violation	Formal	Unique TP
+causal							
+state							
+conservation							
+8. Oracle完整性
+Empty Terms Executed:
+Unknown Fields Evaluated:
+Missing Fields Treated as Zero:
+Scope Mismatches Evaluated:
+Unit Mismatches Evaluated:
+Currency Mismatches Evaluated:
+Duplicate Oracle Authorities:
+
+全部必须为0。
+
+9. Finding与复现
+Finding	Rule	类型	First Divergent Field	Reproduction	Cleanup	Restored	Root
+10. 外部Evaluator
+Evaluator Receipt Valid:
+External Unique TP:
+New Unique TP:
+New Deep Unique TP:
+New Non-Authorization Unique TP:
+False Positives:
+Benchmark Leakage:
+11. 回归
+V1.5.1 Specialized Baseline: 86 passed
+V1.6.0 Specialized:
+Full Regression:
+Known Failures:
+New Regressions:
+12. 最终结论
+V1_6_0_RESULT_LEVEL = A/B/C/D/E
+
+FIELD_LEVEL_RULE_GROUNDING =
+CAUSAL_ORACLE_CLOSURE =
+STATE_ORACLE_CLOSURE =
+CONSERVATION_ORACLE_CLOSURE =
+FIELD_OBSERVATION_INTEGRITY =
+SCOPE_VALIDATION_INTEGRITY =
+CLEANUP_AND_RESTORATION =
+REPRODUCTION_INTEGRITY =
+DEEP_BUG_DISCOVERY_PROOF =
+ARCHITECTURE_REDUNDANCY =
+HISTORICAL_REGRESSION =
+
+PROJECT_G_ENTRY_ALLOWED = false
+
+未完整通过时：
+
+NEXT_SINGLE_BREAKPOINT =
+AFFECTED_RULES =
+CUMULATIVE_UNLOCK =
+SHARED_FIX_POINT =
+37. 最终执行指令
+
+不要继续增加义务数量。
+
+不要追求更多内部Finding。
+
+不要优先优化authorization。
+
+不要在Oracle末端重新猜字段。
+
+不要继续使用空守恒公式。
+
+不要扫描整个JSON中的全部数字字段。
+
+不要把缺失字段当成0。
+
+不要混淆Balance与Delta。
+
+不要在Scope不一致时执行Oracle。
+
+不要把HTTP错误冒充字段级业务Bug。
+
+不要根据Benchmark答案修改Golden Rule。
+
+不要在正式运行开始后调整规则、字段绑定或公式。
+
+本阶段只完成一件事：
+
+将V1.4.0形成的字段级企业认知与V1.5.1形成的可信多步骤执行链结合，使QualiBug能够基于来源明确的字段因果关系、真实状态转换和明确守恒公式，产生可计算、可复现、可清理、可由外部Evaluator确认的深层业务Bug证据。
+
+正式执行顺序：
+
+冻结f440c3d
+→ 字段Oracle Gap Map
+→ Golden Rule候选筛选
+→ 冻结20条Golden Rule
+→ Rule Completeness Gate
+→ Typed Expression DSL
+→ Causal闭环
+→ State闭环
+→ Conservation闭环
+→ Field Observation Contract
+→ Scope Validation
+→ Fixture Field Preconditions
+→ Async Convergence
+→ Field Oracle Trace
+→ 正式产品入口运行
+→ Cleanup与环境恢复
+→ 新Fixture 2/2复现
+→ Root Cause去重
+→ 外部Evaluator
+→ 全量回归
+→ A/B/C/D/E结论
+→ 停止
+</user_query>

@@ -435,16 +435,14 @@ class TestWriteReversibilityProof:
         assert CLEANUP_AUTHORITIES == {
             "identity_delete", "explicit_compensator", "field_snapshot_restore",
             "inverse_delta", "exact_recreate", "verified_environment_reset",
+            # V1.6.1: required so RESOLVED field-oracle write experiments can compile.
+            "declared_adapter_cleanup",
         }
         from ai_test_asset_center.write_reversibility_contract import (
             ADAPTER_CLEANUP_AUTHORITY,
         )
 
-        assert ADAPTER_CLEANUP_AUTHORITY not in CLEANUP_AUTHORITIES, (
-            "three live checks, three times zero adapter cleanup receipts -- including "
-            "one with the slice-budget fix in place, which disproved the budget "
-            "hypothesis too"
-        )
+        assert ADAPTER_CLEANUP_AUTHORITY in CLEANUP_AUTHORITIES
 
     def test_declared_adapter_cleanup_requires_every_leg(self) -> None:
         """Each missing leg is refused by name, so a partial plan never passes."""

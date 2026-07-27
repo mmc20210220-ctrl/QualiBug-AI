@@ -1,0 +1,5 @@
+{
+  "V1_6_2_ENTRY_ALLOWED": true,
+  "based_on_level": "B",
+  "reason": "Trace closure for available RESOLVED types with causal SOURCE_ASSET_LIMITED"
+}

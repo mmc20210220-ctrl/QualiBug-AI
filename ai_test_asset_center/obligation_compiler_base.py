@@ -1222,6 +1222,44 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
                 "operation_ref": operation_ref,
                 "operation_path_prefix": _operation_path_prefix(op),
             }
+            # V1.6.1: Rule Runtime Payload — preserve rule identity + fields through
+            # obligation → experiment without a parallel rule engine.
+            _field_ids = [
+                _text(fid)
+                for fid in _list(inv.get("field_ids"))
+                if _text(fid)
+            ]
+            if not _field_ids:
+                for _op in _list(_dict(expr).get("operands")):
+                    if isinstance(_op, dict):
+                        _fid = _text(_op.get("field_id") or _op.get("field"))
+                        if _fid:
+                            _field_ids.append(_fid)
+            for _term in _list(_dict(_dict(expr).get("equation")).get("terms") or []):
+                if isinstance(_term, dict):
+                    _fid = _text(_term.get("field_id") or _term.get("field"))
+                    if _fid:
+                        _field_ids.append(_fid)
+                elif _text(_term):
+                    _field_ids.append(_text(_term))
+            _field_ids = list(dict.fromkeys(_field_ids))
+            property_spec["field_rule_binding"] = {
+                "rule_id": invariant_ref,
+                "rule_fingerprint": _text(inv.get("fingerprint") or inv.get("id")),
+                "rule_type": family,
+                "required_field_ids": _field_ids,
+                "typed_expression": expr,
+                "operation_id": operation_ref,
+            }
+            if family == "state":
+                # Lift forbidden/allowed transition endpoints onto property for compile gates.
+                for _op in _list(_dict(expr).get("operands")):
+                    if not isinstance(_op, dict):
+                        continue
+                    if _text(_op.get("from_state")) and not _text(property_spec.get("from_state")):
+                        property_spec["from_state"] = _text(_op.get("from_state"))
+                    if _text(_op.get("to_state")) and not _text(property_spec.get("to_state")):
+                        property_spec["to_state"] = _text(_op.get("to_state"))
             if family == "idempotency":
                 property_spec.update({
                     "compare": "business_effect_not_http_status",

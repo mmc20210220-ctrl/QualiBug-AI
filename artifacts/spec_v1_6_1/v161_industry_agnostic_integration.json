@@ -1,0 +1,9 @@
+{
+  "schema_version": "qualibug.v161-industry-agnostic-integration.v1",
+  "causal_trace": 1,
+  "state_trace": 1,
+  "conservation_trace": 1,
+  "silent_trace_loss": 0,
+  "benchmark_names_present": false,
+  "status": "PASS"
+}

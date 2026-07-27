@@ -1,0 +1,43 @@
+{
+  "schema_version": "qualibug.v161-release-manifest.v1",
+  "spec_version": "V1.6.1",
+  "run_name": "V1_6_1_RESOLVED_RULE_ORACLE_TRACE_RUNTIME_V1",
+  "phase": "P0-1_BASELINE_FREEZE",
+  "branch": "main",
+  "commit_sha": "f440c3df96aadc32f578ab976a35b558bcb5eefb",
+  "parent_commit_sha": "01f95b43b8e7242f85628af050b5560efeb9d62b",
+  "tree_hash": "a722cc6d5ed45ff704a2d47adc482fb57d0188c8",
+  "working_tree_status": "dirty",
+  "working_tree_policy": "SPEC prefers clean; dirty holds V1.6.0 in-place edits + artifacts. Re-hash at formal-run freeze after code lock.",
+  "upstream_v160": {
+    "scan_id": "scan_benchmark_mall_131_1785141701072",
+    "run_id": "RUN_759828cc1f111aa50c4c3e54",
+    "V1_6_0_RESULT_LEVEL": "B",
+    "field_oracle_traces": 0,
+    "resolved_golden_rules": 12,
+    "golden_rule_set_hash": "e92bb9c7838cee63205790f36e35cecf77d3720369f8dc048223b266040b6306"
+  },
+  "frozen_hashes": {
+    "golden_rule_set_hash": "e92bb9c7838cee63205790f36e35cecf77d3720369f8dc048223b266040b6306",
+    "field_binding_hash": "7face8198d8759f4db337001ef098339c50e279d4a165ae31cec7ca383c00cb8",
+    "typed_expression_dsl_hash": "899ff7c095018599e217d74688165a82d8127b1f0794ad8f97d9573aab6f5aa5",
+    "observer_registry_hash": "d85c712a0f00b91620d440f0a451a4b0e12a9c7f08d8d982449c5bf9682ed625",
+    "oracle_registry_hash": "72f6cf9b3a4fba15b9ab9db93ba5de18c0e1aedc29a718ad0781483398031493",
+    "cleanup_policy_hash": "4f8b9c2836db63ac32365123c5e67702926e96ee16aed4158c750850277490ab"
+  },
+  "file_hashes": {
+    "behavior_ir": "7face8198d8759f4db337001ef098339c50e279d4a165ae31cec7ca383c00cb8",
+    "assertion_dsl": "899ff7c095018599e217d74688165a82d8127b1f0794ad8f97d9573aab6f5aa5",
+    "observer": "d85c712a0f00b91620d440f0a451a4b0e12a9c7f08d8d982449c5bf9682ed625",
+    "compiler": "24272e9cffdd959ea060197b33970235431da79234260ddf52dfb58e1bb640de",
+    "protocols": "f8f2cb7f0498c1a41ccb4d69c2cc3aca434764fb69e9ed13d91b174399c9b8ef",
+    "contract_oracles": "72f6cf9b3a4fba15b9ab9db93ba5de18c0e1aedc29a718ad0781483398031493",
+    "delivery_gate": "4f8b9c2836db63ac32365123c5e67702926e96ee16aed4158c750850277490ab",
+    "golden_set": "bf98ad52ab4c258fbfdc151d93a290f791fc9fa2b87406dbde8267e494751ee6"
+  },
+  "architecture_policy": {
+    "in_place_only": true,
+    "new_parallel_oracle_forbidden": true
+  },
+  "generated_at": "2026-07-27T09:04:27.853399+00:00"
+}

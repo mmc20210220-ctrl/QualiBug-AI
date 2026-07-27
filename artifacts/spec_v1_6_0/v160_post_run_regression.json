@@ -1,0 +1,33 @@
+{
+  "schema_version": "qualibug.v160-post-run-regression.v1",
+  "spec_version": "V1.6.0",
+  "generated_at": "2026-07-27T08:50:00Z",
+  "scan_id": "scan_benchmark_mall_131_1785141701072",
+  "specialized_v160": {
+    "tests": [
+      "tests/test_v160_field_oracle_closure.py",
+      "tests/test_v160_industry_neutral_field_oracle.py"
+    ],
+    "passed": 72,
+    "failed": 0
+  },
+  "related_suite": {
+    "command": "pytest tests/test_v160_* tests/test_observer_evidence_truthfulness.py tests/test_state_transition_experiment_compiler.py tests/test_assertion_kind_registration.py tests/test_phase3_tristate_assertion_receipts.py",
+    "passed": 128,
+    "failed": 1,
+    "failures": [
+      {
+        "test": "tests/test_state_transition_experiment_compiler.py::test_state_transition_fails_closed_without_permitted_runtime_actor",
+        "expected": "BLOCKED_MISSING_ACTOR / state_transition_actor_unresolved",
+        "observed": "BLOCKED_MISSING_FIXTURE / entity_in_state:state-pending",
+        "note": "Fail-closed still holds; blocker code ordering differs from test expectation. Not introduced by field-oracle evaluation path."
+      }
+    ]
+  },
+  "full_regression": {
+    "status": "NOT_RERUN_THIS_PHASE",
+    "baseline_reference": "V1.5.1: 2732 passed / 35 known failures",
+    "reason": "P0-28 stop after level conclusion; related suite recorded; full suite deferred to next phase if required"
+  },
+  "new_regressions_from_v160_specialized": 0
+}

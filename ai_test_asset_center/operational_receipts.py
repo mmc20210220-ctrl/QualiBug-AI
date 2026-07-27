@@ -23,6 +23,10 @@ _EXECUTION_STATUSES = frozenset({
     "HARNESS_FAILURE",
     "HARNESS_FAILED",
     "DELIVERABLE",
+    # V1.6.1: write executed and oracle may have evaluated, but cleanup/restoration
+    # did not complete. Must remain a first-class operational status so Field Oracle
+    # Traces are not lost behind an OperationalReceiptError abort.
+    "EXECUTED_BUT_NOT_RESTORED",
 })
 _CLEANUP_PHASES = frozenset({"cleanup", "fixture_cleanup"})
 _CLEANUP_STATUSES = frozenset({"COMPLETED", "FAILED", "NOT_REQUIRED"})

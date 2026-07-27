@@ -1,0 +1,26 @@
+{
+  "spec_version": "V1.6.0",
+  "run_name": "V1_6_0_FIELD_LEVEL_BUSINESS_ORACLE_RUNTIME_V1",
+  "triggered_at": "2026-07-27T16:41:38",
+  "completed_at": "2026-07-27T16:44:22",
+  "freeze_bundle_hash": "3aebafe88eb6b973aa01f97d639f7114bf4f7602e7e47cc351c8f0d5bdd046b2",
+  "golden_rule_set_hash": "e92bb9c7838cee63205790f36e35cecf77d3720369f8dc048223b266040b6306",
+  "entry_request": {
+    "method": "POST",
+    "url": "http://localhost:8088/api/v1/scan",
+    "body": {
+      "project_id": "benchmark_mall_131",
+      "base_url": "http://localhost:8080",
+      "approved_base_url": "http://localhost:8080",
+      "environment_type": "test",
+      "environment_ref": "sandbox"
+    }
+  },
+  "entry_response_status": 200,
+  "scan_id": "scan_benchmark_mall_131_1785141701072",
+  "campaign_id": "CMP_4d07614f012f301939d34b75",
+  "run_id": "RUN_759828cc1f111aa50c4c3e54",
+  "mainline_authority_id": "experiment_candidate",
+  "total_ms": 163668,
+  "execution_status": "completed"
+}

@@ -81,6 +81,13 @@ def _stable_id(*parts: Any) -> str:
     return f"bir_{digest}"
 
 
+def _canonical_field_id(*parts: Any) -> str:
+    """Stable Canonical Field identity (cf_*), distinct from Behavior IR node ids."""
+    raw = "|".join(_text(part) for part in parts if _text(part))
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+    return f"cf_{digest}"
+
+
 def _source_ref(source_id: str = "", *, version: str = "", locator: str = "", quote: str = "", kind: str = "") -> dict[str, Any]:
     quote_text = _text(quote)
     return {
@@ -2647,9 +2654,17 @@ _CF_VERSION_TOKENS = {"version", "revision", "etag", "row_version", "concurrency
 _CF_TIMESTAMP_TOKENS = {"created_at", "updated_at", "deleted_at", "timestamp", "time", "date", "_at", "_time", "expires"}
 _CF_AMOUNT_TOKENS = {"amount", "price", "total", "sum", "balance", "cost", "fee", "subtotal", "discount", "tax", "payment", "revenue", "credit", "debit", "delta", "payable"}
 _CF_QUANTITY_TOKENS = {"quantity", "qty", "count", "units", "stock", "inventory", "capacity", "limit"}
+_CF_QUANTITY_BALANCE_TOKENS = {
+    "available", "locked", "reserved", "allocated", "on_hand", "onhand",
+    "physical", "safety", "balance", "stock", "inventory", "capacity",
+}
+_CF_AMOUNT_BALANCE_TOKENS = {
+    "balance", "total", "subtotal", "payable", "receivable", "outstanding",
+    "revenue", "wallet", "deposit",
+}
 _CF_IDEMPOTENCY_TOKENS = {"idempotency", "idempotency_key", "request_id", "correlation_id", "dedup_key"}
 _CF_AUDIT_TOKENS = {"created_by", "updated_by", "modified_by", "deleted_by", "audit", "log", "trace", "reason", "remark", "note", "comment", "detail"}
-_CF_BOOLEAN_TOKENS = {"is_", "has_", "can_", "enabled", "active", "flag", "deleted", "visible", "locked", "verified"}
+_CF_BOOLEAN_TOKENS = {"is_", "has_", "can_", "enabled", "active", "flag", "deleted", "visible", "verified"}
 _CF_ENUM_TOKENS = {"role", "type", "category", "channel", "level", "kind", "mode", "tag", "label", "city", "province", "region", "gender"}
 _CF_CONTACT_TOKENS = {"phone", "email", "mobile", "receiver", "contact", "address", "name"}
 
@@ -2722,7 +2737,26 @@ def _classify_field_semantics(
         if fn.endswith(tok) or tok == fn:
             return "TIMESTAMP", 0.85
 
-    # Boolean
+    # Quantity before boolean: names like locked_qty must not become BOOLEAN_FLAG.
+    _has_qty_token = any(tok in fn for tok in _CF_QUANTITY_TOKENS)
+    _has_amount_token = any(tok in fn for tok in _CF_AMOUNT_TOKENS)
+    if _has_qty_token:
+        if any(tok in fn for tok in _CF_QUANTITY_BALANCE_TOKENS):
+            return "QUANTITY_BALANCE", 0.9
+        if any(tok in fn for tok in ("delta", "adjust", "change", "increment", "decrement")):
+            return "QUANTITY_DELTA", 0.85
+        # Bare qty/quantity on a stock-like entity defaults to balance.
+        if any(tok in entity_name.lower() for tok in ("inventory", "stock", "warehouse", "sku")):
+            return "QUANTITY_BALANCE", 0.8
+        return "QUANTITY_DELTA", 0.7
+    if _has_amount_token:
+        if any(tok in fn for tok in _CF_AMOUNT_BALANCE_TOKENS):
+            return "AMOUNT_BALANCE", 0.9
+        if any(tok in fn for tok in ("delta", "adjust", "change", "discount", "fee", "tax", "credit", "debit")):
+            return "AMOUNT_DELTA", 0.85
+        return "AMOUNT_DELTA", 0.7
+
+    # Boolean (after qty/amount so locked_qty / is_active stay correct)
     if sch_type == "boolean":
         return "BOOLEAN_FLAG", 0.9
     for tok in _CF_BOOLEAN_TOKENS:
@@ -2733,40 +2767,19 @@ def _classify_field_semantics(
     if has_enum or _list(sch.get("enum")):
         return "ENUM_VALUE", 0.8
 
-    # Amount (monetary)
-    if sch_type in ("decimal", "numeric", "money"):
-        # Distinguish balance vs delta by name
-        for tok in ("balance", "total", "subtotal", "revenue"):
-            if tok in fn:
-                return "AMOUNT_BALANCE", 0.85
-        return "AMOUNT_DELTA", 0.75
-    if sch_type == "number":
-        for tok in _CF_AMOUNT_TOKENS:
-            if tok in fn:
-                for bal_tok in ("balance", "total", "subtotal"):
-                    if bal_tok in fn:
-                        return "AMOUNT_BALANCE", 0.8
-                return "AMOUNT_DELTA", 0.75
+    # Amount (monetary) by schema type
+    if sch_type in ("decimal", "numeric", "money", "number"):
+        if any(tok in fn for tok in _CF_AMOUNT_BALANCE_TOKENS):
+            return "AMOUNT_BALANCE", 0.85
+        if any(tok in fn for tok in _CF_AMOUNT_TOKENS):
+            return "AMOUNT_DELTA", 0.75
 
-    # Quantity (integer counts)
+    # Quantity by schema type
     if sch_type == "integer":
-        for tok in _CF_QUANTITY_TOKENS:
-            if tok in fn:
-                for bal_tok in ("stock", "inventory", "capacity", "balance"):
-                    if bal_tok in fn:
-                        return "QUANTITY_BALANCE", 0.8
-                return "QUANTITY_DELTA", 0.75
-    for tok in _CF_QUANTITY_TOKENS:
-        if tok in fn:
-            return "QUANTITY_DELTA", 0.7
-
-    # Amount by name (no schema type)
-    for tok in _CF_AMOUNT_TOKENS:
-        if tok in fn:
-            for bal_tok in ("balance", "total", "subtotal"):
-                if bal_tok in fn:
-                    return "AMOUNT_BALANCE", 0.7
-            return "AMOUNT_DELTA", 0.65
+        if any(tok in fn for tok in _CF_QUANTITY_TOKENS):
+            if any(tok in fn for tok in _CF_QUANTITY_BALANCE_TOKENS):
+                return "QUANTITY_BALANCE", 0.8
+            return "QUANTITY_DELTA", 0.75
 
     # Identity (name-based, lower confidence)
     for tok in _CF_IDENTITY_TOKENS:
@@ -2894,7 +2907,7 @@ def _build_canonical_fields(
             field_src_refs.append({"source_id": fd_source, "kind": "field_dictionary"})
 
         field_node: dict[str, Any] = {
-            "field_id": _stable_id("cf", entity_name, name_lower),
+            "field_id": _canonical_field_id("cf", entity_name, name_lower),
             "name": name,
             "semantic_type": semantic_type,
             "data_type": data_type,
@@ -3882,18 +3895,30 @@ def build_behavior_ir_from_knowledge_asset(
     # These are industry-neutral patterns: the parser extracts field tokens
     # from rule statements and maps them to entities via schema evidence.
     _ENTITY_FIELD_REGISTRY: dict[str, list[str]] = {}
+    _ENTITY_FIELD_NODES: dict[str, dict[str, dict[str, Any]]] = {}
     for _ent in _list(model.get("entities")):
         _ent_id = _text(_ent.get("id") or _ent.get("name"))
+        _ent_name = _text(_ent.get("name") or _ent_id)
         if not _ent_id:
             continue
         _ent_fields: list[str] = []
+        _nodes: dict[str, dict[str, Any]] = {}
         for _f in _list(_ent.get("fields") or _ent.get("properties") or []):
             if isinstance(_f, dict):
-                _ent_fields.append(_text(_f.get("name") or _f.get("id")))
+                _fname = _text(_f.get("name") or _f.get("id"))
+                if _fname:
+                    _ent_fields.append(_fname)
+                    _nodes[_fname.lower()] = _f
             elif isinstance(_f, str):
                 _ent_fields.append(_f)
         # Also extract from operation schemas that reference this entity
         _ENTITY_FIELD_REGISTRY[_ent_id.lower()] = [f for f in _ent_fields if f]
+        _ENTITY_FIELD_NODES[_ent_id.lower()] = _nodes
+        if _ent_name.lower() != _ent_id.lower():
+            _ENTITY_FIELD_REGISTRY[_ent_name.lower()] = list(
+                _ENTITY_FIELD_REGISTRY[_ent_id.lower()]
+            )
+            _ENTITY_FIELD_NODES[_ent_name.lower()] = dict(_nodes)
     # Supplement from operation request/response schemas
     for _op in _list(model.get("operations")):
         _op_ents = [_text(e).lower() for e in _list(_op.get("entity_refs")) if _text(e)]
@@ -3932,17 +3957,29 @@ def build_behavior_ir_from_knowledge_asset(
         for field in all_fields:
             field_lower = field.lower()
             matched_entity = ""
+            matched_node: dict[str, Any] = {}
             for ent_name, ent_fields in _ENTITY_FIELD_REGISTRY.items():
                 if any(field_lower == ef.lower() for ef in ent_fields):
                     matched_entity = ent_name
+                    matched_node = _dict(_ENTITY_FIELD_NODES.get(ent_name, {}).get(field_lower))
                     break
             # Heuristic entity mapping from field name prefix
             if not matched_entity:
                 for ent_name in _ENTITY_FIELD_REGISTRY:
                     if field_lower.startswith(ent_name.rstrip("s") + "_") or ent_name.rstrip("s") in field_lower:
                         matched_entity = ent_name
+                        matched_node = _dict(
+                            _ENTITY_FIELD_NODES.get(ent_name, {}).get(field_lower)
+                        )
                         break
-            result.append({"entity_ref": matched_entity, "field": field})
+            row: dict[str, Any] = {"entity_ref": matched_entity, "field": field}
+            _cf = _text(matched_node.get("field_id"))
+            _sem = _text(matched_node.get("semantic_type"))
+            if _cf:
+                row["field_id"] = _cf
+            if _sem:
+                row["semantic_type"] = _sem
+            result.append(row)
         return result
 
     # Invariants from rule library (typed expression + description)
@@ -3979,17 +4016,30 @@ def build_behavior_ir_from_knowledge_asset(
         _rule_kind = _text(rule.get("kind") or rule.get("risk_type") or "business_rule")
         _rule_operands = _list(rule.get("operands"))
         _rule_equation: dict[str, Any] = _dict(rule.get("equation"))
-        # For conservation/data_conservation rules without explicit operands,
-        # extract field references from the statement text.
-        if not _rule_operands and any(
-            token in _rule_kind.lower()
-            for token in ("conserv", "data_conservation", "balance", "amount", "quantity")
+        # For conservation/data_conservation/business amount-quantity rules
+        # without explicit operands, extract field references from statement text.
+        if not _rule_operands and (
+            any(
+                token in _rule_kind.lower()
+                for token in ("conserv", "data_conservation", "balance", "amount", "quantity")
+            )
+            or any(
+                token in statement.lower()
+                for token in (
+                    "available_qty", "locked_qty", "payable_amount", "total_amount",
+                    "discount_amount", "refund", "qty", "amount",
+                )
+            )
         ):
             _extracted = _extract_fields_from_statement(statement)
             if _extracted:
                 _rule_operands = _extracted
                 # Build conservation equation terms from extracted fields
-                _terms = [f["field"] for f in _extracted if f.get("field")]
+                _terms = [
+                    _text(f.get("field_id") or f.get("field"))
+                    for f in _extracted
+                    if f.get("field") or f.get("field_id")
+                ]
                 if _terms and not _rule_equation:
                     _rule_equation = {
                         "operator": "unchanged_sum",
@@ -4003,11 +4053,11 @@ def build_behavior_ir_from_knowledge_asset(
         }
         if _rule_equation:
             _expression["equation"] = _rule_equation
-        # V1.4.0: collect field_ids from operands for downstream binding
+        # V1.4.0/V1.6.0: collect Canonical Field IDs (cf_*) when present; else names.
         _inv_field_ids: list[str] = []
         for _operand in _rule_operands:
             if isinstance(_operand, dict):
-                _of = _text(_operand.get("field"))
+                _of = _text(_operand.get("field_id") or _operand.get("field"))
                 if _of:
                     _inv_field_ids.append(_of)
         _inv_typed: dict[str, Any] = {
