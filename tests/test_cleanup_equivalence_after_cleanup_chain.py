@@ -211,3 +211,50 @@ def test_final_state_without_cleanup_keeps_write_snapshot_contract() -> None:
     assert receipts[0]["status"] == "OBSERVED"
     assert receipts[0]["evidence"]["cleanup_phase_excluded"] is True
     assert receipts[0]["evidence"]["final_state"] == "PAID"
+
+
+def test_seal_records_visible_block_when_write_step_missing() -> None:
+    from ai_test_asset_center.experiment_cleanup_executor import (
+        seal_after_cleanup_observation,
+    )
+    from pathlib import Path
+
+    observations: dict = {}
+    sealed = seal_after_cleanup_observation(
+        steps_out=[],
+        observations=observations,
+        actors={},
+        tokens={},
+        base_url="http://127.0.0.1:8080",
+        root=Path("."),
+        project="benchmark_mall_131",
+        runtime_contract={"status": "approved", "approved_base_url": "http://127.0.0.1:8080"},
+    )
+    assert sealed == {}
+    assert observations["after_cleanup_observation_seal"]["reason_code"] == (
+        "AFTER_CLEANUP_WRITE_STEP_MISSING"
+    )
+
+
+def test_adapter_runtime_step_accepts_lowercase_cleaned_status() -> None:
+    from ai_test_asset_center.experiment_cleanup_executor import (
+        _append_adapter_cleanup_runtime_step,
+    )
+
+    steps: list[dict] = []
+    _append_adapter_cleanup_runtime_step(
+        steps_out=steps,
+        cleanup_subject_id="cleanup_1",
+        adapter_receipt={
+            "status": "cleaned",
+            "table": "orders",
+            "rows_deleted": 1,
+        },
+        after_cleanup_obs={
+            "status_code": 404,
+            "body": {"error": "not_found"},
+            "path": "/orders/1",
+        },
+    )
+    assert steps[0]["governance_receipt"]["accepted"] is True
+    assert steps[0]["status_code"] == 200

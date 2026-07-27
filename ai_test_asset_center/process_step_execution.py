@@ -377,10 +377,11 @@ class ProcessStepLedger:
 
 
 def step_ids_with_observation_evidence(ledger: ProcessStepLedger) -> list[str]:
-    """Step ids whose ledger row carries at least one real observation receipt id.
+    """Step ids whose ledger row carries real observation evidence.
 
-    Never returns executed-step ids by default — a step with no observation
-    receipt id attached is not observed, regardless of execution status.
+    Evidence is a named observation/observer receipt id, or a non-empty
+    ``response_receipt_id`` produced from the governed HTTP response body.
+    Never returns executed-step ids merely because the step ran.
     """
     out: list[str] = []
     for row in ledger.all_rows():
@@ -390,7 +391,7 @@ def step_ids_with_observation_evidence(ledger: ProcessStepLedger) -> list[str]:
         candidate_ids = list(row.get("observation_receipt_ids") or []) + list(
             row.get("observer_receipt_ids") or []
         )
-        if any(_text(rid) for rid in candidate_ids):
+        if any(_text(rid) for rid in candidate_ids) or _text(row.get("response_receipt_id")):
             out.append(sid)
     return out
 

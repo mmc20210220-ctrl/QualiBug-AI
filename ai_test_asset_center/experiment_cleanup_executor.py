@@ -42,7 +42,6 @@ from .runtime_binding_materializer import (
 )
 from .cleanup_execution_receipt import build_cleanup_execution_receipt
 from .sandbox_write_executor import (
-    _http_request,
     _restore_payload,
     execute_governed_control_write,
     sandbox_write_allowed,
@@ -105,6 +104,22 @@ def _normalize_after_cleanup_obs(
     }
 
 
+def _record_after_cleanup_seal_block(
+    observations: dict[str, Any],
+    *,
+    reason_code: str,
+    detail: str = "",
+) -> dict[str, Any]:
+    """Record why after-cleanup sealing did not produce an observation (fail visible)."""
+    block = {
+        "status": "BLOCKED",
+        "reason_code": _text(reason_code) or "AFTER_CLEANUP_SEAL_BLOCKED",
+        "detail": _text(detail),
+    }
+    observations["after_cleanup_observation_seal"] = block
+    return block
+
+
 def seal_after_cleanup_observation(
     *,
     steps_out: list[dict[str, Any]],
@@ -121,12 +136,14 @@ def seal_after_cleanup_observation(
     Prefer an already-present cleanup-phase governance ``after`` snapshot.
     Otherwise re-read the write's declared observation_path with the write actor.
     Never invent a path and never treat the cleanup write response body as state.
+    Blocking reasons are written to ``after_cleanup_observation_seal``.
     """
     existing = _dict(observations.get("after_cleanup_observation"))
     if existing and (
         existing.get("body") is not None
         or int(existing.get("status_code") or existing.get("status") or 0) > 0
     ):
+        observations.pop("after_cleanup_observation_seal", None)
         return existing
 
     # Prefer real cleanup-step governance after snapshots already captured.
@@ -147,10 +164,16 @@ def seal_after_cleanup_observation(
                 source="cleanup_step_governance_after",
             )
             observations["after_cleanup_observation"] = sealed
+            observations.pop("after_cleanup_observation_seal", None)
             return sealed
 
     write_step = _primary_write_step_for_readback(steps_out)
     if not write_step:
+        _record_after_cleanup_seal_block(
+            observations,
+            reason_code="AFTER_CLEANUP_WRITE_STEP_MISSING",
+            detail="no_accepted_control_or_treatment_write_with_observation_path",
+        )
         return {}
     gov = _dict(write_step.get("governance_receipt"))
     observation_path = _text(
@@ -159,14 +182,24 @@ def seal_after_cleanup_observation(
         or write_step.get("path")
     )
     if not observation_path.startswith("/") or path_has_placeholders(observation_path):
+        _record_after_cleanup_seal_block(
+            observations,
+            reason_code="AFTER_CLEANUP_OBSERVATION_PATH_UNRESOLVED",
+            detail=observation_path or "empty_path",
+        )
         return {}
     try:
         _actor_ref, _actor, token = _cleanup_actor_for_write_step(
             write_step, actors=actors, tokens=tokens
         )
-    except ValueError:
+    except ValueError as exc:
+        _record_after_cleanup_seal_block(
+            observations,
+            reason_code="AFTER_CLEANUP_ACTOR_UNRESOLVED",
+            detail=str(exc),
+        )
         return {}
-    allowed, _reason = sandbox_write_allowed(
+    allowed, deny_reason = sandbox_write_allowed(
         root=root,
         project=project,
         runtime_contract=runtime_contract,
@@ -176,11 +209,24 @@ def seal_after_cleanup_observation(
     # Readback is a GET; still require the actor to be sandbox-allowed for the
     # campaign target so we never probe undeclared environments.
     if not allowed:
+        _record_after_cleanup_seal_block(
+            observations,
+            reason_code="AFTER_CLEANUP_SANDBOX_DENIED",
+            detail=_text(deny_reason),
+        )
         return {}
     base = _text(base_url).rstrip("/")
     if not base:
+        _record_after_cleanup_seal_block(
+            observations,
+            reason_code="AFTER_CLEANUP_BASE_URL_MISSING",
+            detail="base_url_empty",
+        )
         return {}
-    raw = _http_request("GET", base + observation_path, token=token)
+    # Use the sandbox HTTP transport (same authority as governed writes' reads).
+    from .sandbox_write_executor_base import _http_request as _governed_http_get
+
+    raw = _governed_http_get("GET", base + observation_path, token=token)
     sealed = _normalize_after_cleanup_obs(
         status_code=int(raw.get("status") or 0),
         body=raw.get("body"),
@@ -189,8 +235,14 @@ def seal_after_cleanup_observation(
     )
     # HTTP transport errors yield status 0 — do not seal empty/indeterminate rows.
     if int(sealed.get("status_code") or 0) <= 0 and sealed.get("body") is None:
+        _record_after_cleanup_seal_block(
+            observations,
+            reason_code="AFTER_CLEANUP_READBACK_TRANSPORT_FAILED",
+            detail=_text(raw.get("error") or raw.get("detail") or "status_0_empty_body"),
+        )
         return {}
     observations["after_cleanup_observation"] = sealed
+    observations.pop("after_cleanup_observation_seal", None)
     return sealed
 
 
@@ -206,7 +258,7 @@ def _append_adapter_cleanup_runtime_step(
     Without this row, cleanup_execution_receipt sees zero cleanup steps and
     equivalence stays permanently INDETERMINATE even when DB delete succeeded.
     """
-    cleaned = _text(adapter_receipt.get("status")) == "CLEANED"
+    cleaned = _text(adapter_receipt.get("status")).upper() == "CLEANED"
     after_payload = {}
     if after_cleanup_obs:
         after_payload = {

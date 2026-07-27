@@ -733,3 +733,73 @@ class TestExtras:
             "ai_test_asset_center/experiment_outcome_finalizer.py",
         ]:
             ast.parse((ROOT / rel).read_text(encoding="utf-8"))
+
+    def test_66_response_receipt_alone_counts_as_observation_evidence(self):
+        """Formal mainline shape: plan_executor writes response_receipt_id only."""
+        from ai_test_asset_center.process_step_execution import (
+            step_ids_with_observation_evidence,
+        )
+
+        led = ProcessStepLedger(
+            "exp_resp_obs",
+            required_step_ids=["treatment_1"],
+            campaign_id="cmp",
+            run_id="run",
+            obligation_id="obl",
+            protocol_id="proto",
+        )
+        led.record_step_execution(
+            step_id="treatment_1",
+            phase="treatment",
+            operation_ref="op_t",
+            actor_ref="actor_a",
+            request_receipt_id="req_1",
+            response_receipt_id="resp_body_fp_1",
+            transport_receipt_id="tr_1",
+            observer_receipt_ids=[],
+            status_code=200,
+            final_status="EXECUTED",
+            target_reached=True,
+        )
+        assert led.get_step_row("treatment_1")["observer_receipt_ids"] == []
+        assert step_ids_with_observation_evidence(led) == ["treatment_1"]
+
+    def test_67_mainline_balance_without_hand_seeded_observer_ids(self):
+        """Balance must pass when only response_receipt_id + bound oracle/cleanup exist."""
+        from ai_test_asset_center.process_step_execution import (
+            step_ids_with_cleanup_evidence,
+            step_ids_with_observation_evidence,
+            step_ids_with_oracle_evidence,
+            validate_required_actual_step_balance,
+        )
+
+        led = ProcessStepLedger(
+            "exp_mainline_shape",
+            required_step_ids=["treatment_1"],
+            campaign_id="cmp",
+            run_id="run",
+            obligation_id="obl",
+            protocol_id="proto",
+        )
+        led.record_step_execution(
+            step_id="treatment_1",
+            phase="treatment",
+            operation_ref="op_t",
+            actor_ref="actor_a",
+            request_receipt_id="req_1",
+            response_receipt_id="resp_1",
+            transport_receipt_id="tr_1",
+            status_code=200,
+            final_status="EXECUTED",
+            target_reached=True,
+        )
+        led.append_receipt_ref("treatment_1", "oracle_receipt_ids", "oracle_1")
+        led.append_receipt_ref("treatment_1", "cleanup_receipt_ids", "cleanup_1")
+        bal = validate_required_actual_step_balance(
+            required_step_ids=led.required_step_ids,
+            executed_step_ids=led.executed_step_ids(),
+            observed_step_ids=step_ids_with_observation_evidence(led),
+            oracle_step_ids=step_ids_with_oracle_evidence(led),
+            cleanup_step_ids=step_ids_with_cleanup_evidence(led),
+        )
+        assert bal["balanced"] is True

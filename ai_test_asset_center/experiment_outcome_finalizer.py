@@ -1611,8 +1611,27 @@ def finalize_experiment_execution(
             elif not _env_receipt:
                 _env_receipt = {}
 
-            # Bind real oracle/cleanup receipt ids onto ledger steps before balance.
+            # Bind real observation/oracle/cleanup receipt ids onto ledger steps
+            # before balance. Never invent ids — only append verified receipt ids.
             if _process_ledger is not None and hasattr(_process_ledger, "append_receipt_ref"):
+                for _or in list(observer_receipts) + list(
+                    _list(observations.get("observation_receipts"))
+                ):
+                    if not isinstance(_or, dict):
+                        continue
+                    _orid = _text(_or.get("receipt_id"))
+                    if not _orid:
+                        continue
+                    _osid = _text(
+                        _or.get("step_id")
+                        or _dict(_or.get("evidence")).get("step_id")
+                    )
+                    _targets = [_osid] if _osid else list(_executed_steps)
+                    for _sid in _targets:
+                        if _text(_sid):
+                            _process_ledger.append_receipt_ref(
+                                _text(_sid), "observation_receipt_ids", _orid
+                            )
                 if _oracle_rid:
                     for _sid in _executed_steps:
                         _process_ledger.append_receipt_ref(
