@@ -2307,6 +2307,9 @@ def _derive_source_relationship_relations(
 
         invariant = invariant_matches[0]
         operation = operation_matches[0]
+        # V1.4.0: umbrella rules must not generate executable relations
+        if _text(invariant.get("binding_status")) == "umbrella_rule_excluded":
+            continue
         operation_ref = _text(operation.get("id"))
         relations.append(_relation_node(
             relation_type=_invariant_relation_type(invariant),
@@ -2335,14 +2338,19 @@ def _derive_invariant_relations(model: dict[str, Any]) -> list[dict[str, Any]]:
     for invariant in _list(model.get("invariants")):
         if not isinstance(invariant, dict):
             continue
+        # V1.4.0: skip umbrella rules — they must not generate executable relations
+        if _text(invariant.get("binding_status")) == "umbrella_rule_excluded":
+            continue
         relation_type = _invariant_relation_type(invariant)
         op_refs = _list(invariant.get("operation_refs"))
+        _bound_ops: set[str] = set()
 
         for hint in op_refs:
             operation = _resolve_operation(operations, {"operation_ref": hint})
             if not operation:
                 continue
             operation_ref = _text(operation.get("id"))
+            _bound_ops.add(operation_ref)
             relations.append(_relation_node(
                 relation_type=relation_type,
                 from_ref=operation_ref,
@@ -2358,6 +2366,53 @@ def _derive_invariant_relations(model: dict[str, Any]) -> list[dict[str, Any]]:
                 ),
                 derivation="explicit",
             ))
+        # V1.4.0: field-based dual-signal fallback — when no explicit operation_refs
+        # are resolved, try to bind via field_ids → operation schema match.
+        if not _bound_ops:
+            _field_ids = {_text(f).lower() for f in _list(invariant.get("field_ids")) if _text(f)}
+            _entity_ref = _text(invariant.get("entity_ref"))
+            if _field_ids or _entity_ref:
+                for op in operations:
+                    op_id = _text(op.get("id"))
+                    if not op_id or op_id in _bound_ops:
+                        continue
+                    # Collect operation schema fields
+                    _op_field_set: set[str] = set()
+                    for _sk in ("request_schema", "response_schema"):
+                        _schema = _dict(op.get(_sk))
+                        _props = _dict(_schema.get("properties"))
+                        _op_field_set.update(k.lower() for k in _props)
+                        _content = _dict(_schema.get("content"))
+                        _json_m = _dict(_content.get("application/json"))
+                        _nested = _dict(_dict(_json_m.get("schema")).get("properties"))
+                        _op_field_set.update(k.lower() for k in _nested)
+                    # Entity signal
+                    _op_ents = {_text(e).lower() for e in _list(op.get("entity_refs")) if _text(e)}
+                    _ent_match = bool(_entity_ref and _entity_ref.lower() in _op_ents)
+                    # Field signal
+                    _fld_match = bool(_field_ids and _op_field_set & _field_ids)
+                    if _ent_match and _fld_match:
+                        _bound_ops.add(op_id)
+                        relations.append(_relation_node(
+                            relation_type=relation_type,
+                            from_ref=op_id,
+                            to_ref=_text(invariant.get("id")),
+                            operation_ref=op_id,
+                            source_refs=list(invariant.get("source_refs") or [])[:3],
+                            confidence=0.65,
+                            derivation="field-co-reference",
+                        ))
+                    elif _fld_match:
+                        _bound_ops.add(op_id)
+                        relations.append(_relation_node(
+                            relation_type=relation_type,
+                            from_ref=op_id,
+                            to_ref=_text(invariant.get("id")),
+                            operation_ref=op_id,
+                            source_refs=list(invariant.get("source_refs") or [])[:3],
+                            confidence=0.5,
+                            derivation="field-schema-match",
+                        ))
     return relations
 
 
@@ -2559,6 +2614,303 @@ def _resolve_node_reference(raw: Any, index: dict[str, str]) -> str:
         if tail in index:
             return index[tail]
     return ""
+
+
+# ─── V1.4.0 Canonical Field Semantic Classification ─────────────────────────
+# Industry-neutral field semantic types. Classification uses only structural
+# signals (name tokens, data type, schema constraints, entity context).
+
+CANONICAL_FIELD_SEMANTIC_TYPES = frozenset({
+    "IDENTITY",
+    "FOREIGN_KEY",
+    "OWNER_ID",
+    "TENANT_ID",
+    "STATE",
+    "QUANTITY_BALANCE",
+    "QUANTITY_DELTA",
+    "AMOUNT_BALANCE",
+    "AMOUNT_DELTA",
+    "VERSION",
+    "TIMESTAMP",
+    "IDEMPOTENCY_KEY",
+    "BOOLEAN_FLAG",
+    "ENUM_VALUE",
+    "AUDIT_FIELD",
+    "UNKNOWN",
+})
+
+_CF_IDENTITY_TOKENS = {"id", "code", "number", "key", "identifier", "uuid", "ref", "reference", "no", "num", "sku", "coupon"}
+_CF_STATE_TOKENS = {"status", "state", "lifecycle", "phase", "stage", "condition", "disposition"}
+_CF_TENANT_TOKENS = {"tenant", "tenant_id", "org", "organization", "company", "client_id"}
+_CF_OWNER_TOKENS = {"owner", "owner_id", "user_id", "created_by", "creator", "author", "assignee", "assigned_to"}
+_CF_VERSION_TOKENS = {"version", "revision", "etag", "row_version", "concurrency_token"}
+_CF_TIMESTAMP_TOKENS = {"created_at", "updated_at", "deleted_at", "timestamp", "time", "date", "_at", "_time", "expires"}
+_CF_AMOUNT_TOKENS = {"amount", "price", "total", "sum", "balance", "cost", "fee", "subtotal", "discount", "tax", "payment", "revenue", "credit", "debit", "delta", "payable"}
+_CF_QUANTITY_TOKENS = {"quantity", "qty", "count", "units", "stock", "inventory", "capacity", "limit"}
+_CF_IDEMPOTENCY_TOKENS = {"idempotency", "idempotency_key", "request_id", "correlation_id", "dedup_key"}
+_CF_AUDIT_TOKENS = {"created_by", "updated_by", "modified_by", "deleted_by", "audit", "log", "trace", "reason", "remark", "note", "comment", "detail"}
+_CF_BOOLEAN_TOKENS = {"is_", "has_", "can_", "enabled", "active", "flag", "deleted", "visible", "locked", "verified"}
+_CF_ENUM_TOKENS = {"role", "type", "category", "channel", "level", "kind", "mode", "tag", "label", "city", "province", "region", "gender"}
+_CF_CONTACT_TOKENS = {"phone", "email", "mobile", "receiver", "contact", "address", "name"}
+
+
+def _classify_field_semantics(
+    field_name: str,
+    *,
+    data_type: str = "",
+    entity_name: str = "",
+    is_primary_key: bool = False,
+    is_foreign_key: bool = False,
+    has_enum: bool = False,
+    schema: dict[str, Any] | None = None,
+) -> tuple[str, float]:
+    """Classify a field into one of the canonical semantic types.
+
+    Returns (semantic_type, confidence). Industry-neutral: uses only structural
+    signals from name tokens, data type, and schema constraints.
+    """
+    fn = field_name.lower().strip()
+    sch = schema if isinstance(schema, dict) else {}
+    sch_type = _text(sch.get("type") or data_type).lower()
+
+    # Primary key → IDENTITY
+    if is_primary_key:
+        return "IDENTITY", 0.95
+
+    # Foreign key → FOREIGN_KEY (but check owner/tenant first)
+    if is_foreign_key or fn.endswith("_id") or (fn.endswith("id") and len(fn) > 2 and fn[:-2].isalpha()):
+        # Check if it's a tenant or owner FK
+        for tok in _CF_TENANT_TOKENS:
+            if tok in fn:
+                return "TENANT_ID", 0.9
+        for tok in _CF_OWNER_TOKENS:
+            if tok in fn:
+                return "OWNER_ID", 0.85
+        return "FOREIGN_KEY", 0.8
+
+    # Idempotency key
+    for tok in _CF_IDEMPOTENCY_TOKENS:
+        if tok in fn:
+            return "IDEMPOTENCY_KEY", 0.9
+
+    # Version
+    for tok in _CF_VERSION_TOKENS:
+        if tok == fn or fn.endswith("_" + tok) or tok in fn:
+            return "VERSION", 0.85
+
+    # State
+    for tok in _CF_STATE_TOKENS:
+        if tok == fn or fn.endswith("_" + tok) or fn.startswith(tok + "_"):
+            return "STATE", 0.9
+    if has_enum and any(tok in fn for tok in _CF_STATE_TOKENS):
+        return "STATE", 0.85
+
+    # Tenant (non-FK)
+    for tok in _CF_TENANT_TOKENS:
+        if tok == fn or tok in fn:
+            return "TENANT_ID", 0.85
+
+    # Owner (non-FK)
+    for tok in _CF_OWNER_TOKENS:
+        if tok == fn or tok in fn:
+            return "OWNER_ID", 0.8
+
+    # Timestamp
+    if sch_type in ("datetime", "timestamp", "date"):
+        return "TIMESTAMP", 0.9
+    for tok in _CF_TIMESTAMP_TOKENS:
+        if fn.endswith(tok) or tok == fn:
+            return "TIMESTAMP", 0.85
+
+    # Boolean
+    if sch_type == "boolean":
+        return "BOOLEAN_FLAG", 0.9
+    for tok in _CF_BOOLEAN_TOKENS:
+        if fn.startswith(tok) or fn == tok:
+            return "BOOLEAN_FLAG", 0.8
+
+    # Enum
+    if has_enum or _list(sch.get("enum")):
+        return "ENUM_VALUE", 0.8
+
+    # Amount (monetary)
+    if sch_type in ("decimal", "numeric", "money"):
+        # Distinguish balance vs delta by name
+        for tok in ("balance", "total", "subtotal", "revenue"):
+            if tok in fn:
+                return "AMOUNT_BALANCE", 0.85
+        return "AMOUNT_DELTA", 0.75
+    if sch_type == "number":
+        for tok in _CF_AMOUNT_TOKENS:
+            if tok in fn:
+                for bal_tok in ("balance", "total", "subtotal"):
+                    if bal_tok in fn:
+                        return "AMOUNT_BALANCE", 0.8
+                return "AMOUNT_DELTA", 0.75
+
+    # Quantity (integer counts)
+    if sch_type == "integer":
+        for tok in _CF_QUANTITY_TOKENS:
+            if tok in fn:
+                for bal_tok in ("stock", "inventory", "capacity", "balance"):
+                    if bal_tok in fn:
+                        return "QUANTITY_BALANCE", 0.8
+                return "QUANTITY_DELTA", 0.75
+    for tok in _CF_QUANTITY_TOKENS:
+        if tok in fn:
+            return "QUANTITY_DELTA", 0.7
+
+    # Amount by name (no schema type)
+    for tok in _CF_AMOUNT_TOKENS:
+        if tok in fn:
+            for bal_tok in ("balance", "total", "subtotal"):
+                if bal_tok in fn:
+                    return "AMOUNT_BALANCE", 0.7
+            return "AMOUNT_DELTA", 0.65
+
+    # Identity (name-based, lower confidence)
+    for tok in _CF_IDENTITY_TOKENS:
+        if fn == tok or fn.endswith("_" + tok) or fn.startswith(tok + "_"):
+            return "IDENTITY", 0.7
+
+    # Audit
+    for tok in _CF_AUDIT_TOKENS:
+        if tok in fn:
+            return "AUDIT_FIELD", 0.7
+
+    # Enum (categorical by name pattern)
+    for tok in _CF_ENUM_TOKENS:
+        if tok == fn or fn.endswith("_" + tok) or fn.startswith(tok + "_") or tok in fn:
+            return "ENUM_VALUE", 0.7
+
+    # Contact / identity fields (phone, email, receiver, address, name)
+    for tok in _CF_CONTACT_TOKENS:
+        if tok == fn or tok in fn:
+            return "IDENTITY", 0.6
+
+    # Nested/collection fields (items, items[].xxx) — treat as FOREIGN_KEY reference
+    if "[]" in fn or fn.endswith("s") and len(fn) > 3:
+        # Plural collection field or nested path
+        for tok in _CF_IDENTITY_TOKENS:
+            if tok in fn:
+                return "FOREIGN_KEY", 0.6
+        return "FOREIGN_KEY", 0.5
+
+    return "UNKNOWN", 0.3
+
+
+def _build_canonical_fields(
+    raw_fields: list[Any],
+    entity_name: str,
+    *,
+    identity_fields: list[Any] | None = None,
+    source_refs: list[Any] | None = None,
+    field_dictionary: list[Any] | None = None,
+    db_columns: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Convert raw field names/dicts into structured canonical field dicts.
+
+    Merges information from multiple sources (entity fields, field_dictionary,
+    DB columns) to produce the richest possible field description.
+    """
+    id_fields = {_text(f).lower() for f in _list(identity_fields) if _text(f)}
+    src_refs = _list(source_refs)
+    db_cols = db_columns if isinstance(db_columns, dict) else {}
+
+    # Build field_dictionary lookup: field_name -> dict info
+    fd_lookup: dict[str, dict[str, Any]] = {}
+    for fd in _list(field_dictionary):
+        if isinstance(fd, dict):
+            fname = _text(fd.get("field") or fd.get("name")).lower()
+            if fname:
+                fd_lookup[fname] = fd
+        elif isinstance(fd, str):
+            fd_lookup[fd.lower()] = {"field": fd}
+
+    # Collect unique field names preserving order
+    seen: set[str] = set()
+    ordered_names: list[str] = []
+    for f in raw_fields:
+        name = ""
+        if isinstance(f, dict):
+            name = _text(f.get("name") or f.get("id") or f.get("field"))
+        elif isinstance(f, str):
+            name = f.strip()
+        if name and name.lower() not in seen:
+            seen.add(name.lower())
+            ordered_names.append(name)
+    # Supplement from field_dictionary
+    for fname in fd_lookup:
+        if fname not in seen:
+            seen.add(fname)
+            ordered_names.append(fname)
+    # Supplement from DB columns
+    for col_name in db_cols:
+        if col_name.lower() not in seen:
+            seen.add(col_name.lower())
+            ordered_names.append(col_name)
+
+    result: list[dict[str, Any]] = []
+    for name in ordered_names:
+        name_lower = name.lower()
+        # Gather evidence from all sources
+        fd_info = fd_lookup.get(name_lower, {})
+        db_info = db_cols.get(name_lower, {})
+        data_type = _text(
+            fd_info.get("type") or db_info.get("type") or db_info.get("data_type")
+        )
+        is_pk = name_lower in id_fields or bool(db_info.get("primary_key"))
+        is_fk = bool(fd_info.get("foreign_key") or db_info.get("foreign_key"))
+        has_enum = bool(_list(fd_info.get("enum")) or _list(db_info.get("enum")))
+        nullable = db_info.get("nullable", fd_info.get("nullable"))
+        description = _text(fd_info.get("description") or db_info.get("description"))
+
+        semantic_type, confidence = _classify_field_semantics(
+            name,
+            data_type=data_type,
+            entity_name=entity_name,
+            is_primary_key=is_pk,
+            is_foreign_key=is_fk,
+            has_enum=has_enum,
+        )
+
+        # Determine identity_role and scope_role
+        identity_role = ""
+        if is_pk:
+            identity_role = "primary_key"
+        elif is_fk or semantic_type == "FOREIGN_KEY":
+            identity_role = "foreign_key"
+
+        scope_role = ""
+        if semantic_type == "TENANT_ID":
+            scope_role = "tenant_id"
+        elif semantic_type == "OWNER_ID":
+            scope_role = "owner_id"
+
+        # Build source_refs for this field
+        field_src_refs = list(src_refs)  # inherit entity-level refs
+        fd_source = _text(fd_info.get("source_id"))
+        if fd_source:
+            field_src_refs.append({"source_id": fd_source, "kind": "field_dictionary"})
+
+        field_node: dict[str, Any] = {
+            "field_id": _stable_id("cf", entity_name, name_lower),
+            "name": name,
+            "semantic_type": semantic_type,
+            "data_type": data_type,
+            "nullable": nullable if nullable is not None else None,
+            "identity_role": identity_role,
+            "scope_role": scope_role,
+            "confidence": round(confidence, 2),
+            "conflict_status": "accepted",
+        }
+        if description:
+            field_node["description"] = description
+        if field_src_refs:
+            field_node["source_refs"] = field_src_refs
+        result.append(field_node)
+
+    return result
 
 
 def build_behavior_ir_from_knowledge_asset(
@@ -2860,6 +3212,309 @@ def build_behavior_ir_from_knowledge_asset(
         )
         entities_by_canonical_name[canonical_name] = entity
         model["entities"].append(entity)
+
+    # ── V1.4.0: Upgrade entity fields to Canonical Field structure ──
+    # Build a lookup of data_tables field_dictionary and DB column info per entity.
+    _table_field_dict: dict[str, list[Any]] = {}
+    _table_db_columns: dict[str, dict[str, dict[str, Any]]] = {}
+    for _dt in _list(data.get("data_tables")):
+        if not isinstance(_dt, dict):
+            continue
+        _dt_name = _text(_dt.get("name") or _dt.get("table") or _dt.get("entity")).lower()
+        if not _dt_name:
+            continue
+        _fd_list = _list(_dt.get("field_dictionary"))
+        if _fd_list:
+            _table_field_dict.setdefault(_dt_name, []).extend(_fd_list)
+        # Build column info from field_dictionary entries
+        for _fd_entry in _fd_list:
+            if not isinstance(_fd_entry, dict):
+                continue
+            _fd_fname = _text(_fd_entry.get("field") or _fd_entry.get("name")).lower()
+            if _fd_fname:
+                _table_db_columns.setdefault(_dt_name, {})[_fd_fname] = _fd_entry
+
+    # Supplement from top-level field_dictionary (has table→field mappings)
+    for _fd_top in _list(data.get("field_dictionary")):
+        if not isinstance(_fd_top, dict):
+            continue
+        _fd_table = _text(_fd_top.get("table") or _fd_top.get("table_id", "").replace("table:", "")).lower()
+        if not _fd_table:
+            continue
+        _table_field_dict.setdefault(_fd_table, []).append(_fd_top)
+        _fd_fname = _text(_fd_top.get("field") or _fd_top.get("name")).lower()
+        if _fd_fname:
+            _table_db_columns.setdefault(_fd_table, {})[_fd_fname] = _fd_top
+
+    # Supplement from operations' request/response schemas (path-based entity inference)
+    _NON_ENTITY_SEGMENTS = {"api", "rest", "v1", "v2", "v3", "admin", "public", "internal", "auth"}
+    for _op in _list(model.get("operations")):
+        if not isinstance(_op, dict):
+            continue
+        # Infer entity from path: /api/orders/{id} -> "orders"
+        _op_path = _text(_op.get("path") or _op.get("raw_path"))
+        _op_ents = [_text(e).lower() for e in _list(_op.get("entity_refs")) if _text(e)]
+        if not _op_ents and _op_path:
+            _segments = [s for s in _op_path.strip("/").split("/") if s and not s.startswith(":") and not s.startswith("{")]
+            for _seg in _segments:
+                _seg_lower = _seg.lower()
+                if _seg_lower not in _NON_ENTITY_SEGMENTS and len(_seg_lower) > 2:
+                    _op_ents = [_seg_lower]
+                    break
+        if not _op_ents:
+            continue
+        _op_schema_fields: list[str] = []
+        # Request schema properties
+        _req_schema = _dict(_op.get("request_schema") or _op.get("requestBody"))
+        _content = _dict(_req_schema.get("content"))
+        _json_media = _dict(_content.get("application/json"))
+        _schema_props = _dict(_dict(_json_media.get("schema")).get("properties"))
+        _op_schema_fields.extend(_schema_props.keys())
+        # Also direct properties (non-nested)
+        _direct_props = _dict(_req_schema.get("properties"))
+        _op_schema_fields.extend(_direct_props.keys())
+        # Request example keys
+        _example = _dict(_json_media.get("example") or _op.get("request_example"))
+        _op_schema_fields.extend(k for k in _example.keys() if k)
+        # Response schema properties
+        _resp_schema = _dict(_op.get("response_schema") or _op.get("responseSchema"))
+        _resp_props = _dict(_resp_schema.get("properties"))
+        _op_schema_fields.extend(_resp_props.keys())
+        # Nested data/records wrapper
+        for _wrapper in ("data", "records", "items", "result"):
+            _w = _dict(_resp_props.get(_wrapper))
+            _w_items = _dict(_w.get("items"))
+            _w_props = _dict(_w_items.get("properties") or _w.get("properties"))
+            _op_schema_fields.extend(_w_props.keys())
+        # field_dictionary on operation
+        for _ofd in _list(_op.get("field_dictionary")):
+            if isinstance(_ofd, dict):
+                _op_schema_fields.append(_text(_ofd.get("name") or _ofd.get("field")))
+            elif isinstance(_ofd, str):
+                _op_schema_fields.append(_ofd)
+        # Dedupe and add to each referenced entity
+        _unique_fields = list(dict.fromkeys(f for f in _op_schema_fields if f))
+        for _ent_name in _op_ents:
+            existing_cols = _table_db_columns.setdefault(_ent_name, {})
+            for _sf in _unique_fields:
+                if _sf.lower() not in existing_cols:
+                    existing_cols[_sf.lower()] = {"field": _sf, "source": "operation_schema"}
+
+    for entity in _list(model.get("entities")):
+        if not isinstance(entity, dict):
+            continue
+        ent_name = _text(entity.get("name"))
+        if not ent_name:
+            continue
+        raw_fields = _list(entity.get("fields"))
+        identity_fields = _list(entity.get("identity_fields"))
+        ent_source_refs = _list(entity.get("source_refs"))
+        # Look up supplementary field info from data_tables
+        ent_lower = ent_name.lower()
+        fd_supplement = _table_field_dict.get(ent_lower, [])
+        db_cols = _table_db_columns.get(ent_lower, {})
+        # Also try singular/plural forms
+        if not fd_supplement:
+            singular = ent_lower.rstrip("s") if ent_lower.endswith("s") else ent_lower + "s"
+            fd_supplement = _table_field_dict.get(singular, [])
+            db_cols = db_cols or _table_db_columns.get(singular, {})
+        if not db_cols:
+            singular = ent_lower.rstrip("s") if ent_lower.endswith("s") else ent_lower + "s"
+            db_cols = _table_db_columns.get(singular, {})
+        # Only upgrade if there are fields to process
+        if not raw_fields and not fd_supplement and not db_cols:
+            continue
+        canonical = _build_canonical_fields(
+            raw_fields,
+            ent_name,
+            identity_fields=identity_fields,
+            source_refs=ent_source_refs,
+            field_dictionary=fd_supplement,
+            db_columns=db_cols,
+        )
+        if canonical:
+            entity["fields"] = canonical
+
+    # ── V1.4.0: Field Binding — connect canonical fields to API/DB layers ──
+    # Build operation index: entity_name -> list of operations
+    _ops_by_entity: dict[str, list[dict[str, Any]]] = {}
+    for _op in _list(model.get("operations")):
+        if not isinstance(_op, dict):
+            continue
+        _op_path = _text(_op.get("path") or _op.get("raw_path"))
+        if not _op_path:
+            continue
+        _segments = [s for s in _op_path.strip("/").split("/") if s and not s.startswith(":") and not s.startswith("{")]
+        for _seg in _segments:
+            _seg_lower = _seg.lower()
+            if _seg_lower not in _NON_ENTITY_SEGMENTS and len(_seg_lower) > 2:
+                _ops_by_entity.setdefault(_seg_lower, []).append(_op)
+                break
+
+    def _extract_op_field_names(op: dict[str, Any], direction: str) -> set[str]:
+        """Extract field names from an operation's request or response schema."""
+        names: set[str] = set()
+        if direction == "request":
+            schema = _dict(op.get("request_schema") or op.get("requestBody"))
+            content = _dict(schema.get("content"))
+            json_media = _dict(content.get("application/json"))
+            props = _dict(_dict(json_media.get("schema")).get("properties"))
+            names.update(k.lower() for k in props.keys())
+            direct = _dict(schema.get("properties"))
+            names.update(k.lower() for k in direct.keys())
+            example = _dict(json_media.get("example") or op.get("request_example"))
+            names.update(k.lower() for k in example.keys() if k)
+            for fd in _list(op.get("field_dictionary")):
+                if isinstance(fd, dict):
+                    n = _text(fd.get("name") or fd.get("field")).lower()
+                    if n:
+                        names.add(n)
+                elif isinstance(fd, str):
+                    names.add(fd.lower())
+        else:  # response
+            schema = _dict(op.get("response_schema") or op.get("responseSchema"))
+            props = _dict(schema.get("properties"))
+            names.update(k.lower() for k in props.keys())
+            for wrapper in ("data", "records", "items", "result"):
+                w = _dict(props.get(wrapper))
+                w_items = _dict(w.get("items"))
+                w_props = _dict(w_items.get("properties") or w.get("properties"))
+                names.update(k.lower() for k in w_props.keys())
+        return names
+
+    for entity in _list(model.get("entities")):
+        if not isinstance(entity, dict):
+            continue
+        fields = _list(entity.get("fields"))
+        if not fields or not isinstance(fields[0], dict):
+            continue
+        ent_name = _text(entity.get("name")).lower()
+        ent_ops = _ops_by_entity.get(ent_name, [])
+        if not ent_ops:
+            singular = ent_name.rstrip("s") if ent_name.endswith("s") else ent_name + "s"
+            ent_ops = _ops_by_entity.get(singular, [])
+        if not ent_ops:
+            continue
+        # Pre-extract field sets per operation
+        op_req_fields = [(op, _extract_op_field_names(op, "request")) for op in ent_ops]
+        op_resp_fields = [(op, _extract_op_field_names(op, "response")) for op in ent_ops]
+
+        for field in fields:
+            if not isinstance(field, dict):
+                continue
+            fname = _text(field.get("name")).lower()
+            if not fname:
+                continue
+            api_req_bindings: list[dict[str, str]] = []
+            api_resp_bindings: list[dict[str, str]] = []
+            # API request bindings
+            for op, req_names in op_req_fields:
+                if fname in req_names:
+                    api_req_bindings.append({
+                        "operation_id": _text(op.get("id")),
+                        "json_path": f"$.{field.get('name')}",
+                    })
+            # API response bindings
+            for op, resp_names in op_resp_fields:
+                if fname in resp_names:
+                    api_resp_bindings.append({
+                        "operation_id": _text(op.get("id")),
+                        "json_path": f"$.{field.get('name')}",
+                    })
+            # Database binding (from _table_db_columns built earlier)
+            db_bindings: list[dict[str, str]] = []
+            db_col_info = _table_db_columns.get(ent_name, {}).get(fname)
+            if not db_col_info:
+                singular = ent_name.rstrip("s") if ent_name.endswith("s") else ent_name + "s"
+                db_col_info = _table_db_columns.get(singular, {}).get(fname)
+            if db_col_info:
+                db_bindings.append({
+                    "table": _text(db_col_info.get("table") or entity.get("name")),
+                    "column": _text(db_col_info.get("field") or field.get("name")),
+                })
+            # Determine binding status
+            total_bindings = len(api_req_bindings) + len(api_resp_bindings) + len(db_bindings)
+            if total_bindings >= 2:
+                status = "RESOLVED"
+            elif total_bindings == 1:
+                status = "INCOMPLETE"
+            else:
+                status = "NOT_DECLARED"
+            # Write bindings to field
+            if api_req_bindings:
+                field["api_request_bindings"] = api_req_bindings
+            if api_resp_bindings:
+                field["api_response_bindings"] = api_resp_bindings
+            if db_bindings:
+                field["database_bindings"] = db_bindings
+            field["binding_status"] = status
+
+    # ── V1.4.0: Scope Field Formalization ──
+    # Derive tenant_field and owner_field for each entity from:
+    #   1. Canonical field scope_role (TENANT_ID / OWNER_ID semantic types)
+    #   2. permission_matrix scope values ('own', 'other_owner', 'all')
+    #   3. entity_relations 'belongs_to' / 'owns' patterns
+    _perm_rows = _list(data.get("permission_matrix") or data.get("permissions"))
+    _entity_relations_raw = _list(data.get("entity_relations"))
+    # Build permission scope index: resource -> set of scopes
+    _resource_scopes: dict[str, set[str]] = {}
+    for _perm in _perm_rows:
+        if not isinstance(_perm, dict):
+            continue
+        _res = _text(_perm.get("resource")).lower()
+        _scope = _text(_perm.get("scope")).lower()
+        if _res and _scope and _scope != "unspecified":
+            _resource_scopes.setdefault(_res, set()).add(_scope)
+    # Build ownership index: entity -> owner_entity (from belongs_to / owns)
+    _ownership: dict[str, str] = {}  # child_entity -> parent_entity
+    for _rel in _entity_relations_raw:
+        if not isinstance(_rel, dict):
+            continue
+        _rel_type = _text(_rel.get("relation_type") or _rel.get("relation")).lower()
+        _from_ent = _text(_rel.get("from_entity")).lower()
+        _to_ent = _text(_rel.get("to_entity")).lower()
+        if _rel_type in ("belongs_to", "owns", "owned_by") and _from_ent and _to_ent:
+            _ownership[_from_ent] = _to_ent
+
+    for entity in _list(model.get("entities")):
+        if not isinstance(entity, dict):
+            continue
+        fields = _list(entity.get("fields"))
+        if not fields or not isinstance(fields[0], dict):
+            continue
+        ent_name = _text(entity.get("name")).lower()
+        # 1. From canonical field scope_role
+        _tenant_field = ""
+        _owner_field = ""
+        for field in fields:
+            if not isinstance(field, dict):
+                continue
+            _sr = _text(field.get("scope_role"))
+            if _sr == "tenant_id" and not _tenant_field:
+                _tenant_field = _text(field.get("name"))
+            elif _sr == "owner_id" and not _owner_field:
+                _owner_field = _text(field.get("name"))
+        # 2. From permission_matrix scope
+        _perm_scope = ""
+        _scopes = _resource_scopes.get(ent_name, set())
+        if not _scopes:
+            singular = ent_name.rstrip("s") if ent_name.endswith("s") else ent_name + "s"
+            _scopes = _resource_scopes.get(singular, set())
+        if "own" in _scopes or "other_owner" in _scopes:
+            _perm_scope = "owner_scoped"
+        elif "all" in _scopes:
+            _perm_scope = "global"
+        # 3. From entity_relations (belongs_to → owner entity)
+        _owner_entity = _ownership.get(ent_name, "")
+        # Write scope_fields typed_field
+        _scope_node: dict[str, Any] = {
+            "tenant_field": _tenant_field,
+            "owner_field": _owner_field,
+            "permission_scope": _perm_scope,
+        }
+        if _owner_entity:
+            _scope_node["owner_entity"] = _owner_entity
+        entity["scope_fields"] = _scope_node
 
     # Actors from permission matrix / roles / runtime actors (secret_ref only)
     actor_names: set[str] = set()
@@ -3291,6 +3946,14 @@ def build_behavior_ir_from_knowledge_asset(
         return result
 
     # Invariants from rule library (typed expression + description)
+    # V1.4.0: Umbrella Rule detection — broad rules without specific entity/field
+    # references must not generate executable experiments.
+    _UMBRELLA_PATTERNS = (
+        "数据一致性", "权限安全", "业务流程必须正确", "金额必须准确",
+        "系统应保证", "数据安全", "系统稳定", "高可用", "高性能",
+        "data consistency", "system security", "business correctness",
+        "amount accuracy", "system stability", "high availability",
+    )
     for rule in _list(data.get("rule_library") or data.get("rules")):
         if not isinstance(rule, dict):
             continue
@@ -3298,6 +3961,20 @@ def build_behavior_ir_from_knowledge_asset(
         if not statement:
             continue
         rid = _text(rule.get("rule_id") or rule.get("id")) or _stable_id("inv", statement)
+
+        # V1.4.0: Detect Umbrella Rules — broad statements without concrete
+        # entity/field references that cannot produce testable experiments.
+        _stmt_lower = statement.lower()
+        _is_umbrella = any(p in _stmt_lower for p in _UMBRELLA_PATTERNS)
+        # Also detect: no backtick fields, no snake_case fields, no specific entity
+        if not _is_umbrella:
+            _has_concrete_field = bool(re.findall(r"`[a-zA-Z_][a-zA-Z0-9_]*`", statement))
+            _has_concrete_field = _has_concrete_field or bool(
+                re.findall(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b", _stmt_lower)
+            )
+            _has_entity_ref = bool(_text(rule.get("entity") or rule.get("object") or rule.get("business_object")))
+            if not _has_concrete_field and not _has_entity_ref and len(statement) < 30:
+                _is_umbrella = True
         # ── Field-level grounding: extract structured operands from statement ──
         _rule_kind = _text(rule.get("kind") or rule.get("risk_type") or "business_rule")
         _rule_operands = _list(rule.get("operands"))
@@ -3326,26 +4003,89 @@ def build_behavior_ir_from_knowledge_asset(
         }
         if _rule_equation:
             _expression["equation"] = _rule_equation
+        # V1.4.0: collect field_ids from operands for downstream binding
+        _inv_field_ids: list[str] = []
+        for _operand in _rule_operands:
+            if isinstance(_operand, dict):
+                _of = _text(_operand.get("field"))
+                if _of:
+                    _inv_field_ids.append(_of)
+        _inv_typed: dict[str, Any] = {
+            "description": statement,
+            "expression": _expression,
+            "operation_refs": [
+                _text(value)
+                for value in _list(
+                    rule.get("operation_refs")
+                    or ([rule.get("operation_ref") or rule.get("operation_id")]
+                        if rule.get("operation_ref") or rule.get("operation_id") else [])
+                )
+                if _text(value)
+            ],
+            "source_rule_refs": list(dict.fromkeys(
+                _text(value)
+                for value in (rule.get("rule_id"), rule.get("id"))
+                if _text(value)
+            )),
+        }
+        if _inv_field_ids:
+            _inv_typed["field_ids"] = _inv_field_ids
+        # V1.4.0: infer operation_refs from field_ids / entity_refs when no explicit refs
+        if not _inv_typed["operation_refs"] and not _is_umbrella:
+            _inv_fset = {f.lower() for f in _inv_field_ids}
+            # Collect entity refs from expression operands
+            _inv_ent_set: set[str] = set()
+            for _op_item in _rule_operands:
+                if isinstance(_op_item, dict):
+                    _er = _text(_op_item.get("entity_ref")).lower()
+                    if _er:
+                        _inv_ent_set.add(_er)
+            # Also from rule-level entity/object
+            _rule_ent = _text(rule.get("entity") or rule.get("object") or rule.get("business_object")).lower()
+            if _rule_ent:
+                _inv_ent_set.add(_rule_ent)
+            if _inv_fset or _inv_ent_set:
+                for _exist_op in _list(model.get("operations")):
+                    if not isinstance(_exist_op, dict):
+                        continue
+                    _op_id = _text(_exist_op.get("id"))
+                    if not _op_id:
+                        continue
+                    # Field signal: check operation schema for field overlap
+                    _field_match = False
+                    if _inv_fset:
+                        _op_fnames: set[str] = set()
+                        for _sk in ("request_schema", "response_schema"):
+                            _sch = _dict(_exist_op.get(_sk))
+                            _props = _dict(_sch.get("properties"))
+                            _op_fnames.update(k.lower() for k in _props)
+                            _ct = _dict(_sch.get("content"))
+                            _jm = _dict(_ct.get("application/json"))
+                            _np = _dict(_dict(_jm.get("schema")).get("properties"))
+                            _op_fnames.update(k.lower() for k in _np)
+                        _field_match = bool(_op_fnames & _inv_fset)
+                    # Entity signal: check operation path for entity name
+                    _ent_match = False
+                    if _inv_ent_set:
+                        _op_path = _text(_exist_op.get("path") or _exist_op.get("raw_path")).lower()
+                        _op_segs = {s for s in _op_path.strip("/").split("/") if s and not s.startswith("{") and not s.startswith(":")}
+                        _op_segs.difference_update(_NON_ENTITY_SEGMENTS)
+                        _ent_match = bool(_op_segs & _inv_ent_set)
+                        # Also check singular/plural
+                        if not _ent_match:
+                            for _ie in _inv_ent_set:
+                                _pl = _ie + "s" if not _ie.endswith("s") else _ie
+                                _sg = _ie.rstrip("s") if _ie.endswith("s") else _ie
+                                if _pl in _op_segs or _sg in _op_segs:
+                                    _ent_match = True
+                                    break
+                    if _field_match or _ent_match:
+                        _inv_typed["operation_refs"].append(_op_id)
+        if _is_umbrella:
+            _inv_typed["binding_status"] = "umbrella_rule_excluded"
         model["invariants"].append(_fact_node(
             node_id=rid if rid.startswith("bir_") else _stable_id("inv", rid),
-            typed_fields={
-                "description": statement,
-                "expression": _expression,
-                "operation_refs": [
-                    _text(value)
-                    for value in _list(
-                        rule.get("operation_refs")
-                        or ([rule.get("operation_ref") or rule.get("operation_id")]
-                            if rule.get("operation_ref") or rule.get("operation_id") else [])
-                    )
-                    if _text(value)
-                ],
-                "source_rule_refs": list(dict.fromkeys(
-                    _text(value)
-                    for value in (rule.get("rule_id"), rule.get("id"))
-                    if _text(value)
-                )),
-            },
+            typed_fields=_inv_typed,
             source_refs=[_source_ref(_text(rule.get("source_id")) or "rule_library", quote=statement[:200])],
             confidence=float(rule.get("confidence") or 0.7),
             derivation="explicit",
@@ -3504,6 +4244,120 @@ def build_behavior_ir_from_knowledge_asset(
                 confidence=float(rule.get("confidence") or 0.7),
                 derivation="explicit",
             ))
+
+    # ── V1.4.0 Post-processing: bind remaining unbound invariants ──
+    # For any invariant without operation_refs (and not umbrella), infer
+    # bindings from entity_ref in operands + operation path matching.
+    _all_ops = _list(model.get("operations"))
+    _op_path_index: list[tuple[str, set[str]]] = []  # (op_id, path_segments)
+    # Use minimal exclusion for binding (keep "auth", "admin" as matchable)
+    _BIND_SKIP_SEGS = {"api", "rest", "v1", "v2", "v3"}
+    for _aop in _all_ops:
+        if not isinstance(_aop, dict):
+            continue
+        _aop_id = _text(_aop.get("id"))
+        _aop_path = _text(_aop.get("path") or _aop.get("raw_path")).lower()
+        if not _aop_id or not _aop_path:
+            continue
+        _segs = {s for s in _aop_path.strip("/").split("/") if s and not s.startswith("{") and not s.startswith(":")}
+        _segs.difference_update(_BIND_SKIP_SEGS)
+        _op_path_index.append((_aop_id, _segs))
+    # Entity ID → name resolution map
+    _entity_id_to_name: dict[str, str] = {}
+    for _ent_node in _list(model.get("entities")):
+        if isinstance(_ent_node, dict):
+            _eid = _text(_ent_node.get("id"))
+            _ename = _text(_ent_node.get("name")).lower()
+            if _eid and _ename:
+                _entity_id_to_name[_eid] = _ename
+
+    for _inv_node in _list(model.get("invariants")):
+        if not isinstance(_inv_node, dict):
+            continue
+        if _list(_inv_node.get("operation_refs")):
+            continue
+        if _text(_inv_node.get("binding_status")) == "umbrella_rule_excluded":
+            continue
+        # Extract entity refs from expression operands
+        _inv_expr = _dict(_inv_node.get("expression"))
+        _inv_ents: set[str] = set()
+        for _inv_op in _list(_inv_expr.get("operands")):
+            if isinstance(_inv_op, dict):
+                _er = _text(_inv_op.get("entity_ref")).lower()
+                if not _er:
+                    continue
+                # Resolve IR node IDs to entity names
+                if _er.startswith("bir_"):
+                    _resolved = _entity_id_to_name.get(_er, "")
+                    if _resolved:
+                        _inv_ents.add(_resolved)
+                else:
+                    _inv_ents.add(_er)
+        # Also try field_ids for schema matching
+        _inv_fids = {_text(f).lower() for f in _list(_inv_node.get("field_ids")) if _text(f)}
+        # V1.4.0: extract entity mentions from description text
+        _inv_desc = _text(_inv_node.get("description")).lower()
+        # Also include causal_trigger in text matching
+        _causal_trigger = _text(_inv_node.get("causal_trigger")).lower()
+        _match_text = f"{_inv_desc} {_causal_trigger}"
+        if _match_text.strip() and not _inv_ents:
+            for _eid, _ename in _entity_id_to_name.items():
+                # Match entity name (singular/plural) in description
+                _sg = _ename.rstrip("s") if _ename.endswith("s") else _ename
+                if _ename in _match_text or _sg in _match_text:
+                    _inv_ents.add(_ename)
+            # Chinese keyword → entity mapping for CJK descriptions
+            _ZH_ENTITY_MAP: dict[str, str] = {
+                "订单": "orders", "支付": "payments", "付款": "payments",
+                "库存": "inventory", "优惠券": "coupons", "折扣券": "coupons",
+                "退款": "refunds", "商品": "products", "产品": "products",
+                "购物车": "cart", "用户": "users", "地址": "addresses",
+                "报告": "reports", "角色": "auth", "登录": "auth",
+                "后台": "auth", "数量": "inventory", "金额": "payments",
+            }
+            if not _inv_ents:
+                for _zh_tok, _ent_target in _ZH_ENTITY_MAP.items():
+                    if _zh_tok in _match_text:
+                        _inv_ents.add(_ent_target)
+            # Also match field_ids to entities via registry
+            if not _inv_ents and _inv_fids:
+                for _fid in _inv_fids:
+                    for _reg_key, _ent_fields in _ENTITY_FIELD_REGISTRY.items():
+                        if any(_fid == ef.lower() for ef in _ent_fields):
+                            # Resolve registry key (entity ID) to entity name
+                            _resolved_name = _entity_id_to_name.get(_reg_key, _reg_key)
+                            _inv_ents.add(_resolved_name.lower())
+                            break
+            # Extract backtick fields from description and match to entities
+            if not _inv_ents and _match_text:
+                _desc_fields = re.findall(r"`([a-zA-Z_][a-zA-Z0-9_]*)`", _match_text)
+                for _df in _desc_fields:
+                    _df_lower = _df.lower()
+                    for _reg_key, _ent_fields in _ENTITY_FIELD_REGISTRY.items():
+                        if any(_df_lower == ef.lower() or _df_lower in ef.lower() for ef in _ent_fields):
+                            _resolved_name = _entity_id_to_name.get(_reg_key, _reg_key)
+                            _inv_ents.add(_resolved_name.lower())
+                            break
+        if not _inv_ents and not _inv_fids:
+            continue
+        # Match against operation paths (entity signal)
+        _matched_ops: list[str] = []
+        for _op_id, _segs in _op_path_index:
+            _ent_hit = False
+            if _inv_ents:
+                if _segs & _inv_ents:
+                    _ent_hit = True
+                else:
+                    for _ie in _inv_ents:
+                        _pl = _ie + "s" if not _ie.endswith("s") else _ie
+                        _sg = _ie.rstrip("s") if _ie.endswith("s") else _ie
+                        if _pl in _segs or _sg in _segs:
+                            _ent_hit = True
+                            break
+            if _ent_hit:
+                _matched_ops.append(_op_id)
+        if _matched_ops:
+            _inv_node["operation_refs"] = _matched_ops
 
     # ── Infer missing operations from permission matrix ──
     # Only infer operations for resources referenced by existing API schemas

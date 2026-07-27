@@ -1,0 +1,56 @@
+{
+  "gate": "V1_4_0_FIELD_COMPREHENSION = PASS",
+  "PHASE_2_ENTRY_ALLOWED": true,
+  "criteria": {
+    "C1_core_entities": {
+      "value": 13,
+      "threshold": ">=8",
+      "pass": true
+    },
+    "C2_classified_fields": {
+      "value": 40,
+      "threshold": ">=40",
+      "pass": true
+    },
+    "C3_binding_rate_pct": {
+      "value": 100.0,
+      "threshold": ">=90",
+      "pass": true
+    },
+    "C4_scope_rate_pct": {
+      "value": 100.0,
+      "threshold": "100",
+      "pass": true
+    },
+    "C5_source_ref_rate_pct": {
+      "value": 100.0,
+      "threshold": "100",
+      "pass": true
+    },
+    "C6_op_binding_rate_pct": {
+      "value": 92.0,
+      "threshold": ">=90",
+      "pass": true
+    },
+    "C7_random_bindings": {
+      "value": 0,
+      "threshold": "0",
+      "pass": true
+    },
+    "C8_umbrella_in_execution": {
+      "value": 0,
+      "threshold": "0",
+      "pass": true
+    }
+  },
+  "stats": {
+    "total_entities": 13,
+    "total_fields": 41,
+    "classified_fields": 40,
+    "bound_fields": 41,
+    "bindable_fields": 41,
+    "total_invariants": 65,
+    "high_conf_rules": 25,
+    "high_conf_bound": 23
+  }
+}

@@ -1116,18 +1116,61 @@ def compile_obligations_from_behavior_ir(behavior_ir: dict[str, Any]) -> dict[st
                 _top_ent = _text(inv.get("entity_ref"))
                 if _top_ent:
                     _inv_entity_refs.add(_top_ent)
-                if _inv_entity_refs:
+                # V1.4.0: field-based dual-signal binding ──
+                # When invariant carries field_ids, prefer operations whose
+                # schema contains those fields (Entity + Field = dual signal).
+                _inv_field_ids: set[str] = {
+                    _text(f).lower() for f in _list(inv.get("field_ids"))
+                    if _text(f)
+                }
+
+                def _op_schema_fields(op: dict) -> set[str]:
+                    """Collect field names from operation request/response schema."""
+                    fields: set[str] = set()
+                    for schema_key in ("request_schema", "response_schema"):
+                        schema = _dict(op.get(schema_key))
+                        props = _dict(schema.get("properties"))
+                        fields.update(k.lower() for k in props)
+                        # Also nested content.application/json.schema.properties
+                        content = _dict(schema.get("content"))
+                        json_media = _dict(content.get("application/json"))
+                        nested_props = _dict(_dict(json_media.get("schema")).get("properties"))
+                        fields.update(k.lower() for k in nested_props)
+                    return fields
+
+                if _inv_entity_refs or _inv_field_ids:
                     for _cand_op_id, _cand_op in operations_by_id.items():
                         _op_ents = {
                             _text(e) for e in _list(_cand_op.get("entity_refs"))
                             if _text(e)
                         }
-                        if _op_ents & _inv_entity_refs:
+                        _entity_match = bool(_op_ents & _inv_entity_refs) if _inv_entity_refs else False
+                        _field_match = False
+                        if _inv_field_ids:
+                            _op_fields = _op_schema_fields(_cand_op)
+                            _field_match = bool(_op_fields & _inv_field_ids)
+                        # Dual-signal: entity + field → high confidence
+                        if _entity_match and _field_match:
+                            joined_relations.append({
+                                "operation_ref": _cand_op_id,
+                                "relation_type": "observes",
+                                "derivation": "field-co-reference",
+                                "confidence": 0.7,
+                            })
+                        elif _entity_match:
                             joined_relations.append({
                                 "operation_ref": _cand_op_id,
                                 "relation_type": "observes",
                                 "derivation": "entity-co-reference",
                                 "confidence": 0.4,
+                            })
+                        elif _field_match and _inv_field_ids:
+                            # Field-only signal (no entity declared) — moderate
+                            joined_relations.append({
+                                "operation_ref": _cand_op_id,
+                                "relation_type": "observes",
+                                "derivation": "field-schema-match",
+                                "confidence": 0.5,
                             })
                 if not joined_relations:
                     coverage_gaps.append(_compile_gap(
