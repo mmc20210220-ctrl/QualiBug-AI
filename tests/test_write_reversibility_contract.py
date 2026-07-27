@@ -441,9 +441,9 @@ class TestWriteReversibilityProof:
         )
 
         assert ADAPTER_CLEANUP_AUTHORITY not in CLEANUP_AUTHORITIES, (
-            "declared_adapter_cleanup stays out until the cleanup executor demonstrably "
-            "deletes the row; admitting it let 517 writes proceed with no cleanup and "
-            "the target gained rows"
+            "the live check ran twice and said no: with the authority on and the branch "
+            "proven reachable in isolation, a real run produced zero adapter cleanup "
+            "receipts and the target gained rows (products 6->7, cart_items 46->67)"
         )
 
     def test_declared_adapter_cleanup_requires_every_leg(self) -> None:

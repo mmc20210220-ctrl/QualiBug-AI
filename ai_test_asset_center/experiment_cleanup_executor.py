@@ -149,23 +149,51 @@ def _execute_adapter_cleanup_step(
     project: str,
     runtime_bindings: dict[str, Any],
     steps_out: list[dict[str, Any]],
+    behavior_ir: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run one declared-adapter cleanup step and return its receipt.
 
     Every refusal is a receipt too. A cleanup that did not happen must be as visible as
     one that did, or residue accumulates in a customer system unnoticed.
     """
-    from .cleanup_adapter_ladder import execute_declared_adapter_cleanup
+    from .cleanup_adapter_ladder import (
+        build_ordered_delete_plan,
+        execute_declared_adapter_cleanup,
+    )
 
     identity = _adapter_cleanup_identity(
         cleanup, runtime_bindings=runtime_bindings, steps_out=steps_out
     )
-    return execute_declared_adapter_cleanup(
-        _dict(cleanup),
+    dsn = _project_database_dsn(root, project)
+    step = _dict(cleanup)
+
+    # Dependents first, owner last. A single-table delete raised ForeignKeyViolation on
+    # every run-created product against the live target, because inventory, cart_items,
+    # inventory_locks and order_items reference them.
+    ordered = build_ordered_delete_plan(
+        table=_text(step.get("table")),
+        identity_column=_text(step.get("identity_column")) or "id",
         identity_value=identity,
-        dsn=_project_database_dsn(root, project),
-        creation_receipts=[],
+        entities=_list(_dict(behavior_ir).get("entities")),
     )
+
+    receipts = [
+        execute_declared_adapter_cleanup(
+            sub_step, identity_value=identity, dsn=dsn, creation_receipts=[]
+        )
+        for sub_step in ordered
+    ]
+    owner_receipt = receipts[-1] if receipts else {}
+    # The owner row is the one that had to go. A dependent that was already absent is
+    # not a failure, but an owner that survived is.
+    summary = dict(owner_receipt)
+    summary["dependent_receipts"] = receipts[:-1]
+    summary["rows_deleted"] = sum(int(r.get("rows_deleted") or 0) for r in receipts)
+    failed = [r for r in receipts if _text(r.get("status")) == "FAILED"]
+    if failed and _text(summary.get("status")) != "FAILED":
+        summary["status"] = "FAILED"
+        summary["reason_code"] = _text(failed[0].get("reason_code"))
+    return summary
 
 
 def execute_experiment_cleanup_compensation(
@@ -404,6 +432,8 @@ def execute_experiment_cleanup_compensation(
                     project=project,
                     runtime_bindings=runtime_bindings,
                     steps_out=steps_out,
+                    behavior_ir={"entities": _list(_dict(exp.get("behavior_ir")).get("entities"))}
+                    if exp.get("behavior_ir") else {"entities": []},
                 )
                 # contract_evidence_receipts has its own strict schema and the delivery
                 # gate validates every entry; a cleanup receipt is a different artifact

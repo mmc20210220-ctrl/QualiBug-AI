@@ -36,7 +36,7 @@ CLEANUP_AUTHORITIES = frozenset({
     "inverse_delta",
     "exact_recreate",
     "verified_environment_reset",
-    # NOT admitted yet -- deliberately. See below.
+    # NOT admitted -- the live check said no. See below.
 })
 
 # ── declared_adapter_cleanup: built, tested, and NOT yet authorised ──────────
@@ -73,6 +73,15 @@ CLEANUP_AUTHORITIES = frozenset({
 #
 # Flip this on only after the cleanup executor demonstrably deletes the row -- the check
 # is the residue count in the target after a run, not a passing unit test.
+#
+# THE CHECK WAS RUN, twice, and it says no. With the authority on, dependency-ordered
+# deletion wired, and the branch proven reachable in isolation
+# (tests/test_adapter_cleanup_reaches_the_executor.py), a live run still produced ZERO
+# adapter cleanup receipts and the target gained rows: products 6 -> 7, inventory 6 -> 7,
+# cart_items 46 -> 67 against a measured baseline. The branch is guarded by
+# accepted_governed_writes_requiring_cleanup, and something upstream of that guard is not
+# satisfied on the real path. Finding what is the remaining work; until then the honest
+# state is that this tier is built and unproven.
 ADAPTER_CLEANUP_AUTHORITY = "declared_adapter_cleanup"
 
 # Server-managed fields that must never appear in restore bodies
