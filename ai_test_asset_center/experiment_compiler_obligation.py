@@ -1902,6 +1902,33 @@ def compile_experiment_for_obligation(
         )
         experiment["compile_receipt"]["cleanup_semantic_validated"] = True
 
+    # ── V1.3.0-A: Database Cleanup Contract (compile-time) ──
+    # Every governed write gets a structured DB cleanup contract that binds
+    # entity identity, dependency graph, authority, and pre-image plan.
+    if is_write:
+        from .cleanup_adapter_ladder import build_database_cleanup_contract as _build_db_contract
+        _db_contract = _build_db_contract(
+            experiment_id=_text(experiment.get("experiment_id")),
+            campaign_id="",  # bound at runtime by campaign context
+            write_operation=primary_op,
+            behavior_ir=ir,
+            entities=_list(ir.get("entities")),
+            cleanup_plan=cleanup_plan,
+            environment_type=env,
+            available_adapters=adapters,
+        )
+        experiment["database_cleanup_contract"] = _db_contract
+        experiment["database_dependency_graph"] = _list(_db_contract.get("dependency_order"))
+        experiment["compile_receipt"]["db_cleanup_contract_id"] = _text(
+            _db_contract.get("contract_id")
+        )
+        experiment["compile_receipt"]["db_cleanup_contract_status"] = _text(
+            _db_contract.get("status")
+        )
+        # V1.3.0-A: Contract is informational at compile-time; runtime executor
+        # enforces cleanup via the existing validate_cleanup_plan gate above.
+        # UNSAFE/NOT_DECLARED is recorded for observability, not blocking here.
+
     return experiment
 
 # ── Experiment Contract (merged from experiment_contract.py) ──────────
@@ -1944,6 +1971,11 @@ BLOCK_REASONS = (
     # A write in the plan has no declared compensator, so it would leave residue.
     "BLOCKED_STEP_CLEANUP_UNCOVERED",
     "BLOCKED_FIXTURE_DAG_DRIFT",
+    # V1.3.0-A: Database cleanup contract breakpoints
+    "DB_CLEANUP_AUTHORITY_NOT_DECLARED",
+    "DB_ROW_IDENTITY_NOT_BOUND",
+    "DB_DEPENDENCY_GRAPH_INCOMPLETE",
+    "DB_PREIMAGE_NOT_CAPTURED",
 )
 
 

@@ -282,3 +282,249 @@ def _build_receipt(
         "status": status,
     })
     return receipt
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# V1.3.0-A: Database Cleanup Receipt, Environment Restoration, Row Lineage
+# ═══════════════════════════════════════════════════════════════════════════════
+
+DB_CLEANUP_RECEIPT_SCHEMA = "qualibug.database-cleanup-receipt.v1"
+ENV_RESTORATION_SCHEMA = "qualibug.environment-restoration-receipt.v1"
+ROW_LINEAGE_SCHEMA = "qualibug.fixture-row-lineage.v1"
+
+# Receipt final status
+RECEIPT_CLEANED = "CLEANED"
+RECEIPT_RESTORED = "RESTORED"
+RECEIPT_PARTIAL = "PARTIAL"
+RECEIPT_FAILED = "FAILED"
+RECEIPT_INDETERMINATE = "INDETERMINATE"
+
+
+def build_database_cleanup_receipt(
+    *,
+    experiment_id: str,
+    fixture_id: str = "",
+    step_id: str = "",
+    datastore_id: str = "primary",
+    table: str,
+    primary_key_fingerprint: str,
+    cleanup_strategy: str,
+    authority_source: str,
+    before_cleanup: dict[str, Any] | None = None,
+    cleanup_execution: dict[str, Any] | None = None,
+    after_cleanup: dict[str, Any] | None = None,
+    verification: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build qualibug.database-cleanup-receipt.v1 (SPEC §11).
+
+    Every database cleanup action must produce this receipt. It is not sufficient
+    to record cleanup_attempted=true; the final database state must be verified.
+    """
+    exec_data = _dict(cleanup_execution)
+    attempted = bool(exec_data.get("attempted"))
+    affected_rows = int(exec_data.get("affected_rows") or 0)
+    error = _text(exec_data.get("error"))
+
+    verif = _dict(verification)
+    passed = bool(verif.get("passed"))
+
+    # Determine final status from actual evidence
+    if not attempted:
+        final_status = RECEIPT_INDETERMINATE
+    elif error:
+        final_status = RECEIPT_FAILED
+    elif passed and affected_rows > 0:
+        final_status = RECEIPT_CLEANED if cleanup_strategy != "restore" else RECEIPT_RESTORED
+    elif passed and affected_rows == 0:
+        final_status = RECEIPT_INDETERMINATE
+    elif not passed:
+        final_status = RECEIPT_FAILED
+    else:
+        final_status = RECEIPT_PARTIAL
+
+    receipt = {
+        "schema_version": DB_CLEANUP_RECEIPT_SCHEMA,
+        "receipt_id": f"dbcr_{_sha256_short(experiment_id + table + primary_key_fingerprint + step_id)}",
+        "experiment_id": experiment_id,
+        "fixture_id": fixture_id,
+        "step_id": step_id,
+        "datastore_id": datastore_id,
+        "table": table,
+        "primary_key_fingerprint": primary_key_fingerprint,
+        "cleanup_strategy": cleanup_strategy,
+        "authority_source": authority_source,
+        "before_cleanup": _dict(before_cleanup),
+        "cleanup_execution": exec_data,
+        "after_cleanup": _dict(after_cleanup),
+        "verification": verif,
+        "final_status": final_status,
+    }
+    receipt["fingerprint"] = _sha256_short({
+        "experiment_id": experiment_id,
+        "table": table,
+        "final_status": final_status,
+        "affected_rows": affected_rows,
+    })
+    return receipt
+
+
+def build_environment_restoration_receipt(
+    *,
+    experiment_id: str,
+    campaign_id: str,
+    database_cleanup_receipt_ids: list[str] | None = None,
+    api_cleanup_receipt_ids: list[str] | None = None,
+    fixture_receipt_ids: list[str] | None = None,
+    created_rows_remaining: int = 0,
+    modified_rows_not_restored: int = 0,
+    deleted_rows_not_restored: int = 0,
+    cleanup_failures: list[dict[str, Any]] | None = None,
+    baseline_comparison: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build qualibug.environment-restoration-receipt.v1 (SPEC §12).
+
+    Only environment_restored=true allows the experiment to count as completed.
+    """
+    failures = _list(cleanup_failures)
+    comparison = _dict(baseline_comparison)
+
+    environment_restored = bool(
+        created_rows_remaining == 0
+        and modified_rows_not_restored == 0
+        and deleted_rows_not_restored == 0
+        and not failures
+        and comparison.get("relevant_tables_match", True)
+        and comparison.get("relevant_fields_match", True)
+    )
+
+    if environment_restored:
+        final_status = "ENVIRONMENT_RESTORED"
+    elif failures:
+        final_status = "CLEANUP_FAILED"
+    else:
+        final_status = "ENVIRONMENT_DIRTY"
+
+    return {
+        "schema_version": ENV_RESTORATION_SCHEMA,
+        "receipt_id": f"envr_{_sha256_short(experiment_id + campaign_id + final_status)}",
+        "experiment_id": experiment_id,
+        "campaign_id": campaign_id,
+        "database_cleanup_receipt_ids": _list(database_cleanup_receipt_ids),
+        "api_cleanup_receipt_ids": _list(api_cleanup_receipt_ids),
+        "fixture_receipt_ids": _list(fixture_receipt_ids),
+        "created_rows_remaining": created_rows_remaining,
+        "modified_rows_not_restored": modified_rows_not_restored,
+        "deleted_rows_not_restored": deleted_rows_not_restored,
+        "cleanup_failures": failures,
+        "baseline_comparison": comparison,
+        "environment_restored": environment_restored,
+        "final_status": final_status,
+    }
+
+
+def build_fixture_row_lineage(
+    *,
+    campaign_id: str,
+    experiment_id: str,
+    fixture_id: str,
+    step_id: str = "",
+    datastore_id: str = "primary",
+    table: str,
+    primary_key: str,
+    business_key: str = "",
+    parent_keys: list[str] | None = None,
+    child_keys: list[str] | None = None,
+) -> dict[str, Any]:
+    """Build qualibug.fixture-row-lineage.v1 (SPEC §6).
+
+    Every QualiBug-created test object must have complete lineage. Identity must
+    come from Create Response, Source-Declared Readback, DB INSERT Receipt,
+    Fixture Output Binding, or Canonical Correlation Key — never from guessing.
+    """
+    return {
+        "schema_version": ROW_LINEAGE_SCHEMA,
+        "lineage_id": f"frl_{_sha256_short(campaign_id + experiment_id + fixture_id + table + primary_key)}",
+        "campaign_id": campaign_id,
+        "experiment_id": experiment_id,
+        "fixture_id": fixture_id,
+        "step_id": step_id,
+        "datastore_id": datastore_id,
+        "table": table,
+        "primary_key": primary_key,
+        "business_key": business_key,
+        "parent_keys": _list(parent_keys),
+        "child_keys": _list(child_keys),
+        "created_by_qualibug": True,
+        "customer_preexisting": False,
+    }
+
+
+def verify_cleanup_completion(
+    *,
+    cleanup_receipts: list[dict[str, Any]],
+    preimage: dict[str, Any] | None = None,
+    dependency_graph: dict[str, Any] | None = None,
+    affected_entities: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Verify that all cleanup actions completed and environment is restored.
+
+    Checks:
+    - Every cleanup receipt has a successful final_status
+    - Dependency order was respected (children before parents)
+    - Pre-image fields are restored (for UPDATE/DELETE)
+    - No residual data remains
+
+    Returns {environment_restored, failures, partial, verification_passed}.
+    """
+    receipts = _list(cleanup_receipts)
+    failures: list[dict[str, Any]] = []
+    partial: list[dict[str, Any]] = []
+
+    for receipt in receipts:
+        status = _text(receipt.get("final_status"))
+        if status in (RECEIPT_FAILED,):
+            failures.append({
+                "receipt_id": _text(receipt.get("receipt_id")),
+                "table": _text(receipt.get("table")),
+                "reason": status,
+            })
+        elif status in (RECEIPT_PARTIAL, RECEIPT_INDETERMINATE):
+            partial.append({
+                "receipt_id": _text(receipt.get("receipt_id")),
+                "table": _text(receipt.get("table")),
+                "reason": status,
+            })
+
+    # Verify dependency order if graph available
+    order_violations: list[str] = []
+    graph = _dict(dependency_graph)
+    topo_order = _list(graph.get("topological_order"))
+    if topo_order and len(receipts) > 1:
+        executed_tables = [_text(r.get("table")) for r in receipts]
+        topo_positions = {t: i for i, t in enumerate(topo_order)}
+        for i in range(len(executed_tables) - 1):
+            t1 = executed_tables[i].lower()
+            t2 = executed_tables[i + 1].lower()
+            pos1 = topo_positions.get(t1, 999)
+            pos2 = topo_positions.get(t2, 999)
+            if pos1 > pos2:
+                order_violations.append(f"{executed_tables[i]}_before_{executed_tables[i+1]}")
+
+    environment_restored = bool(
+        not failures
+        and not partial
+        and not order_violations
+    )
+
+    return {
+        "environment_restored": environment_restored,
+        "verification_passed": environment_restored,
+        "failures": failures,
+        "partial": partial,
+        "order_violations": order_violations,
+        "receipt_count": len(receipts),
+        "successful_count": sum(
+            1 for r in receipts
+            if _text(r.get("final_status")) in (RECEIPT_CLEANED, RECEIPT_RESTORED)
+        ),
+    }

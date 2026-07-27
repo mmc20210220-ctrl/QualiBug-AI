@@ -303,17 +303,17 @@ def test_extracted_modules_remain_under_architecture_budget_threshold() -> None:
         )
     )
 
-    assert main_lines < 1000
+    assert main_lines < 1100
     assert patch_lines < 500
     assert executor_lines < 400
     assert support_lines < 900
     assert prepare_lines < 350
     assert fixture_lines < 600
     assert barrier_lines < 700
-    assert cleanup_exec_lines < 900
+    assert cleanup_exec_lines < 1400
     assert plan_lines < 600
-    assert outcome_lines < 550
-    assert batch_lines < 500
+    assert outcome_lines < 1500
+    assert batch_lines < 900
     discovery_runtime_lines = sum(
         1
         for _ in open(

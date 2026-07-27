@@ -472,3 +472,534 @@ def build_ordered_delete_plan(
         "delete_order": "owner",
     })
     return steps
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# V1.3.0-A: Database Cleanup Contract, Dependency Graph, Authority, Pre-image
+# ═══════════════════════════════════════════════════════════════════════════════
+
+import hashlib as _hashlib
+import json as _json
+import re as _re
+
+CONTRACT_SCHEMA = "qualibug.database-cleanup-contract.v1"
+
+# Contract status constants
+CONTRACT_RESOLVED = "RESOLVED"
+CONTRACT_INCOMPLETE = "INCOMPLETE"
+CONTRACT_AMBIGUOUS = "AMBIGUOUS"
+CONTRACT_UNSAFE = "UNSAFE"
+CONTRACT_NOT_DECLARED = "NOT_DECLARED"
+
+# Cleanup strategy types (SPEC §3 — the ONLY legal strategies)
+STRATEGY_API_COMPENSATION = "SOURCE_DECLARED_API_COMPENSATION"
+STRATEGY_DB_DELETE = "SOURCE_DECLARED_DB_DELETE"
+STRATEGY_DB_RESTORE = "SOURCE_DECLARED_DB_RESTORE"
+STRATEGY_TRANSACTION_ROLLBACK = "TRANSACTION_ROLLBACK"
+STRATEGY_SNAPSHOT_RESTORE = "SNAPSHOT_RESTORE"
+STRATEGY_ENVIRONMENT_RESET = "ENVIRONMENT_RESET_CONTRACT"
+STRATEGY_DISPOSABLE_FIXTURE_DELETE = "CAMPAIGN_OWNED_DISPOSABLE_FIXTURE_DELETE"
+
+_LEGAL_STRATEGIES = frozenset({
+    STRATEGY_API_COMPENSATION, STRATEGY_DB_DELETE, STRATEGY_DB_RESTORE,
+    STRATEGY_TRANSACTION_ROLLBACK, STRATEGY_SNAPSHOT_RESTORE,
+    STRATEGY_ENVIRONMENT_RESET, STRATEGY_DISPOSABLE_FIXTURE_DELETE,
+})
+
+# Mutation types
+MUTATION_CREATE = "CREATE"
+MUTATION_UPDATE = "UPDATE"
+MUTATION_DELETE = "DELETE"
+MUTATION_MULTI_TABLE = "MULTI_TABLE"
+
+# Breakpoint codes (SPEC §17)
+DB_CLEANUP_AUTHORITY_NOT_DECLARED = "DB_CLEANUP_AUTHORITY_NOT_DECLARED"
+DB_ROW_IDENTITY_NOT_BOUND = "DB_ROW_IDENTITY_NOT_BOUND"
+DB_SCOPE_NOT_BOUND = "DB_SCOPE_NOT_BOUND"
+DB_DEPENDENCY_GRAPH_INCOMPLETE = "DB_DEPENDENCY_GRAPH_INCOMPLETE"
+DB_PREIMAGE_NOT_CAPTURED = "DB_PREIMAGE_NOT_CAPTURED"
+DB_RESTORE_FIELD_SET_EMPTY = "DB_RESTORE_FIELD_SET_EMPTY"
+DB_RESTORE_CONCURRENT_CHANGE_DETECTED = "DB_RESTORE_CONCURRENT_CHANGE_DETECTED"
+DB_DELETE_NOT_REVERSIBLE = "DB_DELETE_NOT_REVERSIBLE"
+DB_CLEANUP_PARTIAL = "DB_CLEANUP_PARTIAL"
+DB_CLEANUP_FAILED = "DB_CLEANUP_FAILED"
+DB_CLEANUP_VERIFICATION_FAILED = "DB_CLEANUP_VERIFICATION_FAILED"
+DB_ENVIRONMENT_DIRTY = "DB_ENVIRONMENT_DIRTY"
+CROSS_DATASTORE_CLEANUP_INCOMPLETE = "CROSS_DATASTORE_CLEANUP_INCOMPLETE"
+ENVIRONMENT_RESTORATION_NOT_PROVEN = "ENVIRONMENT_RESTORATION_NOT_PROVEN"
+PARENT_BREAKPOINT = "DB_CLEANUP_AND_ENVIRONMENT_RESTORATION_NOT_CLOSED"
+
+ALL_DB_BREAKPOINT_CODES = frozenset({
+    DB_CLEANUP_AUTHORITY_NOT_DECLARED, DB_ROW_IDENTITY_NOT_BOUND,
+    DB_SCOPE_NOT_BOUND, DB_DEPENDENCY_GRAPH_INCOMPLETE,
+    DB_PREIMAGE_NOT_CAPTURED, DB_RESTORE_FIELD_SET_EMPTY,
+    DB_RESTORE_CONCURRENT_CHANGE_DETECTED, DB_DELETE_NOT_REVERSIBLE,
+    DB_CLEANUP_PARTIAL, DB_CLEANUP_FAILED,
+    DB_CLEANUP_VERIFICATION_FAILED, DB_ENVIRONMENT_DIRTY,
+    CROSS_DATASTORE_CLEANUP_INCOMPLETE, ENVIRONMENT_RESTORATION_NOT_PROVEN,
+})
+
+# Prohibited pattern detection
+_PROHIBITED_SQL_RE = _re.compile(
+    r"(TRUNCATE|DROP\s+TABLE|SET\s+FOREIGN_KEY_CHECKS\s*=\s*0"
+    r"|DELETE\s+FROM\s+\w+\s*(?:;|$)"
+    r"|MAX\s*\(\s*id\s*\)"
+    r"|ORDER\s+BY\s+(?:created_at|id)\s+DESC\s+LIMIT\s+1)",
+    _re.I,
+)
+
+
+def _contract_id(*parts: Any) -> str:
+    raw = "|".join(str(p) for p in parts)
+    return "dbc_" + _hashlib.sha256(raw.encode()).hexdigest()[:24]
+
+
+def _infer_mutation_type(method: str, path: str) -> str:
+    """Infer mutation type from HTTP method and path semantics."""
+    m = _text(method).upper()
+    if m == "POST":
+        return MUTATION_CREATE
+    if m in ("PUT", "PATCH"):
+        return MUTATION_UPDATE
+    if m == "DELETE":
+        return MUTATION_DELETE
+    return MUTATION_CREATE
+
+
+def _entity_for_operation(
+    operation: dict[str, Any],
+    entities: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Find the primary entity an operation acts on, from path segment matching."""
+    path = _text(operation.get("path") or operation.get("raw_path"))
+    if not path:
+        return {}
+    segments = [s for s in path.split("/") if s and not s.startswith("{")]
+    if not segments:
+        return {}
+    # Last non-placeholder segment is typically the entity collection
+    target_seg = segments[-1].lower()
+    for entity in entities:
+        name = _text(entity.get("name")).lower()
+        if not name:
+            continue
+        if name == target_seg or name.rstrip("s") == target_seg.rstrip("s"):
+            return entity
+    # Fallback: first segment match
+    for seg in reversed(segments):
+        seg_l = seg.lower()
+        for entity in entities:
+            name = _text(entity.get("name")).lower()
+            if name and (name == seg_l or name.rstrip("s") == seg_l.rstrip("s")):
+                return entity
+    return {}
+
+
+# ─── Database Dependency Graph ────────────────────────────────────────────────
+
+def build_database_dependency_graph(
+    entities: Any,
+    *,
+    schema_text: str = "",
+) -> dict[str, Any]:
+    """Build a dependency graph from source-declared schema and entity metadata.
+
+    Priority:
+    1. Explicit REFERENCES in DDL schema_text (confidence 1.0)
+    2. foreign_keys declared on entity dicts (confidence 0.95)
+    3. Naming convention <singular>_id (confidence 0.6, marked inferred)
+
+    Returns {nodes, edges, topological_order, incomplete, reason_codes}.
+    """
+    entity_list = _list(entities)
+    nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
+    node_names: set[str] = set()
+
+    for entity in entity_list:
+        name = _text(entity.get("name"))
+        if not name:
+            continue
+        node_names.add(name.lower())
+        nodes.append({
+            "table": name,
+            "identity_fields": _list(entity.get("identity_fields")),
+            "fields": _list(entity.get("fields")),
+        })
+
+    # Priority 1: DDL REFERENCES
+    if schema_text:
+        for match in _re.finditer(
+            r"(?is)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[\"`]?([A-Za-z_][A-Za-z0-9_]*)[\"`]?\s*\((.*?)\);",
+            schema_text,
+        ):
+            child_table = match.group(1)
+            body = match.group(2)
+            for parent in _re.findall(r"(?i)REFERENCES\s+[\"`]?([A-Za-z_][A-Za-z0-9_]*)", body):
+                edges.append({
+                    "child_table": child_table,
+                    "parent_table": parent,
+                    "source": "ddl_references",
+                    "confidence": 1.0,
+                })
+
+    # Priority 2: declared foreign_keys on entity dicts
+    for entity in entity_list:
+        name = _text(entity.get("name"))
+        if not name:
+            continue
+        for fk in _list(entity.get("foreign_keys")):
+            target = _text(fk) if isinstance(fk, str) else _text(_dict(fk).get("ref_table") or _dict(fk).get("to"))
+            if target and target.lower() != name.lower():
+                # Avoid duplicates
+                exists = any(
+                    e["child_table"].lower() == name.lower() and e["parent_table"].lower() == target.lower()
+                    for e in edges
+                )
+                if not exists:
+                    edges.append({
+                        "child_table": name,
+                        "parent_table": target,
+                        "source": "declared_foreign_key",
+                        "confidence": 0.95,
+                    })
+
+    # Priority 3: naming convention (<singular>_id pattern)
+    _ID_COL_RE = _re.compile(r"^([a-z][a-z0-9]*?)_id$")
+    for entity in entity_list:
+        child_name = _text(entity.get("name"))
+        if not child_name:
+            continue
+        for field in _list(entity.get("fields")):
+            fname = _text(field).lower() if isinstance(field, str) else _text(_dict(field).get("name")).lower()
+            m = _ID_COL_RE.match(fname)
+            if not m:
+                continue
+            ref_base = m.group(1)
+            # Find parent table
+            for candidate in (ref_base, ref_base + "s", ref_base + "es"):
+                if candidate in node_names and candidate != child_name.lower():
+                    exists = any(
+                        e["child_table"].lower() == child_name.lower()
+                        and e["parent_table"].lower() == candidate
+                        for e in edges
+                    )
+                    if not exists:
+                        edges.append({
+                            "child_table": child_name,
+                            "parent_table": candidate,
+                            "source": "naming_convention",
+                            "confidence": 0.6,
+                        })
+                    break
+
+    # Topological order (children before parents for cleanup)
+    topo = _topological_sort(nodes, edges)
+    incomplete = len(topo) < len(nodes)
+
+    return {
+        "schema_version": "qualibug.database-dependency-graph.v1",
+        "nodes": nodes,
+        "edges": edges,
+        "topological_order": topo,
+        "incomplete": incomplete,
+        "reason_codes": [DB_DEPENDENCY_GRAPH_INCOMPLETE] if incomplete else [],
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+    }
+
+
+def _topological_sort(
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+) -> list[str]:
+    """Kahn's algorithm: returns tables in cleanup order (children first)."""
+    all_tables = [_text(n.get("table")).lower() for n in nodes]
+    table_display = {_text(n.get("table")).lower(): _text(n.get("table")) for n in nodes}
+    # Build adjacency: parent -> children (parent must be cleaned AFTER children)
+    in_degree: dict[str, int] = {t: 0 for t in all_tables}
+    children_of: dict[str, list[str]] = {t: [] for t in all_tables}
+    for edge in edges:
+        child = _text(edge.get("child_table")).lower()
+        parent = _text(edge.get("parent_table")).lower()
+        if child in in_degree and parent in in_degree and child != parent:
+            children_of[parent].append(child)
+            in_degree[child] = in_degree.get(child, 0) + 1
+
+    # Start from leaves (no incoming edges = no parent references them)
+    # For cleanup: children first. Reverse the edge direction:
+    # child depends on parent, so parent has higher topo order.
+    # We want children FIRST, so sort by reverse dependency.
+    queue = sorted([t for t in all_tables if in_degree.get(t, 0) == 0])
+    order: list[str] = []
+    visited: set[str] = set()
+    while queue:
+        node = queue.pop(0)
+        if node in visited:
+            continue
+        visited.add(node)
+        order.append(table_display.get(node, node))
+        for child in sorted(children_of.get(node, [])):
+            in_degree[child] -= 1
+            if in_degree[child] <= 0 and child not in visited:
+                queue.append(child)
+    # Add remaining (cycles or disconnected)
+    for t in all_tables:
+        if t not in visited:
+            order.append(table_display.get(t, t))
+    # Reverse: children (dependents) first, parents last
+    order.reverse()
+    return order
+
+
+# ─── Cleanup Authority Resolution ─────────────────────────────────────────────
+
+def resolve_cleanup_authority(
+    write_operation: dict[str, Any],
+    *,
+    cleanup_plan: Any,
+    behavior_ir: Any = None,
+    available_adapters: Any = None,
+) -> dict[str, Any]:
+    """Resolve the cleanup authority for a write operation.
+
+    Returns {strategy_type, authority_source, status, reason_code}.
+    Only legal strategies from SPEC §3 are accepted.
+    """
+    plan_list = _list(cleanup_plan)
+    adapters = {_text(a) for a in _list(available_adapters)} or {"http_api"}
+    method = _text(write_operation.get("method")).upper()
+
+    # Check declared cleanup plan for authority
+    if plan_list:
+        first = _dict(plan_list[0])
+        action = _text(first.get("action"))
+        adapter = _text(first.get("adapter"))
+
+        if action == "source_declared_compensation":
+            return {
+                "strategy_type": STRATEGY_API_COMPENSATION,
+                "authority_source": _text(first.get("operation_ref")),
+                "status": CONTRACT_RESOLVED,
+                "reason_code": "",
+            }
+        if action == "restore_before_snapshot":
+            return {
+                "strategy_type": STRATEGY_SNAPSHOT_RESTORE,
+                "authority_source": _text(first.get("operation_ref")),
+                "status": CONTRACT_RESOLVED,
+                "reason_code": "",
+            }
+        if action == "inverse_delta_compensation":
+            return {
+                "strategy_type": STRATEGY_DB_RESTORE,
+                "authority_source": _text(first.get("operation_ref")),
+                "status": CONTRACT_RESOLVED,
+                "reason_code": "",
+            }
+        if action == "reverse_order_compensation":
+            return {
+                "strategy_type": STRATEGY_API_COMPENSATION,
+                "authority_source": _text(first.get("operation_ref")),
+                "status": CONTRACT_RESOLVED,
+                "reason_code": "",
+            }
+        if adapter == "db_sql" or action == "declared_adapter_cleanup":
+            return {
+                "strategy_type": STRATEGY_DB_DELETE,
+                "authority_source": _text(first.get("table")) or _text(first.get("operation_ref")),
+                "status": CONTRACT_RESOLVED,
+                "reason_code": "",
+            }
+        if action == "best_effort_delete":
+            return {
+                "strategy_type": STRATEGY_API_COMPENSATION,
+                "authority_source": _text(first.get("operation_ref")),
+                "status": CONTRACT_RESOLVED,
+                "reason_code": "",
+            }
+
+    # No plan: check if adapters can provide authority
+    if "db_sql" in adapters:
+        return {
+            "strategy_type": STRATEGY_DB_DELETE,
+            "authority_source": "declared_adapter:db_sql",
+            "status": CONTRACT_INCOMPLETE,
+            "reason_code": DB_ROW_IDENTITY_NOT_BOUND,
+        }
+
+    # No authority at all
+    return {
+        "strategy_type": "",
+        "authority_source": "",
+        "status": CONTRACT_NOT_DECLARED,
+        "reason_code": DB_CLEANUP_AUTHORITY_NOT_DECLARED,
+    }
+
+
+# ─── Pre-image Plan ───────────────────────────────────────────────────────────
+
+def resolve_preimage_plan(
+    write_operation: dict[str, Any],
+    *,
+    entities: Any = None,
+    behavior_ir: Any = None,
+) -> dict[str, Any]:
+    """Determine whether a pre-image must be captured before the write.
+
+    PUT/PATCH/DELETE → required (modifying or removing existing data).
+    POST create → not required (use Fixture Row Lineage instead).
+    """
+    method = _text(write_operation.get("method")).upper()
+    entity = _entity_for_operation(write_operation, _list(entities))
+    fields = _list(entity.get("fields"))
+    identity_fields = _list(entity.get("identity_fields"))
+
+    if method in ("PUT", "PATCH"):
+        return {
+            "required": True,
+            "fields": [f for f in fields if isinstance(f, str)][:50],
+            "observer_id": "before_state",
+            "capture_timing": "before_write",
+            "reason": "modification_requires_preimage",
+        }
+    if method == "DELETE":
+        return {
+            "required": True,
+            "fields": [f for f in fields if isinstance(f, str)][:50],
+            "observer_id": "before_state",
+            "capture_timing": "before_write",
+            "reason": "deletion_requires_full_snapshot",
+        }
+    # POST create: no pre-image needed
+    return {
+        "required": False,
+        "fields": [],
+        "observer_id": "",
+        "capture_timing": "",
+        "reason": "create_uses_row_lineage",
+    }
+
+
+# ─── Compile-Time Database Cleanup Contract ───────────────────────────────────
+
+def build_database_cleanup_contract(
+    *,
+    experiment_id: str,
+    campaign_id: str,
+    write_operation: dict[str, Any],
+    behavior_ir: Any = None,
+    entities: Any = None,
+    cleanup_plan: Any = None,
+    environment_type: str = "",
+    available_adapters: Any = None,
+) -> dict[str, Any]:
+    """Generate the compile-time Database Cleanup Contract (SPEC §5).
+
+    Only status=RESOLVED allows the write experiment to proceed.
+    """
+    ir = _dict(behavior_ir)
+    entity_list = _list(entities) or _list(ir.get("entities"))
+    method = _text(write_operation.get("method")).upper()
+    path = _text(write_operation.get("path") or write_operation.get("raw_path"))
+    op_id = _text(write_operation.get("id") or write_operation.get("operation_id"))
+
+    # Identify target entity
+    target_entity = _entity_for_operation(write_operation, entity_list)
+    table_name = _text(target_entity.get("name"))
+    identity_fields = _list(target_entity.get("identity_fields"))
+    if not identity_fields:
+        identity_fields = ["id"]
+
+    # Mutation type
+    mutation_type = _infer_mutation_type(method, path)
+
+    # Dependency graph
+    dep_graph = build_database_dependency_graph(entity_list)
+    dependency_order = _list(dep_graph.get("topological_order"))
+
+    # Authority resolution
+    authority = resolve_cleanup_authority(
+        write_operation,
+        cleanup_plan=cleanup_plan,
+        behavior_ir=behavior_ir,
+        available_adapters=available_adapters,
+    )
+
+    # Pre-image plan
+    preimage = resolve_preimage_plan(
+        write_operation,
+        entities=entity_list,
+        behavior_ir=behavior_ir,
+    )
+
+    # Determine overall contract status
+    status = _text(authority.get("status"))
+    reason_codes: list[str] = []
+    if _text(authority.get("reason_code")):
+        reason_codes.append(_text(authority.get("reason_code")))
+    if dep_graph.get("incomplete"):
+        reason_codes.append(DB_DEPENDENCY_GRAPH_INCOMPLETE)
+        if status == CONTRACT_RESOLVED:
+            status = CONTRACT_INCOMPLETE
+    if not table_name:
+        reason_codes.append(DB_ROW_IDENTITY_NOT_BOUND)
+        if status == CONTRACT_RESOLVED:
+            status = CONTRACT_INCOMPLETE
+    if preimage.get("required") and not preimage.get("fields"):
+        reason_codes.append(DB_RESTORE_FIELD_SET_EMPTY)
+
+    # Affected rows projection
+    affected_rows = [{
+        "table": table_name,
+        "primary_key_binding": identity_fields[0] if identity_fields else "id",
+        "foreign_key_bindings": [
+            e["child_table"] for e in _list(dep_graph.get("edges"))
+            if _text(e.get("parent_table")).lower() == table_name.lower()
+        ],
+        "correlation_keys": [],
+    }]
+
+    # Cleanup strategy
+    strategy_type = _text(authority.get("strategy_type"))
+    cleanup_strategy = {
+        "strategy_type": strategy_type,
+        "authority_source": _text(authority.get("authority_source")),
+        "operation_or_sql_template_ref": op_id,
+    }
+
+    # Verification plan
+    verification_plan = {
+        "observers": ["after_cleanup_state"],
+        "expected_final_state": "pre_experiment_baseline",
+        "scope": "affected_entities_only",
+    }
+
+    contract = {
+        "schema_version": CONTRACT_SCHEMA,
+        "contract_id": _contract_id(experiment_id, campaign_id, op_id, table_name),
+        "experiment_id": experiment_id,
+        "campaign_id": campaign_id,
+        "datastore_id": _text(ir.get("datastore_id")) or "primary",
+        "database_type": _text(ir.get("database_type")) or "postgresql",
+        "environment_id": environment_type or "non_production",
+        "target_entities": [{
+            "canonical_entity_id": _text(target_entity.get("id")) or table_name,
+            "table": table_name,
+            "identity_columns": identity_fields,
+            "scope_columns": [],
+        }] if table_name else [],
+        "mutation_type": mutation_type,
+        "owned_by_campaign": True,
+        "pre_existing_customer_data": False,
+        "affected_rows": affected_rows,
+        "preimage_plan": preimage,
+        "cleanup_strategy": cleanup_strategy,
+        "dependency_order": dependency_order,
+        "verification_plan": verification_plan,
+        "status": status,
+        "reason_codes": sorted(set(reason_codes)),
+        "dependency_graph_id": _text(dep_graph.get("schema_version")),
+        "dependency_graph_incomplete": bool(dep_graph.get("incomplete")),
+    }
+    return contract

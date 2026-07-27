@@ -402,6 +402,26 @@ def execute_one_experiment(
             },
         }
 
+    # ── V1.3.0-A: Fixture Row Lineage (SPEC §6) ──
+    # Record complete lineage for every QualiBug-created test object.
+    _fixture_lineage_receipts: list[dict[str, Any]] = []
+    if fixture_receipts:
+        from .cleanup_execution_receipt import build_fixture_row_lineage as _build_lineage
+        for _fr in fixture_receipts:
+            _fr_d = _dict(_fr)
+            _fr_table = _text(_fr_d.get("table") or _fr_d.get("entity") or _fr_d.get("target"))
+            _fr_pk = _text(_fr_d.get("primary_key") or _fr_d.get("row_id") or _fr_d.get("created_id"))
+            if _fr_table and _fr_pk:
+                _fixture_lineage_receipts.append(_build_lineage(
+                    campaign_id=resolved_campaign_id,
+                    experiment_id=eid,
+                    fixture_id=_text(_fr_d.get("fixture_id") or _fr_d.get("receipt_id")),
+                    step_id=_text(_fr_d.get("step_id")),
+                    table=_fr_table,
+                    primary_key=_fr_pk,
+                ))
+    observations["fixture_row_lineage_receipts"] = _fixture_lineage_receipts
+
     # ── SPEC v1.1 §10 Phase B: Runtime binding validation ──
     # After fixture materialization, verify proof fingerprint and bindings.
     if is_governed_write:

@@ -547,7 +547,7 @@ def execute_selected_experiments(
             oracle_receipt_id = _text(validated_oracle.get("receipt_id"))
             outcome["oracle_verdict"] = validated_oracle
         status = _text(outcome.get("status")).upper()
-        if status not in {"EXECUTED", "BLOCKED", "HARNESS_FAILURE", "HARNESS_FAILED", "DELIVERABLE"}:
+        if status not in {"EXECUTED", "BLOCKED", "HARNESS_FAILURE", "HARNESS_FAILED", "DELIVERABLE", "EXECUTED_BUT_NOT_RESTORED"}:
             raise ValueError(f"experiment_execution_status_invalid:{status or 'MISSING'}")
         outcome_cleanup_failures = int(outcome.get("cleanup_failures") or 0)
         if outcome_cleanup_failures:

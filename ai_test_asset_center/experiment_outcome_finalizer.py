@@ -34,6 +34,29 @@ from .cleanup_equivalence import evaluate_cleanup_equivalence
 from .cleanup_observation_adapter import build_cleanup_equivalence_inputs
 
 
+# ─── V1.3.0-A: Experiment Lifecycle State Machine ─────────────────────────────
+# Full lifecycle: PLANNED → COMPILED → FIXTURE_CREATED → BUSINESS_STEPS_EXECUTED
+#   → OBSERVATION_COMPLETED → ORACLE_EVALUATED → CLEANUP_EXECUTED
+#   → CLEANUP_VERIFIED → ENVIRONMENT_RESTORED → EXPERIMENT_COMPLETED
+# Non-completion terminal states:
+LIFECYCLE_EXECUTED_BUT_NOT_RESTORED = "EXECUTED_BUT_NOT_RESTORED"
+LIFECYCLE_PARTIAL_EXECUTION = "PARTIAL_EXECUTION"
+LIFECYCLE_CLEANUP_FAILED = "CLEANUP_FAILED"
+LIFECYCLE_ENVIRONMENT_DIRTY = "ENVIRONMENT_DIRTY"
+LIFECYCLE_EXPERIMENT_COMPLETED = "EXPERIMENT_COMPLETED"
+LIFECYCLE_ORACLE_EVALUATED = "ORACLE_EVALUATED"
+LIFECYCLE_CLEANUP_EXECUTED = "CLEANUP_EXECUTED"
+LIFECYCLE_CLEANUP_VERIFIED = "CLEANUP_VERIFIED"
+LIFECYCLE_ENVIRONMENT_RESTORED = "ENVIRONMENT_RESTORED"
+
+_TERMINAL_NON_COMPLETE = frozenset({
+    LIFECYCLE_EXECUTED_BUT_NOT_RESTORED,
+    LIFECYCLE_PARTIAL_EXECUTION,
+    LIFECYCLE_CLEANUP_FAILED,
+    LIFECYCLE_ENVIRONMENT_DIRTY,
+})
+
+
 def _extract_related_from_body(body: Any, entity_name: str) -> Any:
     """Extract related entity data from a response body.
 
@@ -928,6 +951,16 @@ def finalize_experiment_execution(
         # NOT_APPLICABLE allows finding (read-only or exempted)
     observations["cleanup_gate"] = cleanup_gate
 
+    # ── V1.3.0-A: Early environment restoration determination ──
+    # Computed before finding creation so the delivery gate can consume it.
+    _env_restored = False
+    if cleanup_failures:
+        pass  # not restored
+    elif cleanup_gate == "PASSED":
+        _env_restored = True
+    elif not is_governed_write:
+        _env_restored = True  # read-only: no cleanup needed
+
     finding = None
     # Execution status reflects actual HTTP activity, not oracle assessment.
     # Oracle verdict is advisory evidence quality metadata.
@@ -1235,8 +1268,11 @@ def finalize_experiment_execution(
         }
         # The executor authors evidence and a candidate only.  It never authors
         # the independent delivery decision that consumes this receipt chain.
+        # ── V1.3.0-A: Environment restoration is a hard delivery gate ──
         if cleanup_failures:
             finding = mark_as_internal_clue(finding, reason="cleanup_compensation_failed")
+        elif is_governed_write and not _env_restored:
+            finding = mark_as_internal_clue(finding, reason="environment_not_restored")
     elif verdict.get("verdict") == "executed_clue":
         finding = mark_as_internal_clue(
             {
@@ -1254,6 +1290,28 @@ def finalize_experiment_execution(
             reason=_text(verdict.get("demotion_reason") or "executed_clue"),
         )
 
+    # ── V1.3.0-A: Lifecycle State + Environment Restoration Gate ──
+    # Determine lifecycle state from cleanup evidence (_env_restored computed earlier).
+    _lifecycle_state = LIFECYCLE_ORACLE_EVALUATED
+    if cleanup_failures:
+        _lifecycle_state = LIFECYCLE_CLEANUP_FAILED
+    elif _env_restored:
+        _lifecycle_state = LIFECYCLE_EXPERIMENT_COMPLETED
+    elif cleanup_gate == "FAILED":
+        _lifecycle_state = LIFECYCLE_ENVIRONMENT_DIRTY
+    elif cleanup_gate == "BLOCKED":
+        _lifecycle_state = LIFECYCLE_EXECUTED_BUT_NOT_RESTORED
+    elif is_governed_write:
+        # Governed write but no equivalence receipt
+        _lifecycle_state = LIFECYCLE_EXECUTED_BUT_NOT_RESTORED
+    else:
+        _lifecycle_state = LIFECYCLE_EXPERIMENT_COMPLETED
+
+    # Environment restoration is a hard gate for EXPERIMENT_COMPLETED.
+    # Cleanup failures downgrade status.
+    if cleanup_failures and status == "EXECUTED":
+        status = "EXECUTED_BUT_NOT_RESTORED"
+
     # ── P0-12: Finding filter reason ──
     _finding_created = finding is not None
     _finding_filter_reason = ""
@@ -1262,6 +1320,8 @@ def finalize_experiment_execution(
             _finding_filter_reason = f"environment_error:{harness_failure_reason or 'harness_failure'}"
         elif status == "BLOCKED":
             _finding_filter_reason = "environment_blocked"
+        elif status == "EXECUTED_BUT_NOT_RESTORED":
+            _finding_filter_reason = "environment_not_restored"
         elif _text(verdict.get("status")) == "PROPERTY_HELD":
             _finding_filter_reason = "oracle_property_held"
         elif _text(verdict.get("status")) == "INDETERMINATE":
@@ -1290,6 +1350,8 @@ def finalize_experiment_execution(
         "finding_filter_reason": _finding_filter_reason,
         "cleanup_failures": cleanup_failures,
         "cleanup_equivalence_receipt": cleanup_equivalence_receipt,
+        "lifecycle_state": _lifecycle_state,
+        "environment_restored": _env_restored,
         "execution_receipt": {
             "status": status,
             "steps": len(steps_out),
@@ -1302,6 +1364,8 @@ def finalize_experiment_execution(
             "cleanup_equivalence_status": _text(
                 cleanup_equivalence_receipt.get("equivalence_status")
             ) if cleanup_equivalence_receipt else None,
+            "lifecycle_state": _lifecycle_state,
+            "environment_restored": _env_restored,
         },
     }
 

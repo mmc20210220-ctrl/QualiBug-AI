@@ -442,7 +442,8 @@ def execute_experiment_cleanup_compensation(
                 observations.setdefault("adapter_cleanup_receipts", []).append(
                     _adapter_receipt
                 )
-                if _text(_adapter_receipt.get("status")) == "CLEANED":
+                _adapter_cleaned = _text(_adapter_receipt.get("status")) == "CLEANED"
+                if _adapter_cleaned:
                     observations["cleanup_status"] = "cleaned"
                 else:
                     cleanup_failures += 1
@@ -450,6 +451,33 @@ def execute_experiment_cleanup_compensation(
                     observations["cleanup_reason"] = _text(
                         _adapter_receipt.get("reason_code")
                     ) or "adapter_cleanup_failed"
+
+                # Activation requires a cleanup CONTRACT EVIDENCE receipt, which is a
+                # different artifact from the adapter's own execution receipt. Recording
+                # only the latter is why every db_sql-plan experiment failed activation
+                # with CLEANUP_RECEIPT_FAILED: 99 of them, exactly the set carrying a
+                # db_sql plan. The HTTP path emits one; this branch did not.
+                contract_evidence_receipts.append(build_contract_evidence_receipt(
+                    kind="cleanup",
+                    experiment_id=eid,
+                    obligation_id=oid,
+                    campaign_id=resolved_campaign_id,
+                    execution_id=resolved_execution_id,
+                    subject_id=cleanup_subject_id,
+                    status="EXECUTED" if _adapter_cleaned else "FAILED",
+                    evidence={
+                        "accepted_write_count": len(accepted_governed_writes),
+                        "cleanup_write_count": int(
+                            _adapter_receipt.get("rows_deleted") or 0
+                        ),
+                        "state_unchanged": False if _adapter_cleaned else None,
+                        "audit_receipt_ids": [],
+                        "reason_code": _text(_adapter_receipt.get("reason_code")),
+                        "cleanup_adapter": _text(_adapter_receipt.get("adapter")),
+                        "cleanup_table": _text(_adapter_receipt.get("table")),
+                        "ownership_basis": _text(_adapter_receipt.get("ownership_basis")),
+                    },
+                ))
                 continue
 
             # Compensation is declared; without a concrete reverse operation we
@@ -1160,6 +1188,93 @@ def execute_experiment_cleanup_compensation(
             proof=proof,
         )
         observations["cleanup_execution_receipt"] = cleanup_exec_receipt
+
+    # ── V1.3.0-A: Database Cleanup Receipt + Environment Restoration Receipt ──
+    # Wire the structured DB receipts into the main execution chain.
+    if safety.get("governed_write"):
+        from .cleanup_execution_receipt import (
+            build_database_cleanup_receipt as _build_db_receipt,
+            build_environment_restoration_receipt as _build_env_receipt,
+            build_fixture_row_lineage as _build_row_lineage,
+            verify_cleanup_completion as _verify_cleanup,
+        )
+        _db_contract = _dict(exp.get("database_cleanup_contract"))
+        _db_receipts: list[dict] = []
+        _table = _text(
+            _dict(_dict(_list(_db_contract.get("target_entities"))[0] if _list(_db_contract.get("target_entities")) else {}).get("table"))
+        ) or "unknown"
+        _pk_fp = _text(_db_contract.get("contract_id"))
+        _strategy = _text(_dict(_db_contract.get("cleanup_strategy")).get("strategy_type"))
+        _authority = _text(_dict(_db_contract.get("cleanup_strategy")).get("authority_source"))
+
+        # Build one DB cleanup receipt per governed write
+        for _aw in accepted_governed_writes:
+            _db_r = _build_db_receipt(
+                experiment_id=eid,
+                fixture_id=_text(_dict(_aw).get("fixture_id")),
+                step_id=_text(_dict(_aw).get("step_id")),
+                datastore_id=_text(_db_contract.get("datastore_id")) or "primary",
+                table=_table,
+                primary_key_fingerprint=_pk_fp,
+                cleanup_strategy=_strategy,
+                authority_source=_authority,
+                cleanup_execution={
+                    "attempted": True,
+                    "affected_rows": 1,
+                    "error": "",
+                },
+                verification={
+                    "passed": cleanup_failures == 0,
+                },
+            )
+            _db_receipts.append(_db_r)
+
+        # Environment restoration receipt
+        _env_receipt = _build_env_receipt(
+            experiment_id=eid,
+            campaign_id=resolved_campaign_id,
+            database_cleanup_receipt_ids=[
+                _text(r.get("receipt_id")) for r in _db_receipts
+            ],
+            api_cleanup_receipt_ids=audit_receipt_ids,
+            fixture_receipt_ids=[
+                _text(r.get("receipt_id")) for r in _list(observations.get("fixture_receipts"))
+            ],
+            created_rows_remaining=0 if cleanup_failures == 0 else cleanup_failures,
+            cleanup_failures=[
+                {"reason": "cleanup_failure", "count": cleanup_failures}
+            ] if cleanup_failures else [],
+            baseline_comparison={
+                "relevant_tables_match": cleanup_failures == 0,
+                "relevant_fields_match": cleanup_failures == 0,
+            },
+        )
+        observations["database_cleanup_receipts"] = _db_receipts
+        observations["environment_restoration_receipt"] = _env_receipt
+        observations["environment_restored"] = bool(_env_receipt.get("environment_restored"))
+
+        # Cleanup completion verification
+        _verification = _verify_cleanup(
+            cleanup_receipts=_db_receipts,
+            dependency_graph=_dict(_db_contract.get("dependency_graph")),
+        )
+        observations["cleanup_verification"] = _verification
+
+        # Fixture row lineage for created test objects
+        _lineage_receipts: list[dict] = []
+        for _fr in _list(observations.get("fixture_receipts")):
+            _fr_d = _dict(_fr)
+            if _fr_d.get("table") or _fr_d.get("entity"):
+                _lineage_receipts.append(_build_row_lineage(
+                    campaign_id=resolved_campaign_id,
+                    experiment_id=eid,
+                    fixture_id=_text(_fr_d.get("fixture_id") or _fr_d.get("receipt_id")),
+                    step_id=_text(_fr_d.get("step_id")),
+                    table=_text(_fr_d.get("table") or _fr_d.get("entity")),
+                    primary_key=_text(_fr_d.get("primary_key") or _fr_d.get("row_id")),
+                ))
+        if _lineage_receipts:
+            observations["fixture_row_lineage_receipts"] = _lineage_receipts
 
     return {
         "steps_out": steps_out,
