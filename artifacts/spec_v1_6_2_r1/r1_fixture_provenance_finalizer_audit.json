@@ -1,6 +1,6 @@
 {
   "schema_version": "qualibug.v162r1-fixture-provenance-finalizer-audit.v1",
-  "generated_at": "2026-07-27T11:27:42.035069+00:00",
+  "generated_at": "2026-07-27T11:37:37.222811+00:00",
   "status": "CONSUMED_WHEN_PRESENT",
   "note": "Finalizer consumes fixture_provenance_receipts / fixture_receipts; no fixture re-search"
 }

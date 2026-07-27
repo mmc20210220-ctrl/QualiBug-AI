@@ -42,6 +42,7 @@ from .runtime_binding_materializer import (
 )
 from .cleanup_execution_receipt import build_cleanup_execution_receipt
 from .sandbox_write_executor import (
+    _http_request,
     _restore_payload,
     execute_governed_control_write,
     sandbox_write_allowed,
@@ -63,6 +64,191 @@ def _cleanup_actor_for_write_step(
     actor = actors[actor_ref]
     token = _resolve_token(actor, tokens)
     return actor_ref, actor, token
+
+
+def _primary_write_step_for_readback(
+    steps_out: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Last accepted control/treatment write that carries an observation path."""
+    for step in reversed(steps_out):
+        if not isinstance(step, dict):
+            continue
+        if _text(step.get("phase")) not in {"control", "treatment"}:
+            continue
+        gov = _dict(step.get("governance_receipt"))
+        if gov.get("accepted") is not True:
+            continue
+        path = _text(
+            step.get("observation_path")
+            or gov.get("observation_path")
+            or step.get("path")
+        )
+        if path.startswith("/") and not path_has_placeholders(path):
+            return step
+    return {}
+
+
+def _normalize_after_cleanup_obs(
+    *,
+    status_code: int,
+    body: Any,
+    path: str,
+    source: str,
+) -> dict[str, Any]:
+    return {
+        "status_code": int(status_code or 0),
+        "status": int(status_code or 0),
+        "body": body,
+        "path": _text(path),
+        "phase": "after_cleanup",
+        "source": source,
+    }
+
+
+def seal_after_cleanup_observation(
+    *,
+    steps_out: list[dict[str, Any]],
+    observations: dict[str, Any],
+    actors: dict[str, dict[str, Any]],
+    tokens: dict[str, str],
+    base_url: str,
+    root: Path,
+    project: str,
+    runtime_contract: dict[str, Any],
+) -> dict[str, Any]:
+    """Materialize post-cleanup business-state readback for equivalence.
+
+    Prefer an already-present cleanup-phase governance ``after`` snapshot.
+    Otherwise re-read the write's declared observation_path with the write actor.
+    Never invent a path and never treat the cleanup write response body as state.
+    """
+    existing = _dict(observations.get("after_cleanup_observation"))
+    if existing and (
+        existing.get("body") is not None
+        or int(existing.get("status_code") or existing.get("status") or 0) > 0
+    ):
+        return existing
+
+    # Prefer real cleanup-step governance after snapshots already captured.
+    for step in reversed(steps_out):
+        if not isinstance(step, dict) or _text(step.get("phase")) != "cleanup":
+            continue
+        gov = _dict(step.get("governance_receipt"))
+        after = _dict(gov.get("after"))
+        if after and int(after.get("status") or 0) > 0:
+            sealed = _normalize_after_cleanup_obs(
+                status_code=int(after.get("status") or 0),
+                body=after.get("body"),
+                path=_text(
+                    gov.get("observation_path")
+                    or step.get("observation_path")
+                    or step.get("path")
+                ),
+                source="cleanup_step_governance_after",
+            )
+            observations["after_cleanup_observation"] = sealed
+            return sealed
+
+    write_step = _primary_write_step_for_readback(steps_out)
+    if not write_step:
+        return {}
+    gov = _dict(write_step.get("governance_receipt"))
+    observation_path = _text(
+        write_step.get("observation_path")
+        or gov.get("observation_path")
+        or write_step.get("path")
+    )
+    if not observation_path.startswith("/") or path_has_placeholders(observation_path):
+        return {}
+    try:
+        _actor_ref, _actor, token = _cleanup_actor_for_write_step(
+            write_step, actors=actors, tokens=tokens
+        )
+    except ValueError:
+        return {}
+    allowed, _reason = sandbox_write_allowed(
+        root=root,
+        project=project,
+        runtime_contract=runtime_contract,
+        actor_token=token,
+        actor_identity=_text(_actor.get("role") or _actor_ref),
+    )
+    # Readback is a GET; still require the actor to be sandbox-allowed for the
+    # campaign target so we never probe undeclared environments.
+    if not allowed:
+        return {}
+    base = _text(base_url).rstrip("/")
+    if not base:
+        return {}
+    raw = _http_request("GET", base + observation_path, token=token)
+    sealed = _normalize_after_cleanup_obs(
+        status_code=int(raw.get("status") or 0),
+        body=raw.get("body"),
+        path=observation_path,
+        source="post_cleanup_readback",
+    )
+    # HTTP transport errors yield status 0 — do not seal empty/indeterminate rows.
+    if int(sealed.get("status_code") or 0) <= 0 and sealed.get("body") is None:
+        return {}
+    observations["after_cleanup_observation"] = sealed
+    return sealed
+
+
+def _append_adapter_cleanup_runtime_step(
+    *,
+    steps_out: list[dict[str, Any]],
+    cleanup_subject_id: str,
+    adapter_receipt: dict[str, Any],
+    after_cleanup_obs: dict[str, Any],
+) -> None:
+    """Record adapter cleanup as a real cleanup-phase runtime step.
+
+    Without this row, cleanup_execution_receipt sees zero cleanup steps and
+    equivalence stays permanently INDETERMINATE even when DB delete succeeded.
+    """
+    cleaned = _text(adapter_receipt.get("status")) == "CLEANED"
+    after_payload = {}
+    if after_cleanup_obs:
+        after_payload = {
+            "status": int(
+                after_cleanup_obs.get("status_code")
+                or after_cleanup_obs.get("status")
+                or 0
+            ),
+            "body": after_cleanup_obs.get("body"),
+        }
+    steps_out.append(
+        {
+            "phase": "cleanup",
+            "cleanup_subject_id": cleanup_subject_id,
+            "method": "ADAPTER_DB_SQL",
+            "path": _text(after_cleanup_obs.get("path")),
+            "observation_path": _text(after_cleanup_obs.get("path")),
+            "status_code": 200 if cleaned else 0,
+            "body": adapter_receipt,
+            "adapter_cleanup_receipt": dict(adapter_receipt),
+            "governance_receipt": {
+                "accepted": cleaned,
+                "status": "executed" if cleaned else "failed",
+                "reason": _text(adapter_receipt.get("reason_code")) or (
+                    "adapter_cleanup_cleaned" if cleaned else "adapter_cleanup_failed"
+                ),
+                "method": "ADAPTER_DB_SQL",
+                "path": _text(after_cleanup_obs.get("path")),
+                "observation_path": _text(after_cleanup_obs.get("path")),
+                "before": {},
+                "write": {
+                    "status": 200 if cleaned else 0,
+                    "body": {
+                        "rows_deleted": int(adapter_receipt.get("rows_deleted") or 0),
+                        "table": _text(adapter_receipt.get("table")),
+                        "status": _text(adapter_receipt.get("status")),
+                    },
+                },
+                "after": after_payload,
+            },
+        }
+    )
 
 
 def _write_step_for_cleanup_path(
@@ -478,6 +664,24 @@ def execute_experiment_cleanup_compensation(
                         "ownership_basis": _text(_adapter_receipt.get("ownership_basis")),
                     },
                 ))
+                # Seal post-cleanup readback + emit a cleanup-phase runtime step so
+                # cleanup_execution_receipt / equivalence see real cleanup evidence.
+                _after_obs = seal_after_cleanup_observation(
+                    steps_out=steps_out,
+                    observations=observations,
+                    actors=actors,
+                    tokens=tokens,
+                    base_url=base_url,
+                    root=root,
+                    project=project,
+                    runtime_contract=runtime_contract,
+                )
+                _append_adapter_cleanup_runtime_step(
+                    steps_out=steps_out,
+                    cleanup_subject_id=cleanup_subject_id,
+                    adapter_receipt=_adapter_receipt,
+                    after_cleanup_obs=_after_obs,
+                )
                 continue
 
             # Compensation is declared; without a concrete reverse operation we
@@ -1177,6 +1381,17 @@ def execute_experiment_cleanup_compensation(
     # ── SPEC v1.1.1 §6: Emit explicit Cleanup Execution Receipt ──
     safety = _dict(exp.get("safety_contract"))
     if safety.get("governed_write"):
+        # Seal after-cleanup observation for HTTP and adapter paths alike.
+        seal_after_cleanup_observation(
+            steps_out=steps_out,
+            observations=observations,
+            actors=actors,
+            tokens=tokens,
+            base_url=base_url,
+            root=root,
+            project=project,
+            runtime_contract=runtime_contract,
+        )
         proof = _dict(exp.get("write_reversibility_proof"))
         cleanup_exec_receipt = build_cleanup_execution_receipt(
             experiment_id=eid,
@@ -1186,6 +1401,7 @@ def execute_experiment_cleanup_compensation(
             cleanup_failures=cleanup_failures,
             cleanup_status=_text(observations.get("cleanup_status")),
             proof=proof,
+            adapter_cleanup_receipts=_list(observations.get("adapter_cleanup_receipts")),
         )
         observations["cleanup_execution_receipt"] = cleanup_exec_receipt
         observations["cleanup_execution_receipts"] = [cleanup_exec_receipt]

@@ -1708,9 +1708,26 @@ def _state_snapshot_evidence(
     return evidence, ""
 
 
+def _cleanup_phase_steps(execution_steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return cleanup-phase steps that carry a governance after snapshot."""
+    rows: list[dict[str, Any]] = []
+    for step in execution_steps:
+        if not isinstance(step, dict):
+            continue
+        if _text(step.get("phase")) != "cleanup":
+            continue
+        gov = _dict(step.get("governance_receipt"))
+        after = _dict(gov.get("after"))
+        if after and int(after.get("status") or 0) > 0:
+            rows.append(step)
+    return rows
+
+
 def _observe_state_snapshot(
     observer_id: str,
     execution_steps: list[dict[str, Any]],
+    *,
+    observations: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     main_steps = _main_governed_write_steps(execution_steps)
     if not main_steps:
@@ -1724,14 +1741,47 @@ def _observe_state_snapshot(
         step = main_steps[0]
         snapshot_key = "before"
         state_key = "before_state"
+        cleanup_phase_excluded = True
     elif observer_id == "after_state":
         step = main_steps[-1]
         snapshot_key = "after"
         state_key = "after_state"
+        cleanup_phase_excluded = True
     elif observer_id == "final_state":
-        step = main_steps[-1]
-        snapshot_key = "after"
-        state_key = "final_state"
+        # Final state must reflect post-cleanup reality when cleanup ran.
+        cleanup_steps = _cleanup_phase_steps(execution_steps)
+        sealed = _dict((_dict(observations).get("after_cleanup_observation")))
+        if cleanup_steps:
+            step = cleanup_steps[-1]
+            snapshot_key = "after"
+            state_key = "final_state"
+            cleanup_phase_excluded = False
+        elif sealed and (
+            sealed.get("body") is not None
+            or int(sealed.get("status_code") or sealed.get("status") or 0) > 0
+        ):
+            # Synthetic governance wrapper so _state_snapshot_evidence can run.
+            step = {
+                "phase": "cleanup",
+                "governance_receipt": {
+                    "after": {
+                        "status": int(
+                            sealed.get("status_code") or sealed.get("status") or 0
+                        ),
+                        "body": sealed.get("body"),
+                    },
+                    "observation_path": _text(sealed.get("path")),
+                },
+                "observation_path": _text(sealed.get("path")),
+            }
+            snapshot_key = "after"
+            state_key = "final_state"
+            cleanup_phase_excluded = False
+        else:
+            step = main_steps[-1]
+            snapshot_key = "after"
+            state_key = "final_state"
+            cleanup_phase_excluded = True
     else:
         raise ValueError(f"state_snapshot_observer_invalid:{observer_id}")
     evidence, reason = _state_snapshot_evidence(
@@ -1740,7 +1790,22 @@ def _observe_state_snapshot(
         state_key=state_key,
     )
     evidence["write_step_count"] = len(main_steps)
-    evidence["cleanup_phase_excluded"] = True
+    evidence["cleanup_phase_excluded"] = cleanup_phase_excluded
+    if not cleanup_phase_excluded:
+        evidence["status_code"] = int(
+            _dict(_dict(step.get("governance_receipt")).get(snapshot_key)).get("status")
+            or evidence.get("status_code")
+            or 0
+        )
+        if evidence.get("body") is None:
+            evidence["body"] = _dict(
+                _dict(step.get("governance_receipt")).get(snapshot_key)
+            ).get("body")
+        evidence["path"] = _text(
+            _dict(step.get("governance_receipt")).get("observation_path")
+            or step.get("observation_path")
+            or evidence.get("path")
+        )
     if reason:
         return _receipt(
             observer_id=observer_id,
@@ -2183,6 +2248,7 @@ def observe_experiment_requirements(
                     for step in _list(evidence.get("execution_steps"))
                     if isinstance(step, dict)
                 ],
+                observations=evidence if isinstance(evidence, dict) else {},
             )
         elif observer_id == "barrier_timeline":
             receipt = _observe_barrier_timeline(evidence)

@@ -56,6 +56,7 @@ def build_cleanup_execution_receipt(
     cleanup_failures: int,
     cleanup_status: str,
     proof: dict[str, Any],
+    adapter_cleanup_receipts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build the explicit cleanup execution receipt from actual execution evidence.
 
@@ -70,6 +71,8 @@ def build_cleanup_execution_receipt(
         cleanup_failures: Count of cleanup failures (diagnostic only).
         cleanup_status: The observed cleanup status string.
         proof: The full WriteReversibilityProof dict.
+        adapter_cleanup_receipts: Optional declared-adapter cleanup receipts when
+            cleanup ran through db_sql rather than HTTP transport.
 
     Returns:
         A qualibug.cleanup-execution-receipt.v1 dict.
@@ -85,6 +88,9 @@ def build_cleanup_execution_receipt(
     cleanup_steps = [
         step for step in steps_out
         if isinstance(step, dict) and _text(step.get("phase")) == "cleanup"
+    ]
+    adapter_receipts = [
+        row for row in _list(adapter_cleanup_receipts) if isinstance(row, dict)
     ]
 
     # No cleanup plan declared
@@ -111,6 +117,70 @@ def build_cleanup_execution_receipt(
 
     # Cleanup plan exists but no cleanup steps executed
     if not cleanup_steps:
+        # Declared-adapter cleanup may succeed without HTTP cleanup steps when the
+        # runtime failed to emit a phase=cleanup row. Prefer explicit adapter
+        # receipts over inventing NOT_ATTEMPTED.
+        if adapter_receipts:
+            cleaned = [
+                row for row in adapter_receipts
+                if _text(row.get("status")).upper() == "CLEANED"
+            ]
+            failed = [
+                row for row in adapter_receipts
+                if _text(row.get("status")).upper() == "FAILED"
+            ]
+            if cleaned and not failed and len(cleaned) == len(adapter_receipts):
+                owner = cleaned[-1]
+                return _build_receipt(
+                    experiment_id=experiment_id,
+                    proof_id=proof_id,
+                    cleanup_operation_ref=cleanup_operation_ref
+                    or _text(owner.get("table")),
+                    cleanup_authority=cleanup_authority or "declared_adapter_cleanup",
+                    attempted=True,
+                    transport_reached=True,
+                    method="ADAPTER_DB_SQL",
+                    path_template=_text(owner.get("table")),
+                    materialized_path=_text(owner.get("table")),
+                    request_body_fingerprint="",
+                    identity_bindings={
+                        _text(owner.get("identity_column")) or "id": owner.get(
+                            "identity_value"
+                        )
+                    },
+                    status_code=200,
+                    response_body_fingerprint=_sha256_short(
+                        {
+                            "rows_deleted": int(owner.get("rows_deleted") or 0),
+                            "table": _text(owner.get("table")),
+                        }
+                    ),
+                    succeeded=True,
+                    status=STATUS_ACCEPTED,
+                    reason_code="",
+                    detail="adapter_cleanup_cleaned",
+                )
+            fail_row = failed[0] if failed else adapter_receipts[-1]
+            return _build_receipt(
+                experiment_id=experiment_id,
+                proof_id=proof_id,
+                cleanup_operation_ref=cleanup_operation_ref
+                or _text(fail_row.get("table")),
+                cleanup_authority=cleanup_authority or "declared_adapter_cleanup",
+                attempted=True,
+                transport_reached=True,
+                method="ADAPTER_DB_SQL",
+                path_template=_text(fail_row.get("table")),
+                materialized_path=_text(fail_row.get("table")),
+                request_body_fingerprint="",
+                identity_bindings={},
+                status_code=0,
+                response_body_fingerprint="",
+                succeeded=False,
+                status=STATUS_TRANSPORT_FAILED,
+                reason_code=_text(fail_row.get("reason_code")) or "ADAPTER_CLEANUP_FAILED",
+                detail=_text(fail_row.get("detail")) or "adapter_cleanup_not_cleaned",
+            )
         # Determine why: blocked or not attempted
         if cleanup_status == "blocked":
             status = STATUS_BLOCKED

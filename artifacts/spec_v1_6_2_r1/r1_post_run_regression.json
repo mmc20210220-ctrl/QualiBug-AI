@@ -1,7 +1,14 @@
 {
   "schema_version": "qualibug.v162r1-post-run-regression.v1",
-  "generated_at": "2026-07-27T11:27:42.035069+00:00",
+  "generated_at": "2026-07-27T11:37:37.222811+00:00",
+  "status": "PASS",
   "specialized_tests_passed": 69,
+  "specialized_tests_failed": 0,
+  "minimum_required": 55,
   "v150_v162_regression_passed": 107,
-  "status": "PASS"
+  "regression_detail": {
+    "test_v150_process_step_execution": "PASS",
+    "test_v162_gate_a_receipt_authority": "PASS",
+    "combined_passed": 107
+  }
 }

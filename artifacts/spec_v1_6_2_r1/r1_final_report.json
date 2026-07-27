@@ -1,9 +1,9 @@
 {
   "schema_version": "qualibug.v162r1-final-report.v1",
   "spec_version": "V1.6.2-R1",
-  "generated_at": "2026-07-27T11:27:42.035069+00:00",
-  "V1_6_2_R1_RESULT_LEVEL": "C",
-  "level_reason": "Ledger id/hash + step sets now reach Finalizer on formal mainline; Execution Receipt Bundle and Finalization Receipt activate for executed unlock-set experiments (8/61 seen this resumed campaign). Derived terminal is CLEANUP_FAILED because cleanup_equivalence=INDETERMINATE (env_restored=false). TRUE_COMPLETED remains 0; Finalizer-not-activated breakpoint is closed.",
+  "generated_at": "2026-07-27T11:37:37.222811+00:00",
+  "V1_6_2_R1_RESULT_LEVEL": "D",
+  "level_reason": "INVALID_POST_START_TUNING: code_modified_after_freeze:process_step_execution; code_modified_after_freeze:experiment_outcome_finalizer; code_modified_after_freeze:experiment_plan_executor; code_modified_after_freeze:experiment_cleanup_executor",
   "Seal状态": {
     "level_c_evidence_commit": "2d5e8b3151e6a2f95472e7afdd859b26cc7e546e",
     "level_c_tag": "qualibug-v1.6.2-level-c-stop",
@@ -17,12 +17,12 @@
     "canonical_obligation_manifest_hash": "0c692b5ee288abf4bf540b3d57d5395fee552c6163b3df56fe42d445033dd4cd",
     "candidate_unlock_set_N": 61,
     "candidate_unlock_set_hash": "8001dff09ce870c598545365d94365f419bf5fb1893023fd72fbc8e1de9f12a1",
-    "modified_after_freeze": false,
+    "modified_after_freeze": true,
     "shared_fix_point": "FINALIZATION_RECEIPT_FROM_BUNDLE"
   },
   "根因": {
-    "breakpoint": "FINALIZER_RECEIPT_BUNDLE_NOT_ACTIVATED_ON_FORMAL_MAINLINE",
-    "cause": "Formal mainline produced ProcessStepLedger but did not propagate planned/executed step ids + ledger id/hash into Finalizer observations, so Execution Receipt Bundle seek never activated."
+    "breakpoint": "INVALID_POST_START_TUNING",
+    "cause": "Freeze audit found post-start drift: code_modified_after_freeze:process_step_execution; code_modified_after_freeze:experiment_outcome_finalizer; code_modified_after_freeze:experiment_plan_executor; code_modified_after_freeze:experiment_cleanup_executor"
   },
   "修改文件": [
     "ai_test_asset_center/process_step_execution.py",
@@ -62,31 +62,32 @@
     "campaign_id": "CMP_4d07614f012f301939d34b75",
     "execution_status": "completed",
     "elapsed_ms": 163302,
-    "evidence_note": "",
-    "bundles_activated": 8,
-    "finalizations_emitted": 8,
-    "derived_terminal_dominant": "CLEANUP_FAILED"
+    "evidence_note": ""
   },
   "安全": {
     "gates_relaxed": false,
     "forged_ledgers": false,
     "forged_finalization_receipts": false,
-    "PROJECT_G_ENTRY_ALLOWED": false
+    "PROJECT_G_ENTRY_ALLOWED": false,
+    "freeze_audit_violated": true,
+    "integrity_violation_count": 0
   },
   "回归": {
+    "status": "PASS",
     "specialized_tests_passed": 69,
-    "v150_v162_regression_passed": 107
+    "specialized_tests_failed": 0,
+    "minimum_required": 55,
+    "v150_v162_regression_passed": 107,
+    "regression_detail": {
+      "test_v150_process_step_execution": "PASS",
+      "test_v162_gate_a_receipt_authority": "PASS",
+      "combined_passed": 107
+    }
   },
   "最终判定": {
-    "V1_6_2_R1_RESULT_LEVEL": "C",
+    "V1_6_2_R1_RESULT_LEVEL": "D",
     "V1_6_3_ENTRY_ALLOWED": false,
-    "NEXT_SINGLE_BREAKPOINT": "CLEANUP_EQUIVALENCE_INDETERMINATE_BLOCKS_TRUE_COMPLETED",
-    "CUMULATIVE_UNLOCK": 0,
-    "FINALIZER_ACTIVATION": "PARTIAL",
-    "CLOSED_BREAKPOINT": "FINALIZER_RECEIPT_BUNDLE_NOT_ACTIVATED_ON_FORMAL_MAINLINE"
-  },
-  "FINALIZER_ACTIVATION": "PARTIAL",
-  "NEXT_SINGLE_BREAKPOINT": "CLEANUP_EQUIVALENCE_INDETERMINATE_BLOCKS_TRUE_COMPLETED",
-  "AFFECTED_OBLIGATIONS": 61,
-  "CUMULATIVE_UNLOCK": 0
+    "NEXT_SINGLE_BREAKPOINT": "INVALID_POST_START_TUNING",
+    "CUMULATIVE_UNLOCK": 0
+  }
 }

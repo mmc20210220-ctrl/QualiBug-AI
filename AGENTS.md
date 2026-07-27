@@ -45,6 +45,7 @@ assert engine.client.config.max_tokens >= 32768, "max_tokens too low"
 8.首先我要的就是全行业不同软件系统都适用，只要违反这个原则都要优化
 9.我的产品前端服务端口是5174，后端服务端口是8088，不要搞错了
 10.所有优化在现有模块基础上优化，不要重复造轮子，所有优化都要接入主链才算闭环，不要有断点
+11.有短板或者漏洞缺陷一定要从根本原因上优化，不要打补丁方式修补
 ## Non-Production Execution Contract
 
 - QualiBug automatically performs read and write probes against explicitly declared non-production targets (local, development, test, QA, SIT, UAT, staging, pre-release, and sandbox). A source-bound campaign does not require per-probe manual approval.

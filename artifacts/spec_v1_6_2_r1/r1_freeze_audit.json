@@ -1,0 +1,25 @@
+{
+  "schema_version": "qualibug.v162r1-freeze-audit.v1",
+  "violated": true,
+  "violations": [
+    "code_modified_after_freeze:process_step_execution",
+    "code_modified_after_freeze:experiment_outcome_finalizer",
+    "code_modified_after_freeze:experiment_plan_executor",
+    "code_modified_after_freeze:experiment_cleanup_executor"
+  ],
+  "current_file_hashes": {
+    "process_step_execution": "a828889b30a1a5f2e554d95098c4fa10ff6ccd61681585e3e35407fcc288232a",
+    "experiment_outcome_finalizer": "65ac58959205bc51f672b91054891fa9133c89151f53b35133d68be29a05e453",
+    "experiment_executor": "40c0497ed35db59027a0bc300550a2286349f12153e58004604f9a9c600289df",
+    "experiment_plan_executor": "0dcd79b3465772b82efd9ad136b6ee01c62793d607ae5e6c71a4f6edfde60392",
+    "experiment_cleanup_executor": "e36f7b10347ed8e5693e77a94d3b9a9aabb1d5c2be4a32ab5a9066c1b23c974c"
+  },
+  "frozen_file_hashes": {
+    "process_step_execution": "e9549b92c13e46f9e32ca8e8b9d45a06011f6a67087b7e6d6435acf74fa43f9f",
+    "experiment_outcome_finalizer": "fddb13fd560fec8ed698d6e218a98d80218390fb0aa7a71bba6b227994bf1fb9",
+    "experiment_executor": "40c0497ed35db59027a0bc300550a2286349f12153e58004604f9a9c600289df",
+    "experiment_plan_executor": "747eb4319681008b79e5c9a5c734de3945b44c5b875466fe90d912bc7a53a027",
+    "experiment_cleanup_executor": "f82f8097adb75cbfe2f5da2990a6a6a320fb60b4f3583cb560f17b44ba8b0475"
+  },
+  "generated_at": "2026-07-27T11:37:37.222811+00:00"
+}

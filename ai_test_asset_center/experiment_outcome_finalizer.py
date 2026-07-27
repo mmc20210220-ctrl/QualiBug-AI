@@ -912,12 +912,30 @@ def finalize_experiment_execution(
     if is_governed_write:
         proof = _dict(exp.get("write_reversibility_proof"))
         if proof and _text(proof.get("proof_status")) == "PROVEN":
-            # SPEC v1.1.1 §5: Use canonical adapter for observation extraction
+            # SPEC v1.1.1 §5: Use canonical adapter for observation extraction.
+            # Prefer sealed after-cleanup readback produced by cleanup executor;
+            # never rely on write-phase final_state as after-cleanup.
+            cleanup_result = _dict(observations.get("cleanup_result"))
+            sealed_after = _dict(observations.get("after_cleanup_observation"))
+            if sealed_after and not _dict(cleanup_result.get("after_cleanup_observation")):
+                cleanup_result = {
+                    **cleanup_result,
+                    "after_cleanup_observation": sealed_after,
+                    "observation_path": _text(sealed_after.get("path")),
+                    "after": {
+                        "status": int(
+                            sealed_after.get("status_code")
+                            or sealed_after.get("status")
+                            or 0
+                        ),
+                        "body": sealed_after.get("body"),
+                    },
+                }
             equiv_inputs = build_cleanup_equivalence_inputs(
                 exp=exp,
                 observations=observations,
                 steps_out=steps_out,
-                cleanup_result=_dict(observations.get("cleanup_result")),
+                cleanup_result=cleanup_result,
             )
             before_obs = equiv_inputs["before_observation"]
             after_write_obs = equiv_inputs["after_write_observation"]
@@ -1335,6 +1353,7 @@ def finalize_experiment_execution(
     _v150_true_completion: dict[str, Any] = {}
     _process_ledger = observations.get("process_step_ledger")
     # V1.6.2-R1: hydrate step id sets from live ledger when observation keys empty.
+    # Required ids stay compile/plan authority — never forged from executed responses.
     _ledger_id = _text(
         observations.get("process_step_ledger_id")
         or getattr(_process_ledger, "ledger_id", "")
@@ -1350,25 +1369,36 @@ def finalize_experiment_execution(
     if _process_ledger is not None and hasattr(_process_ledger, "executed_step_ids"):
         if not _list(observations.get("executed_step_ids")):
             observations["executed_step_ids"] = list(_process_ledger.executed_step_ids())
-        if not _list(observations.get("planned_step_ids")):
-            _req = list(getattr(_process_ledger, "required_step_ids", []) or [])
-            observations["planned_step_ids"] = list(
-                _req or _process_ledger.executed_step_ids()
-            )
+        _req = list(getattr(_process_ledger, "required_step_ids", []) or [])
         if not _list(observations.get("required_step_ids")):
-            _req = list(getattr(_process_ledger, "required_step_ids", []) or [])
-            observations["required_step_ids"] = list(
-                _req or _process_ledger.executed_step_ids()
+            observations["required_step_ids"] = list(_req)
+        if not _list(observations.get("planned_step_ids")):
+            observations["planned_step_ids"] = list(
+                _list(observations.get("required_step_ids")) or _req
             )
-        if not _ledger_id and hasattr(_process_ledger, "ledger_id"):
-            _ledger_id = _text(_process_ledger.ledger_id)
+        live_id = _text(getattr(_process_ledger, "ledger_id", ""))
+        if not _ledger_id and live_id:
+            _ledger_id = live_id
             observations["process_step_ledger_id"] = _ledger_id
-        if not _ledger_hash and hasattr(_process_ledger, "compute_hash"):
-            _ledger_hash = _text(_process_ledger.compute_hash())
-            observations["process_step_ledger_hash"] = _ledger_hash
+        if hasattr(_process_ledger, "compute_hash"):
+            live_hash = _text(_process_ledger.compute_hash())
+            # Empty live ledger identity is a missing-ledger fault; do not
+            # mis-attribute a stale observation hash as HASH_MISMATCH.
+            if live_id and _ledger_hash and live_hash and _ledger_hash != live_hash:
+                observations["finalizer_block_reason"] = (
+                    "PROCESS_STEP_LEDGER_HASH_MISMATCH"
+                )
+            elif live_id and not _ledger_hash and live_hash:
+                _ledger_hash = live_hash
+                observations["process_step_ledger_hash"] = _ledger_hash
+        obs_id = _text(observations.get("process_step_ledger_id"))
+        if obs_id and live_id and obs_id != live_id:
+            observations["finalizer_block_reason"] = (
+                "PROCESS_STEP_LEDGER_IDENTITY_MISMATCH"
+            )
     _planned_steps = _list(observations.get("planned_step_ids"))
     _executed_steps = _list(observations.get("executed_step_ids"))
-    _required_steps = _list(observations.get("required_step_ids")) or list(_planned_steps)
+    _required_steps = _list(observations.get("required_step_ids"))
     _evidence_receipt = _dict(observations.get("per_step_evidence_completeness"))
     if (
         not _evidence_receipt
@@ -1380,7 +1410,7 @@ def finalize_experiment_execution(
             evaluate_per_step_evidence_completeness as _eval_step_evidence,
         )
         _evidence_receipt = _eval_step_evidence(
-            planned_step_ids=list(_required_steps or _planned_steps or _executed_steps),
+            planned_step_ids=list(_required_steps or _planned_steps),
             ledger=_process_ledger,
             observed_step_ids=list(_executed_steps),
         )
@@ -1396,8 +1426,8 @@ def finalize_experiment_execution(
                 "state_precondition_established", True
             ),
             all_required_steps_executed=(
-                set(_required_steps or _planned_steps) <= set(_executed_steps)
-                if (_required_steps or _planned_steps) else bool(_executed_steps)
+                bool(_required_steps)
+                and set(_required_steps) <= set(_executed_steps)
             ),
             per_step_evidence_complete=bool(_evidence_receipt.get("complete", False)),
             minimal_oracle_evaluated=_oracle_evaluated,
@@ -1417,8 +1447,14 @@ def finalize_experiment_execution(
     # receipt from a validated receipt bundle (never direct status assignment).
     _execution_receipt_bundle: dict[str, Any] = {}
     _finalization_receipt: dict[str, Any] = {}
-    _finalizer_block_reason = ""
-    if _process_ledger is not None or observations.get("force_receipt_bundle"):
+    _finalizer_block_reason = _text(observations.get("finalizer_block_reason"))
+    if _process_ledger is None and not observations.get("force_receipt_bundle"):
+        from .process_step_execution import (
+            FORMAL_MAINLINE_PROCESS_STEP_LEDGER_NOT_PROPAGATED as _LEDGER_NOT_PROP,
+        )
+        _finalizer_block_reason = _LEDGER_NOT_PROP
+        observations["finalizer_block_reason"] = _LEDGER_NOT_PROP
+    elif _process_ledger is not None or observations.get("force_receipt_bundle"):
         from .operational_receipts import (
             NOT_APPLICABLE as _NA,
             assemble_bundle_from_finalizer_observations as _assemble_bundle,
@@ -1427,11 +1463,19 @@ def finalize_experiment_execution(
         from .process_step_execution import (
             FINALIZER_PROCESS_STEP_LEDGER_MISSING as _LEDGER_MISSING,
             FINALIZER_RECEIPT_BUNDLE_NOT_ACTIVATED as _BUNDLE_NOT_ACTIVATED,
+            PROCESS_STEP_LEDGER_HASH_MISMATCH as _HASH_MISMATCH,
+            PROCESS_STEP_LEDGER_IDENTITY_MISMATCH as _ID_MISMATCH,
             PROCESS_STEP_REQUIRED_SET_MISMATCH as _STEP_MISMATCH,
+            attach_ledger_refs_to_observations as _attach_ledger_refs,
+            step_ids_with_cleanup_evidence as _steps_cleanup,
+            step_ids_with_observation_evidence as _steps_observed,
+            step_ids_with_oracle_evidence as _steps_oracle,
             validate_required_actual_step_balance as _step_balance,
         )
 
-        if not _ledger_id and not observations.get("force_receipt_bundle"):
+        if _finalizer_block_reason in {_HASH_MISMATCH, _ID_MISMATCH}:
+            observations["finalizer_block_reason"] = _finalizer_block_reason
+        elif not _ledger_id and not observations.get("force_receipt_bundle"):
             # SPEC §12: missing process_step_ledger_id must not skip to COMPLETED.
             _finalizer_block_reason = _LEDGER_MISSING
             observations["finalizer_block_reason"] = _LEDGER_MISSING
@@ -1459,48 +1503,43 @@ def finalize_experiment_execution(
                     body.update(extra)
                 return body
 
+            # Compile receipt: real materials only — never synthesize from executed steps.
             _compile_raw = _dict(observations.get("compile_receipt") or exp.get("compile_receipt"))
-            if not _compile_raw and (
-                _v150_true_completion.get("formula_inputs", {}).get(
-                    "all_required_steps_executed"
-                )
-                or bool(_executed_steps)
-            ):
-                _compile_raw = _id_receipt(f"compile_{eid}", "compile", {"status": "COMPILED"})
 
             _fixture_prov = list(_list(observations.get("fixture_provenance_receipts")))
             if not _fixture_prov and fixture_receipts:
                 for idx, fr in enumerate(fixture_receipts):
                     frd = _dict(fr)
+                    fr_rid = _text(frd.get("receipt_id"))
+                    if not fr_rid:
+                        continue
                     _fixture_prov.append(
-                        _id_receipt(
-                            _text(frd.get("receipt_id") or f"fixture_{eid}_{idx}"),
-                            "fixture_provenance",
-                            frd,
-                        )
+                        _id_receipt(fr_rid, "fixture_provenance", frd)
                     )
 
+            # Process-step receipts from live ledger rows (never forge missing steps).
             _step_receipts = list(_list(observations.get("process_step_receipts")))
-            if not _step_receipts:
-                for sid in (_executed_steps or _planned_steps or [f"step_{eid}_0"]):
-                    _step_receipts.append(_id_receipt(f"step_{sid}", "process_step"))
+            if not _step_receipts and _process_ledger is not None and hasattr(
+                _process_ledger, "all_rows"
+            ):
+                for row in list(_process_ledger.all_rows()):
+                    if isinstance(row, dict) and _text(row.get("step_id")):
+                        _step_receipts.append(dict(row))
 
             _transport_receipts = list(_list(observations.get("transport_receipts")))
             if not _transport_receipts:
                 for idx, step in enumerate(steps_out):
                     sd = _dict(step)
                     gov = _dict(sd.get("governance_receipt"))
-                    if gov or (int(sd.get("status_code") or 0) > 0):
+                    gov_rid = _text(gov.get("receipt_id"))
+                    if gov_rid:
                         _transport_receipts.append(
                             _id_receipt(
-                                _text(gov.get("receipt_id") or f"transport_{eid}_{idx}"),
+                                gov_rid,
                                 "transport",
                                 {"step_index": idx, "status_code": sd.get("status_code")},
                             )
                         )
-            if not _transport_receipts and steps_out:
-                _transport_receipts.append(_id_receipt(f"transport_{eid}_0", "transport"))
-            # Prefer explicit ID collections propagated from the ledger/executor.
             for _tid in _list(observations.get("transport_receipt_ids")):
                 if _text(_tid) and not any(
                     _text(_dict(r).get("receipt_id")) == _text(_tid)
@@ -1511,20 +1550,23 @@ def finalize_experiment_execution(
             _obs_receipts = [
                 dict(r) for r in observer_receipts if isinstance(r, dict)
             ] or list(_list(observations.get("observation_receipts")))
-            if not _obs_receipts and _evidence_receipt:
+            if not _obs_receipts and _evidence_receipt and _text(
+                _evidence_receipt.get("receipt_id")
+            ):
                 _obs_receipts.append(
                     _id_receipt(
-                        _text(_evidence_receipt.get("receipt_id") or f"obs_{eid}"),
+                        _text(_evidence_receipt.get("receipt_id")),
                         "observation",
                         _evidence_receipt,
                     )
                 )
 
             _oracle_inv = list(_list(observations.get("oracle_invocation_receipts")))
-            if not _oracle_inv and _oracle_evaluated:
+            _oracle_rid = _text(verdict.get("receipt_id")) if isinstance(verdict, dict) else ""
+            if not _oracle_inv and _oracle_evaluated and _oracle_rid:
                 _oracle_inv.append(
                     _id_receipt(
-                        f"oracle_inv_{eid}",
+                        _oracle_rid,
                         "oracle_invocation",
                         {"verdict": _dict(verdict)},
                     )
@@ -1532,66 +1574,96 @@ def finalize_experiment_execution(
             _oracle_tr = list(_list(observations.get("oracle_trace_receipts")))
             if not _oracle_tr and _list(observations.get("oracle_trace")):
                 for idx, tr in enumerate(_list(observations.get("oracle_trace"))):
-                    _oracle_tr.append(
-                        _id_receipt(f"oracle_trace_{eid}_{idx}", "oracle_trace", _dict(tr))
-                    )
+                    trd = _dict(tr)
+                    tr_rid = _text(trd.get("receipt_id"))
+                    if not tr_rid:
+                        continue
+                    _oracle_tr.append(_id_receipt(tr_rid, "oracle_trace", trd))
 
             _cleanup_exec_receipts = list(_list(observations.get("cleanup_execution_receipts")))
             if not _cleanup_exec_receipts:
                 _singular_cleanup = _dict(observations.get("cleanup_execution_receipt"))
-                if _singular_cleanup:
+                if _singular_cleanup and _text(_singular_cleanup.get("receipt_id")):
                     _cleanup_exec_receipts = [_singular_cleanup]
-            if not _cleanup_exec_receipts and _cleanup_executed_ok:
-                _cleanup_exec_receipts = [
-                    _id_receipt(
-                        f"cleanup_exec_{eid}",
-                        "cleanup_execution",
-                        {"cleanup_failures": cleanup_failures},
-                    )
-                ]
             _cleanup_ver_receipts = list(
                 _list(observations.get("cleanup_verification_receipts"))
             )
             if not _cleanup_ver_receipts:
                 _singular_ver = _dict(observations.get("cleanup_verification"))
-                if _singular_ver:
+                if _singular_ver and _text(
+                    _singular_ver.get("receipt_id") or _singular_ver.get("verification_id")
+                ):
                     _cleanup_ver_receipts = [_singular_ver]
             if not _cleanup_ver_receipts and cleanup_equivalence_receipt:
-                _cleanup_ver_receipts = [
-                    _id_receipt(
-                        _text(
-                            cleanup_equivalence_receipt.get("receipt_id")
-                            or f"cleanup_ver_{eid}"
-                        ),
-                        "cleanup_verification",
-                        dict(cleanup_equivalence_receipt),
-                    )
-                ]
-            elif not _cleanup_ver_receipts and _cleanup_ver:
-                _cleanup_ver_receipts = [
-                    _id_receipt(f"cleanup_ver_{eid}", "cleanup_verification", {"status": "PASS"})
-                ]
+                _ver_rid = _text(cleanup_equivalence_receipt.get("receipt_id"))
+                if _ver_rid:
+                    _cleanup_ver_receipts = [
+                        _id_receipt(
+                            _ver_rid,
+                            "cleanup_verification",
+                            dict(cleanup_equivalence_receipt),
+                        )
+                    ]
 
             _env_receipt = _dict(observations.get("environment_restoration_receipt"))
-            if not _env_receipt and _env_restored:
-                _env_receipt = _id_receipt(
-                    f"env_restore_{eid}",
-                    "environment_restoration",
-                    {"environment_restored": True},
-                )
             if _env_receipt and _text(_env_receipt.get("receipt_id")):
                 observations["restoration_receipt_id"] = _text(_env_receipt.get("receipt_id"))
+            elif not _env_receipt:
+                _env_receipt = {}
 
+            # Bind real oracle/cleanup receipt ids onto ledger steps before balance.
+            if _process_ledger is not None and hasattr(_process_ledger, "append_receipt_ref"):
+                if _oracle_rid:
+                    for _sid in _executed_steps:
+                        _process_ledger.append_receipt_ref(
+                            _text(_sid), "oracle_receipt_ids", _oracle_rid
+                        )
+                _cleanup_bind_ids = [
+                    _text(_dict(r).get("receipt_id"))
+                    for r in _cleanup_exec_receipts
+                    if _text(_dict(r).get("receipt_id"))
+                ]
+                if _cleanup_bind_ids and _cleanup_ver:
+                    _write_steps = (
+                        list(_process_ledger.successful_write_step_ids())
+                        if hasattr(_process_ledger, "successful_write_step_ids")
+                        else list(_executed_steps)
+                    )
+                    _targets = _write_steps or list(_executed_steps)
+                    for _sid in _targets:
+                        for _crid in _cleanup_bind_ids:
+                            _process_ledger.append_receipt_ref(
+                                _text(_sid), "cleanup_receipt_ids", _crid
+                            )
+                _attach_ledger_refs(observations, _process_ledger)
+                _ledger_hash = _text(observations.get("process_step_ledger_hash"))
+
+            _observed_steps = (
+                _steps_observed(_process_ledger)
+                if _process_ledger is not None and hasattr(_process_ledger, "all_rows")
+                else []
+            )
+            _oracle_steps = (
+                _steps_oracle(_process_ledger)
+                if _process_ledger is not None and hasattr(_process_ledger, "all_rows")
+                else []
+            )
+            _cleanup_steps = (
+                _steps_cleanup(_process_ledger)
+                if (
+                    _process_ledger is not None
+                    and hasattr(_process_ledger, "all_rows")
+                    and _cleanup_exec_receipts
+                    and _cleanup_ver
+                )
+                else []
+            )
             _balance = _step_balance(
-                required_step_ids=list(_required_steps or _planned_steps or _executed_steps),
+                required_step_ids=list(_required_steps),
                 executed_step_ids=list(_executed_steps),
-                observed_step_ids=list(_executed_steps),
-                oracle_step_ids=list(_executed_steps) if _oracle_evaluated else [],
-                cleanup_step_ids=(
-                    list(_executed_steps)
-                    if (_cleanup_exec_receipts and _cleanup_ver)
-                    else []
-                ),
+                observed_step_ids=list(_observed_steps),
+                oracle_step_ids=list(_oracle_steps),
+                cleanup_step_ids=list(_cleanup_steps),
             )
             observations["process_step_balance"] = _balance
 
@@ -1603,14 +1675,18 @@ def finalize_experiment_execution(
                 observations.get("force_receipt_bundle")
                 or (
                     bool(_ledger_id)
-                    and bool(_executed_steps or _planned_steps or _required_steps)
-                    and bool(fixture_receipts or _fixture_prov or observations.get("force_receipt_bundle"))
+                    and bool(_required_steps)
+                    and bool(_executed_steps)
+                    and bool(fixture_receipts or _fixture_prov)
+                    and bool(_compile_raw)
                     and _oracle_evaluated
+                    and not _finalizer_block_reason
                 )
             )
-            # TRUE_COMPLETED seek still requires cleanup + restoration (formula unchanged).
+            # TRUE_COMPLETED seek still requires cleanup + restoration + balance.
             _seek_true_completed = bool(
                 _attempt_finalization
+                and _balance.get("balanced", False)
                 and (
                     observations.get("force_receipt_bundle")
                     or (
@@ -1618,6 +1694,7 @@ def finalize_experiment_execution(
                         or (
                             _cleanup_ver
                             and bool(_env_restored)
+                            and bool(_env_receipt)
                         )
                     )
                 )
@@ -1625,8 +1702,6 @@ def finalize_experiment_execution(
             if _attempt_finalization and not _balance.get("balanced", False):
                 _finalizer_block_reason = _text(_balance.get("reason_code")) or _STEP_MISMATCH
                 observations["finalizer_block_reason"] = _finalizer_block_reason
-                # Identity/set mismatch blocks TRUE_COMPLETED but still allows an
-                # honest incomplete finalization receipt below when materials exist.
                 _seek_true_completed = False
             if _attempt_finalization:
                 _execution_receipt_bundle = _assemble_bundle(
@@ -1659,7 +1734,6 @@ def finalize_experiment_execution(
                     code_commit_sha=_commit,
                     tree_hash=_tree,
                 )
-                # Always surface honest derived terminal from the receipt.
                 _derived = _text(
                     _finalization_receipt.get("derived_terminal_status")
                     or _finalization_receipt.get("lifecycle_state")
@@ -1669,7 +1743,8 @@ def finalize_experiment_execution(
                 if (
                     _derived == "TRUE_COMPLETED"
                     and not (
-                        _cleanup_ver
+                        _seek_true_completed
+                        and _cleanup_ver
                         and bool(_env_restored)
                         and _balance.get("balanced", False)
                     )

@@ -784,8 +784,8 @@ def execute_non_barrier_plans(
         "process_step_ledger_hash": process_ledger.compute_hash(),
         "process_timeline": process_ledger.build_timeline_receipt(),
         "required_step_ids": list(process_ledger.required_step_ids),
-        "planned_step_ids": list(
-            process_ledger.required_step_ids or process_ledger.executed_step_ids()
-        ),
+        # Planned == required (compile/plan authority) ONLY — never fall back
+        # to executed steps, which would make the balance check tautological.
+        "planned_step_ids": list(process_ledger.required_step_ids),
         "executed_step_ids": process_ledger.executed_step_ids(),
     }

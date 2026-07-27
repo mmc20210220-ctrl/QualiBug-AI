@@ -1,6 +1,6 @@
 {
   "schema_version": "qualibug.v162r1-finalizer-input-ledger.v1",
-  "generated_at": "2026-07-27T11:27:42.035069+00:00",
+  "generated_at": "2026-07-27T11:37:37.222811+00:00",
   "unlock_set_N": 61,
   "rows": [
     {
@@ -15,7 +15,9 @@
         "treatment_1"
       ],
       "lifecycle_state": "CLEANUP_FAILED",
-      "finalizer_block_reason": ""
+      "finalizer_block_reason": "",
+      "environment_restored": false,
+      "cleanup_failures": 0
     },
     {
       "obligation_id": "obl_117cdff8c039543a6281",
@@ -29,7 +31,9 @@
         "treatment_1"
       ],
       "lifecycle_state": "CLEANUP_FAILED",
-      "finalizer_block_reason": ""
+      "finalizer_block_reason": "",
+      "environment_restored": false,
+      "cleanup_failures": 0
     },
     {
       "obligation_id": "obl_1306106ec75a1286f34c",
@@ -43,7 +47,9 @@
         "treatment_1"
       ],
       "lifecycle_state": "CLEANUP_FAILED",
-      "finalizer_block_reason": ""
+      "finalizer_block_reason": "",
+      "environment_restored": false,
+      "cleanup_failures": 0
     },
     {
       "obligation_id": "obl_138425ca076a8809a7a1",
@@ -57,7 +63,9 @@
         "treatment_1"
       ],
       "lifecycle_state": "CLEANUP_FAILED",
-      "finalizer_block_reason": ""
+      "finalizer_block_reason": "",
+      "environment_restored": false,
+      "cleanup_failures": 0
     },
     {
       "obligation_id": "obl_1f70ed35bc590890f773",
@@ -71,7 +79,9 @@
         "treatment_1"
       ],
       "lifecycle_state": "CLEANUP_FAILED",
-      "finalizer_block_reason": ""
+      "finalizer_block_reason": "",
+      "environment_restored": false,
+      "cleanup_failures": 0
     },
     {
       "obligation_id": "obl_1f76afc07d7551da1822",
@@ -85,7 +95,9 @@
         "treatment_1"
       ],
       "lifecycle_state": "CLEANUP_FAILED",
-      "finalizer_block_reason": ""
+      "finalizer_block_reason": "",
+      "environment_restored": false,
+      "cleanup_failures": 0
     },
     {
       "obligation_id": "obl_22f01fa3d443895e6ef2",
@@ -99,7 +111,9 @@
         "treatment_1"
       ],
       "lifecycle_state": "CLEANUP_FAILED",
-      "finalizer_block_reason": ""
+      "finalizer_block_reason": "",
+      "environment_restored": false,
+      "cleanup_failures": 0
     },
     {
       "obligation_id": "obl_2d01364e54507dde85f6",
@@ -113,7 +127,9 @@
         "treatment_1"
       ],
       "lifecycle_state": "CLEANUP_FAILED",
-      "finalizer_block_reason": ""
+      "finalizer_block_reason": "",
+      "environment_restored": false,
+      "cleanup_failures": 0
     }
   ],
   "with_ledger_id": 8,

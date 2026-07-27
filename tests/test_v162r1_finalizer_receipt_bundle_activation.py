@@ -17,6 +17,7 @@ import pytest
 from ai_test_asset_center.process_step_execution import (
     FINALIZER_PROCESS_STEP_LEDGER_MISSING,
     FINALIZER_RECEIPT_BUNDLE_NOT_ACTIVATED,
+    FORMAL_MAINLINE_PROCESS_STEP_LEDGER_NOT_PROPAGATED,
     PROCESS_STEP_LEDGER_HASH_MISMATCH,
     PROCESS_STEP_OBSERVATION_SET_INCOMPLETE,
     PROCESS_STEP_ORACLE_SET_INCOMPLETE,
@@ -81,6 +82,7 @@ def _finalizer_result(
     force: bool = False,
     omit_ledger_id: bool = False,
     fixture: bool = True,
+    tamper_hash: bool = False,
 ) -> dict:
     import time as _time
     from unittest.mock import patch
@@ -149,6 +151,10 @@ def _finalizer_result(
         if omit_ledger_id:
             observations.pop("process_step_ledger_id", None)
             led.ledger_id = ""
+        if tamper_hash:
+            # Simulate a stale/tampered recorded hash that no longer matches
+            # the live ledger's real compute_hash() -- must block, not pass.
+            observations["process_step_ledger_hash"] = "0" * 64
     if force:
         observations["force_receipt_bundle"] = True
     steps_out = [
@@ -161,6 +167,7 @@ def _finalizer_result(
     ]
     soft_verdict = {
         "schema_version": "qualibug.contract-oracle-receipt.v1",
+        "receipt_id": f"oracle_verdict_{eid}",
         "experiment_id": eid,
         "obligation_id": oid,
         "campaign_id": f"cmp_{entity}",
@@ -322,6 +329,12 @@ class TestLedgerIdentityHash:
     def test_20_hash_mismatch_constant_defined(self):
         assert PROCESS_STEP_LEDGER_HASH_MISMATCH == "PROCESS_STEP_LEDGER_HASH_MISMATCH"
 
+    def test_20b_hash_mismatch_blocks_true_completed(self):
+        result = _finalizer_result(entity="hash_bad", tamper_hash=True)
+        assert result.get("finalizer_block_reason") == PROCESS_STEP_LEDGER_HASH_MISMATCH
+        assert not result.get("execution_finalization_receipt")
+        assert result.get("lifecycle_state") != "TRUE_COMPLETED"
+
 
 # ── 26.3 Finalizer activation ─────────────────────────────────────────────────
 
@@ -335,7 +348,11 @@ class TestFinalizerActivation:
     def test_22_without_ledger_blocks(self):
         result = _finalizer_result(entity="no_led", with_ledger=False)
         assert not result.get("execution_receipt_bundle")
-        assert result.get("lifecycle_state") != "TRUE_COMPLETED" or True
+        assert result.get("lifecycle_state") != "TRUE_COMPLETED"
+        assert (
+            result.get("finalizer_block_reason")
+            == FORMAL_MAINLINE_PROCESS_STEP_LEDGER_NOT_PROPAGATED
+        )
         # No ledger → no bundle activation path.
         assert not result.get("execution_finalization_receipt")
 
@@ -346,8 +363,14 @@ class TestFinalizerActivation:
 
     def test_24_force_bundle_still_allowed_for_tests(self):
         result = _finalizer_result(entity="force_ok", with_ledger=False, force=True, fixture=True)
-        # force path may still need materials; ensure it does not invent ledger id silently
-        assert result.get("process_step_ledger_id") in ("", None) or True
+        # Force path must not invent a ledger id when no ledger was ever attached.
+        assert result.get("process_step_ledger_id") in ("", None)
+        # With no ledger there is no required-step set either, so the step
+        # balance must fail closed (empty required) rather than pass silently.
+        balance = result.get("process_step_balance") or {}
+        if balance:
+            assert balance.get("balanced") is False
+            assert balance.get("reason_code") == PROCESS_STEP_REQUIRED_SET_MISMATCH
 
     def test_25_no_fixture_provenance_blocks_seek(self):
         result = _finalizer_result(entity="no_fix", fixture=False)
@@ -405,6 +428,41 @@ class TestStepSetBalance:
             oracle_step_ids=["a", "b"],
         )
         assert bal["balanced"] is True
+
+    def test_32b_empty_required_fails_closed(self):
+        # An empty required set must never be treated as trivially satisfied
+        # (that would make required == executed tautologically true).
+        bal = validate_required_actual_step_balance(
+            required_step_ids=[],
+            executed_step_ids=["a"],
+            observed_step_ids=["a"],
+            oracle_step_ids=["a"],
+        )
+        assert bal["balanced"] is False
+        assert bal["reason_code"] == PROCESS_STEP_REQUIRED_SET_MISMATCH
+        assert bal.get("detail") == "required_step_ids_empty"
+
+    def test_32c_observed_none_not_defaulted_to_executed(self):
+        # observed_step_ids=None means "unknown observation evidence" and
+        # must fail closed, never silently default to the executed set.
+        bal = validate_required_actual_step_balance(
+            required_step_ids=["a"],
+            executed_step_ids=["a"],
+            observed_step_ids=None,
+            oracle_step_ids=["a"],
+        )
+        assert bal["balanced"] is False
+        assert bal["reason_code"] == PROCESS_STEP_OBSERVATION_SET_INCOMPLETE
+
+    def test_32d_oracle_none_not_defaulted_to_executed(self):
+        bal = validate_required_actual_step_balance(
+            required_step_ids=["a"],
+            executed_step_ids=["a"],
+            observed_step_ids=["a"],
+            oracle_step_ids=None,
+        )
+        assert bal["balanced"] is False
+        assert bal["reason_code"] == PROCESS_STEP_ORACLE_SET_INCOMPLETE
 
     def test_33_missing_required_blocks(self):
         bal = validate_required_actual_step_balance(
@@ -565,7 +623,7 @@ class TestFormalReportReceiptBinding:
         if result.get("status") == "EXECUTED" and not (
             result.get("execution_finalization_receipt") or {}
         ).get("true_completed"):
-            assert result.get("lifecycle_state") != "TRUE_COMPLETED" or True
+            assert result.get("lifecycle_state") != "TRUE_COMPLETED"
 
     def test_52_ledger_hash_present_on_result(self):
         result = _finalizer_result(entity="rep_e")

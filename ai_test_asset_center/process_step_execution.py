@@ -376,6 +376,49 @@ class ProcessStepLedger:
         }
 
 
+def step_ids_with_observation_evidence(ledger: ProcessStepLedger) -> list[str]:
+    """Step ids whose ledger row carries at least one real observation receipt id.
+
+    Never returns executed-step ids by default — a step with no observation
+    receipt id attached is not observed, regardless of execution status.
+    """
+    out: list[str] = []
+    for row in ledger.all_rows():
+        sid = _text(row.get("step_id"))
+        if not sid:
+            continue
+        candidate_ids = list(row.get("observation_receipt_ids") or []) + list(
+            row.get("observer_receipt_ids") or []
+        )
+        if any(_text(rid) for rid in candidate_ids):
+            out.append(sid)
+    return out
+
+
+def step_ids_with_oracle_evidence(ledger: ProcessStepLedger) -> list[str]:
+    """Step ids whose ledger row carries at least one real oracle receipt id."""
+    out: list[str] = []
+    for row in ledger.all_rows():
+        sid = _text(row.get("step_id"))
+        if not sid:
+            continue
+        if any(_text(rid) for rid in list(row.get("oracle_receipt_ids") or [])):
+            out.append(sid)
+    return out
+
+
+def step_ids_with_cleanup_evidence(ledger: ProcessStepLedger) -> list[str]:
+    """Step ids whose ledger row carries at least one real cleanup receipt id."""
+    out: list[str] = []
+    for row in ledger.all_rows():
+        sid = _text(row.get("step_id"))
+        if not sid:
+            continue
+        if any(_text(rid) for rid in list(row.get("cleanup_receipt_ids") or [])):
+            out.append(sid)
+    return out
+
+
 def attach_ledger_refs_to_observations(
     observations: dict[str, Any],
     ledger: ProcessStepLedger,
@@ -390,7 +433,10 @@ def attach_ledger_refs_to_observations(
     target["process_step_ledger"] = ledger
     target["process_step_ledger_id"] = ledger.ledger_id
     target["process_step_ledger_hash"] = ledger.compute_hash()
-    required = list(ledger.required_step_ids) or list(ledger.executed_step_ids())
+    # Required ids are compile/plan authority ONLY. Never forge them from the
+    # executed set — that would make required==executed tautologically true
+    # and hide missing-step defects from the balance validator.
+    required = list(ledger.required_step_ids)
     executed = list(ledger.executed_step_ids())
     target["required_step_ids"] = required
     target["planned_step_ids"] = list(required)
@@ -441,19 +487,36 @@ def validate_required_actual_step_balance(
     oracle_step_ids: "list[str] | None" = None,
     cleanup_step_ids: "list[str] | None" = None,
 ) -> dict[str, Any]:
-    """Required/actual step set balance for Finalizer bundle activation (SPEC §13)."""
+    """Required/actual step set balance for Finalizer bundle activation (SPEC §13).
+
+    ``observed_step_ids`` and ``oracle_step_ids`` are mandatory evidence sets.
+    A caller passing ``None`` means "I do not know the observation/oracle
+    evidence" — that must fail closed with an incomplete-evidence reason
+    code, never silently default to the executed set (which would make the
+    balance tautologically true).
+    """
     required = [_text(s) for s in list(required_step_ids or []) if _text(s)]
     executed = [_text(s) for s in list(executed_step_ids or []) if _text(s)]
-    observed = (
-        [_text(s) for s in list(observed_step_ids) if _text(s)]
-        if observed_step_ids is not None
-        else list(executed)
-    )
-    oracle = (
-        [_text(s) for s in list(oracle_step_ids) if _text(s)]
-        if oracle_step_ids is not None
-        else list(executed)
-    )
+    if not required:
+        return {
+            "balanced": False,
+            "reason_code": PROCESS_STEP_REQUIRED_SET_MISMATCH,
+            "detail": "required_step_ids_empty",
+        }
+    if observed_step_ids is None:
+        return {
+            "balanced": False,
+            "reason_code": PROCESS_STEP_OBSERVATION_SET_INCOMPLETE,
+            "detail": "observed_step_ids_not_provided",
+        }
+    if oracle_step_ids is None:
+        return {
+            "balanced": False,
+            "reason_code": PROCESS_STEP_ORACLE_SET_INCOMPLETE,
+            "detail": "oracle_step_ids_not_provided",
+        }
+    observed = [_text(s) for s in list(observed_step_ids) if _text(s)]
+    oracle = [_text(s) for s in list(oracle_step_ids) if _text(s)]
     cleanup = [_text(s) for s in list(cleanup_step_ids or []) if _text(s)]
     req_set = set(required)
     exe_set = set(executed)

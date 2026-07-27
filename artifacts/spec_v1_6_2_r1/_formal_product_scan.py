@@ -1,4 +1,15 @@
-"""V1.6.2-R1 formal product entry scan (POST /api/v1/scan)."""
+"""V1.6.2-R1 formal product entry scan (POST /api/v1/scan).
+
+Review-bug fix: this script previously hardcoded its own ``ENTRY`` request,
+independent of whatever ``entry_request`` was actually frozen into
+``r1_start_manifest.json`` at run-start time. That let the executed POST
+silently drift from the frozen authority (different body, URL, or method)
+without any of the freeze/integrity checks in ``_postprocess_r1.py``
+noticing, because those checks only compare *code* hashes, not the request
+that was actually sent. ``load_frozen_entry`` makes the start manifest the
+sole POST authority: the request actually sent is read verbatim from the
+frozen manifest, never redeclared here.
+"""
 from __future__ import annotations
 
 import json
@@ -7,27 +18,43 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "artifacts" / "spec_v1_6_2_r1"
-
-ENTRY = {
-    "method": "POST",
-    "url": "http://127.0.0.1:8088/api/v1/scan",
-    "body": {
-        "project_id": "benchmark_mall_131",
-        "base_url": "http://127.0.0.1:8080",
-        "approved_base_url": "http://127.0.0.1:8080",
-        "environment_type": "test",
-        "environment_ref": "sandbox",
-    },
-}
+START_MANIFEST = OUT / "r1_start_manifest.json"
 
 
-def post_scan() -> dict:
-    body = json.dumps(ENTRY["body"]).encode("utf-8")
+def load_frozen_entry() -> dict[str, Any]:
+    """Load the sole POST authority: ``entry_request`` from the frozen start manifest.
+
+    Fails fast (never falls back to a locally hardcoded request) if the
+    manifest or its ``entry_request`` field is missing, or if the request is
+    not a POST -- a scan entry point can only be the one frozen at run-start.
+    """
+    if not START_MANIFEST.exists():
+        raise FileNotFoundError(
+            f"r1_start_manifest.json missing at {START_MANIFEST}; "
+            "cannot determine frozen entry_request POST authority"
+        )
+    manifest = json.loads(START_MANIFEST.read_text(encoding="utf-8"))
+    entry = manifest.get("entry_request")
+    if not isinstance(entry, dict) or not entry:
+        raise ValueError("r1_start_manifest.json has no frozen entry_request")
+    method = str(entry.get("method") or "").upper()
+    url = str(entry.get("url") or "").strip()
+    body = entry.get("body")
+    if method != "POST" or not url or not isinstance(body, dict):
+        raise ValueError(
+            f"frozen entry_request is not a valid POST authority: {entry!r}"
+        )
+    return {"method": method, "url": url, "body": body}
+
+
+def post_scan(entry: dict[str, Any]) -> dict:
+    body = json.dumps(entry["body"]).encode("utf-8")
     req = urllib.request.Request(
-        ENTRY["url"],
+        entry["url"],
         data=body,
         headers={"Content-Type": "application/json", "Accept": "application/json"},
         method="POST",
@@ -49,11 +76,12 @@ def post_scan() -> dict:
 
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
-    start = json.loads((OUT / "r1_start_manifest.json").read_text(encoding="utf-8"))
+    start = json.loads(START_MANIFEST.read_text(encoding="utf-8"))
+    entry = load_frozen_entry()
     print("start", start["run_name"], start["commit_sha"][:12])
-    print("POST", ENTRY["url"], "...")
+    print("POST", entry["url"], "...")
     try:
-        data = post_scan()
+        data = post_scan(entry)
     except Exception as exc:
         (OUT / "r1_scan_error.json").write_text(
             json.dumps(

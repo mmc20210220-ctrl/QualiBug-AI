@@ -242,33 +242,36 @@ def _extract_after_cleanup_observation(
     """Extract after-cleanup observation with strict priority chain.
 
     Priority:
-      1. Cleanup-phase observer receipt (final_state typed observer)
-      2. final_state_observer_receipt.evidence
-      3. cleanup_result.after_cleanup_observation
-      4. Cleanup-phase re-executed source-declared observer
-      5. Cleanup-phase steps in steps_out (governance receipt after)
+      1. Explicit observations.after_cleanup_observation (post-cleanup readback)
+      2. cleanup_result.after_cleanup_observation
+      3. Cleanup-phase steps in steps_out (governance receipt after)
+      4. Cleanup-phase governance receipt after (from cleanup_result)
+      5. final_state_observer_receipt ONLY when it includes cleanup-phase evidence
+         (cleanup_phase_excluded must be False)
 
     PROHIBITED sources (SPEC §5.3):
       - primary write after_state
-      - cleanup HTTP response body
+      - write-phase final_state with cleanup_phase_excluded=True
+      - cleanup HTTP write response body alone (use governance after / readback)
       - before_state
       - static request body
     """
-    # 1/2. Typed observer receipt (final_state)
-    final_receipt = _dict(observations.get("final_state_observer_receipt"))
-    if final_receipt and _text(final_receipt.get("status")).upper() == "OBSERVED":
-        evidence = _dict(final_receipt.get("evidence"))
-        if evidence:
-            return {
-                "status_code": evidence.get("status_code") or evidence.get("status"),
-                "body": evidence.get("body") or evidence.get("state"),
-                "path": _text(evidence.get("path")),
-                "phase": "after_cleanup",
-                "source": "cleanup_observer",
-                "receipt_id": _text(final_receipt.get("receipt_id")),
-            }, "final_state_observer_receipt"
+    # 1. Explicit sealed after-cleanup readback from the cleanup executor.
+    sealed = _dict(observations.get("after_cleanup_observation"))
+    if sealed and (
+        sealed.get("body") is not None
+        or int(sealed.get("status_code") or sealed.get("status") or 0) > 0
+    ):
+        return {
+            "status_code": int(sealed.get("status_code") or sealed.get("status") or 0),
+            "body": sealed.get("body"),
+            "path": _text(sealed.get("path")),
+            "phase": "after_cleanup",
+            "source": "sealed_after_cleanup_observation",
+            "receipt_id": _text(sealed.get("receipt_id")),
+        }, "observations_after_cleanup_observation"
 
-    # 3. cleanup_result.after_cleanup_observation (explicit post-cleanup read)
+    # 2. cleanup_result.after_cleanup_observation (explicit post-cleanup read)
     explicit_obs = _dict(cleanup_result.get("after_cleanup_observation"))
     if explicit_obs and (
         explicit_obs.get("body") is not None
@@ -284,18 +287,7 @@ def _extract_after_cleanup_observation(
             "source": "cleanup_observer",
         }, "cleanup_result_after_cleanup_observation"
 
-    # 4. Cleanup-phase governance receipt after (from cleanup_result)
-    cleanup_after = _dict(cleanup_result.get("after"))
-    if cleanup_after and int(cleanup_after.get("status") or 0) > 0:
-        return {
-            "status_code": int(cleanup_after.get("status") or 0),
-            "body": cleanup_after.get("body"),
-            "path": _text(cleanup_result.get("observation_path")),
-            "phase": "after_cleanup",
-            "source": "cleanup_observer",
-        }, "cleanup_governance_after"
-
-    # 5. Cleanup-phase steps in steps_out (governance receipt after)
+    # 3. Cleanup-phase steps in steps_out (governance receipt after)
     if steps_out:
         for step in reversed(steps_out):
             if not isinstance(step, dict):
@@ -308,10 +300,39 @@ def _extract_after_cleanup_observation(
                 return {
                     "status_code": int(after.get("status") or 0),
                     "body": after.get("body"),
-                    "path": _text(gov.get("observation_path") or step.get("path")),
+                    "path": _text(
+                        gov.get("observation_path")
+                        or step.get("observation_path")
+                        or step.get("path")
+                    ),
                     "phase": "after_cleanup",
                     "source": "cleanup_step_governance",
                 }, "cleanup_step_governance_after"
+
+    # 4. Cleanup-phase governance receipt after (from cleanup_result)
+    cleanup_after = _dict(cleanup_result.get("after"))
+    if cleanup_after and int(cleanup_after.get("status") or 0) > 0:
+        return {
+            "status_code": int(cleanup_after.get("status") or 0),
+            "body": cleanup_after.get("body"),
+            "path": _text(cleanup_result.get("observation_path")),
+            "phase": "after_cleanup",
+            "source": "cleanup_observer",
+        }, "cleanup_governance_after"
+
+    # 5. Typed final_state only when it actually observed post-cleanup state.
+    final_receipt = _dict(observations.get("final_state_observer_receipt"))
+    if final_receipt and _text(final_receipt.get("status")).upper() == "OBSERVED":
+        evidence = _dict(final_receipt.get("evidence"))
+        if evidence and evidence.get("cleanup_phase_excluded") is not True:
+            return {
+                "status_code": evidence.get("status_code") or evidence.get("status"),
+                "body": evidence.get("body") or evidence.get("state") or evidence.get("final_state"),
+                "path": _text(evidence.get("path")),
+                "phase": "after_cleanup",
+                "source": "cleanup_observer",
+                "receipt_id": _text(final_receipt.get("receipt_id")),
+            }, "final_state_observer_receipt"
 
     return {}, ""
 
