@@ -1,0 +1,20 @@
+{
+  "spec_version": "V1.5.1",
+  "generated_at": "2026-07-27T15:29:17.654044",
+  "total_findings": 1,
+  "delivery_gate_passed": 11,
+  "delivery_gate_failed": 12,
+  "evidence_incomplete_reaching_formal": 0,
+  "cleanup_failed_reaching_formal": 0,
+  "environment_dirty_reaching_formal": 0,
+  "formal_finding_requirements": {
+    "source_declared_rule": true,
+    "real_target_execution": true,
+    "per_step_evidence_complete": true,
+    "oracle_result_required": "VIOLATION",
+    "cleanup_verified": true,
+    "environment_restored": true
+  },
+  "internal_clues_only": 12,
+  "note": "Findings not used as V1.5.1 success metric. Gate integrity verified: no incomplete evidence or failed cleanup reaches formal."
+}

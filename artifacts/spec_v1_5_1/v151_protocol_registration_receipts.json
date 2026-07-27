@@ -1,0 +1,38 @@
+{
+  "spec_version": "V1.5.1",
+  "generated_at": "2026-07-27T14:09:04.375432",
+  "process_id": 17196,
+  "observer_surface_id": "process_timeline",
+  "assertion_kind": "step_sequence_order",
+  "protocols": [
+    {
+      "protocol_id": "process:multi_step_business_process",
+      "family": "process",
+      "template": "multi_step_business_process",
+      "installed_at": "2026-07-27T14:09:04.375432",
+      "observer_installed_before_protocol": true,
+      "idempotent": true
+    },
+    {
+      "protocol_id": "process:sequence_verification",
+      "family": "process",
+      "template": "sequence_verification",
+      "installed_at": "2026-07-27T14:09:04.375432",
+      "observer_installed_before_protocol": true,
+      "idempotent": true
+    },
+    {
+      "protocol_id": "state:state_chain_process",
+      "family": "state",
+      "template": "state_chain_process",
+      "installed_at": "2026-07-27T14:09:04.375432",
+      "observer_installed_before_protocol": true,
+      "idempotent": true
+    }
+  ],
+  "registry_fingerprint": "2f9a87301565b0bc",
+  "observer_install_count": 1,
+  "protocol_registration_count": 3,
+  "duplicate_registration_error": 0,
+  "registry_entry_count_stable": true
+}

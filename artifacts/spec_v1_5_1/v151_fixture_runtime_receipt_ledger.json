@@ -1,0 +1,10 @@
+{
+  "spec_version": "V1.5.1",
+  "generated_at": "2026-07-27T14:51:58.639586",
+  "fixtures_materialized": 320,
+  "identity_verified": 320,
+  "scope_verified": 320,
+  "runtime_provenance_verified": 320,
+  "campaign_owned": true,
+  "customer_preexisting": false
+}

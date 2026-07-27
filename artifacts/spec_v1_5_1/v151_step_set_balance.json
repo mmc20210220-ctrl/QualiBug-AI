@@ -1,0 +1,11 @@
+{
+  "spec_version": "V1.5.1",
+  "generated_at": "2026-07-27T14:51:58.639586",
+  "planned_required_steps": 23,
+  "executed_required_steps": 23,
+  "observed_required_steps": 23,
+  "missing_execution": 0,
+  "missing_observation": 0,
+  "duplicate_execution": 0,
+  "complete": true
+}

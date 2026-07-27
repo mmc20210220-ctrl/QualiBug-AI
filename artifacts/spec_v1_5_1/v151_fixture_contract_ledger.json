@@ -1,0 +1,16 @@
+{
+  "spec_version": "V1.5.1",
+  "generated_at": "2026-07-27T14:51:58.639586",
+  "source": "formal_product_entry_scan",
+  "scan_id": "scan_benchmark_mall_131_1785133993891",
+  "fixture_contracts_resolved": 320,
+  "fixtures_materialized": 320,
+  "fixture_setup_blocked": 0,
+  "fixture_setup_failed": 0,
+  "identity_verification_method": "WRITE_RESPONSE_ID",
+  "forbidden_identity_methods_used": 0,
+  "customer_preexisting_used_as_fixture": 0,
+  "scope_verified": 320,
+  "multi_table_fixtures": 320,
+  "note": "All compiled experiments pass through disposable_fixture_contract.discover_fixture_candidates in experiment_compiler_obligation before protocol compilation."
+}

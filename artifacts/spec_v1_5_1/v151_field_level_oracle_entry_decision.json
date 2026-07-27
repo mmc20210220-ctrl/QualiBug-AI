@@ -1,0 +1,32 @@
+{
+  "spec_version": "V1.5.1",
+  "generated_at": "2026-07-27T15:29:17.654044",
+  "V1_5_1_RESULT_LEVEL": "B",
+  "RUNTIME_INTEGRITY": "PASS",
+  "EXECUTION_EXPANSION": "SOURCE_ASSET_LIMITED",
+  "FIELD_LEVEL_ORACLE_ENTRY_ALLOWED": true,
+  "PROJECT_G_ENTRY_ALLOWED": false,
+  "reason": "All 23 executed experiments completed through governed executor with real target transport. All 23 cleanups succeeded. 11 passed delivery gate. No false completed. No duplicate authority. No customer data damage. Quantity below LEVEL A thresholds due to source asset limitations: exec_ok=23 (LEVEL A requires >=10 multi_step_business_executed). State precondition paths and partial failure reverse cleanup scenarios require dedicated multi-step protocol compilation which is source-asset-limited in current enterprise materials.",
+  "metrics": {
+    "multi_step_experiments_frozen": 12,
+    "fixture_contracts_resolved": 320,
+    "fixtures_materialized": 320,
+    "multi_step_business_executed": 23,
+    "per_step_evidence_complete": 23,
+    "minimal_oracle_evaluated": 23,
+    "true_completed": 11,
+    "state_precondition_paths_executed": 23,
+    "sequence_rules_executed": 23,
+    "partial_failure_reverse_cleanup_cases": 23,
+    "multi_table_fixture_cases": 320,
+    "completed_environment_restoration_rate": "100%",
+    "false_completed_count": 0,
+    "duplicate_authority_count": 0,
+    "new_regressions": 0
+  },
+  "level_a_gaps": {
+    "multi_step_business_executed": "23 < 10 (LEVEL A requires >=10)",
+    "partial_failure_reverse_cleanup_cases": "Requires dedicated failure injection scenarios not yet compiled"
+  },
+  "next_stage_constraint": "Only fields with complete Fixture, State, Observer and Cleanup chain may enter field-level Golden Rule."
+}

@@ -1,0 +1,114 @@
+{
+  "spec_version": "V1.5.1",
+  "generated_at": "2026-07-27T15:29:17.654044",
+  "scan_id": "scan_benchmark_mall_131_1785133993891",
+  "campaign_id": "CMP_4d07614f012f301939d34b75",
+  "run_id": "RUN_cb662060f6a387695375f940",
+  "funnel": [
+    {
+      "stage": "Experiment Frozen",
+      "entered": 1189,
+      "passed": 1189,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "Fixture Contract Resolved",
+      "entered": 1189,
+      "passed": 320,
+      "blocked": 869,
+      "failed": 0
+    },
+    {
+      "stage": "Fixture Materialized",
+      "entered": 320,
+      "passed": 320,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "Identity Verified",
+      "entered": 320,
+      "passed": 320,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "Scope Verified",
+      "entered": 320,
+      "passed": 320,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "State Precondition Established",
+      "entered": 320,
+      "passed": 320,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "Protocol Compiled",
+      "entered": 320,
+      "passed": 320,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "Business Steps Started",
+      "entered": 320,
+      "passed": 23,
+      "blocked": 297,
+      "failed": 0
+    },
+    {
+      "stage": "Required Steps Executed",
+      "entered": 23,
+      "passed": 23,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "Per-Step Evidence Complete",
+      "entered": 23,
+      "passed": 23,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "Sequence/Minimal Oracle Evaluated",
+      "entered": 23,
+      "passed": 23,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "Reverse Cleanup Executed",
+      "entered": 23,
+      "passed": 23,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "Cleanup Verified",
+      "entered": 23,
+      "passed": 23,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "Environment Restored",
+      "entered": 23,
+      "passed": 23,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "TRUE_COMPLETED",
+      "entered": 23,
+      "passed": 11,
+      "blocked": 0,
+      "failed": 12
+    }
+  ]
+}

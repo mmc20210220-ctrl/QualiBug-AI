@@ -1,0 +1,11 @@
+{
+  "spec_version": "V1.5.1",
+  "generated_at": "2026-07-27T14:51:58.639586",
+  "experiments_with_process_step_ledger": 23,
+  "total_steps_executed": 23,
+  "total_steps_observed": 23,
+  "step_execution_receipt_coverage": "100%",
+  "step_observation_receipt_coverage": "100%",
+  "process_timeline_source": "experiment_plan_executor (real transport events)",
+  "fabricated_step_facts": 0
+}

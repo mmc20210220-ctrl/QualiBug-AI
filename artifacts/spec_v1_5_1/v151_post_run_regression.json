@@ -1,0 +1,17 @@
+{
+  "spec_version": "V1.5.1",
+  "generated_at": "2026-07-27T15:35:10.150880",
+  "v150_specialized_tests": {
+    "passed": 86,
+    "failed": 0,
+    "total": 86
+  },
+  "full_regression": {
+    "passed": 2732,
+    "failed": 35,
+    "skipped": 13
+  },
+  "new_specialized_failures": 0,
+  "new_regressions": 0,
+  "baseline_comparison": "IDENTICAL - same 35 known failures, same 2732 passed"
+}

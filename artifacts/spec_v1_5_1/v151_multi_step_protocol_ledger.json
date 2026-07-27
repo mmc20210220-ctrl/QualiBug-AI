@@ -1,0 +1,15 @@
+{
+  "spec_version": "V1.5.1",
+  "generated_at": "2026-07-27T14:51:58.639586",
+  "protocols_registered": [
+    "process:multi_step_business_process",
+    "process:sequence_verification",
+    "state:state_chain_process"
+  ],
+  "protocol_compile_entered": 320,
+  "protocol_compile_resolved": 320,
+  "protocol_registry_authority": "experiment_protocol_registry.register_family_protocol",
+  "parallel_registry_used": false,
+  "lazy_registration_triggered": true,
+  "observer_installed_before_protocol": true
+}

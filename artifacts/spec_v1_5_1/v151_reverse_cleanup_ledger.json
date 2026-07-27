@@ -1,0 +1,10 @@
+{
+  "spec_version": "V1.5.1",
+  "generated_at": "2026-07-27T14:51:58.639586",
+  "cleanup_entered": 23,
+  "cleanup_succeeded": 23,
+  "cleanup_failed": 0,
+  "successful_write_cleanup_coverage": "100%",
+  "unexecuted_steps_with_cleanup_receipt": 0,
+  "reverse_order_verified": true
+}

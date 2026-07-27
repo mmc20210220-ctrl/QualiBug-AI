@@ -1,0 +1,11 @@
+{
+  "spec_version": "V1.5.1",
+  "generated_at": "2026-07-27T14:51:58.639586",
+  "true_completed_formula_authority": "process_step_execution.evaluate_true_completed",
+  "called_from": "experiment_outcome_finalizer (line 1316)",
+  "computed_true_completed": 11,
+  "persisted_true_completed": 11,
+  "formula_mismatches": 0,
+  "false_completed_count": 0,
+  "direct_assignment_outside_finalizer": 0
+}

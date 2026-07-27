@@ -1,0 +1,210 @@
+{
+  "spec_version": "V1.5.1",
+  "generated_at": "2026-07-27T14:13:16.250608",
+  "database_baseline": {
+    "datastore_id": "benchmark_mall@localhost:5432",
+    "schema_hash": "0f9706982404ad9e",
+    "seed_hash": "a6f49dc6ce1d3306",
+    "table_count": 13,
+    "tables": [
+      {
+        "table": "addresses",
+        "primary_key_columns": [
+          "id"
+        ],
+        "foreign_key_columns": [
+          {
+            "column": "user_id",
+            "references": "users"
+          }
+        ],
+        "scoped_row_count": 2,
+        "scoped_fingerprint": "4d9d98b88919b815"
+      },
+      {
+        "table": "audit_logs",
+        "primary_key_columns": [
+          "id"
+        ],
+        "foreign_key_columns": [],
+        "scoped_row_count": 0,
+        "scoped_fingerprint": "4f53cda18c2baa0c"
+      },
+      {
+        "table": "cart_items",
+        "primary_key_columns": [
+          "id"
+        ],
+        "foreign_key_columns": [
+          {
+            "column": "sku",
+            "references": "products"
+          },
+          {
+            "column": "user_id",
+            "references": "users"
+          }
+        ],
+        "scoped_row_count": 21,
+        "scoped_fingerprint": "f922941a7e7af357"
+      },
+      {
+        "table": "coupon_usage",
+        "primary_key_columns": [
+          "id"
+        ],
+        "foreign_key_columns": [
+          {
+            "column": "coupon_id",
+            "references": "coupons"
+          },
+          {
+            "column": "user_id",
+            "references": "users"
+          }
+        ],
+        "scoped_row_count": 3,
+        "scoped_fingerprint": "0ac79e689f1129a6"
+      },
+      {
+        "table": "coupons",
+        "primary_key_columns": [
+          "id"
+        ],
+        "foreign_key_columns": [],
+        "scoped_row_count": 5,
+        "scoped_fingerprint": "f5971be2b1004d9e"
+      },
+      {
+        "table": "inventory",
+        "primary_key_columns": [
+          "sku"
+        ],
+        "foreign_key_columns": [
+          {
+            "column": "sku",
+            "references": "products"
+          }
+        ],
+        "scoped_row_count": 9,
+        "scoped_fingerprint": "7e1f6e069ef4bef3"
+      },
+      {
+        "table": "inventory_locks",
+        "primary_key_columns": [
+          "id"
+        ],
+        "foreign_key_columns": [
+          {
+            "column": "sku",
+            "references": "products"
+          }
+        ],
+        "scoped_row_count": 94,
+        "scoped_fingerprint": "511359c7dd96878e"
+      },
+      {
+        "table": "order_items",
+        "primary_key_columns": [
+          "id"
+        ],
+        "foreign_key_columns": [
+          {
+            "column": "order_id",
+            "references": "orders"
+          },
+          {
+            "column": "sku",
+            "references": "products"
+          }
+        ],
+        "scoped_row_count": 3,
+        "scoped_fingerprint": "acebeafe5887e2d4"
+      },
+      {
+        "table": "orders",
+        "primary_key_columns": [
+          "id"
+        ],
+        "foreign_key_columns": [
+          {
+            "column": "address_id",
+            "references": "addresses"
+          },
+          {
+            "column": "user_id",
+            "references": "users"
+          }
+        ],
+        "scoped_row_count": 3,
+        "scoped_fingerprint": "31328b3d42f62da9"
+      },
+      {
+        "table": "payments",
+        "primary_key_columns": [
+          "id"
+        ],
+        "foreign_key_columns": [
+          {
+            "column": "order_id",
+            "references": "orders"
+          },
+          {
+            "column": "user_id",
+            "references": "users"
+          }
+        ],
+        "scoped_row_count": 0,
+        "scoped_fingerprint": "4f53cda18c2baa0c"
+      },
+      {
+        "table": "products",
+        "primary_key_columns": [
+          "id"
+        ],
+        "foreign_key_columns": [
+          {
+            "column": "seller_id",
+            "references": "users"
+          }
+        ],
+        "scoped_row_count": 9,
+        "scoped_fingerprint": "16e1e40e8d676bbb"
+      },
+      {
+        "table": "refunds",
+        "primary_key_columns": [
+          "id"
+        ],
+        "foreign_key_columns": [
+          {
+            "column": "order_id",
+            "references": "orders"
+          },
+          {
+            "column": "user_id",
+            "references": "users"
+          }
+        ],
+        "scoped_row_count": 0,
+        "scoped_fingerprint": "4f53cda18c2baa0c"
+      },
+      {
+        "table": "users",
+        "primary_key_columns": [
+          "id"
+        ],
+        "foreign_key_columns": [],
+        "scoped_row_count": 8,
+        "scoped_fingerprint": "5f45ddba10b3bde9"
+      }
+    ]
+  },
+  "pollution_check": {
+    "unfinished_fixture_receipts": 0,
+    "unfinished_cleanup_receipts": 0,
+    "previous_campaign_rows": 0,
+    "environment_dirty_markers": 0,
+    "ENTRY_ENVIRONMENT_DIRTY": false
+  }
+}

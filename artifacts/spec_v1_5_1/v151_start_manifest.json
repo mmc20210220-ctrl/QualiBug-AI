@@ -1,0 +1,25 @@
+{
+  "spec_version": "V1.5.1",
+  "run_name": "V1_5_1_DISPOSABLE_FIXTURE_MULTI_STEP_LIVE_VALIDATION_V1",
+  "triggered_at": "2026-07-27T14:33:11",
+  "completed_at": "2026-07-27T14:43:43",
+  "entry_request": {
+    "method": "POST",
+    "url": "http://localhost:8088/api/v1/scan",
+    "body": {
+      "project_id": "benchmark_mall_131",
+      "base_url": "http://localhost:8080",
+      "approved_base_url": "http://localhost:8080",
+      "environment_type": "test",
+      "environment_ref": "sandbox"
+    }
+  },
+  "entry_response_status": 200,
+  "scan_id": "scan_benchmark_mall_131_1785133993891",
+  "campaign_id": "CMP_4d07614f012f301939d34b75",
+  "run_id": "RUN_cb662060f6a387695375f940",
+  "mainline_authority_id": "experiment_candidate",
+  "mainline_contract_fingerprint": "47f52749427c3adcd28bd4af5d6f1a798f4dfe4c3f2e43ecfcf2d57c16ce646d",
+  "total_ms": 436805,
+  "execution_status": "completed"
+}

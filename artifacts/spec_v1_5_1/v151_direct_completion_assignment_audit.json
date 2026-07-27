@@ -1,0 +1,11 @@
+{
+  "spec_version": "V1.5.1",
+  "generated_at": "2026-07-27T14:51:58.639586",
+  "direct_true_completed_assignment_count": 0,
+  "legitimate_exceptions": [
+    "constant_declaration",
+    "test_assertions",
+    "schema_enums"
+  ],
+  "production_caller_direct_assignment": 0
+}

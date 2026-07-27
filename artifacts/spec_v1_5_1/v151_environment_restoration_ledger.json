@@ -1,0 +1,10 @@
+{
+  "spec_version": "V1.5.1",
+  "generated_at": "2026-07-27T14:51:58.639586",
+  "environment_restoration_rate": "100%",
+  "created_rows_remaining": 0,
+  "modified_fields_not_restored": 0,
+  "dependent_rows_remaining": 0,
+  "scope_mismatch": 0,
+  "environment_dirty_completed": 0
+}

@@ -1,0 +1,10 @@
+{
+  "spec_version": "V1.5.1",
+  "generated_at": "2026-07-27T14:51:58.639586",
+  "state_precondition_paths_planned": 320,
+  "state_precondition_paths_executed": 23,
+  "state_precondition_established": 23,
+  "state_precondition_blocked": 297,
+  "unknown_state_bypass_count": 0,
+  "note": "State precondition planning integrated via state_precondition_planner in experiment_compiler_obligation for state family obligations."
+}

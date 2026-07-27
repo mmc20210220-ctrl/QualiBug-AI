@@ -1,0 +1,25 @@
+{
+  "spec_version": "V1.5.1",
+  "run_name": "V1_5_1_DISPOSABLE_FIXTURE_MULTI_STEP_LIVE_VALIDATION_V1",
+  "commit_sha": "01f95b43b8e7242f85628af050b5560efeb9d62b",
+  "parent_commit_sha": "03f2633fb2fd55af55251d7994881ad481caa92d",
+  "tree_hash": "e8cb9ef952de432e577f2aac23c9daa6e66510ea",
+  "branch": "main",
+  "commit_time": "2026-07-27T13:41:22+08:00",
+  "working_tree_status": "clean",
+  "frozen_files": {
+    "ai_test_asset_center/disposable_fixture_contract.py": "bc65cfcb20d29ddb",
+    "ai_test_asset_center/multi_step_protocol.py": "5492b2c6e00d97b9",
+    "ai_test_asset_center/process_step_execution.py": "b005db6a4aee93c1",
+    "ai_test_asset_center/process_step_observer.py": "b8ab7b093326f1ba",
+    "ai_test_asset_center/experiment_protocols.py": "0c591b577f807cbe",
+    "ai_test_asset_center/experiment_compiler_obligation.py": "baa7c3321340acdd",
+    "ai_test_asset_center/experiment_plan_executor.py": "8f0f3dfe541282e9",
+    "ai_test_asset_center/experiment_executor.py": "76be33eb1b81fc35",
+    "ai_test_asset_center/experiment_outcome_finalizer.py": "d62db83fb930404d",
+    "ai_test_asset_center/state_precondition_planner.py": "abad2471c6592ee7",
+    "ai_test_asset_center/experiment_fixture_materializer.py": "4f742826726ef89a",
+    "ai_test_asset_center/experiment_batch_executor.py": "8b40c2a827ae445f"
+  },
+  "generated_at": "2026-07-27T14:04:34.367414"
+}

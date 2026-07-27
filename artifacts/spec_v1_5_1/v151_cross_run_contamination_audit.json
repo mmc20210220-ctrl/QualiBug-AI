@@ -1,0 +1,12 @@
+{
+  "spec_version": "V1.5.1",
+  "generated_at": "2026-07-27T15:29:17.654044",
+  "runs_completed": 1,
+  "runs_required": 3,
+  "cross_run_residual_rows": 0,
+  "cross_run_scope_contamination": 0,
+  "reused_fixture_identity": 0,
+  "database_baseline_hash_before": "a6f49dc6ce1d3306",
+  "note": "Single formal run completed. Cross-run contamination audit requires 3 consecutive runs of same scenarios. Current run establishes clean baseline; fixture identities are campaign-scoped UUIDs preventing reuse.",
+  "STATUS": "SINGLE_RUN_BASELINE_ESTABLISHED"
+}

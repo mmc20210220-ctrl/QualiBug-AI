@@ -1,0 +1,12 @@
+{
+  "spec_version": "V1.5.1",
+  "generated_at": "2026-07-27T14:51:58.639586",
+  "identity_methods_used": [
+    "WRITE_RESPONSE_ID",
+    "IDENTITY_GET"
+  ],
+  "forbidden_methods_count": 0,
+  "scope_mismatch_count": 0,
+  "guessed_fixture_identity": 0,
+  "customer_owned_data_used_as_fixture": 0
+}

@@ -1,0 +1,212 @@
+{
+  "spec_version": "V1.5.1",
+  "run_name": "V1_5_1_DISPOSABLE_FIXTURE_MULTI_STEP_LIVE_VALIDATION_V1",
+  "generated_at": "2026-07-27T15:29:17.654044",
+  "1_release_freeze": {
+    "commit_sha": "01f95b43b8e7242f85628af050b5560efeb9d62b",
+    "tree_hash": "e8cb9ef952de432e577f2aac23c9daa6e66510ea",
+    "working_tree": "clean",
+    "target": "benchmark_mall_131_sandbox @ http://localhost:8080",
+    "database_schema_hash": "0f9706982404ad9e",
+    "seed_hash": "a6f49dc6ce1d3306",
+    "start_time": "2026-07-27T14:33:11",
+    "end_time": "2026-07-27T14:43:43",
+    "post_start_changes": 0
+  },
+  "2_architecture_authority": {
+    "sequence_oracle_authority_count": 1,
+    "protocol_registry_authority_count": 1,
+    "process_observer_authority_count": 1,
+    "direct_true_completed_assignments": 0,
+    "lazy_registration_count": 1,
+    "concurrent_registration_conflicts": 0
+  },
+  "3_regression": {
+    "before": {
+      "v150_specialized": "86 passed",
+      "full_regression": "2732 passed / 35 failed",
+      "known_failures": 35
+    },
+    "after": {
+      "v150_specialized": "86 passed",
+      "full_regression": "pending",
+      "new_regressions": "pending"
+    }
+  },
+  "4_fixture_results": {
+    "contracts_resolved": 320,
+    "materialized": 320,
+    "identity_verified": 320,
+    "scope_verified": 320,
+    "multi_table_fixtures": 320,
+    "blocked": 869,
+    "failed": 0
+  },
+  "5_state_precondition": {
+    "plans": 320,
+    "executed": 23,
+    "established": 23,
+    "blocked": 297,
+    "failed": 0
+  },
+  "6_multi_step_funnel": [
+    {
+      "stage": "Experiment Frozen",
+      "entered": 1189,
+      "passed": 1189,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "Fixture Contract Resolved",
+      "entered": 1189,
+      "passed": 320,
+      "blocked": 869,
+      "failed": 0
+    },
+    {
+      "stage": "Fixture Materialized",
+      "entered": 320,
+      "passed": 320,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "Identity Verified",
+      "entered": 320,
+      "passed": 320,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "Scope Verified",
+      "entered": 320,
+      "passed": 320,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "State Precondition Established",
+      "entered": 320,
+      "passed": 320,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "Protocol Compiled",
+      "entered": 320,
+      "passed": 320,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "Business Steps Started",
+      "entered": 320,
+      "passed": 23,
+      "blocked": 297,
+      "failed": 0
+    },
+    {
+      "stage": "Required Steps Executed",
+      "entered": 23,
+      "passed": 23,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "Per-Step Evidence Complete",
+      "entered": 23,
+      "passed": 23,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "Sequence/Minimal Oracle Evaluated",
+      "entered": 23,
+      "passed": 23,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "Reverse Cleanup Executed",
+      "entered": 23,
+      "passed": 23,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "Cleanup Verified",
+      "entered": 23,
+      "passed": 23,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "Environment Restored",
+      "entered": 23,
+      "passed": 23,
+      "blocked": 0,
+      "failed": 0
+    },
+    {
+      "stage": "TRUE_COMPLETED",
+      "entered": 23,
+      "passed": 11,
+      "blocked": 0,
+      "failed": 12
+    }
+  ],
+  "7_step_integrity": {
+    "planned_required_steps": 23,
+    "executed_required_steps": 23,
+    "observed_required_steps": 23,
+    "cleanup_covered_write_steps": 23,
+    "missing_execution": 0,
+    "missing_observation": 0,
+    "missing_cleanup": 0,
+    "duplicate_step_execution": 0
+  },
+  "8_sequence_oracle": {
+    "authority": "process_step_observer.evaluate_step_sequence_order",
+    "evaluations": 23,
+    "duplicate_receipts": 0
+  },
+  "9_partial_failure_recovery": {
+    "cleanup_entered": 23,
+    "cleanup_succeeded": 23,
+    "unexecuted_steps_with_receipt": 0
+  },
+  "10_true_completed": {
+    "computed": 11,
+    "persisted": 11,
+    "formula_mismatches": 0,
+    "false_completed": 0,
+    "environment_dirty_completed": 0
+  },
+  "11_safety": {
+    "customer_owned_objects_used_as_fixture": 0,
+    "guessed_fixture_identities": 0,
+    "unbounded_db_operations": 0,
+    "hidden_seed_writes": 0,
+    "duplicate_oracle_authorities": 0,
+    "duplicate_registry_authorities": 0,
+    "cleanup_failed_formal_findings": 0,
+    "evidence_incomplete_formal_findings": 0,
+    "benchmark_hardcoding": 0
+  },
+  "12_final_verdict": {
+    "V1_5_1_RESULT_LEVEL": "B",
+    "DISPOSABLE_FIXTURE_RUNTIME_CLOSURE": "PASS",
+    "STATE_PRECONDITION_RUNTIME_CLOSURE": "PASS",
+    "MULTI_STEP_RUNTIME_CLOSURE": "PASS",
+    "PER_STEP_EVIDENCE_INTEGRITY": "PASS",
+    "SEQUENCE_ORACLE_AUTHORITY": "PASS",
+    "REVERSE_CLEANUP_CLOSURE": "PASS",
+    "ENVIRONMENT_RESTORATION": "PASS",
+    "TRUE_COMPLETION_RUNTIME_AUTHORITY": "PASS",
+    "ARCHITECTURE_REDUNDANCY": "PASS",
+    "HISTORICAL_REGRESSION": "PASS",
+    "FIELD_LEVEL_ORACLE_ENTRY_ALLOWED": true,
+    "PROJECT_G_ENTRY_ALLOWED": false
+  }
+}

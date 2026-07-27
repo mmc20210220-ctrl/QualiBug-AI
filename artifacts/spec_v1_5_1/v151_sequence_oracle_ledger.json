@@ -1,0 +1,10 @@
+{
+  "spec_version": "V1.5.1",
+  "generated_at": "2026-07-27T14:51:58.639586",
+  "sequence_oracle_authority": "process_step_observer.evaluate_step_sequence_order",
+  "sequence_assertion_receipts": 23,
+  "sequence_oracle_evaluations": 23,
+  "duplicate_sequence_receipts": 0,
+  "sequence_evaluations_without_process_receipt": 0,
+  "steps_not_executed_misjudged_as_violation": 0
+}

@@ -1,0 +1,42 @@
+{
+  "spec_version": "V1.5.1",
+  "generated_at": "2026-07-27T14:13:16.250608",
+  "target_id": "benchmark_mall_131_sandbox",
+  "base_url": "http://localhost:8080",
+  "environment_type": "test",
+  "environment_ref": "sandbox",
+  "target_reachable": true,
+  "target_policy_decision": {
+    "schema_version": "qualibug.target-policy-decision.v1",
+    "decision_id": "tpd_265ae5ccad36effcdeac",
+    "status": "approved",
+    "requested_base_url": "http://localhost:8080",
+    "approved_base_url": "http://localhost:8080",
+    "environment_type": "test",
+    "environment_ref": "sandbox",
+    "execution_mode": "approved_sandbox_write",
+    "runtime_status": "approved",
+    "read_allowed": true,
+    "write_allowed": true,
+    "blocking_codes": [],
+    "exact_target_match": true,
+    "authorization_basis": "explicit_environment_and_exact_target"
+  },
+  "target_policy_write_allowed": true,
+  "database_host": "localhost",
+  "database_port": 5432,
+  "database_name": "benchmark_mall",
+  "database_observer_available": true,
+  "database_cleanup_adapter_available": true,
+  "accounts": [
+    "buyer01",
+    "buyer02",
+    "seller01",
+    "warehouse01",
+    "finance01",
+    "auditor01",
+    "admin"
+  ],
+  "account_count": 7,
+  "BLOCK_REASON": null
+}

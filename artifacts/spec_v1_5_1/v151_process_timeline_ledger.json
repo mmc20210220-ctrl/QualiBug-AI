@@ -1,0 +1,14 @@
+{
+  "spec_version": "V1.5.1",
+  "generated_at": "2026-07-27T14:51:58.639586",
+  "timeline_source": "experiment_plan_executor.py line 715 (real step events)",
+  "events_recorded": [
+    "STEP_READY",
+    "TRANSPORT_STARTED",
+    "TRANSPORT_COMPLETED",
+    "AFTER_STATE_OBSERVED",
+    "STEP_COMPLETED"
+  ],
+  "fake_timeline_from_plan": 0,
+  "timeline_count": 23
+}
