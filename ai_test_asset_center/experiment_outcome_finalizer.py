@@ -1595,28 +1595,40 @@ def finalize_experiment_execution(
             )
             observations["process_step_balance"] = _balance
 
-            # Only attempt bundle derivation when diagnostic formula says the
-            # experiment is structurally complete enough to seek TRUE_COMPLETED,
-            # or when caller supplied explicit receipt materials.
-            _seek_true_completed = bool(
+            # Attempt bundle/finalization whenever ledger id + structural materials
+            # exist. Cleanup/env flags are passed honestly into derivation so
+            # missing cleanup yields CLEANUP_FAILED / ENVIRONMENT_DIRTY rather than
+            # skipping Finalization Receipt entirely (SPEC §15).
+            _attempt_finalization = bool(
                 observations.get("force_receipt_bundle")
                 or (
-                    _v150_true_completion.get("true_completed")
+                    bool(_ledger_id)
+                    and bool(_executed_steps or _planned_steps or _required_steps)
+                    and bool(fixture_receipts or _fixture_prov or observations.get("force_receipt_bundle"))
+                    and _oracle_evaluated
+                )
+            )
+            # TRUE_COMPLETED seek still requires cleanup + restoration (formula unchanged).
+            _seek_true_completed = bool(
+                _attempt_finalization
+                and (
+                    observations.get("force_receipt_bundle")
                     or (
-                        bool(fixture_receipts or _fixture_prov)
-                        and bool(_executed_steps or _planned_steps)
-                        and _oracle_evaluated
-                        and _cleanup_ver
-                        and bool(_env_restored)
-                        and bool(_ledger_id)
+                        _v150_true_completion.get("true_completed")
+                        or (
+                            _cleanup_ver
+                            and bool(_env_restored)
+                        )
                     )
                 )
             )
-            if _seek_true_completed and not _balance.get("balanced", False):
+            if _attempt_finalization and not _balance.get("balanced", False):
                 _finalizer_block_reason = _text(_balance.get("reason_code")) or _STEP_MISMATCH
                 observations["finalizer_block_reason"] = _finalizer_block_reason
+                # Identity/set mismatch blocks TRUE_COMPLETED but still allows an
+                # honest incomplete finalization receipt below when materials exist.
                 _seek_true_completed = False
-            if _seek_true_completed:
+            if _attempt_finalization:
                 _execution_receipt_bundle = _assemble_bundle(
                     bundle_id=f"erb_{eid}",
                     campaign_id=_text(resolved_campaign_id or campaign_id or _NA),
@@ -1647,9 +1659,27 @@ def finalize_experiment_execution(
                     code_commit_sha=_commit,
                     tree_hash=_tree,
                 )
-                _derived = _text(_finalization_receipt.get("derived_terminal_status"))
+                # Always surface honest derived terminal from the receipt.
+                _derived = _text(
+                    _finalization_receipt.get("derived_terminal_status")
+                    or _finalization_receipt.get("lifecycle_state")
+                )
                 if _derived:
                     _lifecycle_state = _derived
+                if (
+                    _derived == "TRUE_COMPLETED"
+                    and not (
+                        _cleanup_ver
+                        and bool(_env_restored)
+                        and _balance.get("balanced", False)
+                    )
+                ):
+                    # Fail closed: never accept TRUE_COMPLETED without cleanup/env/balance.
+                    _lifecycle_state = "RECEIPT_INCOMPLETE"
+                    _finalization_receipt = dict(_finalization_receipt)
+                    _finalization_receipt["derived_terminal_status"] = "RECEIPT_INCOMPLETE"
+                    _finalization_receipt["true_completed"] = False
+                    _finalization_receipt["lifecycle_state"] = "RECEIPT_INCOMPLETE"
             elif not _finalizer_block_reason:
                 _finalizer_block_reason = _BUNDLE_NOT_ACTIVATED
                 observations["finalizer_block_reason"] = _BUNDLE_NOT_ACTIVATED
