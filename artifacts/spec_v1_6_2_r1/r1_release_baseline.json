@@ -1,0 +1,16 @@
+{
+  "schema_version": "qualibug.v162r1-release-baseline.v1",
+  "generated_at": "2026-07-27T11:27:42.035069+00:00",
+  "commit_sha": "edae50e6372fd0874342722918253d8bfdf95188",
+  "tree_hash": "812d744ad799e1131ed6fdec6c74e234460adaf5",
+  "pushed_to_origin": true,
+  "canonical_obligation_manifest_hash": "0c692b5ee288abf4bf540b3d57d5395fee552c6163b3df56fe42d445033dd4cd",
+  "candidate_unlock_set_hash": "8001dff09ce870c598545365d94365f419bf5fb1893023fd72fbc8e1de9f12a1",
+  "file_hashes": {
+    "process_step_execution": "e9549b92c13e46f9e32ca8e8b9d45a06011f6a67087b7e6d6435acf74fa43f9f",
+    "experiment_outcome_finalizer": "fddb13fd560fec8ed698d6e218a98d80218390fb0aa7a71bba6b227994bf1fb9",
+    "experiment_executor": "40c0497ed35db59027a0bc300550a2286349f12153e58004604f9a9c600289df",
+    "experiment_plan_executor": "747eb4319681008b79e5c9a5c734de3945b44c5b875466fe90d912bc7a53a027",
+    "experiment_cleanup_executor": "f82f8097adb75cbfe2f5da2990a6a6a320fb60b4f3583cb560f17b44ba8b0475"
+  }
+}

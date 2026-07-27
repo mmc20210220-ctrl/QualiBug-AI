@@ -1,0 +1,119 @@
+{
+  "schema_version": "qualibug.v162r1-process-step-ledger-runtime.v1",
+  "generated_at": "2026-07-27T11:27:42.035069+00:00",
+  "sample": [
+    {
+      "obligation_id": "obl_05735d43d702fa55ec7e",
+      "experiment_id": "exp_13612138afacd72a32cf",
+      "process_step_ledger_id": "psl_4086c9d8b52af9855b8ca84a",
+      "process_step_ledger_hash": "88c4d356cf3160d278e0f62f2fb8f347f7b17d3f5248c087b6beff7eb5e30439",
+      "required_step_ids": [
+        "treatment_1"
+      ],
+      "executed_step_ids": [
+        "treatment_1"
+      ],
+      "lifecycle_state": "CLEANUP_FAILED",
+      "finalizer_block_reason": ""
+    },
+    {
+      "obligation_id": "obl_117cdff8c039543a6281",
+      "experiment_id": "exp_39b0ecc9eb46b1f8ef4f",
+      "process_step_ledger_id": "psl_7c582aea1d47fa1329918270",
+      "process_step_ledger_hash": "bb52d00655c4715189213b518dd781da63e404983c44efd64dc4586ebe7c1959",
+      "required_step_ids": [
+        "treatment_1"
+      ],
+      "executed_step_ids": [
+        "treatment_1"
+      ],
+      "lifecycle_state": "CLEANUP_FAILED",
+      "finalizer_block_reason": ""
+    },
+    {
+      "obligation_id": "obl_1306106ec75a1286f34c",
+      "experiment_id": "exp_bc8c58969ef105d9bb1b",
+      "process_step_ledger_id": "psl_b7fe0b5b561b4e6d66b47c90",
+      "process_step_ledger_hash": "9032fb3052a26398703a4b41c643caffe226541752b95437913a81dfa289e152",
+      "required_step_ids": [
+        "treatment_1"
+      ],
+      "executed_step_ids": [
+        "treatment_1"
+      ],
+      "lifecycle_state": "CLEANUP_FAILED",
+      "finalizer_block_reason": ""
+    },
+    {
+      "obligation_id": "obl_138425ca076a8809a7a1",
+      "experiment_id": "exp_3fe8247aa1da033a224b",
+      "process_step_ledger_id": "psl_7d71c6cb510bc4cb91692f6d",
+      "process_step_ledger_hash": "4a785732fdad40acce4db38e0cff386ec672a69a79ae73f18fc37847c92273a6",
+      "required_step_ids": [
+        "treatment_1"
+      ],
+      "executed_step_ids": [
+        "treatment_1"
+      ],
+      "lifecycle_state": "CLEANUP_FAILED",
+      "finalizer_block_reason": ""
+    },
+    {
+      "obligation_id": "obl_1f70ed35bc590890f773",
+      "experiment_id": "exp_092aadbf1a14df6ecead",
+      "process_step_ledger_id": "psl_ec5b0908ad0f1a515e707af4",
+      "process_step_ledger_hash": "1e853e57e87f793052afc9dc99b51b0c5055f9cb5c891329da9393d01bd5dc7d",
+      "required_step_ids": [
+        "treatment_1"
+      ],
+      "executed_step_ids": [
+        "treatment_1"
+      ],
+      "lifecycle_state": "CLEANUP_FAILED",
+      "finalizer_block_reason": ""
+    },
+    {
+      "obligation_id": "obl_1f76afc07d7551da1822",
+      "experiment_id": "exp_7e5f2bff44ae7b3da80a",
+      "process_step_ledger_id": "psl_51ce68b5a8fbbc176a3eeeae",
+      "process_step_ledger_hash": "69d436de58242f069684edf0ca27d2c759eba44ab7a80deadd992aaa80c32b79",
+      "required_step_ids": [
+        "treatment_1"
+      ],
+      "executed_step_ids": [
+        "treatment_1"
+      ],
+      "lifecycle_state": "CLEANUP_FAILED",
+      "finalizer_block_reason": ""
+    },
+    {
+      "obligation_id": "obl_22f01fa3d443895e6ef2",
+      "experiment_id": "exp_d20ecde459361910f9e4",
+      "process_step_ledger_id": "psl_9b7103ae7648ae2553d650d9",
+      "process_step_ledger_hash": "0cc813a0da23fcb4f0da5f49c6ab524bce2a02ece878a41fd8461a3f12e25f25",
+      "required_step_ids": [
+        "treatment_1"
+      ],
+      "executed_step_ids": [
+        "treatment_1"
+      ],
+      "lifecycle_state": "CLEANUP_FAILED",
+      "finalizer_block_reason": ""
+    },
+    {
+      "obligation_id": "obl_2d01364e54507dde85f6",
+      "experiment_id": "exp_c5639e638619cec9ffe1",
+      "process_step_ledger_id": "psl_40510a7ceae1f311d9f358c2",
+      "process_step_ledger_hash": "79053ece816a4a19524705b4e95500f719cbfd045bd559a20d004c4877bc6016",
+      "required_step_ids": [
+        "treatment_1"
+      ],
+      "executed_step_ids": [
+        "treatment_1"
+      ],
+      "lifecycle_state": "CLEANUP_FAILED",
+      "finalizer_block_reason": ""
+    }
+  ],
+  "count": 8
+}

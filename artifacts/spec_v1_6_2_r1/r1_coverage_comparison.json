@@ -1,0 +1,21 @@
+{
+  "schema_version": "qualibug.v162r1-coverage-comparison.v1",
+  "generated_at": "2026-07-27T11:27:42.035069+00:00",
+  "N": 61,
+  "D": 0,
+  "need_D": 49,
+  "D_rate": 0.0,
+  "oracle_ok_among_D": 0,
+  "need_oracle": 0,
+  "cleanup_ok_among_D": 0,
+  "need_cleanup": 0,
+  "TRUE_COMPLETED": 0,
+  "need_TRUE_COMPLETED_vs_cleanup": 0,
+  "thresholds": {
+    "D_ge_ceil_0_8_N": false,
+    "oracle_ge_ceil_0_8_D": false,
+    "cleanup_ge_ceil_0_9_D": false,
+    "tc_ge_ceil_0_9_cleanup": false
+  },
+  "baseline_v162_D": 0
+}

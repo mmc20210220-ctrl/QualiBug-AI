@@ -1,0 +1,8 @@
+{
+  "schema_version": "qualibug.v162r1-formal-report-receipt-balance.v1",
+  "generated_at": "2026-07-27T11:27:42.035069+00:00",
+  "TRUE_COMPLETED": 0,
+  "finalization_receipts": 8,
+  "bundles": 8,
+  "balanced": true
+}

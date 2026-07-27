@@ -1,0 +1,42 @@
+{
+  "schema_version": "qualibug.v162r1-first-terminal-ledger.v1",
+  "generated_at": "2026-07-27T11:27:42.035069+00:00",
+  "unlock_set_N": 61,
+  "rows": [
+    {
+      "obligation_id": "obl_05735d43d702fa55ec7e",
+      "first_terminal_stage": "CLEANUP_FAILED"
+    },
+    {
+      "obligation_id": "obl_117cdff8c039543a6281",
+      "first_terminal_stage": "CLEANUP_FAILED"
+    },
+    {
+      "obligation_id": "obl_1306106ec75a1286f34c",
+      "first_terminal_stage": "CLEANUP_FAILED"
+    },
+    {
+      "obligation_id": "obl_138425ca076a8809a7a1",
+      "first_terminal_stage": "CLEANUP_FAILED"
+    },
+    {
+      "obligation_id": "obl_1f70ed35bc590890f773",
+      "first_terminal_stage": "CLEANUP_FAILED"
+    },
+    {
+      "obligation_id": "obl_1f76afc07d7551da1822",
+      "first_terminal_stage": "CLEANUP_FAILED"
+    },
+    {
+      "obligation_id": "obl_22f01fa3d443895e6ef2",
+      "first_terminal_stage": "CLEANUP_FAILED"
+    },
+    {
+      "obligation_id": "obl_2d01364e54507dde85f6",
+      "first_terminal_stage": "CLEANUP_FAILED"
+    }
+  ],
+  "distribution": {
+    "CLEANUP_FAILED": 8
+  }
+}

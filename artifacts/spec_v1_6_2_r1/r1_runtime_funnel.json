@@ -1,0 +1,23 @@
+{
+  "schema_version": "qualibug.v162r1-runtime-funnel.v1",
+  "generated_at": "2026-07-27T11:27:42.035069+00:00",
+  "run_name": "V1_6_2_R1_FINALIZER_RECEIPT_BUNDLE_ACTIVATION_V1",
+  "scan_id": "scan_benchmark_mall_131_1785151406715",
+  "campaign": {
+    "campaign_id": "CMP_4d07614f012f301939d34b75",
+    "campaign_status": "degraded",
+    "selected": 1498,
+    "terminal": 1498,
+    "fingerprint": "bd2ae1e3169a1744912800568501c2a1c8c0c8ccf5a831dc12e060777ac6c3e4"
+  },
+  "http_status": 200,
+  "elapsed_ms": 163302,
+  "execution_status": "completed",
+  "unlock_set": {
+    "N": 61,
+    "experiments_seen": 8,
+    "bundles": 8,
+    "finalizations": 8,
+    "TRUE_COMPLETED": 0
+  }
+}
