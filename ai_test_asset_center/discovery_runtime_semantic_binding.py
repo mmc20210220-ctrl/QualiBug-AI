@@ -17,6 +17,9 @@ from typing import Any
 
 from . import discovery_runtime_planning as _planning
 from .effect_observer_binding import bind_source_effect_observers
+from .formal_event_capability_guard import (
+    install_formal_event_capability_guard,
+)
 from .formal_event_pre_cleanup import install_formal_event_pre_cleanup_observer
 from .formal_event_surface import install_formal_event_surface
 from .formal_ui_surface import install_formal_ui_surface
@@ -50,11 +53,13 @@ _INSTALL_MARKER = "_qualibug_semantic_operation_binding_installed"
 _ORIGINAL_MARKER = "_qualibug_original_behavior_ir_builder"
 
 # Register formal surfaces before any obligation or experiment is compiled. Every installer is
-# idempotent and performs no target I/O.
+# idempotent and performs no target I/O. The event capability guard must wrap the base handler
+# before the pre-cleanup installer captures it for exact-once execution/reuse.
 install_non_http_observers()
 install_formal_ui_surface()
 install_formal_ui_read_only_guard()
 install_formal_event_surface()
+install_formal_event_capability_guard()
 install_formal_event_pre_cleanup_observer()
 install_source_ui_contract_source_guard()
 install_source_ui_obligation_binding()
@@ -113,7 +118,7 @@ def build_behavior_ir_with_semantic_operation_bindings(
     runtime_actors: list[dict[str, Any]] | None = None,
     available_surfaces: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
-    """Build canonical IR and apply only exact source-grounded joins."""
+    """Build canonical IR and apply exact source-grounded UI/event joins."""
 
     ui_asset, scan_ui_receipt = overlay_scan_ui_contracts(asset)
     effective_asset, scan_event_receipt = (
