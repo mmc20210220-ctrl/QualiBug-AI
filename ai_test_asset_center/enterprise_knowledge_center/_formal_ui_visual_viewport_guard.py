@@ -10,6 +10,9 @@ from __future__ import annotations
 from typing import Any
 
 from . import _formal_ui_contracts as _contracts
+from ._formal_ui_browser_matrix_guard import (
+    install_formal_ui_browser_matrix_guard,
+)
 
 ACTION = "expect_visual_baseline"
 _INSTALL_MARKER = "_qualibug_formal_ui_visual_viewport_guard_installed"
@@ -102,6 +105,7 @@ def _gap_from_contract(
 
 def install_formal_ui_visual_viewport_guard() -> None:
     if getattr(_contracts, _INSTALL_MARKER, False):
+        install_formal_ui_browser_matrix_guard()
         return
     original = getattr(
         _contracts,
@@ -131,6 +135,10 @@ def install_formal_ui_visual_viewport_guard() -> None:
 
     _contracts._validate_contract = validate_with_visual_viewport
     setattr(_contracts, _INSTALL_MARKER, True)
+    # Matrix admission is another source-only guard. Installing it here keeps the
+    # enterprise knowledge facade independent from the browser runtime while ensuring
+    # direct ingestion and scan admission share the same strict contract boundary.
+    install_formal_ui_browser_matrix_guard()
 
 
 __all__ = ["install_formal_ui_visual_viewport_guard"]
