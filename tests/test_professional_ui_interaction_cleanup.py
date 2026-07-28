@@ -21,6 +21,11 @@ from ai_test_asset_center.professional_ui_interaction_privacy_guard import (
     EVIDENCE_POLICY,
     install_controlled_ui_interaction_privacy_guard,
 )
+from ai_test_asset_center.professional_ui_persistent_cleanup_probe import (
+    EQUIVALENCE_SCOPE,
+    PERSISTENT_PROBE_PROPERTY,
+    install_persistent_ui_cleanup_probe,
+)
 
 
 def _install_ui_mainline() -> None:
@@ -32,6 +37,7 @@ def _install_ui_mainline() -> None:
     interaction.install_controlled_ui_interaction()
     install_controlled_ui_interaction_contract_guard()
     install_controlled_ui_interaction_privacy_guard()
+    install_persistent_ui_cleanup_probe()
 
 
 def _runtime(*, environment_type: str = "test") -> dict:
@@ -58,15 +64,25 @@ def _plan() -> dict:
         "interaction_contract": {
             "cleanup_strategy": "browser_compensation",
             "equivalence": "source_declared_state_probes",
+            "equivalence_scope": EQUIVALENCE_SCOPE,
             "target_scope": "approved_nonproduction_target",
             "evidence_policy": EVIDENCE_POLICY,
         },
         "state_probes": [
             {"probe_id": "page-url", "property": "url"},
             {
-                "probe_id": "record-count",
+                "probe_id": "record-count-ui",
                 "property": "count",
                 "selector": "[data-testid=record-row]",
+            },
+            {
+                "probe_id": "record-count-persistent",
+                "property": PERSISTENT_PROBE_PROPERTY,
+                "method": "GET",
+                "url": "/api/records/summary",
+                "json_pointer": "/count",
+                "expected_status_class": 2,
+                "max_response_bytes": 100_000,
             },
         ],
         "steps": [
@@ -118,6 +134,7 @@ def test_valid_governed_interaction_plan_is_phased_and_source_reversible() -> No
         "browser_compensation"
     )
     assert normalized["interaction_contract"]["evidence_policy"] == EVIDENCE_POLICY
+    assert normalized["interaction_contract"]["equivalence_scope"] == EQUIVALENCE_SCOPE
     assert [row["phase"] for row in normalized["steps"]] == [
         "setup",
         "setup",
@@ -129,8 +146,12 @@ def test_valid_governed_interaction_plan_is_phased_and_source_reversible() -> No
     ]
     assert [row["probe_id"] for row in normalized["state_probes"]] == [
         "page-url",
-        "record-count",
+        "record-count-ui",
+        "record-count-persistent",
     ]
+    assert normalized["state_probes"][2]["url"] == (
+        "https://example.test/api/records/summary"
+    )
 
 
 def test_interaction_plan_without_cleanup_is_non_reversible() -> None:
@@ -155,6 +176,34 @@ def test_interaction_plan_requires_state_probes() -> None:
     with pytest.raises(
         browser_execution.BrowserExecutionError,
         match=r"^UI_INTERACTION_STATE_PROBES_MISSING$",
+    ):
+        interaction.validate_controlled_browser_plan(plan, _runtime())
+
+
+def test_interaction_plan_requires_persistent_state_probe() -> None:
+    _install_ui_mainline()
+    plan = _plan()
+    plan["state_probes"] = [
+        row
+        for row in plan["state_probes"]
+        if row["property"] != PERSISTENT_PROBE_PROPERTY
+    ]
+
+    with pytest.raises(
+        browser_execution.BrowserExecutionError,
+        match=r"^UI_INTERACTION_PERSISTENT_STATE_PROBE_MISSING$",
+    ):
+        interaction.validate_controlled_browser_plan(plan, _runtime())
+
+
+def test_persistent_probe_cannot_leave_approved_origin() -> None:
+    _install_ui_mainline()
+    plan = _plan()
+    plan["state_probes"][2]["url"] = "https://evil.example/api/records"
+
+    with pytest.raises(
+        browser_execution.BrowserExecutionError,
+        match=r"^browser_persistent_probe_outside_approved_base_url$",
     ):
         interaction.validate_controlled_browser_plan(plan, _runtime())
 
@@ -292,10 +341,19 @@ def test_write_compile_requires_cleanup_contract_and_marks_cleanup_authority() -
 def test_cleanup_receipt_accepts_only_exact_post_cleanup_equivalence() -> None:
     before = {
         "page-url": {"property": "url", "value_fingerprint": "url-a"},
-        "record-count": {
+        "record-count-ui": {
             "property": "count",
             "matched_count": 2,
             "value_fingerprint": "count-2",
+        },
+        "record-count-persistent": {
+            "property": PERSISTENT_PROBE_PROPERTY,
+            "url_fingerprint": "url-api",
+            "status_class": 2,
+            "json_pointer_fingerprint": "pointer-count",
+            "value_fingerprint": "count-2",
+            "raw_response_included": False,
+            "raw_selected_value_included": False,
         },
     }
     accepted = interaction._cleanup_receipt(
@@ -313,9 +371,8 @@ def test_cleanup_receipt_accepts_only_exact_post_cleanup_equivalence() -> None:
     assert accepted["raw_state_included"] is False
 
     after = dict(before)
-    after["record-count"] = {
-        "property": "count",
-        "matched_count": 3,
+    after["record-count-persistent"] = {
+        **before["record-count-persistent"],
         "value_fingerprint": "count-3",
     }
     mismatch = interaction._cleanup_receipt(
