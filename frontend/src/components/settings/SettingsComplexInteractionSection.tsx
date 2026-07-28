@@ -17,7 +17,7 @@ export function SettingsComplexInteractionSection() {
   const outputRef = useRef<HTMLTextAreaElement | null>(null);
   const [kind, setKind] = useState<ComplexInteractionKind>('upload');
   const [selector, setSelector] = useState('input[type=file]');
-  const [fileRef, setFileRef] = useState('uifb_从上方审批面板复制');
+  const [fileRef, setFileRef] = useState('');
   const [expectedUrl, setExpectedUrl] = useState('/export');
   const [expectedSha256, setExpectedSha256] = useState('');
   const [frameSelector, setFrameSelector] = useState('');
@@ -111,7 +111,12 @@ export function SettingsComplexInteractionSection() {
         {kind === 'upload' && (
           <label className="form-field">
             <span>审批 binding_ref</span>
-            <input className="form-input" value={fileRef} onChange={(event) => setFileRef(event.target.value)} />
+            <input
+              className="form-input"
+              value={fileRef}
+              placeholder="从上方审批面板复制 uifb_..."
+              onChange={(event) => setFileRef(event.target.value)}
+            />
           </label>
         )}
         {kind === 'download' && (
