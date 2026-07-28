@@ -64,6 +64,16 @@ def _validate(step: dict[str, object]) -> dict[str, object]:
     return normalized["steps"][1]
 
 
+def _empty_focus() -> dict[str, object]:
+    return {
+        "findings": [],
+        "untestable": [],
+        "checked": 0,
+        "candidate_count": 0,
+        "truncated": False,
+    }
+
+
 def test_accessibility_action_requires_explicit_standard_or_rules() -> None:
     with pytest.raises(
         professional._browser.BrowserExecutionError,
@@ -72,7 +82,7 @@ def test_accessibility_action_requires_explicit_standard_or_rules() -> None:
         _validate({"action": engine.ACTION})
 
 
-def test_full_deterministic_standard_expands_exact_catalog() -> None:
+def test_full_deterministic_standard_expands_high_confidence_subset() -> None:
     normalized = _validate({
         "action": engine.ACTION,
         "standard": engine.STANDARD,
@@ -80,7 +90,8 @@ def test_full_deterministic_standard_expands_exact_catalog() -> None:
 
     assert normalized["standard"] == engine.STANDARD
     assert tuple(normalized["rules"]) == tuple(engine.STANDARD_RULES)
-    assert len(normalized["rules"]) == len(engine.RULE_CATALOG)
+    assert set(normalized["rules"]).issubset(engine.RULE_CATALOG)
+    assert set(engine.CUSTOM_ONLY_RULES).isdisjoint(normalized["rules"])
     assert normalized["max_violations"] == 0
     assert all(value == 0 for value in normalized["impact_budgets"].values())
     assert normalized["require_complete_scan"] is True
@@ -121,11 +132,15 @@ def test_full_standard_cannot_be_weakened_by_subset_or_exclusion() -> None:
 def test_source_declared_rule_subset_is_not_mislabelled_as_full_standard() -> None:
     normalized = _validate({
         "action": engine.ACTION,
-        "rules": ["buttons_have_name", "focus_visible"],
+        "rules": ["buttons_have_name", "focus_visible", "target_size_minimum"],
     })
 
     assert normalized["standard"] == CUSTOM_STANDARD
-    assert normalized["rules"] == ["buttons_have_name", "focus_visible"]
+    assert normalized["rules"] == [
+        "buttons_have_name",
+        "focus_visible",
+        "target_size_minimum",
+    ]
     assert normalized["require_complete_scan"] is True
 
 
@@ -204,13 +219,7 @@ def test_incomplete_accessibility_observation_is_preserved_not_promoted(
         "total": 20,
         "truncated": False,
     })
-    monkeypatch.setattr(engine, "_focus_audit", lambda _page, _step: {
-        "findings": [],
-        "untestable": [],
-        "checked": 0,
-        "candidate_count": 0,
-        "truncated": False,
-    })
+    monkeypatch.setattr(engine, "_focus_audit", lambda _page, _step: _empty_focus())
     token = observation_guard._OBSERVATIONS.set([])
     try:
         receipt = observation_guard._execute_with_preserved_observation(None, step)
@@ -246,13 +255,7 @@ def test_accessibility_violation_uses_typed_ui_failure_and_minimized_receipt(
         "total": 10,
         "truncated": False,
     })
-    monkeypatch.setattr(engine, "_focus_audit", lambda _page, _step: {
-        "findings": [],
-        "untestable": [],
-        "checked": 0,
-        "candidate_count": 0,
-        "truncated": False,
-    })
+    monkeypatch.setattr(engine, "_focus_audit", lambda _page, _step: _empty_focus())
     token = observation_guard._OBSERVATIONS.set([])
     try:
         with pytest.raises(
@@ -286,13 +289,7 @@ def test_accessibility_observation_carries_matrix_profile_identity(
         "total": 5,
         "truncated": False,
     })
-    monkeypatch.setattr(engine, "_focus_audit", lambda _page, _step: {
-        "findings": [],
-        "untestable": [],
-        "checked": 0,
-        "candidate_count": 0,
-        "truncated": False,
-    })
+    monkeypatch.setattr(engine, "_focus_audit", lambda _page, _step: _empty_focus())
     profile_token = matrix._ACTIVE_PROFILE.set({
         "profile_id": "firefox-desktop",
         "browser_engine": "firefox",
