@@ -1,11 +1,15 @@
 """Bind formal visual comparison to one active governed baseline record.
 
-File existence and SHA-256 are necessary but insufficient authority. This
-installer requires the exact visual baseline reference to have one active
-project registry record whose content identity, CSS viewport, screenshot mode
-and deterministic renderer profile match the source-declared expectation.
-Revoked, unregistered, ambiguous or identity-drifted baselines are
-INDETERMINATE and cannot become formal defects.
+File existence and SHA-256 are necessary but insufficient authority. During a
+formal UI adapter call, this installer requires the exact visual baseline
+reference to have one active project registry record whose content identity,
+CSS viewport, screenshot mode and deterministic renderer profile match the
+source-declared expectation. Revoked, unregistered, ambiguous or identity-
+drifted baselines are INDETERMINATE and cannot become formal defects.
+
+The enforcement flag is bound by the final UI adapter wrapper rather than as a
+process-global assumption. This preserves deterministic low-level image unit
+tests while keeping every real formal execution registry-governed.
 """
 from __future__ import annotations
 
@@ -20,9 +24,14 @@ from .visual_baseline_registry import active_visual_baseline_record
 _INSTALL_MARKER = "_qualibug_visual_registry_binding_installed"
 _ORIGINAL_BYTES = "_qualibug_visual_baseline_bytes_before_registry_binding"
 _ORIGINAL_EXECUTOR = "_qualibug_visual_executor_before_registry_binding"
+_ORIGINAL_ADAPTER = "_qualibug_ui_adapter_before_visual_registry_binding"
 _ACTIVE_RECORD: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
     "qualibug_active_visual_baseline_record",
     default={},
+)
+_REGISTRY_REQUIRED: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "qualibug_visual_baseline_registry_required",
+    default=False,
 )
 
 
@@ -133,12 +142,20 @@ def install_visual_registry_binding() -> None:
         _ORIGINAL_EXECUTOR,
         _visual._execute_visual_baseline,
     )
+    original_adapter = getattr(
+        _visual._adapter,
+        _ORIGINAL_ADAPTER,
+        _visual._adapter._playwright_request_result,
+    )
     setattr(_visual, _ORIGINAL_BYTES, original_bytes)
     setattr(_visual, _ORIGINAL_EXECUTOR, original_execute)
+    setattr(_visual._adapter, _ORIGINAL_ADAPTER, original_adapter)
 
     def baseline_bytes_with_registry(
         step: dict[str, Any],
     ) -> tuple[bytes, str]:
+        if not _REGISTRY_REQUIRED.get():
+            return original_bytes(step)
         record = _require_registry_identity(step)
         data, digest = original_bytes(step)
         if digest != _text(record.get("sha256")).lower():
@@ -149,6 +166,8 @@ def install_visual_registry_binding() -> None:
         return data, digest
 
     def execute_with_registry(page: Any, step: dict[str, Any]) -> dict[str, Any]:
+        if not _REGISTRY_REQUIRED.get():
+            return original_execute(page, step)
         token = _ACTIVE_RECORD.set({})
         try:
             receipt = original_execute(page, step)
@@ -166,9 +185,34 @@ def install_visual_registry_binding() -> None:
             _update_last_observation(fields)
         return receipt
 
+    def adapter_with_visual_registry(
+        project_id: str,
+        request: dict[str, Any],
+        runtime_contract: dict[str, Any],
+        *,
+        root: Path,
+        run_id: str,
+    ) -> dict[str, Any]:
+        token = _REGISTRY_REQUIRED.set(True)
+        try:
+            return original_adapter(
+                project_id,
+                request,
+                runtime_contract,
+                root=root,
+                run_id=run_id,
+            )
+        finally:
+            _REGISTRY_REQUIRED.reset(token)
+
     _visual._baseline_bytes = baseline_bytes_with_registry
     _visual._execute_visual_baseline = execute_with_registry
+    _visual._adapter._playwright_request_result = adapter_with_visual_registry
     setattr(_visual, _INSTALL_MARKER, True)
 
 
-__all__ = ["install_visual_registry_binding"]
+__all__ = [
+    "_REGISTRY_REQUIRED",
+    "_require_registry_identity",
+    "install_visual_registry_binding",
+]
