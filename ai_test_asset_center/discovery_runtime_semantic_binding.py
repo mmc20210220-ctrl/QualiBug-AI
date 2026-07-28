@@ -30,6 +30,9 @@ from .source_ui_contract_source_guard import (
     install_source_ui_contract_source_guard,
 )
 from .source_ui_obligation_binding import install_source_ui_obligation_binding
+from .source_ui_obligation_compat import (
+    install_source_ui_family_vector_compat,
+)
 
 _INSTALL_MARKER = "_qualibug_semantic_operation_binding_installed"
 _ORIGINAL_MARKER = "_qualibug_original_behavior_ir_builder"
@@ -41,6 +44,7 @@ install_formal_ui_surface()
 install_formal_ui_read_only_guard()
 install_source_ui_contract_source_guard()
 install_source_ui_obligation_binding()
+install_source_ui_family_vector_compat()
 
 
 if hasattr(_planning, _ORIGINAL_MARKER):
