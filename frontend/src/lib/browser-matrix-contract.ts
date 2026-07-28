@@ -55,11 +55,29 @@ export const BROWSER_MATRIX_PRESETS: Array<BrowserMatrixProfile & {
   },
 ];
 
+function asContractProfile(profile: BrowserMatrixProfile): BrowserMatrixProfile {
+  return {
+    profile_id: profile.profile_id,
+    browser_engine: profile.browser_engine,
+    device_class: profile.device_class,
+    viewport_width: profile.viewport_width,
+    viewport_height: profile.viewport_height,
+    device_scale_factor: profile.device_scale_factor,
+    is_mobile: profile.is_mobile,
+    has_touch: profile.has_touch,
+    locale: profile.locale,
+    timezone_id: profile.timezone_id,
+    color_scheme: profile.color_scheme,
+    reduced_motion: profile.reduced_motion,
+    user_agent: profile.user_agent,
+  };
+}
+
 export function buildBrowserMatrixContract(profileIds: string[]): BrowserMatrixContract {
   const selected = new Set(profileIds);
   const profiles = BROWSER_MATRIX_PRESETS
     .filter((profile) => selected.has(profile.profile_id))
-    .map(({ label: _label, note: _note, enabledByDefault: _enabled, ...profile }) => profile);
+    .map(asContractProfile);
   if (profiles.length < 2 || profiles.length > 12) {
     throw new Error('浏览器矩阵必须包含 2–12 个唯一 profile。');
   }
