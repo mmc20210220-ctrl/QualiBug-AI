@@ -21,9 +21,11 @@ BASELINE_ADAPTERS = frozenset({"http_api"})
 # These are not target capabilities and never authorize access to customer data.
 PRODUCT_OWNED_ADAPTERS = frozenset({"process_ledger"})
 
-# adapter -> what a service must declare for it to become available.
+# adapter -> what the customer/campaign must explicitly declare for it to become
+# available. These strings are operator-facing diagnostics, not inference rules.
 DECLARATION_REQUIRED: dict[str, str] = {
     "db_sql": "services[].db",
+    "ui_browser": "runtime_contract.declared_adapters[] + ui_formal_contracts[]",
 }
 
 
@@ -74,6 +76,11 @@ def resolve_available_adapters(
     Target-facing adapters are added only when the customer declares what they
     observe. Product-owned adapters are added because their evidence is created
     inside the formal executor, not discovered on the target.
+
+    ``ui_browser`` is deliberately not inferred from a UI URL, an installed
+    Playwright package, or the presence of browser steps. The campaign must name
+    the adapter explicitly, and the UI formal-chain entry point separately
+    requires source-bound ``ui_formal_contracts`` before executing it.
     """
     available = set(BASELINE_ADAPTERS | PRODUCT_OWNED_ADAPTERS)
     config = _declared_config(Path(root), project)
