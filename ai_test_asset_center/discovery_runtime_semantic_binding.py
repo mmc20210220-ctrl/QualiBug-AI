@@ -10,6 +10,7 @@ those symbols with stable additive wrappers:
 * enterprise and explicit scan UI contracts;
 * professional source-declared read-only UI/UX assertions;
 * responsive viewport/media and deterministic accessibility checks;
+* immutable deterministic visual baseline regression;
 * governed non-production UI interaction with rendered and persistent cleanup equivalence;
 * minimized interactive evidence with no HAR or Playwright trace persistence;
 * source-declared asynchronous event contracts;
@@ -57,6 +58,9 @@ from .professional_ui_readonly import install_professional_ui_readonly
 from .professional_ui_responsive_accessibility import (
     install_professional_ui_responsive_accessibility,
 )
+from .professional_ui_visual_baseline import (
+    install_professional_ui_visual_baseline,
+)
 from .scan_event_contract_external_signal import (
     overlay_scan_event_contracts_with_external_signals,
 )
@@ -98,15 +102,18 @@ _ORIGINAL_MARKER = "_qualibug_original_behavior_ir_builder"
 
 # Register formal surfaces before any obligation or experiment is compiled. Every installer is
 # idempotent and performs no target I/O. The UI installers extend one authority in order:
-# read-only assertions, scan admission, responsive/accessibility behavior, governed interaction,
-# plan-level checks, evidence minimization, persistent cleanup observation, then direct-scan
-# admission parity with enterprise source contracts.
+# read-only assertions, scan admission, responsive/accessibility behavior, deterministic visual
+# comparison, governed interaction, plan-level checks, evidence minimization, persistent cleanup
+# observation, then direct-scan admission parity with enterprise source contracts. Installing the
+# visual observer before the interaction observer means interactive visual findings inherit the
+# cleanup-equivalence gate instead of bypassing it.
 install_non_http_observers()
 install_formal_ui_surface()
 install_formal_ui_read_only_guard()
 install_professional_ui_readonly()
 install_professional_ui_contract_guard()
 install_professional_ui_responsive_accessibility()
+install_professional_ui_visual_baseline()
 install_controlled_ui_interaction()
 install_controlled_ui_interaction_contract_guard()
 install_controlled_ui_interaction_privacy_guard()
