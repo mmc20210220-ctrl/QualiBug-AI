@@ -37,15 +37,47 @@ def test_scan_context_threads_explicit_observer_adapters_without_inference() -> 
     context = build_campaign_context_from_scan_body({
         "base_url": "https://example.test",
         "ui_base_url": "https://example.test",
-        "declared_adapters": ["ui_browser", "db_sql", "ui_browser"],
+        "declared_adapters": [
+            "ui_browser",
+            "db_sql",
+            "event_observer_http",
+            "ui_browser",
+        ],
     })
 
-    assert context["declared_adapters"] == ["ui_browser", "db_sql"]
+    assert context["declared_adapters"] == [
+        "ui_browser",
+        "db_sql",
+        "event_observer_http",
+    ]
 
 
 def test_scan_context_preserves_explicit_empty_adapter_declaration() -> None:
     context = build_campaign_context_from_scan_body({"declared_adapters": []})
     assert context["declared_adapters"] == []
+
+
+def test_scan_context_threads_formal_event_contracts_without_interpreting_them() -> None:
+    contract = {
+        "contract_id": "order-created-event",
+        "source_refs": [{"source_id": "event-spec", "locator": "EVT-1"}],
+        "operation_id": "create_order",
+        "actor_role": "buyer",
+        "observer_path": "/test-observers/events",
+    }
+    context = build_campaign_context_from_scan_body({
+        "event_formal_contracts": [contract],
+    })
+
+    assert context["event_formal_contracts"] == [contract]
+    assert context["event_formal_contracts"][0] is not contract
+
+
+def test_scan_context_preserves_explicit_empty_event_contract_list() -> None:
+    context = build_campaign_context_from_scan_body({
+        "event_formal_contracts": [],
+    })
+    assert context["event_formal_contracts"] == []
 
 
 @pytest.mark.parametrize(
@@ -65,6 +97,25 @@ def test_scan_context_rejects_invalid_adapter_declarations(
 ) -> None:
     with pytest.raises(ValueError, match=rf"^{reason}$"):
         build_campaign_context_from_scan_body({"declared_adapters": value})
+
+
+@pytest.mark.parametrize(
+    ("value", "reason"),
+    [
+        ({}, "event_formal_contracts_not_list"),
+        (None, "event_formal_contracts_not_list"),
+        (["event"], "event_formal_contract_not_object:0"),
+        ([{}, 1], "event_formal_contract_not_object:1"),
+    ],
+)
+def test_scan_context_rejects_invalid_event_contract_transport_shape(
+    value: object,
+    reason: str,
+) -> None:
+    with pytest.raises(ValueError, match=rf"^{reason}$"):
+        build_campaign_context_from_scan_body({
+            "event_formal_contracts": value,
+        })
 
 
 @pytest.mark.parametrize(
