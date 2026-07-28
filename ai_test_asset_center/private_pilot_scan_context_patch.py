@@ -22,6 +22,9 @@ from ai_test_asset_center.private_pilot_upload_fixture_health_patch import (
 from ai_test_asset_center.private_pilot_upload_fixture_routes import (
     install_private_pilot_upload_fixture_routes,
 )
+from ai_test_asset_center.ui_upload_fixture_registry_integrity import (
+    install_upload_fixture_registry_integrity,
+)
 from ai_test_asset_center.ui_upload_fixture_runtime_binding import (
     install_ui_upload_fixture_runtime_binding,
 )
@@ -46,6 +49,7 @@ def install_scan_campaign_context_patch(*, patch_source: str) -> None:
     install_performance_scan_context_bridge()
     # Upload fixtures are part of the same immutable scan-context authority. These
     # installers are idempotent and perform no browser or target I/O.
+    install_upload_fixture_registry_integrity()
     install_ui_upload_fixture_runtime_binding()
     install_private_pilot_upload_fixture_routes()
     install_upload_fixture_health_patch()
