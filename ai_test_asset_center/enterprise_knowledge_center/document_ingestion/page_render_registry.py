@@ -11,9 +11,9 @@ from .page_rendering import (
     PageRendererRegistry as _BasePageRendererRegistry,
     PdfiumPdfPageRenderer,
     PypdfEmbeddedImagePageRenderer,
-    RasterImagePageRenderer,
     RenderedPage,
 )
+from .universal_image_renderer import UniversalImagePageRenderer
 
 
 def _targets(values: Iterable[int] | None) -> set[int]:
@@ -41,6 +41,7 @@ class PageRendererRegistry(_BasePageRendererRegistry):
         errors: list[dict[str, Any]] = []
         attempted: list[str] = []
         selected: dict[int, list[RenderedPage]] = {}
+        image_decode_receipts: list[dict[str, Any]] = []
 
         for renderer in self.matching(source):
             attempted.append(renderer.name)
@@ -58,6 +59,9 @@ class PageRendererRegistry(_BasePageRendererRegistry):
                     }
                 )
                 continue
+            decode_receipt = getattr(renderer, "last_decode_receipt", None)
+            if isinstance(decode_receipt, dict) and decode_receipt:
+                image_decode_receipts.append(dict(decode_receipt))
             if not rendered:
                 errors.append(
                     {
@@ -102,6 +106,14 @@ class PageRendererRegistry(_BasePageRendererRegistry):
             for row in rendered_pages
             if row.renderer_name
         }
+        decoded_formats = sorted(
+            {
+                str(value)
+                for receipt in image_decode_receipts
+                for value in receipt.get("detected_formats") or []
+                if str(value).strip()
+            }
+        )
         receipt = {
             "schema": PAGE_RENDER_RECEIPT_SCHEMA,
             "status": status,
@@ -116,6 +128,9 @@ class PageRendererRegistry(_BasePageRendererRegistry):
             "missing_pages": missing_pages,
             "rendered_image_count": len(rendered_pages),
             "attempted_renderers": attempted,
+            "image_decode_receipt_count": len(image_decode_receipts),
+            "image_decode_receipts": image_decode_receipts,
+            "decoded_image_formats": decoded_formats,
             "error_count": len(errors),
             "errors": errors,
             "reason_code": reason_code,
@@ -127,7 +142,7 @@ class PageRendererRegistry(_BasePageRendererRegistry):
 def build_default_page_renderer_registry() -> PageRendererRegistry:
     return PageRendererRegistry(
         [
-            RasterImagePageRenderer(),
+            UniversalImagePageRenderer(),
             PdfiumPdfPageRenderer(),
             LibreOfficeDocumentPageRenderer(),
             PypdfEmbeddedImagePageRenderer(),
