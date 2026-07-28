@@ -1,5 +1,7 @@
 import { currentToken } from './client';
 
+export const VISUAL_BASELINES_CHANGED_EVENT = 'qualibug-visual-baselines-change';
+
 export type VisualBaselineAuthority = 'source_registered' | 'approved_copy' | string;
 export type VisualBaselineStatus = 'active' | 'revoked' | string;
 
@@ -71,6 +73,13 @@ function asBoolean(value: unknown): boolean {
 function optionalString(value: unknown): string | undefined {
   const text = asString(value);
   return text || undefined;
+}
+
+function notifyVisualBaselineChange(project: string): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent(VISUAL_BASELINES_CHANGED_EVENT, {
+    detail: { project },
+  }));
 }
 
 function toVisualBaselineRecord(value: unknown): VisualBaselineRecord | null {
@@ -227,7 +236,9 @@ export async function registerVisualBaseline(input: {
       full_page: input.fullPage,
     }),
   });
-  return requiredBaselineFromPayload(payload, '后端未返回有效视觉基线记录。');
+  const baseline = requiredBaselineFromPayload(payload, '后端未返回有效视觉基线记录。');
+  notifyVisualBaselineChange(input.project);
+  return baseline;
 }
 
 export async function approveVisualBaseline(
@@ -242,7 +253,9 @@ export async function approveVisualBaseline(
       baseline_id: baselineId,
     }),
   });
-  return requiredBaselineFromPayload(payload, '后端未返回有效审批记录。');
+  const baseline = requiredBaselineFromPayload(payload, '后端未返回有效审批记录。');
+  notifyVisualBaselineChange(project);
+  return baseline;
 }
 
 export async function revokeVisualBaseline(
@@ -259,5 +272,7 @@ export async function revokeVisualBaseline(
       reason,
     }),
   });
-  return requiredBaselineFromPayload(payload, '后端未返回有效撤销记录。');
+  const baseline = requiredBaselineFromPayload(payload, '后端未返回有效撤销记录。');
+  notifyVisualBaselineChange(project);
+  return baseline;
 }
