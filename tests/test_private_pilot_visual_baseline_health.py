@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from ai_test_asset_center import private_pilot_health_contract as health
+from ai_test_asset_center import private_pilot_visual_baseline_health_patch as patch
 from ai_test_asset_center.private_pilot_visual_baseline_health_patch import (
     install_visual_baseline_health_patch,
     visual_baseline_health_status,
@@ -75,6 +78,37 @@ def test_visual_baseline_health_is_additive_and_does_not_rewrite_overall_status(
     }
 
     monkeypatch.setattr(health, "build_private_pilot_health_payload", original)
+
+
+def test_visual_health_propagates_only_exact_stale_consumer_aliases(
+    monkeypatch: Any,
+) -> None:
+    def original(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {"source": "original"}
+
+    def wrapped(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {"source": "wrapped"}
+
+    def custom(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {"source": "custom"}
+
+    deployment = SimpleNamespace(build_private_pilot_health_payload=original)
+    doctor = SimpleNamespace(build_private_pilot_health_payload=custom)
+    monkeypatch.setitem(
+        sys.modules,
+        "ai_test_asset_center.private_pilot_deployment_patch",
+        deployment,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "ai_test_asset_center.private_pilot_doctor",
+        doctor,
+    )
+
+    patch._propagate_loaded_consumer_aliases(original, wrapped)
+
+    assert deployment.build_private_pilot_health_payload is wrapped
+    assert doctor.build_private_pilot_health_payload is custom
 
 
 def test_visual_baseline_health_reports_explicit_runtime_installation_state() -> None:
