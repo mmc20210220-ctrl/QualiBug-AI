@@ -227,6 +227,7 @@ def build_professional_ui_coverage(result: dict[str, Any]) -> dict[str, Any]:
 
     terminal_reason_counts: Counter[str] = Counter()
     cleanup_status_counts: Counter[str] = Counter()
+    invalid_deliverable_without_cleanup_count = 0
     for attempt in attempts:
         obligation_id = _text(attempt.get("obligation_id"))
         categories = obligation_categories.get(obligation_id, set())
@@ -241,7 +242,21 @@ def build_professional_ui_coverage(result: dict[str, Any]) -> dict[str, Any]:
         oracle_status = _text(
             _dict(execution.get("oracle_verdict")).get("status")
         ).upper()
-        deliverable = _text(attempt.get("terminal_status")).upper() == "DELIVERABLE"
+        cleanup_required = obligation_requires_cleanup.get(obligation_id, False)
+        ledger_deliverable = (
+            _text(attempt.get("terminal_status")).upper() == "DELIVERABLE"
+        )
+        invalid_deliverable = bool(
+            ledger_deliverable
+            and cleanup_required
+            and cleanup_status != "ACCEPTED"
+        )
+        if invalid_deliverable:
+            invalid_deliverable_without_cleanup_count += 1
+            terminal_reason_counts[
+                "UI_DELIVERABLE_WITHOUT_CLEANUP_EQUIVALENCE"
+            ] += 1
+        deliverable = ledger_deliverable and not invalid_deliverable
         reason = _text(attempt.get("reason_code"))
         if reason and not deliverable:
             terminal_reason_counts[reason] += 1
@@ -256,12 +271,16 @@ def build_professional_ui_coverage(result: dict[str, Any]) -> dict[str, Any]:
                 row["violation_count"] += 1
             if deliverable:
                 row["deliverable_count"] += 1
-            if obligation_requires_cleanup.get(obligation_id):
+            if cleanup_required:
                 if cleanup_status == "ACCEPTED":
                     row["cleanup_equivalence_accepted_count"] += 1
                 else:
                     row["cleanup_equivalence_indeterminate_count"] += 1
-            if not observed or oracle_status not in {"PROPERTY_HELD", "VIOLATION"}:
+            if (
+                not observed
+                or oracle_status not in {"PROPERTY_HELD", "VIOLATION"}
+                or invalid_deliverable
+            ):
                 row["blocked_or_indeterminate_count"] += 1
 
     supported_readonly = sorted(ASSERTION_ACTIONS | CONFIG_ACTIONS)
@@ -286,6 +305,13 @@ def build_professional_ui_coverage(result: dict[str, Any]) -> dict[str, Any]:
             ),
             "equivalence_scope": EQUIVALENCE_SCOPE,
             "persistent_probe_property": PERSISTENT_PROBE_PROPERTY,
+        },
+        "cleanup_delivery_invariant": {
+            "cleanup_equivalence_required_for_delivery": True,
+            "invalid_deliverable_without_cleanup_count": (
+                invalid_deliverable_without_cleanup_count
+            ),
+            "invalid_deliverables_counted_as_deliverable": False,
         },
         "dimensions": category_rows,
         "dimensions_without_declared_contracts": sorted(
