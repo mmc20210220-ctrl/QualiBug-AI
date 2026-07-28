@@ -62,6 +62,13 @@ def _declared_mode_mismatch(raw: dict[str, Any]) -> bool:
 
 
 def install_formal_ui_persistent_probe_guard() -> None:
+    from ._formal_ui_complex_interaction_guard import (
+        install_formal_ui_complex_interaction_guard,
+    )
+
+    # Complex action vocabulary and exact source-field validation must be installed
+    # before this cleanup guard captures the current contract validator.
+    install_formal_ui_complex_interaction_guard()
     if getattr(_contracts, _INSTALL_MARKER, False):
         return
     original = getattr(
