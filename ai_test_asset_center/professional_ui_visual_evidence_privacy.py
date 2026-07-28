@@ -11,12 +11,15 @@ visual regression. This guard gives visual plans a stricter evidence profile:
   then written once in masked form;
 * console text, network URLs and untyped runtime exceptions are fingerprinted in
   the first JSON serialization;
+* stale browser evidence under the exact reused run directory is removed before
+  execution so a new result cannot reference an older raw artifact;
 * formal visual comparison receipts remain unchanged and authoritative.
 """
 from __future__ import annotations
 
 import contextvars
 import copy
+import io
 import json
 from pathlib import Path
 from typing import Any
@@ -120,6 +123,7 @@ def _scrub_result(result: dict[str, Any]) -> dict[str, Any]:
         "raw_network_url_persisted": False,
         "runtime_exception_text_persisted": False,
         "persisted_screenshots_masked_before_first_write": True,
+        "stale_browser_evidence_removed_before_run": True,
         "raw_visual_comparison_pixels_embedded_in_json": False,
     }
     return row
@@ -184,7 +188,7 @@ class _VisualPrivacyPage:
         output = Path(str(destination))
         output.parent.mkdir(parents=True, exist_ok=True)
         image.save(output, format="PNG")
-        buffer = __import__("io").BytesIO()
+        buffer = io.BytesIO()
         image.save(buffer, format="PNG")
         return buffer.getvalue()
 
@@ -222,6 +226,36 @@ class _VisualPrivacyBrowser:
             self._browser.new_context(*args, **options),
             self._mask_step,
         )
+
+
+def _artifact_dir(root: Path, project_id: str, run_id: str) -> Path:
+    project = _professional._browser._safe_project(project_id)
+    execution = _professional._browser._safe_run_id(run_id)
+    return (
+        Path(root)
+        / "platform_workspace"
+        / project
+        / "browser_runs"
+        / execution
+    )
+
+
+def _remove_stale_browser_evidence(
+    *,
+    root: Path,
+    project_id: str,
+    run_id: str,
+) -> None:
+    directory = _artifact_dir(root, project_id, run_id)
+    if not directory.is_dir():
+        return
+    for path in directory.iterdir():
+        if not path.is_file():
+            continue
+        if path.name in {"trace.zip", "network.har", "browser_execution.json"} or (
+            path.suffix.lower() == ".png"
+        ):
+            path.unlink(missing_ok=True)
 
 
 def _rewrite_artifact(result: dict[str, Any], root: Path) -> None:
@@ -290,6 +324,11 @@ def install_visual_evidence_privacy() -> None:
                 root=root,
                 run_id=run_id,
             )
+        _remove_stale_browser_evidence(
+            root=Path(root),
+            project_id=project_id,
+            run_id=run_id,
+        )
         token = _CONTEXT.set({
             "mask_step": _combined_mask_step(visual_steps),
             "project": _text(project_id),
