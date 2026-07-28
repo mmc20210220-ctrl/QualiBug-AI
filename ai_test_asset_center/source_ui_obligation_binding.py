@@ -6,9 +6,9 @@ invariant as validation and creates a status-code experiment. This extension rem
 misclassified variant and emits exactly one UI obligation from the already exact IR identities.
 
 Read-only UI obligations need no cleanup. Governed interactive UI obligations delegate cleanup
-to the registered UI observer, which executes the source-declared browser compensation and
-requires a content-addressed cleanup-equivalence receipt before Oracle eligibility. The generic
-HTTP finalizer must not run a second compensation or label the write as cleanup-free.
+to the registered UI observer, which executes source-declared browser compensation and requires
+rendered plus source-selected persistent-state equivalence before Oracle eligibility. The
+generic HTTP finalizer must not run a second compensation or label the write as cleanup-free.
 """
 from __future__ import annotations
 
@@ -26,11 +26,17 @@ from .professional_ui_interaction_cleanup import (
     CLEANUP_RECEIPT_SCHEMA,
     INTERACTIVE_ACTIONS,
 )
+from .professional_ui_interaction_privacy_guard import EVIDENCE_POLICY
+from .professional_ui_persistent_cleanup_probe import (
+    EQUIVALENCE_SCOPE,
+    PERSISTENT_PROBE_PROPERTY,
+)
 from .test_obligation import dedupe_obligations, make_obligation
 
 _INSTALL_MARKER = "_qualibug_source_ui_obligation_binding_installed"
 _ORIGINAL_MARKER = "_qualibug_original_compile_obligations_for_source_ui"
 _WRITE_MODE = "approved_sandbox_write"
+_READ_ONLY_MODE = "safe_read_only"
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -71,13 +77,16 @@ def _ui_invariants(behavior_ir: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def _request_mode(request: dict[str, Any]) -> str:
+def _request_modes(request: dict[str, Any]) -> tuple[str, str, str]:
     plan = _dict(request.get("browser_plan"))
-    return _text(
-        request.get("execution_mode")
-        or plan.get("execution_mode")
-        or "safe_read_only"
-    )
+    request_mode = _text(request.get("execution_mode"))
+    plan_mode = _text(plan.get("execution_mode"))
+    effective = request_mode or plan_mode or _READ_ONLY_MODE
+    return request_mode, plan_mode, effective
+
+
+def _request_mode(request: dict[str, Any]) -> str:
+    return _request_modes(request)[2]
 
 
 def _interaction_actions(request: dict[str, Any]) -> list[str]:
@@ -89,39 +98,87 @@ def _interaction_actions(request: dict[str, Any]) -> list[str]:
     ]
 
 
+def _persistent_probes(request: dict[str, Any]) -> list[dict[str, Any]]:
+    plan = _dict(request.get("browser_plan"))
+    return [
+        copy.deepcopy(row)
+        for row in _list(plan.get("state_probes"))
+        if isinstance(row, dict)
+        and _text(row.get("property")).lower() == PERSISTENT_PROBE_PROPERTY
+    ]
+
+
 def _cleanup_authority(request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     """Return property metadata and the generic-finalizer cleanup requirement."""
     actions = _interaction_actions(request)
-    mode = _request_mode(request)
-    if mode == _WRITE_MODE and actions:
-        authority = {
-            "mode": "observer_managed_browser_cleanup",
-            "observer_id": OBSERVER_ID,
-            "receipt_schema": CLEANUP_RECEIPT_SCHEMA,
-            "equivalence_required": True,
-            "generic_http_cleanup_must_not_run": True,
-        }
-        requirement = {
-            "required": False,
-            "mode": "observer_managed_browser_cleanup",
-            "delegated": True,
-            "observer_id": OBSERVER_ID,
-            "receipt_schema": CLEANUP_RECEIPT_SCHEMA,
-            "reason": "formal_ui_observer_requires_cleanup_equivalence_before_verdict",
-        }
-        return authority, requirement
-    return (
-        {
-            "mode": "not_required_read_only",
-            "observer_id": OBSERVER_ID,
-            "equivalence_required": False,
-        },
-        {
-            "required": False,
-            "mode": "not_required_read_only",
-            "reason": "read_only_ui_contract",
-        },
-    )
+    if not actions:
+        return (
+            {
+                "mode": "not_required_read_only",
+                "observer_id": OBSERVER_ID,
+                "equivalence_required": False,
+                "contract_complete": True,
+            },
+            {
+                "required": False,
+                "mode": "not_required_read_only",
+                "reason": "read_only_ui_contract",
+            },
+        )
+
+    plan = _dict(request.get("browser_plan"))
+    contract = _dict(plan.get("interaction_contract"))
+    request_mode, plan_mode, effective_mode = _request_modes(request)
+    probes = _persistent_probes(request)
+    incomplete_reasons: list[str] = []
+    if effective_mode != _WRITE_MODE:
+        incomplete_reasons.append("approved_sandbox_write_mode_required")
+    if request_mode and plan_mode and request_mode != plan_mode:
+        incomplete_reasons.append("request_plan_execution_mode_mismatch")
+    expected_contract = {
+        "cleanup_strategy": "browser_compensation",
+        "equivalence": "source_declared_state_probes",
+        "equivalence_scope": EQUIVALENCE_SCOPE,
+        "target_scope": "approved_nonproduction_target",
+        "evidence_policy": EVIDENCE_POLICY,
+    }
+    for key, expected in expected_contract.items():
+        if _text(contract.get(key)) != expected:
+            incomplete_reasons.append(f"interaction_contract_{key}_invalid")
+    if not probes:
+        incomplete_reasons.append("persistent_cleanup_probe_missing")
+
+    authority = {
+        "mode": "observer_managed_browser_cleanup",
+        "observer_id": OBSERVER_ID,
+        "receipt_schema": CLEANUP_RECEIPT_SCHEMA,
+        "equivalence_required": True,
+        "equivalence_scope": EQUIVALENCE_SCOPE,
+        "persistent_probe_property": PERSISTENT_PROBE_PROPERTY,
+        "persistent_probe_required": True,
+        "persistent_probe_count": len(probes),
+        "rendered_state_only_cleanup_accepted": False,
+        "universal_backend_restoration_claimed": False,
+        "evidence_policy": EVIDENCE_POLICY,
+        "har_persisted": False,
+        "trace_persisted": False,
+        "generic_http_cleanup_must_not_run": True,
+        "contract_complete": not incomplete_reasons,
+        "incomplete_reasons": incomplete_reasons,
+    }
+    requirement = {
+        "required": False,
+        "mode": "observer_managed_browser_cleanup",
+        "delegated": True,
+        "observer_id": OBSERVER_ID,
+        "receipt_schema": CLEANUP_RECEIPT_SCHEMA,
+        "equivalence_scope": EQUIVALENCE_SCOPE,
+        "persistent_probe_required": True,
+        "persistent_probe_count": len(probes),
+        "evidence_policy": EVIDENCE_POLICY,
+        "reason": "formal_ui_observer_requires_cleanup_equivalence_before_verdict",
+    }
+    return authority, requirement
 
 
 def compile_obligations_with_source_ui(
@@ -140,6 +197,7 @@ def compile_obligations_with_source_ui(
             "obligation_count": 0,
             "interactive_obligation_count": 0,
             "read_only_obligation_count": 0,
+            "persistent_probe_count": 0,
             "misclassified_obligation_count_removed": 0,
         }
         return baseline
@@ -176,6 +234,7 @@ def compile_obligations_with_source_ui(
     skipped: list[dict[str, str]] = []
     interactive_count = 0
     read_only_count = 0
+    persistent_probe_count = 0
 
     for invariant in ui_invariants:
         invariant_ref = _text(invariant.get("id"))
@@ -226,8 +285,17 @@ def compile_obligations_with_source_ui(
         request = copy.deepcopy(_dict(invariant.get("ui_request")))
         cleanup_authority, cleanup_requirement = _cleanup_authority(request)
         is_interactive = cleanup_authority.get("equivalence_required") is True
+        if is_interactive and cleanup_authority.get("contract_complete") is not True:
+            skipped.append({
+                "invariant_ref": invariant_ref,
+                "reason_code": "FORMAL_UI_INTERACTION_CLEANUP_AUTHORITY_INCOMPLETE",
+            })
+            continue
         interactive_count += int(is_interactive)
         read_only_count += int(not is_interactive)
+        persistent_probe_count += int(
+            cleanup_authority.get("persistent_probe_count") or 0
+        )
         property_spec = {
             "template": PROTOCOL_TEMPLATE,
             "invariant_ref": invariant_ref,
@@ -318,8 +386,12 @@ def compile_obligations_with_source_ui(
             "obligation_count": len(additions),
             "interactive_obligation_count": interactive_count,
             "read_only_obligation_count": read_only_count,
+            "persistent_probe_count": persistent_probe_count,
             "interactive_cleanup_authority": "formal_ui_observer_receipt",
             "interactive_cleanup_receipt_schema": CLEANUP_RECEIPT_SCHEMA,
+            "interactive_cleanup_equivalence_scope": EQUIVALENCE_SCOPE,
+            "interactive_persistent_probe_property": PERSISTENT_PROBE_PROPERTY,
+            "interactive_evidence_policy": EVIDENCE_POLICY,
             "misclassified_obligation_count_removed": removed,
             "skipped_count": len(skipped),
             "skipped_reason_counts": {
