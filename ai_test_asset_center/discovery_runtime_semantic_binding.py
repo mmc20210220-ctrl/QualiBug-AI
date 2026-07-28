@@ -21,9 +21,11 @@ from .formal_event_surface import install_formal_event_surface
 from .formal_ui_surface import install_formal_ui_surface
 from .formal_ui_surface_guard import install_formal_ui_read_only_guard
 from .non_http_observers import install_non_http_observers
+from .scan_event_contract_external_signal import (
+    overlay_scan_event_contracts_with_external_signals,
+)
 from .scan_event_contract_overlay import (
     bind_scan_event_contract_context,
-    overlay_scan_event_contracts,
     reset_scan_event_contract_context,
 )
 from .scan_ui_contract_overlay import (
@@ -112,7 +114,9 @@ def build_behavior_ir_with_semantic_operation_bindings(
     """Build canonical IR and apply only exact source-grounded joins."""
 
     ui_asset, scan_ui_receipt = overlay_scan_ui_contracts(asset)
-    effective_asset, scan_event_receipt = overlay_scan_event_contracts(ui_asset)
+    effective_asset, scan_event_receipt = (
+        overlay_scan_event_contracts_with_external_signals(ui_asset)
+    )
     behavior_ir = _original_build_behavior_ir(
         effective_asset,
         project_id=project_id,
