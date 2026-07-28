@@ -7,19 +7,20 @@ upstream receipts that precede selection:
     scan overlay -> source/IR binding -> UI obligation compiler
     -> compile -> execute -> observe -> Oracle -> Delivery Gate
 
-It additionally projects professional read-only UI/UX coverage dimensions from
-the same obligations and receipts. Recall, precision and F1 remain unavailable
-without an external hidden-GT evaluator.
+Professional UI coverage and this top-level funnel share the same cleanup gate:
+interactive outcomes are not counted as observed Oracle results or deliverables
+unless the typed UI observer carries an ACCEPTED cleanup-equivalence receipt.
+Recall, precision and F1 remain unavailable without an external hidden-GT
+evaluator.
 """
 from __future__ import annotations
 
 from collections import Counter
 from typing import Any
 
-from .formal_ui_surface import OBSERVER_ID, RISK_FAMILY
-from .professional_ui_coverage_projection import (
-    build_professional_ui_coverage,
-)
+from .formal_ui_surface import EVIDENCE_KEY, OBSERVER_ID, RISK_FAMILY
+from .professional_ui_coverage_projection import build_professional_ui_coverage
+from .professional_ui_interaction_cleanup import INTERACTIVE_ACTIONS
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -57,6 +58,39 @@ def _execution_rows(result: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
+def _ui_receipts(execution: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        row
+        for row in _list(execution.get("observer_receipts"))
+        if isinstance(row, dict) and _text(row.get("observer_id")) == OBSERVER_ID
+    ]
+
+
+def _cleanup_status(receipts: list[dict[str, Any]]) -> str:
+    statuses: list[str] = []
+    for receipt in receipts:
+        ui_evidence = _dict(_dict(receipt.get("evidence")).get(EVIDENCE_KEY))
+        status = _text(_dict(ui_evidence.get("cleanup_receipt")).get("status")).upper()
+        if status:
+            statuses.append(status)
+    unique = list(dict.fromkeys(statuses))
+    return unique[0] if len(unique) == 1 else "AMBIGUOUS" if unique else ""
+
+
+def _requires_cleanup(obligation: dict[str, Any]) -> bool:
+    prop = _dict(obligation.get("property"))
+    authority = _dict(prop.get("ui_cleanup_authority"))
+    if authority.get("equivalence_required") is True:
+        return True
+    request = _dict(prop.get("ui_request"))
+    plan = _dict(request.get("browser_plan"))
+    return any(
+        _text(row.get("action")).lower() in INTERACTIVE_ACTIONS
+        for row in _list(plan.get("steps"))
+        if isinstance(row, dict)
+    )
+
+
 def build_formal_ui_loss_funnel(result: dict[str, Any]) -> dict[str, Any]:
     behavior_ir = _dict(result.get("behavior_ir"))
     test_obligations = _dict(result.get("test_obligations"))
@@ -69,6 +103,11 @@ def build_formal_ui_loss_funnel(result: dict[str, Any]) -> dict[str, Any]:
         for row in _list(test_obligations.get("obligations"))
         if isinstance(row, dict) and _text(row.get("risk_family")) == RISK_FAMILY
     ]
+    obligation_by_id = {
+        _text(row.get("obligation_id")): row
+        for row in ui_obligations
+        if _text(row.get("obligation_id"))
+    }
     attempts = [
         dict(row)
         for row in _list(_dict(result.get("obligation_attempt_ledger")).get("attempts"))
@@ -86,16 +125,25 @@ def build_formal_ui_loss_funnel(result: dict[str, Any]) -> dict[str, Any]:
     oracle_evaluated = 0
     oracle_violation = 0
     oracle_property_held = 0
+    deliverable = 0
+    invalid_cleanup_oracle_count = 0
+    invalid_cleanup_deliverable_count = 0
     observer_reason_counts: Counter[str] = Counter()
     oracle_status_counts: Counter[str] = Counter()
+    terminal_reasons: Counter[str] = Counter()
+
     for attempt in attempts:
-        execution = _dict(execution_by_obligation.get(_text(attempt.get("obligation_id"))))
-        receipts = [
-            row
-            for row in _list(execution.get("observer_receipts"))
-            if isinstance(row, dict) and _text(row.get("observer_id")) == OBSERVER_ID
-        ]
-        if any(_text(row.get("status")).upper() == "OBSERVED" for row in receipts):
+        obligation_id = _text(attempt.get("obligation_id"))
+        execution = _dict(execution_by_obligation.get(obligation_id))
+        receipts = _ui_receipts(execution)
+        cleanup_required = _requires_cleanup(_dict(obligation_by_id.get(obligation_id)))
+        cleanup_accepted = _cleanup_status(receipts) == "ACCEPTED"
+        outcome_allowed = not cleanup_required or cleanup_accepted
+
+        receipt_observed = any(
+            _text(row.get("status")).upper() == "OBSERVED" for row in receipts
+        )
+        if receipt_observed and outcome_allowed:
             observed += 1
         observer_reason_counts.update(
             _text(row.get("reason_code"))
@@ -103,27 +151,33 @@ def build_formal_ui_loss_funnel(result: dict[str, Any]) -> dict[str, Any]:
             if _text(row.get("status")).upper() != "OBSERVED"
             and _text(row.get("reason_code"))
         )
+        if receipt_observed and not outcome_allowed:
+            observer_reason_counts["UI_OBSERVED_WITHOUT_CLEANUP_EQUIVALENCE"] += 1
+
         oracle = _dict(execution.get("oracle_verdict"))
         oracle_status = _text(oracle.get("status")).upper()
-        if oracle_status:
+        if oracle_status and outcome_allowed:
             oracle_evaluated += 1
             oracle_status_counts[oracle_status] += 1
-        if oracle_status == "VIOLATION":
-            oracle_violation += 1
-        elif oracle_status == "PROPERTY_HELD":
-            oracle_property_held += 1
+            if oracle_status == "VIOLATION":
+                oracle_violation += 1
+            elif oracle_status == "PROPERTY_HELD":
+                oracle_property_held += 1
+        elif oracle_status in {"VIOLATION", "PROPERTY_HELD"} and not outcome_allowed:
+            invalid_cleanup_oracle_count += 1
+            oracle_status_counts["SUPPRESSED_WITHOUT_CLEANUP_EQUIVALENCE"] += 1
 
-    deliverable = sum(
-        1
-        for row in attempts
-        if _text(row.get("terminal_status")).upper() == "DELIVERABLE"
-    )
-    terminal_reasons = Counter(
-        _text(row.get("reason_code"))
-        for row in attempts
-        if _text(row.get("terminal_status")).upper() != "DELIVERABLE"
-        and _text(row.get("reason_code"))
-    )
+        ledger_deliverable = _text(attempt.get("terminal_status")).upper() == "DELIVERABLE"
+        if ledger_deliverable and outcome_allowed:
+            deliverable += 1
+        elif ledger_deliverable and not outcome_allowed:
+            invalid_cleanup_deliverable_count += 1
+            terminal_reasons["UI_DELIVERABLE_WITHOUT_CLEANUP_EQUIVALENCE"] += 1
+        else:
+            reason = _text(attempt.get("reason_code"))
+            if reason:
+                terminal_reasons[reason] += 1
+
     binding_reason_counts = Counter({
         _text(key): _safe_int(value)
         for key, value in _dict(source_binding.get("reason_counts")).items()
@@ -141,6 +195,7 @@ def build_formal_ui_loss_funnel(result: dict[str, Any]) -> dict[str, Any]:
     bound_invariants = _safe_int(source_binding.get("bound_invariant_count"))
     obligation_count = len(ui_obligations)
     selected_count = len(attempts)
+    professional_coverage = build_professional_ui_coverage(result)
 
     return {
         "schema_version": "qualibug.formal-ui-loss-funnel.v1",
@@ -171,6 +226,16 @@ def build_formal_ui_loss_funnel(result: dict[str, Any]) -> dict[str, Any]:
             ),
             "complete_family_vector": obligation_binding.get("complete_family_vector") is True,
         },
+        "cleanup_outcome_invariant": {
+            "cleanup_equivalence_required_for_observed_outcome": True,
+            "cleanup_equivalence_required_for_oracle": True,
+            "cleanup_equivalence_required_for_delivery": True,
+            "invalid_oracle_without_cleanup_count": invalid_cleanup_oracle_count,
+            "invalid_deliverable_without_cleanup_count": (
+                invalid_cleanup_deliverable_count
+            ),
+            "invalid_outcomes_counted": False,
+        },
         "losses": {
             "source_binding_reason_counts": dict(sorted(binding_reason_counts.items())),
             "obligation_skip_reason_counts": dict(sorted(skipped_reason_counts.items())),
@@ -183,7 +248,7 @@ def build_formal_ui_loss_funnel(result: dict[str, Any]) -> dict[str, Any]:
             "violation_count": oracle_violation,
             "deliverable_count": deliverable,
         },
-        "professional_coverage": build_professional_ui_coverage(result),
+        "professional_coverage": professional_coverage,
         "external_quality_metrics": {
             "status": "NOT_MEASURED",
             "recall": None,
