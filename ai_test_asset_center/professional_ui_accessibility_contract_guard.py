@@ -5,6 +5,9 @@ from typing import Any
 
 from . import professional_ui_accessibility_engine as _engine
 from . import professional_ui_readonly as _professional
+from .professional_ui_accessibility_source_guard import (
+    install_professional_ui_accessibility_source_guard,
+)
 
 CUSTOM_STANDARD = "source-declared-rule-set"
 _INSTALL_MARKER = "_qualibug_accessibility_contract_guard_installed"
@@ -25,10 +28,14 @@ def _text(value: Any, *, limit: int = 500) -> str:
 
 def _zero_budgets(value: Any) -> bool:
     raw = _dict(value)
-    return all(int(raw.get(impact, 0) or 0) == 0 for impact in _engine.IMPACTS)
+    try:
+        return all(int(raw.get(impact, 0) or 0) == 0 for impact in _engine.IMPACTS)
+    except (TypeError, ValueError):
+        return False
 
 
 def install_professional_ui_accessibility_contract_guard() -> None:
+    install_professional_ui_accessibility_source_guard()
     if getattr(_engine, _INSTALL_MARKER, False):
         return
     original = getattr(
@@ -74,9 +81,13 @@ def install_professional_ui_accessibility_contract_guard() -> None:
                 raise _professional._browser.BrowserExecutionError(
                     "browser_accessibility_standard_exclusions_forbidden"
                 )
-            if int(raw.get("max_violations", 0) or 0) != 0 or not _zero_budgets(
-                raw.get("impact_budgets")
-            ):
+            try:
+                max_violations = int(raw.get("max_violations", 0) or 0)
+            except (TypeError, ValueError) as exc:
+                raise _professional._browser.BrowserExecutionError(
+                    "browser_accessibility_standard_zero_budget_required"
+                ) from exc
+            if max_violations != 0 or not _zero_budgets(raw.get("impact_budgets")):
                 raise _professional._browser.BrowserExecutionError(
                     "browser_accessibility_standard_zero_budget_required"
                 )
