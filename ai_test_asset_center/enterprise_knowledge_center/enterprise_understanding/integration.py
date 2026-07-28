@@ -11,24 +11,93 @@ from .schema import as_dict, as_list, text
 
 
 def _parsed_sources_for_context(asset: dict[str, Any], root: Path) -> list[dict[str, Any]]:
-    """Re-read registered sources so document hierarchy keeps original character ranges."""
+    """Re-read registered sources and attach source-preserving structure IR.
+
+    Existing parsers remain the source of extracted business facts.  For DOCX, the
+    original immutable bytes are additionally parsed into Document Structure IR so
+    headings, list levels and table positions are available to context resolution.
+    """
     from .._crud import _record_parse
 
     parsed_sources: list[dict[str, Any]] = []
     for source in as_list(asset.get("source_inventory")):
         if not isinstance(source, dict) or text(source.get("status")) != "active":
             continue
+        stored = root / text(source.get("stored_path"))
         parsed = _record_parse(source, root)
         parser_receipt = as_dict(parsed.get("parser_receipt"))
+        filename = text(source.get("original_name") or stored.name)
+        document_structure = as_dict(parsed.get("document_structure"))
+        structure_error: dict[str, Any] = {}
+        if stored.exists() and stored.suffix.lower() == ".docx":
+            try:
+                from .._document_structure_ir import extract_docx_document_ir
+
+                document_structure = extract_docx_document_ir(
+                    stored.read_bytes(), filename=filename
+                )
+            except Exception as exc:
+                structure_error = {
+                    "code": "DOCX_DOCUMENT_STRUCTURE_IR_FAILED",
+                    "detail": f"{type(exc).__name__}: {exc}"[:500],
+                    "operator_action": "inspect DOCX integrity and python-docx compatibility",
+                }
         parsed_sources.append(
             {
                 "source_id": source.get("source_id"),
-                "filename": source.get("original_name"),
+                "filename": filename,
                 "source_locator": parser_receipt.get("source_locator"),
+                # Keep the parser's original text for the legacy text-range context
+                # stage.  IR context uses document_structure blocks directly.
                 "text": parsed.get("text") or "",
+                "document_structure": document_structure,
+                "document_structure_error": structure_error,
             }
         )
     return parsed_sources
+
+
+def _attach_document_structure_assets(
+    asset: dict[str, Any], parsed_sources: Iterable[dict[str, Any]]
+) -> None:
+    rows: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    for source in parsed_sources:
+        if not isinstance(source, dict):
+            continue
+        structure = as_dict(source.get("document_structure"))
+        if structure:
+            rows.append(
+                {
+                    "source_id": source.get("source_id"),
+                    "filename": source.get("filename"),
+                    **structure,
+                }
+            )
+        error = as_dict(source.get("document_structure_error"))
+        if error:
+            errors.append(
+                {
+                    "source_id": source.get("source_id"),
+                    "filename": source.get("filename"),
+                    **error,
+                }
+            )
+    block_count = sum(len(as_list(row.get("blocks"))) for row in rows)
+    unsupported_count = sum(
+        int(as_dict(row.get("structure_receipt")).get("unsupported_content_count") or 0)
+        for row in rows
+    )
+    asset["document_structure_assets"] = {
+        "schema": "qualibug.enterprise-document-structure-assets.v1",
+        "source_count": len(rows),
+        "block_count": block_count,
+        "unsupported_content_count": unsupported_count,
+        "items": rows,
+        "errors": errors,
+        "document_order_is_business_flow": False,
+        "filename_is_business_context": False,
+    }
 
 
 def enrich_asset_with_enterprise_understanding(
@@ -36,14 +105,20 @@ def enrich_asset_with_enterprise_understanding(
     *,
     parsed_sources: Iterable[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Attach document context, refresh fact conflicts, then compile cognition model."""
+    """Attach document structure/context, reconcile conflicts, then compile cognition."""
+    source_rows = list(parsed_sources or [])
     if parsed_sources is not None:
         from .._chinese_business_conflicts import reconcile_chinese_business_fact_conflicts
         from .._chinese_document_context import apply_chinese_document_context
+        from .._document_ir_context import apply_document_ir_context
 
-        asset = apply_chinese_document_context(asset, parsed_sources)
-        # Context resolution may promote previously pending facts. Re-run the existing
-        # conflict authority before any newly promoted fact enters the understanding model.
+        _attach_document_structure_assets(asset, source_rows)
+        asset = apply_document_ir_context(asset, source_rows)
+        # The legacy text-range stage remains as a lower-fidelity supplement for
+        # formats that do not yet emit rich structure blocks.
+        asset = apply_chinese_document_context(asset, source_rows)
+        # Either context stage may promote previously pending facts. Re-run the
+        # existing conflict authority before promoted facts enter the model.
         asset = reconcile_chinese_business_fact_conflicts(asset)
 
     model = build_enterprise_understanding_model(asset)
@@ -95,6 +170,8 @@ def enrich_asset_with_enterprise_understanding(
         )
     asset["coverage_gaps"] = gaps
 
+    structure_assets = as_dict(asset.get("document_structure_assets"))
+    ir_receipt = as_dict(asset.get("document_ir_context_resolution_receipt"))
     summary = as_dict(asset.get("summary"))
     summary.update(
         {
@@ -111,6 +188,17 @@ def enrich_asset_with_enterprise_understanding(
             "enterprise_understanding_conflict_count": len(model.get("conflicts") or []),
             "enterprise_understanding_projection": as_dict(model.get("metrics")).get("model_completeness_projection"),
             "enterprise_understanding_projection_contract": "INTERNAL_MODEL_CLOSURE_NOT_RECALL_OR_ACCURACY",
+            "document_structure_source_count": int(structure_assets.get("source_count") or 0),
+            "document_structure_block_count": int(structure_assets.get("block_count") or 0),
+            "document_structure_unsupported_content_count": int(
+                structure_assets.get("unsupported_content_count") or 0
+            ),
+            "document_ir_context_resolved_fact_count": int(
+                ir_receipt.get("resolved_fact_count") or 0
+            ),
+            "document_ir_context_unresolved_fact_count": int(
+                ir_receipt.get("unresolved_fact_count") or 0
+            ),
         }
     )
     asset["summary"] = summary
@@ -127,6 +215,11 @@ def enrich_asset_with_enterprise_understanding(
             "field_or_entity_inventory_alone_cannot_pass_understanding_gate": True,
             "document_context_resolves_before_understanding_model": parsed_sources is not None,
             "document_context_promotions_are_conflict_reconciled": parsed_sources is not None,
+            "docx_native_structure_ir_enabled": parsed_sources is not None,
+            "document_ir_context_precedes_text_context": parsed_sources is not None,
+            "document_ir_filename_context_forbidden": True,
+            "document_ir_order_is_not_business_flow": True,
+            "headers_and_footers_excluded_from_business_fact_flow": True,
         }
     )
     asset["governance"] = governance
