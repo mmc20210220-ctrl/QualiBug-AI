@@ -1,8 +1,8 @@
 """Generic page rendering providers for visual document understanding.
 
-Rendering is a shared infrastructure capability. OCR, table reconstruction and diagram
-analysis consume the same source-preserving rendered pages instead of implementing their
-own PDF/image/office conversion branches. Providers never infer business semantics.
+Rendering is shared infrastructure for OCR, table reconstruction and diagram analysis.
+Providers convert source bytes into source-preserving page images and never infer business
+semantics.
 """
 from __future__ import annotations
 
@@ -51,7 +51,15 @@ def _looks_like_image(source: DocumentSource) -> bool:
 
 
 def _page_filter(values: Iterable[int] | None) -> set[int]:
-    return {int(value) for value in (values or ()) if int(value) > 0}
+    result: set[int] = set()
+    for value in values or ():
+        try:
+            page = int(value)
+        except (TypeError, ValueError):
+            continue
+        if page > 0:
+            result.add(page)
+    return result
 
 
 @dataclass(frozen=True)
@@ -160,8 +168,8 @@ class RasterImagePageRenderer:
                 )
             return rendered
         except Exception:
-            # Keep a fail-visible pass-through for synthetic tests and uncommon raster
-            # containers. A real OCR provider will still fail if bytes are unreadable.
+            # Synthetic fixtures and unusual raster containers remain fail-visible.
+            # A real OCR provider must still reject unreadable bytes.
             if requested and 1 not in requested:
                 return []
             return [
@@ -179,8 +187,10 @@ class RasterImagePageRenderer:
             ]
 
 
-class PymupdfPdfPageRenderer:
-    name = "pymupdf-pdf-page-renderer"
+class PdfiumPdfPageRenderer:
+    """Preferred full-page PDF renderer using permissively licensed PDFium bindings."""
+
+    name = "pdfium-pdf-page-renderer"
     version = "1"
     priority = 110
 
@@ -189,7 +199,7 @@ class PymupdfPdfPageRenderer:
 
     def available(self) -> bool:
         try:
-            import fitz  # noqa: F401
+            import pypdfium2  # noqa: F401
         except ImportError:
             return False
         return True
@@ -203,41 +213,54 @@ class PymupdfPdfPageRenderer:
         *,
         pages: Iterable[int] | None = None,
     ) -> list[RenderedPage]:
-        import fitz
+        import pypdfium2 as pdfium
 
         requested = _page_filter(pages)
         scale = self.dpi / 72.0
-        matrix = fitz.Matrix(scale, scale)
-        document = fitz.open(stream=source.data, filetype="pdf")
+        document = pdfium.PdfDocument(source.data)
         rendered: list[RenderedPage] = []
         try:
-            for page_index in range(document.page_count):
+            for page_index in range(len(document)):
                 page_number = page_index + 1
                 if requested and page_number not in requested:
                     continue
-                page = document.load_page(page_index)
-                pixmap = page.get_pixmap(matrix=matrix, alpha=False)
-                rendered.append(
-                    RenderedPage(
-                        page=page_number,
-                        image_index=0,
-                        image_bytes=pixmap.tobytes("png"),
-                        width_px=int(pixmap.width),
-                        height_px=int(pixmap.height),
-                        source_locator=f"{source.filename or 'document.pdf'}#rendered_page={page_number}",
-                        renderer_name=self.name,
-                        renderer_version=self.version,
-                        render_method="pdf_page_rasterized",
-                        dpi=self.dpi,
+                page = document[page_index]
+                bitmap = None
+                try:
+                    bitmap = page.render(scale=scale)
+                    image = bitmap.to_pil().convert("RGB")
+                    buffer = io.BytesIO()
+                    image.save(buffer, format="PNG")
+                    rendered.append(
+                        RenderedPage(
+                            page=page_number,
+                            image_index=0,
+                            image_bytes=buffer.getvalue(),
+                            width_px=int(image.width),
+                            height_px=int(image.height),
+                            source_locator=f"{source.filename or 'document.pdf'}#rendered_page={page_number}",
+                            renderer_name=self.name,
+                            renderer_version=self.version,
+                            render_method="pdfium_full_page_rasterized",
+                            dpi=self.dpi,
+                        )
                     )
-                )
+                finally:
+                    close_bitmap = getattr(bitmap, "close", None)
+                    if callable(close_bitmap):
+                        close_bitmap()
+                    close_page = getattr(page, "close", None)
+                    if callable(close_page):
+                        close_page()
         finally:
-            document.close()
+            close_document = getattr(document, "close", None)
+            if callable(close_document):
+                close_document()
         return rendered
 
 
 class PypdfEmbeddedImagePageRenderer:
-    """Lower-fidelity PDF fallback when a full page renderer is unavailable."""
+    """Lower-fidelity fallback that extracts PDF embedded images, not whole pages."""
 
     name = "pypdf-embedded-image-renderer"
     version = "1"
@@ -298,14 +321,14 @@ class PypdfEmbeddedImagePageRenderer:
                         ),
                         renderer_name=self.name,
                         renderer_version=self.version,
-                        render_method="pdf_embedded_image_fallback",
+                        render_method="pdf_embedded_image_fallback_not_full_page",
                     )
                 )
         return rendered
 
 
 class LibreOfficeDocumentPageRenderer:
-    """Optional office-to-PDF renderer using a local LibreOffice installation."""
+    """Optional office-to-PDF conversion followed by PDFium page rendering."""
 
     name = "libreoffice-office-page-renderer"
     version = "1"
@@ -319,7 +342,7 @@ class LibreOfficeDocumentPageRenderer:
         return shutil.which("libreoffice") or shutil.which("soffice") or ""
 
     def available(self) -> bool:
-        return bool(self._binary()) and PymupdfPdfPageRenderer(self.dpi).available()
+        return bool(self._binary()) and PdfiumPdfPageRenderer(self.dpi).available()
 
     def supports(self, source: DocumentSource) -> bool:
         return source.suffix in _OFFICE_SUFFIXES
@@ -363,7 +386,7 @@ class LibreOfficeDocumentPageRenderer:
                 data=pdf_path.read_bytes(),
                 declared_mime="application/pdf",
             )
-            rendered = PymupdfPdfPageRenderer(self.dpi).render(pdf_source, pages=pages)
+            rendered = PdfiumPdfPageRenderer(self.dpi).render(pdf_source, pages=pages)
             return [
                 RenderedPage(
                     page=row.page,
@@ -374,7 +397,7 @@ class LibreOfficeDocumentPageRenderer:
                     source_locator=f"{source.filename}#rendered_page={row.page}",
                     renderer_name=self.name,
                     renderer_version=self.version,
-                    render_method="office_to_pdf_then_page_rasterized",
+                    render_method="office_to_pdf_then_pdfium_page_rasterized",
                     dpi=row.dpi,
                 )
                 for row in rendered
@@ -483,7 +506,7 @@ def build_default_page_renderer_registry() -> PageRendererRegistry:
     return PageRendererRegistry(
         [
             RasterImagePageRenderer(),
-            PymupdfPdfPageRenderer(),
+            PdfiumPdfPageRenderer(),
             LibreOfficeDocumentPageRenderer(),
             PypdfEmbeddedImagePageRenderer(),
         ]
@@ -496,7 +519,7 @@ __all__ = [
     "PageRenderBatch",
     "PageRenderer",
     "RasterImagePageRenderer",
-    "PymupdfPdfPageRenderer",
+    "PdfiumPdfPageRenderer",
     "PypdfEmbeddedImagePageRenderer",
     "LibreOfficeDocumentPageRenderer",
     "PageRendererRegistry",
