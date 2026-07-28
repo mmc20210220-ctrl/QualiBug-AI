@@ -1,7 +1,7 @@
 """Preserve accessibility coverage evidence and fail incomplete scans closed.
 
-The core rule engine computes deterministic findings and untestable coverage.  This
-installer keeps that material in a typed observer receipt.  An incomplete scan is
+The core rule engine computes deterministic findings and untestable coverage. This
+installer keeps that material in a typed observer receipt. An incomplete scan is
 not a UI defect, but it also cannot prove PROPERTY_HELD; the formal observer is
 therefore changed to INDETERMINATE unless a separate typed accessibility violation
 was already observed.
@@ -39,9 +39,29 @@ def _text(value: Any, *, limit: int = 500) -> str:
     return str(value or "").strip()[:limit]
 
 
+def _matrix_identity() -> dict[str, Any]:
+    try:
+        from . import professional_ui_browser_matrix as _matrix
+
+        profile = _dict(_matrix._ACTIVE_PROFILE.get())
+    except Exception:
+        profile = {}
+    if not profile:
+        return {
+            "matrix_profile_id": "",
+            "browser_engine": "",
+            "device_class": "",
+        }
+    return {
+        "matrix_profile_id": _text(profile.get("profile_id"), limit=80),
+        "browser_engine": _text(profile.get("browser_engine"), limit=20),
+        "device_class": _text(profile.get("device_class"), limit=20),
+    }
+
+
 def _append_observation(receipt: dict[str, Any]) -> None:
     rows = [copy.deepcopy(row) for row in _OBSERVATIONS.get()]
-    rows.append(copy.deepcopy(receipt))
+    rows.append({**copy.deepcopy(receipt), **_matrix_identity()})
     _OBSERVATIONS.set(rows)
 
 
