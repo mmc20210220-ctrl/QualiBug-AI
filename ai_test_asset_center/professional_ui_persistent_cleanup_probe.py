@@ -78,6 +78,18 @@ def _json_pointer(payload: Any, pointer: str) -> Any:
 
 
 def install_persistent_ui_cleanup_probe() -> None:
+    # Privacy is installed immediately before this entry in the formal runtime.
+    # Complex interaction wrappers must be present before persistent cleanup captures
+    # the final write validator and probe-material functions.
+    from .professional_ui_complex_interaction_hardening import (
+        install_professional_ui_complex_interaction_hardening,
+    )
+    from .professional_ui_complex_interactions import (
+        install_professional_ui_complex_interactions,
+    )
+
+    install_professional_ui_complex_interactions()
+    install_professional_ui_complex_interaction_hardening()
     if getattr(_interaction, _INSTALL_MARKER, False):
         return
     original_validate_probe = getattr(
