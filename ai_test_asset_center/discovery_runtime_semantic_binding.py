@@ -27,9 +27,7 @@ from .behavior_ir_surface_reconciliation import (
     reconcile_declared_observation_surfaces,
 )
 from .effect_observer_binding import bind_source_effect_observers
-from .formal_event_capability_guard import (
-    install_formal_event_capability_guard,
-)
+from .formal_event_capability_guard import install_formal_event_capability_guard
 from .formal_event_pre_cleanup import install_formal_event_pre_cleanup_observer
 from .formal_event_surface import install_formal_event_surface
 from .formal_performance_attribution_guard import (
@@ -39,12 +37,8 @@ from .formal_performance_surface import install_formal_performance_surface
 from .formal_ui_surface import install_formal_ui_surface
 from .formal_ui_surface_guard import install_formal_ui_read_only_guard
 from .non_http_observers import install_non_http_observers
-from .professional_ui_contract_guard import (
-    install_professional_ui_contract_guard,
-)
-from .professional_ui_interaction_cleanup import (
-    install_controlled_ui_interaction,
-)
+from .professional_ui_contract_guard import install_professional_ui_contract_guard
+from .professional_ui_interaction_cleanup import install_controlled_ui_interaction
 from .professional_ui_interaction_contract_guard import (
     install_controlled_ui_interaction_contract_guard,
 )
@@ -58,9 +52,7 @@ from .professional_ui_readonly import install_professional_ui_readonly
 from .professional_ui_responsive_accessibility import (
     install_professional_ui_responsive_accessibility,
 )
-from .professional_ui_visual_baseline import (
-    install_professional_ui_visual_baseline,
-)
+from .professional_ui_visual_baseline import install_professional_ui_visual_baseline
 from .professional_ui_visual_baseline_governance import (
     install_visual_baseline_governance,
 )
@@ -68,6 +60,7 @@ from .professional_ui_visual_determinism_guard import (
     install_visual_determinism_guard,
 )
 from .professional_ui_visual_image_guard import install_visual_image_guard
+from .professional_ui_visual_viewport_guard import install_visual_viewport_guard
 from .scan_event_contract_external_signal import (
     overlay_scan_event_contracts_with_external_signals,
 )
@@ -96,13 +89,9 @@ from .source_performance_obligation_binding import (
     install_source_performance_obligation_binding,
 )
 from .source_ui_contract_binding import bind_source_ui_contracts
-from .source_ui_contract_source_guard import (
-    install_source_ui_contract_source_guard,
-)
+from .source_ui_contract_source_guard import install_source_ui_contract_source_guard
 from .source_ui_obligation_binding import install_source_ui_obligation_binding
-from .source_ui_obligation_compat import (
-    install_source_ui_family_vector_compat,
-)
+from .source_ui_obligation_compat import install_source_ui_family_vector_compat
 
 _INSTALL_MARKER = "_qualibug_semantic_operation_binding_installed"
 _ORIGINAL_MARKER = "_qualibug_original_behavior_ir_builder"
@@ -111,9 +100,10 @@ _ORIGINAL_MARKER = "_qualibug_original_behavior_ir_builder"
 # idempotent and performs no target I/O. The UI installers extend one authority in order:
 # read-only assertions, scan admission, responsive/accessibility behavior, deterministic visual
 # comparison, project namespace governance, decode limits and renderer stabilization, governed
-# interaction, plan-level checks, evidence minimization, persistent cleanup observation, then
-# direct-scan admission parity with enterprise source contracts. Installing the visual observer
-# before the interaction observer means interactive visual findings inherit cleanup equivalence.
+# interaction, plan-level checks, evidence minimization, persistent cleanup observation, visual
+# viewport binding over the final validators, then direct-scan admission parity. Installing the
+# visual observer before the interaction observer means interactive visual findings inherit the
+# cleanup-equivalence gate instead of bypassing it.
 install_non_http_observers()
 install_formal_ui_surface()
 install_formal_ui_read_only_guard()
@@ -128,6 +118,7 @@ install_controlled_ui_interaction()
 install_controlled_ui_interaction_contract_guard()
 install_controlled_ui_interaction_privacy_guard()
 install_persistent_ui_cleanup_probe()
+install_visual_viewport_guard()
 install_scan_ui_interaction_contract_guard()
 install_formal_event_surface()
 install_formal_event_capability_guard()
@@ -193,10 +184,9 @@ def build_behavior_ir_with_semantic_operation_bindings(
     available_surfaces: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
     """Build canonical IR and apply exact source-grounded UI/event/performance joins."""
-
     ui_asset, scan_ui_receipt = overlay_scan_ui_contracts(asset)
-    event_asset, scan_event_receipt = (
-        overlay_scan_event_contracts_with_external_signals(ui_asset)
+    event_asset, scan_event_receipt = overlay_scan_event_contracts_with_external_signals(
+        ui_asset
     )
     effective_asset, scan_performance_receipt = overlay_scan_performance_contracts(
         event_asset
@@ -218,14 +208,8 @@ def build_behavior_ir_with_semantic_operation_bindings(
         effective_asset,
     )
     observer_ir, _observer_receipt = bind_source_effect_observers(semantic_ir)
-    ui_ir, _ui_receipt = bind_source_ui_contracts(
-        observer_ir,
-        effective_asset,
-    )
-    event_ir, _event_receipt = bind_source_event_contracts(
-        ui_ir,
-        effective_asset,
-    )
+    ui_ir, _ui_receipt = bind_source_ui_contracts(observer_ir, effective_asset)
+    event_ir, _event_receipt = bind_source_event_contracts(ui_ir, effective_asset)
     performance_ir, _performance_receipt = bind_source_performance_contracts(
         event_ir,
         effective_asset,
