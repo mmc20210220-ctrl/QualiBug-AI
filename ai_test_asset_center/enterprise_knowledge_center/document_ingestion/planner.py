@@ -1,8 +1,7 @@
 """Capability-driven parsing planner.
 
-The planner does not infer business meaning. It fingerprints the source, resolves
-registered adapters, and records which structural capabilities are available or still
-missing. Supplemental adapters are planned after primary structural gaps are known.
+The planner fingerprints sources and chooses structural adapters. Supplemental adapters
+are selected only after a native primary exposes a concrete, fail-visible gap.
 """
 from __future__ import annotations
 
@@ -114,23 +113,11 @@ def _required_capabilities(family: str) -> list[str]:
         )
     if family == "image":
         return unique_text(
-            [
-                CAP_PAGE_RENDERING,
-                CAP_OCR,
-                CAP_TEXT_EXTRACTION,
-                CAP_TEXT_COORDINATES,
-                CAP_PAGE_LAYOUT,
-            ]
+            [CAP_PAGE_RENDERING, CAP_OCR, CAP_TEXT_EXTRACTION, CAP_TEXT_COORDINATES, CAP_PAGE_LAYOUT]
         )
     if family in _VISUAL_OFFICE_FAMILIES:
         return unique_text(
-            [
-                CAP_PAGE_RENDERING,
-                CAP_OCR,
-                CAP_TEXT_EXTRACTION,
-                CAP_TEXT_COORDINATES,
-                CAP_PAGE_LAYOUT,
-            ]
+            [CAP_PAGE_RENDERING, CAP_OCR, CAP_TEXT_EXTRACTION, CAP_TEXT_COORDINATES, CAP_PAGE_LAYOUT]
         )
     if family in _TABLE_OFFICE_FAMILIES:
         return unique_text([CAP_TABLE_STRUCTURE, CAP_FORMULA_EXTRACTION, CAP_STYLE_SEMANTICS])
@@ -178,8 +165,6 @@ def plan_document_parsing(
 
     selected: list[tuple[Any, Any]] = []
     if primary_rows:
-        # Supplemental capabilities are never run eagerly beside a native primary.
-        # They are selected only after the primary exposes a concrete structural gap.
         selected.append(primary_rows[0])
     else:
         standalone_rows = [
@@ -191,21 +176,18 @@ def plan_document_parsing(
         if standalone_rows:
             selected.append(standalone_rows[0])
         elif fallback_rows:
-            # Generic text outranks the fail-visible unknown adapter by match score.
             selected.append(fallback_rows[0])
 
     provided_capabilities = unique_text(
-        capability
-        for _adapter, match in selected
-        for capability in match.capabilities
+        capability for _adapter, match in selected for capability in match.capabilities
     )
     missing_capabilities = sorted(set(required_capabilities) - set(provided_capabilities))
+    selected_rows = [_adapter_row(adapter, match) for adapter, match in selected]
     alternatives = [
         match.to_dict()
         for adapter, match in matches
         if all(adapter.name != chosen.name for chosen, _chosen_match in selected)
     ]
-    selected_rows = [_adapter_row(adapter, match) for adapter, match in selected]
     status = "READY"
     if not selected_rows:
         status = "BLOCKED_NO_ADAPTER"
@@ -213,7 +195,6 @@ def plan_document_parsing(
         status = "BLOCKED_UNSUPPORTED_SOURCE"
     elif missing_capabilities:
         status = "PARTIAL_CAPABILITY_COVERAGE"
-
     return {
         "schema": DOCUMENT_PARSING_PLAN_SCHEMA,
         "status": status,
@@ -245,7 +226,6 @@ def plan_deferred_supplementals(
     *,
     excluded_names: Iterable[str] = (),
 ) -> dict[str, Any]:
-    """Plan supplemental adapters from fail-visible primary structure gaps."""
     trigger_gaps = [
         dict(row)
         for row in (primary_document_ir.get("unsupported_content") or [])
@@ -280,10 +260,10 @@ def plan_deferred_supplementals(
         provided.update(contribution)
     missing = sorted(set(requested) - provided)
     status = "NOT_REQUIRED"
-    if trigger_gaps and selected and not missing:
+    if trigger_gaps and selected:
+        # READY means an adapter can execute. Missing capabilities remain explicit in
+        # the receipt for legacy adapters that internally bundle rendering with OCR.
         status = "READY"
-    elif trigger_gaps and selected and missing:
-        status = "PARTIAL_REQUIRED_SUPPLEMENTAL_CAPABILITY"
     elif trigger_gaps and not selected:
         status = "BLOCKED_REQUIRED_SUPPLEMENTAL_ADAPTER_UNAVAILABLE"
     return {
