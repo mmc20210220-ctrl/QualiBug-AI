@@ -70,7 +70,7 @@ async function responseJson<T>(response: Response): Promise<T> {
         : text.slice(0, 200) || `API ${response.status}`;
     throw new Error(message);
   }
-  return payload as T;
+  return payload as unknown as T;
 }
 
 function endpoint(projectId: string, upload = false): string {
