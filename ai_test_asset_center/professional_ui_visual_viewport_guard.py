@@ -19,6 +19,7 @@ _INSTALL_MARKER = "_qualibug_visual_viewport_guard_installed"
 _ORIGINAL_VISUAL_VALIDATOR = "_qualibug_visual_validator_before_viewport_guard"
 _ORIGINAL_VISUAL_EXECUTOR = "_qualibug_visual_executor_before_viewport_guard"
 _ORIGINAL_READONLY_PLAN = "_qualibug_readonly_plan_before_visual_viewport_guard"
+_ORIGINAL_BROWSER_PLAN = "_qualibug_browser_plan_before_visual_viewport_guard"
 _ORIGINAL_WRITE_PLAN = "_qualibug_write_plan_before_visual_viewport_guard"
 
 
@@ -93,6 +94,11 @@ def install_visual_viewport_guard() -> None:
         _ORIGINAL_READONLY_PLAN,
         _professional.validate_professional_browser_plan,
     )
+    original_browser = getattr(
+        _professional._browser,
+        _ORIGINAL_BROWSER_PLAN,
+        _professional._browser.validate_browser_plan,
+    )
     original_write = getattr(
         _interaction,
         _ORIGINAL_WRITE_PLAN,
@@ -101,6 +107,7 @@ def install_visual_viewport_guard() -> None:
     setattr(_visual, _ORIGINAL_VISUAL_VALIDATOR, original_validate)
     setattr(_visual, _ORIGINAL_VISUAL_EXECUTOR, original_execute)
     setattr(_professional, _ORIGINAL_READONLY_PLAN, original_readonly)
+    setattr(_professional._browser, _ORIGINAL_BROWSER_PLAN, original_browser)
     setattr(_interaction, _ORIGINAL_WRITE_PLAN, original_write)
 
     def validate_visual_with_viewport(raw: dict[str, Any]) -> None:
@@ -123,6 +130,14 @@ def install_visual_viewport_guard() -> None:
         runtime_contract: dict[str, Any],
     ) -> dict[str, Any]:
         normalized = original_readonly(plan, runtime_contract)
+        _validate_plan_viewports(normalized)
+        return normalized
+
+    def validate_browser_with_visual_viewport(
+        plan: dict[str, Any],
+        runtime_contract: dict[str, Any],
+    ) -> dict[str, Any]:
+        normalized = original_browser(plan, runtime_contract)
         _validate_plan_viewports(normalized)
         return normalized
 
@@ -200,8 +215,10 @@ def install_visual_viewport_guard() -> None:
     _professional.validate_professional_browser_plan = (
         validate_readonly_with_visual_viewport
     )
+    # Wrap the currently installed unified browser validator. If governed write
+    # support is already installed, its mode dispatcher remains intact.
     _professional._browser.validate_browser_plan = (
-        validate_readonly_with_visual_viewport
+        validate_browser_with_visual_viewport
     )
     _interaction._validate_write_plan = validate_write_with_visual_viewport
     setattr(_visual, _INSTALL_MARKER, True)
