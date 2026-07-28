@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ai_test_asset_center.behavior_ir import empty_behavior_ir
+from ai_test_asset_center.behavior_ir import build_behavior_ir_from_knowledge_asset
 from ai_test_asset_center.source_ui_contract_binding import bind_source_ui_contracts
 from ai_test_asset_center.source_ui_contract_source_guard import (
     install_source_ui_contract_source_guard,
@@ -8,51 +8,52 @@ from ai_test_asset_center.source_ui_contract_source_guard import (
 
 
 def _ir() -> dict:
-    ir = empty_behavior_ir(project_id="ui-source-guard")
-    ir["operations"] = [{
-        "id": "bir_op_get_order",
-        "operation_id": "get_order",
-        "method": "GET",
-        "path": "/api/orders/{id}",
-        "read_write": "read",
-        "source_refs": [{
+    return build_behavior_ir_from_knowledge_asset(
+        {
+            "source_inventory": [{
+                "source_id": "api-orders",
+                "filename": "orders-api.json",
+                "source_type": "openapi",
+                "text_hash": "a" * 64,
+            }],
+        },
+        project_id="ui-source-guard",
+        source_snapshot_hash="b" * 64,
+        api_operations=[{
+            "operation_id": "get_order",
+            "method": "GET",
+            "path": "/api/orders/{id}",
+            "summary": "Get order",
             "source_id": "api-orders",
-            "version": "v1",
-            "locator": "GET /api/orders/{id}",
-            "kind": "api_operation",
-            "quote_hash": "",
+            "read_write": "read",
         }],
-        "confidence": 1.0,
-        "derivation": "explicit",
-        "status": "accepted",
-    }]
-    ir["actors"] = [{
-        "id": "bir_actor_public",
-        "role": "public",
-        "role_key": "public",
-        "credential_secret_ref": "",
-        "runtime_bound": True,
-        "account_status": "active",
-        "source_refs": [{
-            "source_id": "roles",
-            "version": "v1",
-            "locator": "public",
-            "kind": "runtime_actor",
-            "quote_hash": "",
+        runtime_actors=[{
+            "role": "public",
+            "status": "active",
         }],
-        "confidence": 1.0,
-        "derivation": "runtime-observed",
-        "status": "accepted",
-    }]
-    return ir
+        available_surfaces={
+            "http_api": True,
+            "ui_browser": True,
+            "db_snapshot": False,
+            "process_timeline": True,
+        },
+    )
 
 
-def _contract() -> dict:
+def _public_actor_ref(ir: dict) -> str:
+    return next(
+        row["id"]
+        for row in ir["actors"]
+        if row.get("role_key") == "public"
+    )
+
+
+def _contract(actor_ref: str) -> dict:
     return {
         "contract_id": "ui-order-title",
         "title": "Order title",
         "operation_ref": "get_order",
-        "actor_ref": "bir_actor_public",
+        "actor_ref": actor_ref,
         "ui_request": {
             "request_id": "ui-order-title",
             "provider": "playwright_browser_plan",
@@ -71,9 +72,10 @@ def _contract() -> dict:
 
 def test_contract_without_source_identity_becomes_gap_not_invariant() -> None:
     install_source_ui_contract_source_guard()
+    ir = _ir()
     behavior_ir, receipt = bind_source_ui_contracts(
-        _ir(),
-        {"ui_formal_contracts": [_contract()]},
+        ir,
+        {"ui_formal_contracts": [_contract(_public_actor_ref(ir))]},
     )
 
     assert receipt["bound_invariant_count"] == 0
@@ -87,13 +89,14 @@ def test_contract_without_source_identity_becomes_gap_not_invariant() -> None:
 
 def test_explicit_source_id_is_converted_to_a_real_source_ref() -> None:
     install_source_ui_contract_source_guard()
-    contract = _contract()
+    ir = _ir()
+    contract = _contract(_public_actor_ref(ir))
     contract.update({
         "source_id": "ui-spec-orders",
         "source_locator": "screen:order-detail:title",
     })
     behavior_ir, receipt = bind_source_ui_contracts(
-        _ir(),
+        ir,
         {"ui_formal_contracts": [contract]},
     )
 
