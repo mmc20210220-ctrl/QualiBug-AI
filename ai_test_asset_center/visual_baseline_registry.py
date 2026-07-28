@@ -1,9 +1,10 @@
 """Public project-scoped visual baseline governance API.
 
 This is the supported import surface for registering, approving, listing,
-revoking and resolving formal UI visual baselines. Import installs the registry
-integrity guard before public function aliases are bound, so callers cannot
-bypass lifecycle hardening through an early-captured function reference.
+revoking and resolving formal UI visual baselines. Import installs registry
+integrity and projection guards before public function aliases are bound, so
+callers cannot bypass lifecycle hardening or receive history-dependent counter
+semantics through an early-captured function reference.
 """
 from __future__ import annotations
 
@@ -11,11 +12,15 @@ from .enterprise_knowledge_center import _visual_baselines as _registry
 from .enterprise_knowledge_center._visual_baseline_registry_guard import (
     install_visual_baseline_registry_guard,
 )
+from .enterprise_knowledge_center._visual_baseline_registry_projection_guard import (
+    install_visual_baseline_registry_projection_guard,
+)
 from .private_pilot_visual_baseline_health_patch import (
     install_visual_baseline_health_patch,
 )
 
 install_visual_baseline_registry_guard()
+install_visual_baseline_registry_projection_guard()
 install_visual_baseline_health_patch()
 
 APPROVED_PREFIX = _registry.APPROVED_PREFIX
