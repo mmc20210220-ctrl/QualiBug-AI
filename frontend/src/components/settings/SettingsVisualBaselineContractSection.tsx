@@ -22,10 +22,16 @@ function parseMaskSelectors(value: string): string[] {
     .slice(0, 64);
 }
 
+function validStartUrl(value: string): boolean {
+  if (value.startsWith('/') && !value.startsWith('//')) return true;
+  return /^https?:\/\/[^\s]+$/i.test(value);
+}
+
 export function SettingsVisualBaselineContractSection({ project }: SettingsVisualBaselineContractSectionProps) {
   const outputRef = useRef<HTMLTextAreaElement | null>(null);
   const [records, setRecords] = useState<VisualBaselineRecord[]>([]);
   const [selectedId, setSelectedId] = useState('');
+  const [startUrl, setStartUrl] = useState('');
   const [changedRatio, setChangedRatio] = useState('0.001');
   const [channelTolerance, setChannelTolerance] = useState('2');
   const [maskSelectors, setMaskSelectors] = useState('');
@@ -67,6 +73,8 @@ export function SettingsVisualBaselineContractSection({ project }: SettingsVisua
 
   useEffect(() => {
     let cancelled = false;
+    setStartUrl('');
+    setMaskSelectors('');
     if (!project) {
       setRecords([]);
       setSelectedId('');
@@ -126,9 +134,17 @@ export function SettingsVisualBaselineContractSection({ project }: SettingsVisua
   );
 
   const validation = useMemo(() => {
+    const target = startUrl.trim();
     const ratio = Number(changedRatio);
     const tolerance = Number(channelTolerance);
     if (!selected) return { ok: false, message: '请选择活动视觉基线。' };
+    if (!target) return { ok: false, message: '请填写被测页面路径或 URL。' };
+    if (target.length > 2000 || !validStartUrl(target)) {
+      return {
+        ok: false,
+        message: '页面地址必须是单斜杠开头的相对路径，或 http/https 绝对 URL。',
+      };
+    }
     if (!Number.isFinite(ratio) || ratio < 0 || ratio > 1) {
       return { ok: false, message: '允许变化比例必须是 0–1 之间的数字。' };
     }
@@ -136,38 +152,50 @@ export function SettingsVisualBaselineContractSection({ project }: SettingsVisua
       return { ok: false, message: '通道容差必须是 0–32 之间的整数。' };
     }
     return { ok: true, message: '' };
-  }, [changedRatio, channelTolerance, selected]);
+  }, [changedRatio, channelTolerance, selected, startUrl]);
 
   const contractFragment = useMemo(() => {
     if (!selected || !validation.ok) return '';
+    const target = startUrl.trim();
     return JSON.stringify({
+      request_id: `visual_${selected.baseline_id}`,
+      title: `Visual baseline ${selected.ref}`,
+      provider: 'playwright_browser_plan',
+      start_url: target,
       execution_mode: 'safe_read_only',
-      steps: [
-        {
-          action: 'set_viewport',
-          width: selected.viewport_width,
-          height: selected.viewport_height,
-        },
-        {
-          action: 'expect_visual_baseline',
-          baseline_ref: selected.ref,
-          baseline_sha256: selected.sha256,
-          max_changed_pixel_ratio: Number(changedRatio),
-          channel_tolerance: Number(channelTolerance),
-          full_page: selected.full_page,
-          animations_disabled: true,
-          renderer_profile: selected.renderer_profile,
-          scroll_origin: selected.scroll_origin,
-          font_readiness: selected.font_readiness,
-          viewport_width: selected.viewport_width,
-          viewport_height: selected.viewport_height,
-          mask_selectors: parseMaskSelectors(maskSelectors),
-          mask_locator_intents: [],
-          mask_regions: [],
-        },
-      ],
+      browser_plan: {
+        execution_mode: 'safe_read_only',
+        steps: [
+          {
+            action: 'set_viewport',
+            width: selected.viewport_width,
+            height: selected.viewport_height,
+          },
+          {
+            action: 'goto',
+            url: target,
+          },
+          {
+            action: 'expect_visual_baseline',
+            baseline_ref: selected.ref,
+            baseline_sha256: selected.sha256,
+            max_changed_pixel_ratio: Number(changedRatio),
+            channel_tolerance: Number(channelTolerance),
+            full_page: selected.full_page,
+            animations_disabled: true,
+            renderer_profile: selected.renderer_profile,
+            scroll_origin: selected.scroll_origin,
+            font_readiness: selected.font_readiness,
+            viewport_width: selected.viewport_width,
+            viewport_height: selected.viewport_height,
+            mask_selectors: parseMaskSelectors(maskSelectors),
+            mask_locator_intents: [],
+            mask_regions: [],
+          },
+        ],
+      },
     }, null, 2);
-  }, [changedRatio, channelTolerance, maskSelectors, selected, validation.ok]);
+  }, [changedRatio, channelTolerance, maskSelectors, selected, startUrl, validation.ok]);
 
   const handleCopy = async () => {
     if (!contractFragment) {
@@ -176,11 +204,11 @@ export function SettingsVisualBaselineContractSection({ project }: SettingsVisua
     }
     try {
       await navigator.clipboard.writeText(contractFragment);
-      setStatus('已复制浏览器计划片段。请继续补齐 operation_ref、actor_role、source_refs 和 start_url。');
+      setStatus('已复制可导航的 ui_request。正式来源合同仍需补齐 operation_ref、actor_role 与 source_refs。');
     } catch {
       outputRef.current?.focus();
       outputRef.current?.select();
-      setStatus('浏览器未授权自动复制，已选中片段，请手动复制。');
+      setStatus('浏览器未授权自动复制，已选中 ui_request，请手动复制。');
     }
   };
 
@@ -191,8 +219,8 @@ export function SettingsVisualBaselineContractSection({ project }: SettingsVisua
           <span className="panel-kicker">来源合同绑定</span>
           <h2>视觉合同助手</h2>
           <p className="visual-contract-subtitle">
-            从活动 registry 记录生成确定性的 browser_plan 片段，避免手工抄写基线哈希、视口和渲染档案。
-            片段不会自动成为正式合同，仍需由企业资料提供真实 operation_ref、actor_role、source_refs 和 start_url。
+            从活动 registry 记录生成可导航的确定性 ui_request，避免手工抄写基线哈希、视口、页面地址和渲染档案。
+            输出不会自动成为正式合同，企业资料仍必须提供真实 operation_ref、actor_role 与 source_refs。
           </p>
         </div>
         <button
@@ -226,6 +254,25 @@ export function SettingsVisualBaselineContractSection({ project }: SettingsVisua
                 </option>
               ))}
             </select>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label" htmlFor="visual-contract-start-url">被测页面路径 / URL</label>
+            <input
+              id="visual-contract-start-url"
+              className="form-input"
+              value={startUrl}
+              disabled={!selected}
+              maxLength={2000}
+              placeholder="如：/orders 或 https://test.example.com/orders"
+              onChange={(event) => {
+                setStartUrl(event.target.value);
+                setStatus('');
+              }}
+            />
+            <span className="settings-hint">
+              正式执行仍会按运行时 approved_base_url 校验同源，越权地址会被阻断。
+            </span>
           </div>
 
           <div className="visual-contract-number-row">
@@ -288,8 +335,8 @@ export function SettingsVisualBaselineContractSection({ project }: SettingsVisua
         <div className="visual-contract-output">
           <div className="visual-contract-output-head">
             <div>
-              <span>browser_plan JSON</span>
-              <small>只包含可验证字段，不包含页面像素。</small>
+              <span>ui_request JSON</span>
+              <small>包含显式导航和视觉比较，不包含页面像素。</small>
             </div>
             <button
               type="button"
@@ -297,7 +344,7 @@ export function SettingsVisualBaselineContractSection({ project }: SettingsVisua
               disabled={!contractFragment}
               onClick={handleCopy}
             >
-              复制片段
+              复制 ui_request
             </button>
           </div>
           <textarea
@@ -305,7 +352,7 @@ export function SettingsVisualBaselineContractSection({ project }: SettingsVisua
             className="visual-contract-code"
             readOnly
             spellCheck={false}
-            aria-label="视觉基线 browser plan JSON"
+            aria-label="视觉基线 ui request JSON"
             value={contractFragment || (loading ? '正在读取活动基线…' : validation.message)}
           />
         </div>
