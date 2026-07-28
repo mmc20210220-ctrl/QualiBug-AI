@@ -1,3 +1,4 @@
+import { SettingsAccessibilitySection } from './SettingsAccessibilitySection';
 import { SettingsBrowserMatrixSection } from './SettingsBrowserMatrixSection';
 
 type SettingsInfoSectionProps = {
@@ -31,6 +32,7 @@ export function SettingsInfoSection({ productVersion, serviceStatus, auditStatus
         </div>
       </div>
       <SettingsBrowserMatrixSection />
+      <SettingsAccessibilitySection />
     </>
   );
 }
