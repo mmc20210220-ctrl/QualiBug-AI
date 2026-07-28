@@ -129,9 +129,9 @@ def test_projection_never_promotes_evidence_into_a_new_finding() -> None:
     ] is False
 
 
-def test_public_runtime_exports_projecting_execution_entry() -> None:
+def test_public_runtime_exports_full_quality_projection_chain() -> None:
     from ai_test_asset_center import discovery_runtime
-    from ai_test_asset_center.formal_evidence_projection import (
+    from ai_test_asset_center.discovery_runtime_quality_projection import (
         run_experiment_candidate,
     )
 
