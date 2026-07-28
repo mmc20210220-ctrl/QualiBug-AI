@@ -186,12 +186,14 @@ def enrich_asset_with_enterprise_understanding(
         from .._chinese_business_conflicts import reconcile_chinese_business_fact_conflicts
         from .._chinese_document_context import apply_chinese_document_context
         from .._document_ir_context import apply_document_ir_context
+        from .._document_ir_fact_evidence import align_business_facts_to_document_ir
 
         _attach_document_structure_assets(asset, source_rows)
         # Rebuild the formal Chinese coverage/fact ledgers from the best merged IR text.
         # This is what makes OCR or future supplemental adapters visible to enterprise
         # cognition instead of leaving recovered text stranded in a structure receipt.
         asset = build_chinese_first_comprehension(asset, source_rows)
+        asset = align_business_facts_to_document_ir(asset, source_rows)
         asset = apply_document_ir_context(asset, source_rows)
         # The legacy text-range stage remains as a lower-fidelity supplement for
         # formats that do not yet emit rich structure blocks.
@@ -251,6 +253,7 @@ def enrich_asset_with_enterprise_understanding(
 
     structure_assets = as_dict(asset.get("document_structure_assets"))
     ir_receipt = as_dict(asset.get("document_ir_context_resolution_receipt"))
+    fact_evidence_receipt = as_dict(asset.get("document_ir_fact_evidence_receipt"))
     summary = as_dict(asset.get("summary"))
     summary.update(
         {
@@ -296,6 +299,12 @@ def enrich_asset_with_enterprise_understanding(
             "document_parsing_plan_status_distribution": dict(
                 structure_assets.get("parsing_plan_status_distribution") or {}
             ),
+            "document_ir_fact_evidence_aligned_count": int(
+                fact_evidence_receipt.get("aligned_fact_count") or 0
+            ),
+            "document_ir_fact_evidence_unresolved_count": int(
+                fact_evidence_receipt.get("unresolved_fact_count") or 0
+            ),
             "document_ir_context_resolved_fact_count": int(
                 ir_receipt.get("resolved_fact_count") or 0
             ),
@@ -325,6 +334,7 @@ def enrich_asset_with_enterprise_understanding(
             "document_unknown_format_fails_visible": True,
             "document_business_understanding_is_format_agnostic": True,
             "merged_document_ir_text_reenters_chinese_fact_ledger": parsed_sources is not None,
+            "document_ir_fact_evidence_alignment_enabled": parsed_sources is not None,
             "ocr_recovered_text_can_create_source_backed_facts": parsed_sources is not None,
             "docx_native_structure_ir_enabled": parsed_sources is not None,
             "pdf_page_layout_structure_ir_enabled": parsed_sources is not None,
