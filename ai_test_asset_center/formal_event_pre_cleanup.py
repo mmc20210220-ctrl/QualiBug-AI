@@ -44,6 +44,24 @@ def _requires_event_observer(exp: dict[str, Any]) -> bool:
     )
 
 
+def _event_assertion(exp: dict[str, Any]) -> dict[str, Any]:
+    """Return the unique assertion owned by the formal event surface.
+
+    Selecting the first assertion is only accidentally correct while every event
+    protocol emits one assertion. A future compound protocol could place a state
+    assertion first and make the event observer read the wrong property contract.
+    Ambiguity is fail-closed; the observer must never guess which assertion owns
+    the event contract.
+    """
+    matches = [
+        dict(row)
+        for row in _list(_dict(exp).get("assertions"))
+        if isinstance(row, dict)
+        and _text(row.get("kind")) == _surface.ASSERTION_KIND
+    ]
+    return matches[0] if len(matches) == 1 else {}
+
+
 def _pre_observe_event(
     *,
     exp: dict[str, Any],
@@ -56,33 +74,39 @@ def _pre_observe_event(
     existing = _dict(observations.get(_PRE_RECEIPT_KEY))
     if existing:
         return existing
-    assertion = _dict(
-        _list(exp.get("assertions"))[0]
-        if _list(exp.get("assertions"))
-        else {}
-    )
-    try:
-        receipt = _surface._event_observer_handler({
-            "observer_id": _surface.OBSERVER_ID,
-            "experiment": exp,
-            "observations": observations,
-            "assertion": assertion,
-            "property": _dict(assertion.get("property")),
-            "control_observation": _dict(observations.get("control_observation")),
-            "treatment_observation": _dict(observations.get("treatment_observation")),
-            "execution_steps": _list(observations.get("execution_steps")),
-            "campaign_id": campaign_id,
-            "execution_id": execution_id,
-        })
-    except Exception as exc:  # noqa: BLE001 - cleanup must still proceed
+    assertion = _event_assertion(exp)
+    if not assertion:
         from .observer_contracts_base import _receipt
 
         receipt = _receipt(
             observer_id=_surface.OBSERVER_ID,
             status="INDETERMINATE",
-            reason_code="EVENT_PRE_CLEANUP_OBSERVER_FAILED",
-            evidence={"error_type": type(exc).__name__},
+            reason_code="EVENT_ASSERTION_IDENTITY_NOT_UNIQUE",
+            evidence={"matching_assertion_count": 0},
         )
+    else:
+        try:
+            receipt = _surface._event_observer_handler({
+                "observer_id": _surface.OBSERVER_ID,
+                "experiment": exp,
+                "observations": observations,
+                "assertion": assertion,
+                "property": _dict(assertion.get("property")),
+                "control_observation": _dict(observations.get("control_observation")),
+                "treatment_observation": _dict(observations.get("treatment_observation")),
+                "execution_steps": _list(observations.get("execution_steps")),
+                "campaign_id": campaign_id,
+                "execution_id": execution_id,
+            })
+        except Exception as exc:  # noqa: BLE001 - cleanup must still proceed
+            from .observer_contracts_base import _receipt
+
+            receipt = _receipt(
+                observer_id=_surface.OBSERVER_ID,
+                status="INDETERMINATE",
+                reason_code="EVENT_PRE_CLEANUP_OBSERVER_FAILED",
+                evidence={"error_type": type(exc).__name__},
+            )
     receipt = copy.deepcopy(_dict(receipt))
     evidence = _dict(receipt.get("evidence"))
     event_evidence = _dict(evidence.get(_surface.EVIDENCE_KEY))
