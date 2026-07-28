@@ -45,12 +45,14 @@ dev = [
 llm = ["anthropic>=0.18.0", "openai>=1.0.0"]
 pdf = ["pypdf>=4.0.0", "python-docx>=0.8.11"]
 ocr = ["pytesseract>=0.3.13,<1.0.0"]
+render = ["pymupdf>=1.24.0,<2.0.0"]
 browser = ["playwright>=1.40.0"]
 api_fuzz = ["schemathesis>=4.20.3,<5"]
 all = [
     "anthropic>=0.18.0",
     "openai>=1.0.0",
     "pytesseract>=0.3.13,<1.0.0",
+    "pymupdf>=1.24.0,<2.0.0",
     "playwright>=1.40.0",
     "schemathesis>=4.20.3,<5",
     "pytest>=7.4.0",
