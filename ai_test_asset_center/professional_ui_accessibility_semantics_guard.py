@@ -149,6 +149,9 @@ def _focus_audit(page: Any, step: dict[str, Any]) -> dict[str, Any]:
     selected = set(step["rules"]) & _engine._FOCUS_RULES
     if not selected:
         return {"findings": [], "untestable": [], "checked": 0, "truncated": False}
+    page.evaluate(
+        "() => { if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }"
+    )
     baseline = _dict(page.evaluate(
         _BASELINE_SCRIPT,
         {"exclude_selectors": list(step["exclude_selectors"])},
@@ -164,7 +167,6 @@ def _focus_audit(page: Any, step: dict[str, Any]) -> dict[str, Any]:
     seen: set[str] = set()
     checked = 0
     try:
-        page.evaluate("() => { if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }")
         for _index in range(limit):
             page.keyboard.press("Tab")
             observation = _dict(page.evaluate(_FOCUSED_SCRIPT))
