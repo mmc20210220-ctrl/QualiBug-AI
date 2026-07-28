@@ -1,7 +1,8 @@
 """Unified document ingestion pipeline.
 
-Every source follows the same path: fingerprint -> plan -> execute registered adapters
--> merge IR -> expose gaps.  Business understanding never selects adapters directly.
+Every source follows the same path: fingerprint -> primary plan -> execute primary
+adapters -> plan deferred supplemental capabilities -> merge IR -> expose gaps.
+Business understanding never selects adapters directly.
 """
 from __future__ import annotations
 
@@ -12,10 +13,13 @@ from .contract import (
     CAP_TEXT_EXTRACTION,
     DocumentSource,
     MODE_FALLBACK,
+    MODE_PRIMARY,
+    SupplementalContext,
     text,
+    unique_text,
 )
 from .merger import merge_document_irs
-from .planner import plan_document_parsing
+from .planner import plan_deferred_supplementals, plan_document_parsing
 from .registry import DocumentAdapterRegistry, build_default_registry
 
 
@@ -38,6 +42,28 @@ def _execute_adapter(
     match = _match_from_plan(plan_row)
     document_ir = adapter.extract(source)
     receipt = adapter.receipt(source, match)
+    return {
+        "adapter_name": adapter.name,
+        "mode": adapter.mode,
+        "match_score": match.score,
+        "document_ir": document_ir,
+        "adapter_receipt": receipt,
+    }
+
+
+def _execute_supplemental_adapter(
+    source: DocumentSource,
+    registry: DocumentAdapterRegistry,
+    plan_row: dict[str, Any],
+    context: SupplementalContext,
+) -> dict[str, Any]:
+    adapter = registry.get(text(plan_row.get("adapter_name")))
+    match = _match_from_plan(plan_row)
+    document_ir = adapter.extract_supplemental(source, context)
+    receipt = adapter.receipt(source, match)
+    receipt["deferred_execution"] = True
+    receipt["trigger_gap_count"] = len(context.trigger_gaps)
+    receipt["requested_capabilities"] = list(context.requested_capabilities)
     return {
         "adapter_name": adapter.name,
         "mode": adapter.mode,
@@ -127,6 +153,13 @@ def _apply_capability_gaps(
     return result
 
 
+def _primary_execution(executions: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for execution in executions:
+        if text(execution.get("mode")) == MODE_PRIMARY:
+            return execution
+    return executions[0] if executions else None
+
+
 def build_document_structure_ir(
     data: bytes,
     *,
@@ -178,6 +211,7 @@ def build_document_structure_ir(
                 execution = _execute_adapter(source, resolved_registry, row)
                 executions.append(execution)
                 parsing_plan["runtime_fallback_adapter"] = row
+                selected_names.add(text(row.get("adapter_name")))
                 break
             except Exception as exc:
                 errors.append(
@@ -193,6 +227,76 @@ def build_document_structure_ir(
     if not executions:
         raise ValueError(f"document ingestion produced no adapter output: {errors}")
 
+    deferred_plan: dict[str, Any] = {
+        "schema": "qualibug.deferred-document-parsing-plan.v1",
+        "status": "NOT_REQUIRED",
+        "trigger_gaps": [],
+        "requested_capabilities": [],
+        "provided_capabilities": [],
+        "missing_capabilities": [],
+        "selected_adapters": [],
+    }
+    primary = _primary_execution(executions)
+    if primary is not None:
+        primary_ir = dict(primary.get("document_ir") or {})
+        deferred_plan = plan_deferred_supplementals(
+            source,
+            primary_ir,
+            resolved_registry,
+            excluded_names=selected_names,
+        )
+        context = SupplementalContext(
+            primary_document_ir=primary_ir,
+            trigger_gaps=tuple(
+                dict(row)
+                for row in (deferred_plan.get("trigger_gaps") or [])
+                if isinstance(row, dict)
+            ),
+            requested_capabilities=tuple(
+                text(value)
+                for value in (deferred_plan.get("requested_capabilities") or [])
+                if text(value)
+            ),
+        )
+        for row in deferred_plan.get("selected_adapters") or []:
+            if not isinstance(row, dict):
+                continue
+            try:
+                executions.append(
+                    _execute_supplemental_adapter(
+                        source,
+                        resolved_registry,
+                        row,
+                        context,
+                    )
+                )
+                selected_names.add(text(row.get("adapter_name")))
+            except Exception as exc:
+                errors.append(
+                    {
+                        "adapter_name": row.get("adapter_name"),
+                        "code": "DOCUMENT_SUPPLEMENTAL_ADAPTER_EXECUTION_FAILED",
+                        "detail": f"{type(exc).__name__}: {exc}"[:500],
+                        "primary": True,
+                        "mode": row.get("mode"),
+                    }
+                )
+
+    provided = unique_text(
+        [
+            *(parsing_plan.get("provided_capabilities") or []),
+            *(deferred_plan.get("provided_capabilities") or []),
+        ]
+    )
+    parsing_plan["provided_capabilities"] = provided
+    parsing_plan["missing_capabilities"] = sorted(
+        set(parsing_plan.get("required_capabilities") or []) - set(provided)
+    )
+    parsing_plan["deferred_plan"] = deferred_plan
+    parsing_plan["deferred_selected_adapters"] = list(
+        deferred_plan.get("selected_adapters") or []
+    )
+
     merged = merge_document_irs(
         source,
         parsing_plan,
@@ -206,7 +310,9 @@ def build_document_structure_ir(
         "filename": source.filename,
         "source_hash": source.content_hash,
         "plan_status": parsing_plan.get("status"),
+        "deferred_plan_status": deferred_plan.get("status"),
         "selected_adapter_count": len(selected_rows),
+        "deferred_selected_adapter_count": len(deferred_plan.get("selected_adapters") or []),
         "executed_adapter_count": len(executions),
         "execution_error_count": len(errors),
         "runtime_fallback_used": bool(parsing_plan.get("runtime_fallback_adapter")),
