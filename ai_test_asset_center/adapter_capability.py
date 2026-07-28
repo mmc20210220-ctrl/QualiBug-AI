@@ -21,11 +21,13 @@ BASELINE_ADAPTERS = frozenset({"http_api"})
 # These are not target capabilities and never authorize access to customer data.
 PRODUCT_OWNED_ADAPTERS = frozenset({"process_ledger"})
 
-# adapter -> what the customer/campaign must explicitly declare for it to become
-# available. These strings are operator-facing diagnostics, not inference rules.
+# adapter -> what the customer/runtime must explicitly declare for it to become
+# available. Source-level UI contracts are validated separately by the formal UI
+# protocol; mixing those two authorities is how a source document could accidentally
+# authorize a runtime capability.
 DECLARATION_REQUIRED: dict[str, str] = {
     "db_sql": "services[].db",
-    "ui_browser": "runtime_contract.declared_adapters[] + ui_formal_contracts[]",
+    "ui_browser": "runtime_contract.declared_adapters[]",
 }
 
 
@@ -50,7 +52,7 @@ def _config_candidates(root: Path, project: str) -> list[Path]:
 
 
 def _declared_config(root: Path, project: str) -> dict[str, Any]:
-    for path in _config_candidates(root, project):
+    for path in _config_candidates(Path(root), project):
         if not path.is_file():
             continue
         try:
@@ -78,9 +80,9 @@ def resolve_available_adapters(
     inside the formal executor, not discovered on the target.
 
     ``ui_browser`` is deliberately not inferred from a UI URL, an installed
-    Playwright package, or the presence of browser steps. The campaign must name
-    the adapter explicitly, and the UI formal-chain entry point separately
-    requires source-bound ``ui_formal_contracts`` before executing it.
+    Playwright package, or the presence of browser steps. The runtime contract
+    must name the adapter explicitly. The formal UI protocol independently
+    requires a source-declared browser expectation before compiling an experiment.
     """
     available = set(BASELINE_ADAPTERS | PRODUCT_OWNED_ADAPTERS)
     config = _declared_config(Path(root), project)
