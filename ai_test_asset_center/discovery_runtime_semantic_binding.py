@@ -8,9 +8,10 @@ those symbols with stable additive wrappers:
 * exact accepted rule/interface identities;
 * canonical-field response observers;
 * enterprise and explicit scan UI contracts;
+* professional source-declared read-only UI/UX assertions;
 * source-declared asynchronous event contracts;
 * source-declared sequential read-only latency budgets;
-* formal UI, event and performance obligations using the single experiment mainline.
+* one formal experiment mainline for every surface.
 """
 from __future__ import annotations
 
@@ -34,6 +35,7 @@ from .formal_performance_surface import install_formal_performance_surface
 from .formal_ui_surface import install_formal_ui_surface
 from .formal_ui_surface_guard import install_formal_ui_read_only_guard
 from .non_http_observers import install_non_http_observers
+from .professional_ui_readonly import install_professional_ui_readonly
 from .scan_event_contract_external_signal import (
     overlay_scan_event_contracts_with_external_signals,
 )
@@ -71,11 +73,13 @@ _INSTALL_MARKER = "_qualibug_semantic_operation_binding_installed"
 _ORIGINAL_MARKER = "_qualibug_original_behavior_ir_builder"
 
 # Register formal surfaces before any obligation or experiment is compiled. Every installer is
-# idempotent and performs no target I/O. Event and performance guards must wrap their base
-# handlers before the mainline captures or dispatches them.
+# idempotent and performs no target I/O. The professional UI installer extends the existing UI
+# authority after its first read-only guard has been registered, so the guard's live whitelist
+# and the browser executor are widened together without introducing a second adjudicator.
 install_non_http_observers()
 install_formal_ui_surface()
 install_formal_ui_read_only_guard()
+install_professional_ui_readonly()
 install_formal_event_surface()
 install_formal_event_capability_guard()
 install_formal_event_pre_cleanup_observer()
