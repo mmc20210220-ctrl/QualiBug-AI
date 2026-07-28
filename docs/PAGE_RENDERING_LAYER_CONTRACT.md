@@ -45,10 +45,11 @@ The default registry contains:
    - may pass through unreadable raster bytes only as unverified input; the downstream
      provider must still fail visibly if the bytes are invalid.
 
-2. `pymupdf-pdf-page-renderer`
+2. `pdfium-pdf-page-renderer`
    - preferred full-page PDF renderer;
+   - opens PDF content from immutable bytes;
    - preserves target page selection and DPI;
-   - requires the optional `render` dependency.
+   - uses the optional `pypdfium2` dependency.
 
 3. `pypdf-embedded-image-renderer`
    - lower-fidelity PDF fallback;
@@ -58,7 +59,7 @@ The default registry contains:
 4. `libreoffice-office-page-renderer`
    - optional office-to-PDF renderer;
    - supports legacy Word, PowerPoint, OpenDocument and spreadsheet containers;
-   - requires both a local LibreOffice executable and PyMuPDF;
+   - requires both a local LibreOffice executable and PDFium rendering support;
    - conversion provenance must remain visible.
 
 ## Selection rules
@@ -108,6 +109,12 @@ must not add new PDF, PPT or image rendering code inside their own modules.
 
 Adding a new renderer is allowed by registration. Adding file-format branches to the
 enterprise understanding layer is forbidden.
+
+## Dependency policy
+
+The proprietary product build must not silently introduce reciprocal copyleft rendering
+libraries. The default optional PDF renderer is `pypdfium2`, whose project declares
+Apache-2.0 / BSD-3-Clause terms and uses PDFium under a BSD-style license.
 
 ## Deployment
 
