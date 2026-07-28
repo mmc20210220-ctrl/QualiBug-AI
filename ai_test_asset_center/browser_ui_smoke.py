@@ -98,6 +98,10 @@ def run_browser_ui_smoke(
     - failed network requests;
     - one screenshot per visited page.
 
+    ``paths`` is accepted only from the caller. The collector never invents routes
+    from API endpoints or page text; a formal caller supplies source-declared page
+    paths, while ordinary smoke use retains the root-page default.
+
     It returns a stable report even when Playwright is unavailable, so callers can
     surface the exact blocker instead of silently omitting UI coverage.
     """
@@ -228,11 +232,22 @@ def attach_browser_ui_health(
     project: str,
     root: Path,
     base_url: str = "",
+    paths: list[str] | None = None,
     enabled: bool | None = None,
 ) -> dict[str, Any]:
-    """Attach browser UI health to a scan result without mutating failure semantics."""
+    """Attach browser UI health without mutating the scan's original failure semantics.
+
+    Formal callers may provide source-declared ``paths``. Ordinary callers omit it and
+    retain the historical root-page smoke behavior.
+    """
     updated = dict(result or {})
-    report = run_browser_ui_smoke(project=project, root=root, base_url=base_url, enabled=enabled)
+    report = run_browser_ui_smoke(
+        project=project,
+        root=root,
+        base_url=base_url,
+        paths=paths,
+        enabled=enabled,
+    )
     updated["browser_ui_health"] = report
     coverage_gaps = list(updated.get("coverage_gaps") or []) if isinstance(updated.get("coverage_gaps"), list) else []
     if not report.get("enabled"):
