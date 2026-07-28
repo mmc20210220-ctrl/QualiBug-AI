@@ -137,7 +137,19 @@ def _apply_gap_resolutions(
 
 
 def _composed_plain_text(blocks: list[dict[str, Any]], fallback: str) -> str:
-    allowed = {"HEADING", "PARAGRAPH", "LIST_ITEM"}
+    # Text-bearing table cells, notes and formulas are part of the enterprise material
+    # projection. Container blocks such as TABLE or FIGURE stay excluded to avoid
+    # duplicating their child text.
+    allowed = {
+        "HEADING",
+        "PARAGRAPH",
+        "LIST_ITEM",
+        "TABLE_CELL",
+        "KEY_VALUE",
+        "NOTE",
+        "CAPTION",
+        "FORMULA",
+    }
     values: list[str] = []
     seen: set[tuple[str, str]] = set()
     for block in blocks:
