@@ -61,6 +61,9 @@ from .professional_ui_responsive_accessibility import (
 from .professional_ui_visual_baseline import (
     install_professional_ui_visual_baseline,
 )
+from .professional_ui_visual_baseline_governance import (
+    install_visual_baseline_governance,
+)
 from .scan_event_contract_external_signal import (
     overlay_scan_event_contracts_with_external_signals,
 )
@@ -103,10 +106,10 @@ _ORIGINAL_MARKER = "_qualibug_original_behavior_ir_builder"
 # Register formal surfaces before any obligation or experiment is compiled. Every installer is
 # idempotent and performs no target I/O. The UI installers extend one authority in order:
 # read-only assertions, scan admission, responsive/accessibility behavior, deterministic visual
-# comparison, governed interaction, plan-level checks, evidence minimization, persistent cleanup
-# observation, then direct-scan admission parity with enterprise source contracts. Installing the
-# visual observer before the interaction observer means interactive visual findings inherit the
-# cleanup-equivalence gate instead of bypassing it.
+# comparison and project namespace governance, governed interaction, plan-level checks, evidence
+# minimization, persistent cleanup observation, then direct-scan admission parity with enterprise
+# source contracts. Installing the visual observer before the interaction observer means
+# interactive visual findings inherit the cleanup-equivalence gate instead of bypassing it.
 install_non_http_observers()
 install_formal_ui_surface()
 install_formal_ui_read_only_guard()
@@ -114,6 +117,7 @@ install_professional_ui_readonly()
 install_professional_ui_contract_guard()
 install_professional_ui_responsive_accessibility()
 install_professional_ui_visual_baseline()
+install_visual_baseline_governance()
 install_controlled_ui_interaction()
 install_controlled_ui_interaction_contract_guard()
 install_controlled_ui_interaction_privacy_guard()
