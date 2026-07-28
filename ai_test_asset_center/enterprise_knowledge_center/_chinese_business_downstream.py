@@ -222,11 +222,12 @@ def refresh_chinese_business_downstream(
     source_gate = _dict(asset.get("enterprise_comprehension_gate"))
     source_ready = bool(source_gate.get("entry_allowed", True))
     downstream_ready = source_ready and not blocked_rules
-    downstream_status = (
-        "PASS"
-        if downstream_ready
-        else "BLOCKED_BUSINESS_COMPREHENSION_DOWNSTREAM_UNBOUND"
-    )
+    if blocked_rules:
+        downstream_status = "BLOCKED_BUSINESS_COMPREHENSION_DOWNSTREAM_UNBOUND"
+    elif not source_ready:
+        downstream_status = "BLOCKED_UPSTREAM_BUSINESS_COMPREHENSION_GATE"
+    else:
+        downstream_status = "PASS"
     downstream_gate = {
         "schema": DOWNSTREAM_GATE_SCHEMA,
         "status": downstream_status,
@@ -240,6 +241,7 @@ def refresh_chinese_business_downstream(
             "after an authoritative rule-to-interface relation is proven"
         ),
         "arbitrary_endpoint_fallback_allowed": False,
+        "upstream_gate_status": _text(source_gate.get("status")) or "UNKNOWN",
     }
     source_gate["downstream"] = downstream_gate
     source_gate["entry_allowed"] = source_ready and downstream_ready
