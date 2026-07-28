@@ -109,15 +109,37 @@ def test_professional_ui_contract_is_projected_across_declared_dimensions() -> N
         assert row["violation_count"] == 1
         assert row["deliverable_count"] == 1
 
+    assert coverage["dimensions"]["visual_regression"][
+        "declared_contract_count"
+    ] == 0
     assert coverage["dimensions"]["workflow_interaction"][
         "declared_contract_count"
     ] == 0
+    assert coverage["visual_baseline_contracts"] == {
+        "declared_visual_contract_count": 0,
+        "declared_baseline_namespace_counts": {},
+        "visual_observation_count": 0,
+        "comparable_visual_observation_count": 0,
+        "visual_observation_status_counts": {},
+        "visual_reason_counts": {},
+        "ai_visual_judgement_consumed_count": 0,
+        "baseline_scope": "project_approved_visual_baseline",
+        "comparison_method": "rgba_max_channel_absolute_difference",
+        "allowed_baseline_namespaces": [
+            "visual_baselines",
+            "approved_visual_baselines",
+        ],
+        "baseline_auto_update_supported": False,
+    }
     # One contract can exercise several professional dimensions, but the formal
     # funnel still contains one violation and one deliverable finding occurrence.
     assert funnel["outcomes"]["violation_count"] == 1
     assert funnel["outcomes"]["deliverable_count"] == 1
     boundary = coverage["capability_boundary"]
     assert boundary["provider_findings_consumed"] is False
+    assert boundary["visual_baseline_regression_supported"] is True
+    assert boundary["visual_baseline_auto_update_supported"] is False
+    assert boundary["visual_provider_or_ai_opinion_used_as_defect"] is False
     assert boundary["controlled_write_interaction_supported"] is True
     assert boundary["production_write_supported"] is False
     assert boundary["browser_cleanup_equivalence_required"] is True
@@ -139,6 +161,7 @@ def test_empty_ui_result_reports_every_professional_dimension_as_uncovered() -> 
         "layout_responsive",
         "rendered_state",
         "runtime_quality",
+        "visual_regression",
         "workflow_interaction",
     ]
     assert all(
