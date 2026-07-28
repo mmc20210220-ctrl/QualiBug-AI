@@ -38,6 +38,25 @@ def _source_manifest_details(context: dict[str, Any], source_text: Any) -> tuple
     }, issues
 
 
+def _declared_adapters(context: dict[str, Any]) -> list[str]:
+    """Normalize only campaign-declared adapters; never infer from URLs or drivers."""
+    raw = context.get("declared_adapters")
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("declared_adapters_not_list")
+    adapters: list[str] = []
+    for value in raw:
+        name = str(value or "").strip()
+        if not name:
+            continue
+        if len(name) > 80:
+            raise ValueError("declared_adapter_name_too_long")
+        if name not in adapters:
+            adapters.append(name)
+    return adapters
+
+
 def _runtime_contract(context: dict[str, Any], base_url: str, source_text: Any) -> dict[str, Any]:
     verification_text = context.get("_source_verification_text", source_text)
     manifest, source_issues = _source_manifest_details(context, verification_text)
@@ -49,6 +68,7 @@ def _runtime_contract(context: dict[str, Any], base_url: str, source_text: Any) 
         or ""
     ).strip().lower()
     execution_mode = str(context.get("execution_mode") or "safe_read_only").strip() or "safe_read_only"
+    declared_adapters = _declared_adapters(context)
     scenario_gap_codes: list[str] = []
     if context.get("runtime_scenario_contract"):
         from .runtime_scenario_contract_gate import runtime_scenario_contract_gaps
@@ -66,6 +86,7 @@ def _runtime_contract(context: dict[str, Any], base_url: str, source_text: Any) 
             "environment_ref": environment_ref,
             "environment_kind": environment_kind,
             "execution_mode": execution_mode,
+            "declared_adapters": declared_adapters,
             "source_manifest": manifest,
             "source_issues": source_issues,
         }
@@ -102,6 +123,7 @@ def _runtime_contract(context: dict[str, Any], base_url: str, source_text: Any) 
             "environment_ref": environment_ref,
             "environment_kind": environment_kind,
             "execution_mode": execution_mode,
+            "declared_adapters": declared_adapters,
             "source_manifest": manifest,
             "target_policy_decision": decision,
         }
@@ -114,6 +136,7 @@ def _runtime_contract(context: dict[str, Any], base_url: str, source_text: Any) 
         "environment_ref": environment_ref,
         "environment_kind": environment_kind,
         "execution_mode": execution_mode,
+        "declared_adapters": declared_adapters,
         "source_manifest": manifest,
         "target_policy_decision": decision,
     }
@@ -126,7 +149,6 @@ def _runtime_contract(context: dict[str, Any], base_url: str, source_text: Any) 
 
 def _slice_ledger_path(root: Path, project: str) -> Path:
     return root / "platform_workspace" / str(project) / "defect_discovery" / "v12_behavior_slice_ledger.json"
-
 
 
 
