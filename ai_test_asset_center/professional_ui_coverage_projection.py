@@ -4,7 +4,8 @@ The projection is descriptive, not a second verdict authority. A formal contract
 may contain assertions from several dimensions; its attempt/outcome is counted in
 each declared dimension so the product can show exactly what was exercised.
 Interactive treatment and cleanup steps are counted separately from assertions,
-and cleanup equivalence is read only from the typed UI observer receipt.
+visual comparison status comes only from typed observer receipts, and cleanup
+equivalence remains mandatory before interactive Oracle or delivery outcomes.
 """
 from __future__ import annotations
 
@@ -17,6 +18,15 @@ from .professional_ui_interaction_privacy_guard import EVIDENCE_POLICY
 from .professional_ui_persistent_cleanup_probe import (
     EQUIVALENCE_SCOPE,
     PERSISTENT_PROBE_PROPERTY,
+)
+from .professional_ui_visual_baseline import (
+    ACTION as VISUAL_ACTION,
+    BASELINE_SCOPE as VISUAL_BASELINE_SCOPE,
+    COMPARISON_METHOD as VISUAL_COMPARISON_METHOD,
+)
+from .professional_ui_visual_baseline_governance import (
+    APPROVED_PREFIX as VISUAL_APPROVED_PREFIX,
+    INPUT_PREFIX as VISUAL_INPUT_PREFIX,
 )
 
 CATEGORY_ACTIONS: dict[str, frozenset[str]] = {
@@ -47,6 +57,7 @@ CATEGORY_ACTIONS: dict[str, frozenset[str]] = {
         "expect_not_obscured",
         "expect_no_horizontal_overflow",
     }),
+    "visual_regression": frozenset({VISUAL_ACTION}),
     "runtime_quality": frozenset({
         "expect_no_console_errors",
         "expect_no_failed_requests",
@@ -103,6 +114,16 @@ def _persistent_probes_from_obligation(
     ]
 
 
+def _visual_steps_from_obligation(
+    obligation: dict[str, Any],
+) -> list[dict[str, Any]]:
+    return [
+        row
+        for row in _steps_from_obligation(obligation)
+        if _text(row.get("action")).lower() == VISUAL_ACTION
+    ]
+
+
 def _categories(actions: set[str]) -> set[str]:
     categories = {
         category
@@ -143,6 +164,18 @@ def _cleanup_status(receipts: list[dict[str, Any]]) -> str:
     return unique[0] if len(unique) == 1 else "AMBIGUOUS" if unique else ""
 
 
+def _visual_observations(receipts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for receipt in receipts:
+        ui_evidence = _dict(_dict(receipt.get("evidence")).get(EVIDENCE_KEY))
+        output.extend(
+            dict(row)
+            for row in _list(ui_evidence.get("visual_baseline_observations"))
+            if isinstance(row, dict)
+        )
+    return output
+
+
 def build_professional_ui_coverage(result: dict[str, Any]) -> dict[str, Any]:
     obligation_pack = _dict(result.get("test_obligations"))
     obligations = [
@@ -171,6 +204,8 @@ def build_professional_ui_coverage(result: dict[str, Any]) -> dict[str, Any]:
     interaction_contract_count = 0
     persistent_probe_count = 0
     interaction_without_persistent_probe_count = 0
+    visual_contract_count = 0
+    visual_baseline_ref_counts: Counter[str] = Counter()
     category_rows = {
         category: {
             "declared_contract_count": 0,
@@ -206,6 +241,17 @@ def build_professional_ui_coverage(result: dict[str, Any]) -> dict[str, Any]:
                     treatment_interaction_counts[action] += 1
             elif action in ASSERTION_ACTIONS:
                 assertion_counts[action] += 1
+        visual_steps = _visual_steps_from_obligation(obligation)
+        if visual_steps:
+            visual_contract_count += 1
+            for step in visual_steps:
+                ref = _text(step.get("baseline_ref"))
+                if ref.startswith(VISUAL_INPUT_PREFIX + "/"):
+                    visual_baseline_ref_counts[VISUAL_INPUT_PREFIX] += 1
+                elif ref.startswith(VISUAL_APPROVED_PREFIX + "/"):
+                    visual_baseline_ref_counts[VISUAL_APPROVED_PREFIX] += 1
+                else:
+                    visual_baseline_ref_counts["invalid_or_legacy_scope"] += 1
         categories = _categories(actions)
         obligation_categories[obligation_id] = categories
         cleanup_authority = _dict(
@@ -227,6 +273,11 @@ def build_professional_ui_coverage(result: dict[str, Any]) -> dict[str, Any]:
 
     terminal_reason_counts: Counter[str] = Counter()
     cleanup_status_counts: Counter[str] = Counter()
+    visual_observation_status_counts: Counter[str] = Counter()
+    visual_reason_counts: Counter[str] = Counter()
+    visual_observation_count = 0
+    visual_comparable_count = 0
+    visual_ai_judgement_consumed_count = 0
     invalid_deliverable_without_cleanup_count = 0
     invalid_oracle_without_cleanup_count = 0
     for attempt in attempts:
@@ -237,6 +288,19 @@ def build_professional_ui_coverage(result: dict[str, Any]) -> dict[str, Any]:
         observed = any(
             _text(row.get("status")).upper() == "OBSERVED" for row in receipts
         )
+        for observation in _visual_observations(receipts):
+            visual_observation_count += 1
+            status = _text(observation.get("status")).upper() or "UNKNOWN"
+            visual_observation_status_counts[status] += 1
+            reason = _text(observation.get("reason_code"))
+            if reason:
+                visual_reason_counts[reason] += 1
+            if observation.get("dimension_match") is True and (
+                observation.get("changed_pixel_ratio") is not None
+            ):
+                visual_comparable_count += 1
+            if observation.get("ai_visual_judgement_used") is True:
+                visual_ai_judgement_consumed_count += 1
         cleanup_status = _cleanup_status(receipts)
         if cleanup_status:
             cleanup_status_counts[cleanup_status] += 1
@@ -311,6 +375,28 @@ def build_professional_ui_coverage(result: dict[str, Any]) -> dict[str, Any]:
         "declared_cleanup_interaction_action_counts": dict(
             sorted(cleanup_interaction_counts.items())
         ),
+        "visual_baseline_contracts": {
+            "declared_visual_contract_count": visual_contract_count,
+            "declared_baseline_namespace_counts": dict(
+                sorted(visual_baseline_ref_counts.items())
+            ),
+            "visual_observation_count": visual_observation_count,
+            "comparable_visual_observation_count": visual_comparable_count,
+            "visual_observation_status_counts": dict(
+                sorted(visual_observation_status_counts.items())
+            ),
+            "visual_reason_counts": dict(sorted(visual_reason_counts.items())),
+            "ai_visual_judgement_consumed_count": (
+                visual_ai_judgement_consumed_count
+            ),
+            "baseline_scope": VISUAL_BASELINE_SCOPE,
+            "comparison_method": VISUAL_COMPARISON_METHOD,
+            "allowed_baseline_namespaces": [
+                VISUAL_INPUT_PREFIX,
+                VISUAL_APPROVED_PREFIX,
+            ],
+            "baseline_auto_update_supported": False,
+        },
         "interaction_cleanup_contracts": {
             "declared_interaction_contract_count": interaction_contract_count,
             "declared_persistent_probe_count": persistent_probe_count,
@@ -351,7 +437,17 @@ def build_professional_ui_coverage(result: dict[str, Any]) -> dict[str, Any]:
             "media_emulation_supported": True,
             "deterministic_accessibility_basics_supported": True,
             "full_accessibility_certification_claimed": False,
-            "visual_baseline_regression_supported": False,
+            "visual_baseline_regression_supported": True,
+            "visual_baseline_sha256_required": True,
+            "visual_changed_pixel_budget_required": True,
+            "visual_dynamic_region_masking_supported": True,
+            "visual_sensitive_region_masking_supported": True,
+            "visual_baseline_auto_update_supported": False,
+            "visual_provider_or_ai_opinion_used_as_defect": False,
+            "visual_allowed_baseline_namespaces": [
+                VISUAL_INPUT_PREFIX,
+                VISUAL_APPROVED_PREFIX,
+            ],
             "controlled_write_interaction_supported": True,
             "approved_nonproduction_target_required": True,
             "production_write_supported": False,
