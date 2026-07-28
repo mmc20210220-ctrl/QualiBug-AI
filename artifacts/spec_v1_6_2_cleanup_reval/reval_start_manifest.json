@@ -1,10 +1,10 @@
 {
   "schema_version": "qualibug.v162-cleanup-reval-start-manifest.v1",
   "spec_version": "V1.6.2-CLEANUP-EQUIVALENCE-REVAL",
-  "run_name": "V1_6_2_CLEANUP_EQUIVALENCE_ROOTCAUSE_REVAL_V14",
-  "frozen_at": "2026-07-27T15:20:36.764678+00:00",
-  "commit_sha": "7c49fcc65b6fc6d9835bf1b1f8db965dafb26c5d",
-  "tree_hash": "c060487c8ae185f79579e171e14c18daf156a187",
+  "run_name": "V1_6_2_CLEANUP_EQUIV_MODE_ALIGN_REVAL_V1",
+  "frozen_at": "2026-07-28T00:30:33.174941+00:00",
+  "commit_sha": "22ededb90a370c31ade9e07b9b06c3b9b49c0494",
+  "tree_hash": "e6a54a2c2e3274b395d575f60bbf23cfdc327154",
   "working_tree_dirty": true,
   "canonical_obligation_count": 1498,
   "canonical_obligation_manifest_hash": "0c692b5ee288abf4bf540b3d57d5395fee552c6163b3df56fe42d445033dd4cd",
@@ -30,22 +30,22 @@
       "approved_base_url": "http://127.0.0.1:8080",
       "environment_type": "test",
       "environment_ref": "sandbox",
-      "campaign_rerun_key": "v162_cleanup_equivalence_reval_v14"
+      "campaign_rerun_key": "v162_cleanup_equiv_mode_align_reval_v1"
     }
   },
   "post_start_tuning_forbidden": true,
   "file_hashes": {
     "cleanup_observation_adapter": "b790f0565f0b860d2c6ff6e9d80dfbd4abfb38537d848fbe7727820558976ac0",
-    "cleanup_execution_receipt": "03409f3ee55d1d945db1027ff6df62eef172cd5338c0b41e2d7f5b244a698f51",
-    "cleanup_equivalence": "8c7edac19efad750206db82bc04cce97244070fe159cb6a0cad4f41bf9cbb8f6",
-    "write_reversibility_contract": "742f16a2b3a116168bc8e111c525826cd54a7331e0d52f82899cc597d1d7d509",
-    "experiment_cleanup": "3db8da73cb09646da43f8d4b54dca26d50ee8d9482d565dc673874b7f277ce88",
-    "experiment_cleanup_executor": "f1fc0ffe4e345fa96d8326a5218582af1fcb84768b061dac843367e078b4926f",
-    "experiment_outcome_finalizer": "3e2fbefe8f223d63ca46cf853e43c861736868b5d09206bc4880f77957be91b2",
+    "cleanup_execution_receipt": "31ff825fef8cb58c259015db3edb2343f8c049edd472e1a14f29578f6e4d48cf",
+    "cleanup_equivalence": "526ef66fa6c5e58d1106809b0175af46adcf84f84d1330c17d8622eacae78ed5",
+    "write_reversibility_contract": "c38010d8e609939d5f19db5ffd3f4ef554fb443d36ede104f1bf3a3cc0139323",
+    "experiment_cleanup": "b551777cf1d99a6960a346539c5af059dd8a9a38388aafad05348e180b5537a0",
+    "experiment_cleanup_executor": "c0273b8cc832418e0fad346d64e05d0b4af48467b078d95fad00ce88062dc1cf",
+    "experiment_outcome_finalizer": "b2fe298d357326aa4114df697f710793b5aad2d464933c1b2775e27bd2134bad",
     "experiment_runtime_support": "7b06b69881a81f637050e43f94ac6aa6307eed1ee436d01dc5052fc2c3510866",
     "runtime_binding_graph": "da47270d6b6ddeb52ec67b7114f809dc26c985b5d325fffe2326dea992279dcf",
     "behavior_ir": "4b71d60ccd780e138df675ca6b3249e630d0a664190ac5abbb842cd797cc2ff2",
-    "observer_contracts_base": "8abe87943a089eebbf317302ba1d3ddff1106aa7a60217f0b173bdd64de5e110",
+    "observer_contracts_base": "e01130dcbd11c2974055601c16a81ef0e104904e2628ec574aaf5164fbfaeaf6",
     "discovery_runtime_execution": "ed4bdac570aafd2a8d019003367fc5500955245b70b1d137a6836308c025fd22",
     "discovery_runtime_execution_support": "0ee1a4879de2029c235bc693957387306df82bbae5ee32f2ef6a8caf7abad163"
   }

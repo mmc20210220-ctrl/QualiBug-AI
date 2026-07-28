@@ -707,7 +707,11 @@ _COLLECTION_ENVELOPE_META_KEYS = frozenset({
 def _dict_has_resource_identity(value: dict[str, Any]) -> bool:
     """True when the object carries a conventional resource identity scalar."""
     for key, child in value.items():
-        if not isinstance(child, (str, int, float)) or not str(child).strip():
+        if (
+            isinstance(child, bool)
+            or not isinstance(child, (str, int, float))
+            or not str(child).strip()
+        ):
             continue
         raw_key = str(key).strip()
         normalized = re.sub(r"[^a-z0-9]+", "", raw_key.lower())

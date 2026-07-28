@@ -64,6 +64,18 @@ def test_cleanup_entity_rows_does_not_treat_business_word_ending_id_as_identity(
     assert rows == [{"id": "line-1", "quantity": 1}]
 
 
+def test_cleanup_entity_rows_rejects_boolean_identity_values():
+    rows = _entity_rows(
+        {
+            "orderId": True,
+            "status": "SHIPPED",
+            "items": [{"id": "line-1", "quantity": 1}],
+        }
+    )
+
+    assert rows == [{"id": "line-1", "quantity": 1}]
+
+
 def test_cleanup_entity_rows_still_unwraps_collection_envelope():
     rows = _entity_rows(
         {

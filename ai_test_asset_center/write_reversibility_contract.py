@@ -380,9 +380,70 @@ def _classify_cleanup_authority_v11(
             primary_method=primary_method,
             primary_path=primary_path,
             primary_op=_dict(ops.get(primary_operation_ref)),
+            primary_operation_ref=primary_operation_ref,
+            relations=relations,
         )
 
     return {"kind": "none", "detail": "cleanup_authority_unrecognized"}
+
+
+def _relation_kind(rel: dict[str, Any]) -> str:
+    return _text(
+        rel.get("kind") or rel.get("type") or rel.get("relation") or rel.get("relation_type")
+    ).lower()
+
+
+def _operation_refs_match(rel: dict[str, Any], operation_ref: str) -> bool:
+    op = _text(operation_ref)
+    if not op:
+        return False
+    candidates = {
+        _text(rel.get("operation_ref")),
+        _text(rel.get("from_ref")),
+        _text(rel.get("from")),
+        _text(rel.get("source")),
+        _text(rel.get("op_ref")),
+    }
+    return op in candidates
+
+
+def _operation_produces_entity(
+    operation_ref: str,
+    relations: list[Any] | None,
+) -> bool:
+    """True when Behavior IR declares the write produces/creates an entity."""
+    for rel in _list(relations):
+        if not isinstance(rel, dict):
+            continue
+        kind = _relation_kind(rel)
+        if kind not in {"produces", "creates", "create"}:
+            continue
+        if _operation_refs_match(rel, operation_ref):
+            return True
+    return False
+
+
+def _operation_mutates_entity(
+    operation_ref: str,
+    relations: list[Any] | None,
+) -> bool:
+    """True when Behavior IR declares the write mutates an existing entity."""
+    for rel in _list(relations):
+        if not isinstance(rel, dict):
+            continue
+        kind = _relation_kind(rel)
+        if kind not in {
+            "mutates",
+            "updates",
+            "modifies",
+            "transitions",
+            "state_transition",
+            "affects",
+        }:
+            continue
+        if _operation_refs_match(rel, operation_ref):
+            return True
+    return False
 
 
 def _adapter_cleanup_is_field_restore(
@@ -391,29 +452,42 @@ def _adapter_cleanup_is_field_restore(
     primary_method: str,
     primary_path: str,
     primary_op: dict[str, Any],
+    primary_operation_ref: str = "",
+    relations: list[Any] | None = None,
 ) -> bool:
     """True when adapter cleanup must restore mutated fields, not delete a created row.
 
-    Empty-body identity POSTs (ship/confirm/approve) and PUT/PATCH on an addressed
-    entity mutate pre-existing rows. Row-delete equivalence (created_entity_absent)
-    is the wrong contract for those writes — runtime field_restore leaves the entity
-    present and must be judged by business_state_restored.
+    Classification authority is source cleanup mode / produces-entity vs
+    mutates-entity — not empty-body heuristics alone. Create-under-parent POSTs
+    that produce a child must stay on row_delete even when the request example
+    is empty.
+
+    Mutates/transitions wins over a co-declared produces tag: IR often attaches
+    both to identity-bound action POSTs (ship/pay/confirm). Preferring produces
+    left WRP on created_entity_absent while runtime field_restore kept the row,
+    which falsely failed as ENTITY_STILL_PRESENT_AFTER_CLEANUP.
     """
     from .real_id_resolver_base import path_has_placeholders
 
     step_mode = _text(step.get("mode")).lower()
     if step_mode in {"field_restore", "adapter_field_restore", "snapshot_restore"}:
         return True
-    method = _text(primary_method).upper()
-    if not path_has_placeholders(primary_path):
-        return False
-    if method in {"PUT", "PATCH"}:
+
+    op_ref = _text(primary_operation_ref) or _text(primary_op.get("id"))
+    # Mutates/transitions first — co-declared produces must not force row_delete.
+    if _operation_mutates_entity(op_ref, relations):
         return True
-    if method != "POST":
+    if _operation_produces_entity(op_ref, relations):
         return False
-    request_example = primary_op.get("request_example")
-    body_empty = not request_example or request_example == {}
-    return body_empty
+
+    method = _text(primary_method).upper()
+    if method in {"PUT", "PATCH"} and path_has_placeholders(primary_path):
+        return True
+    # Explicit row_delete without produces/mutates stays row_delete.
+    # Empty-body identity POST alone is not enough to force field_restore.
+    if step_mode in {"row_delete", "adapter_row_delete"}:
+        return False
+    return False
 
 
 def _validate_declared_adapter_cleanup(
@@ -422,6 +496,8 @@ def _validate_declared_adapter_cleanup(
     primary_method: str = "",
     primary_path: str = "",
     primary_op: dict[str, Any] | None = None,
+    primary_operation_ref: str = "",
+    relations: list[Any] | None = None,
 ) -> dict[str, Any]:
     """Admit a declared-adapter cleanup as authority, or say what is missing.
 
@@ -449,6 +525,8 @@ def _validate_declared_adapter_cleanup(
         primary_method=primary_method,
         primary_path=primary_path,
         primary_op=_dict(primary_op),
+        primary_operation_ref=primary_operation_ref,
+        relations=relations,
     )
     authority_block = {
         "kind": "declared_adapter_cleanup",

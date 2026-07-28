@@ -1,19 +1,19 @@
 {
   "ok": true,
-  "scan_id": "scan_benchmark_mall_131_1785165636907",
+  "scan_id": "scan_benchmark_mall_131_1785198633529",
   "grade": "evidence_ready",
   "score": 12.0,
   "coverage": 1.0,
   "total_findings": 2,
-  "total_ms": 163246,
+  "total_ms": 313157,
   "layers": {
     "source_grounded_discovery": {
       "tool": "V12 enterprise campaign",
       "findings": 2,
       "candidates": 0,
-      "ms": 81878,
+      "ms": 115284,
       "execution_status": "completed",
-      "campaign_id": "CMP_88f1834f5884dbb974238430"
+      "campaign_id": "CMP_3c844df8a7999f709f5ae3bf"
     },
     "external_signals": {
       "tool": "explicit_external_signal_requests",
@@ -51,7 +51,7 @@
   },
   "execution_status": "completed",
   "campaign": {
-    "campaign_id": "CMP_88f1834f5884dbb974238430",
+    "campaign_id": "CMP_3c844df8a7999f709f5ae3bf",
     "campaign_status": "degraded",
     "project_id": "benchmark_mall_131",
     "scope_id": "private_default",
@@ -61,7 +61,7 @@
     "source_snapshot_hash": "d9d814fe08b1d9537f107e08d9873a5d96de0bdad6a6b1330a5c939866d465e2",
     "policy_version": "v1.0.0-baseline",
     "lineage_campaign_id": "CMP_4d07614f012f301939d34b75",
-    "rerun_key": "v162_cleanup_equivalence_reval_v14",
+    "rerun_key": "v162_cleanup_equiv_mode_align_reval_v1",
     "rerun_reason": "",
     "run_count": 1,
     "round_count": 0,
@@ -71,7 +71,7 @@
     "confirmed_slice_count": 0,
     "obligation_attempt_selected_count": 1317,
     "obligation_attempt_terminal_count": 1317,
-    "obligation_attempt_ledger_fingerprint": "0d528793667855ce75bfaf49573c355d7dc32151a8efffa644fe09b42b67b280",
+    "obligation_attempt_ledger_fingerprint": "81d21045dc536fb352f4712f2c3f8d7ace88432adc130e09df9cfe0864eeea60",
     "coverage_deferred_reason": "",
     "next_campaign_reason": "",
     "completion_authority": "obligation_attempt_ledger",
@@ -117,25 +117,25 @@
       "authorization_basis": "explicit_environment_and_exact_target"
     },
     "execution_approval": {
-      "approval_id": "eap_78c92b0a38f402c591aedecf",
-      "campaign_id": "CMP_089ba8e9fcf99cbbd459712a",
+      "approval_id": "eap_a926291ea7f8fee771c230d0",
+      "campaign_id": "CMP_e85f8b58ec3346a5a6c68796",
       "scope_id": "private_default",
       "environment_ref": "sandbox",
       "source_hash": "503317304928d072811692cedd110d09e9dcc0d9c6128cff382f7613ca03c545",
       "target_origin": "http://127.0.0.1:8080",
       "execution_mode": "approved_sandbox_write",
-      "expires_at_utc": "2026-07-27T16:14:53Z",
+      "expires_at_utc": "2026-07-28T01:16:17Z",
       "actor": {
         "name": "formal_cleanup_reval",
         "role": "project_owner"
       },
-      "issued_at_utc": "2026-07-27T15:14:53Z",
-      "approval_hash": "80e285f8f8a1e1798a70969522f8e7a8b8807383236da0d02cf6edccacc24dc0"
+      "issued_at_utc": "2026-07-28T00:16:17Z",
+      "approval_hash": "6457f54d2649071659014ea7ae1b69bccdf816cde24fb7bf174b5f3732585697"
     }
   },
   "test_data_plan": {
     "schema_version": "enterprise-test-data-plan-v2",
-    "campaign_id": "CMP_88f1834f5884dbb974238430",
+    "campaign_id": "CMP_3c844df8a7999f709f5ae3bf",
     "status": "ready",
     "strategy": "create_disposable",
     "environment_ref": "sandbox",
@@ -150,14 +150,14 @@
     "schema_version": "qualibug-release-gate-v1",
     "verdict": "not_ready",
     "status": "inconclusive",
-    "campaign_id": "CMP_88f1834f5884dbb974238430",
+    "campaign_id": "CMP_3c844df8a7999f709f5ae3bf",
     "campaign_status": "degraded",
     "execution_status": "completed",
     "runtime_contract_status": "approved",
     "confirmed_finding_count": 0,
     "confirmed_p0_count": 0,
     "confirmed_p1_count": 0,
-    "evidence_bundle_id": "evb_46a956dcfb2546880ca9a3dc",
+    "evidence_bundle_id": "evb_3433d5d2e013fd46063d63d3",
     "evidence_bundle_verified": true,
     "reasons": [
       {
@@ -195,12 +195,12 @@
     },
     "run_delivery_readiness_schema_version": "qualibug.run-delivery-readiness.v1",
     "identities": {
-      "campaign_id": "CMP_88f1834f5884dbb974238430",
-      "run_id": "RUN_cf524336d4c1c22f1f223168",
+      "campaign_id": "CMP_3c844df8a7999f709f5ae3bf",
+      "run_id": "RUN_d6543989aee1347113745ad4",
       "mainline_authority": "experiment_candidate",
-      "mainline_contract_fingerprint": "fde3a7f1fa276e91f67c5de0c5f103496c8b40b9ed01f8db50adaafa111112f2",
-      "attempt_ledger_fingerprint": "0d528793667855ce75bfaf49573c355d7dc32151a8efffa644fe09b42b67b280",
-      "evidence_bundle_id": "evb_46a956dcfb2546880ca9a3dc"
+      "mainline_contract_fingerprint": "d56ef3a8920a9e3b6d34ebb087c8baef322cfc5635900ba69f96d7487018064d",
+      "attempt_ledger_fingerprint": "81d21045dc536fb352f4712f2c3f8d7ace88432adc130e09df9cfe0864eeea60",
+      "evidence_bundle_id": "evb_3433d5d2e013fd46063d63d3"
     },
     "checks": [
       {
@@ -234,7 +234,7 @@
       {
         "name": "测试义务执行率",
         "status": "pending",
-        "detail": "82/1317 个测试义务完成终态执行。",
+        "detail": "91/1317 个测试义务完成终态执行。",
         "code": "OBLIGATION_EXECUTION_RATIO",
         "source": "run_delivery_readiness"
       },
@@ -719,6 +719,6 @@
   },
   "cumulative": {},
   "_http_status": 200,
-  "_elapsed_ms_wall": 232914,
-  "_scanned_at": "2026-07-27T15:24:29.739946+00:00"
+  "_elapsed_ms_wall": 449005,
+  "_scanned_at": "2026-07-28T00:38:02.299314+00:00"
 }

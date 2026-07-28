@@ -128,12 +128,11 @@ def test_declared_family_is_preserved_when_narrowed() -> None:
 
 
 def test_unknown_family_is_flagged_not_silently_rewritten() -> None:
-    """An unrecognized family must stay visible.
+    """An unrecognized family must stay visible and BLOCKED.
 
-    It still compiles under a canonical family so the obligation is not lost, but
-    the declared name and a reason code are recorded, which is what makes a
-    missing capability countable instead of indistinguishable from a real
-    validation obligation.
+    Never coerce compile authority to validation — that made breadth loss
+    invisible. Declared name + reason code + BLOCKED status keep the gap
+    countable.
     """
     obligation = make_obligation(
         risk_family="some_unmodelled_defect_class",
@@ -144,7 +143,11 @@ def test_unknown_family_is_flagged_not_silently_rewritten() -> None:
     assert obligation["declared_risk_family"] == "some_unmodelled_defect_class"
     assert resolution["registered"] is False
     assert resolution["reason_code"] == RISK_FAMILY_UNREGISTERED_REASON
-    assert obligation["risk_family"] in CANONICAL_RISK_FAMILIES
+    assert obligation["risk_family"] == "some_unmodelled_defect_class"
+    assert obligation["risk_family"] not in CANONICAL_RISK_FAMILIES
+    assert obligation["compile_status"] == "BLOCKED"
+    assert obligation["block_reason"] == RISK_FAMILY_UNREGISTERED_REASON
+    assert resolution["canonical"] == "some_unmodelled_defect_class"
 
 
 def test_capability_gap_family_is_distinguishable_from_a_plain_alias() -> None:

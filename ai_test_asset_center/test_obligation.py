@@ -20,9 +20,10 @@ SCHEMA_VERSION = "qualibug.test-obligation.v1"
 # Two rules make it lossless:
 #   1. A declared family is NEVER rewritten in place. ``resolve_risk_family``
 #      returns the canonical family used for compilation *alongside* the original
-#      and a reason code, and ``make_obligation`` records all three. Previously an
-#      unrecognized family was silently reassigned to "validation", which made the
-#      capability gap invisible in the data -- nobody could see what was lost.
+#      and a reason code, and ``make_obligation`` records all three. An
+#      unrecognized family stays declared, is marked unregistered, and
+#      ``make_obligation`` sets compile_status=BLOCKED — never coerced to
+#      "validation" (that made the capability gap invisible in the data).
 #   2. A family is canonical only when it is compilable END TO END. That means
 #      obligation_source_adapter has an entry for it in all three of
 #      _RELATION_TYPES_BY_FAMILY, _TEMPLATE_BY_FAMILY and _OBSERVERS_BY_FAMILY,
@@ -335,9 +336,12 @@ def resolve_risk_family(risk_family: Any) -> dict[str, Any]:
             "registered": True,
             "reason_code": RISK_FAMILY_CAPABILITY_GAP_REASON,
         }
+    # Never coerce unknown families to "validation" — that made breadth loss
+    # invisible. Preserve the declared name and mark unregistered so
+    # make_obligation can BLOCK visibly.
     return {
         "declared": declared,
-        "canonical": "validation",
+        "canonical": declared,
         "registered": False,
         "reason_code": RISK_FAMILY_UNREGISTERED_REASON,
     }
@@ -383,6 +387,14 @@ def make_obligation(
     resolution = resolve_risk_family(risk_family)
     family = resolution["canonical"]
     status = compile_status if compile_status in COMPILE_STATUSES else "PENDING"
+    # Unknown families fail visibly as BLOCKED — never rewrite compile authority
+    # to validation (AGENTS.md Enterprise Business Comprehension Contract).
+    if (
+        resolution.get("registered") is False
+        and _text(resolution.get("reason_code")) == RISK_FAMILY_UNREGISTERED_REASON
+    ):
+        family = resolution["declared"] or _text(risk_family).lower()
+        status = "BLOCKED"
     oid = _text(obligation_id) or stable_obligation_id(
         family,
         ",".join(sorted(_text(x) for x in subject_refs if _text(x))),
@@ -407,6 +419,12 @@ def make_obligation(
         "relation_refs": [_text(x) for x in (relation_refs or []) if _text(x)],
         "confidence": max(0.0, min(1.0, float(confidence))),
         "compile_status": status,
+        "block_reason": (
+            RISK_FAMILY_UNREGISTERED_REASON
+            if status == "BLOCKED"
+            and _text(resolution.get("reason_code")) == RISK_FAMILY_UNREGISTERED_REASON
+            else ""
+        ),
     }
 
 

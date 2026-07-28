@@ -485,12 +485,12 @@ class TestWriteReversibilityProof:
         assert create_result["equivalence_contract"]["mode"]
 
     def test_declared_adapter_mutation_emits_business_state_equivalence(self) -> None:
-        """Empty-body identity POSTs must not compile with an empty equivalence mode.
+        """Mutates-entity authority must compile business_state_restored, not empty mode.
 
         V12 Unlock breakpoint UNLOCK_CLEANUP_EQUIVALENCE_MODE_MISSING: adapter
         field_restore COMPLETED, but WRP.equivalence_contract was {} so equivalence
-        stayed INDETERMINATE. Identity mutations restore fields and must carry
-        business_state_restored.
+        stayed INDETERMINATE. Classification comes from source mode / mutates
+        relation — not empty-body heuristics alone.
         """
         from ai_test_asset_center.write_reversibility_contract import (
             _classify_cleanup_authority_v11,
@@ -499,7 +499,7 @@ class TestWriteReversibilityProof:
 
         plan = {
             "action": "declared_adapter_cleanup",
-            "mode": "row_delete",
+            "mode": "field_restore",
             "adapter": "db_sql",
             "table": "orders",
             "identity_column": "id",
@@ -520,7 +520,13 @@ class TestWriteReversibilityProof:
             primary_operation_ref="op_confirm",
             primary_path="/api/orders/:id/confirm",
             ops=ops,
-            relations=[],
+            relations=[
+                {
+                    "kind": "mutates",
+                    "operation_ref": "op_confirm",
+                    "to_ref": "entity_order",
+                }
+            ],
             experiment={},
         )
         assert result["kind"] == "declared_adapter_cleanup"
@@ -532,10 +538,108 @@ class TestWriteReversibilityProof:
             primary_method="POST",
             primary_path="/api/orders/:id/confirm",
             cleanup_plan=[plan],
-            behavior_ir={"operations": list(ops.values())},
+            behavior_ir={
+                "operations": list(ops.values()),
+                "relations": [
+                    {
+                        "kind": "mutates",
+                        "operation_ref": "op_confirm",
+                        "to_ref": "entity_order",
+                    }
+                ],
+            },
         )
         assert proof["proof_status"] == "PROVEN"
         assert proof["equivalence_contract"]["mode"] == "business_state_restored"
+
+    def test_create_under_parent_stays_row_delete_not_field_restore(self) -> None:
+        """Produces-entity under a parent path must not be classified as field_restore."""
+        from ai_test_asset_center.write_reversibility_contract import (
+            _classify_cleanup_authority_v11,
+        )
+
+        plan = {
+            "action": "declared_adapter_cleanup",
+            "mode": "row_delete",
+            "adapter": "db_sql",
+            "table": "order_items",
+            "identity_column": "id",
+            "requires_ownership_proof": True,
+            "scope": "run_created_only",
+        }
+        ops = {
+            "op_add_item": {
+                "id": "op_add_item",
+                "method": "POST",
+                "path": "/api/orders/:id/items",
+                "request_example": {},
+            }
+        }
+        result = _classify_cleanup_authority_v11(
+            cleanup_plan=[plan],
+            primary_method="POST",
+            primary_operation_ref="op_add_item",
+            primary_path="/api/orders/:id/items",
+            ops=ops,
+            relations=[
+                {
+                    "kind": "produces",
+                    "operation_ref": "op_add_item",
+                    "to_ref": "entity_order_item",
+                }
+            ],
+            experiment={},
+        )
+        assert result["kind"] == "declared_adapter_cleanup"
+        assert result["authority_block"]["cleanup_surface"] == "row_delete"
+        assert result["equivalence_contract"]["mode"] == "created_entity_absent"
+
+    def test_transitions_wins_over_co_declared_produces_for_field_restore(self) -> None:
+        """Ship/pay IR often tags both produces and transitions; mutates must win."""
+        from ai_test_asset_center.write_reversibility_contract import (
+            _classify_cleanup_authority_v11,
+        )
+
+        plan = {
+            "action": "declared_adapter_cleanup",
+            "mode": "row_delete",
+            "adapter": "db_sql",
+            "table": "orders",
+            "identity_column": "id",
+            "requires_ownership_proof": True,
+            "scope": "run_created_only",
+        }
+        ops = {
+            "op_ship": {
+                "id": "op_ship",
+                "method": "POST",
+                "path": "/api/orders/:id/ship",
+                "request_example": {},
+            }
+        }
+        result = _classify_cleanup_authority_v11(
+            cleanup_plan=[plan],
+            primary_method="POST",
+            primary_operation_ref="op_ship",
+            primary_path="/api/orders/:id/ship",
+            ops=ops,
+            relations=[
+                {
+                    "relation_type": "produces",
+                    "operation_ref": "op_ship",
+                    "to_ref": "entity_order",
+                },
+                {
+                    "relation_type": "transitions",
+                    "operation_ref": "op_ship",
+                    "from_ref": "state_paid",
+                    "to_ref": "state_shipped",
+                },
+            ],
+            experiment={},
+        )
+        assert result["authority_block"]["cleanup_surface"] == "field_restore"
+        assert result["equivalence_contract"]["mode"] == "business_state_restored"
 
 
 # ─── Cleanup Plan Validator unit tests ────────────────────────────────────────

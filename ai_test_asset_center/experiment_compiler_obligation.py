@@ -219,10 +219,24 @@ def _resolve_fallback_cleanup_tier(
     plan = dict(_dict(resolved.get("plan")))
     plan.pop("identity_value", None)
     plan.pop("ownership_basis", None)
+    # Align plan mode with WRP cleanup surface: mutates/transitions → field_restore,
+    # produces-only → row_delete. Runtime still overrides via executed receipt mode.
+    from .write_reversibility_contract import _adapter_cleanup_is_field_restore
+
+    field_restore = _adapter_cleanup_is_field_restore(
+        {"mode": "adapter_row_delete"},
+        primary_method=_text(primary_op.get("method")),
+        primary_path=_text(
+            primary_op.get("path") or primary_op.get("raw_path")
+        ),
+        primary_op=primary_op,
+        primary_operation_ref=_text(primary_op.get("id")),
+        relations=_list(_dict(behavior_ir).get("relations")),
+    )
     return {
         "schema_version": LADDER_SCHEMA,
         "tier": tier,
-        "mode": "adapter_row_delete",
+        "mode": "field_restore" if field_restore else "adapter_row_delete",
         "requires_ownership_proof": True,
         "plan": plan,
     }
@@ -1172,13 +1186,17 @@ def compile_experiment_for_obligation(
                     # requires_ownership_proof travels with the plan and the executor
                     # must refuse any row this run did not create. Compile cannot check
                     # it: the row identity is a runtime value.
+                    #
+                    # Mode must win over ladder plan defaults (often row_delete): unpack
+                    # plan first, then set the WRP-aligned surface mode last.
+                    _adapter_plan = _dict(_adapter_cleanup.get("plan"))
                     cleanup_plan = [{
+                        **_adapter_plan,
                         "action": "declared_adapter_cleanup",
                         "mode": _text(_adapter_cleanup.get("mode")) or "adapter_row_delete",
-                        "adapter": _text(_dict(_adapter_cleanup.get("plan")).get("adapter")),
+                        "adapter": _text(_adapter_plan.get("adapter")),
                         "requires_ownership_proof": True,
                         "compensates_operation_ref": primary_op_id,
-                        **_dict(_adapter_cleanup.get("plan")),
                     }]
                 else:
                     # Authorization/isolation probes that expect rejection still

@@ -57,6 +57,61 @@ _TERMINAL_NON_COMPLETE = frozenset({
 })
 
 
+def _requires_cleanup_equivalence(
+    *,
+    safety_contract: dict[str, Any],
+    steps_out: list[dict[str, Any]],
+) -> bool:
+    """Derive cleanup authority from the declared contract and executed writes."""
+    declared = safety_contract.get("governed_write")
+    if declared is True or _text(declared).lower() in {"true", "required"}:
+        return True
+    for step in _list(steps_out):
+        if not isinstance(step, dict) or _text(step.get("phase")) == "cleanup":
+            continue
+        if _text(step.get("method")).upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
+            continue
+        governance = _dict(step.get("governance_receipt"))
+        if governance.get("accepted") is True:
+            return True
+        status = int(step.get("status_code") or step.get("status") or 0)
+        if 200 <= status < 300:
+            return True
+    return False
+
+
+def _cleanup_equivalence_gate(
+    *,
+    is_governed_write: bool,
+    cleanup_equivalence_receipt: dict[str, Any] | None,
+) -> tuple[str, str]:
+    """Return the fail-closed cleanup gate decision for one experiment."""
+    receipt = _dict(cleanup_equivalence_receipt)
+    if not receipt:
+        if is_governed_write:
+            return "BLOCKED", "BLOCKED_CLEANUP_EQUIVALENCE_MISSING"
+        return "PASSED", ""
+
+    status = _text(receipt.get("equivalence_status")).upper()
+    if status == "EQUIVALENT":
+        return "PASSED", ""
+    if status == "NOT_EQUIVALENT":
+        return "FAILED", "HARNESS_CLEANUP_EQUIVALENCE_FAILED"
+    if status == "INDETERMINATE":
+        return "BLOCKED", "BLOCKED_CLEANUP_EQUIVALENCE_INDETERMINATE"
+    if status == "NOT_APPLICABLE":
+        if not is_governed_write:
+            return "PASSED", ""
+        reason = _text(receipt.get("reason_code")).upper()
+        if reason == "CLEANUP_NOT_REQUIRED":
+            return "PASSED", ""
+        return (
+            "BLOCKED",
+            "BLOCKED_CLEANUP_EQUIVALENCE_NOT_APPLICABLE_UNPROVEN",
+        )
+    return "BLOCKED", "BLOCKED_CLEANUP_EQUIVALENCE_STATUS_INVALID"
+
+
 def _extract_related_from_body(body: Any, entity_name: str) -> Any:
     """Extract related entity data from a response body.
 
@@ -908,7 +963,10 @@ def finalize_experiment_execution(
     # For governed writes, evaluate whether cleanup restored business state.
     cleanup_equivalence_receipt: dict[str, Any] | None = None
     safety = _dict(exp.get("safety_contract"))
-    is_governed_write = safety.get("governed_write")
+    is_governed_write = _requires_cleanup_equivalence(
+        safety_contract=safety,
+        steps_out=steps_out,
+    )
     if is_governed_write:
         proof = _dict(exp.get("write_reversibility_proof"))
         if proof and _text(proof.get("proof_status")) == "PROVEN":
@@ -954,19 +1012,12 @@ def finalize_experiment_execution(
 
     # ── SPEC v1.1.1 §8: Equivalence Hard Gate ──
     # NOT_EQUIVALENT or INDETERMINATE blocks finding creation.
-    cleanup_gate = "PASSED"
-    cleanup_gate_reason = ""
-    if cleanup_equivalence_receipt:
-        equiv_status = _text(cleanup_equivalence_receipt.get("equivalence_status")).upper()
-        if equiv_status == "NOT_EQUIVALENT":
-            cleanup_gate = "FAILED"
-            cleanup_gate_reason = "HARNESS_CLEANUP_EQUIVALENCE_FAILED"
-        elif equiv_status == "INDETERMINATE":
-            cleanup_gate = "BLOCKED"
-            cleanup_gate_reason = "BLOCKED_CLEANUP_EQUIVALENCE_INDETERMINATE"
-        elif equiv_status == "EQUIVALENT":
-            cleanup_gate = "PASSED"
-        # NOT_APPLICABLE allows finding (read-only or exempted)
+    # Governed writes must never default PASSED when equivalence is absent —
+    # missing proof is BLOCKED, not restored.
+    cleanup_gate, cleanup_gate_reason = _cleanup_equivalence_gate(
+        is_governed_write=bool(is_governed_write),
+        cleanup_equivalence_receipt=cleanup_equivalence_receipt,
+    )
     observations["cleanup_gate"] = cleanup_gate
 
     # ── V1.3.0-A: Early environment restoration determination ──

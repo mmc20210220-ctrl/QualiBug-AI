@@ -293,8 +293,10 @@ def _append_adapter_cleanup_runtime_step(
                     "status": 200 if cleaned else 0,
                     "body": {
                         "rows_deleted": int(adapter_receipt.get("rows_deleted") or 0),
+                        "rows_updated": int(adapter_receipt.get("rows_updated") or 0),
                         "table": _text(adapter_receipt.get("table")),
                         "status": _text(adapter_receipt.get("status")),
+                        "mode": _text(adapter_receipt.get("mode")),
                     },
                 },
                 "after": after_payload,
@@ -466,7 +468,7 @@ def _adapter_cleanup_identity(
         if _text(step.get("phase")) not in {"control", "treatment"}:
             continue
         gov = _dict(step.get("governance_receipt"))
-        if not gov:
+        if not gov or gov.get("accepted") is not True:
             continue
         for body in (
             _dict(_dict(gov.get("after")).get("body")),

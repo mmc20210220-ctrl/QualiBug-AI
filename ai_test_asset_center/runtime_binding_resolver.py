@@ -12,6 +12,7 @@ import json
 import re
 import urllib.request
 import urllib.error
+import urllib.parse
 from typing import Any
 
 _SCHEMA = "qualibug.runtime-binding-resolver.v1"
@@ -137,11 +138,17 @@ def materialize_declared_identity_read(
     placeholders = _extract_placeholders(path)
     if not value or len(placeholders) != 1:
         return ""
+    if (
+        value in {".", ".."}
+        or any(char in value for char in ("/", "\\", "?", "#", "\r", "\n"))
+    ):
+        return ""
+    encoded_value = urllib.parse.quote(value, safe="")
     placeholder = placeholders[0]
-    materialized = path.replace(f"{{{placeholder}}}", value)
+    materialized = path.replace(f"{{{placeholder}}}", encoded_value)
     materialized = re.sub(
         rf"(?<=/):{re.escape(placeholder)}\b",
-        lambda _match: value,
+        lambda _match: encoded_value,
         materialized,
     )
     if _extract_placeholders(materialized):
@@ -174,6 +181,8 @@ def _find_list_endpoints_for_entity(
         for hint in (collection_hints or set())
         if _text(hint)
     }
+    path_hints = {hint.rstrip("/") for hint in hints if hint.startswith("/")}
+    segment_hints = hints - path_hints
 
     for op in operations:
         if not isinstance(op, dict):
@@ -195,8 +204,13 @@ def _find_list_endpoints_for_entity(
             for segment in path.strip("/").split("/")
             if segment
         }
-        if hints:
-            if not (hints & path_segments):
+        if path_hints:
+            if path_lower.rstrip("/") not in path_hints:
+                continue
+            candidates.append(op)
+            continue
+        if segment_hints:
+            if not (segment_hints & path_segments):
                 continue
             candidates.append(op)
             continue
@@ -578,10 +592,11 @@ def collect_placeholder_collection_hints(
     experiments: list[dict[str, Any]],
     behavior_ir: dict[str, Any],
 ) -> dict[str, set[str]]:
-    """Map each required placeholder to owning collection segments.
+    """Map each required placeholder to exact owning collection paths.
 
     Used so batch pre-resolution cannot bind a cart-item ``id`` into an
-    ``/api/orders/{id}/confirm`` write.
+    ``/api/orders/{id}/confirm`` write, including when different parents use
+    the same terminal collection segment.
     """
     ops_by_id = {
         _text(op.get("id")): op
@@ -601,9 +616,9 @@ def collect_placeholder_collection_hints(
                 op = ops_by_id.get(op_ref, {})
                 path = _text(step.get("path") or op.get("path") or op.get("raw_path"))
                 for ph in _extract_placeholders(path):
-                    segment = collection_segment_for_placeholder(path, ph)
+                    collection_path = collection_path_for_placeholder(path, ph)
                     bucket = hints.setdefault(ph, set())
-                    if segment:
-                        bucket.add(segment)
+                    if collection_path:
+                        bucket.add(collection_path.lower().rstrip("/"))
 
     return hints

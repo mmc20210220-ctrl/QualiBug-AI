@@ -8,6 +8,10 @@ CLEANUP_EQUIVALENCE_INDETERMINATE was caused by:
 from __future__ import annotations
 
 from ai_test_asset_center.cleanup_equivalence import evaluate_cleanup_equivalence
+from ai_test_asset_center.experiment_outcome_finalizer import (
+    _cleanup_equivalence_gate,
+    _requires_cleanup_equivalence,
+)
 from ai_test_asset_center.cleanup_execution_receipt import build_cleanup_execution_receipt
 from ai_test_asset_center.cleanup_observation_adapter import (
     build_cleanup_equivalence_inputs,
@@ -96,11 +100,14 @@ def test_cleanup_execution_receipt_accepts_adapter_cleaned_without_http_steps() 
         proof=_proof(),
         adapter_cleanup_receipts=[
             {
+                "receipt_id": "cleanup_adapter_1",
                 "status": "CLEANED",
                 "adapter": "db_sql",
                 "table": "orders",
                 "identity_column": "id",
                 "identity_value": "o-1",
+                "mode": "row_delete",
+                "ownership_basis": "creation_receipt",
                 "rows_deleted": 1,
             }
         ],
@@ -108,6 +115,64 @@ def test_cleanup_execution_receipt_accepts_adapter_cleaned_without_http_steps() 
     assert receipt["succeeded"] is True
     assert receipt["attempted"] is True
     assert receipt["status"] == "ACCEPTED"
+    assert receipt["source_receipt_ids"] == ["cleanup_adapter_1"]
+
+
+def test_cleanup_execution_receipt_rejects_unidentified_adapter_success() -> None:
+    receipt = build_cleanup_execution_receipt(
+        experiment_id="exp_1",
+        proof_id="wrp_1",
+        cleanup_plan=[{"adapter": "db_sql", "table": "orders", "identity_column": "id"}],
+        steps_out=[],
+        cleanup_failures=0,
+        cleanup_status="cleaned",
+        proof=_proof(),
+        adapter_cleanup_receipts=[
+            {
+                "status": "CLEANED",
+                "adapter": "db_sql",
+                "table": "orders",
+                "identity_column": "id",
+                "identity_value": "o-1",
+                "mode": "row_delete",
+                "ownership_basis": "creation_receipt",
+                "rows_deleted": 1,
+            }
+        ],
+    )
+
+    assert receipt["succeeded"] is False
+    assert receipt["status"] == "BLOCKED"
+    assert receipt["reason_code"] == "ADAPTER_CLEANUP_RECEIPT_ID_MISSING"
+
+
+def test_cleanup_execution_receipt_rejects_zero_effect_adapter_success() -> None:
+    receipt = build_cleanup_execution_receipt(
+        experiment_id="exp_1",
+        proof_id="wrp_1",
+        cleanup_plan=[{"adapter": "db_sql", "table": "orders", "identity_column": "id"}],
+        steps_out=[],
+        cleanup_failures=0,
+        cleanup_status="cleaned",
+        proof=_proof(),
+        adapter_cleanup_receipts=[
+            {
+                "receipt_id": "cleanup_adapter_1",
+                "status": "CLEANED",
+                "adapter": "db_sql",
+                "table": "orders",
+                "identity_column": "id",
+                "identity_value": "o-1",
+                "mode": "row_delete",
+                "ownership_basis": "creation_receipt",
+                "rows_deleted": 0,
+            }
+        ],
+    )
+
+    assert receipt["succeeded"] is False
+    assert receipt["status"] == "BLOCKED"
+    assert receipt["reason_code"] == "ADAPTER_CLEANUP_CARDINALITY_INVALID"
 
 
 def test_equivalence_equivalent_when_create_deleted_and_receipt_succeeded() -> None:
@@ -165,6 +230,157 @@ def test_equivalence_not_applicable_for_honest_not_required_cer() -> None:
     )
     assert receipt["equivalence_status"] == "NOT_APPLICABLE"
     assert receipt["reason_code"] == "CLEANUP_NOT_REQUIRED"
+
+
+def test_equivalence_rejects_malformed_not_required_receipt() -> None:
+    receipt = evaluate_cleanup_equivalence(
+        proof=_proof(mode="created_entity_absent"),
+        before_observation={
+            "status_code": 200,
+            "body": {"id": "o-1", "status": "PENDING"},
+        },
+        after_write_observation={
+            "status_code": 200,
+            "body": {"id": "o-1", "status": "PENDING"},
+        },
+        after_cleanup_observation={},
+        runtime_bindings={"id": "o-1"},
+        cleanup_execution_receipt={"status": "NOT_REQUIRED"},
+    )
+
+    assert receipt["equivalence_status"] == "INDETERMINATE"
+    assert receipt["reason_code"] == "CLEANUP_EXECUTION_RECEIPT_SCHEMA_INVALID"
+
+
+def test_false_not_required_without_sealed_unchanged_is_indeterminate() -> None:
+    """CER NOT_REQUIRED must not waive Finalizer when before≠after is unproven."""
+    receipt = evaluate_cleanup_equivalence(
+        proof=_proof(mode="business_state_restored"),
+        before_observation={"status_code": 200, "body": {"id": "o-1", "status": "SHIPPED"}},
+        after_write_observation={
+            "status_code": 200,
+            "body": {"id": "o-1", "status": "COMPLETED"},
+        },
+        after_cleanup_observation={},
+        runtime_bindings={"id": "o-1"},
+        cleanup_execution_receipt={
+            "schema_version": "qualibug.cleanup-execution-receipt.v1",
+            "status": "NOT_REQUIRED",
+            "succeeded": False,
+            "attempted": False,
+            "status_code": 0,
+            "reason_code": "CLEANUP_NOT_REQUIRED",
+        },
+    )
+    assert receipt["equivalence_status"] == "INDETERMINATE"
+    assert receipt["reason_code"] == "CLEANUP_NOT_REQUIRED_UNPROVEN"
+
+
+def test_false_not_required_detects_nested_business_state_change() -> None:
+    receipt = evaluate_cleanup_equivalence(
+        proof=_proof(mode="business_state_restored"),
+        before_observation={
+            "status_code": 200,
+            "body": {
+                "id": "o-1",
+                "items": [{"sku": "A", "quantity": 1}],
+            },
+        },
+        after_write_observation={
+            "status_code": 200,
+            "body": {
+                "id": "o-1",
+                "items": [{"sku": "A", "quantity": 2}],
+            },
+        },
+        after_cleanup_observation={},
+        runtime_bindings={"id": "o-1"},
+        cleanup_execution_receipt={
+            "schema_version": "qualibug.cleanup-execution-receipt.v1",
+            "status": "NOT_REQUIRED",
+            "reason_code": "CLEANUP_NOT_REQUIRED",
+        },
+    )
+
+    assert receipt["equivalence_status"] == "INDETERMINATE"
+    assert receipt["reason_code"] == "CLEANUP_NOT_REQUIRED_UNPROVEN"
+
+
+def test_not_required_does_not_trust_self_asserted_equal_fingerprints() -> None:
+    receipt = evaluate_cleanup_equivalence(
+        proof=_proof(mode="business_state_restored"),
+        before_observation={
+            "status_code": 200,
+            "body": {"id": "o-1", "status": "SHIPPED"},
+        },
+        after_write_observation={
+            "status_code": 200,
+            "body": {"id": "o-1", "status": "COMPLETED"},
+        },
+        after_cleanup_observation={},
+        runtime_bindings={"id": "o-1"},
+        cleanup_execution_receipt={
+            "schema_version": "qualibug.cleanup-execution-receipt.v1",
+            "status": "NOT_REQUIRED",
+            "reason_code": "CLEANUP_NOT_REQUIRED",
+            "before_state_fingerprint": "self-asserted",
+            "after_write_state_fingerprint": "self-asserted",
+        },
+    )
+
+    assert receipt["equivalence_status"] == "INDETERMINATE"
+    assert receipt["reason_code"] == "CLEANUP_NOT_REQUIRED_UNPROVEN"
+
+
+def test_not_required_treats_concurrency_version_as_business_state() -> None:
+    receipt = evaluate_cleanup_equivalence(
+        proof=_proof(mode="business_state_restored"),
+        before_observation={
+            "status_code": 200,
+            "body": {"id": "o-1", "status": "SHIPPED", "version": 4},
+        },
+        after_write_observation={
+            "status_code": 200,
+            "body": {"id": "o-1", "status": "SHIPPED", "version": 5},
+        },
+        after_cleanup_observation={},
+        runtime_bindings={"id": "o-1"},
+        cleanup_execution_receipt={
+            "schema_version": "qualibug.cleanup-execution-receipt.v1",
+            "status": "NOT_REQUIRED",
+            "reason_code": "CLEANUP_NOT_REQUIRED",
+        },
+    )
+
+    assert receipt["equivalence_status"] == "INDETERMINATE"
+    assert receipt["reason_code"] == "CLEANUP_NOT_REQUIRED_UNPROVEN"
+
+
+def test_governed_write_rejects_unproven_not_applicable_equivalence() -> None:
+    gate, reason = _cleanup_equivalence_gate(
+        is_governed_write=True,
+        cleanup_equivalence_receipt={
+            "equivalence_status": "NOT_APPLICABLE",
+            "reason_code": "NO_CLEANUP_PLAN",
+        },
+    )
+
+    assert gate == "BLOCKED"
+    assert reason == "BLOCKED_CLEANUP_EQUIVALENCE_NOT_APPLICABLE_UNPROVEN"
+
+
+def test_executed_write_cannot_bypass_cleanup_when_safety_flag_is_missing() -> None:
+    assert _requires_cleanup_equivalence(
+        safety_contract={},
+        steps_out=[
+            {
+                "phase": "treatment",
+                "method": "POST",
+                "status_code": 201,
+                "governance_receipt": {"accepted": True},
+            }
+        ],
+    )
 
 
 def test_equivalence_still_indeterminate_when_cer_not_attempted() -> None:
@@ -286,6 +502,71 @@ def test_field_restore_not_equivalent_when_business_field_differs() -> None:
             "succeeded": True,
             "attempted": True,
             "status_code": 200,
+        },
+    )
+    assert receipt["equivalence_status"] == "NOT_EQUIVALENT"
+    assert receipt["reason_code"] == "BUSINESS_STATE_NOT_RESTORED"
+
+
+def test_executed_field_restore_overrides_stale_created_entity_absent_mode() -> None:
+    """Runtime field_restore must not be judged as created_entity_absent.
+
+    Unlock regression: WRP stayed on created_entity_absent while adapter
+    field_restore left the entity present → ENTITY_STILL_PRESENT_AFTER_CLEANUP.
+    """
+    before = {
+        "status_code": 200,
+        "body": {"id": "o-1", "status": "PENDING_PAYMENT", "total": "10"},
+    }
+    after_write = {
+        "status_code": 200,
+        "body": {"id": "o-1", "status": "SHIPPED", "total": "10"},
+    }
+    after_cleanup = {
+        "status_code": 200,
+        "body": {"id": "o-1", "status": "PENDING_PAYMENT", "total": "10"},
+    }
+    receipt = evaluate_cleanup_equivalence(
+        proof=_proof(mode="created_entity_absent"),
+        before_observation=before,
+        after_write_observation=after_write,
+        after_cleanup_observation=after_cleanup,
+        runtime_bindings={"id": "o-1"},
+        cleanup_execution_receipt={
+            "schema_version": "qualibug.cleanup-execution-receipt.v1",
+            "succeeded": True,
+            "attempted": True,
+            "status_code": 200,
+            "cleanup_mode": "field_restore",
+            "mode": "field_restore",
+        },
+    )
+    assert receipt["equivalence_status"] == "EQUIVALENT"
+    assert receipt["reason_code"] != "ENTITY_STILL_PRESENT_AFTER_CLEANUP"
+
+
+def test_executed_field_restore_failed_restore_is_business_state_not_entity_present() -> None:
+    receipt = evaluate_cleanup_equivalence(
+        proof=_proof(mode="created_entity_absent"),
+        before_observation={
+            "status_code": 200,
+            "body": {"id": "o-1", "status": "PENDING_PAYMENT"},
+        },
+        after_write_observation={
+            "status_code": 200,
+            "body": {"id": "o-1", "status": "SHIPPED"},
+        },
+        after_cleanup_observation={
+            "status_code": 200,
+            "body": {"id": "o-1", "status": "SHIPPED"},
+        },
+        runtime_bindings={"id": "o-1"},
+        cleanup_execution_receipt={
+            "schema_version": "qualibug.cleanup-execution-receipt.v1",
+            "succeeded": True,
+            "attempted": True,
+            "status_code": 200,
+            "cleanup_mode": "field_restore",
         },
     )
     assert receipt["equivalence_status"] == "NOT_EQUIVALENT"

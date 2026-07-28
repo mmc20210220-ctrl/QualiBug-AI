@@ -62,6 +62,7 @@ def test_identity_proof_uses_only_exact_declared_entity_reads() -> None:
         materialize_declared_identity_read(declared[1], "ord-1")
         == "/api/orders/ord-1"
     )
+    assert materialize_declared_identity_read(declared[0], "../admin") == ""
 
 
 def test_generic_id_does_not_match_all_list_endpoints() -> None:
@@ -109,7 +110,32 @@ def test_collect_hints_detects_ambiguous_id_across_orders_and_cart() -> None:
         },
     ]
     hints = collect_placeholder_collection_hints(experiments, BEHAVIOR_IR)
-    assert hints["id"] == {"orders", "items"}
+    assert hints["id"] == {"/api/orders", "/api/cart/items"}
+
+
+def test_collect_hints_keeps_full_parent_path_for_same_named_collections() -> None:
+    behavior_ir = {
+        "operations": [
+            {
+                "id": "confirm-cart-item",
+                "method": "POST",
+                "path": "/api/cart/items/{id}/confirm",
+            },
+            {
+                "id": "confirm-order-item",
+                "method": "POST",
+                "path": "/api/orders/items/{id}/confirm",
+            },
+        ]
+    }
+    experiments = [
+        {"treatment_plan": [{"operation_ref": "confirm-cart-item"}]},
+        {"treatment_plan": [{"operation_ref": "confirm-order-item"}]},
+    ]
+
+    hints = collect_placeholder_collection_hints(experiments, behavior_ir)
+
+    assert hints["id"] == {"/api/cart/items", "/api/orders/items"}
 
 
 def test_auto_resolve_leaves_ambiguous_id_unbound(monkeypatch) -> None:

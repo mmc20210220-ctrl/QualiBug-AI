@@ -47,6 +47,27 @@ STATUS_REJECTED = "REJECTED"
 STATUS_ACCEPTED = "ACCEPTED"
 
 
+def _cleaned_adapter_receipt_error(receipt: dict[str, Any]) -> str:
+    if not _text(receipt.get("receipt_id")):
+        return "ADAPTER_CLEANUP_RECEIPT_ID_MISSING"
+    if not all(
+        _text(receipt.get(key))
+        for key in ("table", "identity_column", "identity_value", "ownership_basis")
+    ):
+        return "ADAPTER_CLEANUP_IDENTITY_LINEAGE_INCOMPLETE"
+    if _text(receipt.get("mode")).lower() not in {
+        "row_delete",
+        "field_restore",
+    }:
+        return "ADAPTER_CLEANUP_MODE_INVALID"
+    affected = int(receipt.get("rows_deleted") or 0) + int(
+        receipt.get("rows_updated") or 0
+    )
+    if affected != 1:
+        return "ADAPTER_CLEANUP_CARDINALITY_INVALID"
+    return ""
+
+
 def build_cleanup_execution_receipt(
     *,
     experiment_id: str,
@@ -129,6 +150,37 @@ def build_cleanup_execution_receipt(
                 row for row in adapter_receipts
                 if _text(row.get("status")).upper() == "FAILED"
             ]
+            invalid = [
+                (row, _cleaned_adapter_receipt_error(row))
+                for row in cleaned
+                if _cleaned_adapter_receipt_error(row)
+            ]
+            if invalid:
+                row, validation_error = invalid[0]
+                return _build_receipt(
+                    experiment_id=experiment_id,
+                    proof_id=proof_id,
+                    cleanup_operation_ref=cleanup_operation_ref
+                    or _text(row.get("table")),
+                    cleanup_authority=cleanup_authority
+                    or "declared_adapter_cleanup",
+                    attempted=True,
+                    transport_reached=False,
+                    method="ADAPTER_DB_SQL",
+                    path_template=_text(row.get("table")),
+                    materialized_path=_text(row.get("table")),
+                    request_body_fingerprint="",
+                    identity_bindings={},
+                    status_code=0,
+                    response_body_fingerprint="",
+                    succeeded=False,
+                    status=STATUS_BLOCKED,
+                    reason_code=validation_error,
+                    detail="cleaned_adapter_receipt_failed_lineage_validation",
+                    cleanup_mode=_cleanup_mode_from_adapter_receipts(
+                        adapter_receipts
+                    ),
+                )
             if cleaned and not failed and len(cleaned) == len(adapter_receipts):
                 owner = cleaned[-1]
                 return _build_receipt(
@@ -152,13 +204,19 @@ def build_cleanup_execution_receipt(
                     response_body_fingerprint=_sha256_short(
                         {
                             "rows_deleted": int(owner.get("rows_deleted") or 0),
+                            "rows_updated": int(owner.get("rows_updated") or 0),
                             "table": _text(owner.get("table")),
+                            "mode": _text(owner.get("mode")),
                         }
                     ),
                     succeeded=True,
                     status=STATUS_ACCEPTED,
                     reason_code="",
                     detail="adapter_cleanup_cleaned",
+                    cleanup_mode=_cleanup_mode_from_adapter_receipts(adapter_receipts),
+                    source_receipt_ids=[
+                        _text(row.get("receipt_id")) for row in adapter_receipts
+                    ],
                 )
             fail_row = failed[0] if failed else adapter_receipts[-1]
             return _build_receipt(
@@ -180,6 +238,7 @@ def build_cleanup_execution_receipt(
                 status=STATUS_TRANSPORT_FAILED,
                 reason_code=_text(fail_row.get("reason_code")) or "ADAPTER_CLEANUP_FAILED",
                 detail=_text(fail_row.get("detail")) or "adapter_cleanup_not_cleaned",
+                cleanup_mode=_cleanup_mode_from_adapter_receipts(adapter_receipts),
             )
         # Explicit NOT_REQUIRED must not be rewritten as NOT_ATTEMPTED/failed
         # transport — that poisons cleanup equivalence into INDETERMINATE.
@@ -238,6 +297,9 @@ def build_cleanup_execution_receipt(
     last_governance = _dict(last_step.get("governance_receipt"))
     transport_reached = last_status_code > 0
     accepted = last_governance.get("accepted") is True
+    from .experiment_runtime_support import _governance_audit_receipt_id
+
+    governance_audit_receipt_id = _governance_audit_receipt_id(last_governance)
 
     # Determine receipt status from actual evidence
     if not transport_reached:
@@ -245,17 +307,21 @@ def build_cleanup_execution_receipt(
         reason = "CLEANUP_TRANSPORT_NOT_REACHED"
         detail = _text(last_step.get("error")) or "status_code_zero"
         succeeded = False
-    elif accepted and 200 <= last_status_code < 300:
+    elif accepted and 200 <= last_status_code < 300 and governance_audit_receipt_id:
         status = STATUS_ACCEPTED
         reason = ""
         detail = ""
         succeeded = True
+    elif accepted and 200 <= last_status_code < 300:
+        status = STATUS_BLOCKED
+        reason = "CLEANUP_GOVERNANCE_AUDIT_RECEIPT_MISSING"
+        detail = f"status={last_status_code};governance_audit_receipt=missing"
+        succeeded = False
     elif 200 <= last_status_code < 300:
-        # 2xx but not formally accepted by governance
-        status = STATUS_ACCEPTED
-        reason = ""
-        detail = "accepted_by_status_code"
-        succeeded = True
+        status = STATUS_BLOCKED
+        reason = "CLEANUP_GOVERNANCE_ACCEPTANCE_MISSING"
+        detail = f"status={last_status_code};governance_accepted=false"
+        succeeded = False
     elif last_status_code in {401, 403}:
         status = STATUS_REJECTED
         reason = "CLEANUP_REJECTED_BY_TARGET"
@@ -276,6 +342,11 @@ def build_cleanup_execution_receipt(
             if key in gov_write["body"]:
                 identity_bindings[key] = gov_write["body"][key]
 
+    executed_mode = (
+        _cleanup_mode_from_step(last_step)
+        or _cleanup_mode_from_adapter_receipts(adapter_receipts)
+        or _cleanup_mode_from_plan(cleanup_plan)
+    )
     return _build_receipt(
         experiment_id=experiment_id,
         proof_id=proof_id,
@@ -294,6 +365,8 @@ def build_cleanup_execution_receipt(
         status=status,
         reason_code=reason,
         detail=detail,
+        cleanup_mode=executed_mode,
+        source_receipt_ids=[governance_audit_receipt_id],
     )
 
 
@@ -320,6 +393,34 @@ def _first_cleanup_path(cleanup_plan: list[dict[str, Any]]) -> str:
     return ""
 
 
+def _cleanup_mode_from_adapter_receipts(
+    adapter_receipts: list[dict[str, Any]],
+) -> str:
+    """Surface actually executed by the adapter ladder (field_restore vs row_delete)."""
+    for row in reversed(adapter_receipts):
+        mode = _text(row.get("mode") or row.get("cleanup_mode")).lower()
+        if mode:
+            return mode
+    return ""
+
+
+def _cleanup_mode_from_step(step: dict[str, Any]) -> str:
+    """Read only the product-authored adapter receipt embedded on a runtime step."""
+    adapter = _dict(step.get("adapter_cleanup_receipt"))
+    return _text(adapter.get("mode") or adapter.get("cleanup_mode")).lower()
+
+
+def _cleanup_mode_from_plan(cleanup_plan: list[dict[str, Any]]) -> str:
+    """Read the source-compiled cleanup mode, never target request/response bodies."""
+    for row in cleanup_plan:
+        if not isinstance(row, dict):
+            continue
+        mode = _text(row.get("mode") or row.get("cleanup_mode")).lower()
+        if mode:
+            return mode
+    return ""
+
+
 def _build_receipt(
     *,
     experiment_id: str,
@@ -339,15 +440,33 @@ def _build_receipt(
     status: str,
     reason_code: str,
     detail: str,
+    cleanup_mode: str = "",
+    source_receipt_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Assemble the final receipt with content-addressed fingerprint."""
-    receipt_id = f"cleanup_exec_{_sha256_short(experiment_id + proof_id + method + materialized_path)}"
+    source_ids = sorted(
+        {
+            _text(value)
+            for value in _list(source_receipt_ids)
+            if _text(value)
+        }
+    )
+    receipt_id = f"cleanup_exec_{_sha256_short({
+        'experiment_id': experiment_id,
+        'proof_id': proof_id,
+        'method': method,
+        'materialized_path': materialized_path,
+        'source_receipt_ids': source_ids,
+    })}"
     receipt = {
         "schema_version": "qualibug.cleanup-execution-receipt.v1",
         "experiment_id": experiment_id,
         "proof_id": proof_id,
         "cleanup_operation_ref": cleanup_operation_ref,
         "cleanup_authority": cleanup_authority,
+        "cleanup_mode": _text(cleanup_mode),
+        "mode": _text(cleanup_mode),
+        "source_receipt_ids": source_ids,
         "attempted": attempted,
         "transport_reached": transport_reached,
         "method": method,

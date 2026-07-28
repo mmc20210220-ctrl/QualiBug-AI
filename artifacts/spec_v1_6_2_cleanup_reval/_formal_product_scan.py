@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import time
 import urllib.error
@@ -65,13 +66,19 @@ def freeze_start_manifest() -> dict:
             "environment_ref": "sandbox",
             # Force a fresh campaign so cleanup-equivalence revalidation is not
             # poisoned by resumed cached attempt ledgers from V1.6.2-R1.
-            "campaign_rerun_key": "v162_cleanup_equivalence_reval_v14",
+            "campaign_rerun_key": os.environ.get(
+                "QUALIBUG_REVAL_CAMPAIGN_RERUN_KEY",
+                "v162_cleanup_review_rootcause_reval_v1",
+            ),
         },
     }
     manifest = {
         "schema_version": "qualibug.v162-cleanup-reval-start-manifest.v1",
         "spec_version": "V1.6.2-CLEANUP-EQUIVALENCE-REVAL",
-        "run_name": "V1_6_2_CLEANUP_EQUIVALENCE_ROOTCAUSE_REVAL_V14",
+        "run_name": os.environ.get(
+            "QUALIBUG_REVAL_RUN_NAME",
+            "V1_6_2_CLEANUP_REVIEW_ROOTCAUSE_REVAL_V1",
+        ),
         "frozen_at": datetime.now(timezone.utc).isoformat(),
         "commit_sha": commit,
         "tree_hash": tree,

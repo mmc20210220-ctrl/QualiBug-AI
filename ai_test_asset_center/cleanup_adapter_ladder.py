@@ -80,8 +80,15 @@ def identity_body_keys(identity_column: str) -> tuple[str, ...]:
 def identity_value_from_body(body: Any, identity_column: str) -> str:
     """Extract a scalar identity from a body using only declared/generic keys."""
     row = _dict(body)
-    for key in identity_body_keys(identity_column):
-        raw_value = row.get(key)
+    allowed_keys = identity_body_keys(identity_column)
+    generic = (_text(identity_column) or "id").lower() in _GENERIC_PRIMARY_KEY_ALIASES
+    matches: list[str] = []
+    for key, raw_value in row.items():
+        if generic:
+            if _text(key).lower() not in {item.lower() for item in allowed_keys}:
+                continue
+        elif key not in allowed_keys:
+            continue
         if isinstance(raw_value, bool) or not isinstance(
             raw_value,
             (str, int, float),
@@ -89,8 +96,9 @@ def identity_value_from_body(body: Any, identity_column: str) -> str:
             continue
         value = _text(raw_value)
         if value:
-            return value
-    return ""
+            matches.append(value)
+    unique = list(dict.fromkeys(matches))
+    return unique[0] if len(unique) == 1 else ""
 
 
 def mutation_attested_for_identity(
@@ -116,6 +124,8 @@ def mutation_attested_for_identity(
         return False, "attestation_identity_mismatch"
     if att.get("accepted_write") is not True:
         return False, "attestation_write_not_accepted"
+    if not _text(att.get("write_receipt_ref")):
+        return False, "attestation_write_receipt_missing"
     before_body = _dict(att.get("before_body"))
     after_body = _dict(att.get("after_body"))
     if not before_body or not after_body:
@@ -558,16 +568,32 @@ def execute_declared_adapter_field_restore(
     except Exception as exc:
         try:
             connection.rollback()
-        except Exception:
-            pass
-        receipt["status"] = "FAILED"
-        receipt["reason_code"] = f"CLEANUP_DB_RESTORE_FAILED:{type(exc).__name__}"
-        receipt["detail"] = str(exc)[:200]
+        except Exception as rollback_exc:
+            receipt["status"] = "FAILED"
+            receipt["reason_code"] = (
+                f"CLEANUP_DB_ROLLBACK_FAILED:{type(rollback_exc).__name__}"
+            )
+            receipt["detail"] = (
+                f"restore_error={type(exc).__name__}:{exc};"
+                f"rollback_error={type(rollback_exc).__name__}:{rollback_exc}"
+            )[:400]
+        else:
+            receipt["status"] = "FAILED"
+            receipt["reason_code"] = f"CLEANUP_DB_RESTORE_FAILED:{type(exc).__name__}"
+            receipt["detail"] = str(exc)[:200]
     finally:
         try:
             connection.close()
-        except Exception:
-            pass
+        except Exception as close_exc:
+            prior_reason = _text(receipt.get("reason_code"))
+            receipt["status"] = "FAILED"
+            receipt["reason_code"] = (
+                f"CLEANUP_DB_CLOSE_FAILED:{type(close_exc).__name__}"
+            )
+            receipt["detail"] = (
+                f"prior_reason={prior_reason or 'none'};"
+                f"close_error={type(close_exc).__name__}:{close_exc}"
+            )[:400]
     return receipt
 
 
@@ -609,6 +635,7 @@ def execute_declared_adapter_cleanup(
         "status": "REFUSED",
         "reason_code": "",
         "rows_deleted": 0,
+        "mode": "row_delete",
     }
 
     if _text(plan.get("adapter")) != "db_sql":
@@ -675,26 +702,49 @@ def execute_declared_adapter_cleanup(
             (_text(identity_value),),
         )
         deleted = int(getattr(cursor, "rowcount", 0) or 0)
+        receipt["rows_deleted"] = deleted
+        if deleted != 1:
+            connection.rollback()
+        if deleted > 1:
+            receipt["status"] = "FAILED"
+            receipt["reason_code"] = "CLEANUP_DB_DELETE_CARDINALITY_MISMATCH"
+            receipt["detail"] = f"identity_matched_rows={deleted}"
+            return receipt
+        if deleted == 0:
+            receipt["status"] = "REFUSED"
+            receipt["reason_code"] = "CLEANUP_ROW_ALREADY_ABSENT"
+            return receipt
         connection.commit()
         receipt["status"] = "CLEANED"
-        receipt["rows_deleted"] = deleted
-        if deleted == 0:
-            # Not a failure -- the row may already be gone -- but it must not read as a
-            # successful deletion of something.
-            receipt["reason_code"] = "CLEANUP_ROW_ALREADY_ABSENT"
     except Exception as exc:
         try:
             connection.rollback()
-        except Exception:
-            pass
-        receipt["status"] = "FAILED"
-        receipt["reason_code"] = f"CLEANUP_DB_DELETE_FAILED:{type(exc).__name__}"
-        receipt["detail"] = str(exc)[:200]
+        except Exception as rollback_exc:
+            receipt["status"] = "FAILED"
+            receipt["reason_code"] = (
+                f"CLEANUP_DB_ROLLBACK_FAILED:{type(rollback_exc).__name__}"
+            )
+            receipt["detail"] = (
+                f"delete_error={type(exc).__name__}:{exc};"
+                f"rollback_error={type(rollback_exc).__name__}:{rollback_exc}"
+            )[:400]
+        else:
+            receipt["status"] = "FAILED"
+            receipt["reason_code"] = f"CLEANUP_DB_DELETE_FAILED:{type(exc).__name__}"
+            receipt["detail"] = str(exc)[:200]
     finally:
         try:
             connection.close()
-        except Exception:
-            pass
+        except Exception as close_exc:
+            prior_reason = _text(receipt.get("reason_code"))
+            receipt["status"] = "FAILED"
+            receipt["reason_code"] = (
+                f"CLEANUP_DB_CLOSE_FAILED:{type(close_exc).__name__}"
+            )
+            receipt["detail"] = (
+                f"prior_reason={prior_reason or 'none'};"
+                f"close_error={type(close_exc).__name__}:{close_exc}"
+            )[:400]
     return receipt
 
 

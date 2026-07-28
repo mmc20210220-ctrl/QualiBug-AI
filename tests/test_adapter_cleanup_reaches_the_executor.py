@@ -161,6 +161,25 @@ def test_identity_ignores_fixture_and_domain_field_names() -> None:
     assert identity == ""
 
 
+def test_identity_ignores_rejected_governed_write_bodies() -> None:
+    identity = cleanup_mod._adapter_cleanup_identity(
+        {"identity_column": "id"},
+        runtime_bindings={},
+        steps_out=[
+            {
+                "phase": "treatment",
+                "body": {"id": "qb_auto_rejected"},
+                "governance_receipt": {
+                    "accepted": False,
+                    "after": {"body": {"id": "qb_auto_rejected"}},
+                },
+            }
+        ],
+    )
+
+    assert identity == ""
+
+
 def test_no_observed_identity_yields_nothing_rather_than_a_guess() -> None:
     """The executor then refuses; deleting by guess is the failure this prevents."""
     assert cleanup_mod._adapter_cleanup_identity(
@@ -245,6 +264,92 @@ def test_a_write_without_target_policy_context_is_refused(monkeypatch) -> None:
     )
     assert receipt["status"] == "REFUSED"
     assert receipt["reason_code"] == "CLEANUP_TARGET_POLICY_UNAVAILABLE"
+
+
+def test_row_delete_rolls_back_when_declared_identity_matches_multiple_rows() -> None:
+    from ai_test_asset_center.cleanup_adapter_ladder import (
+        execute_declared_adapter_cleanup,
+    )
+
+    class _Cursor:
+        rowcount = 2
+
+        def execute(self, sql, params):
+            return None
+
+    class _Connection:
+        committed = False
+        rolled_back = False
+
+        def cursor(self):
+            return _Cursor()
+
+        def commit(self):
+            self.committed = True
+
+        def rollback(self):
+            self.rolled_back = True
+
+        def close(self):
+            return None
+
+    connection = _Connection()
+    receipt = execute_declared_adapter_cleanup(
+        {
+            "adapter": "db_sql",
+            "table": "orders",
+            "identity_column": "id",
+            "requires_ownership_proof": True,
+        },
+        identity_value="qb_auto_1",
+        dsn="postgresql://x/y",
+        connect=lambda: connection,
+        policy_decision={"write_allowed": True},
+    )
+
+    assert receipt["status"] == "FAILED"
+    assert receipt["reason_code"] == "CLEANUP_DB_DELETE_CARDINALITY_MISMATCH"
+    assert receipt["rows_deleted"] == 2
+    assert connection.rolled_back is True
+    assert connection.committed is False
+
+
+def test_row_delete_surfaces_rollback_failure() -> None:
+    from ai_test_asset_center.cleanup_adapter_ladder import (
+        execute_declared_adapter_cleanup,
+    )
+
+    class _Cursor:
+        def execute(self, sql, params):
+            raise ValueError("delete failed")
+
+    class _Connection:
+        def cursor(self):
+            return _Cursor()
+
+        def rollback(self):
+            raise RuntimeError("rollback failed")
+
+        def close(self):
+            return None
+
+    receipt = execute_declared_adapter_cleanup(
+        {
+            "adapter": "db_sql",
+            "table": "orders",
+            "identity_column": "id",
+            "requires_ownership_proof": True,
+        },
+        identity_value="qb_auto_1",
+        dsn="postgresql://x/y",
+        connect=lambda: _Connection(),
+        policy_decision={"write_allowed": True},
+    )
+
+    assert receipt["status"] == "FAILED"
+    assert receipt["reason_code"] == "CLEANUP_DB_ROLLBACK_FAILED:RuntimeError"
+    assert "delete failed" in receipt["detail"]
+    assert "rollback failed" in receipt["detail"]
 
 
 def test_a_failed_adapter_cleanup_counts_as_a_cleanup_failure() -> None:
@@ -452,6 +557,7 @@ def test_field_restore_updates_observed_scalars(monkeypatch) -> None:
     attestation = {
         "identity_value": "ord-1",
         "accepted_write": True,
+        "write_receipt_ref": "audit-write-1",
         "before_body": {"id": "ord-1", "status": "SHIPPED"},
         "after_body": {"id": "ord-1", "status": "COMPLETED"},
         "restore_fields": {"status": "SHIPPED"},
@@ -534,6 +640,7 @@ def test_field_restore_rolls_back_when_identity_updates_multiple_rows() -> None:
         mutation_attestation={
             "identity_value": "ord-1",
             "accepted_write": True,
+            "write_receipt_ref": "audit-write-1",
             "before_body": {"id": "ord-1", "status": "SHIPPED"},
             "after_body": {"id": "ord-1", "status": "COMPLETED"},
             "restore_fields": {"status": "SHIPPED"},

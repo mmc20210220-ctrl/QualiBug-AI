@@ -44,6 +44,107 @@ SERVER_MANAGED_FIELDS = frozenset({
 })
 
 
+_UNCHANGED_PROOF_IGNORED_FIELDS = frozenset({
+    "createdat",
+    "updatedat",
+    "created_at",
+    "updated_at",
+    "createdby",
+    "updatedby",
+    "created_by",
+    "updated_by",
+    "deletedat",
+    "deleted_at",
+})
+
+
+def _business_state_material(value: Any) -> Any:
+    """Retain nested business state while removing only volatile metadata."""
+    if isinstance(value, dict):
+        return {
+            _text(key): _business_state_material(value[key])
+            for key in sorted(value.keys(), key=lambda item: str(item))
+            if _text(key).lower() not in _UNCHANGED_PROOF_IGNORED_FIELDS
+        }
+    if isinstance(value, list):
+        return [_business_state_material(item) for item in value]
+    return value
+
+
+def _business_field_fingerprint(body: Any) -> str:
+    """Fingerprint the complete nested business state for unchanged proof."""
+    return _sha256_stable(_business_state_material(body))
+
+
+def _sealed_state_unchanged_proof(
+    *,
+    cleanup_execution_receipt: dict[str, Any],
+    before_observation: dict[str, Any],
+    after_write_observation: dict[str, Any],
+) -> bool:
+    """True only when sealed before/after-write fingerprints prove no mutation."""
+    before_obs = _dict(before_observation)
+    after_obs = _dict(after_write_observation)
+    if not before_obs or not after_obs:
+        return False
+    before_status = int(before_obs.get("status_code") or before_obs.get("status") or 0)
+    after_status = int(after_obs.get("status_code") or after_obs.get("status") or 0)
+    if not (200 <= before_status < 300 and 200 <= after_status < 300):
+        return False
+    return _business_field_fingerprint(before_obs.get("body")) == _business_field_fingerprint(
+        after_obs.get("body")
+    )
+
+
+# ─── Mode resolution from executed cleanup authority ─────────────────────────
+
+_FIELD_RESTORE_EXECUTED = frozenset({
+    "field_restore",
+    "adapter_field_restore",
+    "snapshot_restore",
+    "business_state_restored",
+})
+_ROW_DELETE_EXECUTED = frozenset({
+    "row_delete",
+    "adapter_row_delete",
+    "identity_delete",
+    "created_entity_absent",
+})
+
+
+def _executed_cleanup_surface(cleanup_execution_receipt: dict[str, Any]) -> str:
+    """Return the cleanup surface actually executed, if the receipt names one."""
+    cer = _dict(cleanup_execution_receipt)
+    for key in ("cleanup_mode", "mode", "cleanup_surface"):
+        value = _text(cer.get(key)).lower()
+        if value:
+            return value
+    adapter = _dict(cer.get("adapter_cleanup_receipt"))
+    for key in ("mode", "cleanup_mode", "cleanup_surface"):
+        value = _text(adapter.get(key)).lower()
+        if value:
+            return value
+    return ""
+
+
+def _effective_equivalence_mode(
+    proof_mode: str,
+    cleanup_execution_receipt: dict[str, Any],
+) -> str:
+    """Prefer the executed cleanup surface over a stale compile-time WRP mode.
+
+    field_restore leaves the entity present and must be judged as
+    business_state_restored — never created_entity_absent /
+    ENTITY_STILL_PRESENT_AFTER_CLEANUP.
+    """
+    executed = _executed_cleanup_surface(cleanup_execution_receipt)
+    if executed in _FIELD_RESTORE_EXECUTED:
+        return "business_state_restored"
+    if executed in _ROW_DELETE_EXECUTED:
+        return "created_entity_absent"
+    return _text(proof_mode)
+
+
 # ─── Main Equivalence Evaluation ─────────────────────────────────────────────
 
 
@@ -73,7 +174,10 @@ def evaluate_cleanup_equivalence(
     proof_id = _text(proof.get("proof_id"))
     equivalence_contract = _dict(proof.get("equivalence_contract"))
     identity_contract = _dict(proof.get("identity_contract"))
-    mode = _text(equivalence_contract.get("mode"))
+    mode = _effective_equivalence_mode(
+        _text(equivalence_contract.get("mode")),
+        cleanup_execution_receipt,
+    )
 
     # Extract identity fields
     identity_fields = _list(identity_contract.get("identity_fields"))
@@ -100,15 +204,49 @@ def evaluate_cleanup_equivalence(
             field_comparison={},
             relation_comparison={},
         )
+    if _text(cleanup_execution_receipt.get("schema_version")) != (
+        "qualibug.cleanup-execution-receipt.v1"
+    ):
+        return _build_receipt(
+            proof_id=proof_id,
+            primary_identity=primary_identity,
+            cleanup_identity=cleanup_identity,
+            before_obs=before_observation,
+            after_write_obs=after_write_observation,
+            after_cleanup_obs=after_cleanup_observation,
+            equivalence_status="INDETERMINATE",
+            reason_code="CLEANUP_EXECUTION_RECEIPT_SCHEMA_INVALID",
+            detail="cleanup_execution_receipt_schema_missing_or_invalid",
+            field_comparison={},
+            relation_comparison={},
+        )
 
     cleanup_receipt_status = _text(
         cleanup_execution_receipt.get("status")
     ).upper()
-    # Honest NOT_REQUIRED (e.g. accepted write with proven unchanged state)
-    # is not a restoration comparison — do not poison as INDETERMINATE.
-    # Callers must only emit CER NOT_REQUIRED when state change was actually
-    # observed-absent, never when the observer merely missed the entity.
+    # Honest NOT_REQUIRED requires sealed state-unchanged evidence fingerprints.
+    # A bare CER status must never waive restoration into NOT_APPLICABLE /
+    # Finalizer PASSED — false NOT_REQUIRED (missed entity, short-id hole) stays
+    # INDETERMINATE.
     if cleanup_receipt_status == "NOT_REQUIRED":
+        if not _sealed_state_unchanged_proof(
+            cleanup_execution_receipt=cleanup_execution_receipt,
+            before_observation=before_observation,
+            after_write_observation=after_write_observation,
+        ):
+            return _build_receipt(
+                proof_id=proof_id,
+                primary_identity=primary_identity,
+                cleanup_identity=cleanup_identity,
+                before_obs=before_observation,
+                after_write_obs=after_write_observation,
+                after_cleanup_obs=after_cleanup_observation,
+                equivalence_status="INDETERMINATE",
+                reason_code="CLEANUP_NOT_REQUIRED_UNPROVEN",
+                detail="not_required_without_sealed_state_unchanged_proof",
+                field_comparison={},
+                relation_comparison={},
+            )
         return _build_receipt(
             proof_id=proof_id,
             primary_identity=primary_identity,
