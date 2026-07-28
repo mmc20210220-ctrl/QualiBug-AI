@@ -9,6 +9,7 @@ those symbols with stable additive wrappers:
 * canonical-field response observers;
 * enterprise and explicit scan UI contracts;
 * professional source-declared read-only UI/UX assertions;
+* responsive viewport/media and deterministic accessibility checks;
 * source-declared asynchronous event contracts;
 * source-declared sequential read-only latency budgets;
 * one formal experiment mainline for every surface.
@@ -39,6 +40,9 @@ from .professional_ui_contract_guard import (
     install_professional_ui_contract_guard,
 )
 from .professional_ui_readonly import install_professional_ui_readonly
+from .professional_ui_responsive_accessibility import (
+    install_professional_ui_responsive_accessibility,
+)
 from .scan_event_contract_external_signal import (
     overlay_scan_event_contracts_with_external_signals,
 )
@@ -78,12 +82,13 @@ _ORIGINAL_MARKER = "_qualibug_original_behavior_ir_builder"
 # Register formal surfaces before any obligation or experiment is compiled. Every installer is
 # idempotent and performs no target I/O. The professional UI installers extend the existing UI
 # authority after its first read-only guard has been registered, so browser execution, compiler
-# policy and scan admission share one action vocabulary without a second adjudicator.
+# policy, scan admission, responsive configuration and UX assertions share one vocabulary.
 install_non_http_observers()
 install_formal_ui_surface()
 install_formal_ui_read_only_guard()
 install_professional_ui_readonly()
 install_professional_ui_contract_guard()
+install_professional_ui_responsive_accessibility()
 install_formal_event_surface()
 install_formal_event_capability_guard()
 install_formal_event_pre_cleanup_observer()
