@@ -15,6 +15,10 @@ from ._chinese_business_comprehension import (  # noqa: F401
     build_chinese_first_comprehension,
     install_chinese_first_business_comprehension,
 )
+from ._chinese_business_downstream import (  # noqa: F401
+    refresh_chinese_business_downstream,
+    install_chinese_business_downstream_refresh,
+)
 from ._formal_ui_contracts import (  # noqa: F401
     extract_formal_ui_contracts,
     install_formal_ui_contract_parser,
@@ -39,10 +43,12 @@ install_formal_ui_persistent_probe_guard()
 install_formal_ui_visual_baseline_guard()
 install_formal_ui_visual_viewport_guard()
 
-# Install on the existing knowledge-center build authority. The installer wraps
-# and patches _api.build_enterprise_business_knowledge_asset, so internal callers
-# and package-facade callers share one Chinese-first mainline.
+# Install on the existing knowledge-center build authority. The first installer
+# turns Chinese source spans into governed facts; the second rebuilds downstream
+# relationships, risks, Oracles, probes and evidence without arbitrary endpoint
+# fallback. Both patch _api so internal and facade callers share one mainline.
 build_enterprise_business_knowledge_asset = install_chinese_first_business_comprehension()
+build_enterprise_business_knowledge_asset = install_chinese_business_downstream_refresh()
 
 # Explicit re-exports for underscore-prefixed symbols
 from ._common import _SEMANTIC_LEXICON_CACHE  # noqa: F401
@@ -192,6 +198,8 @@ __all__ = [
     "analyze_chinese_business_source",
     "build_chinese_first_comprehension",
     "install_chinese_first_business_comprehension",
+    "refresh_chinese_business_downstream",
+    "install_chinese_business_downstream_refresh",
     "build_enterprise_business_knowledge_asset",
     "load_enterprise_business_knowledge_asset",
     "generate_enterprise_business_knowledge_probes",
