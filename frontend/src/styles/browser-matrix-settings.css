@@ -1,0 +1,86 @@
+.browser-matrix-section {
+  grid-column: 1 / -1;
+}
+
+.browser-matrix-head {
+  align-items: flex-start;
+}
+
+.browser-matrix-head p,
+.browser-matrix-output-head p {
+  margin: 0.35rem 0 0;
+  color: var(--text-secondary, #5f6b7a);
+}
+
+.browser-matrix-policy {
+  margin: 1rem 0;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border-color, #dfe3e8);
+  border-radius: 0.75rem;
+  background: var(--surface-muted, #f7f8fa);
+  line-height: 1.65;
+}
+
+.browser-matrix-profile-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.browser-matrix-profile {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  padding: 0.9rem;
+  border: 1px solid var(--border-color, #dfe3e8);
+  border-radius: 0.75rem;
+  cursor: pointer;
+}
+
+.browser-matrix-profile:has(input:checked) {
+  border-color: var(--primary-color, #2563eb);
+  background: color-mix(in srgb, var(--primary-color, #2563eb) 6%, transparent);
+}
+
+.browser-matrix-profile span {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.browser-matrix-profile small,
+.browser-matrix-profile em {
+  color: var(--text-secondary, #5f6b7a);
+  font-style: normal;
+}
+
+.browser-matrix-output-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 1rem;
+  margin-top: 1.1rem;
+}
+
+.browser-matrix-output-head h3 {
+  margin: 0;
+}
+
+.browser-matrix-output {
+  width: 100%;
+  margin-top: 0.75rem;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+@media (max-width: 760px) {
+  .browser-matrix-profile-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .browser-matrix-output-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
