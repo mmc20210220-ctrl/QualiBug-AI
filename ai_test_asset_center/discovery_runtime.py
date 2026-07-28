@@ -7,16 +7,19 @@ entry installs exact accepted rule/interface identity binding before any plan
 is compiled. The public execution entry projects receipt-backed evidence and an
 honest loss funnel without creating findings or inventing quality metrics.
 
-Only ``ui_formal_surface`` is installed as the public UI observer/assertion
-authority. The earlier browser-plan experiment facade remains importable for
-artifact compatibility but is not auto-installed, preventing one source UI
-contract from entering two competing formal delivery chains.
+The formal UI surface is installed on the same experiment mainline as API and
+persistence obligations. It registers a source-declared browser protocol,
+typed observer and assertion kind. The read-only guard blocks click/fill/select
+plans until browser-side cleanup equivalence exists. Importing this module
+registers capability only; it opens no browser and performs no target I/O.
 """
 from __future__ import annotations
 
-from .ui_formal_surface import install_ui_formal_surface
+from .formal_ui_surface import install_formal_ui_surface
+from .formal_ui_surface_guard import install_formal_ui_read_only_guard
 
-install_ui_formal_surface()
+install_formal_ui_surface()
+install_formal_ui_read_only_guard()
 
 from .discovery_runtime_execution import (  # noqa: E402,F401
     RUNTIME_SCHEMA,
