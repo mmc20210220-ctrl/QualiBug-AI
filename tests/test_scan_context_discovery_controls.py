@@ -33,6 +33,40 @@ def test_scan_context_preserves_explicit_disabled_controls() -> None:
     assert "runtime_interface_discovery_budget" not in context
 
 
+def test_scan_context_threads_explicit_observer_adapters_without_inference() -> None:
+    context = build_campaign_context_from_scan_body({
+        "base_url": "https://example.test",
+        "ui_base_url": "https://example.test",
+        "declared_adapters": ["ui_browser", "db_sql", "ui_browser"],
+    })
+
+    assert context["declared_adapters"] == ["ui_browser", "db_sql"]
+
+
+def test_scan_context_preserves_explicit_empty_adapter_declaration() -> None:
+    context = build_campaign_context_from_scan_body({"declared_adapters": []})
+    assert context["declared_adapters"] == []
+
+
+@pytest.mark.parametrize(
+    ("value", "reason"),
+    [
+        ("ui_browser", "declared_adapters_not_list"),
+        (None, "declared_adapters_not_list"),
+        ([1], "declared_adapter_name_not_string"),
+        ([""], "declared_adapter_name_empty"),
+        (["x" * 81], "declared_adapter_name_too_long"),
+        (["telepathy"], "declared_adapter_unknown:telepathy"),
+    ],
+)
+def test_scan_context_rejects_invalid_adapter_declarations(
+    value: object,
+    reason: str,
+) -> None:
+    with pytest.raises(ValueError, match=rf"^{reason}$"):
+        build_campaign_context_from_scan_body({"declared_adapters": value})
+
+
 @pytest.mark.parametrize(
     "key",
     [
