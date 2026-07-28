@@ -87,7 +87,7 @@ def build_default_registry() -> DocumentAdapterRegistry:
         PdfDocumentAdapter,
         UnknownBinaryDocumentAdapter,
     )
-    from .ocr_adapter import OcrSupplementalAdapter
+    from .rendered_ocr_adapter import OcrSupplementalAdapter
 
     return DocumentAdapterRegistry(
         [
