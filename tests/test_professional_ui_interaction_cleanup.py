@@ -17,6 +17,10 @@ from ai_test_asset_center.professional_ui_contract_guard import (
 from ai_test_asset_center.professional_ui_interaction_contract_guard import (
     install_controlled_ui_interaction_contract_guard,
 )
+from ai_test_asset_center.professional_ui_interaction_privacy_guard import (
+    EVIDENCE_POLICY,
+    install_controlled_ui_interaction_privacy_guard,
+)
 
 
 def _install_ui_mainline() -> None:
@@ -27,6 +31,7 @@ def _install_ui_mainline() -> None:
     professional_ui_responsive_accessibility.install_professional_ui_responsive_accessibility()
     interaction.install_controlled_ui_interaction()
     install_controlled_ui_interaction_contract_guard()
+    install_controlled_ui_interaction_privacy_guard()
 
 
 def _runtime(*, environment_type: str = "test") -> dict:
@@ -54,6 +59,7 @@ def _plan() -> dict:
             "cleanup_strategy": "browser_compensation",
             "equivalence": "source_declared_state_probes",
             "target_scope": "approved_nonproduction_target",
+            "evidence_policy": EVIDENCE_POLICY,
         },
         "state_probes": [
             {"probe_id": "page-url", "property": "url"},
@@ -111,6 +117,7 @@ def test_valid_governed_interaction_plan_is_phased_and_source_reversible() -> No
     assert normalized["interaction_contract"]["cleanup_strategy"] == (
         "browser_compensation"
     )
+    assert normalized["interaction_contract"]["evidence_policy"] == EVIDENCE_POLICY
     assert [row["phase"] for row in normalized["steps"]] == [
         "setup",
         "setup",
@@ -148,6 +155,18 @@ def test_interaction_plan_requires_state_probes() -> None:
     with pytest.raises(
         browser_execution.BrowserExecutionError,
         match=r"^UI_INTERACTION_STATE_PROBES_MISSING$",
+    ):
+        interaction.validate_controlled_browser_plan(plan, _runtime())
+
+
+def test_interaction_plan_requires_minimized_evidence_policy() -> None:
+    _install_ui_mainline()
+    plan = _plan()
+    plan["interaction_contract"].pop("evidence_policy")
+
+    with pytest.raises(
+        browser_execution.BrowserExecutionError,
+        match=r"^UI_INTERACTION_EVIDENCE_POLICY_INVALID$",
     ):
         interaction.validate_controlled_browser_plan(plan, _runtime())
 
@@ -334,6 +353,8 @@ def test_production_target_is_blocked_before_browser_launch(
     assert result["execution_status"] == "not_executed"
     assert result["reason"].startswith("UI_WRITE_POLICY_BLOCKED:")
     assert result["cleanup_receipt"]["status"] == "INDETERMINATE"
+    assert result["trace_ref"] == ""
+    assert result["har_ref"] == ""
 
 
 def test_formal_execution_blocks_missing_or_unaccepted_cleanup_receipt(
