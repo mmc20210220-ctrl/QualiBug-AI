@@ -7,12 +7,27 @@ from .contract import DocumentSource
 from .image_decoding import ImageDecoderRegistry, build_default_image_decoder_registry
 from .page_rendering import RenderedPage
 
+_DOCUMENT_CONTAINER_SUFFIXES = {
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".rtf",
+    ".odt",
+    ".ppt",
+    ".pptx",
+    ".odp",
+    ".xls",
+    ".xlsx",
+    ".ods",
+}
+
 
 class UniversalImagePageRenderer:
     """Normalize any runtime-decodable image container into rendered pages.
 
     Formal support is based on successful content decoding, not on a fixed filename suffix
-    list.  The public page-rendering contract remains unchanged for OCR/table/diagram users.
+    list. Document containers remain assigned to their native or conversion renderers even
+    if an installed image library happens to identify an embedded preview.
     """
 
     name = "universal-image-page-renderer"
@@ -24,9 +39,14 @@ class UniversalImagePageRenderer:
         self.last_decode_receipt: dict = {}
 
     def available(self) -> bool:
-        return any(row.get("available") for row in self.decoder_registry.runtime_capabilities()["decoders"])
+        return any(
+            row.get("available")
+            for row in self.decoder_registry.runtime_capabilities()["decoders"]
+        )
 
     def supports(self, source: DocumentSource) -> bool:
+        if source.data.lstrip().startswith(b"%PDF-") or source.suffix in _DOCUMENT_CONTAINER_SUFFIXES:
+            return False
         return self.decoder_registry.can_decode(source)
 
     def render(
