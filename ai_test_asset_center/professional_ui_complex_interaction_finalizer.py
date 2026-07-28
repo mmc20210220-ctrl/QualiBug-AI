@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import sys
 from collections import Counter
 from typing import Any
 
@@ -123,6 +124,15 @@ def install_professional_ui_complex_interaction_finalizer() -> None:
 
     _interaction._validate_probe = validate_probe_with_frame_boundary
     _coverage.build_professional_ui_coverage = build_coverage_with_complex_interactions
+    loss_module = sys.modules.get("ai_test_asset_center.discovery_ui_loss_projection")
+    if loss_module is not None and getattr(
+        loss_module,
+        "build_professional_ui_coverage",
+        None,
+    ) is original_coverage:
+        loss_module.build_professional_ui_coverage = (
+            build_coverage_with_complex_interactions
+        )
     setattr(_interaction, _INSTALL_MARKER, True)
 
 
