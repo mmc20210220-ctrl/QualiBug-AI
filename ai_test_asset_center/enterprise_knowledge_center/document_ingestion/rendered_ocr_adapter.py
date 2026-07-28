@@ -23,12 +23,7 @@ def _list(value: Any) -> list[Any]:
 
 
 class OcrSupplementalAdapter(_LegacyOcrSupplementalAdapter):
-    """Compatibility-preserving OCR adapter backed by generic rendered pages.
-
-    The public class name and adapter name remain stable. The implementation no longer
-    reaches into PDF image objects directly; every visual source first passes through the
-    page renderer registry, which is shared with future table and diagram adapters.
-    """
+    """Compatibility-preserving OCR adapter backed by generic rendered pages."""
 
     parser_version = "2"
     capabilities = frozenset({*_LegacyOcrSupplementalAdapter.capabilities, CAP_PAGE_RENDERING})
@@ -89,10 +84,7 @@ class OcrSupplementalAdapter(_LegacyOcrSupplementalAdapter):
         target_pages: list[int],
         format_name: str,
     ) -> dict[str, Any]:
-        page_images = [
-            (row.page, row.image_index, row.image_bytes)
-            for row in batch.pages
-        ]
+        page_images = [(row.page, row.image_index, row.image_bytes) for row in batch.pages]
         effective_pages = target_pages or sorted({row.page for row in batch.pages}) or [1]
         result = self._build_ir(
             source,
@@ -100,10 +92,11 @@ class OcrSupplementalAdapter(_LegacyOcrSupplementalAdapter):
             target_pages=effective_pages,
             format_name=format_name,
         )
-        render_index = {
-            (row.page, row.image_index): row
-            for row in batch.pages
-        }
+        render_index = {(row.page, row.image_index): row for row in batch.pages}
+        render_by_page: dict[int, list[dict[str, Any]]] = {}
+        for rendered in batch.pages:
+            render_by_page.setdefault(rendered.page, []).append(rendered.evidence())
+
         for block in result.get("blocks") or []:
             if not isinstance(block, dict):
                 continue
@@ -124,6 +117,17 @@ class OcrSupplementalAdapter(_LegacyOcrSupplementalAdapter):
             evidence["coordinate_system"] = "IMAGE_PIXELS_LOCAL_TO_RENDERED_PAGE"
             block["structure_evidence"] = evidence
             block["rendered_page_source_locator"] = rendered.source_locator
+
+        for page_row in result.get("pages") or []:
+            if not isinstance(page_row, dict):
+                continue
+            page_number = int(page_row.get("page") or 0)
+            render_rows = render_by_page.get(page_number) or []
+            page_row["page_rendering"] = render_rows
+            page_row["page_rendered"] = bool(render_rows)
+            page_row["page_renderer_names"] = sorted(
+                {text(row.get("renderer_name")) for row in render_rows if text(row.get("renderer_name"))}
+            )
 
         unsupported = [
             dict(row)
@@ -155,6 +159,7 @@ class OcrSupplementalAdapter(_LegacyOcrSupplementalAdapter):
         receipt["page_rendering_receipt"] = batch.receipt
         receipt["page_renderer_name"] = batch.receipt.get("renderer_name")
         receipt["page_renderer_version"] = batch.receipt.get("renderer_version")
+        receipt["rendered_page_count"] = len(render_by_page)
         result["unsupported_content"] = unsupported
         result["structure_receipt"] = receipt
         result["page_rendering_receipt"] = batch.receipt
