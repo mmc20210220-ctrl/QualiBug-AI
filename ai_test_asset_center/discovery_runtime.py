@@ -9,14 +9,17 @@ honest loss funnel without creating findings or inventing quality metrics.
 
 The formal UI surface is installed here, not at package import time: it registers
 source-declared UI observer/assertion/protocol capability and injects only the runtime
-context required by the observer. Importing ``ai_test_asset_center`` alone still opens no
-browser and performs no target I/O.
+context required by the observer. The first formal UI increment is read-only; interactive
+browser plans remain blocked until browser-side cleanup equivalence exists. Importing
+``ai_test_asset_center`` alone still opens no browser and performs no target I/O.
 """
 from __future__ import annotations
 
 from .formal_ui_surface import install_formal_ui_surface
+from .formal_ui_surface_guard import install_formal_ui_read_only_guard
 
 install_formal_ui_surface()
+install_formal_ui_read_only_guard()
 
 from .discovery_runtime_execution import (  # noqa: E402,F401
     RUNTIME_SCHEMA,
