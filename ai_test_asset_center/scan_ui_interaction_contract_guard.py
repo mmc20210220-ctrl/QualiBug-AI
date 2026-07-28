@@ -8,6 +8,7 @@ remain visible scan coverage gaps and never enter Behavior IR.
 """
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 from . import scan_ui_contract_overlay as _overlay
@@ -93,16 +94,24 @@ def install_scan_ui_interaction_contract_guard() -> None:
         locator = _text(contract.get("source_locator")) or (
             f"scan_ui_execution_requests[{int(index)}]"
         )
-        _validated, source_gap = _source_contracts._validate_contract(
+        validated, source_gap = _source_contracts._validate_contract(
             contract,
             source_id=source_id,
             locator=locator,
         )
-        if not source_gap:
-            return contract, gaps
+        if not source_gap and validated is not None:
+            # Preserve the original immutable source refs and exact resolved identities,
+            # but retain parser normalization of request/plan mode and metadata. Dropping
+            # this normalized request would let downstream adapter defaults reintroduce
+            # a false safe-read-only mode.
+            normalized = copy.deepcopy(contract)
+            normalized["ui_request"] = copy.deepcopy(
+                _dict(validated.get("ui_request"))
+            )
+            return normalized, gaps
         missing = [
             _text(value)
-            for value in _list(source_gap.get("missing_requirements"))
+            for value in _list(_dict(source_gap).get("missing_requirements"))
             if _text(value)
         ]
         return None, [
