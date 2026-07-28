@@ -8,11 +8,13 @@ from typing import Any
 
 from . import professional_ui_coverage_projection as _coverage
 from .formal_ui_surface import EVIDENCE_KEY, OBSERVER_ID, RISK_FAMILY
+from .professional_ui_accessibility_contract_guard import CUSTOM_STANDARD
 from .professional_ui_accessibility_engine import (
     ACTION,
     RULE_CATALOG,
     SCHEMA_VERSION,
     STANDARD,
+    STANDARD_RULES,
     WCAG_VERSION,
 )
 
@@ -95,12 +97,29 @@ def _projection(result: dict[str, Any]) -> dict[str, Any]:
     complete_required_count = 0
     exclusion_contract_count = 0
     for step in steps:
-        declared_standards[_text(step.get("standard")) or STANDARD] += 1
+        explicit_standard = _text(step.get("standard"))
+        explicit_rules = [
+            _text(rule)
+            for rule in _list(step.get("rules"))
+            if _text(rule)
+        ]
+        resolved_standard = (
+            explicit_standard
+            if explicit_standard
+            else CUSTOM_STANDARD
+            if explicit_rules
+            else "missing_authority"
+        )
+        resolved_rules = (
+            list(STANDARD_RULES)
+            if resolved_standard == STANDARD and not explicit_rules
+            else explicit_rules
+        )
+        declared_standards[resolved_standard] += 1
         complete_required_count += int(step.get("require_complete_scan", True) is True)
         exclusion_contract_count += int(bool(_list(step.get("exclude_selectors"))))
-        for rule in _list(step.get("rules")):
-            if _text(rule):
-                declared_rules[_text(rule)] += 1
+        for rule in resolved_rules:
+            declared_rules[rule] += 1
 
     status_counts: Counter[str] = Counter()
     violation_rule_counts: Counter[str] = Counter()
@@ -166,6 +185,7 @@ def _projection(result: dict[str, Any]) -> dict[str, Any]:
         "schema_version": SCHEMA_VERSION,
         "wcag_version": WCAG_VERSION,
         "deterministic_standard": STANDARD,
+        "custom_standard": CUSTOM_STANDARD,
         "rule_catalog": catalog,
         "supported_rule_count": len(catalog),
         "declared_contract_count": len(steps),
