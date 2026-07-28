@@ -29,8 +29,28 @@ function validStartUrl(value: string): boolean {
   return /^https?:\/\/[^\s]+$/i.test(value);
 }
 
-function stableContractId(record: VisualBaselineRecord): string {
-  return `visual_${record.baseline_id}`;
+function shortFingerprint(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function stableContractId(
+  record: VisualBaselineRecord,
+  operationRef: string,
+  actorRole: string,
+  startUrl: string,
+): string {
+  const scenario = [
+    record.baseline_id,
+    operationRef.trim(),
+    actorRole.trim(),
+    startUrl.trim(),
+  ].join('|');
+  return `visual_${record.baseline_id}_${shortFingerprint(scenario)}`;
 }
 
 export function SettingsVisualBaselineContractSection({ project }: SettingsVisualBaselineContractSectionProps) {
@@ -196,8 +216,14 @@ export function SettingsVisualBaselineContractSection({ project }: SettingsVisua
   const uiRequest = useMemo(() => {
     if (!selected || !validation.ok) return null;
     const target = startUrl.trim();
+    const requestId = stableContractId(
+      selected,
+      operationRef,
+      actorRole,
+      target,
+    );
     return {
-      request_id: stableContractId(selected),
+      request_id: requestId,
       title: `Visual baseline ${selected.ref}`,
       provider: 'playwright_browser_plan',
       start_url: target,
@@ -234,11 +260,20 @@ export function SettingsVisualBaselineContractSection({ project }: SettingsVisua
         ],
       },
     };
-  }, [changedRatio, channelTolerance, maskSelectors, selected, startUrl, validation.ok]);
+  }, [
+    actorRole,
+    changedRatio,
+    channelTolerance,
+    maskSelectors,
+    operationRef,
+    selected,
+    startUrl,
+    validation.ok,
+  ]);
 
   const contractFragment = useMemo(() => {
     if (!selected || !uiRequest || !validation.ok) return '';
-    const contractId = stableContractId(selected);
+    const contractId = uiRequest.request_id;
     if (outputMode === 'enterprise_source') {
       return JSON.stringify({
         schema_version: 'qualibug.ui-formal-contract.v2',
