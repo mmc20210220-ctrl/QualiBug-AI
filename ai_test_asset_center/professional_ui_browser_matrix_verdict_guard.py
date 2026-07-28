@@ -5,6 +5,10 @@ A failed browser profile is not automatically a UI defect.  Only the existing
 engine/bootstrap/runtime failures remain INDETERMINATE.  The guard also rebuilds
 the observer receipt after matrix evidence is added, because observer receipts are
 content-addressed and must never be mutated after their id is computed.
+
+The source contract may declare a User-Agent, but execution results retain only its
+fingerprint.  This avoids duplicating client-identifying strings into result and
+observer artifacts while preserving exact source authority in the obligation.
 """
 from __future__ import annotations
 
@@ -48,6 +52,23 @@ def _is_typed_violation(result: dict[str, Any]) -> bool:
     )
 
 
+def _sanitized_matrix_for_result(matrix: dict[str, Any]) -> dict[str, Any]:
+    profiles = []
+    for value in _list(matrix.get("profiles")):
+        row = copy.deepcopy(_dict(value))
+        user_agent = _text(row.pop("user_agent", None), limit=500)
+        row["user_agent_fingerprint"] = (
+            _matrix._fingerprint(user_agent) if user_agent else ""
+        )
+        profiles.append(row)
+    return {
+        "schema_version": _text(matrix.get("schema_version")),
+        "aggregation_policy": _text(matrix.get("aggregation_policy")),
+        "profiles": profiles,
+        "raw_user_agent_in_execution_result": False,
+    }
+
+
 def _matrix_receipt_from_children(
     receipt: dict[str, Any],
     child_results: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]],
@@ -81,6 +102,7 @@ def _matrix_receipt_from_children(
     output["runtime_failures_are_formal_violations"] = False
     output["property_held_requires_all_profiles"] = True
     output["violation_requires_one_typed_profile_failure"] = True
+    output["raw_user_agent_in_receipt"] = False
     return output
 
 
@@ -141,6 +163,7 @@ def _synthetic_blocked_receipt(
         "provider_findings_consumed": False,
         "interactive_matrix_supported": False,
         "cross_engine_visual_baseline_supported": False,
+        "raw_user_agent_in_receipt": False,
     }
 
 
@@ -189,6 +212,7 @@ def install_professional_ui_browser_matrix_verdict_guard() -> None:
             _dict(result.get("browser_matrix_receipt")),
             child_results,
         )
+        result["browser_matrix"] = _sanitized_matrix_for_result(matrix)
         result["browser_matrix_receipt"] = receipt
         result["matrix_results"] = copy.deepcopy(_list(receipt.get("profiles")))
         _matrix._LAST_RECEIPT.set(copy.deepcopy(receipt))
@@ -221,7 +245,7 @@ def install_professional_ui_browser_matrix_verdict_guard() -> None:
         except ValueError:
             return result
         receipt = _synthetic_blocked_receipt(matrix, reason)
-        result["browser_matrix"] = copy.deepcopy(matrix)
+        result["browser_matrix"] = _sanitized_matrix_for_result(matrix)
         result["browser_matrix_receipt"] = receipt
         result["matrix_results"] = copy.deepcopy(receipt["profiles"])
         _matrix._LAST_RECEIPT.set(copy.deepcopy(receipt))
