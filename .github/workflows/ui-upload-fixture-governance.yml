@@ -1,0 +1,65 @@
+name: UI upload fixture governance
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ai_test_asset_center/ui_upload_fixture_*.py'
+      - 'ai_test_asset_center/private_pilot_upload_fixture_*.py'
+      - 'ai_test_asset_center/private_pilot_scan_context_patch.py'
+      - 'frontend/src/api/upload-fixtures.ts'
+      - 'frontend/src/components/settings/SettingsUploadFixtureSection.tsx'
+      - 'frontend/src/components/settings/SettingsComplexInteractionSection.tsx'
+      - 'frontend/src/components/settings/SettingsInfoSection.tsx'
+      - 'frontend/src/styles/upload-fixture-settings.css'
+      - 'tests/test_ui_upload_fixture_*.py'
+      - 'tests/test_private_pilot_upload_fixture_governance.py'
+      - '.github/workflows/ui-upload-fixture-governance.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-upload-fixtures-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-governance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install Python test dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e '.[dev]'
+      - name: Run upload fixture governance tests
+        run: >-
+          python -m pytest -q
+          tests/test_ui_upload_fixture_registry.py
+          tests/test_ui_upload_fixture_registry_integrity.py
+          tests/test_ui_upload_fixture_continuous_binding.py
+          tests/test_private_pilot_upload_fixture_governance.py
+
+  frontend-governance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Typecheck fixture governance UI
+        run: npm run typecheck
+      - name: Lint fixture governance UI
+        run: npm run lint
