@@ -30,6 +30,12 @@ export type VisualBaselineRecord = {
   raw_pixels_embedded_in_registry?: boolean;
 };
 
+export type VisualBaselineRevocationResult = {
+  baseline: VisualBaselineRecord;
+  cascadeRevokedCount: number;
+  cascadeRevokedBaselineIds: string[];
+};
+
 export type VisualBaselineInventory = {
   ok: boolean;
   schema_version: string;
@@ -262,7 +268,7 @@ export async function revokeVisualBaseline(
   project: string,
   baselineId: string,
   reason: string,
-): Promise<VisualBaselineRecord> {
+): Promise<VisualBaselineRevocationResult> {
   const payload = await visualBaselineRequest(project, {
     method: 'POST',
     body: JSON.stringify({
@@ -272,7 +278,22 @@ export async function revokeVisualBaseline(
       reason,
     }),
   });
+  const data = asRecord(payload.data);
   const baseline = requiredBaselineFromPayload(payload, '后端未返回有效撤销记录。');
+  const cascadeRevokedBaselineIds = Array.isArray(data.cascade_revoked_baseline_ids)
+    ? data.cascade_revoked_baseline_ids
+      .map(asString)
+      .filter(Boolean)
+    : [];
+  const declaredCount = Math.max(0, Math.trunc(asNumber(data.cascade_revoked_count)));
+  const cascadeRevokedCount = Math.max(
+    declaredCount,
+    cascadeRevokedBaselineIds.length,
+  );
   notifyVisualBaselineChange(project);
-  return baseline;
+  return {
+    baseline,
+    cascadeRevokedCount,
+    cascadeRevokedBaselineIds,
+  };
 }
