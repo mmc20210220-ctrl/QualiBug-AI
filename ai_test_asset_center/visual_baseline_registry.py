@@ -11,8 +11,12 @@ from .enterprise_knowledge_center import _visual_baselines as _registry
 from .enterprise_knowledge_center._visual_baseline_registry_guard import (
     install_visual_baseline_registry_guard,
 )
+from .private_pilot_visual_baseline_health_patch import (
+    install_visual_baseline_health_patch,
+)
 
 install_visual_baseline_registry_guard()
+install_visual_baseline_health_patch()
 
 APPROVED_PREFIX = _registry.APPROVED_PREFIX
 FONT_READINESS = _registry.FONT_READINESS
