@@ -1,0 +1,124 @@
+.upload-fixture-section {
+  grid-column: 1 / -1;
+}
+
+.upload-fixture-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 0.8rem;
+  margin-top: 1rem;
+}
+
+.upload-fixture-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  margin-top: 1.2rem;
+}
+
+.upload-fixture-toolbar > div {
+  flex: 1;
+}
+
+.upload-fixture-toolbar span,
+.upload-fixture-toggle,
+.upload-fixture-row small,
+.upload-fixture-row em {
+  color: var(--text-secondary, #5f6b7a);
+}
+
+.upload-fixture-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  white-space: nowrap;
+}
+
+.upload-fixture-reason {
+  margin-top: 0.8rem;
+}
+
+.upload-fixture-list {
+  display: grid;
+  gap: 0.7rem;
+  margin-top: 0.9rem;
+}
+
+.upload-fixture-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border-color, #dfe3e8);
+  border-radius: 0.75rem;
+  background: var(--surface, #fff);
+}
+
+.upload-fixture-row.is-revoked {
+  opacity: 0.68;
+  background: var(--surface-muted, #f7f8fa);
+}
+
+.upload-fixture-main {
+  min-width: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.upload-fixture-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.upload-fixture-title span {
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  background: var(--surface-muted, #f0f2f5);
+  color: var(--text-secondary, #5f6b7a);
+  font-size: 0.75rem;
+}
+
+.upload-fixture-main code {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  font-size: 0.78rem;
+}
+
+.upload-fixture-main em {
+  font-style: normal;
+  font-size: 0.8rem;
+}
+
+.upload-fixture-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+@media (max-width: 900px) {
+  .upload-fixture-form {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .upload-fixture-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .upload-fixture-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 640px) {
+  .upload-fixture-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
