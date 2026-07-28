@@ -6,6 +6,7 @@ makes that field registry-derived rather than caller-authored:
 * scan callers may submit ``ui_upload_fixture_ids`` containing approved fixture ids
   or binding refs;
 * any explicit ``ui_file_bindings`` must exactly match active registry records;
+* manual and continuous scan preparation both hydrate the same registry authority;
 * campaign context and the final pipeline runtime contract retain only canonical
   project-relative bindings;
 * loaded aliases are rebound so the patch is effective even when the service
@@ -29,6 +30,9 @@ from .ui_upload_fixture_registry import (
 
 _INSTALL_MARKER = "_qualibug_ui_upload_fixture_runtime_binding_installed"
 _ORIGINAL_PREPARE = "_qualibug_scan_prepare_before_upload_fixture_binding"
+_ORIGINAL_CAMPAIGN_PREPARE = (
+    "_qualibug_campaign_prepare_before_upload_fixture_binding"
+)
 _ORIGINAL_CONTEXT = "_qualibug_campaign_context_before_upload_fixture_binding"
 _ORIGINAL_RUNTIME = "_qualibug_runtime_contract_before_upload_fixture_binding"
 _CANONICAL_BINDING_FIELDS = frozenset({
@@ -47,10 +51,6 @@ _CANONICAL_BINDING_FIELDS = frozenset({
 
 def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
-
-
-def _list(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else []
 
 
 def _text(value: Any, *, limit: int = 1000) -> str:
@@ -161,6 +161,11 @@ def install_ui_upload_fixture_runtime_binding() -> None:
         _ORIGINAL_PREPARE,
         _scan_prep._prepare_v12_scan_body,
     )
+    original_campaign_prepare = getattr(
+        _scan_context,
+        _ORIGINAL_CAMPAIGN_PREPARE,
+        _scan_context.prepare_scan_body_for_campaign,
+    )
     original_context = getattr(
         _scan_context,
         _ORIGINAL_CONTEXT,
@@ -172,6 +177,11 @@ def install_ui_upload_fixture_runtime_binding() -> None:
         _pipeline_runtime._runtime_contract,
     )
     setattr(_scan_prep, _ORIGINAL_PREPARE, original_prepare)
+    setattr(
+        _scan_context,
+        _ORIGINAL_CAMPAIGN_PREPARE,
+        original_campaign_prepare,
+    )
     setattr(_scan_context, _ORIGINAL_CONTEXT, original_context)
     setattr(_pipeline_runtime, _ORIGINAL_RUNTIME, original_runtime)
 
@@ -190,6 +200,14 @@ def install_ui_upload_fixture_runtime_binding() -> None:
             body,
             local_dev_mode=local_dev_mode,
         )
+        return _hydrate_bindings(project, Path(root), prepared)
+
+    def campaign_prepare_with_upload_fixture_bindings(
+        project: str,
+        root: Path,
+        body: dict[str, Any],
+    ) -> dict[str, Any]:
+        prepared = original_campaign_prepare(project, root, body)
         return _hydrate_bindings(project, Path(root), prepared)
 
     def campaign_context_with_upload_fixture_bindings(
@@ -219,6 +237,9 @@ def install_ui_upload_fixture_runtime_binding() -> None:
         return contract
 
     _scan_prep._prepare_v12_scan_body = prepare_with_upload_fixture_bindings
+    _scan_context.prepare_scan_body_for_campaign = (
+        campaign_prepare_with_upload_fixture_bindings
+    )
     _scan_context.build_campaign_context_from_scan_body = (
         campaign_context_with_upload_fixture_bindings
     )
@@ -231,6 +252,18 @@ def install_ui_upload_fixture_runtime_binding() -> None:
         None,
     ) is original_prepare:
         scan_handlers._prepare_v12_scan_body = prepare_with_upload_fixture_bindings
+
+    continuous_handlers = sys.modules.get(
+        "ai_test_asset_center.private_pilot_continuous_handlers"
+    )
+    if continuous_handlers is not None and getattr(
+        continuous_handlers,
+        "prepare_scan_body_for_campaign",
+        None,
+    ) is original_campaign_prepare:
+        continuous_handlers.prepare_scan_body_for_campaign = (
+            campaign_prepare_with_upload_fixture_bindings
+        )
 
     pipeline = sys.modules.get("ai_test_asset_center.v12_pipeline")
     if pipeline is not None and getattr(pipeline, "_runtime_contract", None) is original_runtime:
