@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .discovery_event_loss_projection import attach_formal_event_loss_funnel
 from .discovery_loss_funnel import build_discovery_loss_funnel
 from .discovery_ui_loss_projection import attach_formal_ui_loss_funnel
 from .formal_evidence_projection import (
@@ -17,9 +18,10 @@ def project_discovery_quality(result: dict[str, Any]) -> dict[str, Any]:
         raise TypeError("discovery_result_not_object")
     projected = dict(result)
     generic_funnel = build_discovery_loss_funnel(projected)
-    projected["discovery_loss_funnel"] = attach_formal_ui_loss_funnel(
+    with_ui = attach_formal_ui_loss_funnel(projected, generic_funnel)
+    projected["discovery_loss_funnel"] = attach_formal_event_loss_funnel(
         projected,
-        generic_funnel,
+        with_ui,
     )
     return projected
 
