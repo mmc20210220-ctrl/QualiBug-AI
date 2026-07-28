@@ -105,9 +105,13 @@ def _apply_capability_gaps(
                 "included_in_plain_text_authority": False,
             }
         )
-    receipt = dict(result.get("structure_receipt") or {})
     blocked = any(bool(row.get("blocks_formal_understanding")) for row in unsupported)
-    receipt["status"] = "BLOCKED" if blocked else "PARTIAL"
+    final_status = "BLOCKED" if blocked else "PARTIAL"
+    merge_receipt = dict(result.get("adapter_merge_receipt") or {})
+    merge_receipt["status"] = final_status
+    merge_receipt["missing_capabilities"] = missing
+    receipt = dict(result.get("structure_receipt") or {})
+    receipt["status"] = final_status
     receipt["unsupported_content"] = unsupported
     receipt["unsupported_content_count"] = sum(int(row.get("count") or 0) for row in unsupported)
     receipt["critical_unsupported_content_count"] = sum(
@@ -116,11 +120,9 @@ def _apply_capability_gaps(
         if bool(row.get("blocks_formal_understanding"))
     )
     receipt["missing_adapter_capabilities"] = missing
+    receipt["adapter_merge_receipt"] = merge_receipt
     result["unsupported_content"] = unsupported
     result["structure_receipt"] = receipt
-    merge_receipt = dict(result.get("adapter_merge_receipt") or {})
-    merge_receipt["status"] = receipt["status"]
-    merge_receipt["missing_capabilities"] = missing
     result["adapter_merge_receipt"] = merge_receipt
     return result
 
