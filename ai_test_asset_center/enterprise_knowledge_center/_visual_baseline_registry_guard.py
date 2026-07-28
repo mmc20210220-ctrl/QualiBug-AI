@@ -10,8 +10,8 @@ installer hardens its dynamic helpers without creating a second registry:
   limits before they can become executable authority;
 * one immutable ref cannot acquire conflicting active viewport or screenshot-mode
   identities;
-* every lifecycle version receives a unique baseline id, including re-registration
-  after revocation;
+* every lifecycle version receives a unique baseline id and, after revocation, a
+  new immutable ref so old contracts cannot be revived by re-registration;
 * register/approve/revoke mutations are serialized by a short-lived project lock;
 * revoking source authority atomically revokes every active approved copy derived
   from it, so invalidated pixels cannot remain executable through another ref.
@@ -228,13 +228,14 @@ def install_visual_baseline_registry_guard() -> None:
             120,
         )
         digest = hashlib.sha256(data).hexdigest()
-        ref = f"{_registry.INPUT_PREFIX}/{name}__{digest[:12]}.png"
+        canonical_ref = f"{_registry.INPUT_PREFIX}/{name}__{digest[:12]}.png"
         with _mutation_lock(project, effective_root):
             registry = _registry._load(project, effective_root)
             same_ref = [
                 row
                 for row in registry["baselines"]
-                if row.get("status") == "active" and row.get("ref") == ref
+                if row.get("status") == "active"
+                and row.get("ref") == canonical_ref
             ]
             exact = [
                 row
@@ -247,16 +248,27 @@ def install_visual_baseline_registry_guard() -> None:
                 and row.get("scroll_origin") == _registry.SCROLL_ORIGIN
                 and row.get("font_readiness") == _registry.FONT_READINESS
             ]
-            if same_ref and not exact:
+            if len(same_ref) != len(exact):
                 raise RuntimeError("visual_baseline_active_identity_conflict")
             if len(exact) > 1:
                 raise RuntimeError("visual_baseline_active_identity_ambiguous")
-            token = _RECORD_GENERATION.set(len(registry["baselines"]) + 1)
+            generation = len(registry["baselines"]) + 1
+            historical_canonical_ref = any(
+                row.get("ref") == canonical_ref
+                for row in registry["baselines"]
+            )
+            effective_name = name
+            if historical_canonical_ref and not same_ref:
+                effective_name = _registry._safe_slug(
+                    f"{name}__v{generation}",
+                    120,
+                )
+            token = _RECORD_GENERATION.set(generation)
             try:
                 return original_register(
                     project_id,
                     file_path=file_path,
-                    baseline_name=baseline_name,
+                    baseline_name=effective_name,
                     viewport_width=viewport_width,
                     viewport_height=viewport_height,
                     full_page=full_page,
