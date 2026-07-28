@@ -7,19 +7,16 @@ entry installs exact accepted rule/interface identity binding before any plan
 is compiled. The public execution entry projects receipt-backed evidence and an
 honest loss funnel without creating findings or inventing quality metrics.
 
-The formal UI surface is installed here, not at package import time: it registers
-source-declared UI observer/assertion/protocol capability and injects only the runtime
-context required by the observer. The first formal UI increment is read-only; interactive
-browser plans remain blocked until browser-side cleanup equivalence exists. Importing
-``ai_test_asset_center`` alone still opens no browser and performs no target I/O.
+Only ``ui_formal_surface`` is installed as the public UI observer/assertion
+authority. The earlier browser-plan experiment facade remains importable for
+artifact compatibility but is not auto-installed, preventing one source UI
+contract from entering two competing formal delivery chains.
 """
 from __future__ import annotations
 
-from .formal_ui_surface import install_formal_ui_surface
-from .formal_ui_surface_guard import install_formal_ui_read_only_guard
+from .ui_formal_surface import install_ui_formal_surface
 
-install_formal_ui_surface()
-install_formal_ui_read_only_guard()
+install_ui_formal_surface()
 
 from .discovery_runtime_execution import (  # noqa: E402,F401
     RUNTIME_SCHEMA,
