@@ -216,10 +216,19 @@ export function SettingsVisualBaselineSection({ project }: SettingsVisualBaselin
 
   const handleRevoke = async (record: VisualBaselineRecord) => {
     const reason = revokeReason.trim();
+    const dependentApprovedCount = inventory.baselines.filter((candidate) => (
+      candidate.status === 'active'
+      && candidate.authority === 'approved_copy'
+      && candidate.approved_from_baseline_id === record.baseline_id
+    )).length;
     if (revokeId !== record.baseline_id) {
       setRevokeId(record.baseline_id);
       setRevokeReason('');
-      setStatus('请填写撤销原因后确认。');
+      setStatus(
+        dependentApprovedCount > 0
+          ? `该来源基线有 ${dependentApprovedCount} 个活动审批副本；确认后将一并撤销。`
+          : '请填写撤销原因后确认。',
+      );
       return;
     }
     if (!reason) {
@@ -229,8 +238,16 @@ export function SettingsVisualBaselineSection({ project }: SettingsVisualBaselin
     setBusyKey(`revoke:${record.baseline_id}`);
     setStatus('正在撤销基线 authority…');
     try {
-      await revokeVisualBaseline(project, record.baseline_id, reason);
-      setStatus(`已撤销：${record.ref}`);
+      const result = await revokeVisualBaseline(
+        project,
+        record.baseline_id,
+        reason,
+      );
+      setStatus(
+        result.cascadeRevokedCount > 0
+          ? `已撤销：${record.ref}；同时级联撤销 ${result.cascadeRevokedCount} 个审批副本。`
+          : `已撤销：${record.ref}`,
+      );
       setRevokeId('');
       setRevokeReason('');
       await refresh(false);
@@ -483,7 +500,7 @@ export function SettingsVisualBaselineSection({ project }: SettingsVisualBaselin
       )}
 
       {status && (
-        <p className={`settings-inline-feedback visual-baseline-feedback ${status.includes('失败') || status.includes('不能为空') || status.includes('请选择') ? 'is-error' : ''}`}>
+        <p className={`settings-inline-feedback visual-baseline-feedback ${status.includes('失败') || status.includes('不能为空') || status.includes('请选择') ? 'is-error' : ''}`} role="status" aria-live="polite">
           {status}
         </p>
       )}
