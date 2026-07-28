@@ -244,8 +244,13 @@ def test_protocol_emits_exact_warmup_and_sample_steps() -> None:
     assert result["assertion"]["kind"] == performance.ASSERTION_KIND
 
 
-def _steps(durations: list[float], statuses: list[int] | None = None) -> list[dict]:
+def _steps(
+    durations: list[float],
+    statuses: list[int] | None = None,
+    attempts: list[int] | None = None,
+) -> list[dict]:
     status_values = statuses or [200] * len(durations)
+    attempt_values = attempts or [1] * len(durations)
     return [
         {
             "step_id": f"performance_sample_{index + 1}",
@@ -255,6 +260,7 @@ def _steps(durations: list[float], statuses: list[int] | None = None) -> list[di
             "path": f"/api/orders/{index + 1}",
             "status_code": status_values[index],
             "duration_ms": duration,
+            "raw": {"_attempts": attempt_values[index]},
             "body": {"secret": "must-not-enter-performance-receipt"},
             "headers": {"authorization": "Bearer secret"},
         }
@@ -285,7 +291,10 @@ def test_complete_p95_series_is_observed_and_redacted() -> None:
     assert evidence["observed_percentile_ms"] == 200
     assert evidence["observed_error_rate"] == 0
     assert evidence["coverage_complete"] is True
-    assert evidence["measurement_semantics"] == "sequential_read_only_samples"
+    assert evidence["single_attempt_samples_only"] is True
+    assert evidence["measurement_semantics"] == (
+        "sequential_read_only_single_attempt_transport_duration_samples"
+    )
     serialized = json.dumps(receipt, ensure_ascii=False, sort_keys=True)
     assert "must-not-enter-performance-receipt" not in serialized
     assert "Bearer secret" not in serialized
@@ -337,3 +346,19 @@ def test_missing_sample_or_duration_is_indeterminate() -> None:
     assert missing_duration["evidence"][performance.EVIDENCE_KEY][
         "missing_duration_count"
     ] == 1
+
+
+def test_retried_transport_duration_is_not_trusted_as_service_latency() -> None:
+    receipt = performance._performance_observer_handler(
+        _observer_envelope(_steps(
+            [100, 120, 140, 160, 180],
+            attempts=[1, 1, 2, 1, 1],
+        ))
+    )
+
+    assert receipt["status"] == "INDETERMINATE"
+    assert receipt["reason_code"] == "PERFORMANCE_SAMPLE_DURATION_UNTRUSTWORTHY"
+    evidence = receipt["evidence"][performance.EVIDENCE_KEY]
+    assert evidence["retry_detected_count"] == 1
+    assert evidence["missing_attempt_evidence_count"] == 0
+    assert evidence["coverage_complete"] is False
