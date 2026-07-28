@@ -4,6 +4,11 @@ The generic invariant compiler does not know that ``ui_source_expectation`` must
 registered ``source_declared_ui_expectation`` protocol template. Left alone, it classifies the
 invariant as validation and creates a status-code experiment. This extension removes that
 misclassified variant and emits exactly one UI obligation from the already exact IR identities.
+
+Read-only UI obligations need no cleanup. Governed interactive UI obligations delegate cleanup
+to the registered UI observer, which executes the source-declared browser compensation and
+requires a content-addressed cleanup-equivalence receipt before Oracle eligibility. The generic
+HTTP finalizer must not run a second compensation or label the write as cleanup-free.
 """
 from __future__ import annotations
 
@@ -17,10 +22,15 @@ from .formal_ui_surface import (
     PROTOCOL_TEMPLATE,
     RISK_FAMILY,
 )
+from .professional_ui_interaction_cleanup import (
+    CLEANUP_RECEIPT_SCHEMA,
+    INTERACTIVE_ACTIONS,
+)
 from .test_obligation import dedupe_obligations, make_obligation
 
 _INSTALL_MARKER = "_qualibug_source_ui_obligation_binding_installed"
 _ORIGINAL_MARKER = "_qualibug_original_compile_obligations_for_source_ui"
+_WRITE_MODE = "approved_sandbox_write"
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -61,6 +71,59 @@ def _ui_invariants(behavior_ir: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def _request_mode(request: dict[str, Any]) -> str:
+    plan = _dict(request.get("browser_plan"))
+    return _text(
+        request.get("execution_mode")
+        or plan.get("execution_mode")
+        or "safe_read_only"
+    )
+
+
+def _interaction_actions(request: dict[str, Any]) -> list[str]:
+    return [
+        _text(row.get("action")).lower()
+        for row in _list(_dict(request.get("browser_plan")).get("steps"))
+        if isinstance(row, dict)
+        and _text(row.get("action")).lower() in INTERACTIVE_ACTIONS
+    ]
+
+
+def _cleanup_authority(request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return property metadata and the generic-finalizer cleanup requirement."""
+    actions = _interaction_actions(request)
+    mode = _request_mode(request)
+    if mode == _WRITE_MODE and actions:
+        authority = {
+            "mode": "observer_managed_browser_cleanup",
+            "observer_id": OBSERVER_ID,
+            "receipt_schema": CLEANUP_RECEIPT_SCHEMA,
+            "equivalence_required": True,
+            "generic_http_cleanup_must_not_run": True,
+        }
+        requirement = {
+            "required": False,
+            "mode": "observer_managed_browser_cleanup",
+            "delegated": True,
+            "observer_id": OBSERVER_ID,
+            "receipt_schema": CLEANUP_RECEIPT_SCHEMA,
+            "reason": "formal_ui_observer_requires_cleanup_equivalence_before_verdict",
+        }
+        return authority, requirement
+    return (
+        {
+            "mode": "not_required_read_only",
+            "observer_id": OBSERVER_ID,
+            "equivalence_required": False,
+        },
+        {
+            "required": False,
+            "mode": "not_required_read_only",
+            "reason": "read_only_ui_contract",
+        },
+    )
+
+
 def compile_obligations_with_source_ui(
     behavior_ir: dict[str, Any],
     *,
@@ -75,6 +138,8 @@ def compile_obligations_with_source_ui(
             "status": "NOT_REQUESTED",
             "invariant_count": 0,
             "obligation_count": 0,
+            "interactive_obligation_count": 0,
+            "read_only_obligation_count": 0,
             "misclassified_obligation_count_removed": 0,
         }
         return baseline
@@ -109,6 +174,8 @@ def compile_obligations_with_source_ui(
     ]
     additions: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
+    interactive_count = 0
+    read_only_count = 0
 
     for invariant in ui_invariants:
         invariant_ref = _text(invariant.get("id"))
@@ -157,6 +224,10 @@ def compile_obligations_with_source_ui(
             })
             continue
         request = copy.deepcopy(_dict(invariant.get("ui_request")))
+        cleanup_authority, cleanup_requirement = _cleanup_authority(request)
+        is_interactive = cleanup_authority.get("equivalence_required") is True
+        interactive_count += int(is_interactive)
+        read_only_count += int(not is_interactive)
         property_spec = {
             "template": PROTOCOL_TEMPLATE,
             "invariant_ref": invariant_ref,
@@ -166,6 +237,9 @@ def compile_obligations_with_source_ui(
             "actor_ref": actor_ref,
             "ui_contract_id": _text(invariant.get("ui_contract_id")),
             "ui_request": request,
+            "ui_execution_mode": _request_mode(request),
+            "ui_interaction_actions": _interaction_actions(request),
+            "ui_cleanup_authority": cleanup_authority,
             "ui_expectation_actions": [
                 _text(value)
                 for value in _list(invariant.get("ui_expectation_actions"))
@@ -187,7 +261,7 @@ def compile_obligations_with_source_ui(
             required_actors=[actor_ref],
             required_operations=[operation_ref],
             required_observers=[OBSERVER_ID],
-            cleanup_requirement={"required": False, "reason": "read_only_ui_contract"},
+            cleanup_requirement=cleanup_requirement,
             source_refs=_unique_source_refs(
                 invariant,
                 operation,
@@ -220,13 +294,21 @@ def compile_obligations_with_source_ui(
             "description": "Exact formal UI invariant could not become one obligation",
         })
 
-    families = sorted({_text(row.get("risk_family")) for row in obligations if _text(row.get("risk_family"))})
+    families = sorted({
+        _text(row.get("risk_family"))
+        for row in obligations
+        if _text(row.get("risk_family"))
+    })
     baseline.update({
         "obligations": obligations,
         "obligation_count": len(obligations),
         "coverage_gaps": gaps,
         "by_family": {
-            family: sum(1 for row in obligations if _text(row.get("risk_family")) == family)
+            family: sum(
+                1
+                for row in obligations
+                if _text(row.get("risk_family")) == family
+            )
             for family in families
         },
         "source_ui_obligation_receipt": {
@@ -234,11 +316,21 @@ def compile_obligations_with_source_ui(
             "status": "COMPILED" if additions else "BLOCKED",
             "invariant_count": len(ui_invariants),
             "obligation_count": len(additions),
+            "interactive_obligation_count": interactive_count,
+            "read_only_obligation_count": read_only_count,
+            "interactive_cleanup_authority": "formal_ui_observer_receipt",
+            "interactive_cleanup_receipt_schema": CLEANUP_RECEIPT_SCHEMA,
             "misclassified_obligation_count_removed": removed,
             "skipped_count": len(skipped),
             "skipped_reason_counts": {
-                reason: sum(1 for row in skipped if _text(row.get("reason_code")) == reason)
-                for reason in sorted({_text(row.get("reason_code")) for row in skipped})
+                reason: sum(
+                    1
+                    for row in skipped
+                    if _text(row.get("reason_code")) == reason
+                )
+                for reason in sorted({
+                    _text(row.get("reason_code")) for row in skipped
+                })
                 if reason
             },
         },
