@@ -27,6 +27,9 @@ from .formal_event_capability_guard import (
 )
 from .formal_event_pre_cleanup import install_formal_event_pre_cleanup_observer
 from .formal_event_surface import install_formal_event_surface
+from .formal_performance_attribution_guard import (
+    install_formal_performance_attribution_guard,
+)
 from .formal_performance_surface import install_formal_performance_surface
 from .formal_ui_surface import install_formal_ui_surface
 from .formal_ui_surface_guard import install_formal_ui_read_only_guard
@@ -68,8 +71,8 @@ _INSTALL_MARKER = "_qualibug_semantic_operation_binding_installed"
 _ORIGINAL_MARKER = "_qualibug_original_behavior_ir_builder"
 
 # Register formal surfaces before any obligation or experiment is compiled. Every installer is
-# idempotent and performs no target I/O. The event capability guard must wrap the base handler
-# before the pre-cleanup installer captures it for exact-once execution/reuse.
+# idempotent and performs no target I/O. Event and performance guards must wrap their base
+# handlers before the mainline captures or dispatches them.
 install_non_http_observers()
 install_formal_ui_surface()
 install_formal_ui_read_only_guard()
@@ -77,6 +80,7 @@ install_formal_event_surface()
 install_formal_event_capability_guard()
 install_formal_event_pre_cleanup_observer()
 install_formal_performance_surface()
+install_formal_performance_attribution_guard()
 install_source_ui_contract_source_guard()
 install_source_ui_obligation_binding()
 install_source_ui_family_vector_compat()
