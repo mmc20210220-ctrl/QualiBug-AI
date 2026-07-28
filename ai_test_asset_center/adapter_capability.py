@@ -27,9 +27,7 @@ PRODUCT_OWNED_ADAPTERS = frozenset({"process_ledger"})
 DECLARATION_REQUIRED: dict[str, str] = {
     "db_sql": "services[].db",
     "ui_browser": "runtime_contract.declared_adapters[]",
-    "event_log_jsonl": (
-        "runtime_contract.declared_adapters[] + runtime_contract.event_log"
-    ),
+    "event_observer_http": "runtime_contract.declared_adapters[]",
 }
 
 
@@ -82,9 +80,9 @@ def resolve_available_adapters(
     inside the formal executor, not discovered on the target.
 
     ``ui_browser`` is never inferred from a UI URL or installed Playwright.
-    ``event_log_jsonl`` is never inferred from a log-looking file: the runtime
-    contract must both name the adapter and provide an ``event_log`` block. A
-    partial declaration fails in the direction of fewer capabilities.
+    ``event_observer_http`` is never inferred from a route that happens to look
+    like an event endpoint. Its relative read path, fields, correlation rule and
+    bounded observation window come from the independent source event contract.
     """
     available = set(BASELINE_ADAPTERS | PRODUCT_OWNED_ADAPTERS)
     config = _declared_config(Path(root), project)
@@ -98,15 +96,6 @@ def resolve_available_adapters(
 
     for name in _list(runtime.get("declared_adapters")):
         adapter = _text(name)
-        if adapter == "event_log_jsonl":
-            if _dict(runtime.get("event_log")):
-                available.add(adapter)
-            else:
-                logger.warning(
-                    "adapter capability: event_log_jsonl declared without "
-                    "runtime_contract.event_log; ignored"
-                )
-            continue
         if (
             adapter in DECLARATION_REQUIRED
             or adapter in BASELINE_ADAPTERS
@@ -140,7 +129,7 @@ ADAPTER_TO_OBSERVATION_SURFACE: dict[str, str] = {
     "process_ledger": "process_timeline",
     "db_sql": "db_snapshot",
     "ui_browser": "ui_browser",
-    "event_log_jsonl": "event_log",
+    "event_observer_http": "event_stream",
 }
 
 # The capability node an available adapter justifies.
@@ -149,7 +138,7 @@ ADAPTER_TO_CAPABILITY: dict[str, str] = {
     "process_ledger": "process_timeline_observe",
     "db_sql": "db_read",
     "ui_browser": "ui_execute",
-    "event_log_jsonl": "event_log_read",
+    "event_observer_http": "event_stream_read",
 }
 
 
