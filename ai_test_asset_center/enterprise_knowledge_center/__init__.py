@@ -14,8 +14,12 @@ from ._formal_ui_contracts import (  # noqa: F401
     extract_formal_ui_contracts,
     install_formal_ui_contract_parser,
 )
+from ._formal_ui_contract_guard import (  # noqa: F401
+    install_formal_ui_root_array_guard,
+)
 
 # Additive parser registration only. It opens no files, browser or target connection.
+install_formal_ui_root_array_guard()
 install_formal_ui_contract_parser()
 
 # Explicit re-exports for underscore-prefixed symbols
@@ -172,5 +176,6 @@ __all__ = [
     "run_enterprise_knowledge_demo",
     "extract_formal_ui_contracts",
     "install_formal_ui_contract_parser",
+    "install_formal_ui_root_array_guard",
     "_cli",
 ]
