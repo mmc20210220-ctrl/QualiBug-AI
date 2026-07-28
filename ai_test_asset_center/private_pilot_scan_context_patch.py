@@ -16,6 +16,12 @@ from ai_test_asset_center.performance_scan_context_bridge import (
 from ai_test_asset_center.private_pilot_scan_context_contract import (
     CONTINUOUS_CAMPAIGN_CONTEXTS,
 )
+from ai_test_asset_center.private_pilot_upload_fixture_routes import (
+    install_private_pilot_upload_fixture_routes,
+)
+from ai_test_asset_center.ui_upload_fixture_runtime_binding import (
+    install_ui_upload_fixture_runtime_binding,
+)
 
 PATCH_SOURCE = "ai_test_asset_center.private_pilot_scan_context_patch"
 
@@ -33,8 +39,12 @@ def restore_scan_campaign_context_patch() -> None:
 
 
 def install_scan_campaign_context_patch(*, patch_source: str) -> None:
-    """Mark first-class binding active and preserve performance contracts."""
+    """Mark first-class binding active and preserve governed scan contracts."""
     install_performance_scan_context_bridge()
+    # Upload fixtures are part of the same immutable scan-context authority. These
+    # installers are idempotent and perform no browser or target I/O.
+    install_ui_upload_fixture_runtime_binding()
+    install_private_pilot_upload_fixture_routes()
     if getattr(_service, "_SCAN_CAMPAIGN_CONTEXT_PATCHED", False):
         return
     _service._SCAN_CAMPAIGN_CONTEXT_PATCHED = True  # type: ignore[attr-defined]
