@@ -1,0 +1,115 @@
+"""Fail-closed integrity and audit guard for the visual baseline registry.
+
+The lifecycle module intentionally keeps a small persistence implementation. This
+installer hardens its dynamic helpers without creating a second registry:
+
+* cleaned knowledge-center actors are recorded as ``name:role``;
+* an existing malformed or wrong-schema registry is never replaced with an empty
+  registry;
+* registered PNGs are fully verified under decompression-bomb and dimension
+  limits before they can become executable authority.
+"""
+from __future__ import annotations
+
+import io
+import json
+import warnings
+from pathlib import Path
+from typing import Any
+
+from . import _visual_baselines as _registry
+
+_INSTALL_MARKER = "_qualibug_visual_baseline_registry_guard_installed"
+_ORIGINAL_ACTOR = "_qualibug_visual_registry_actor_before_guard"
+_ORIGINAL_LOAD = "_qualibug_visual_registry_load_before_guard"
+_ORIGINAL_PNG = "_qualibug_visual_registry_png_before_guard"
+
+
+def _text(value: Any, *, limit: int = 1000) -> str:
+    return str(value or "").strip()[:limit]
+
+
+def install_visual_baseline_registry_guard() -> None:
+    if getattr(_registry, _INSTALL_MARKER, False):
+        return
+    setattr(_registry, _ORIGINAL_ACTOR, _registry._actor_ref)
+    setattr(_registry, _ORIGINAL_LOAD, _registry._load)
+    setattr(_registry, _ORIGINAL_PNG, _registry._png_metadata)
+
+    def actor_ref_with_role(actor: dict[str, Any]) -> str:
+        name = _text(
+            actor.get("name")
+            or actor.get("actor_ref")
+            or actor.get("subject")
+            or actor.get("sub")
+            or actor.get("id")
+            or actor.get("username")
+            or "knowledge_operator",
+            limit=160,
+        )
+        role = _text(actor.get("role"), limit=64)
+        return f"{name}:{role}" if role else name
+
+    def load_fail_closed(project: str, root: Path) -> dict[str, Any]:
+        path = _registry._paths(project, root)["registry"]
+        if not path.is_file():
+            return _registry._default_registry(project)
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise RuntimeError("visual_baseline_registry_corrupt") from exc
+        if (
+            not isinstance(payload, dict)
+            or payload.get("schema_version") != _registry.SCHEMA_VERSION
+            or payload.get("project_id") not in {None, "", project}
+            or not isinstance(payload.get("baselines", []), list)
+            or not isinstance(payload.get("audit_events", []), list)
+        ):
+            raise RuntimeError("visual_baseline_registry_schema_invalid")
+        payload.setdefault("project_id", project)
+        payload.setdefault("baselines", [])
+        payload.setdefault("audit_events", [])
+        return payload
+
+    def verified_png_metadata(data: bytes) -> tuple[int, int]:
+        if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise ValueError("visual_baseline_png_required")
+        if not 1 <= len(data) <= _registry.MAX_BASELINE_BYTES:
+            raise ValueError("visual_baseline_size_invalid")
+        try:
+            from PIL import Image
+        except ImportError as exc:
+            raise RuntimeError("visual_baseline_pillow_unavailable") from exc
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", Image.DecompressionBombWarning)
+                header = Image.open(io.BytesIO(data))
+                if str(header.format or "").upper() != "PNG":
+                    raise ValueError("visual_baseline_png_required")
+                width, height = int(header.size[0]), int(header.size[1])
+                if (
+                    width < 1
+                    or height < 1
+                    or width > _registry.MAX_IMAGE_WIDTH
+                    or height > _registry.MAX_IMAGE_HEIGHT
+                    or width * height > _registry.MAX_IMAGE_PIXELS
+                ):
+                    raise ValueError(
+                        "visual_baseline_decode_dimension_limit_exceeded"
+                    )
+                header.verify()
+        except ValueError:
+            raise
+        except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
+            raise ValueError("visual_baseline_decompression_bomb_blocked") from exc
+        except Exception as exc:
+            raise ValueError("visual_baseline_png_decode_failed") from exc
+        return width, height
+
+    _registry._actor_ref = actor_ref_with_role
+    _registry._load = load_fail_closed
+    _registry._png_metadata = verified_png_metadata
+    setattr(_registry, _INSTALL_MARKER, True)
+
+
+__all__ = ["install_visual_baseline_registry_guard"]
