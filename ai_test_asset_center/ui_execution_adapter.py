@@ -138,6 +138,30 @@ def _page_agent_request_result(
     }
 
 
+def _plan_with_start_url(
+    plan: dict[str, Any],
+    start_url: str,
+) -> dict[str, Any]:
+    """Bind request navigation without mutating an unrelated first plan step.
+
+    A visual or responsive plan commonly starts with ``set_viewport``. The old
+    adapter added ``url`` to whatever the first step happened to be, which left
+    the browser on ``about:blank`` because only ``goto`` consumes that field.
+    Existing leading ``goto`` steps with an empty URL are completed; every other
+    plan receives a new explicit navigation step at position one.
+    """
+    target = str(start_url or "").strip()
+    if not target:
+        return plan
+    steps = [dict(_as_dict(step)) for step in _as_list(plan.get("steps"))]
+    if steps and str(steps[0].get("action") or "").strip().lower() == "goto":
+        if not str(steps[0].get("url") or "").strip():
+            steps[0]["url"] = target
+    else:
+        steps.insert(0, {"action": "goto", "url": target})
+    return {**plan, "steps": steps}
+
+
 def _playwright_request_result(
     project_id: str,
     request: dict[str, Any],
@@ -159,12 +183,7 @@ def _playwright_request_result(
     if plan_mode != request_mode:
         return _blocked_request_result(request, "UI_EXECUTION_MODE_MISMATCH", root=root)
     plan = {**plan, "execution_mode": request_mode}
-    if request.get("start_url"):
-        steps = _as_list(plan.get("steps"))
-        if steps and not _as_dict(steps[0]).get("url"):
-            steps = [dict(_as_dict(step)) for step in steps]
-            steps[0]["url"] = request["start_url"]
-            plan = {**plan, "steps": steps}
+    plan = _plan_with_start_url(plan, str(request.get("start_url") or ""))
     try:
         result = execute_browser_plan(
             project_id,
