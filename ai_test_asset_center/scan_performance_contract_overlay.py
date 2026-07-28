@@ -3,6 +3,9 @@
 The stable ``external_signal_requests`` channel is reused, but admission is strict: only rows
 explicitly typed as a formal performance/latency contract are considered. Ordinary telemetry,
 monitoring and health-check requests remain outside formal defect authority.
+
+The first increment measures successful GET/HEAD latency only. Functional non-2xx responses,
+retries, load, throughput and long-duration stability are deliberately outside this contract.
 """
 from __future__ import annotations
 
@@ -21,6 +24,7 @@ _ALLOWED_TYPES = frozenset({
     "latency_budget_contract",
     "source_declared_latency_budget",
 })
+_SAFE_METHODS = frozenset({"GET", "HEAD"})
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -108,6 +112,8 @@ def _normalize(raw: dict[str, Any], *, index: int) -> tuple[dict[str, Any] | Non
     operation_path = _text(row.get("operation_path") or row.get("api_path") or row.get("endpoint"))
     if not operation_ref and not (method and operation_path):
         return None, [_gap(contract_id, "FORMAL_PERFORMANCE_OPERATION_IDENTITY_MISSING", refs)]
+    if not operation_ref and method not in _SAFE_METHODS:
+        return None, [_gap(contract_id, "FORMAL_PERFORMANCE_GET_OR_HEAD_REQUIRED", refs)]
     actor_ref = _text(row.get("actor_ref") or row.get("actor_id"))
     actor_role = _text(row.get("actor_role") or row.get("role"))
     if not actor_ref and not actor_role:
@@ -129,10 +135,10 @@ def _normalize(raw: dict[str, Any], *, index: int) -> tuple[dict[str, Any] | Non
         return None, [_gap(contract_id, "FORMAL_PERFORMANCE_PERCENTILE_INVALID", refs)]
     if max_latency_ms <= 0 or max_latency_ms > 120_000:
         return None, [_gap(contract_id, "FORMAL_PERFORMANCE_THRESHOLD_INVALID", refs)]
-    if max_error_rate < 0 or max_error_rate > 1:
-        return None, [_gap(contract_id, "FORMAL_PERFORMANCE_ERROR_RATE_INVALID", refs)]
-    if expected_status_class not in {2, 3, 4, 5}:
-        return None, [_gap(contract_id, "FORMAL_PERFORMANCE_STATUS_CLASS_INVALID", refs)]
+    if max_error_rate != 0:
+        return None, [_gap(contract_id, "FORMAL_PERFORMANCE_ZERO_ERROR_RATE_REQUIRED", refs)]
+    if expected_status_class != 2:
+        return None, [_gap(contract_id, "FORMAL_PERFORMANCE_SUCCESS_STATUS_CLASS_REQUIRED", refs)]
 
     normalized = {
         **row,
@@ -145,8 +151,8 @@ def _normalize(raw: dict[str, Any], *, index: int) -> tuple[dict[str, Any] | Non
         "warmup_count": warmup_count,
         "percentile": percentile,
         "max_latency_ms": max_latency_ms,
-        "max_error_rate": max_error_rate,
-        "expected_status_class": expected_status_class,
+        "max_error_rate": 0.0,
+        "expected_status_class": 2,
         "status": "accepted",
         "derivation": "explicit",
         "confidence": 1.0,
@@ -215,11 +221,13 @@ def overlay_scan_performance_contracts(
     receipt = {
         "schema_version": OVERLAY_SCHEMA,
         "status": "OVERLAID" if added else "BLOCKED" if raw_contracts else "NOT_REQUESTED",
+        "scan_contract_count": len(raw_contracts),
         "explicit_contract_count": len(explicit),
         "typed_external_contract_count": len(external),
         "contract_added_count": added,
         "coverage_gap_count": len(gaps),
         "telemetry_inferred_as_contract": False,
+        "functional_non_2xx_judged_as_performance": False,
     }
     merged["scan_performance_contract_overlay_receipt"] = receipt
     return merged, receipt
