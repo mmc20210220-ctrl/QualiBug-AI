@@ -13,6 +13,9 @@ from .enterprise_knowledge_center._formal_ui_browser_matrix_guard import (
     SUPPORTED_ENGINES,
 )
 from .formal_ui_surface import EVIDENCE_KEY, OBSERVER_ID, RISK_FAMILY
+from .professional_ui_accessibility_matrix_guard import (
+    install_professional_ui_accessibility_matrix_guard,
+)
 from .professional_ui_browser_matrix_launch_guard import (
     install_professional_ui_browser_matrix_launch_guard,
 )
@@ -155,10 +158,11 @@ def _matrix_projection(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def install_professional_ui_browser_matrix_coverage() -> None:
-    # Launch, verdict and content-address integrity must be active before the
-    # coverage projection starts consuming matrix receipts.
+    # Launch, verdict, accessibility completeness and content-address integrity
+    # must be active before coverage consumes matrix receipts.
     install_professional_ui_browser_matrix_launch_guard()
     install_professional_ui_browser_matrix_verdict_guard()
+    install_professional_ui_accessibility_matrix_guard()
     if getattr(_coverage, _INSTALL_MARKER, False):
         return
     original = getattr(
@@ -178,6 +182,7 @@ def install_professional_ui_browser_matrix_coverage() -> None:
             "cross_browser_matrix_engines": sorted(SUPPORTED_ENGINES),
             "device_profile_matrix_supported": True,
             "matrix_property_held_requires_all_profiles": True,
+            "matrix_accessibility_complete_observation_required": True,
             "matrix_violation_can_be_profile_specific": True,
             "matrix_runtime_failure_is_violation": False,
             "matrix_bundled_browser_engines_required": True,
