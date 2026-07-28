@@ -29,6 +29,16 @@ from ai_test_asset_center.professional_ui_responsive_accessibility import (
 from ai_test_asset_center.professional_ui_visual_baseline_governance import (
     install_visual_baseline_governance,
 )
+from ai_test_asset_center.professional_ui_visual_determinism_guard import (
+    FONT_READINESS,
+    RENDERER_PROFILE,
+    SCROLL_ORIGIN,
+    install_visual_determinism_guard,
+)
+from ai_test_asset_center.professional_ui_visual_image_guard import (
+    MAX_IMAGE_WIDTH,
+    install_visual_image_guard,
+)
 
 
 def _install_visual_chain() -> None:
@@ -39,6 +49,8 @@ def _install_visual_chain() -> None:
     install_professional_ui_responsive_accessibility()
     visual.install_professional_ui_visual_baseline()
     install_visual_baseline_governance()
+    install_visual_image_guard()
+    install_visual_determinism_guard()
 
 
 def _png_bytes(
@@ -84,6 +96,9 @@ def _step(data: bytes, **overrides: Any) -> dict[str, Any]:
         "channel_tolerance": 0,
         "full_page": False,
         "animations_disabled": True,
+        "renderer_profile": RENDERER_PROFILE,
+        "scroll_origin": SCROLL_ORIGIN,
+        "font_readiness": FONT_READINESS,
         "mask_selectors": [],
         "mask_locator_intents": [],
         "mask_regions": [],
@@ -104,12 +119,32 @@ class _EmptyLocator:
 
 
 class _FakePage:
-    def __init__(self, screenshot: bytes) -> None:
+    def __init__(
+        self,
+        screenshot: bytes,
+        *,
+        render_state: dict[str, Any] | None = None,
+        evaluate_error: Exception | None = None,
+    ) -> None:
         self._screenshot = screenshot
+        self._render_state = render_state or {
+            "ready_state": "complete",
+            "font_status": "loaded",
+            "scroll_x": 0,
+            "scroll_y": 0,
+        }
+        self._evaluate_error = evaluate_error
         self.screenshot_calls: list[dict[str, Any]] = []
+        self.evaluate_calls: list[str] = []
 
     def locator(self, selector: str) -> _EmptyLocator:
         return _EmptyLocator()
+
+    def evaluate(self, script: str) -> dict[str, Any]:
+        self.evaluate_calls.append(script)
+        if self._evaluate_error is not None:
+            raise self._evaluate_error
+        return dict(self._render_state)
 
     def screenshot(self, **kwargs: Any) -> bytes:
         self.screenshot_calls.append(dict(kwargs))
@@ -209,6 +244,40 @@ def test_visual_source_contract_rejects_arbitrary_png_namespace() -> None:
     )
 
 
+def test_visual_source_contract_requires_renderer_font_and_scroll_profile() -> None:
+    baseline = _png_bytes()
+    step = _step(baseline)
+    step.pop("renderer_profile")
+    step.pop("font_readiness")
+    step.pop("scroll_origin")
+    contract = {
+        "contract_id": "visual-missing-render-profile",
+        "operation_ref": "get-orders-page",
+        "actor_role": "public",
+        "ui_request": {
+            "request_id": "visual-missing-render-profile",
+            "provider": "playwright_browser_plan",
+            "start_url": "/orders",
+            "execution_mode": "safe_read_only",
+            "browser_plan": {
+                "execution_mode": "safe_read_only",
+                "steps": [{"action": "goto", "url": "/orders"}, step],
+            },
+        },
+    }
+
+    contracts, gaps = extract_formal_ui_contracts(
+        json.dumps({"ui_formal_contracts": [contract]}),
+        source_id="ui-design-orders",
+    )
+
+    assert contracts == []
+    requirements = gaps[0]["missing_requirements"]
+    assert any("browser_visual_renderer_profile_invalid" in row for row in requirements)
+    assert any("browser_visual_font_readiness_invalid" in row for row in requirements)
+    assert any("browser_visual_scroll_origin_invalid" in row for row in requirements)
+
+
 def test_visual_step_validation_requires_hash_budget_mode_and_governed_scope() -> None:
     _install_visual_chain()
     baseline = _png_bytes()
@@ -243,6 +312,13 @@ def test_visual_step_validation_requires_hash_budget_mode_and_governed_scope() -
         visual._validate_visual_step(
             _step(baseline, animations_disabled=False)
         )
+    with pytest.raises(
+        visual._professional._browser.BrowserExecutionError,
+        match=r"^browser_visual_renderer_profile_invalid$",
+    ):
+        visual._validate_visual_step(
+            _step(baseline, renderer_profile="firefox-device-pixels")
+        )
 
 
 def test_identical_visual_baseline_produces_deterministic_observation(
@@ -264,7 +340,12 @@ def test_identical_visual_baseline_produces_deterministic_observation(
     assert receipt["raw_pixels_in_receipt"] is False
     assert receipt["ai_visual_judgement_used"] is False
     assert receipt["baseline_auto_updated"] is False
+    assert receipt["renderer_profile"] == RENDERER_PROFILE
+    assert receipt["font_readiness"] == FONT_READINESS
+    assert receipt["scroll_origin"] == SCROLL_ORIGIN
+    assert receipt["rendering_preconditions_observed"] is True
     assert observations == [receipt]
+    assert len(page.evaluate_calls) == 1
     assert page.screenshot_calls == [{
         "full_page": False,
         "animations": "disabled",
@@ -307,6 +388,7 @@ def test_visual_pixel_change_over_budget_is_typed_violation(
     )
     assert observation["changed_pixel_count"] == 1
     assert observation["changed_pixel_ratio"] == pytest.approx(0.01)
+    assert observation["rendering_preconditions_observed"] is True
     assert observation["change_bounding_box"] == {
         "x": 0,
         "y": 0,
@@ -389,6 +471,7 @@ def test_visual_dimension_mismatch_is_typed_violation(tmp_path: Path) -> None:
     assert observation["dimension_match"] is False
     assert observation["baseline_width"] == 10
     assert observation["current_width"] == 11
+    assert observation["rendering_preconditions_observed"] is True
 
 
 def test_missing_or_hash_mismatched_baseline_is_indeterminate(
@@ -415,6 +498,7 @@ def test_missing_or_hash_mismatched_baseline_is_indeterminate(
 
     assert missing["status"] == "INDETERMINATE"
     assert missing["reason_code"] == "UI_VISUAL_BASELINE_NOT_FOUND"
+    assert missing["rendering_preconditions_observed"] is True
 
     _baseline(tmp_path, data=baseline)
     runtime_token = visual._RUNTIME_CONTEXT.set({
@@ -439,6 +523,72 @@ def test_missing_or_hash_mismatched_baseline_is_indeterminate(
     assert mismatch["status"] == "INDETERMINATE"
     assert mismatch["reason_code"] == "UI_VISUAL_BASELINE_HASH_MISMATCH"
     assert mismatch["raw_pixels_in_receipt"] is False
+    assert mismatch["rendering_preconditions_observed"] is True
+
+
+def test_rendering_precondition_failure_is_indeterminate_before_screenshot(
+    tmp_path: Path,
+) -> None:
+    _install_visual_chain()
+    baseline = _png_bytes()
+    _baseline(tmp_path, data=baseline)
+    page = _FakePage(
+        baseline,
+        render_state={
+            "ready_state": "complete",
+            "font_status": "loading",
+            "scroll_x": 0,
+            "scroll_y": 0,
+        },
+    )
+    runtime_token = visual._RUNTIME_CONTEXT.set({
+        "root": str(tmp_path),
+        "project": "visual-project",
+    })
+    observations_token = visual._OBSERVATIONS.set([])
+    try:
+        with pytest.raises(
+            visual.VisualBaselineObservationError,
+            match=r"^UI_VISUAL_FONTS_NOT_READY$",
+        ):
+            visual._execute_visual_baseline(page, _step(baseline))
+        observation = dict(visual._OBSERVATIONS.get()[0])
+    finally:
+        visual._OBSERVATIONS.reset(observations_token)
+        visual._RUNTIME_CONTEXT.reset(runtime_token)
+
+    assert observation["status"] == "INDETERMINATE"
+    assert observation["reason_code"] == "UI_VISUAL_FONTS_NOT_READY"
+    assert observation["rendering_preconditions_observed"] is False
+    assert page.screenshot_calls == []
+
+
+def test_image_guard_rejects_oversized_dimensions_before_load(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_visual_chain()
+
+    class OversizedImage:
+        format = "PNG"
+        size = (MAX_IMAGE_WIDTH + 1, 1)
+        loaded = False
+
+        def load(self) -> None:
+            self.loaded = True
+
+        def convert(self, mode: str) -> "OversizedImage":
+            return self
+
+    image = OversizedImage()
+    monkeypatch.setattr(Image, "open", lambda stream: image)
+
+    with pytest.raises(
+        visual.VisualBaselineObservationError,
+        match=r"^UI_VISUAL_DECODE_DIMENSION_LIMIT_EXCEEDED$",
+    ):
+        visual._open_rgba(_png_bytes())
+
+    assert image.loaded is False
 
 
 def test_visual_observer_attaches_only_typed_comparison_evidence(
@@ -479,7 +629,11 @@ def test_visual_observer_attaches_only_typed_comparison_evidence(
     assert evidence["visual_baseline_observation_count"] == 1
     assert evidence["visual_baseline_observations"] == [observation]
     assert evidence["visual_ai_judgement_consumed"] is False
-    assert "pixels" not in json.dumps(evidence)
+    assert evidence["visual_baseline_observations"][0][
+        "raw_pixels_in_receipt"
+    ] is False
+    assert "current_screenshot_bytes" not in evidence
+    assert "baseline_bytes" not in evidence
 
 
 def test_visual_coverage_reports_typed_observation_and_governed_namespace() -> None:
@@ -515,6 +669,8 @@ def test_visual_coverage_reports_typed_observation_and_governed_namespace() -> N
                                     ),
                                     "dimension_match": True,
                                     "changed_pixel_ratio": 0.01,
+                                    "renderer_profile": RENDERER_PROFILE,
+                                    "rendering_preconditions_observed": True,
                                     "ai_visual_judgement_used": False,
                                 }],
                             },
