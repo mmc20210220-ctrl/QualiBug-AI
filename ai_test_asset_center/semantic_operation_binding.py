@@ -1,8 +1,8 @@
 """Exact semantic rule-to-operation binding for the formal discovery mainline.
 
 The agent semantic linker is allowed to select only existing rule and interface
-identities.  This module turns those accepted identities into Behavior IR
-operation joins.  It never matches text, paths, fields, states, or business
+identities. This module turns those accepted identities into Behavior IR
+operation joins. It never matches text, paths, fields, states, or business
 vocabulary; unresolved or ambiguous identities remain visible in the receipt.
 """
 from __future__ import annotations
@@ -243,7 +243,6 @@ def bind_accepted_semantic_operations(
                         else "explicit"
                     ),
                     source_relationship_ref=edge_ref,
-                    semantic_identity_only=True,
                 )
                 added_relations.append(relation)
                 existing_relation_keys.add(relation_key)
