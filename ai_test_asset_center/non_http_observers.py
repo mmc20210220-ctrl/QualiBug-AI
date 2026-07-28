@@ -68,7 +68,10 @@ def _process_timeline_handler(envelope: dict[str, Any]) -> dict[str, Any]:
         if event_id:
             event_ids.append(event_id)
         for key in (
+            "occurred_at",
             "timestamp",
+            "transport_started",
+            "transport_completed",
             "started_at",
             "started_at_utc",
             "completed_at",
@@ -77,7 +80,12 @@ def _process_timeline_handler(envelope: dict[str, Any]) -> dict[str, Any]:
             value = row.get(key)
             if value not in (None, ""):
                 timestamps.append(str(value))
-        status = _text(row.get("status") or row.get("outcome"))
+        status = _text(
+            row.get("event_type")
+            or row.get("final_status")
+            or row.get("status")
+            or row.get("outcome")
+        )
         if status:
             statuses.append(status)
 
