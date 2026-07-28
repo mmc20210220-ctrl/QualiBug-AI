@@ -11,6 +11,7 @@ those symbols with stable additive wrappers:
 * professional source-declared read-only UI/UX assertions;
 * responsive viewport/media and deterministic accessibility checks;
 * immutable deterministic visual baseline regression;
+* governed Chromium/Firefox/WebKit desktop and device-profile matrices;
 * governed non-production UI interaction with rendered and persistent cleanup equivalence;
 * minimized visual and interactive evidence with no HAR or Playwright trace persistence;
 * source-declared asynchronous event contracts;
@@ -37,6 +38,13 @@ from .formal_performance_surface import install_formal_performance_surface
 from .formal_ui_surface import install_formal_ui_surface
 from .formal_ui_surface_guard import install_formal_ui_read_only_guard
 from .non_http_observers import install_non_http_observers
+from .professional_ui_browser_matrix import (
+    install_professional_ui_browser_matrix,
+    install_professional_ui_browser_matrix_runtime,
+)
+from .professional_ui_browser_matrix_integrity import (
+    install_professional_ui_browser_matrix_integrity,
+)
 from .professional_ui_contract_guard import install_professional_ui_contract_guard
 from .professional_ui_interaction_cleanup import install_controlled_ui_interaction
 from .professional_ui_interaction_contract_guard import (
@@ -102,14 +110,12 @@ _ORIGINAL_MARKER = "_qualibug_original_behavior_ir_builder"
 
 # Register formal surfaces before any obligation or experiment is compiled. Every installer is
 # idempotent and performs no target I/O. The UI installers extend one authority in order:
-# read-only assertions, scan admission, responsive/accessibility behavior, deterministic visual
-# comparison, project namespace governance, decode limits, renderer stabilization and visual
-# evidence privacy, governed interaction, plan-level checks, interaction evidence minimization,
-# persistent cleanup observation, visual viewport binding over the final validators, active
-# visual-registry identity binding, then direct-scan admission parity. Installing visual
-# evidence/observer wrappers before interaction means the governed interaction dispatcher
-# preserves them for read-only visual requests, while interactive visual findings still inherit
-# cleanup equivalence.
+# read-only assertions, responsive/accessibility behavior, deterministic visual comparison,
+# project namespace governance, decode limits and renderer stabilization; matrix engine selection
+# is installed before evidence wrappers so Chromium/Firefox/WebKit receive the same privacy policy.
+# Governed interaction, persistent cleanup and visual-registry identity remain unchanged. Matrix
+# request expansion is installed last over the final adapter and then its registered observer slot
+# is rebound, so no profile can bypass existing validators, cleanup or Oracle authority.
 install_non_http_observers()
 install_formal_ui_surface()
 install_formal_ui_read_only_guard()
@@ -120,6 +126,7 @@ install_professional_ui_visual_baseline()
 install_visual_baseline_governance()
 install_visual_image_guard()
 install_visual_determinism_guard()
+install_professional_ui_browser_matrix_runtime()
 install_visual_evidence_privacy()
 install_controlled_ui_interaction()
 install_controlled_ui_interaction_contract_guard()
@@ -127,6 +134,8 @@ install_controlled_ui_interaction_privacy_guard()
 install_persistent_ui_cleanup_probe()
 install_visual_viewport_guard()
 install_visual_registry_binding()
+install_professional_ui_browser_matrix()
+install_professional_ui_browser_matrix_integrity()
 install_scan_ui_interaction_contract_guard()
 install_formal_event_surface()
 install_formal_event_capability_guard()
