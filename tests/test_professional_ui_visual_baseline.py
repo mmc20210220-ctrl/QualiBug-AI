@@ -39,6 +39,12 @@ from ai_test_asset_center.professional_ui_visual_image_guard import (
     MAX_IMAGE_WIDTH,
     install_visual_image_guard,
 )
+from ai_test_asset_center.professional_ui_visual_viewport_guard import (
+    install_visual_viewport_guard,
+)
+
+VIEWPORT_WIDTH = 1280
+VIEWPORT_HEIGHT = 720
 
 
 def _install_visual_chain() -> None:
@@ -51,6 +57,7 @@ def _install_visual_chain() -> None:
     install_visual_baseline_governance()
     install_visual_image_guard()
     install_visual_determinism_guard()
+    install_visual_viewport_guard()
 
 
 def _png_bytes(
@@ -87,6 +94,14 @@ def _baseline(
     return path, content
 
 
+def _viewport_step(
+    *,
+    width: int = VIEWPORT_WIDTH,
+    height: int = VIEWPORT_HEIGHT,
+) -> dict[str, Any]:
+    return {"action": "set_viewport", "width": width, "height": height}
+
+
 def _step(data: bytes, **overrides: Any) -> dict[str, Any]:
     row: dict[str, Any] = {
         "action": visual.ACTION,
@@ -99,6 +114,8 @@ def _step(data: bytes, **overrides: Any) -> dict[str, Any]:
         "renderer_profile": RENDERER_PROFILE,
         "scroll_origin": SCROLL_ORIGIN,
         "font_readiness": FONT_READINESS,
+        "viewport_width": VIEWPORT_WIDTH,
+        "viewport_height": VIEWPORT_HEIGHT,
         "mask_selectors": [],
         "mask_locator_intents": [],
         "mask_regions": [],
@@ -125,6 +142,7 @@ class _FakePage:
         *,
         render_state: dict[str, Any] | None = None,
         evaluate_error: Exception | None = None,
+        viewport_size: dict[str, int] | None = None,
     ) -> None:
         self._screenshot = screenshot
         self._render_state = render_state or {
@@ -134,6 +152,10 @@ class _FakePage:
             "scroll_y": 0,
         }
         self._evaluate_error = evaluate_error
+        self.viewport_size = viewport_size or {
+            "width": VIEWPORT_WIDTH,
+            "height": VIEWPORT_HEIGHT,
+        }
         self.screenshot_calls: list[dict[str, Any]] = []
         self.evaluate_calls: list[str] = []
 
@@ -176,9 +198,8 @@ def _execute(
     return receipt, observations, page
 
 
-def test_visual_contract_is_admitted_by_enterprise_parser_without_runtime_import_order() -> None:
-    baseline = _png_bytes()
-    contract = {
+def _source_contract(baseline: bytes, visual_step: dict[str, Any]) -> dict[str, Any]:
+    return {
         "contract_id": "visual-orders",
         "operation_ref": "get-orders-page",
         "actor_role": "public",
@@ -191,11 +212,17 @@ def test_visual_contract_is_admitted_by_enterprise_parser_without_runtime_import
                 "execution_mode": "safe_read_only",
                 "steps": [
                     {"action": "goto", "url": "/orders"},
-                    _step(baseline),
+                    _viewport_step(),
+                    visual_step,
                 ],
             },
         },
     }
+
+
+def test_visual_contract_is_admitted_by_enterprise_parser_without_runtime_import_order() -> None:
+    baseline = _png_bytes()
+    contract = _source_contract(baseline, _step(baseline))
 
     contracts, gaps = extract_formal_ui_contracts(
         json.dumps({"ui_formal_contracts": [contract]}),
@@ -208,29 +235,15 @@ def test_visual_contract_is_admitted_by_enterprise_parser_without_runtime_import
         row["action"]
         for row in contracts[0]["ui_request"]["browser_plan"]["steps"]
     ]
-    assert actions == ["goto", visual.ACTION]
+    assert actions == ["goto", "set_viewport", visual.ACTION]
 
 
 def test_visual_source_contract_rejects_arbitrary_png_namespace() -> None:
     baseline = _png_bytes()
-    contract = {
-        "contract_id": "visual-arbitrary-png",
-        "operation_ref": "get-orders-page",
-        "actor_role": "public",
-        "ui_request": {
-            "request_id": "visual-arbitrary-png",
-            "provider": "playwright_browser_plan",
-            "start_url": "/orders",
-            "execution_mode": "safe_read_only",
-            "browser_plan": {
-                "execution_mode": "safe_read_only",
-                "steps": [
-                    {"action": "goto", "url": "/orders"},
-                    _step(baseline, baseline_ref="screenshots/orders.png"),
-                ],
-            },
-        },
-    }
+    contract = _source_contract(
+        baseline,
+        _step(baseline, baseline_ref="screenshots/orders.png"),
+    )
 
     contracts, gaps = extract_formal_ui_contracts(
         json.dumps({"ui_formal_contracts": [contract]}),
@@ -250,21 +263,7 @@ def test_visual_source_contract_requires_renderer_font_and_scroll_profile() -> N
     step.pop("renderer_profile")
     step.pop("font_readiness")
     step.pop("scroll_origin")
-    contract = {
-        "contract_id": "visual-missing-render-profile",
-        "operation_ref": "get-orders-page",
-        "actor_role": "public",
-        "ui_request": {
-            "request_id": "visual-missing-render-profile",
-            "provider": "playwright_browser_plan",
-            "start_url": "/orders",
-            "execution_mode": "safe_read_only",
-            "browser_plan": {
-                "execution_mode": "safe_read_only",
-                "steps": [{"action": "goto", "url": "/orders"}, step],
-            },
-        },
-    }
+    contract = _source_contract(baseline, step)
 
     contracts, gaps = extract_formal_ui_contracts(
         json.dumps({"ui_formal_contracts": [contract]}),
@@ -278,6 +277,39 @@ def test_visual_source_contract_requires_renderer_font_and_scroll_profile() -> N
     assert any("browser_visual_scroll_origin_invalid" in row for row in requirements)
 
 
+def test_visual_source_contract_requires_matching_preceding_viewport() -> None:
+    baseline = _png_bytes()
+    contract = _source_contract(baseline, _step(baseline))
+    contract["ui_request"]["browser_plan"]["steps"] = [
+        {"action": "goto", "url": "/orders"},
+        _step(baseline),
+    ]
+    contracts, gaps = extract_formal_ui_contracts(
+        json.dumps({"ui_formal_contracts": [contract]}),
+        source_id="ui-design-orders",
+    )
+    assert contracts == []
+    assert any(
+        "browser_visual_viewport_configuration_missing" in row
+        for row in gaps[0]["missing_requirements"]
+    )
+
+    contract = _source_contract(baseline, _step(baseline))
+    contract["ui_request"]["browser_plan"]["steps"][1] = _viewport_step(
+        width=1024,
+        height=768,
+    )
+    contracts, gaps = extract_formal_ui_contracts(
+        json.dumps({"ui_formal_contracts": [contract]}),
+        source_id="ui-design-orders",
+    )
+    assert contracts == []
+    assert any(
+        "browser_visual_viewport_configuration_mismatch" in row
+        for row in gaps[0]["missing_requirements"]
+    )
+
+
 def test_visual_step_validation_requires_hash_budget_mode_and_governed_scope() -> None:
     _install_visual_chain()
     baseline = _png_bytes()
@@ -285,6 +317,8 @@ def test_visual_step_validation_requires_hash_budget_mode_and_governed_scope() -
 
     visual._validate_visual_step(valid)
     assert valid["baseline_ref"] == "visual_baselines/orders.png"
+    assert valid["viewport_width"] == VIEWPORT_WIDTH
+    assert valid["viewport_height"] == VIEWPORT_HEIGHT
 
     with pytest.raises(
         visual._professional._browser.BrowserExecutionError,
@@ -319,6 +353,47 @@ def test_visual_step_validation_requires_hash_budget_mode_and_governed_scope() -
         visual._validate_visual_step(
             _step(baseline, renderer_profile="firefox-device-pixels")
         )
+    with pytest.raises(
+        visual._professional._browser.BrowserExecutionError,
+        match=r"^browser_visual_viewport_width_invalid$",
+    ):
+        visual._validate_visual_step(_step(baseline, viewport_width=100))
+
+
+def test_readonly_plan_requires_matching_visual_viewport() -> None:
+    _install_visual_chain()
+    baseline = _png_bytes()
+    runtime = {
+        "status": "approved",
+        "approved_base_url": "https://example.test",
+    }
+    valid = {
+        "execution_mode": "safe_read_only",
+        "steps": [
+            {"action": "goto", "url": "/orders"},
+            _viewport_step(),
+            _step(baseline),
+        ],
+    }
+    normalized = professional_ui_readonly.validate_professional_browser_plan(
+        valid,
+        runtime,
+    )
+    assert normalized["steps"][1]["width"] == VIEWPORT_WIDTH
+
+    invalid = {
+        **valid,
+        "steps": [
+            {"action": "goto", "url": "/orders"},
+            _viewport_step(width=1024, height=768),
+            _step(baseline),
+        ],
+    }
+    with pytest.raises(
+        visual._professional._browser.BrowserExecutionError,
+        match=r"^browser_visual_viewport_configuration_mismatch$",
+    ):
+        professional_ui_readonly.validate_professional_browser_plan(invalid, runtime)
 
 
 def test_identical_visual_baseline_produces_deterministic_observation(
@@ -344,6 +419,12 @@ def test_identical_visual_baseline_produces_deterministic_observation(
     assert receipt["font_readiness"] == FONT_READINESS
     assert receipt["scroll_origin"] == SCROLL_ORIGIN
     assert receipt["rendering_preconditions_observed"] is True
+    assert receipt["declared_viewport"] == {
+        "width": VIEWPORT_WIDTH,
+        "height": VIEWPORT_HEIGHT,
+    }
+    assert receipt["actual_viewport"] == receipt["declared_viewport"]
+    assert receipt["viewport_match"] is True
     assert observations == [receipt]
     assert len(page.evaluate_calls) == 1
     assert page.screenshot_calls == [{
@@ -352,6 +433,38 @@ def test_identical_visual_baseline_produces_deterministic_observation(
         "caret": "hide",
         "scale": "css",
     }]
+
+
+def test_runtime_viewport_mismatch_is_indeterminate_before_rendering(
+    tmp_path: Path,
+) -> None:
+    _install_visual_chain()
+    baseline = _png_bytes()
+    _baseline(tmp_path, data=baseline)
+    page = _FakePage(
+        baseline,
+        viewport_size={"width": 1024, "height": 768},
+    )
+    runtime_token = visual._RUNTIME_CONTEXT.set({
+        "root": str(tmp_path),
+        "project": "visual-project",
+    })
+    observations_token = visual._OBSERVATIONS.set([])
+    try:
+        with pytest.raises(
+            visual.VisualBaselineObservationError,
+            match=r"^UI_VISUAL_VIEWPORT_RUNTIME_MISMATCH$",
+        ):
+            visual._execute_visual_baseline(page, _step(baseline))
+        observation = dict(visual._OBSERVATIONS.get()[0])
+    finally:
+        visual._OBSERVATIONS.reset(observations_token)
+        visual._RUNTIME_CONTEXT.reset(runtime_token)
+
+    assert observation["status"] == "INDETERMINATE"
+    assert observation["actual_viewport"] == {"width": 1024, "height": 768}
+    assert page.evaluate_calls == []
+    assert page.screenshot_calls == []
 
 
 def test_visual_pixel_change_over_budget_is_typed_violation(
@@ -389,6 +502,7 @@ def test_visual_pixel_change_over_budget_is_typed_violation(
     assert observation["changed_pixel_count"] == 1
     assert observation["changed_pixel_ratio"] == pytest.approx(0.01)
     assert observation["rendering_preconditions_observed"] is True
+    assert observation["viewport_match"] is True
     assert observation["change_bounding_box"] == {
         "x": 0,
         "y": 0,
@@ -472,6 +586,7 @@ def test_visual_dimension_mismatch_is_typed_violation(tmp_path: Path) -> None:
     assert observation["baseline_width"] == 10
     assert observation["current_width"] == 11
     assert observation["rendering_preconditions_observed"] is True
+    assert observation["viewport_match"] is True
 
 
 def test_missing_or_hash_mismatched_baseline_is_indeterminate(
@@ -499,6 +614,7 @@ def test_missing_or_hash_mismatched_baseline_is_indeterminate(
     assert missing["status"] == "INDETERMINATE"
     assert missing["reason_code"] == "UI_VISUAL_BASELINE_NOT_FOUND"
     assert missing["rendering_preconditions_observed"] is True
+    assert missing["viewport_match"] is True
 
     _baseline(tmp_path, data=baseline)
     runtime_token = visual._RUNTIME_CONTEXT.set({
@@ -524,6 +640,7 @@ def test_missing_or_hash_mismatched_baseline_is_indeterminate(
     assert mismatch["reason_code"] == "UI_VISUAL_BASELINE_HASH_MISMATCH"
     assert mismatch["raw_pixels_in_receipt"] is False
     assert mismatch["rendering_preconditions_observed"] is True
+    assert mismatch["viewport_match"] is True
 
 
 def test_rendering_precondition_failure_is_indeterminate_before_screenshot(
@@ -560,6 +677,7 @@ def test_rendering_precondition_failure_is_indeterminate_before_screenshot(
     assert observation["status"] == "INDETERMINATE"
     assert observation["reason_code"] == "UI_VISUAL_FONTS_NOT_READY"
     assert observation["rendering_preconditions_observed"] is False
+    assert observation["viewport_match"] is True
     assert page.screenshot_calls == []
 
 
@@ -647,7 +765,7 @@ def test_visual_coverage_reports_typed_observation_and_governed_namespace() -> N
                 "property": {
                     "ui_request": {
                         "browser_plan": {
-                            "steps": [_step(baseline)],
+                            "steps": [_viewport_step(), _step(baseline)],
                         },
                     },
                 },
@@ -670,6 +788,15 @@ def test_visual_coverage_reports_typed_observation_and_governed_namespace() -> N
                                     "dimension_match": True,
                                     "changed_pixel_ratio": 0.01,
                                     "renderer_profile": RENDERER_PROFILE,
+                                    "declared_viewport": {
+                                        "width": VIEWPORT_WIDTH,
+                                        "height": VIEWPORT_HEIGHT,
+                                    },
+                                    "actual_viewport": {
+                                        "width": VIEWPORT_WIDTH,
+                                        "height": VIEWPORT_HEIGHT,
+                                    },
+                                    "viewport_match": True,
                                     "rendering_preconditions_observed": True,
                                     "ai_visual_judgement_used": False,
                                 }],
