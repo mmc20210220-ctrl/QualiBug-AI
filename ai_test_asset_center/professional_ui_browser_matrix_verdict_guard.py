@@ -6,6 +6,11 @@ engine/bootstrap/runtime failures remain INDETERMINATE.  The guard also rebuilds
 the observer receipt after matrix evidence is added, because observer receipts are
 content-addressed and must never be mutated after their id is computed.
 
+Matrix execution injects profile-owned viewport/media steps.  Therefore a failed
+child's completed-step index cannot be compared with the unexpanded source plan.
+The typed failure action and code are carried in the matrix receipt and rebound to
+the existing formal UI assertion evidence without guessing a DOM target.
+
 The source contract may declare a User-Agent, but execution results retain only its
 fingerprint.  This avoids duplicating client-identifying strings into result and
 observer artifacts while preserving exact source authority in the obligation.
@@ -50,6 +55,16 @@ def _is_typed_violation(result: dict[str, Any]) -> bool:
         _text(result.get("status"), limit=40).lower() == "failed"
         and _text(result.get("reason")).startswith(_TYPED_VIOLATION_PREFIX)
     )
+
+
+def _typed_failure(reason: Any) -> tuple[str, str]:
+    text = _text(reason)
+    if not text.startswith(_TYPED_VIOLATION_PREFIX):
+        return "", ""
+    parts = text.split(":", 3)
+    action = _text(parts[1], limit=100) if len(parts) > 1 else ""
+    code = _text(parts[2], limit=160) if len(parts) > 2 else ""
+    return action, code
 
 
 def _sanitized_matrix_for_result(matrix: dict[str, Any]) -> dict[str, Any]:
@@ -103,6 +118,17 @@ def _matrix_receipt_from_children(
     output["property_held_requires_all_profiles"] = True
     output["violation_requires_one_typed_profile_failure"] = True
     output["raw_user_agent_in_receipt"] = False
+    profile_rows = [
+        copy.deepcopy(_dict(value)) for value in _list(output.get("profiles"))
+    ]
+    for index, (_profile, result, _runtime) in enumerate(child_results):
+        if index >= len(profile_rows):
+            break
+        action, code = _typed_failure(result.get("reason"))
+        profile_rows[index]["typed_failure_action"] = action
+        profile_rows[index]["typed_failure_code"] = code
+        profile_rows[index]["raw_failure_text_in_receipt"] = False
+    output["profiles"] = profile_rows
     return output
 
 
@@ -138,11 +164,14 @@ def _synthetic_blocked_receipt(
             "status": "blocked",
             "execution_status": "not_executed",
             "reason_code": _text(reason, limit=160).split(":", 1)[0],
+            "typed_failure_action": "",
+            "typed_failure_code": "",
             "completed_step_count": 0,
             "artifact_fingerprints": [],
             "duration_ms": 0,
             "raw_console_in_receipt": False,
             "raw_network_urls_in_receipt": False,
+            "raw_failure_text_in_receipt": False,
         })
     return {
         "schema_version": SCHEMA_VERSION,
@@ -177,6 +206,56 @@ def _rebuild_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
         campaign_id=_text(row.get("campaign_id")),
         execution_id=_text(row.get("execution_id")),
     )
+
+
+def _apply_matrix_verdict_to_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
+    output = copy.deepcopy(_dict(receipt))
+    evidence = _dict(output.get("evidence"))
+    ui_evidence = _dict(evidence.get(_formal.EVIDENCE_KEY))
+    matrix_receipt = _dict(ui_evidence.get("browser_matrix"))
+    if not matrix_receipt:
+        return output
+    matrix_status = _text(matrix_receipt.get("status"), limit=80)
+    if matrix_status == "VIOLATION_OBSERVED":
+        typed_profile = next(
+            (
+                _dict(row)
+                for row in _list(matrix_receipt.get("profiles"))
+                if _text(_dict(row).get("typed_failure_action"), limit=100)
+            ),
+            {},
+        )
+        ui_evidence["expectation_satisfied"] = False
+        ui_evidence["violation_observed"] = True
+        ui_evidence["failed_step_index"] = 0
+        ui_evidence["failed_expectation"] = {
+            "action": _text(typed_profile.get("typed_failure_action"), limit=100),
+            "matrix_profile_id": _text(typed_profile.get("profile_id"), limit=80),
+            "browser_engine": _text(typed_profile.get("browser_engine"), limit=20),
+        }
+        ui_evidence["failure_type"] = _text(
+            typed_profile.get("typed_failure_code"),
+            limit=160,
+        )
+        output["status"] = "OBSERVED"
+        output["reason_code"] = ""
+    elif matrix_status in {"INCOMPLETE", "PROFILE_EXECUTION_FAILED"}:
+        ui_evidence["expectation_satisfied"] = None
+        ui_evidence["violation_observed"] = False
+        output["status"] = "INDETERMINATE"
+        output["reason_code"] = (
+            "UI_BROWSER_MATRIX_PROFILE_RUNTIME_FAILED"
+            if matrix_status == "PROFILE_EXECUTION_FAILED"
+            else "UI_BROWSER_MATRIX_INCOMPLETE"
+        )
+    elif matrix_status == "ALL_PROFILES_EXECUTED":
+        ui_evidence["expectation_satisfied"] = True
+        ui_evidence["violation_observed"] = False
+        output["status"] = "OBSERVED"
+        output["reason_code"] = ""
+    evidence[_formal.EVIDENCE_KEY] = ui_evidence
+    output["evidence"] = evidence
+    return output
 
 
 def install_professional_ui_browser_matrix_verdict_guard() -> None:
@@ -258,7 +337,7 @@ def install_professional_ui_browser_matrix_verdict_guard() -> None:
         )
         if not _dict(ui_evidence.get("browser_matrix")):
             return receipt
-        return _rebuild_receipt(receipt)
+        return _rebuild_receipt(_apply_matrix_verdict_to_receipt(receipt))
 
     _matrix._aggregate_result = aggregate_with_typed_verdict
     _adapter._playwright_request_result = adapter_with_blocked_matrix_receipt
@@ -269,4 +348,8 @@ def install_professional_ui_browser_matrix_verdict_guard() -> None:
     setattr(_matrix, _INSTALL_MARKER, True)
 
 
-__all__ = ["install_professional_ui_browser_matrix_verdict_guard"]
+__all__ = [
+    "_apply_matrix_verdict_to_receipt",
+    "_rebuild_receipt",
+    "install_professional_ui_browser_matrix_verdict_guard",
+]
