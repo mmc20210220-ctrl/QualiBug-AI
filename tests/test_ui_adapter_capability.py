@@ -33,4 +33,4 @@ def test_browser_adapter_requires_explicit_runtime_declaration(tmp_path) -> None
     assert "ui_browser" in adapters
     reason = missing_declaration_reason("ui_browser")
     assert "ui_browser" in reason
-    assert "ui_formal_contracts" in reason
+    assert "runtime_contract.declared_adapters" in reason
