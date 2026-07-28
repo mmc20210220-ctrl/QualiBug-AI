@@ -2,13 +2,12 @@
 
 The planner does not infer business meaning.  It fingerprints the source, resolves
 registered adapters, and records which structural capabilities are available or still
-missing.  Supplemental adapters may be added later without changing the business
-understanding mainline.
+missing.  Supplemental adapters may be planned after primary structural gaps are known.
 """
 from __future__ import annotations
 
 import mimetypes
-from typing import Any
+from typing import Any, Iterable
 
 from .contract import (
     CAP_FONT_EVIDENCE,
@@ -16,6 +15,7 @@ from .contract import (
     CAP_HEADING_HIERARCHY,
     CAP_IMAGE_PRESENCE,
     CAP_LIST_HIERARCHY,
+    CAP_OCR,
     CAP_PAGE_LAYOUT,
     CAP_TABLE_REGION_DETECTION,
     CAP_TABLE_STRUCTURE,
@@ -26,9 +26,19 @@ from .contract import (
     MODE_PRIMARY,
     MODE_SUPPLEMENTAL,
     DocumentSource,
+    SupplementalContext,
+    text,
     unique_text,
 )
 from .registry import DocumentAdapterRegistry
+
+
+_IMAGE_SUFFIXES = {"png", "jpg", "jpeg", "tif", "tiff", "bmp", "gif", "webp"}
+_DEFERRED_CAPABILITY_BY_GAP = {
+    "SCANNED_PAGE_REQUIRES_OCR": CAP_OCR,
+    "PDF_TABLE_REGION_NOT_CELL_PARSED": CAP_TABLE_STRUCTURE,
+    "PDF_IMAGE_CONTENT_UNPARSED": "DIAGRAM_STRUCTURE",
+}
 
 
 def _detected_family(source: DocumentSource) -> tuple[str, str]:
@@ -51,12 +61,22 @@ def _detected_family(source: DocumentSource) -> tuple[str, str]:
             return "zip", "zip_container_signature"
         except Exception:
             return "zip_or_corrupt_container", "pk_signature_without_readable_zip_directory"
+    signature = source.data[:16]
+    if (
+        signature.startswith((b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF87a", b"GIF89a", b"II*\x00", b"MM\x00*", b"BM"))
+        or (signature.startswith(b"RIFF") and b"WEBP" in signature)
+    ):
+        return "image", "raster_image_signature"
     if stripped.startswith((b"{", b"[")):
         return "structured_text", "json_like_prefix"
     mime, _encoding = mimetypes.guess_type(source.filename)
+    if mime and mime.startswith("image/"):
+        return "image", "mime_guess"
     if mime and mime.startswith("text/"):
         return "text", "mime_guess"
     suffix = source.suffix.lstrip(".")
+    if suffix in _IMAGE_SUFFIXES:
+        return "image", "filename_suffix"
     return suffix or "unknown", "filename_suffix_or_unknown"
 
 
@@ -86,9 +106,39 @@ def _required_capabilities(family: str) -> list[str]:
                 CAP_HEADER_FOOTER,
             ]
         )
-    if family in {"text", "structured_text", "txt", "md", "markdown", "rst", "json", "yaml", "yml", "xml", "html", "htm", "sql", "log", "csv", "tsv"}:
+    if family == "image":
+        return unique_text(
+            [CAP_OCR, CAP_TEXT_EXTRACTION, CAP_TEXT_COORDINATES, CAP_PAGE_LAYOUT]
+        )
+    if family in {
+        "text",
+        "structured_text",
+        "txt",
+        "md",
+        "markdown",
+        "rst",
+        "json",
+        "yaml",
+        "yml",
+        "xml",
+        "html",
+        "htm",
+        "sql",
+        "log",
+        "csv",
+        "tsv",
+    }:
         return unique_text([CAP_TEXT_EXTRACTION, CAP_HEADING_HIERARCHY, CAP_LIST_HIERARCHY])
     return []
+
+
+def _adapter_row(adapter: Any, match: Any) -> dict[str, Any]:
+    return {
+        **match.to_dict(),
+        "parser_version": str(getattr(adapter, "parser_version", "")),
+        "priority": int(getattr(adapter, "priority", 0)),
+        "standalone": bool(getattr(adapter, "standalone", False)),
+    }
 
 
 def plan_document_parsing(
@@ -111,9 +161,15 @@ def plan_document_parsing(
                 continue
             selected.append(row)
             provided.update(row[1].capabilities)
-    elif fallback_rows:
-        # Generic text outranks the fail-visible unknown adapter by match score.
-        selected.append(fallback_rows[0])
+    else:
+        standalone_rows = [
+            row for row in supplemental_rows if bool(getattr(row[0], "standalone", False))
+        ]
+        if standalone_rows:
+            selected.append(standalone_rows[0])
+        elif fallback_rows:
+            # Generic text outranks the fail-visible unknown adapter by match score.
+            selected.append(fallback_rows[0])
 
     provided_capabilities = unique_text(
         capability
@@ -127,14 +183,7 @@ def plan_document_parsing(
         for adapter, match in matches
         if all(adapter.name != chosen.name for chosen, _chosen_match in selected)
     ]
-    selected_rows = [
-        {
-            **match.to_dict(),
-            "parser_version": str(getattr(adapter, "parser_version", "")),
-            "priority": int(getattr(adapter, "priority", 0)),
-        }
-        for adapter, match in selected
-    ]
+    selected_rows = [_adapter_row(adapter, match) for adapter, match in selected]
     status = "READY"
     if not selected_rows:
         status = "BLOCKED_NO_ADAPTER"
@@ -158,15 +207,67 @@ def plan_document_parsing(
         "required_capabilities": required_capabilities,
         "provided_capabilities": provided_capabilities,
         "missing_capabilities": missing_capabilities,
-        "deferred_capability_triggers": {
-            "SCANNED_PAGE_REQUIRES_OCR": "OCR",
-            "PDF_TABLE_REGION_NOT_CELL_PARSED": "TABLE_STRUCTURE",
-            "PDF_IMAGE_CONTENT_UNPARSED": "DIAGRAM_STRUCTURE_OR_VISUAL_PARSER",
-        },
+        "deferred_capability_triggers": dict(_DEFERRED_CAPABILITY_BY_GAP),
         "business_semantics_added": False,
         "document_order_is_business_flow": False,
         "filename_is_business_context": False,
     }
 
 
-__all__ = ["plan_document_parsing"]
+def plan_deferred_supplementals(
+    source: DocumentSource,
+    primary_document_ir: dict[str, Any],
+    registry: DocumentAdapterRegistry,
+    *,
+    excluded_names: Iterable[str] = (),
+) -> dict[str, Any]:
+    """Plan supplemental adapters from fail-visible primary structure gaps."""
+    trigger_gaps = [
+        dict(row)
+        for row in (primary_document_ir.get("unsupported_content") or [])
+        if isinstance(row, dict)
+        and text(row.get("reason_code") or row.get("kind")) in _DEFERRED_CAPABILITY_BY_GAP
+        and int(row.get("count") or 0) > 0
+    ]
+    requested = unique_text(
+        _DEFERRED_CAPABILITY_BY_GAP[text(row.get("reason_code") or row.get("kind"))]
+        for row in trigger_gaps
+    )
+    context = SupplementalContext(
+        primary_document_ir=dict(primary_document_ir or {}),
+        trigger_gaps=tuple(trigger_gaps),
+        requested_capabilities=tuple(requested),
+    )
+    matches = registry.supplemental_matches(
+        source,
+        context,
+        excluded_names=excluded_names,
+    )
+    selected: list[tuple[Any, Any]] = []
+    provided: set[str] = set()
+    for adapter, match in matches:
+        contribution = set(match.capabilities) & set(requested)
+        if not contribution:
+            continue
+        selected.append((adapter, match))
+        provided.update(contribution)
+    missing = sorted(set(requested) - provided)
+    status = "NOT_REQUIRED"
+    if trigger_gaps and selected:
+        status = "READY"
+    elif trigger_gaps and not selected:
+        status = "BLOCKED_REQUIRED_SUPPLEMENTAL_ADAPTER_UNAVAILABLE"
+    return {
+        "schema": "qualibug.deferred-document-parsing-plan.v1",
+        "status": status,
+        "trigger_gaps": trigger_gaps,
+        "requested_capabilities": requested,
+        "provided_capabilities": sorted(provided),
+        "missing_capabilities": missing,
+        "selected_adapters": [_adapter_row(adapter, match) for adapter, match in selected],
+        "business_semantics_added": False,
+        "document_order_is_business_flow": False,
+    }
+
+
+__all__ = ["plan_document_parsing", "plan_deferred_supplementals"]
