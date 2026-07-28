@@ -12,6 +12,10 @@ export type AccessibilityRuleId =
   | 'role_img_has_name'
   | 'aria_hidden_focusable'
   | 'aria_reference_valid'
+  | 'aria_reference_unique'
+  | 'aria_state_value_valid'
+  | 'aria_required_state_present'
+  | 'interactive_role_focusable'
   | 'multiple_main_landmarks_named'
   | 'explicit_data_table_headers'
   | 'fieldset_legend'
@@ -60,7 +64,11 @@ export const ACCESSIBILITY_RULE_PRESETS: AccessibilityRulePreset[] = [
   { rule: 'iframe_has_title', label: 'iframe 标题', note: '可见 iframe 必须声明 title', wcag: '4.1.2 A', customOnly: false },
   { rule: 'role_img_has_name', label: '图像角色名称', note: 'role=img 的 SVG 必须命名', wcag: '1.1.1 A', customOnly: false },
   { rule: 'aria_hidden_focusable', label: '隐藏区焦点', note: 'aria-hidden 区域不能包含可聚焦对象', wcag: '4.1.2 A', customOnly: false },
-  { rule: 'aria_reference_valid', label: 'ARIA 引用', note: 'ARIA ID 引用必须真实存在', wcag: '4.1.2 A', customOnly: false },
+  { rule: 'aria_reference_valid', label: 'ARIA 引用存在', note: 'ARIA ID 引用必须真实存在', wcag: '4.1.2 A', customOnly: false },
+  { rule: 'aria_reference_unique', label: 'ARIA 引用唯一', note: '被引用 ID 不能对应多个节点', wcag: '4.1.2 A', customOnly: false },
+  { rule: 'aria_state_value_valid', label: 'ARIA 状态值', note: '枚举与数值型 ARIA 状态必须合法', wcag: '4.1.2 A', customOnly: false },
+  { rule: 'aria_required_state_present', label: 'ARIA 必需状态', note: '角色要求的状态属性必须存在', wcag: '4.1.2 A', customOnly: false },
+  { rule: 'interactive_role_focusable', label: '交互角色可聚焦', note: '自定义交互角色必须可通过键盘聚焦', wcag: '2.1.1 A', customOnly: false },
   { rule: 'multiple_main_landmarks_named', label: '多主区域命名', note: '多个 main landmark 必须唯一命名', wcag: '1.3.1 A', customOnly: false },
   { rule: 'explicit_data_table_headers', label: '数据表头', note: '明确的数据表必须具备表头语义', wcag: '1.3.1 A', customOnly: false },
   { rule: 'fieldset_legend', label: '分组图例', note: '单选/复选分组必须具备 legend', wcag: '1.3.1 A', customOnly: false },
@@ -80,6 +88,9 @@ export const DEFAULT_CUSTOM_ACCESSIBILITY_RULES: AccessibilityRuleId[] = [
   'buttons_have_name',
   'links_have_name',
   'form_controls_have_name',
+  'aria_reference_valid',
+  'aria_state_value_valid',
+  'interactive_role_focusable',
   'text_contrast_minimum',
   'focus_visible',
   'focus_not_obscured',
