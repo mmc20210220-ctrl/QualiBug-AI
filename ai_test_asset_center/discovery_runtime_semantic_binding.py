@@ -17,6 +17,7 @@ from typing import Any
 
 from . import discovery_runtime_planning as _planning
 from .effect_observer_binding import bind_source_effect_observers
+from .formal_event_pre_cleanup import install_formal_event_pre_cleanup_observer
 from .formal_event_surface import install_formal_event_surface
 from .formal_ui_surface import install_formal_ui_surface
 from .formal_ui_surface_guard import install_formal_ui_read_only_guard
@@ -54,6 +55,7 @@ install_non_http_observers()
 install_formal_ui_surface()
 install_formal_ui_read_only_guard()
 install_formal_event_surface()
+install_formal_event_pre_cleanup_observer()
 install_source_ui_contract_source_guard()
 install_source_ui_obligation_binding()
 install_source_ui_family_vector_compat()
