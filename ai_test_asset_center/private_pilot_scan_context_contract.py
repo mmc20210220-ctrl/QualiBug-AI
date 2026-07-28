@@ -263,6 +263,32 @@ def build_campaign_context_from_scan_body(body: dict[str, Any]) -> dict[str, Any
 
     context["execution_mode"] = default_scan_execution_mode(body)
 
+    # These controls are consumed by discovery_runtime_planning, but previously
+    # the product's only customer scan entry discarded them while building the
+    # immutable campaign context. Preserve explicit False as well as True, and
+    # fail closed on non-boolean JSON values so a string such as "false" cannot
+    # accidentally enable a discovery round.
+    for key in (
+        "agent_semantic_linking_enabled",
+        "runtime_interface_discovery_enabled",
+    ):
+        if key not in body:
+            continue
+        value = body.get(key)
+        if not isinstance(value, bool):
+            raise ValueError(f"{key}_not_boolean")
+        context[key] = value
+
+    if "runtime_interface_discovery_budget" in body:
+        budget = body.get("runtime_interface_discovery_budget")
+        if (
+            isinstance(budget, bool)
+            or not isinstance(budget, int)
+            or not 1 <= budget <= 5000
+        ):
+            raise ValueError("runtime_interface_discovery_budget_invalid")
+        context["runtime_interface_discovery_budget"] = budget
+
     test_data_contract = default_scan_test_data_contract(body)
     if test_data_contract:
         context["test_data_contract"] = test_data_contract
