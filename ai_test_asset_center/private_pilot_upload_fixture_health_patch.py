@@ -12,6 +12,8 @@ _INSTALL_MARKER = "_qualibug_upload_fixture_health_patch_installed"
 _ORIGINAL_BUILDER = "_qualibug_health_builder_before_upload_fixtures"
 _MODULES = (
     "ai_test_asset_center.ui_upload_fixture_registry",
+    "ai_test_asset_center.ui_upload_fixture_registry_integrity",
+    "ai_test_asset_center.ui_upload_fixture_ingest",
     "ai_test_asset_center.ui_upload_fixture_runtime_binding",
     "ai_test_asset_center.private_pilot_upload_fixture_routes",
 )
@@ -27,13 +29,18 @@ def _available(name: str) -> bool:
 def upload_fixture_health_status() -> dict[str, Any]:
     modules_available = all(_available(name) for name in _MODULES)
     registry_api_available = False
+    integrity_installed = False
     runtime_binding_installed = False
     routes_installed = False
+    binary_upload_available = False
     campaign_context_binding_installed = False
     runtime_contract_binding_installed = False
     try:
         registry = importlib.import_module(
             "ai_test_asset_center.ui_upload_fixture_registry"
+        )
+        ingest = importlib.import_module(
+            "ai_test_asset_center.ui_upload_fixture_ingest"
         )
         scan_prep = importlib.import_module(
             "ai_test_asset_center.private_pilot_scan_prep"
@@ -57,6 +64,16 @@ def upload_fixture_health_status() -> dict[str, Any]:
                 "approved_upload_fixture_binding",
                 "materialize_upload_fixture_bindings",
             )
+        )
+        integrity_installed = bool(
+            getattr(
+                registry,
+                "_qualibug_upload_fixture_registry_integrity_installed",
+                False,
+            )
+        )
+        binary_upload_available = callable(
+            getattr(ingest, "stage_and_register_upload_fixture", None)
         )
         runtime_binding_installed = bool(
             getattr(
@@ -97,8 +114,9 @@ def upload_fixture_health_status() -> dict[str, Any]:
     except Exception:
         registry_api_available = False
 
-    code_ready = modules_available and registry_api_available
+    code_ready = modules_available and registry_api_available and binary_upload_available
     composed = all((
+        integrity_installed,
         runtime_binding_installed,
         routes_installed,
         campaign_context_binding_installed,
@@ -114,6 +132,8 @@ def upload_fixture_health_status() -> dict[str, Any]:
         "checks": {
             "modules_available": modules_available,
             "registry_api_available": registry_api_available,
+            "binary_upload_available": binary_upload_available,
+            "approval_generation_integrity_installed": integrity_installed,
             "project_routes_installed": routes_installed,
             "scan_prepare_binding_installed": runtime_binding_installed,
             "campaign_context_binding_installed": campaign_context_binding_installed,
@@ -127,6 +147,10 @@ def upload_fixture_health_status() -> dict[str, Any]:
             "source_and_approved_symlinks_supported": False,
             "caller_authored_absolute_paths_supported": False,
             "revoking_source_cascades_to_approved_copy": True,
+            "revoked_binding_ref_can_be_reactivated": False,
+            "new_approval_requires_new_binding_ref": True,
+            "browser_binary_upload_base64_used": False,
+            "browser_binary_upload_max_bytes": 10 * 1024 * 1024,
             "revoked_bytes_retained_for_audit": True,
             "raw_file_bytes_embedded_in_registry": False,
             "raw_source_paths_embedded_in_registry": False,
