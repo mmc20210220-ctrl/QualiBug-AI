@@ -29,6 +29,41 @@ def as_text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def declared_adapters_from_scan_body(body: dict[str, Any]) -> list[str] | None:
+    """Normalize an explicit adapter declaration without inferring capabilities.
+
+    ``None`` means the caller did not submit the field. An explicit empty list is
+    preserved, because it is materially different from a missing declaration.
+    Unknown adapter names are rejected at the customer boundary instead of being
+    silently retained in an immutable campaign contract and ignored later.
+    """
+    if "declared_adapters" not in body:
+        return None
+    raw = body.get("declared_adapters")
+    if not isinstance(raw, list):
+        raise ValueError("declared_adapters_not_list")
+
+    from ai_test_asset_center.adapter_capability import (
+        ADAPTER_TO_OBSERVATION_SURFACE,
+    )
+
+    known = set(ADAPTER_TO_OBSERVATION_SURFACE)
+    adapters: list[str] = []
+    for value in raw:
+        if not isinstance(value, str):
+            raise ValueError("declared_adapter_name_not_string")
+        name = value.strip()
+        if not name:
+            raise ValueError("declared_adapter_name_empty")
+        if len(name) > 80:
+            raise ValueError("declared_adapter_name_too_long")
+        if name not in known:
+            raise ValueError(f"declared_adapter_unknown:{name}")
+        if name not in adapters:
+            adapters.append(name)
+    return adapters
+
+
 def _is_production_like_environment(environment_type: str = "") -> bool:
     # Use the same fail-closed classifier as the governed write executor.  The
     # TestOps helper intentionally recognizes only canonical environment names;
@@ -57,9 +92,7 @@ def default_scan_execution_mode(body: dict[str, Any]) -> str:
 
     # Unknown or undeclared targets are fail-closed for writes. A name/type
     # must explicitly carry a recognized non-production classification.
-    if not (
-        is_test_or_sandbox_environment(environment_type)
-    ):
+    if not is_test_or_sandbox_environment(environment_type):
         return "safe_read_only"
     return "approved_sandbox_write"
 
@@ -249,11 +282,7 @@ def build_campaign_context_from_scan_body(body: dict[str, Any]) -> dict[str, Any
         "execution_mode",
         # v12_pipeline reads context["campaign_rerun_key"] / ["campaign_restart_key"] to
         # start a fresh campaign instead of resuming one. Neither was in this passthrough,
-        # so the mechanism was unreachable from the only entry point the product exposes:
-        # a campaign that considered itself complete replayed its cached attempt ledger on
-        # every subsequent scan (campaign_mode "resumed", attempted_slice_count 0). An
-        # operator who fixed their system had no way to re-verify, and no execution-layer
-        # change could be measured end to end.
+        # so the mechanism was unreachable from the only entry point the product exposes.
         "campaign_rerun_key",
         "campaign_restart_key",
     ):
@@ -262,6 +291,10 @@ def build_campaign_context_from_scan_body(body: dict[str, Any]) -> dict[str, Any
             context[key] = value
 
     context["execution_mode"] = default_scan_execution_mode(body)
+
+    adapters = declared_adapters_from_scan_body(body)
+    if adapters is not None:
+        context["declared_adapters"] = adapters
 
     # These controls are consumed by discovery_runtime_planning, but previously
     # the product's only customer scan entry discarded them while building the
@@ -300,9 +333,7 @@ def build_campaign_context_from_scan_body(body: dict[str, Any]) -> dict[str, Any
     # the V12 campaign context. This lets automation / CI / benchmark harnesses (and
     # the Run Center advanced mode) submit an EXPLICIT deterministic scenario set for
     # reproducible real execution instead of depending on LLM discovery to derive
-    # scenarios. It weakens no gate: runtime_scenario_contract_gaps() still validates
-    # execution_policy / actor / source-bound steps, and execution_mode + approval +
-    # write/cleanup + production-safety boundaries are still enforced downstream.
+    # scenarios. It weakens no downstream safety gate.
     runtime_scenario_contract = as_dict(body.get("runtime_scenario_contract"))
     if runtime_scenario_contract:
         context["runtime_scenario_contract"] = runtime_scenario_contract
