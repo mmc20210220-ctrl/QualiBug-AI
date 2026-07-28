@@ -7,8 +7,9 @@ upstream receipts that precede selection:
     scan overlay -> source/IR binding -> UI obligation compiler
     -> compile -> execute -> observe -> Oracle -> Delivery Gate
 
-Recall, precision and F1 remain unavailable without an external hidden-GT
-evaluator.
+It additionally projects professional read-only UI/UX coverage dimensions from
+the same obligations and receipts. Recall, precision and F1 remain unavailable
+without an external hidden-GT evaluator.
 """
 from __future__ import annotations
 
@@ -16,6 +17,9 @@ from collections import Counter
 from typing import Any
 
 from .formal_ui_surface import OBSERVER_ID, RISK_FAMILY
+from .professional_ui_coverage_projection import (
+    build_professional_ui_coverage,
+)
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -179,6 +183,7 @@ def build_formal_ui_loss_funnel(result: dict[str, Any]) -> dict[str, Any]:
             "violation_count": oracle_violation,
             "deliverable_count": deliverable,
         },
+        "professional_coverage": build_professional_ui_coverage(result),
         "external_quality_metrics": {
             "status": "NOT_MEASURED",
             "recall": None,
