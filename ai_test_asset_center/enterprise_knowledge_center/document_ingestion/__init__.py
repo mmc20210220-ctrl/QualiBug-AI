@@ -6,15 +6,14 @@ from .contract import (
     SupplementalContext,
 )
 from .ocr_adapter import OcrProvider, TesseractOcrProvider
+from .page_render_registry import PageRendererRegistry, build_default_page_renderer_registry
 from .page_rendering import (
     LibreOfficeDocumentPageRenderer,
     PageRenderBatch,
-    PageRendererRegistry,
     PdfiumPdfPageRenderer,
     PypdfEmbeddedImagePageRenderer,
     RasterImagePageRenderer,
     RenderedPage,
-    build_default_page_renderer_registry,
 )
 from .pipeline import build_document_structure_ir
 from .planner import plan_deferred_supplementals, plan_document_parsing
