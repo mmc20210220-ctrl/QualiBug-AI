@@ -12,7 +12,9 @@ installer hardens its dynamic helpers without creating a second registry:
   identities;
 * every lifecycle version receives a unique baseline id, including re-registration
   after revocation;
-* register/approve/revoke mutations are serialized by a short-lived project lock.
+* register/approve/revoke mutations are serialized by a short-lived project lock;
+* revoking source authority atomically revokes every active approved copy derived
+  from it, so invalidated pixels cannot remain executable through another ref.
 """
 from __future__ import annotations
 
@@ -298,14 +300,62 @@ def install_visual_baseline_registry_guard() -> None:
         clean_actor = _registry._require_manage_actor(actor)
         effective_root = Path(root or _registry.ROOT)
         project = _registry._safe_project_id(project_id)
+        explanation = _text(reason, limit=500)
+        if not explanation:
+            raise ValueError("visual_baseline_revocation_reason_required")
         with _mutation_lock(project, effective_root):
-            return original_revoke(
-                project_id,
-                baseline_id=baseline_id,
-                reason=reason,
-                root=effective_root,
-                actor=clean_actor,
+            registry = _registry._load(project, effective_root)
+            record = next(
+                (
+                    row
+                    for row in registry["baselines"]
+                    if row.get("baseline_id") == baseline_id
+                    and row.get("status") == "active"
+                ),
+                None,
             )
+            if not record:
+                raise KeyError("active_visual_baseline_not_found")
+            now = _registry._now()
+            actor_ref = _registry._actor_ref(clean_actor)
+            record["status"] = "revoked"
+            record["revoked_at_utc"] = now
+            record["revoked_by"] = actor_ref
+            record["revocation_reason"] = explanation
+            cascade_ids: list[str] = []
+            if record.get("authority") == "source_registered":
+                for child in registry["baselines"]:
+                    if (
+                        child.get("status") == "active"
+                        and child.get("authority") == "approved_copy"
+                        and child.get("approved_from_baseline_id") == baseline_id
+                    ):
+                        child["status"] = "revoked"
+                        child["revoked_at_utc"] = now
+                        child["revoked_by"] = actor_ref
+                        child["revocation_reason"] = explanation
+                        child["cascade_source_baseline_id"] = baseline_id
+                        child_id = _text(child.get("baseline_id"), limit=200)
+                        if child_id:
+                            cascade_ids.append(child_id)
+            registry["audit_events"].append({
+                "event": "revoke",
+                "at_utc": now,
+                "actor_ref": actor_ref,
+                "baseline_id": baseline_id,
+                "ref": record.get("ref"),
+                "reason": explanation,
+                "bytes_retained_for_audit": True,
+                "cascade_revoked_baseline_ids": cascade_ids,
+            })
+            _registry._save(project, effective_root, registry)
+            return {
+                "ok": True,
+                "status": "REVOKED",
+                "baseline": dict(record),
+                "cascade_revoked_baseline_ids": cascade_ids,
+                "cascade_revoked_count": len(cascade_ids),
+            }
 
     _registry._actor_ref = actor_ref_with_role
     _registry._load = load_fail_closed
