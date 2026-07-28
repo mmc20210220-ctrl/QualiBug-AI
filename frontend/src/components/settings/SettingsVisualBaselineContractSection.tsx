@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   listVisualBaselines,
+  VISUAL_BASELINES_CHANGED_EVENT,
   type VisualBaselineRecord,
 } from '../../api/visual-baselines';
 import '../../styles/visual-baseline-contract.css';
@@ -31,14 +32,47 @@ export function SettingsVisualBaselineContractSection({ project }: SettingsVisua
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');
 
-  useEffect(() => {
+  const loadActiveBaselines = useCallback(async (showLoading = true) => {
     if (!project) {
       setRecords([]);
       setSelectedId('');
       setStatus('');
       return;
     }
+    if (showLoading) setLoading(true);
+    try {
+      const inventory = await listVisualBaselines(project);
+      const active = inventory.baselines
+        .filter((record) => record.status === 'active')
+        .sort((left, right) => {
+          const approved = Number(right.authority === 'approved_copy')
+            - Number(left.authority === 'approved_copy');
+          if (approved !== 0) return approved;
+          return String(right.created_at_utc || '').localeCompare(String(left.created_at_utc || ''));
+        });
+      setRecords(active);
+      setSelectedId((current) => (
+        active.some((record) => record.baseline_id === current)
+          ? current
+          : active[0]?.baseline_id || ''
+      ));
+    } catch (error: unknown) {
+      setRecords([]);
+      setSelectedId('');
+      setStatus(`加载失败：${errorMessage(error)}`);
+    } finally {
+      if (showLoading) setLoading(false);
+    }
+  }, [project]);
+
+  useEffect(() => {
     let cancelled = false;
+    if (!project) {
+      setRecords([]);
+      setSelectedId('');
+      setStatus('');
+      return () => { cancelled = true; };
+    }
     setLoading(true);
     setStatus('');
     listVisualBaselines(project)
@@ -71,6 +105,20 @@ export function SettingsVisualBaselineContractSection({ project }: SettingsVisua
       });
     return () => { cancelled = true; };
   }, [project]);
+
+  useEffect(() => {
+    const handleRegistryChange = (event: Event) => {
+      const detail = event instanceof CustomEvent
+        ? event.detail as { project?: unknown }
+        : {};
+      if (typeof detail.project === 'string' && detail.project !== project) return;
+      void loadActiveBaselines(false);
+    };
+    window.addEventListener(VISUAL_BASELINES_CHANGED_EVENT, handleRegistryChange);
+    return () => {
+      window.removeEventListener(VISUAL_BASELINES_CHANGED_EVENT, handleRegistryChange);
+    };
+  }, [loadActiveBaselines, project]);
 
   const selected = useMemo(
     () => records.find((record) => record.baseline_id === selectedId) || null,
@@ -147,6 +195,14 @@ export function SettingsVisualBaselineContractSection({ project }: SettingsVisua
             片段不会自动成为正式合同，仍需由企业资料提供真实 operation_ref、actor_role、source_refs 和 start_url。
           </p>
         </div>
+        <button
+          type="button"
+          className="btn btn-secondary settings-btn-compact"
+          disabled={!project || loading}
+          onClick={() => void loadActiveBaselines(true)}
+        >
+          {loading ? '刷新中…' : '刷新基线'}
+        </button>
       </div>
 
       <div className="visual-contract-grid">
