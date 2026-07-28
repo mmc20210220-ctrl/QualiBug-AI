@@ -1,4 +1,4 @@
-"""Install source-bound semantic and effect-observer joins on formal planning.
+"""Install source-bound joins and formal non-HTTP observers on planning.
 
 ``discovery_runtime_planning.build_discovery_plan`` resolves its Behavior IR
 builder from module globals at execution time. The product compatibility entry
@@ -12,10 +12,14 @@ from typing import Any
 
 from . import discovery_runtime_planning as _planning
 from .effect_observer_binding import bind_source_effect_observers
+from .non_http_observers import install_non_http_observers
 from .semantic_operation_binding import bind_accepted_semantic_operations
 
 _INSTALL_MARKER = "_qualibug_semantic_operation_binding_installed"
 _ORIGINAL_MARKER = "_qualibug_original_behavior_ir_builder"
+
+# Register formal process-ledger observation before any experiment is compiled.
+install_non_http_observers()
 
 
 if hasattr(_planning, _ORIGINAL_MARKER):
