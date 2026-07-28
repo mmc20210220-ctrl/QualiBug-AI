@@ -63,6 +63,7 @@ from .professional_ui_visual_evidence_privacy import (
     install_visual_evidence_privacy,
 )
 from .professional_ui_visual_image_guard import install_visual_image_guard
+from .professional_ui_visual_registry_binding import install_visual_registry_binding
 from .professional_ui_visual_viewport_guard import install_visual_viewport_guard
 from .scan_event_contract_external_signal import (
     overlay_scan_event_contracts_with_external_signals,
@@ -104,10 +105,11 @@ _ORIGINAL_MARKER = "_qualibug_original_behavior_ir_builder"
 # read-only assertions, scan admission, responsive/accessibility behavior, deterministic visual
 # comparison, project namespace governance, decode limits, renderer stabilization and visual
 # evidence privacy, governed interaction, plan-level checks, interaction evidence minimization,
-# persistent cleanup observation, visual viewport binding over the final validators, then direct-
-# scan admission parity. Installing visual evidence/observer wrappers before interaction means the
-# governed interaction dispatcher preserves them for read-only visual requests, while interactive
-# visual findings still inherit cleanup equivalence.
+# persistent cleanup observation, visual viewport binding over the final validators, active
+# visual-registry identity binding, then direct-scan admission parity. Installing visual
+# evidence/observer wrappers before interaction means the governed interaction dispatcher
+# preserves them for read-only visual requests, while interactive visual findings still inherit
+# cleanup equivalence.
 install_non_http_observers()
 install_formal_ui_surface()
 install_formal_ui_read_only_guard()
@@ -124,6 +126,7 @@ install_controlled_ui_interaction_contract_guard()
 install_controlled_ui_interaction_privacy_guard()
 install_persistent_ui_cleanup_probe()
 install_visual_viewport_guard()
+install_visual_registry_binding()
 install_scan_ui_interaction_contract_guard()
 install_formal_event_surface()
 install_formal_event_capability_guard()
