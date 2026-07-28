@@ -10,7 +10,9 @@ evidence policy than read-only UI checks:
   interaction locator;
 * persisted console messages and network URLs are fingerprinted after assertions
   have consumed their in-memory values;
-* untyped browser/runtime exception text is replaced by a stable fingerprint.
+* untyped browser/runtime exception text is replaced by a stable fingerprint;
+* the interaction executor's first JSON serialization is already scrubbed, so
+  there is no raw-then-overwrite persistence window.
 
 The formal cleanup and expectation receipts remain authoritative. This guard only
 reduces artifact exposure; it does not create or judge findings.
@@ -30,6 +32,7 @@ _INSTALL_MARKER = "_qualibug_controlled_ui_privacy_guard_installed"
 ORIGINAL_LAUNCH = "_qualibug_original_interaction_browser_launch_before_privacy"
 ORIGINAL_EXECUTOR = "_qualibug_original_interaction_executor_before_privacy"
 ORIGINAL_CONTRACT_CHECK = "_qualibug_original_interaction_contract_check_before_privacy"
+ORIGINAL_JSON = "_qualibug_original_interaction_json_before_privacy"
 _SENSITIVE_STEPS: contextvars.ContextVar[list[dict[str, Any]]] = contextvars.ContextVar(
     "qualibug_interaction_sensitive_steps",
     default=[],
@@ -172,8 +175,38 @@ def _scrub_result(result: dict[str, Any]) -> dict[str, Any]:
         "runtime_exception_text_persisted": False,
         "raw_request_body_persisted": False,
         "raw_response_body_persisted": False,
+        "first_persisted_artifact_minimized": True,
     }
     return scrubbed
+
+
+def _looks_like_interaction_execution_result(value: Any) -> bool:
+    row = _dict(value)
+    return bool(
+        _text(row.get("execution_mode")) == _interaction.WRITE_MODE
+        and "cleanup_receipt" in row
+        and "steps" in row
+        and "duration_ms" in row
+        and "status" in row
+    )
+
+
+class _PrivacyJsonProxy:
+    """Module-local JSON facade that scrubs the executor's first disk write."""
+
+    def __init__(self, delegate: Any) -> None:
+        self._delegate = delegate
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._delegate, name)
+
+    def dumps(self, value: Any, *args: Any, **kwargs: Any) -> str:
+        safe_value = (
+            _scrub_result(value)
+            if _looks_like_interaction_execution_result(value)
+            else value
+        )
+        return self._delegate.dumps(safe_value, *args, **kwargs)
 
 
 def _rewrite_execution_artifact(
@@ -218,6 +251,12 @@ def install_controlled_ui_interaction_privacy_guard() -> None:
         _interaction._source_cleanup_contract_error,
     )
     setattr(_interaction, ORIGINAL_CONTRACT_CHECK, original_contract_check)
+    original_json = getattr(
+        _interaction,
+        ORIGINAL_JSON,
+        _interaction.json,
+    )
+    setattr(_interaction, ORIGINAL_JSON, original_json)
 
     def contract_check_with_privacy(plan: dict[str, Any]) -> str:
         error = original_contract_check(plan)
@@ -268,6 +307,7 @@ def install_controlled_ui_interaction_privacy_guard() -> None:
 
     _interaction._source_cleanup_contract_error = contract_check_with_privacy
     _interaction._launch_browser = launch_private_browser
+    _interaction.json = _PrivacyJsonProxy(original_json)
     _interaction.execute_controlled_browser_plan = execute_with_minimized_evidence
     # The browser provider resolves this global at request execution time.
     _interaction._browser.execute_browser_plan = execute_with_minimized_evidence
