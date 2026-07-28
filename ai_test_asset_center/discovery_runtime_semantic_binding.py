@@ -10,6 +10,7 @@ those symbols with stable additive wrappers:
 * enterprise and explicit scan UI contracts;
 * professional source-declared read-only UI/UX assertions;
 * responsive viewport/media and deterministic accessibility checks;
+* governed non-production UI interaction with browser cleanup equivalence;
 * source-declared asynchronous event contracts;
 * source-declared sequential read-only latency budgets;
 * one formal experiment mainline for every surface.
@@ -38,6 +39,9 @@ from .formal_ui_surface_guard import install_formal_ui_read_only_guard
 from .non_http_observers import install_non_http_observers
 from .professional_ui_contract_guard import (
     install_professional_ui_contract_guard,
+)
+from .professional_ui_interaction_cleanup import (
+    install_controlled_ui_interaction,
 )
 from .professional_ui_readonly import install_professional_ui_readonly
 from .professional_ui_responsive_accessibility import (
@@ -80,15 +84,16 @@ _INSTALL_MARKER = "_qualibug_semantic_operation_binding_installed"
 _ORIGINAL_MARKER = "_qualibug_original_behavior_ir_builder"
 
 # Register formal surfaces before any obligation or experiment is compiled. Every installer is
-# idempotent and performs no target I/O. The professional UI installers extend the existing UI
-# authority after its first read-only guard has been registered, so browser execution, compiler
-# policy, scan admission, responsive configuration and UX assertions share one vocabulary.
+# idempotent and performs no target I/O. The UI installers extend one authority in order:
+# read-only assertions, scan admission, responsive/accessibility behavior, then governed
+# interaction whose cleanup receipt gates observation and Oracle eligibility.
 install_non_http_observers()
 install_formal_ui_surface()
 install_formal_ui_read_only_guard()
 install_professional_ui_readonly()
 install_professional_ui_contract_guard()
 install_professional_ui_responsive_accessibility()
+install_controlled_ui_interaction()
 install_formal_event_surface()
 install_formal_event_capability_guard()
 install_formal_event_pre_cleanup_observer()
