@@ -5,6 +5,9 @@ from typing import Any
 
 from .discovery_event_loss_projection import attach_formal_event_loss_funnel
 from .discovery_loss_funnel import build_discovery_loss_funnel
+from .discovery_performance_loss_projection import (
+    attach_formal_performance_loss_funnel,
+)
 from .discovery_ui_loss_projection import attach_formal_ui_loss_funnel
 from .formal_evidence_projection import (
     run_experiment_candidate as _run_with_formal_evidence,
@@ -19,9 +22,9 @@ def project_discovery_quality(result: dict[str, Any]) -> dict[str, Any]:
     projected = dict(result)
     generic_funnel = build_discovery_loss_funnel(projected)
     with_ui = attach_formal_ui_loss_funnel(projected, generic_funnel)
-    projected["discovery_loss_funnel"] = attach_formal_event_loss_funnel(
-        projected,
-        with_ui,
+    with_event = attach_formal_event_loss_funnel(projected, with_ui)
+    projected["discovery_loss_funnel"] = (
+        attach_formal_performance_loss_funnel(projected, with_event)
     )
     return projected
 
