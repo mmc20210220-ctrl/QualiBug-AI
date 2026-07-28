@@ -42,9 +42,15 @@ from ai_test_asset_center.professional_ui_visual_determinism_guard import (
 from ai_test_asset_center.professional_ui_visual_image_guard import (
     install_visual_image_guard,
 )
+from ai_test_asset_center.professional_ui_visual_viewport_guard import (
+    install_visual_viewport_guard,
+)
 from ai_test_asset_center.scan_ui_interaction_contract_guard import (
     install_scan_ui_interaction_contract_guard,
 )
+
+VIEWPORT_WIDTH = 1280
+VIEWPORT_HEIGHT = 720
 
 
 def _install_full_ui_chain() -> None:
@@ -61,7 +67,19 @@ def _install_full_ui_chain() -> None:
     install_controlled_ui_interaction_contract_guard()
     install_controlled_ui_interaction_privacy_guard()
     install_persistent_ui_cleanup_probe()
+    install_visual_viewport_guard()
     install_scan_ui_interaction_contract_guard()
+
+
+def _viewport_step(*, phase: str = "") -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "action": "set_viewport",
+        "width": VIEWPORT_WIDTH,
+        "height": VIEWPORT_HEIGHT,
+    }
+    if phase:
+        row["phase"] = phase
+    return row
 
 
 def _visual_step() -> dict[str, Any]:
@@ -76,6 +94,8 @@ def _visual_step() -> dict[str, Any]:
         "renderer_profile": RENDERER_PROFILE,
         "scroll_origin": SCROLL_ORIGIN,
         "font_readiness": FONT_READINESS,
+        "viewport_width": VIEWPORT_WIDTH,
+        "viewport_height": VIEWPORT_HEIGHT,
         "mask_selectors": ["[data-testid=clock]"],
         "mask_locator_intents": [],
         "mask_regions": [],
@@ -107,6 +127,7 @@ def test_direct_scan_visual_contract_reaches_formal_ui_overlay_and_compiler() ->
             "execution_mode": "safe_read_only",
             "steps": [
                 {"action": "goto", "url": "/orders"},
+                _viewport_step(),
                 _visual_step(),
             ],
         },
@@ -121,9 +142,12 @@ def test_direct_scan_visual_contract_reaches_formal_ui_overlay_and_compiler() ->
     assert receipt["contract_added_count"] == 1
     assert receipt["coverage_gap_count"] == 0
     contract = asset["ui_formal_contracts"][0]
-    assert contract["ui_request"]["browser_plan"]["steps"][1]["action"] == (
-        visual.ACTION
-    )
+    steps = contract["ui_request"]["browser_plan"]["steps"]
+    assert [row["action"] for row in steps] == [
+        "goto",
+        "set_viewport",
+        visual.ACTION,
+    ]
 
     compiled = formal_ui_surface._compile_ui_protocol({
         "property_spec": {
@@ -220,6 +244,7 @@ def test_interactive_visual_violation_is_suppressed_when_cleanup_is_unproven() -
         }],
         "steps": [
             {"phase": "setup", "action": "goto", "url": "/orders"},
+            _viewport_step(phase="setup"),
             {"phase": "treatment", "action": "click", "selector": "#create"},
             {"phase": "assertion", **_visual_step()},
             {"phase": "cleanup", "action": "click", "selector": "#remove"},
@@ -258,6 +283,15 @@ def test_interactive_visual_violation_is_suppressed_when_cleanup_is_unproven() -
                                     ),
                                     "dimension_match": True,
                                     "changed_pixel_ratio": 0.02,
+                                    "declared_viewport": {
+                                        "width": VIEWPORT_WIDTH,
+                                        "height": VIEWPORT_HEIGHT,
+                                    },
+                                    "actual_viewport": {
+                                        "width": VIEWPORT_WIDTH,
+                                        "height": VIEWPORT_HEIGHT,
+                                    },
+                                    "viewport_match": True,
                                     "ai_visual_judgement_used": False,
                                 }],
                             },
