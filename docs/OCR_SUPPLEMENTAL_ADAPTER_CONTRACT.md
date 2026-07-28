@@ -3,22 +3,23 @@
 ## Purpose
 
 OCR is a structural recovery capability, not a business-semantic authority. It may
-recover text and image-local coordinates from raster images or scanned PDF pages, but it
-must not create business meaning, infer process order, or silently clear unresolved pages.
+recover text and page-local coordinates from rendered pages, but it must not create
+business meaning, infer process order, or silently clear unresolved pages.
 
 ## Two-phase execution
 
 1. A primary adapter first parses the native source container.
 2. The primary adapter exposes fail-visible gaps such as `SCANNED_PAGE_REQUIRES_OCR`.
-3. The deferred parsing planner requests the `OCR` capability only for affected pages.
-4. A supplemental OCR adapter returns Document IR blocks and explicit gap resolutions.
-5. The central merger applies resolutions page by page and preserves all remaining gaps.
-6. Merged IR text re-enters Chinese-first fact extraction.
-7. Extracted facts are aligned back to exact IR block locators before enterprise model compilation.
+3. The deferred planner requests `PAGE_RENDERING` and `OCR` for affected pages.
+4. `PageRendererRegistry` produces source-preserving `RenderedPage` objects.
+5. The OCR adapter returns Document IR blocks and explicit gap resolutions.
+6. The central merger applies resolutions page by page and preserves remaining gaps.
+7. Merged IR text re-enters Chinese-first fact extraction.
+8. Extracted facts are aligned back to exact IR block locators before enterprise model compilation.
 
 OCR must not run over every PDF by default.
 
-## Built-in provider
+## Built-in OCR provider
 
 `TesseractOcrProvider` is optional. It is available only when:
 
@@ -26,34 +27,45 @@ OCR must not run over every PDF by default.
 - the `tesseract` executable is available on `PATH`;
 - requested OCR language data is installed.
 
-The Python optional dependency is installed with:
+Install Python OCR and rendering support with:
 
 ```bash
-pip install -e '.[ocr]'
+pip install -e '.[ocr,render]'
 ```
 
 The system-level Tesseract binary and language packs remain deployment responsibilities.
 The default language is `chi_sim+eng` and can be changed with `QUALIBUG_OCR_LANG`.
 
-Missing OCR dependencies do not crash document ingestion. The OCR adapter simply does
-not match, and the original scanned-page gap remains formally blocking.
+Missing OCR dependencies do not crash document ingestion. The OCR adapter does not match,
+and the original scanned-page gap remains formally blocking.
 
 ## Supported source paths
 
 ### Standalone raster image
 
-The adapter can run standalone for PNG, JPEG, TIFF, BMP, GIF and WebP sources when an OCR
-provider is available.
+PNG, JPEG, TIFF, BMP, GIF and WebP sources enter `PageRendererRegistry` first. Multi-frame
+images produce multiple rendered pages. OCR then consumes normalized or fail-visible
+pass-through image bytes.
 
 ### Scanned PDF page
 
-The adapter runs only after the PDF primary adapter reports scanned pages. The current
-Tesseract implementation extracts embedded page images through `pypdf` and applies OCR to
-them. If no recoverable embedded image is available, it reports
-`OCR_SOURCE_IMAGE_NOT_AVAILABLE` and keeps the page blocked.
+The adapter runs only after the PDF primary adapter reports scanned pages. Rendering is
+attempted in this order when providers are available:
 
-A future page renderer may supplement this path without changing enterprise business
-understanding.
+1. full-page PDFium rasterization;
+2. embedded-image extraction through `pypdf` as a lower-fidelity fallback.
+
+Only requested page numbers are rendered. If no renderer produces those pages, the system
+reports `PAGE_RENDERER_UNAVAILABLE_OR_FAILED` and keeps them blocked.
+
+### Visual office fallback
+
+Legacy Word, PowerPoint and OpenDocument files may be converted to PDF by a local
+LibreOffice installation and then rendered through PDFium. Conversion provenance is
+retained. Native adapters still take priority when available.
+
+Spreadsheet families are not silently downgraded to OCR when table, formula and style
+structure are required.
 
 ## Formal confidence rules
 
@@ -61,9 +73,11 @@ Each OCR line must preserve:
 
 - source id and filename;
 - page number;
-- embedded-image index;
-- image-local bounding box;
+- rendered-image index;
+- page-local bounding box;
 - OCR provider and version;
+- page renderer and version;
+- rendering method and DPI;
 - recognition confidence;
 - source locator.
 
@@ -74,6 +88,7 @@ The default formal confidence threshold is `0.55`.
 - Below threshold: `OCR_TEXT_LOW_CONFIDENCE` is P0 and formal understanding remains blocked.
 - No text: `OCR_TEXT_NOT_RECOVERED` is P0.
 - Provider execution failure: `OCR_PROVIDER_EXECUTION_FAILED` is P0.
+- Rendering failure: `PAGE_RENDERER_UNAVAILABLE_OR_FAILED` is P0.
 
 ## Gap-resolution contract
 
@@ -88,9 +103,8 @@ A supplemental adapter may declare:
 ```
 
 The merger may resolve only the listed pages. If the primary gap covers pages `[3, 4, 5]`,
-page `5` remains blocked.
-
-Adapter output must never clear a whole-document gap merely because one page succeeded.
+page `5` remains blocked. Adapter output must never clear a whole-document gap merely
+because one page succeeded.
 
 ## Business-fact authority
 
@@ -103,15 +117,15 @@ silently. The unresolved alignment remains visible in
 
 ## Known limitations
 
-The current first version does not claim:
+The current version does not claim:
 
-- authoritative page coordinates for OCR lines; coordinates are local to extracted images;
-- correct reconstruction of multi-column reading order inside scanned pages;
+- semantic reading order for complex multi-column scanned pages;
 - handwriting recognition quality;
 - table-cell reconstruction;
 - flowchart, BPMN, UML or ER-diagram understanding;
-- rendering of every PDF page when no embedded image can be extracted;
-- automatic installation of Tesseract language packs.
+- rendering when neither PDFium, LibreOffice nor a usable embedded-image fallback exists;
+- automatic installation of Tesseract or LibreOffice system dependencies;
+- automatic installation of OCR language packs.
 
 These limitations must remain visible through structure receipts and enterprise
 understanding gates.
