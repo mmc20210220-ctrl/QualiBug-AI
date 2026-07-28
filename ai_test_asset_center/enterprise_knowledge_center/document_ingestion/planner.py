@@ -1,8 +1,8 @@
 """Capability-driven parsing planner.
 
-The planner does not infer business meaning.  It fingerprints the source, resolves
+The planner does not infer business meaning. It fingerprints the source, resolves
 registered adapters, and records which structural capabilities are available or still
-missing.  Supplemental adapters may be planned after primary structural gaps are known.
+missing. Supplemental adapters are planned after primary structural gaps are known.
 """
 from __future__ import annotations
 
@@ -11,12 +11,15 @@ from typing import Any, Iterable
 
 from .contract import (
     CAP_FONT_EVIDENCE,
+    CAP_FORMULA_EXTRACTION,
     CAP_HEADER_FOOTER,
     CAP_HEADING_HIERARCHY,
     CAP_IMAGE_PRESENCE,
     CAP_LIST_HIERARCHY,
     CAP_OCR,
     CAP_PAGE_LAYOUT,
+    CAP_PAGE_RENDERING,
+    CAP_STYLE_SEMANTICS,
     CAP_TABLE_REGION_DETECTION,
     CAP_TABLE_STRUCTURE,
     CAP_TEXT_COORDINATES,
@@ -32,12 +35,13 @@ from .contract import (
 )
 from .registry import DocumentAdapterRegistry
 
-
 _IMAGE_SUFFIXES = {"png", "jpg", "jpeg", "tif", "tiff", "bmp", "gif", "webp"}
-_DEFERRED_CAPABILITY_BY_GAP = {
-    "SCANNED_PAGE_REQUIRES_OCR": CAP_OCR,
-    "PDF_TABLE_REGION_NOT_CELL_PARSED": CAP_TABLE_STRUCTURE,
-    "PDF_IMAGE_CONTENT_UNPARSED": "DIAGRAM_STRUCTURE",
+_VISUAL_OFFICE_FAMILIES = {"doc", "rtf", "odt", "ppt", "pptx", "odp"}
+_TABLE_OFFICE_FAMILIES = {"xls", "xlsx", "ods"}
+_DEFERRED_CAPABILITIES_BY_GAP: dict[str, tuple[str, ...]] = {
+    "SCANNED_PAGE_REQUIRES_OCR": (CAP_PAGE_RENDERING, CAP_OCR),
+    "PDF_TABLE_REGION_NOT_CELL_PARSED": (CAP_TABLE_STRUCTURE,),
+    "PDF_IMAGE_CONTENT_UNPARSED": ("DIAGRAM_STRUCTURE", CAP_PAGE_RENDERING),
 }
 
 
@@ -63,7 +67,9 @@ def _detected_family(source: DocumentSource) -> tuple[str, str]:
             return "zip_or_corrupt_container", "pk_signature_without_readable_zip_directory"
     signature = source.data[:16]
     if (
-        signature.startswith((b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF87a", b"GIF89a", b"II*\x00", b"MM\x00*", b"BM"))
+        signature.startswith(
+            (b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF87a", b"GIF89a", b"II*\x00", b"MM\x00*", b"BM")
+        )
         or (signature.startswith(b"RIFF") and b"WEBP" in signature)
     ):
         return "image", "raster_image_signature"
@@ -108,8 +114,26 @@ def _required_capabilities(family: str) -> list[str]:
         )
     if family == "image":
         return unique_text(
-            [CAP_OCR, CAP_TEXT_EXTRACTION, CAP_TEXT_COORDINATES, CAP_PAGE_LAYOUT]
+            [
+                CAP_PAGE_RENDERING,
+                CAP_OCR,
+                CAP_TEXT_EXTRACTION,
+                CAP_TEXT_COORDINATES,
+                CAP_PAGE_LAYOUT,
+            ]
         )
+    if family in _VISUAL_OFFICE_FAMILIES:
+        return unique_text(
+            [
+                CAP_PAGE_RENDERING,
+                CAP_OCR,
+                CAP_TEXT_EXTRACTION,
+                CAP_TEXT_COORDINATES,
+                CAP_PAGE_LAYOUT,
+            ]
+        )
+    if family in _TABLE_OFFICE_FAMILIES:
+        return unique_text([CAP_TABLE_STRUCTURE, CAP_FORMULA_EXTRACTION, CAP_STYLE_SEMANTICS])
     if family in {
         "text",
         "structured_text",
@@ -150,20 +174,19 @@ def plan_document_parsing(
     primary_rows = [row for row in matches if row[1].mode == MODE_PRIMARY]
     supplemental_rows = [row for row in matches if row[1].mode == MODE_SUPPLEMENTAL]
     fallback_rows = [row for row in matches if row[1].mode == MODE_FALLBACK]
+    required_capabilities = _required_capabilities(family)
 
     selected: list[tuple[Any, Any]] = []
     if primary_rows:
+        # Supplemental capabilities are never run eagerly beside a native primary.
+        # They are selected only after the primary exposes a concrete structural gap.
         selected.append(primary_rows[0])
-        provided = set(primary_rows[0][1].capabilities)
-        for row in supplemental_rows:
-            contribution = set(row[1].capabilities) - provided
-            if not contribution:
-                continue
-            selected.append(row)
-            provided.update(row[1].capabilities)
     else:
         standalone_rows = [
-            row for row in supplemental_rows if bool(getattr(row[0], "standalone", False))
+            row
+            for row in supplemental_rows
+            if bool(getattr(row[0], "standalone", False))
+            and set(row[1].capabilities) & set(required_capabilities)
         ]
         if standalone_rows:
             selected.append(standalone_rows[0])
@@ -176,7 +199,6 @@ def plan_document_parsing(
         for _adapter, match in selected
         for capability in match.capabilities
     )
-    required_capabilities = _required_capabilities(family)
     missing_capabilities = sorted(set(required_capabilities) - set(provided_capabilities))
     alternatives = [
         match.to_dict()
@@ -207,7 +229,9 @@ def plan_document_parsing(
         "required_capabilities": required_capabilities,
         "provided_capabilities": provided_capabilities,
         "missing_capabilities": missing_capabilities,
-        "deferred_capability_triggers": dict(_DEFERRED_CAPABILITY_BY_GAP),
+        "deferred_capability_triggers": {
+            key: list(values) for key, values in _DEFERRED_CAPABILITIES_BY_GAP.items()
+        },
         "business_semantics_added": False,
         "document_order_is_business_flow": False,
         "filename_is_business_context": False,
@@ -226,12 +250,15 @@ def plan_deferred_supplementals(
         dict(row)
         for row in (primary_document_ir.get("unsupported_content") or [])
         if isinstance(row, dict)
-        and text(row.get("reason_code") or row.get("kind")) in _DEFERRED_CAPABILITY_BY_GAP
+        and text(row.get("reason_code") or row.get("kind")) in _DEFERRED_CAPABILITIES_BY_GAP
         and int(row.get("count") or 0) > 0
     ]
     requested = unique_text(
-        _DEFERRED_CAPABILITY_BY_GAP[text(row.get("reason_code") or row.get("kind"))]
+        capability
         for row in trigger_gaps
+        for capability in _DEFERRED_CAPABILITIES_BY_GAP[
+            text(row.get("reason_code") or row.get("kind"))
+        ]
     )
     context = SupplementalContext(
         primary_document_ir=dict(primary_document_ir or {}),
@@ -253,8 +280,10 @@ def plan_deferred_supplementals(
         provided.update(contribution)
     missing = sorted(set(requested) - provided)
     status = "NOT_REQUIRED"
-    if trigger_gaps and selected:
+    if trigger_gaps and selected and not missing:
         status = "READY"
+    elif trigger_gaps and selected and missing:
+        status = "PARTIAL_REQUIRED_SUPPLEMENTAL_CAPABILITY"
     elif trigger_gaps and not selected:
         status = "BLOCKED_REQUIRED_SUPPLEMENTAL_ADAPTER_UNAVAILABLE"
     return {
