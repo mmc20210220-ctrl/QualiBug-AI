@@ -22,12 +22,14 @@ BASELINE_ADAPTERS = frozenset({"http_api"})
 PRODUCT_OWNED_ADAPTERS = frozenset({"process_ledger"})
 
 # adapter -> what the customer/runtime must explicitly declare for it to become
-# available. Source-level UI contracts are validated separately by the formal UI
-# protocol; mixing those two authorities is how a source document could accidentally
-# authorize a runtime capability.
+# available. Source-level contracts are validated separately by their formal
+# protocols; a source document must never authorize a runtime capability.
 DECLARATION_REQUIRED: dict[str, str] = {
     "db_sql": "services[].db",
     "ui_browser": "runtime_contract.declared_adapters[]",
+    "event_log_jsonl": (
+        "runtime_contract.declared_adapters[] + runtime_contract.event_log"
+    ),
 }
 
 
@@ -79,13 +81,14 @@ def resolve_available_adapters(
     observe. Product-owned adapters are added because their evidence is created
     inside the formal executor, not discovered on the target.
 
-    ``ui_browser`` is deliberately not inferred from a UI URL, an installed
-    Playwright package, or the presence of browser steps. The runtime contract
-    must name the adapter explicitly. The formal UI protocol independently
-    requires a source-declared browser expectation before compiling an experiment.
+    ``ui_browser`` is never inferred from a UI URL or installed Playwright.
+    ``event_log_jsonl`` is never inferred from a log-looking file: the runtime
+    contract must both name the adapter and provide an ``event_log`` block. A
+    partial declaration fails in the direction of fewer capabilities.
     """
     available = set(BASELINE_ADAPTERS | PRODUCT_OWNED_ADAPTERS)
     config = _declared_config(Path(root), project)
+    runtime = _dict(runtime_contract)
 
     if any(
         _dict(_dict(service).get("db"))
@@ -93,8 +96,17 @@ def resolve_available_adapters(
     ):
         available.add("db_sql")
 
-    for name in _list(_dict(runtime_contract).get("declared_adapters")):
+    for name in _list(runtime.get("declared_adapters")):
         adapter = _text(name)
+        if adapter == "event_log_jsonl":
+            if _dict(runtime.get("event_log")):
+                available.add(adapter)
+            else:
+                logger.warning(
+                    "adapter capability: event_log_jsonl declared without "
+                    "runtime_contract.event_log; ignored"
+                )
+            continue
         if (
             adapter in DECLARATION_REQUIRED
             or adapter in BASELINE_ADAPTERS
@@ -128,6 +140,7 @@ ADAPTER_TO_OBSERVATION_SURFACE: dict[str, str] = {
     "process_ledger": "process_timeline",
     "db_sql": "db_snapshot",
     "ui_browser": "ui_browser",
+    "event_log_jsonl": "event_log",
 }
 
 # The capability node an available adapter justifies.
@@ -136,6 +149,7 @@ ADAPTER_TO_CAPABILITY: dict[str, str] = {
     "process_ledger": "process_timeline_observe",
     "db_sql": "db_read",
     "ui_browser": "ui_execute",
+    "event_log_jsonl": "event_log_read",
 }
 
 
