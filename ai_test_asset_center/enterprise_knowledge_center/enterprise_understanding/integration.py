@@ -13,10 +13,10 @@ from .schema import as_dict, as_list, text
 def _parsed_sources_for_context(asset: dict[str, Any], root: Path) -> list[dict[str, Any]]:
     """Re-read registered sources and attach source-preserving structure IR.
 
-    Existing parsers remain the source of extracted business facts. For DOCX, the
-    original immutable bytes are additionally parsed into normalized Document
-    Structure IR so headings, list levels and table positions are available to
-    context resolution.
+    Existing parsers remain the source of extracted business facts. DOCX and PDF
+    immutable source bytes are additionally parsed into Document Structure IR so
+    native headings, page coordinates, list levels, tables and reading-order evidence
+    are available to context resolution and completeness gates.
     """
     from .._crud import _record_parse
 
@@ -30,7 +30,8 @@ def _parsed_sources_for_context(asset: dict[str, Any], root: Path) -> list[dict[
         filename = text(source.get("original_name") or stored.name)
         document_structure = as_dict(parsed.get("document_structure"))
         structure_error: dict[str, Any] = {}
-        if stored.exists() and stored.suffix.lower() == ".docx":
+        suffix = stored.suffix.lower() if stored.exists() else Path(filename).suffix.lower()
+        if stored.exists() and suffix == ".docx":
             try:
                 from .._document_structure_ir_normalizer import (
                     extract_normalized_docx_document_ir,
@@ -44,6 +45,21 @@ def _parsed_sources_for_context(asset: dict[str, Any], root: Path) -> list[dict[
                     "code": "DOCX_DOCUMENT_STRUCTURE_IR_FAILED",
                     "detail": f"{type(exc).__name__}: {exc}"[:500],
                     "operator_action": "inspect DOCX integrity and python-docx compatibility",
+                }
+        elif stored.exists() and suffix == ".pdf":
+            try:
+                from .._pdf_document_structure_ir import extract_pdf_document_ir
+
+                document_structure = extract_pdf_document_ir(
+                    stored.read_bytes(), filename=filename
+                )
+            except Exception as exc:
+                structure_error = {
+                    "code": "PDF_DOCUMENT_STRUCTURE_IR_FAILED",
+                    "detail": f"{type(exc).__name__}: {exc}"[:500],
+                    "operator_action": (
+                        "inspect PDF integrity, encryption and pypdf layout compatibility"
+                    ),
                 }
         parsed_sources.append(
             {
@@ -91,11 +107,45 @@ def _attach_document_structure_assets(
         int(as_dict(row.get("structure_receipt")).get("unsupported_content_count") or 0)
         for row in rows
     )
+    page_count = sum(
+        int(as_dict(row.get("structure_receipt")).get("page_count") or 0)
+        for row in rows
+    )
+    scanned_page_count = sum(
+        int(as_dict(row.get("structure_receipt")).get("scanned_page_count") or 0)
+        for row in rows
+    )
+    image_count = sum(
+        int(as_dict(row.get("structure_receipt")).get("image_count") or 0)
+        for row in rows
+    )
+    table_region_count = sum(
+        int(as_dict(row.get("structure_receipt")).get("table_region_count") or 0)
+        for row in rows
+    )
+    multi_column_page_count = sum(
+        int(as_dict(row.get("structure_receipt")).get("multi_column_page_count") or 0)
+        for row in rows
+    )
+    critical_structure_gap_count = sum(
+        1
+        for row in rows
+        for gap in as_list(row.get("unsupported_content"))
+        if isinstance(gap, dict)
+        and int(gap.get("count") or 0) > 0
+        and bool(gap.get("blocks_formal_understanding"))
+    )
     asset["document_structure_assets"] = {
         "schema": "qualibug.enterprise-document-structure-assets.v1",
         "source_count": len(rows),
         "block_count": block_count,
+        "page_count": page_count,
+        "scanned_page_count": scanned_page_count,
+        "image_count": image_count,
+        "table_region_count": table_region_count,
+        "multi_column_page_count": multi_column_page_count,
         "unsupported_content_count": unsupported_count,
+        "critical_structure_gap_count": critical_structure_gap_count,
         "items": rows,
         "errors": errors,
         "document_order_is_business_flow": False,
@@ -193,6 +243,20 @@ def enrich_asset_with_enterprise_understanding(
             "enterprise_understanding_projection_contract": "INTERNAL_MODEL_CLOSURE_NOT_RECALL_OR_ACCURACY",
             "document_structure_source_count": int(structure_assets.get("source_count") or 0),
             "document_structure_block_count": int(structure_assets.get("block_count") or 0),
+            "document_structure_page_count": int(structure_assets.get("page_count") or 0),
+            "document_structure_scanned_page_count": int(
+                structure_assets.get("scanned_page_count") or 0
+            ),
+            "document_structure_image_count": int(structure_assets.get("image_count") or 0),
+            "document_structure_table_region_count": int(
+                structure_assets.get("table_region_count") or 0
+            ),
+            "document_structure_multi_column_page_count": int(
+                structure_assets.get("multi_column_page_count") or 0
+            ),
+            "document_structure_critical_gap_count": int(
+                structure_assets.get("critical_structure_gap_count") or 0
+            ),
             "document_structure_unsupported_content_count": int(
                 structure_assets.get("unsupported_content_count") or 0
             ),
@@ -219,6 +283,10 @@ def enrich_asset_with_enterprise_understanding(
             "document_context_resolves_before_understanding_model": parsed_sources is not None,
             "document_context_promotions_are_conflict_reconciled": parsed_sources is not None,
             "docx_native_structure_ir_enabled": parsed_sources is not None,
+            "pdf_page_layout_structure_ir_enabled": parsed_sources is not None,
+            "pdf_scanned_pages_fail_closed": True,
+            "pdf_text_coordinates_are_formal_evidence": True,
+            "pdf_multi_column_reading_order_is_projection": True,
             "document_ir_context_precedes_text_context": parsed_sources is not None,
             "document_ir_filename_context_forbidden": True,
             "document_ir_order_is_not_business_flow": True,
