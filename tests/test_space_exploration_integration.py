@@ -120,6 +120,20 @@ def build_full_system():
     }
 
 
+def test_product_default_invariant_graph_contains_only_source_invariants():
+    graph = build_default_invariant_graph(
+        {
+            "invariants": [],
+            "relations": [],
+            "entities": [],
+            "operations": [],
+        },
+        project_id="source-only",
+    )
+
+    assert_eq(graph.size, 0, "no source-free golden or structural invariants")
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Integration Test 1: Actor x State
 # ═══════════════════════════════════════════════════════════════════════════════

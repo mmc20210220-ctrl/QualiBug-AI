@@ -79,7 +79,8 @@ def sample_ir():
         ],
         "relations": [
             {"id": "rel_order_item", "relation_type": "consumes", "from_ref": "ent_order", "to_ref": "ent_item",
-             "operation_ref": "op_create", "source_refs": [{"source_id": "s1"}], "preconditions": [], "effects": []},
+             "operation_ref": "op_create", "correlation_key": "item_id",
+             "source_refs": [{"source_id": "s1"}], "preconditions": [], "effects": []},
         ],
         "invariants": [
             {"id": "inv_qty", "invariant_type": "conservation", "terms": [{"field": "quantity"}],
@@ -292,10 +293,19 @@ class TestRelation:
         assert meta["relation_type"] == "consumes"
 
     def test_27_relation_correlation_key(self, ledger, sample_ir):
-        """Relation binding infers correlation key."""
+        """Relation binding preserves the exact source correlation key."""
         build_all_bindings(sample_ir, ledger)
         bindings = ledger.find(binding_type="relation", source_node_id="rel_order_item")
-        assert bindings[0]["metadata"]["correlation_key"] != ""
+        assert bindings[0]["metadata"]["correlation_key"] == "item_id"
+
+    def test_relation_without_declared_correlation_key_stays_unresolved(self):
+        from ai_test_asset_center.binding_builder import _declared_correlation_key
+
+        assert _declared_correlation_key({
+            "relation_type": "owns",
+            "from_ref": "parent",
+            "to_ref": "child",
+        }) == ""
 
     def test_28_relation_evidence_score(self, ledger, sample_ir):
         """Relation binding has schema_relation evidence."""

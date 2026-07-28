@@ -759,47 +759,6 @@ def _validate_explicit_compensator(
     }
 
 
-def _entity_fields_for_operation(
-    operation_ref: str,
-    entities: list[Any],
-    relations: list[Any],
-) -> list[str]:
-    """Derive writable fields from entities linked to an operation via relations.
-
-    Used as a fallback when request_example is empty (e.g. PATCH with
-    runtime-mutation plans that derive candidate fields from entity schemas).
-    """
-    entity_ids: set[str] = set()
-    for rel in relations:
-        if not isinstance(rel, dict):
-            continue
-        rel_kind = _text(rel.get("relation_type") or rel.get("kind"))
-        if rel_kind not in {"transitions", "observes", "mutates", "writes"}:
-            continue
-        op_ref = _text(
-            rel.get("operation_ref") or rel.get("from_ref") or rel.get("from") or rel.get("source")
-        )
-        target_ref = _text(
-            rel.get("to_ref") or rel.get("to") or rel.get("target")
-        )
-        if op_ref == operation_ref and target_ref:
-            entity_ids.add(target_ref)
-        elif target_ref == operation_ref:
-            from_ref = _text(rel.get("from_ref") or rel.get("from") or rel.get("source"))
-            if from_ref:
-                entity_ids.add(from_ref)
-    fields: list[str] = []
-    for entity in entities:
-        if not isinstance(entity, dict):
-            continue
-        if _text(entity.get("id")) not in entity_ids:
-            continue
-        for f in _list(entity.get("fields")):
-            if isinstance(f, str) and f not in fields:
-                fields.append(f)
-    return fields
-
-
 def _validate_field_snapshot_restore(
     *,
     primary_method: str,
@@ -834,16 +793,6 @@ def _validate_field_snapshot_restore(
     writable_fields = list(request_example.keys()) if isinstance(request_example, dict) else []
     # Strip server-managed fields
     restore_fields = [f for f in writable_fields if f.lower() not in SERVER_MANAGED_FIELDS]
-
-    # Fallback: derive writable fields from linked entity definitions when
-    # request_example is empty (common for PATCH with runtime-mutation plans).
-    if not restore_fields and entities:
-        entity_fields = _entity_fields_for_operation(
-            primary_operation_ref, entities or [], relations or []
-        )
-        restore_fields = [
-            f for f in entity_fields if f.lower() not in SERVER_MANAGED_FIELDS
-        ]
 
     if not restore_fields:
         return {"kind": "none", "detail": "field_snapshot_restore_no_writable_fields"}

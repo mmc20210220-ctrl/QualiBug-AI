@@ -18,10 +18,9 @@ BINDING_PRIORITY = (
     "experiment_setup_response",
     "same_actor_list_read",
     "actor_credential_secret",
-    "evaluator_frozen_fixture",
+    "runtime_actor_secret_ref",
     "disposable_fixture_receipt",
     "api_doc_example",
-    "schema_generated",
 )
 
 _PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
@@ -44,14 +43,6 @@ _CREDENTIAL_FIELD_TOKENS = frozenset({
     "clientsecret",
     "apikey",
 })
-_CLEANUP_ACTION_RE = re.compile(
-    r"(?:cancel|close|void|disable|archive|reject|release|rollback|revoke|remove|"
-    r"delete|deactivate|suspend|expire|invalidate|terminate|withdraw|abandon|"
-    r"discard|retire|freeze|reset|clear|purge)$",
-    re.I,
-)
-
-
 def _text(value: Any) -> str:
     return str(value or "").strip()
 
@@ -358,31 +349,6 @@ def _request_example(operation: dict[str, Any], *, sibling_ops: list[dict[str, A
             value = _dict(row).get("value")
             if isinstance(value, dict) and value:
                 return dict(value)
-    # Inherit from sibling POST operations sharing the same path prefix
-    op_path = normalize_path_placeholders(
-        _text(operation.get("path") or operation.get("raw_path"))
-    ).rstrip("/")
-    op_prefix = op_path.rsplit("/", 1)[0] if "/" in op_path else ""
-    # A root API prefix (for example ``/api``) is shared by unrelated
-    # resources.  Inheriting a sibling body at that level fabricates path/body
-    # placeholders on read operations and later blocks otherwise executable
-    # experiments.  Only inherit when the shared prefix names a concrete
-    # resource domain.
-    op_prefix_parts = [part for part in op_prefix.strip("/").split("/") if part]
-    if len(op_prefix_parts) >= 2 and sibling_ops:
-        for candidate in sibling_ops:
-            if not isinstance(candidate, dict):
-                continue
-            if _text(candidate.get("method")).upper() != "POST":
-                continue
-            c_path = normalize_path_placeholders(
-                _text(candidate.get("path") or candidate.get("raw_path"))
-            ).rstrip("/")
-            c_prefix = c_path.rsplit("/", 1)[0] if "/" in c_path else ""
-            if c_prefix == op_prefix and c_path != op_path:
-                c_example = _dict(candidate.get("request_example"))
-                if c_example:
-                    return dict(c_example)
     return {}
 
 
@@ -515,6 +481,24 @@ def _declared_cleanup_operations(
     behavior_ir: dict[str, Any],
 ) -> list[dict[str, str]]:
     created_collection = normalize_path_placeholders(create_path).rstrip("/")
+    create_refs = {
+        _text(operation.get("id"))
+        for operation in _list(_dict(behavior_ir).get("operations"))
+        if isinstance(operation, dict)
+        and _text(operation.get("method")).upper() == "POST"
+        and normalize_path_placeholders(
+            _text(operation.get("path") or operation.get("raw_path"))
+        ).rstrip("/") == created_collection
+        and _text(operation.get("id"))
+    }
+    explicit_compensators = {
+        _text(relation.get("operation_ref") or relation.get("from_ref"))
+        for relation in _list(_dict(behavior_ir).get("relations"))
+        if isinstance(relation, dict)
+        and _text(relation.get("relation_type")) == "compensates"
+        and _text(relation.get("to_ref")) in create_refs
+        and _text(relation.get("status")) not in {"conflicting", "unsupported"}
+    }
     candidates: list[tuple[int, dict[str, str]]] = []
     for operation in _list(_dict(behavior_ir).get("operations")):
         if not isinstance(operation, dict):
@@ -530,18 +514,19 @@ def _declared_cleanup_operations(
             or not path.startswith(created_collection + "/")
         ):
             continue
+        operation_ref = _text(operation.get("id"))
         is_delete = method == "DELETE"
-        is_compensation = bool(_CLEANUP_ACTION_RE.search(path.rstrip("/")))
-        if not is_delete and not is_compensation:
+        is_explicit_compensation = operation_ref in explicit_compensators
+        if not is_delete and not is_explicit_compensation:
             continue
-        candidates.append((
-            0 if is_delete else 1,
-            {
-                "operation_ref": _text(operation.get("id")),
-                "method": method,
-                "path": path,
-            },
-        ))
+        candidate = {
+            "operation_ref": operation_ref,
+            "method": method,
+            "path": path,
+        }
+        if not is_delete and is_explicit_compensation and len(create_refs) == 1:
+            candidate["compensates_operation_ref"] = sorted(create_refs)[0]
+        candidates.append((0 if is_delete else 1, candidate))
     ordered = [row for _, row in sorted(
         candidates,
         key=lambda item: (item[0], item[1]["path"].count("/"), item[1]["path"]),
@@ -557,111 +542,54 @@ def _declared_cleanup_operations(
     return unique
 
 
-def _request_contract_shape(value: Any) -> Any:
-    if isinstance(value, dict):
-        return tuple(sorted(
-            (_text(key), _request_contract_shape(child))
-            for key, child in value.items()
-        ))
-    if isinstance(value, list):
-        return ("list", tuple(_request_contract_shape(child) for child in value))
-    if isinstance(value, str):
-        placeholder = _BODY_PLACEHOLDER_RE.match(value)
-        return ("placeholder", _text(placeholder.group(1))) if placeholder else "string"
-    if isinstance(value, bool):
-        return "boolean"
-    if isinstance(value, int):
-        return "integer"
-    if isinstance(value, float):
-        return "number"
-    if value is None:
-        return "null"
-    return type(value).__name__
-
-
-def _source_text_references_action(
-    source_operation: dict[str, Any],
-    candidate_operation: dict[str, Any],
-) -> bool:
-    source_path = normalize_path_placeholders(
-        _text(source_operation.get("path") or source_operation.get("raw_path"))
-    ).rstrip("/")
-    source_action = source_path.rsplit("/", 1)[-1].lower()
-    source_text = re.sub(
-        r"[\W_]+",
-        "",
-        " ".join([
-            _text(source_operation.get("summary")),
-            _text(source_operation.get("description")),
-        ]).lower(),
-    )
-    candidate_text = re.sub(
-        r"[\W_]+",
-        "",
-        " ".join([
-            _text(candidate_operation.get("summary")),
-            _text(candidate_operation.get("description")),
-        ]).lower(),
-    )
-    return bool(
-        candidate_text
-        and (
-            (len(source_text) >= 4 and source_text in candidate_text)
-            or (len(source_action) >= 4 and source_action in candidate_text)
-        )
-    )
-
-
 def declared_action_compensators(
     operation: dict[str, Any],
     *,
     behavior_ir: dict[str, Any],
 ) -> list[dict[str, str]]:
-    """Return unique source-declared action endpoints that can compensate a write.
-
-    Structural compatibility alone is insufficient. A candidate must share the
-    same action parent and request contract, be explicitly documented, expose a
-    real effect observer, and its own source text must reference the original
-    action. Ambiguous candidates are returned to the compiler, which fails
-    closed unless exactly one remains.
-    """
-    source = _dict(operation)
-    source_id = _text(source.get("id"))
-    source_path = normalize_path_placeholders(
-        _text(source.get("path") or source.get("raw_path"))
-    ).rstrip("/")
-    source_body = _request_example(source)
-    if (
-        not source_id
-        or _text(source.get("method")).upper() not in {"POST", "PUT", "PATCH"}
-        or "/" not in source_path
-        or not source_body
-        or not _list(source.get("source_refs"))
-    ):
-        return []
-    parent_path = source_path.rsplit("/", 1)[0]
-    source_shape = _request_contract_shape(source_body)
+    """Return compensators linked to this write by an explicit source relation."""
+    source_id = _text(_dict(operation).get("id"))
+    operations = {
+        _text(candidate.get("id")): candidate
+        for candidate in _list(_dict(behavior_ir).get("operations"))
+        if isinstance(candidate, dict) and _text(candidate.get("id"))
+    }
     candidates: list[dict[str, str]] = []
-    for candidate in _list(_dict(behavior_ir).get("operations")):
-        if not isinstance(candidate, dict) or _text(candidate.get("id")) == source_id:
+    for relation in _list(_dict(behavior_ir).get("relations")):
+        if (
+            not isinstance(relation, dict)
+            or _text(relation.get("relation_type") or relation.get("kind"))
+            not in {"compensates", "inverse", "compensation"}
+            or not _list(relation.get("source_refs"))
+            or _text(relation.get("status")) in {"conflicting", "unsupported"}
+        ):
             continue
+        standard_cleanup = _text(
+            relation.get("operation_ref") or relation.get("from_ref")
+        )
+        standard_primary = _text(relation.get("to_ref"))
+        legacy_primary = _text(
+            relation.get("source") or relation.get("source_operation_ref")
+        )
+        legacy_cleanup = _text(
+            relation.get("target") or relation.get("target_operation_ref")
+        )
+        cleanup_ref = (
+            standard_cleanup
+            if standard_primary == source_id
+            else legacy_cleanup
+            if legacy_primary == source_id
+            else ""
+        )
+        candidate = operations.get(cleanup_ref) or {}
         method = _text(candidate.get("method")).upper()
         path = normalize_path_placeholders(
             _text(candidate.get("path") or candidate.get("raw_path"))
-        ).rstrip("/")
-        terminal = path.rsplit("/", 1)[-1]
-        if (
-            method not in {"POST", "PUT", "PATCH"}
-            or path.rsplit("/", 1)[0] != parent_path
-            or not _CLEANUP_ACTION_RE.search(terminal)
-            or not _list(candidate.get("source_refs"))
-            or _request_contract_shape(_request_example(candidate)) != source_shape
-            or not _source_text_references_action(source, candidate)
-            or not declared_effect_observers(candidate, behavior_ir=behavior_ir)
-        ):
+        )
+        if method not in {"POST", "PUT", "PATCH", "DELETE"} or not path:
             continue
         candidates.append({
-            "operation_ref": _text(candidate.get("id")),
+            "operation_ref": cleanup_ref,
             "method": method,
             "path": path,
         })
@@ -673,54 +601,52 @@ def declared_action_recreate_primaries(
     *,
     behavior_ir: dict[str, Any],
 ) -> list[dict[str, str]]:
-    """When primary is a cleanup action, return unique sibling creates it reverses.
-
-    Only siblings whose ``declared_action_compensators`` uniquely name this
-    cleanup operation qualify. Ambiguous create peers (same body shape but no
-    unique compensator link) fail closed.
-    """
-    source = _dict(operation)
-    source_id = _text(source.get("id"))
-    source_path = normalize_path_placeholders(
-        _text(source.get("path") or source.get("raw_path"))
-    ).rstrip("/")
-    if (
-        not source_id
-        or _text(source.get("method")).upper() not in {"POST", "PUT", "PATCH"}
-        or "/" not in source_path
-        or not _CLEANUP_ACTION_RE.search(source_path.rsplit("/", 1)[-1])
-        or not _list(source.get("source_refs"))
-    ):
-        return []
-    parent_path = source_path.rsplit("/", 1)[0]
+    """Return writes explicitly named as the inverse of this cleanup action."""
+    cleanup_id = _text(_dict(operation).get("id"))
+    operations = {
+        _text(candidate.get("id")): candidate
+        for candidate in _list(_dict(behavior_ir).get("operations"))
+        if isinstance(candidate, dict) and _text(candidate.get("id"))
+    }
     candidates: list[dict[str, str]] = []
-    for candidate in _list(_dict(behavior_ir).get("operations")):
-        if not isinstance(candidate, dict) or _text(candidate.get("id")) == source_id:
+    for relation in _list(_dict(behavior_ir).get("relations")):
+        if (
+            not isinstance(relation, dict)
+            or _text(relation.get("relation_type") or relation.get("kind"))
+            not in {"compensates", "inverse", "compensation"}
+            or not _list(relation.get("source_refs"))
+            or _text(relation.get("status")) in {"conflicting", "unsupported"}
+        ):
             continue
+        standard_cleanup = _text(
+            relation.get("operation_ref") or relation.get("from_ref")
+        )
+        standard_primary = _text(relation.get("to_ref"))
+        legacy_primary = _text(
+            relation.get("source") or relation.get("source_operation_ref")
+        )
+        legacy_cleanup = _text(
+            relation.get("target") or relation.get("target_operation_ref")
+        )
+        primary_ref = (
+            standard_primary
+            if standard_cleanup == cleanup_id
+            else legacy_primary
+            if legacy_cleanup == cleanup_id
+            else ""
+        )
+        candidate = operations.get(primary_ref) or {}
         method = _text(candidate.get("method")).upper()
         path = normalize_path_placeholders(
             _text(candidate.get("path") or candidate.get("raw_path"))
-        ).rstrip("/")
-        if (
-            method not in {"POST", "PUT", "PATCH"}
-            or path.rsplit("/", 1)[0] != parent_path
-            or _CLEANUP_ACTION_RE.search(path.rsplit("/", 1)[-1])
-            or not _list(candidate.get("source_refs"))
-        ):
-            continue
-        compensators = declared_action_compensators(
-            candidate,
-            behavior_ir=behavior_ir,
         )
-        if (
-            len(compensators) == 1
-            and _text(compensators[0].get("operation_ref")) == source_id
-        ):
-            candidates.append({
-                "operation_ref": _text(candidate.get("id")),
-                "method": method,
-                "path": path,
-            })
+        if method not in {"POST", "PUT", "PATCH"} or not path:
+            continue
+        candidates.append({
+            "operation_ref": primary_ref,
+            "method": method,
+            "path": path,
+        })
     return candidates
 
 
@@ -738,136 +664,7 @@ def _declared_fixture_actor_refs(
         and _text(relation.get("operation_ref")) == create_ref
         and _text(relation.get("actor_ref"))
     ]
-    if explicit:
-        return list(dict.fromkeys(explicit))
-
-    method = _text(create_operation.get("method")).upper()
-    action_tokens = {
-        "*", method.lower(), "write", "manage",
-        "create", "add", "register", "submit",
-    }
-    path_tokens = {
-        token
-        for token in re.findall(
-            r"[a-z0-9]+",
-            normalize_path_placeholders(_text(create_operation.get("path"))).lower(),
-        )
-        if token not in {"api", "admin", "v1", "v2", "v3"}
-        and not token.startswith("{")
-    }
-    path_token_forms = set(path_tokens)
-    for token in path_tokens:
-        if token.endswith("s") and len(token) > 3:
-            path_token_forms.add(token[:-1])
-        else:
-            path_token_forms.add(token + "s")
-    ranked: list[tuple[int, int, str]] = []
-    for index, actor in enumerate(_list(_dict(behavior_ir).get("actors"))):
-        if not isinstance(actor, dict) or not _text(actor.get("id")):
-            continue
-        actions = {
-            _text(action).lower()
-            for action in _list(actor.get("allowed_actions"))
-            if _text(action)
-        }
-        resources = set()
-        for resource in _list(actor.get("allowed_resources")):
-            resources.update(re.findall(r"[a-z0-9]+", _text(resource).lower()))
-        resource_forms = set(resources)
-        for token in resources:
-            if token.endswith("s") and len(token) > 3:
-                resource_forms.add(token[:-1])
-            else:
-                resource_forms.add(token + "s")
-        if not actions.intersection(action_tokens) or not resource_forms.intersection(path_token_forms):
-            continue
-        secret = _text(actor.get("credential_secret_ref"))
-        ranked.append((0 if "test_accounts" in secret or "context" in secret else 1, index, _text(actor.get("id"))))
-    result = [actor_ref for _, _, actor_ref in sorted(ranked)]
-    return result
-
-
-def _generate_minimal_body_from_schema(schema: dict[str, Any]) -> dict[str, Any]:
-    """Generate a minimal valid request body from a JSON Schema definition.
-
-    Used when no documented request example exists. Handles complex enterprise
-    schemas with nested objects, arrays, and type constraints.
-    """
-    if not isinstance(schema, dict):
-        return {}
-    properties = _dict(schema.get("properties", {}))
-    if not properties:
-        return {}
-    required = [_text(v) for v in (schema.get("required") or []) if _text(v)]
-    body: dict[str, Any] = {}
-    for field_name, field_schema in properties.items():
-        if not isinstance(field_schema, dict):
-            continue
-        field_type = _text(field_schema.get("type", "")).lower()
-        # Use schema example, default, or generate from type
-        example = field_schema.get("example") or field_schema.get("default")
-        if example is not None:
-            body[field_name] = example
-            continue
-        if field_type == "string":
-            enum_vals = field_schema.get("enum")
-            body[field_name] = str(enum_vals[0]) if enum_vals else f"auto_{field_name}"
-        elif field_type == "integer":
-            body[field_name] = int(field_schema.get("minimum", 1))
-        elif field_type == "number":
-            body[field_name] = float(field_schema.get("minimum", 1.0))
-        elif field_type == "boolean":
-            body[field_name] = True
-        elif field_type == "array":
-            items_schema = field_schema.get("items", {})
-            if isinstance(items_schema, dict) and items_schema.get("type") == "object":
-                body[field_name] = [_generate_minimal_body_from_schema(items_schema)]
-            else:
-                body[field_name] = []
-        elif field_type == "object":
-            body[field_name] = _generate_minimal_body_from_schema(field_schema)
-        else:
-            body[field_name] = f"auto_{field_name}"
-    return body
-
-
-def _generate_placeholder_test_value(name: str) -> str:
-    """Generate a best-effort test value for an unresolvable path/body placeholder.
-
-    Uses semantic heuristics based on the parameter name. This is a last-resort
-    fallback — the API may reject the generated value, but that produces an
-    observable HTTP response rather than silently blocking the obligation.
-    """
-    import uuid
-    from datetime import datetime
-
-    lower = name.lower().strip()
-    # ID-like parameters: generate a semi-random numeric ID
-    if lower in {"id", "uuid", "key"} or lower.endswith("_id") or lower.endswith("id"):
-        return f"qb_test_{abs(hash(name + str(datetime.now().timestamp())))}"[:20]
-    # SKU/code parameters
-    if lower in {"sku", "code", "product_code", "item_code"} or "sku" in lower:
-        return f"QB-TEST-{uuid.uuid4().hex[:8].upper()}"
-    # Numeric parameters
-    if lower in {"qty", "quantity", "amount", "price", "total", "count", "number"}:
-        return "1"
-    # String parameters
-    if lower in {"name", "title", "description", "reason", "note", "comment"}:
-        return f"qb_test_{lower}"
-    # Email
-    if "email" in lower:
-        return "test@qualibug.test"
-    # Phone
-    if "phone" in lower or "mobile" in lower:
-        return "13800138000"
-    # Address
-    if "address" in lower:
-        return "1"
-    # Status/state
-    if lower in {"status", "state", "type", "kind", "category", "role"}:
-        return "active"
-    # Generic fallback
-    return f"qb_test_{lower}_{uuid.uuid4().hex[:6]}"
+    return list(dict.fromkeys(explicit))
 
 
 def _declared_fixture_setup(
@@ -898,24 +695,7 @@ def _declared_fixture_setup(
         ), None)
         if not isinstance(create, dict):
             continue
-        # ── Body generation priority ──
-        # 1. Enterprise test data engine (schema-driven, realistic values)
-        # 2. Schema-based minimal body generation
-        # 3. Documented example (LAST RESORT — illustrative only in real APIs)
-        body_template = {}
-        request_schema = _dict(
-            create.get("request_schema")
-            or _dict(create.get("requestBody", {}))
-        )
-        schema_props = _dict(request_schema.get("properties", {}))
-        if schema_props:
-            try:
-                from .enterprise_test_data_engine import generate_request_body
-                body_template = generate_request_body(request_schema)
-            except Exception:
-                body_template = _generate_minimal_body_from_schema(request_schema)
-        if not body_template:
-            body_template = _request_example(create, sibling_ops=operations)
+        body_template = _request_example(create, sibling_ops=operations)
         if not body_template:
             continue
         body_bindings: list[dict[str, Any]] = []
@@ -929,22 +709,15 @@ def _declared_fixture_setup(
                 behavior_ir=behavior_ir,
             )
             if not resolvers:
-                # Best-effort: unresolvable body placeholders should not block
-                # the entire fixture setup. Use the template value as-is.
-                # Enterprise APIs often have fields (addressId, couponCode)
-                # that can't be auto-resolved from list endpoints.
-                body_bindings.append({
-                    "target": _text(row.get("target")),
-                    "template_token": token,
-                    "resolver_operations": [],
-                    "fallback": "template_value",
-                })
-                continue
+                unresolved_body = True
+                break
             body_bindings.append({
                 "target": _text(row.get("target")),
                 "template_token": token,
                 "resolver_operations": resolvers,
             })
+        if unresolved_body:
+            continue
         cleanup_operations = _declared_cleanup_operations(
             normalize_path_placeholders(collection),
             behavior_ir=behavior_ir,
@@ -1009,7 +782,7 @@ def build_binding_plan(
         existing = _dict(values.get(name))
         source = _text(existing.get("source") or existing.get("source_priority"))
         if source and source not in BINDING_PRIORITY:
-            source = "schema_generated"
+            raise ValueError(f"binding_source_priority_invalid:{source}")
         if existing.get("value") is not None and source:
             plan.append({
                 "target": name,
@@ -1127,13 +900,10 @@ def build_binding_plan(
                         "value_fingerprint": "",
                     })
                     continue
-            # ── Best-effort fallback for unresolvable placeholders ──
-            # PATH PARAMETERS: Block instead of generating placeholder.
-            # Using qb_test_* in path guarantees 404/400 failure - waste of resources.
-            # BODY PARAMETERS: Generate test value (API may accept or reject).
+            # An unbound placeholder is never a license to invent enterprise
+            # data. Both path and body values must remain visibly blocked.
             is_path_param = name in path_placeholders
             if is_path_param:
-                # Block: path parameter with placeholder ID will definitely fail
                 plan.append({
                     "target": name,
                     "status": "blocked",
@@ -1143,15 +913,13 @@ def build_binding_plan(
                     "blocked_reason": "PLACEHOLDER_PATH_PARAMETER_NOT_RESOLVED",
                 })
             else:
-                # Body parameter: generate test value (may be accepted)
-                generated_value = _generate_placeholder_test_value(name)
                 plan.append({
                     "target": name,
-                    "status": "bound",
-                    "source_priority": "test_value_generated",
+                    "status": "blocked",
+                    "source_priority": "body_placeholder_unresolvable",
                     "resolver_operations": [],
-                    "value_fingerprint": _fingerprint(generated_value),
-                    "generated_value": generated_value,
+                    "value_fingerprint": "",
+                    "blocked_reason": "BODY_PARAMETER_NOT_SOURCE_BOUND",
                 })
 
     for actor in actors or []:
@@ -1229,11 +997,10 @@ def apply_binding(
     source_priority: str,
 ) -> list[dict[str, Any]]:
     """Apply a binding without allowing low-priority sources to override higher ones."""
-    if source_priority not in BINDING_PRIORITY and source_priority != "runtime_actor_secret_ref":
-        source_priority = "schema_generated"
+    if source_priority not in BINDING_PRIORITY:
+        raise ValueError(f"binding_source_priority_invalid:{source_priority}")
     new_plan = [dict(item) for item in plan]
     priority_rank = {name: index for index, name in enumerate(BINDING_PRIORITY)}
-    priority_rank["runtime_actor_secret_ref"] = 0
     incoming_rank = priority_rank.get(source_priority, len(BINDING_PRIORITY))
     for item in new_plan:
         if _text(item.get("target")) != _text(target):

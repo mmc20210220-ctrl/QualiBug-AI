@@ -19,8 +19,6 @@ from .adaptive_discovery_planner import (
     build_agent_intent_plan,
     plan_obligation_round,
 )
-from .deep_experiment_planner import plan_deep_experiments
-from .deep_experiment_protocol_adapter import adapt_deep_experiments_for_execution
 from .adaptive_planning_history import (
     build_planning_budget_receipt,
     build_planning_history_receipt,
@@ -354,21 +352,24 @@ def build_discovery_plan(
         runtime_actors=runtime_actors,
         available_surfaces=observation_surfaces_for_adapters(_available_adapters),
     )
-    # Join prose invariants to the operations they constrain. A rule extracted from a
-    # requirements document never names an endpoint, so operation_refs stayed empty and
-    # the obligation compiler deferred the obligation with MISSING_PRIMARY_OPERATION --
-    # the single largest terminal reason on a live 11-service target. The binder only
-    # writes a ref when two independent signals agree and records the basis for each,
-    # so a derived binding is auditable and an unbindable invariant keeps its gap.
-    from .invariant_operation_binder import (
-        apply_invariant_operation_bindings,
-        bind_invariants_to_operations,
-    )
-
-    invariant_binding_result = bind_invariants_to_operations(behavior_ir)
-    invariant_binding_receipt = apply_invariant_operation_bindings(
-        behavior_ir, invariant_binding_result
-    )
+    invariants = [
+        row
+        for row in _list(behavior_ir.get("invariants"))
+        if isinstance(row, dict)
+    ]
+    invariant_binding_receipt = {
+        "schema_version": "qualibug.invariant-operation-binding.v2",
+        "status": "SOURCE_IDENTITY_ONLY",
+        "heuristic_binding_enabled": False,
+        "explicitly_bound_count": sum(
+            1 for row in invariants if _list(row.get("operation_refs"))
+        ),
+        "unbound_count": sum(
+            1 for row in invariants if not _list(row.get("operation_refs"))
+        ),
+        "semantic_linking_enabled": semantic_linking_enabled,
+        "reason_code": "EXACT_SOURCE_OR_AGENT_SEMANTIC_IDENTITY_REQUIRED",
+    }
 
     behavior_ir_input_receipt = {
         "schema_version": "qualibug.behavior-ir-input-receipt.v1",
@@ -774,29 +775,6 @@ def build_discovery_plan(
         "blocked_obligations": _binding_blocked_obls[:50],
         "probe_status": _probe_status,
     }
-
-    # ── Deep Experiment Planner: enrich blocked/shallow obligations ──
-    _deep_budget = int(
-        os.environ.get("QUALIBUG_DEEP_EXPERIMENT_BUDGET") or "100"
-    )
-    _deep_result = plan_deep_experiments(
-        obligations,
-        by_obligation,
-        behavior_ir,
-        budget=_deep_budget,
-    )
-    # ── Plan-to-Protocol Adaptation (SPEC §8): enrich for executor ──
-    _deep_raw = _list(_deep_result.get("deep_experiments"))
-    _adaptation = adapt_deep_experiments_for_execution(
-        _deep_raw,
-        behavior_ir,
-    )
-    _deep_by_obl = _dict(_adaptation.get("by_obligation"))
-    for _d_oid, _d_exp in _deep_by_obl.items():
-        if _d_oid not in by_obligation or _text(
-            _dict(_dict(by_obligation[_d_oid]).get("compile_receipt")).get("status")
-        ).upper() != "COMPILED":
-            by_obligation[_d_oid] = _d_exp
 
     campaign_budget = int(getattr(campaign, "slice_budget", 0) or 0)
     if campaign_budget <= 0:

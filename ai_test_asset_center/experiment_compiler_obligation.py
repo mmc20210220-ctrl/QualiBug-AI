@@ -45,8 +45,6 @@ _FAMILY_ASSERTION_KIND = {
 from .runtime_binding_graph import (
     blocked_binding_reasons,
     build_binding_plan,
-    declared_action_compensators,
-    declared_action_recreate_primaries,
     declared_effect_observers,
     unresolved_placeholders,
 )
@@ -306,15 +304,16 @@ def compile_experiment_for_obligation(
     required_actors = [
         _text(x) for x in _list(obl.get("required_actors")) if _text(x)
     ]
-    # ── SPEC v1.1.1 §11: Actor Selection Contract detection ──
-    # Explicit actors: obligation directly names actors or property has actor refs.
-    _explicit_actor_fields = ("actor_ref", "owner_actor_ref", "viewer_actor_ref",
-                              "control_actor_ref", "treatment_actor_ref")
-    _has_explicit_actor_from_obl = bool(required_actors)
-    _has_explicit_actor_from_prop = any(
-        _text(prop.get(f)) for f in _explicit_actor_fields
+    _explicit_actor_fields = (
+        "actor_ref",
+        "owner_actor_ref",
+        "viewer_actor_ref",
+        "control_actor_ref",
+        "treatment_actor_ref",
     )
-    _actor_selection_explicit = _has_explicit_actor_from_obl or _has_explicit_actor_from_prop
+    _actor_selection_explicit = bool(required_actors) or any(
+        _text(prop.get(field)) for field in _explicit_actor_fields
+    )
     required_fixtures = [
         _text(x) for x in _list(obl.get("required_fixtures")) if _text(x)
     ]
@@ -334,29 +333,13 @@ def compile_experiment_for_obligation(
             )
         )
         if state_reason:
-            # ── Enhanced: try actor degradation for state family ──
-            if "actor" in state_reason:
-                _fallback = next(
-                    (
-                        aid for aid, a in actors.items()
-                        if isinstance(a, dict)
-                        and _actor_is_executable(a)
-                        and _text(a.get("credential_secret_ref") or a.get("secret_ref"))
-                    ),
-                    None,
-                )
-                if _fallback:
-                    required_actors = [_fallback]
-                    prop = {**prop, "actor_ref": _fallback, "_actor_degraded": True}
-                    state_reason = ""  # Clear the reason to proceed
-            if state_reason:
-                return blocked_experiment(
-                    oid,
-                    "BLOCKED_MISSING_BINDING"
-                    if "actor" not in state_reason
-                    else "BLOCKED_MISSING_ACTOR",
-                    state_reason,
-                )
+            return blocked_experiment(
+                oid,
+                "BLOCKED_MISSING_BINDING"
+                if "actor" not in state_reason
+                else "BLOCKED_MISSING_ACTOR",
+                state_reason,
+            )
         obl = {
             **obl,
             "property": prop,
@@ -388,12 +371,7 @@ def compile_experiment_for_obligation(
                     break
     for op_id in required_ops:
         if op_id not in ops:
-            # Filter to only valid operations; update primary if needed.
-            required_ops = [oid for oid in required_ops if oid in ops]
-            if not required_ops:
-                return blocked_experiment(oid, "BLOCKED_MISSING_OPERATION", "no_valid_operations")
-            primary_op_id = required_ops[0]
-            break
+            return blocked_experiment(oid, "BLOCKED_MISSING_OPERATION", op_id)
     if not required_actors and primary_op_id and family not in {"authorization", "isolation", "visibility"}:
         permitted_actor_ids = {
             _text(relation.get("actor_ref") or relation.get("from_ref"))
@@ -416,52 +394,19 @@ def compile_experiment_for_obligation(
             )
         )
         if not ranked_actors:
-            # Source permits may be absent for invariant-bound writes. Fall back
-            # to executable runtime-bound test actors already present in IR.
-            ranked_actors = sorted(
-                (
-                    (
-                        0 if _text(actor.get("account_ref")) else 1,
-                        0 if actor.get("runtime_bound") is True else 1,
-                        actor_id,
-                    )
-                    for actor_id, actor in actors.items()
-                    if isinstance(actor, dict) and _actor_is_executable(actor)
-                )
+            return blocked_experiment(
+                oid,
+                "BLOCKED_MISSING_ACTOR",
+                f"source_permitted_actor_missing:{primary_op_id}",
             )
-        if ranked_actors:
-            required_actors = [ranked_actors[0][2]]
-            prop = {
-                **prop,
-                "actor_ref": required_actors[0],
-            }
+        required_actors = [ranked_actors[0][2]]
+        prop = {
+            **prop,
+            "actor_ref": required_actors[0],
+        }
     for actor_id in required_actors:
         if actor_id not in actors:
-            # ── SPEC v1.1.1 §11.1: Explicit actors must NOT be substituted ──
-            if _actor_selection_explicit:
-                return blocked_experiment(oid, "BLOCKED_MISSING_ACTOR", actor_id)
-            # Constraint-based: try fallback actor
-            _fallback = next(
-                (
-                    aid for aid, a in actors.items()
-                    if isinstance(a, dict)
-                    and _actor_is_executable(a)
-                    and _text(a.get("role")).lower() in {"admin", "administrator", "superuser"}
-                ),
-                None,
-            ) or next(
-                (
-                    aid for aid, a in actors.items()
-                    if isinstance(a, dict) and _actor_is_executable(a)
-                ),
-                None,
-            )
-            if _fallback:
-                required_actors = [_fallback if a == actor_id else a for a in required_actors]
-                prop = {**prop, "actor_ref": _fallback, "_actor_degraded": True, "_original_actor": actor_id}
-                actor_id = _fallback
-            else:
-                return blocked_experiment(oid, "BLOCKED_MISSING_ACTOR", actor_id)
+            return blocked_experiment(oid, "BLOCKED_MISSING_ACTOR", actor_id)
         secret_ref = _text(
             actors[actor_id].get("credential_secret_ref")
             or actors[actor_id].get("secret_ref")
@@ -471,37 +416,11 @@ def compile_experiment_for_obligation(
             and _text(actors[actor_id].get("role")).lower()
             not in {"anonymous", "public"}
         ):
-            # ── SPEC v1.1.1 §11.1: Explicit actors must NOT be substituted ──
-            if _actor_selection_explicit:
-                return blocked_experiment(
-                    oid,
-                    "BLOCKED_MISSING_ACTOR",
-                    f"missing_secret_ref:{actor_id}",
-                )
-            # Constraint-based: try fallback actor with valid secret
-            _fallback = next(
-                (
-                    aid for aid, a in actors.items()
-                    if isinstance(a, dict)
-                    and _actor_is_executable(a)
-                    and _text(a.get("credential_secret_ref") or a.get("secret_ref"))
-                ),
-                None,
+            return blocked_experiment(
+                oid,
+                "BLOCKED_MISSING_ACTOR",
+                f"missing_secret_ref:{actor_id}",
             )
-            if _fallback:
-                required_actors = [_fallback if a == actor_id else a for a in required_actors]
-                prop = {**prop, "actor_ref": _fallback, "_actor_degraded": True, "_original_actor": actor_id}
-                actor_id = _fallback
-                secret_ref = _text(
-                    actors[actor_id].get("credential_secret_ref")
-                    or actors[actor_id].get("secret_ref")
-                )
-            else:
-                return blocked_experiment(
-                    oid,
-                    "BLOCKED_MISSING_ACTOR",
-                    f"missing_secret_ref:{actor_id}",
-                )
         if _is_unresolvable_actor_secret_ref(secret_ref):
             return blocked_experiment(
                 oid,
@@ -562,16 +481,17 @@ def compile_experiment_for_obligation(
                     "provenance_fingerprint": _readback_contract.get("provenance_fingerprint", ""),
                 }]
         except Exception as _rb_exc:
-            # Fail-safe on the OUTCOME -- a resolver failure must not change compile
-            # behaviour -- but not silent. A bare pass here hid every defect in the
-            # resolver behind an indistinguishable BLOCKED_MISSING_OBSERVER, which is
-            # the one reason code that already accounts for most blocked obligations.
             logging.getLogger(__name__).warning(
-                "readback resolver raised for obligation %s (%s: %s); "
-                "falling back to declared observers only",
+                "readback resolver raised for obligation %s (%s: %s)",
                 oid,
                 type(_rb_exc).__name__,
                 str(_rb_exc)[:200],
+                exc_info=_rb_exc,
+            )
+            return blocked_experiment(
+                oid,
+                "BLOCKED_OBSERVER_RESOLUTION_FAILED",
+                f"{type(_rb_exc).__name__}:{str(_rb_exc)[:160]}",
             )
     # ── Filter write-only observers for read-only operations ──
     # entity_state, before_state, after_state, final_state, business_effect
@@ -702,19 +622,11 @@ def compile_experiment_for_obligation(
                     "value_fingerprint": "",
                 })
             else:
-                # No /me endpoint — use generated identity value as fallback.
-                # The API will apply authorization rules based on this identity;
-                # a 404 response is a valid test outcome, not a failure.
-                import uuid as _uuid
-                _fallback_id = str(_uuid.uuid4())
-                binding_plan.append({
-                    "target": identity_target,
-                    "target_path": "/{" + identity_target + "}",
-                    "status": "bound",
-                    "source_priority": "generated_identity",
-                    "value_fingerprint": _fallback_id,
-                    "generated_value": _fallback_id,
-                })
+                return blocked_experiment(
+                    oid,
+                    "BLOCKED_MISSING_BINDING",
+                    f"owner_identity_resolver_missing:{identity_target}",
+                )
     if family == "state":
         state_token = _state_match_token(prop.get("from_state"))
         normalized_path = normalize_path_placeholders(
@@ -737,71 +649,15 @@ def compile_experiment_for_obligation(
                 binding["selection_semantics"] = "source_state_precondition"
                 binding["required_state"] = _text(prop.get("from_state"))
     unresolved = unresolved_placeholders(primary_op, binding_plan)
-    prereq_plan = None
     if unresolved:
-        # ── Try unified enterprise test data constructor ──
-        # If placeholders cannot be resolved from existing data, build a
-        # full prerequisite chain: detect FK dependencies recursively,
-        # classify values, plan creation order. Store the plan for
-        # execution at runtime by the fixture materializer.
-        prereq_plan = None
-        try:
-            from .enterprise_test_data_constructor import plan_prerequisite_data
-            prereq_plan = plan_prerequisite_data(primary_op, ir, max_depth=10)
-            if prereq_plan and prereq_plan["total_prerequisites"] > 0:
-                # Check if the plan covers our unresolved placeholders
-                planned_entities = {
-                    step.get("entity", "").lower().rstrip("s")
-                    for step in prereq_plan["execution_plan"]
-                }
-                resolved_placeholders = [
-                    p for p in unresolved
-                    if p.lower().rstrip("s") in planned_entities
-                    or any(p.lower() in e for e in planned_entities)
-                ]
-                if resolved_placeholders:
-                    unresolved = [p for p in unresolved if p not in resolved_placeholders]
-        except Exception as exc:
-            logger.debug("prerequisite plan failed for obligation: %s", exc)
-            prereq_plan = None
-
-        if unresolved:
-            # ── Placeholder interception: BLOCK instead of generating fake IDs ──
-            # Unresolved path placeholders mean no real entity exists. Executing
-            # with placeholder IDs (qb_test_*) wastes compute and produces 100%
-            # failed requests. Block the experiment until real fixture data is
-            # materialized by the governed Bootstrap flow.
-            return blocked_experiment(
-                oid,
-                "BLOCKED_MISSING_BINDING",
-                f"unresolved_placeholders_no_fixture:{';'.join(unresolved[:6])}",
-            )
-
-    # Store prerequisite plan for runtime execution — attach to binding_plan
-    # since the experiment dict is built later by make_experiment().
-    if prereq_plan and prereq_plan.get("total_prerequisites", 0) > 0:
-        binding_plan.append({
-            "target": "__prerequisite_plan__",
-            "status": "bound",
-            "source_priority": "enterprise_test_data_constructor",
-            "prerequisite_plan": prereq_plan,
-        })
-    # ── Substitute generated values into operation path ──
-    # When the binding plan contains best-effort generated values, substitute
-    # them into the operation's path so that runtime preflight doesn't reject
-    # the still-present {placeholder} tokens.
-    for binding in binding_plan:
-        if not isinstance(binding, dict):
-            continue
-        gen_val = binding.get("generated_value")
-        if gen_val is not None:
-            target = _text(binding.get("target"))
-            if target:
-                primary_op["path"] = _text(primary_op.get("path", "")).replace(
-                    "{" + target + "}", str(gen_val)
-                ).replace(
-                    ":" + target, str(gen_val)
-                )
+        # A schema or entity-name heuristic cannot prove an executable business
+        # prerequisite. Runtime setup is legal only when the binding graph has
+        # an exact source request example plus a source-declared compensator.
+        return blocked_experiment(
+            oid,
+            "BLOCKED_MISSING_BINDING",
+            f"unresolved_placeholders_no_fixture:{';'.join(unresolved[:6])}",
+        )
     if is_write and not write_observers:
         primary_path_for_observers = normalize_path_placeholders(
             _text(primary_op.get("path") or primary_op.get("raw_path"))
@@ -1093,8 +949,6 @@ def compile_experiment_for_obligation(
                 "runtime_response_binding_required": "{" in primary_path,
             }]
         if not cleanup_plan and not cleanup_op:
-            from .runtime_binding_graph import _CLEANUP_ACTION_RE, _declared_cleanup_operations
-
             # SPEC v1.1 §12: Removed unsafe fallbacks:
             # - §12.1: Action → DELETE forbidden (DELETE only for collection create)
             # - §12.2: Cancel/Reject → Collection Create forbidden without explicit proof
@@ -1109,16 +963,29 @@ def compile_experiment_for_obligation(
             for rel in relations:
                 if not isinstance(rel, dict):
                     continue
-                kind = _text(rel.get("kind"))
+                kind = _text(rel.get("kind") or rel.get("relation_type"))
                 if kind not in {"compensates", "inverse", "compensation"}:
                     continue
-                src = _text(rel.get("source") or rel.get("source_operation_ref"))
-                tgt = _text(rel.get("target") or rel.get("target_operation_ref"))
-                if src == primary_op_id and tgt and tgt in ops:
-                    explicit_compensator = _dict(ops.get(tgt))
+                if not _list(rel.get("source_refs")):
+                    continue
+                standard_cleanup = _text(
+                    rel.get("operation_ref") or rel.get("from_ref")
+                )
+                standard_primary = _text(rel.get("to_ref"))
+                legacy_primary = _text(
+                    rel.get("source") or rel.get("source_operation_ref")
+                )
+                legacy_cleanup = _text(
+                    rel.get("target") or rel.get("target_operation_ref")
+                )
+                if (
+                    standard_primary == primary_op_id
+                    and standard_cleanup in ops
+                ):
+                    explicit_compensator = _dict(ops.get(standard_cleanup))
                     break
-                if tgt == primary_op_id and src and src in ops:
-                    explicit_compensator = _dict(ops.get(src))
+                if legacy_primary == primary_op_id and legacy_cleanup in ops:
+                    explicit_compensator = _dict(ops.get(legacy_cleanup))
                     break
 
             if explicit_compensator:
@@ -1304,6 +1171,23 @@ def compile_experiment_for_obligation(
             binding_plan.append(row)
             existing_targets.add(target)
 
+    control_actor = _text(
+        prop.get("control_actor_ref")
+        or prop.get("owner_actor_ref")
+        or prop.get("actor_ref")
+        or (required_actors[0] if required_actors else "")
+    )
+    treatment_actor = _text(
+        prop.get("treatment_actor_ref")
+        or prop.get("viewer_actor_ref")
+        or prop.get("actor_ref")
+        or (
+            required_actors[1]
+            if len(required_actors) > 1
+            else control_actor
+        )
+    )
+
     # ── V1.5.0 §10: Compile-Time Fixture Binding ──
     # Discover fixture candidates and build Disposable Fixture Contract BEFORE
     # final experiment assembly. Write experiments that create persistent entities
@@ -1358,70 +1242,18 @@ def compile_experiment_for_obligation(
                         behavior_ir=ir,
                     )
         except Exception as _fc_exc:
-            logger.debug(
-                "V1.5.0 fixture contract discovery failed for %s: %s",
-                oid, _fc_exc,
+            logger.warning(
+                "fixture contract discovery failed for %s: %s: %s",
+                oid,
+                type(_fc_exc).__name__,
+                str(_fc_exc)[:200],
+                exc_info=_fc_exc,
             )
-
-    control_actor = _text(
-        prop.get("control_actor_ref")
-        or prop.get("owner_actor_ref")
-        or prop.get("actor_ref")
-        or (required_actors[0] if required_actors else "")
-    )
-    treatment_actor = _text(
-        prop.get("treatment_actor_ref")
-        or prop.get("viewer_actor_ref")
-        or prop.get("actor_ref")
-        or (
-            required_actors[1]
-            if len(required_actors) > 1
-            else control_actor
-        )
-    )
-    # ── SPEC v1.1.1 §11.1: For authorization/isolation/visibility tests ──
-    # Control = authorized actor (higher privilege), Treatment = unauthorized (lower privilege)
-    # When actors are explicitly specified, NO swap or substitution is allowed.
-    _high_privilege_roles = {"admin", "administrator", "superadmin", "root", "system"}
-    _lower_privilege_roles = {"buyer", "customer", "user", "viewer", "guest", "anonymous", "public"}
-    if family in {"authorization", "isolation", "visibility"} and not _actor_selection_explicit:
-        _control_role = _text(actors.get(control_actor, {}).get("role")).lower()
-        _treatment_role = _text(actors.get(treatment_actor, {}).get("role")).lower()
-        # If treatment has higher privilege than control, swap them
-        if _treatment_role in _high_privilege_roles and _control_role not in _high_privilege_roles:
-            control_actor, treatment_actor = treatment_actor, control_actor
-            _control_role, _treatment_role = _treatment_role, _control_role
-        # If treatment equals control, or treatment has high privilege, find a lower-privilege actor
-        if treatment_actor == control_actor or _treatment_role in _high_privilege_roles:
-            _alt_actor = next(
-                (
-                    aid for aid, a in actors.items()
-                    if isinstance(a, dict)
-                    and _actor_is_executable(a)
-                    and aid != control_actor
-                    and _text(a.get("role")).lower() in _lower_privilege_roles
-                ),
-                None,
-            ) or next(
-                (
-                    aid for aid, a in actors.items()
-                    if isinstance(a, dict)
-                    and _actor_is_executable(a)
-                    and aid != control_actor
-                    and _text(a.get("role")).lower() not in _high_privilege_roles
-                ),
-                None,
-            ) or next(
-                (
-                    aid for aid, a in actors.items()
-                    if isinstance(a, dict)
-                    and _actor_is_executable(a)
-                    and aid != control_actor
-                ),
-                None,
+            return blocked_experiment(
+                oid,
+                "BLOCKED_FIXTURE_CONTRACT_FAILED",
+                f"{type(_fc_exc).__name__}:{str(_fc_exc)[:160]}",
             )
-            if _alt_actor:
-                treatment_actor = _alt_actor
     observer_requirements = list(required_observers)
     permit_only = _text(prop.get("template")) == "permitted_operation_invocation"
     if (
@@ -2080,13 +1912,15 @@ def compile_experiment_for_obligation(
 
     # ── SPEC v1.1.1 §11: Actor Selection Contract ──
     experiment["actor_selection_contract"] = {
-        "selection_mode": "explicit" if _actor_selection_explicit else "constraint_based",
+        "selection_mode": (
+            "explicit" if _actor_selection_explicit else "source_permitted"
+        ),
         "control_actor_ref": control_actor,
         "treatment_actor_ref": treatment_actor,
         "required_roles": [],
         "constraints": [],
         "source_refs": list(obl.get("source_refs") or [])[:3],
-        "substitution_allowed": not _actor_selection_explicit,
+        "substitution_allowed": False,
     }
 
     # ── SPEC v1.1 §8: Compile-time Cleanup Validation ──

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import base64
 import contextvars
-from decimal import Decimal
 import inspect
 import json
 import os
@@ -531,7 +530,7 @@ def _materialize_source_observed_mutation(
     before_body: Any,
     plan: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any], str]:
-    """Derive one bounded PATCH/PUT body from an observed source-linked entity."""
+    """Reject legacy plans that derive a write body from observed target state."""
 
     if _text(plan.get("schema_version")) != "qualibug.source-observed-mutation-plan.v1":
         return {}, {}, "runtime_mutation_plan_schema_invalid"
@@ -542,92 +541,7 @@ def _materialize_source_observed_mutation(
     ]
     if not candidates:
         return {}, {}, "runtime_mutation_candidate_fields_missing"
-    bindings = {
-        _text(key): value
-        for key, value in (plan.get("identity_bindings") or {}).items()
-        if _text(key) and value not in (None, "")
-    }
-    rows = _runtime_mutation_rows(before_body)
-    if bindings:
-        filtered = [
-            row
-            for row in rows
-            if all(str(row.get(key)) == str(value) for key, value in bindings.items())
-        ]
-        if filtered:
-            rows = filtered
-    if not rows:
-        # This return said "runtime_mutation_target_ambiguous", which it never is.
-        # Genuine ambiguity is handled two lines below -- "use first row when multiple
-        # match instead of blocking" -- so the only way here is ZERO rows. 70 attempts on
-        # a live target carried the ambiguity label while the truth was an empty
-        # before-state read, sending any reader looking for a disambiguation rule that
-        # would not have helped.
-        if before_body in (None, "", [], {}):
-            return {}, {}, "runtime_mutation_before_state_absent"
-        return {}, {}, "runtime_mutation_before_state_has_no_entity_rows"
-    # ── Degraded: use first row when multiple match instead of blocking ──
-    row = rows[0]
-    supported: list[tuple[int, str, Any, str]] = []
-    for field in candidates:
-        if field not in row:
-            continue
-        value = row.get(field)
-        if isinstance(value, bool):
-            supported.append((0, field, not value, "bool"))
-        elif isinstance(value, int) and not isinstance(value, bool):
-            supported.append((1, field, value + 1, "int"))
-        elif isinstance(value, float):
-            supported.append((2, field, value + 1.0, "float"))
-        elif isinstance(value, str) and re.fullmatch(r"[+-]?\d+(?:\.\d+)?", value.strip()):
-            normalized = value.strip()
-            mutated_decimal = Decimal(normalized) + Decimal(1)
-            if "." in normalized:
-                decimal_places = len(normalized.rsplit(".", 1)[1])
-                mutated_value = f"{mutated_decimal:.{decimal_places}f}"
-            else:
-                mutated_value = str(mutated_decimal.quantize(Decimal(1)))
-            supported.append((3, field, mutated_value, "str_decimal"))
-        elif isinstance(value, str) and value:
-            # ── Degraded: mutate general strings by appending suffix ──
-            supported.append((4, field, value + "_mut", "str_general"))
-    # ── Degraded: if no candidate fields found, try any mutable field in row ──
-    if not supported:
-        _skip_fields = {"id", "createdat", "updatedat", "created_at", "updated_at"}
-        for field, value in row.items():
-            if field.lower() in _skip_fields:
-                continue
-            if isinstance(value, bool):
-                supported.append((0, field, not value, "bool"))
-                break
-            elif isinstance(value, int) and not isinstance(value, bool):
-                supported.append((1, field, value + 1, "int"))
-                break
-            elif isinstance(value, str) and value:
-                supported.append((4, field, value + "_mut", "str_general"))
-                break
-    if not supported:
-        return {}, {}, "runtime_mutation_supported_field_missing"
-    derived_field_markers = ("original", "snapshot", "computed", "derived")
-    _, field, mutated, value_type = sorted(
-        supported,
-        key=lambda item: (
-            item[0],
-            sum(marker in item[1].lower() for marker in derived_field_markers),
-            len(item[1]),
-            item[1],
-        ),
-    )[0]
-    body = {field: mutated}
-    receipt = {
-        "schema_version": "qualibug.source-observed-mutation-receipt.v1",
-        "status": "MATERIALIZED",
-        "selected_field": field,
-        "candidate_field_count": len(candidates),
-        "identity_binding_fields": sorted(bindings),
-        "value_type": value_type,
-    }
-    return body, receipt, ""
+    return {}, {}, "runtime_mutation_source_declared_body_required"
 
 
 def _identity_scoped_entity_observation(write_path: str, observation_path: str) -> bool:
@@ -991,8 +905,10 @@ def _protected_runtime_identity_values(root: Path, project: str) -> set[str]:
             continue
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(
+                f"protected_identity_config_invalid:{path.name}:{type(exc).__name__}"
+            ) from exc
         for row in _iter_account_rows(raw):
             for key in ("id", "user_id", "userId", "account_id", "accountId", "email", "username", "login", "account"):
                 value = _text(row.get(key))
@@ -1015,53 +931,6 @@ def _body_has_protected_identity(value: Any, protected: set[str]) -> bool:
         return any(_body_has_protected_identity(v, protected) for v in value)
     text = _text(value).lower()
     return bool(text and text in protected)
-
-
-def _scrub_protected_identities_from_body(value: Any, protected: set[str]) -> Any:
-    """Remove seeded/protected identity literals from a probe body.
-
-    API docs often reuse demo accounts in request examples. Using those values
-    on identity-mutation routes is hard-blocked; scrubbing them lets the probe
-    still reach HTTP as an authorization/contract check without mutating a
-    protected runtime account.
-    """
-    if not protected:
-        return value
-    if isinstance(value, dict):
-        scrubbed: dict[str, Any] = {}
-        for key, child in value.items():
-            cleaned = _scrub_protected_identities_from_body(child, protected)
-            if cleaned is None:
-                continue
-            if isinstance(cleaned, str) and not cleaned.strip():
-                continue
-            scrubbed[key] = cleaned
-        return scrubbed
-    if isinstance(value, list):
-        return [
-            cleaned
-            for cleaned in (_scrub_protected_identities_from_body(item, protected) for item in value)
-            if cleaned is not None and not (isinstance(cleaned, str) and not cleaned.strip())
-        ]
-    text = _text(value)
-    if text and text.lower() in protected:
-        return None
-    return value
-
-
-def _apply_body_to_primary_write_step(scenario: Any, body: Any) -> None:
-    """Keep scenario step templates aligned with the scrubbed probe body."""
-    for step in getattr(scenario, "steps", []) or []:
-        if _is_authentication_step(step) or _is_fixture_bootstrap_step(step):
-            continue
-        method = _text(getattr(step, "api_method", "") or "").upper()
-        path = _text(getattr(step, "api_path", "") or "")
-        if method in _WRITE_METHODS and path.startswith("/"):
-            try:
-                step.body_template = dict(body) if isinstance(body, dict) else body
-            except Exception:
-                setattr(step, "body_template", body)
-            return
 
 
 def _body_has_protected_identity_mutation_key(value: Any) -> bool:
@@ -2221,31 +2090,8 @@ def execute_with_sandbox_write(
         path=path,
         body=_body,
     )
-    protected_identity_scrubbed = False
-    if identity_block == "protected_runtime_identity_mutation_blocked":
-        protected = _protected_runtime_identity_values(root, project)
-        scrubbed_body = _scrub_protected_identities_from_body(_body, protected)
-        if scrubbed_body != _body:
-            protected_identity_scrubbed = True
-            _apply_body_to_primary_write_step(scenario, scrubbed_body if isinstance(scrubbed_body, dict) else {})
-            _body = scrubbed_body if isinstance(scrubbed_body, dict) else {}
-            write_meta = (method, path, _body)
-            identity_block = _protected_runtime_identity_write_block_reason(
-                root=root,
-                project=project,
-                scenario=scenario,
-                method=method,
-                path=path,
-                body=_body,
-            )
     if identity_block:
         return _blocked_write_trace(scenario, identity_block, write_meta)
-    if protected_identity_scrubbed and not documented_routes:
-        return _blocked_write_trace(
-            scenario,
-            "write_cleanup_operation_not_declared",
-            write_meta,
-        )
     if safety_boundary:
         excl = match_production_data_exclusion(safety_boundary, path, "")
         if excl:

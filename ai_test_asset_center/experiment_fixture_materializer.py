@@ -141,14 +141,6 @@ def _auto_fixture_create_for_binding_target(
     if not candidate_paths:
         return None
 
-    import re as _re_cleanup
-
-    _cleanup_action = _re_cleanup.compile(
-        r"(?:cancel|close|void|disable|archive|reject|release|rollback|revoke|remove|"
-        r"delete|deactivate|suspend|expire|invalidate|terminate|withdraw|abandon|"
-        r"discard|retire|freeze|reset|clear|purge)$",
-        _re_cleanup.I,
-    )
     for op_id, op in operations.items():
         if not isinstance(op, dict):
             continue
@@ -163,12 +155,11 @@ def _auto_fixture_create_for_binding_target(
             # Prefer identity-bound DELETE; otherwise accept a source-shaped
             # compensation action on the same collection (e.g. …/{id}/cancel).
             cleanup_ops: list[dict[str, str]] = []
-            compensation_ops: list[dict[str, str]] = []
             for clean_id, clean_op in operations.items():
                 if not isinstance(clean_op, dict):
                     continue
                 clean_method = _text(clean_op.get("method")).upper()
-                if clean_method not in {"DELETE", "POST", "PUT", "PATCH"}:
+                if clean_method != "DELETE":
                     continue
                 clean_path = normalize_path_placeholders(
                     _text(clean_op.get("path") or clean_op.get("raw_path"))
@@ -183,11 +174,8 @@ def _auto_fixture_create_for_binding_target(
                     "method": clean_method,
                     "path": clean_path,
                 }
-                if clean_method == "DELETE":
-                    cleanup_ops.append(row)
-                elif _cleanup_action.search(clean_path.rstrip("/")):
-                    compensation_ops.append(row)
-            selected_cleanup = cleanup_ops or compensation_ops
+                cleanup_ops.append(row)
+            selected_cleanup = cleanup_ops
             if not selected_cleanup:
                 continue
             owner = _text(binding.get("fixture_owner_actor_ref"))
@@ -195,12 +183,6 @@ def _auto_fixture_create_for_binding_target(
             # Auto-create has no permits-bound owner: declare every campaign
             # actor so runtime can prefer control/treatment, then fall back
             # when dependency rows (e.g. addresses) are owned by a buyer.
-            if not actor_refs and isinstance(actors, dict):
-                actor_refs = [
-                    _text(actor_id)
-                    for actor_id in actors
-                    if _text(actor_id)
-                ]
             if not actor_refs:
                 continue
             return {
@@ -289,11 +271,15 @@ def materialize_experiment_fixtures(
         elif kind == "runtime_read_binding":
             target = _text(_dict(node).get("target"))
             binding = binding_plan.get(target) or {}
-            # ── Shortcut: pre-resolved binding with generated_value ──
+            # ── Shortcut: source-observed, pre-materialized binding ──
             # Batch pre-resolution may supply a value, but only after a source
             # identity GET proves that value is observable on THIS binding's
             # collection. A cart-item {id} must never bind into /api/orders/{id}.
-            if binding.get("generated_value") and _text(binding.get("status")) == "bound":
+            if (
+                binding.get("materialized_value") not in (None, "")
+                and _text(binding.get("status")) == "bound"
+                and _text(binding.get("source_priority")) == "same_actor_list_read"
+            ):
                 from .runtime_binding_resolver import (
                     collection_path_for_placeholder,
                     collection_segment_for_placeholder,
@@ -301,7 +287,7 @@ def materialize_experiment_fixtures(
                     materialize_declared_identity_read,
                 )
 
-                _pre_val = str(binding["generated_value"])
+                _pre_val = str(binding["materialized_value"])
                 _target_path = normalize_path_placeholders(
                     _text(binding.get("target_path"))
                 )
@@ -421,26 +407,18 @@ def materialize_experiment_fixtures(
                 "value_fingerprint": "",
             }
             # ── Resolve per-binding actor token for fixture resolution ──
-            # Prefer fixture_owner_actor_ref from binding; fallback to global resolver.
-            # If the primary actor gets 401, try all other available actors.
+            # Resolve only with the binding's exact owner actor or the actor
+            # already declared by the executable control/treatment plan.
             _binding_actor_ref = _text(binding.get("fixture_owner_actor_ref"))
             _binding_actor = actors.get(_binding_actor_ref) or {} if _binding_actor_ref else {}
             _binding_token = _resolve_token(_binding_actor, tokens) if _binding_actor_ref else ""
             _effective_resolver_token = _binding_token or resolver_token
             _effective_resolver_actor = _binding_actor_ref or resolver_actor_ref
-            # Build actor fallback list: primary first, then all other actors with tokens
-            _actor_fallbacks: list[tuple[str, str]] = [(_effective_resolver_actor, _effective_resolver_token)]
-            for _act_id, _act in actors.items():
-                if _act_id == _effective_resolver_actor:
-                    continue
-                _act_tok = _resolve_token(_act, tokens)
-                if _act_tok:
-                    _actor_fallbacks.append((_act_id, _act_tok))
+            _actor_candidates: list[tuple[str, str]] = [
+                (_effective_resolver_actor, _effective_resolver_token)
+            ]
             for index, resolver in enumerate(resolvers):
-                # A 2xx empty collection is not conclusive: the permitted fixture
-                # actor may simply own no rows. Keep trying other token-bearing
-                # actors before falling through to fixture create / BLOCKED.
-                for _fb_idx, (_fb_actor, _fb_token) in enumerate(_actor_fallbacks):
+                for _fb_idx, (_fb_actor, _fb_token) in enumerate(_actor_candidates):
                     obs = _run_http_step(
                         base_url=base_url,
                         method=resolver["method"],
@@ -526,28 +504,19 @@ def materialize_experiment_fixtures(
                     _fs_diag["blocked_reason"] = "fixture_setup_no_actor"
                 token_values: dict[str, Any] = {}
                 dependency_blocked = False
-                # Fixture create actors from permits may not own dependency rows
-                # (admin can create orders but addresses live under buyers).
-                _dep_actor_fallbacks: list[tuple[str, str]] = [
+                _dependency_actor: list[tuple[str, str]] = [
                     (fixture_actor_ref, fixture_token)
                 ]
-                for _act_id, _act in actors.items():
-                    if _act_id == fixture_actor_ref:
-                        continue
-                    _act_tok = _resolve_token(_act, tokens)
-                    if _act_tok:
-                        _dep_actor_fallbacks.append((_act_id, _act_tok))
                 for dependency in _list(fixture_setup.get("body_bindings")):
                     dependency_target = _text(_dict(dependency).get("target"))
                     dependency_token = _text(_dict(dependency).get("template_token"))
                     dependency_value: Any = None
                     dependency_leaf = dependency_target.split(".")[-1].split("[")[0]
-                    has_fallback = bool(_dict(dependency).get("fallback"))
                     for index, resolver in enumerate(_list(_dict(dependency).get("resolver_operations"))):
                         if not isinstance(resolver, dict):
                             continue
                         for _dep_idx, (_dep_actor, _dep_token) in enumerate(
-                            _dep_actor_fallbacks
+                            _dependency_actor
                         ):
                             obs = _run_http_step(
                                 base_url=base_url,
@@ -588,13 +557,6 @@ def materialize_experiment_fixtures(
                             break
                         if dependency_value not in (None, "", [], {}):
                             break
-                    # Fallback: use template literal value when no resolver
-                    # exists. This is best-effort for fields (addressId,
-                    # couponCode) that cannot be auto-resolved from list
-                    # endpoints in complex enterprise APIs.
-                    if dependency_value in (None, "", [], {}) and has_fallback:
-                        token_values[dependency_token] = dependency_token
-                        dependency_value = dependency_token
                     # When a fixture dependency cannot be resolved from observed
                     # data, the fixture setup is blocked — never fabricate IDs
                     # or auto-create resources via hidden writes.
@@ -607,109 +569,6 @@ def materialize_experiment_fixtures(
                         fixture_setup.get("body_template"),
                         token_values,
                     )
-                    # ── Execute prerequisite plan from binding_plan ──
-                    # The experiment compiler may have attached a full
-                    # prerequisite plan built by the enterprise test data
-                    # constructor. Execute all prerequisite creations first.
-                    prereq_ids: dict[str, Any] = {}
-                    for item in _list(binding.get("__internal__") or []):
-                        pass  # placeholder
-                    # Check binding_plan for prerequisite_plan
-                    bp_list = _list(exp.get("binding_plan", [])) if isinstance(exp, dict) else []
-                    for bp_item in bp_list:
-                        prereq = _dict(bp_item).get("prerequisite_plan")
-                        if isinstance(prereq, dict) and prereq.get("execution_plan"):
-                            for step in prereq["execution_plan"]:
-                                if step["step"] == "target":
-                                    continue
-                                dep_body = dict(step.get("body", {}))
-                                for k, v in list(dep_body.items()):
-                                    if isinstance(v, str) and v.startswith("<") and v.endswith("_id>"):
-                                        entity = v[1:-4]
-                                        if entity in prereq_ids:
-                                            dep_body[k] = prereq_ids[entity]
-                                # Observation path for the governed write.
-                                #
-                                # This used to pass observation_path="" unconditionally, and
-                                # execute_governed_control_write refuses any observation_path
-                                # that does not start with "/" -- so EVERY prerequisite-chain
-                                # write was blocked before transport with
-                                # http_attempt_count 0. The chain has never executed.
-                                #
-                                # The refusal is right: a governed write needs a before/after
-                                # observation to prove reversibility. The caller was wrong to
-                                # pass nothing. Observe the collection being written to, the
-                                # same thing the fixture-setup block below does for the same
-                                # reason.
-                                _dep_path = _text(step.get("path"))
-                                _dep_observation = (
-                                    _dep_path
-                                    if _dep_path.startswith("/")
-                                    and not path_has_placeholders(_dep_path)
-                                    else ""
-                                )
-                                if not _dep_observation:
-                                    # No observable collection, so this write cannot produce
-                                    # reversibility evidence. Record it -- the old code fell
-                                    # through silently, leaving prereq_ids empty and the
-                                    # <entity_id> placeholders unresolved with no trace.
-                                    fixture_receipts.append({
-                                        "node_id": f"prerequisite:{_text(step.get('entity'))}",
-                                        "kind": "prerequisite_chain",
-                                        "status": "blocked",
-                                        "blocked_reason":
-                                            "prerequisite_observation_path_not_source_declared",
-                                        "path": _dep_path,
-                                    })
-                                    continue
-                                dep_result = execute_governed_control_write(
-                                    root=root, project=project,
-                                    base_url=base_url,
-                                    runtime_contract=runtime_contract,
-                                    campaign_id=campaign_id,
-                                    operation_phase="prerequisite_chain",
-                                    actor_identity=_text(fixture_actor.get("role") or fixture_actor_ref),
-                                    actor_token=fixture_token,
-                                    method=step["method"],
-                                    path=step["path"],
-                                    body=dep_body,
-                                    observation_path=_dep_observation,
-                                )
-                                dep_write = _dict(dep_result.get("write", {}))
-                                dep_status = int(dep_write.get("status") or 0)
-                                if 200 <= dep_status < 300:
-                                    from .enterprise_test_data_engine import extract_resource_id
-                                    rid = extract_resource_id(dep_write.get("body"), step["entity"])
-                                    if rid:
-                                        prereq_ids[step["entity"]] = rid
-                                    else:
-                                        fixture_receipts.append({
-                                            "node_id": f"prerequisite:{_text(step.get('entity'))}",
-                                            "kind": "prerequisite_chain",
-                                            "status": "blocked",
-                                            "blocked_reason":
-                                                "prerequisite_resource_id_not_extractable",
-                                        })
-                                else:
-                                    # A prerequisite that did not succeed leaves every later
-                                    # step's <entity_id> placeholder unresolved. Silence here
-                                    # is what made the whole chain look like it worked.
-                                    fixture_receipts.append({
-                                        "node_id": f"prerequisite:{_text(step.get('entity'))}",
-                                        "kind": "prerequisite_chain",
-                                        "status": "blocked",
-                                        "blocked_reason": (
-                                            "prerequisite_write_not_accepted:"
-                                            f"{dep_status or _text(_dict(dep_result).get('reason'))}"
-                                        ),
-                                    })
-                            # Apply resolved IDs to setup_body
-                            for k, v in list(setup_body.items()):
-                                if isinstance(v, str) and v.startswith("<") and v.endswith("_id>"):
-                                    entity = v[1:-4]
-                                    if entity in prereq_ids:
-                                        setup_body[k] = prereq_ids[entity]
-                            break  # only process first prerequisite_plan
 
                     # Fixture create-only plans have no list-read resolver.
                     # Observe the create collection itself (no placeholders) so

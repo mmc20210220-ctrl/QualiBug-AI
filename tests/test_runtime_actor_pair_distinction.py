@@ -192,6 +192,127 @@ def test_batch_compiler_enforces_the_same_runtime_principal_rule() -> None:
     assert obligation["compile_status"] == "BLOCKED"
 
 
+def test_compiler_never_substitutes_unrelated_actors_for_the_declared_pair() -> None:
+    obligation = _obligation()
+    ir = _behavior_ir(
+        _actor(
+            "actor-control",
+            account_ref="shared@example.test",
+            secret_ref="secret_ref:test_accounts:control",
+        ),
+        _actor(
+            "actor-treatment",
+            account_ref="shared@example.test",
+            secret_ref="secret_ref:test_accounts:treatment",
+        ),
+    )
+    ir["actors"].append(
+        _actor(
+            "actor-unrelated",
+            account_ref="other@example.test",
+            secret_ref="secret_ref:test_accounts:other",
+        )
+    )
+
+    experiment = compile_experiment_for_obligation(
+        obligation,
+        behavior_ir=ir,
+        environment_type="test",
+    )
+
+    assert experiment["compile_receipt"]["status"] == "BLOCKED"
+    assert experiment["compile_receipt"]["detail"] == (
+        "runtime_actor_pair_not_distinct:shared_account_ref"
+    )
+
+
+def test_empty_patch_without_source_declared_body_is_blocked() -> None:
+    obligation = {
+        **_obligation(),
+        "obligation_id": "obl-empty-patch",
+        "property": {
+            **_obligation()["property"],
+            "operation_ref": "op-empty-patch",
+        },
+        "required_operations": ["op-empty-patch"],
+        "cleanup_requirement": {
+            "required": True,
+            "operation_ref": "op-delete",
+        },
+    }
+    ir = {
+        "operations": [
+            {
+                "id": "op-empty-patch",
+                "method": "PATCH",
+                "path": "/resources/current",
+                "read_write": "write",
+                "request_schema": {},
+                "request_example": {},
+            },
+            {
+                "id": "op-read",
+                "method": "GET",
+                "path": "/resources/current",
+                "read_write": "read",
+            },
+            {
+                "id": "op-delete",
+                "method": "DELETE",
+                "path": "/resources/current",
+                "read_write": "write",
+            },
+        ],
+        "actors": [
+            _actor(
+                "actor-control",
+                account_ref="owner@example.test",
+                secret_ref="secret_ref:test_accounts:owner",
+            ),
+            _actor(
+                "actor-treatment",
+                account_ref="outsider@example.test",
+                secret_ref="secret_ref:test_accounts:outsider",
+            ),
+        ],
+        "entities": [
+            {
+                "id": "entity-resource",
+                "fields": ["id", "status"],
+            }
+        ],
+        "relations": [
+            {
+                "id": "rel-mutation",
+                "relation_type": "transitions",
+                "operation_ref": "op-empty-patch",
+                "to_ref": "entity-resource",
+            },
+            {
+                "id": "rel-read",
+                "relation_type": "observes",
+                "operation_ref": "op-read",
+                "to_ref": "entity-resource",
+            },
+        ],
+        "conflicts": [],
+    }
+
+    experiment = compile_experiment_for_obligation(
+        obligation,
+        behavior_ir=ir,
+        environment_type="test",
+    )
+
+    assert experiment["compile_receipt"]["status"] == "BLOCKED"
+    assert experiment["compile_receipt"]["reason_code"] == (
+        "BLOCKED_NON_REVERSIBLE_WRITE"
+    )
+    assert experiment["compile_receipt"]["detail"] == (
+        "field_snapshot_restore_no_writable_fields"
+    )
+
+
 def test_non_sensitive_single_actor_validation_is_unchanged() -> None:
     obligation = {
         "obligation_id": "obl-validation",

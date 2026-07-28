@@ -202,6 +202,30 @@ class TestCleanupAuthority:
         assert result["strategy_type"] == STRATEGY_DB_DELETE
         assert result["status"] == CONTRACT_RESOLVED
 
+    def test_best_effort_delete_is_not_cleanup_authority(self):
+        plan = [{
+            "action": "best_effort_delete",
+            "operation_ref": "op_create_order",
+        }]
+        result = resolve_cleanup_authority(WRITE_OP_POST, cleanup_plan=plan)
+
+        assert result["status"] == CONTRACT_NOT_DECLARED
+        assert result["strategy_type"] == ""
+        assert result["reason_code"] == DB_CLEANUP_AUTHORITY_NOT_DECLARED
+
+    def test_runtime_contains_no_best_effort_cleanup_success_path(self):
+        from pathlib import Path
+
+        source = (
+            Path(__file__).resolve().parents[1]
+            / "ai_test_asset_center"
+            / "experiment_cleanup_executor.py"
+        ).read_text(encoding="utf-8")
+
+        assert 'cleanup_action == "best_effort_delete"' in source
+        assert "cleanup_authority_not_source_declared" in source
+        assert '"best_effort": True' not in source
+
     def test_no_plan_no_adapter(self):
         result = resolve_cleanup_authority(WRITE_OP_POST, cleanup_plan=[])
         assert result["status"] == CONTRACT_NOT_DECLARED

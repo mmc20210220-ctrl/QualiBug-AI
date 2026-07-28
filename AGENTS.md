@@ -113,6 +113,23 @@ assert engine.client.config.max_tokens >= 32768, "max_tokens too low"
   envelope — no new budget expansion. Runtime binding probes are
   contract-gated and remain `PROBES_SKIPPED_CONTRACT_NOT_APPROVED` until
   the runtime contract is explicitly approved.
+- `deep_experiment_planner` and `deep_experiment_protocol_adapter` are
+  diagnostic-only research surfaces. They are not imported or invoked by
+  `discovery_runtime_planning`; a heuristic deep plan must never replace a
+  compiler-blocked experiment. Product execution may advance only experiments
+  compiled from exact source actors, operations, request bodies, bindings,
+  observers, assertions, and cleanup authority.
+- Product-mainline business-semantic joins require exact source identities or
+  accepted `agent_semantic_linker` rule/interface identities. State-name/path
+  similarity, invariant field/entity overlap, and permission-matrix vocabulary
+  must never create operation references, API paths, request schemas, request
+  examples, or executable experiments. Unresolved joins remain visible
+  coverage gaps; `invariant_operation_binder` and
+  `field_level_golden_rules` are diagnostic-only. The product default invariant
+  graph contains only source-backed Behavior IR invariants and must not inject
+  universal authorization, idempotency, conservation, or lifecycle claims.
+  Relation correlation keys are source declarations; they must not be derived
+  from entity names or relation vocabulary.
 - Multi-layer observation and cross-surface evidence are execution-stage
   enrichments in `experiment_executor.py`. After typed observers complete,
   `multi_layer_observation.check_observation_completeness` emits

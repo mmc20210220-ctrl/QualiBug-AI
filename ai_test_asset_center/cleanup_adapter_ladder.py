@@ -1164,14 +1164,6 @@ def resolve_cleanup_authority(
                 "status": CONTRACT_RESOLVED,
                 "reason_code": "",
             }
-        if action == "best_effort_delete":
-            return {
-                "strategy_type": STRATEGY_API_COMPENSATION,
-                "authority_source": _text(first.get("operation_ref")),
-                "status": CONTRACT_RESOLVED,
-                "reason_code": "",
-            }
-
     # No plan: check if adapters can provide authority
     if "db_sql" in adapters:
         return {

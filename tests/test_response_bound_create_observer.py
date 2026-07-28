@@ -111,10 +111,9 @@ def test_ephemeral_login_strips_write_only_observers() -> None:
     }
     assert "entity_state" not in kinds
     assert "business_effect" not in kinds
-    assert "http_response" in kinds
 
 
-def test_read_state_obligation_strips_write_only_protocol_observers() -> None:
+def test_read_state_obligation_without_source_assertion_stays_blocked() -> None:
     experiment = compile_experiment_for_obligation(
         {
             "obligation_id": "obl-read-state",
@@ -152,20 +151,11 @@ def test_read_state_obligation_strips_write_only_protocol_observers() -> None:
         },
         environment_type="test",
     )
-    assert experiment["compile_receipt"]["status"] == "COMPILED", experiment[
-        "compile_receipt"
-    ]
-    kinds = {
-        str(row.get("observer_id") or "")
-        for row in (experiment.get("observers") or [])
-        if isinstance(row, dict)
+    assert experiment["compile_receipt"] == {
+        "status": "BLOCKED",
+        "reason_code": "FIELD_LEVEL_RULE_NOT_EXECUTABLE",
+        "detail": "postcondition_missing_bound_field_or_expected_value",
     }
-    assert "before_state" not in kinds
-    assert "after_state" not in kinds
-    assert "entity_state" not in kinds
-    assert "http_response" in kinds
-
-
 def test_release_recreates_via_unique_sibling_reserve() -> None:
     request_example = {"sku": "SKU-1", "qty": 1}
     ir = {
@@ -212,7 +202,7 @@ def test_release_recreates_via_unique_sibling_reserve() -> None:
         ir["operations"][1],
         behavior_ir=ir,
     )
-    assert [row["operation_ref"] for row in recreate] == ["reserve_stock"]
+    assert recreate == []
 
     experiment = compile_experiment_for_obligation(
         {

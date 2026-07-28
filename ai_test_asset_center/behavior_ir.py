@@ -186,12 +186,6 @@ _DENY_DECISIONS = {
     "prohibit",
     "prohibited",
 }
-_CLEANUP_ACTION_RE = re.compile(
-    r"(?:cancel|close|void|disable|archive|reject|release|rollback|revoke|"
-    r"remove|delete|deactivate|suspend|expire|invalidate|terminate|withdraw|"
-    r"abandon|discard|retire|freeze|reset|clear|purge)$",
-    re.I,
-)
 _READ_EFFECT_DECLARATIONS = frozenset({
     "read",
     "read_only",
@@ -1786,22 +1780,14 @@ def _derive_compensation_relations(model: dict[str, Any]) -> list[dict[str, Any]
         candidates: list[dict[str, Any]] = []
         for candidate in operations:
             candidate_method = _text(candidate.get("method")).upper()
-            if candidate_method not in {"DELETE", "POST", "PATCH", "PUT"}:
+            if candidate_method != "DELETE":
                 continue
             compensation_shape = _path_shape(candidate.get("path")).rstrip("/")
             segments = compensation_shape.split("/")
             if not segments or segments[-1] != "{}":
-                action_collection = "/".join(segments[:-2]).rstrip("/") if len(segments) >= 3 else ""
-                action_name = segments[-1] if segments else ""
-                if (
-                    candidate_method in {"POST", "PATCH", "PUT"}
-                    and action_collection == create_shape
-                    and _CLEANUP_ACTION_RE.search(action_name)
-                ):
-                    candidates.append(candidate)
                 continue
             collection_shape = "/".join(segments[:-1]).rstrip("/")
-            if candidate_method == "DELETE" and collection_shape == create_shape:
+            if collection_shape == create_shape:
                 if _debug_comp:
                     logger.debug("[COMP-DEBUG]   MATCH DELETE %s: %s collection=%s", _text(candidate.get('id')), candidate.get('path'), collection_shape)
                 candidates.append(candidate)
@@ -1834,95 +1820,6 @@ def _derive_compensation_relations(model: dict[str, Any]) -> list[dict[str, Any]
             _append_compensation(create_operation, candidates[0])
         elif _debug_comp and len(candidates) > 1:
             logger.debug("[COMP-DEBUG]   => AMBIGUOUS %d candidates (different shapes)", len(candidates))
-
-    # Sibling action pairs: POST /resource/reserve ↔ POST /resource/release.
-    # Require unique cleanup-named sibling under the same parent path plus source
-    # text evidence that the cleanup documents the primary action.
-    for source_operation in operations:
-        source_method = _text(source_operation.get("method")).upper()
-        if source_method not in {"POST", "PUT", "PATCH"}:
-            continue
-        source_path = _path_shape(source_operation.get("path")).rstrip("/")
-        if not source_path or "/" not in source_path:
-            continue
-        source_terminal = source_path.rsplit("/", 1)[-1]
-        if _CLEANUP_ACTION_RE.search(source_terminal):
-            continue
-        parent_path = source_path.rsplit("/", 1)[0]
-        source_text = re.sub(
-            r"[\W_]+",
-            "",
-            " ".join([
-                _text(source_operation.get("summary")),
-                _text(source_operation.get("description")),
-            ]).lower(),
-        )
-        source_action = source_terminal.lower()
-        source_keys = set(_dict(source_operation.get("request_example")))
-        candidates = []
-        for candidate in operations:
-            if _text(candidate.get("id")) == _text(source_operation.get("id")):
-                continue
-            candidate_method = _text(candidate.get("method")).upper()
-            if candidate_method not in {"POST", "PUT", "PATCH", "DELETE"}:
-                continue
-            candidate_path = _path_shape(candidate.get("path")).rstrip("/")
-            if not candidate_path or "/" not in candidate_path:
-                continue
-            if candidate_path.rsplit("/", 1)[0] != parent_path:
-                continue
-            candidate_terminal = candidate_path.rsplit("/", 1)[-1]
-            if not (
-                candidate_method == "DELETE"
-                or _CLEANUP_ACTION_RE.search(candidate_terminal)
-            ):
-                continue
-            candidate_text = re.sub(
-                r"[\W_]+",
-                "",
-                " ".join([
-                    _text(candidate.get("summary")),
-                    _text(candidate.get("description")),
-                ]).lower(),
-            )
-            candidate_keys = set(_dict(candidate.get("request_example")))
-            text_ok = bool(candidate_text) and (
-                (len(source_text) >= 2 and source_text in candidate_text)
-                or (len(source_action) >= 4 and source_action in candidate_text)
-                or any(
-                    run in candidate_text
-                    for run in re.findall(
-                        r"[\u4e00-\u9fff]{3,}|[a-z]{4,}",
-                        source_text,
-                    )
-                )
-            )
-            keys_ok = bool(source_keys) and source_keys == candidate_keys
-            if not (text_ok or keys_ok):
-                continue
-            if not text_ok and keys_ok:
-                peer_primaries = [
-                    peer
-                    for peer in operations
-                    if _text(peer.get("id"))
-                    not in {
-                        _text(source_operation.get("id")),
-                        _text(candidate.get("id")),
-                    }
-                    and _text(peer.get("method")).upper()
-                    in {"POST", "PUT", "PATCH"}
-                    and _path_shape(peer.get("path")).rstrip("/").rsplit("/", 1)[0]
-                    == parent_path
-                    and not _CLEANUP_ACTION_RE.search(
-                        _path_shape(peer.get("path")).rstrip("/").rsplit("/", 1)[-1]
-                    )
-                    and set(_dict(peer.get("request_example"))) == source_keys
-                ]
-                if peer_primaries:
-                    continue
-            candidates.append(candidate)
-        if len(candidates) == 1:
-            _append_compensation(source_operation, candidates[0])
 
     return relations
 
@@ -2026,87 +1923,6 @@ def _resolve_operation(
     return candidates[0] if len(candidates) == 1 else None
 
 
-def _state_action_stems(state_name: str) -> list[str]:
-    """Derive generic linguistic action stems from a state name.
-
-    Industry-neutral English morphology only (no domain vocabulary): strip the
-    trailing past-tense/participle suffix and normalise ``-y`` past tenses
-    (``PAID`` -> ``pay``).  The resulting stems are matched against operation
-    path tokens so a declared target state can be bound to the write that
-    produces it, without any source-supplied operation hint.
-    """
-
-    token = re.sub(r"[^a-z]", "", _text(state_name).lower())
-    if len(token) < 4:
-        return []
-    stem = token
-    if stem.endswith("ed"):
-        stem = stem[:-2]
-    elif stem.endswith("d"):
-        stem = stem[:-1]
-    # Undouble the final consonant reverted by the past-tense suffix
-    # (``shipp`` -> ``ship``, ``cancell`` -> ``cancel``).
-    if len(stem) >= 3 and stem[-1] == stem[-2] and stem[-1] not in "aeiou":
-        stem = stem[:-1]
-    stems: list[str] = []
-    for candidate in (stem, stem + "e", stem + "y"):
-        if len(candidate) >= 3 and candidate not in stems:
-            stems.append(candidate)
-    # Consonant+y past tense: ``paid`` -> ``pay`` (the ``y`` surfaces as ``i``).
-    if stem.endswith("i"):
-        y_form = stem[:-1] + "y"
-        if len(y_form) >= 3 and y_form not in stems:
-            stems.append(y_form)
-    return stems
-
-
-def _infer_transition_operation(
-    operations: list[dict[str, Any]],
-    entity: str,
-    to_state: str,
-) -> dict[str, Any] | None:
-    """Bind a declared target state to the unique write that produces it.
-
-    Generic, source-agnostic heuristic: match the state's linguistic stems
-    against the path tokens of write operations that touch the entity.  Returns
-    a binding only when exactly one operation matches (exact-token matches are
-    preferred over prefix matches); ambiguous or absent matches fail closed to
-    ``None`` so no unjustified operation is bound.
-    """
-
-    stems = _state_action_stems(to_state)
-    if not stems:
-        return None
-    exact: list[dict[str, Any]] = []
-    prefix: list[dict[str, Any]] = []
-    for op in operations:
-        if not isinstance(op, dict):
-            continue
-        if _text(op.get("method")).upper() not in {"POST", "PUT", "PATCH"}:
-            continue
-        path = _text(op.get("path") or op.get("raw_path")).lower()
-        if not path:
-            continue
-        tokens = [
-            tok
-            for tok in re.split(r"[^a-z]+", path)
-            if len(tok) >= 3 and tok not in {"api", "admin", "v1", "v2", "v3"}
-        ]
-        if any(stem == tok for stem in stems for tok in tokens):
-            exact.append(op)
-        elif any(
-            len(stem) >= 4
-            and any(tok.startswith(stem) for tok in tokens)
-            for stem in stems
-        ):
-            prefix.append(op)
-    if len(exact) == 1:
-        return exact[0]
-    if not exact and len(prefix) == 1:
-        return prefix[0]
-    return None
-
-
 def _derive_state_transition_relations(
     model: dict[str, Any],
     data: dict[str, Any],
@@ -2135,13 +1951,6 @@ def _derive_state_transition_relations(
             operation = _resolve_operation(operations, transition) if operation_binding else None
             from_name = _text(transition.get("from") or transition.get("from_state"))
             to_name = _text(transition.get("to") or transition.get("to_state"))
-            # ── P0-6: infer operation binding from state name when absent ──
-            # Use the same linguistic stem matching that forbidden transitions
-            # use, so allowed transitions also bind to their trigger operation.
-            _operation_inferred = False
-            if not operation and from_state and to_state and to_name:
-                operation = _infer_transition_operation(operations, entity, to_name)
-                _operation_inferred = operation is not None
             if not from_state or not to_state or not operation:
                 if from_state and to_state and not operation:
                     model["coverage_gaps"].append(_fact_node(
@@ -2187,8 +1996,8 @@ def _derive_state_transition_relations(
                     locator=f"{entity}:{_text(from_state.get('name'))}->{_text(to_state.get('name'))}",
                     kind="state_transition",
                 )],
-                confidence=float(transition.get("confidence") or (0.7 if _operation_inferred else 0.8)),
-                derivation="model-inferred" if _operation_inferred else "explicit",
+                confidence=float(transition.get("confidence") or 0.8),
+                derivation="explicit",
             ))
     return relations
 
@@ -2350,14 +2159,12 @@ def _derive_invariant_relations(model: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         relation_type = _invariant_relation_type(invariant)
         op_refs = _list(invariant.get("operation_refs"))
-        _bound_ops: set[str] = set()
 
         for hint in op_refs:
             operation = _resolve_operation(operations, {"operation_ref": hint})
             if not operation:
                 continue
             operation_ref = _text(operation.get("id"))
-            _bound_ops.add(operation_ref)
             relations.append(_relation_node(
                 relation_type=relation_type,
                 from_ref=operation_ref,
@@ -2373,53 +2180,6 @@ def _derive_invariant_relations(model: dict[str, Any]) -> list[dict[str, Any]]:
                 ),
                 derivation="explicit",
             ))
-        # V1.4.0: field-based dual-signal fallback — when no explicit operation_refs
-        # are resolved, try to bind via field_ids → operation schema match.
-        if not _bound_ops:
-            _field_ids = {_text(f).lower() for f in _list(invariant.get("field_ids")) if _text(f)}
-            _entity_ref = _text(invariant.get("entity_ref"))
-            if _field_ids or _entity_ref:
-                for op in operations:
-                    op_id = _text(op.get("id"))
-                    if not op_id or op_id in _bound_ops:
-                        continue
-                    # Collect operation schema fields
-                    _op_field_set: set[str] = set()
-                    for _sk in ("request_schema", "response_schema"):
-                        _schema = _dict(op.get(_sk))
-                        _props = _dict(_schema.get("properties"))
-                        _op_field_set.update(k.lower() for k in _props)
-                        _content = _dict(_schema.get("content"))
-                        _json_m = _dict(_content.get("application/json"))
-                        _nested = _dict(_dict(_json_m.get("schema")).get("properties"))
-                        _op_field_set.update(k.lower() for k in _nested)
-                    # Entity signal
-                    _op_ents = {_text(e).lower() for e in _list(op.get("entity_refs")) if _text(e)}
-                    _ent_match = bool(_entity_ref and _entity_ref.lower() in _op_ents)
-                    # Field signal
-                    _fld_match = bool(_field_ids and _op_field_set & _field_ids)
-                    if _ent_match and _fld_match:
-                        _bound_ops.add(op_id)
-                        relations.append(_relation_node(
-                            relation_type=relation_type,
-                            from_ref=op_id,
-                            to_ref=_text(invariant.get("id")),
-                            operation_ref=op_id,
-                            source_refs=list(invariant.get("source_refs") or [])[:3],
-                            confidence=0.65,
-                            derivation="field-co-reference",
-                        ))
-                    elif _fld_match:
-                        _bound_ops.add(op_id)
-                        relations.append(_relation_node(
-                            relation_type=relation_type,
-                            from_ref=op_id,
-                            to_ref=_text(invariant.get("id")),
-                            operation_ref=op_id,
-                            source_refs=list(invariant.get("source_refs") or [])[:3],
-                            confidence=0.5,
-                            derivation="field-schema-match",
-                        ))
     return relations
 
 
@@ -3821,16 +3581,11 @@ def build_behavior_ir_from_knowledge_asset(
                 _text(transition.get(key))
                 for key in ("operation_ref", "operation_id", "operation", "method", "path")
             )
-            operation_inferred = False
-            if operation_binding:
-                operation = _resolve_operation(operations, transition)
-            else:
-                # No source-supplied operation hint: fall back to a generic,
-                # industry-neutral state->action linguistic binding so the
-                # declared forbidden transition becomes testable. Binds only a
-                # unique write; ambiguity fails closed to no binding.
-                operation = _infer_transition_operation(operations, entity, to_name)
-                operation_inferred = operation is not None
+            operation = (
+                _resolve_operation(operations, transition)
+                if operation_binding
+                else None
+            )
             operation_refs = [_text(operation.get("id"))] if operation else []
             invariant_id = _stable_id(
                 "inv",
@@ -3862,7 +3617,7 @@ def build_behavior_ir_from_knowledge_asset(
                 },
                 source_refs=source_refs,
                 confidence=float(transition.get("confidence") or sm.get("confidence") or 0.8),
-                derivation="model-inferred" if operation_inferred else "explicit",
+                derivation="explicit",
             ))
             if not operation:
                 model["coverage_gaps"].append(_fact_node(
@@ -4140,57 +3895,6 @@ def build_behavior_ir_from_knowledge_asset(
             _inv_typed["field_ids"] = _inv_field_ids
         if _semantic_frame:
             _inv_typed["semantic_frame"] = _semantic_frame
-        # V1.4.0: infer operation_refs from field_ids / entity_refs when no explicit refs
-        if not _inv_typed["operation_refs"] and not _is_umbrella:
-            _inv_fset = {f.lower() for f in _inv_field_ids}
-            # Collect entity refs from expression operands
-            _inv_ent_set: set[str] = set()
-            for _op_item in _rule_operands:
-                if isinstance(_op_item, dict):
-                    _er = _text(_op_item.get("entity_ref")).lower()
-                    if _er:
-                        _inv_ent_set.add(_er)
-            # Also from rule-level entity/object
-            _rule_ent = _text(rule.get("entity") or rule.get("object") or rule.get("business_object")).lower()
-            if _rule_ent:
-                _inv_ent_set.add(_rule_ent)
-            if _inv_fset or _inv_ent_set:
-                for _exist_op in _list(model.get("operations")):
-                    if not isinstance(_exist_op, dict):
-                        continue
-                    _op_id = _text(_exist_op.get("id"))
-                    if not _op_id:
-                        continue
-                    # Field signal: check operation schema for field overlap
-                    _field_match = False
-                    if _inv_fset:
-                        _op_fnames: set[str] = set()
-                        for _sk in ("request_schema", "response_schema"):
-                            _sch = _dict(_exist_op.get(_sk))
-                            _props = _dict(_sch.get("properties"))
-                            _op_fnames.update(k.lower() for k in _props)
-                            _ct = _dict(_sch.get("content"))
-                            _jm = _dict(_ct.get("application/json"))
-                            _np = _dict(_dict(_jm.get("schema")).get("properties"))
-                            _op_fnames.update(k.lower() for k in _np)
-                        _field_match = bool(_op_fnames & _inv_fset)
-                    # Entity signal: check operation path for entity name
-                    _ent_match = False
-                    if _inv_ent_set:
-                        _op_path = _text(_exist_op.get("path") or _exist_op.get("raw_path")).lower()
-                        _op_segs = {s for s in _op_path.strip("/").split("/") if s and not s.startswith("{") and not s.startswith(":")}
-                        _op_segs.difference_update(_NON_ENTITY_SEGMENTS)
-                        _ent_match = bool(_op_segs & _inv_ent_set)
-                        # Also check singular/plural
-                        if not _ent_match:
-                            for _ie in _inv_ent_set:
-                                _pl = _ie + "s" if not _ie.endswith("s") else _ie
-                                _sg = _ie.rstrip("s") if _ie.endswith("s") else _ie
-                                if _pl in _op_segs or _sg in _op_segs:
-                                    _ent_match = True
-                                    break
-                    if _field_match or _ent_match:
-                        _inv_typed["operation_refs"].append(_op_id)
         if _is_umbrella:
             _inv_typed["binding_status"] = "umbrella_rule_excluded"
         model["invariants"].append(_fact_node(
@@ -4358,221 +4062,6 @@ def build_behavior_ir_from_knowledge_asset(
                 confidence=float(rule.get("confidence") or 0.7),
                 derivation="explicit",
             ))
-
-    # ── V1.4.0 Post-processing: bind remaining unbound invariants ──
-    # For any invariant without operation_refs (and not umbrella), infer
-    # bindings from entity_ref in operands + operation path matching.
-    _all_ops = _list(model.get("operations"))
-    _op_path_index: list[tuple[str, set[str]]] = []  # (op_id, path_segments)
-    # Use minimal exclusion for binding (keep "auth", "admin" as matchable)
-    _BIND_SKIP_SEGS = {"api", "rest", "v1", "v2", "v3"}
-    for _aop in _all_ops:
-        if not isinstance(_aop, dict):
-            continue
-        _aop_id = _text(_aop.get("id"))
-        _aop_path = _text(_aop.get("path") or _aop.get("raw_path")).lower()
-        if not _aop_id or not _aop_path:
-            continue
-        _segs = {s for s in _aop_path.strip("/").split("/") if s and not s.startswith("{") and not s.startswith(":")}
-        _segs.difference_update(_BIND_SKIP_SEGS)
-        _op_path_index.append((_aop_id, _segs))
-    # Entity ID → name resolution map
-    _entity_id_to_name: dict[str, str] = {}
-    for _ent_node in _list(model.get("entities")):
-        if isinstance(_ent_node, dict):
-            _eid = _text(_ent_node.get("id"))
-            _ename = _text(_ent_node.get("name")).lower()
-            if _eid and _ename:
-                _entity_id_to_name[_eid] = _ename
-
-    for _inv_node in _list(model.get("invariants")):
-        if not isinstance(_inv_node, dict):
-            continue
-        if _list(_inv_node.get("operation_refs")):
-            continue
-        if _text(_inv_node.get("binding_status")) == "umbrella_rule_excluded":
-            continue
-        # Extract entity refs from expression operands
-        _inv_expr = _dict(_inv_node.get("expression"))
-        _inv_ents: set[str] = set()
-        for _inv_op in _list(_inv_expr.get("operands")):
-            if isinstance(_inv_op, dict):
-                _er = _text(_inv_op.get("entity_ref")).lower()
-                if not _er:
-                    continue
-                # Resolve IR node IDs to entity names
-                if _er.startswith("bir_"):
-                    _resolved = _entity_id_to_name.get(_er, "")
-                    if _resolved:
-                        _inv_ents.add(_resolved)
-                else:
-                    _inv_ents.add(_er)
-        # Also try field_ids for schema matching
-        _inv_fids = {_text(f).lower() for f in _list(_inv_node.get("field_ids")) if _text(f)}
-        # V1.4.0: extract entity mentions from description text
-        _inv_desc = _text(_inv_node.get("description")).lower()
-        # Also include causal_trigger in text matching
-        _causal_trigger = _text(_inv_node.get("causal_trigger")).lower()
-        _match_text = f"{_inv_desc} {_causal_trigger}"
-        if _match_text.strip() and not _inv_ents:
-            for _eid, _ename in _entity_id_to_name.items():
-                # Match entity name (singular/plural) in description
-                _sg = _ename.rstrip("s") if _ename.endswith("s") else _ename
-                if _ename in _match_text or _sg in _match_text:
-                    _inv_ents.add(_ename)
-            # Chinese keyword → entity mapping for CJK descriptions
-            _ZH_ENTITY_MAP: dict[str, str] = {
-                "订单": "orders", "支付": "payments", "付款": "payments",
-                "库存": "inventory", "优惠券": "coupons", "折扣券": "coupons",
-                "退款": "refunds", "商品": "products", "产品": "products",
-                "购物车": "cart", "用户": "users", "地址": "addresses",
-                "报告": "reports", "角色": "auth", "登录": "auth",
-                "后台": "auth", "数量": "inventory", "金额": "payments",
-            }
-            if not _inv_ents:
-                for _zh_tok, _ent_target in _ZH_ENTITY_MAP.items():
-                    if _zh_tok in _match_text:
-                        _inv_ents.add(_ent_target)
-            # Also match field_ids to entities via registry
-            if not _inv_ents and _inv_fids:
-                for _fid in _inv_fids:
-                    for _reg_key, _ent_fields in _ENTITY_FIELD_REGISTRY.items():
-                        if any(_fid == ef.lower() for ef in _ent_fields):
-                            # Resolve registry key (entity ID) to entity name
-                            _resolved_name = _entity_id_to_name.get(_reg_key, _reg_key)
-                            _inv_ents.add(_resolved_name.lower())
-                            break
-            # Extract backtick fields from description and match to entities
-            if not _inv_ents and _match_text:
-                _desc_fields = re.findall(r"`([a-zA-Z_][a-zA-Z0-9_]*)`", _match_text)
-                for _df in _desc_fields:
-                    _df_lower = _df.lower()
-                    for _reg_key, _ent_fields in _ENTITY_FIELD_REGISTRY.items():
-                        if any(_df_lower == ef.lower() or _df_lower in ef.lower() for ef in _ent_fields):
-                            _resolved_name = _entity_id_to_name.get(_reg_key, _reg_key)
-                            _inv_ents.add(_resolved_name.lower())
-                            break
-        if not _inv_ents and not _inv_fids:
-            continue
-        # Match against operation paths (entity signal)
-        _matched_ops: list[str] = []
-        for _op_id, _segs in _op_path_index:
-            _ent_hit = False
-            if _inv_ents:
-                if _segs & _inv_ents:
-                    _ent_hit = True
-                else:
-                    for _ie in _inv_ents:
-                        _pl = _ie + "s" if not _ie.endswith("s") else _ie
-                        _sg = _ie.rstrip("s") if _ie.endswith("s") else _ie
-                        if _pl in _segs or _sg in _segs:
-                            _ent_hit = True
-                            break
-            if _ent_hit:
-                _matched_ops.append(_op_id)
-        if _matched_ops:
-            _inv_node["operation_refs"] = _matched_ops
-
-    # ── Infer missing operations from permission matrix ──
-    # Only infer operations for resources referenced by existing API schemas
-    # (as FK targets). This prevents flooding the obligation pool with
-    # operations for resources that are only in the permission matrix.
-    _existing_paths = {
-        (_text(op.get("method")).upper(), _path_shape(_text(op.get("path") or op.get("raw_path"))))
-        for op in model["operations"]
-    }
-    # Build set of FK entities from existing API operation schemas
-    _referenced_entities: set[str] = set()
-    for _op in model["operations"]:
-        _sch = _dict(_op.get("request_schema") or {})
-        for _props_key in ("properties",):
-            _props = _dict(_sch.get(_props_key, {}))
-            for _field in _props:
-                _norm = _field.lower().rstrip("s")
-                if _norm.endswith("_id") or _norm.endswith("id"):
-                    _entity = _norm[:-3].rstrip("_") if _norm.endswith("_id") else _norm[:-2].rstrip("_")
-                    if _entity:
-                        _referenced_entities.add(_entity)
-    # Also collect entity names from existing API paths as referenced entities
-    for _op in model["operations"]:
-        _path = _text(_op.get("path") or "").lower()
-        for _seg in _path.split("/"):
-            _seg = _seg.strip("{}:").rstrip("s")
-            if _seg and _seg not in ("api", "v1", "v2", "v3", "admin"):
-                _referenced_entities.add(_seg)
-    # Remove generic terms
-    _referenced_entities.difference_update({"me", "items", "validate", "login", "register"})
-    _inferred_count = 0
-    _MAX_INFERRED = 3
-    for row in permission_rows:
-        if not isinstance(row, dict):
-            continue
-        if _inferred_count >= _MAX_INFERRED:
-            break
-        resource = _text(row.get("resource") or row.get("module"))
-        if not resource or resource == "*":
-            continue
-        # Only infer if this resource is referenced by existing API schemas
-        _resource_lower = resource.lower().rstrip("s")
-        if _resource_lower not in _referenced_entities and _referenced_entities:
-            continue
-        actions = row.get("actions") or row.get("action") or []
-        if isinstance(actions, str):
-            actions = [actions]
-        for action in actions:
-            action_upper = _text(action).upper()
-            # Map action words to HTTP methods
-            method_map = {
-                "READ": "GET", "VIEW": "GET", "LIST": "GET", "GET": "GET", "HEAD": "HEAD",
-                "CREATE": "POST", "WRITE": "POST", "ADD": "POST", "POST": "POST",
-                "UPDATE": "PUT", "MODIFY": "PUT", "EDIT": "PUT", "PUT": "PUT", "PATCH": "PATCH",
-                "DELETE": "DELETE", "REMOVE": "DELETE", "DESTROY": "DELETE",
-                "SHIP": "POST", "DELIVER": "POST", "ADJUST": "POST", "APPROVE": "POST",
-                "REJECT": "POST", "CANCEL": "POST", "CONFIRM": "POST",
-            }
-            method = method_map.get(action_upper, "POST")
-            # Build simple path from resource name
-            clean = re.sub(r"[^a-z0-9_/-]", "", resource.lower().replace(" ", "_"))
-            if not clean.startswith("/"):
-                clean = "/api/" + clean
-            path = clean
-            # Minimal schema for write operations
-            minimal_schema: dict[str, Any] = {}
-            if method in ("POST", "PUT", "PATCH"):
-                minimal_schema = {
-                    "type": "object",
-                    "properties": {
-                        "status": {"type": "string", "example": "active"},
-                    },
-                }
-            key = (method, _path_shape(path))
-            if key not in _existing_paths:
-                _existing_paths.add(key)
-                _inferred_count += 1
-                if _inferred_count >= _MAX_INFERRED:
-                    break  # inner loop
-                inferred_op = _fact_node(
-                    node_id=_stable_id("inferred", method, path),
-                    typed_fields={
-                        "method": method,
-                        "path": path,
-                        "raw_path": path,
-                        "operation_id": f"{method.lower()}:{_path_shape(path)}",
-                        "read_write": "write" if method in ("POST", "PUT", "PATCH", "DELETE") else "read",
-                        "side_effect_class": "write" if method in ("POST", "PUT", "PATCH", "DELETE") else "read",
-                        "source_id": "permission_inferred",
-                        "summary": f"Inferred from permission matrix: {action} {resource}",
-                        "description": "",
-                        "request_schema": minimal_schema,
-                        "request_example": minimal_schema.get("properties", {}) if minimal_schema else {},
-                        "tags": [],
-                        "field_dictionary": {},
-                    },
-                    source_refs=[_source_ref("permission_inferred", locator=f"{action} {resource}", kind="permission_inferred")],
-                    confidence=0.5,
-                    derivation="model-inferred",
-                )
-                model["operations"].append(inferred_op)
 
     # Runtime V2 relations are the only semantic joins used by the compiler.
     permission_policy_mode = _text(

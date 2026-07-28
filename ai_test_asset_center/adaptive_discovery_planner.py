@@ -279,20 +279,31 @@ def plan_obligation_round(
         if op_key:
             operation_counts[op_key] = operation_counts.get(op_key, 0) + 1
 
-    # Reserve minimum slots per type
-    for family_key, minimum in sorted(guarantees.items(), key=lambda kv: -kv[1]):
-        if len(selected) >= budget:
-            break
-        count = 0
+    # Reserve minimum slots only when the budget can represent every present
+    # guaranteed family. Under a smaller budget, forcing the first configured
+    # family would override observed yield and make ranking order-dependent.
+    present_guaranteed_families = {
+        item["risk_family"]
+        for item in ranked
+        if item["risk_family"] in guarantees
+    }
+    present_families = {
+        item["risk_family"] for item in ranked if item["risk_family"]
+    }
+    if budget >= len(present_families):
+        remaining_guarantees = {
+            family: minimum
+            for family, minimum in guarantees.items()
+            if family in present_guaranteed_families
+        }
         for item in ranked:
-            if count >= minimum or len(selected) >= budget:
+            if len(selected) >= budget:
                 break
-            if item["obligation_id"] in selected_ids:
-                continue
-            if item["risk_family"] != family_key:
+            family = item["risk_family"]
+            if remaining_guarantees.get(family, 0) <= 0:
                 continue
             _add_item(item)
-            count += 1
+            remaining_guarantees[family] -= 1
 
     # Compute diversity sets and soft caps from ranked candidates
     families_present = sorted({item["risk_family"] for item in ranked if item["risk_family"]})

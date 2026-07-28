@@ -1,11 +1,57 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from ai_test_asset_center.deep_experiment_protocol_adapter import (
     adapt_deep_experiments_for_execution,
 )
 from ai_test_asset_center.experiment_runtime_support import (
     preflight_experiment_executable,
 )
+
+
+def test_discovery_mainline_does_not_replace_blocked_experiments_with_deep_heuristics() -> None:
+    planning_source = (
+        Path(__file__).resolve().parents[1]
+        / "ai_test_asset_center"
+        / "discovery_runtime_planning.py"
+    ).read_text(encoding="utf-8")
+
+    assert "plan_deep_experiments" not in planning_source
+    assert "adapt_deep_experiments_for_execution" not in planning_source
+
+
+def test_deep_adapter_rejects_missing_actor_without_substitution() -> None:
+    result = adapt_deep_experiments_for_execution(
+        [{
+            "experiment_id": "deep-missing-actor",
+            "obligation_id": "obl-missing-actor",
+            "compile_receipt": {"status": "COMPILED"},
+            "control_plan": [],
+            "treatment_plan": [{
+                "step_id": "treatment_1",
+                "operation_ref": "op-read",
+                "actor_ref": "actor-source-declared-but-missing",
+            }],
+            "observers": [{"observer_id": "http_response"}],
+            "assertions": [{"kind": "http_status_class", "expected": 2}],
+        }],
+        {
+            "actors": [{
+                "id": "actor-admin",
+                "role": "admin",
+                "credential_secret_ref": "secret_ref:test_accounts:admin",
+            }],
+            "operations": [{
+                "id": "op-read",
+                "method": "GET",
+                "path": "/api/resources",
+            }],
+        },
+    )
+
+    assert result["adapted"] == []
+    assert result["blocked_reasons"] == {"BLOCKED_MISSING_ACTOR": 1}
 
 
 def test_deep_adapter_binds_bare_path_id_via_collection_parent() -> None:
@@ -45,14 +91,8 @@ def test_deep_adapter_binds_bare_path_id_via_collection_parent() -> None:
         behavior_ir,
     )
 
-    exp = adapted["adapted"][0]
-    binding = next(b for b in exp["binding_plan"] if b["target"] == "id")
-    assert binding["status"] == "runtime_resolvable"
-    assert binding["resolver_operations"][0]["path"] == "/api/orders"
-    assert any(
-        n.get("kind") == "runtime_read_binding" and n.get("target") == "id"
-        for n in exp["fixture_dag"]["nodes"]
-    )
+    assert adapted["adapted"] == []
+    assert adapted["blocked_reasons"] == {"BLOCKED_NON_REVERSIBLE_WRITE": 1}
 
 
 def test_deep_adapter_binds_body_order_id_placeholder() -> None:
@@ -101,9 +141,8 @@ def test_deep_adapter_binds_body_order_id_placeholder() -> None:
         behavior_ir,
     )
 
-    exp = adapted["adapted"][0]
-    binding = next(b for b in exp["binding_plan"] if b["target"] == "order_id")
-    assert binding["resolver_operations"][0]["path"] == "/api/orders"
+    assert adapted["adapted"] == []
+    assert adapted["blocked_reasons"] == {"BLOCKED_NON_REVERSIBLE_WRITE": 1}
 
 
 def test_deep_adapter_uses_fixture_create_when_no_list_read() -> None:
@@ -153,11 +192,8 @@ def test_deep_adapter_uses_fixture_create_when_no_list_read() -> None:
         behavior_ir,
     )
 
-    exp = adapted["adapted"][0]
-    binding = next(b for b in exp["binding_plan"] if b["target"] == "id")
-    assert binding["status"] == "runtime_resolvable"
-    assert binding["fixture_setup"]["path"] == "/api/refunds"
-    assert any(n.get("target") == "id" for n in exp["fixture_dag"]["nodes"])
+    assert adapted["adapted"] == []
+    assert adapted["blocked_reasons"] == {"BLOCKED_NON_REVERSIBLE_WRITE": 1}
 
 
 def test_preflight_accepts_fixture_create_only_path_binding() -> None:

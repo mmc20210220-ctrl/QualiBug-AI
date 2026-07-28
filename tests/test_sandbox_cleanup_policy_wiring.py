@@ -104,7 +104,7 @@ def test_governed_control_write_emits_real_before_after_and_audit(monkeypatch, t
     assert Path(receipt["audit_path"]).is_file()
 
 
-def test_governed_write_materializes_source_observed_boolean_mutation(
+def test_governed_write_blocks_source_observed_mutation_before_transport(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -148,14 +148,11 @@ def test_governed_write_materializes_source_observed_boolean_mutation(
         },
     )
 
-    assert receipt["accepted"] is True
-    assert receipt["materialized_request_body"] == {"selected": True}
-    assert receipt["runtime_body_receipt"]["status"] == "MATERIALIZED"
-    assert receipt["runtime_body_receipt"]["selected_field"] == "selected"
-    assert "selected_value" not in receipt["runtime_body_receipt"]
+    assert receipt["accepted"] is False
+    assert receipt["reason"] == "runtime_mutation_source_declared_body_required"
+    assert receipt["write"]["status"] == 0
+    assert receipt["runtime_body_receipt"]["status"] == "BLOCKED"
     assert calls == [
-        ("GET", "http://target.invalid/resources", None),
-        ("PATCH", "http://target.invalid/resources/resource-1", {"selected": True}),
         ("GET", "http://target.invalid/resources", None),
     ]
 
@@ -207,13 +204,13 @@ def test_governed_write_blocks_ambiguous_runtime_mutation_before_transport(
     )
 
     assert receipt["accepted"] is False
-    assert receipt["reason"] == "runtime_mutation_target_ambiguous"
+    assert receipt["reason"] == "runtime_mutation_source_declared_body_required"
     assert receipt["write"]["status"] == 0
     assert receipt["runtime_body_receipt"]["status"] == "BLOCKED"
     assert calls == ["GET"]
 
 
-def test_source_observed_mutation_preserves_decimal_string_shape() -> None:
+def test_source_observed_decimal_mutation_is_not_invented() -> None:
     body, receipt, reason = _materialize_source_observed_mutation(
         {"sku": "SKU-1", "original_price": "12.50", "price": "10.50"},
         {
@@ -223,6 +220,6 @@ def test_source_observed_mutation_preserves_decimal_string_shape() -> None:
         },
     )
 
-    assert reason == ""
-    assert body == {"price": "11.50"}
-    assert receipt["value_type"] == "str_decimal"
+    assert reason == "runtime_mutation_source_declared_body_required"
+    assert body == {}
+    assert receipt == {}

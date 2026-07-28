@@ -88,7 +88,7 @@ def test_request_body_placeholder_uses_source_declared_runtime_read_binding() ->
     assert unresolved_placeholders(operation, plan) == []
 
 
-def test_request_body_placeholder_without_declared_resolver_stays_unresolved() -> None:
+def test_request_body_placeholder_without_declared_resolver_is_blocked() -> None:
     operation = {
         "id": "reserve_inventory",
         "method": "POST",
@@ -102,8 +102,11 @@ def test_request_body_placeholder_without_declared_resolver_stays_unresolved() -
         behavior_ir={"operations": [operation]},
     )
 
-    # With generated test values as fallback, body placeholders without
-    # declared resolvers now receive best-effort generated values.
+    binding = next(row for row in plan if row.get("target") == "order_id")
+    assert binding["status"] == "blocked"
+    assert binding["source_priority"] == "body_placeholder_unresolvable"
+    assert binding["blocked_reason"] == "BODY_PARAMETER_NOT_SOURCE_BOUND"
+    assert "generated_value" not in binding
     assert unresolved_placeholders(operation, plan) == []
 
 
@@ -157,12 +160,10 @@ def test_fixture_create_without_actor_bound_resolver_does_not_satisfy_binding() 
     )
 
     binding = next(row for row in plan if row.get("target") == "id")
-    # When no resolver exists, a best-effort test value is generated instead
-    # of blocking. The API may reject it, but an HTTP response is more
-    # informative than a silently blocked obligation.
-    assert binding["status"] == "bound"
-    assert binding["source_priority"] == "test_value_generated"
-    assert "generated_value" in binding
+    assert binding["status"] == "blocked"
+    assert binding["source_priority"] == "path_placeholder_unresolvable"
+    assert binding["blocked_reason"] == "PLACEHOLDER_PATH_PARAMETER_NOT_RESOLVED"
+    assert "generated_value" not in binding
     assert unresolved_placeholders(operation, plan) == []
 
 
@@ -725,6 +726,70 @@ def test_behavior_ir_emits_gap_for_unbound_state_transition() -> None:
     )
 
 
+def test_state_name_path_similarity_never_creates_transition_binding() -> None:
+    ir = build_behavior_ir_from_knowledge_asset(
+        {
+            "operations": [
+                {
+                    "method": "POST",
+                    "path": "/resources/{id}/activate",
+                    "operation_id": "activate_resource",
+                }
+            ],
+            "state_machines": [{
+                "source_id": "workflow-source",
+                "entity": "resource",
+                "states": ["draft", "activated"],
+                "transitions": [{"from": "draft", "to": "activated"}],
+            }],
+        },
+        project_id="no-state-path-inference",
+    )
+
+    assert not any(row.get("relation_type") == "transitions" for row in ir["relations"])
+    assert any(
+        row.get("gap_type") == "state_transition_operation_unresolved"
+        for row in ir["coverage_gaps"]
+    )
+
+
+def test_permission_matrix_never_invents_api_operations_or_request_bodies() -> None:
+    ir = build_behavior_ir_from_knowledge_asset(
+        {
+            "permission_matrix": [{
+                "role": "operator",
+                "resource": "resources",
+                "actions": ["approve"],
+            }],
+        },
+        project_id="no-permission-operation-inference",
+    )
+
+    assert ir["operations"] == []
+
+
+def test_invariant_entity_text_never_guesses_an_operation_reference() -> None:
+    ir = build_behavior_ir_from_knowledge_asset(
+        {
+            "operations": [{
+                "method": "PATCH",
+                "path": "/resources/{id}",
+                "operation_id": "update_resource",
+            }],
+            "rule_library": [{
+                "rule_id": "resource-rule",
+                "statement": "resource must remain valid",
+                "kind": "validation",
+                "entity": "resource",
+            }],
+        },
+        project_id="no-invariant-operation-inference",
+    )
+
+    invariant = next(row for row in ir["invariants"] if row.get("source_rule_refs"))
+    assert not invariant.get("operation_refs")
+
+
 def test_behavior_ir_preserves_forbidden_state_transition_as_typed_invariant() -> None:
     ir = build_behavior_ir_from_knowledge_asset(
         {
@@ -1080,6 +1145,25 @@ def test_runtime_binding_does_not_inherit_unrelated_root_api_body() -> None:
             {
                 "method": "POST",
                 "path": "/api/orders",
+                "request_example": {"addressId": "<address_id>"},
+            }
+        ],
+    )
+
+    assert example == {}
+
+
+def test_runtime_binding_never_inherits_a_sibling_operation_body() -> None:
+    example = _request_example(
+        {
+            "method": "POST",
+            "path": "/api/orders/confirm",
+            "request_example": {},
+        },
+        sibling_ops=[
+            {
+                "method": "POST",
+                "path": "/api/orders/create",
                 "request_example": {"addressId": "<address_id>"},
             }
         ],
@@ -1525,6 +1609,7 @@ def test_validation_experiment_resolves_source_permitted_actor_when_obligation_o
         "operations": [
             operation,
             {"id": "op-resource-list", "method": "GET", "path": "/resources", "read_write": "read"},
+            {"id": "op-resource-delete", "method": "DELETE", "path": "/resources/{id}", "read_write": "write"},
         ],
         "actors": [{
             "id": "actor-writer",
@@ -1556,7 +1641,11 @@ def test_validation_experiment_resolves_source_permitted_actor_when_obligation_o
         "required_operations": ["op-resource-write"],
         "required_fixtures": [],
         "required_observers": ["http_response"],
-        "cleanup_requirement": {"required": False},
+        "cleanup_requirement": {
+            "required": True,
+            "mode": "reverse_order",
+            "operation_ref": "op-resource-delete",
+        },
     }
 
     experiment = compile_experiment_for_obligation(
@@ -1745,7 +1834,7 @@ def test_obligation_compiler_uses_unique_documented_create_compensation() -> Non
     assert write_effect_obligations == []
 
 
-def test_behavior_ir_derives_unique_action_compensation_for_created_resource() -> None:
+def test_behavior_ir_does_not_infer_action_compensation_from_path_name() -> None:
     ir = build_behavior_ir_from_knowledge_asset(
         {
             "interfaces": [
@@ -1793,7 +1882,7 @@ def test_behavior_ir_derives_unique_action_compensation_for_created_resource() -
     )
     operations = {operation["operation_id"]: operation for operation in ir["operations"]}
 
-    assert any(
+    assert not any(
         relation["relation_type"] == "compensates"
         and relation["from_ref"] == operations["cancel_order"]["id"]
         and relation["to_ref"] == operations["create_order"]["id"]
@@ -1806,10 +1895,7 @@ def test_behavior_ir_derives_unique_action_compensation_for_created_resource() -
         for obligation in obligations
         if obligation["risk_family"] == "idempotency"
     )
-    assert (
-        idempotency["cleanup_requirement"]["operation_ref"]
-        == operations["cancel_order"]["id"]
-    )
+    assert "operation_ref" not in idempotency["cleanup_requirement"]
 
 
 def test_obligation_compiler_requires_source_invariant_for_write_effect_family() -> None:
@@ -2548,17 +2634,11 @@ def test_runtime_binding_plan_includes_governed_fixture_setup_from_declared_oper
             },
         },
         {
-            "operation_id": "archive_resource",
-            "method": "POST",
-            "path": "/api/resources/:id/archive",
-            "side_effect_class": "write",
-        },
-        {
-            "operation_id": "archive_resource",
-            "method": "POST",
-            "path": "/api/resources/:id/archive",
-            "side_effect_class": "write",
-        },
+                "operation_id": "delete_resource",
+                "method": "DELETE",
+                "path": "/api/resources/:id",
+                "side_effect_class": "write",
+            },
     ]
     ir = build_behavior_ir_from_knowledge_asset(
         asset,
@@ -2622,10 +2702,10 @@ def test_runtime_binding_plan_includes_governed_fixture_setup_from_declared_oper
     }]
     assert fixture_setup["cleanup_operations"] == [{
         "operation_ref": next(
-            op["id"] for op in ir["operations"] if op.get("operation_id") == "archive_resource"
+            op["id"] for op in ir["operations"] if op.get("operation_id") == "delete_resource"
         ),
-        "method": "POST",
-        "path": "/api/resources/{id}/archive",
+        "method": "DELETE",
+        "path": "/api/resources/{id}",
     }]
 
 
@@ -2639,7 +2719,7 @@ def test_runtime_binding_plan_deduplicates_merged_cleanup_operations() -> None:
             "content": {"application/json": {"example": {"name": "source-name"}}},
         },
     }
-    cleanup = {"id": "archive_resource", "method": "POST", "path": "/api/resources/{id}/archive"}
+    cleanup = {"id": "delete_resource", "method": "DELETE", "path": "/api/resources/{id}"}
     plan = build_binding_plan(
         operation=target,
         obligation={"required_fixtures": []},
@@ -2657,15 +2737,72 @@ def test_runtime_binding_plan_deduplicates_merged_cleanup_operations() -> None:
                 "allowed_resources": ["resource"],
                 "credential_secret_ref": "secret_ref:test_accounts:fixture_actor",
             }],
+            "relations": [{
+                "id": "permit-create",
+                "relation_type": "permits",
+                "operation_ref": "create_resource",
+                "actor_ref": "fixture_actor",
+                "from_ref": "fixture_actor",
+                "to_ref": "create_resource",
+                "source_refs": [{"source_id": "api"}],
+            }],
         },
     )
 
     fixture_setup = next(item for item in plan if item["target"] == "resourceId")["fixture_setup"]
     assert fixture_setup["cleanup_operations"] == [{
-        "operation_ref": "archive_resource",
-        "method": "POST",
-        "path": "/api/resources/{id}/archive",
+        "operation_ref": "delete_resource",
+        "method": "DELETE",
+        "path": "/api/resources/{id}",
     }]
+
+
+def test_fixture_setup_requires_a_source_declared_request_example() -> None:
+    from ai_test_asset_center.runtime_binding_graph import (
+        _declared_fixture_setup,
+    )
+
+    target = {
+        "id": "read_projection",
+        "method": "GET",
+        "path": "/api/projections/resource/{resourceId}",
+    }
+    setup = _declared_fixture_setup(
+        target,
+        target="resourceId",
+        behavior_ir={
+            "operations": [
+                target,
+                {
+                    "id": "create_resource",
+                    "method": "POST",
+                    "path": "/api/resources",
+                    "request_schema": {
+                        "type": "object",
+                        "required": ["name"],
+                        "properties": {
+                            "name": {"type": "string"},
+                        },
+                    },
+                },
+                {
+                    "id": "delete_resource",
+                    "method": "DELETE",
+                    "path": "/api/resources/{id}",
+                },
+            ],
+            "actors": [{
+                "id": "fixture_actor",
+                "allowed_actions": ["write"],
+                "allowed_resources": ["resource"],
+                "credential_secret_ref": (
+                    "secret_ref:test_accounts:fixture_actor"
+                ),
+            }],
+        },
+    )
+
+    assert setup == {}
 
 
 def test_experiment_compiler_blocks_production_environment() -> None:
@@ -2685,9 +2822,28 @@ def test_experiment_compiler_blocks_production_environment() -> None:
 
 def test_binding_priority_no_low_override() -> None:
     plan = [{"target": "id", "status": "bound", "source_priority": "experiment_setup_response", "value_fingerprint": "aaa"}]
-    updated = apply_binding(plan, target="id", value="low", source_priority="schema_generated")
+    updated = apply_binding(
+        plan,
+        target="id",
+        value="low",
+        source_priority="api_doc_example",
+    )
     assert updated[0]["source_priority"] == "experiment_setup_response"
     assert "override_rejected" in updated[0]
+
+
+def test_binding_priority_rejects_unknown_or_evaluator_owned_sources() -> None:
+    from ai_test_asset_center.runtime_binding_graph import BINDING_PRIORITY
+
+    assert "schema_generated" not in BINDING_PRIORITY
+    assert "evaluator_frozen_fixture" not in BINDING_PRIORITY
+    with pytest.raises(ValueError, match="binding_source_priority_invalid"):
+        apply_binding(
+            [],
+            target="id",
+            value="invented",
+            source_priority="unknown_source",
+        )
 
 
 def test_assertion_concurrency_rejects_dual_2xx_alone() -> None:

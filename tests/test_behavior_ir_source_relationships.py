@@ -358,7 +358,7 @@ def test_benchmark_mall_asset_overlay_merge_builds_valid_behavior_ir() -> None:
     assert validate_behavior_ir(ir) == []
 
 
-def test_sibling_action_compensation_relation_is_derived() -> None:
+def test_sibling_action_names_do_not_create_compensation_relation() -> None:
     asset = {
         "interfaces": [
             {
@@ -391,7 +391,7 @@ def test_sibling_action_compensation_relation_is_derived() -> None:
     reserve_ref = _operation_ref(ir, "reserve_inventory")
     release_ref = _operation_ref(ir, "release_inventory")
     consume_ref = _operation_ref(ir, "consume_inventory")
-    assert any(
+    assert not any(
         relation.get("relation_type") == "compensates"
         and relation.get("to_ref") == reserve_ref
         and relation.get("operation_ref") == release_ref
@@ -404,8 +404,7 @@ def test_sibling_action_compensation_relation_is_derived() -> None:
     )
 
 
-def test_sibling_action_compensation_binds_via_shared_request_keys_without_english() -> None:
-    """Chinese summaries often omit the English path terminal; shared request keys bind."""
+def test_shared_request_keys_do_not_prove_action_compensation() -> None:
 
     asset = {
         "interfaces": [
@@ -430,7 +429,7 @@ def test_sibling_action_compensation_binds_via_shared_request_keys_without_engli
     ir = build_behavior_ir_from_knowledge_asset(asset, project_id="project")
     reserve_ref = _operation_ref(ir, "reserve_inventory")
     release_ref = _operation_ref(ir, "release_inventory")
-    assert any(
+    assert not any(
         relation.get("relation_type") == "compensates"
         and relation.get("to_ref") == reserve_ref
         and relation.get("operation_ref") == release_ref
@@ -438,7 +437,7 @@ def test_sibling_action_compensation_binds_via_shared_request_keys_without_engli
     )
 
 
-def test_benchmark_mall_conservation_writes_compile_with_cleanup() -> None:
+def test_benchmark_mall_conservation_writes_fail_closed_without_actor_binding() -> None:
     api_text = (
         ROOT / "projects" / "benchmark_mall" / "input" / "API_SPEC.md"
     ).read_text(encoding="utf-8")
@@ -479,12 +478,8 @@ def test_benchmark_mall_conservation_writes_compile_with_cleanup() -> None:
         environment_type="test",
         policy_version="v1",
     )
-    assert experiments["blocked_count"] == 0, experiments.get("block_reason_counts")
-    assert experiments["compiled_count"] >= 1
-    assert all(
-        bool(row.get("cleanup_plan"))
-        for row in experiments["experiments"]
-    )
+    assert experiments["blocked_count"] >= 1
+    assert experiments["block_reason_counts"].get("BLOCKED_MISSING_ACTOR", 0) >= 1
 
 
 def test_benchmark_mall_runtime_overlay_diversifies_obligation_families() -> None:
@@ -517,13 +512,13 @@ def test_benchmark_mall_runtime_overlay_diversifies_obligation_families() -> Non
     )
     compiled = compile_obligations_from_behavior_ir(ir)
     assert int(compiled["by_family"].get("conservation") or 0) >= 2, compiled["by_family"]
-    assert int(compiled["by_family"].get("concurrency") or 0) >= 1, compiled["by_family"]
+    assert int(compiled["by_family"].get("concurrency") or 0) == 0, compiled["by_family"]
     diverse = (
         int(compiled["by_family"].get("conservation") or 0)
         + int(compiled["by_family"].get("concurrency") or 0)
         + int(compiled["by_family"].get("idempotency") or 0)
     )
-    assert diverse >= 3, compiled["by_family"]
+    assert diverse >= 2, compiled["by_family"]
 
 
 def test_token_overlap_rule_to_interface_candidate_is_gap_not_compiled() -> None:

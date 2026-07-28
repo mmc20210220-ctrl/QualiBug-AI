@@ -7,6 +7,7 @@ so observers / oracle evaluation can proceed. Predicate helpers remain in
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +47,9 @@ from .sandbox_write_executor import (
     execute_governed_control_write,
     sandbox_write_allowed,
 )
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _cleanup_actor_for_write_step(
@@ -375,15 +379,23 @@ def _project_database_dsn(root: Path, project: str) -> tuple[str, str]:
             )
 
             ensure_local_credential_encryption_key(Path(root))
-        except Exception:
-            # Decrypt below fail-closes visibly when the key is still unavailable.
-            pass
+        except Exception as exc:
+            # Decrypt below still fails closed; record the earlier key-loading
+            # failure so operators can distinguish its root cause.
+            _LOGGER.warning(
+                "cleanup_credential_key_load_failed project=%s error=%s",
+                project,
+                type(exc).__name__,
+            )
 
     path = Path(root) / "platform_workspace" / str(project) / "multi_service_config.json"
-    try:
-        payload = _json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    if not path.exists():
         payload = {}
+    else:
+        try:
+            payload = _json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            return "", f"CLEANUP_DB_CONFIG_INVALID:{type(exc).__name__}"
 
     def _env_db_override(service_name: str = "") -> tuple[str, str, str, str, str]:
         """Return (host, port, name, user, password) from env when declared."""
@@ -1228,89 +1240,43 @@ def execute_experiment_cleanup_compensation(
                         observations["cleanup_status"] = "completed"
                 continue
             if cleanup_action == "best_effort_delete":
-                # ── Enhanced: best-effort DELETE for POST creates without documented cleanup ──
-                # Find the treatment POST step and extract resource ID from response
-                post_steps = [
-                    step for step in steps_out
-                    if _text(_dict(step).get("phase")) in {"control", "treatment"}
-                    and _text(_dict(step).get("operation_ref")) == op_ref
-                    and _text(_dict(step).get("method")).upper() == "POST"
-                    and 200 <= int(_dict(step).get("status_code") or 0) < 300
-                ]
-                if not post_steps:
-                    # No successful POST step; cleanup not needed
-                    observations["cleanup_status"] = "completed"
-                    continue
-                for step in reversed(post_steps):
-                    actor_ref, actor, token = _cleanup_actor_for_write_step(
-                        step,
-                        actors=actors,
-                        tokens=tokens,
+                cleanup_failures += 1
+                observations["cleanup_status"] = "failed"
+                observations["cleanup_reason"] = (
+                    "cleanup_authority_not_source_declared"
+                )
+                steps_out.append({
+                    "phase": "cleanup",
+                    "cleanup_subject_id": cleanup_subject_id,
+                    "method": "",
+                    "path": "",
+                    "status_code": 0,
+                    "operation_ref": op_ref,
+                    "error": "cleanup_authority_not_source_declared",
+                })
+                contract_evidence_receipts.append(
+                    build_contract_evidence_receipt(
+                        kind="cleanup",
+                        experiment_id=eid,
+                        obligation_id=oid,
+                        campaign_id=resolved_campaign_id,
+                        execution_id=resolved_execution_id,
+                        subject_id=cleanup_subject_id,
+                        status="FAILED",
+                        evidence={
+                            "accepted_write_count": len(
+                                accepted_governed_writes
+                            ),
+                            "cleanup_write_count": 0,
+                            "state_unchanged": False,
+                            "restoration_verified": False,
+                            "audit_receipt_ids": [],
+                            "reason_code": (
+                                "cleanup_authority_not_source_declared"
+                            ),
+                        },
                     )
-                    # Extract resource ID from response body
-                    response_body = _dict(step).get("body") or {}
-                    resource_id = (
-                        response_body.get("id")
-                        or response_body.get("ID")
-                        or _dict(response_body.get("data")).get("id")
-                        or _dict(response_body.get("data")).get("ID")
-                        or ""
-                    )
-                    if not resource_id:
-                        # Cannot resolve resource ID; best-effort cleanup skipped
-                        observations["cleanup_status"] = "completed"
-                        observations["cleanup_reason"] = "best_effort_no_resource_id"
-                        continue
-                    # Build DELETE path from template
-                    base_path = _text(_dict(cleanup).get("path") or "").replace("/{response_id}", "")
-                    delete_path = f"{base_path}/{resource_id}"
-                    allowed, reason = sandbox_write_allowed(
-                        root=root,
-                        project=project,
-                        runtime_contract=runtime_contract,
-                        actor_token=token,
-                        actor_identity=_text(actor.get("role") or actor_ref),
-                    )
-                    if not allowed:
-                        # Best-effort: don't fail if sandbox denies cleanup
-                        observations["cleanup_status"] = "completed"
-                        observations["cleanup_reason"] = f"best_effort_sandbox_denied:{reason}"
-                        continue
-                    governed_cleanup = execute_governed_control_write(
-                        root=root,
-                        project=project,
-                        base_url=base_url,
-                        runtime_contract=runtime_contract,
-                        campaign_id=campaign_id,
-                        operation_phase="experiment_cleanup",
-                        actor_identity=_text(actor.get("role") or actor_ref),
-                        actor_token=token,
-                        method="DELETE",
-                        path=delete_path,
-                        body=None,
-                        observation_path=delete_path,
-                    )
-                    cleanup_write = _dict(governed_cleanup.get("write"))
-                    cleanup_observation = {
-                        "method": "DELETE",
-                        "path": delete_path,
-                        "status_code": int(cleanup_write.get("status") or 0),
-                        "body": cleanup_write.get("body"),
-                        "headers": cleanup_write.get("headers") or {},
-                        "duration_ms": cleanup_write.get("duration_ms"),
-                        "error": cleanup_write.get("error") or governed_cleanup.get("reason") or "",
-                        "governance_receipt": governed_cleanup,
-                        "phase": "cleanup",
-                        "operation_ref": op_ref,
-                        "cleanup_subject_id": cleanup_subject_id,
-                        "compensates_step_id": _text(step.get("step_id")),
-                        "actor_ref": actor_ref,
-                        "best_effort": True,
-                    }
-                    steps_out.append(cleanup_observation)
-                    # Best-effort: don't count failures
-                    if not cleanup_failures:
-                        observations["cleanup_status"] = "completed"
+                )
                 continue
             if cleanup_action in {"restore_before_snapshot", "inverse_delta_compensation"}:
                 restore_steps = [

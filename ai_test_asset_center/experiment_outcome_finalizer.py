@@ -67,7 +67,9 @@ def _requires_cleanup_equivalence(
     if declared is True or _text(declared).lower() in {"true", "required"}:
         return True
     for step in _list(steps_out):
-        if not isinstance(step, dict) or _text(step.get("phase")) == "cleanup":
+        if not isinstance(step, dict):
+            continue
+        if _text(step.get("phase")) not in {"control", "treatment"}:
             continue
         if _text(step.get("method")).upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
             continue
@@ -607,16 +609,16 @@ def _extract_operation_inputs(exp: dict[str, Any]) -> dict[str, Any]:
 
 
 def _safe_serialize(obj: Any) -> dict[str, Any]:
-    """Safely serialize a dataclass or dict to a plain dict."""
+    """Serialize supported receipt objects without inventing fallback evidence."""
     if obj is None:
         return {}
     if isinstance(obj, dict):
         return obj
-    try:
-        from dataclasses import asdict
-        return asdict(obj)
-    except Exception:
-        return {"repr": str(obj)}
+    from dataclasses import asdict, is_dataclass
+
+    if not is_dataclass(obj) or isinstance(obj, type):
+        raise TypeError(f"unsupported_receipt_object:{type(obj).__name__}")
+    return asdict(obj)
 
 
 def finalize_experiment_execution(

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import time
@@ -30,6 +31,9 @@ from .runtime_binding_materializer import (
 )
 from .runtime_binding_graph import declared_effect_observers
 from .sandbox_write_executor import _http_request
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -435,7 +439,22 @@ def load_actor_tokens(root: Path, project: str, *, base_url: str = "") -> dict[s
                 tokens.setdefault(role, token)
                 tokens.setdefault(f"secret_ref:test_accounts:{role}", token)
                 tokens.setdefault(f"secret_ref:context:{role}", token)
-        except Exception:
+            else:
+                _LOGGER.warning(
+                    "actor_login_rejected project=%s role=%s status=%s "
+                    "token_present=%s",
+                    project,
+                    role,
+                    status,
+                    bool(token),
+                )
+        except Exception as exc:
+            _LOGGER.warning(
+                "actor_login_transport_failed project=%s role=%s error=%s",
+                project,
+                role,
+                type(exc).__name__,
+            )
             continue
     return tokens
 
@@ -554,8 +573,7 @@ def preflight_experiment_executable(
                 # appears on a receipt after resolution has already run.
                 _resolved = any(
                     b.get("target") == _p and (
-                        b.get("generated_value")
-                        or b.get("status") == "bound"
+                        b.get("status") == "bound"
                         or _list(b.get("resolver_operations"))
                         # fixture_create_only plans are runtime_resolvable with
                         # a source-declared create+cleanup and empty resolvers.
@@ -598,20 +616,17 @@ def preflight_experiment_executable(
             else:
                 # http:// URL - use as-is
                 pass
-        # Check if all path placeholders have generated values in binding plan
+        # Check whether every placeholder has an exact source-observed binding.
         _bp = _list(exp.get("binding_plan"))
         _pre_rb = _dict(exp.get("_pre_resolved_bindings"))
-        _has_generated_bindings = False
+        _has_materialized_bindings = False
         if path_has_placeholders(path):
             _params = infer_path_params(path)
-            _has_generated_bindings = _params and all(
-                any(
-                    b.get("target") == p and b.get("generated_value")
-                    for b in _bp if isinstance(b, dict)
-                ) or _pre_rb.get(p) not in (None, "")
+            _has_materialized_bindings = _params and all(
+                _pre_rb.get(p) not in (None, "")
                 for p in _params
             )
-        if path_has_placeholders(path) and not _has_generated_bindings and not _runtime_binding_contract_ready(
+        if path_has_placeholders(path) and not _has_materialized_bindings and not _runtime_binding_contract_ready(
             path,
             binding_plan=_bp,
             fixture_dag=dag,
@@ -647,7 +662,6 @@ def preflight_experiment_executable(
             and not _declared_observation_path(path, ops)
             and not _declared_effect_observer_available(op, ops)
             and not _exp_has_compiled_effect_resolvers
-            and not _is_permitted_operation_invocation(exp)
         ):
             # A write response reports that the request was accepted, not that
             # the business effect happened. Degrading to it would make the
@@ -1095,9 +1109,23 @@ def run_environment_preflight(
                 else:
                     routes_ok += 1
                     route_results.append({"path": path, "status": status, "route": "OK"})
-            except Exception:
+            except Exception as exc:
                 routes_failed += 1
-                route_results.append({"path": path, "status": 0, "route": "ERROR"})
+                error_type = type(exc).__name__
+                route_results.append(
+                    {
+                        "path": path,
+                        "status": 0,
+                        "route": "ERROR",
+                        "error_type": error_type,
+                        "detail": str(exc)[:200],
+                    }
+                )
+                _LOGGER.warning(
+                    "environment_preflight_route_failed path=%s error=%s",
+                    path,
+                    error_type,
+                )
     route_ratio = routes_ok / max(1, routes_ok + routes_failed)
     checks.append({
         "check": "gateway_routes",

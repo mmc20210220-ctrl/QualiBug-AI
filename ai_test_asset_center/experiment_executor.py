@@ -266,7 +266,7 @@ def execute_one_experiment(
         for item in _list(exp.get("binding_plan"))
         if isinstance(item, dict) and _text(item.get("target"))
     }
-    # ── Inject pre-resolved bindings into binding_plan before fixture materialization ──
+    # ── Inject source-observed bindings before fixture materialization ──
     # Batch-level auto_resolve_bindings resolves path placeholders by calling GET
     # endpoints. Inject those values so the fixture materializer can use them directly
     # instead of re-resolving (which may fail without proper actor context).
@@ -274,7 +274,12 @@ def execute_one_experiment(
     if _pre_bindings:
         for _bk, _bv in _pre_bindings.items():
             if _bk in binding_plan and _bv not in (None, ""):
-                binding_plan[_bk] = {**binding_plan[_bk], "generated_value": str(_bv), "status": "bound"}
+                binding_plan[_bk] = {
+                    **binding_plan[_bk],
+                    "materialized_value": str(_bv),
+                    "source_priority": "same_actor_list_read",
+                    "status": "bound",
+                }
     resolver_actor_ref = ""
     for planned in _list(exp.get("control_plan")) + _list(exp.get("treatment_plan")):
         if isinstance(planned, dict) and _text(planned.get("actor_ref")):

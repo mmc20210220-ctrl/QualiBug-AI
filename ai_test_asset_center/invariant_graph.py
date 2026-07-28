@@ -289,85 +289,11 @@ def build_default_invariant_graph(
     *,
     project_id: str = "",
 ) -> InvariantGraph:
-    """Build a complete invariant graph from all available sources."""
+    """Build the product graph exclusively from source-backed Behavior IR."""
     graph = InvariantGraph(project_id=project_id)
 
-    # From Behavior IR
     if behavior_ir:
         for inv in build_invariants_from_behavior_ir(behavior_ir):
             graph.add(inv)
-
-    # From Golden Rules
-    for inv in build_invariants_from_golden_rules():
-        graph.add(inv)
-
-    # Add structural invariants that are always applicable
-    structural_invariants = [
-        create_invariant(
-            invariant_type="AUTHORIZATION",
-            applicable_dimensions=["ACTOR", "ROLE", "TENANT"],
-            compatible_operators=["SWITCH_ACTOR", "SWITCH_ROLE", "SWITCH_TENANT"],
-            description="Operation must respect actor authorization boundaries",
-            confidence=0.95,
-        ),
-        create_invariant(
-            invariant_type="TENANT_ISOLATION",
-            applicable_dimensions=["TENANT", "ACTOR"],
-            compatible_operators=["SWITCH_TENANT", "USE_CROSS_SCOPE_RESOURCE"],
-            description="Resources must be isolated between tenants",
-            confidence=0.95,
-        ),
-        create_invariant(
-            invariant_type="IDEMPOTENCY",
-            applicable_dimensions=["REPLAY"],
-            compatible_operators=["EXACT_REPLAY", "SAME_KEY_SAME_PAYLOAD", "DUPLICATE_EVENT_DELIVERY"],
-            description="Duplicate operations must not produce duplicate side effects",
-            confidence=0.9,
-        ),
-        create_invariant(
-            invariant_type="TRANSACTIONAL_ATOMICITY",
-            applicable_dimensions=["FAILURE"],
-            compatible_operators=["FAIL_AFTER_PARTIAL_SIDE_EFFECT", "FAIL_BEFORE_COMMIT"],
-            description="Multi-step operations must be atomic or fully compensated",
-            confidence=0.85,
-        ),
-        create_invariant(
-            invariant_type="EVENTUAL_CONSISTENCY",
-            applicable_dimensions=["ORDERING", "REPLAY"],
-            compatible_operators=["OUT_OF_ORDER_EVENT", "DUPLICATE_EVENT_DELIVERY"],
-            description="Async processing must eventually converge to correct state",
-            confidence=0.85,
-        ),
-        create_invariant(
-            invariant_type="VERSION_MONOTONICITY",
-            applicable_dimensions=["CONCURRENCY"],
-            compatible_operators=["VERSION_CONFLICT", "PARALLEL_SAME_RESOURCE"],
-            description="Concurrent updates must not silently overwrite newer versions",
-            confidence=0.85,
-        ),
-        create_invariant(
-            invariant_type="CROSS_SURFACE_CONSISTENCY",
-            applicable_dimensions=["CROSS_SURFACE", "OBSERVATION_SURFACE"],
-            compatible_operators=["OBSERVE_VIA_DB", "OBSERVE_VIA_EVENT", "OBSERVE_VIA_API"],
-            description="Same business fact must be consistent across observation surfaces",
-            confidence=0.85,
-        ),
-        create_invariant(
-            invariant_type="SCALE_STABILITY",
-            applicable_dimensions=["DATA_VOLUME", "CONCURRENCY_LEVEL"],
-            compatible_operators=["SCALE_DATA_VOLUME", "SCALE_BATCH_SIZE", "SCALE_CONCURRENCY"],
-            description="Business invariants must hold under scale pressure",
-            confidence=0.8,
-        ),
-        create_invariant(
-            invariant_type="COMPENSATION",
-            applicable_dimensions=["FAILURE"],
-            compatible_operators=["EXECUTE_COMPENSATION", "RETRY_AFTER_PARTIAL_FAILURE"],
-            description="Failed operations must be compensable to consistent state",
-            confidence=0.85,
-        ),
-    ]
-    for inv in structural_invariants:
-        graph.add(inv)
 
     return graph

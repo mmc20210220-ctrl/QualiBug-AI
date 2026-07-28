@@ -88,6 +88,49 @@ class TestEmptyBodyActionNR:
             "BLOCKED_MISSING_BINDING",
         }
 
+    def test_empty_patch_does_not_infer_restore_fields_from_entity_schema(
+        self,
+    ) -> None:
+        from ai_test_asset_center.write_reversibility_contract import (
+            _validate_field_snapshot_restore,
+        )
+
+        result = _validate_field_snapshot_restore(
+            primary_method="PATCH",
+            primary_path="/orders/current",
+            primary_operation_ref="op-update",
+            cleanup_op={},
+            cleanup_method="PATCH",
+            cleanup_path="/orders/current",
+            experiment={},
+            ops={
+                "op-update": {
+                    "id": "op-update",
+                    "method": "PATCH",
+                    "path": "/orders/current",
+                    "request_example": {},
+                }
+            },
+            entities=[
+                {
+                    "id": "entity-order",
+                    "fields": ["id", "status", "amount"],
+                }
+            ],
+            relations=[
+                {
+                    "relation_type": "mutates",
+                    "operation_ref": "op-update",
+                    "to_ref": "entity-order",
+                }
+            ],
+        )
+
+        assert result == {
+            "kind": "none",
+            "detail": "field_snapshot_restore_no_writable_fields",
+        }
+
 
 # ─── §16.2: Sibling misbinding prohibited ─────────────────────────────────────
 

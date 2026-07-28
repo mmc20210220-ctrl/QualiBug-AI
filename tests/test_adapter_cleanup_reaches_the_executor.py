@@ -246,6 +246,49 @@ def test_a_credential_decrypt_failure_is_not_collapsed_into_not_configured(monke
     assert receipt["reason_code"].startswith("CREDENTIAL_DECRYPT_FAILED")
 
 
+def test_malformed_cleanup_database_config_is_reported(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("QUALIBUG_DB_DSN", raising=False)
+    config = tmp_path / "platform_workspace" / "project" / "multi_service_config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text("{not-json", encoding="utf-8")
+
+    dsn, error = cleanup_mod._project_database_dsn(tmp_path, "project")
+
+    assert dsn == ""
+    assert error.startswith("CLEANUP_DB_CONFIG_INVALID:")
+
+
+def test_cleanup_key_initialization_failure_is_observable(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from ai_test_asset_center import private_pilot_credentials_patch
+
+    monkeypatch.delenv("QUALIBUG_DB_DSN", raising=False)
+    key_path = (
+        tmp_path
+        / "platform_workspace"
+        / ".secrets"
+        / "credential_encryption.key"
+    )
+    key_path.parent.mkdir(parents=True, exist_ok=True)
+    key_path.write_text("existing-key", encoding="utf-8")
+    monkeypatch.setattr(
+        private_pilot_credentials_patch,
+        "ensure_local_credential_encryption_key",
+        lambda _root: (_ for _ in ()).throw(ValueError("invalid key")),
+    )
+
+    with caplog.at_level("WARNING"):
+        dsn, error = cleanup_mod._project_database_dsn(tmp_path, "project")
+
+    assert dsn == ""
+    assert error == ""
+    assert "cleanup_credential_key_load_failed" in caplog.text
+    assert "ValueError" in caplog.text
+
+
 def test_a_write_without_target_policy_context_is_refused(monkeypatch) -> None:
     """No policy_decision and no root/project means the gate cannot evaluate -- refuse."""
     monkeypatch.setattr(

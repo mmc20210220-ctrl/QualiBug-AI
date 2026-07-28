@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from ai_test_asset_center.sandbox_write_executor import execute_with_sandbox_write
 from ai_test_asset_center.experiment_executor import _cleanup_restores_governed_write
 
@@ -307,8 +309,8 @@ def test_empty_body_password_reset_probe_does_not_require_disposable_fixture(tmp
     assert concrete == "identity_mutation_requires_disposable_fixture"
 
 
-def test_password_reset_scrubs_protected_identity_then_blocks_without_compensation(tmp_path: Path) -> None:
-    """Protected examples are scrubbed, but irreversible writes still fail closed."""
+def test_password_reset_preserves_source_body_and_blocks_protected_identity(tmp_path: Path) -> None:
+    """Safety gates must block, never rewrite a source-declared request body."""
     accounts = tmp_path / "platform_inputs" / "project"
     accounts.mkdir(parents=True)
     (accounts / "test_accounts.json").write_text(
@@ -367,9 +369,25 @@ def test_password_reset_scrubs_protected_identity_then_blocks_without_compensati
     )
 
     assert calls == []
-    assert "buyer01@example.com" not in json.dumps(scenario.steps[0].body_template)
+    assert scenario.steps[0].body_template == {
+        "email": "buyer01@example.com",
+        "newPassword": "NewPass@123",
+    }
     assert result["sandbox_write"]["status"] == "blocked"
-    assert result["sandbox_write"]["reason"] == "write_cleanup_operation_not_declared"
+    assert result["sandbox_write"]["reason"] == "protected_runtime_identity_mutation_blocked"
+
+
+def test_protected_identity_config_parse_failure_is_not_ignored(tmp_path: Path) -> None:
+    from ai_test_asset_center.sandbox_write_executor import (
+        _protected_runtime_identity_values,
+    )
+
+    accounts = tmp_path / "platform_inputs" / "project"
+    accounts.mkdir(parents=True)
+    (accounts / "test_accounts.json").write_text("{not-json", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="protected_identity_config_invalid"):
+        _protected_runtime_identity_values(tmp_path, "project")
 
 
 def test_created_resource_identity_uses_source_path_and_generic_id_suffix() -> None:

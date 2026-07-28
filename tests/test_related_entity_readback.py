@@ -165,7 +165,7 @@ def test_a_write_with_no_declared_read_stays_unresolved() -> None:
 
 # ── the resolver failure is no longer silent ─────────────────────────────────
 
-def test_resolver_exceptions_are_logged_not_swallowed() -> None:
+def test_resolver_exceptions_are_logged_and_blocked() -> None:
     """A bare `except Exception: pass` hid every resolver defect behind
     BLOCKED_MISSING_OBSERVER -- the one code that already explains most blocks."""
     from pathlib import Path
@@ -179,3 +179,4 @@ def test_resolver_exceptions_are_logged_not_swallowed() -> None:
     region = source[source.index(marker): source.index(marker) + 2200]
     assert "pass  # Fail-safe: resolver failure does not change existing behavior" not in region
     assert "readback resolver raised for obligation" in region
+    assert "BLOCKED_OBSERVER_RESOLUTION_FAILED" in region

@@ -42,7 +42,7 @@ POST /api/v1/scan → __main__.scan() → run_v12_pipeline → discovery_mainlin
       → contract_oracles.evaluate_contract_oracle → customer_delivery_gate_v2
 ```
 
-**本 SPEC 的目标:把两套能力层按 Project A–F 一贯的"原位增强"方式接入上述主线,前置参照物是 `deep_experiment_planner` 的接入方式(`discovery_runtime_planning.py` 第 604–625 行)。**
+**本 SPEC 的目标:把两套能力层按 Project A–F 一贯的"原位增强"方式接入上述主线。`deep_experiment_planner` 已退出产品主链，仅保留为诊断研究面；它不得用启发式 actor、请求体、断言或补偿关系替换编译期已阻断的实验。**
 
 ---
 
@@ -86,7 +86,7 @@ POST /api/v1/scan → __main__.scan() → run_v12_pipeline → discovery_mainlin
 
 **挂点:`ai_test_asset_center/discovery_runtime_planning.py`**
 
-在 `compile_experiments(...)`(约第 566 行)之前构建绑定账本;在实验编译后、deep planner 合并前对每个 obligation 跑完备性门禁。
+在 `compile_experiments(...)` 之前构建绑定账本；在实验编译后直接对每个 obligation 跑完备性门禁。阻断结果保持阻断，不再通过 deep planner 合并路径改写。
 
 ```python
 # (a) behavior_ir 构建完成后:

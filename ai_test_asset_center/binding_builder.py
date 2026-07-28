@@ -353,8 +353,7 @@ def _build_relation_bindings(ir: dict, ledger: BindingLedger, module: str) -> in
         if not rel_id or not from_ref or not to_ref:
             continue
 
-        # Infer correlation key from relation
-        correlation_key = _infer_correlation_key(rel_type, from_ref, to_ref)
+        correlation_key = _declared_correlation_key(rel)
 
         # Find materialization operation
         op_ref = _text(rel.get("operation_ref"))
@@ -663,11 +662,6 @@ def _build_fixture_bindings(ir: dict, ledger: BindingLedger, module: str) -> int
 
         create_id = _text(create_op.get("id"))
         body_template = _dict(create_op.get("request_example"))
-        if not body_template:
-            # Try schema-based generation
-            request_schema = _dict(create_op.get("request_schema"))
-            if _dict(request_schema.get("properties")):
-                body_template = {"__schema_generated": True}
 
         # Find cleanup operations
         cleanup_ops = _find_cleanup_operations(operations, collection_path)
@@ -977,15 +971,17 @@ def _extract_schema_field_names(schema: dict[str, Any]) -> list[str]:
     return fields
 
 
-def _infer_correlation_key(rel_type: str, from_ref: str, to_ref: str) -> str:
-    """Infer the correlation key field name from a relation."""
-    # Common patterns: entity_id, parent_id, etc.
-    to_norm = re.sub(r"[^a-z0-9]+", "_", to_ref.lower()).strip("_")
-    if rel_type in ("produces", "owns", "scopes"):
-        return f"{to_norm}_id"
-    if rel_type == "consumes":
-        return f"{to_norm}_id"
-    return f"{to_norm}_ref"
+def _declared_correlation_key(relation: dict[str, Any]) -> str:
+    """Return one exact source-declared correlation key, never a guessed field."""
+    direct = _text(relation.get("correlation_key"))
+    if direct:
+        return direct
+    declared = [
+        _text(value)
+        for value in _list(relation.get("correlation_keys"))
+        if isinstance(value, str) and _text(value)
+    ]
+    return declared[0] if len(declared) == 1 else ""
 
 
 def _extract_invariant_field_refs(invariant: dict[str, Any]) -> list[str]:

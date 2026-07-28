@@ -508,16 +508,6 @@ def runtime_setup_value_from_response(body: Any, target: str) -> Any:
             value = source.get(field)
             if value not in (None, "", [], {}):
                 return value
-    # ── Fallback: enterprise-grade extraction via engine ──
-    # Handles entity-named wrappers, list-first-item, and camelCase matching
-    # that the simple candidate loop above may miss.
-    try:
-        from .enterprise_test_data_engine import extract_resource_id
-        extracted = extract_resource_id(body, entity_name=target)
-        if extracted is not None:
-            return extracted
-    except Exception:
-        pass
     return None
 
 
@@ -647,21 +637,18 @@ def validated_fixture_setup(
             },
             operations,
         )
-        has_fallback = bool(raw.get("fallback"))
         if (
             not _text(raw.get("target"))
             or not _text(raw.get("template_token"))
         ):
             return {}
-        # Accept empty resolvers when a fallback is declared (e.g., schema-
-        # generated values or template defaults for unresolvable fields).
-        if not resolvers and not has_fallback:
+        if not resolvers:
             return {}
         body_bindings.append({
             "target": _text(raw.get("target")),
             "template_token": _text(raw.get("template_token")),
-            "resolver_operations": resolvers if resolvers else [],
-            "fallback": _text(raw.get("fallback")) if has_fallback else "",
+            "resolver_operations": resolvers,
+            "fallback": "",
         })
     cleanup_operations: list[dict[str, str]] = []
     for raw in _list(setup.get("cleanup_operations")):
@@ -671,6 +658,7 @@ def validated_fixture_setup(
         cleanup = operations.get(cleanup_ref) or {}
         cleanup_method = _text(raw.get("method")).upper()
         cleanup_path = normalize_path_placeholders(_text(raw.get("path")))
+        compensates_operation_ref = _text(raw.get("compensates_operation_ref"))
         if (
             cleanup_ref
             and cleanup_method in {"DELETE", "POST", "PATCH", "PUT"}
@@ -681,17 +669,23 @@ def validated_fixture_setup(
             == cleanup_path
             and cleanup_path.startswith("/")
             and path_has_placeholders(cleanup_path)
+            and (
+                cleanup_method == "DELETE"
+                or compensates_operation_ref == operation_ref
+            )
         ):
-            cleanup_operations.append({
+            cleanup_row = {
                 "operation_ref": cleanup_ref,
                 "method": cleanup_method,
                 "path": cleanup_path,
-            })
+            }
+            if compensates_operation_ref:
+                cleanup_row["compensates_operation_ref"] = (
+                    compensates_operation_ref
+                )
+            cleanup_operations.append(cleanup_row)
     if not cleanup_operations:
-        # Best-effort: fixture creation should not be blocked by missing
-        # cleanup operations. Per-run DB reset provides overall cleanup.
-        # This aligns with Round 2's best_effort_db_reset policy.
-        cleanup_operations = []
+        return {}
     actor_refs = [
         _text(actor_ref)
         for actor_ref in _list(setup.get("actor_refs"))

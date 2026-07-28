@@ -71,9 +71,11 @@ def _build_test_ir():
         ],
         "relations": [
             {"id": "rel_order_customer", "relation_type": "consumes", "from_ref": "ent_order", "to_ref": "ent_customer",
-             "operation_ref": "op_create_order", "source_refs": [{"source_id": "s1"}], "preconditions": [], "effects": []},
+             "operation_ref": "op_create_order", "correlation_key": "customer_id",
+             "source_refs": [{"source_id": "s1"}], "preconditions": [], "effects": []},
             {"id": "rel_order_items", "relation_type": "produces", "from_ref": "ent_order", "to_ref": "ent_item",
-             "operation_ref": "op_create_item", "source_refs": [{"source_id": "s1"}], "preconditions": [], "effects": []},
+             "operation_ref": "op_create_item", "correlation_key": "item_id",
+             "source_refs": [{"source_id": "s1"}], "preconditions": [], "effects": []},
             {"id": "rel_admin_permits", "relation_type": "permits", "from_ref": "actor_admin", "to_ref": "op_create_order",
              "operation_ref": "op_create_order", "actor_ref": "actor_admin", "source_refs": [], "preconditions": [], "effects": []},
             {"id": "rel_order_transition", "relation_type": "transitions", "from_ref": "state_order_status", "to_ref": "state_order_status",
@@ -225,7 +227,7 @@ class TestChain4CrossEntity:
         meta = order_customer[0]["metadata"]
         assert meta["source_entity_ref"] == "ent_order"
         assert meta["target_entity_ref"] == "ent_customer"
-        assert meta["correlation_key"] != ""
+        assert meta["correlation_key"] == "customer_id"
 
         # Observer bindings exist for related entities
         observer_bindings = loaded_ledger.get_by_type("observer")

@@ -24,6 +24,7 @@ Does NOT:
 from __future__ import annotations
 
 import re
+from copy import deepcopy
 from typing import Any
 
 
@@ -61,112 +62,6 @@ def _is_template_actor(actor: dict[str, Any]) -> bool:
     if not secret or secret.startswith("{") or ":{" in secret:
         return True
     return False
-
-
-def _find_executable_actor(
-    actors: dict[str, dict[str, Any]],
-    *,
-    preferred_role: str = "",
-) -> str:
-    """Find the best executable actor ID with valid credentials.
-
-    Priority:
-      1. preferred_role match with valid credential
-      2. admin/administrator/superuser with valid credential
-      3. Any actor with valid credential (non-template)
-    """
-    # Try preferred role
-    if preferred_role:
-        for aid, actor in actors.items():
-            if _is_template_actor(actor):
-                continue
-            if _text(actor.get("role")).lower() == preferred_role.lower():
-                return aid
-
-    # Try admin
-    for aid, actor in actors.items():
-        if _is_template_actor(actor):
-            continue
-        role = _text(actor.get("role")).lower()
-        if role in {"admin", "administrator", "superuser", "root"}:
-            return aid
-
-    # Any non-template actor with credential
-    for aid, actor in actors.items():
-        if _is_template_actor(actor):
-            continue
-        secret = _text(actor.get("credential_secret_ref") or actor.get("secret_ref"))
-        if secret:
-            return aid
-
-    return ""
-
-
-def _fixture_setup_with_campaign_actors(
-    operation: dict[str, Any],
-    *,
-    target: str,
-    behavior_ir: dict[str, Any],
-    ops: dict[str, dict[str, Any]],
-) -> dict[str, Any]:
-    """Build create+cleanup fixture setup using credentialed IR actors.
-
-    Used when permits-bound actor discovery yields no owner for a deep plan.
-    """
-    from .real_id_resolver import collection_path, normalize_path_placeholders
-    from .runtime_binding_graph import _declared_cleanup_operations, _request_example
-
-    path = normalize_path_placeholders(
-        _text(operation.get("path") or operation.get("raw_path"))
-    )
-    collection = normalize_path_placeholders(collection_path(path))
-    if not collection.startswith("/"):
-        return {}
-    create = next(
-        (
-            op
-            for op in ops.values()
-            if _text(op.get("method")).upper() == "POST"
-            and normalize_path_placeholders(
-                _text(op.get("path") or op.get("raw_path"))
-            ) == collection
-            and _text(op.get("id"))
-        ),
-        None,
-    )
-    if not isinstance(create, dict):
-        return {}
-    body_template = _request_example(
-        create,
-        sibling_ops=_list(behavior_ir.get("operations")),
-    )
-    if not body_template:
-        return {}
-    cleanup_operations = _declared_cleanup_operations(
-        collection,
-        behavior_ir=behavior_ir,
-    )
-    if not cleanup_operations:
-        return {}
-    actor_refs = [
-        _text(actor.get("id"))
-        for actor in _list(behavior_ir.get("actors"))
-        if isinstance(actor, dict)
-        and _text(actor.get("id"))
-        and not _is_template_actor(actor)
-        and _text(actor.get("credential_secret_ref") or actor.get("secret_ref"))
-    ]
-    if not actor_refs:
-        return {}
-    return {
-        "operation_ref": _text(create.get("id")),
-        "method": "POST",
-        "path": collection,
-        "actor_refs": actor_refs,
-        "body_template": body_template,
-        "body_bindings": [],
-        "cleanup_operations": cleanup_operations,
-    }
 
 
 def _body_placeholder_tokens(value: Any) -> list[str]:
@@ -275,17 +170,6 @@ def _build_binding_plan(
                 target=param,
                 behavior_ir=behavior_ir,
             )
-            if not fixture_setup:
-                # Permits-bound actor refs are often absent on deep plans.
-                # Fall back to a source-declared create+cleanup with every
-                # credentialed campaign actor — runtime still materializes
-                # dependencies and selects the executable token.
-                fixture_setup = _fixture_setup_with_campaign_actors(
-                    operation,
-                    target=param,
-                    behavior_ir=behavior_ir,
-                    ops=ops,
-                )
             if fixture_setup:
                 binding["fixture_setup"] = fixture_setup
                 binding["status"] = "runtime_resolvable"
@@ -361,9 +245,6 @@ def adapt_deep_experiments_for_execution(
         if isinstance(o, dict) and _text(o.get("id"))
     }
 
-    # Find the best default executable actor
-    default_actor = _find_executable_actor(ir_actors)
-
     adapted: list[dict[str, Any]] = []
     by_obligation: dict[str, dict[str, Any]] = {}
     blocked_reasons: dict[str, int] = {}
@@ -373,60 +254,50 @@ def adapt_deep_experiments_for_execution(
         if not isinstance(exp, dict):
             continue
 
-        exp = dict(exp)  # shallow copy
+        exp = deepcopy(exp)
         oid = _text(exp.get("obligation_id"))
         eid = _text(exp.get("experiment_id"))
 
-        # ── Step 1: Resolve actor references ──
-        resolved_actor = default_actor
-        original_actor = ""
+        # ── Step 1: Validate exact source-declared actor references ──
+        resolved_actor_refs: list[str] = []
         steps = _list(exp.get("control_plan")) + _list(exp.get("treatment_plan"))
+        actor_invalid = not steps
         for step in steps:
             if not isinstance(step, dict):
+                actor_invalid = True
                 continue
             actor_ref = _text(step.get("actor_ref"))
-            original_actor = actor_ref
             actor = ir_actors.get(actor_ref)
             if not actor or _is_template_actor(actor):
-                # Replace with executable actor
-                if resolved_actor:
-                    step["actor_ref"] = resolved_actor
-                    step["_actor_adapted"] = True
-                    step["_original_actor_ref"] = actor_ref
-                else:
-                    blocked_reasons["ACTOR_ROLE_NOT_FOUND"] = (
-                        blocked_reasons.get("ACTOR_ROLE_NOT_FOUND", 0) + 1
-                    )
-            else:
-                # Actor exists and has credentials - use it
-                resolved_actor = actor_ref
+                actor_invalid = True
+                continue
+            resolved_actor_refs.append(actor_ref)
 
-        if not resolved_actor:
-            blocked_reasons["ACTOR_CREDENTIAL_MISSING"] = (
-                blocked_reasons.get("ACTOR_CREDENTIAL_MISSING", 0) + 1
+        if actor_invalid:
+            blocked_reasons["BLOCKED_MISSING_ACTOR"] = (
+                blocked_reasons.get("BLOCKED_MISSING_ACTOR", 0) + 1
             )
             continue
 
         actor_resolutions.append({
             "experiment_id": eid,
             "obligation_id": oid,
-            "original_actor": original_actor,
-            "resolved_actor": resolved_actor,
+            "declared_actor_refs": list(dict.fromkeys(resolved_actor_refs)),
             "resolved": True,
         })
 
         # ── Step 2: Validate operation references and build binding_plan ──
         all_bindings: list[dict[str, Any]] = []
-        has_valid_op = False
+        operation_invalid = False
         for step in steps:
             if not isinstance(step, dict):
+                operation_invalid = True
                 continue
             op_ref = _text(step.get("operation_ref"))
             op = ir_ops.get(op_ref)
             if not op:
-                # Try to find operation by matching path/method from step
+                operation_invalid = True
                 continue
-            has_valid_op = True
             step_bodies = [
                 step.get("body"),
                 _dict(step.get("request")).get("body"),
@@ -444,9 +315,9 @@ def adapt_deep_experiments_for_execution(
                 if not any(eb.get("target") == b.get("target") for eb in all_bindings):
                     all_bindings.append(b)
 
-        if not has_valid_op:
-            blocked_reasons["PLAN_PROTOCOL_ADAPTATION_FAILED"] = (
-                blocked_reasons.get("PLAN_PROTOCOL_ADAPTATION_FAILED", 0) + 1
+        if operation_invalid:
+            blocked_reasons["BLOCKED_MISSING_OPERATION"] = (
+                blocked_reasons.get("BLOCKED_MISSING_OPERATION", 0) + 1
             )
             continue
 
@@ -506,12 +377,7 @@ def adapt_deep_experiments_for_execution(
         )
         if has_write:
             from .experiment_compiler_obligation import _is_ephemeral_session_path
-            from .real_id_resolver import (
-                collection_path,
-                normalize_path_placeholders,
-                path_has_placeholders,
-            )
-            from .runtime_binding_graph import _declared_cleanup_operations
+            from .real_id_resolver import normalize_path_placeholders
 
             write_ops = [
                 ir_ops.get(_text(step.get("operation_ref"))) or {}
@@ -537,140 +403,21 @@ def adapt_deep_experiments_for_execution(
                 "require_cleanup": not ephemeral_write,
                 "cleanup_not_required": ephemeral_write,
             }
-            # Never invent DELETE. Bind only a unique source-declared
-            # cleanup/compensation on the same collection when present.
             if not _list(exp.get("cleanup_plan")) and not ephemeral_write:
-                for op in write_ops:
-                    if not op:
-                        continue
-                    op_path = normalize_path_placeholders(
-                        _text(op.get("path") or op.get("raw_path"))
-                    )
-                    parent = normalize_path_placeholders(collection_path(op_path))
-                    create_path = parent if path_has_placeholders(op_path) else op_path
-                    candidates = [
-                        row
-                        for row in _declared_cleanup_operations(
-                            create_path,
-                            behavior_ir=ir,
-                        )
-                        if _text(row.get("operation_ref")) != _text(op.get("id"))
-                    ]
-                    if len(candidates) != 1:
-                        continue
-                    row = candidates[0]
-                    exp["cleanup_plan"] = [{
-                        "operation_ref": _text(row.get("operation_ref")),
-                        "method": _text(row.get("method")).upper(),
-                        "path": _text(row.get("path")),
-                        "mode": "reverse_order",
-                        "action": "source_declared_compensation",
-                        "runtime_response_binding_required": "{" in _text(
-                            row.get("path")
-                        ),
-                    }]
-                    break
+                blocked_reasons["BLOCKED_NON_REVERSIBLE_WRITE"] = (
+                    blocked_reasons.get("BLOCKED_NON_REVERSIBLE_WRITE", 0) + 1
+                )
+                continue
 
         # ── Step 5: Ensure assertion is in assertions list format ──
         # The executor's outcome finalizer reads exp["assertions"] (plural)
         assertion = _dict(exp.get("assertion"))
         if assertion and not _list(exp.get("assertions")):
-            # Map deep_mechanism_contrast to a supported assertion DSL kind
-            _a_kind = _text(assertion.get("kind"))
-            if _a_kind == "deep_mechanism_contrast":
-                _mechanism = _text(assertion.get("mechanism")).upper()
-                _family = _text(exp.get("risk_family"))
-                _rule_id = _text(exp.get("rule_id"))
-                _inv = next(
-                    (
-                        row
-                        for row in _list(ir.get("invariants"))
-                        if isinstance(row, dict) and _text(row.get("id")) == _rule_id
-                    ),
-                    None,
+            if _text(assertion.get("kind")) == "deep_mechanism_contrast":
+                blocked_reasons["BLOCKED_MISSING_SOURCE_ASSERTION"] = (
+                    blocked_reasons.get("BLOCKED_MISSING_SOURCE_ASSERTION", 0) + 1
                 )
-                _expr = _dict((_inv or {}).get("expression"))
-                # V1.6.1: preserve field-level oracle kinds for state/conservation.
-                if _family in {"state", "state_integrity"} and _expr:
-                    _ops = _list(_expr.get("operands"))
-                    _op0 = _ops[0] if _ops and isinstance(_ops[0], dict) else {}
-                    _from = _text(_op0.get("from_state") or _expr.get("from_state"))
-                    _to = _text(_op0.get("to_state") or _expr.get("to_state"))
-                    if _from and _to:
-                        assertion = {
-                            "kind": (
-                                "forbidden_state_transition"
-                                if _text(_expr.get("kind")) == "forbidden_state_transition"
-                                or _text(_expr.get("operator")).lower()
-                                == "must_not_transition"
-                                else "state_transition"
-                            ),
-                            "from_state": _from,
-                            "to_state": _to,
-                            "operator": _text(_expr.get("operator"))
-                            or "must_not_transition",
-                            "operands": _ops,
-                            "rule_id": _rule_id,
-                            "invariant_ref": _rule_id,
-                            "control_must_succeed": True,
-                        }
-                    elif _mechanism == "IDEMPOTENCY":
-                        assertion = {
-                            "kind": "http_status_class",
-                            "expected": 2,
-                            "control_must_succeed": True,
-                        }
-                    elif _mechanism in {
-                        "STATE_NEGATIVE",
-                        "CUMULATIVE",
-                        "CAUSAL_SIDE_EFFECT",
-                    }:
-                        assertion = {
-                            "kind": "http_status_class",
-                            "expected": 4,
-                            "control_must_succeed": True,
-                        }
-                    else:
-                        assertion = {"kind": "http_status_class", "expected": 2}
-                elif _family == "conservation" and _expr:
-                    _equation = _dict(_expr.get("equation"))
-                    assertion = {
-                        "kind": "conservation",
-                        "equation": _equation
-                        or {
-                            "operator": "unchanged_sum",
-                            "terms": [
-                                _text(t.get("field") or t.get("field_id") or t)
-                                if isinstance(t, dict)
-                                else _text(t)
-                                for t in _list(_expr.get("operands"))
-                            ],
-                        },
-                        "operands": _list(_expr.get("operands")),
-                        "rule_id": _rule_id,
-                        "invariant_ref": _rule_id,
-                        "control_must_succeed": True,
-                    }
-                elif _mechanism == "IDEMPOTENCY":
-                    # Idempotency: treatment (repeat) should also succeed (2xx)
-                    assertion = {
-                        "kind": "http_status_class",
-                        "expected": 2,
-                        "control_must_succeed": True,
-                    }
-                elif _mechanism in {"STATE_NEGATIVE", "CUMULATIVE", "CAUSAL_SIDE_EFFECT"}:
-                    # Violation: treatment should be rejected (4xx)
-                    assertion = {
-                        "kind": "http_status_class",
-                        "expected": 4,
-                        "control_must_succeed": True,
-                    }
-                else:
-                    # Default: check treatment returns 2xx (operation works)
-                    assertion = {
-                        "kind": "http_status_class",
-                        "expected": 2,
-                    }
+                continue
             exp["assertions"] = [assertion]
 
         # ── Step 5b: Fix observers for read-only experiments ──
@@ -693,26 +440,10 @@ def adapt_deep_experiments_for_execution(
                 and _text(obs.get("observer_id")) not in {"entity_state", "business_effect"}
             ]
 
-        # ── Step 5c: Fix control plan for state-dependent write operations ──
-        # For POST/PUT/PATCH operations that change entity state (activate,
-        # approve, etc.), the control step using the same operation may fail
-        # if the entity is already in the target state. Since http_status_class
-        # assertions don't semantically require control, remove the control plan
-        # to avoid CONTROL_SUCCESS_NOT_PROVEN and delivery gate mismatch.
-        _control_plan = _list(exp.get("control_plan"))
-        if _control_plan and _has_write_op:
-            _ctrl_step = _dict(_control_plan[0]) if _control_plan else {}
-            _ctrl_op = ir_ops.get(_text(_ctrl_step.get("operation_ref"))) or {}
-            _ctrl_method = _text(_ctrl_op.get("method")).upper()
-            if _ctrl_method in {"POST", "PUT", "PATCH"}:
-                # Remove control plan — treatment evidence is sufficient for
-                # http_status_class assertions without semantic control requirement.
-                exp["control_plan"] = []
-
         # ── Step 6: Mark as adapted ──
         exp["_protocol_adapted"] = True
         exp["_adaptation_receipt"] = {
-            "actor_resolved": resolved_actor,
+            "actor_refs_validated": list(dict.fromkeys(resolved_actor_refs)),
             "binding_count": len(all_bindings),
             "has_fixture_dag": bool(exp.get("fixture_dag")),
             "has_safety_contract": bool(exp.get("safety_contract")),
@@ -733,6 +464,6 @@ def adapt_deep_experiments_for_execution(
         "actor_resolution": {
             "total": len(actor_resolutions),
             "resolved": sum(1 for r in actor_resolutions if r.get("resolved")),
-            "default_actor": default_actor,
+            "default_actor": "",
         },
     }

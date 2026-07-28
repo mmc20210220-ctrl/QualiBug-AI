@@ -293,14 +293,14 @@ def test_stale_unbound_gaps_are_pruned_for_newly_bound_invariants() -> None:
     assert any(g.get("reason_code") == "TEST_DATA_GAP" for g in ir["coverage_gaps"])
 
 
-def test_binder_is_wired_into_the_ir_build() -> None:
-    """A module nobody calls changes nothing."""
+def test_heuristic_binder_is_not_wired_into_the_product_mainline() -> None:
+    """Only exact source or agent-semantic identities may join rules to operations."""
     from pathlib import Path
 
     source = (
         Path(__file__).resolve().parents[1]
         / "ai_test_asset_center" / "discovery_runtime_planning.py"
     ).read_text(encoding="utf-8")
-    assert "bind_invariants_to_operations(behavior_ir)" in source
-    assert "apply_invariant_operation_bindings(" in source
-    assert "invariant_operation_binding" in source, "the receipt must reach the result"
+    assert "bind_invariants_to_operations(behavior_ir)" not in source
+    assert "apply_invariant_operation_bindings(" not in source
+    assert "agent_semantic_link_receipt" in source

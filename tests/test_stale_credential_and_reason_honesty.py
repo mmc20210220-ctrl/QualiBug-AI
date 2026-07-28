@@ -130,6 +130,39 @@ def test_base_url_is_accepted_from_the_caller(tmp_path: Path) -> None:
     assert load_actor_tokens(tmp_path, "absent", base_url="http://localhost:8080") == {}
 
 
+def test_login_transport_failure_is_observable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from ai_test_asset_center import experiment_runtime_support as runtime_support
+
+    path = tmp_path / "platform_inputs" / "p-login" / "TEST_ACCOUNTS.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "| role | email | password |\n"
+        "| --- | --- | --- |\n"
+        "| buyer | buyer@example.test | secret |\n",
+        encoding="utf-8",
+    )
+
+    def fail_login(*_args, **_kwargs):
+        raise TimeoutError("login timed out")
+
+    monkeypatch.setattr(runtime_support, "_http_request", fail_login)
+    with caplog.at_level("WARNING"):
+        tokens = load_actor_tokens(
+            tmp_path,
+            "p-login",
+            base_url="http://target.invalid",
+        )
+
+    assert tokens == {}
+    assert "actor_login_transport_failed" in caplog.text
+    assert "role=buyer" in caplog.text
+    assert "TimeoutError" in caplog.text
+
+
 def test_executors_thread_the_approved_base_url() -> None:
     """A parameter nobody passes is the same as no parameter."""
     root = Path(__file__).resolve().parents[1] / "ai_test_asset_center"

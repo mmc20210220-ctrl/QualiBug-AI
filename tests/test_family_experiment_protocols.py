@@ -45,6 +45,11 @@ def _patch_http_request(monkeypatch: pytest.MonkeyPatch, http_request) -> None:
     )
 
 
+def test_finalizer_rejects_unserializable_receipt_objects() -> None:
+    with pytest.raises(TypeError, match="unsupported_receipt_object"):
+        outcome_finalizer._safe_serialize(object())
+
+
 def _patch_governed_write(monkeypatch: pytest.MonkeyPatch, governed_write) -> None:
     """Patch governed writes across experiment execution modules."""
     for mod in (
@@ -544,6 +549,57 @@ def test_idempotency_obligation_keeps_explicit_permitted_actor() -> None:
         if row["risk_family"] == "validation"
     )
     assert validation["required_observers"] == ["http_response"]
+
+
+def test_compiler_does_not_assign_an_unpermitted_actor_to_an_actorless_rule() -> None:
+    obligation = _idempotency_obligation()
+    obligation["required_actors"] = []
+    obligation["property"] = {
+        **obligation["property"],
+        "actor_ref": "",
+    }
+
+    experiment = compile_experiment_for_obligation(
+        obligation,
+        behavior_ir=_idempotency_ir(),
+        environment_type="test",
+    )
+
+    assert experiment["compile_receipt"] == {
+        "status": "BLOCKED",
+        "reason_code": "BLOCKED_MISSING_ACTOR",
+        "detail": "source_permitted_actor_missing:op-create",
+    }
+
+
+def test_compiler_does_not_drop_a_missing_required_operation() -> None:
+    obligation = _idempotency_obligation()
+    obligation["required_operations"] = ["op-create", "op-unknown"]
+
+    experiment = compile_experiment_for_obligation(
+        obligation,
+        behavior_ir=_idempotency_ir(),
+        environment_type="test",
+    )
+
+    assert experiment["compile_receipt"] == {
+        "status": "BLOCKED",
+        "reason_code": "BLOCKED_MISSING_OPERATION",
+        "detail": "op-unknown",
+    }
+
+
+def test_compiler_contains_no_generated_business_identity_fallback() -> None:
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "ai_test_asset_center"
+        / "experiment_compiler_obligation.py"
+    ).read_text(encoding="utf-8")
+
+    assert '"source_priority": "generated_identity"' not in source
+    assert "_fallback_id = str(_uuid.uuid4())" not in source
 
 
 def _governed_step(
@@ -1467,10 +1523,7 @@ def test_fixture_cleanup_runs_after_experiment_write_compensations(
     ]
 
 
-def test_empty_patch_uses_source_linked_entity_fields_for_runtime_mutation(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
-) -> None:
+def test_empty_patch_without_source_declared_body_is_blocked() -> None:
     ir = {
         "operations": [
             {
@@ -1538,130 +1591,11 @@ def test_empty_patch_uses_source_linked_entity_fields_for_runtime_mutation(
         environment_type="test",
     )
 
-    assert experiment["compile_receipt"]["status"] == "COMPILED", experiment
-    plans = [
-        step["runtime_body_plan"]
-        for step in experiment["control_plan"] + experiment["treatment_plan"]
-    ]
-    assert plans == [
-        {
-            "schema_version": "qualibug.source-observed-mutation-plan.v1",
-            "candidate_fields": ["quota", "selected"],
-            "source_entity_refs": ["entity-settings"],
-            "source_relation_refs": ["rel-update-settings"],
-        },
-        {
-            "schema_version": "qualibug.source-observed-mutation-plan.v1",
-            "candidate_fields": ["quota", "selected"],
-            "source_entity_refs": ["entity-settings"],
-            "source_relation_refs": ["rel-update-settings"],
-        },
-    ]
-
-    experiment["fixture_dag"] = {
-        "status": "READY",
-        "nodes": [],
-        "setup_order": [],
+    assert experiment["compile_receipt"] == {
+        "status": "BLOCKED",
+        "reason_code": "BLOCKED_NON_REVERSIBLE_WRITE",
+        "detail": "field_snapshot_restore_no_writable_fields",
     }
-    governed_calls: list[dict] = []
-
-    def governed_write(**kwargs):
-        governed_calls.append(dict(kwargs))
-        phase = kwargs["operation_phase"]
-        if phase == "experiment_control":
-            assert kwargs["body"] is None
-            assert kwargs["runtime_body_plan"]["candidate_fields"] == [
-                "quota", "selected"
-            ]
-            return {
-                "accepted": True,
-                "before": {
-                    "status": 200,
-                    "body": {"id": "settings", "selected": False, "quota": 1},
-                },
-                "write": {"status": 200, "body": {"selected": True}},
-                "after": {
-                    "status": 200,
-                    "body": {"id": "settings", "selected": True, "quota": 1},
-                },
-                "materialized_request_body": {"selected": True},
-                "runtime_body_receipt": {"status": "MATERIALIZED"},
-                "audit_path": "audit.jsonl",
-                "audit_record": {"phase": phase},
-            }
-        if phase == "experiment_treatment":
-            assert kwargs["runtime_body_plan"] is None
-            assert kwargs["body"] == {"selected": True}
-            return {
-                "accepted": True,
-                "before": {
-                    "status": 200,
-                    "body": {"id": "settings", "selected": True, "quota": 1},
-                },
-                "write": {"status": 200, "body": {"selected": True}},
-                "after": {
-                    "status": 200,
-                    "body": {"id": "settings", "selected": True, "quota": 1},
-                },
-                "audit_path": "audit.jsonl",
-                "audit_record": {"phase": phase},
-            }
-        assert phase == "experiment_cleanup"
-        return {
-            "accepted": True,
-            "before": {
-                "status": 200,
-                "body": {"id": "settings", "selected": True, "quota": 1},
-            },
-            "write": {"status": 200, "body": {"selected": False}},
-            "after": {
-                "status": 200,
-                "body": {"id": "settings", "selected": False, "quota": 1},
-            },
-            "audit_path": "audit.jsonl",
-            "audit_record": {"phase": phase},
-        }
-
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_executor.sandbox_write_allowed",
-        lambda **_kwargs: (True, ""),
-    )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_barrier_executor.sandbox_write_allowed",
-        lambda **_kwargs: (True, ""),
-    )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_cleanup_executor.sandbox_write_allowed",
-        lambda **_kwargs: (True, ""),
-    )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_plan_executor.sandbox_write_allowed",
-        lambda **_kwargs: (True, ""),
-    )
-    _patch_governed_write(
-        monkeypatch,
-        governed_write,
-    )
-
-    result = execute_one_experiment(
-        experiment,
-        behavior_ir=ir,
-        root=tmp_path,
-        project="project",
-        base_url="http://target.invalid",
-        runtime_contract={"environment_type": "test"},
-        campaign_id="campaign",
-        execution_id="execution-runtime-patch",
-        actor_tokens={},
-    )
-
-    assert result["status"] == "EXECUTED"
-    assert result["cleanup_failures"] == 0
-    assert [call["operation_phase"] for call in governed_calls] == [
-        "experiment_control",
-        "experiment_treatment",
-        "experiment_cleanup",
-    ]
 
 
 def test_authorization_collection_read_forces_source_declared_control_fixture() -> None:
@@ -2904,7 +2838,7 @@ def test_concurrency_executor_releases_control_and_treatment_with_barrier(
     ]
 
 
-def test_source_invariant_obligation_compiles_typed_assertion_observers() -> None:
+def test_source_invariant_without_conservation_terms_is_blocked() -> None:
     obligation = _idempotency_obligation()
     obligation["obligation_id"] = "obl-source-invariant"
     obligation["risk_family"] = "conservation"
@@ -2925,11 +2859,11 @@ def test_source_invariant_obligation_compiles_typed_assertion_observers() -> Non
         environment_type="test",
     )
 
-    assert experiment["compile_receipt"]["status"] == "COMPILED", experiment["compile_receipt"]
-    assert {
-        observer["observer_id"]
-        for observer in experiment["observers"]
-    } >= {"typed_assertion", "source_invariant"}
+    assert experiment["compile_receipt"] == {
+        "status": "BLOCKED",
+        "reason_code": "BLOCKED_EMPTY_CONSERVATION_TERMS",
+        "detail": "conservation_requires_non_empty_equation_terms",
+    }
 
 
 def test_conservation_obligation_compiles_entity_state_and_conservation_write_protocol() -> None:
@@ -3568,6 +3502,7 @@ def test_auto_fixture_requires_identity_bound_cleanup_operation() -> None:
     binding = {
         "target": "id",
         "target_path": "/resources/{id}",
+        "fixture_owner_actor_ref": "actor-buyer",
         "resolver_operations": [{
             "operation_ref": "op-list",
             "method": "GET",
@@ -3612,11 +3547,11 @@ def test_auto_fixture_requires_identity_bound_cleanup_operation() -> None:
     assert fixture["fixture_setup"]["actor_refs"] == ["actor-buyer"]
 
 
-def test_runtime_binding_actor_fallback_on_empty_collection(
+def test_runtime_binding_does_not_cross_actor_scope_on_empty_collection(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    """Primary actor 200+[] must not stop fallback to another token-bearing actor."""
+    """An empty owner collection must not borrow another actor's resource ID."""
     behavior_ir = {
         "operations": [{
             "id": "op-list",
@@ -3718,13 +3653,13 @@ def test_runtime_binding_actor_fallback_on_empty_collection(
     )
 
     binding = result["binding_materialization_receipts"][0]
-    assert binding["status"] == "BOUND"
-    assert binding["resolver_actor_ref"] == "actor-buyer"
+    assert binding["status"] == "BLOCKED"
+    assert binding["resolver_actor_ref"] == "actor-admin"
     assert "admin-token" in seen_tokens
-    assert "buyer-token" in seen_tokens
+    assert "buyer-token" not in seen_tokens
 
 
-def test_auto_fixture_accepts_source_compensation_cleanup() -> None:
+def test_auto_fixture_rejects_action_name_as_cleanup_authority() -> None:
     operations = {
         "op-create": {
             "id": "op-create",
@@ -3741,6 +3676,7 @@ def test_auto_fixture_accepts_source_compensation_cleanup() -> None:
     binding = {
         "target": "order_id",
         "target_path": "/api/orders/{id}",
+        "fixture_owner_actor_ref": "actor-buyer",
         "resolver_operations": [{
             "operation_ref": "op-list",
             "method": "GET",
@@ -3757,12 +3693,7 @@ def test_auto_fixture_accepts_source_compensation_cleanup() -> None:
         actors=actors,
     )
 
-    assert fixture is not None
-    assert fixture["fixture_setup"]["cleanup_operations"] == [{
-        "operation_ref": "op-cancel",
-        "method": "POST",
-        "path": "/api/orders/{id}/cancel",
-    }]
+    assert fixture is None
 
 
 def test_validated_fixture_setup_derives_body_dependency_resolvers() -> None:
@@ -3777,6 +3708,7 @@ def test_validated_fixture_setup_derives_body_dependency_resolvers() -> None:
                     "operation_ref": "op-cancel",
                     "method": "POST",
                     "path": "/api/orders/{id}/cancel",
+                    "compensates_operation_ref": "op-create-order",
                 }],
             },
         },
@@ -3865,6 +3797,83 @@ def test_runtime_fixture_setup_does_not_fallback_to_any_available_actor() -> Non
                 "id": "actor-admin",
                 "role": "admin",
                 "credential_secret_ref": "secret_ref:test_accounts:admin",
+            },
+        },
+    )
+
+    assert setup == {}
+
+
+def test_runtime_fixture_setup_rejects_unresolved_body_fallback() -> None:
+    setup = validated_fixture_setup(
+        {
+            "fixture_setup": {
+                "operation_ref": "op-create",
+                "method": "POST",
+                "path": "/resources",
+                "actor_refs": ["actor-writer"],
+                "body_template": {"ownerId": "<owner_id>"},
+                "body_bindings": [{
+                    "target": "ownerId",
+                    "template_token": "owner_id",
+                    "resolver_operations": [],
+                    "fallback": "invented-owner",
+                }],
+                "cleanup_operations": [{
+                    "operation_ref": "op-delete",
+                    "method": "DELETE",
+                    "path": "/resources/{id}",
+                }],
+            },
+        },
+        {
+            "op-create": {
+                "id": "op-create",
+                "method": "POST",
+                "path": "/resources",
+                "request_example": {"ownerId": "<owner_id>"},
+            },
+            "op-delete": {
+                "id": "op-delete",
+                "method": "DELETE",
+                "path": "/resources/{id}",
+            },
+        },
+        {
+            "actor-writer": {
+                "id": "actor-writer",
+                "credential_secret_ref": "secret_ref:test_accounts:writer",
+            },
+        },
+    )
+
+    assert setup == {}
+
+
+def test_runtime_fixture_setup_requires_identity_bound_cleanup() -> None:
+    setup = validated_fixture_setup(
+        {
+            "fixture_setup": {
+                "operation_ref": "op-create",
+                "method": "POST",
+                "path": "/resources",
+                "actor_refs": ["actor-writer"],
+                "body_template": {"name": "source-name"},
+                "cleanup_operations": [],
+            },
+        },
+        {
+            "op-create": {
+                "id": "op-create",
+                "method": "POST",
+                "path": "/resources",
+                "request_example": {"name": "source-name"},
+            },
+        },
+        {
+            "actor-writer": {
+                "id": "actor-writer",
+                "credential_secret_ref": "secret_ref:test_accounts:writer",
             },
         },
     )
