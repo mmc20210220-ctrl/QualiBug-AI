@@ -4,6 +4,7 @@
 obligation compiler from module globals at execution time. This compatibility entry replaces
 those symbols with stable additive wrappers:
 
+* every declared adapter surface preserved in Behavior IR;
 * exact accepted rule/interface identities;
 * canonical-field response observers;
 * enterprise and explicit scan UI contracts;
@@ -16,6 +17,9 @@ from dataclasses import replace
 from typing import Any
 
 from . import discovery_runtime_planning as _planning
+from .behavior_ir_surface_reconciliation import (
+    reconcile_declared_observation_surfaces,
+)
 from .effect_observer_binding import bind_source_effect_observers
 from .formal_event_capability_guard import (
     install_formal_event_capability_guard,
@@ -131,6 +135,10 @@ def build_behavior_ir_with_semantic_operation_bindings(
         api_operations=api_operations,
         runtime_actors=runtime_actors,
         available_surfaces=available_surfaces,
+    )
+    behavior_ir, _surface_receipt = reconcile_declared_observation_surfaces(
+        behavior_ir,
+        available_surfaces,
     )
     semantic_ir, _semantic_receipt = bind_accepted_semantic_operations(
         behavior_ir,
