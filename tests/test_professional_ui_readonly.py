@@ -3,19 +3,19 @@ from __future__ import annotations
 import pytest
 
 from ai_test_asset_center import formal_ui_surface as formal_ui
+from ai_test_asset_center import professional_ui_readonly as professional
 from ai_test_asset_center import scan_ui_contract_overlay as scan_overlay
 from ai_test_asset_center import source_ui_contract_binding as source_binding
 from ai_test_asset_center.browser_execution import BrowserExecutionError
 from ai_test_asset_center.professional_ui_contract_guard import (
     install_professional_ui_contract_guard,
 )
-from ai_test_asset_center.professional_ui_readonly import (
-    PROFESSIONAL_EXPECTATIONS,
-    ProfessionalUIExpectationError,
-    _execute_expectation,
-    install_professional_ui_readonly,
-    validate_professional_browser_plan,
-)
+
+
+PROFESSIONAL_EXPECTATIONS = professional.PROFESSIONAL_EXPECTATIONS
+ProfessionalUIExpectationError = professional.ProfessionalUIExpectationError
+install_professional_ui_readonly = professional.install_professional_ui_readonly
+validate_professional_browser_plan = professional.validate_professional_browser_plan
 
 
 def _runtime() -> dict:
@@ -199,7 +199,7 @@ def test_hidden_expectation_accepts_source_target_absence() -> None:
     install_professional_ui_readonly()
     install_professional_ui_contract_guard()
 
-    receipt = _execute_expectation(
+    receipt = professional._execute_expectation(
         page=_AbsentPage(),
         step={
             "action": "expect_hidden",
@@ -226,7 +226,7 @@ def test_layout_overflow_is_a_typed_expectation_failure() -> None:
         ProfessionalUIExpectationError,
         match=r"^UI_EXPECTATION_UNSATISFIED:expect_no_horizontal_overflow:overflow_detected$",
     ):
-        _execute_expectation(
+        professional._execute_expectation(
             page=_OverflowPage(),
             step={
                 "action": "expect_no_horizontal_overflow",
