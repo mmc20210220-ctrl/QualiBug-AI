@@ -7,8 +7,9 @@ callers cannot bypass lifecycle hardening or receive history-dependent counter
 semantics through an early-captured function reference.
 
 The private-pilot service imports this surface while installing its governed UI
-routes. That same safe bootstrap point installs additive visual, browser-matrix
-and accessibility health metadata without launching or downloading a browser.
+routes. That same safe bootstrap point installs additive visual, browser-matrix,
+accessibility and complex-interaction health metadata without launching or
+downloading a browser.
 """
 from __future__ import annotations
 
@@ -25,6 +26,9 @@ from .private_pilot_accessibility_health_patch import (
 from .private_pilot_browser_matrix_health_patch import (
     install_browser_matrix_health_patch,
 )
+from .private_pilot_complex_interaction_health_patch import (
+    install_complex_interaction_health_patch,
+)
 from .private_pilot_visual_baseline_health_patch import (
     install_visual_baseline_health_patch,
 )
@@ -34,6 +38,7 @@ install_visual_baseline_registry_projection_guard()
 install_visual_baseline_health_patch()
 install_browser_matrix_health_patch()
 install_accessibility_health_patch()
+install_complex_interaction_health_patch()
 
 APPROVED_PREFIX = _registry.APPROVED_PREFIX
 FONT_READINESS = _registry.FONT_READINESS
