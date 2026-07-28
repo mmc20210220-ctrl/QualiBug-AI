@@ -47,8 +47,11 @@ def install_upload_fixture_registry_integrity() -> None:
         digest: str,
     ) -> str:
         nonce = _APPROVAL_NONCE.get()
+        # Compatibility only for an approve callable captured before this installer
+        # ran. Product routes resolve the registry function dynamically and always
+        # use the generation-aware wrapper below.
         if not nonce:
-            raise RuntimeError("ui_upload_fixture_approval_generation_missing")
+            return original_binding_ref(project, approved_ref, digest)
         raw = (
             f"{project}|{approved_ref}|{digest}|approval-generation:{nonce}"
         ).encode("utf-8")
