@@ -15,6 +15,16 @@ from . import private_pilot_health_contract as _health
 
 _INSTALL_MARKER = "_qualibug_accessibility_health_patch_installed"
 _ORIGINAL_BUILDER = "_qualibug_health_builder_before_accessibility_rules"
+_GUARD_MODULES = (
+    "ai_test_asset_center.professional_ui_accessibility_rule_governance",
+    "ai_test_asset_center.professional_ui_accessibility_aria_guard",
+    "ai_test_asset_center.professional_ui_accessibility_contract_guard",
+    "ai_test_asset_center.professional_ui_accessibility_semantics_guard",
+    "ai_test_asset_center.professional_ui_accessibility_observation_guard",
+    "ai_test_asset_center.professional_ui_accessibility_exclusion_guard",
+    "ai_test_asset_center.professional_ui_accessibility_matrix_guard",
+    "ai_test_asset_center.professional_ui_accessibility_coverage",
+)
 
 
 def _module_available(name: str) -> bool:
@@ -24,14 +34,43 @@ def _module_available(name: str) -> bool:
         return False
 
 
+def _expected_rule_counts(engine: Any) -> tuple[int, int, int]:
+    """Derive governed counts without mutating the lazy formal runtime."""
+    try:
+        governance = importlib.import_module(
+            "ai_test_asset_center.professional_ui_accessibility_rule_governance"
+        )
+        aria = importlib.import_module(
+            "ai_test_asset_center.professional_ui_accessibility_aria_guard"
+        )
+        catalog = dict(getattr(engine, "RULE_CATALOG", {}) or {})
+        for rule in frozenset(getattr(governance, "_REMOVED_RULES", frozenset())):
+            catalog.pop(rule, None)
+        catalog.update(dict(getattr(governance, "_ADDED_RULES", {}) or {}))
+        catalog.update(dict(getattr(aria, "ARIA_RULES", {}) or {}))
+        custom = frozenset(
+            getattr(governance, "CUSTOM_ONLY_RULES", frozenset()) or frozenset()
+        )
+        return len(catalog), len(set(catalog) - set(custom)), len(custom)
+    except Exception:
+        catalog = dict(getattr(engine, "RULE_CATALOG", {}) or {})
+        standard = tuple(getattr(engine, "STANDARD_RULES", ()) or ())
+        custom = frozenset(
+            getattr(engine, "CUSTOM_ONLY_RULES", frozenset()) or frozenset()
+        )
+        return len(catalog), len(standard), len(custom)
+
+
 def accessibility_health_status() -> dict[str, Any]:
     module_available = _module_available(
         "ai_test_asset_center.professional_ui_accessibility_engine"
     )
+    guard_modules_available = all(_module_available(name) for name in _GUARD_MODULES)
     action_available = False
     source_guard_available = False
     runtime_installed = False
     governance_installed = False
+    aria_guard_installed = False
     contract_guard_installed = False
     semantics_guard_installed = False
     observation_guard_installed = False
@@ -59,14 +98,20 @@ def accessibility_health_status() -> dict[str, Any]:
             action
             and callable(getattr(engine, "install_professional_ui_accessibility_engine", None))
         )
-        source_guard_available = callable(
-            getattr(contracts, "_expectation_structure_gaps", None)
+        source_guard_available = bool(
+            callable(getattr(contracts, "_expectation_structure_gaps", None))
+            and _module_available(
+                "ai_test_asset_center.professional_ui_accessibility_source_guard"
+            )
         )
         runtime_installed = bool(
             getattr(professional, getattr(engine, "_INSTALL_MARKER", ""), False)
         )
         governance_installed = bool(
             getattr(engine, "_qualibug_accessibility_rule_governance_installed", False)
+        )
+        aria_guard_installed = bool(
+            getattr(engine, "_qualibug_accessibility_aria_guard_installed", False)
         )
         contract_guard_installed = bool(
             getattr(engine, "_qualibug_accessibility_contract_guard_installed", False)
@@ -86,17 +131,37 @@ def accessibility_health_status() -> dict[str, Any]:
         coverage_installed = bool(
             getattr(coverage, "_qualibug_accessibility_coverage_installed", False)
         )
-        supported_rule_count = len(dict(getattr(engine, "RULE_CATALOG", {}) or {}))
-        standard_rule_count = len(tuple(getattr(engine, "STANDARD_RULES", ()) or ()))
-        custom_only_rule_count = len(
-            frozenset(getattr(engine, "CUSTOM_ONLY_RULES", frozenset()) or frozenset())
-        )
+        if governance_installed and aria_guard_installed:
+            supported_rule_count = len(
+                dict(getattr(engine, "RULE_CATALOG", {}) or {})
+            )
+            standard_rule_count = len(
+                tuple(getattr(engine, "STANDARD_RULES", ()) or ())
+            )
+            custom_only_rule_count = len(
+                frozenset(
+                    getattr(engine, "CUSTOM_ONLY_RULES", frozenset())
+                    or frozenset()
+                )
+            )
+        else:
+            (
+                supported_rule_count,
+                standard_rule_count,
+                custom_only_rule_count,
+            ) = _expected_rule_counts(engine)
     except Exception:
         action_available = False
 
-    code_ready = module_available and action_available and source_guard_available
+    code_ready = all((
+        module_available,
+        guard_modules_available,
+        action_available,
+        source_guard_available,
+    ))
     governance_composed = all((
         governance_installed,
+        aria_guard_installed,
         contract_guard_installed,
         semantics_guard_installed,
         observation_guard_installed,
@@ -109,6 +174,7 @@ def accessibility_health_status() -> dict[str, Any]:
         name
         for name, available in (
             ("accessibility_rule_module", module_available),
+            ("accessibility_guard_modules", guard_modules_available),
             ("accessibility_action", action_available),
             ("accessibility_source_guard", source_guard_available),
         )
@@ -126,10 +192,12 @@ def accessibility_health_status() -> dict[str, Any]:
         "custom_only_rule_count": custom_only_rule_count,
         "checks": {
             "rule_module_available": module_available,
+            "guard_modules_available": guard_modules_available,
             "action_available": action_available,
             "source_guard_available": source_guard_available,
             "runtime_action_installed": runtime_installed,
             "conservative_rule_governance_installed": governance_installed,
+            "aria_semantics_guard_installed": aria_guard_installed,
             "explicit_authority_guard_installed": contract_guard_installed,
             "semantics_accuracy_guard_installed": semantics_guard_installed,
             "typed_observation_guard_installed": observation_guard_installed,
