@@ -142,23 +142,31 @@ def _plan_with_start_url(
     plan: dict[str, Any],
     start_url: str,
 ) -> dict[str, Any]:
-    """Bind request navigation without mutating an unrelated first plan step.
+    """Bind one explicit navigation step without disturbing source plan order.
 
-    A visual or responsive plan commonly starts with ``set_viewport``. The old
-    adapter added ``url`` to whatever the first step happened to be, which left
-    the browser on ``about:blank`` because only ``goto`` consumes that field.
-    Existing leading ``goto`` steps with an empty URL are completed; every other
-    plan receives a new explicit navigation step at position one.
+    A visual or responsive plan commonly configures viewport/media before page
+    navigation so responsive assets load under the intended environment. If any
+    ``goto`` already exists, its source-declared URL remains authoritative and an
+    empty URL receives the request fallback. Otherwise navigation is inserted
+    after the leading deterministic configuration steps and before assertions.
     """
     target = str(start_url or "").strip()
     if not target:
         return plan
     steps = [dict(_as_dict(step)) for step in _as_list(plan.get("steps"))]
-    if steps and str(steps[0].get("action") or "").strip().lower() == "goto":
-        if not str(steps[0].get("url") or "").strip():
-            steps[0]["url"] = target
-    else:
-        steps.insert(0, {"action": "goto", "url": target})
+    for step in steps:
+        if str(step.get("action") or "").strip().lower() != "goto":
+            continue
+        if not str(step.get("url") or "").strip():
+            step["url"] = target
+        return {**plan, "steps": steps}
+    insert_at = 0
+    while insert_at < len(steps):
+        action = str(steps[insert_at].get("action") or "").strip().lower()
+        if action not in {"set_viewport", "set_media"}:
+            break
+        insert_at += 1
+    steps.insert(insert_at, {"action": "goto", "url": target})
     return {**plan, "steps": steps}
 
 
