@@ -110,7 +110,7 @@ def test_same_ref_cannot_acquire_conflicting_active_viewport(tmp_path: Path) -> 
         _register(tmp_path, viewport_width=1440)
 
 
-def test_re_registration_after_revocation_receives_new_version_id(
+def test_re_registration_after_source_revocation_gets_new_id_and_cascades(
     tmp_path: Path,
 ) -> None:
     registered = _register(tmp_path)["baseline"]
@@ -125,15 +125,20 @@ def test_re_registration_after_revocation_receives_new_version_id(
     assert approved["baseline_id"] != registered["baseline_id"]
     assert approved["created_by"] == "approver:qa_lead"
 
-    revoked = registry.revoke_visual_baseline(
+    revocation = registry.revoke_visual_baseline(
         "visual-project",
         baseline_id=registered["baseline_id"],
         reason="superseded by reviewed capture",
         root=tmp_path,
         actor=_actor("reviewer"),
-    )["baseline"]
+    )
+    revoked = revocation["baseline"]
     assert revoked["status"] == "revoked"
     assert revoked["revoked_by"] == "reviewer:qa_lead"
+    assert revocation["cascade_revoked_count"] == 1
+    assert revocation["cascade_revoked_baseline_ids"] == [
+        approved["baseline_id"]
+    ]
 
     replacement = _register(tmp_path)["baseline"]
     assert replacement["baseline_id"] != registered["baseline_id"]
@@ -147,8 +152,44 @@ def test_re_registration_after_revocation_receives_new_version_id(
     )
     ids = [row["baseline_id"] for row in inventory["baselines"]]
     assert len(ids) == len(set(ids))
-    assert inventory["summary"]["active_count"] == 2
-    assert inventory["summary"]["revoked_count"] == 1
+    assert inventory["summary"]["active_count"] == 1
+    assert inventory["summary"]["revoked_count"] == 2
+    approved_history = next(
+        row
+        for row in inventory["baselines"]
+        if row["baseline_id"] == approved["baseline_id"]
+    )
+    assert approved_history["status"] == "revoked"
+    assert approved_history["cascade_source_baseline_id"] == (
+        registered["baseline_id"]
+    )
+
+
+def test_revoking_approved_copy_does_not_revoke_source(tmp_path: Path) -> None:
+    registered = _register(tmp_path)["baseline"]
+    approved = registry.approve_visual_baseline(
+        "visual-project",
+        baseline_id=registered["baseline_id"],
+        root=tmp_path,
+        actor=_actor("approver"),
+    )["baseline"]
+
+    revocation = registry.revoke_visual_baseline(
+        "visual-project",
+        baseline_id=approved["baseline_id"],
+        reason="approval withdrawn",
+        root=tmp_path,
+        actor=_actor("reviewer"),
+    )
+
+    assert revocation["cascade_revoked_count"] == 0
+    active = registry.list_visual_baselines(
+        "visual-project",
+        root=tmp_path,
+    )["baselines"]
+    assert [row["baseline_id"] for row in active] == [
+        registered["baseline_id"]
+    ]
 
 
 def test_corrupt_registry_is_not_silently_overwritten(tmp_path: Path) -> None:
