@@ -42,6 +42,9 @@ from .professional_ui_browser_matrix import (
     install_professional_ui_browser_matrix,
     install_professional_ui_browser_matrix_runtime,
 )
+from .professional_ui_browser_matrix_coverage import (
+    install_professional_ui_browser_matrix_coverage,
+)
 from .professional_ui_browser_matrix_integrity import (
     install_professional_ui_browser_matrix_integrity,
 )
@@ -136,6 +139,7 @@ install_visual_viewport_guard()
 install_visual_registry_binding()
 install_professional_ui_browser_matrix()
 install_professional_ui_browser_matrix_integrity()
+install_professional_ui_browser_matrix_coverage()
 install_scan_ui_interaction_contract_guard()
 install_formal_event_surface()
 install_formal_event_capability_guard()
