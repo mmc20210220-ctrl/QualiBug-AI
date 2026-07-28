@@ -108,6 +108,20 @@ class AdapterMatch:
         }
 
 
+@dataclass(frozen=True)
+class SupplementalContext:
+    """Evidence passed to a deferred supplemental adapter.
+
+    Supplemental adapters may inspect structural gaps produced by the primary adapter,
+    but they still may not infer business meaning.  ``primary_document_ir`` is immutable
+    by contract: supplemental output is merged later by the central merger.
+    """
+
+    primary_document_ir: dict[str, Any]
+    trigger_gaps: tuple[dict[str, Any], ...] = ()
+    requested_capabilities: tuple[str, ...] = ()
+
+
 class DocumentAdapter:
     """Base adapter contract.
 
@@ -120,12 +134,29 @@ class DocumentAdapter:
     priority: ClassVar[int] = 0
     mode: ClassVar[str] = MODE_PRIMARY
     capabilities: ClassVar[frozenset[str]] = frozenset()
+    standalone: ClassVar[bool] = False
 
     def probe(self, source: DocumentSource) -> AdapterMatch | None:
         raise NotImplementedError
 
     def extract(self, source: DocumentSource) -> dict[str, Any]:
         raise NotImplementedError
+
+    def probe_supplemental(
+        self,
+        source: DocumentSource,
+        context: SupplementalContext,
+    ) -> AdapterMatch | None:
+        """Return a deferred match after primary structure gaps are known."""
+        return None
+
+    def extract_supplemental(
+        self,
+        source: DocumentSource,
+        context: SupplementalContext,
+    ) -> dict[str, Any]:
+        """Produce supplemental IR without mutating the primary result."""
+        return self.extract(source)
 
     def receipt(self, source: DocumentSource, match: AdapterMatch) -> dict[str, Any]:
         return {
@@ -134,6 +165,7 @@ class DocumentAdapter:
             "parser_version": self.parser_version,
             "mode": self.mode,
             "priority": int(self.priority),
+            "standalone": bool(self.standalone),
             "match_score": int(match.score),
             "match_reason": match.reason,
             "capabilities": unique_text(self.capabilities),
@@ -204,6 +236,7 @@ __all__ = [
     "MODE_FALLBACK",
     "DocumentSource",
     "AdapterMatch",
+    "SupplementalContext",
     "DocumentAdapter",
     "validate_adapter",
     "validate_document_ir",
