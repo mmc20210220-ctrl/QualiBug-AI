@@ -18,7 +18,7 @@ from . import ui_execution_adapter as _adapter
 
 _INSTALL_MARKER = "_qualibug_browser_matrix_integrity_installed"
 _ORIGINAL_CONTEXT = "_qualibug_matrix_context_before_integrity"
-_ORIGINAL_ADAPTER = "_qualibug_matrix_adapter_before_integrity"
+_ORIGINAL_ADAPTER = "_qualibug_matrix_final_adapter_before_integrity"
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -34,16 +34,19 @@ def install_professional_ui_browser_matrix_integrity() -> None:
         return
     original_context = getattr(
         _matrix._MatrixBrowser,
-        _matrix._ORIGINAL_CONTEXT,
+        ORIGINAL_CONTEXT,
         _matrix._MatrixBrowser.new_context,
     )
+    # This must capture the CURRENT adapter, which is the matrix-aware wrapper
+    # installed immediately before this function. Reading the matrix module's
+    # pre-matrix snapshot would silently restore the single-browser path.
     original_adapter = getattr(
         _adapter,
-        _matrix._ORIGINAL_ADAPTER,
+        ORIGINAL_ADAPTER,
         _adapter._playwright_request_result,
     )
-    setattr(_matrix._MatrixBrowser, _matrix._ORIGINAL_CONTEXT, original_context)
-    setattr(_adapter, _matrix._ORIGINAL_ADAPTER, original_adapter)
+    setattr(_matrix._MatrixBrowser, ORIGINAL_CONTEXT, original_context)
+    setattr(_adapter, ORIGINAL_ADAPTER, original_adapter)
 
     def new_context_with_engine_compatibility(
         self: Any,
