@@ -41,11 +41,17 @@ and the original scanned-page gap remains formally blocking.
 
 ## Supported source paths
 
-### Standalone raster image
+### Standalone image source
 
-PNG, JPEG, TIFF, BMP, GIF and WebP sources enter `PageRendererRegistry` first. Multi-frame
-images produce multiple rendered pages. OCR then consumes normalized or fail-visible
-pass-through image bytes.
+Image support is not defined by a fixed PNG/JPEG suffix list. The source first enters
+`ImageDecoderRegistry`, which selects a decoder by actual bytes and runtime capability.
+The default Pillow decoder can consume every format exposed by the installed Pillow build,
+including multi-frame containers. Optional registered providers add HEIF/HEIC/AVIF,
+SVG/SVGZ and camera RAW families when their dependencies are installed.
+
+Every successful decode is normalized to a rendered page and records the original format,
+decoder name/version, frame count and fallback errors. A file with an image-like extension
+but undecodable bytes remains blocked.
 
 ### Scanned PDF page
 
@@ -77,7 +83,8 @@ Each OCR line must preserve:
 - page-local bounding box;
 - OCR provider and version;
 - page renderer and version;
-- rendering method and DPI;
+- image decoder and original source format when applicable;
+- rendering/decode method and DPI;
 - recognition confidence;
 - source locator.
 
@@ -89,6 +96,7 @@ The default formal confidence threshold is `0.55`.
 - No text: `OCR_TEXT_NOT_RECOVERED` is P0.
 - Provider execution failure: `OCR_PROVIDER_EXECUTION_FAILED` is P0.
 - Rendering failure: `PAGE_RENDERER_UNAVAILABLE_OR_FAILED` is P0.
+- Image decode failure: `IMAGE_DECODER_UNAVAILABLE_OR_FAILED` is P0.
 
 ## Gap-resolution contract
 
@@ -124,6 +132,7 @@ The current version does not claim:
 - table-cell reconstruction;
 - flowchart, BPMN, UML or ER-diagram understanding;
 - rendering when neither PDFium, LibreOffice nor a usable embedded-image fallback exists;
+- decoding of optional image families when their provider is not installed;
 - automatic installation of Tesseract or LibreOffice system dependencies;
 - automatic installation of OCR language packs.
 
