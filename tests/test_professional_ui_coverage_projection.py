@@ -82,6 +82,7 @@ def test_professional_ui_contract_is_projected_across_declared_dimensions() -> N
     funnel = build_formal_ui_loss_funnel(result)
     coverage = funnel["professional_coverage"]
 
+    assert coverage["schema_version"] == "qualibug.professional-ui-coverage.v2"
     assert coverage["declared_assertion_action_counts"] == {
         "expect_accessibility_basics": 1,
         "expect_no_failed_requests": 1,
@@ -92,6 +93,8 @@ def test_professional_ui_contract_is_projected_across_declared_dimensions() -> N
     assert coverage["declared_configuration_action_counts"] == {
         "set_viewport": 1,
     }
+    assert coverage["declared_treatment_interaction_action_counts"] == {}
+    assert coverage["declared_cleanup_interaction_action_counts"] == {}
     for category in (
         "content_navigation",
         "rendered_state",
@@ -106,12 +109,19 @@ def test_professional_ui_contract_is_projected_across_declared_dimensions() -> N
         assert row["violation_count"] == 1
         assert row["deliverable_count"] == 1
 
+    assert coverage["dimensions"]["workflow_interaction"][
+        "declared_contract_count"
+    ] == 0
     # One contract can exercise several professional dimensions, but the formal
     # funnel still contains one violation and one deliverable finding occurrence.
     assert funnel["outcomes"]["violation_count"] == 1
     assert funnel["outcomes"]["deliverable_count"] == 1
-    assert coverage["capability_boundary"]["provider_findings_consumed"] is False
-    assert coverage["capability_boundary"]["ai_usability_opinion_used_as_defect"] is False
+    boundary = coverage["capability_boundary"]
+    assert boundary["provider_findings_consumed"] is False
+    assert boundary["controlled_write_interaction_supported"] is True
+    assert boundary["production_write_supported"] is False
+    assert boundary["browser_cleanup_equivalence_required"] is True
+    assert boundary["ai_usability_opinion_used_as_defect"] is False
 
 
 def test_empty_ui_result_reports_every_professional_dimension_as_uncovered() -> None:
@@ -129,6 +139,7 @@ def test_empty_ui_result_reports_every_professional_dimension_as_uncovered() -> 
         "layout_responsive",
         "rendered_state",
         "runtime_quality",
+        "workflow_interaction",
     ]
     assert all(
         row["declared_contract_count"] == 0
