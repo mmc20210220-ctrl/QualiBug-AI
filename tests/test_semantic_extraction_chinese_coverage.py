@@ -17,10 +17,11 @@ class _Client:
 
 
 def test_long_chinese_source_extracts_candidate_beyond_first_6000_chars(monkeypatch) -> None:
-    prefix = "前置业务说明" * 680
+    prefix = "前置业务说明" * 1100
     marker = "后半段订单只能由区域经理审批"
     source = prefix + marker
     marker_start = source.index(marker)
+    assert marker_start > 6000
 
     def responder(prompt: str) -> dict:
         if marker in prompt:
