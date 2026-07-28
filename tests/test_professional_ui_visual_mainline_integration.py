@@ -135,9 +135,8 @@ def test_direct_scan_visual_contract_reaches_formal_ui_overlay_and_compiler() ->
     })
 
     assert compiled["status"] == "COMPILED"
-    assert compiled["assertion"]["assertion_kind"] == (
-        formal_ui_surface.ASSERTION_KIND
-    )
+    assert compiled["assertion"]["kind"] == formal_ui_surface.ASSERTION_KIND
+    assert compiled["assertion"]["ui_expectation_count"] == 1
 
 
 def test_visual_and_cleanup_evidence_survive_one_observer_receipt(
