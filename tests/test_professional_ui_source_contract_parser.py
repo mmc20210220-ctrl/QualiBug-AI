@@ -8,6 +8,10 @@ from ai_test_asset_center.enterprise_knowledge_center._formal_ui_contracts impor
 from ai_test_asset_center.professional_ui_interaction_privacy_guard import (
     EVIDENCE_POLICY,
 )
+from ai_test_asset_center.professional_ui_persistent_cleanup_probe import (
+    EQUIVALENCE_SCOPE,
+    PERSISTENT_PROBE_PROPERTY,
+)
 
 
 def _envelope(browser_plan: dict, *, execution_mode: str) -> dict:
@@ -73,11 +77,21 @@ def test_governed_interaction_contract_enters_enterprise_source_parser() -> None
         "interaction_contract": {
             "cleanup_strategy": "browser_compensation",
             "equivalence": "source_declared_state_probes",
+            "equivalence_scope": EQUIVALENCE_SCOPE,
             "target_scope": "approved_nonproduction_target",
             "evidence_policy": EVIDENCE_POLICY,
         },
         "state_probes": [
-            {"probe_id": "record-count", "property": "count", "selector": ".row"},
+            {"probe_id": "record-count-ui", "property": "count", "selector": ".row"},
+            {
+                "probe_id": "record-count-persistent",
+                "property": PERSISTENT_PROBE_PROPERTY,
+                "method": "GET",
+                "url": "/api/records/summary",
+                "json_pointer": "/count",
+                "expected_status_class": 2,
+                "max_response_bytes": 100_000,
+            },
         ],
         "steps": [
             {"phase": "setup", "action": "goto", "url": "/records"},
@@ -120,7 +134,8 @@ def test_governed_interaction_contract_enters_enterprise_source_parser() -> None
     parsed_plan = contracts[0]["ui_request"]["browser_plan"]
     assert parsed_plan["write_approved"] is True
     assert parsed_plan["interaction_contract"]["evidence_policy"] == EVIDENCE_POLICY
-    assert parsed_plan["state_probes"][0]["probe_id"] == "record-count"
+    assert parsed_plan["interaction_contract"]["equivalence_scope"] == EQUIVALENCE_SCOPE
+    assert parsed_plan["state_probes"][1]["property"] == PERSISTENT_PROBE_PROPERTY
 
 
 def test_interaction_source_without_cleanup_or_privacy_remains_a_visible_gap() -> None:
@@ -169,6 +184,52 @@ def test_interaction_source_without_cleanup_or_privacy_remains_a_visible_gap() -
         in gap["missing_requirements"]
     )
     assert "cleanup_interaction" in gap["missing_requirements"]
+
+
+def test_interaction_source_without_persistent_probe_remains_a_visible_gap() -> None:
+    browser_plan = {
+        "execution_mode": "approved_sandbox_write",
+        "write_approved": True,
+        "interaction_contract": {
+            "cleanup_strategy": "browser_compensation",
+            "equivalence": "source_declared_state_probes",
+            "equivalence_scope": EQUIVALENCE_SCOPE,
+            "target_scope": "approved_nonproduction_target",
+            "evidence_policy": EVIDENCE_POLICY,
+        },
+        "state_probes": [
+            {"probe_id": "record-count-ui", "property": "count", "selector": ".row"},
+        ],
+        "steps": [
+            {"phase": "setup", "action": "goto", "url": "/records"},
+            {"phase": "treatment", "action": "click", "selector": "#save"},
+            {
+                "phase": "assertion",
+                "action": "expect_text",
+                "selector": "#result",
+                "text": "Saved",
+            },
+            {
+                "phase": "cleanup",
+                "action": "click",
+                "selector": "#delete-test-record",
+            },
+        ],
+    }
+
+    contracts, gaps = extract_formal_ui_contracts(
+        json.dumps({
+            "ui_formal_contracts": [
+                _envelope(browser_plan, execution_mode="approved_sandbox_write")
+            ]
+        }),
+        source_id="ui-spec-no-persistent-probe",
+    )
+
+    assert contracts == []
+    assert gaps[0]["missing_requirements"] == [
+        "browser_plan.persistent_state_probe"
+    ]
 
 
 def test_readonly_contract_with_click_is_not_silently_upgraded_to_write() -> None:
