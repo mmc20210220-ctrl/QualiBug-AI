@@ -1,0 +1,136 @@
+from __future__ import annotations
+
+from ai_test_asset_center.discovery_ui_loss_projection import (
+    build_formal_ui_loss_funnel,
+)
+
+
+def test_professional_ui_contract_is_projected_across_declared_dimensions() -> None:
+    result = {
+        "behavior_ir": {
+            "scan_ui_contract_overlay_receipt": {
+                "status": "OVERLAID",
+                "formal_candidate_count": 1,
+                "contract_added_count": 1,
+                "coverage_gap_count": 0,
+            },
+            "source_ui_contract_binding_receipt": {
+                "status": "BOUND",
+                "contract_count": 1,
+                "bound_invariant_count": 1,
+                "coverage_gap_count": 0,
+                "reason_counts": {},
+            },
+        },
+        "test_obligations": {
+            "source_ui_obligation_receipt": {
+                "status": "COMPILED",
+                "complete_family_vector": True,
+                "skipped_reason_counts": {},
+            },
+            "obligations": [{
+                "obligation_id": "ui-professional-1",
+                "risk_family": "ui_state_consistency",
+                "property": {
+                    "ui_request": {
+                        "browser_plan": {
+                            "steps": [
+                                {"action": "set_viewport", "width": 390, "height": 844},
+                                {"action": "expect_text", "selector": "h1", "text": "Orders"},
+                                {"action": "expect_visible", "selector": "#orders"},
+                                {
+                                    "action": "expect_accessibility_basics",
+                                    "rules": ["html_lang", "buttons_have_name"],
+                                    "max_violations": 0,
+                                },
+                                {"action": "expect_no_horizontal_overflow"},
+                                {"action": "expect_no_failed_requests"},
+                            ],
+                        },
+                    },
+                },
+            }],
+        },
+        "experiment_execution": {
+            "results": {
+                "ui-professional-1": {
+                    "obligation_id": "ui-professional-1",
+                    "observer_receipts": [{
+                        "observer_id": "ui_source_expectation_reader",
+                        "status": "OBSERVED",
+                        "reason_code": "",
+                    }],
+                    "oracle_verdict": {"status": "VIOLATION"},
+                },
+            },
+        },
+        "obligation_attempt_ledger": {
+            "attempts": [{
+                "obligation_id": "ui-professional-1",
+                "risk_family": "ui_state_consistency",
+                "terminal_status": "DELIVERABLE",
+                "reason_code": "",
+                "stages": [
+                    {"stage": "compile", "status": "COMPILED"},
+                    {"stage": "execution", "status": "EXECUTED"},
+                    {"stage": "gate", "status": "DELIVERABLE"},
+                ],
+            }],
+        },
+    }
+
+    funnel = build_formal_ui_loss_funnel(result)
+    coverage = funnel["professional_coverage"]
+
+    assert coverage["declared_assertion_action_counts"] == {
+        "expect_accessibility_basics": 1,
+        "expect_no_failed_requests": 1,
+        "expect_no_horizontal_overflow": 1,
+        "expect_text": 1,
+        "expect_visible": 1,
+    }
+    assert coverage["declared_configuration_action_counts"] == {
+        "set_viewport": 1,
+    }
+    for category in (
+        "content_navigation",
+        "rendered_state",
+        "accessibility",
+        "layout_responsive",
+        "runtime_quality",
+    ):
+        row = coverage["dimensions"][category]
+        assert row["declared_contract_count"] == 1
+        assert row["selected_contract_count"] == 1
+        assert row["observed_contract_count"] == 1
+        assert row["violation_count"] == 1
+        assert row["deliverable_count"] == 1
+
+    # One contract can exercise several professional dimensions, but the formal
+    # funnel still contains one violation and one deliverable finding occurrence.
+    assert funnel["outcomes"]["violation_count"] == 1
+    assert funnel["outcomes"]["deliverable_count"] == 1
+    assert coverage["capability_boundary"]["provider_findings_consumed"] is False
+    assert coverage["capability_boundary"]["ai_usability_opinion_used_as_defect"] is False
+
+
+def test_empty_ui_result_reports_every_professional_dimension_as_uncovered() -> None:
+    funnel = build_formal_ui_loss_funnel({
+        "behavior_ir": {},
+        "test_obligations": {"obligations": []},
+        "experiment_execution": {"results": {}},
+        "obligation_attempt_ledger": {"attempts": []},
+    })
+
+    coverage = funnel["professional_coverage"]
+    assert coverage["dimensions_without_declared_contracts"] == [
+        "accessibility",
+        "content_navigation",
+        "layout_responsive",
+        "rendered_state",
+        "runtime_quality",
+    ]
+    assert all(
+        row["declared_contract_count"] == 0
+        for row in coverage["dimensions"].values()
+    )
