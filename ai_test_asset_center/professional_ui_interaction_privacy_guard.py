@@ -9,7 +9,8 @@ evidence policy than read-only UI checks:
 * screenshots mask password/secret fields and every source-declared sensitive
   interaction locator;
 * persisted console messages and network URLs are fingerprinted after assertions
-  have consumed their in-memory values.
+  have consumed their in-memory values;
+* untyped browser/runtime exception text is replaced by a stable fingerprint.
 
 The formal cleanup and expectation receipts remain authoritative. This guard only
 reduces artifact exposure; it does not create or judge findings.
@@ -26,12 +27,17 @@ from . import professional_ui_interaction_cleanup as _interaction
 
 EVIDENCE_POLICY = "masked_screenshots_no_trace_no_har"
 _INSTALL_MARKER = "_qualibug_controlled_ui_privacy_guard_installed"
-_ORIGINAL_LAUNCH = "_qualibug_original_interaction_browser_launch_before_privacy"
+ORIGINAL_LAUNCH = "_qualibug_original_interaction_browser_launch_before_privacy"
 ORIGINAL_EXECUTOR = "_qualibug_original_interaction_executor_before_privacy"
 ORIGINAL_CONTRACT_CHECK = "_qualibug_original_interaction_contract_check_before_privacy"
 _SENSITIVE_STEPS: contextvars.ContextVar[list[dict[str, Any]]] = contextvars.ContextVar(
     "qualibug_interaction_sensitive_steps",
     default=[],
+)
+_TYPED_REASON_PREFIXES = (
+    "UI_EXPECTATION_UNSATISFIED:",
+    "UI_CLEANUP_EQUIVALENCE_UNPROVEN:",
+    "UI_WRITE_POLICY_BLOCKED:",
 )
 
 
@@ -123,6 +129,15 @@ def _sensitive_steps(plan: dict[str, Any]) -> list[dict[str, Any]]:
     return output
 
 
+def _safe_reason(value: Any) -> str:
+    reason = _text(value)
+    if not reason:
+        return ""
+    if reason.startswith(_TYPED_REASON_PREFIXES):
+        return reason
+    return "UI_INTERACTION_RUNTIME_ERROR:" + _interaction._fingerprint(reason)[:20]
+
+
 def _scrub_result(result: dict[str, Any]) -> dict[str, Any]:
     scrubbed = copy.deepcopy(_dict(result))
     console = []
@@ -144,6 +159,7 @@ def _scrub_result(result: dict[str, Any]) -> dict[str, Any]:
         })
     scrubbed["console"] = console
     scrubbed["network"] = network
+    scrubbed["reason"] = _safe_reason(scrubbed.get("reason"))
     scrubbed["trace_ref"] = ""
     scrubbed["har_ref"] = ""
     scrubbed["evidence_privacy"] = {
@@ -153,6 +169,7 @@ def _scrub_result(result: dict[str, Any]) -> dict[str, Any]:
         "sensitive_screenshot_masking": True,
         "console_text_persisted": False,
         "network_url_persisted": False,
+        "runtime_exception_text_persisted": False,
         "raw_request_body_persisted": False,
         "raw_response_body_persisted": False,
     }
@@ -185,11 +202,9 @@ def install_controlled_ui_interaction_privacy_guard() -> None:
         return
     original_launch = getattr(
         _interaction,
-        _interaction.ORIGINAL_LAUNCH if hasattr(_interaction, "ORIGINAL_LAUNCH") else ORIGINAL_LAUNCH,
-        None,
+        ORIGINAL_LAUNCH,
+        _interaction._launch_browser,
     )
-    if original_launch is None:
-        original_launch = _interaction._launch_browser
     setattr(_interaction, ORIGINAL_LAUNCH, original_launch)
     original_executor = getattr(
         _interaction,
