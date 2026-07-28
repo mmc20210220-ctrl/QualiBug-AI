@@ -32,6 +32,20 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _install_unified_accessibility_dimension() -> None:
+    current = _coverage.CATEGORY_ACTIONS.get("accessibility", frozenset())
+    _coverage.CATEGORY_ACTIONS["accessibility"] = frozenset({*current, ACTION})
+    _coverage.ASSERTION_ACTIONS = frozenset(
+        set().union(
+            *(
+                actions
+                for category, actions in _coverage.CATEGORY_ACTIONS.items()
+                if category != "workflow_interaction"
+            )
+        )
+    )
+
+
 def _obligations(result: dict[str, Any]) -> list[dict[str, Any]]:
     return [
         dict(row)
@@ -184,6 +198,7 @@ def _projection(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def install_professional_ui_accessibility_coverage() -> None:
+    _install_unified_accessibility_dimension()
     if getattr(_coverage, _INSTALL_MARKER, False):
         return
     original = getattr(
