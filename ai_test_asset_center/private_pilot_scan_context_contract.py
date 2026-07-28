@@ -64,6 +64,29 @@ def declared_adapters_from_scan_body(body: dict[str, Any]) -> list[str] | None:
     return adapters
 
 
+def formal_event_contracts_from_scan_body(
+    body: dict[str, Any],
+) -> list[dict[str, Any]] | None:
+    """Preserve explicit event contracts for the strict source overlay.
+
+    This boundary validates only the transport shape. Source identity,
+    operation/actor identity, observer path, field bindings and observation
+    windows remain owned by ``scan_event_contract_overlay``. An explicit empty
+    list is preserved; malformed rows are rejected instead of disappearing.
+    """
+    if "event_formal_contracts" not in body:
+        return None
+    raw = body.get("event_formal_contracts")
+    if not isinstance(raw, list):
+        raise ValueError("event_formal_contracts_not_list")
+    contracts: list[dict[str, Any]] = []
+    for index, value in enumerate(raw):
+        if not isinstance(value, dict):
+            raise ValueError(f"event_formal_contract_not_object:{index}")
+        contracts.append(dict(value))
+    return contracts
+
+
 def _is_production_like_environment(environment_type: str = "") -> bool:
     # Use the same fail-closed classifier as the governed write executor.  The
     # TestOps helper intentionally recognizes only canonical environment names;
@@ -295,6 +318,10 @@ def build_campaign_context_from_scan_body(body: dict[str, Any]) -> dict[str, Any
     adapters = declared_adapters_from_scan_body(body)
     if adapters is not None:
         context["declared_adapters"] = adapters
+
+    event_contracts = formal_event_contracts_from_scan_body(body)
+    if event_contracts is not None:
+        context["event_formal_contracts"] = event_contracts
 
     # These controls are consumed by discovery_runtime_planning, but previously
     # the product's only customer scan entry discarded them while building the
