@@ -13,9 +13,10 @@ from .schema import as_dict, as_list, text
 def _parsed_sources_for_context(asset: dict[str, Any], root: Path) -> list[dict[str, Any]]:
     """Re-read registered sources and attach source-preserving structure IR.
 
-    Existing parsers remain the source of extracted business facts.  For DOCX, the
-    original immutable bytes are additionally parsed into Document Structure IR so
-    headings, list levels and table positions are available to context resolution.
+    Existing parsers remain the source of extracted business facts. For DOCX, the
+    original immutable bytes are additionally parsed into normalized Document
+    Structure IR so headings, list levels and table positions are available to
+    context resolution.
     """
     from .._crud import _record_parse
 
@@ -31,9 +32,11 @@ def _parsed_sources_for_context(asset: dict[str, Any], root: Path) -> list[dict[
         structure_error: dict[str, Any] = {}
         if stored.exists() and stored.suffix.lower() == ".docx":
             try:
-                from .._document_structure_ir import extract_docx_document_ir
+                from .._document_structure_ir_normalizer import (
+                    extract_normalized_docx_document_ir,
+                )
 
-                document_structure = extract_docx_document_ir(
+                document_structure = extract_normalized_docx_document_ir(
                     stored.read_bytes(), filename=filename
                 )
             except Exception as exc:
@@ -48,7 +51,7 @@ def _parsed_sources_for_context(asset: dict[str, Any], root: Path) -> list[dict[
                 "filename": filename,
                 "source_locator": parser_receipt.get("source_locator"),
                 # Keep the parser's original text for the legacy text-range context
-                # stage.  IR context uses document_structure blocks directly.
+                # stage. IR context uses document_structure blocks directly.
                 "text": parsed.get("text") or "",
                 "document_structure": document_structure,
                 "document_structure_error": structure_error,
