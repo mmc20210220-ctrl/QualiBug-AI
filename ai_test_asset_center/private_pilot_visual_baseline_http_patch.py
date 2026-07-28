@@ -42,13 +42,28 @@ def _text(value: Any, *, limit: int = 1000) -> str:
 
 def _route_project(path: str) -> str:
     parts = [unquote(part) for part in urlparse(path).path.split("/") if part]
-    if (
+    if not (
         len(parts) == 5
         and parts[:3] == ["api", "v1", "projects"]
         and parts[4] == "visual-baselines"
     ):
-        return _safe_project_id(parts[3])
-    return ""
+        return ""
+    raw = parts[3].strip()
+    safe = _safe_project_id(raw)
+    # Do not let this route reinterpret an encoded slash, whitespace or any
+    # other invalid identity as a different existing project.
+    if not raw or raw != safe:
+        return ""
+    return safe
+
+
+def _maximum_body_bytes() -> int:
+    raw = os.environ.get("QUALIBUG_MAX_REQUEST_BODY", str(_DEFAULT_MAX_BODY))
+    try:
+        value = int(raw or _DEFAULT_MAX_BODY)
+    except (TypeError, ValueError):
+        return _DEFAULT_MAX_BODY
+    return value if value > 0 else _DEFAULT_MAX_BODY
 
 
 def _read_json_body(handler: Any) -> dict[str, Any]:
@@ -56,13 +71,9 @@ def _read_json_body(handler: Any) -> dict[str, Any]:
         size = int(handler.headers.get("Content-Length", "0") or 0)
     except (TypeError, ValueError) as exc:
         raise ValueError("visual_baseline_content_length_invalid") from exc
-    maximum = int(
-        os.environ.get("QUALIBUG_MAX_REQUEST_BODY", str(_DEFAULT_MAX_BODY))
-        or _DEFAULT_MAX_BODY
-    )
     if size <= 0:
         return {}
-    if size > maximum:
+    if size > _maximum_body_bytes():
         raise ValueError("visual_baseline_request_body_too_large")
     raw = handler.rfile.read(size)
     if len(raw) != size:
@@ -87,6 +98,11 @@ def _error_response(handler: Any, exc: Exception) -> Any:
         return handler._json(
             {"ok": False, "error": "VISUAL_BASELINE_NOT_FOUND", "message": code},
             404,
+        )
+    if isinstance(exc, ValueError) and code == "visual_baseline_request_body_too_large":
+        return handler._json(
+            {"ok": False, "error": "PAYLOAD_TOO_LARGE", "message": code},
+            413,
         )
     if isinstance(exc, ValueError):
         return handler._json(
@@ -174,7 +190,10 @@ def _register_from_body(
     root: Path,
     actor: dict[str, str],
 ) -> Any:
-    content = _text(body.get("content") or body.get("data"), limit=_DEFAULT_MAX_BODY * 2)
+    content = _text(
+        body.get("content") or body.get("data"),
+        limit=_maximum_body_bytes() * 2,
+    )
     if not content:
         raise ValueError("visual_baseline_base64_content_required")
     try:
@@ -222,8 +241,10 @@ def _handle_post(handler: Any, project: str) -> Any:
     try:
         body = _read_json_body(handler)
         submitted_project = _text(body.get("project_id"))
-        if submitted_project and _safe_project_id(submitted_project) != project:
-            raise ValueError("visual_baseline_project_id_mismatch")
+        if submitted_project:
+            submitted_safe = _safe_project_id(submitted_project)
+            if submitted_project != submitted_safe or submitted_safe != project:
+                raise ValueError("visual_baseline_project_id_mismatch")
         action = _text(body.get("action") or "register").lower()
         if action == "register":
             return _register_from_body(handler, project, body, root, actor)
