@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getProjectMetadata, saveProjectMetadata, type ProjectMetadata } from '../../api/client';
+import { SettingsVisualBaselineContractSection } from './SettingsVisualBaselineContractSection';
 import { SettingsVisualBaselineSection } from './SettingsVisualBaselineSection';
 
 type SettingsMetadataSectionProps = {
@@ -160,6 +161,7 @@ export function SettingsMetadataSection({ project }: SettingsMetadataSectionProp
       </div>
 
       <SettingsVisualBaselineSection project={project} />
+      <SettingsVisualBaselineContractSection project={project} />
     </>
   );
 }
