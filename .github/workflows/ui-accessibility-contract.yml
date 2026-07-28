@@ -1,0 +1,64 @@
+name: UI accessibility contract
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ai_test_asset_center/professional_ui_accessibility_*.py'
+      - 'ai_test_asset_center/private_pilot_accessibility_health_patch.py'
+      - 'ai_test_asset_center/visual_baseline_registry.py'
+      - 'frontend/src/components/settings/SettingsAccessibilitySection.tsx'
+      - 'frontend/src/lib/accessibility-contract.ts'
+      - 'frontend/src/components/settings/SettingsInfoSection.tsx'
+      - 'tests/test_professional_ui_accessibility_*.py'
+      - 'tests/test_private_pilot_accessibility_health.py'
+      - '.github/workflows/ui-accessibility-contract.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-accessibility-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install Python test dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e '.[dev,browser]'
+      - name: Run deterministic accessibility tests
+        run: >-
+          python -m pytest -q
+          tests/test_professional_ui_accessibility_engine.py
+          tests/test_professional_ui_accessibility_rule_governance.py
+          tests/test_professional_ui_accessibility_exclusion_guard.py
+          tests/test_professional_ui_accessibility_aria_guard.py
+          tests/test_private_pilot_accessibility_health.py
+
+  frontend-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Typecheck accessibility helper
+        run: npm run typecheck
+      - name: Lint accessibility helper
+        run: npm run lint
