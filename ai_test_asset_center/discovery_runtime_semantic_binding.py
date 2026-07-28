@@ -9,7 +9,8 @@ those symbols with stable additive wrappers:
 * canonical-field response observers;
 * enterprise and explicit scan UI contracts;
 * source-declared asynchronous event contracts;
-* formal UI and event obligations using the single experiment mainline.
+* source-declared sequential read-only latency budgets;
+* formal UI, event and performance obligations using the single experiment mainline.
 """
 from __future__ import annotations
 
@@ -26,6 +27,7 @@ from .formal_event_capability_guard import (
 )
 from .formal_event_pre_cleanup import install_formal_event_pre_cleanup_observer
 from .formal_event_surface import install_formal_event_surface
+from .formal_performance_surface import install_formal_performance_surface
 from .formal_ui_surface import install_formal_ui_surface
 from .formal_ui_surface_guard import install_formal_ui_read_only_guard
 from .non_http_observers import install_non_http_observers
@@ -36,6 +38,11 @@ from .scan_event_contract_overlay import (
     bind_scan_event_contract_context,
     reset_scan_event_contract_context,
 )
+from .scan_performance_contract_overlay import (
+    bind_scan_performance_contract_context,
+    overlay_scan_performance_contracts,
+    reset_scan_performance_contract_context,
+)
 from .scan_ui_contract_overlay import (
     bind_scan_ui_contract_context,
     overlay_scan_ui_contracts,
@@ -44,6 +51,10 @@ from .scan_ui_contract_overlay import (
 from .semantic_operation_binding import bind_accepted_semantic_operations
 from .source_event_contract_binding import bind_source_event_contracts
 from .source_event_obligation_binding import install_source_event_obligation_binding
+from .source_performance_contract_binding import bind_source_performance_contracts
+from .source_performance_obligation_binding import (
+    install_source_performance_obligation_binding,
+)
 from .source_ui_contract_binding import bind_source_ui_contracts
 from .source_ui_contract_source_guard import (
     install_source_ui_contract_source_guard,
@@ -65,10 +76,12 @@ install_formal_ui_read_only_guard()
 install_formal_event_surface()
 install_formal_event_capability_guard()
 install_formal_event_pre_cleanup_observer()
+install_formal_performance_surface()
 install_source_ui_contract_source_guard()
 install_source_ui_obligation_binding()
 install_source_ui_family_vector_compat()
 install_source_event_obligation_binding()
+install_source_performance_obligation_binding()
 
 
 if hasattr(_planning, _ORIGINAL_MARKER):
@@ -122,11 +135,14 @@ def build_behavior_ir_with_semantic_operation_bindings(
     runtime_actors: list[dict[str, Any]] | None = None,
     available_surfaces: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
-    """Build canonical IR and apply exact source-grounded UI/event joins."""
+    """Build canonical IR and apply exact source-grounded UI/event/performance joins."""
 
     ui_asset, scan_ui_receipt = overlay_scan_ui_contracts(asset)
-    effective_asset, scan_event_receipt = (
+    event_asset, scan_event_receipt = (
         overlay_scan_event_contracts_with_external_signals(ui_asset)
+    )
+    effective_asset, scan_performance_receipt = overlay_scan_performance_contracts(
+        event_asset
     )
     behavior_ir = _original_build_behavior_ir(
         effective_asset,
@@ -153,9 +169,16 @@ def build_behavior_ir_with_semantic_operation_bindings(
         ui_ir,
         effective_asset,
     )
-    event_ir["scan_ui_contract_overlay_receipt"] = dict(scan_ui_receipt)
-    event_ir["scan_event_contract_overlay_receipt"] = dict(scan_event_receipt)
-    return event_ir
+    performance_ir, _performance_receipt = bind_source_performance_contracts(
+        event_ir,
+        effective_asset,
+    )
+    performance_ir["scan_ui_contract_overlay_receipt"] = dict(scan_ui_receipt)
+    performance_ir["scan_event_contract_overlay_receipt"] = dict(scan_event_receipt)
+    performance_ir["scan_performance_contract_overlay_receipt"] = dict(
+        scan_performance_receipt
+    )
+    return performance_ir
 
 
 if not getattr(_planning, _INSTALL_MARKER, False):
@@ -166,14 +189,16 @@ if not getattr(_planning, _INSTALL_MARKER, False):
 
 
 def build_discovery_plan(inputs: Any, campaign_handle: Any) -> Any:
-    """Bind immutable UI and event scan contexts for one planning call."""
+    """Bind immutable UI, event and performance scan contexts for one planning call."""
     effective_inputs = _planning_inputs_with_declared_adapters(inputs)
     context = _dict(getattr(effective_inputs, "campaign_context", {}))
     ui_token = bind_scan_ui_contract_context(context)
     event_token = bind_scan_event_contract_context(context)
+    performance_token = bind_scan_performance_contract_context(context)
     try:
         return _planning.build_discovery_plan(effective_inputs, campaign_handle)
     finally:
+        reset_scan_performance_contract_context(performance_token)
         reset_scan_event_contract_context(event_token)
         reset_scan_ui_contract_context(ui_token)
 
