@@ -7,7 +7,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from .contract import AdapterMatch, DocumentSource, MODE_FALLBACK, text
+from .contract import (
+    AdapterMatch,
+    CAP_TEXT_EXTRACTION,
+    DocumentSource,
+    MODE_FALLBACK,
+    text,
+)
 from .merger import merge_document_irs
 from .planner import plan_document_parsing
 from .registry import DocumentAdapterRegistry, build_default_registry
@@ -58,6 +64,65 @@ def _fallback_rows(
             }
         )
     return rows
+
+
+def _apply_capability_gaps(
+    document_ir: dict[str, Any], parsing_plan: dict[str, Any]
+) -> dict[str, Any]:
+    missing = sorted(
+        {
+            text(value)
+            for value in (parsing_plan.get("missing_capabilities") or [])
+            if text(value)
+        }
+    )
+    if not missing:
+        return document_ir
+    result = dict(document_ir)
+    unsupported = [
+        dict(row)
+        for row in (result.get("unsupported_content") or [])
+        if isinstance(row, dict)
+    ]
+    existing = {
+        text(row.get("missing_capability"))
+        for row in unsupported
+        if text(row.get("kind")) == "DOCUMENT_ADAPTER_CAPABILITY_GAP"
+    }
+    for capability in missing:
+        if capability in existing:
+            continue
+        critical = capability == CAP_TEXT_EXTRACTION
+        unsupported.append(
+            {
+                "kind": "DOCUMENT_ADAPTER_CAPABILITY_GAP",
+                "reason_code": "DOCUMENT_ADAPTER_CAPABILITY_GAP",
+                "missing_capability": capability,
+                "count": 1,
+                "status": "NO_SELECTED_ADAPTER_PROVIDES_REQUIRED_CAPABILITY",
+                "severity": "P0" if critical else "P1",
+                "blocks_formal_understanding": critical,
+                "included_in_plain_text_authority": False,
+            }
+        )
+    receipt = dict(result.get("structure_receipt") or {})
+    blocked = any(bool(row.get("blocks_formal_understanding")) for row in unsupported)
+    receipt["status"] = "BLOCKED" if blocked else "PARTIAL"
+    receipt["unsupported_content"] = unsupported
+    receipt["unsupported_content_count"] = sum(int(row.get("count") or 0) for row in unsupported)
+    receipt["critical_unsupported_content_count"] = sum(
+        int(row.get("count") or 0)
+        for row in unsupported
+        if bool(row.get("blocks_formal_understanding"))
+    )
+    receipt["missing_adapter_capabilities"] = missing
+    result["unsupported_content"] = unsupported
+    result["structure_receipt"] = receipt
+    merge_receipt = dict(result.get("adapter_merge_receipt") or {})
+    merge_receipt["status"] = receipt["status"]
+    merge_receipt["missing_capabilities"] = missing
+    result["adapter_merge_receipt"] = merge_receipt
+    return result
 
 
 def build_document_structure_ir(
@@ -132,6 +197,7 @@ def build_document_structure_ir(
         executions,
         execution_errors=errors,
     )
+    merged = _apply_capability_gaps(merged, parsing_plan)
     merged["ingestion_pipeline_receipt"] = {
         "schema": "qualibug.document-ingestion-pipeline-receipt.v1",
         "source_id": source.source_id,
@@ -142,6 +208,7 @@ def build_document_structure_ir(
         "executed_adapter_count": len(executions),
         "execution_error_count": len(errors),
         "runtime_fallback_used": bool(parsing_plan.get("runtime_fallback_adapter")),
+        "missing_capability_count": len(parsing_plan.get("missing_capabilities") or []),
         "final_status": (merged.get("structure_receipt") or {}).get("status"),
         "business_semantics_added": False,
         "document_order_is_business_flow": False,
