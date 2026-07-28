@@ -13,6 +13,11 @@ from typing import Any
 
 from .formal_ui_surface import EVIDENCE_KEY, OBSERVER_ID, RISK_FAMILY
 from .professional_ui_interaction_cleanup import INTERACTIVE_ACTIONS
+from .professional_ui_interaction_privacy_guard import EVIDENCE_POLICY
+from .professional_ui_persistent_cleanup_probe import (
+    EQUIVALENCE_SCOPE,
+    PERSISTENT_PROBE_PROPERTY,
+)
 
 CATEGORY_ACTIONS: dict[str, frozenset[str]] = {
     "content_navigation": frozenset({
@@ -72,14 +77,29 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _steps_from_obligation(obligation: dict[str, Any]) -> list[dict[str, Any]]:
+def _plan_from_obligation(obligation: dict[str, Any]) -> dict[str, Any]:
     prop = _dict(obligation.get("property"))
     request = _dict(prop.get("ui_request"))
-    plan = _dict(request.get("browser_plan"))
+    return _dict(request.get("browser_plan"))
+
+
+def _steps_from_obligation(obligation: dict[str, Any]) -> list[dict[str, Any]]:
+    plan = _plan_from_obligation(obligation)
     return [
         dict(row)
         for row in _list(plan.get("steps"))
         if isinstance(row, dict) and _text(row.get("action"))
+    ]
+
+
+def _persistent_probes_from_obligation(
+    obligation: dict[str, Any],
+) -> list[dict[str, Any]]:
+    return [
+        dict(row)
+        for row in _list(_plan_from_obligation(obligation).get("state_probes"))
+        if isinstance(row, dict)
+        and _text(row.get("property")).lower() == PERSISTENT_PROBE_PROPERTY
     ]
 
 
@@ -148,6 +168,9 @@ def build_professional_ui_coverage(result: dict[str, Any]) -> dict[str, Any]:
     config_counts: Counter[str] = Counter()
     treatment_interaction_counts: Counter[str] = Counter()
     cleanup_interaction_counts: Counter[str] = Counter()
+    interaction_contract_count = 0
+    persistent_probe_count = 0
+    interaction_without_persistent_probe_count = 0
     category_rows = {
         category: {
             "declared_contract_count": 0,
@@ -188,10 +211,17 @@ def build_professional_ui_coverage(result: dict[str, Any]) -> dict[str, Any]:
         cleanup_authority = _dict(
             _dict(obligation.get("property")).get("ui_cleanup_authority")
         )
+        is_interactive = bool(actions & INTERACTIVE_ACTIONS)
         obligation_requires_cleanup[obligation_id] = (
             cleanup_authority.get("equivalence_required") is True
-            or bool(actions & INTERACTIVE_ACTIONS)
+            or is_interactive
         )
+        if is_interactive:
+            interaction_contract_count += 1
+            probes = _persistent_probes_from_obligation(obligation)
+            persistent_probe_count += len(probes)
+            if not probes:
+                interaction_without_persistent_probe_count += 1
         for category in categories:
             category_rows[category]["declared_contract_count"] += 1
 
@@ -248,6 +278,15 @@ def build_professional_ui_coverage(result: dict[str, Any]) -> dict[str, Any]:
         "declared_cleanup_interaction_action_counts": dict(
             sorted(cleanup_interaction_counts.items())
         ),
+        "interaction_cleanup_contracts": {
+            "declared_interaction_contract_count": interaction_contract_count,
+            "declared_persistent_probe_count": persistent_probe_count,
+            "interaction_without_persistent_probe_count": (
+                interaction_without_persistent_probe_count
+            ),
+            "equivalence_scope": EQUIVALENCE_SCOPE,
+            "persistent_probe_property": PERSISTENT_PROBE_PROPERTY,
+        },
         "dimensions": category_rows,
         "dimensions_without_declared_contracts": sorted(
             category
@@ -272,7 +311,16 @@ def build_professional_ui_coverage(result: dict[str, Any]) -> dict[str, Any]:
             "approved_nonproduction_target_required": True,
             "production_write_supported": False,
             "browser_cleanup_equivalence_required": True,
+            "persistent_cleanup_probe_required": True,
+            "rendered_state_only_cleanup_accepted": False,
+            "cleanup_equivalence_scope": EQUIVALENCE_SCOPE,
+            "persistent_probe_property": PERSISTENT_PROBE_PROPERTY,
+            "universal_backend_restoration_claimed": False,
             "cleanup_failure_can_be_deliverable": False,
+            "interaction_evidence_policy": EVIDENCE_POLICY,
+            "interactive_har_persisted": False,
+            "interactive_trace_persisted": False,
+            "runtime_exception_text_persisted": False,
             "cross_browser_matrix_supported": False,
             "ai_usability_opinion_used_as_defect": False,
         },
