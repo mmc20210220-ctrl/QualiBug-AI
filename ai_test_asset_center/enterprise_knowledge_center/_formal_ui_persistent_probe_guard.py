@@ -1,9 +1,9 @@
-"""Source-admission guard for persistent UI cleanup probes.
+"""Source-admission guard for governed UI cleanup contracts.
 
 Governed interaction contracts are not source-complete when they only compare
-rendered browser state. This guard requires one relative same-target GET JSON
-pointer probe and an explicit rendered-plus-persistent equivalence scope before
-an enterprise source contract is admitted.
+rendered browser state. This guard also prevents request/plan execution-mode
+drift, and requires one relative same-target GET JSON-pointer probe plus an
+explicit rendered-and-persistent equivalence scope before admission.
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ _ORIGINAL_MARKER = "_qualibug_original_formal_ui_contract_validator_before_persi
 _PERSISTENT_PROPERTY = "http_json_pointer"
 _EQUIVALENCE_SCOPE = "rendered_and_persistent_state"
 _MAX_RESPONSE_BYTES = 1_000_000
+_MODE_MATCH_REQUIREMENT = "ui_request_and_browser_plan_execution_mode_match"
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -42,12 +43,22 @@ def _gap_from_contract(
     return {
         "gap_type": "formal_ui_contract_incomplete",
         "reason_code": "FORMAL_UI_CONTRACT_INCOMPLETE",
-        "contract_id": _text(contract.get("contract_id") or request.get("request_id")),
+        "contract_id": _text(
+            contract.get("contract_id") or request.get("request_id")
+        ),
         "source_id": source_id,
         "source_locator": locator,
         "missing_requirements": list(dict.fromkeys(missing)),
         "status": "unsupported",
     }
+
+
+def _declared_mode_mismatch(raw: dict[str, Any]) -> bool:
+    request = _contracts._normalize_request(raw)
+    plan = _dict(request.get("browser_plan"))
+    request_mode = _text(request.get("execution_mode"))
+    plan_mode = _text(plan.get("execution_mode"))
+    return bool(request_mode and plan_mode and request_mode != plan_mode)
 
 
 def install_formal_ui_persistent_probe_guard() -> None:
@@ -66,12 +77,24 @@ def install_formal_ui_persistent_probe_guard() -> None:
         source_id: str,
         locator: str,
     ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        # Check before the base parser normalizes browser-plan mode from request mode.
+        # Silent normalization would erase an explicit source contradiction.
+        if _declared_mode_mismatch(raw):
+            return None, _gap_from_contract(
+                raw,
+                source_id=source_id,
+                locator=locator,
+                missing=[_MODE_MATCH_REQUIREMENT],
+            )
+
         contract, gap = original(raw, source_id=source_id, locator=locator)
         if gap or not contract:
             return contract, gap
         request = _dict(contract.get("ui_request"))
         plan = _dict(request.get("browser_plan"))
-        steps = [row for row in _list(plan.get("steps")) if isinstance(row, dict)]
+        steps = [
+            row for row in _list(plan.get("steps")) if isinstance(row, dict)
+        ]
         interactive = any(
             _text(row.get("action")).lower() in _contracts.INTERACTIVE_ACTIONS
             for row in steps
@@ -106,7 +129,9 @@ def install_formal_ui_persistent_probe_guard() -> None:
             url = _text(probe.get("url"))
             parsed = urlparse(url)
             if not url or parsed.scheme or parsed.netloc or not url.startswith("/"):
-                missing.append(f"persistent_probe[{index}].relative_same_target_url")
+                missing.append(
+                    f"persistent_probe[{index}].relative_same_target_url"
+                )
             if not _text(probe.get("json_pointer")).startswith("/"):
                 missing.append(f"persistent_probe[{index}].json_pointer")
             expected_class = probe.get("expected_status_class", 2)
@@ -115,7 +140,9 @@ def install_formal_ui_persistent_probe_guard() -> None:
             except (TypeError, ValueError):
                 expected_class = 0
             if expected_class != 2:
-                missing.append(f"persistent_probe[{index}].expected_status_class=2")
+                missing.append(
+                    f"persistent_probe[{index}].expected_status_class=2"
+                )
             limit = probe.get("max_response_bytes", _MAX_RESPONSE_BYTES)
             try:
                 limit = int(limit)
