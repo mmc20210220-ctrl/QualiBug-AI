@@ -425,8 +425,10 @@ def test_interaction_coverage_reports_persistent_cleanup_and_privacy_boundary() 
     assert cleanup["interaction_without_persistent_probe_count"] == 0
     workflow = coverage["dimensions"]["workflow_interaction"]
     assert workflow["cleanup_equivalence_accepted_count"] == 1
+    assert workflow["violation_count"] == 1
     assert workflow["deliverable_count"] == 1
     invariant = coverage["cleanup_delivery_invariant"]
+    assert invariant["invalid_oracle_without_cleanup_count"] == 0
     assert invariant["invalid_deliverable_without_cleanup_count"] == 0
     boundary = coverage["capability_boundary"]
     assert boundary["persistent_cleanup_probe_required"] is True
@@ -437,19 +439,23 @@ def test_interaction_coverage_reports_persistent_cleanup_and_privacy_boundary() 
     assert boundary["universal_backend_restoration_claimed"] is False
 
 
-def test_coverage_refuses_ledger_deliverable_without_cleanup_equivalence() -> None:
+def test_coverage_refuses_oracle_and_delivery_without_cleanup_equivalence() -> None:
     coverage = build_professional_ui_coverage(
         _coverage_result(cleanup_status="INDETERMINATE")
     )
 
     workflow = coverage["dimensions"]["workflow_interaction"]
-    assert workflow["violation_count"] == 1
+    assert workflow["violation_count"] == 0
+    assert workflow["property_held_count"] == 0
     assert workflow["deliverable_count"] == 0
     assert workflow["blocked_or_indeterminate_count"] == 1
     assert workflow["cleanup_equivalence_indeterminate_count"] == 1
     invariant = coverage["cleanup_delivery_invariant"]
+    assert invariant["invalid_oracle_without_cleanup_count"] == 1
     assert invariant["invalid_deliverable_without_cleanup_count"] == 1
+    assert invariant["invalid_oracles_counted_as_outcomes"] is False
     assert invariant["invalid_deliverables_counted_as_deliverable"] is False
     assert coverage["terminal_reason_counts"] == {
         "UI_DELIVERABLE_WITHOUT_CLEANUP_EQUIVALENCE": 1,
+        "UI_ORACLE_WITHOUT_CLEANUP_EQUIVALENCE": 1,
     }
