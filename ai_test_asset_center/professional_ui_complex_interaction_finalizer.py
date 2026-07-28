@@ -9,6 +9,9 @@ from typing import Any
 from . import professional_ui_complex_interactions as _complex
 from . import professional_ui_coverage_projection as _coverage
 from . import professional_ui_interaction_cleanup as _interaction
+from .professional_ui_complex_origin_guard import (
+    install_professional_ui_complex_origin_guard,
+)
 
 _INSTALL_MARKER = "_qualibug_complex_interaction_finalizer_installed"
 _ORIGINAL_PROBE_VALIDATOR = "_qualibug_probe_validator_before_complex_finalizer"
@@ -68,6 +71,7 @@ def _complex_projection(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def install_professional_ui_complex_interaction_finalizer() -> None:
+    install_professional_ui_complex_origin_guard()
     if getattr(_interaction, _INSTALL_MARKER, False):
         return
     original_probe = getattr(
