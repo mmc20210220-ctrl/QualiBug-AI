@@ -26,6 +26,9 @@ from .scan_ui_contract_overlay import (
 )
 from .semantic_operation_binding import bind_accepted_semantic_operations
 from .source_ui_contract_binding import bind_source_ui_contracts
+from .source_ui_contract_source_guard import (
+    install_source_ui_contract_source_guard,
+)
 from .source_ui_obligation_binding import install_source_ui_obligation_binding
 
 _INSTALL_MARKER = "_qualibug_semantic_operation_binding_installed"
@@ -36,6 +39,7 @@ _ORIGINAL_MARKER = "_qualibug_original_behavior_ir_builder"
 install_non_http_observers()
 install_formal_ui_surface()
 install_formal_ui_read_only_guard()
+install_source_ui_contract_source_guard()
 install_source_ui_obligation_binding()
 
 
