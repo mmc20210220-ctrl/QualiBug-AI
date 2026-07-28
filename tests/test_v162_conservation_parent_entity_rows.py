@@ -36,6 +36,27 @@ def test_entity_rows_keeps_parent_when_items_are_embedded_children():
     assert any(row.get("id") == "line-1" for row in rows)
 
 
+def test_entity_rows_keeps_parent_with_named_identity_field():
+    body = _order_body()
+    body["order_id"] = body.pop("id")
+
+    rows = _entity_rows(body)
+
+    assert rows[0]["order_id"] == "ord-1"
+    assert rows[0]["discount_amount"] == "100.00"
+
+
+def test_entity_rows_does_not_treat_business_word_ending_id_as_identity():
+    rows = _entity_rows(
+        {
+            "paid": 1,
+            "items": [{"id": "line-1", "quantity": 1}],
+        }
+    )
+
+    assert rows == [{"id": "line-1", "quantity": 1}]
+
+
 def test_entity_rows_still_unwraps_collection_envelope():
     rows = _entity_rows(
         {

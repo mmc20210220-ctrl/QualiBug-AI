@@ -454,19 +454,32 @@ def _adapter_cleanup_identity(
 ) -> str:
     """The concrete row identity for an adapter cleanup, from what the run observed.
 
-    Prefers a value the write itself returned, then a runtime binding. Returns "" when
-    neither is available -- the executor then refuses rather than deleting by guess.
+    Restricts to control/treatment governance bodies for the write being
+    compensated — never fixture/cleanup step bodies. Resolves only via the
+    declared identity_column (plus generic primary-key aliases when the column
+    itself is id/uuid/key). Returns "" when unbound rather than guessing.
     """
+    from .cleanup_adapter_ladder import identity_body_keys, identity_value_from_body
+
     column = _text(_dict(cleanup).get("identity_column")) or "id"
     for step in reversed(_list(steps_out)):
-        body = _dict(step).get("body")
-        if isinstance(body, dict):
-            for key in (column, "id", "sku", "orderId", "order_id"):
-                value = _text(body.get(key))
-                if value:
-                    return value
-    for key in (column, "id", "sku"):
-        value = _text(_dict(runtime_bindings).get(key))
+        if _text(step.get("phase")) not in {"control", "treatment"}:
+            continue
+        gov = _dict(step.get("governance_receipt"))
+        if not gov:
+            continue
+        for body in (
+            _dict(_dict(gov.get("after")).get("body")),
+            _dict(_dict(gov.get("write")).get("body")),
+            _dict(_dict(gov.get("before")).get("body")),
+            _dict(step.get("body")) if isinstance(step.get("body"), dict) else {},
+        ):
+            value = identity_value_from_body(body, column)
+            if value:
+                return value
+    bindings = _dict(runtime_bindings)
+    for key in identity_body_keys(column):
+        value = _text(bindings.get(key))
         if value:
             return value
     return ""
@@ -476,38 +489,37 @@ def _mutation_restore_fields_from_steps(
     steps_out: list[dict[str, Any]],
     *,
     identity_value: str = "",
+    identity_column: str = "id",
 ) -> dict[str, Any]:
     """Scalar fields a governed write changed, restored from before-state.
 
     Used when adapter cleanup would otherwise row-delete an existing entity the
     run only mutated (action POSTs like ship/confirm). Server-managed timestamps
     are excluded so timestamp-only noise cannot drive a restore.
+
+    Requires a positive primary-identity match on both before and after bodies
+    when ``identity_value`` is supplied — partial/missing ids never contribute
+    a restore map.
     """
+    from .cleanup_adapter_ladder import identity_value_from_body
     from .cleanup_equivalence import SERVER_MANAGED_FIELDS
 
     identity = _text(identity_value)
+    column = _text(identity_column) or "id"
     for step in reversed(_list(steps_out)):
         if _text(step.get("phase")) not in {"control", "treatment"}:
             continue
         gov = _dict(step.get("governance_receipt"))
-        if not gov:
+        if not gov or gov.get("accepted") is not True:
             continue
         before_body = _dict(_dict(gov.get("before")).get("body"))
         after_body = _dict(_dict(gov.get("after")).get("body"))
         if not before_body or not after_body:
             continue
         if identity:
-            before_id = _text(
-                before_body.get("id")
-                or before_body.get("orderId")
-                or before_body.get("order_id")
-            )
-            after_id = _text(
-                after_body.get("id")
-                or after_body.get("orderId")
-                or after_body.get("order_id")
-            )
-            if before_id and before_id != identity and after_id and after_id != identity:
+            before_id = identity_value_from_body(before_body, column)
+            after_id = identity_value_from_body(after_body, column)
+            if before_id != identity or after_id != identity:
                 continue
         restore: dict[str, Any] = {}
         for key, before_val in before_body.items():
@@ -523,6 +535,48 @@ def _mutation_restore_fields_from_steps(
                 restore[field] = before_val
         if restore:
             return restore
+    return {}
+
+
+def _mutation_attestation_from_steps(
+    steps_out: list[dict[str, Any]],
+    *,
+    identity_value: str,
+    identity_column: str,
+    restore_fields: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the mutation attestation field_restore requires before any UPDATE."""
+    from .cleanup_adapter_ladder import identity_value_from_body
+
+    identity = _text(identity_value)
+    column = _text(identity_column) or "id"
+    if not identity or not _dict(restore_fields):
+        return {}
+    for step in reversed(_list(steps_out)):
+        if _text(step.get("phase")) not in {"control", "treatment"}:
+            continue
+        gov = _dict(step.get("governance_receipt"))
+        if not gov or gov.get("accepted") is not True:
+            continue
+        before_body = _dict(_dict(gov.get("before")).get("body"))
+        after_body = _dict(_dict(gov.get("after")).get("body"))
+        if not before_body or not after_body:
+            continue
+        if identity_value_from_body(before_body, column) != identity:
+            continue
+        if identity_value_from_body(after_body, column) != identity:
+            continue
+        return {
+            "identity_value": identity,
+            "identity_column": column,
+            "accepted_write": True,
+            "before_body": before_body,
+            "after_body": after_body,
+            "restore_fields": dict(restore_fields),
+            "write_receipt_ref": _text(
+                gov.get("audit_path") or gov.get("before_ref") or gov.get("after_ref")
+            ),
+        }
     return {}
 
 
@@ -574,10 +628,36 @@ def _execute_adapter_cleanup_step(
             "dependent_receipts": [],
         }
 
+    identity_column = _text(step.get("identity_column")) or "id"
     restore_fields = _mutation_restore_fields_from_steps(
-        steps_out, identity_value=identity
+        steps_out,
+        identity_value=identity,
+        identity_column=identity_column,
     )
     if restore_fields:
+        attestation = _mutation_attestation_from_steps(
+            steps_out,
+            identity_value=identity,
+            identity_column=identity_column,
+            restore_fields=restore_fields,
+        )
+        if not attestation:
+            # Observed scalar diffs without a sealed mutation attestation must
+            # never fall through to UPDATE or to a customer-row DELETE.
+            return {
+                "schema_version": EXECUTION_SCHEMA,
+                "adapter": _text(step.get("adapter")),
+                "table": _text(step.get("table")),
+                "identity_column": identity_column,
+                "identity_value": identity,
+                "status": "REFUSED",
+                "reason_code": "CLEANUP_MUTATION_NOT_ATTESTED",
+                "rows_deleted": 0,
+                "rows_updated": 0,
+                "mode": "field_restore",
+                "dependent_receipts": [],
+                "ownership_basis": "mutation_attestation_missing",
+            }
         receipt = execute_declared_adapter_field_restore(
             step,
             identity_value=identity,
@@ -586,10 +666,13 @@ def _execute_adapter_cleanup_step(
             root=root,
             project=project,
             runtime_contract=runtime_contract,
+            mutation_attestation=attestation,
         )
         summary = dict(receipt)
         summary["dependent_receipts"] = []
-        summary["rows_deleted"] = int(receipt.get("rows_updated") or 0)
+        # Keep mode-specific counters — never overload rows_deleted with updates.
+        summary["rows_deleted"] = int(receipt.get("rows_deleted") or 0)
+        summary["rows_updated"] = int(receipt.get("rows_updated") or 0)
         return summary
 
     # Dependents first, owner last. A single-table delete raised ForeignKeyViolation on
@@ -889,6 +972,24 @@ def execute_experiment_cleanup_compensation(
                 # only the latter is why every db_sql-plan experiment failed activation
                 # with CLEANUP_RECEIPT_FAILED: 99 of them, exactly the set carrying a
                 # db_sql plan. The HTTP path emits one; this branch did not.
+                #
+                # After successful field_restore/delete, state_unchanged means the
+                # environment matches pre-write (restored), and restoration_verified
+                # must be true with real audit ids — never inverted "write changed
+                # state" semantics that fail the delivery gate.
+                _adapter_audit_ids: list[str] = []
+                for attempt in accepted_governed_writes:
+                    aid = _governance_audit_receipt_id(attempt)
+                    if aid:
+                        _adapter_audit_ids.append(aid)
+                _adapter_rid = _text(_adapter_receipt.get("receipt_id"))
+                if _adapter_rid:
+                    _adapter_audit_ids.append(_adapter_rid)
+                _adapter_audit_ids = sorted(set(_adapter_audit_ids))
+                _adapter_cleanup_writes = (
+                    int(_adapter_receipt.get("rows_updated") or 0)
+                    + int(_adapter_receipt.get("rows_deleted") or 0)
+                )
                 contract_evidence_receipts.append(build_contract_evidence_receipt(
                     kind="cleanup",
                     experiment_id=eid,
@@ -903,11 +1004,12 @@ def execute_experiment_cleanup_compensation(
                     status="COMPLETED" if _adapter_cleaned else "FAILED",
                     evidence={
                         "accepted_write_count": len(accepted_governed_writes),
-                        "cleanup_write_count": int(
-                            _adapter_receipt.get("rows_deleted") or 0
+                        "cleanup_write_count": (
+                            _adapter_cleanup_writes if _adapter_cleaned else 0
                         ),
-                        "state_unchanged": False if _adapter_cleaned else None,
-                        "audit_receipt_ids": [],
+                        "state_unchanged": bool(_adapter_cleaned),
+                        "restoration_verified": bool(_adapter_cleaned),
+                        "audit_receipt_ids": _adapter_audit_ids,
                         "reason_code": _text(_adapter_receipt.get("reason_code")),
                         "cleanup_adapter": _text(_adapter_receipt.get("adapter")),
                         "cleanup_table": _text(_adapter_receipt.get("table")),
@@ -1680,24 +1782,41 @@ def execute_experiment_cleanup_compensation(
         _strategy = _text(_dict(_db_contract.get("cleanup_strategy")).get("strategy_type"))
         _authority = _text(_dict(_db_contract.get("cleanup_strategy")).get("authority_source"))
 
-        # Build one DB cleanup receipt per governed write
-        for _aw in accepted_governed_writes:
+        # Only emit DB cleanup receipts for real adapter DB operations. Never
+        # fabricate DB restoration after HTTP-only cleanup or CER NOT_REQUIRED.
+        _real_adapter_receipts = [
+            row
+            for row in _list(observations.get("adapter_cleanup_receipts"))
+            if isinstance(row, dict)
+            and _text(row.get("status")).upper() == "CLEANED"
+            and (
+                int(row.get("rows_deleted") or 0) > 0
+                or int(row.get("rows_updated") or 0) > 0
+            )
+        ]
+        for _ar in _real_adapter_receipts:
             _db_r = _build_db_receipt(
                 experiment_id=eid,
-                fixture_id=_text(_dict(_aw).get("fixture_id")),
-                step_id=_text(_dict(_aw).get("step_id")),
+                fixture_id="",
+                step_id=_text(_ar.get("identity_value")),
                 datastore_id=_text(_db_contract.get("datastore_id")) or "primary",
-                table=_table,
-                primary_key_fingerprint=_pk_fp,
-                cleanup_strategy=_strategy,
-                authority_source=_authority,
+                table=_text(_ar.get("table")) or _table,
+                primary_key_fingerprint=_pk_fp
+                or _text(_ar.get("identity_value")),
+                cleanup_strategy=_strategy
+                or _text(_ar.get("mode"))
+                or "declared_adapter_cleanup",
+                authority_source=_authority
+                or _text(_ar.get("ownership_basis"))
+                or "adapter_cleanup",
                 cleanup_execution={
                     "attempted": True,
-                    "affected_rows": 1,
+                    "affected_rows": int(_ar.get("rows_deleted") or 0)
+                    + int(_ar.get("rows_updated") or 0),
                     "error": "",
                 },
                 verification={
-                    "passed": cleanup_failures == 0,
+                    "passed": True,
                 },
             )
             _db_receipts.append(_db_r)

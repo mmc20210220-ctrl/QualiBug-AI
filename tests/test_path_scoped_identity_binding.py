@@ -5,7 +5,10 @@ from ai_test_asset_center.runtime_binding_resolver import (
     _find_list_endpoints_for_entity,
     auto_resolve_bindings,
     collect_placeholder_collection_hints,
+    collection_path_for_placeholder,
     collection_segment_for_placeholder,
+    declared_identity_read_operations,
+    materialize_declared_identity_read,
 )
 from ai_test_asset_center.sandbox_write_executor_base import (
     _identity_scoped_entity_observation,
@@ -31,6 +34,34 @@ def test_collection_segment_for_order_confirm() -> None:
     assert (
         collection_segment_for_placeholder("/api/cart/items/{id}", "id") == "items"
     )
+    assert (
+        collection_path_for_placeholder("/api/v1/orders/:orderId/confirm", "orderId")
+        == "/api/v1/orders"
+    )
+
+
+def test_identity_proof_uses_only_exact_declared_entity_reads() -> None:
+    operations = [
+        {"id": "get-order", "method": "GET", "path": "/api/orders/{orderId}"},
+        {"id": "head-order", "method": "HEAD", "path": "/api/orders/:orderId"},
+        {
+            "id": "confirm-order",
+            "method": "GET",
+            "path": "/api/orders/{orderId}/confirm",
+        },
+        {"id": "other-order", "method": "GET", "path": "/v2/orders/{orderId}"},
+    ]
+
+    declared = declared_identity_read_operations(
+        operations,
+        collection_path="/api/orders",
+    )
+
+    assert [row["id"] for row in declared] == ["get-order", "head-order"]
+    assert (
+        materialize_declared_identity_read(declared[1], "ord-1")
+        == "/api/orders/ord-1"
+    )
 
 
 def test_generic_id_does_not_match_all_list_endpoints() -> None:
@@ -47,6 +78,21 @@ def test_collection_hints_scope_list_endpoints_to_orders() -> None:
     paths = [row["path"] for row in candidates]
     assert paths == ["/api/orders"]
     assert "/api/cart/items" not in paths
+
+
+def test_head_collection_route_cannot_authorize_an_undeclared_get() -> None:
+    behavior_ir = {
+        "operations": [
+            {"id": "head-orders", "method": "HEAD", "path": "/api/orders"},
+            {"id": "get-order", "method": "GET", "path": "/api/orders/{id}"},
+        ]
+    }
+
+    assert _find_list_endpoints_for_entity(
+        behavior_ir,
+        "id",
+        collection_hints={"orders"},
+    ) == []
 
 
 def test_collect_hints_detects_ambiguous_id_across_orders_and_cart() -> None:
@@ -133,6 +179,48 @@ def test_auto_resolve_orders_proves_entity_get(monkeypatch) -> None:
     )
     assert result["bindings"] == {"id": "order-uuid-0001"}
     assert "/api/orders/order-uuid-0001" in statuses
+    resolved = next(
+        row for row in result["receipts"] if row.get("status") == "resolved"
+    )
+    assert resolved["entity_operation_ref"] == "get-order"
+
+
+def test_auto_resolve_refuses_to_invent_missing_entity_get(monkeypatch) -> None:
+    behavior_ir = {
+        "operations": [
+            {"id": "list-orders", "method": "GET", "path": "/api/orders"},
+            {
+                "id": "confirm-order",
+                "method": "POST",
+                "path": "/api/orders/{id}/confirm",
+            },
+        ]
+    }
+
+    monkeypatch.setattr(
+        "ai_test_asset_center.runtime_binding_resolver._call_get_endpoint",
+        lambda *args, **kwargs: [{"id": "order-uuid-0001"}],
+    )
+    status_calls: list[str] = []
+    monkeypatch.setattr(
+        "ai_test_asset_center.runtime_binding_resolver._call_get_status",
+        lambda base_url, path, token, timeout=10: status_calls.append(path) or 200,
+    )
+
+    result = auto_resolve_bindings(
+        behavior_ir,
+        {"admin": "tok"},
+        "http://127.0.0.1:8080",
+        required_placeholders={"id"},
+        placeholder_collection_hints={"id": {"orders"}},
+    )
+
+    assert result["bindings"] == {}
+    assert status_calls == []
+    assert any(
+        row.get("status") == "identity_observer_not_declared"
+        for row in result["receipts"]
+    )
 
 
 def test_auto_resolve_rejects_list_id_when_entity_get_404(monkeypatch) -> None:
@@ -169,4 +257,20 @@ def test_identity_scoped_observation_for_confirm() -> None:
     assert not _identity_scoped_entity_observation(
         "/api/orders",
         "/api/orders",
+    )
+
+
+def test_short_id_ord1_is_identity_scoped() -> None:
+    """Short opaque ids must block unobservable entity paths — no UUID guessing."""
+    assert _identity_scoped_entity_observation(
+        "/api/orders/ord-1/confirm",
+        "/api/orders/ord-1",
+    )
+    assert _identity_scoped_entity_observation(
+        "/api/orders/ord-1",
+        "/api/orders/ord-1",
+    )
+    assert not _identity_scoped_entity_observation(
+        "/api/v1/orders",
+        "/api/v1/orders",
     )

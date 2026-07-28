@@ -33,6 +33,7 @@ outcome, not a silent partial cleanup.
 """
 
 import re
+import uuid
 from typing import Any
 
 LADDER_SCHEMA = "qualibug.cleanup-adapter-ladder.v1"
@@ -52,7 +53,90 @@ REASON_NO_ADAPTER = "CLEANUP_NO_DECLARED_ADAPTER"
 REASON_NO_TABLE = "CLEANUP_TABLE_NOT_SOURCE_DECLARED"
 REASON_NO_IDENTITY = "CLEANUP_ROW_IDENTITY_NOT_RESOLVABLE"
 REASON_NOT_RUN_OWNED = "CLEANUP_ROW_NOT_CREATED_BY_THIS_RUN"
+REASON_MUTATION_NOT_ATTESTED = "CLEANUP_MUTATION_NOT_ATTESTED"
 REASON_NOT_APPROVED = "CLEANUP_TARGET_NOT_APPROVED_FOR_WRITE"
+
+# Industry-neutral primary-key aliases. Domain field names (orderId, sku, …)
+# must never be hard-coded here — callers supply the declared identity_column.
+_GENERIC_PRIMARY_KEY_ALIASES: tuple[str, ...] = ("id", "uuid", "guid", "key")
+
+
+def identity_body_keys(identity_column: str) -> tuple[str, ...]:
+    """Keys allowed when reading an identity from a body or binding map.
+
+    Always includes the declared column. When that column itself is a generic
+    primary key, also accept the other generic aliases. Never invents domain
+    field names.
+    """
+    column = _text(identity_column) or "id"
+    keys: list[str] = [column]
+    if column.lower() in _GENERIC_PRIMARY_KEY_ALIASES:
+        for alias in _GENERIC_PRIMARY_KEY_ALIASES:
+            if alias not in keys and alias.lower() != column.lower():
+                keys.append(alias)
+    return tuple(keys)
+
+
+def identity_value_from_body(body: Any, identity_column: str) -> str:
+    """Extract a scalar identity from a body using only declared/generic keys."""
+    row = _dict(body)
+    for key in identity_body_keys(identity_column):
+        raw_value = row.get(key)
+        if isinstance(raw_value, bool) or not isinstance(
+            raw_value,
+            (str, int, float),
+        ):
+            continue
+        value = _text(raw_value)
+        if value:
+            return value
+    return ""
+
+
+def mutation_attested_for_identity(
+    *,
+    identity_value: Any,
+    identity_column: str = "id",
+    mutation_attestation: Any = None,
+) -> tuple[bool, str]:
+    """Whether this run attested a governed mutation of the named row.
+
+    Field restore UPDATEs pre-existing customer rows. That is only safe when
+    governed before/after snapshots prove this write mutated that exact identity
+    and an accepted write receipt owns the mutation scope. Anything less is
+    refusal — never an unbound UPDATE guess.
+    """
+    identity = _text(identity_value)
+    if not identity:
+        return False, "identity_empty"
+    att = _dict(mutation_attestation)
+    if not att:
+        return False, "mutation_attestation_missing"
+    if _text(att.get("identity_value")) != identity:
+        return False, "attestation_identity_mismatch"
+    if att.get("accepted_write") is not True:
+        return False, "attestation_write_not_accepted"
+    before_body = _dict(att.get("before_body"))
+    after_body = _dict(att.get("after_body"))
+    if not before_body or not after_body:
+        return False, "attestation_snapshots_missing"
+    column = _text(identity_column) or "id"
+    before_id = identity_value_from_body(before_body, column)
+    after_id = identity_value_from_body(after_body, column)
+    if before_id != identity or after_id != identity:
+        return False, "attestation_entity_id_mismatch"
+    restore_fields = _dict(att.get("restore_fields"))
+    if not restore_fields:
+        return False, "attestation_restore_fields_empty"
+    for field, restore_value in restore_fields.items():
+        if field not in before_body or field not in after_body:
+            return False, "attestation_restore_field_unobserved"
+        before_value = before_body[field]
+        if restore_value != before_value:
+            return False, "attestation_restore_value_mismatch"
+        if before_value == after_body[field]:
+            return False, "attestation_field_not_mutated"
+    return True, "governed_mutation_attested"
 
 # The marker this product stamps on data it creates. A row carrying it was written by a
 # QualiBug run; a row without it is the customer's.
@@ -342,6 +426,7 @@ def execute_declared_adapter_field_restore(
     project: str = "",
     runtime_contract: dict[str, Any] | None = None,
     policy_decision: dict[str, Any] | None = None,
+    mutation_attestation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Restore source-observed scalar fields on an existing row this run mutated.
 
@@ -349,10 +434,14 @@ def execute_declared_adapter_field_restore(
     is the wrong compensator: ownership refuses them, and deleting would destroy
     pre-existing data. The honest undo is an UPDATE of exactly the scalar fields
     the governed before/after snapshots prove this write changed.
+
+    Fail-closed: refuse UPDATE unless ``mutation_attestation`` proves an accepted
+    governed write mutated this exact identity (before/after + ownership scope).
     """
     plan = _dict(step)
     receipt: dict[str, Any] = {
         "schema_version": EXECUTION_SCHEMA,
+        "receipt_id": f"cleanup_adapter_{uuid.uuid4().hex}",
         "adapter": _text(plan.get("adapter")) or "db_sql",
         "table": _text(plan.get("table")),
         "identity_column": _text(plan.get("identity_column")) or "id",
@@ -363,6 +452,7 @@ def execute_declared_adapter_field_restore(
         "rows_updated": 0,
         "mode": "field_restore",
         "restored_fields": sorted(str(k) for k in _dict(restore_fields).keys()),
+        "ownership_basis": "",
     }
 
     if _text(plan.get("adapter")) not in {"", "db_sql"}:
@@ -386,6 +476,24 @@ def execute_declared_adapter_field_restore(
         return receipt
     if not _text(identity_value):
         receipt["reason_code"] = REASON_NO_IDENTITY
+        return receipt
+
+    # Mutation attestation is the ownership/scope proof for field restore —
+    # analogous to row_was_created_by_this_run for DELETE. Never UPDATE without it.
+    attested, basis = mutation_attested_for_identity(
+        identity_value=identity_value,
+        identity_column=column,
+        mutation_attestation={
+            **_dict(mutation_attestation),
+            "restore_fields": _dict(
+                _dict(mutation_attestation).get("restore_fields") or restore_fields
+            ),
+        },
+    )
+    receipt["ownership_basis"] = basis
+    if not attested:
+        receipt["reason_code"] = REASON_MUTATION_NOT_ATTESTED
+        receipt["detail"] = basis
         return receipt
 
     safe_fields: dict[str, Any] = {}
@@ -431,11 +539,22 @@ def execute_declared_adapter_field_restore(
             values,
         )
         updated = int(getattr(cursor, "rowcount", 0) or 0)
-        connection.commit()
-        receipt["status"] = "CLEANED" if updated > 0 else "REFUSED"
         receipt["rows_updated"] = updated
+        # Identity must address exactly one row. Multi-row updates are a scope
+        # failure — roll back rather than commit ambiguous customer mutations.
+        if updated != 1:
+            connection.rollback()
+        if updated > 1:
+            receipt["status"] = "FAILED"
+            receipt["reason_code"] = "CLEANUP_DB_RESTORE_CARDINALITY_MISMATCH"
+            receipt["detail"] = f"identity_matched_rows={updated}"
+            return receipt
         if updated == 0:
+            receipt["status"] = "REFUSED"
             receipt["reason_code"] = "CLEANUP_ROW_ALREADY_ABSENT"
+            return receipt
+        connection.commit()
+        receipt["status"] = "CLEANED"
     except Exception as exc:
         try:
             connection.rollback()
@@ -482,6 +601,7 @@ def execute_declared_adapter_cleanup(
     plan = _dict(step)
     receipt: dict[str, Any] = {
         "schema_version": EXECUTION_SCHEMA,
+        "receipt_id": f"cleanup_adapter_{uuid.uuid4().hex}",
         "adapter": _text(plan.get("adapter")),
         "table": _text(plan.get("table")),
         "identity_column": _text(plan.get("identity_column")),

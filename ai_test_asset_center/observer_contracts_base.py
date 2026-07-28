@@ -265,6 +265,11 @@ def bind_observer_receipt_lineage(
 
 # ``implemented`` means the current candidate runtime emits a typed receipt for
 # this observer. Declaring a surface in Behavior IR is not implementation.
+#
+# RESIDUAL BREADTH CEILING (V1.6.2): every built-in observer below still uses
+# adapter ``http_api``. DB / UI / message-queue / timing observers are not on the
+# executor → observer → assertion-DSL → contract-oracle chain. Do not claim those
+# defect classes are supported until a real non-HTTP observer is wired end-to-end.
 OBSERVER_REGISTRY: dict[str, dict[str, Any]] = {
     "http_response": {
         "surface": "http_api",
@@ -700,12 +705,17 @@ _COLLECTION_ENVELOPE_META_KEYS = frozenset({
 
 
 def _dict_has_resource_identity(value: dict[str, Any]) -> bool:
-    """True when the object itself carries a primary resource identity scalar."""
+    """True when the object carries a conventional resource identity scalar."""
     for key, child in value.items():
         if not isinstance(child, (str, int, float)) or not str(child).strip():
             continue
-        normalized = re.sub(r"[^a-z0-9]+", "_", str(key).lower()).strip("_")
-        if normalized in {"id", "uuid", "key"}:
+        raw_key = str(key).strip()
+        normalized = re.sub(r"[^a-z0-9]+", "", raw_key.lower())
+        if (
+            normalized in {"id", "uuid", "guid", "key"}
+            or raw_key.lower().endswith(("_id", "-id"))
+            or raw_key.endswith(("Id", "ID"))
+        ):
             return True
     return False
 

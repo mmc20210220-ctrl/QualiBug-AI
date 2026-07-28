@@ -67,6 +67,88 @@ def collection_segment_for_placeholder(path: str, placeholder_name: str) -> str:
     return ""
 
 
+def collection_path_for_placeholder(path: str, placeholder_name: str) -> str:
+    """Return the exact static collection prefix owning a path placeholder."""
+    normalized = _text(path)
+    placeholder = _text(placeholder_name)
+    if not normalized.startswith("/") or not placeholder:
+        return ""
+    markers = {f"{{{placeholder}}}", f":{placeholder}"}
+    segments = [segment for segment in normalized.strip("/").split("/") if segment]
+    for index, segment in enumerate(segments):
+        if segment in markers and index > 0:
+            prefix = segments[:index]
+            if any(_extract_placeholders("/" + item) for item in prefix):
+                return ""
+            return "/" + "/".join(prefix)
+    return ""
+
+
+def declared_identity_read_operations(
+    operations: list[dict[str, Any]],
+    *,
+    collection_path: str,
+) -> list[dict[str, Any]]:
+    """Find exact source-declared GET/HEAD operations for one collection entity.
+
+    A collection list response is not enough to prove that its identifier can be
+    observed on an entity route. The proof route must exist in Behavior IR and
+    must be exactly ``<collection>/<one placeholder>``; action routes and paths
+    with additional unresolved parameters are rejected.
+    """
+    collection_segments = [
+        segment
+        for segment in _text(collection_path).strip("/").split("/")
+        if segment
+    ]
+    if not collection_segments:
+        return []
+    candidates: list[dict[str, Any]] = []
+    for operation in operations:
+        if not isinstance(operation, dict):
+            continue
+        if _text(operation.get("method")).upper() not in {"GET", "HEAD"}:
+            continue
+        path = _text(operation.get("path") or operation.get("raw_path"))
+        if not path.startswith("/"):
+            continue
+        segments = [segment for segment in path.strip("/").split("/") if segment]
+        placeholders = _extract_placeholders(path)
+        if (
+            len(placeholders) == 1
+            and len(segments) == len(collection_segments) + 1
+            and segments[:-1] == collection_segments
+            and segments[-1] in {
+                f"{{{placeholders[0]}}}",
+                f":{placeholders[0]}",
+            }
+        ):
+            candidates.append(operation)
+    return candidates
+
+
+def materialize_declared_identity_read(
+    operation: dict[str, Any],
+    resource_id: Any,
+) -> str:
+    """Materialize one exact declared entity read without deriving a new route."""
+    path = _text(operation.get("path") or operation.get("raw_path"))
+    value = _text(resource_id)
+    placeholders = _extract_placeholders(path)
+    if not value or len(placeholders) != 1:
+        return ""
+    placeholder = placeholders[0]
+    materialized = path.replace(f"{{{placeholder}}}", value)
+    materialized = re.sub(
+        rf"(?<=/):{re.escape(placeholder)}\b",
+        lambda _match: value,
+        materialized,
+    )
+    if _extract_placeholders(materialized):
+        return ""
+    return materialized
+
+
 def _entity_hint(placeholder_name: str) -> str:
     ph_lower = _text(placeholder_name).lower()
     return re.sub(r"(id|_id|Id)$", "", ph_lower).strip("_")
@@ -97,7 +179,9 @@ def _find_list_endpoints_for_entity(
         if not isinstance(op, dict):
             continue
         method = _text(op.get("method")).upper()
-        if method not in ("GET", "HEAD"):
+        # Collection binding needs a response body. A declared HEAD operation
+        # cannot authorize an undeclared GET against the same route.
+        if method != "GET":
             continue
         path = _text(op.get("path") or op.get("raw_path"))
         if not path:
@@ -145,25 +229,46 @@ def _call_get_endpoint(
         return None
 
 
-def _call_get_status(
+def _call_read_status(
     base_url: str,
     path: str,
     token: str,
+    *,
+    method: str,
     timeout: int = _BINDING_TIMEOUT,
 ) -> int:
-    """Return HTTP status for a GET, or 0 on transport failure."""
+    """Return status for an exact declared GET/HEAD, or 0 on transport failure."""
+    read_method = _text(method).upper()
+    if read_method not in {"GET", "HEAD"}:
+        raise ValueError(f"unsupported_identity_read_method:{read_method}")
     url = base_url.rstrip("/") + "/" + path.lstrip("/")
     headers = {"Accept": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     try:
-        req = urllib.request.Request(url, headers=headers, method="GET")
+        req = urllib.request.Request(url, headers=headers, method=read_method)
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return int(resp.status)
     except urllib.error.HTTPError as exc:
         return int(exc.code)
     except (urllib.error.URLError, OSError):
         return 0
+
+
+def _call_get_status(
+    base_url: str,
+    path: str,
+    token: str,
+    timeout: int = _BINDING_TIMEOUT,
+) -> int:
+    """Compatibility wrapper for declared GET identity observers."""
+    return _call_read_status(
+        base_url,
+        path,
+        token,
+        method="GET",
+        timeout=timeout,
+    )
 
 
 def _extract_id_from_response(response: Any, placeholder_name: str) -> str:
@@ -220,15 +325,6 @@ def _extract_id_from_response(response: Any, placeholder_name: str) -> str:
             return str(val).strip()
 
     return ""
-
-
-def _entity_get_path(list_path: str, resource_id: str) -> str:
-    """Build the sibling entity GET path from a collection list path + id."""
-    base = _text(list_path).rstrip("/")
-    value = _text(resource_id)
-    if not base.startswith("/") or not value:
-        return ""
-    return f"{base}/{value}"
 
 
 def auto_resolve_bindings(
@@ -382,36 +478,72 @@ def auto_resolve_bindings(
                 })
                 continue
 
-            # Prove the bound identity is observable on the sibling entity GET.
-            # List rows from the wrong collection (or stale ids) fail closed here.
-            entity_path = _entity_get_path(path, value)
-            entity_status = (
-                _call_get_status(base_url, entity_path, token)
-                if entity_path
-                else 0
+            identity_operations = declared_identity_read_operations(
+                operations,
+                collection_path=path,
             )
-            if not (200 <= entity_status < 300):
+            if not identity_operations:
                 receipts.append({
                     "placeholder": placeholder,
                     "endpoint": path,
-                    "entity_path": entity_path,
-                    "entity_status": entity_status,
-                    "status": "identity_unobservable",
+                    "status": "identity_observer_not_declared",
+                    "collection_hints": sorted(hints),
                     "value_fingerprint": "",
                 })
                 continue
 
-            bindings[placeholder] = value
-            receipts.append({
-                "placeholder": placeholder,
-                "endpoint": path,
-                "entity_path": entity_path,
-                "entity_status": entity_status,
-                "status": "resolved",
-                "value_fingerprint": value[:8] + "..." if len(value) > 8 else value,
-            })
-            resolved = True
-            break
+            for identity_operation in identity_operations[:3]:
+                if attempts >= max_resolution_attempts:
+                    break
+                entity_path = materialize_declared_identity_read(
+                    identity_operation,
+                    value,
+                )
+                if not entity_path:
+                    continue
+                attempts += 1
+                entity_method = _text(identity_operation.get("method")).upper()
+                if entity_method == "GET":
+                    entity_status = _call_get_status(
+                        base_url,
+                        entity_path,
+                        token,
+                    )
+                else:
+                    entity_status = _call_read_status(
+                        base_url,
+                        entity_path,
+                        token,
+                        method=entity_method,
+                    )
+                if not (200 <= entity_status < 300):
+                    receipts.append({
+                        "placeholder": placeholder,
+                        "endpoint": path,
+                        "entity_path": entity_path,
+                        "entity_operation_ref": _text(identity_operation.get("id")),
+                        "entity_status": entity_status,
+                        "status": "identity_unobservable",
+                        "value_fingerprint": "",
+                    })
+                    continue
+
+                bindings[placeholder] = value
+                receipts.append({
+                    "placeholder": placeholder,
+                    "endpoint": path,
+                    "entity_path": entity_path,
+                    "entity_operation_ref": _text(identity_operation.get("id")),
+                    "entity_status": entity_status,
+                    "status": "resolved",
+                    "value_fingerprint": (
+                        value[:8] + "..." if len(value) > 8 else value
+                    ),
+                })
+                resolved = True
+                break
+            if resolved:
+                break
 
         if not resolved and placeholder not in bindings:
             receipts.append({

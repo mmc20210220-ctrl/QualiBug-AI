@@ -634,9 +634,13 @@ def _identity_scoped_entity_observation(write_path: str, observation_path: str) 
     """True when observation is the entity identity under an identity-bound write.
 
     Examples:
-    - write ``/api/orders/{id}/confirm``, observe ``/api/orders/{id}`` → True
-    - write ``/api/orders/{id}``, observe ``/api/orders/{id}`` → True
+    - write ``/api/orders/ord-1/confirm``, observe ``/api/orders/ord-1`` → True
+    - write ``/api/orders/ord-1``, observe ``/api/orders/ord-1`` → True
     - write ``/api/orders``, observe ``/api/orders`` → False (collection)
+
+    The last observe segment is the path identity when the write is that path or
+    a strict suffix action on it. Do not UUID-shape-guess — short ids like
+    ``ord-1`` must still block unobservable pre-write reads.
     """
     write = normalize_path_placeholders(_text(write_path)).split("?", 1)[0].rstrip("/")
     observe = normalize_path_placeholders(_text(observation_path)).split("?", 1)[0].rstrip("/")
@@ -647,23 +651,33 @@ def _identity_scoped_entity_observation(write_path: str, observation_path: str) 
     if len(observe_segs) < 2:
         return False
 
-    def _looks_like_identity(segment: str) -> bool:
+    def _is_bound_identity_segment(segment: str, *, opaque_required: bool) -> bool:
         token = _text(segment)
         if not token or token.startswith("{") or token.startswith(":"):
             return False
-        if token.isdigit():
+        if not opaque_required:
+            # Structural action-on-entity: observe prefix ends at the identity.
             return True
-        # UUID-like or opaque resource ids — not static vocabulary segments.
-        return bool(re.fullmatch(r"[0-9a-fA-F-]{8,}|[A-Za-z0-9_-]{12,}", token))
+        # Equal-path entity ids are opaque (digit and/or separator), not static
+        # collection vocabulary like ``orders`` / ``v1``.
+        if token.isalpha():
+            return False
+        return True
 
-    if write == observe:
-        return _looks_like_identity(observe_segs[-1])
-    # Action-on-entity: observation is a strict prefix ending at the identity.
-    if len(write_segs) <= len(observe_segs):
+    # Action-on-entity: write extends observe (…/id/action), observe ends at id.
+    if len(write_segs) > len(observe_segs):
+        if write_segs[: len(observe_segs)] != observe_segs:
+            return False
+        return _is_bound_identity_segment(observe_segs[-1], opaque_required=True)
+
+    if write != observe:
         return False
-    if write_segs[: len(observe_segs)] != observe_segs:
+    # Entity-addressed write/observe (…/collection/id). Require depth ≥ 3 so
+    # bare collections (…/orders) stay out; reject alphabetic vocabulary leaves
+    # such as ``/api/v1/orders``.
+    if len(observe_segs) < 3:
         return False
-    return _looks_like_identity(observe_segs[-1])
+    return _is_bound_identity_segment(observe_segs[-1], opaque_required=True)
 
 
 def execute_governed_control_write(

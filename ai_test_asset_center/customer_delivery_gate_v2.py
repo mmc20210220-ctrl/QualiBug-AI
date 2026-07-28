@@ -979,10 +979,6 @@ def _validate_active_chain(
                 and matching
             ):
                 return "BLOCKED", ["CLEANUP_PROOF_DEFERRED_FIELD_ORACLE"]
-            # Cleanup activation mismatch is incomplete restoration proof, not a
-            # campaign-aborting harness crash.
-            if kind == "cleanup":
-                return "BLOCKED", ["CLEANUP_ACTIVATION_REFERENCE_MISMATCH"]
             raise DeliveryGateV2Error(
                 f"delivery_{kind}_activation_reference_mismatch"
             )
@@ -993,9 +989,9 @@ def _validate_active_chain(
         # Soft field-oracle may activate before observer receipts are sealed.
         if soft_field_oracle and not verified_observers and observer_ids:
             return "BLOCKED", ["OBSERVER_PROOF_DEFERRED_FIELD_ORACLE"]
-        # Observer activation mismatch blocks delivery for this attempt; it must
-        # not abort ledger construction for the whole campaign.
-        return "BLOCKED", ["OBSERVER_ACTIVATION_REFERENCE_MISMATCH"]
+        raise DeliveryGateV2Error(
+            "delivery_observer_activation_reference_mismatch"
+        )
     if not contract_ids.issubset(set(execution["observation_receipt_ids"])):
         raise DeliveryGateV2Error("execution_contract_receipts_missing")
     if not observer_ids.issubset(set(execution["observation_receipt_ids"])):

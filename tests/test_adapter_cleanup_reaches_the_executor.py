@@ -122,13 +122,43 @@ def test_a_db_step_produces_a_receipt_and_deletes(monkeypatch) -> None:
 
 
 def test_the_identity_comes_from_what_the_run_observed() -> None:
-    """Prefer a value the write itself returned over a runtime binding."""
+    """Prefer a value the compensated write returned over a runtime binding."""
     identity = cleanup_mod._adapter_cleanup_identity(
         {"identity_column": "sku"},
         runtime_bindings={"sku": "from_binding"},
-        steps_out=[{"body": {"sku": "from_write_response"}}],
+        steps_out=[
+            {
+                "phase": "treatment",
+                "body": {"sku": "from_write_response"},
+                "governance_receipt": {
+                    "accepted": True,
+                    "after": {"body": {"sku": "from_write_response"}},
+                },
+            }
+        ],
     )
     assert identity == "from_write_response"
+
+
+def test_identity_ignores_fixture_and_domain_field_names() -> None:
+    """Never bind cleanup identity from fixture bodies or hardcoded orderId keys."""
+    identity = cleanup_mod._adapter_cleanup_identity(
+        {"identity_column": "id"},
+        runtime_bindings={},
+        steps_out=[
+            {"phase": "fixture", "body": {"id": "fixture-row", "orderId": "ord-wrong"}},
+            {
+                "phase": "treatment",
+                "body": {"orderId": "ord-from-payment", "status": "PAID"},
+                "governance_receipt": {
+                    "accepted": True,
+                    "after": {"body": {"orderId": "ord-from-payment", "status": "PAID"}},
+                },
+            },
+        ],
+    )
+    # identity_column=id and no generic id present → unbound (not orderId guess)
+    assert identity == ""
 
 
 def test_no_observed_identity_yields_nothing_rather_than_a_guess() -> None:
@@ -306,6 +336,28 @@ def test_mutation_restore_fields_from_governed_before_after() -> None:
     assert fields == {"status": "SHIPPED"}
 
 
+def test_mutation_restore_fields_rejects_cross_entity_before_snapshot() -> None:
+    fields = cleanup_mod._mutation_restore_fields_from_steps(
+        [
+            {
+                "phase": "treatment",
+                "governance_receipt": {
+                    "accepted": True,
+                    "before": {
+                        "body": {"id": "other-order", "status": "SHIPPED"}
+                    },
+                    "after": {
+                        "body": {"id": "target-order", "status": "COMPLETED"}
+                    },
+                },
+            }
+        ],
+        identity_value="target-order",
+    )
+
+    assert fields == {}
+
+
 def test_adapter_prefers_field_restore_over_row_delete_for_mutations(monkeypatch) -> None:
     """Existing-entity mutations must not attempt run-owned row delete."""
     restored: list[dict] = []
@@ -397,6 +449,13 @@ def test_field_restore_updates_observed_scalars(monkeypatch) -> None:
         def close(self):
             return None
 
+    attestation = {
+        "identity_value": "ord-1",
+        "accepted_write": True,
+        "before_body": {"id": "ord-1", "status": "SHIPPED"},
+        "after_body": {"id": "ord-1", "status": "COMPLETED"},
+        "restore_fields": {"status": "SHIPPED"},
+    }
     receipt = execute_declared_adapter_field_restore(
         {"adapter": "db_sql", "table": "orders", "identity_column": "id"},
         identity_value="ord-1",
@@ -404,11 +463,85 @@ def test_field_restore_updates_observed_scalars(monkeypatch) -> None:
         dsn="postgresql://x/y",
         connect=lambda: _Conn(),
         policy_decision={"write_allowed": True},
+        mutation_attestation=attestation,
     )
     assert receipt["status"] == "CLEANED"
+    assert receipt["receipt_id"].startswith("cleanup_adapter_")
     assert receipt["rows_updated"] == 1
+    assert receipt["rows_deleted"] == 0
     assert executed
     sql, params = executed[0]
     assert "UPDATE" in sql.upper()
     assert "DELETE" not in sql.upper()
     assert params == ["SHIPPED", "ord-1"]
+
+
+def test_field_restore_refuses_without_mutation_attestation() -> None:
+    """UPDATE must never run from unbound identity + restore map alone."""
+    from ai_test_asset_center.cleanup_adapter_ladder import (
+        REASON_MUTATION_NOT_ATTESTED,
+        execute_declared_adapter_field_restore,
+    )
+
+    receipt = execute_declared_adapter_field_restore(
+        {"adapter": "db_sql", "table": "orders", "identity_column": "id"},
+        identity_value="ord-1",
+        restore_fields={"status": "SHIPPED"},
+        dsn="postgresql://x/y",
+        connect=lambda: (_ for _ in ()).throw(AssertionError("must not connect")),
+        policy_decision={"write_allowed": True},
+    )
+    assert receipt["status"] == "REFUSED"
+    assert receipt["reason_code"] == REASON_MUTATION_NOT_ATTESTED
+    assert receipt["rows_updated"] == 0
+
+
+def test_field_restore_rolls_back_when_identity_updates_multiple_rows() -> None:
+    from ai_test_asset_center.cleanup_adapter_ladder import (
+        execute_declared_adapter_field_restore,
+    )
+
+    class _Cursor:
+        rowcount = 2
+
+        def execute(self, sql, params):
+            return None
+
+    class _Conn:
+        committed = False
+        rolled_back = False
+
+        def cursor(self):
+            return _Cursor()
+
+        def commit(self):
+            self.committed = True
+
+        def rollback(self):
+            self.rolled_back = True
+
+        def close(self):
+            return None
+
+    connection = _Conn()
+    receipt = execute_declared_adapter_field_restore(
+        {"adapter": "db_sql", "table": "orders", "identity_column": "id"},
+        identity_value="ord-1",
+        restore_fields={"status": "SHIPPED"},
+        dsn="postgresql://x/y",
+        connect=lambda: connection,
+        policy_decision={"write_allowed": True},
+        mutation_attestation={
+            "identity_value": "ord-1",
+            "accepted_write": True,
+            "before_body": {"id": "ord-1", "status": "SHIPPED"},
+            "after_body": {"id": "ord-1", "status": "COMPLETED"},
+            "restore_fields": {"status": "SHIPPED"},
+        },
+    )
+
+    assert receipt["status"] == "FAILED"
+    assert receipt["reason_code"] == "CLEANUP_DB_RESTORE_CARDINALITY_MISMATCH"
+    assert receipt["rows_updated"] == 2
+    assert connection.rolled_back is True
+    assert connection.committed is False

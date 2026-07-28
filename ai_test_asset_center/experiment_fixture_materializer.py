@@ -294,36 +294,40 @@ def materialize_experiment_fixtures(
             # identity GET proves that value is observable on THIS binding's
             # collection. A cart-item {id} must never bind into /api/orders/{id}.
             if binding.get("generated_value") and _text(binding.get("status")) == "bound":
-                from .runtime_binding_resolver import collection_segment_for_placeholder
+                from .runtime_binding_resolver import (
+                    collection_path_for_placeholder,
+                    collection_segment_for_placeholder,
+                    declared_identity_read_operations,
+                    materialize_declared_identity_read,
+                )
 
                 _pre_val = str(binding["generated_value"])
                 _target_path = normalize_path_placeholders(
                     _text(binding.get("target_path"))
                 )
-                _proof_paths: list[str] = []
-                if _target_path.startswith("/") and ("{" + target + "}") in _target_path:
-                    _materialized = _target_path.replace("{" + target + "}", _pre_val)
-                    _segs = [s for s in _materialized.strip("/").split("/") if s]
-                    if _pre_val in _segs:
-                        _id_idx = _segs.index(_pre_val)
-                        _proof_paths.append("/" + "/".join(_segs[: _id_idx + 1]))
-                for _resolver in _list(binding.get("resolver_operations")):
-                    if not isinstance(_resolver, dict):
-                        continue
-                    _rpath = _text(_resolver.get("path")).rstrip("/")
-                    if _rpath.startswith("/") and not path_has_placeholders(_rpath):
-                        _candidate = f"{_rpath}/{_pre_val}"
-                        if _candidate not in _proof_paths:
-                            _proof_paths.append(_candidate)
+                _collection_path = collection_path_for_placeholder(
+                    _target_path,
+                    target,
+                )
+                _identity_operations = declared_identity_read_operations(
+                    list(ops.values()),
+                    collection_path=_collection_path,
+                )
                 _proved = False
-                if not _proof_paths:
+                if not _identity_operations:
                     # No path context → cannot safely accept a global {id}.
                     _proved = False
                 else:
-                    for _proof_path in _proof_paths[:3]:
+                    for _identity_operation in _identity_operations[:3]:
+                        _proof_path = materialize_declared_identity_read(
+                            _identity_operation,
+                            _pre_val,
+                        )
+                        if not _proof_path:
+                            continue
                         _proof_obs = _run_http_step(
                             base_url=base_url,
-                            method="GET",
+                            method=_text(_identity_operation.get("method")).upper(),
                             path=_proof_path,
                             token=resolver_token,
                         )
@@ -331,7 +335,7 @@ def materialize_experiment_fixtures(
                             "phase": "binding_identity_proof",
                             "step_id": f"bind-proof:{target}",
                             "actor_ref": resolver_actor_ref,
-                            "operation_ref": "",
+                            "operation_ref": _text(_identity_operation.get("id")),
                         })
                         steps_out.append(_proof_obs)
                         if 200 <= int(_proof_obs.get("status_code") or 0) < 300:

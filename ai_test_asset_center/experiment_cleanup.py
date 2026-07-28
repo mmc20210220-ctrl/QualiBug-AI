@@ -178,11 +178,17 @@ def _normalized_field_key(value: Any) -> str:
 
 
 def _dict_has_resource_identity(value: dict[str, Any]) -> bool:
-    """True when the object itself carries a primary resource identity scalar."""
+    """True when the object carries a conventional resource identity scalar."""
     for key, child in value.items():
         if not isinstance(child, (str, int, float)) or not str(child).strip():
             continue
-        if _normalized_field_key(key) in {"id", "uuid", "key"}:
+        raw_key = str(key).strip()
+        normalized = _normalized_field_key(raw_key)
+        if (
+            normalized in {"id", "uuid", "guid", "key"}
+            or raw_key.lower().endswith(("_id", "-id"))
+            or raw_key.endswith(("Id", "ID"))
+        ):
             return True
     return False
 

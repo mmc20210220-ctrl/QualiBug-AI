@@ -86,25 +86,6 @@ def main() -> int:
             return 3
         print("backend_ready", flush=True)
 
-        # Seed a SHIPPED order so confirm state-delta remains observable.
-        seed = subprocess.run(
-            [sys.executable, "-u", str(OUT / "_seed_shipped_order.py")],
-            cwd=str(ROOT),
-            env=env,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=60,
-        )
-        (OUT / "_seed_v7.log").write_text(
-            (seed.stdout or "") + "\n" + (seed.stderr or ""),
-            encoding="utf-8",
-        )
-        print(seed.stdout or "", end="", flush=True)
-        if seed.returncode != 0:
-            print(f"seed_exit={seed.returncode}", flush=True)
-
         scan = subprocess.run(
             [sys.executable, "-u", str(OUT / "_formal_product_scan.py")],
             cwd=str(ROOT),
