@@ -11,13 +11,18 @@ candidate. The container has no operation/actor/ui_request fields, so every
 valid document produced one phantom ``FORMAL_UI_CONTRACT_INCOMPLETE`` gap.
 
 This guard keeps standalone-contract support while filtering only structural
-containers that already yielded child rows.
+containers that already yielded child rows. It also installs the paired source
+classifier so explicit formal contract JSON reaches this parser during ordinary
+knowledge-center ingestion.
 """
 from __future__ import annotations
 
 from typing import Any
 
 from . import _formal_ui_contracts as _contracts
+from ._formal_ui_contract_source_type_guard import (
+    install_formal_ui_contract_source_type_guard,
+)
 
 _INSTALL_MARKER = "_qualibug_formal_ui_contract_document_guard_installed"
 _ORIGINAL_MARKER = "_qualibug_contract_rows_before_document_guard"
@@ -53,6 +58,10 @@ def _is_document_container(row: dict[str, Any]) -> bool:
 
 
 def install_formal_ui_contract_document_guard() -> None:
+    # Classification and extraction are one admission boundary: explicit formal
+    # JSON must first reach uiux_spec parsing, then its container must not become
+    # a phantom second contract.
+    install_formal_ui_contract_source_type_guard()
     if getattr(_contracts, _INSTALL_MARKER, False):
         return
     original = getattr(
