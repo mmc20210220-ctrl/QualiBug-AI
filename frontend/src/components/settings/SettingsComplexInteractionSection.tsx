@@ -7,7 +7,7 @@ import {
 import '../../styles/browser-matrix-settings.css';
 
 const OPTIONS: Array<{ value: ComplexInteractionKind; label: string; note: string }> = [
-  { value: 'upload', label: '文件上传', note: '只引用已批准的 runtime file_ref，不接受文件路径或 base64。' },
+  { value: 'upload', label: '文件上传', note: '只引用上方治理面板审批生成的 uifb_ binding_ref，不接受文件路径或 base64。' },
   { value: 'download', label: '下载观察', note: '只保存 SHA-256、大小和文件名指纹，观察后删除下载文件。' },
   { value: 'popup', label: '新窗口 / 弹窗', note: '等待来源声明的最终 URL，观察完成后立即关闭。' },
   { value: 'iframe-click', label: 'iframe 内交互', note: '要求唯一 iframe selector 和精确批准 origin。' },
@@ -17,7 +17,7 @@ export function SettingsComplexInteractionSection() {
   const outputRef = useRef<HTMLTextAreaElement | null>(null);
   const [kind, setKind] = useState<ComplexInteractionKind>('upload');
   const [selector, setSelector] = useState('input[type=file]');
-  const [fileRef, setFileRef] = useState('approved-upload-fixture');
+  const [fileRef, setFileRef] = useState('uifb_从上方审批面板复制');
   const [expectedUrl, setExpectedUrl] = useState('/export');
   const [expectedSha256, setExpectedSha256] = useState('');
   const [frameSelector, setFrameSelector] = useState('');
@@ -79,8 +79,7 @@ export function SettingsComplexInteractionSection() {
       </div>
 
       <div className="browser-matrix-policy">
-        下载与弹窗不一致在 v1 只会使执行失败并进入 INDETERMINATE，暂不直接形成客户 Bug；文件上传必须通过
-        runtime_contract.ui_file_bindings 绑定项目内不可变文件及 SHA-256。
+        下载与弹窗不一致在 v1 只会使执行失败并进入 INDETERMINATE，暂不直接形成客户 Bug；文件上传必须使用上方治理面板生成的活动审批 binding_ref，扫描启动时会重新校验 registry、路径、大小和 SHA-256。
       </div>
 
       <div className="browser-matrix-profile-grid" role="radiogroup" aria-label="复杂交互类型">
@@ -111,7 +110,7 @@ export function SettingsComplexInteractionSection() {
         </label>
         {kind === 'upload' && (
           <label className="form-field">
-            <span>运行时 file_ref</span>
+            <span>审批 binding_ref</span>
             <input className="form-input" value={fileRef} onChange={(event) => setFileRef(event.target.value)} />
           </label>
         )}
