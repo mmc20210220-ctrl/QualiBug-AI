@@ -10,6 +10,11 @@ from ._parsing import *  # noqa: F401,F403
 from ._crud import *  # noqa: F401,F403
 from ._linking import *  # noqa: F401,F403
 from ._api import *  # noqa: F401,F403
+from ._chinese_business_comprehension import (  # noqa: F401
+    analyze_chinese_business_source,
+    build_chinese_first_comprehension,
+    install_chinese_first_business_comprehension,
+)
 from ._formal_ui_contracts import (  # noqa: F401
     extract_formal_ui_contracts,
     install_formal_ui_contract_parser,
@@ -33,6 +38,11 @@ install_formal_ui_contract_parser()
 install_formal_ui_persistent_probe_guard()
 install_formal_ui_visual_baseline_guard()
 install_formal_ui_visual_viewport_guard()
+
+# Install on the existing knowledge-center build authority. The installer wraps
+# and patches _api.build_enterprise_business_knowledge_asset, so internal callers
+# and package-facade callers share one Chinese-first mainline.
+build_enterprise_business_knowledge_asset = install_chinese_first_business_comprehension()
 
 # Explicit re-exports for underscore-prefixed symbols
 from ._common import _SEMANTIC_LEXICON_CACHE  # noqa: F401
@@ -179,6 +189,9 @@ __all__ = [
     "_extract_entity_relations",
     "_detect_cross_document_conflicts",
     "_structurize_rule_causal_chains",
+    "analyze_chinese_business_source",
+    "build_chinese_first_comprehension",
+    "install_chinese_first_business_comprehension",
     "build_enterprise_business_knowledge_asset",
     "load_enterprise_business_knowledge_asset",
     "generate_enterprise_business_knowledge_probes",
