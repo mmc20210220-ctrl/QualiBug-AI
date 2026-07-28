@@ -13,8 +13,6 @@ page text, labels and DOM fragments do not.
 """
 from __future__ import annotations
 
-import copy
-import re
 from typing import Any
 
 from . import formal_ui_surface as _formal
@@ -26,6 +24,9 @@ from . import source_ui_contract_binding as _source_binding
 _INSTALL_MARKER = "_qualibug_professional_ui_responsive_accessibility_installed"
 _ORIGINAL_VALIDATE = "_qualibug_professional_validator_before_responsive"
 _ORIGINAL_EXECUTE = "_qualibug_professional_executor_before_responsive"
+_ORIGINAL_PLAN_VALIDATE = (
+    "_qualibug_professional_plan_validator_before_responsive"
+)
 
 CONFIG_ACTIONS = frozenset({"set_viewport", "set_media"})
 ACCESSIBILITY_ACTION = "expect_accessibility_basics"
@@ -211,8 +212,14 @@ def install_professional_ui_responsive_accessibility() -> None:
         _ORIGINAL_EXECUTE,
         _professional._execute_expectation,
     )
+    original_plan_validate = getattr(
+        _professional,
+        _ORIGINAL_PLAN_VALIDATE,
+        _professional.validate_professional_browser_plan,
+    )
     setattr(_professional, _ORIGINAL_VALIDATE, original_validate)
     setattr(_professional, _ORIGINAL_EXECUTE, original_execute)
+    setattr(_professional, _ORIGINAL_PLAN_VALIDATE, original_plan_validate)
 
     def validate_with_responsive_accessibility(
         raw: dict[str, Any],
@@ -222,6 +229,19 @@ def install_professional_ui_responsive_accessibility() -> None:
             _validate_extension_step(raw, action)
             return
         original_validate(raw, action)
+
+    def validate_plan_with_responsive_configuration(
+        plan: dict[str, Any],
+        runtime_contract: dict[str, Any],
+    ) -> dict[str, Any]:
+        normalized = original_plan_validate(plan, runtime_contract)
+        for step in _list(normalized.get("steps")):
+            if not isinstance(step, dict):
+                continue
+            action = _text(step.get("action")).lower()
+            if action in CONFIG_ACTIONS:
+                _validate_extension_step(step, action)
+        return normalized
 
     def execute_with_responsive_accessibility(
         *,
@@ -303,6 +323,12 @@ def install_professional_ui_responsive_accessibility() -> None:
     })
     _professional._validate_professional_step = (
         validate_with_responsive_accessibility
+    )
+    _professional.validate_professional_browser_plan = (
+        validate_plan_with_responsive_configuration
+    )
+    _professional._browser.validate_browser_plan = (
+        validate_plan_with_responsive_configuration
     )
     _professional._execute_expectation = execute_with_responsive_accessibility
     _formal._SUPPORTED_EXPECTATIONS = _professional.PROFESSIONAL_EXPECTATIONS
