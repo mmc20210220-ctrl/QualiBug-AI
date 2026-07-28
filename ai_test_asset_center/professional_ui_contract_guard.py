@@ -1,11 +1,11 @@
 """Reachability and edge-case guard for professional read-only UI assertions.
 
-The formal scan overlay historically recognized only expect_text/expect_url. This
-installer widens that existing admission set to the professional assertion
-vocabulary and fixes two semantic boundaries:
+The formal scan overlay and source-to-IR binder historically recognized only
+expect_text/expect_url. This installer widens both existing authorities to the
+professional assertion vocabulary and fixes two semantic boundaries:
 
 * ``expect_hidden`` succeeds when the source locator matches no attached node,
-  which is Playwright's documented hidden-state meaning;
+  which is Playwright's hidden-state meaning;
 * console ignore expressions are validated before execution, so malformed source
   regex cannot turn a test run into an unclassified runtime failure.
 """
@@ -16,6 +16,7 @@ from typing import Any
 
 from . import professional_ui_readonly as _professional
 from . import scan_ui_contract_overlay as _overlay
+from . import source_ui_contract_binding as _source_binding
 
 _INSTALL_MARKER = "_qualibug_professional_ui_contract_guard_installed"
 _ORIGINAL_EXECUTE = "_qualibug_original_professional_expectation_executor"
@@ -107,6 +108,7 @@ def install_professional_ui_contract_guard() -> None:
     _professional._validate_professional_step = validate_with_console_patterns
     _professional._execute_expectation = execute_with_hidden_absence
     _overlay._EXPECTATION_ACTIONS = _professional.PROFESSIONAL_EXPECTATIONS
+    _source_binding._EXPECTATION_ACTIONS = _professional.PROFESSIONAL_EXPECTATIONS
     setattr(_professional, _INSTALL_MARKER, True)
 
 
