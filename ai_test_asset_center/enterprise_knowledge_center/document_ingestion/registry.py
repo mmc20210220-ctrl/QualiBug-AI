@@ -3,7 +3,14 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from .contract import AdapterMatch, DocumentAdapter, DocumentSource, validate_adapter
+from .contract import (
+    AdapterMatch,
+    DocumentAdapter,
+    DocumentSource,
+    MODE_SUPPLEMENTAL,
+    SupplementalContext,
+    validate_adapter,
+)
 
 
 class DocumentAdapterRegistry:
@@ -48,6 +55,30 @@ class DocumentAdapterRegistry:
             ),
         )
 
+    def supplemental_matches(
+        self,
+        source: DocumentSource,
+        context: SupplementalContext,
+        *,
+        excluded_names: Iterable[str] = (),
+    ) -> list[tuple[DocumentAdapter, AdapterMatch]]:
+        excluded = {str(value) for value in excluded_names}
+        rows: list[tuple[DocumentAdapter, AdapterMatch]] = []
+        for adapter in self.all():
+            if adapter.name in excluded or adapter.mode != MODE_SUPPLEMENTAL:
+                continue
+            match = adapter.probe_supplemental(source, context)
+            if match is not None:
+                rows.append((adapter, match))
+        return sorted(
+            rows,
+            key=lambda row: (
+                -int(row[1].score),
+                -int(getattr(row[0], "priority", 0)),
+                str(row[0].name),
+            ),
+        )
+
 
 def build_default_registry() -> DocumentAdapterRegistry:
     from .builtin_adapters import (
@@ -56,11 +87,13 @@ def build_default_registry() -> DocumentAdapterRegistry:
         PdfDocumentAdapter,
         UnknownBinaryDocumentAdapter,
     )
+    from .ocr_adapter import OcrSupplementalAdapter
 
     return DocumentAdapterRegistry(
         [
             DocxDocumentAdapter(),
             PdfDocumentAdapter(),
+            OcrSupplementalAdapter(),
             GenericTextDocumentAdapter(),
             UnknownBinaryDocumentAdapter(),
         ]
