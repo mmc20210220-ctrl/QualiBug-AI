@@ -81,6 +81,9 @@ def install_persistent_ui_cleanup_probe() -> None:
     # Privacy is installed immediately before this entry in the formal runtime.
     # Complex interaction wrappers must be present before persistent cleanup captures
     # the final write validator and probe-material functions.
+    from .professional_ui_complex_interaction_finalizer import (
+        install_professional_ui_complex_interaction_finalizer,
+    )
     from .professional_ui_complex_interaction_hardening import (
         install_professional_ui_complex_interaction_hardening,
     )
@@ -171,7 +174,12 @@ def install_persistent_ui_cleanup_probe() -> None:
             raise _interaction._browser.BrowserExecutionError(
                 "browser_persistent_probe_json_pointer_invalid"
             )
-        if probe.get("selector") or probe.get("locator_intent"):
+        if (
+            probe.get("selector")
+            or probe.get("locator_intent")
+            or probe.get("frame_selector")
+            or probe.get("frame_origin")
+        ):
             raise _interaction._browser.BrowserExecutionError(
                 "browser_persistent_probe_locator_not_allowed"
             )
@@ -263,6 +271,7 @@ def install_persistent_ui_cleanup_probe() -> None:
     _interaction._validate_write_plan = validate_write_with_persistent_probe
     _interaction._probe_material = persistent_probe_material
     setattr(_interaction, _INSTALL_MARKER, True)
+    install_professional_ui_complex_interaction_finalizer()
 
 
 __all__ = [
