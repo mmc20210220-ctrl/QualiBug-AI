@@ -3,15 +3,49 @@ from __future__ import annotations
 
 from functools import wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from .builder import build_enterprise_understanding_model
 from .closure import apply_minimum_understanding_closure
 from .schema import as_dict, as_list, text
 
 
-def enrich_asset_with_enterprise_understanding(asset: dict[str, Any]) -> dict[str, Any]:
-    """Attach the model and project its gate into the existing comprehension gate."""
+def _parsed_sources_for_context(asset: dict[str, Any], root: Path) -> list[dict[str, Any]]:
+    """Re-read registered sources so document hierarchy keeps original character ranges."""
+    from .._crud import _record_parse
+
+    parsed_sources: list[dict[str, Any]] = []
+    for source in as_list(asset.get("source_inventory")):
+        if not isinstance(source, dict) or text(source.get("status")) != "active":
+            continue
+        parsed = _record_parse(source, root)
+        parser_receipt = as_dict(parsed.get("parser_receipt"))
+        parsed_sources.append(
+            {
+                "source_id": source.get("source_id"),
+                "filename": source.get("original_name"),
+                "source_locator": parser_receipt.get("source_locator"),
+                "text": parsed.get("text") or "",
+            }
+        )
+    return parsed_sources
+
+
+def enrich_asset_with_enterprise_understanding(
+    asset: dict[str, Any],
+    *,
+    parsed_sources: Iterable[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Attach document context, refresh fact conflicts, then compile cognition model."""
+    if parsed_sources is not None:
+        from .._chinese_business_conflicts import reconcile_chinese_business_fact_conflicts
+        from .._chinese_document_context import apply_chinese_document_context
+
+        asset = apply_chinese_document_context(asset, parsed_sources)
+        # Context resolution may promote previously pending facts. Re-run the existing
+        # conflict authority before any newly promoted fact enters the understanding model.
+        asset = reconcile_chinese_business_fact_conflicts(asset)
+
     model = build_enterprise_understanding_model(asset)
     model = apply_minimum_understanding_closure(model, asset)
     model_gate = as_dict(model.get("gate"))
@@ -91,6 +125,8 @@ def enrich_asset_with_enterprise_understanding(asset: dict[str, Any]) -> dict[st
             "enterprise_understanding_unknowns_fail_visible": True,
             "enterprise_understanding_projection_is_not_recall": True,
             "field_or_entity_inventory_alone_cannot_pass_understanding_gate": True,
+            "document_context_resolves_before_understanding_model": parsed_sources is not None,
+            "document_context_promotions_are_conflict_reconciled": parsed_sources is not None,
         }
     )
     asset["governance"] = governance
@@ -140,7 +176,11 @@ def install_enterprise_understanding_model():
         resolved_root = root or ROOT
         project = _safe_project_id(project_id)
         asset = original(project, resolved_root, options or {})
-        enriched = enrich_asset_with_enterprise_understanding(asset)
+        parsed_sources = _parsed_sources_for_context(asset, resolved_root)
+        enriched = enrich_asset_with_enterprise_understanding(
+            asset,
+            parsed_sources=parsed_sources,
+        )
         _persist(enriched, project_id=project, root=resolved_root)
         return enriched
 
