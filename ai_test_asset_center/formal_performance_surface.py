@@ -6,9 +6,10 @@ explicitly declare its sample count, percentile, latency threshold, expected sta
 maximum error rate. The protocol emits the exact number of sequential read steps; the observer
 summarizes only those step receipts.
 
-A single slow response is never a defect. Missing samples, missing duration evidence or an
-incomplete execution set is INDETERMINATE. Raw response bodies and headers are never copied into
-performance evidence.
+A single slow response is never a defect. Missing samples, missing duration evidence, retries or
+an incomplete execution set are INDETERMINATE. ``duration_ms`` is accepted only when the transport
+reports exactly one attempt: a retried duration includes client backoff and cannot be attributed
+to the target. Raw response bodies and headers are never copied into performance evidence.
 """
 from __future__ import annotations
 
@@ -28,7 +29,7 @@ RISK_FAMILY = "performance_latency"
 PROTOCOL_TEMPLATE = "source_declared_latency_budget"
 SURFACE = "http_latency_series"
 ADAPTER = "http_api"
-_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+_SAFE_METHODS = frozenset({"GET", "HEAD"})
 _ALLOWED_PERCENTILES = frozenset({"p50", "p90", "p95", "p99", "max"})
 _MIN_SAMPLES = 3
 _MAX_SAMPLES = 20
@@ -117,7 +118,7 @@ def _compile_performance_protocol(envelope: dict[str, Any]) -> dict[str, Any]:
         return {
             "status": "BLOCKED",
             "reason_code": "BLOCKED_TARGET_POLICY",
-            "detail": "performance_first_increment_requires_read_only_operation",
+            "detail": "performance_first_increment_requires_get_or_head",
         }
     if not actor_ref:
         return {
@@ -176,6 +177,19 @@ def _nearest_rank(values: list[float], percentile: str) -> float:
     return ordered[rank - 1]
 
 
+def _transport_attempt_count(step: dict[str, Any]) -> int | None:
+    """Return the transport's declared attempt count; missing is untrustworthy."""
+    raw = _dict(step.get("raw"))
+    value = raw.get("_attempts")
+    if isinstance(value, bool):
+        return None
+    try:
+        attempts = int(value)
+    except (TypeError, ValueError):
+        return None
+    return attempts if attempts > 0 else None
+
+
 def _performance_observer_handler(envelope: dict[str, Any]) -> dict[str, Any]:
     from .observer_contracts_base import _receipt
 
@@ -199,7 +213,16 @@ def _performance_observer_handler(envelope: dict[str, Any]) -> dict[str, Any]:
     durations: list[float] = []
     status_codes: list[int] = []
     missing_duration = 0
+    missing_attempt_count = 0
+    retried_sample_count = 0
     for step in steps:
+        attempts = _transport_attempt_count(step)
+        if attempts is None:
+            missing_attempt_count += 1
+            continue
+        if attempts != 1:
+            retried_sample_count += 1
+            continue
         raw_duration = step.get("duration_ms")
         try:
             duration = float(raw_duration)
@@ -221,17 +244,35 @@ def _performance_observer_handler(envelope: dict[str, Any]) -> dict[str, Any]:
         "observed_sample_count": len(steps),
         "duration_sample_count": len(durations),
         "missing_duration_count": missing_duration,
+        "missing_attempt_count": missing_attempt_count,
+        "retried_sample_count": retried_sample_count,
         "percentile": _text(contract.get("percentile")),
+        "percentile_method": "nearest_rank",
         "max_latency_ms": float(contract.get("max_latency_ms")),
         "max_error_rate": float(contract.get("max_error_rate")),
         "expected_status_class": int(contract.get("expected_status_class")),
         "raw_response_payloads_included": False,
+        "headers_included": False,
+        "transport_backoff_included": False,
     }
-    if len(steps) != expected_count or missing_duration or len(durations) != expected_count:
+    if (
+        len(steps) != expected_count
+        or missing_duration
+        or missing_attempt_count
+        or retried_sample_count
+        or len(durations) != expected_count
+    ):
+        reason_code = (
+            "PERFORMANCE_RETRIED_TRANSPORT_UNTRUSTWORTHY"
+            if retried_sample_count
+            else "PERFORMANCE_TRANSPORT_ATTEMPT_COUNT_MISSING"
+            if missing_attempt_count
+            else "PERFORMANCE_SAMPLE_SET_INCOMPLETE"
+        )
         return _receipt(
             observer_id=OBSERVER_ID,
             status="INDETERMINATE",
-            reason_code="PERFORMANCE_SAMPLE_SET_INCOMPLETE",
+            reason_code=reason_code,
             evidence={EVIDENCE_KEY: evidence_base},
         )
 
@@ -258,7 +299,7 @@ def _performance_observer_handler(envelope: dict[str, Any]) -> dict[str, Any]:
             "error_count": error_count,
             "observed_error_rate": error_rate,
             "coverage_complete": True,
-            "measurement_semantics": "sequential_read_only_samples",
+            "measurement_semantics": "sequential_get_or_head_single_attempt_samples",
         }
     }
     return _receipt(
@@ -285,6 +326,7 @@ def _evaluate_latency_budget(envelope: dict[str, Any]) -> dict[str, Any]:
         "status_class_counts": _dict(observation.get("status_class_counts")),
         "coverage_complete": observation.get("coverage_complete") is True,
         "measurement_semantics": _text(observation.get("measurement_semantics")),
+        "percentile_method": _text(observation.get("percentile_method")),
     }
     if not actual["coverage_complete"]:
         return {
