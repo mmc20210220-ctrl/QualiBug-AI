@@ -66,6 +66,7 @@ function asString(value: unknown): string {
 async function visualBaselineRequest(
   project: string,
   init?: RequestInit,
+  query = '',
 ): Promise<VisualBaselineEnvelope> {
   const token = currentToken();
   if (!token) throw new Error('未登录或会话已失效，请重新登录。');
@@ -73,7 +74,7 @@ async function visualBaselineRequest(
   headers.set('Authorization', `Bearer ${token}`);
   if (init?.body) headers.set('Content-Type', 'application/json');
   const response = await fetch(
-    `/api/v1/projects/${encodeURIComponent(project)}/visual-baselines`,
+    `/api/v1/projects/${encodeURIComponent(project)}/visual-baselines${query}`,
     { ...init, headers, credentials: 'include' },
   );
   const raw = await response.text();
@@ -126,8 +127,8 @@ export async function listVisualBaselines(
       raw_pixels_embedded: false,
     };
   }
-  const suffix = options?.includeRevoked ? '?include_revoked=true' : '';
-  const payload = await visualBaselineRequest(`${project}${suffix}`);
+  const query = options?.includeRevoked ? '?include_revoked=true' : '';
+  const payload = await visualBaselineRequest(project, undefined, query);
   const data = asRecord(payload.data) as VisualBaselineInventory;
   return {
     ok: data.ok !== false,
