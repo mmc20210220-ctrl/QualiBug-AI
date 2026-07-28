@@ -228,6 +228,7 @@ def build_professional_ui_coverage(result: dict[str, Any]) -> dict[str, Any]:
     terminal_reason_counts: Counter[str] = Counter()
     cleanup_status_counts: Counter[str] = Counter()
     invalid_deliverable_without_cleanup_count = 0
+    invalid_oracle_without_cleanup_count = 0
     for attempt in attempts:
         obligation_id = _text(attempt.get("obligation_id"))
         categories = obligation_categories.get(obligation_id, set())
@@ -243,13 +244,25 @@ def build_professional_ui_coverage(result: dict[str, Any]) -> dict[str, Any]:
             _dict(execution.get("oracle_verdict")).get("status")
         ).upper()
         cleanup_required = obligation_requires_cleanup.get(obligation_id, False)
+        cleanup_accepted = cleanup_status == "ACCEPTED"
+        outcome_allowed = not cleanup_required or cleanup_accepted
+        invalid_oracle = bool(
+            cleanup_required
+            and not cleanup_accepted
+            and oracle_status in {"PROPERTY_HELD", "VIOLATION"}
+        )
+        if invalid_oracle:
+            invalid_oracle_without_cleanup_count += 1
+            terminal_reason_counts[
+                "UI_ORACLE_WITHOUT_CLEANUP_EQUIVALENCE"
+            ] += 1
         ledger_deliverable = (
             _text(attempt.get("terminal_status")).upper() == "DELIVERABLE"
         )
         invalid_deliverable = bool(
             ledger_deliverable
             and cleanup_required
-            and cleanup_status != "ACCEPTED"
+            and not cleanup_accepted
         )
         if invalid_deliverable:
             invalid_deliverable_without_cleanup_count += 1
@@ -265,20 +278,21 @@ def build_professional_ui_coverage(result: dict[str, Any]) -> dict[str, Any]:
             row["selected_contract_count"] += 1
             if observed:
                 row["observed_contract_count"] += 1
-            if oracle_status == "PROPERTY_HELD":
+            if outcome_allowed and oracle_status == "PROPERTY_HELD":
                 row["property_held_count"] += 1
-            elif oracle_status == "VIOLATION":
+            elif outcome_allowed and oracle_status == "VIOLATION":
                 row["violation_count"] += 1
             if deliverable:
                 row["deliverable_count"] += 1
             if cleanup_required:
-                if cleanup_status == "ACCEPTED":
+                if cleanup_accepted:
                     row["cleanup_equivalence_accepted_count"] += 1
                 else:
                     row["cleanup_equivalence_indeterminate_count"] += 1
             if (
                 not observed
                 or oracle_status not in {"PROPERTY_HELD", "VIOLATION"}
+                or invalid_oracle
                 or invalid_deliverable
             ):
                 row["blocked_or_indeterminate_count"] += 1
@@ -307,10 +321,15 @@ def build_professional_ui_coverage(result: dict[str, Any]) -> dict[str, Any]:
             "persistent_probe_property": PERSISTENT_PROBE_PROPERTY,
         },
         "cleanup_delivery_invariant": {
+            "cleanup_equivalence_required_for_oracle": True,
             "cleanup_equivalence_required_for_delivery": True,
+            "invalid_oracle_without_cleanup_count": (
+                invalid_oracle_without_cleanup_count
+            ),
             "invalid_deliverable_without_cleanup_count": (
                 invalid_deliverable_without_cleanup_count
             ),
+            "invalid_oracles_counted_as_outcomes": False,
             "invalid_deliverables_counted_as_deliverable": False,
         },
         "dimensions": category_rows,
@@ -342,6 +361,7 @@ def build_professional_ui_coverage(result: dict[str, Any]) -> dict[str, Any]:
             "cleanup_equivalence_scope": EQUIVALENCE_SCOPE,
             "persistent_probe_property": PERSISTENT_PROBE_PROPERTY,
             "universal_backend_restoration_claimed": False,
+            "cleanup_failure_can_be_oracle_outcome": False,
             "cleanup_failure_can_be_deliverable": False,
             "interaction_evidence_policy": EVIDENCE_POLICY,
             "interactive_har_persisted": False,
