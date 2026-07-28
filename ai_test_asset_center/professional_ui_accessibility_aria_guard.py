@@ -10,7 +10,7 @@ from . import professional_ui_accessibility_engine as _engine
 
 _INSTALL_MARKER = "_qualibug_accessibility_aria_guard_installed"
 
-_ARIA_RULES = {
+ARIA_RULES = {
     "aria_reference_unique": {
         "wcag": "4.1.2",
         "level": "A",
@@ -82,12 +82,18 @@ _ARIA_SCRIPT = r"""
         const value = norm(el.getAttribute(attr)).toLowerCase();
         if (!allowed.has(value)) push('aria_state_value_valid', el, attr);
       });
-      ['aria-level','aria-setsize','aria-posinset','aria-colcount','aria-colindex','aria-rowcount','aria-rowindex']
-        .forEach(attr => {
-          if (!el.hasAttribute(attr)) return;
-          const value = Number(el.getAttribute(attr));
-          if (!Number.isInteger(value) || value === 0 || value < -1) push('aria_state_value_valid', el, attr);
-        });
+      ['aria-level','aria-posinset','aria-colindex','aria-rowindex'].forEach(attr => {
+        if (!el.hasAttribute(attr)) return;
+        const value = Number(el.getAttribute(attr));
+        if (!Number.isInteger(value) || value < 1) push('aria_state_value_valid', el, attr);
+      });
+      ['aria-setsize','aria-colcount','aria-rowcount'].forEach(attr => {
+        if (!el.hasAttribute(attr)) return;
+        const value = Number(el.getAttribute(attr));
+        if (!Number.isInteger(value) || (value !== -1 && value < 1)) {
+          push('aria_state_value_valid', el, attr);
+        }
+      });
       ['aria-valuenow','aria-valuemin','aria-valuemax'].forEach(attr => {
         if (!el.hasAttribute(attr)) return;
         const value = Number(el.getAttribute(attr));
@@ -106,8 +112,17 @@ _ARIA_SCRIPT = r"""
       ['heading', ['aria-level']],
       ['combobox', ['aria-expanded']]
     ]);
+    const nativeProvidesState = (el, role) => {
+      if (role === 'checkbox' && el.matches('input[type="checkbox"]')) return true;
+      if (role === 'radio' && el.matches('input[type="radio"]')) return true;
+      if (role === 'spinbutton' && el.matches('input[type="number"]')) return true;
+      if (role === 'heading' && /^H[1-6]$/.test(el.tagName)) return true;
+      if (role === 'combobox' && el.matches('select,input[list]')) return true;
+      return false;
+    };
     nodes.filter(el => visible(el) && el.hasAttribute('role')).forEach(el => {
       const role = norm(el.getAttribute('role')).toLowerCase().split(/\s+/)[0];
+      if (nativeProvidesState(el, role)) return;
       const attrs = required.get(role) || [];
       attrs.forEach(attr => {
         if (!el.hasAttribute(attr) || !norm(el.getAttribute(attr))) {
@@ -134,14 +149,14 @@ def install_professional_ui_accessibility_aria_guard() -> None:
         return
     if _INSERT_BEFORE not in _engine._DOM_AUDIT_SCRIPT:
         raise RuntimeError("accessibility_aria_patch_anchor_missing")
-    _engine.RULE_CATALOG.update(_ARIA_RULES)
+    _engine.RULE_CATALOG.update(ARIA_RULES)
     _engine.STANDARD_RULES = tuple([
         *list(_engine.STANDARD_RULES),
-        *(rule for rule in _ARIA_RULES if rule not in _engine.STANDARD_RULES),
+        *(rule for rule in ARIA_RULES if rule not in _engine.STANDARD_RULES),
     ])
     _engine._DOM_RULES = frozenset({
         *_engine._DOM_RULES,
-        *_ARIA_RULES,
+        *ARIA_RULES,
     })
     _engine._MAX_RULES = len(_engine.RULE_CATALOG)
     _engine._DOM_AUDIT_SCRIPT = _engine._DOM_AUDIT_SCRIPT.replace(
@@ -153,5 +168,6 @@ def install_professional_ui_accessibility_aria_guard() -> None:
 
 
 __all__ = [
+    "ARIA_RULES",
     "install_professional_ui_accessibility_aria_guard",
 ]
