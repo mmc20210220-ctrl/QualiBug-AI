@@ -11,14 +11,14 @@ from .schema import as_dict, as_list, text
 
 
 def _parsed_sources_for_context(asset: dict[str, Any], root: Path) -> list[dict[str, Any]]:
-    """Re-read registered sources and attach source-preserving structure IR.
+    """Re-read registered sources through the format-agnostic ingestion pipeline.
 
-    Existing parsers remain the source of extracted business facts. DOCX and PDF
-    immutable source bytes are additionally parsed into Document Structure IR so
-    native headings, page coordinates, list levels, tables and reading-order evidence
-    are available to context resolution and completeness gates.
+    Existing parsers remain the source of extracted business facts. Immutable source
+    bytes are additionally routed through DocumentAdapter Registry -> Parsing Planner
+    -> IR Merger so adding a new format driver never changes business understanding.
     """
     from .._crud import _record_parse
+    from ..document_ingestion import build_document_structure_ir
 
     parsed_sources: list[dict[str, Any]] = []
     for source in as_list(asset.get("source_inventory")):
@@ -30,35 +30,21 @@ def _parsed_sources_for_context(asset: dict[str, Any], root: Path) -> list[dict[
         filename = text(source.get("original_name") or stored.name)
         document_structure = as_dict(parsed.get("document_structure"))
         structure_error: dict[str, Any] = {}
-        suffix = stored.suffix.lower() if stored.exists() else Path(filename).suffix.lower()
-        if stored.exists() and suffix == ".docx":
+        if stored.exists():
             try:
-                from .._document_structure_ir_normalizer import (
-                    extract_normalized_docx_document_ir,
-                )
-
-                document_structure = extract_normalized_docx_document_ir(
-                    stored.read_bytes(), filename=filename
+                document_structure = build_document_structure_ir(
+                    stored.read_bytes(),
+                    filename=filename,
+                    source_id=text(source.get("source_id")),
+                    declared_mime=text(source.get("mime_type") or source.get("content_type")),
+                    legacy_text=text(parsed.get("text")),
                 )
             except Exception as exc:
                 structure_error = {
-                    "code": "DOCX_DOCUMENT_STRUCTURE_IR_FAILED",
-                    "detail": f"{type(exc).__name__}: {exc}"[:500],
-                    "operator_action": "inspect DOCX integrity and python-docx compatibility",
-                }
-        elif stored.exists() and suffix == ".pdf":
-            try:
-                from .._pdf_document_structure_ir import extract_pdf_document_ir
-
-                document_structure = extract_pdf_document_ir(
-                    stored.read_bytes(), filename=filename
-                )
-            except Exception as exc:
-                structure_error = {
-                    "code": "PDF_DOCUMENT_STRUCTURE_IR_FAILED",
+                    "code": "DOCUMENT_INGESTION_PIPELINE_FAILED",
                     "detail": f"{type(exc).__name__}: {exc}"[:500],
                     "operator_action": (
-                        "inspect PDF integrity, encryption and pypdf layout compatibility"
+                        "inspect source integrity, adapter registry and parsing-plan receipts"
                     ),
                 }
         parsed_sources.append(
@@ -135,6 +121,19 @@ def _attach_document_structure_assets(
         and int(gap.get("count") or 0) > 0
         and bool(gap.get("blocks_formal_understanding"))
     )
+    adapter_execution_count = sum(len(as_list(row.get("adapter_receipts"))) for row in rows)
+    adapter_names = sorted(
+        {
+            text(receipt.get("adapter_name"))
+            for row in rows
+            for receipt in as_list(row.get("adapter_receipts"))
+            if isinstance(receipt, dict) and text(receipt.get("adapter_name"))
+        }
+    )
+    plan_status_distribution: dict[str, int] = {}
+    for row in rows:
+        status = text(as_dict(row.get("parsing_plan")).get("status")) or "UNKNOWN"
+        plan_status_distribution[status] = plan_status_distribution.get(status, 0) + 1
     asset["document_structure_assets"] = {
         "schema": "qualibug.enterprise-document-structure-assets.v1",
         "source_count": len(rows),
@@ -146,6 +145,9 @@ def _attach_document_structure_assets(
         "multi_column_page_count": multi_column_page_count,
         "unsupported_content_count": unsupported_count,
         "critical_structure_gap_count": critical_structure_gap_count,
+        "adapter_execution_count": adapter_execution_count,
+        "adapter_names": adapter_names,
+        "parsing_plan_status_distribution": plan_status_distribution,
         "items": rows,
         "errors": errors,
         "document_order_is_business_flow": False,
@@ -260,6 +262,13 @@ def enrich_asset_with_enterprise_understanding(
             "document_structure_unsupported_content_count": int(
                 structure_assets.get("unsupported_content_count") or 0
             ),
+            "document_adapter_execution_count": int(
+                structure_assets.get("adapter_execution_count") or 0
+            ),
+            "document_adapter_names": list(structure_assets.get("adapter_names") or []),
+            "document_parsing_plan_status_distribution": dict(
+                structure_assets.get("parsing_plan_status_distribution") or {}
+            ),
             "document_ir_context_resolved_fact_count": int(
                 ir_receipt.get("resolved_fact_count") or 0
             ),
@@ -282,6 +291,11 @@ def enrich_asset_with_enterprise_understanding(
             "field_or_entity_inventory_alone_cannot_pass_understanding_gate": True,
             "document_context_resolves_before_understanding_model": parsed_sources is not None,
             "document_context_promotions_are_conflict_reconciled": parsed_sources is not None,
+            "document_adapter_registry_enabled": parsed_sources is not None,
+            "document_parsing_planner_enabled": parsed_sources is not None,
+            "document_multi_adapter_merge_enabled": parsed_sources is not None,
+            "document_unknown_format_fails_visible": True,
+            "document_business_understanding_is_format_agnostic": True,
             "docx_native_structure_ir_enabled": parsed_sources is not None,
             "pdf_page_layout_structure_ir_enabled": parsed_sources is not None,
             "pdf_scanned_pages_fail_closed": True,
