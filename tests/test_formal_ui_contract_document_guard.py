@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from ai_test_asset_center import discovery_runtime_semantic_binding as _runtime_binding  # noqa: F401
 from ai_test_asset_center.enterprise_knowledge_center import (
     extract_formal_ui_contracts,
 )
