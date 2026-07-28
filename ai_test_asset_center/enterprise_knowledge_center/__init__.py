@@ -23,12 +23,16 @@ from ._formal_ui_persistent_probe_guard import (  # noqa: F401
 from ._formal_ui_visual_baseline_guard import (  # noqa: F401
     install_formal_ui_visual_baseline_guard,
 )
+from ._formal_ui_visual_viewport_guard import (  # noqa: F401
+    install_formal_ui_visual_viewport_guard,
+)
 
 # Additive parser registration only. It opens no files, browser or target connection.
 install_formal_ui_root_array_guard()
 install_formal_ui_contract_parser()
 install_formal_ui_persistent_probe_guard()
 install_formal_ui_visual_baseline_guard()
+install_formal_ui_visual_viewport_guard()
 
 # Explicit re-exports for underscore-prefixed symbols
 from ._common import _SEMANTIC_LEXICON_CACHE  # noqa: F401
@@ -187,5 +191,6 @@ __all__ = [
     "install_formal_ui_root_array_guard",
     "install_formal_ui_persistent_probe_guard",
     "install_formal_ui_visual_baseline_guard",
+    "install_formal_ui_visual_viewport_guard",
     "_cli",
 ]
