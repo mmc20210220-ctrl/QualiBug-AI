@@ -7,7 +7,8 @@ those symbols with stable additive wrappers:
 * exact accepted rule/interface identities;
 * canonical-field response observers;
 * enterprise and explicit scan UI contracts;
-* formal UI obligations using the one registered experiment-mainline authority.
+* source-declared asynchronous event contracts;
+* formal UI and event obligations using the single experiment mainline.
 """
 from __future__ import annotations
 
@@ -16,15 +17,23 @@ from typing import Any
 
 from . import discovery_runtime_planning as _planning
 from .effect_observer_binding import bind_source_effect_observers
+from .formal_event_surface import install_formal_event_surface
 from .formal_ui_surface import install_formal_ui_surface
 from .formal_ui_surface_guard import install_formal_ui_read_only_guard
 from .non_http_observers import install_non_http_observers
+from .scan_event_contract_overlay import (
+    bind_scan_event_contract_context,
+    overlay_scan_event_contracts,
+    reset_scan_event_contract_context,
+)
 from .scan_ui_contract_overlay import (
     bind_scan_ui_contract_context,
     overlay_scan_ui_contracts,
     reset_scan_ui_contract_context,
 )
 from .semantic_operation_binding import bind_accepted_semantic_operations
+from .source_event_contract_binding import bind_source_event_contracts
+from .source_event_obligation_binding import install_source_event_obligation_binding
 from .source_ui_contract_binding import bind_source_ui_contracts
 from .source_ui_contract_source_guard import (
     install_source_ui_contract_source_guard,
@@ -37,14 +46,16 @@ from .source_ui_obligation_compat import (
 _INSTALL_MARKER = "_qualibug_semantic_operation_binding_installed"
 _ORIGINAL_MARKER = "_qualibug_original_behavior_ir_builder"
 
-# Register formal observation and UI protocol surfaces before any obligation or experiment is
-# compiled. Every installer is idempotent and performs no target I/O.
+# Register formal surfaces before any obligation or experiment is compiled. Every installer is
+# idempotent and performs no target I/O.
 install_non_http_observers()
 install_formal_ui_surface()
 install_formal_ui_read_only_guard()
+install_formal_event_surface()
 install_source_ui_contract_source_guard()
 install_source_ui_obligation_binding()
 install_source_ui_family_vector_compat()
+install_source_event_obligation_binding()
 
 
 if hasattr(_planning, _ORIGINAL_MARKER):
@@ -67,13 +78,7 @@ def _dict(value: Any) -> dict[str, Any]:
 
 
 def _planning_inputs_with_declared_adapters(inputs: Any) -> Any:
-    """Give planning one adapter declaration regardless of which public entry called it.
-
-    ``pipeline_runtime`` already copies top-level ``declared_adapters`` into the runtime
-    contract. Direct planning callers did not, so the IR could say ui_browser=true while the
-    experiment compiler still saw http-only (or vice versa). Merge once here and pass a copied
-    frozen dataclass; never mutate the caller's campaign context.
-    """
+    """Give planning one adapter declaration regardless of which public entry called it."""
     context = dict(_dict(getattr(inputs, "campaign_context", {})))
     submitted = [
         _text(value)
@@ -106,7 +111,8 @@ def build_behavior_ir_with_semantic_operation_bindings(
 ) -> dict[str, Any]:
     """Build canonical IR and apply only exact source-grounded joins."""
 
-    effective_asset, scan_ui_receipt = overlay_scan_ui_contracts(asset)
+    ui_asset, scan_ui_receipt = overlay_scan_ui_contracts(asset)
+    effective_asset, scan_event_receipt = overlay_scan_event_contracts(ui_asset)
     behavior_ir = _original_build_behavior_ir(
         effective_asset,
         project_id=project_id,
@@ -124,8 +130,13 @@ def build_behavior_ir_with_semantic_operation_bindings(
         observer_ir,
         effective_asset,
     )
-    ui_ir["scan_ui_contract_overlay_receipt"] = dict(scan_ui_receipt)
-    return ui_ir
+    event_ir, _event_receipt = bind_source_event_contracts(
+        ui_ir,
+        effective_asset,
+    )
+    event_ir["scan_ui_contract_overlay_receipt"] = dict(scan_ui_receipt)
+    event_ir["scan_event_contract_overlay_receipt"] = dict(scan_event_receipt)
+    return event_ir
 
 
 if not getattr(_planning, _INSTALL_MARKER, False):
@@ -136,15 +147,16 @@ if not getattr(_planning, _INSTALL_MARKER, False):
 
 
 def build_discovery_plan(inputs: Any, campaign_handle: Any) -> Any:
-    """Bind the immutable scan context for the duration of one planning call."""
+    """Bind immutable UI and event scan contexts for one planning call."""
     effective_inputs = _planning_inputs_with_declared_adapters(inputs)
-    token = bind_scan_ui_contract_context(
-        _dict(getattr(effective_inputs, "campaign_context", {}))
-    )
+    context = _dict(getattr(effective_inputs, "campaign_context", {}))
+    ui_token = bind_scan_ui_contract_context(context)
+    event_token = bind_scan_event_contract_context(context)
     try:
         return _planning.build_discovery_plan(effective_inputs, campaign_handle)
     finally:
-        reset_scan_ui_contract_context(token)
+        reset_scan_event_contract_context(event_token)
+        reset_scan_ui_contract_context(ui_token)
 
 
 __all__ = [
