@@ -14,7 +14,6 @@ from .professional_ui_accessibility_engine import (
     RULE_CATALOG,
     SCHEMA_VERSION,
     STANDARD,
-    STANDARD_RULES,
     WCAG_VERSION,
 )
 
@@ -111,7 +110,7 @@ def _projection(result: dict[str, Any]) -> dict[str, Any]:
             else "missing_authority"
         )
         resolved_rules = (
-            list(STANDARD_RULES)
+            list(RULE_CATALOG)
             if resolved_standard == STANDARD and not explicit_rules
             else explicit_rules
         )
