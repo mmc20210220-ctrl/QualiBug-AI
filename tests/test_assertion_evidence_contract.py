@@ -1,26 +1,10 @@
 """Kind-to-evidence and observer-dispatch contracts.
 
-Four capabilities were compiled and executed while being structurally incapable of
-returning a verdict. That is worse than a missing feature: it spends real requests
-against a customer system, consumes budget, and reports a shape that looks like
-coverage.
-
-* Three assertion kinds read observation keys nothing writes. Verified by enumerating
-  every ``observations["..."] =`` assignment in the package (58 distinct keys):
-  ``collection``, ``invariant_held`` and ``surfaces_agree`` are written by nothing.
-  Empirically, ``cross_surface_consistency`` produced 78 receipts across the stored
-  artifacts, every one INDETERMINATE with CROSS_SURFACE_EVIDENCE_MISSING.
-* ``temporal_date_boundary`` is compiled as an assertion kind by
-  experiment_protocols_base but exists in no SUPPORTED_KINDS set, so it can only land
-  as a harness error.
-* ``write_observer`` was registered ``implemented=True`` with no dispatch branch, so it
-  passed compile_observer_requirements and then returned UNSUPPORTED at runtime.
-
-These tests derive the produced-key set and the dispatch set from source, so a new
-kind or observer added without a producer fails here rather than silently in
-production.
+Four capabilities were compiled and executed while being structurally incapable
+of returning a verdict. These tests derive produced keys and observer dispatch
+coverage from source plus the validated runtime registration entry point, so a
+new kind or observer cannot silently compile without evidence production.
 """
-
 from __future__ import annotations
 
 import re
@@ -37,7 +21,10 @@ from ai_test_asset_center.assertion_dsl_base import (
     unproducible_assertion_evidence,
 )
 from ai_test_asset_center.experiment_compiler_obligation import BLOCK_REASONS
-from ai_test_asset_center.observer_contracts_base import OBSERVER_REGISTRY
+from ai_test_asset_center.observer_contracts_base import (
+    OBSERVER_REGISTRY,
+    registered_observer_ids,
+)
 
 
 PACKAGE = Path(__file__).resolve().parents[1] / "ai_test_asset_center"
@@ -58,7 +45,7 @@ def _produced_observation_keys() -> set[str]:
 
 
 def _dispatched_observer_ids() -> set[str]:
-    """Observer ids with a real branch in observe_experiment_requirements."""
+    """Observer ids with a static branch or a validated registered handler."""
     source = OBSERVER_SOURCE.read_text(encoding="utf-8")
     marker = "def observe_experiment_requirements"
     assert marker in source, "observe_experiment_requirements not found"
@@ -66,23 +53,19 @@ def _dispatched_observer_ids() -> set[str]:
     dispatched = set(re.findall(r'observer_id == "([a-z_0-9]+)"', body))
     for group in re.findall(r"observer_id in \{([^}]*)\}", body):
         dispatched.update(re.findall(r'"([a-z_0-9]+)"', group))
+    dispatched.update(registered_observer_ids())
     return dispatched
 
 
 def test_produced_observation_keys_are_discoverable() -> None:
     produced = _produced_observation_keys()
     assert len(produced) > 40, f"key extraction looks broken: {sorted(produced)}"
-    # Anchors that must always be produced.
     assert {"before_state", "after_state", "execution_steps"} <= produced
 
 
 @pytest.mark.parametrize("key", sorted(UNPRODUCED_OBSERVATION_KEYS))
 def test_recorded_unproduced_keys_are_still_unproduced(key: str) -> None:
-    """When a producer lands, delete the entry -- do not leave it stale.
-
-    A stale entry would keep blocking (or keep flagging) a capability that actually
-    works, which is the mirror image of the defect this file exists for.
-    """
+    """When a producer lands, delete the stale unproduced-key declaration."""
     produced = _produced_observation_keys()
     assert key not in produced, (
         f"{key!r} is now produced by an observer; remove it from "
@@ -92,7 +75,6 @@ def test_recorded_unproduced_keys_are_still_unproduced(key: str) -> None:
 
 
 def test_every_required_observation_key_is_accounted_for() -> None:
-    """A kind's required key is either produced, or explicitly recorded as not."""
     produced = _produced_observation_keys()
     unaccounted: list[str] = []
     for kind, keys in KIND_REQUIRED_OBSERVATION_KEYS.items():
@@ -106,12 +88,6 @@ def test_every_required_observation_key_is_accounted_for() -> None:
 
 
 def test_unproducible_kinds_are_blocked_before_and_after_alias_resolution() -> None:
-    """A protocol may emit the family name or the evaluator name; both must block.
-
-    _FAMILY_ASSERTION_KIND emits "consistency" while the dead kind is registered as
-    "cross_surface_consistency". Matching only one of the two would let the family
-    name straight through.
-    """
     for kind in UNPRODUCIBLE_ASSERTION_KINDS:
         assert unproducible_assertion_evidence(kind)
     for family_name, evaluator_name in KIND_ALIASES.items():
@@ -123,21 +99,19 @@ def test_unproducible_kinds_are_blocked_before_and_after_alias_resolution() -> N
 
 
 def test_satisfiable_kinds_are_not_blocked() -> None:
-    """Over-blocking silently removes coverage, so pin the working kinds."""
-    for kind in ("http_status", "state_transition", "postcondition", "conservation",
-                 "owner_tenant_visibility", "field_delta", "idempotency_effect"):
+    for kind in (
+        "http_status",
+        "state_transition",
+        "postcondition",
+        "conservation",
+        "owner_tenant_visibility",
+        "field_delta",
+        "idempotency_effect",
+    ):
         assert unproducible_assertion_evidence(kind) == "", kind
 
 
 def test_concurrency_is_not_blocked() -> None:
-    """Concurrency keeps compiling on purpose.
-
-    invariant_held is unproduced like the others, but the barrier protocol and the
-    barrier_timeline / final_state observers are real and exercised. Blocking would
-    discard working concurrency evidence in order to suppress a missing verdict, and
-    that verdict is already visible as a BLOCKED terminal with reason
-    ASSERTION_INDETERMINATE.
-    """
     assert unproducible_assertion_evidence("concurrency") == ""
     assert unproducible_assertion_evidence("concurrency_final_invariant") == ""
 
@@ -150,13 +124,8 @@ def test_block_reason_codes_are_registered() -> None:
         assert code in BLOCK_REASONS
 
 
-def test_every_implemented_observer_has_a_dispatch_branch() -> None:
-    """implemented=True with no branch compiles and then returns UNSUPPORTED.
-
-    compile_observer_requirements only checks ``implemented is True``, so a registry
-    entry without a handler passes compilation and dies at observation time. This is
-    exactly how write_observer shipped.
-    """
+def test_every_implemented_observer_has_a_dispatch_path() -> None:
+    """Built-ins need a branch; registered observers need a validated handler."""
     dispatched = _dispatched_observer_ids()
     declared = {
         observer_id
@@ -165,31 +134,23 @@ def test_every_implemented_observer_has_a_dispatch_branch() -> None:
     }
     missing = sorted(declared - dispatched)
     assert not missing, (
-        "observers declared implemented=True in OBSERVER_REGISTRY with no branch in "
-        f"observe_experiment_requirements: {missing}"
+        "observers declared implemented=True with neither a static dispatch branch "
+        f"nor a registered handler: {missing}"
     )
 
 
 def test_write_observer_is_not_registered_as_an_observation_surface() -> None:
-    """It is a governance callback parameter name, never an observer id."""
     assert "write_observer" not in OBSERVER_REGISTRY
 
 
-def test_every_dispatched_observer_is_declared() -> None:
-    """A handler with no registry entry can never be required, so it is dead code."""
+def test_every_static_or_registered_dispatch_is_declared() -> None:
     dispatched = _dispatched_observer_ids()
     undeclared = sorted(dispatched - set(OBSERVER_REGISTRY))
     assert not undeclared, (
-        f"dispatch branches for observers absent from OBSERVER_REGISTRY: {undeclared}"
+        f"dispatch paths for observers absent from OBSERVER_REGISTRY: {undeclared}"
     )
 
 
-def test_unproducible_kinds_remain_in_supported_kinds_where_they_have_evaluators() -> None:
-    """Blocking happens at compile time; the evaluator stays intact.
-
-    Removing them from SUPPORTED_KINDS would change a fail-closed
-    ``*_EVIDENCE_MISSING`` INDETERMINATE into an ``unsupported_assertion_kind`` raise
-    for any historical artifact being replayed.
-    """
+def test_unproducible_kinds_remain_supported_where_evaluators_exist() -> None:
     for kind in ("cardinality", "cross_surface_consistency"):
         assert kind in SUPPORTED_KINDS
