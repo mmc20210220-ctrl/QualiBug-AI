@@ -43,6 +43,9 @@ from .professional_ui_contract_guard import (
 from .professional_ui_interaction_cleanup import (
     install_controlled_ui_interaction,
 )
+from .professional_ui_interaction_contract_guard import (
+    install_controlled_ui_interaction_contract_guard,
+)
 from .professional_ui_readonly import install_professional_ui_readonly
 from .professional_ui_responsive_accessibility import (
     install_professional_ui_responsive_accessibility,
@@ -85,8 +88,8 @@ _ORIGINAL_MARKER = "_qualibug_original_behavior_ir_builder"
 
 # Register formal surfaces before any obligation or experiment is compiled. Every installer is
 # idempotent and performs no target I/O. The UI installers extend one authority in order:
-# read-only assertions, scan admission, responsive/accessibility behavior, then governed
-# interaction whose cleanup receipt gates observation and Oracle eligibility.
+# read-only assertions, scan admission, responsive/accessibility behavior, governed interaction,
+# then its plan-level cleanup/configuration guard.
 install_non_http_observers()
 install_formal_ui_surface()
 install_formal_ui_read_only_guard()
@@ -94,6 +97,7 @@ install_professional_ui_readonly()
 install_professional_ui_contract_guard()
 install_professional_ui_responsive_accessibility()
 install_controlled_ui_interaction()
+install_controlled_ui_interaction_contract_guard()
 install_formal_event_surface()
 install_formal_event_capability_guard()
 install_formal_event_pre_cleanup_observer()
