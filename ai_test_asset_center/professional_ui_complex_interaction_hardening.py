@@ -1,10 +1,12 @@
-"""File-system and hashing hardening for complex UI interactions."""
+"""File-system, popup-navigation and coverage hardening for complex UI interactions."""
 from __future__ import annotations
 
 import hashlib
 import os
+import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin
 
 from . import professional_ui_complex_interactions as _complex
 from . import professional_ui_interaction_cleanup as _interaction
@@ -12,6 +14,7 @@ from . import professional_ui_interaction_cleanup as _interaction
 _INSTALL_MARKER = "_qualibug_complex_interaction_hardening_installed"
 _ORIGINAL_RESOLVER = "_qualibug_upload_resolver_before_hardening"
 _ORIGINAL_DOWNLOAD_HASH = "_qualibug_download_hash_before_hardening"
+_ORIGINAL_COMPLEX_EXECUTE = "_qualibug_complex_executor_before_popup_hardening"
 _CHUNK_BYTES = 1024 * 1024
 
 
@@ -162,6 +165,85 @@ def _hash_download_hardened(download: Any, max_bytes: int) -> dict[str, Any]:
     }
 
 
+def _execute_with_final_popup_url(
+    *,
+    page: Any,
+    step: dict[str, Any],
+    runtime_contract: dict[str, Any],
+) -> dict[str, Any]:
+    original = getattr(_complex, _ORIGINAL_COMPLEX_EXECUTE)
+    if _text(step.get("action")).lower() != _complex.CLICK_POPUP:
+        return original(page=page, step=step, runtime_contract=runtime_contract)
+
+    locator, strategy = _interaction._candidate(page, step)
+    _interaction._require_unique(locator, _complex.CLICK_POPUP)
+    timeout = int(step.get("timeout_ms") or 10_000)
+    _surface, frame_identity = _complex._frame_surface(page, step)
+    expected = urljoin(
+        _text(runtime_contract.get("approved_base_url"), limit=2000).rstrip("/") + "/",
+        _text(step.get("expected_url"), limit=2000),
+    )
+    expected_origin = _complex._origin(expected)
+    approved = _complex._approved_origins(runtime_contract, "approved_popup_origins")
+    if expected_origin not in approved:
+        raise RuntimeError("UI_POPUP_EXPECTED_ORIGIN_NOT_APPROVED")
+    popup = None
+    try:
+        with page.expect_popup(timeout=timeout) as popup_info:
+            locator.click(timeout=timeout)
+        popup = popup_info.value
+        popup.wait_for_url(
+            expected,
+            wait_until=_text(step.get("wait_until") or "domcontentloaded", limit=40),
+            timeout=timeout,
+        )
+        actual = _text(popup.url, limit=2000)
+        if _complex._origin(actual) not in approved:
+            raise RuntimeError("UI_POPUP_ACTUAL_ORIGIN_NOT_APPROVED")
+        if actual != expected:
+            raise RuntimeError("UI_POPUP_URL_MISMATCH")
+        return {
+            "action": _complex.CLICK_POPUP,
+            "phase": _text(step.get("phase")),
+            "locator_strategy": strategy,
+            "locator_intent_fingerprint": _interaction._fingerprint(
+                step.get("locator_intent") or step.get("selector")
+            ),
+            "raw_input_value_included": False,
+            **frame_identity,
+            "popup_url_fingerprint": _interaction._fingerprint(actual),
+            "popup_origin_fingerprint": _interaction._fingerprint(
+                _complex._origin(actual)
+            ),
+            "popup_title_fingerprint": _interaction._fingerprint(
+                _text(popup.title(), limit=500)
+            ),
+            "popup_closed_after_observation": True,
+            "raw_popup_url_included": False,
+            "raw_popup_title_included": False,
+            "waited_for_source_declared_final_url": True,
+        }
+    finally:
+        if popup is not None:
+            try:
+                popup.close()
+            except Exception:
+                pass
+
+
+def _sync_complex_coverage() -> None:
+    coverage = sys.modules.get(
+        "ai_test_asset_center.professional_ui_coverage_projection"
+    )
+    if coverage is None:
+        return
+    actions = _interaction.INTERACTIVE_ACTIONS
+    coverage.INTERACTIVE_ACTIONS = actions
+    categories = getattr(coverage, "CATEGORY_ACTIONS", None)
+    if isinstance(categories, dict):
+        categories["workflow_interaction"] = actions
+
+
 def install_professional_ui_complex_interaction_hardening() -> None:
     if getattr(_complex, _INSTALL_MARKER, False):
         return
@@ -175,8 +257,19 @@ def install_professional_ui_complex_interaction_hardening() -> None:
         _ORIGINAL_DOWNLOAD_HASH,
         getattr(_complex, _ORIGINAL_DOWNLOAD_HASH, _complex._hash_download),
     )
+    setattr(
+        _complex,
+        _ORIGINAL_COMPLEX_EXECUTE,
+        getattr(
+            _complex,
+            _ORIGINAL_COMPLEX_EXECUTE,
+            _complex._execute_complex_interaction,
+        ),
+    )
     _complex._resolve_upload_files = _resolve_upload_files_hardened
     _complex._hash_download = _hash_download_hardened
+    _complex._execute_complex_interaction = _execute_with_final_popup_url
+    _sync_complex_coverage()
     setattr(_complex, _INSTALL_MARKER, True)
 
 
