@@ -8,6 +8,7 @@ from typing import Any, Iterable
 
 from .contract import (
     DOCUMENT_IR_MERGE_RECEIPT_SCHEMA,
+    MODE_SUPPLEMENTAL,
     DocumentSource,
     text,
     unique_text,
@@ -30,10 +31,6 @@ def _dict(value: Any) -> dict[str, Any]:
 
 def _normalized_text(value: Any) -> str:
     return re.sub(r"\s+", "", text(value))
-
-
-def _status_rank(value: Any) -> int:
-    return {"COMPLETE": 0, "PASS": 0, "PARTIAL": 1, "BLOCKED": 2}.get(text(value).upper(), 1)
 
 
 def _merge_gap_rows(rows: Iterable[tuple[str, dict[str, Any]]]) -> list[dict[str, Any]]:
@@ -59,6 +56,106 @@ def _merge_gap_rows(rows: Iterable[tuple[str, dict[str, Any]]]) -> list[dict[str
             [*_list(existing.get("observed_by_adapters")), adapter_name]
         )
     return list(merged.values())
+
+
+def _collect_gap_resolutions(valid: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for execution in valid:
+        adapter_name = text(execution.get("adapter_name"))
+        document_ir = _dict(execution.get("document_ir"))
+        for raw in _list(document_ir.get("resolves_gaps")):
+            if not isinstance(raw, dict):
+                continue
+            reason = text(raw.get("reason_code") or raw.get("kind"))
+            if not reason:
+                continue
+            row = dict(raw)
+            row["reason_code"] = reason
+            row["resolved_by_adapter"] = adapter_name
+            row["pages"] = sorted(
+                {int(page) for page in _list(row.get("pages")) if str(page).isdigit()}
+            )
+            rows.append(row)
+    return rows
+
+
+def _apply_gap_resolutions(
+    unsupported: list[dict[str, Any]],
+    resolutions: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    kept: list[dict[str, Any]] = []
+    applied: list[dict[str, Any]] = []
+    by_reason: dict[str, list[dict[str, Any]]] = {}
+    for resolution in resolutions:
+        by_reason.setdefault(text(resolution.get("reason_code")), []).append(resolution)
+
+    for raw in unsupported:
+        gap = dict(raw)
+        reason = text(gap.get("reason_code") or gap.get("kind"))
+        matching = by_reason.get(reason) or []
+        if not matching:
+            kept.append(gap)
+            continue
+        gap_pages = {
+            int(page) for page in _list(gap.get("pages")) if str(page).isdigit()
+        }
+        wildcard = any(not _list(row.get("pages")) for row in matching)
+        resolved_pages = {
+            int(page)
+            for row in matching
+            for page in _list(row.get("pages"))
+            if str(page).isdigit()
+        }
+        if gap_pages:
+            remaining = sorted(gap_pages - resolved_pages)
+            resolved = sorted(gap_pages & resolved_pages)
+            if resolved:
+                applied.append(
+                    {
+                        "reason_code": reason,
+                        "resolved_pages": resolved,
+                        "resolutions": matching,
+                    }
+                )
+            if remaining:
+                gap["pages"] = remaining
+                gap["count"] = len(remaining)
+                gap["partially_resolved_pages"] = resolved
+                kept.append(gap)
+            continue
+        if wildcard:
+            applied.append(
+                {
+                    "reason_code": reason,
+                    "resolved_pages": [],
+                    "resolutions": matching,
+                }
+            )
+            continue
+        kept.append(gap)
+    return kept, applied
+
+
+def _composed_plain_text(blocks: list[dict[str, Any]], fallback: str) -> str:
+    allowed = {"HEADING", "PARAGRAPH", "LIST_ITEM"}
+    values: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for block in blocks:
+        if text(block.get("region")) not in {"", "body"}:
+            continue
+        if block.get("excluded_from_main_flow"):
+            continue
+        if text(block.get("type")) not in allowed:
+            continue
+        value = text(block.get("text"))
+        if not value:
+            continue
+        identity = (text(block.get("source_locator")), _normalized_text(value))
+        if identity in seen:
+            continue
+        seen.add(identity)
+        values.append(value)
+    return "\n".join(values).strip() or str(fallback or "")
 
 
 def merge_document_irs(
@@ -140,8 +237,6 @@ def merge_document_irs(
                     },
                 }
                 conflicts.append(conflict)
-                # Keep both contradictory observations. Their source locator remains the
-                # same so the conflict is auditable, while block identity stays unique.
             block_id = text(block.get("block_id"))
             if block_id in block_ids:
                 block_id = _stable_id("merged_document_block", block_id, adapter_name, locator)
@@ -182,7 +277,7 @@ def merge_document_irs(
 
     gap_rows: list[tuple[str, dict[str, Any]]] = []
     adapter_receipts: list[dict[str, Any]] = []
-    text_candidates: list[tuple[int, str, str]] = []
+    full_text_candidates: list[tuple[int, str, str]] = []
     for execution in valid:
         adapter_name = text(execution.get("adapter_name"))
         document_ir = _dict(execution.get("document_ir"))
@@ -192,8 +287,10 @@ def merge_document_irs(
             if isinstance(gap, dict):
                 gap_rows.append((adapter_name, gap))
         plain_text = str(document_ir.get("plain_text") or "")
-        if plain_text.strip():
-            text_candidates.append((int(execution.get("match_score") or 0), adapter_name, plain_text))
+        if plain_text.strip() and text(execution.get("mode")) != MODE_SUPPLEMENTAL:
+            full_text_candidates.append(
+                (int(execution.get("match_score") or 0), adapter_name, plain_text)
+            )
 
     for error in errors:
         gap_rows.append(
@@ -213,19 +310,21 @@ def merge_document_irs(
         )
     gap_rows.extend(("document-ir-merger", conflict) for conflict in conflicts)
     unsupported = _merge_gap_rows(gap_rows)
+    resolutions = _collect_gap_resolutions(valid)
+    unsupported, applied_resolutions = _apply_gap_resolutions(unsupported, resolutions)
 
-    text_candidates.sort(key=lambda row: (-row[0], row[1]))
-    plain_text = text_candidates[0][2] if text_candidates else str(base_ir.get("plain_text") or "")
+    full_text_candidates.sort(key=lambda row: (-row[0], row[1]))
+    authority_text = full_text_candidates[0][2] if full_text_candidates else str(base_ir.get("plain_text") or "")
     text_divergences: list[dict[str, Any]] = []
-    authority_normalized = _normalized_text(plain_text)
-    for _score, adapter_name, candidate in text_candidates[1:]:
+    authority_normalized = _normalized_text(authority_text)
+    for _score, adapter_name, candidate in full_text_candidates[1:]:
         normalized = _normalized_text(candidate)
         if normalized and normalized != authority_normalized:
             text_divergences.append(
                 {
                     "adapter_name": adapter_name,
-                    "authority_adapter": text_candidates[0][1],
-                    "authority_hash": hashlib.sha256(plain_text.encode("utf-8")).hexdigest(),
+                    "authority_adapter": full_text_candidates[0][1],
+                    "authority_hash": hashlib.sha256(authority_text.encode("utf-8")).hexdigest(),
                     "candidate_hash": hashlib.sha256(candidate.encode("utf-8")).hexdigest(),
                 }
             )
@@ -243,12 +342,6 @@ def merge_document_irs(
             }
         )
 
-    critical = [row for row in unsupported if bool(row.get("blocks_formal_understanding"))]
-    input_statuses = [
-        text(_dict(_dict(execution.get("document_ir")).get("structure_receipt")).get("status"))
-        for execution in valid
-    ]
-    status = "BLOCKED" if critical or any(_status_rank(value) >= 2 for value in input_statuses) else "PARTIAL" if unsupported or any(_status_rank(value) == 1 for value in input_statuses) else "COMPLETE"
     merged_blocks.sort(
         key=lambda row: (
             int(row.get("page") or 0),
@@ -257,6 +350,9 @@ def merge_document_irs(
             text(row.get("block_id")),
         )
     )
+    plain_text = _composed_plain_text(merged_blocks, authority_text)
+    critical = [row for row in unsupported if bool(row.get("blocks_formal_understanding"))]
+    status = "BLOCKED" if critical else "PARTIAL" if unsupported else "COMPLETE"
     block_counts = Counter(text(block.get("type")) for block in merged_blocks)
     traceable = [block for block in merged_blocks if text(block.get("source_locator"))]
     capabilities = unique_text(
@@ -279,6 +375,9 @@ def merge_document_irs(
         "block_conflict_count": len(conflicts),
         "plain_text_divergence_count": len(text_divergences),
         "execution_error_count": len(errors),
+        "declared_gap_resolution_count": len(resolutions),
+        "applied_gap_resolution_count": len(applied_resolutions),
+        "applied_gap_resolutions": applied_resolutions,
         "document_order_is_business_flow": False,
         "filename_is_business_context": False,
     }
@@ -293,6 +392,7 @@ def merge_document_irs(
         "unsupported_content_count": sum(int(row.get("count") or 0) for row in unsupported),
         "unsupported_content": unsupported,
         "critical_unsupported_content_count": sum(int(row.get("count") or 0) for row in critical),
+        "applied_gap_resolution_count": len(applied_resolutions),
         "document_order_is_business_flow": False,
         "filename_is_business_context": False,
         "adapter_merge_receipt": merge_receipt,
@@ -307,6 +407,8 @@ def merge_document_irs(
         "tables": collections["tables"],
         "pages": collections["pages"],
         "unsupported_content": unsupported,
+        "resolves_gaps": resolutions,
+        "applied_gap_resolutions": applied_resolutions,
         "structure_receipt": structure_receipt,
         "parsing_plan": parsing_plan,
         "adapter_receipts": adapter_receipts,
