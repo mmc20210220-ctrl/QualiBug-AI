@@ -13,6 +13,9 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from . import _formal_ui_contracts as _contracts
+from ._formal_ui_contract_document_guard import (
+    install_formal_ui_contract_document_guard,
+)
 
 ACTION = "expect_visual_baseline"
 INPUT_PREFIX = "visual_baselines"
@@ -142,6 +145,10 @@ def _visual_gaps(expectations: list[dict[str, Any]]) -> list[str]:
 
 
 def install_formal_ui_visual_baseline_guard() -> None:
+    # A visual-contract document may carry the same schema family as its child
+    # contracts. Install the document-container filter even when the visual
+    # vocabulary itself was already registered by another import path.
+    install_formal_ui_contract_document_guard()
     if getattr(_contracts, _INSTALL_MARKER, False):
         return
     original = getattr(
