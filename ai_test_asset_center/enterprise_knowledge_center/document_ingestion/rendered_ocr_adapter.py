@@ -11,11 +11,8 @@ from .contract import (
     text,
 )
 from .ocr_adapter import OcrProvider, OcrSupplementalAdapter as _LegacyOcrSupplementalAdapter
-from .page_rendering import (
-    PageRenderBatch,
-    PageRendererRegistry,
-    build_default_page_renderer_registry,
-)
+from .page_render_registry import PageRendererRegistry, build_default_page_renderer_registry
+from .page_rendering import PageRenderBatch
 
 
 def _list(value: Any) -> list[Any]:
@@ -142,6 +139,20 @@ class OcrSupplementalAdapter(_LegacyOcrSupplementalAdapter):
                     "count": max(1, len(effective_pages)),
                     "pages": effective_pages,
                     "status": "SOURCE_COULD_NOT_BE_RENDERED_FOR_OCR",
+                    "severity": "P0",
+                    "blocks_formal_understanding": True,
+                    "included_in_plain_text_authority": False,
+                    "render_receipt": batch.receipt,
+                }
+            )
+        elif batch.receipt.get("missing_pages"):
+            unsupported.append(
+                {
+                    "kind": "PAGE_RENDERING_TARGET_PAGES_INCOMPLETE",
+                    "reason_code": "PAGE_RENDERING_TARGET_PAGES_INCOMPLETE",
+                    "count": len(batch.receipt.get("missing_pages") or []),
+                    "pages": list(batch.receipt.get("missing_pages") or []),
+                    "status": "SOME_TARGET_PAGES_COULD_NOT_BE_RENDERED",
                     "severity": "P0",
                     "blocks_formal_understanding": True,
                     "included_in_plain_text_authority": False,
