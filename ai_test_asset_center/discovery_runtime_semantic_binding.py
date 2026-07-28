@@ -50,6 +50,9 @@ from .professional_ui_accessibility_engine import (
 from .professional_ui_accessibility_observation_guard import (
     install_professional_ui_accessibility_observation_guard,
 )
+from .professional_ui_accessibility_rule_governance import (
+    install_professional_ui_accessibility_rule_governance,
+)
 from .professional_ui_accessibility_semantics_guard import (
     install_professional_ui_accessibility_semantics_guard,
 )
@@ -128,13 +131,13 @@ _ORIGINAL_MARKER = "_qualibug_original_behavior_ir_builder"
 
 # Register formal surfaces before any obligation or experiment is compiled. Every installer is
 # idempotent and performs no target I/O. The UI installers extend one authority in order:
-# read-only assertions, responsive configuration, explicit accessibility authority,
-# accessibility semantics/evidence, deterministic visual comparison, project namespace
-# governance, decode limits and renderer stabilization. Matrix engine selection is installed
-# before evidence wrappers so Chromium/Firefox/WebKit receive the same privacy policy. Governed
-# interaction, persistent cleanup and visual-registry identity remain unchanged. Matrix request
-# expansion is installed last over the final adapter and then its registered observer slot is
-# rebound, so no profile can bypass existing validators, accessibility completeness, cleanup or
+# read-only assertions, responsive configuration, conservative accessibility rule governance,
+# explicit source authority, accessibility semantics/evidence, deterministic visual comparison,
+# project namespace governance, decode limits and renderer stabilization. Matrix engine selection
+# is installed before evidence wrappers so Chromium/Firefox/WebKit receive the same privacy policy.
+# Governed interaction, persistent cleanup and visual-registry identity remain unchanged. Matrix
+# request expansion is installed last over the final adapter and then its registered observer slot
+# is rebound, so no profile can bypass existing validators, accessibility completeness, cleanup or
 # Oracle authority.
 install_non_http_observers()
 install_formal_ui_surface()
@@ -143,6 +146,7 @@ install_professional_ui_readonly()
 install_professional_ui_contract_guard()
 install_professional_ui_responsive_accessibility()
 install_professional_ui_accessibility_engine()
+install_professional_ui_accessibility_rule_governance()
 install_professional_ui_accessibility_contract_guard()
 install_professional_ui_accessibility_semantics_guard()
 install_professional_ui_accessibility_observation_guard()
