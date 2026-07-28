@@ -13,8 +13,8 @@ from .ui_upload_fixture_registry import (
 )
 
 _INSTALL_MARKER = "_qualibug_upload_fixture_routes_installed"
-_ORIGINAL_GET = "_qualibug_http_get_before_upload_fixture_routes"
-_ORIGINAL_POST = "_qualibug_http_post_before_upload_fixture_routes"
+_WRAPPER_MARKER = "_qualibug_upload_fixture_route_wrapper"
+_DELEGATE_MARKER = "_qualibug_upload_fixture_route_delegate"
 _ROUTE_TAIL = "ui-upload-fixtures"
 _MUTATING_ACTIONS = frozenset({"register", "approve", "revoke"})
 
@@ -45,21 +45,24 @@ def _authorize(handler: Any, project: str, root: Path) -> dict[str, Any] | None:
     return actor
 
 
+def _delegate(method: Any) -> Any:
+    return getattr(method, _DELEGATE_MARKER, method)
+
+
 def install_private_pilot_upload_fixture_routes() -> None:
-    if getattr(_routing.HttpRoutingMixin, _INSTALL_MARKER, False):
+    current_get = _routing.HttpRoutingMixin.do_GET
+    current_post = _routing.HttpRoutingMixin.do_POST
+    if (
+        getattr(current_get, _WRAPPER_MARKER, False)
+        and getattr(current_post, _WRAPPER_MARKER, False)
+    ):
+        setattr(_routing.HttpRoutingMixin, _INSTALL_MARKER, True)
         return
-    original_get = getattr(
-        _routing.HttpRoutingMixin,
-        _ORIGINAL_GET,
-        _routing.HttpRoutingMixin.do_GET,
-    )
-    original_post = getattr(
-        _routing.HttpRoutingMixin,
-        _ORIGINAL_POST,
-        _routing.HttpRoutingMixin.do_POST,
-    )
-    setattr(_routing.HttpRoutingMixin, _ORIGINAL_GET, original_get)
-    setattr(_routing.HttpRoutingMixin, _ORIGINAL_POST, original_post)
+
+    # If another installer replaced one method after our first installation, wrap
+    # the currently active method rather than jumping back to an early stale alias.
+    original_get = _delegate(current_get)
+    original_post = _delegate(current_post)
 
     def get_with_upload_fixture_registry(self: Any) -> None:
         parsed = urlparse(self.path)
@@ -145,6 +148,10 @@ def install_private_pilot_upload_fixture_routes() -> None:
                 409,
             )
 
+    setattr(get_with_upload_fixture_registry, _WRAPPER_MARKER, True)
+    setattr(get_with_upload_fixture_registry, _DELEGATE_MARKER, original_get)
+    setattr(post_with_upload_fixture_registry, _WRAPPER_MARKER, True)
+    setattr(post_with_upload_fixture_registry, _DELEGATE_MARKER, original_post)
     _routing.HttpRoutingMixin.do_GET = get_with_upload_fixture_registry
     _routing.HttpRoutingMixin.do_POST = post_with_upload_fixture_registry
     setattr(_routing.HttpRoutingMixin, _INSTALL_MARKER, True)
