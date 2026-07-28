@@ -12,7 +12,7 @@ those symbols with stable additive wrappers:
 * responsive viewport/media and deterministic accessibility checks;
 * immutable deterministic visual baseline regression;
 * governed non-production UI interaction with rendered and persistent cleanup equivalence;
-* minimized interactive evidence with no HAR or Playwright trace persistence;
+* minimized visual and interactive evidence with no HAR or Playwright trace persistence;
 * source-declared asynchronous event contracts;
 * source-declared sequential read-only latency budgets;
 * one formal experiment mainline for every surface.
@@ -59,6 +59,9 @@ from .professional_ui_visual_baseline_governance import (
 from .professional_ui_visual_determinism_guard import (
     install_visual_determinism_guard,
 )
+from .professional_ui_visual_evidence_privacy import (
+    install_visual_evidence_privacy,
+)
 from .professional_ui_visual_image_guard import install_visual_image_guard
 from .professional_ui_visual_viewport_guard import install_visual_viewport_guard
 from .scan_event_contract_external_signal import (
@@ -99,11 +102,12 @@ _ORIGINAL_MARKER = "_qualibug_original_behavior_ir_builder"
 # Register formal surfaces before any obligation or experiment is compiled. Every installer is
 # idempotent and performs no target I/O. The UI installers extend one authority in order:
 # read-only assertions, scan admission, responsive/accessibility behavior, deterministic visual
-# comparison, project namespace governance, decode limits and renderer stabilization, governed
-# interaction, plan-level checks, evidence minimization, persistent cleanup observation, visual
-# viewport binding over the final validators, then direct-scan admission parity. Installing the
-# visual observer before the interaction observer means interactive visual findings inherit the
-# cleanup-equivalence gate instead of bypassing it.
+# comparison, project namespace governance, decode limits, renderer stabilization and visual
+# evidence privacy, governed interaction, plan-level checks, interaction evidence minimization,
+# persistent cleanup observation, visual viewport binding over the final validators, then direct-
+# scan admission parity. Installing visual evidence/observer wrappers before interaction means the
+# governed interaction dispatcher preserves them for read-only visual requests, while interactive
+# visual findings still inherit cleanup equivalence.
 install_non_http_observers()
 install_formal_ui_surface()
 install_formal_ui_read_only_guard()
@@ -114,6 +118,7 @@ install_professional_ui_visual_baseline()
 install_visual_baseline_governance()
 install_visual_image_guard()
 install_visual_determinism_guard()
+install_visual_evidence_privacy()
 install_controlled_ui_interaction()
 install_controlled_ui_interaction_contract_guard()
 install_controlled_ui_interaction_privacy_guard()
