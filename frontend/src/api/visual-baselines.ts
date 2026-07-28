@@ -44,11 +44,7 @@ export type VisualBaselineInventory = {
 
 type VisualBaselineEnvelope = {
   ok?: boolean;
-  data?: VisualBaselineInventory | {
-    ok?: boolean;
-    status?: string;
-    baseline?: VisualBaselineRecord;
-  };
+  data?: unknown;
   error?: string;
   message?: string;
 };
@@ -61,6 +57,52 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function asString(value: unknown): string {
   return typeof value === 'string' ? value : '';
+}
+
+function asNumber(value: unknown): number {
+  const number = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function asBoolean(value: unknown): boolean {
+  return value === true;
+}
+
+function optionalString(value: unknown): string | undefined {
+  const text = asString(value);
+  return text || undefined;
+}
+
+function toVisualBaselineRecord(value: unknown): VisualBaselineRecord | null {
+  const row = asRecord(value);
+  const baselineId = asString(row.baseline_id);
+  const ref = asString(row.ref);
+  const sha256 = asString(row.sha256);
+  if (!baselineId || !ref || !sha256) return null;
+  return {
+    baseline_id: baselineId,
+    ref,
+    namespace: asString(row.namespace),
+    status: asString(row.status),
+    authority: asString(row.authority),
+    sha256,
+    size_bytes: asNumber(row.size_bytes),
+    image_width: asNumber(row.image_width),
+    image_height: asNumber(row.image_height),
+    viewport_width: asNumber(row.viewport_width),
+    viewport_height: asNumber(row.viewport_height),
+    full_page: asBoolean(row.full_page),
+    renderer_profile: asString(row.renderer_profile),
+    scroll_origin: asString(row.scroll_origin),
+    font_readiness: asString(row.font_readiness),
+    created_at_utc: asString(row.created_at_utc),
+    created_by: asString(row.created_by),
+    approved_from_baseline_id: optionalString(row.approved_from_baseline_id),
+    revoked_at_utc: optionalString(row.revoked_at_utc),
+    revoked_by: optionalString(row.revoked_by),
+    revocation_reason: optionalString(row.revocation_reason),
+    raw_pixels_embedded_in_registry: row.raw_pixels_embedded_in_registry === true,
+  };
 }
 
 async function visualBaselineRequest(
@@ -80,7 +122,13 @@ async function visualBaselineRequest(
   const raw = await response.text();
   let payload: VisualBaselineEnvelope = {};
   try {
-    payload = asRecord(JSON.parse(raw)) as VisualBaselineEnvelope;
+    const parsed = asRecord(JSON.parse(raw));
+    payload = {
+      ok: parsed.ok === true,
+      data: parsed.data,
+      error: asString(parsed.error),
+      message: asString(parsed.message),
+    };
   } catch {
     payload = {};
   }
@@ -129,20 +177,32 @@ export async function listVisualBaselines(
   }
   const query = options?.includeRevoked ? '?include_revoked=true' : '';
   const payload = await visualBaselineRequest(project, undefined, query);
-  const data = asRecord(payload.data) as VisualBaselineInventory;
+  const data = asRecord(payload.data);
+  const summary = asRecord(data.summary);
+  const baselines = Array.isArray(data.baselines)
+    ? data.baselines
+      .map(toVisualBaselineRecord)
+      .filter((row): row is VisualBaselineRecord => row !== null)
+    : [];
   return {
     ok: data.ok !== false,
     schema_version: asString(data.schema_version),
     project_id: asString(data.project_id) || project,
-    baselines: Array.isArray(data.baselines) ? data.baselines : [],
+    baselines,
     summary: {
-      active_count: Number(data.summary?.active_count || 0),
-      revoked_count: Number(data.summary?.revoked_count || 0),
-      source_registered_count: Number(data.summary?.source_registered_count || 0),
-      approved_copy_count: Number(data.summary?.approved_copy_count || 0),
+      active_count: asNumber(summary.active_count),
+      revoked_count: asNumber(summary.revoked_count),
+      source_registered_count: asNumber(summary.source_registered_count),
+      approved_copy_count: asNumber(summary.approved_copy_count),
     },
     raw_pixels_embedded: data.raw_pixels_embedded === true,
   };
+}
+
+function requiredBaselineFromPayload(payload: VisualBaselineEnvelope, message: string): VisualBaselineRecord {
+  const baseline = toVisualBaselineRecord(asRecord(payload.data).baseline);
+  if (!baseline) throw new Error(message);
+  return baseline;
 }
 
 export async function registerVisualBaseline(input: {
@@ -167,10 +227,7 @@ export async function registerVisualBaseline(input: {
       full_page: input.fullPage,
     }),
   });
-  const data = asRecord(payload.data);
-  const baseline = asRecord(data.baseline) as VisualBaselineRecord;
-  if (!baseline.baseline_id) throw new Error('后端未返回有效视觉基线记录。');
-  return baseline;
+  return requiredBaselineFromPayload(payload, '后端未返回有效视觉基线记录。');
 }
 
 export async function approveVisualBaseline(
@@ -185,9 +242,7 @@ export async function approveVisualBaseline(
       baseline_id: baselineId,
     }),
   });
-  const baseline = asRecord(asRecord(payload.data).baseline) as VisualBaselineRecord;
-  if (!baseline.baseline_id) throw new Error('后端未返回有效审批记录。');
-  return baseline;
+  return requiredBaselineFromPayload(payload, '后端未返回有效审批记录。');
 }
 
 export async function revokeVisualBaseline(
@@ -204,7 +259,5 @@ export async function revokeVisualBaseline(
       reason,
     }),
   });
-  const baseline = asRecord(asRecord(payload.data).baseline) as VisualBaselineRecord;
-  if (!baseline.baseline_id) throw new Error('后端未返回有效撤销记录。');
-  return baseline;
+  return requiredBaselineFromPayload(payload, '后端未返回有效撤销记录。');
 }
