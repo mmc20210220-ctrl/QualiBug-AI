@@ -1,0 +1,237 @@
+"""Canonical schema helpers for enterprise business understanding.
+
+This layer models what the enterprise materials say. It does not create tests,
+findings, probes, or industry assumptions. Every formal model entry must remain
+traceable to an original source span or an existing source-backed knowledge asset.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+from typing import Any, Iterable
+
+MODEL_SCHEMA = "qualibug.enterprise-business-understanding-model.v1"
+OBJECT_SCHEMA = "qualibug.enterprise-business-object.v1"
+ACTOR_SCHEMA = "qualibug.enterprise-business-actor.v1"
+OPERATION_SCHEMA = "qualibug.enterprise-business-operation.v1"
+RELATION_SCHEMA = "qualibug.enterprise-business-object-relation.v1"
+LIFECYCLE_SCHEMA = "qualibug.enterprise-business-lifecycle.v1"
+PROCESS_SCHEMA = "qualibug.enterprise-business-process.v1"
+UNKNOWN_SCHEMA = "qualibug.enterprise-business-unknown.v1"
+GATE_SCHEMA = "qualibug.enterprise-understanding-model-gate.v1"
+
+
+def text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def as_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def stable_id(prefix: str, *parts: Any) -> str:
+    material = "\x1f".join(
+        json.dumps(part, ensure_ascii=False, sort_keys=True, default=str)
+        if isinstance(part, (dict, list, tuple, set))
+        else text(part)
+        for part in parts
+    )
+    return f"{prefix}:{hashlib.sha256(material.encode('utf-8')).hexdigest()[:20]}"
+
+
+def unique_text(values: Iterable[Any]) -> list[str]:
+    return sorted({text(value) for value in values if text(value)})
+
+
+def source_evidence(
+    *,
+    source_id: Any = "",
+    source_locator: Any = "",
+    quote: Any = "",
+    quote_hash: Any = "",
+    fact_id: Any = "",
+    asset_ref: Any = "",
+    derivation: str = "source_span",
+) -> dict[str, Any]:
+    evidence = {
+        "source_id": text(source_id),
+        "source_locator": text(source_locator),
+        "quote": text(quote),
+        "quote_hash": text(quote_hash),
+        "fact_id": text(fact_id),
+        "asset_ref": text(asset_ref),
+        "derivation": text(derivation) or "source_span",
+    }
+    return {key: value for key, value in evidence.items() if value}
+
+
+def evidence_from_fact(fact: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for span in as_list(fact.get("source_spans")):
+        if not isinstance(span, dict):
+            continue
+        row = source_evidence(
+            source_id=span.get("source_id"),
+            source_locator=span.get("locator") or span.get("source_locator"),
+            quote=span.get("quote") or fact.get("raw_statement"),
+            quote_hash=span.get("quote_hash"),
+            fact_id=fact.get("fact_id"),
+        )
+        if row:
+            rows.append(row)
+    if not rows and text(fact.get("fact_id")):
+        rows.append(
+            source_evidence(
+                source_id=fact.get("source_id"),
+                source_locator=fact.get("source_locator"),
+                quote=fact.get("raw_statement") or fact.get("statement"),
+                fact_id=fact.get("fact_id"),
+            )
+        )
+    return dedupe_evidence(rows)
+
+
+def dedupe_evidence(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    seen: set[tuple[str, ...]] = set()
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        row = {key: value for key, value in raw.items() if value not in (None, "", [], {})}
+        key = (
+            text(row.get("source_id")),
+            text(row.get("source_locator")),
+            text(row.get("quote_hash")),
+            text(row.get("fact_id")),
+            text(row.get("asset_ref")),
+            text(row.get("derivation")),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(row)
+    return result
+
+
+def new_unknown(
+    kind: str,
+    question: str,
+    *,
+    related_objects: Iterable[Any] = (),
+    related_operations: Iterable[Any] = (),
+    evidence: Iterable[dict[str, Any]] = (),
+    severity: str = "P1",
+    blocks_formal_understanding: bool = False,
+    reason_code: str = "",
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    object_refs = unique_text(related_objects)
+    operation_refs = unique_text(related_operations)
+    evidence_rows = dedupe_evidence(evidence)
+    unknown_id = stable_id(
+        "understanding_unknown",
+        kind,
+        question,
+        object_refs,
+        operation_refs,
+        [row.get("fact_id") or row.get("source_locator") for row in evidence_rows],
+    )
+    return {
+        "schema": UNKNOWN_SCHEMA,
+        "unknown_id": unknown_id,
+        "kind": text(kind) or "BUSINESS_DEFINITION_UNKNOWN",
+        "question": text(question),
+        "related_object_refs": object_refs,
+        "related_operation_refs": operation_refs,
+        "severity": text(severity) or "P1",
+        "blocks_formal_understanding": bool(blocks_formal_understanding),
+        "reason_code": text(reason_code) or text(kind),
+        "details": dict(details or {}),
+        "evidence": evidence_rows,
+        "resolution_status": "UNRESOLVED",
+        "automatic_inference_allowed": False,
+    }
+
+
+def empty_model() -> dict[str, Any]:
+    return {
+        "schema": MODEL_SCHEMA,
+        "language_contract": "CHINESE_SOURCE_TEXT_IS_FACT_AUTHORITY",
+        "translation_as_fact_authority": False,
+        "quality_claim": "MODEL_COMPLETENESS_PROJECTION_NOT_RECALL",
+        "business_objects": [],
+        "actors": [],
+        "operations": [],
+        "object_relations": [],
+        "lifecycles": [],
+        "processes": [],
+        "rules": [],
+        "unknowns": [],
+        "conflicts": [],
+        "evidence_index": [],
+        "metrics": {},
+        "gate": {
+            "schema": GATE_SCHEMA,
+            "status": "NOT_BUILT",
+            "entry_allowed": False,
+            "critical_unknowns": [],
+        },
+    }
+
+
+def validate_model_shape(model: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return structural violations without silently repairing the model."""
+    violations: list[dict[str, Any]] = []
+    if text(model.get("schema")) != MODEL_SCHEMA:
+        violations.append({"code": "MODEL_SCHEMA_INVALID", "value": model.get("schema")})
+    for key in (
+        "business_objects",
+        "actors",
+        "operations",
+        "object_relations",
+        "lifecycles",
+        "processes",
+        "rules",
+        "unknowns",
+        "conflicts",
+        "evidence_index",
+    ):
+        if not isinstance(model.get(key), list):
+            violations.append({"code": "MODEL_COLLECTION_INVALID", "field": key})
+    for collection in ("business_objects", "actors", "operations", "object_relations", "lifecycles", "processes"):
+        for index, row in enumerate(as_list(model.get(collection))):
+            if not isinstance(row, dict):
+                violations.append({"code": "MODEL_ENTRY_INVALID", "field": collection, "index": index})
+                continue
+            evidence = row.get("evidence")
+            if not isinstance(evidence, list) or not evidence:
+                violations.append({"code": "FORMAL_ENTRY_WITHOUT_EVIDENCE", "field": collection, "index": index, "id": row.get("object_id") or row.get("actor_id") or row.get("operation_id") or row.get("relation_id") or row.get("lifecycle_id") or row.get("process_id")})
+    return violations
+
+
+__all__ = [
+    "MODEL_SCHEMA",
+    "OBJECT_SCHEMA",
+    "ACTOR_SCHEMA",
+    "OPERATION_SCHEMA",
+    "RELATION_SCHEMA",
+    "LIFECYCLE_SCHEMA",
+    "PROCESS_SCHEMA",
+    "UNKNOWN_SCHEMA",
+    "GATE_SCHEMA",
+    "text",
+    "as_dict",
+    "as_list",
+    "stable_id",
+    "unique_text",
+    "source_evidence",
+    "evidence_from_fact",
+    "dedupe_evidence",
+    "new_unknown",
+    "empty_model",
+    "validate_model_shape",
+]
