@@ -3,13 +3,16 @@
 The projection is descriptive, not a second verdict authority. A formal contract
 may contain assertions from several dimensions; its attempt/outcome is counted in
 each declared dimension so the product can show exactly what was exercised.
+Interactive treatment and cleanup steps are counted separately from assertions,
+and cleanup equivalence is read only from the typed UI observer receipt.
 """
 from __future__ import annotations
 
 from collections import Counter
 from typing import Any
 
-from .formal_ui_surface import OBSERVER_ID, RISK_FAMILY
+from .formal_ui_surface import EVIDENCE_KEY, OBSERVER_ID, RISK_FAMILY
+from .professional_ui_interaction_cleanup import INTERACTIVE_ACTIONS
 
 CATEGORY_ACTIONS: dict[str, frozenset[str]] = {
     "content_navigation": frozenset({
@@ -43,8 +46,18 @@ CATEGORY_ACTIONS: dict[str, frozenset[str]] = {
         "expect_no_console_errors",
         "expect_no_failed_requests",
     }),
+    "workflow_interaction": INTERACTIVE_ACTIONS,
 }
 CONFIG_ACTIONS = frozenset({"set_viewport", "set_media"})
+ASSERTION_ACTIONS = frozenset(
+    set().union(
+        *(
+            actions
+            for category, actions in CATEGORY_ACTIONS.items()
+            if category != "workflow_interaction"
+        )
+    )
+)
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -90,6 +103,26 @@ def _execution_rows(result: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
+def _ui_receipts(execution: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        row
+        for row in _list(_dict(execution).get("observer_receipts"))
+        if isinstance(row, dict) and _text(row.get("observer_id")) == OBSERVER_ID
+    ]
+
+
+def _cleanup_status(receipts: list[dict[str, Any]]) -> str:
+    statuses = []
+    for receipt in receipts:
+        evidence = _dict(_dict(receipt.get("evidence")).get(EVIDENCE_KEY))
+        cleanup = _dict(evidence.get("cleanup_receipt"))
+        status = _text(cleanup.get("status")).upper()
+        if status:
+            statuses.append(status)
+    unique = list(dict.fromkeys(statuses))
+    return unique[0] if len(unique) == 1 else "AMBIGUOUS" if unique else ""
+
+
 def build_professional_ui_coverage(result: dict[str, Any]) -> dict[str, Any]:
     obligation_pack = _dict(result.get("test_obligations"))
     obligations = [
@@ -111,8 +144,10 @@ def build_professional_ui_coverage(result: dict[str, Any]) -> dict[str, Any]:
     ]
     executions = _execution_rows(result)
 
-    action_counts: Counter[str] = Counter()
+    assertion_counts: Counter[str] = Counter()
     config_counts: Counter[str] = Counter()
+    treatment_interaction_counts: Counter[str] = Counter()
+    cleanup_interaction_counts: Counter[str] = Counter()
     category_rows = {
         category: {
             "declared_contract_count": 0,
@@ -122,39 +157,57 @@ def build_professional_ui_coverage(result: dict[str, Any]) -> dict[str, Any]:
             "violation_count": 0,
             "deliverable_count": 0,
             "blocked_or_indeterminate_count": 0,
+            "cleanup_equivalence_accepted_count": 0,
+            "cleanup_equivalence_indeterminate_count": 0,
         }
         for category in CATEGORY_ACTIONS
     }
     obligation_categories: dict[str, set[str]] = {}
+    obligation_requires_cleanup: dict[str, bool] = {}
     for obligation_id, obligation in obligation_by_id.items():
+        steps = _steps_from_obligation(obligation)
         actions = {
             _text(step.get("action")).lower()
-            for step in _steps_from_obligation(obligation)
+            for step in steps
             if _text(step.get("action"))
         }
-        for action in actions:
+        for step in steps:
+            action = _text(step.get("action")).lower()
+            phase = _text(step.get("phase")).lower()
             if action in CONFIG_ACTIONS:
                 config_counts[action] += 1
-            else:
-                action_counts[action] += 1
+            elif action in INTERACTIVE_ACTIONS:
+                if phase == "cleanup":
+                    cleanup_interaction_counts[action] += 1
+                else:
+                    treatment_interaction_counts[action] += 1
+            elif action in ASSERTION_ACTIONS:
+                assertion_counts[action] += 1
         categories = _categories(actions)
         obligation_categories[obligation_id] = categories
+        cleanup_authority = _dict(
+            _dict(obligation.get("property")).get("ui_cleanup_authority")
+        )
+        obligation_requires_cleanup[obligation_id] = (
+            cleanup_authority.get("equivalence_required") is True
+            or bool(actions & INTERACTIVE_ACTIONS)
+        )
         for category in categories:
             category_rows[category]["declared_contract_count"] += 1
 
     terminal_reason_counts: Counter[str] = Counter()
+    cleanup_status_counts: Counter[str] = Counter()
     for attempt in attempts:
         obligation_id = _text(attempt.get("obligation_id"))
         categories = obligation_categories.get(obligation_id, set())
         execution = _dict(executions.get(obligation_id))
-        receipts = [
-            row
-            for row in _list(execution.get("observer_receipts"))
-            if isinstance(row, dict) and _text(row.get("observer_id")) == OBSERVER_ID
-        ]
+        receipts = _ui_receipts(execution)
         observed = any(
             _text(row.get("status")).upper() == "OBSERVED" for row in receipts
         )
+        cleanup_status = _cleanup_status(receipts)
+        if cleanup_status:
+            cleanup_status_counts[cleanup_status] += 1
         oracle_status = _text(
             _dict(execution.get("oracle_verdict")).get("status")
         ).upper()
@@ -173,34 +226,53 @@ def build_professional_ui_coverage(result: dict[str, Any]) -> dict[str, Any]:
                 row["violation_count"] += 1
             if deliverable:
                 row["deliverable_count"] += 1
+            if obligation_requires_cleanup.get(obligation_id):
+                if cleanup_status == "ACCEPTED":
+                    row["cleanup_equivalence_accepted_count"] += 1
+                else:
+                    row["cleanup_equivalence_indeterminate_count"] += 1
             if not observed or oracle_status not in {"PROPERTY_HELD", "VIOLATION"}:
                 row["blocked_or_indeterminate_count"] += 1
 
-    supported_actions = sorted(
-        set().union(*CATEGORY_ACTIONS.values()) | CONFIG_ACTIONS
-    )
+    supported_readonly = sorted(ASSERTION_ACTIONS | CONFIG_ACTIONS)
+    supported_interactions = sorted(INTERACTIVE_ACTIONS)
     return {
-        "schema_version": "qualibug.professional-ui-coverage.v1",
-        "supported_readonly_actions": supported_actions,
-        "declared_assertion_action_counts": dict(sorted(action_counts.items())),
+        "schema_version": "qualibug.professional-ui-coverage.v2",
+        "supported_readonly_actions": supported_readonly,
+        "supported_governed_interaction_actions": supported_interactions,
+        "declared_assertion_action_counts": dict(sorted(assertion_counts.items())),
         "declared_configuration_action_counts": dict(sorted(config_counts.items())),
+        "declared_treatment_interaction_action_counts": dict(
+            sorted(treatment_interaction_counts.items())
+        ),
+        "declared_cleanup_interaction_action_counts": dict(
+            sorted(cleanup_interaction_counts.items())
+        ),
         "dimensions": category_rows,
         "dimensions_without_declared_contracts": sorted(
             category
             for category, row in category_rows.items()
             if int(row["declared_contract_count"]) == 0
         ),
+        "cleanup_equivalence_status_counts": dict(
+            sorted(cleanup_status_counts.items())
+        ),
         "terminal_reason_counts": dict(sorted(terminal_reason_counts.items())),
         "capability_boundary": {
             "source_declared_contracts_required": True,
             "provider_findings_consumed": False,
-            "read_only": True,
+            "read_only_assertions_supported": True,
+            "read_only_only": False,
             "responsive_viewport_supported": True,
             "media_emulation_supported": True,
             "deterministic_accessibility_basics_supported": True,
             "full_accessibility_certification_claimed": False,
             "visual_baseline_regression_supported": False,
-            "controlled_write_interaction_supported": False,
+            "controlled_write_interaction_supported": True,
+            "approved_nonproduction_target_required": True,
+            "production_write_supported": False,
+            "browser_cleanup_equivalence_required": True,
+            "cleanup_failure_can_be_deliverable": False,
             "cross_browser_matrix_supported": False,
             "ai_usability_opinion_used_as_defect": False,
         },
@@ -208,6 +280,7 @@ def build_professional_ui_coverage(result: dict[str, Any]) -> dict[str, Any]:
 
 
 __all__ = [
+    "ASSERTION_ACTIONS",
     "CATEGORY_ACTIONS",
     "build_professional_ui_coverage",
 ]
