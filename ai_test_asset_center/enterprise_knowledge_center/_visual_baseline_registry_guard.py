@@ -1,4 +1,4 @@
-"""Fail-closed integrity and audit guard for the visual baseline registry.
+"""Fail-closed integrity, audit and concurrency guard for visual baselines.
 
 The lifecycle module intentionally keeps a small persistence implementation. This
 installer hardens its dynamic helpers without creating a second registry:
@@ -9,16 +9,23 @@ installer hardens its dynamic helpers without creating a second registry:
 * registered PNGs are fully verified under decompression-bomb and dimension
   limits before they can become executable authority;
 * one immutable ref cannot acquire conflicting active viewport or screenshot-mode
-  identities.
+  identities;
+* every lifecycle version receives a unique baseline id, including re-registration
+  after revocation;
+* register/approve/revoke mutations are serialized by a short-lived project lock.
 """
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import io
 import json
+import os
+import time
 import warnings
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from . import _visual_baselines as _registry
 
@@ -26,21 +33,81 @@ _INSTALL_MARKER = "_qualibug_visual_baseline_registry_guard_installed"
 _ORIGINAL_ACTOR = "_qualibug_visual_registry_actor_before_guard"
 _ORIGINAL_LOAD = "_qualibug_visual_registry_load_before_guard"
 _ORIGINAL_PNG = "_qualibug_visual_registry_png_before_guard"
+_ORIGINAL_RECORD_ID = "_qualibug_visual_registry_record_id_before_guard"
 _ORIGINAL_REGISTER = "_qualibug_visual_registry_register_before_guard"
+_ORIGINAL_APPROVE = "_qualibug_visual_registry_approve_before_guard"
+_ORIGINAL_REVOKE = "_qualibug_visual_registry_revoke_before_guard"
+_LOCK_TIMEOUT_SECONDS = 5.0
+_STALE_LOCK_SECONDS = 120.0
+_RECORD_GENERATION: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "qualibug_visual_baseline_record_generation",
+    default=0,
+)
 
 
 def _text(value: Any, *, limit: int = 1000) -> str:
     return str(value or "").strip()[:limit]
 
 
+@contextmanager
+def _mutation_lock(project: str, root: Path) -> Iterator[None]:
+    registry_path = _registry._paths(project, root)["registry"]
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = registry_path.with_name(registry_path.name + ".lock")
+    deadline = time.monotonic() + _LOCK_TIMEOUT_SECONDS
+    descriptor: int | None = None
+    while descriptor is None:
+        try:
+            descriptor = os.open(
+                str(lock_path),
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                0o600,
+            )
+        except FileExistsError:
+            try:
+                stale = time.time() - lock_path.stat().st_mtime > _STALE_LOCK_SECONDS
+            except OSError:
+                stale = False
+            if stale:
+                try:
+                    lock_path.unlink()
+                except OSError:
+                    pass
+                continue
+            if time.monotonic() >= deadline:
+                raise RuntimeError("visual_baseline_registry_busy")
+            time.sleep(0.05)
+    try:
+        os.write(
+            descriptor,
+            f"pid={os.getpid()} acquired={time.time():.6f}\n".encode("ascii"),
+        )
+        os.fsync(descriptor)
+        yield
+    finally:
+        try:
+            os.close(descriptor)
+        finally:
+            try:
+                lock_path.unlink()
+            except OSError:
+                pass
+
+
 def install_visual_baseline_registry_guard() -> None:
     if getattr(_registry, _INSTALL_MARKER, False):
         return
     original_register = _registry.register_visual_baseline
+    original_approve = _registry.approve_visual_baseline
+    original_revoke = _registry.revoke_visual_baseline
+    original_record_id = _registry._record_id
     setattr(_registry, _ORIGINAL_ACTOR, _registry._actor_ref)
     setattr(_registry, _ORIGINAL_LOAD, _registry._load)
     setattr(_registry, _ORIGINAL_PNG, _registry._png_metadata)
+    setattr(_registry, _ORIGINAL_RECORD_ID, original_record_id)
     setattr(_registry, _ORIGINAL_REGISTER, original_register)
+    setattr(_registry, _ORIGINAL_APPROVE, original_approve)
+    setattr(_registry, _ORIGINAL_REVOKE, original_revoke)
 
     def actor_ref_with_role(actor: dict[str, Any]) -> str:
         name = _text(
@@ -112,6 +179,15 @@ def install_visual_baseline_registry_guard() -> None:
             raise ValueError("visual_baseline_png_decode_failed") from exc
         return width, height
 
+    def record_id_with_generation(project: str, ref: str, digest: str) -> str:
+        generation = int(_RECORD_GENERATION.get() or 0)
+        if generation <= 0:
+            raise RuntimeError("visual_baseline_record_generation_missing")
+        raw = (
+            f"{project}|{ref}|{digest}|generation:{generation}"
+        ).encode("utf-8")
+        return "vbl_" + hashlib.sha256(raw).hexdigest()[:20]
+
     def register_without_identity_conflict(
         project_id: str,
         *,
@@ -123,6 +199,7 @@ def install_visual_baseline_registry_guard() -> None:
         root: Path | None = None,
         actor: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        clean_actor = _registry._require_manage_actor(actor)
         effective_root = Path(root or _registry.ROOT)
         project = _registry._safe_project_id(project_id)
         source = Path(file_path).expanduser().resolve()
@@ -150,42 +227,93 @@ def install_visual_baseline_registry_guard() -> None:
         )
         digest = hashlib.sha256(data).hexdigest()
         ref = f"{_registry.INPUT_PREFIX}/{name}__{digest[:12]}.png"
-        registry = _registry._load(project, effective_root)
-        same_ref = [
-            row
-            for row in registry["baselines"]
-            if row.get("status") == "active" and row.get("ref") == ref
-        ]
-        exact = [
-            row
-            for row in same_ref
-            if row.get("sha256") == digest
-            and int(row.get("viewport_width") or 0) == width
-            and int(row.get("viewport_height") or 0) == height
-            and row.get("full_page") is full_page
-            and row.get("renderer_profile") == _registry.RENDERER_PROFILE
-            and row.get("scroll_origin") == _registry.SCROLL_ORIGIN
-            and row.get("font_readiness") == _registry.FONT_READINESS
-        ]
-        if same_ref and not exact:
-            raise RuntimeError("visual_baseline_active_identity_conflict")
-        if len(exact) > 1:
-            raise RuntimeError("visual_baseline_active_identity_ambiguous")
-        return original_register(
-            project_id,
-            file_path=file_path,
-            baseline_name=baseline_name,
-            viewport_width=viewport_width,
-            viewport_height=viewport_height,
-            full_page=full_page,
-            root=root,
-            actor=actor,
-        )
+        with _mutation_lock(project, effective_root):
+            registry = _registry._load(project, effective_root)
+            same_ref = [
+                row
+                for row in registry["baselines"]
+                if row.get("status") == "active" and row.get("ref") == ref
+            ]
+            exact = [
+                row
+                for row in same_ref
+                if row.get("sha256") == digest
+                and int(row.get("viewport_width") or 0) == width
+                and int(row.get("viewport_height") or 0) == height
+                and row.get("full_page") is full_page
+                and row.get("renderer_profile") == _registry.RENDERER_PROFILE
+                and row.get("scroll_origin") == _registry.SCROLL_ORIGIN
+                and row.get("font_readiness") == _registry.FONT_READINESS
+            ]
+            if same_ref and not exact:
+                raise RuntimeError("visual_baseline_active_identity_conflict")
+            if len(exact) > 1:
+                raise RuntimeError("visual_baseline_active_identity_ambiguous")
+            token = _RECORD_GENERATION.set(len(registry["baselines"]) + 1)
+            try:
+                return original_register(
+                    project_id,
+                    file_path=file_path,
+                    baseline_name=baseline_name,
+                    viewport_width=viewport_width,
+                    viewport_height=viewport_height,
+                    full_page=full_page,
+                    root=effective_root,
+                    actor=clean_actor,
+                )
+            finally:
+                _RECORD_GENERATION.reset(token)
+
+    def approve_with_lock(
+        project_id: str,
+        *,
+        baseline_id: str,
+        root: Path | None = None,
+        actor: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        clean_actor = _registry._require_manage_actor(actor)
+        effective_root = Path(root or _registry.ROOT)
+        project = _registry._safe_project_id(project_id)
+        with _mutation_lock(project, effective_root):
+            registry = _registry._load(project, effective_root)
+            token = _RECORD_GENERATION.set(len(registry["baselines"]) + 1)
+            try:
+                return original_approve(
+                    project_id,
+                    baseline_id=baseline_id,
+                    root=effective_root,
+                    actor=clean_actor,
+                )
+            finally:
+                _RECORD_GENERATION.reset(token)
+
+    def revoke_with_lock(
+        project_id: str,
+        *,
+        baseline_id: str,
+        reason: str,
+        root: Path | None = None,
+        actor: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        clean_actor = _registry._require_manage_actor(actor)
+        effective_root = Path(root or _registry.ROOT)
+        project = _registry._safe_project_id(project_id)
+        with _mutation_lock(project, effective_root):
+            return original_revoke(
+                project_id,
+                baseline_id=baseline_id,
+                reason=reason,
+                root=effective_root,
+                actor=clean_actor,
+            )
 
     _registry._actor_ref = actor_ref_with_role
     _registry._load = load_fail_closed
     _registry._png_metadata = verified_png_metadata
+    _registry._record_id = record_id_with_generation
     _registry.register_visual_baseline = register_without_identity_conflict
+    _registry.approve_visual_baseline = approve_with_lock
+    _registry.revoke_visual_baseline = revoke_with_lock
     setattr(_registry, _INSTALL_MARKER, True)
 
 
