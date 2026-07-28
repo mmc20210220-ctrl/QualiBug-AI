@@ -23,6 +23,7 @@ from .real_project_onboarding import _safe_project_id
 
 _http_logger = get_logger("qualibug.http")
 
+
 class AuthScopeMixin:
     def _root(self) -> Path:
         configured = getattr(self.server, "qualibug_private_root", None)
@@ -246,3 +247,13 @@ class AuthScopeMixin:
             404,
         )
         return False
+
+
+# ``private_pilot_service`` imports HttpRoutingMixin before AuthScopeMixin. At
+# this point the core router is complete but the final handler class has not yet
+# been composed, which is the safe point for an idempotent route extension.
+from .private_pilot_visual_baseline_http_patch import (  # noqa: E402
+    install_visual_baseline_http_patch,
+)
+
+install_visual_baseline_http_patch()
