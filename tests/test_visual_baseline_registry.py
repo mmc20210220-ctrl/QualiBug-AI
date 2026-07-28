@@ -110,7 +110,7 @@ def test_same_ref_cannot_acquire_conflicting_active_viewport(tmp_path: Path) -> 
         _register(tmp_path, viewport_width=1440)
 
 
-def test_re_registration_after_source_revocation_gets_new_id_and_cascades(
+def test_re_registration_after_source_revocation_gets_new_id_ref_and_cascades(
     tmp_path: Path,
 ) -> None:
     registered = _register(tmp_path)["baseline"]
@@ -142,8 +142,35 @@ def test_re_registration_after_source_revocation_gets_new_id_and_cascades(
 
     replacement = _register(tmp_path)["baseline"]
     assert replacement["baseline_id"] != registered["baseline_id"]
-    assert replacement["ref"] == registered["ref"]
+    assert replacement["ref"] != registered["ref"]
+    assert "__v" in replacement["ref"]
     assert replacement["sha256"] == registered["sha256"]
+    assert registry.active_visual_baseline_record(
+        "visual-project",
+        registered["ref"],
+        root=tmp_path,
+    ) is None
+    assert registry.active_visual_baseline_record(
+        "visual-project",
+        replacement["ref"],
+        root=tmp_path,
+    )["baseline_id"] == replacement["baseline_id"]
+
+    token = visual._RUNTIME_CONTEXT.set({
+        "root": str(tmp_path),
+        "project": "visual-project",
+    })
+    try:
+        with pytest.raises(
+            visual.VisualBaselineObservationError,
+            match=r"^UI_VISUAL_BASELINE_NOT_ACTIVE$",
+        ):
+            _require_registry_identity(_step(registered))
+        assert _require_registry_identity(_step(replacement))[
+            "baseline_id"
+        ] == replacement["baseline_id"]
+    finally:
+        visual._RUNTIME_CONTEXT.reset(token)
 
     inventory = registry.list_visual_baselines(
         "visual-project",
