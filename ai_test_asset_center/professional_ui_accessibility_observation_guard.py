@@ -223,5 +223,14 @@ def install_professional_ui_accessibility_observation_guard() -> None:
     ] = observer_with_accessibility_receipts
     setattr(_engine, _INSTALL_MARKER, True)
 
+    # This guard must wrap the final evidence-preserving executor. Importing here
+    # avoids a module cycle while guaranteeing invalid source exclusions cannot be
+    # silently ignored by later DOM audits.
+    from .professional_ui_accessibility_exclusion_guard import (
+        install_professional_ui_accessibility_exclusion_guard,
+    )
+
+    install_professional_ui_accessibility_exclusion_guard()
+
 
 __all__ = ["install_professional_ui_accessibility_observation_guard"]
