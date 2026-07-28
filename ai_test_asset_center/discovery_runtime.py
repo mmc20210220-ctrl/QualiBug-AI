@@ -2,7 +2,9 @@
 
 Planning lives in ``discovery_runtime_planning``; execution lives in
 ``discovery_runtime_execution``. This module re-exports the public surface for
-compatibility with ``v12_pipeline`` and existing tests.
+compatibility with ``v12_pipeline`` and existing tests. The public planning
+entry installs exact accepted rule/interface identity binding before any plan
+is compiled.
 """
 from __future__ import annotations
 
@@ -20,6 +22,8 @@ from .discovery_runtime_planning import (  # noqa: F401
     _campaign_store,
     _contract,
     _runtime_actors,
+)
+from .discovery_runtime_semantic_binding import (  # noqa: F401
     build_discovery_plan,
 )
 
