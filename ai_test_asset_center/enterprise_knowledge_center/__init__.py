@@ -10,6 +10,13 @@ from ._parsing import *  # noqa: F401,F403
 from ._crud import *  # noqa: F401,F403
 from ._linking import *  # noqa: F401,F403
 from ._api import *  # noqa: F401,F403
+from ._formal_ui_contracts import (  # noqa: F401
+    extract_formal_ui_contracts,
+    install_formal_ui_contract_parser,
+)
+
+# Additive parser registration only. It opens no files, browser or target connection.
+install_formal_ui_contract_parser()
 
 # Explicit re-exports for underscore-prefixed symbols
 from ._common import _SEMANTIC_LEXICON_CACHE  # noqa: F401
@@ -163,5 +170,7 @@ __all__ = [
     "render_enterprise_business_knowledge_report",
     "render_enterprise_business_knowledge_center",
     "run_enterprise_knowledge_demo",
+    "extract_formal_ui_contracts",
+    "install_formal_ui_contract_parser",
     "_cli",
 ]
