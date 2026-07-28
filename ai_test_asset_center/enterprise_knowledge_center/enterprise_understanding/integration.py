@@ -13,9 +13,10 @@ from .schema import as_dict, as_list, text
 def _parsed_sources_for_context(asset: dict[str, Any], root: Path) -> list[dict[str, Any]]:
     """Re-read registered sources through the format-agnostic ingestion pipeline.
 
-    Existing parsers remain the source of extracted business facts. Immutable source
-    bytes are additionally routed through DocumentAdapter Registry -> Parsing Planner
-    -> IR Merger so adding a new format driver never changes business understanding.
+    Existing parsers provide a compatibility text projection. Immutable source bytes are
+    routed through DocumentAdapter Registry -> Parsing Planner -> IR Merger. The merged
+    IR text becomes the source presented to Chinese-first fact extraction, so OCR and
+    future supplemental adapters can contribute source-backed business facts.
     """
     from .._crud import _record_parse
     from ..document_ingestion import build_document_structure_ir
@@ -47,14 +48,19 @@ def _parsed_sources_for_context(asset: dict[str, Any], root: Path) -> list[dict[
                         "inspect source integrity, adapter registry and parsing-plan receipts"
                     ),
                 }
+        merged_text = text(document_structure.get("plain_text"))
         parsed_sources.append(
             {
                 "source_id": source.get("source_id"),
                 "filename": filename,
                 "source_locator": parser_receipt.get("source_locator"),
-                # Keep the parser's original text for the legacy text-range context
-                # stage. IR context uses document_structure blocks directly.
-                "text": parsed.get("text") or "",
+                "text": merged_text or parsed.get("text") or "",
+                "legacy_text": parsed.get("text") or "",
+                "text_authority": (
+                    "merged_document_structure_ir"
+                    if merged_text
+                    else "legacy_parser_text_projection"
+                ),
                 "document_structure": document_structure,
                 "document_structure_error": structure_error,
             }
@@ -134,12 +140,25 @@ def _attach_document_structure_assets(
     for row in rows:
         status = text(as_dict(row.get("parsing_plan")).get("status")) or "UNKNOWN"
         plan_status_distribution[status] = plan_status_distribution.get(status, 0) + 1
+    ocr_resolved_pages = sorted(
+        {
+            int(page)
+            for row in rows
+            for resolution in as_list(row.get("applied_gap_resolutions"))
+            if isinstance(resolution, dict)
+            and text(resolution.get("reason_code")) == "SCANNED_PAGE_REQUIRES_OCR"
+            for page in as_list(resolution.get("resolved_pages"))
+            if str(page).isdigit()
+        }
+    )
     asset["document_structure_assets"] = {
         "schema": "qualibug.enterprise-document-structure-assets.v1",
         "source_count": len(rows),
         "block_count": block_count,
         "page_count": page_count,
         "scanned_page_count": scanned_page_count,
+        "ocr_resolved_page_count": len(ocr_resolved_pages),
+        "ocr_resolved_pages": ocr_resolved_pages,
         "image_count": image_count,
         "table_region_count": table_region_count,
         "multi_column_page_count": multi_column_page_count,
@@ -163,11 +182,16 @@ def enrich_asset_with_enterprise_understanding(
     """Attach document structure/context, reconcile conflicts, then compile cognition."""
     source_rows = list(parsed_sources or [])
     if parsed_sources is not None:
+        from .._chinese_business_comprehension import build_chinese_first_comprehension
         from .._chinese_business_conflicts import reconcile_chinese_business_fact_conflicts
         from .._chinese_document_context import apply_chinese_document_context
         from .._document_ir_context import apply_document_ir_context
 
         _attach_document_structure_assets(asset, source_rows)
+        # Rebuild the formal Chinese coverage/fact ledgers from the best merged IR text.
+        # This is what makes OCR or future supplemental adapters visible to enterprise
+        # cognition instead of leaving recovered text stranded in a structure receipt.
+        asset = build_chinese_first_comprehension(asset, source_rows)
         asset = apply_document_ir_context(asset, source_rows)
         # The legacy text-range stage remains as a lower-fidelity supplement for
         # formats that do not yet emit rich structure blocks.
@@ -249,6 +273,9 @@ def enrich_asset_with_enterprise_understanding(
             "document_structure_scanned_page_count": int(
                 structure_assets.get("scanned_page_count") or 0
             ),
+            "document_structure_ocr_resolved_page_count": int(
+                structure_assets.get("ocr_resolved_page_count") or 0
+            ),
             "document_structure_image_count": int(structure_assets.get("image_count") or 0),
             "document_structure_table_region_count": int(
                 structure_assets.get("table_region_count") or 0
@@ -293,9 +320,12 @@ def enrich_asset_with_enterprise_understanding(
             "document_context_promotions_are_conflict_reconciled": parsed_sources is not None,
             "document_adapter_registry_enabled": parsed_sources is not None,
             "document_parsing_planner_enabled": parsed_sources is not None,
+            "document_deferred_supplemental_planning_enabled": parsed_sources is not None,
             "document_multi_adapter_merge_enabled": parsed_sources is not None,
             "document_unknown_format_fails_visible": True,
             "document_business_understanding_is_format_agnostic": True,
+            "merged_document_ir_text_reenters_chinese_fact_ledger": parsed_sources is not None,
+            "ocr_recovered_text_can_create_source_backed_facts": parsed_sources is not None,
             "docx_native_structure_ir_enabled": parsed_sources is not None,
             "pdf_page_layout_structure_ir_enabled": parsed_sources is not None,
             "pdf_scanned_pages_fail_closed": True,
