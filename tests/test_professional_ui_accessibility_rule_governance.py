@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from ai_test_asset_center import discovery_runtime_semantic_binding as _runtime  # noqa: F401
 from ai_test_asset_center import professional_ui_accessibility_engine as engine
+from ai_test_asset_center.professional_ui_accessibility_rule_governance import (
+    CUSTOM_ONLY_RULES,
+)
 from ai_test_asset_center.professional_ui_accessibility_semantics_guard import (
     _style_indicator_changed,
 )
@@ -25,9 +28,11 @@ def test_formal_standard_excludes_ambiguous_advisory_rules() -> None:
 
     assert removed.isdisjoint(engine.RULE_CATALOG)
     assert replacements.issubset(engine.RULE_CATALOG)
-    assert tuple(engine.STANDARD_RULES) == tuple(engine.RULE_CATALOG)
+    assert set(engine.STANDARD_RULES).issubset(engine.RULE_CATALOG)
+    assert CUSTOM_ONLY_RULES.issubset(engine.RULE_CATALOG)
+    assert CUSTOM_ONLY_RULES.isdisjoint(engine.STANDARD_RULES)
     assert engine._DOM_RULES == frozenset(
-        set(engine.STANDARD_RULES) - set(engine._FOCUS_RULES)
+        set(engine.RULE_CATALOG) - set(engine._FOCUS_RULES)
     )
 
 
