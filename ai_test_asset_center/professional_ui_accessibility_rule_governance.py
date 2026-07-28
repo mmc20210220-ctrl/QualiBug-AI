@@ -1,8 +1,9 @@
-"""Conservative governance for the deterministic accessibility rule catalog.
+"""Conservative governance for deterministic accessibility rules.
 
-Only checks with a defensible rendered-state precondition remain in the formal
-standard set. Advisory outline preferences and ambiguous content classifications
-are removed or narrowed so they cannot become false formal defects.
+The catalog contains every deterministic rule the runtime can execute. The default
+``wcag22-aa-deterministic`` standard is a narrower high-confidence subset. Rules
+with material WCAG exceptions or organisation-specific policy choices remain
+available only through an explicit source-declared custom rule set.
 """
 from __future__ import annotations
 
@@ -25,6 +26,13 @@ _ADDED_RULES = {
     "explicit_data_table_headers": {"wcag": "1.3.1", "level": "A", "impact": "serious"},
     "bypass_blocks_mechanism": {"wcag": "2.4.1", "level": "A", "impact": "serious"},
 }
+
+CUSTOM_ONLY_RULES = frozenset({
+    "main_landmark_present",
+    "bypass_blocks_mechanism",
+    "no_positive_tabindex",
+    "target_size_minimum",
+})
 
 _SVG_OLD = """  if (selected.has('svg_has_name')) {
     nodes.filter(el => el.tagName.toLowerCase() === 'svg' && visible(el) && el.getAttribute('aria-hidden') !== 'true')
@@ -159,9 +167,16 @@ def install_professional_ui_accessibility_rule_governance() -> None:
     for rule in _REMOVED_RULES:
         _engine.RULE_CATALOG.pop(rule, None)
     _engine.RULE_CATALOG.update(_ADDED_RULES)
-    _engine.STANDARD_RULES = tuple(_engine.RULE_CATALOG)
+    _engine.CUSTOM_ONLY_RULES = CUSTOM_ONLY_RULES
+    _engine.STANDARD_RULES = tuple(
+        rule
+        for rule in _engine.RULE_CATALOG
+        if rule not in CUSTOM_ONLY_RULES
+    )
+    # Custom source contracts may execute every catalogued rule, even when a rule
+    # is intentionally excluded from the default high-confidence standard.
     _engine._DOM_RULES = frozenset(
-        set(_engine.STANDARD_RULES) - set(_engine._FOCUS_RULES)
+        set(_engine.RULE_CATALOG) - set(_engine._FOCUS_RULES)
     )
     _engine._MAX_RULES = len(_engine.RULE_CATALOG)
 
@@ -177,5 +192,6 @@ def install_professional_ui_accessibility_rule_governance() -> None:
 
 
 __all__ = [
+    "CUSTOM_ONLY_RULES",
     "install_professional_ui_accessibility_rule_governance",
 ]
