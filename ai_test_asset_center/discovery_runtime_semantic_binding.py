@@ -74,6 +74,9 @@ from .scan_ui_contract_overlay import (
     overlay_scan_ui_contracts,
     reset_scan_ui_contract_context,
 )
+from .scan_ui_interaction_contract_guard import (
+    install_scan_ui_interaction_contract_guard,
+)
 from .semantic_operation_binding import bind_accepted_semantic_operations
 from .source_event_contract_binding import bind_source_event_contracts
 from .source_event_obligation_binding import install_source_event_obligation_binding
@@ -96,7 +99,8 @@ _ORIGINAL_MARKER = "_qualibug_original_behavior_ir_builder"
 # Register formal surfaces before any obligation or experiment is compiled. Every installer is
 # idempotent and performs no target I/O. The UI installers extend one authority in order:
 # read-only assertions, scan admission, responsive/accessibility behavior, governed interaction,
-# plan-level checks, evidence minimization, then persistent cleanup observation.
+# plan-level checks, evidence minimization, persistent cleanup observation, then direct-scan
+# admission parity with enterprise source contracts.
 install_non_http_observers()
 install_formal_ui_surface()
 install_formal_ui_read_only_guard()
@@ -107,6 +111,7 @@ install_controlled_ui_interaction()
 install_controlled_ui_interaction_contract_guard()
 install_controlled_ui_interaction_privacy_guard()
 install_persistent_ui_cleanup_probe()
+install_scan_ui_interaction_contract_guard()
 install_formal_event_surface()
 install_formal_event_capability_guard()
 install_formal_event_pre_cleanup_observer()
