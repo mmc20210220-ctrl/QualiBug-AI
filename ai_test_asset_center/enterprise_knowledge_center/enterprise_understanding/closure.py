@@ -1,8 +1,8 @@
 """Minimum closure checks for enterprise business understanding.
 
 A parsed schema or a list of entities is not equivalent to understanding an
-enterprise. This stage prevents empty, field-only, or behaviorless models from
-reporting PASS.
+enterprise. This stage prevents empty, field-only, behaviorless, or structurally
+incomplete source models from reporting PASS.
 """
 from __future__ import annotations
 
@@ -98,7 +98,12 @@ def apply_minimum_understanding_closure(
     )
     model["gate"] = gate
     model["metrics"] = dict(gate.get("metrics") or {})
-    return model
+
+    # Document-structure completeness is part of the same formal closure.  Keeping
+    # it here prevents alternate callers from bypassing structure gaps.
+    from .document_structure_gate import apply_document_structure_completeness
+
+    return apply_document_structure_completeness(model, asset)
 
 
 __all__ = ["apply_minimum_understanding_closure"]
