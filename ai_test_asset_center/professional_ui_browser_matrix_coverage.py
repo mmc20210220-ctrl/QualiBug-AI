@@ -13,6 +13,9 @@ from .enterprise_knowledge_center._formal_ui_browser_matrix_guard import (
     SUPPORTED_ENGINES,
 )
 from .formal_ui_surface import EVIDENCE_KEY, OBSERVER_ID, RISK_FAMILY
+from .professional_ui_browser_matrix_launch_guard import (
+    install_professional_ui_browser_matrix_launch_guard,
+)
 from .professional_ui_browser_matrix_verdict_guard import (
     install_professional_ui_browser_matrix_verdict_guard,
 )
@@ -152,8 +155,9 @@ def _matrix_projection(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def install_professional_ui_browser_matrix_coverage() -> None:
-    # Verdict and content-address integrity must be active before the coverage
-    # projection starts consuming matrix receipts.
+    # Launch, verdict and content-address integrity must be active before the
+    # coverage projection starts consuming matrix receipts.
+    install_professional_ui_browser_matrix_launch_guard()
     install_professional_ui_browser_matrix_verdict_guard()
     if getattr(_coverage, _INSTALL_MARKER, False):
         return
