@@ -17,6 +17,9 @@ from . import _formal_ui_contracts as _contracts
 ACTION = "expect_visual_baseline"
 INPUT_PREFIX = "visual_baselines"
 APPROVED_PREFIX = "approved_visual_baselines"
+RENDERER_PROFILE = "chromium_css_scale_v1"
+SCROLL_ORIGIN = "document_start"
+FONT_READINESS = "document_fonts_ready"
 _INSTALL_MARKER = "_qualibug_formal_ui_visual_baseline_guard_installed"
 _ORIGINAL_MARKER = "_qualibug_original_visual_expectation_gaps"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -102,6 +105,12 @@ def _visual_gaps(expectations: list[dict[str, Any]]) -> list[str]:
             missing.append(
                 f"{prefix}.browser_visual_animations_must_be_disabled"
             )
+        if _text(step.get("renderer_profile")) != RENDERER_PROFILE:
+            missing.append(f"{prefix}.browser_visual_renderer_profile_invalid")
+        if _text(step.get("scroll_origin")) != SCROLL_ORIGIN:
+            missing.append(f"{prefix}.browser_visual_scroll_origin_invalid")
+        if _text(step.get("font_readiness")) != FONT_READINESS:
+            missing.append(f"{prefix}.browser_visual_font_readiness_invalid")
         selectors = _list(step.get("mask_selectors"))
         if len(selectors) > _MAX_MASKS or any(not _text(row) for row in selectors):
             missing.append(f"{prefix}.browser_visual_mask_selectors_invalid")
@@ -162,6 +171,9 @@ def install_formal_ui_visual_baseline_guard() -> None:
 __all__ = [
     "ACTION",
     "APPROVED_PREFIX",
+    "FONT_READINESS",
     "INPUT_PREFIX",
+    "RENDERER_PROFILE",
+    "SCROLL_ORIGIN",
     "install_formal_ui_visual_baseline_guard",
 ]
