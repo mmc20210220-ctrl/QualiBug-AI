@@ -32,9 +32,9 @@ from .contract import (
     text,
     unique_text,
 )
+from .image_decoding import sniff_image_source
 from .registry import DocumentAdapterRegistry
 
-_IMAGE_SUFFIXES = {"png", "jpg", "jpeg", "tif", "tiff", "bmp", "gif", "webp"}
 _VISUAL_OFFICE_FAMILIES = {"doc", "rtf", "odt", "ppt", "pptx", "odp"}
 _TABLE_OFFICE_FAMILIES = {"xls", "xlsx", "ods"}
 _DEFERRED_CAPABILITIES_BY_GAP: dict[str, tuple[str, ...]] = {
@@ -64,24 +64,15 @@ def _detected_family(source: DocumentSource) -> tuple[str, str]:
             return "zip", "zip_container_signature"
         except Exception:
             return "zip_or_corrupt_container", "pk_signature_without_readable_zip_directory"
-    signature = source.data[:16]
-    if (
-        signature.startswith(
-            (b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF87a", b"GIF89a", b"II*\x00", b"MM\x00*", b"BM")
-        )
-        or (signature.startswith(b"RIFF") and b"WEBP" in signature)
-    ):
-        return "image", "raster_image_signature"
+    image_family, image_reason = sniff_image_source(source)
+    if image_family:
+        return "image", image_reason
     if stripped.startswith((b"{", b"[")):
         return "structured_text", "json_like_prefix"
     mime, _encoding = mimetypes.guess_type(source.filename)
-    if mime and mime.startswith("image/"):
-        return "image", "mime_guess"
     if mime and mime.startswith("text/"):
         return "text", "mime_guess"
     suffix = source.suffix.lstrip(".")
-    if suffix in _IMAGE_SUFFIXES:
-        return "image", "filename_suffix"
     return suffix or "unknown", "filename_suffix_or_unknown"
 
 
