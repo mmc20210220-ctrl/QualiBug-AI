@@ -1,7 +1,7 @@
 """Compile exact latency-budget invariants into formal performance obligations.
 
 The generic invariant compiler does not preserve the registered latency protocol template. This
-extension removes only the generic obligation for the same invariant and emits one read-only
+extension removes only the generic obligation for the same invariant and emits one GET/HEAD
 performance obligation with exact operation, actor, relation and source identities.
 """
 from __future__ import annotations
@@ -135,10 +135,10 @@ def compile_obligations_with_source_performance(
                 "reason_code": "FORMAL_PERFORMANCE_ACTOR_IDENTITY_NOT_FOUND",
             })
             continue
-        if _text(operation.get("method")).upper() not in {"GET", "HEAD", "OPTIONS"}:
+        if _text(operation.get("method")).upper() not in {"GET", "HEAD"}:
             skipped.append({
                 "invariant_ref": invariant_ref,
-                "reason_code": "FORMAL_PERFORMANCE_WRITE_OPERATION_NOT_ALLOWED",
+                "reason_code": "FORMAL_PERFORMANCE_GET_OR_HEAD_REQUIRED",
             })
             continue
         matching = [
