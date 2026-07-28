@@ -13,7 +13,10 @@ from .observer_contracts_base import (
 _PROCESS_OBSERVER_ID = "process_timeline"
 _COMPILER_MARKER = "_qualibug_process_timeline_observer_installed"
 _ORIGINAL_COMPILER_MARKER = "_qualibug_original_compile_observer_requirements"
-_TEMPORAL_FAMILIES = frozenset({"concurrency", "temporal"})
+# Temporal protocols always use the sequential plan executor, which creates a
+# ProcessStepLedger. Pure concurrency barriers have their own barrier_timeline
+# and must not be forced to provide a different ledger they may never create.
+_PROCESS_LEDGER_FAMILIES = frozenset({"temporal"})
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -139,7 +142,7 @@ def _process_timeline_handler(envelope: dict[str, Any]) -> dict[str, Any]:
 
 
 def install_non_http_observers() -> None:
-    """Register process-ledger evidence and require it for temporal families."""
+    """Register process-ledger evidence for protocols that guarantee it."""
 
     if _PROCESS_OBSERVER_ID not in registered_observer_ids():
         register_observer(
@@ -179,7 +182,7 @@ def install_non_http_observers() -> None:
     ) -> tuple[list[dict[str, Any]], str, str]:
         required = list(observer_ids or [])
         if (
-            _text(risk_family) in _TEMPORAL_FAMILIES
+            _text(risk_family) in _PROCESS_LEDGER_FAMILIES
             and _PROCESS_OBSERVER_ID not in {
                 _text(value) for value in required
             }
