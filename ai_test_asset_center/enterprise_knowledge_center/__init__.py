@@ -15,6 +15,10 @@ from ._chinese_business_comprehension import (  # noqa: F401
     build_chinese_first_comprehension,
     install_chinese_first_business_comprehension,
 )
+from ._chinese_business_conflicts import (  # noqa: F401
+    reconcile_chinese_business_fact_conflicts,
+    install_chinese_business_conflict_reconciliation,
+)
 from ._chinese_business_downstream import (  # noqa: F401
     refresh_chinese_business_downstream,
     install_chinese_business_downstream_refresh,
@@ -43,11 +47,12 @@ install_formal_ui_persistent_probe_guard()
 install_formal_ui_visual_baseline_guard()
 install_formal_ui_visual_viewport_guard()
 
-# Install on the existing knowledge-center build authority. The first installer
-# turns Chinese source spans into governed facts; the second rebuilds downstream
-# relationships, risks, Oracles, probes and evidence without arbitrary endpoint
-# fallback. Both patch _api so internal and facade callers share one mainline.
+# Install on the existing knowledge-center build authority. Chinese source spans
+# become governed facts first; unresolved contradictions are removed from formal
+# rule input and block the gate; only then are authoritative operation bindings,
+# risks, Oracles, probes and evidence rebuilt without arbitrary endpoint fallback.
 build_enterprise_business_knowledge_asset = install_chinese_first_business_comprehension()
+build_enterprise_business_knowledge_asset = install_chinese_business_conflict_reconciliation()
 build_enterprise_business_knowledge_asset = install_chinese_business_downstream_refresh()
 
 # Explicit re-exports for underscore-prefixed symbols
@@ -198,6 +203,8 @@ __all__ = [
     "analyze_chinese_business_source",
     "build_chinese_first_comprehension",
     "install_chinese_first_business_comprehension",
+    "reconcile_chinese_business_fact_conflicts",
+    "install_chinese_business_conflict_reconciliation",
     "refresh_chinese_business_downstream",
     "install_chinese_business_downstream_refresh",
     "build_enterprise_business_knowledge_asset",
