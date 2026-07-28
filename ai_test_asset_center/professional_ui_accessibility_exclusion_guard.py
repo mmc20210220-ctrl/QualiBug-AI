@@ -12,6 +12,9 @@ from typing import Any
 
 from . import professional_ui_accessibility_engine as _engine
 from . import professional_ui_accessibility_observation_guard as _observation
+from .professional_ui_accessibility_focus_governance import (
+    install_professional_ui_accessibility_focus_governance,
+)
 
 _INSTALL_MARKER = "_qualibug_accessibility_exclusion_guard_installed"
 _ORIGINAL_EXECUTE = "_qualibug_accessibility_execute_before_exclusion_guard"
@@ -75,6 +78,9 @@ def _indeterminate_receipt(step: dict[str, Any], *, reason: str, count: int) -> 
 
 
 def install_professional_ui_accessibility_exclusion_guard() -> None:
+    # Focus governance must see the semantics guard's final scripts before the
+    # evidence-preserving executor begins calling the audit.
+    install_professional_ui_accessibility_focus_governance()
     if getattr(_engine, _INSTALL_MARKER, False):
         return
     original = getattr(
