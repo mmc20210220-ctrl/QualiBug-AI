@@ -1,4 +1,4 @@
-"""Require explicit source authority for accessibility rule execution."""
+"""Require explicit and exact source authority for accessibility execution."""
 from __future__ import annotations
 
 from typing import Any
@@ -11,12 +11,21 @@ _INSTALL_MARKER = "_qualibug_accessibility_contract_guard_installed"
 _ORIGINAL_VALIDATE = "_qualibug_accessibility_validate_before_contract_guard"
 
 
+def _dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 def _list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
 def _text(value: Any, *, limit: int = 500) -> str:
     return str(value or "").strip()[:limit]
+
+
+def _zero_budgets(value: Any) -> bool:
+    raw = _dict(value)
+    return all(int(raw.get(impact, 0) or 0) == 0 for impact in _engine.IMPACTS)
 
 
 def install_professional_ui_accessibility_contract_guard() -> None:
@@ -40,7 +49,38 @@ def install_professional_ui_accessibility_contract_guard() -> None:
             raise _professional._browser.BrowserExecutionError(
                 "browser_accessibility_standard_or_rules_missing"
             )
-        custom = bool(declared_rules and not declared_standard)
+        if raw.get("require_complete_scan", True) is not True:
+            raise _professional._browser.BrowserExecutionError(
+                "browser_accessibility_complete_scan_required"
+            )
+
+        custom = not declared_standard and bool(declared_rules)
+        if declared_standard:
+            if declared_standard != _engine.STANDARD:
+                raise _professional._browser.BrowserExecutionError(
+                    "browser_accessibility_standard_unsupported"
+                )
+            if declared_rules and tuple(dict.fromkeys(declared_rules)) != tuple(
+                _engine.STANDARD_RULES
+            ):
+                raise _professional._browser.BrowserExecutionError(
+                    "browser_accessibility_standard_rule_set_mismatch"
+                )
+            if _list(raw.get("allowed_untestable_rules")):
+                raise _professional._browser.BrowserExecutionError(
+                    "browser_accessibility_standard_untestable_waiver_forbidden"
+                )
+            if _list(raw.get("exclude_selectors")):
+                raise _professional._browser.BrowserExecutionError(
+                    "browser_accessibility_standard_exclusions_forbidden"
+                )
+            if int(raw.get("max_violations", 0) or 0) != 0 or not _zero_budgets(
+                raw.get("impact_budgets")
+            ):
+                raise _professional._browser.BrowserExecutionError(
+                    "browser_accessibility_standard_zero_budget_required"
+                )
+
         if custom:
             raw["standard"] = _engine.STANDARD
         original(raw)
