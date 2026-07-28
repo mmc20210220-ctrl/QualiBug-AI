@@ -5,6 +5,10 @@ revoking and resolving formal UI visual baselines. Import installs registry
 integrity and projection guards before public function aliases are bound, so
 callers cannot bypass lifecycle hardening or receive history-dependent counter
 semantics through an early-captured function reference.
+
+The private-pilot service imports this surface while installing its governed UI
+routes. That same safe bootstrap point installs additive browser-matrix health
+metadata without launching or downloading any browser.
 """
 from __future__ import annotations
 
@@ -15,6 +19,9 @@ from .enterprise_knowledge_center._visual_baseline_registry_guard import (
 from .enterprise_knowledge_center._visual_baseline_registry_projection_guard import (
     install_visual_baseline_registry_projection_guard,
 )
+from .private_pilot_browser_matrix_health_patch import (
+    install_browser_matrix_health_patch,
+)
 from .private_pilot_visual_baseline_health_patch import (
     install_visual_baseline_health_patch,
 )
@@ -22,6 +29,7 @@ from .private_pilot_visual_baseline_health_patch import (
 install_visual_baseline_registry_guard()
 install_visual_baseline_registry_projection_guard()
 install_visual_baseline_health_patch()
+install_browser_matrix_health_patch()
 
 APPROVED_PREFIX = _registry.APPROVED_PREFIX
 FONT_READINESS = _registry.FONT_READINESS
