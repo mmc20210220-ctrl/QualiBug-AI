@@ -19,6 +19,14 @@ from ._chinese_business_conflicts import (  # noqa: F401
     reconcile_chinese_business_fact_conflicts,
     install_chinese_business_conflict_reconciliation,
 )
+from .enterprise_understanding import (  # noqa: F401
+    assess_understanding_model,
+    build_enterprise_understanding_model,
+    build_lifecycles,
+    build_object_graph,
+    enrich_asset_with_enterprise_understanding,
+    install_enterprise_understanding_model,
+)
 from ._chinese_business_downstream import (  # noqa: F401
     refresh_chinese_business_downstream,
     install_chinese_business_downstream_refresh,
@@ -49,10 +57,12 @@ install_formal_ui_visual_viewport_guard()
 
 # Install on the existing knowledge-center build authority. Chinese source spans
 # become governed facts first; unresolved contradictions are removed from formal
-# rule input and block the gate; only then are authoritative operation bindings,
-# risks, Oracles, probes and evidence rebuilt without arbitrary endpoint fallback.
+# rule input; the enterprise understanding model then compiles objects, actors,
+# operations, relations, lifecycles, processes and unknowns. Only after that gate
+# closes may downstream bindings, risks, Oracles, probes and evidence be rebuilt.
 build_enterprise_business_knowledge_asset = install_chinese_first_business_comprehension()
 build_enterprise_business_knowledge_asset = install_chinese_business_conflict_reconciliation()
+build_enterprise_business_knowledge_asset = install_enterprise_understanding_model()
 build_enterprise_business_knowledge_asset = install_chinese_business_downstream_refresh()
 
 # Explicit re-exports for underscore-prefixed symbols
@@ -205,6 +215,12 @@ __all__ = [
     "install_chinese_first_business_comprehension",
     "reconcile_chinese_business_fact_conflicts",
     "install_chinese_business_conflict_reconciliation",
+    "assess_understanding_model",
+    "build_enterprise_understanding_model",
+    "build_lifecycles",
+    "build_object_graph",
+    "enrich_asset_with_enterprise_understanding",
+    "install_enterprise_understanding_model",
     "refresh_chinese_business_downstream",
     "install_chinese_business_downstream_refresh",
     "build_enterprise_business_knowledge_asset",
