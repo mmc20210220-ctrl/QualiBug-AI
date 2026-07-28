@@ -13,6 +13,7 @@ CLICK_POPUP = "click_popup"
 COMPLEX_ACTIONS = frozenset({SET_INPUT_FILES, CLICK_DOWNLOAD, CLICK_POPUP})
 _MAX_UPLOAD_FILES = 10
 _MAX_DOWNLOAD_BYTES = 50_000_000
+_PERSISTENT_PROPERTY = "http_json_pointer"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _INSTALL_MARKER = "_qualibug_formal_ui_complex_interaction_guard_installed"
 _ORIGINAL_VALIDATOR = "_qualibug_ui_validator_before_complex_interactions"
@@ -162,8 +163,14 @@ def install_formal_ui_complex_interaction_guard() -> None:
             [row for row in _list(plan.get("state_probes")) if isinstance(row, dict)],
             start=1,
         ):
-            if probe.get("frame_selector") or probe.get("frame_origin"):
-                missing.extend(_frame_gaps(probe, f"state_probes[{index}]"))
+            has_frame = bool(probe.get("frame_selector") or probe.get("frame_origin"))
+            if not has_frame:
+                continue
+            prefix = f"state_probes[{index}]"
+            if _text(probe.get("property")).lower() == _PERSISTENT_PROPERTY:
+                missing.append(f"{prefix}.persistent_probe_no_frame_scope")
+            else:
+                missing.extend(_frame_gaps(probe, prefix))
         if missing:
             return None, _gap(
                 contract,
