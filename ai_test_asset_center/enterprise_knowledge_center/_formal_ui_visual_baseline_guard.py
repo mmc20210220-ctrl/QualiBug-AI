@@ -15,6 +15,8 @@ from typing import Any
 from . import _formal_ui_contracts as _contracts
 
 ACTION = "expect_visual_baseline"
+INPUT_PREFIX = "visual_baselines"
+APPROVED_PREFIX = "approved_visual_baselines"
 _INSTALL_MARKER = "_qualibug_formal_ui_visual_baseline_guard_installed"
 _ORIGINAL_MARKER = "_qualibug_original_visual_expectation_gaps"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -42,6 +44,8 @@ def _valid_relative_png(value: Any) -> bool:
     return bool(
         not path.is_absolute()
         and ".." not in path.parts
+        and len(path.parts) >= 2
+        and path.parts[0] in {INPUT_PREFIX, APPROVED_PREFIX}
         and path.suffix.lower() == ".png"
     )
 
@@ -69,7 +73,7 @@ def _visual_gaps(expectations: list[dict[str, Any]]) -> list[str]:
             continue
         prefix = f"{ACTION}[{index}]"
         if not _valid_relative_png(step.get("baseline_ref")):
-            missing.append(f"{prefix}.browser_visual_baseline_ref_invalid")
+            missing.append(f"{prefix}.browser_visual_baseline_scope_invalid")
         if not _SHA256_RE.fullmatch(_text(step.get("baseline_sha256")).lower()):
             missing.append(f"{prefix}.browser_visual_baseline_sha256_invalid")
         if "max_changed_pixel_ratio" not in step:
@@ -114,7 +118,11 @@ def _visual_gaps(expectations: list[dict[str, Any]]) -> list[str]:
         for region in regions:
             row = _dict(region)
             if not row or not all(
-                _integer(row.get(key), minimum=0 if key in {"x", "y"} else 1, maximum=100_000)
+                _integer(
+                    row.get(key),
+                    minimum=0 if key in {"x", "y"} else 1,
+                    maximum=100_000,
+                )
                 for key in ("x", "y", "width", "height")
             ):
                 missing.append(f"{prefix}.browser_visual_mask_region_invalid")
@@ -153,5 +161,7 @@ def install_formal_ui_visual_baseline_guard() -> None:
 
 __all__ = [
     "ACTION",
+    "APPROVED_PREFIX",
+    "INPUT_PREFIX",
     "install_formal_ui_visual_baseline_guard",
 ]
