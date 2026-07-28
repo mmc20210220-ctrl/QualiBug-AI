@@ -6,12 +6,14 @@ from pathlib import Path
 from typing import Any
 
 from .builder import build_enterprise_understanding_model
+from .closure import apply_minimum_understanding_closure
 from .schema import as_dict, as_list, text
 
 
 def enrich_asset_with_enterprise_understanding(asset: dict[str, Any]) -> dict[str, Any]:
     """Attach the model and project its gate into the existing comprehension gate."""
     model = build_enterprise_understanding_model(asset)
+    model = apply_minimum_understanding_closure(model, asset)
     model_gate = as_dict(model.get("gate"))
     asset["enterprise_understanding_model"] = model
 
@@ -88,6 +90,7 @@ def enrich_asset_with_enterprise_understanding(asset: dict[str, Any]) -> dict[st
             "enterprise_understanding_does_not_infer_from_token_similarity": True,
             "enterprise_understanding_unknowns_fail_visible": True,
             "enterprise_understanding_projection_is_not_recall": True,
+            "field_or_entity_inventory_alone_cannot_pass_understanding_gate": True,
         }
     )
     asset["governance"] = governance
