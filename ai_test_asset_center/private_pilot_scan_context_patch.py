@@ -36,7 +36,7 @@ def restore_scan_campaign_context_patch() -> None:
     _service._SCAN_CAMPAIGN_CONTEXT_PATCH_SOURCE = ""  # type: ignore[attr-defined]
     _service._ORIGINAL_V12_SCAN = None  # type: ignore[attr-defined]
     _service._ORIGINAL_HANDLE_V12_SCAN = None  # type: ignore[attr-defined]
-    _service._ORIGINAL_CONTINUOUS_START = None  # type: ignore[attr-defined]
+    _service._ORIGINAL_HANDLE_CONTINUOUS_START = None  # type: ignore[attr-defined]
     _service._ORIGINAL_CONTINUOUS_SCAN_LOOP = None  # type: ignore[attr-defined]
     CONTINUOUS_CAMPAIGN_CONTEXTS.clear()
 
