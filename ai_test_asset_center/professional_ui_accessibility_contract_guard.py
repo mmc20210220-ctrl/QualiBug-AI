@@ -5,6 +5,9 @@ from typing import Any
 
 from . import professional_ui_accessibility_engine as _engine
 from . import professional_ui_readonly as _professional
+from .professional_ui_accessibility_aria_guard import (
+    install_professional_ui_accessibility_aria_guard,
+)
 from .professional_ui_accessibility_source_guard import (
     install_professional_ui_accessibility_source_guard,
 )
@@ -35,6 +38,10 @@ def _zero_budgets(value: Any) -> bool:
 
 
 def install_professional_ui_accessibility_contract_guard() -> None:
+    # Rule governance runs immediately before this installer in the formal runtime.
+    # Add deterministic ARIA rules before source admission and normalization bind the
+    # exact standard/custom rule identity.
+    install_professional_ui_accessibility_aria_guard()
     install_professional_ui_accessibility_source_guard()
     if getattr(_engine, _INSTALL_MARKER, False):
         return
