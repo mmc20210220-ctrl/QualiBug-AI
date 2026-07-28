@@ -8,12 +8,17 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import sys
 from typing import Any
 
 from . import private_pilot_health_contract as _health
 
 _INSTALL_MARKER = "_qualibug_visual_baseline_health_patch_installed"
 _ORIGINAL_BUILDER = "_qualibug_health_builder_before_visual_baseline"
+_CONSUMER_MODULES = (
+    "ai_test_asset_center.private_pilot_deployment_patch",
+    "ai_test_asset_center.private_pilot_doctor",
+)
 
 
 def _module_available(name: str) -> bool:
@@ -156,8 +161,32 @@ def visual_baseline_health_status() -> dict[str, Any]:
     }
 
 
+def _propagate_loaded_consumer_aliases(
+    original: Any,
+    wrapped: Any,
+) -> None:
+    """Replace only stale aliases that still point at the exact old builder.
+
+    Modules imported after installation receive the wrapped function naturally.
+    Modules imported earlier may have copied the old object with ``from ...
+    import``; those aliases must be updated or doctor/deployment health diverges
+    from the live HTTP route. Unrelated monkeypatches or custom wrappers are not
+    overwritten because identity must match ``original`` exactly.
+    """
+    for module_name in _CONSUMER_MODULES:
+        module = sys.modules.get(module_name)
+        if module is None:
+            continue
+        if getattr(module, "build_private_pilot_health_payload", None) is original:
+            setattr(module, "build_private_pilot_health_payload", wrapped)
+
+
 def install_visual_baseline_health_patch() -> None:
     if getattr(_health, _INSTALL_MARKER, False):
+        current = _health.build_private_pilot_health_payload
+        original = getattr(_health, ORIGINAL_BUILDER, None)
+        if callable(original):
+            _propagate_loaded_consumer_aliases(original, current)
         return
     original = getattr(
         _health,
@@ -193,6 +222,7 @@ def install_visual_baseline_health_patch() -> None:
         return payload
 
     _health.build_private_pilot_health_payload = build_health_with_visual_baseline
+    _propagate_loaded_consumer_aliases(original, build_health_with_visual_baseline)
     setattr(_health, _INSTALL_MARKER, True)
 
 
