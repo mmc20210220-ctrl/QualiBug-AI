@@ -1,8 +1,9 @@
 """Bind explicit latency-budget contracts to exact Behavior IR identities.
 
-One contract becomes one invariant only when one read-only operation, one executable actor and
+One contract becomes one invariant only when one GET/HEAD operation, one executable actor and
 one real source reference are proven. No endpoint or threshold is inferred from monitoring data,
-route names or historical timings.
+route names or historical timings. OPTIONS is deliberately excluded: its framework/gateway path
+is often materially different from the business read whose latency the source contract names.
 """
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ from typing import Any
 from . import behavior_ir as _bir
 
 BINDING_RECEIPT_SCHEMA = "qualibug.source-performance-contract-binding.v1"
-_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+_SAFE_METHODS = frozenset({"GET", "HEAD"})
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -101,7 +102,7 @@ def _resolve_operation(
         )
     operation = candidates[0]
     if _text(operation.get("method")).upper() not in _SAFE_METHODS:
-        return None, "FORMAL_PERFORMANCE_WRITE_OPERATION_NOT_ALLOWED"
+        return None, "FORMAL_PERFORMANCE_GET_OR_HEAD_REQUIRED"
     return operation, ""
 
 
