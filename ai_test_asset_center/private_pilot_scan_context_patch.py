@@ -43,6 +43,9 @@ from ai_test_asset_center.ui_upload_fixture_runtime_binding import (
 from ai_test_asset_center.ui_upload_scenario_runtime_binding import (
     install_ui_upload_scenario_runtime_binding,
 )
+from ai_test_asset_center.ui_upload_scenario_source_authority import (
+    install_ui_upload_scenario_source_authority,
+)
 
 PATCH_SOURCE = "ai_test_asset_center.private_pilot_scan_context_patch"
 
@@ -63,9 +66,11 @@ def install_scan_campaign_context_patch(*, patch_source: str) -> None:
     """Mark first-class binding active and preserve governed scan contracts."""
     install_performance_scan_context_bridge()
     # Upload scenarios expand into source-bound UI requests plus fixture refs. The
-    # fixture authority then materializes those refs into runtime file bindings.
+    # scenario source identity is resolved from the same knowledge-center registry
+    # that builds Behavior IR; the fixture authority then materializes file bindings.
     # Every installer is idempotent and performs no browser or target I/O.
     install_upload_fixture_registry_integrity()
+    install_ui_upload_scenario_source_authority()
     install_ui_upload_scenario_runtime_binding()
     install_ui_upload_fixture_runtime_binding()
     install_upload_fixture_scan_gate()
