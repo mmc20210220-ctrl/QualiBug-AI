@@ -166,3 +166,15 @@ def test_conflicting_cron_values_are_retained_and_block_automatic_promotion() ->
         "CONFLICTED_SOURCE_EVIDENCE"
     )
     assert asset["fact_authority"]["runtime_integrity_behavior_eligible"] is False
+
+    operation = to_async_operation_with_governance(asset)
+    behaviors, ledger, _lineages, gate = project_job_behaviors(
+        {"job_assets": [asset]},
+        _model(operation),
+    )
+    assert behaviors[0]["status"] == "CONFLICTED"
+    assert behaviors[0]["formal_business_rule"] is False
+    assert "ASYNC_JOB_SOURCE_FACT_CONFLICT" in behaviors[0]["unresolved_semantics"]
+    assert ledger[0]["reason_code"] == "ASYNC_JOB_SOURCE_FACT_CONFLICT"
+    assert ledger[0]["formal_obligation_eligible"] is False
+    assert gate["entry_allowed"] is False
