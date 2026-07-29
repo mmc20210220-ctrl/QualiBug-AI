@@ -61,25 +61,16 @@ def test_approved_upload_fixture_executes_and_cleanup_restores_state(
 ) -> None:
     pytest.importorskip("playwright.sync_api")
 
+    # Import the one product runtime composition instead of constructing a test-only
+    # installer order. This is the same chain used by discovery execution.
+    from ai_test_asset_center import discovery_runtime_semantic_binding as _runtime  # noqa: F401
     from ai_test_asset_center import professional_ui_interaction_cleanup as interaction
     from ai_test_asset_center import ui_upload_fixture_registry as registry
-    from ai_test_asset_center.professional_ui_complex_interactions import (
-        install_professional_ui_complex_interactions,
-    )
-    from ai_test_asset_center.professional_ui_interaction_cleanup import (
-        install_controlled_ui_interaction,
-    )
-    from ai_test_asset_center.professional_ui_readonly import (
-        install_professional_ui_readonly,
-    )
     from ai_test_asset_center.ui_upload_fixture_registry_integrity import (
         install_upload_fixture_registry_integrity,
     )
 
     install_upload_fixture_registry_integrity()
-    install_professional_ui_readonly()
-    install_controlled_ui_interaction()
-    install_professional_ui_complex_interactions()
 
     project = "upload_fixture_e2e"
     actor = {"name": "e2e", "role": "qa_lead"}
