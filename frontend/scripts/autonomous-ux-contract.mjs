@@ -19,6 +19,14 @@ function forbidText(content, forbidden, label) {
   }
 }
 
+function requireAll(content, expected, label) {
+  for (const value of expected) requireText(content, value, label);
+}
+
+function forbidAll(content, forbidden, label) {
+  for (const value of forbidden) forbidText(content, value, label);
+}
+
 const [
   scenarioSelector,
   fixtureSelector,
@@ -63,172 +71,205 @@ const [
   source('src/components/Sidebar.tsx'),
 ]);
 
-requireText(scenarioSelector, '已批准的 UI 场景自动纳入本次验证', 'upload scenario selector');
-requireText(scenarioSelector, '用户不需要逐项选择或重复确认', 'upload scenario selector');
+requireAll(scenarioSelector, [
+  '已批准的 UI 场景自动纳入本次验证',
+  '用户不需要逐项选择或重复确认',
+], 'upload scenario selector');
 forbidText(scenarioSelector, 'type="checkbox"', 'upload scenario selector');
 
-requireText(fixtureSelector, 'const refs = approved.map(scenarioRef)', 'upload fixture selector');
-requireText(fixtureSelector, 'reportScenarioState({ refs, loading: false, error:', 'upload fixture selector');
-requireText(fixtureSelector, 'onScenarioStateChange?:', 'upload fixture selector');
-requireText(fixtureSelector, 'onScenarioSelectionChange?:', 'upload fixture selector');
-requireText(fixtureSelector, '<details className="run-fixture-selector">', 'upload fixture selector');
-requireText(fixtureSelector, '异常补充入口', 'upload fixture selector');
-forbidText(fixtureSelector, 'localStorage', 'upload fixture selector');
-forbidText(fixtureSelector, 'sessionStorage', 'upload fixture selector');
+requireAll(fixtureSelector, [
+  'const refs = approved.map(scenarioRef)',
+  'reportScenarioState({ refs, loading: false, error:',
+  'onScenarioStateChange?:',
+  'onScenarioSelectionChange?:',
+  '<details className="run-fixture-selector">',
+  '异常补充入口',
+], 'upload fixture selector');
+forbidAll(fixtureSelector, ['localStorage', 'sessionStorage'], 'upload fixture selector');
 
-requireText(runCenter, 'async function activeApprovedScenarioIds', 'run center');
-requireText(runCenter, 'await listUploadScenarios(project, false)', 'run center');
-requireText(runCenter, "scenario.status === 'active' && scenario.authority === 'approved_copy'", 'run center');
-requireText(runCenter, "const forceReadOnly = options.execution_mode === 'safe_read_only';", 'run center');
-requireText(runCenter, 'const fixtureIds = forceReadOnly', 'run center');
-requireText(runCenter, 'const scenarioIds = forceReadOnly', 'run center');
-forbidText(runCenter, 'localStorage', 'run center');
-forbidText(runCenter, 'sessionStorage', 'run center');
+requireAll(runCenter, [
+  'async function activeApprovedScenarioIds',
+  'await listUploadScenarios(project, false)',
+  "scenario.status === 'active' && scenario.authority === 'approved_copy'",
+  "const forceReadOnly = options.execution_mode === 'safe_read_only';",
+  'const fixtureIds = forceReadOnly',
+  'const scenarioIds = forceReadOnly',
+], 'run center');
+forbidAll(runCenter, ['localStorage', 'sessionStorage'], 'run center');
 
-requireText(campaignsPage, '开始企业系统验证', 'campaigns page');
-requireText(campaignsPage, '后台会自动选择目标服务、有效资料快照、登录方式、测试数据方案和可执行场景', 'campaigns page');
-requireText(campaignsPage, '<details className="card mb-4">', 'campaigns page');
-requireText(campaignsPage, '异常覆盖与安全熔断', 'campaigns page');
-requireText(campaignsPage, '强制只读熔断：本次验证禁止任何写入', 'campaigns page');
-requireText(campaignsPage, 'onScenarioSelectionChange={handleScenarioSelectionChange}', 'campaigns page');
-requireText(campaignsPage, '个已审批 UI 场景由后台自动纳入', 'campaigns page');
-forbidText(campaignsPage, '测试数据策略', 'campaigns page');
-forbidText(campaignsPage, 'type DataStrategy', 'campaigns page');
-forbidText(campaignsPage, 'buildTestDataContract', 'campaigns page');
+requireAll(campaignsPage, [
+  '开始企业系统验证',
+  '后台会自动选择目标服务、有效资料快照、登录方式、测试数据方案和可执行场景',
+  '<details className="card mb-4">',
+  '异常覆盖与安全熔断',
+  '强制只读熔断：本次验证禁止任何写入',
+  'onScenarioSelectionChange={handleScenarioSelectionChange}',
+  '个已审批 UI 场景由后台自动纳入',
+], 'campaigns page');
+forbidAll(campaignsPage, ['测试数据策略', 'type DataStrategy', 'buildTestDataContract'], 'campaigns page');
 
-requireText(dashboardPage, "import { EnterpriseUnderstandingPanel }", 'dashboard understanding projection');
-requireText(dashboardPage, 'const knowledgeSummary = asRecord(record.knowledge_summary);', 'dashboard understanding projection');
-requireText(dashboardPage, '<EnterpriseUnderstandingPanel', 'dashboard understanding projection');
-requireText(dashboardPage, "navigateToProjectPath('/settings', project)", 'dashboard understanding projection');
+requireAll(dashboardPage, [
+  'import { EnterpriseUnderstandingPanel }',
+  'const knowledgeSummary = asRecord(record.knowledge_summary);',
+  '<EnterpriseUnderstandingPanel',
+  "navigateToProjectPath('/settings', project)",
+], 'dashboard understanding projection');
 
-requireText(dashboardUnderstanding, '已有知识资产的只读投影', 'dashboard enterprise understanding');
-requireText(dashboardUnderstanding, 'summary.understanding_gates', 'dashboard enterprise understanding');
-requireText(dashboardUnderstanding, 'summary.understanding_blocker_receipts', 'dashboard enterprise understanding');
-requireText(dashboardUnderstanding, 'summary.understanding_source_receipt_count', 'dashboard enterprise understanding');
-requireText(dashboardUnderstanding, "key: 'runtime_plan'", 'dashboard enterprise understanding');
-requireText(dashboardUnderstanding, "label: 'Runtime Plan'", 'dashboard enterprise understanding');
-requireText(dashboardUnderstanding, "key: 'runtime_materialization'", 'dashboard enterprise understanding');
-requireText(dashboardUnderstanding, "label: '运行实例化'", 'dashboard enterprise understanding');
-requireText(dashboardUnderstanding, '运行草稿链已闭合', 'dashboard enterprise understanding');
-requireText(dashboardUnderstanding, '不可发送', 'dashboard enterprise understanding');
-requireText(dashboardUnderstanding, '不可执行', 'dashboard enterprise understanding');
-requireText(dashboardUnderstanding, '查看缺口与原始资料回执', 'dashboard enterprise understanding');
-requireText(dashboardUnderstanding, '现有门禁回执尚未附具体资料定位', 'dashboard enterprise understanding');
-requireText(dashboardUnderstanding, '没有来源的条目不会被系统猜测补齐', 'dashboard enterprise understanding');
-requireText(dashboardUnderstanding, '系统不会通过人工点击“确认正确”或常识补全绕过门禁', 'dashboard enterprise understanding');
-forbidText(dashboardUnderstanding, 'contentEditable', 'dashboard enterprise understanding');
-forbidText(dashboardUnderstanding, '保存模型', 'dashboard enterprise understanding');
-forbidText(dashboardUnderstanding, '确认理解正确', 'dashboard enterprise understanding');
+requireAll(dashboardUnderstanding, [
+  '已有知识资产的只读投影',
+  'summary.understanding_gates',
+  'summary.understanding_blocker_receipts',
+  'summary.understanding_source_receipt_count',
+  "key: 'runtime_plan'",
+  "label: 'Runtime Plan'",
+  "key: 'runtime_materialization'",
+  "label: '运行实例化'",
+  '运行准备链已闭合',
+  '真实执行仍由现有 Experiment Executor',
+  '实例化草案',
+  '运行实例化缺口',
+  '查看缺口与原始资料回执',
+  '现有门禁回执尚未附具体资料定位',
+  '没有证据的条目不会被系统猜测补齐',
+  '旧 Probe 回退绕过门禁',
+], 'dashboard enterprise understanding');
+forbidAll(dashboardUnderstanding, ['contentEditable', '保存模型', '确认理解正确'], 'dashboard enterprise understanding');
 
-requireText(serviceForm, '最小接入', 'service onboarding form');
-requireText(serviceForm, '只需提供系统名称、测试地址和可用凭据', 'service onboarding form');
-requireText(serviceForm, '<details className="settings-auth-section">', 'service onboarding form');
+requireAll(serviceForm, [
+  '最小接入',
+  '只需提供系统名称、测试地址和可用凭据',
+  '<details className="settings-auth-section">',
+], 'service onboarding form');
 
-requireText(customerSection, '客户与企业资料', 'customer and materials section');
-requireText(customerSection, '用户不需要判断资料类型、选择解析策略、维护版本或逐项绑定场景', 'customer and materials section');
-requireText(customerSection, '选择文件后立即导入', 'customer and materials section');
-requireText(customerSection, 'type="file"', 'customer and materials section');
-requireText(customerSection, 'multiple', 'customer and materials section');
-requireText(customerSection, 'void handleFilesSelected(files)', 'customer and materials section');
-requireText(customerSection, '<EnterpriseUnderstandingReceipt', 'customer and materials section');
-requireText(customerSection, '查看后台识别的资料来源', 'customer and materials section');
-forbidText(customerSection, 'setSelectedSourceType', 'customer and materials section');
-forbidText(customerSection, 'onDeleteKnowledge', 'customer and materials section');
-forbidText(customerSection, 'onConfirmUnderstanding', 'customer and materials section');
+requireAll(customerSection, [
+  '客户与企业资料',
+  '用户不需要判断资料类型、选择解析策略、维护版本或逐项绑定场景',
+  '选择文件后立即导入',
+  'type="file"',
+  'multiple',
+  'void handleFilesSelected(files)',
+  '<EnterpriseUnderstandingReceipt',
+  '查看后台识别的资料来源',
+], 'customer and materials section');
+forbidAll(customerSection, ['setSelectedSourceType', 'onDeleteKnowledge', 'onConfirmUnderstanding'], 'customer and materials section');
 
-requireText(understandingReceipt, '已有知识资产的只读投影', 'enterprise understanding receipt');
-requireText(understandingReceipt, 'asset.enterprise_understanding_model', 'enterprise understanding receipt');
-requireText(understandingReceipt, 'asset.enterprise_comprehension_gate', 'enterprise understanding receipt');
-requireText(understandingReceipt, 'asset.scenario_planning_gate', 'enterprise understanding receipt');
-requireText(understandingReceipt, 'asset.scenario_ir_gate', 'enterprise understanding receipt');
-requireText(understandingReceipt, 'asset.scenario_execution_contract_gate', 'enterprise understanding receipt');
-requireText(understandingReceipt, 'asset.runtime_plan_gate', 'enterprise understanding receipt');
-requireText(understandingReceipt, 'asset.runtime_plan_unknowns', 'enterprise understanding receipt');
-requireText(understandingReceipt, 'asset.runtime_materialization_gate', 'enterprise understanding receipt');
-requireText(understandingReceipt, 'asset.runtime_materialization_unknowns', 'enterprise understanding receipt');
-requireText(understandingReceipt, "gateView('Runtime Plan'", 'enterprise understanding receipt');
-requireText(understandingReceipt, "gateView('运行实例化'", 'enterprise understanding receipt');
-requireText(understandingReceipt, '不可发送请求草稿', 'enterprise understanding receipt');
-requireText(understandingReceipt, '不可执行断言草稿', 'enterprise understanding receipt');
-requireText(understandingReceipt, '系统不会通过人工点击“确认正确”关闭缺口', 'enterprise understanding receipt');
-requireText(understandingReceipt, '不创建第二套模型', 'enterprise understanding receipt');
-forbidText(understandingReceipt, 'contentEditable', 'enterprise understanding receipt');
-forbidText(understandingReceipt, '保存模型', 'enterprise understanding receipt');
-forbidText(understandingReceipt, '确认理解正确', 'enterprise understanding receipt');
+requireAll(understandingReceipt, [
+  '已有知识资产的只读投影',
+  'asset.enterprise_understanding_model',
+  'asset.enterprise_comprehension_gate',
+  'asset.scenario_planning_gate',
+  'asset.scenario_ir_gate',
+  'asset.scenario_execution_contract_gate',
+  'asset.runtime_plan_gate',
+  'asset.runtime_plan_unknowns',
+  'asset.runtime_materialization_gate',
+  'asset.runtime_materialization_unknowns',
+  "gateView('Runtime Plan'",
+  "gateView('运行实例化'",
+  '不可发送请求草稿',
+  '不可执行断言草稿',
+  '系统不会通过人工点击“确认正确”关闭缺口',
+  '不创建第二套模型',
+], 'enterprise understanding receipt');
+forbidAll(understandingReceipt, ['contentEditable', '保存模型', '确认理解正确'], 'enterprise understanding receipt');
 
-requireText(understandingPreflight, 'load_enterprise_business_knowledge_asset', 'understanding preflight projection');
-requireText(understandingPreflight, 'existing_enterprise_business_knowledge_asset', 'understanding preflight projection');
-requireText(understandingPreflight, 'runtime_plan_gate', 'understanding preflight projection');
-requireText(understandingPreflight, 'runtime_materialization_gate', 'understanding preflight projection');
-requireText(understandingPreflight, 'RUNTIME_PLAN_BLOCKED', 'understanding preflight projection');
-requireText(understandingPreflight, 'RUNTIME_MATERIALIZATION_BLOCKED', 'understanding preflight projection');
-requireText(understandingPreflight, 'first_blocked_gate', 'understanding preflight projection');
-requireText(understandingPreflight, '旧 Probe 回退绕过门禁', 'understanding preflight projection');
-requireText(understandingPreflight, 'super()._handle_scan_preflight(project, root, body)', 'understanding preflight projection');
-forbidText(understandingPreflight, 'build_enterprise_business_knowledge_asset', 'understanding preflight projection');
-forbidText(understandingPreflight, '第二套', 'understanding preflight projection');
+requireAll(understandingPreflight, [
+  'load_enterprise_business_knowledge_asset',
+  'existing_enterprise_business_knowledge_asset',
+  'runtime_plan_gate',
+  'runtime_materialization_gate',
+  'RUNTIME_PLAN_BLOCKED',
+  'RUNTIME_MATERIALIZATION_BLOCKED',
+  'runtime_materialization_unknowns',
+  'first_blocked_gate',
+  '旧 Probe 回退绕过门禁',
+  'super()._handle_scan_preflight(project, root, body)',
+], 'understanding preflight projection');
+forbidAll(understandingPreflight, ['build_enterprise_business_knowledge_asset', '第二套'], 'understanding preflight projection');
 
-requireText(commandCenterUnderstanding, 'load_enterprise_business_knowledge_asset', 'command center understanding projection');
-requireText(commandCenterUnderstanding, 'data["knowledge_summary"] = {**existing, **_understanding_projection(asset)}', 'command center understanding projection');
-requireText(commandCenterUnderstanding, 'runtime_plan_gate', 'command center understanding projection');
-requireText(commandCenterUnderstanding, 'runtime_plan_unknowns', 'command center understanding projection');
-requireText(commandCenterUnderstanding, 'runtime_materialization_gate', 'command center understanding projection');
-requireText(commandCenterUnderstanding, 'runtime_materialization_unknowns', 'command center understanding projection');
-requireText(commandCenterUnderstanding, 'def _source_receipts(', 'command center understanding projection');
-requireText(commandCenterUnderstanding, '"understanding_blocker_receipts": blocker_receipts', 'command center understanding projection');
-requireText(commandCenterUnderstanding, '"understanding_source_receipt_count"', 'command center understanding projection');
-requireText(commandCenterUnderstanding, 'EXISTING_KNOWLEDGE_ASSET_GATE_PROJECTION_NOT_SECOND_AUTHORITY', 'command center understanding projection');
-requireText(commandCenterUnderstanding, 'super()._build_command_center(project_id, root)', 'command center understanding projection');
+requireAll(commandCenterUnderstanding, [
+  'load_enterprise_business_knowledge_asset',
+  'data["knowledge_summary"] = {**existing, **_understanding_projection(asset)}',
+  'runtime_plan_gate',
+  'runtime_plan_unknowns',
+  'runtime_materialization_gate',
+  'runtime_materialization_unknowns',
+  'runtime_materialization_ready',
+  'formal_runtime_chain_ready',
+  'def _source_receipts(',
+  '"understanding_blocker_receipts": blocker_receipts',
+  '"understanding_source_receipt_count"',
+  'EXISTING_KNOWLEDGE_ASSET_GATE_PROJECTION_NOT_SECOND_AUTHORITY',
+  'super()._build_command_center(project_id, root)',
+], 'command center understanding projection');
 forbidText(commandCenterUnderstanding, 'build_enterprise_business_knowledge_asset', 'command center understanding projection');
 
-requireText(serviceComposition, 'from .private_pilot_understanding_preflight import UnderstandingPreflightProjectionMixin', 'private pilot composition');
-requireText(serviceComposition, 'UnderstandingPreflightProjectionMixin,\n    ScanHandlersMixin,', 'private pilot composition');
-requireText(serviceComposition, 'from .private_pilot_command_center_understanding import UnderstandingCommandCenterProjectionMixin', 'private pilot composition');
-requireText(serviceComposition, 'UnderstandingCommandCenterProjectionMixin,\n    CommandCenterBuilderMixin,', 'private pilot composition');
+requireAll(serviceComposition, [
+  'from .private_pilot_understanding_preflight import UnderstandingPreflightProjectionMixin',
+  'UnderstandingPreflightProjectionMixin,\n    ScanHandlersMixin,',
+  'from .private_pilot_command_center_understanding import UnderstandingCommandCenterProjectionMixin',
+  'UnderstandingCommandCenterProjectionMixin,\n    CommandCenterBuilderMixin,',
+], 'private pilot composition');
 
-requireText(knowledgeApi, "fetch('/api/knowledge/ingest'", 'knowledge ingest API');
-requireText(knowledgeApi, 'filename: file.name', 'knowledge ingest API');
-requireText(knowledgeApi, 'defer_auto_scan: options.deferAutoScan', 'knowledge ingest API');
-requireText(knowledgeApi, 'finalize_batch: options.finalizeBatch', 'knowledge ingest API');
-requireText(knowledgeApi, 'for (let index = 0; index < selected.length; index += 1)', 'knowledge ingest API');
-forbidText(knowledgeApi, '\n      type:', 'knowledge ingest API');
-forbidText(knowledgeApi, 'localStorage', 'knowledge ingest API');
-forbidText(knowledgeApi, 'sessionStorage', 'knowledge ingest API');
+requireAll(knowledgeApi, [
+  "fetch('/api/knowledge/ingest'",
+  'filename: file.name',
+  'defer_auto_scan: options.deferAutoScan',
+  'finalize_batch: options.finalizeBatch',
+  'for (let index = 0; index < selected.length; index += 1)',
+], 'knowledge ingest API');
+forbidAll(knowledgeApi, ['\n      type:', 'localStorage', 'sessionStorage'], 'knowledge ingest API');
 
-requireText(ingestHandler, 'explicit_type = str(body.get("type") or body.get("doc_type") or "")', 'knowledge ingest backend');
-requireText(ingestHandler, 'resolve_knowledge_source_type(', 'knowledge ingest backend');
-requireText(ingestHandler, 'extracted_text = str(doc_info.get("text") or "")', 'knowledge ingest backend');
-requireText(ingestHandler, 'defer_auto_scan = body.get("defer_auto_scan") is True', 'knowledge ingest backend');
-requireText(ingestHandler, 'finalize_batch = body.get("finalize_batch") is True', 'knowledge ingest backend');
-requireText(ingestHandler, 'source_type_resolution', 'knowledge ingest backend');
-forbidText(ingestHandler, 'body.get("doc_type") or "prd"', 'knowledge ingest backend');
-forbidText(ingestHandler, 'raw.decode("utf-8", errors="replace")\n            source_manifest', 'knowledge ingest backend');
+requireAll(ingestHandler, [
+  'explicit_type = str(body.get("type") or body.get("doc_type") or "")',
+  'resolve_knowledge_source_type(',
+  'extracted_text = str(doc_info.get("text") or "")',
+  'defer_auto_scan = body.get("defer_auto_scan") is True',
+  'finalize_batch = body.get("finalize_batch") is True',
+  'source_type_resolution',
+], 'knowledge ingest backend');
+forbidAll(ingestHandler, [
+  'body.get("doc_type") or "prd"',
+  'raw.decode("utf-8", errors="replace")\n            source_manifest',
+], 'knowledge ingest backend');
 
-requireText(projectAssets, 'def resolve_knowledge_source_type(', 'knowledge source classifier');
-requireText(projectAssets, 'from .enterprise_knowledge_center import _classify_source', 'knowledge source classifier');
-requireText(projectAssets, 'return normalized, "automatic"', 'knowledge source classifier');
-requireText(projectAssets, 'return normalized, "explicit_override"', 'knowledge source classifier');
+requireAll(projectAssets, [
+  'def resolve_knowledge_source_type(',
+  'from .enterprise_knowledge_center import _classify_source',
+  'return normalized, "automatic"',
+  'return normalized, "explicit_override"',
+], 'knowledge source classifier');
 forbidText(projectAssets, 'return "prd"', 'knowledge source classifier');
 
-requireText(topologySection, '接入被测系统', 'topology section');
-requireText(topologySection, '只提供系统名称、测试环境地址和可用凭据', 'topology section');
-requireText(topologySection, '<details className="settings-auth-section">', 'topology section');
-requireText(topologySection, '不要求用户持续维护', 'topology section');
+requireAll(topologySection, [
+  '接入被测系统',
+  '只提供系统名称、测试环境地址和可用凭据',
+  '<details className="settings-auth-section">',
+  '不要求用户持续维护',
+], 'topology section');
 
-requireText(metadataSection, '<details className="section-card settings-span-2">', 'metadata section');
-requireText(metadataSection, '异常覆盖：业务范围与绝对禁触边界', 'metadata section');
-requireText(metadataSection, '留空则由后台自动判断', 'metadata section');
-requireText(metadataSection, '不是要求客户维护完整接口清单', 'metadata section');
+requireAll(metadataSection, [
+  '<details className="section-card settings-span-2">',
+  '异常覆盖：业务范围与绝对禁触边界',
+  '留空则由后台自动判断',
+  '不是要求客户维护完整接口清单',
+], 'metadata section');
 
-requireText(llmSection, '<details className="section-card">', 'LLM section');
-requireText(llmSection, '属于部署级能力，不应成为每个客户项目的日常维护项', 'LLM section');
+requireAll(llmSection, [
+  '<details className="section-card">',
+  '属于部署级能力，不应成为每个客户项目的日常维护项',
+], 'LLM section');
 
-requireText(infoSection, '<details className="section-card settings-span-2">', 'internal governance section');
-requireText(infoSection, '正常客户流程不需要维护', 'internal governance section');
-requireText(infoSection, '应优先由后台从企业资料、页面结构和执行轨迹自动生成', 'internal governance section');
+requireAll(infoSection, [
+  '<details className="section-card settings-span-2">',
+  '正常客户流程不需要维护',
+  '应优先由后台从企业资料、页面结构和执行轨迹自动生成',
+], 'internal governance section');
 
-requireText(sidebar, "label: '主流程'", 'sidebar');
-requireText(sidebar, "label: '高级视图'", 'sidebar');
-requireText(sidebar, '少配置 · 自动理解 · 真实验证', 'sidebar');
+requireAll(sidebar, [
+  "label: '主流程'",
+  "label: '高级视图'",
+  '少配置 · 自动理解 · 真实验证',
+], 'sidebar');
 
 process.stdout.write('autonomous UX contract: OK\n');
