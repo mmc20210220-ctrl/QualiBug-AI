@@ -68,9 +68,11 @@ def _row_message(value: Any) -> str:
     for candidate in (
         row.get("message"),
         row.get("description"),
+        row.get("question"),
         row.get("statement"),
         row.get("raw_statement"),
         details.get("message"),
+        details.get("question"),
         details.get("statement"),
         _readable_reason(row.get("reason_code")),
         _readable_reason(row.get("kind")),
@@ -79,6 +81,205 @@ def _row_message(value: Any) -> str:
         if message:
             return message
     return ""
+
+
+def _source_labels(asset: dict[str, Any]) -> dict[str, str]:
+    labels: dict[str, str] = {}
+    raw_sources = asset.get("source_inventory") or asset.get("sources") or asset.get("items") or []
+    if isinstance(raw_sources, dict):
+        entries = [
+            ({"source_id": key, **value} if isinstance(value, dict) else {"source_id": key})
+            for key, value in raw_sources.items()
+        ]
+    else:
+        entries = _rows(raw_sources)
+    for value in entries:
+        row = _record(value)
+        source_id = _text(row.get("source_id") or row.get("id") or row.get("source_ref"))
+        label = _text(
+            row.get("display_name")
+            or row.get("filename")
+            or row.get("original_name")
+            or row.get("name")
+            or row.get("stored_path")
+        )
+        if source_id:
+            labels[source_id] = label or source_id
+    return labels
+
+
+def _evidence_candidates(value: Any) -> list[dict[str, Any]]:
+    row = _record(value)
+    details = _record(row.get("details"))
+    candidates: list[dict[str, Any]] = []
+    for raw in (
+        row.get("evidence"),
+        row.get("source_evidence"),
+        row.get("evidence_refs"),
+        details.get("evidence"),
+        details.get("source_evidence"),
+    ):
+        if isinstance(raw, dict):
+            candidates.append(raw)
+        elif isinstance(raw, list):
+            candidates.extend(item for item in raw if isinstance(item, dict))
+    if any(
+        _text(row.get(key))
+        for key in ("source_id", "source_ref", "source_locator", "locator", "quote", "verbatim_quote")
+    ):
+        candidates.append(row)
+    for source_ref in _rows(row.get("source_refs")):
+        if _text(source_ref):
+            candidates.append({"source_id": source_ref})
+    return candidates
+
+
+def _source_receipts(value: Any, labels: dict[str, str]) -> list[dict[str, str]]:
+    receipts: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for raw in _evidence_candidates(value):
+        row = _record(raw)
+        source_id = _text(row.get("source_id") or row.get("source_ref") or row.get("document_id"))
+        source_name = _text(
+            row.get("source_name")
+            or row.get("display_name")
+            or row.get("filename")
+            or labels.get(source_id)
+        )
+        locator = _text(
+            row.get("source_locator")
+            or row.get("locator")
+            or row.get("section")
+            or row.get("line_range")
+            or row.get("page")
+            or row.get("asset_ref")
+        )
+        quote = _text(
+            row.get("quote")
+            or row.get("verbatim_quote")
+            or row.get("source_excerpt")
+            or row.get("excerpt")
+        )[:240]
+        fact_id = _text(row.get("fact_id"))
+        if not any((source_id, source_name, locator, quote, fact_id)):
+            continue
+        key = (source_id or source_name, locator, quote, fact_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        receipts.append(
+            {
+                "source_id": source_id,
+                "source_name": source_name or source_id,
+                "source_locator": locator,
+                "quote": quote,
+                "fact_id": fact_id,
+            }
+        )
+    return receipts[:3]
+
+
+def _is_unresolved_conflict(value: Any) -> bool:
+    status = _text(_record(value).get("status") or "UNRESOLVED").upper()
+    return status not in {"RESOLVED", "SUPERSEDED", "DISMISSED"}
+
+
+def _is_blocking_unknown(value: Any) -> bool:
+    row = _record(value)
+    return any(
+        row.get(key) is True
+        for key in (
+            "blocks_formal_understanding",
+            "blocks_scenario_planning",
+            "blocks_scenario_ir",
+            "blocks_execution_contract",
+            "blocks_runtime_plan",
+            "blocking",
+        )
+    )
+
+
+def _blocker_receipts(asset: dict[str, Any], model: dict[str, Any], gates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    labels = _source_labels(asset)
+    candidates: list[tuple[str, Any]] = []
+    model_gate = _record(model.get("gate"))
+    candidates.extend(("critical_unknown", row) for row in _rows(model_gate.get("critical_unknowns")))
+    candidates.extend(("source_conflict", row) for row in _rows(model_gate.get("unresolved_conflicts")))
+    candidates.extend(
+        ("enterprise_unknown", row)
+        for row in _rows(model.get("unknowns"))
+        if _is_blocking_unknown(row)
+    )
+    candidates.extend(
+        ("source_conflict", row)
+        for row in _rows(model.get("conflicts"))
+        if _is_unresolved_conflict(row)
+    )
+    candidates.extend(("scenario_ir_unknown", row) for row in _rows(asset.get("scenario_ir_unknowns")))
+    candidates.extend(
+        ("execution_contract_unknown", row)
+        for row in _rows(asset.get("scenario_execution_contract_unknowns"))
+    )
+    candidates.extend(
+        ("runtime_plan_unknown", row)
+        for row in _rows(asset.get("runtime_plan_unknowns"))
+        if _is_blocking_unknown(row)
+    )
+    candidates.extend(
+        ("coverage_gap", row)
+        for row in _rows(asset.get("coverage_gaps"))
+        if any(
+            token in _text(_record(row).get("kind"))
+            for token in ("UNDERSTANDING", "SCENARIO", "EXECUTION_CONTRACT", "RUNTIME_PLAN")
+        )
+    )
+
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
+    for category, value in candidates:
+        row = _record(value)
+        message = _row_message(row)
+        kind = _text(row.get("reason_code") or row.get("kind") or category)
+        if not message and not kind:
+            continue
+        key = (kind, message or _readable_reason(kind))
+        receipt = merged.setdefault(
+            key,
+            {
+                "receipt_id": _text(
+                    row.get("unknown_id")
+                    or row.get("conflict_id")
+                    or row.get("gap_id")
+                    or row.get("runtime_plan_unknown_id")
+                ) or f"{category}:{kind}:{message}"[:180],
+                "category": category,
+                "kind": kind,
+                "message": message or _readable_reason(kind),
+                "operator_action": _text(row.get("operator_action") or row.get("recommended_action")),
+                "blocking": _is_blocking_unknown(row) or category in {"critical_unknown", "source_conflict", "runtime_plan_unknown"},
+                "source_evidence": [],
+            },
+        )
+        evidence = [*_rows(receipt.get("source_evidence")), *_source_receipts(row, labels)]
+        deduped: list[dict[str, str]] = []
+        seen: set[tuple[str, str, str, str]] = set()
+        for item in evidence:
+            evidence_row = _record(item)
+            evidence_key = (
+                _text(evidence_row.get("source_id") or evidence_row.get("source_name")),
+                _text(evidence_row.get("source_locator")),
+                _text(evidence_row.get("quote")),
+                _text(evidence_row.get("fact_id")),
+            )
+            if evidence_key in seen:
+                continue
+            seen.add(evidence_key)
+            deduped.append(dict(evidence_row))
+        receipt["source_evidence"] = deduped[:3]
+        receipt["source_backed"] = bool(deduped)
+
+    ordered = list(merged.values())
+    ordered.sort(key=lambda row: (not bool(row.get("blocking")), not bool(row.get("source_backed")), _text(row.get("message"))))
+    return ordered[:8]
 
 
 def _understanding_projection(asset: dict[str, Any]) -> dict[str, Any]:
@@ -175,6 +376,9 @@ def _understanding_projection(asset: dict[str, Any]) -> dict[str, Any]:
         if message:
             blockers.append(message)
 
+    blocker_receipts = _blocker_receipts(asset, model, gates)
+    blockers.extend(_text(row.get("message")) for row in blocker_receipts if _text(row.get("message")))
+
     return {
         "enterprise_understanding_model_id": _text(summary.get("enterprise_understanding_model_id"))
         or _text(model.get("model_id")),
@@ -250,7 +454,11 @@ def _understanding_projection(asset: dict[str, Any]) -> dict[str, Any]:
         ),
         "formal_scenario_chain_ready": all(bool(row.get("ready")) for row in gates),
         "understanding_gates": gates,
-        "understanding_blockers": list(dict.fromkeys(blockers))[:8],
+        "understanding_blockers": list(dict.fromkeys(value for value in blockers if value))[:8],
+        "understanding_blocker_receipts": blocker_receipts,
+        "understanding_source_receipt_count": sum(
+            1 for row in blocker_receipts if bool(row.get("source_backed"))
+        ),
         "understanding_projection_contract": "EXISTING_KNOWLEDGE_ASSET_GATE_PROJECTION_NOT_SECOND_AUTHORITY",
         "understanding_source_of_truth": "existing_enterprise_business_knowledge_asset",
     }
