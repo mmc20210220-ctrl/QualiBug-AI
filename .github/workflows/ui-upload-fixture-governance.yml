@@ -59,6 +59,7 @@ jobs:
           tests/test_ui_upload_fixture_continuous_binding.py
           tests/test_ui_upload_scenario_registry.py
           tests/test_ui_upload_scenario_semantic_drift.py
+          tests/test_ui_upload_scenario_semantic_alias_merge.py
           tests/test_ui_upload_scenario_submission_health.py
           tests/test_ui_upload_scenario_public_projection.py
           tests/test_private_pilot_upload_fixture_governance.py
