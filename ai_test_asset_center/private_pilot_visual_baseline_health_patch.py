@@ -184,16 +184,16 @@ def _propagate_loaded_consumer_aliases(
 def install_visual_baseline_health_patch() -> None:
     if getattr(_health, _INSTALL_MARKER, False):
         current = _health.build_private_pilot_health_payload
-        original = getattr(_health, ORIGINAL_BUILDER, None)
+        original = getattr(_health, _ORIGINAL_BUILDER, None)
         if callable(original):
             _propagate_loaded_consumer_aliases(original, current)
         return
     original = getattr(
         _health,
-        ORIGINAL_BUILDER,
+        _ORIGINAL_BUILDER,
         _health.build_private_pilot_health_payload,
     )
-    setattr(_health, ORIGINAL_BUILDER, original)
+    setattr(_health, _ORIGINAL_BUILDER, original)
 
     def build_health_with_visual_baseline(
         handler: Any,
