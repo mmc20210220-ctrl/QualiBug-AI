@@ -151,6 +151,16 @@ def _register_process_risk_family() -> None:
     )
 
 
+def _register_process_planning_minimum() -> None:
+    """Reserve one slot through the existing adaptive planner, never a Job scheduler."""
+    from .adaptive_discovery_planner import DEFAULT_TYPE_MINIMUM_GUARANTEES
+
+    # One slot proves first-class inclusion without letting a new family displace
+    # established business families. The planner scales or suppresses guarantees
+    # under budgets too small to represent all present families.
+    DEFAULT_TYPE_MINIMUM_GUARANTEES.setdefault("process", 1)
+
+
 def register_job_async_protocol() -> str:
     """Register the Job compiler on the existing (family, template) authority."""
     # The enterprise-knowledge composition loads Job asset governance before this
@@ -166,6 +176,7 @@ def register_job_async_protocol() -> str:
     install_job_asset_display_name_policy()
     register_v150_multi_step_protocols()
     _register_process_risk_family()
+    _register_process_planning_minimum()
     _install_async_finalizer_guard()
     from .experiment_protocol_registry import (
         register_family_protocol,
