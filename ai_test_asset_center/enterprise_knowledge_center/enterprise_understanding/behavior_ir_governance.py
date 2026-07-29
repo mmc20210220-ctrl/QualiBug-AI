@@ -158,13 +158,52 @@ def _remerge_governed_behaviors(behaviors: list[dict[str, Any]]) -> list[dict[st
     return sorted(merged.values(), key=lambda row: text(row.get("behavior_id")))
 
 
-def _recalculate_conflicts(behaviors: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Recalculate only conflicts backed by accepted business facts.
+def _explicit_source_combinator(behavior: dict[str, Any]) -> str:
+    """Return an explicit source-backed Boolean combinator, never a guessed default."""
+    frame = as_dict(behavior.get("condition_frame"))
+    for candidate in (
+        behavior.get("condition_combinator"),
+        as_dict(behavior.get("trigger")).get("condition_combinator"),
+        frame.get("combinator"),
+    ):
+        value = text(candidate).upper()
+        if value in {"AND", "OR"}:
+            return value
+    return ""
 
-    Decision-matrix rows are direct structural interpretations and remain candidate-only
-    until corroborated into the business fact ledger. They may expose ambiguity or a
-    coverage gap, but they cannot conflict with, downgrade, or block a formal fact-backed
-    behavior.
+
+def _incompatible_equalities(behavior: dict[str, Any]) -> dict[str, list[str]]:
+    """Recompute one behavior's exact equality contradiction from its condition slots."""
+    equal_values: dict[str, set[str]] = defaultdict(set)
+    for condition in as_list(behavior.get("preconditions")):
+        if (
+            not isinstance(condition, dict)
+            or text(condition.get("operator_candidate")) != "EQUALS"
+        ):
+            continue
+        field = text(condition.get("field_candidate"))
+        if field:
+            equal_values[field].add(
+                json.dumps(
+                    _canonical_value(as_dict(condition.get("value_candidate"))),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    default=str,
+                )
+            )
+    return {
+        field: sorted(values)
+        for field, values in equal_values.items()
+        if len(values) > 1
+    }
+
+
+def _recalculate_conflicts(behaviors: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Rebuild formal conflicts from source-backed behavior content.
+
+    Accepted facts are evaluated from their condition slots, explicit source combinator,
+    permission decision and evidence. Prior status flags are not authority. Decision-matrix
+    interpretations remain candidate-only and cannot downgrade or block a formal fact.
     """
     conflicts: list[dict[str, Any]] = []
     families: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
@@ -173,43 +212,47 @@ def _recalculate_conflicts(behaviors: list[dict[str, Any]]) -> list[dict[str, An
         unresolved = unique_text(as_list(behavior.get("unresolved_semantics")))
         is_fact_backed = source_kind == "ACCEPTED_BUSINESS_FACT"
 
-        if is_fact_backed:
-            behavior["status"] = "INCOMPLETE" if unresolved else "CONFIRMED"
-            behavior["formal_business_rule"] = text(behavior.get("status")) == "CONFIRMED"
-        else:
+        if not is_fact_backed:
             if text(behavior.get("permission_decision")) == "CONFLICTED":
                 unresolved.append("BEHAVIOR_CANDIDATE_RESULT_CONFLICT")
             behavior["unresolved_semantics"] = unique_text(unresolved)
             behavior["status"] = "INCOMPLETE" if unresolved else "CANDIDATE"
             behavior["candidate_only"] = True
             behavior["formal_business_rule"] = False
-
-        if not behavior.get("formal_business_rule"):
             continue
 
-        signature = _condition_signature(as_list(behavior.get("preconditions")))
-        families[(text(behavior.get("behavior_family_id")), signature)].append(behavior)
+        conditions = [
+            row for row in as_list(behavior.get("preconditions")) if isinstance(row, dict)
+        ]
+        explicit_combinator = _explicit_source_combinator(behavior)
+        unresolved = [
+            value
+            for value in unresolved
+            if value != "BEHAVIOR_CONDITION_COMBINATOR_UNRESOLVED"
+        ]
+        if len(conditions) > 1:
+            if explicit_combinator:
+                behavior["condition_combinator"] = explicit_combinator
+            else:
+                behavior["condition_combinator"] = "UNRESOLVED"
+                unresolved.append("BEHAVIOR_CONDITION_COMBINATOR_UNRESOLVED")
+        else:
+            behavior["condition_combinator"] = "SINGLE_CONDITION" if conditions else ""
+        behavior["unresolved_semantics"] = unique_text(unresolved)
+        behavior["candidate_only"] = False
 
-        equal_values: dict[str, set[str]] = defaultdict(set)
-        for condition in as_list(behavior.get("preconditions")):
-            if (
-                not isinstance(condition, dict)
-                or text(condition.get("operator_candidate")) != "EQUALS"
-            ):
-                continue
-            field = text(condition.get("field_candidate"))
-            if field:
-                equal_values[field].add(
-                    json.dumps(
-                        _canonical_value(as_dict(condition.get("value_candidate"))),
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        default=str,
-                    )
-                )
-        contradictions = {
-            field: sorted(values) for field, values in equal_values.items() if len(values) > 1
-        }
+        # Missing operation/object/evidence or unresolved source logic remains incomplete;
+        # it cannot become a formal rule or an authority-eligible contradiction.
+        if unresolved:
+            behavior["status"] = "INCOMPLETE"
+            behavior["formal_business_rule"] = False
+            continue
+
+        contradictions = (
+            _incompatible_equalities(behavior)
+            if explicit_combinator == "AND"
+            else {}
+        )
         if contradictions:
             behavior["status"] = "CONFLICTED"
             behavior["formal_business_rule"] = False
@@ -222,12 +265,23 @@ def _recalculate_conflicts(behaviors: list[dict[str, Any]]) -> list[dict[str, An
                     "status": "UNRESOLVED",
                     "severity": "P0",
                     "behavior_refs": [behavior.get("behavior_id")],
-                    "details": {"contradictory_equalities": contradictions},
+                    "source_refs": unique_text(as_list(behavior.get("source_refs"))),
+                    "details": {
+                        "condition_combinator": "AND",
+                        "contradictory_equalities": contradictions,
+                    },
                     "evidence": as_list(behavior.get("evidence")),
                     "automatic_resolution_allowed": False,
                 }
             )
+            continue
 
+        behavior["status"] = "CONFIRMED"
+        behavior["formal_business_rule"] = True
+        signature = _condition_signature(conditions)
+        families[(text(behavior.get("behavior_family_id")), signature)].append(behavior)
+
+    # Cross-fact permission conflicts are calculated only from complete formal facts.
     for (_family, _signature), rows in families.items():
         decisions = {
             text(row.get("permission_decision"))
@@ -249,6 +303,9 @@ def _recalculate_conflicts(behaviors: list[dict[str, Any]]) -> list[dict[str, An
                 "status": "UNRESOLVED",
                 "severity": "P0",
                 "behavior_refs": [row.get("behavior_id") for row in rows],
+                "source_refs": unique_text(
+                    [source_ref for row in rows for source_ref in as_list(row.get("source_refs"))]
+                ),
                 "details": {"permission_decisions": sorted(decisions)},
                 "evidence": dedupe_evidence(
                     [evidence for row in rows for evidence in as_list(row.get("evidence"))]
