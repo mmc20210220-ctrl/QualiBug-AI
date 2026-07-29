@@ -121,6 +121,7 @@ from .private_pilot_command_center_builder import CommandCenterBuilderMixin
 from .private_pilot_credentials_handlers import CredentialsHandlerMixin
 from .private_pilot_http_routing import HttpRoutingMixin
 from .private_pilot_ingest_handlers import IngestHandlersMixin
+from .private_pilot_understanding_preflight import UnderstandingPreflightProjectionMixin
 from .private_pilot_scan_handlers import ScanHandlersMixin
 from .private_pilot_report_loading import ReportLoadingMixin
 from .private_pilot_auth_scope import AuthScopeMixin
@@ -182,6 +183,7 @@ class PrivatePilotHandler(
     HttpRoutingMixin,
     CredentialsHandlerMixin,
     IngestHandlersMixin,
+    UnderstandingPreflightProjectionMixin,
     ScanHandlersMixin,
     ContinuousHandlersMixin,
     OpsHandlersMixin,
