@@ -282,6 +282,7 @@ def test_governed_materialization_builds_non_sendable_request_and_assertion_draf
     project_governed_runtime_materializations_to_asset(asset, model)
 
     assert asset["runtime_materialization_gate"]["status"] == "PASS"
+    assert asset["coverage_gaps"] == []
     assert len(asset["runtime_materializations"]) == 1
     materialization = asset["runtime_materializations"][0]
     assert materialization["status"] == "DRAFT_READY"
@@ -338,7 +339,9 @@ def test_governed_materialization_builds_non_sendable_request_and_assertion_draf
 def test_missing_dynamic_value_binding_blocks_materialization() -> None:
     asset = _asset()
     asset["runtime_input_bindings"] = [
-        row for row in asset["runtime_input_bindings"] if row["slot_id"] != "runtime-slot:order-id"
+        row
+        for row in asset["runtime_input_bindings"]
+        if row["slot_id"] != "runtime-slot:order-id"
     ]
     contracts, unknowns, gate = build_runtime_materializations_v1(asset, {})
 
@@ -354,9 +357,12 @@ def test_missing_dynamic_value_binding_blocks_materialization() -> None:
 def test_production_write_is_blocked_even_with_reset_capability() -> None:
     asset = _asset()
     asset["runtime_environment"].update(
-        {"environment_kind": "PRODUCTION", "is_production": True}
+        {
+            "environment_kind": "PRODUCTION",
+            "is_production": True,
+            "base_url": "https://prod.example.internal",
+        }
     )
-    asset["runtime_environment"]["base_url"] = "https://prod.example.internal"
     contracts, unknowns, gate = build_runtime_materializations_v1(asset, {})
 
     assert gate["status"] == "BLOCKED_RUNTIME_MATERIALIZATION_INCOMPLETE"
@@ -416,11 +422,13 @@ def test_multiple_body_media_types_require_approved_selection() -> None:
             "approved_for_materialization": True,
         }
     ]
-    contracts, unknowns, gate = build_runtime_materializations_v1(asset, {})
-    assert gate["status"] == "PASS"
-    assert unknowns == []
-    assert contracts[0]["request_draft"]["body_media_type"] == "application/json"
-    assert contracts[0]["request_draft"]["body_draft"] == {"status": "approved"}
+    model = {"source_summary": {}, "metrics": {}}
+    project_governed_runtime_materializations_to_asset(asset, model)
+    assert asset["runtime_materialization_gate"]["status"] == "PASS"
+    assert asset["runtime_materialization_unknowns"] == []
+    contract = asset["runtime_materializations"][0]
+    assert contract["request_draft"]["body_media_type"] == "application/json"
+    assert contract["request_draft"]["body_draft"] == {"status": "approved"}
 
 
 def test_allowed_generator_is_bound_but_not_executed() -> None:
@@ -435,18 +443,20 @@ def test_allowed_generator_is_bound_but_not_executed() -> None:
         for row in plan["oracle_query_templates"]["templates"]
         if row["template_kind"] != "DATABASE_FIELD_SNAPSHOT"
     ]
-    contracts, unknowns, gate = build_runtime_materializations_v1(asset, {})
+    model = {"source_summary": {}, "metrics": {}}
+    project_governed_runtime_materializations_to_asset(asset, model)
 
-    assert gate["status"] == "PASS"
-    assert unknowns == []
+    assert asset["runtime_materialization_gate"]["status"] == "PASS"
+    assert asset["runtime_materialization_unknowns"] == []
+    contract = asset["runtime_materializations"][0]
     binding = next(
         row
-        for row in contracts[0]["request_value_bindings"]
+        for row in contract["request_value_bindings"]
         if row["slot_id"] == "runtime-slot:order-id"
     )
     assert binding["binding_kind"] == "RUNTIME_GENERATOR_DESCRIPTOR"
     assert binding["generator_executed"] is False
-    assert "{{generator:uuid}}" in contracts[0]["request_draft"]["path_draft"]
+    assert "{{generator:uuid}}" in contract["request_draft"]["path_draft"]
 
 
 def test_multiple_connectors_do_not_get_guessed() -> None:
