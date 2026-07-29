@@ -8,10 +8,14 @@ on:
       - 'ai_test_asset_center/private_pilot_upload_fixture_*.py'
       - 'ai_test_asset_center/private_pilot_scan_context_patch.py'
       - 'frontend/src/api/upload-fixtures.ts'
+      - 'frontend/src/api/run-center.ts'
+      - 'frontend/src/components/run/RunUploadFixtureSelector.tsx'
       - 'frontend/src/components/settings/SettingsUploadFixtureSection.tsx'
       - 'frontend/src/components/settings/SettingsComplexInteractionSection.tsx'
       - 'frontend/src/components/settings/SettingsInfoSection.tsx'
+      - 'frontend/src/pages/EnterpriseCampaigns.tsx'
       - 'frontend/src/styles/upload-fixture-settings.css'
+      - 'frontend/src/styles/run-upload-fixtures.css'
       - 'tests/test_ui_upload_fixture_*.py'
       - 'tests/test_private_pilot_upload_fixture_governance.py'
       - '.github/workflows/ui-upload-fixture-governance.yml'
@@ -43,6 +47,25 @@ jobs:
           tests/test_ui_upload_fixture_registry_integrity.py
           tests/test_ui_upload_fixture_continuous_binding.py
           tests/test_private_pilot_upload_fixture_governance.py
+
+  playwright-upload-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install Python and Playwright dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+          python -m pip install playwright
+      - name: Install Chromium runtime
+        run: python -m playwright install --with-deps chromium
+      - name: Run governed upload browser acceptance
+        run: python -m pytest -q tests/test_ui_upload_fixture_playwright_e2e.py
 
   frontend-governance:
     runs-on: ubuntu-latest
