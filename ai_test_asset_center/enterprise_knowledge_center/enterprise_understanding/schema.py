@@ -20,6 +20,8 @@ PROCESS_SCHEMA = "qualibug.enterprise-business-process.v1"
 BEHAVIOR_SCHEMA = "qualibug.enterprise-business-behavior.v1"
 BEHAVIOR_ROW_LEDGER_SCHEMA = "qualibug.decision-matrix-row-ledger.v1"
 BEHAVIOR_GATE_SCHEMA = "qualibug.enterprise-business-behavior-gate.v1"
+IMPLEMENTATION_BINDING_SCHEMA = "qualibug.business-behavior-implementation-binding.v1"
+IMPLEMENTATION_BINDING_GATE_SCHEMA = "qualibug.business-behavior-implementation-binding-gate.v1"
 UNKNOWN_SCHEMA = "qualibug.enterprise-business-unknown.v1"
 GATE_SCHEMA = "qualibug.enterprise-understanding-model-gate.v1"
 
@@ -182,6 +184,18 @@ def empty_model() -> dict[str, Any]:
             "entry_allowed": False,
             "metrics": {},
         },
+        "behavior_implementation_bindings": [],
+        "implementation_binding_unknowns": [],
+        "implementation_binding_conflicts": [],
+        "implementation_evidence_index": [],
+        "implementation_binding_gate": {
+            "schema": IMPLEMENTATION_BINDING_GATE_SCHEMA,
+            "status": "NOT_BUILT",
+            "entry_allowed": False,
+            "scenario_planning_allowed": False,
+            "execution_allowed": False,
+            "metrics": {},
+        },
         "unknowns": [],
         "conflicts": [],
         "evidence_index": [],
@@ -217,8 +231,24 @@ def validate_model_shape(model: dict[str, Any]) -> list[dict[str, Any]]:
     ):
         if not isinstance(model.get(key), list):
             violations.append({"code": "MODEL_COLLECTION_INVALID", "field": key})
+    # Implementation binding fields are additive and remain optional for persisted
+    # pre-v1 models.  When present they must have the canonical container shape.
+    for key in (
+        "behavior_implementation_bindings",
+        "implementation_binding_unknowns",
+        "implementation_binding_conflicts",
+        "implementation_evidence_index",
+    ):
+        if key in model and not isinstance(model.get(key), list):
+            violations.append({"code": "MODEL_COLLECTION_INVALID", "field": key})
     if not isinstance(model.get("behavior_ir_gate"), dict):
         violations.append({"code": "MODEL_OBJECT_INVALID", "field": "behavior_ir_gate"})
+    if "implementation_binding_gate" in model and not isinstance(
+        model.get("implementation_binding_gate"), dict
+    ):
+        violations.append(
+            {"code": "MODEL_OBJECT_INVALID", "field": "implementation_binding_gate"}
+        )
     for collection in (
         "business_objects",
         "actors",
@@ -262,6 +292,8 @@ __all__ = [
     "BEHAVIOR_SCHEMA",
     "BEHAVIOR_ROW_LEDGER_SCHEMA",
     "BEHAVIOR_GATE_SCHEMA",
+    "IMPLEMENTATION_BINDING_SCHEMA",
+    "IMPLEMENTATION_BINDING_GATE_SCHEMA",
     "UNKNOWN_SCHEMA",
     "GATE_SCHEMA",
     "text",
