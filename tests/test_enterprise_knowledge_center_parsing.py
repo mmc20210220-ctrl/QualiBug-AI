@@ -97,7 +97,7 @@ def test_parse_source_extracts_markdown_api_field_dictionary_and_svg() -> None:
     assert "Loading" in svg["ui_specs"][0]["states"]
 
 
-def test_field_dictionary_json_preserves_required_false_in_excerpt() -> None:
+def test_field_dictionary_json_preserves_required_false_in_normalized_evidence() -> None:
     from ai_test_asset_center.enterprise_knowledge_center._parsing import (
         _field_dictionary_entries,
     )
@@ -114,9 +114,13 @@ def test_field_dictionary_json_preserves_required_false_in_excerpt() -> None:
     )
     by_field = {row["field"]: row for row in rows}
     assert by_field["warehouse_id"]["required"] is False
-    assert "required=false" in by_field["warehouse_id"]["source_excerpt"]
+    assert "required=false" in by_field["warehouse_id"]["normalized_evidence"]
+    assert "quote" not in by_field["warehouse_id"]
+    assert "source_excerpt" not in by_field["warehouse_id"]
     assert by_field["sku"]["required"] is True
-    assert "required=true" in by_field["sku"]["source_excerpt"]
+    assert "required=true" in by_field["sku"]["normalized_evidence"]
+    assert "quote" not in by_field["sku"]
+    assert "source_excerpt" not in by_field["sku"]
 
 
 def test_permission_entries_prefer_source_evidence_string() -> None:
