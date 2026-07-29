@@ -38,6 +38,17 @@ _REASON_LABELS = {
     "RUNTIME_PLAN_CREDENTIAL_REF_AMBIGUOUS": "同一业务角色对应多个测试凭证引用",
     "RUNTIME_PLAN_ORACLE_TEMPLATE_UNRESOLVED": "运行计划尚未形成可验证的观察模板",
     "RUNTIME_PLAN_CLEANUP_TEMPLATE_UNRESOLVED": "写操作尚未形成安全清理模板",
+    "RUNTIME_MATERIALIZATION_ENVIRONMENT_REF_UNRESOLVED": "运行实例尚未唯一绑定测试环境",
+    "RUNTIME_MATERIALIZATION_BASE_URL_UNRESOLVED": "运行实例尚未获得测试环境地址",
+    "RUNTIME_MATERIALIZATION_ENVIRONMENT_REF_AMBIGUOUS": "运行实例匹配到多个候选测试环境",
+    "RUNTIME_MATERIALIZATION_PRODUCTION_WRITE_FORBIDDEN": "生产环境写入被安全策略禁止",
+    "RUNTIME_MATERIALIZATION_NON_PRODUCTION_ENVIRONMENT_UNPROVEN": "尚未证明当前环境为非生产测试环境",
+    "RUNTIME_MATERIALIZATION_CREDENTIAL_REF_UNRESOLVED": "运行实例尚未绑定对应角色的凭据引用",
+    "RUNTIME_MATERIALIZATION_SOURCE_EVIDENCE_MISSING": "运行实例缺少可追溯的企业资料证据",
+    "RUNTIME_MATERIALIZATION_TEST_DATA_BINDING_MISSING": "运行实例缺少测试数据绑定",
+    "RUNTIME_MATERIALIZATION_TEST_DATA_BINDING_AMBIGUOUS": "运行实例存在多个测试数据候选绑定",
+    "RUNTIME_MATERIALIZATION_TEST_DATA_BINDING_NOT_APPROVED": "运行实例引用的测试数据尚未批准",
+    "RUNTIME_MATERIALIZATION_SAFE_CLEANUP_CAPABILITY_UNRESOLVED": "写操作尚未绑定可验证的安全清理能力",
 }
 
 
@@ -78,6 +89,7 @@ def _gate_projection(asset: dict[str, Any]) -> dict[str, Any]:
     scenario_gate = _record(asset.get("scenario_ir_gate"))
     execution_gate = _record(asset.get("scenario_execution_contract_gate"))
     runtime_plan_gate = _record(asset.get("runtime_plan_gate"))
+    materialization_gate = _record(asset.get("runtime_materialization_gate"))
 
     model_status = (
         _text(summary.get("enterprise_understanding_status"))
@@ -131,6 +143,15 @@ def _gate_projection(asset: dict[str, Any]) -> dict[str, Any]:
             ),
             "gate": runtime_plan_gate,
         },
+        {
+            "code": "RUNTIME_MATERIALIZATION_BLOCKED",
+            "label": "运行实例化",
+            "status": _text(materialization_gate.get("status")) or "NOT_BUILT",
+            "ready": _gate_ready(
+                materialization_gate, "runtime_materialization_ready", "entry_allowed"
+            ),
+            "gate": materialization_gate,
+        },
     ]
 
     blockers: list[str] = []
@@ -150,6 +171,12 @@ def _gate_projection(asset: dict[str, Any]) -> dict[str, Any]:
                 blockers.append(message)
     for value in _rows(asset.get("runtime_plan_unknowns")):
         if not _record(value).get("blocks_runtime_plan"):
+            continue
+        message = _row_message(value)
+        if message:
+            blockers.append(message)
+    for value in _rows(asset.get("runtime_materialization_unknowns")):
+        if not _record(value).get("blocks_runtime_materialization"):
             continue
         message = _row_message(value)
         if message:
@@ -188,6 +215,10 @@ def _gate_projection(asset: dict[str, Any]) -> dict[str, Any]:
         "runtime_plan_count": int(
             summary.get("runtime_plan_count")
             or len(_rows(asset.get("runtime_plans")))
+        ),
+        "runtime_materialization_count": int(
+            summary.get("runtime_materialization_count")
+            or len(_rows(asset.get("runtime_materializations")))
         ),
         "unknown_count": int(
             summary.get("enterprise_understanding_unknown_count")
@@ -282,7 +313,8 @@ def project_existing_understanding_preflight(
                     "message": (
                         f"{_text(first_blocked.get('label'))}尚未放行"
                         f"（{_text(first_blocked.get('status'))}）{detail}。"
-                        "请补充相关原始企业资料；系统不会通过人工确认或常识补全绕过门禁。"
+                        "请补充相关原始企业资料，或完善测试环境、凭据与测试数据绑定；"
+                        "系统不会通过人工确认、常识补全或旧 Probe 回退绕过门禁。"
                     ),
                 }
             )
