@@ -81,6 +81,7 @@ class DocumentAdapterRegistry:
 
 
 def build_default_registry() -> DocumentAdapterRegistry:
+    from .advanced_visual_table_providers import build_default_advanced_visual_table_provider
     from .builtin_adapters import (
         DocxDocumentAdapter,
         GenericTextDocumentAdapter,
@@ -95,7 +96,9 @@ def build_default_registry() -> DocumentAdapterRegistry:
             DocxDocumentAdapter(),
             PdfDocumentAdapter(),
             OcrSupplementalAdapter(),
-            VisualTableSupplementalAdapter(),
+            VisualTableSupplementalAdapter(
+                provider=build_default_advanced_visual_table_provider()
+            ),
             GenericTextDocumentAdapter(),
             UnknownBinaryDocumentAdapter(),
         ]
