@@ -20,6 +20,7 @@ type UnderstandingView = {
   lifecycleCount: number;
   processCount: number;
   scenarioCount: number;
+  runtimePlanCount: number;
   unknownCount: number;
   conflictCount: number;
   blockers: string[];
@@ -68,6 +69,11 @@ const reasonLabels: Record<string, string> = {
   EXECUTION_CONTRACT_AUTHORITATIVE_ACTION_ENTRY_MISSING: '部分业务场景尚未绑定权威执行入口',
   EXECUTION_CONTRACT_PERMISSION_RESPONSE_OBSERVER_UNRESOLVED: '权限结果缺少可验证的响应观察方式',
   EXECUTION_CONTRACT_EFFECT_OBSERVER_UNRESOLVED: '业务效果缺少可验证的观察方式',
+  RUNTIME_PLAN_REQUEST_FIELD_LOCATION_UNRESOLVED: '请求字段在接口契约中的位置尚未明确',
+  RUNTIME_PLAN_REQUEST_FIELD_LOCATION_AMBIGUOUS: '同一请求字段在接口契约中存在多个位置',
+  RUNTIME_PLAN_CREDENTIAL_REF_AMBIGUOUS: '同一业务角色对应多个测试凭证引用',
+  RUNTIME_PLAN_ORACLE_TEMPLATE_UNRESOLVED: '运行计划尚未形成可验证的观察模板',
+  RUNTIME_PLAN_CLEANUP_TEMPLATE_UNRESOLVED: '写操作尚未形成安全清理模板',
 };
 
 function readableReason(value: unknown): string {
@@ -107,8 +113,8 @@ function statusLabel(
   available: boolean,
 ): string {
   if (!available) return '等待后台理解';
-  if (chainReady) return '正式场景链已闭合';
-  if (understandingReady) return '理解已闭合，场景链待完成';
+  if (chainReady) return '运行模板链已闭合';
+  if (understandingReady) return '理解已闭合，运行模板链待完成';
   if (status.startsWith('BLOCKED')) return '理解被阻断';
   if (status.startsWith('PARTIAL')) return '理解部分完成';
   return '仍在理解中';
@@ -123,6 +129,7 @@ function projectUnderstanding(payload: unknown): UnderstandingView {
   const scenarioPlanningGate = asRecord(asset.scenario_planning_gate);
   const scenarioIrGate = asRecord(asset.scenario_ir_gate);
   const executionContractGate = asRecord(asset.scenario_execution_contract_gate);
+  const runtimePlanGate = asRecord(asset.runtime_plan_gate);
   const metrics = asRecord(modelGate.metrics);
   const modelId = firstText(summary.enterprise_understanding_model_id, model.model_id);
   const status = firstText(
@@ -152,18 +159,22 @@ function projectUnderstanding(payload: unknown): UnderstandingView {
     ...asArray(scenarioPlanningGate.blocking_reasons),
     ...asArray(scenarioIrGate.blocking_reasons),
     ...asArray(executionContractGate.blocking_reasons),
+    ...asArray(runtimePlanGate.blocking_reasons),
   ].map(readableReason).filter(Boolean);
+  const runtimeUnknowns = asArray(asset.runtime_plan_unknowns)
+    .filter((value) => asBoolean(asRecord(value).blocks_runtime_plan));
   const gapMessages = asArray(asset.coverage_gaps)
     .map((value) => {
       const row = asRecord(value);
       const kind = asText(row.kind);
-      if (!/(UNDERSTANDING|SCENARIO|EXECUTION_CONTRACT)/.test(kind)) return '';
+      if (!/(UNDERSTANDING|SCENARIO|EXECUTION_CONTRACT|RUNTIME_PLAN)/.test(kind)) return '';
       return firstText(row.message, row.operator_action, readableReason(row.kind));
     })
     .filter(Boolean);
   const blockers = [...new Set([
     ...criticalUnknowns.map(rowMessage),
     ...conflicts.map(rowMessage),
+    ...runtimeUnknowns.map(rowMessage),
     ...gateReasons,
     ...gapMessages,
   ].filter(Boolean))].slice(0, 8);
@@ -177,6 +188,7 @@ function projectUnderstanding(payload: unknown): UnderstandingView {
     gateView('场景规划', scenarioPlanningGate, ['scenario_planning_allowed', 'entry_allowed']),
     gateView('Scenario IR', scenarioIrGate, ['entry_allowed']),
     gateView('执行合同', executionContractGate, ['execution_contract_ready', 'entry_allowed']),
+    gateView('Runtime Plan', runtimePlanGate, ['runtime_plan_ready', 'entry_allowed']),
   ];
   const ready = understandingReady && gates.every((gate) => gate.ready);
 
@@ -194,6 +206,7 @@ function projectUnderstanding(payload: unknown): UnderstandingView {
     lifecycleCount: asNumber(summary.understood_lifecycle_count) || asArray(model.lifecycles).length,
     processCount: asNumber(summary.understood_process_count) || asArray(model.processes).length,
     scenarioCount: asNumber(summary.scenario_ir_count) || asArray(asset.scenario_ir).length,
+    runtimePlanCount: asNumber(summary.runtime_plan_count) || asArray(asset.runtime_plans).length,
     unknownCount: asNumber(summary.enterprise_understanding_unknown_count) || asArray(model.unknowns).length,
     conflictCount: asNumber(summary.enterprise_understanding_conflict_count) || conflicts.length,
     blockers,
@@ -237,6 +250,7 @@ export function EnterpriseUnderstandingReceipt({ payload, loading, hasSources }:
             <div className="settings-mini-stat"><span>生命周期</span><strong>{view.lifecycleCount}</strong></div>
             <div className="settings-mini-stat"><span>流程</span><strong>{view.processCount}</strong></div>
             <div className="settings-mini-stat"><span>正式场景</span><strong>{view.scenarioCount}</strong></div>
+            <div className="settings-mini-stat"><span>运行模板</span><strong>{view.runtimePlanCount}</strong></div>
           </div>
 
           <div className="settings-info-list settings-mt-10">
@@ -268,8 +282,8 @@ export function EnterpriseUnderstandingReceipt({ payload, loading, hasSources }:
 
           {view.understandingReady && !view.ready && (
             <div className="settings-card-note settings-mt-10">
-              <strong>企业理解已经闭合，但正式场景链尚未全部放行。</strong>
-              <p>请查看下方现有门禁回执。通常还需要已有资料中的实现绑定、可观察结果或执行合同达到要求；系统不会把“理解完成”误报成“已经可以执行”。</p>
+              <strong>企业理解已经闭合，但运行模板链尚未全部放行。</strong>
+              <p>请查看下方现有门禁回执。通常还需要实现绑定、可观察结果、执行合同或Runtime Plan达到要求；系统不会把“理解完成”误报成“已经可以执行”。</p>
               {view.blockers.length > 0 && (
                 <ul>
                   {view.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}
@@ -280,7 +294,7 @@ export function EnterpriseUnderstandingReceipt({ payload, loading, hasSources }:
 
           {view.ready && (
             <div className="settings-card-note settings-mt-10">
-              企业理解、场景规划、Scenario IR 和执行合同门禁已经闭合。运行时仍会继续核对环境、凭据、测试数据、观察通道和清理义务；这里不宣称理解准确率或业务召回率达到某个百分比。
+              企业理解、场景规划、Scenario IR、执行合同和Runtime Plan门禁已经闭合。运行时仍需物化环境、凭据、测试数据、请求值、断言和清理动作；这里不表示已经可以执行，也不宣称理解准确率或业务召回率达到某个百分比。
             </div>
           )}
 
