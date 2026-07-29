@@ -108,6 +108,9 @@ def _conflict(
                 "source_locator": span.get("locator") or fact.get("source_locator"),
                 "quote": span.get("quote"),
                 "quote_hash": span.get("quote_hash"),
+                "normalized_evidence": span.get("normalized_evidence") or fact.get("normalized_evidence"),
+                "evidence_kind": span.get("evidence_kind") or fact.get("evidence_kind"),
+                "evidence_derivation": span.get("evidence_derivation") or fact.get("evidence_derivation"),
                 "modality": fact.get("modality"),
                 "statement": fact.get("raw_statement") or fact.get("statement"),
             }
@@ -129,11 +132,14 @@ def _conflict(
             "source_locator": row.get("source_locator"),
             "quote": row.get("quote"),
             "quote_hash": row.get("quote_hash"),
+            "normalized_evidence": row.get("normalized_evidence"),
+            "evidence_kind": row.get("evidence_kind"),
+            "evidence_derivation": row.get("evidence_derivation"),
             "fact_id": row.get("fact_id"),
             "derivation": "unresolved_business_fact_conflict",
         }
         for row in sources
-        if _text(row.get("quote") or row.get("statement") or row.get("fact_id") or row.get("source_id"))
+        if _text(row.get("quote") or row.get("normalized_evidence") or row.get("statement") or row.get("fact_id") or row.get("source_id"))
     ]
     return {
         "conflict_id": f"conflict:{kind.lower()}:{hashlib.sha256(material.encode('utf-8')).hexdigest()[:20]}",
@@ -190,6 +196,9 @@ def make_authority_eligible_conflict(
                     "source_locator": span.get("locator") or fact.get("source_locator"),
                     "quote": span.get("quote"),
                     "quote_hash": span.get("quote_hash"),
+                    "normalized_evidence": span.get("normalized_evidence") or fact.get("normalized_evidence"),
+                    "evidence_kind": span.get("evidence_kind") or fact.get("evidence_kind"),
+                    "evidence_derivation": span.get("evidence_derivation") or fact.get("evidence_derivation"),
                     "modality": fact.get("modality"),
                     "statement": fact.get("raw_statement") or fact.get("statement"),
                 }
@@ -206,11 +215,14 @@ def make_authority_eligible_conflict(
                 "source_locator": row.get("source_locator"),
                 "quote": row.get("quote"),
                 "quote_hash": row.get("quote_hash"),
+                "normalized_evidence": row.get("normalized_evidence"),
+                "evidence_kind": row.get("evidence_kind"),
+                "evidence_derivation": row.get("evidence_derivation"),
                 "fact_id": row.get("fact_id"),
                 "derivation": "unresolved_technical_cross_source_conflict",
             }
             for row in sources
-            if _text(row.get("quote") or row.get("statement") or row.get("fact_id") or row.get("source_id"))
+            if _text(row.get("quote") or row.get("normalized_evidence") or row.get("statement") or row.get("fact_id") or row.get("source_id"))
         ]
         base["source_ids"] = sorted(
             {_text(row.get("source_id")) for row in sources if _text(row.get("source_id"))}
