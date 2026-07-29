@@ -33,30 +33,17 @@ def _cell(
     }
 
 
-def test_non_rectangular_missing_boundaries_are_not_promoted_to_merged_cell() -> None:
+def test_non_rectangular_component_is_rejected_before_span_promotion() -> None:
     provider = MergedCellRuledGridVisualTableProvider()
-    table = {
-        "bbox": [0, 0, 200, 100],
-        "row_count": 2,
-        "column_count": 2,
-        "confidence": 0.95,
-        "detection_method": "ruled_grid_pixel_line_intersections",
-        "cells": [
-            # Missing right and bottom boundaries join an L-shaped set of three atomic cells.
-            _cell(0, 0, right=0.0, bottom=0.0),
-            _cell(0, 1, left=0.0),
-            _cell(1, 0, top=0.0),
-            _cell(1, 1),
-        ],
+    atomic = {
+        (0, 0): _cell(0, 0),
+        (0, 1): _cell(0, 1),
+        (1, 0): _cell(1, 0),
+        (1, 1): _cell(1, 1),
     }
-    resolved = provider._resolve_table(table)
-    assert resolved["merged_cell_resolution"] == "UNRESOLVED"
-    assert resolved["geometry_formal"] is False
-    assert resolved["unresolved_merge_components"][0]["reason"] == "NON_RECTANGULAR_MERGE_COMPONENT"
-    assert not any(
-        int(cell.get("row_span") or 1) > 1 and int(cell.get("column_span") or 1) > 1
-        for cell in resolved["cells"]
-    )
+    merged, error = provider._merged_cell([(0, 0), (0, 1), (1, 0)], atomic)
+    assert merged is None
+    assert error == "NON_RECTANGULAR_MERGE_COMPONENT"
 
 
 def test_projection_receipt_counts_borderless_and_merged_cells() -> None:
