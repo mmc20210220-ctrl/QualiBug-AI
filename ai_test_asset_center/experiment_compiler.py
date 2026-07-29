@@ -10,6 +10,9 @@ from .runtime_materialization_experiment_bridge import (
     bind_experiment_pack_to_captured_materializations,
     install_runtime_materialization_execution_bridge,
 )
+from .runtime_materialization_operation_matching import (
+    install_runtime_materialization_operation_matching,
+)
 
 
 _original_compile_experiment = _base._original_compile_experiment
@@ -17,6 +20,7 @@ _original_compile_experiment = _base._original_compile_experiment
 # Additive only: capture the existing knowledge asset, bind its governed materialization drafts to
 # experiments, and extend the existing runtime preflight/finalizer. No second compiler or executor.
 install_runtime_materialization_execution_bridge()
+install_runtime_materialization_operation_matching()
 
 
 def __getattr__(name: str) -> Any:
