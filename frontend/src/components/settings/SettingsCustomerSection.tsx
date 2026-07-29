@@ -5,6 +5,7 @@ import {
   KNOWLEDGE_UPLOAD_ACCEPT,
   type KnowledgeIngestResult,
 } from '../../api/knowledge-ingest';
+import { EnterpriseUnderstandingReceipt } from './EnterpriseUnderstandingReceipt';
 
 type WorkspaceOption = {
   id: string;
@@ -118,6 +119,7 @@ export function SettingsCustomerSection({
   onCreateWorkspace,
 }: SettingsCustomerSectionProps) {
   const [sources, setSources] = useState<KnowledgeSource[]>([]);
+  const [knowledgePayload, setKnowledgePayload] = useState<unknown>(null);
   const [knowledgeStatus, setKnowledgeStatus] = useState('');
   const [loadingSources, setLoadingSources] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -125,13 +127,17 @@ export function SettingsCustomerSection({
   const refreshSources = useCallback(async () => {
     if (!project) {
       setSources([]);
+      setKnowledgePayload(null);
       return;
     }
     setLoadingSources(true);
     try {
-      setSources(knowledgeSources(await getKnowledgeAsset(project)));
+      const payload = await getKnowledgeAsset(project);
+      setKnowledgePayload(payload);
+      setSources(knowledgeSources(payload));
     } catch (caught) {
       setSources([]);
+      setKnowledgePayload(null);
       setKnowledgeStatus(caught instanceof Error ? `✗ 资料状态读取失败：${caught.message}` : '✗ 资料状态读取失败');
     } finally {
       setLoadingSources(false);
@@ -224,10 +230,16 @@ export function SettingsCustomerSection({
 
         {knowledgeStatus && <p className="settings-inline-feedback" role="status">{knowledgeStatus}</p>}
 
+        <EnterpriseUnderstandingReceipt
+          payload={knowledgePayload}
+          loading={loadingSources}
+          hasSources={sources.length > 0}
+        />
+
         {sources.length > 0 && (
           <details className="settings-auth-section settings-mt-10">
             <summary>
-              <strong>查看后台识别结果</strong>
+              <strong>查看后台识别的资料来源</strong>
               <span className="muted">{sources.length} 份资料 · {sourceTypeCount} 类来源</span>
             </summary>
             <div className="settings-info-list settings-mt-10">
