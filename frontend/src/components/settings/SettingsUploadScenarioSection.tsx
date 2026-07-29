@@ -13,8 +13,17 @@ import {
   type UploadScenarioRecord,
 } from '../../api/ui-upload-scenarios';
 
- type JsonRecord = Record<string, unknown>;
- type SourceOption = { source_id: string; label: string; source_type: string };
+type JsonRecord = Record<string, unknown>;
+type SourceOption = { source_id: string; label: string; source_type: string };
+type OperationOption = {
+  interface_id: string;
+  operation_id: string;
+  method: string;
+  path: string;
+  summary: string;
+};
+
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 function asRecord(value: unknown): JsonRecord {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -30,6 +39,10 @@ function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function knowledgeAsset(payload: unknown): JsonRecord {
+  return asRecord(asRecord(payload).knowledge_asset);
+}
+
 function approvedFixtures(rows: UploadFixtureRecord[]): UploadFixtureRecord[] {
   return rows.filter((row) => (
     row.status === 'active'
@@ -38,8 +51,7 @@ function approvedFixtures(rows: UploadFixtureRecord[]): UploadFixtureRecord[] {
   ));
 }
 
-function activeSources(payload: unknown): SourceOption[] {
-  const asset = asRecord(asRecord(payload).knowledge_asset);
+function activeSources(asset: JsonRecord): SourceOption[] {
   return asArray(asset.sources || asset.source_inventory).map((value) => {
     const row = asRecord(value);
     const sourceId = text(row.source_id) || text(row.id);
@@ -48,14 +60,60 @@ function activeSources(payload: unknown): SourceOption[] {
       source_id: sourceId,
       label: filename || sourceId,
       source_type: text(row.source_type) || text(row.type),
+      status: text(row.status) || 'active',
     };
-  }).filter((row) => row.source_id);
+  }).filter((row) => row.source_id && row.status === 'active').map(({ status: _status, ...row }) => row);
+}
+
+function safeOperations(asset: JsonRecord): OperationOption[] {
+  const seen = new Set<string>();
+  const output: OperationOption[] = [];
+  for (const value of asArray(asset.interfaces || asset.operations)) {
+    const row = asRecord(value);
+    const interfaceId = text(row.interface_id);
+    const method = text(row.method || row.http_method).toUpperCase();
+    const path = text(row.path || row.endpoint || row.url);
+    if (!interfaceId || !path || !SAFE_METHODS.has(method) || seen.has(interfaceId)) continue;
+    seen.add(interfaceId);
+    output.push({
+      interface_id: interfaceId,
+      operation_id: text(row.operation_id || row.operationId),
+      method,
+      path,
+      summary: text(row.summary || row.title),
+    });
+  }
+  return output.sort((left, right) => (
+    `${left.method} ${left.path} ${left.interface_id}`
+      .localeCompare(`${right.method} ${right.path} ${right.interface_id}`)
+  ));
+}
+
+function sourceRoles(asset: JsonRecord): string[] {
+  const byKey = new Map<string, string>();
+  const add = (value: unknown) => {
+    const role = text(value);
+    if (role) byKey.set(role.toLocaleLowerCase(), role);
+  };
+  for (const value of asArray(asset.roles)) {
+    const row = asRecord(value);
+    add(row.role || row.name || row.id);
+  }
+  for (const value of asArray(asset.permission_matrix || asset.permissions)) {
+    const row = asRecord(value);
+    add(row.role || row.actor || row.principal);
+  }
+  add('public');
+  add('anonymous');
+  return [...byKey.values()].sort((left, right) => left.localeCompare(right));
 }
 
 export function SettingsUploadScenarioSection() {
   const [params] = useSearchParams();
   const project = params.get('project')?.trim() || '';
   const [sources, setSources] = useState<SourceOption[]>([]);
+  const [operations, setOperations] = useState<OperationOption[]>([]);
+  const [roles, setRoles] = useState<string[]>([]);
   const [fixtures, setFixtures] = useState<UploadFixtureRecord[]>([]);
   const [scenarios, setScenarios] = useState<UploadScenarioRecord[]>([]);
   const [includeRevoked, setIncludeRevoked] = useState(false);
@@ -67,8 +125,8 @@ export function SettingsUploadScenarioSection() {
     title: '上传文件并验证结果',
     source_id: '',
     source_locator: 'UI 上传场景说明',
-    operation_ref: 'ui.upload.fixture',
-    actor_ref: 'qa_operator',
+    operation_ref: '',
+    actor_role: '',
     start_url: '/upload',
     upload_selector: 'input[type=file]',
     assertion_selector: '#upload-result',
@@ -83,6 +141,8 @@ export function SettingsUploadScenarioSection() {
   const refresh = useCallback(async () => {
     if (!project) {
       setSources([]);
+      setOperations([]);
+      setRoles([]);
       setFixtures([]);
       setScenarios([]);
       return;
@@ -93,9 +153,14 @@ export function SettingsUploadScenarioSection() {
         listUploadFixtures(project, false),
         listUploadScenarios(project, includeRevoked),
       ]);
-      const nextSources = activeSources(knowledge);
+      const asset = knowledgeAsset(knowledge);
+      const nextSources = activeSources(asset);
+      const nextOperations = safeOperations(asset);
+      const nextRoles = sourceRoles(asset);
       const nextFixtures = approvedFixtures(fixtureList.fixtures);
       setSources(nextSources);
+      setOperations(nextOperations);
+      setRoles(nextRoles);
       setFixtures(nextFixtures);
       setScenarios(scenarioList.scenarios);
       setForm((current) => ({
@@ -103,6 +168,12 @@ export function SettingsUploadScenarioSection() {
         source_id: nextSources.some((row) => row.source_id === current.source_id)
           ? current.source_id
           : nextSources[0]?.source_id || '',
+        operation_ref: nextOperations.some((row) => row.interface_id === current.operation_ref)
+          ? current.operation_ref
+          : nextOperations[0]?.interface_id || '',
+        actor_role: nextRoles.includes(current.actor_role)
+          ? current.actor_role
+          : nextRoles[0] || '',
       }));
       const activeRefs = new Set(nextFixtures.map((row) => text(row.binding_ref)));
       setSelectedFixtures((current) => current.filter((ref) => activeRefs.has(ref)));
@@ -134,10 +205,12 @@ export function SettingsUploadScenarioSection() {
 
   const register = async () => {
     if (!project) { setStatus('✗ 请先选择客户项目'); return; }
-    if (!form.source_id) { setStatus('✗ 必须选择真实企业来源'); return; }
+    if (!form.source_id) { setStatus('✗ 必须选择活动企业来源'); return; }
+    if (!form.operation_ref) { setStatus('✗ 必须选择真实 GET/HEAD/OPTIONS 前置操作'); return; }
+    if (!form.actor_role) { setStatus('✗ 必须选择来源声明角色'); return; }
     if (selectedFixtures.length === 0) { setStatus('✗ 至少选择一个已审批 Fixture'); return; }
     setBusy('register');
-    setStatus('正在校验来源、Fixture 和完整合同…');
+    setStatus('正在校验来源、前置操作、角色、Fixture 和完整合同…');
     try {
       const result = await registerUploadScenario(project, {
         ...form,
@@ -188,7 +261,7 @@ export function SettingsUploadScenarioSection() {
         <div>
           <span className="panel-kicker">来源 UI 上传场景</span>
           <h2>上传场景合同登记与审批</h2>
-          <p>把真实企业来源、审批 Fixture、页面断言和 persistent cleanup 组合为正式 UI 合同。</p>
+          <p>把真实企业来源、安全前置操作、来源角色、审批 Fixture、页面断言和 persistent cleanup 组合为正式 UI 合同。</p>
         </div>
         <strong className={summary.approved > 0 ? 'is-positive' : 'is-neutral'}>
           可运行 {summary.approved} 个
@@ -196,15 +269,15 @@ export function SettingsUploadScenarioSection() {
       </div>
 
       <div className="browser-matrix-policy">
-        系统不推断 selector、业务成功文本或 cleanup。来源版本、合同哈希和 Fixture authority 任一变化，旧审批场景都会在扫描前被阻断。
+        系统不推断 selector、成功文本或 cleanup。前置操作只允许 GET/HEAD/OPTIONS；来源版本、角色、合同哈希和 Fixture authority 任一变化，旧场景都会在扫描前被阻断。
       </div>
 
       <div className="settings-form-grid">
         <label className="form-field"><span>场景名称</span><input className="form-input" value={form.title} onChange={(event) => setField('title', event.target.value)} /></label>
-        <label className="form-field"><span>真实企业来源</span><select className="form-input" value={form.source_id} onChange={(event) => setField('source_id', event.target.value)}><option value="">请选择来源</option>{sources.map((source) => <option key={source.source_id} value={source.source_id}>{source.label} · {source.source_type || 'source'}</option>)}</select></label>
+        <label className="form-field"><span>活动企业来源</span><select className="form-input" value={form.source_id} onChange={(event) => setField('source_id', event.target.value)}><option value="">请选择来源</option>{sources.map((source) => <option key={source.source_id} value={source.source_id}>{source.label} · {source.source_type || 'source'}</option>)}</select></label>
         <label className="form-field"><span>来源定位</span><input className="form-input" value={form.source_locator} onChange={(event) => setField('source_locator', event.target.value)} /></label>
-        <label className="form-field"><span>业务操作标识</span><input className="form-input" value={form.operation_ref} onChange={(event) => setField('operation_ref', event.target.value)} /></label>
-        <label className="form-field"><span>执行角色标识</span><input className="form-input" value={form.actor_ref} onChange={(event) => setField('actor_ref', event.target.value)} /></label>
+        <label className="form-field"><span>安全前置接口操作</span><select className="form-input" value={form.operation_ref} onChange={(event) => setField('operation_ref', event.target.value)}><option value="">请选择 GET / HEAD / OPTIONS</option>{operations.map((operation) => <option key={operation.interface_id} value={operation.interface_id}>{operation.method} {operation.path}{operation.summary ? ` · ${operation.summary}` : ''}</option>)}</select>{operations.length === 0 && <small className="muted">当前知识资产没有可绑定的只读接口操作，请先导入 OpenAPI、Postman 或接口文档。</small>}</label>
+        <label className="form-field"><span>来源角色</span><select className="form-input" value={form.actor_role} onChange={(event) => setField('actor_role', event.target.value)}><option value="">请选择角色</option>{roles.map((role) => <option key={role} value={role}>{role}</option>)}</select><small className="muted">非 public/anonymous 角色仍需在项目账号配置中存在同 role 的运行账号。</small></label>
         <label className="form-field"><span>页面路径</span><input className="form-input" value={form.start_url} onChange={(event) => setField('start_url', event.target.value)} /></label>
         <label className="form-field"><span>上传控件 selector</span><input className="form-input" value={form.upload_selector} onChange={(event) => setField('upload_selector', event.target.value)} /></label>
         <label className="form-field"><span>断言 selector</span><input className="form-input" value={form.assertion_selector} onChange={(event) => setField('assertion_selector', event.target.value)} /></label>
@@ -224,7 +297,7 @@ export function SettingsUploadScenarioSection() {
         })}
         {fixtures.length === 0 && <p className="settings-inline-feedback">尚无已审批 Fixture，请先完成上方文件治理。</p>}
       </div>
-      <div className="settings-actions"><button type="button" className="btn btn-primary" disabled={busy === 'register'} onClick={() => void register()}>{busy === 'register' ? '登记中…' : '登记候选场景'}</button></div>
+      <div className="settings-actions"><button type="button" className="btn btn-primary" disabled={busy === 'register' || !form.operation_ref || !form.actor_role} onClick={() => void register()}>{busy === 'register' ? '登记中…' : '登记候选场景'}</button></div>
 
       <div className="upload-fixture-toolbar">
         <div><strong>场景登记表</strong><span> 候选 {summary.candidates} · 可运行 {summary.approved}</span></div>
