@@ -36,10 +36,20 @@ from .image_decoding import sniff_image_source
 from .registry import DocumentAdapterRegistry
 
 _VISUAL_OFFICE_FAMILIES = {"doc", "rtf", "odt", "ppt", "pptx", "odp"}
-_TABLE_OFFICE_FAMILIES = {"xls", "xlsx", "ods"}
+_TABLE_OFFICE_FAMILIES = {"xls", "xlsx", "xlsm", "xlsb", "ods"}
 _DEFERRED_CAPABILITIES_BY_GAP: dict[str, tuple[str, ...]] = {
-    "SCANNED_PAGE_REQUIRES_OCR": (CAP_PAGE_RENDERING, CAP_OCR),
-    "PDF_TABLE_REGION_NOT_CELL_PARSED": (CAP_TABLE_STRUCTURE,),
+    # A scanned page may contain body text, a table, or both.  Rendering is shared and
+    # supplemental adapters independently recover text and table structure.
+    "SCANNED_PAGE_REQUIRES_OCR": (
+        CAP_PAGE_RENDERING,
+        CAP_OCR,
+        CAP_TABLE_REGION_DETECTION,
+        CAP_TABLE_STRUCTURE,
+    ),
+    "PDF_TABLE_REGION_NOT_CELL_PARSED": (
+        CAP_PAGE_RENDERING,
+        CAP_TABLE_STRUCTURE,
+    ),
     "PDF_IMAGE_CONTENT_UNPARSED": ("DIAGRAM_STRUCTURE", CAP_PAGE_RENDERING),
 }
 
@@ -104,11 +114,27 @@ def _required_capabilities(family: str) -> list[str]:
         )
     if family == "image":
         return unique_text(
-            [CAP_PAGE_RENDERING, CAP_OCR, CAP_TEXT_EXTRACTION, CAP_TEXT_COORDINATES, CAP_PAGE_LAYOUT]
+            [
+                CAP_PAGE_RENDERING,
+                CAP_OCR,
+                CAP_TEXT_EXTRACTION,
+                CAP_TEXT_COORDINATES,
+                CAP_PAGE_LAYOUT,
+                CAP_TABLE_REGION_DETECTION,
+                CAP_TABLE_STRUCTURE,
+            ]
         )
     if family in _VISUAL_OFFICE_FAMILIES:
         return unique_text(
-            [CAP_PAGE_RENDERING, CAP_OCR, CAP_TEXT_EXTRACTION, CAP_TEXT_COORDINATES, CAP_PAGE_LAYOUT]
+            [
+                CAP_PAGE_RENDERING,
+                CAP_OCR,
+                CAP_TEXT_EXTRACTION,
+                CAP_TEXT_COORDINATES,
+                CAP_PAGE_LAYOUT,
+                CAP_TABLE_REGION_DETECTION,
+                CAP_TABLE_STRUCTURE,
+            ]
         )
     if family in _TABLE_OFFICE_FAMILIES:
         return unique_text([CAP_TABLE_STRUCTURE, CAP_FORMULA_EXTRACTION, CAP_STYLE_SEMANTICS])
@@ -158,15 +184,20 @@ def plan_document_parsing(
     if primary_rows:
         selected.append(primary_rows[0])
     else:
-        standalone_rows = [
-            row
-            for row in supplemental_rows
-            if bool(getattr(row[0], "standalone", False))
-            and set(row[1].capabilities) & set(required_capabilities)
-        ]
-        if standalone_rows:
-            selected.append(standalone_rows[0])
-        elif fallback_rows:
+        # A visual source needs several independent capabilities.  Select every standalone
+        # adapter that contributes a still-missing required capability; do not force OCR,
+        # table recovery and future diagram analysis into one monolithic adapter.
+        provided: set[str] = set()
+        for row in supplemental_rows:
+            adapter, match = row
+            if not bool(getattr(adapter, "standalone", False)):
+                continue
+            contribution = (set(match.capabilities) & set(required_capabilities)) - provided
+            if not contribution:
+                continue
+            selected.append(row)
+            provided.update(set(match.capabilities))
+        if not selected and fallback_rows:
             selected.append(fallback_rows[0])
 
     provided_capabilities = unique_text(
@@ -244,16 +275,16 @@ def plan_deferred_supplementals(
     selected: list[tuple[Any, Any]] = []
     provided: set[str] = set()
     for adapter, match in matches:
-        contribution = set(match.capabilities) & set(requested)
+        contribution = (set(match.capabilities) & set(requested)) - provided
         if not contribution:
             continue
         selected.append((adapter, match))
-        provided.update(contribution)
+        provided.update(set(match.capabilities) & set(requested))
     missing = sorted(set(requested) - provided)
     status = "NOT_REQUIRED"
     if trigger_gaps and selected:
-        # READY means an adapter can execute. Missing capabilities remain explicit in
-        # the receipt for legacy adapters that internally bundle rendering with OCR.
+        # READY means one or more adapters can execute. Missing capabilities remain explicit
+        # and the original structural gaps remain until a supplemental result resolves them.
         status = "READY"
     elif trigger_gaps and not selected:
         status = "BLOCKED_REQUIRED_SUPPLEMENTAL_ADAPTER_UNAVAILABLE"
