@@ -16,6 +16,7 @@ those symbols with stable additive wrappers:
 * minimized visual and interactive evidence with no HAR or Playwright trace persistence;
 * source-declared asynchronous event contracts;
 * source-declared sequential read-only latency budgets;
+* governed source-declared ASYNC_JOB runtime-integrity contracts;
 * one formal experiment mainline for every surface.
 """
 from __future__ import annotations
@@ -37,6 +38,7 @@ from .formal_performance_attribution_guard import (
 from .formal_performance_surface import install_formal_performance_surface
 from .formal_ui_surface import install_formal_ui_surface
 from .formal_ui_surface_guard import install_formal_ui_read_only_guard
+from .job_async_protocol import register_job_async_protocol
 from .non_http_observers import install_non_http_observers
 from .professional_ui_accessibility_contract_guard import (
     install_professional_ui_accessibility_contract_guard,
@@ -117,6 +119,8 @@ from .scan_ui_interaction_contract_guard import (
 from .semantic_operation_binding import bind_accepted_semantic_operations
 from .source_event_contract_binding import bind_source_event_contracts
 from .source_event_obligation_binding import install_source_event_obligation_binding
+from .source_job_contract_binding import bind_source_job_contracts
+from .source_job_obligation_binding import install_source_job_obligation_binding
 from .source_performance_contract_binding import bind_source_performance_contracts
 from .source_performance_obligation_binding import (
     install_source_performance_obligation_binding,
@@ -138,7 +142,8 @@ _ORIGINAL_MARKER = "_qualibug_original_behavior_ir_builder"
 # Governed interaction, persistent cleanup and visual-registry identity remain unchanged. Matrix
 # request expansion is installed last over the final adapter and then its registered observer slot
 # is rebound, so no profile can bypass existing validators, accessibility completeness, cleanup or
-# Oracle authority.
+# Oracle authority. Job registration completes the same risk/protocol registries before a Job
+# obligation can be created; it does not install a separate planner.
 install_non_http_observers()
 install_formal_ui_surface()
 install_formal_ui_read_only_guard()
@@ -177,6 +182,8 @@ install_source_ui_obligation_binding()
 install_source_ui_family_vector_compat()
 install_source_event_obligation_binding()
 install_source_performance_obligation_binding()
+register_job_async_protocol()
+install_source_job_obligation_binding()
 
 
 if hasattr(_planning, _ORIGINAL_MARKER):
@@ -230,7 +237,7 @@ def build_behavior_ir_with_semantic_operation_bindings(
     runtime_actors: list[dict[str, Any]] | None = None,
     available_surfaces: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
-    """Build canonical IR and apply exact source-grounded UI/event/performance joins."""
+    """Build canonical IR and apply exact source-grounded joins on every surface."""
     ui_asset, scan_ui_receipt = overlay_scan_ui_contracts(asset)
     event_asset, scan_event_receipt = overlay_scan_event_contracts_with_external_signals(
         ui_asset
@@ -261,12 +268,16 @@ def build_behavior_ir_with_semantic_operation_bindings(
         event_ir,
         effective_asset,
     )
-    performance_ir["scan_ui_contract_overlay_receipt"] = dict(scan_ui_receipt)
-    performance_ir["scan_event_contract_overlay_receipt"] = dict(scan_event_receipt)
-    performance_ir["scan_performance_contract_overlay_receipt"] = dict(
+    job_ir, _job_receipt = bind_source_job_contracts(
+        performance_ir,
+        effective_asset,
+    )
+    job_ir["scan_ui_contract_overlay_receipt"] = dict(scan_ui_receipt)
+    job_ir["scan_event_contract_overlay_receipt"] = dict(scan_event_receipt)
+    job_ir["scan_performance_contract_overlay_receipt"] = dict(
         scan_performance_receipt
     )
-    return performance_ir
+    return job_ir
 
 
 if not getattr(_planning, _INSTALL_MARKER, False):
