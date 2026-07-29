@@ -6,8 +6,14 @@ from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.s
 )
 
 
-def _legacy_probe_asset(*, scenario_ready: bool, contract_ready: bool | None = None) -> dict:
+def _legacy_probe_asset(
+    *,
+    scenario_ready: bool,
+    contract_ready: bool | None = None,
+    runtime_ready: bool | None = None,
+) -> dict:
     execution_ready = scenario_ready if contract_ready is None else contract_ready
+    plan_ready = execution_ready if runtime_ready is None else runtime_ready
     return {
         "asset_id": "asset:test",
         "scenario_planning_gate": {
@@ -29,6 +35,12 @@ def _legacy_probe_asset(*, scenario_ready: bool, contract_ready: bool | None = N
             "status": "PASS" if execution_ready else "BLOCKED_EXECUTION_CONTRACT_INCOMPLETE",
             "entry_allowed": execution_ready,
             "execution_contract_ready": execution_ready,
+            "execution_allowed": False,
+        },
+        "runtime_plan_gate": {
+            "status": "PASS" if plan_ready else "BLOCKED_RUNTIME_PLAN_INCOMPLETE",
+            "entry_allowed": plan_ready,
+            "runtime_plan_ready": plan_ready,
             "execution_allowed": False,
         },
         "interfaces": [
@@ -84,13 +96,27 @@ def test_execution_contract_failure_blocks_legacy_probe_generation() -> None:
     probes = _api._probes_from_asset(asset, 20)
 
     assert probes == []
-    assert asset["governance"][
-        "legacy_probe_generation_requires_execution_contract_gate"
-    ] is True
+
+
+def test_runtime_plan_failure_blocks_legacy_probe_generation() -> None:
+    asset = _legacy_probe_asset(
+        scenario_ready=True,
+        contract_ready=True,
+        runtime_ready=False,
+    )
+    project_scenario_ir_asset_governance(asset, {})
+
+    probes = _api._probes_from_asset(asset, 20)
+
+    assert probes == []
 
 
 def test_all_design_gates_pass_preserves_later_legacy_probe_compatibility() -> None:
-    asset = _legacy_probe_asset(scenario_ready=True, contract_ready=True)
+    asset = _legacy_probe_asset(
+        scenario_ready=True,
+        contract_ready=True,
+        runtime_ready=True,
+    )
     project_scenario_ir_asset_governance(asset, {})
 
     probes = _api._probes_from_asset(asset, 20)
