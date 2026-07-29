@@ -33,6 +33,11 @@ _REASON_LABELS = {
     "EXECUTION_CONTRACT_AUTHORITATIVE_ACTION_ENTRY_MISSING": "部分业务场景尚未绑定权威执行入口",
     "EXECUTION_CONTRACT_PERMISSION_RESPONSE_OBSERVER_UNRESOLVED": "权限结果缺少可验证的响应观察方式",
     "EXECUTION_CONTRACT_EFFECT_OBSERVER_UNRESOLVED": "业务效果缺少可验证的观察方式",
+    "RUNTIME_PLAN_REQUEST_FIELD_LOCATION_UNRESOLVED": "请求字段在接口契约中的位置尚未明确",
+    "RUNTIME_PLAN_REQUEST_FIELD_LOCATION_AMBIGUOUS": "同一请求字段在接口契约中存在多个位置",
+    "RUNTIME_PLAN_CREDENTIAL_REF_AMBIGUOUS": "同一业务角色对应多个测试凭证引用",
+    "RUNTIME_PLAN_ORACLE_TEMPLATE_UNRESOLVED": "运行计划尚未形成可验证的观察模板",
+    "RUNTIME_PLAN_CLEANUP_TEMPLATE_UNRESOLVED": "写操作尚未形成安全清理模板",
 }
 
 
@@ -54,9 +59,9 @@ def _row_message(value: Any) -> str:
         _readable_reason(row.get("reason_code")),
         _readable_reason(row.get("kind")),
     ):
-        text = _text(candidate)
-        if text:
-            return text
+        value_text = _text(candidate)
+        if value_text:
+            return value_text
     return ""
 
 
@@ -72,6 +77,7 @@ def _gate_projection(asset: dict[str, Any]) -> dict[str, Any]:
     planning_gate = _record(asset.get("scenario_planning_gate"))
     scenario_gate = _record(asset.get("scenario_ir_gate"))
     execution_gate = _record(asset.get("scenario_execution_contract_gate"))
+    runtime_plan_gate = _record(asset.get("runtime_plan_gate"))
 
     model_status = (
         _text(summary.get("enterprise_understanding_status"))
@@ -95,7 +101,9 @@ def _gate_projection(asset: dict[str, Any]) -> dict[str, Any]:
             "code": "SCENARIO_PLANNING_BLOCKED",
             "label": "场景规划",
             "status": _text(planning_gate.get("status")) or "NOT_BUILT",
-            "ready": _gate_ready(planning_gate, "scenario_planning_allowed", "entry_allowed"),
+            "ready": _gate_ready(
+                planning_gate, "scenario_planning_allowed", "entry_allowed"
+            ),
             "gate": planning_gate,
         },
         {
@@ -109,8 +117,19 @@ def _gate_projection(asset: dict[str, Any]) -> dict[str, Any]:
             "code": "EXECUTION_CONTRACT_BLOCKED",
             "label": "执行合同",
             "status": _text(execution_gate.get("status")) or "NOT_BUILT",
-            "ready": _gate_ready(execution_gate, "execution_contract_ready", "entry_allowed"),
+            "ready": _gate_ready(
+                execution_gate, "execution_contract_ready", "entry_allowed"
+            ),
             "gate": execution_gate,
+        },
+        {
+            "code": "RUNTIME_PLAN_BLOCKED",
+            "label": "Runtime Plan",
+            "status": _text(runtime_plan_gate.get("status")) or "NOT_BUILT",
+            "ready": _gate_ready(
+                runtime_plan_gate, "runtime_plan_ready", "entry_allowed"
+            ),
+            "gate": runtime_plan_gate,
         },
     ]
 
@@ -129,6 +148,12 @@ def _gate_projection(asset: dict[str, Any]) -> dict[str, Any]:
             message = _readable_reason(value)
             if message:
                 blockers.append(message)
+    for value in _rows(asset.get("runtime_plan_unknowns")):
+        if not _record(value).get("blocks_runtime_plan"):
+            continue
+        message = _row_message(value)
+        if message:
+            blockers.append(message)
     blockers = list(dict.fromkeys(blockers))[:5]
 
     return {
@@ -136,14 +161,42 @@ def _gate_projection(asset: dict[str, Any]) -> dict[str, Any]:
         or _text(model.get("model_id")),
         "model_status": model_status,
         "model_ready": model_ready,
-        "business_object_count": int(summary.get("understood_business_object_count") or len(_rows(model.get("business_objects")))),
-        "actor_count": int(summary.get("understood_actor_count") or len(_rows(model.get("actors")))),
-        "operation_count": int(summary.get("understood_operation_count") or len(_rows(model.get("operations")))),
-        "lifecycle_count": int(summary.get("understood_lifecycle_count") or len(_rows(model.get("lifecycles")))),
-        "process_count": int(summary.get("understood_process_count") or len(_rows(model.get("processes")))),
-        "scenario_count": int(summary.get("scenario_ir_count") or len(_rows(asset.get("scenario_ir")))),
-        "unknown_count": int(summary.get("enterprise_understanding_unknown_count") or len(_rows(model.get("unknowns")))),
-        "conflict_count": int(summary.get("enterprise_understanding_conflict_count") or len(_rows(model.get("conflicts")))),
+        "business_object_count": int(
+            summary.get("understood_business_object_count")
+            or len(_rows(model.get("business_objects")))
+        ),
+        "actor_count": int(
+            summary.get("understood_actor_count")
+            or len(_rows(model.get("actors")))
+        ),
+        "operation_count": int(
+            summary.get("understood_operation_count")
+            or len(_rows(model.get("operations")))
+        ),
+        "lifecycle_count": int(
+            summary.get("understood_lifecycle_count")
+            or len(_rows(model.get("lifecycles")))
+        ),
+        "process_count": int(
+            summary.get("understood_process_count")
+            or len(_rows(model.get("processes")))
+        ),
+        "scenario_count": int(
+            summary.get("scenario_ir_count")
+            or len(_rows(asset.get("scenario_ir")))
+        ),
+        "runtime_plan_count": int(
+            summary.get("runtime_plan_count")
+            or len(_rows(asset.get("runtime_plans")))
+        ),
+        "unknown_count": int(
+            summary.get("enterprise_understanding_unknown_count")
+            or len(_rows(model.get("unknowns")))
+        ),
+        "conflict_count": int(
+            summary.get("enterprise_understanding_conflict_count")
+            or len(_rows(model.get("conflicts")))
+        ),
         "gates": [
             {
                 "label": row["label"],
@@ -152,7 +205,9 @@ def _gate_projection(asset: dict[str, Any]) -> dict[str, Any]:
             }
             for row in gates
         ],
-        "first_blocked_gate": next((row for row in gates if not row["ready"]), None),
+        "first_blocked_gate": next(
+            (row for row in gates if not row["ready"]), None
+        ),
         "blockers": blockers,
     }
 
@@ -180,7 +235,9 @@ def project_existing_understanding_preflight(
     else:
         load_error = ""
 
-    reasons = [dict(row) for row in _rows(result.get("reasons")) if isinstance(row, dict)]
+    reasons = [
+        dict(row) for row in _rows(result.get("reasons")) if isinstance(row, dict)
+    ]
     if not isinstance(asset, dict) or not asset:
         reasons.append(
             {
@@ -241,7 +298,9 @@ def project_existing_understanding_preflight(
         deduped_reasons.append(row)
     result["reasons"] = deduped_reasons
     result["blocking_codes"] = [
-        _text(row.get("code")) for row in deduped_reasons if _text(row.get("code"))
+        _text(row.get("code"))
+        for row in deduped_reasons
+        if _text(row.get("code"))
     ]
     result["ready"] = len(result["blocking_codes"]) == 0
     result["input_checks"] = input_checks
@@ -262,7 +321,9 @@ class UnderstandingPreflightProjectionMixin:
         had_instance_json = "_json" in self.__dict__
         previous_instance_json = self.__dict__.get("_json")
 
-        def capture_json(payload: Any, status: int = 200, *args: Any, **kwargs: Any) -> None:
+        def capture_json(
+            payload: Any, status: int = 200, *args: Any, **kwargs: Any
+        ) -> None:
             captured["payload"] = payload
             captured["status"] = status
             captured["args"] = args
