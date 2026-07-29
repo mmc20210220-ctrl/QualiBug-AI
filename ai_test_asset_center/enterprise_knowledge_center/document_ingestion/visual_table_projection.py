@@ -15,6 +15,7 @@ from .visual_table_continuation import (
     apply_visual_table_continuations,
 )
 from .visual_table_semantic_candidates import apply_visual_table_semantic_candidates
+from .visual_table_semantic_normalizer import normalize_visual_table_semantic_candidates
 
 
 def _list(value: Any) -> list[Any]:
@@ -137,6 +138,8 @@ def _sync_table_summaries(result: dict[str, Any], blocks: list[dict[str, Any]]) 
         "repeated_header_row_count",
         "document_order_is_business_flow",
         "semantic_candidate_header_row_count",
+        "semantic_candidate_owner_table_id",
+        "semantic_candidates_inherited_from_table_id",
         "header_node_ids",
         "column_role_candidate_ids",
         "legend_candidate_ids",
@@ -181,15 +184,17 @@ def _sync_table_summaries(result: dict[str, Any], blocks: list[dict[str, Any]]) 
 
 def apply_visual_table_projection_authority(document_ir: dict[str, Any]) -> dict[str, Any]:
     # Cross-page linking runs before semantic candidates.  Candidate projection sees the full
-    # logical table and exact inherited headers, then repeated headers and superseded page text
-    # are removed only from the merged business-text authority.
+    # logical table and exact inherited headers, then logical-table normalization removes
+    # duplicate continuation-fragment candidates before text authority is recomposed.
     prior_continuation = _dict(document_ir.get("visual_table_continuation_receipt"))
     continued = (
         dict(document_ir or {})
         if text(prior_continuation.get("schema")) == TABLE_CONTINUATION_SCHEMA
         else apply_visual_table_continuations(document_ir)
     )
-    result = apply_visual_table_semantic_candidates(continued)
+    result = normalize_visual_table_semantic_candidates(
+        apply_visual_table_semantic_candidates(continued)
+    )
     blocks = [dict(row) for row in _list(result.get("blocks")) if isinstance(row, dict)]
     visual_tables = [
         row
