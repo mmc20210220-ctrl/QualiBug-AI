@@ -1,8 +1,11 @@
-"""Prepare governed Scenario IR inputs, Execution Contracts and Runtime Plan v1."""
+"""Prepare governed Scenario IR, Execution Contracts, Runtime Plans and materialization drafts."""
 from __future__ import annotations
 
 from typing import Any
 
+from .runtime_materialization_governance import (
+    project_governed_runtime_materializations_to_asset,
+)
 from .runtime_plan_governance import project_governed_runtime_plans_to_asset
 from .schema import as_dict, as_list, text, unique_text
 from .scenario_execution_contract import project_scenario_execution_contracts
@@ -28,11 +31,11 @@ def _authoritative_api_binding(binding: dict[str, Any]) -> dict[str, Any]:
 def project_governed_scenario_execution_contracts(
     asset: dict[str, Any], model: dict[str, Any]
 ) -> dict[str, Any]:
-    """Project one governed interface authority through contract and runtime templates.
+    """Project one governed interface authority through non-executable runtime drafts.
 
-    The projection never changes behavior semantics, materializes runtime values, reads a secret
-    or enables execution. Request locations are copied only from the source-declared interface
-    contract retained on the knowledge asset.
+    The projection never changes behavior semantics, reads a secret, sends a request, executes a
+    query or enables execution. Request locations are copied only from the source-declared
+    interface contract retained on the knowledge asset.
     """
     bindings = {
         text(row.get("binding_id")): row
@@ -96,9 +99,15 @@ def project_governed_scenario_execution_contracts(
     asset["governance"] = governance
     project_scenario_execution_contracts(asset, model)
     project_governed_runtime_plans_to_asset(asset, model)
+    project_governed_runtime_materializations_to_asset(asset, model)
     install_scenario_execution_probe_guard()
     governance = as_dict(asset.get("governance"))
-    governance["legacy_probe_generation_requires_runtime_plan_gate"] = True
+    governance.update(
+        {
+            "legacy_probe_generation_requires_runtime_plan_gate": True,
+            "legacy_probe_generation_requires_runtime_materialization_gate": True,
+        }
+    )
     asset["governance"] = governance
     return asset
 
