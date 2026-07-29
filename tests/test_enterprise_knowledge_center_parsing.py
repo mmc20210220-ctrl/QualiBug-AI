@@ -12,7 +12,7 @@ for _name, _value in _legacy.items():
         globals()[_name] = _value
 
 
-def test_field_dictionary_json_preserves_required_false_in_normalized_evidence() -> None:
+def test_field_dictionary_json_preserves_required_false_in_excerpt() -> None:
     from ai_test_asset_center.enterprise_knowledge_center._parsing import (
         _field_dictionary_entries,
     )
