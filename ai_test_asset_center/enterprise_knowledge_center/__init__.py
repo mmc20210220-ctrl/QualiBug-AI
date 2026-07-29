@@ -19,6 +19,13 @@ from ._chinese_business_conflicts import (  # noqa: F401
     reconcile_chinese_business_fact_conflicts,
     install_chinese_business_conflict_reconciliation,
 )
+from ._chinese_business_authority_decision import (  # noqa: F401
+    ACTION_LEAVE_UNRESOLVED,
+    ACTION_SELECT_FACT,
+    apply_authority_decisions_to_conflicts,
+    list_operator_authority_decisions,
+    record_operator_authority_decision,
+)
 from .enterprise_understanding import (  # noqa: F401
     assess_understanding_model,
     build_enterprise_understanding_model,
@@ -283,6 +290,11 @@ __all__ = [
     "install_chinese_first_business_comprehension",
     "reconcile_chinese_business_fact_conflicts",
     "install_chinese_business_conflict_reconciliation",
+    "ACTION_LEAVE_UNRESOLVED",
+    "ACTION_SELECT_FACT",
+    "apply_authority_decisions_to_conflicts",
+    "list_operator_authority_decisions",
+    "record_operator_authority_decision",
     "assess_understanding_model",
     "build_enterprise_understanding_model",
     "build_lifecycles",

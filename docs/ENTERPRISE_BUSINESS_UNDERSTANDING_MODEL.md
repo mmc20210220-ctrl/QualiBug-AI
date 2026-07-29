@@ -116,6 +116,13 @@ Implemented in this phase:
   opposing conflict fact spans project into standard `evidence` / `message` /
   `operator_action` fields and into command-center / settings receipts so
   UNRESOLVED conflicts remain visible with quotes (display only — never auto-pick);
+- operator authority decision API (`/api/v1/projects/{project}/authority-decisions`)
+  records an explicit `SELECT_FACT` or `LEAVE_UNRESOLVED` choice into a durable
+  ledger (`qualibug.operator-authority-decision-ledger.v1`) with actor identity,
+  timestamp, selected fact/source refs, optional rationale, and an audit receipt;
+  understanding recompute reloads that ledger and re-applies only participant-
+  matched decisions — drifted fact sets fail closed back to UNRESOLVED; gates
+  stay blocked while any conflict remains UNRESOLVED (including explicit leave);
 - understanding-model `rules` retain source-backed structured slots
   (`condition_frame`, postconditions, data effects, compensations, quantity /
   time-window / formula constraints, authorization delegation, exception scope)
@@ -146,11 +153,9 @@ Not yet complete:
 - cross-document coreference beyond broader source-backed TERM_ALIAS /
   synonym / glossary-table identity merge (proximity / filename / order remain
   forbidden);
-- operator authority/version *decision workflow* that can change conflict
-  `authority_decision` from UNRESOLVED to an explicit operator-selected authority
-  (product surfaces already **display** UNRESOLVED conflicts with opposing
-  evidence and forbid auto-pick; they still cannot close a conflict without an
-  explicit authority/version decision);
+- richer operator authority UX beyond the minimal settings conflict selector
+  (multi-conflict batching, document-version catalog pickers, decision history
+  timeline); the API + ledger + fail-closed recompute path are in place;
 - externally labeled Chinese enterprise understanding benchmark and measured
   precision/recall.
 

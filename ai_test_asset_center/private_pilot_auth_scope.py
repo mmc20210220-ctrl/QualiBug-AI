@@ -255,5 +255,9 @@ class AuthScopeMixin:
 from .private_pilot_visual_baseline_http_patch import (  # noqa: E402
     install_visual_baseline_http_patch,
 )
+from .private_pilot_authority_decision_http_patch import (  # noqa: E402
+    install_authority_decision_http_patch,
+)
 
 install_visual_baseline_http_patch()
+install_authority_decision_http_patch()

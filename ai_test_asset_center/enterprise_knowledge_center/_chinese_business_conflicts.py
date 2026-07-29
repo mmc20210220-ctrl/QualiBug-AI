@@ -161,13 +161,25 @@ def _pairs(rows: list[dict[str, Any]]):
             yield left, right
 
 
-def reconcile_chinese_business_fact_conflicts(asset: dict[str, Any]) -> dict[str, Any]:
-    """Mark contradictory facts CONFLICTING and remove their derived rules."""
+def reconcile_chinese_business_fact_conflicts(
+    asset: dict[str, Any],
+    *,
+    project_id: str = "",
+    root: Path | None = None,
+) -> dict[str, Any]:
+    """Detect contradictions, then honor durable operator authority decisions.
+
+    Detection never auto-picks a winner. Until an operator SELECT_FACT decision
+    matches the conflict participants, facts stay non-promotable and gates stay
+    blocked. Explicit LEAVE_UNRESOLVED also stays blocked.
+    """
     ledger = _dict(asset.get("business_fact_ledger"))
     facts = [dict(row) for row in _list(ledger.get("items")) if isinstance(row, dict)]
+    # Recompute may re-emit previously SUPERSEDED/CONFLICTING facts as ACCEPTED from
+    # source extraction; only ACCEPTED (+ still-conflicting prior) participate.
     accepted = [
         fact for fact in facts
-        if _text(fact.get("status")) == "ACCEPTED"
+        if _text(fact.get("status")) in {"ACCEPTED", "CONFLICTING", "SUPERSEDED"}
         and _text(fact.get("kind")) in {"RULE", "STATE_TRANSITION"}
     ]
     by_rule_key: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
@@ -303,7 +315,15 @@ def reconcile_chinese_business_fact_conflicts(asset: dict[str, Any]) -> dict[str
         }
     )
     asset["summary"] = summary
-    return asset
+
+    # Durable operator ledger is the only authority that may resolve conflicts.
+    from ._chinese_business_authority_decision import apply_authority_decisions_to_conflicts
+
+    return apply_authority_decisions_to_conflicts(
+        asset,
+        project_id=project_id or _text(asset.get("project_id")),
+        root=root,
+    )
 
 
 def install_chinese_business_conflict_reconciliation():
@@ -326,7 +346,9 @@ def install_chinese_business_conflict_reconciliation():
         resolved_root = root or ROOT
         project = _safe_project_id(project_id)
         reconciled = reconcile_chinese_business_fact_conflicts(
-            original(project, resolved_root, options or {})
+            original(project, resolved_root, options or {}),
+            project_id=project,
+            root=resolved_root,
         )
         _persist_enriched_asset(reconciled, project, resolved_root)
         return reconciled

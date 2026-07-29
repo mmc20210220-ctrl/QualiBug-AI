@@ -1,9 +1,14 @@
+import { useState } from 'react';
+import { submitAuthorityDecision } from '../../api/authority-decisions';
+
 type JsonRecord = Record<string, unknown>;
 
 type Props = {
   payload: unknown;
   loading: boolean;
   hasSources: boolean;
+  project?: string;
+  onAuthorityDecision?: () => void;
 };
 
 type ConflictEvidenceView = {
@@ -20,6 +25,7 @@ type ConflictView = {
   message: string;
   operatorAction: string;
   automaticResolutionAllowed: boolean;
+  authorityStatus: string;
   evidence: ConflictEvidenceView[];
 };
 
@@ -185,6 +191,7 @@ function conflictViews(values: unknown[]): ConflictView[] {
         '资料冲突保持未决；系统不会按时间、文件名、文档顺序或模型置信度自动选权威。',
       ),
       automaticResolutionAllowed: asBoolean(row.automatic_resolution_allowed),
+      authorityStatus: (asText(authority.status) || asText(row.status) || 'UNRESOLVED').toUpperCase(),
       evidence: conflictEvidence(row),
     });
   }
@@ -318,9 +325,50 @@ function projectUnderstanding(payload: unknown): UnderstandingView {
   };
 }
 
-export function EnterpriseUnderstandingReceipt({ payload, loading, hasSources }: Props) {
+export function EnterpriseUnderstandingReceipt({
+  payload,
+  loading,
+  hasSources,
+  project = '',
+  onAuthorityDecision,
+}: Props) {
   const view = projectUnderstanding(payload);
   const tone = loading ? 'neutral' : view.ready ? 'success' : view.available ? 'warning' : 'neutral';
+  const [busyConflictId, setBusyConflictId] = useState('');
+  const [decisionNote, setDecisionNote] = useState('');
+  const [decisionError, setDecisionError] = useState('');
+
+  async function handleAuthorityDecision(
+    conflict: ConflictView,
+    action: 'SELECT_FACT' | 'LEAVE_UNRESOLVED',
+    selectedFactId = '',
+  ) {
+    if (!project) {
+      setDecisionError('缺少项目上下文，无法记录权威裁决。');
+      return;
+    }
+    setBusyConflictId(conflict.id);
+    setDecisionError('');
+    setDecisionNote('');
+    try {
+      const result = await submitAuthorityDecision({
+        project,
+        conflictId: conflict.id,
+        action,
+        selectedFactId,
+      });
+      setDecisionNote(
+        action === 'SELECT_FACT'
+          ? `已记录操作员权威裁决：选用事实 ${result.selected_fact_id || selectedFactId}`
+          : '已记录操作员显式保留未决；理解门禁继续阻断。',
+      );
+      onAuthorityDecision?.();
+    } catch (error) {
+      setDecisionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusyConflictId('');
+    }
+  }
 
   return (
     <section className={`section-card status-card status-${tone} settings-mt-10`}>
@@ -391,12 +439,21 @@ export function EnterpriseUnderstandingReceipt({ payload, loading, hasSources }:
                 <strong>未解决资料冲突</strong>
                 <span className="muted">{view.conflicts.length} 条，系统不会自动选权威</span>
               </summary>
+              {(decisionNote || decisionError) && (
+                <p
+                  className={`settings-inline-feedback settings-mt-10 ${decisionError ? 'is-negative' : ''}`}
+                  role="status"
+                >
+                  {decisionError || decisionNote}
+                </p>
+              )}
               <div className="customer-secondary-grid settings-mt-10">
                 {view.conflicts.map((conflict) => (
                   <article key={conflict.id} className="customer-secondary-card">
                     <span className="customer-value-kicker">
                       资料冲突 · {conflict.kind}
                       {conflict.automaticResolutionAllowed ? '' : ' · 禁止自动裁决'}
+                      {conflict.authorityStatus ? ` · ${conflict.authorityStatus}` : ''}
                     </span>
                     <h3>{conflict.message || conflict.kind}</h3>
                     {conflict.operatorAction && <p>{conflict.operatorAction}</p>}
@@ -411,11 +468,39 @@ export function EnterpriseUnderstandingReceipt({ payload, loading, hasSources }:
                           {evidence.sourceLocator && <p>位置：{evidence.sourceLocator}</p>}
                           {evidence.quote && <p>原文：{evidence.quote}</p>}
                           {evidence.factId && <small className="muted">业务事实：{evidence.factId}</small>}
+                          {project && evidence.factId && (
+                            <div className="settings-compact-row settings-mt-10">
+                              <button
+                                type="button"
+                                className="btn btn-secondary"
+                                disabled={busyConflictId === conflict.id}
+                                onClick={() => {
+                                  void handleAuthorityDecision(conflict, 'SELECT_FACT', evidence.factId);
+                                }}
+                              >
+                                {busyConflictId === conflict.id ? '记录中…' : '选用此方为权威'}
+                              </button>
+                            </div>
+                          )}
                         </div>
                       ))
                     ) : (
                       <div className="settings-card-note settings-mt-10">
                         冲突回执尚未附对立原文。QualiBug 不会猜测权威版本，请补充可判定权威/版本的原始资料。
+                      </div>
+                    )}
+                    {project && (
+                      <div className="settings-compact-row settings-mt-10">
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          disabled={busyConflictId === conflict.id}
+                          onClick={() => {
+                            void handleAuthorityDecision(conflict, 'LEAVE_UNRESOLVED');
+                          }}
+                        >
+                          显式保留未决
+                        </button>
                       </div>
                     )}
                   </article>

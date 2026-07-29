@@ -234,6 +234,10 @@ export function SettingsCustomerSection({
           payload={knowledgePayload}
           loading={loadingSources}
           hasSources={sources.length > 0}
+          project={project}
+          onAuthorityDecision={() => {
+            void refreshSources();
+          }}
         />
 
         {sources.length > 0 && (
