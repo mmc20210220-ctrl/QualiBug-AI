@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from ai_test_asset_center import behavior_ir
 from ai_test_asset_center import pipeline_runtime
 from ai_test_asset_center import private_pilot_http_routing as routing
 from ai_test_asset_center import private_pilot_scan_context_contract as scan_context
@@ -22,6 +23,7 @@ from ai_test_asset_center.private_pilot_ui_upload_scenario_routes import (
 from ai_test_asset_center.private_pilot_ui_upload_scenario_scan_gate import (
     install_ui_upload_scenario_scan_gate,
 )
+from ai_test_asset_center.source_ui_contract_binding import bind_source_ui_contracts
 from ai_test_asset_center.ui_upload_fixture_registry import (
     approve_upload_fixture,
     register_upload_fixture,
@@ -38,12 +40,16 @@ from ai_test_asset_center.ui_upload_scenario_runtime_binding import (
     _hydrate_scenarios,
     install_ui_upload_scenario_runtime_binding,
 )
+from ai_test_asset_center.ui_upload_scenario_semantic_authority import (
+    install_ui_upload_scenario_semantic_authority,
+)
 from ai_test_asset_center.ui_upload_scenario_source_authority import (
     install_ui_upload_scenario_source_authority,
 )
 
 _PROJECT = "upload-scenario-http"
 _ACTOR = {"name": "qa-owner", "role": "qa_lead"}
+_SAFE_INTERFACE = "api:GET:/customers/upload"
 
 
 class _Handler:
@@ -102,23 +108,63 @@ class _Handler:
 def _install() -> None:
     install_upload_fixture_registry_integrity()
     install_ui_upload_scenario_source_authority()
+    install_ui_upload_scenario_semantic_authority()
     install_ui_upload_scenario_runtime_binding()
     install_private_pilot_ui_upload_scenario_routes()
     install_ui_upload_scenario_scan_gate()
 
 
 def _seed_authorities(tmp_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    openapi = {
+        "openapi": "3.0.0",
+        "info": {"title": "Upload API", "version": "1.0.0"},
+        "paths": {
+            "/customers/upload": {
+                "get": {
+                    "operationId": "getCustomerUploadPage",
+                    "responses": {"200": {"description": "ok"}},
+                },
+                "post": {
+                    "operationId": "submitCustomerUpload",
+                    "responses": {"200": {"description": "ok"}},
+                },
+            }
+        },
+    }
+    permissions = {
+        "permissions": [{
+            "role": "admin",
+            "resource": "/customers/upload",
+            "actions": ["read"],
+            "decision": "allow",
+        }]
+    }
     source_result = ingest_enterprise_knowledge_documents(
         _PROJECT,
-        [{
-            "text": "# Bulk upload\nUpload a CSV and show 上传成功.",
-            "filename": "bulk-upload-ui.md",
-            "source_type": "uiux_spec",
-        }],
+        [
+            {
+                "text": "# Bulk upload\nAdmin uploads a CSV and sees 上传成功.",
+                "filename": "bulk-upload-ui.md",
+                "source_type": "uiux_spec",
+            },
+            {
+                "text": json.dumps(openapi),
+                "filename": "upload-openapi.json",
+                "source_type": "openapi",
+            },
+            {
+                "text": json.dumps(permissions),
+                "filename": "upload-permissions.json",
+                "source_type": "permission_matrix",
+            },
+        ],
         root=tmp_path,
         actor=_ACTOR,
     )
-    source = source_result["created"][0]
+    source = next(
+        row for row in source_result["created"]
+        if row.get("filename") == "bulk-upload-ui.md"
+    )
     fixture_path = tmp_path / "platform_inputs" / _PROJECT / "inbox" / "bulk.csv"
     fixture_path.parent.mkdir(parents=True, exist_ok=True)
     fixture_path.write_text("id,name\n1,Alice\n", encoding="utf-8")
@@ -143,8 +189,8 @@ def _scenario_payload(source_id: str, binding_ref: str) -> dict[str, Any]:
         "title": "客户批量上传",
         "source_id": source_id,
         "source_locator": "heading:Bulk upload",
-        "operation_ref": "customer.bulk_upload",
-        "actor_ref": "qa_operator",
+        "operation_ref": _SAFE_INTERFACE,
+        "actor_role": "admin",
         "start_url": "/customers/upload",
         "fixture_binding_refs": [binding_ref],
         "upload_selector": "input[type=file]",
@@ -276,9 +322,7 @@ def test_scenario_summary_reaches_campaign_and_runtime_contract(tmp_path: Path) 
     ]
 
 
-def test_formal_overlay_accepts_scenario_source_from_full_knowledge_asset(
-    tmp_path: Path,
-) -> None:
+def test_scenario_binds_through_formal_overlay_and_behavior_ir(tmp_path: Path) -> None:
     _candidate, approved = _approved_scenario(tmp_path)
     materialized = approved_upload_scenario(
         _PROJECT,
@@ -293,11 +337,30 @@ def test_formal_overlay_accepts_scenario_source_from_full_knowledge_asset(
     from ai_test_asset_center import discovery_runtime_semantic_binding as _runtime  # noqa: F401
     from ai_test_asset_center import scan_ui_contract_overlay as overlay
 
-    overlaid, receipt = overlay.overlay_scan_ui_contracts(
+    overlaid, overlay_receipt = overlay.overlay_scan_ui_contracts(
         asset,
         {"ui_execution_requests": [materialized["ui_execution_request"]]},
     )
+    model = behavior_ir.build_behavior_ir_from_knowledge_asset(
+        overlaid,
+        project_id=_PROJECT,
+        runtime_actors=[{
+            "role": "admin",
+            "account_ref": "admin-e2e",
+            "secret_ref": "vault://qualibug/admin-e2e",
+            "status": "active",
+        }],
+    )
+    bound_model, binding_receipt = bind_source_ui_contracts(model, overlaid)
 
-    assert receipt["source_registry_guard"]["status"] == "ACCEPTED"
-    assert receipt["contract_added_count"] == 1
-    assert len(overlaid["ui_formal_contracts"]) == 1
+    assert overlay_receipt["source_registry_guard"]["status"] == "ACCEPTED"
+    assert overlay_receipt["contract_added_count"] == 1
+    assert binding_receipt["status"] == "BOUND"
+    assert binding_receipt["bound_invariant_count"] == 1
+    assert binding_receipt["coverage_gap_count"] == 0
+    invariant = next(
+        row for row in bound_model["invariants"]
+        if row.get("ui_contract_id") == materialized["contract_id"]
+    )
+    assert invariant["ui_request"]["actor_role"] == "admin"
+    assert invariant["ui_request"]["operation_ref"] == _SAFE_INTERFACE
