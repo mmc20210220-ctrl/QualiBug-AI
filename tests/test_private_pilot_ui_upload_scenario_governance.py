@@ -132,12 +132,14 @@ def _seed_authorities(tmp_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         },
     }
     permissions = {
-        "permissions": [{
-            "role": "admin",
-            "resource": "/customers/upload",
-            "actions": ["read"],
-            "decision": "allow",
-        }]
+        "permissions": [
+            {
+                "role": "admin",
+                "resource": "/customers/upload",
+                "actions": ["read"],
+                "decision": "allow",
+            }
+        ]
     }
     source_result = ingest_enterprise_knowledge_documents(
         _PROJECT,
@@ -162,7 +164,8 @@ def _seed_authorities(tmp_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         actor=_ACTOR,
     )
     source = next(
-        row for row in source_result["created"]
+        row
+        for row in source_result["created"]
         if row.get("filename") == "bulk-upload-ui.md"
     )
     fixture_path = tmp_path / "platform_inputs" / _PROJECT / "inbox" / "bulk.csv"
@@ -194,6 +197,9 @@ def _scenario_payload(source_id: str, binding_ref: str) -> dict[str, Any]:
         "start_url": "/customers/upload",
         "fixture_binding_refs": [binding_ref],
         "upload_selector": "input[type=file]",
+        "submission_mode": "click_submit",
+        "submit_selector": "#upload-submit",
+        "cleanup_selector": "#remove-upload",
         "assertion_selector": "#upload-result",
         "assertion_text": "上传成功",
         "rendered_probe_selector": "#upload-result",
@@ -221,10 +227,12 @@ def _approved_scenario(tmp_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
 
 def test_project_routes_register_approve_list_and_revoke(tmp_path: Path) -> None:
     source, fixture = _seed_authorities(tmp_path)
-    register_body = json.dumps({
-        "action": "register",
-        "payload": _scenario_payload(source["source_id"], fixture["binding_ref"]),
-    }).encode("utf-8")
+    register_body = json.dumps(
+        {
+            "action": "register",
+            "payload": _scenario_payload(source["source_id"], fixture["binding_ref"]),
+        }
+    ).encode("utf-8")
     register = _Handler(
         tmp_path,
         path=f"/api/v1/projects/{_PROJECT}/ui-upload-scenarios",
@@ -238,10 +246,9 @@ def test_project_routes_register_approve_list_and_revoke(tmp_path: Path) -> None
     approve = _Handler(
         tmp_path,
         path=f"/api/v1/projects/{_PROJECT}/ui-upload-scenarios",
-        body=json.dumps({
-            "action": "approve",
-            "scenario_id": candidate["scenario_id"],
-        }).encode("utf-8"),
+        body=json.dumps(
+            {"action": "approve", "scenario_id": candidate["scenario_id"]}
+        ).encode("utf-8"),
     )
     routing.HttpRoutingMixin.do_POST(approve)
     approved = approve.responses[-1][1]["scenario"]
@@ -254,17 +261,21 @@ def test_project_routes_register_approve_list_and_revoke(tmp_path: Path) -> None
     )
     listing.command = "GET"
     routing.HttpRoutingMixin.do_GET(listing)
-    authorities = {row["authority"] for row in listing.responses[-1][1]["scenarios"]}
+    authorities = {
+        row["authority"] for row in listing.responses[-1][1]["scenarios"]
+    }
     assert authorities == {"source_declared_candidate", "approved_copy"}
 
     revoke = _Handler(
         tmp_path,
         path=f"/api/v1/projects/{_PROJECT}/ui-upload-scenarios",
-        body=json.dumps({
-            "action": "revoke",
-            "scenario_id": candidate["scenario_id"],
-            "reason": "contract replaced",
-        }).encode("utf-8"),
+        body=json.dumps(
+            {
+                "action": "revoke",
+                "scenario_id": candidate["scenario_id"],
+                "reason": "contract replaced",
+            }
+        ).encode("utf-8"),
     )
     routing.HttpRoutingMixin.do_POST(revoke)
     assert revoke.responses[-1][1]["status"] == "REVOKED"
@@ -344,12 +355,14 @@ def test_scenario_binds_through_formal_overlay_and_behavior_ir(tmp_path: Path) -
     model = behavior_ir.build_behavior_ir_from_knowledge_asset(
         overlaid,
         project_id=_PROJECT,
-        runtime_actors=[{
-            "role": "admin",
-            "account_ref": "admin-e2e",
-            "secret_ref": "vault://qualibug/admin-e2e",
-            "status": "active",
-        }],
+        runtime_actors=[
+            {
+                "role": "admin",
+                "account_ref": "admin-e2e",
+                "secret_ref": "vault://qualibug/admin-e2e",
+                "status": "active",
+            }
+        ],
     )
     bound_model, binding_receipt = bind_source_ui_contracts(model, overlaid)
 
@@ -359,8 +372,18 @@ def test_scenario_binds_through_formal_overlay_and_behavior_ir(tmp_path: Path) -
     assert binding_receipt["bound_invariant_count"] == 1
     assert binding_receipt["coverage_gap_count"] == 0
     invariant = next(
-        row for row in bound_model["invariants"]
+        row
+        for row in bound_model["invariants"]
         if row.get("ui_contract_id") == materialized["contract_id"]
     )
     assert invariant["ui_request"]["actor_role"] == "admin"
     assert invariant["ui_request"]["operation_ref"] == _SAFE_INTERFACE
+    steps = invariant["ui_request"]["browser_plan"]["steps"]
+    assert [(row["phase"], row["action"]) for row in steps] == [
+        ("setup", "goto"),
+        ("treatment", "set_input_files"),
+        ("treatment", "click"),
+        ("assertion", "expect_text"),
+        ("cleanup", "click"),
+        ("cleanup", "set_input_files"),
+    ]
