@@ -10,6 +10,7 @@ import re
 from typing import Any
 
 from .contract import text
+from .visual_table_continuation import apply_visual_table_continuations
 
 
 def _list(value: Any) -> list[Any]:
@@ -115,7 +116,9 @@ def _table_method(table: dict[str, Any]) -> str:
 
 
 def apply_visual_table_projection_authority(document_ir: dict[str, Any]) -> dict[str, Any]:
-    result = dict(document_ir or {})
+    # Cross-page linking must run first so repeated continuation headers can remain as evidence
+    # while being excluded from the merged business-text projection below.
+    result = apply_visual_table_continuations(document_ir)
     blocks = [dict(row) for row in _list(result.get("blocks")) if isinstance(row, dict)]
     visual_tables = [
         row
