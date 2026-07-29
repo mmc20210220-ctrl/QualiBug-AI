@@ -31,6 +31,11 @@ from .planner import plan_deferred_supplementals, plan_document_parsing
 from .registry import DocumentAdapterRegistry, build_default_registry
 from .rendered_ocr_adapter import OcrSupplementalAdapter
 from .universal_image_renderer import UniversalImagePageRenderer
+from .visual_table_adapter import (
+    RuledGridVisualTableProvider,
+    VisualTableProvider,
+    VisualTableSupplementalAdapter,
+)
 
 __all__ = [
     "AdapterMatch",
@@ -58,6 +63,9 @@ __all__ = [
     "PypdfEmbeddedImagePageRenderer",
     "LibreOfficeDocumentPageRenderer",
     "build_default_page_renderer_registry",
+    "VisualTableProvider",
+    "RuledGridVisualTableProvider",
+    "VisualTableSupplementalAdapter",
     "DocumentAdapterRegistry",
     "build_default_registry",
     "plan_document_parsing",
