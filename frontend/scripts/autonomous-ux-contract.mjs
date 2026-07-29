@@ -26,6 +26,7 @@ const [
   campaignsPage,
   serviceForm,
   customerSection,
+  understandingReceipt,
   knowledgeApi,
   topologySection,
   metadataSection,
@@ -41,6 +42,7 @@ const [
   source('src/pages/EnterpriseCampaigns.tsx'),
   source('src/components/settings/SettingsServiceForm.tsx'),
   source('src/components/settings/SettingsCustomerSection.tsx'),
+  source('src/components/settings/EnterpriseUnderstandingReceipt.tsx'),
   source('src/api/knowledge-ingest.ts'),
   source('src/components/settings/SettingsTopologySection.tsx'),
   source('src/components/settings/SettingsMetadataSection.tsx'),
@@ -94,10 +96,23 @@ requireText(customerSection, '选择文件后立即导入', 'customer and materi
 requireText(customerSection, 'type="file"', 'customer and materials section');
 requireText(customerSection, 'multiple', 'customer and materials section');
 requireText(customerSection, 'void handleFilesSelected(files)', 'customer and materials section');
-requireText(customerSection, '查看后台识别结果', 'customer and materials section');
-forbidText(customerSection, 'sourceType', 'customer and materials section');
-forbidText(customerSection, 'docType', 'customer and materials section');
-forbidText(customerSection, 'onDelete', 'customer and materials section');
+requireText(customerSection, '<EnterpriseUnderstandingReceipt', 'customer and materials section');
+requireText(customerSection, '查看后台识别的资料来源', 'customer and materials section');
+forbidText(customerSection, 'setSelectedSourceType', 'customer and materials section');
+forbidText(customerSection, 'onDeleteKnowledge', 'customer and materials section');
+forbidText(customerSection, 'onConfirmUnderstanding', 'customer and materials section');
+
+requireText(understandingReceipt, '已有知识资产的只读投影', 'enterprise understanding receipt');
+requireText(understandingReceipt, 'asset.enterprise_understanding_model', 'enterprise understanding receipt');
+requireText(understandingReceipt, 'asset.enterprise_comprehension_gate', 'enterprise understanding receipt');
+requireText(understandingReceipt, 'asset.scenario_planning_gate', 'enterprise understanding receipt');
+requireText(understandingReceipt, 'asset.scenario_ir_gate', 'enterprise understanding receipt');
+requireText(understandingReceipt, 'asset.scenario_execution_contract_gate', 'enterprise understanding receipt');
+requireText(understandingReceipt, '系统不会通过人工点击“确认正确”关闭缺口', 'enterprise understanding receipt');
+requireText(understandingReceipt, '不创建第二套模型', 'enterprise understanding receipt');
+forbidText(understandingReceipt, 'contentEditable', 'enterprise understanding receipt');
+forbidText(understandingReceipt, '保存模型', 'enterprise understanding receipt');
+forbidText(understandingReceipt, '确认理解正确', 'enterprise understanding receipt');
 
 requireText(knowledgeApi, "fetch('/api/knowledge/ingest'", 'knowledge ingest API');
 requireText(knowledgeApi, 'filename: file.name', 'knowledge ingest API');
