@@ -112,7 +112,8 @@ function understandingGates(summary: JsonRecord): GateView[] {
       ready: asBoolean(row.ready),
     }))
     .filter((row) => row.key && row.label);
-  return projected.length > 0 ? projected : fallbackGates(summary);
+  const byKey = new Map(projected.map((row) => [row.key, row]));
+  return fallbackGates(summary).map((fallback) => byKey.get(fallback.key) || fallback);
 }
 
 function sourceEvidence(value: unknown): SourceEvidenceView[] {
@@ -182,24 +183,22 @@ export function EnterpriseUnderstandingPanel({ summary: value, onOpenMaterials }
 
   const gates = understandingGates(summary);
   const understandingReady = asBoolean(summary.enterprise_understanding_ready);
-  const chainReady = gates.length > 0
-    ? gates.every((gate) => gate.ready)
-    : asBoolean(summary.formal_runtime_chain_ready || summary.formal_scenario_chain_ready);
+  const chainReady = gates.every((gate) => gate.ready);
   const blockers = [...new Set(asArray(summary.understanding_blockers).map(asText).filter(Boolean))].slice(0, 8);
   const receipts = blockerReceipts(summary);
   const receiptMessages = new Set(receipts.map((receipt) => receipt.message));
   const residualBlockers = blockers.filter((blocker) => !receiptMessages.has(blocker));
   const firstBlocked = gates.find((gate) => !gate.ready);
   const statusTitle = chainReady
-    ? '运行草稿链已闭合'
+    ? '运行准备链已闭合'
     : understandingReady
-      ? '企业理解已闭合，运行草稿链待完善'
+      ? '企业理解已闭合，运行准备链待完善'
       : '企业理解尚未闭合';
   const statusDetail = chainReady
-    ? '企业理解、场景规划、Scenario IR、执行合同、Runtime Plan 和运行实例化均已通过现有门禁。当前仍只是不可发送的请求草稿和不可执行的断言草稿；秘密值、网络调用、SQL、清理执行与 Bug 判定保持关闭。'
+    ? '企业理解、场景规划、Scenario IR、执行合同、Runtime Plan 和运行实例化均已通过现有门禁。真实执行仍由现有 Experiment Executor 继续检查现场凭据、动态值、观察回执和清理恢复；当前草案本身仍不可直接发送或执行。'
     : firstBlocked
       ? `当前停在“${firstBlocked.label}”：${firstBlocked.status}。下方只读回执展示现有资产已经记录的资料来源或接入缺口；没有证据的条目不会被系统猜测补齐。`
-      : '现有知识资产尚未形成完整的运行草稿链。';
+      : '现有知识资产尚未形成完整的运行准备链。';
 
   return (
     <section className="focus-section" aria-label="企业理解状态">
@@ -232,7 +231,7 @@ export function EnterpriseUnderstandingPanel({ summary: value, onOpenMaterials }
             <span><em>操作对象绑定</em><b>{percent(summary.operation_object_binding_rate)}</b></span>
             <span><em>生命周期完整度</em><b>{percent(summary.lifecycle_completeness)}</b></span>
             <span><em>待关闭未知项</em><b>{asNumber(summary.enterprise_understanding_unknown_count)}</b></span>
-            <span><em>实例化缺口</em><b>{asNumber(summary.runtime_materialization_unknown_count)}</b></span>
+            <span><em>运行实例化缺口</em><b>{asNumber(summary.runtime_materialization_unknown_count)}</b></span>
             <span><em>有资料定位的缺口</em><b>{asNumber(summary.understanding_source_receipt_count)}</b></span>
           </div>
         </article>
