@@ -43,6 +43,10 @@ from .runtime_materialization import (
 from .runtime_materialization_governance import (
     project_governed_runtime_materializations_to_asset,
 )
+from .runtime_materialization_security import (
+    install_secure_runtime_value_resolver,
+    project_secure_runtime_materializations_to_asset,
+)
 from .runtime_plan import (
     RUNTIME_PLAN_GATE_SCHEMA,
     RUNTIME_PLAN_SCHEMA,
@@ -108,6 +112,8 @@ __all__ = [
     "build_runtime_materializations_v1",
     "project_runtime_materializations_to_asset",
     "project_governed_runtime_materializations_to_asset",
+    "install_secure_runtime_value_resolver",
+    "project_secure_runtime_materializations_to_asset",
     "enrich_openapi_runtime_contracts",
     "install_interface_runtime_contract_parser",
     "build_enterprise_understanding_model",
