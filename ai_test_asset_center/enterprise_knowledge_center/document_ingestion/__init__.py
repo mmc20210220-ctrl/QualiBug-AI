@@ -44,6 +44,10 @@ from .visual_table_adapter import (
     VisualTableProvider,
     VisualTableSupplementalAdapter,
 )
+from .visual_table_continuation import (
+    TABLE_CONTINUATION_SCHEMA,
+    apply_visual_table_continuations,
+)
 from .visual_table_provider_gate import GeometryFormalEnforcingVisualTableProvider
 
 __all__ = [
@@ -82,6 +86,8 @@ __all__ = [
     "GeometryFormalEnforcingVisualTableProvider",
     "build_default_advanced_visual_table_provider",
     "VisualTableSupplementalAdapter",
+    "TABLE_CONTINUATION_SCHEMA",
+    "apply_visual_table_continuations",
     "DocumentAdapterRegistry",
     "build_default_registry",
     "plan_document_parsing",
