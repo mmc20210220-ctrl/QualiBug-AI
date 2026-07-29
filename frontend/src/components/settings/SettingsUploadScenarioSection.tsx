@@ -173,10 +173,10 @@ export function SettingsUploadScenarioSection() {
           : nextSources[0]?.source_id || '',
         operation_ref: nextOperations.some((row) => row.interface_id === current.operation_ref)
           ? current.operation_ref
-          : nextOperations[0]?.interface_id || '',
+          : '',
         actor_role: nextRoles.includes(current.actor_role)
           ? current.actor_role
-          : nextRoles[0] || '',
+          : '',
       }));
       const activeRefs = new Set(nextFixtures.map((row) => text(row.binding_ref)));
       setSelectedFixtures((current) => current.filter((ref) => activeRefs.has(ref)));
