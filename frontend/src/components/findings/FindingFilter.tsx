@@ -27,6 +27,7 @@ export function FindingFilter({ filters, active, onChange, searchQuery, onSearch
       </div>
       <input
         type="search"
+        aria-label="搜索问题标题、模块"
         placeholder="搜索问题标题、模块..."
         value={searchQuery}
         onChange={(e) => onSearchChange(e.target.value)}

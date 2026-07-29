@@ -10,12 +10,14 @@ import { useProjectNavigation } from '../lib/project-navigation';
 import { TechnicalDiagnostics } from '../components/TechnicalDiagnostics';
 import { Skeleton, StatePanel } from '../components/dashboard/DashboardPrimitives';
 import { ValueHero } from '../components/dashboard/ValueHero';
-import { RoiCalculator } from '../components/dashboard/RoiCalculator';
+import { ScanFacts } from '../components/dashboard/ScanFacts';
 import { DecisionCards } from '../components/dashboard/DecisionCards';
+import { JourneyStrip } from '../components/dashboard/JourneyStrip';
+import { TrustPanel, type TrustSignal } from '../components/dashboard/TrustPanel';
 import {
   asRecord, asText, asNum, formatScanTime,
   getSeverityWeight, getFindingModule, riskLevel, releaseDecision,
-  getExecutiveHeadline,
+  getExecutiveHeadline, campaignStatusLabel, campaignDetail,
 } from '../lib/dashboard-utils';
 import type { Finding } from '../types';
 
@@ -36,7 +38,8 @@ export function Dashboard() {
       const findings = ((record.defects || record.risks || []) as Finding[]);
       const valueMetrics = asRecord(record.value_metrics);
       const scores = asRecord(valueMetrics.scores);
-      const reportData = buildReportData({ projectName: asText(record.project_name) || project, industry: asText(record.industry), totalBugs: findings.length, beiScore: asNum(scores.bei), bdsScore: String(scores.bds || '0.0'), bcsScore: asNum(scores.bcs), runtimeProbes: asNum(asRecord(record.business_flow_summary).total), dbConfirmed: asNum(asRecord(record.db_verification).confirmed), findings, dbFindings: [] });
+      const modulesCovered = new Set(findings.map(getFindingModule).filter(Boolean)).size;
+      const reportData = buildReportData({ projectName: asText(record.project_name) || project, industry: asText(record.industry), totalBugs: findings.length, beiScore: asNum(scores.bei), bdsScore: String(scores.bds || '0.0'), bcsScore: asNum(scores.bcs), runtimeProbes: asNum(asRecord(record.business_flow_summary).total), dbConfirmed: asNum(asRecord(record.db_verification).confirmed), findings, dbFindings: [], modulesCovered });
       const html = renderReportHTML(reportData);
       const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
       window.open(URL.createObjectURL(blob), '_blank');
@@ -72,7 +75,14 @@ export function Dashboard() {
     </div>
   );
   if (error && !data) return <StatePanel eyebrow="连接状态" title="后端暂时不可用" description={error} action={<button className="btn btn-primary" onClick={refetch}>重新连接</button>} />;
-  if (!project) return <StatePanel eyebrow="开始使用" title="选择客户项目，查看检测价值" description="选择客户后，您将看到：已确认的问题清单、发布安全建议、AI 检测节省的人力成本量化，以及完整的证据链。" />;
+  if (!project) {
+    return (
+      <div>
+        <StatePanel eyebrow="开始使用" title="选择客户项目，查看检测结论" description="QualiBug 是企业系统的独立行为验证层：用真实执行证据，把软件风险变成可复现、可验收的业务结论。请先在右上角选择客户工作区，或按下面四步完成首次接入。" />
+        <JourneyStrip onNavigate={(path) => navigateToProjectPath(path, '')} />
+      </div>
+    );
+  }
 
   const record = asRecord(data);
   const findings = ((record.defects || record.risks || []) as Finding[]).filter(isCustomerReadyFinding);
@@ -90,9 +100,8 @@ export function Dashboard() {
   const modulesCount = modules.length;
   const evidenceTrust = asNum(valueMetrics.evidence_trust_score, 0);
   const aiTestPoints = asNum(valueMetrics.ai_equivalent_test_points, asNum(asRecord(record.business_flow_summary).total, 0));
-  const savedHours = Math.round(aiTestPoints * 0.5);
-  const savedDays = Math.max(1, Math.round(savedHours / 8));
   const clueCount = clues.length;
+  const evidencePackCount = findings.filter((f) => (f.evidence_chain?.length || 0) > 0).length;
 
   const campaign = asRecord(record.campaign);
   const campaignStatus = asText(campaign.campaign_status).toLowerCase();
@@ -109,19 +118,72 @@ export function Dashboard() {
   const decision = releaseDecision(currentScanP0Count, currentScanDefects, pipelineUnhealthy, campaignStatus === 'blocked');
 
   const hasMaterializedMetrics = totalRiskCount > 0 || clueCount > 0 || asNum(asRecord(record.business_flow_summary).total, 0) > 0 || Boolean(campaignStatus);
+
+  // 「为什么可信」信号：全部来自后端真实字段；缺失字段如实标注「后端暂未提供」。
+  const deliveryGuard = asRecord(record.customer_delivery_guard);
+  const hasDeliveryGuard = Object.keys(deliveryGuard).length > 0;
+  const guardDeliverable = deliveryGuard.customer_deliverable === true && deliveryGuard.safe_for_customer === true;
+  const guardBlockReasons = (Array.isArray(deliveryGuard.block_reasons) ? deliveryGuard.block_reasons : []).map(asText).filter(Boolean);
+  const trustSignals: TrustSignal[] = [
+    {
+      key: 'campaign',
+      title: '检测治理',
+      tone: !campaignStatus ? 'neutral' : campaignStatus === 'blocked' ? 'danger' : campaignStatus === 'coverage_deferred' ? 'warning' : 'success',
+      statusLabel: campaignStatus ? campaignStatusLabel(campaignStatus) : '未上报',
+      description: campaignStatus ? campaignDetail(campaignStatus, campaignDeferredReason, '') : '本轮尚未上报检测治理状态。',
+      unreported: !campaignStatus,
+    },
+    {
+      key: 'pipeline',
+      title: '检测链路健康',
+      tone: !pipelineHealthStatus ? 'neutral' : pipelineUnhealthy ? 'danger' : 'success',
+      statusLabel: !pipelineHealthStatus ? '未上报' : pipelineFailedSafe ? '异常（空结果 ≠ 无问题）' : pipelineBlocked ? '执行被阻断' : '健康',
+      description: !pipelineHealthStatus ? '本轮尚未上报检测链路健康状态。' : pipelineUnhealthy ? (asText(pipelineHealth.operator_note) || '检测链路存在问题，本轮结论不能当作"无问题"。') : '检测链路完整执行，异常会如实暴露而不是静默吞掉。',
+      unreported: !pipelineHealthStatus,
+    },
+    {
+      key: 'delivery-guard',
+      title: '交付守卫',
+      tone: !hasDeliveryGuard ? 'neutral' : guardDeliverable ? 'success' : 'warning',
+      statusLabel: !hasDeliveryGuard ? '后端暂未提供' : guardDeliverable ? '交付已放行' : '交付未放行',
+      description: !hasDeliveryGuard
+        ? '交付守卫判定（customer_delivery_guard）尚未随本轮结果上报。'
+        : guardDeliverable
+          ? '每个进入交付的问题都通过了正式交付门禁校验。'
+          : guardBlockReasons.length > 0 ? `阻塞原因：${guardBlockReasons.join('、')}` : '门禁通过不等于交付放行，需守卫明确确认。',
+      unreported: !hasDeliveryGuard,
+    },
+    {
+      key: 'cleanup',
+      title: '受控写入与清理回执',
+      tone: 'neutral',
+      statusLabel: '后端暂未提供',
+      description: '所有写入均经受控沙箱执行并生成清理回执；每轮的写入 / 清理汇总尚未随结果上报，接入后在此展示。',
+      unreported: true,
+    },
+    {
+      key: 'evidence-trust',
+      title: '结论可靠度',
+      tone: evidenceTrust > 0 ? 'success' : 'neutral',
+      statusLabel: evidenceTrust > 0 ? `${evidenceTrust}%` : '待评估',
+      description: evidenceTrust > 0 ? '后端基于证据完整性计算的可靠度评分，可用于上线评审与验收。' : '本轮尚未形成可评分的证据集合，评分保持"待评估"而不是虚构数字。',
+      unreported: evidenceTrust <= 0,
+    },
+  ];
   const topFindings = [...findings].sort((a, b) => { const sg = getSeverityWeight(b.severity) - getSeverityWeight(a.severity); return sg !== 0 ? sg : (b.evidence_quality?.score || 0) - (a.evidence_quality?.score || 0); }).slice(0, 3);
 
   if (!hasMaterializedMetrics) {
     return (
       <div>
-        <div className="page-header"><div><h1>{asText(record.project_name) || project} · 价值总览</h1><p>当前项目还没有形成真实检测数据。</p></div></div>
+        <div className="page-header"><div><h1>{asText(record.project_name) || project} · 价值总览</h1><p>当前项目还没有形成真实检测数据。按下面四步完成首次检测。</p></div></div>
+        <JourneyStrip onNavigate={(path) => navigateToProjectPath(path, project)} />
         <section className="empty-value-promise">
           <h2>运行首次检测后，您将看到：</h2>
           <div className="empty-value-grid">
             <div className="empty-value-card"><strong>已确认问题清单</strong><span>每个问题都有原始证据和复现路径</span></div>
             <div className="empty-value-card"><strong>发布安全建议</strong><span>基于真实检测结果的发布决策参考</span></div>
-            <div className="empty-value-card"><strong>价值量化报告</strong><span>AI 检测节省的人力成本和时间</span></div>
-            <div className="empty-value-card"><strong>覆盖度分析</strong><span>业务模块覆盖和风险分布全景</span></div>
+            <div className="empty-value-card"><strong>本轮检测事实</strong><span>真实执行的验证点、耗时与触达模块，不做估算</span></div>
+            <div className="empty-value-card"><strong>覆盖与缺口分析</strong><span>覆盖缺口如实展示——空结果不等于系统没有问题</span></div>
           </div>
           <button className="btn btn-primary" onClick={() => navigateToProjectPath('/campaigns', project)}>启动首次检测</button>
         </section>
@@ -138,26 +200,24 @@ export function Dashboard() {
         headline={executiveHeadline}
         level={level}
         decision={decision}
-        metrics={{ confirmedDefects: currentScanDefects, p0Count: currentScanP0Count, savedHours, modulesCount }}
+        metrics={{ confirmedDefects: currentScanDefects, p0Count: currentScanP0Count, testPoints: aiTestPoints, modulesCount }}
         scanTime={formatScanTime(asText(scanMeta.last_scan_at) || asText(record.updated_at))}
         evidenceTrust={evidenceTrust}
       />
 
-      {/* 价值量化区 */}
-      <RoiCalculator
-        aiTestPoints={aiTestPoints}
-        savedHours={savedHours}
-        p0Count={currentScanP0Count}
-        p1Count={p1Count}
+      {/* 检测事实区 — 只展示真实执行与后端记账数字 */}
+      <ScanFacts
+        testPoints={aiTestPoints}
+        durationMs={asNum(scanMeta.total_ms)}
         modulesCount={modulesCount}
-        totalModules={modulesCount}
+        evidenceTrust={evidenceTrust}
       />
 
       {/* 决策卡片 */}
       <DecisionCards cards={[
         { role: 'CTO / 技术VP', title: '发布决策', value: decision.label, detail: decision.advice },
-        { role: '测试经理', title: '效率提升', value: `节省 ${savedHours}h`, detail: `AI 30分钟完成人工团队约 ${savedDays} 天的验证工作` },
-        { role: '项目经理', title: '风险拦截', value: `${currentScanP0Count} 个 P0`, detail: currentScanP0Count > 0 ? '阻断性问题已拦截，避免流入生产环境' : '当前无阻断性问题' },
+        { role: '测试 / 质量负责人', title: '证据与验收', value: evidencePackCount > 0 ? `${evidencePackCount} 个证据包` : '待生成', detail: evidencePackCount > 0 ? '每个已确认问题都附原始请求、响应与复现路径，可直接进入整改验收' : '形成已确认问题后，这里会出现可回放、可验收的证据包' },
+        { role: '项目经理', title: '风险拦截', value: `${currentScanP0Count} 个 P0`, detail: currentScanP0Count > 0 ? '阻断性问题已在发布前暴露，需优先安排修复' : `当前无阻断性问题${p1Count > 0 ? `，另有 ${p1Count} 个 P1 待评估` : ''}` },
       ]} />
 
       {/* 行动区 */}
@@ -194,14 +254,17 @@ export function Dashboard() {
                 <p>{f.business_summary || f.business_impact?.summary || f.actual || '该问题已形成确认结论。'}</p>
                 <div className="focus-card-meta">
                   <span>模块 <b>{getFindingModule(f)}</b></span>
-                  <span>证据 <b>{f.evidence_quality?.label || '已归档'}</b></span>
-                  <span>复现 <b>{f.proof?.repro_rate ?? 0}%</b></span>
+                  <span>证据 <b>{f.evidence_quality?.label || '未评分'}</b></span>
+                  <span>复现 <b>{f.proof?.repro_rate != null ? `${f.proof.repro_rate}%` : '未上报'}</b></span>
                 </div>
               </article>
             ))}
           </div>
         )}
       </section>
+
+      {/* 为什么可信 — 治理 / 健康 / 守卫 / 回执 / 可靠度 */}
+      <TrustPanel signals={trustSignals} />
 
       {/* 技术诊断 — 默认折叠 */}
       <TechnicalDiagnostics>
@@ -218,8 +281,8 @@ export function Dashboard() {
           {campaignStatus && (
             <article className="customer-secondary-card">
               <span className="customer-value-kicker">检测治理</span>
-              <h3>{campaignStatus}</h3>
-              <p>{campaignDeferredReason || '检测正在执行中'}</p>
+              <h3>{campaignStatusLabel(campaignStatus)}</h3>
+              <p>{campaignDetail(campaignStatus, campaignDeferredReason, '')}</p>
             </article>
           )}
           {pipelineUnhealthy && (

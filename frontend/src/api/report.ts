@@ -24,8 +24,6 @@ interface ReportData {
     defect_family?: string;
   }>;
   dbFindings: Array<{ id: string; desc: string }>;
-  /* Phase 6 新增字段 */
-  savedHours?: number;
   modulesCovered?: number;
   releaseDecision?: 'go' | 'no-go' | 'conditional';
   releaseChecks?: Array<{ name: string; status: 'pass' | 'fail' | 'pending'; detail: string }>;
@@ -43,8 +41,10 @@ export function buildReportData(summary: {
   dbConfirmed: number;
   findings: Finding[];
   dbFindings?: Array<{ id: string; desc: string }>;
+  modulesCovered?: number;
 }) {
   return {
+    modulesCovered: summary.modulesCovered,
     projectName: summary.projectName,
     generatedAt: formatBeijingDateTime(new Date()),
     beiScore: summary.beiScore,
@@ -238,21 +238,20 @@ export function renderReportHTML(d: ReportData): string {
     </div>
   </div>
 
-  /* Phase 6: 价值量化区 */
-  ${d.savedHours || d.modulesCovered ? `
+  ${d.modulesCovered || d.runtimeProbes ? `
   <div class="section">
-    <h2>价值量化</h2>
-    <p class="section-intro">以下数据基于真实检测结果计算，非估算</p>
+    <h2>本轮检测事实</h2>
+    <p class="section-intro">以下数字来自本轮真实执行与后端记账，不含人工工时或金额估算</p>
     <div class="metric-grid">
       <div class="metric-card detail">
-        <div class="metric-value tone-primary">${d.savedHours || Math.round(d.totalFindings * 4)}h</div>
-        <div class="metric-label">等效人工测试时间</div>
-        <div class="metric-copy">按每个缺陷人工发现+复现+记录约 4 小时计算</div>
+        <div class="metric-value tone-ink">${d.runtimeProbes}</div>
+        <div class="metric-label">真实执行验证点</div>
+        <div class="metric-copy">对被测系统发起的真实接口探测数量</div>
       </div>
       <div class="metric-card detail">
         <div class="metric-value tone-danger">${d.p0Count} 个 P0</div>
-        <div class="metric-label">风险拦截</div>
-        <div class="metric-copy">P0 缺陷若流入生产环境，每个平均造成 15 万+ 损失</div>
+        <div class="metric-label">阻断性风险拦截</div>
+        <div class="metric-copy">发布前暴露的阻断性缺陷，需优先修复</div>
       </div>
       <div class="metric-card detail">
         <div class="metric-value tone-success">${d.modulesCovered || '—'}</div>
@@ -260,9 +259,9 @@ export function renderReportHTML(d: ReportData): string {
         <div class="metric-copy">真实触达的业务模块，非理论覆盖</div>
       </div>
       <div class="metric-card detail">
-        <div class="metric-value tone-ink">${d.runtimeProbes}</div>
-        <div class="metric-label">AI 测试点</div>
-        <div class="metric-copy">自动生成的接口探测点数量</div>
+        <div class="metric-value tone-ink">${d.dbConfirmed}</div>
+        <div class="metric-label">数据库直接确认</div>
+        <div class="metric-copy">直连数据库确认的数据异常数量</div>
       </div>
     </div>
   </div>` : ''}
@@ -300,7 +299,6 @@ export function renderReportHTML(d: ReportData): string {
     </div>`).join('')}
   </div>` : ''}
 
-  /* Phase 6: 证据附录 */
   ${d.findings.some(f => f.evidence) ? `
   <div class="section">
     <h2>证据附录</h2>
@@ -312,7 +310,6 @@ export function renderReportHTML(d: ReportData): string {
     </div>`).join('')}
   </div>` : ''}
 
-  /* Phase 6: 发布建议 */
   ${d.releaseDecision || d.releaseChecks?.length ? `
   <div class="section">
     <h2>发布建议</h2>

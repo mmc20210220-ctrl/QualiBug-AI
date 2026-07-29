@@ -42,8 +42,8 @@ export function FindingCard({ finding, expanded, onToggle, onViewEvidence }: Fin
         </div>
         <div className="finding-card-meta">
           <span>模块 <b>{moduleName(finding)}</b></span>
-          <span>证据 <b>{quality?.label || '已归档'}</b></span>
-          <span>复现 <b>{finding.proof?.repro_rate ?? 0}%</b></span>
+          <span>证据 <b>{quality?.label || '未评分'}</b></span>
+          <span>复现 <b>{finding.proof?.repro_rate != null ? `${finding.proof.repro_rate}%` : '未上报'}</b></span>
           <span>回归 <b className={regTone}>{regressionStatusLabel(finding)}</b></span>
         </div>
         <div className="finding-card-actions" onClick={(e) => e.stopPropagation()}>

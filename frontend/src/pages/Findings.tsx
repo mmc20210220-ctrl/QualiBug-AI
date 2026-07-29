@@ -6,6 +6,9 @@ import { useProjectNavigation } from '../lib/project-navigation';
 import { FindingCard } from '../components/findings/FindingCard';
 import { EvidenceDrawer } from '../components/findings/EvidenceDrawer';
 import { FindingFilter } from '../components/findings/FindingFilter';
+import { Skeleton } from '../components/dashboard/DashboardPrimitives';
+import { TermHint } from '../components/TermHint';
+import { GLOSSARY } from '../lib/glossary';
 import type { Finding } from '../types';
 
 function moduleName(finding: Finding): string {
@@ -64,9 +67,9 @@ export function Findings() {
         <div>
           <h1>问题清单</h1>
           <span className="findings-count">
-            {confirmed.length} 个已确认缺陷
-            {bySeverity.P0 > 0 && ` · ${bySeverity.P0} 个 P0 阻断`}
-            {clues.length > 0 && ` · ${clues.length} 条待补证`}
+            {confirmed.length} 个<TermHint label="已确认缺陷" hint={GLOSSARY.confirmedDefect} />
+            {bySeverity.P0 > 0 && <> · {bySeverity.P0} 个 <TermHint label="P0 阻断" hint={GLOSSARY.p0} /></>}
+            {clues.length > 0 && <> · {clues.length} 条<TermHint label="待补证线索" hint={GLOSSARY.clue} /></>}
           </span>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
@@ -77,7 +80,19 @@ export function Findings() {
 
       <FindingFilter filters={filterOptions} active={filter} onChange={setFilter} searchQuery={searchQuery} onSearchChange={setSearchQuery} />
 
-      {loading && <div className="state-panel"><div className="spinner spinner-centered" /><p>正在整理问题清单...</p></div>}
+      {loading && (
+        <div aria-busy="true" aria-label="正在整理问题清单">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="finding-card">
+              <div className="finding-card-main">
+                <Skeleton h={14} w={72} br={4} />
+                <div style={{ marginTop: 10 }}><Skeleton h={18} w="68%" br={4} /></div>
+                <div style={{ marginTop: 12 }}><Skeleton h={12} w="46%" br={4} /></div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
       {!loading && error && display.length === 0 && (
         <section className="findings-empty-state danger">
           <span className="findings-empty-kicker">连接异常</span>

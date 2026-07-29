@@ -1,5 +1,44 @@
 /* ═══ 通用组件 — Shared Components ═══ */
 
+/* 术语解释 TermHint */
+.term-hint {
+  position: relative;
+  text-decoration: underline dotted var(--subtle);
+  text-underline-offset: 3px;
+  cursor: help;
+}
+.term-hint::after {
+  content: attr(data-hint);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%) translateY(4px);
+  width: max-content;
+  max-width: 300px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--ink);
+  color: #fff;
+  font: 400 12px/1.5 var(--font);
+  text-align: left;
+  white-space: normal;
+  letter-spacing: 0;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 60;
+  transition: opacity .15s ease, transform .15s ease;
+}
+.term-hint:hover::after,
+.term-hint:focus-visible::after {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+.term-hint:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: 4px;
+}
+
 /* 按钮系统 */
 .btn {
   display: inline-flex;

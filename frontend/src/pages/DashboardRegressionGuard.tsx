@@ -102,7 +102,7 @@ function DashboardRegressionBanner({ record }: { record: JsonRecord }) {
         <span><em>失败</em><b>{failed}</b></span>
         <span><em>{hasPendingObligation ? '待执行' : '需复核'}</em><b>{pending}</b></span>
         <span><em>回归义务</em><b>{obligationCount}</b></span>
-        <span><em>confirmed ledger</em><b>{confirmedLedgerProbeCount}</b></span>
+        <span><em>确认缺陷台账</em><b>{confirmedLedgerProbeCount}</b></span>
         <span><em>最近执行</em><b>{generatedAt || '未执行'}</b></span>
       </div>
     </section>

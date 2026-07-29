@@ -10,7 +10,7 @@ interface ValueHeroProps {
   metrics: {
     confirmedDefects: number;
     p0Count: number;
-    savedHours: number;
+    testPoints: number;
     modulesCount: number;
   };
   scanTime: string;
@@ -49,12 +49,12 @@ export function ValueHero({
           <span>P0 阻断发布</span>
         </div>
         <div className="value-hero-metric">
-          <AnimatedCounter value={metrics.savedHours} className="" />
-          <span>节省人工（小时）</span>
+          <AnimatedCounter value={metrics.testPoints} className="" />
+          <span>等效测试点</span>
         </div>
         <div className="value-hero-metric">
           <AnimatedCounter value={metrics.modulesCount} className="" />
-          <span>覆盖模块</span>
+          <span>触达业务模块</span>
         </div>
       </div>
       <div className="value-hero-decision">

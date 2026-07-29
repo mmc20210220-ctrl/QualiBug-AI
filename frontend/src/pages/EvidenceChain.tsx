@@ -7,6 +7,9 @@ import { useProjectNavigation } from '../lib/project-navigation';
 import { AssertionDiff } from '../components/evidence/AssertionDiff';
 import { QualityScore } from '../components/evidence/QualityScore';
 import { ReplayPanel } from '../components/evidence/ReplayPanel';
+import { Skeleton } from '../components/dashboard/DashboardPrimitives';
+import { TermHint } from '../components/TermHint';
+import { GLOSSARY } from '../lib/glossary';
 import type { Finding } from '../types';
 
 const ReplayViewer = lazy(() => import('../components/ReplayViewer'));
@@ -35,8 +38,8 @@ export function EvidenceChain() {
         <div>
           <h1>证据中心</h1>
           <span className="findings-count">
-            {withEvidence.length} 个证据包 · {replayReady} 个可回放
-            {clues.length > 0 && ` · ${clues.length} 条待补证`}
+            {withEvidence.length} 个<TermHint label="证据包" hint={GLOSSARY.evidencePack} /> · {replayReady} 个可回放
+            {clues.length > 0 && <> · {clues.length} 条<TermHint label="待补证线索" hint={GLOSSARY.clue} /></>}
           </span>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
@@ -45,7 +48,23 @@ export function EvidenceChain() {
         </div>
       </div>
 
-      {loading && <div className="state-panel"><div className="spinner spinner-centered" /><p>正在整理证据链...</p></div>}
+      {loading && (
+        <div className="evidence-layout" aria-busy="true" aria-label="正在整理证据链">
+          <div className="evidence-list-panel">
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} className="evidence-list-item">
+                <Skeleton h={14} w="80%" br={4} />
+                <div style={{ marginTop: 8 }}><Skeleton h={11} w="55%" br={4} /></div>
+              </div>
+            ))}
+          </div>
+          <div className="evidence-detail-panel">
+            <Skeleton h={20} w="50%" br={4} />
+            <div style={{ marginTop: 16 }}><Skeleton h={80} w="100%" br={8} /></div>
+            <div style={{ marginTop: 16 }}><Skeleton h={120} w="100%" br={8} /></div>
+          </div>
+        </div>
+      )}
 
       {!loading && withEvidence.length === 0 && (
         <section className="findings-empty-state compact">
@@ -60,7 +79,20 @@ export function EvidenceChain() {
         <div className="evidence-layout">
           <div className="evidence-list-panel">
             {withEvidence.map((f) => (
-              <div key={f.id} className={`evidence-list-item${selectedId === f.id ? ' active' : ''}`} onClick={() => setSelectedId(f.id)}>
+              <div
+                key={f.id}
+                role="button"
+                tabIndex={0}
+                aria-pressed={selectedId === f.id}
+                className={`evidence-list-item${selectedId === f.id ? ' active' : ''}`}
+                onClick={() => setSelectedId(f.id)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    setSelectedId(f.id);
+                  }
+                }}
+              >
                 <h4>
                   <span className={`severity-badge ${f.severity.toLowerCase()}`} style={{ marginRight: 6 }}>{f.severity}</span>
                   {f.title}

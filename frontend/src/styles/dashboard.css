@@ -172,6 +172,50 @@
   justify-content: center;
 }
 
+/* 首次使用引导条 */
+.journey-strip {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  margin: 20px 0 24px;
+}
+.journey-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 18px;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  transition: transform .2s var(--ease-out), box-shadow .2s, border-color .2s;
+}
+.journey-step:hover,
+.journey-step:focus-visible {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-soft);
+  border-color: var(--primary);
+  outline: none;
+}
+.journey-step:focus-visible { box-shadow: var(--focus-ring); }
+.journey-step-index {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--primary-muted);
+  color: var(--primary);
+  font: 800 13px/28px var(--font-display);
+  text-align: center;
+}
+.journey-step-body { display: flex; flex-direction: column; gap: 4px; }
+.journey-step-body strong { font: 700 13.5px/1.3 var(--font); }
+.journey-step-body span { font-size: 12px; color: var(--muted); line-height: 1.45; }
+.journey-step-body em { font-style: normal; font-size: 12px; font-weight: 600; color: var(--primary); margin-top: 2px; }
+
 /* 决策卡片 */
 .decision-cards {
   display: grid;
@@ -225,6 +269,55 @@
   font: 700 14px var(--font);
   margin-bottom: 4px;
 }
+
+/* 为什么可信 */
+.trust-section { margin-bottom: 24px; }
+.trust-section-head { margin-bottom: 14px; }
+.trust-section-head h2 { font: 700 18px/1.3 var(--font-display); }
+.trust-section-head p { font-size: 13px; color: var(--muted); }
+.trust-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+.trust-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.trust-card.unreported { border-style: dashed; background: var(--surface-2); }
+.trust-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.trust-card-head strong { font: 700 13.5px var(--font); }
+.trust-status-chip {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font: 700 12px var(--font);
+  flex-shrink: 0;
+}
+.trust-status-chip.tone-success { background: var(--success-muted); color: var(--success); }
+.trust-status-chip.tone-warning { background: var(--warning-muted); color: var(--warning); }
+.trust-status-chip.tone-danger { background: var(--danger-muted); color: var(--danger); }
+.trust-status-chip.tone-neutral { background: var(--surface-2); color: var(--subtle); border: 1px solid var(--line); }
+.trust-unreported-badge {
+  font: 600 10.5px var(--font);
+  color: var(--subtle);
+  border: 1px dashed var(--line);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.trust-card-status { font: 700 13px var(--font); color: var(--ink); }
+.trust-card.tone-danger .trust-card-status { color: var(--danger); }
+.trust-card.tone-warning .trust-card-status { color: var(--warning); }
+.trust-card.tone-success .trust-card-status { color: var(--success); }
+.trust-card p { font-size: 12px; color: var(--muted); line-height: 1.5; }
 
 /* 重点关注 */
 .focus-section {
@@ -623,6 +716,7 @@
   .value-hero-metrics { grid-template-columns: repeat(2, 1fr); }
   .roi-cards { grid-template-columns: 1fr; }
   .decision-cards { grid-template-columns: 1fr; }
+  .journey-strip { grid-template-columns: repeat(2, 1fr); }
   .evidence-layout { grid-template-columns: 1fr; }
   .evidence-list-panel { max-height: 240px; }
 }
@@ -631,4 +725,5 @@
   .value-hero-conclusion h1 { font-size: 22px; }
   .value-hero-metrics { grid-template-columns: 1fr 1fr; gap: 10px; }
   .action-bar { flex-direction: column; }
+  .journey-strip { grid-template-columns: 1fr; }
 }

@@ -2,6 +2,8 @@ import { useSearchParams } from 'react-router-dom';
 import { getCommercialAssets, usePipelineData, useReleaseData } from '../api/data';
 import { usePageTitle } from '../lib/page-title';
 import { useProjectNavigation } from '../lib/project-navigation';
+import { TermHint } from '../components/TermHint';
+import { GLOSSARY } from '../lib/glossary';
 
 type GateCheck = { name: string; status: 'pass' | 'fail' | 'pending'; detail: string };
 type JsonRecord = Record<string, unknown>;
@@ -83,7 +85,7 @@ export function ReleaseGate() {
       {loading && <div className="state-panel"><div className="spinner spinner-centered" /><p>评估发布就绪状态...</p></div>}
 
       <section className="release-checklist">
-        <h2>检查清单</h2>
+        <h2><TermHint label="发布门禁" hint={GLOSSARY.releaseGate} />检查清单</h2>
         {checks.length === 0 && !loading && (
           <div className="release-check-item">
             <span className="release-check-icon pending">!</span>
@@ -103,7 +105,7 @@ export function ReleaseGate() {
       </section>
 
       <section className="release-checklist">
-        <h2>商业交付 Handoff</h2>
+        <h2><TermHint label="商业交付确认" hint="门禁通过只说明检查项通过；交付放行需要后端交付守卫（customer_delivery_guard）明确确认，两者独立判定。" /></h2>
         <div className="release-check-item">
           <span className={`release-check-icon ${deliveryLabel === '交付已放行' ? 'pass' : 'pending'}`}>
             {deliveryLabel === '交付已放行' ? '✓' : '!'}

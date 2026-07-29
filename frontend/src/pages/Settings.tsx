@@ -16,7 +16,7 @@ import {
   asRecord, asString, normalizeRoleAccounts,
   extractRoleAccounts, extractAuthType, extractLoginApi, extractBearerToken, extractApiKey,
   extractDbConfig, hasConfiguredAuthMaterial, hasConfiguredDbMaterial, findMatchingServiceConfig,
-  type TenantCreateResponse, type RoleAccount, type SavedServiceConfig,
+  type TenantCreateResponse, type SavedServiceConfig,
 } from '../lib/settings-utils';
 
 export function Settings() {
