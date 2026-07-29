@@ -82,6 +82,26 @@ def source_evidence(
     return {key: value for key, value in evidence.items() if value}
 
 
+def is_source_backed_evidence(row: dict[str, Any]) -> bool:
+    """Return whether evidence satisfies the formal source-traceability contract.
+
+    A fact id or generated statement is not source authority by itself. Formal evidence
+    needs: (1) a source identity, (2) an immutable locator/asset/block anchor, and
+    (3) exact source content or its hash. This deliberately rejects the legacy fallback
+    that emitted ``fact_id + raw_statement`` without any traceable source coordinate.
+    """
+    evidence = as_dict(row)
+    source_identity = text(evidence.get("source_id"))
+    source_anchor = text(
+        evidence.get("source_locator")
+        or evidence.get("asset_ref")
+        or evidence.get("document_block_id")
+        or evidence.get("document_node_id")
+    )
+    exact_content = text(evidence.get("quote") or evidence.get("quote_hash"))
+    return bool(source_identity and source_anchor and exact_content)
+
+
 def evidence_from_fact(fact: dict[str, Any]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     attachment = as_dict(fact.get("structural_span_attachment"))
@@ -106,8 +126,11 @@ def evidence_from_fact(fact: dict[str, Any]) -> list[dict[str, Any]]:
             row["document_node_id"] = text(attachment.get("node_id"))
         if text(attachment.get("section_node_id")):
             row["section_node_id"] = text(attachment.get("section_node_id"))
-        if row:
+        if is_source_backed_evidence(row):
             rows.append(row)
+
+    # Legacy top-level coordinates remain supported only when they satisfy the same
+    # formal evidence contract. ``fact_id`` and ``raw_statement`` alone are not enough.
     if not rows and text(fact.get("fact_id")):
         row = source_evidence(
             source_id=fact.get("source_id"),
@@ -119,7 +142,8 @@ def evidence_from_fact(fact: dict[str, Any]) -> list[dict[str, Any]]:
             row["document_block_id"] = text(attachment.get("document_block_id"))
         if text(attachment.get("node_id")):
             row["document_node_id"] = text(attachment.get("node_id"))
-        rows.append(row)
+        if is_source_backed_evidence(row):
+            rows.append(row)
     return dedupe_evidence(rows)
 
 
@@ -221,204 +245,45 @@ def empty_model() -> dict[str, Any]:
         },
         "scenario_ir": [],
         "scenario_ir_unknowns": [],
-        "scenario_ir_evidence_index": [],
-        "scenario_ir_relationships": [],
         "scenario_ir_gate": {
             "schema": SCENARIO_IR_GATE_SCHEMA,
             "status": "NOT_BUILT",
             "entry_allowed": False,
-            "scenario_ir_ready": False,
             "execution_allowed": False,
             "metrics": {},
         },
         "scenario_execution_contracts": [],
         "scenario_execution_contract_unknowns": [],
-        "scenario_execution_contract_evidence_index": [],
-        "scenario_execution_contract_relationships": [],
         "scenario_execution_contract_gate": {
             "schema": SCENARIO_EXECUTION_CONTRACT_GATE_SCHEMA,
             "status": "NOT_BUILT",
             "entry_allowed": False,
-            "execution_contract_ready": False,
             "execution_allowed": False,
             "metrics": {},
         },
         "runtime_plans": [],
         "runtime_plan_unknowns": [],
-        "runtime_plan_evidence_index": [],
-        "runtime_plan_relationships": [],
         "runtime_plan_gate": {
             "schema": RUNTIME_PLAN_GATE_SCHEMA,
             "status": "NOT_BUILT",
             "entry_allowed": False,
-            "runtime_plan_ready": False,
             "execution_allowed": False,
             "metrics": {},
         },
-        "runtime_materializations": [],
+        "runtime_materialization_contracts": [],
         "runtime_materialization_unknowns": [],
-        "runtime_materialization_evidence_index": [],
-        "runtime_materialization_relationships": [],
         "runtime_materialization_gate": {
             "schema": RUNTIME_MATERIALIZATION_GATE_SCHEMA,
             "status": "NOT_BUILT",
             "entry_allowed": False,
-            "runtime_materialization_ready": False,
             "execution_allowed": False,
             "metrics": {},
         },
         "unknowns": [],
-        "conflicts": [],
-        "evidence_index": [],
-        "metrics": {},
         "gate": {
             "schema": GATE_SCHEMA,
-            "status": "NOT_BUILT",
+            "status": "NO_SOURCE_BACKED_MODEL",
             "entry_allowed": False,
-            "critical_unknowns": [],
+            "metrics": {},
         },
     }
-
-
-def validate_model_shape(model: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return structural violations without silently repairing the model."""
-    violations: list[dict[str, Any]] = []
-    if text(model.get("schema")) != MODEL_SCHEMA:
-        violations.append({"code": "MODEL_SCHEMA_INVALID", "value": model.get("schema")})
-    for key in (
-        "business_objects",
-        "actors",
-        "operations",
-        "object_relations",
-        "lifecycles",
-        "processes",
-        "rules",
-        "decision_matrix_row_ledger",
-        "business_behaviors",
-        "behavior_conflicts",
-        "unknowns",
-        "conflicts",
-        "evidence_index",
-    ):
-        if not isinstance(model.get(key), list):
-            violations.append({"code": "MODEL_COLLECTION_INVALID", "field": key})
-    # Downstream fields are additive and remain optional for persisted pre-v1 models.
-    # When present they must have the canonical container shape.
-    for key in (
-        "behavior_implementation_bindings",
-        "implementation_binding_unknowns",
-        "implementation_binding_conflicts",
-        "implementation_evidence_index",
-        "scenario_ir",
-        "scenario_ir_unknowns",
-        "scenario_ir_evidence_index",
-        "scenario_ir_relationships",
-        "scenario_execution_contracts",
-        "scenario_execution_contract_unknowns",
-        "scenario_execution_contract_evidence_index",
-        "scenario_execution_contract_relationships",
-        "runtime_plans",
-        "runtime_plan_unknowns",
-        "runtime_plan_evidence_index",
-        "runtime_plan_relationships",
-        "runtime_materializations",
-        "runtime_materialization_unknowns",
-        "runtime_materialization_evidence_index",
-        "runtime_materialization_relationships",
-    ):
-        if key in model and not isinstance(model.get(key), list):
-            violations.append({"code": "MODEL_COLLECTION_INVALID", "field": key})
-    if not isinstance(model.get("behavior_ir_gate"), dict):
-        violations.append({"code": "MODEL_OBJECT_INVALID", "field": "behavior_ir_gate"})
-    if "implementation_binding_gate" in model and not isinstance(
-        model.get("implementation_binding_gate"), dict
-    ):
-        violations.append(
-            {"code": "MODEL_OBJECT_INVALID", "field": "implementation_binding_gate"}
-        )
-    if "scenario_ir_gate" in model and not isinstance(model.get("scenario_ir_gate"), dict):
-        violations.append({"code": "MODEL_OBJECT_INVALID", "field": "scenario_ir_gate"})
-    if "scenario_execution_contract_gate" in model and not isinstance(
-        model.get("scenario_execution_contract_gate"), dict
-    ):
-        violations.append(
-            {
-                "code": "MODEL_OBJECT_INVALID",
-                "field": "scenario_execution_contract_gate",
-            }
-        )
-    if "runtime_plan_gate" in model and not isinstance(model.get("runtime_plan_gate"), dict):
-        violations.append({"code": "MODEL_OBJECT_INVALID", "field": "runtime_plan_gate"})
-    if "runtime_materialization_gate" in model and not isinstance(
-        model.get("runtime_materialization_gate"), dict
-    ):
-        violations.append(
-            {"code": "MODEL_OBJECT_INVALID", "field": "runtime_materialization_gate"}
-        )
-    for collection in (
-        "business_objects",
-        "actors",
-        "operations",
-        "object_relations",
-        "lifecycles",
-        "processes",
-        "business_behaviors",
-    ):
-        for index, row in enumerate(as_list(model.get(collection))):
-            if not isinstance(row, dict):
-                violations.append({"code": "MODEL_ENTRY_INVALID", "field": collection, "index": index})
-                continue
-            evidence = row.get("evidence")
-            if not isinstance(evidence, list) or not evidence:
-                violations.append(
-                    {
-                        "code": "FORMAL_ENTRY_WITHOUT_EVIDENCE",
-                        "field": collection,
-                        "index": index,
-                        "id": row.get("object_id")
-                        or row.get("actor_id")
-                        or row.get("operation_id")
-                        or row.get("relation_id")
-                        or row.get("lifecycle_id")
-                        or row.get("process_id")
-                        or row.get("behavior_id"),
-                    }
-                )
-    return violations
-
-
-__all__ = [
-    "MODEL_SCHEMA",
-    "OBJECT_SCHEMA",
-    "ACTOR_SCHEMA",
-    "OPERATION_SCHEMA",
-    "RELATION_SCHEMA",
-    "LIFECYCLE_SCHEMA",
-    "PROCESS_SCHEMA",
-    "BEHAVIOR_SCHEMA",
-    "BEHAVIOR_ROW_LEDGER_SCHEMA",
-    "BEHAVIOR_GATE_SCHEMA",
-    "IMPLEMENTATION_BINDING_SCHEMA",
-    "IMPLEMENTATION_BINDING_GATE_SCHEMA",
-    "SCENARIO_IR_SCHEMA",
-    "SCENARIO_IR_GATE_SCHEMA",
-    "SCENARIO_EXECUTION_CONTRACT_SCHEMA",
-    "SCENARIO_EXECUTION_CONTRACT_GATE_SCHEMA",
-    "RUNTIME_PLAN_SCHEMA",
-    "RUNTIME_PLAN_GATE_SCHEMA",
-    "RUNTIME_MATERIALIZATION_SCHEMA",
-    "RUNTIME_MATERIALIZATION_GATE_SCHEMA",
-    "UNKNOWN_SCHEMA",
-    "GATE_SCHEMA",
-    "text",
-    "as_dict",
-    "as_list",
-    "stable_id",
-    "unique_text",
-    "source_evidence",
-    "evidence_from_fact",
-    "dedupe_evidence",
-    "new_unknown",
-    "empty_model",
-    "validate_model_shape",
-]
