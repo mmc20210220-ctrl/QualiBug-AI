@@ -14,6 +14,7 @@ from .visual_table_continuation import (
     TABLE_CONTINUATION_SCHEMA,
     apply_visual_table_continuations,
 )
+from .visual_table_semantic_candidates import apply_visual_table_semantic_candidates
 
 
 def _list(value: Any) -> list[Any]:
@@ -124,7 +125,7 @@ def _sync_table_summaries(result: dict[str, Any], blocks: list[dict[str, Any]]) 
         for row in blocks
         if text(row.get("type")) == "TABLE" and text(row.get("block_id"))
     }
-    continuation_fields = {
+    table_summary_fields = {
         "logical_table_id",
         "table_fragment_index",
         "table_fragment_count",
@@ -135,6 +136,14 @@ def _sync_table_summaries(result: dict[str, Any], blocks: list[dict[str, Any]]) 
         "header_source_table_id",
         "repeated_header_row_count",
         "document_order_is_business_flow",
+        "semantic_candidate_header_row_count",
+        "header_node_ids",
+        "column_role_candidate_ids",
+        "legend_candidate_ids",
+        "decision_matrix_candidate",
+        "decision_matrix_candidate_id",
+        "candidate_only",
+        "business_semantics_added",
     }
     summaries: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -145,14 +154,16 @@ def _sync_table_summaries(result: dict[str, Any], blocks: list[dict[str, Any]]) 
         block_id = text(row.get("block_id"))
         block = table_blocks.get(block_id)
         if block:
-            for field in continuation_fields:
+            for field in table_summary_fields:
                 if field in block:
                     row[field] = block.get(field)
         summaries.append(row)
         if block_id:
             seen.add(block_id)
     for block_id, block in table_blocks.items():
-        if block_id in seen or not text(block.get("logical_table_id")):
+        if block_id in seen or not (
+            text(block.get("logical_table_id")) or bool(block.get("decision_matrix_candidate"))
+        ):
             continue
         summaries.append(
             {
@@ -162,22 +173,23 @@ def _sync_table_summaries(result: dict[str, Any], blocks: list[dict[str, Any]]) 
                 "bbox": block.get("bbox"),
                 "formal_table_structure": block.get("formal_table_structure"),
                 "source_locator": block.get("source_locator"),
-                **{field: block.get(field) for field in continuation_fields if field in block},
+                **{field: block.get(field) for field in table_summary_fields if field in block},
             }
         )
     result["tables"] = summaries
 
 
 def apply_visual_table_projection_authority(document_ir: dict[str, Any]) -> dict[str, Any]:
-    # Cross-page linking must run first so repeated continuation headers can remain as evidence
-    # while being excluded from the merged business-text projection below.  Respect an existing
-    # receipt so repeated pipeline invocation is idempotent.
+    # Cross-page linking runs before semantic candidates.  Candidate projection sees the full
+    # logical table and exact inherited headers, then repeated headers and superseded page text
+    # are removed only from the merged business-text authority.
     prior_continuation = _dict(document_ir.get("visual_table_continuation_receipt"))
-    result = (
+    continued = (
         dict(document_ir or {})
         if text(prior_continuation.get("schema")) == TABLE_CONTINUATION_SCHEMA
         else apply_visual_table_continuations(document_ir)
     )
+    result = apply_visual_table_semantic_candidates(continued)
     blocks = [dict(row) for row in _list(result.get("blocks")) if isinstance(row, dict)]
     visual_tables = [
         row
@@ -229,9 +241,6 @@ def apply_visual_table_projection_authority(document_ir: dict[str, Any]) -> dict
                 continue
             evidence = _dict(block.get("structure_evidence"))
             block_coordinate_system = text(evidence.get("coordinate_system"))
-            # Native PDF text fragments do not always repeat the coordinate-system marker.
-            # Presence of a targeted PDF TABLE_REGION is sufficient to keep comparison in
-            # the primary PDF coordinate space; rendered OCR remains in image pixels.
             block_is_rendered_text = (
                 block_coordinate_system == "IMAGE_PIXELS_LOCAL_TO_RENDERED_PAGE"
                 or bool(block.get("rendered_page_source_locator"))
