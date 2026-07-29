@@ -6,6 +6,7 @@ value source. It does not make any draft executable.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from functools import wraps
 from typing import Any
 
@@ -200,13 +201,33 @@ def project_secure_runtime_materializations_to_asset(
             "runtime_materialization_test_data_requires_actual_value_source": True,
             "runtime_materialization_environment_identity_required": True,
             "runtime_materialization_unknowns_include_readable_messages": True,
+            "runtime_materialization_secure_projection_is_public_authority": True,
         }
     )
     asset["governance"] = governance
     return asset
 
 
+def build_secure_runtime_materializations_v1(
+    asset: dict[str, Any], model: dict[str, Any]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    """Return secure drafts without mutating caller-owned asset or model objects.
+
+    This is the package-level builder authority. It runs the same governed and security audits as
+    the main asset projection, then returns detached copies of the formal collections.
+    """
+    working_asset = deepcopy(asset)
+    working_model = deepcopy(model)
+    project_secure_runtime_materializations_to_asset(working_asset, working_model)
+    return (
+        deepcopy(_dicts(working_asset.get("runtime_materializations"))),
+        deepcopy(_dicts(working_asset.get("runtime_materialization_unknowns"))),
+        deepcopy(as_dict(working_asset.get("runtime_materialization_gate"))),
+    )
+
+
 __all__ = [
     "install_secure_runtime_value_resolver",
+    "build_secure_runtime_materializations_v1",
     "project_secure_runtime_materializations_to_asset",
 ]
