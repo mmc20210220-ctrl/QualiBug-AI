@@ -262,7 +262,16 @@ def _extract_entity_relations(
     """
     relations: list[dict[str, Any]] = []
 
-    def _add_rel(from_e: str, to_e: str, rel_type: str, source_id: str, confidence: float, chunk_ref: str = "") -> None:
+    def _add_rel(
+        from_e: str,
+        to_e: str,
+        rel_type: str,
+        source_id: str,
+        confidence: float,
+        chunk_ref: str = "",
+        *,
+        derivation: str = "parsed_technical_relation",
+    ) -> None:
         if not from_e or not to_e:
             return
         relations.append({
@@ -272,6 +281,8 @@ def _extract_entity_relations(
             "source_id": source_id,
             "source_chunk_id": chunk_ref,
             "confidence": round(min(1.0, max(0.0, confidence)), 3),
+            "derivation": derivation,
+            "status": "candidate" if derivation == "path_segment_heuristic" else "accepted",
         })
 
     # Table FK relationships (from table foreign_keys)
@@ -281,12 +292,12 @@ def _extract_entity_relations(
         for fk in table.get("foreign_keys") or []:
             target = str(fk) if isinstance(fk, str) else str(fk.get("ref_table") or fk.get("to") or "")
             if target:
-                _add_rel(tname, target, "foreign_key", sid, 0.95)
+                _add_rel(tname, target, "foreign_key", sid, 0.95, derivation="declared_foreign_key")
         # Field-to-table ownership
         for col in table.get("columns") or []:
             col_name = str(col) if isinstance(col, str) else str(col.get("name") or "")
             if col_name and tname:
-                _add_rel(col_name, tname, "belongs_to", sid, 0.9)
+                _add_rel(col_name, tname, "belongs_to", sid, 0.9, derivation="declared_column_ownership")
 
     # Field dictionary ownership
     for field in field_dictionary:
@@ -294,9 +305,10 @@ def _extract_entity_relations(
         tname = str(field.get("table") or "")
         sid = str(field.get("source_id") or "")
         if fname and tname:
-            _add_rel(fname, tname, "field_of", sid, 0.85)
+            _add_rel(fname, tname, "field_of", sid, 0.85, derivation="declared_field_dictionary")
 
-    # Interface-to-table relationships (path segment matching)
+    # Interface-to-table relationships (path segment matching) — diagnostic only.
+    # Never treat path vocabulary as source-declared object identity.
     table_names = {str(t.get("name") or "").lower(): str(t.get("name") or "") for t in tables}
     for iface in interfaces:
         path = str(iface.get("path") or "").lower()
@@ -306,7 +318,14 @@ def _extract_entity_relations(
         for seg in segments:
             matched_table = table_names.get(seg) or table_names.get(seg.rstrip("s")) or table_names.get(seg + "s")
             if matched_table:
-                _add_rel(op_id, matched_table, "operates_on", sid, 0.7)
+                _add_rel(
+                    op_id,
+                    matched_table,
+                    "operates_on",
+                    sid,
+                    0.7,
+                    derivation="path_segment_heuristic",
+                )
 
     # State machine transitions
     for sm in state_machines:
@@ -318,7 +337,14 @@ def _extract_entity_relations(
                 from_s = str(states[i].get("from") or states[i]) if isinstance(states[i], dict) else str(states[i])
                 to_s = str(states[i + 1].get("to") or states[i + 1]) if isinstance(states[i + 1], dict) else str(states[i + 1])
                 if from_s and to_s and entity:
-                    _add_rel(f"{entity}:{from_s}", f"{entity}:{to_s}", "transitions", sid, 0.8)
+                    _add_rel(
+                        f"{entity}:{from_s}",
+                        f"{entity}:{to_s}",
+                        "transitions",
+                        sid,
+                        0.8,
+                        derivation="declared_state_machine",
+                    )
 
     # Permission-to-role relationships
     for perm in permissions:
@@ -327,7 +353,14 @@ def _extract_entity_relations(
         sid = str(perm.get("source_id") or "")
         if role and resource:
             action = str(perm.get("action") or perm.get("effect") or "access")
-            _add_rel(role, resource, f"permission:{action}", sid, 0.85)
+            _add_rel(
+                role,
+                resource,
+                f"permission:{action}",
+                sid,
+                0.85,
+                derivation="declared_permission",
+            )
 
     # Rule-to-entity relationships (rules referencing known tables/interfaces)
     known_entities = {str(t.get("name") or "").lower(): str(t.get("name") or "") for t in tables}
@@ -339,7 +372,14 @@ def _extract_entity_relations(
         for token in rule_tokens:
             matched = known_entities.get(token.lower())
             if matched and rule_id:
-                _add_rel(rule_id, matched, "constrains", sid, 0.6)
+                _add_rel(
+                    rule_id,
+                    matched,
+                    "constrains",
+                    sid,
+                    0.6,
+                    derivation="token_overlap",
+                )
 
     # Deduplicate
     seen: set[str] = set()

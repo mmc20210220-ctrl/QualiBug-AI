@@ -6,9 +6,6 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from ai_test_asset_center.private_pilot_authority_decision_http_patch import (
-    install_authority_decision_http_patch,
-)
 from ai_test_asset_center.private_pilot_http_routing import HttpRoutingMixin
 
 
@@ -22,6 +19,7 @@ class _Handler(HttpRoutingMixin):
         role: str = "qa_lead",
     ) -> None:
         self._test_root = root
+        self._test_body = dict(body or {})
         self.path = path
         self.command = "POST" if body is not None else "GET"
         self.actor = {"name": "alice", "role": role}
@@ -36,6 +34,12 @@ class _Handler(HttpRoutingMixin):
 
     def _root(self) -> Path:
         return self._test_root
+
+    def _project(self) -> str:
+        return "auth-project"
+
+    def _body(self) -> dict[str, Any]:
+        return dict(self._test_body)
 
     def _require_actor(self) -> dict[str, str] | None:
         return dict(self.actor)
@@ -75,9 +79,9 @@ def _route(project: str = "auth-project") -> str:
 
 
 def test_http_lists_authority_decisions(tmp_path: Path) -> None:
-    install_authority_decision_http_patch()
     with patch(
-        "ai_test_asset_center.private_pilot_authority_decision_http_patch.list_operator_authority_decisions",
+        "ai_test_asset_center.enterprise_knowledge_center."
+        "_chinese_business_authority_decision.list_operator_authority_decisions",
         return_value={
             "ok": True,
             "schema": "qualibug.operator-authority-decision-ledger.v1",
@@ -95,7 +99,6 @@ def test_http_lists_authority_decisions(tmp_path: Path) -> None:
 
 
 def test_http_records_select_fact_decision(tmp_path: Path) -> None:
-    install_authority_decision_http_patch()
     fake = {
         "ok": True,
         "decision": {
@@ -108,7 +111,8 @@ def test_http_records_select_fact_decision(tmp_path: Path) -> None:
         "audit_receipt": {"audit_receipt_id": "audit:1"},
     }
     with patch(
-        "ai_test_asset_center.private_pilot_authority_decision_http_patch.record_operator_authority_decision",
+        "ai_test_asset_center.enterprise_knowledge_center."
+        "_chinese_business_authority_decision.record_operator_authority_decision",
         return_value=fake,
     ) as mocked:
         handler = _Handler(
@@ -119,10 +123,12 @@ def test_http_records_select_fact_decision(tmp_path: Path) -> None:
                 "conflict_id": "conflict:1",
                 "selected_fact_id": "fact-a",
                 "rationale": "operator chose fact-a",
+                "project_id": "body-project-must-not-override-route",
             },
         )
         handler.do_POST()
     assert mocked.called
+    assert mocked.call_args.args[0] == "auth-project"
     status, body = handler.responses[-1]
     assert status == 201
     assert body["ok"] is True
@@ -131,7 +137,6 @@ def test_http_records_select_fact_decision(tmp_path: Path) -> None:
 
 
 def test_http_rejects_unknown_action(tmp_path: Path) -> None:
-    install_authority_decision_http_patch()
     handler = _Handler(
         tmp_path,
         path=_route(),
@@ -144,7 +149,6 @@ def test_http_rejects_unknown_action(tmp_path: Path) -> None:
 
 
 def test_http_forbids_unprivileged_role(tmp_path: Path) -> None:
-    install_authority_decision_http_patch()
     handler = _Handler(
         tmp_path,
         path=_route(),
@@ -159,3 +163,14 @@ def test_http_forbids_unprivileged_role(tmp_path: Path) -> None:
     status, body = handler.responses[-1]
     assert status == 403
     assert body["ok"] is False
+
+
+def test_http_rejects_noncanonical_route_project(tmp_path: Path) -> None:
+    handler = _Handler(
+        tmp_path,
+        path=_route("non canonical project"),
+    )
+    handler.do_GET()
+    status, body = handler.responses[-1]
+    assert status == 404
+    assert body["error"] == "NOT_FOUND"

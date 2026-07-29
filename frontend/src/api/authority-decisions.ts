@@ -14,6 +14,42 @@ export type AuthorityDecisionRecord = {
   decided_at_utc: string;
   rationale: string;
   audit_receipt_id: string;
+  actor_name: string;
+  actor_role: string;
+  selected_source_ref: {
+    fact_id: string;
+    source_id: string;
+    source_locator: string;
+    quote_hash: string;
+    document_version: string;
+  };
+};
+
+export type AuthorityAuditReceipt = {
+  audit_receipt_id: string;
+  decision_id: string;
+  conflict_id: string;
+  action: string;
+  selected_fact_id: string;
+  decided_at_utc: string;
+  rationale: string;
+  actor_name: string;
+  actor_role: string;
+};
+
+export type AuthorityDecisionSubmitResult = {
+  decision: AuthorityDecisionRecord;
+  audit_receipt_id: string;
+  comprehension_entry_allowed: boolean | null;
+  understanding_gate_status: string;
+  ledger_decision_count: number;
+};
+
+export type AuthorityDecisionLedger = {
+  decisions: AuthorityDecisionRecord[];
+  auditReceipts: AuthorityAuditReceipt[];
+  updatedAtUtc: string;
+  decisionCount: number;
 };
 
 type AuthorityDecisionEnvelope = {
@@ -33,11 +69,63 @@ function asString(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function asBoolean(value: unknown): boolean | null {
+  if (value === true) return true;
+  if (value === false) return false;
+  return null;
+}
+
 function notifyAuthorityDecisionChange(project: string): void {
   if (typeof window === 'undefined') return;
   window.dispatchEvent(new CustomEvent(AUTHORITY_DECISIONS_CHANGED_EVENT, {
     detail: { project },
   }));
+}
+
+function mapDecision(value: unknown): AuthorityDecisionRecord {
+  const decision = asRecord(value);
+  const actor = asRecord(decision.actor);
+  const selectedSourceRef = asRecord(decision.selected_source_ref);
+  return {
+    decision_id: asString(decision.decision_id),
+    conflict_id: asString(decision.conflict_id),
+    action: asString(decision.action),
+    status: asString(decision.status),
+    selected_fact_id: asString(decision.selected_fact_id),
+    authority_source_id: asString(decision.authority_source_id),
+    decided_at_utc: asString(decision.decided_at_utc),
+    rationale: asString(decision.rationale),
+    audit_receipt_id: asString(decision.audit_receipt_id),
+    actor_name: asString(actor.name),
+    actor_role: asString(actor.role),
+    selected_source_ref: {
+      fact_id: asString(selectedSourceRef.fact_id),
+      source_id: asString(selectedSourceRef.source_id),
+      source_locator: asString(selectedSourceRef.source_locator),
+      quote_hash: asString(selectedSourceRef.quote_hash),
+      document_version: asString(selectedSourceRef.document_version),
+    },
+  };
+}
+
+function mapAuditReceipt(value: unknown): AuthorityAuditReceipt {
+  const receipt = asRecord(value);
+  const actor = asRecord(receipt.actor);
+  return {
+    audit_receipt_id: asString(receipt.audit_receipt_id),
+    decision_id: asString(receipt.decision_id),
+    conflict_id: asString(receipt.conflict_id),
+    action: asString(receipt.action),
+    selected_fact_id: asString(receipt.selected_fact_id),
+    decided_at_utc: asString(receipt.decided_at_utc),
+    rationale: asString(receipt.rationale),
+    actor_name: asString(actor.name),
+    actor_role: asString(actor.role),
+  };
 }
 
 async function authorityDecisionRequest(
@@ -76,6 +164,19 @@ async function authorityDecisionRequest(
   return payload;
 }
 
+export async function listAuthorityDecisions(project: string): Promise<AuthorityDecisionLedger> {
+  const payload = await authorityDecisionRequest(project, { method: 'GET' });
+  const data = asRecord(payload.data);
+  const decisions = asArray(data.decisions).map(mapDecision);
+  const auditReceipts = asArray(data.audit_receipts).map(mapAuditReceipt);
+  return {
+    decisions,
+    auditReceipts,
+    updatedAtUtc: asString(data.updated_at_utc),
+    decisionCount: decisions.length,
+  };
+}
+
 export async function submitAuthorityDecision(input: {
   project: string;
   conflictId: string;
@@ -83,7 +184,7 @@ export async function submitAuthorityDecision(input: {
   selectedFactId?: string;
   rationale?: string;
   documentVersion?: string;
-}): Promise<AuthorityDecisionRecord> {
+}): Promise<AuthorityDecisionSubmitResult> {
   const payload = await authorityDecisionRequest(input.project, {
     method: 'POST',
     body: JSON.stringify({
@@ -95,17 +196,21 @@ export async function submitAuthorityDecision(input: {
     }),
   });
   const data = asRecord(payload.data);
-  const decision = asRecord(data.decision);
+  const decision = mapDecision(data.decision);
+  const audit = asRecord(data.audit_receipt);
+  const comprehensionGate = asRecord(data.comprehension_gate);
+  const understandingGate = asRecord(data.understanding_gate);
+  const ledger = asRecord(data.ledger);
   notifyAuthorityDecisionChange(input.project);
   return {
-    decision_id: asString(decision.decision_id),
-    conflict_id: asString(decision.conflict_id),
-    action: asString(decision.action) || input.action,
-    status: asString(decision.status),
-    selected_fact_id: asString(decision.selected_fact_id),
-    authority_source_id: asString(decision.authority_source_id),
-    decided_at_utc: asString(decision.decided_at_utc),
-    rationale: asString(decision.rationale),
-    audit_receipt_id: asString(decision.audit_receipt_id),
+    decision: {
+      ...decision,
+      action: decision.action || input.action,
+      audit_receipt_id: decision.audit_receipt_id || asString(audit.audit_receipt_id),
+    },
+    audit_receipt_id: asString(audit.audit_receipt_id) || decision.audit_receipt_id,
+    comprehension_entry_allowed: asBoolean(comprehensionGate.entry_allowed),
+    understanding_gate_status: asString(understandingGate.status),
+    ledger_decision_count: Number(ledger.decision_count) || 0,
   };
 }

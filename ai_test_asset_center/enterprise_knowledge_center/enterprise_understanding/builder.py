@@ -1061,6 +1061,113 @@ def _pending_fact_unknowns(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return unknowns
 
 
+def _technical_source_attachment_unknowns(
+    asset: dict[str, Any],
+    operations: list[dict[str, Any]],
+    business_objects: list[dict[str, Any]],
+    alias_to_name: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Surface OpenAPI/schema inventory that has not attached to business understanding.
+
+    Never invent operations or identity merges from path vocabulary. Emit visible
+    unknowns so operators can supply TERM_ALIAS / Chinese business facts.
+    """
+    unknowns: list[dict[str, Any]] = []
+    interfaces = [row for row in as_list(asset.get("interfaces")) if isinstance(row, dict)]
+    tables = [row for row in as_list(asset.get("data_tables")) if isinstance(row, dict)]
+
+    if interfaces and not operations:
+        interface_ids = unique_text(
+            [
+                row.get("interface_id") or row.get("operation_id") or row.get("path")
+                for row in interfaces
+            ]
+        )
+        unknowns.append(
+            new_unknown(
+                "TECHNICAL_OPERATIONS_WITHOUT_BUSINESS_OPERATIONS",
+                (
+                    f"知识资产中有 {len(interfaces)} 个接口契约，但尚未从业务事实形成任何业务操作。"
+                    "接口路径/operationId 不会自动升成业务操作；请补充可追溯的业务规则或源声明别名。"
+                ),
+                related_operations=interface_ids[:12],
+                severity="P0",
+                blocks_formal_understanding=True,
+                reason_code="TECHNICAL_OPERATIONS_WITHOUT_BUSINESS_OPERATIONS",
+                details={
+                    "interface_count": len(interfaces),
+                    "business_operation_count": 0,
+                    "automatic_inference_allowed": False,
+                },
+            )
+        )
+
+    table_names = unique_text(
+        [row.get("name") or row.get("table") for row in tables]
+    )
+    chinese_object_names: list[str] = []
+    for obj in business_objects:
+        if not isinstance(obj, dict):
+            continue
+        name = text(obj.get("name"))
+        if not name:
+            continue
+        evidence_derivations = {
+            text(as_dict(item).get("derivation"))
+            for item in as_list(obj.get("evidence"))
+            if isinstance(item, dict)
+        }
+        source_kinds = {text(value) for value in as_list(obj.get("source_kinds")) if text(value)}
+        if (
+            "chinese_first_business_comprehension" in evidence_derivations
+            or "chinese_business_fact" in evidence_derivations
+            or "business_fact" in source_kinds
+            or "chinese_fact" in source_kinds
+        ):
+            chinese_object_names.append(name)
+        # Also treat objects that are not purely data_table inventory as Chinese-side
+        # when they came only from accepted facts (no data_table source kind).
+        elif source_kinds and "data_table" not in source_kinds and name not in table_names:
+            chinese_object_names.append(name)
+
+    chinese_object_names = unique_text(chinese_object_names)
+    # Identity self-maps in alias_to_name are not TERM_ALIAS bridges.
+    bridging_aliases = {
+        text(key): text(value)
+        for key, value in alias_to_name.items()
+        if text(key) and text(value) and text(key) != text(value)
+    }
+    bridged_names = set(bridging_aliases) | set(bridging_aliases.values())
+    if table_names and chinese_object_names:
+        unbridged_tables = [
+            name for name in table_names if name not in chinese_object_names and name not in bridged_names
+        ]
+        unbridged_chinese = [
+            name for name in chinese_object_names if name not in table_names and name not in bridged_names
+        ]
+        if unbridged_tables and unbridged_chinese:
+            unknowns.append(
+                new_unknown(
+                    "CROSS_SOURCE_IDENTITY_UNRESOLVED",
+                    (
+                        f"中文业务对象（{len(unbridged_chinese)}）与数据表/结构名（{len(unbridged_tables)}）"
+                        "并存，但缺少源声明 TERM_ALIAS 身份绑定；系统不会按表名相近或路径词表自动合并。"
+                    ),
+                    related_objects=unique_text([*unbridged_chinese[:10], *unbridged_tables[:10]]),
+                    severity="P1",
+                    blocks_formal_understanding=False,
+                    reason_code="CROSS_SOURCE_IDENTITY_UNRESOLVED",
+                    details={
+                        "unresolved_chinese_object_names": unbridged_chinese[:40],
+                        "unresolved_technical_names": unbridged_tables[:40],
+                        "merge_policy": "source_backed_term_alias_only",
+                        "automatic_inference_allowed": False,
+                    },
+                )
+            )
+    return unknowns
+
+
 def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any]:
     """Compile the current governed asset into one enterprise cognition model."""
     model = empty_model()
@@ -1192,6 +1299,7 @@ def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any
         *relation_unknowns,
         *lifecycle_unknowns,
         *process_unknowns,
+        *_technical_source_attachment_unknowns(asset, operations, business_objects, alias_to_name),
     ]
     if facts and not business_objects:
         unknowns.append(

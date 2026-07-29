@@ -1,5 +1,10 @@
-import { useState } from 'react';
-import { submitAuthorityDecision } from '../../api/authority-decisions';
+import { useEffect, useState } from 'react';
+import {
+  AUTHORITY_DECISIONS_CHANGED_EVENT,
+  listAuthorityDecisions,
+  submitAuthorityDecision,
+  type AuthorityDecisionRecord,
+} from '../../api/authority-decisions';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -13,10 +18,12 @@ type Props = {
 
 type ConflictEvidenceView = {
   sourceId: string;
+  sourceName: string;
   sourceLocator: string;
   quote: string;
   factId: string;
   modality: string;
+  documentVersion: string;
 };
 
 type ConflictView = {
@@ -26,6 +33,10 @@ type ConflictView = {
   operatorAction: string;
   automaticResolutionAllowed: boolean;
   authorityStatus: string;
+  sourceScope: string;
+  resolutionPolicy: string;
+  disallowedSignals: string[];
+  selectedFactId: string;
   evidence: ConflictEvidenceView[];
 };
 
@@ -49,6 +60,8 @@ type UnderstandingView = {
   conflictCount: number;
   blockers: string[];
   conflicts: ConflictView[];
+  resolvedConflicts: ConflictView[];
+  sourceLabels: Record<string, string>;
   gates: Array<{ label: string; status: string; ready: boolean }>;
 };
 
@@ -120,6 +133,9 @@ const reasonLabels: Record<string, string> = {
   RUNTIME_MATERIALIZATION_SAFE_CLEANUP_CAPABILITY_UNRESOLVED: '写操作尚未绑定可验证的安全清理能力',
   RUNTIME_MATERIALIZATION_SENSITIVE_FIELD_REQUIRES_CREDENTIAL_REF: '敏感请求字段必须通过凭据引用注入',
   RUNTIME_MATERIALIZATION_SOURCE_EVIDENCE_MISSING: '运行实例缺少可追溯的企业资料证据',
+  TECHNICAL_OPERATIONS_WITHOUT_BUSINESS_OPERATIONS: '接口契约尚未形成业务操作',
+  CROSS_SOURCE_IDENTITY_UNRESOLVED: '中文业务对象与技术结构名尚未源声明绑定',
+  TECHNICAL_RELATION_ENDPOINT_UNRESOLVED: '技术关系两端尚未对应已理解业务对象',
 };
 
 function readableReason(value: unknown): string {
@@ -146,7 +162,23 @@ function rowMessage(value: unknown): string {
   );
 }
 
-function conflictEvidence(value: unknown): ConflictEvidenceView[] {
+function sourceLabelMap(asset: JsonRecord): Record<string, string> {
+  const labels: Record<string, string> = {};
+  const candidates = [
+    ...asArray(asset.sources),
+    ...asArray(asset.source_inventory),
+    ...asArray(asRecord(asset.source_registry).items),
+  ];
+  for (const candidate of candidates) {
+    const row = asRecord(candidate);
+    const id = firstText(row.source_id, row.id);
+    const name = firstText(row.filename, row.name, row.source_name, row.title, row.path);
+    if (id && name) labels[id] = name;
+  }
+  return labels;
+}
+
+function conflictEvidence(value: unknown, sourceLabels: Record<string, string>): ConflictEvidenceView[] {
   const row = asRecord(value);
   const candidates = [
     ...asArray(row.evidence),
@@ -162,16 +194,25 @@ function conflictEvidence(value: unknown): ConflictEvidenceView[] {
     const quote = asText(item.quote || item.statement || item.raw_statement);
     const factId = asText(item.fact_id);
     const modality = asText(item.modality);
+    const documentVersion = asText(item.document_version || item.version);
     const key = `${sourceId}|${sourceLocator}|${quote}|${factId}`;
     if (!sourceId && !sourceLocator && !quote && !factId) continue;
     if (seen.has(key)) continue;
     seen.add(key);
-    result.push({ sourceId, sourceLocator, quote, factId, modality });
+    result.push({
+      sourceId,
+      sourceName: sourceLabels[sourceId] || sourceId || '来源已记录',
+      sourceLocator,
+      quote,
+      factId,
+      modality,
+      documentVersion,
+    });
   }
   return result.slice(0, 4);
 }
 
-function conflictViews(values: unknown[]): ConflictView[] {
+function conflictViews(values: unknown[], sourceLabels: Record<string, string>): ConflictView[] {
   const seen = new Set<string>();
   const result: ConflictView[] = [];
   for (const value of values) {
@@ -180,6 +221,9 @@ function conflictViews(values: unknown[]): ConflictView[] {
     if (!id || seen.has(id)) continue;
     seen.add(id);
     const authority = asRecord(row.authority_decision);
+    const disallowed = asArray(row.disallowed_authority_signals).length
+      ? asArray(row.disallowed_authority_signals)
+      : asArray(authority.disallowed_authority_signals);
     result.push({
       id,
       kind: asText(row.kind) || asText(row.reason_code) || 'SOURCE_CONFLICT',
@@ -192,10 +236,14 @@ function conflictViews(values: unknown[]): ConflictView[] {
       ),
       automaticResolutionAllowed: asBoolean(row.automatic_resolution_allowed),
       authorityStatus: (asText(authority.status) || asText(row.status) || 'UNRESOLVED').toUpperCase(),
-      evidence: conflictEvidence(row),
+      sourceScope: (asText(row.source_scope) || '').toUpperCase(),
+      resolutionPolicy: firstText(row.resolution_policy, authority.resolution_policy),
+      disallowedSignals: disallowed.map((item) => asText(item)).filter(Boolean),
+      selectedFactId: asText(authority.selected_fact_id),
+      evidence: conflictEvidence(row, sourceLabels),
     });
   }
-  return result.slice(0, 8);
+  return result;
 }
 
 function gateView(label: string, value: unknown, readyKeys: string[]): { label: string; status: string; ready: boolean } {
@@ -245,19 +293,27 @@ function projectUnderstanding(payload: unknown): UnderstandingView {
   const understandingReady = asBoolean(summary.enterprise_understanding_ready)
     || asBoolean(modelGate.entry_allowed)
     || asBoolean(comprehensionGate.entry_allowed);
+  const sourceLabels = sourceLabelMap(asset);
 
   const criticalUnknowns = [
     ...asArray(modelGate.critical_unknowns),
     ...asArray(model.unknowns).filter((value) => asBoolean(asRecord(value).blocks_formal_understanding)),
   ];
-  const conflicts = [
+  const unresolvedConflicts = [
     ...asArray(modelGate.unresolved_conflicts),
     ...asArray(model.conflicts).filter((value) => {
       const rowStatus = (asText(asRecord(value).status) || 'UNRESOLVED').toUpperCase();
       return !['RESOLVED', 'SUPERSEDED', 'DISMISSED'].includes(rowStatus);
     }),
   ];
-  const conflictDetails = conflictViews(conflicts);
+  const resolvedConflictRows = asArray(model.conflicts).filter((value) => {
+    const row = asRecord(value);
+    const rowStatus = (asText(row.status) || '').toUpperCase();
+    const authorityStatus = (asText(asRecord(row.authority_decision).status) || '').toUpperCase();
+    return rowStatus === 'RESOLVED' || authorityStatus === 'RESOLVED';
+  });
+  const conflictDetails = conflictViews(unresolvedConflicts, sourceLabels).slice(0, 8);
+  const resolvedConflicts = conflictViews(resolvedConflictRows, sourceLabels).slice(0, 8);
   const gateReasons = [
     ...asArray(modelGate.blocking_reasons),
     ...asArray(scenarioPlanningGate.blocking_reasons),
@@ -280,7 +336,7 @@ function projectUnderstanding(payload: unknown): UnderstandingView {
     .filter(Boolean);
   const blockers = [...new Set([
     ...criticalUnknowns.map(rowMessage),
-    ...conflicts.map(rowMessage),
+    ...unresolvedConflicts.map(rowMessage),
     ...runtimeUnknowns.map(rowMessage),
     ...materializationUnknowns.map(rowMessage),
     ...gateReasons,
@@ -318,11 +374,24 @@ function projectUnderstanding(payload: unknown): UnderstandingView {
     runtimePlanCount: asNumber(summary.runtime_plan_count) || asArray(asset.runtime_plans).length,
     runtimeMaterializationCount: asNumber(summary.runtime_materialization_count) || asArray(asset.runtime_materializations).length,
     unknownCount: asNumber(summary.enterprise_understanding_unknown_count) || asArray(model.unknowns).length,
-    conflictCount: asNumber(summary.enterprise_understanding_conflict_count) || conflicts.length,
+    conflictCount: asNumber(summary.enterprise_understanding_conflict_count) || unresolvedConflicts.length,
     blockers,
     conflicts: conflictDetails,
+    resolvedConflicts,
+    sourceLabels,
     gates,
   };
+}
+
+function sideLabel(index: number, total: number): string {
+  if (total === 2) return index === 0 ? '方 A' : '方 B';
+  return `对立方 ${index + 1}`;
+}
+
+function scopeLabel(scope: string): string {
+  if (scope === 'CROSS_SOURCE') return '跨文档';
+  if (scope === 'INTRA_SOURCE') return '同文档';
+  return scope || '资料冲突';
 }
 
 export function EnterpriseUnderstandingReceipt({
@@ -337,6 +406,37 @@ export function EnterpriseUnderstandingReceipt({
   const [busyConflictId, setBusyConflictId] = useState('');
   const [decisionNote, setDecisionNote] = useState('');
   const [decisionError, setDecisionError] = useState('');
+  const [rationaleDraft, setRationaleDraft] = useState<Record<string, string>>({});
+  const [decisionHistory, setDecisionHistory] = useState<AuthorityDecisionRecord[]>([]);
+  const [historyError, setHistoryError] = useState('');
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  async function refreshDecisionHistory() {
+    if (!project) return;
+    setHistoryLoading(true);
+    setHistoryError('');
+    try {
+      const ledger = await listAuthorityDecisions(project);
+      setDecisionHistory(ledger.decisions);
+    } catch (error) {
+      setHistoryError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void refreshDecisionHistory();
+    if (!project || typeof window === 'undefined') return undefined;
+    const onChange = (event: Event) => {
+      const detail = asRecord((event as CustomEvent).detail);
+      if (asText(detail.project) && asText(detail.project) !== project) return;
+      void refreshDecisionHistory();
+    };
+    window.addEventListener(AUTHORITY_DECISIONS_CHANGED_EVENT, onChange);
+    return () => window.removeEventListener(AUTHORITY_DECISIONS_CHANGED_EVENT, onChange);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project]);
 
   async function handleAuthorityDecision(
     conflict: ConflictView,
@@ -347,6 +447,18 @@ export function EnterpriseUnderstandingReceipt({
       setDecisionError('缺少项目上下文，无法记录权威裁决。');
       return;
     }
+    if (action === 'SELECT_FACT') {
+      const side = conflict.evidence.find((item) => item.factId === selectedFactId);
+      const confirmed = window.confirm(
+        [
+          `确认选用事实 ${selectedFactId || '（未知）'} 为权威？`,
+          side?.quote ? `原文：${side.quote}` : '',
+          '对立事实将标记为 SUPERSEDED，理解门禁仅在权威一致后放行。',
+          '系统不会按时间、文件名、顺序或模型置信度自动选权威。',
+        ].filter(Boolean).join('\n'),
+      );
+      if (!confirmed) return;
+    }
     setBusyConflictId(conflict.id);
     setDecisionError('');
     setDecisionNote('');
@@ -356,18 +468,70 @@ export function EnterpriseUnderstandingReceipt({
         conflictId: conflict.id,
         action,
         selectedFactId,
+        rationale: asText(rationaleDraft[conflict.id]),
       });
+      const gateHint = result.comprehension_entry_allowed == null
+        ? ''
+        : result.comprehension_entry_allowed
+          ? '理解门禁：已放行。'
+          : '理解门禁：仍阻断。';
+      const receiptHint = result.audit_receipt_id
+        ? `审计回执：${result.audit_receipt_id}`
+        : '';
       setDecisionNote(
-        action === 'SELECT_FACT'
-          ? `已记录操作员权威裁决：选用事实 ${result.selected_fact_id || selectedFactId}`
-          : '已记录操作员显式保留未决；理解门禁继续阻断。',
+        [
+          action === 'SELECT_FACT'
+            ? `已记录操作员权威裁决：选用事实 ${result.decision.selected_fact_id || selectedFactId}`
+            : '已记录操作员显式保留未决；enterprise_comprehension_gate 继续阻断，需补充资料或后续再裁决。',
+          gateHint,
+          result.understanding_gate_status
+            ? `理解模型门禁：${result.understanding_gate_status}`
+            : '',
+          receiptHint,
+        ].filter(Boolean).join(' '),
       );
+      setRationaleDraft((prev) => ({ ...prev, [conflict.id]: '' }));
+      await refreshDecisionHistory();
       onAuthorityDecision?.();
     } catch (error) {
       setDecisionError(error instanceof Error ? error.message : String(error));
     } finally {
       setBusyConflictId('');
     }
+  }
+
+  function renderEvidenceSide(conflict: ConflictView, evidence: ConflictEvidenceView, index: number) {
+    return (
+      <div
+        key={`${conflict.id}:${evidence.factId || evidence.sourceId}:${index}`}
+        className="settings-card-note settings-mt-10"
+      >
+        <strong>
+          {sideLabel(index, conflict.evidence.length)}
+          {' · '}
+          {evidence.sourceName}
+        </strong>
+        {evidence.modality && <p>模态：{evidence.modality}</p>}
+        {evidence.sourceLocator && <p>位置：{evidence.sourceLocator}</p>}
+        {evidence.documentVersion && <p>文档版本：{evidence.documentVersion}</p>}
+        {evidence.quote && <p>原文：{evidence.quote}</p>}
+        {evidence.factId && <small className="muted">业务事实：{evidence.factId}</small>}
+        {project && evidence.factId && conflict.authorityStatus !== 'RESOLVED' && (
+          <div className="settings-compact-row settings-mt-10">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={busyConflictId === conflict.id}
+              onClick={() => {
+                void handleAuthorityDecision(conflict, 'SELECT_FACT', evidence.factId);
+              }}
+            >
+              {busyConflictId === conflict.id ? '记录中…' : '选用此方为权威'}
+            </button>
+          </div>
+        )}
+      </div>
+    );
   }
 
   return (
@@ -451,61 +615,151 @@ export function EnterpriseUnderstandingReceipt({
                 {view.conflicts.map((conflict) => (
                   <article key={conflict.id} className="customer-secondary-card">
                     <span className="customer-value-kicker">
-                      资料冲突 · {conflict.kind}
+                      {scopeLabel(conflict.sourceScope)} · {conflict.kind}
                       {conflict.automaticResolutionAllowed ? '' : ' · 禁止自动裁决'}
                       {conflict.authorityStatus ? ` · ${conflict.authorityStatus}` : ''}
                     </span>
                     <h3>{conflict.message || conflict.kind}</h3>
                     {conflict.operatorAction && <p>{conflict.operatorAction}</p>}
-                    {conflict.evidence.length > 0 ? (
-                      conflict.evidence.map((evidence, index) => (
-                        <div
-                          key={`${conflict.id}:${evidence.factId || evidence.sourceId}:${index}`}
-                          className="settings-card-note settings-mt-10"
-                        >
-                          <strong>{evidence.sourceId || '来源已记录'}</strong>
-                          {evidence.modality && <p>模态：{evidence.modality}</p>}
-                          {evidence.sourceLocator && <p>位置：{evidence.sourceLocator}</p>}
-                          {evidence.quote && <p>原文：{evidence.quote}</p>}
-                          {evidence.factId && <small className="muted">业务事实：{evidence.factId}</small>}
-                          {project && evidence.factId && (
-                            <div className="settings-compact-row settings-mt-10">
-                              <button
-                                type="button"
-                                className="btn btn-secondary"
-                                disabled={busyConflictId === conflict.id}
-                                onClick={() => {
-                                  void handleAuthorityDecision(conflict, 'SELECT_FACT', evidence.factId);
-                                }}
-                              >
-                                {busyConflictId === conflict.id ? '记录中…' : '选用此方为权威'}
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      ))
+                    {conflict.disallowedSignals.length > 0 && (
+                      <p className="muted">
+                        禁止自动权威信号：{conflict.disallowedSignals.join('、')}
+                      </p>
+                    )}
+                    {conflict.evidence.length === 2 ? (
+                      <div className="customer-secondary-grid settings-mt-10">
+                        {conflict.evidence.map((evidence, index) => renderEvidenceSide(conflict, evidence, index))}
+                      </div>
+                    ) : conflict.evidence.length > 0 ? (
+                      conflict.evidence.map((evidence, index) => renderEvidenceSide(conflict, evidence, index))
                     ) : (
                       <div className="settings-card-note settings-mt-10">
                         冲突回执尚未附对立原文。QualiBug 不会猜测权威版本，请补充可判定权威/版本的原始资料。
                       </div>
                     )}
                     {project && (
-                      <div className="settings-compact-row settings-mt-10">
-                        <button
-                          type="button"
-                          className="btn btn-ghost"
-                          disabled={busyConflictId === conflict.id}
-                          onClick={() => {
-                            void handleAuthorityDecision(conflict, 'LEAVE_UNRESOLVED');
-                          }}
-                        >
-                          显式保留未决
-                        </button>
+                      <div className="settings-mt-10">
+                        <label className="form-group" htmlFor={`authority-rationale-${conflict.id}`}>
+                          <span>裁决说明（可选）</span>
+                          <textarea
+                            id={`authority-rationale-${conflict.id}`}
+                            rows={2}
+                            value={rationaleDraft[conflict.id] || ''}
+                            onChange={(event) => {
+                              const next = event.target.value;
+                              setRationaleDraft((prev) => ({ ...prev, [conflict.id]: next }));
+                            }}
+                            placeholder="记录为何选用此方，或为何显式保留未决。不会成为自动权威依据。"
+                          />
+                        </label>
+                        <div className="settings-compact-row settings-mt-10">
+                          <button
+                            type="button"
+                            className="btn btn-ghost"
+                            disabled={busyConflictId === conflict.id}
+                            onClick={() => {
+                              void handleAuthorityDecision(conflict, 'LEAVE_UNRESOLVED');
+                            }}
+                          >
+                            显式保留未决
+                          </button>
+                        </div>
                       </div>
                     )}
                   </article>
                 ))}
               </div>
+            </details>
+          )}
+
+          {view.resolvedConflicts.length > 0 && (
+            <details className="settings-auth-section settings-mt-10">
+              <summary>
+                <strong>已裁决冲突</strong>
+                <span className="muted">{view.resolvedConflicts.length} 条</span>
+              </summary>
+              <div className="customer-secondary-grid settings-mt-10">
+                {view.resolvedConflicts.map((conflict) => (
+                  <article key={`resolved:${conflict.id}`} className="customer-secondary-card muted">
+                    <span className="customer-value-kicker">
+                      已裁决 · {conflict.kind}
+                      {conflict.selectedFactId ? ` · 权威事实 ${conflict.selectedFactId}` : ''}
+                    </span>
+                    <h3>{conflict.message || conflict.kind}</h3>
+                    {conflict.evidence.length === 2 ? (
+                      <div className="customer-secondary-grid settings-mt-10">
+                        {conflict.evidence.map((evidence, index) => (
+                          <div
+                            key={`resolved-ev:${conflict.id}:${evidence.factId || index}`}
+                            className="settings-card-note settings-mt-10"
+                          >
+                            <strong>
+                              {sideLabel(index, conflict.evidence.length)}
+                              {' · '}
+                              {evidence.sourceName}
+                              {conflict.selectedFactId && evidence.factId === conflict.selectedFactId
+                                ? ' · 权威'
+                                : evidence.factId
+                                  ? ' · 已让位'
+                                  : ''}
+                            </strong>
+                            {evidence.modality && <p>模态：{evidence.modality}</p>}
+                            {evidence.quote && <p>原文：{evidence.quote}</p>}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </article>
+                ))}
+              </div>
+            </details>
+          )}
+
+          {project && (
+            <details className="settings-auth-section settings-mt-10" open={decisionHistory.length > 0}>
+              <summary>
+                <strong>权威裁决记录</strong>
+                <span className="muted">
+                  {historyLoading ? '读取中' : `${decisionHistory.length} 条`}
+                </span>
+              </summary>
+              {historyError && (
+                <p className="settings-inline-feedback is-negative settings-mt-10" role="status">
+                  {historyError}
+                </p>
+              )}
+              {!historyLoading && decisionHistory.length === 0 && !historyError && (
+                <p className="settings-card-note settings-mt-10">
+                  尚无操作员权威裁决。冲突出现后可选用一方权威，或显式保留未决；系统不会自动挑选。
+                </p>
+              )}
+              {decisionHistory.length > 0 && (
+                <div className="settings-info-list settings-mt-10">
+                  {decisionHistory.map((decision) => (
+                    <div key={decision.decision_id || `${decision.conflict_id}:${decision.decided_at_utc}`} className="settings-info-row">
+                      <span>
+                        {decision.decided_at_utc || '时间未记录'}
+                        {decision.actor_name ? ` · ${decision.actor_name}` : ''}
+                        {decision.actor_role ? `/${decision.actor_role}` : ''}
+                      </span>
+                      <strong>
+                        {decision.action}
+                        {decision.action === 'SELECT_FACT' && decision.selected_fact_id
+                          ? ` → ${decision.selected_fact_id}`
+                          : ''}
+                        {decision.action === 'LEAVE_UNRESOLVED' ? ' · 门禁继续阻断' : ''}
+                        {decision.rationale ? ` · ${decision.rationale}` : ''}
+                        {decision.audit_receipt_id ? (
+                          <>
+                            {' · '}
+                            <code>{decision.audit_receipt_id}</code>
+                          </>
+                        ) : null}
+                      </strong>
+                    </div>
+                  ))}
+                </div>
+              )}
             </details>
           )}
 

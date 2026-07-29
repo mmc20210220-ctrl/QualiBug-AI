@@ -262,6 +262,35 @@ def _contract_fields_for_interface(interface: dict[str, Any]) -> set[str]:
             normalized = ""
         if normalized:
             fields.add(normalized)
+    # OpenAPI runtime-contract metadata (request_body_fields / parameter_contracts)
+    # is already extracted by enrich_openapi_runtime_contracts; reuse it here so
+    # exclusive-field linking and implementation binding see the same universe.
+    for item in interface.get("request_body_fields") or []:
+        if isinstance(item, str):
+            normalized = _normalize_contract_field(item)
+        elif isinstance(item, dict):
+            normalized = _normalize_contract_field(
+                item.get("name") or item.get("field") or item.get("field_path")
+            )
+        else:
+            normalized = ""
+        if normalized:
+            # Prefer leaf name for nested paths (e.g. options.priority → priority)
+            # while also retaining the terminal segment for exclusive matching.
+            fields.add(normalized)
+            if "." in normalized:
+                leaf = _normalize_contract_field(normalized.rsplit(".", 1)[-1])
+                if leaf:
+                    fields.add(leaf)
+    for item in interface.get("parameter_contracts") or []:
+        if isinstance(item, str):
+            normalized = _normalize_contract_field(item)
+        elif isinstance(item, dict):
+            normalized = _normalize_contract_field(item.get("name") or item.get("field"))
+        else:
+            normalized = ""
+        if normalized:
+            fields.add(normalized)
     excerpt = str(interface.get("source_excerpt") or "")
     for match in _CONTRACT_FIELD_RE.finditer(excerpt):
         fields.add(match.group(1))

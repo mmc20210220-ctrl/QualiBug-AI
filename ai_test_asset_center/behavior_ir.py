@@ -4111,7 +4111,14 @@ def build_behavior_ir_from_knowledge_asset(
             row = _dict(node)
             if _text(row.get("id")) != entity_node_id:
                 continue
-            return any(_text(f).lower() == target for f in _list(row.get("fields")))
+            for field in _list(row.get("fields")):
+                if isinstance(field, dict):
+                    candidate = _text(field.get("name") or field.get("field") or field.get("field_path"))
+                else:
+                    candidate = _text(field)
+                if candidate.lower() == target:
+                    return True
+            return False
         return False
 
     for rel in _list(data.get("entity_relations")):

@@ -37,6 +37,118 @@ class HttpRoutingMixin:
         self._qualibug_req_start = _time.time()
         self._qualibug_corr_id = _uuid.uuid4().hex[:12]
 
+    def _authority_decision_error(
+        self,
+        exc: Exception,
+        *,
+        project: str,
+    ) -> Any:
+        code = str(exc or "").strip()
+        if isinstance(exc, PermissionError):
+            return self._json(
+                {"ok": False, "error": "FORBIDDEN", "message": code},
+                403,
+            )
+        if isinstance(exc, KeyError):
+            return self._json(
+                {
+                    "ok": False,
+                    "error": "AUTHORITY_DECISION_NOT_FOUND",
+                    "message": code,
+                },
+                404,
+            )
+        if isinstance(exc, ValueError):
+            return self._json(
+                {
+                    "ok": False,
+                    "error": "AUTHORITY_DECISION_BAD_REQUEST",
+                    "message": code,
+                },
+                400,
+            )
+        _dbg_report(
+            hypothesis_id="AUTHORITY_DECISION",
+            msg="[ERROR] authority decision route failed",
+            data={
+                "project_id": project,
+                "path": str(getattr(self, "path", "") or ""),
+                "exc_type": type(exc).__name__,
+                "error": code[:300],
+            },
+            trace_id=str(getattr(self, "_qualibug_corr_id", "") or ""),
+        )
+        return self._json(
+            {
+                "ok": False,
+                "error": "AUTHORITY_DECISION_INTERNAL_ERROR",
+                "message": code[:300],
+            },
+            500,
+        )
+
+    def _handle_authority_decision_get(
+        self,
+        project: str,
+        root: Path,
+    ) -> Any:
+        if not self._require_known_project(project, root):
+            return None
+        from .enterprise_knowledge_center._chinese_business_authority_decision import (
+            list_operator_authority_decisions,
+        )
+
+        try:
+            result = list_operator_authority_decisions(project, root=root)
+        except Exception as exc:  # noqa: BLE001 - typed at the HTTP boundary
+            return self._authority_decision_error(exc, project=project)
+        return self._json({"ok": True, "data": result})
+
+    def _handle_authority_decision_post(
+        self,
+        project: str,
+        root: Path,
+        actor: dict[str, Any],
+        body: dict[str, Any],
+    ) -> Any:
+        if not self._require_known_project(project, root):
+            return None
+        if not self._require_role(
+            actor,
+            {"knowledge_admin", "project_owner", "qa_lead", "admin"},
+            "operator authority decision",
+        ):
+            return None
+        from .enterprise_knowledge_center._chinese_business_authority_decision import (
+            ACTION_LEAVE_UNRESOLVED,
+            ACTION_SELECT_FACT,
+            record_operator_authority_decision,
+        )
+
+        action = str(body.get("action") or "").strip().upper()
+        try:
+            if action not in {ACTION_SELECT_FACT, ACTION_LEAVE_UNRESOLVED}:
+                raise ValueError(
+                    "authority_decision_action_invalid_use_SELECT_FACT_or_LEAVE_UNRESOLVED"
+                )
+            result = record_operator_authority_decision(
+                project,
+                conflict_id=str(body.get("conflict_id") or "").strip(),
+                action=action,
+                actor=actor,
+                root=root,
+                selected_fact_id=str(body.get("selected_fact_id") or "").strip(),
+                rationale=str(body.get("rationale") or "").strip()[:2000],
+                document_version=str(body.get("document_version") or "").strip()[:200],
+                rebuild=True,
+            )
+        except Exception as exc:  # noqa: BLE001 - typed at the HTTP boundary
+            return self._authority_decision_error(exc, project=project)
+        return self._json(
+            {"ok": True, "action": action, "data": result},
+            201,
+        )
+
     def do_GET(self) -> None:  # noqa: N802
         self._init_request_context()
         parsed = urlparse(self.path)
@@ -91,10 +203,19 @@ class HttpRoutingMixin:
             if len(_route_parts) >= 4 and _route_parts[:3] == ["api", "v1", "projects"]
             else ""
         )
+        _authority_decision_route = (
+            len(_route_parts) == 5
+            and _route_parts[:3] == ["api", "v1", "projects"]
+            and _route_parts[4] == "authority-decisions"
+        )
         if _route_project:
             project = _safe_project_id(_route_project)
+        if _authority_decision_route and _route_project != project:
+            return self._json({"ok": False, "error": "NOT_FOUND"}, 404)
         if not self._require_project_scope(project):
             return
+        if _authority_decision_route:
+            return self._handle_authority_decision_get(project, root)
         if parsed.path == "/api/v1/projects":
             # Merge DB projects + filesystem-discovered projects (dedup by project_id)
             tenant_id = self._request_tenant()
@@ -326,9 +447,28 @@ class HttpRoutingMixin:
             route_parts = [unquote(part) for part in parsed.path.split("/") if part]
             if len(route_parts) >= 4 and route_parts[:3] == ["api", "v1", "projects"]:
                 route_project = route_parts[3]
-            project = _safe_project_id(str(body.get("project_id") or route_project or self._project()))
+            authority_decision_route = (
+                len(route_parts) == 5
+                and route_parts[:3] == ["api", "v1", "projects"]
+                and route_parts[4] == "authority-decisions"
+            )
+            if authority_decision_route:
+                project = _safe_project_id(route_project)
+                if not route_project or route_project != project:
+                    return self._json({"ok": False, "error": "NOT_FOUND"}, 404)
+            else:
+                project = _safe_project_id(
+                    str(body.get("project_id") or route_project or self._project())
+                )
             if not self._require_project_scope(project):
                 return
+            if authority_decision_route:
+                return self._handle_authority_decision_post(
+                    project,
+                    root,
+                    actor,
+                    body,
+                )
             if parsed.path == "/api/v1/evaluations/submissions":
                 from .campaign_api_contract import build_evaluation_submission
 

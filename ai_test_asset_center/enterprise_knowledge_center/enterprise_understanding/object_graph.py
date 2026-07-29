@@ -40,8 +40,10 @@ _RELATION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 _RELATION_ALIASES = {
     "foreign_key": "REFERENCES",
     "field_to_table": "BELONGS_TO",
+    "field_of": "BELONGS_TO",
     "rule_to_entity": "REFERENCES",
     "state_sequence": "TRANSITIONS_TO",
+    "transitions": "TRANSITIONS_TO",
     "role_to_resource": "REFERENCES",
     "business_dependency": "DEPENDS_ON",
     "generates": "GENERATES",
@@ -56,6 +58,21 @@ _RELATION_ALIASES = {
     "notifies": "NOTIFIES",
     "awaits": "AWAITS",
     "triggers": "TRIGGERS",
+}
+
+# Path-vocabulary / token-overlap technical edges never become formal object relations.
+_NON_AUTHORITATIVE_TECHNICAL_DERIVATIONS = {
+    "path_segment_heuristic",
+    "token_overlap",
+    "token_overlap_only_requires_explicit_source_relation",
+}
+_NON_AUTHORITATIVE_TECHNICAL_RELATIONS = {
+    "operates_on",
+    "constrains",
+}
+_OBJECT_GRAPH_AUTHORITATIVE_TECHNICAL_RELATIONS = {
+    "foreign_key",
+    "references",
 }
 
 _ASYNC_MARKER_RE = re.compile(r"异步|消息|回调|事件驱动|队列|通知|推送|订阅|监听")
@@ -209,16 +226,34 @@ def build_object_graph(
             continue
         status = text(row.get("status") or "accepted").lower()
         derivation = text(row.get("derivation")).lower().replace("-", "_")
+        evidence_gate = text(row.get("evidence_gate")).lower().replace("-", "_")
         if status in {"candidate", "proposed", "unknown", "unsupported", "rejected"}:
             continue
-        if derivation == "token_overlap" or text(row.get("evidence_gate")) == "token_overlap_only_requires_explicit_source_relation":
-            continue
-        source = _normalize_existing_endpoint(row.get("from") or row.get("source"), known)
-        target = _normalize_existing_endpoint(row.get("to") or row.get("target"), known)
-        if not source or not target or source == target:
+        if (
+            derivation in _NON_AUTHORITATIVE_TECHNICAL_DERIVATIONS
+            or evidence_gate in _NON_AUTHORITATIVE_TECHNICAL_DERIVATIONS
+            or evidence_gate == "token_overlap_only_requires_explicit_source_relation"
+        ):
             continue
         raw_relation = text(row.get("relation") or row.get("relation_type"))
-        relation_type = _RELATION_ALIASES.get(raw_relation.lower(), raw_relation.upper() or "REFERENCES")
+        raw_relation_key = raw_relation.lower().replace("-", "_")
+        if raw_relation_key in _NON_AUTHORITATIVE_TECHNICAL_RELATIONS:
+            # Path-segment operates_on and token constrains never become formal
+            # object relations; they remain inventory diagnostic only.
+            continue
+        # Knowledge-center rows use from_entity/to_entity; legacy Behavior IR
+        # rows may use from/to or source/target. Accept all without inventing.
+        source = _normalize_existing_endpoint(
+            row.get("from_entity") or row.get("from") or row.get("source"),
+            known,
+        )
+        target = _normalize_existing_endpoint(
+            row.get("to_entity") or row.get("to") or row.get("target"),
+            known,
+        )
+        relation_type = _RELATION_ALIASES.get(raw_relation_key, raw_relation.upper() or "REFERENCES")
+        raw_from = text(row.get("from_entity") or row.get("from") or row.get("source"))
+        raw_to = text(row.get("to_entity") or row.get("to") or row.get("target"))
         evidence_rows: list[dict[str, Any]] = []
         evidence = row.get("evidence")
         if isinstance(evidence, dict):
@@ -240,6 +275,40 @@ def build_object_graph(
                     derivation=derivation or "existing_source_backed_relation",
                 )
             )
+        # Field-ownership edges (column → table) are not object-object relations.
+        # Only authoritative table/entity FK-style edges emit unresolved unknowns.
+        authoritative_technical = (
+            raw_relation_key in _OBJECT_GRAPH_AUTHORITATIVE_TECHNICAL_RELATIONS
+            or derivation in {"declared_foreign_key", "source_declared_foreign_key"}
+        )
+        if not source or not target or source == target:
+            if authoritative_technical and raw_from and raw_to and raw_from != raw_to:
+                unknowns.append(
+                    new_unknown(
+                        "TECHNICAL_RELATION_ENDPOINT_UNRESOLVED",
+                        (
+                            "技术资料声明了「{from_name}」到「{to_name}」的"
+                            "「{relation}」关系，但两端尚未唯一对应已理解业务对象。"
+                        ).format(
+                            from_name=raw_from,
+                            to_name=raw_to,
+                            relation=raw_relation or "foreign_key",
+                        ),
+                        related_objects=[raw_from, raw_to],
+                        evidence=evidence_rows,
+                        severity="P1",
+                        blocks_formal_understanding=False,
+                        reason_code="TECHNICAL_RELATION_ENDPOINT_UNRESOLVED",
+                        details={
+                            "relation_type": relation_type,
+                            "raw_relation": raw_relation,
+                            "from_entity": raw_from,
+                            "to_entity": raw_to,
+                            "derivation": derivation or "declared_foreign_key",
+                        },
+                    )
+                )
+            continue
         quote = ""
         if evidence_rows:
             quote = text(evidence_rows[0].get("quote"))
