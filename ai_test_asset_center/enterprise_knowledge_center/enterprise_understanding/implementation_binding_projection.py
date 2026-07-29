@@ -148,8 +148,10 @@ def project_final_scenario_planning_gate(
     # Keep Scenario IR behind the final gate. The compiler writes only non-executable
     # design artifacts and an independent Scenario IR gate.
     from .scenario_ir import project_scenario_ir_to_asset
+    from .scenario_ir_asset_governance import project_scenario_ir_asset_governance
 
-    return project_scenario_ir_to_asset(asset, model)
+    project_scenario_ir_to_asset(asset, model)
+    return project_scenario_ir_asset_governance(asset, model)
 
 
 __all__ = [
