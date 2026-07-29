@@ -37,7 +37,13 @@ function normalizedIdentities(
 
 function scenarioDraft(project: string): string[] {
   try {
-    const raw = globalThis.localStorage?.getItem(`qualibug.run.ui-upload-scenarios.${project}`) || '[]';
+    const verified = globalThis.sessionStorage?.getItem(
+      `qualibug.run.ui-upload-scenarios-verified.${project}`,
+    );
+    if (verified !== 'true') return [];
+    const raw = globalThis.localStorage?.getItem(
+      `qualibug.run.ui-upload-scenarios.${project}`,
+    ) || '[]';
     const parsed = JSON.parse(raw) as unknown;
     return Array.isArray(parsed)
       ? parsed.filter((item): item is string => typeof item === 'string')
