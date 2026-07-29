@@ -26,10 +26,13 @@ const [
   campaignsPage,
   serviceForm,
   customerSection,
+  knowledgeApi,
   topologySection,
   metadataSection,
   llmSection,
   infoSection,
+  ingestHandler,
+  projectAssets,
   sidebar,
 ] = await Promise.all([
   source('src/components/run/RunUploadScenarioSelector.tsx'),
@@ -38,10 +41,13 @@ const [
   source('src/pages/EnterpriseCampaigns.tsx'),
   source('src/components/settings/SettingsServiceForm.tsx'),
   source('src/components/settings/SettingsCustomerSection.tsx'),
+  source('src/api/knowledge-ingest.ts'),
   source('src/components/settings/SettingsTopologySection.tsx'),
   source('src/components/settings/SettingsMetadataSection.tsx'),
   source('src/components/settings/SettingsLlmSection.tsx'),
   source('src/components/settings/SettingsInfoSection.tsx'),
+  source('../ai_test_asset_center/private_pilot_ingest_handlers.py'),
+  source('../ai_test_asset_center/private_pilot_project_assets.py'),
   source('src/components/Sidebar.tsx'),
 ]);
 
@@ -82,9 +88,40 @@ requireText(serviceForm, '最小接入', 'service onboarding form');
 requireText(serviceForm, '只需提供系统名称、测试地址和可用凭据', 'service onboarding form');
 requireText(serviceForm, '<details className="settings-auth-section">', 'service onboarding form');
 
-requireText(customerSection, '选择客户项目', 'customer section');
-requireText(customerSection, '<details className="settings-auth-section settings-mt-10">', 'customer section');
-requireText(customerSection, '项目内部结构、测试范围和运行策略不需要在这里维护', 'customer section');
+requireText(customerSection, '客户与企业资料', 'customer and materials section');
+requireText(customerSection, '用户不需要判断资料类型、选择解析策略、维护版本或逐项绑定场景', 'customer and materials section');
+requireText(customerSection, '选择文件后立即导入', 'customer and materials section');
+requireText(customerSection, 'type="file"', 'customer and materials section');
+requireText(customerSection, 'multiple', 'customer and materials section');
+requireText(customerSection, 'void handleFilesSelected(files)', 'customer and materials section');
+requireText(customerSection, '查看后台识别结果', 'customer and materials section');
+forbidText(customerSection, 'sourceType', 'customer and materials section');
+forbidText(customerSection, 'docType', 'customer and materials section');
+forbidText(customerSection, 'onDelete', 'customer and materials section');
+
+requireText(knowledgeApi, "fetch('/api/knowledge/ingest'", 'knowledge ingest API');
+requireText(knowledgeApi, 'filename: file.name', 'knowledge ingest API');
+requireText(knowledgeApi, 'defer_auto_scan: options.deferAutoScan', 'knowledge ingest API');
+requireText(knowledgeApi, 'finalize_batch: options.finalizeBatch', 'knowledge ingest API');
+requireText(knowledgeApi, 'for (let index = 0; index < selected.length; index += 1)', 'knowledge ingest API');
+forbidText(knowledgeApi, '\n      type:', 'knowledge ingest API');
+forbidText(knowledgeApi, 'localStorage', 'knowledge ingest API');
+forbidText(knowledgeApi, 'sessionStorage', 'knowledge ingest API');
+
+requireText(ingestHandler, 'explicit_type = str(body.get("type") or body.get("doc_type") or "")', 'knowledge ingest backend');
+requireText(ingestHandler, 'resolve_knowledge_source_type(', 'knowledge ingest backend');
+requireText(ingestHandler, 'extracted_text = str(doc_info.get("text") or "")', 'knowledge ingest backend');
+requireText(ingestHandler, 'defer_auto_scan = body.get("defer_auto_scan") is True', 'knowledge ingest backend');
+requireText(ingestHandler, 'finalize_batch = body.get("finalize_batch") is True', 'knowledge ingest backend');
+requireText(ingestHandler, 'source_type_resolution', 'knowledge ingest backend');
+forbidText(ingestHandler, 'body.get("doc_type") or "prd"', 'knowledge ingest backend');
+forbidText(ingestHandler, 'raw.decode("utf-8", errors="replace")\n            source_manifest', 'knowledge ingest backend');
+
+requireText(projectAssets, 'def resolve_knowledge_source_type(', 'knowledge source classifier');
+requireText(projectAssets, 'from .enterprise_knowledge_center import _classify_source', 'knowledge source classifier');
+requireText(projectAssets, 'return normalized, "automatic"', 'knowledge source classifier');
+requireText(projectAssets, 'return normalized, "explicit_override"', 'knowledge source classifier');
+forbidText(projectAssets, 'return "prd"', 'knowledge source classifier');
 
 requireText(topologySection, '接入被测系统', 'topology section');
 requireText(topologySection, '只提供系统名称、测试环境地址和可用凭据', 'topology section');
