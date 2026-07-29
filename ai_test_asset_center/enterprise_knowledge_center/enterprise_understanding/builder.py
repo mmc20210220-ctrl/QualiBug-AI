@@ -1,6 +1,7 @@
 """Build the enterprise business understanding model from governed knowledge facts."""
 from __future__ import annotations
 
+import json
 import re
 from collections import defaultdict
 from typing import Any, Iterable
@@ -1479,6 +1480,7 @@ def _build_operations(
                 "object_refs": sorted(object_refs),
                 "preconditions": [],
                 "condition_combinator": combinator,
+                "condition_frames": [],
                 "effects": [],
                 "exceptions": [],
                 "exception_scopes": [],
@@ -1511,6 +1513,17 @@ def _build_operations(
             operation["condition_combinator"] = existing_combinator or combinator or "SINGLE_CONDITION"
         else:
             operation["condition_combinator"] = ""
+        frame = as_dict(fact.get("condition_frame"))
+        if frame:
+            frames = [
+                dict(row) for row in as_list(operation.get("condition_frames")) if isinstance(row, dict)
+            ]
+            frame_key = json.dumps(frame, ensure_ascii=False, sort_keys=True, default=str)
+            if frame_key not in {
+                json.dumps(row, ensure_ascii=False, sort_keys=True, default=str) for row in frames
+            }:
+                frames.append(dict(frame))
+            operation["condition_frames"] = frames
         operation["effects"] = unique_text([*as_list(operation.get("effects")), *_effect_texts(fact)])
         operation["exceptions"] = unique_text([*as_list(operation.get("exceptions")), *as_list(fact.get("exceptions"))])
         operation["exception_scopes"] = unique_text(

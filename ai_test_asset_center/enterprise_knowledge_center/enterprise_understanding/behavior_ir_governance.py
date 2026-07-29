@@ -11,7 +11,11 @@ import re
 from collections import defaultdict
 from typing import Any, Iterable
 
-from .behavior_ir import BEHAVIOR_GATE_SCHEMA, build_business_behavior_ir
+from .behavior_ir import (
+    BEHAVIOR_GATE_SCHEMA,
+    _condition_frame_signature,
+    build_business_behavior_ir,
+)
 from .schema import as_dict, as_list, dedupe_evidence, new_unknown, stable_id, text, unique_text
 
 _DENY_RE = re.compile(r"(?:禁止|不得|不允许|拒绝|不可|不能|deny|forbid)", re.I)
@@ -109,16 +113,18 @@ def _reapply_matrix_permissions(
 
 
 def _remerge_governed_behaviors(behaviors: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    merged: dict[tuple[str, tuple[str, ...], tuple[str, ...], str, str], dict[str, Any]] = {}
+    merged: dict[tuple[str, tuple[str, ...], tuple[str, ...], str, str, str], dict[str, Any]] = {}
     rank = {"CONFIRMED": 4, "CANDIDATE": 3, "INCOMPLETE": 2, "CONFLICTED": 1}
     for raw in behaviors:
         behavior = dict(raw)
+        frame = as_dict(behavior.get("condition_frame"))
         key = (
             text(behavior.get("operation_ref")),
             tuple(unique_text(as_list(behavior.get("object_refs")))),
             tuple(unique_text(as_list(behavior.get("actor_refs")))),
             text(behavior.get("permission_decision")),
             _condition_signature(as_list(behavior.get("preconditions"))),
+            _condition_frame_signature(frame),
         )
         existing = merged.get(key)
         if existing is None:
@@ -136,6 +142,13 @@ def _remerge_governed_behaviors(behaviors: list[dict[str, Any]]) -> list[dict[st
                 *as_list(behavior.get("unresolved_semantics")),
             ]
         )
+        existing_frame = as_dict(existing.get("condition_frame"))
+        if frame and (
+            not existing_frame
+            or len(json.dumps(frame, ensure_ascii=False, sort_keys=True, default=str))
+            > len(json.dumps(existing_frame, ensure_ascii=False, sort_keys=True, default=str))
+        ):
+            existing["condition_frame"] = dict(frame)
         if rank.get(text(behavior.get("status")), 0) > rank.get(text(existing.get("status")), 0):
             existing["status"] = behavior.get("status")
             existing["source_kind"] = behavior.get("source_kind")

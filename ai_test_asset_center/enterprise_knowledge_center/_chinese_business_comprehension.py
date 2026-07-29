@@ -83,9 +83,15 @@ _IF_THEN_ELSE_RE = re.compile(
     r"(?:时)?[，,]?则(?P<then>.+?)"
     r"[，,]?否则(?P<else>.+)$"
 )
-_EXCEPTION_OVERLAY_CLAUSE_RE = re.compile(
-    r"^(?:但|但是|不过|然而)?(?:除[^。外]{1,24}外|[\u4e00-\u9fffA-Za-z0-9_-]{1,20}除外)$"
+_EXCEPTION_ATOM_RE = (
+    r"(?:除[^。外]{1,24}外|[\u4e00-\u9fffA-Za-z0-9_-]{1,20}除外)"
 )
+# Single or chained overlays: 但管理员除外 / 但管理员除外，财务除外 / 除A外，除B外
+_EXCEPTION_OVERLAY_CLAUSE_RE = re.compile(
+    rf"^(?:但|但是|不过|然而)?{_EXCEPTION_ATOM_RE}"
+    rf"(?:[，,]{_EXCEPTION_ATOM_RE})*$"
+)
+_ELSE_IF_HEAD_RE = re.compile(r"^(?:如果|若|一旦)")
 _CRITICAL_AMBIGUITY_PREFIXES = (
     "COREFERENCE_",
     "BUSINESS_SUBJECT_",
@@ -94,6 +100,7 @@ _CRITICAL_AMBIGUITY_PREFIXES = (
     "CONDITION_COMBINATOR_",
     "OMITTED_ACTOR_",
     "IF_THEN_ELSE_",
+    "NESTED_BRANCH_",
     "BRANCH_",
 )
 _COREFERENCE_RE = re.compile(
@@ -640,9 +647,11 @@ def _condition_frame(
 ) -> dict[str, Any]:
     """Project nested condition / exception structure with explicit combinators only."""
     branch_meta = dict(branch_meta or {})
-    if _text(branch_meta.get("kind")) == "IF_THEN_ELSE" or _text(branch_meta.get("branch")) in {
+    branch = _text(branch_meta.get("branch"))
+    if _text(branch_meta.get("kind")) == "IF_THEN_ELSE" or branch in {
         "THEN",
         "ELSE",
+        "ELSE_IF",
     }:
         kind = "IF_THEN_ELSE"
     elif exception_scopes:
@@ -657,12 +666,34 @@ def _condition_frame(
         kind = "LEAF"
     else:
         kind = ""
+    overlays: list[dict[str, Any]] = []
+    if exception_scopes:
+        overlays.append(
+            {
+                "kind": "EXCEPT_OVERLAY",
+                "exception_scopes": list(exception_scopes),
+                "source_backed": True,
+            }
+        )
+    branch_index = branch_meta.get("branch_index")
+    if branch_index is None or (isinstance(branch_index, str) and not branch_index.strip()):
+        branch_index_value: int | str = ""
+    else:
+        try:
+            branch_index_value = int(branch_index)
+        except (TypeError, ValueError):
+            branch_index_value = ""
     frame = {
         "kind": kind,
         "combinator": combinator,
         "conditions": list(conditions),
         "exception_scopes": list(exception_scopes),
-        "branch": _text(branch_meta.get("branch")),
+        "overlays": overlays,
+        "branch": branch,
+        "branch_index": branch_index_value,
+        "parent_conditions": [
+            _text(item) for item in _list(branch_meta.get("parent_conditions")) if _text(item)
+        ],
         "paired_statement": _text(branch_meta.get("paired_statement")),
         "source_backed": True,
     }
@@ -676,16 +707,53 @@ def _is_exception_overlay_clause(text: str) -> bool:
     return bool(stripped and _EXCEPTION_OVERLAY_CLAUSE_RE.match(stripped))
 
 
-def _expand_conditional_units(unit: str) -> list[tuple[str, dict[str, Any]]]:
-    """Expand 若…则…否则… into THEN/ELSE units sharing the source condition frame."""
+def _incomplete_nested_conditional(text: str) -> bool:
+    """True when a nested 若/如果 fragment lacks a complete 则…否则… frame."""
+    raw = _text(text)
+    if not raw or _IF_THEN_ELSE_RE.match(raw):
+        return False
+    return bool(_ELSE_IF_HEAD_RE.match(raw))
+
+
+def _expand_conditional_units(
+    unit: str,
+    *,
+    depth: int = 0,
+    chain_root: str = "",
+    parent_conditions: list[str] | None = None,
+) -> list[tuple[str, dict[str, Any]]]:
+    """Expand 若…则…否则… and 否则若… chains into explicit THEN/ELSE_IF/ELSE frames.
+
+    Underdetermined nesting stays visible — never invent branches or default AND.
+    """
     raw = _text(unit)
+    ancestry = [_text(item) for item in (parent_conditions or []) if _text(item)]
+    if not raw:
+        return []
     match = _IF_THEN_ELSE_RE.match(raw)
     if not match:
+        if depth > 0 and _incomplete_nested_conditional(raw):
+            return [
+                (
+                    raw,
+                    {
+                        "kind": "IF_THEN_ELSE",
+                        "branch": "",
+                        "branch_index": depth,
+                        "paired_statement": chain_root or raw,
+                        "parent_conditions": list(ancestry),
+                        "underdetermined": True,
+                        "underdetermined_reason": "NESTED_BRANCH_UNDERDETERMINED",
+                        "source_backed": True,
+                    },
+                )
+            ]
         return [(raw, {})]
     prefix = _text(match.group("prefix"))
     cond = _text(match.group("cond"))
     then_body = _text(match.group("then"))
     else_body = _text(match.group("else"))
+    root = chain_root or raw
     if not cond or not then_body or not else_body:
         return [
             (
@@ -693,22 +761,74 @@ def _expand_conditional_units(unit: str) -> list[tuple[str, dict[str, Any]]]:
                 {
                     "kind": "IF_THEN_ELSE",
                     "branch": "",
-                    "paired_statement": raw,
+                    "branch_index": depth,
+                    "paired_statement": root,
+                    "parent_conditions": list(ancestry),
                     "underdetermined": True,
+                    "underdetermined_reason": "IF_THEN_ELSE_UNDERDETERMINED",
+                    "source_backed": True,
                 },
             )
         ]
     cond_prefix = f"{prefix}若{cond}，则"
     frame_base = {
         "kind": "IF_THEN_ELSE",
-        "paired_statement": raw,
+        "paired_statement": root,
         "condition_text": cond,
+        "parent_conditions": list(ancestry),
         "source_backed": True,
     }
-    return [
-        (f"{cond_prefix}{then_body}", {**frame_base, "branch": "THEN"}),
-        (f"{cond_prefix}{else_body}", {**frame_base, "branch": "ELSE"}),
+    then_branch = "THEN" if depth == 0 else "ELSE_IF"
+    rows: list[tuple[str, dict[str, Any]]] = [
+        (
+            f"{cond_prefix}{then_body}",
+            {**frame_base, "branch": then_branch, "branch_index": depth},
+        )
     ]
+    nested_ancestry = [*ancestry, cond]
+    else_rows = _expand_conditional_units(
+        else_body,
+        depth=depth + 1,
+        chain_root=root,
+        parent_conditions=nested_ancestry,
+    )
+    nested_framed = any(
+        _text(_dict(meta).get("kind")) == "IF_THEN_ELSE" for _body, meta in else_rows
+    )
+    if nested_framed:
+        for branch_unit, meta in else_rows:
+            remapped = dict(meta or {})
+            remapped["kind"] = "IF_THEN_ELSE"
+            remapped["paired_statement"] = root
+            remapped["source_backed"] = True
+            remapped.setdefault("parent_conditions", list(nested_ancestry))
+            if remapped.get("underdetermined"):
+                rows.append((branch_unit, remapped))
+                continue
+            branch = _text(remapped.get("branch"))
+            if branch == "THEN":
+                remapped["branch"] = "ELSE_IF"
+            elif branch not in {"ELSE", "ELSE_IF"}:
+                remapped["branch"] = "ELSE_IF" if _ELSE_IF_HEAD_RE.match(_text(branch_unit)) else "ELSE"
+            rows.append((branch_unit, remapped))
+        # Normalize sequential branch_index from the chain root — never invent gaps.
+        for index, (branch_unit, meta) in enumerate(rows):
+            meta = dict(meta)
+            meta["branch_index"] = index
+            rows[index] = (branch_unit, meta)
+        return rows
+    rows.append(
+        (
+            f"{cond_prefix}{else_body}",
+            {
+                **frame_base,
+                "branch": "ELSE",
+                "branch_index": depth + 1,
+                "parent_conditions": list(ancestry),
+            },
+        )
+    )
+    return rows
 
 
 def _state_effects(text: str) -> list[dict[str, Any]]:
@@ -929,8 +1049,16 @@ def _pending_branch_fact(
     """Emit a visible unresolved branch instead of silently dropping IF/ELSE structure."""
     raw = _text(unit)
     quote_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    branch_index = branch_meta.get("branch_index")
+    if branch_index is None or (isinstance(branch_index, str) and not branch_index.strip()):
+        branch_index_value: int | str = ""
+    else:
+        try:
+            branch_index_value = int(branch_index)
+        except (TypeError, ValueError):
+            branch_index_value = ""
     return {
-        "fact_id": _stable_id("fact", source_id, locator, "RULE", raw, reason),
+        "fact_id": _stable_id("fact", source_id, locator, "RULE", raw, reason, branch_meta.get("branch")),
         "kind": "RULE",
         "language": _language_of(raw),
         "subject": {"actor_refs": [], "entity_refs": [], "resolution_evidence": []},
@@ -941,7 +1069,12 @@ def _pending_branch_fact(
             "combinator": "UNRESOLVED",
             "conditions": [],
             "exception_scopes": [],
+            "overlays": [],
             "branch": _text(branch_meta.get("branch")),
+            "branch_index": branch_index_value,
+            "parent_conditions": [
+                _text(item) for item in _list(branch_meta.get("parent_conditions")) if _text(item)
+            ],
             "paired_statement": _text(branch_meta.get("paired_statement") or raw),
             "source_backed": True,
         },
@@ -1029,16 +1162,16 @@ def _fact_from_unit(
         return None
     branch_meta = dict(branch_meta or {})
     if branch_meta.get("underdetermined"):
-        ambiguities = ["IF_THEN_ELSE_UNDERDETERMINED"]
+        reason = _text(branch_meta.get("underdetermined_reason")) or "IF_THEN_ELSE_UNDERDETERMINED"
         return {
             **_pending_branch_fact(
                 raw,
                 source_id=source_id,
                 locator=locator,
                 branch_meta=branch_meta,
-                reason="IF_THEN_ELSE_UNDERDETERMINED",
+                reason=reason,
             ),
-            "ambiguities": ambiguities,
+            "ambiguities": [reason],
         }
     entities = _find_mentions(raw, known_entities, _ENTITY_SUFFIX_RE)
     entities = _strip_deictic_placeholder_entities(raw, entities, known_entities)
@@ -1120,19 +1253,18 @@ def _fact_from_unit(
     if modality in {"MUST_NOT", "ONLY_IF"} and not action and not states:
         ambiguities.append("CRITICAL_ACTION_UNRESOLVED")
     if exceptions and len(_split_rule_units(raw)) == 1 and not conditions and not re.match(r"^(?:除[^，,；;。]+外|但|但是|不过|然而)", raw):
-        if len(exception_scopes) == 1:
-            # Source uniquely names the exception actor/scope — do not keep PENDING.
-            resolution_evidence.append(
-                {
-                    "mention": "例外范围",
-                    "resolved_ref": exception_scopes[0],
-                    "method": "explicit_exception_scope_in_source",
-                    "confidence": 0.9,
-                    "source_backed": True,
-                }
-            )
-        elif len(exception_scopes) > 1:
-            ambiguities.append("EXCEPTION_SCOPE_AMBIGUOUS:" + ",".join(exception_scopes))
+        if exception_scopes:
+            # Explicitly named exception actor/scopes — promote all; never invent.
+            for scope in exception_scopes:
+                resolution_evidence.append(
+                    {
+                        "mention": "例外范围",
+                        "resolved_ref": scope,
+                        "method": "explicit_exception_scope_in_source",
+                        "confidence": 0.9,
+                        "source_backed": True,
+                    }
+                )
         else:
             ambiguities.append("EXCEPTION_SCOPE_UNRESOLVED")
     if len(conditions) > 1 and condition_combinator == "UNRESOLVED":
@@ -1268,7 +1400,7 @@ def analyze_chinese_business_source(source: dict[str, Any], *, asset: dict[str, 
                     if not fact:
                         continue
                     branch_facts.append(fact)
-                # IF_THEN_ELSE ELSE branch may omit actor/object — inherit only from the
+                # IF_THEN_ELSE ELSE/ELSE_IF may omit actor/object — inherit only from the
                 # paired THEN fact in the same source frame (not proximity coreference).
                 then_fact = next(
                     (
@@ -1284,7 +1416,8 @@ def analyze_chinese_business_source(source: dict[str, Any], *, asset: dict[str, 
                     then_actors = _list(then_subject.get("actor_refs"))
                     then_action = _dict(then_fact.get("action"))
                     for row in branch_facts:
-                        if _text(_dict(row.get("condition_frame")).get("branch")) != "ELSE":
+                        branch = _text(_dict(row.get("condition_frame")).get("branch"))
+                        if branch not in {"ELSE", "ELSE_IF"}:
                             continue
                         subject = _dict(row.get("subject"))
                         if not _list(subject.get("entity_refs")) and then_entities:
@@ -1294,7 +1427,7 @@ def analyze_chinese_business_source(source: dict[str, Any], *, asset: dict[str, 
                             evidence = _list(subject.get("resolution_evidence"))
                             evidence.append(
                                 {
-                                    "mention": "否则分支省略对象",
+                                    "mention": f"{branch}分支省略对象",
                                     "resolved_ref": then_entities[0],
                                     "method": "if_then_else_frame_inheritance",
                                     "confidence": 0.88,
@@ -1308,7 +1441,7 @@ def analyze_chinese_business_source(source: dict[str, Any], *, asset: dict[str, 
                             evidence = _list(subject.get("resolution_evidence"))
                             evidence.append(
                                 {
-                                    "mention": "否则分支省略Actor",
+                                    "mention": f"{branch}分支省略Actor",
                                     "resolved_ref": then_actors[0],
                                     "method": "if_then_else_frame_inheritance",
                                     "confidence": 0.88,
@@ -1318,10 +1451,6 @@ def analyze_chinese_business_source(source: dict[str, Any], *, asset: dict[str, 
                             subject["resolution_evidence"] = evidence
                         if not _dict(row.get("action")) and then_action:
                             row["action"] = dict(then_action)
-                            ambiguities = _list(row.get("ambiguities"))
-                            if "BRANCH_ACTION_INHERITED_FROM_THEN" not in ambiguities:
-                                # Inheritance is source-frame structural, not an ambiguity.
-                                pass
                 for fact in branch_facts:
                     chunk_facts.append(fact)
                     chunk_fact_ids.append(fact["fact_id"])

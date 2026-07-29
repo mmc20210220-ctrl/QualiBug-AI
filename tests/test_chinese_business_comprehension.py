@@ -600,3 +600,104 @@ def test_explicit_and_clause_after_comma_is_not_silently_dropped() -> None:
     assert then_fact["modality"] == "MAY"
     assert else_fact["modality"] == "MUST_NOT"
     assert else_fact["condition_combinator"] == "AND"
+
+
+def test_multi_branch_else_if_chain_projects_explicit_frames() -> None:
+    asset = {
+        **_asset(),
+        "roles": [{"role": "管理员"}, {"role": "普通用户"}, {"role": "财务"}],
+    }
+    _, facts, _ = analyze_chinese_business_source(
+        {
+            "source_id": "else-if-1",
+            "filename": "多分支.md",
+            "text": (
+                "若金额超过1000，则管理员可以审批订单，"
+                "否则若金额超过500，则财务可以审批订单，"
+                "否则普通用户不得审批订单。"
+            ),
+        },
+        asset=asset,
+    )
+    by_branch = {
+        fact["condition_frame"]["branch"]: fact
+        for fact in facts
+        if fact.get("condition_frame", {}).get("kind") == "IF_THEN_ELSE"
+    }
+    assert set(by_branch) == {"THEN", "ELSE_IF", "ELSE"}
+    assert by_branch["THEN"]["conditions"] == ["金额超过1000"]
+    assert by_branch["THEN"]["modality"] == "MAY"
+    assert by_branch["THEN"]["subject"]["actor_refs"] == ["管理员"]
+    assert by_branch["ELSE_IF"]["conditions"] == ["金额超过500"]
+    assert by_branch["ELSE_IF"]["condition_combinator"] != "AND"
+    assert by_branch["ELSE_IF"]["modality"] == "MAY"
+    assert by_branch["ELSE_IF"]["subject"]["actor_refs"] == ["财务"]
+    assert by_branch["ELSE_IF"]["condition_frame"]["parent_conditions"] == ["金额超过1000"]
+    assert by_branch["ELSE"]["modality"] == "MUST_NOT"
+    assert by_branch["ELSE"]["subject"]["actor_refs"] == ["普通用户"]
+    assert by_branch["ELSE"]["subject"]["entity_refs"] == ["订单"]
+    assert {fact["condition_frame"]["branch_index"] for fact in by_branch.values()} == {0, 1, 2}
+    assert all(fact["status"] == "ACCEPTED" for fact in by_branch.values())
+
+
+def test_nested_except_inside_branch_and_chained_overlays() -> None:
+    asset = {
+        **_asset(),
+        "roles": [{"role": "管理员"}, {"role": "普通用户"}, {"role": "财务"}],
+    }
+    _, nested_facts, _ = analyze_chinese_business_source(
+        {
+            "source_id": "nested-except-branch",
+            "filename": "分支内例外.md",
+            "text": "若状态为草稿，则除管理员外普通用户不得提交订单，否则可以提交订单。",
+        },
+        asset=asset,
+    )
+    then_fact = next(
+        fact
+        for fact in nested_facts
+        if fact.get("condition_frame", {}).get("branch") == "THEN"
+    )
+    assert then_fact["exception_scope"] == ["管理员"]
+    assert then_fact["condition_frame"]["kind"] == "IF_THEN_ELSE"
+    assert then_fact["condition_frame"]["overlays"] == [
+        {"kind": "EXCEPT_OVERLAY", "exception_scopes": ["管理员"], "source_backed": True}
+    ]
+    assert then_fact["subject"]["actor_refs"] == ["普通用户"]
+    assert then_fact["status"] == "ACCEPTED"
+
+    _, chained, _ = analyze_chinese_business_source(
+        {
+            "source_id": "chained-except",
+            "filename": "连锁例外.md",
+            "text": "订单不得删除，但管理员除外，财务除外。",
+        },
+        asset=asset,
+    )
+    deny = next(fact for fact in chained if fact.get("action", {}).get("canonical") == "删除")
+    assert deny["exception_scope"] == ["管理员", "财务"]
+    assert deny["condition_frame"]["kind"] == "EXCEPT_OVERLAY"
+    assert deny["condition_frame"]["overlays"][0]["exception_scopes"] == ["管理员", "财务"]
+    assert deny["status"] == "ACCEPTED"
+    assert "EXCEPTION_SCOPE_UNRESOLVED" not in deny.get("ambiguities", [])
+
+
+def test_underdetermined_nested_branch_stays_unresolved() -> None:
+    _, facts, _ = analyze_chinese_business_source(
+        {
+            "source_id": "under-nested",
+            "filename": "未决嵌套.md",
+            "text": "若金额超过1000，则管理员可以审批订单，否则若金额超过500。",
+        },
+        asset=_asset(),
+    )
+    pending = [
+        fact
+        for fact in facts
+        if "NESTED_BRANCH_UNDERDETERMINED" in fact.get("ambiguities", [])
+        or "IF_THEN_ELSE_UNDERDETERMINED" in fact.get("ambiguities", [])
+    ]
+    assert pending
+    assert all(fact["status"] == "PENDING" for fact in pending)
+    assert all(fact["condition_frame"]["kind"] == "IF_THEN_ELSE" for fact in pending)
+    assert all(fact["condition_combinator"] == "UNRESOLVED" for fact in pending)

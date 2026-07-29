@@ -322,3 +322,149 @@ def test_decision_matrix_object_actor_slots_are_not_silently_dropped() -> None:
     assert behaviors[0]["object_refs"] == ["订单"]
     assert behaviors[0]["operation_ref"] == "发货"
     assert behaviors[0]["permission_decision"] == "ALLOW"
+
+
+def test_multi_branch_condition_frames_project_without_silent_merge() -> None:
+    shared_statement = (
+        "若金额超过1000，则管理员可以审批订单，"
+        "否则若金额超过500，则财务可以审批订单，"
+        "否则普通用户不得审批订单。"
+    )
+    facts = [
+        {
+            "fact_id": "fact-then",
+            "kind": "RULE",
+            "status": "ACCEPTED",
+            "modality": "MAY",
+            "polarity": "POSITIVE",
+            "action": {"canonical": "审批", "raw": "审批"},
+            "subject": {"actor_refs": ["管理员"], "entity_refs": ["订单"]},
+            "object": {"entity_refs": ["订单"]},
+            "conditions": ["金额超过1000"],
+            "condition_combinator": "SINGLE_CONDITION",
+            "condition_frame": {
+                "kind": "IF_THEN_ELSE",
+                "combinator": "SINGLE_CONDITION",
+                "conditions": ["金额超过1000"],
+                "exception_scopes": [],
+                "overlays": [],
+                "branch": "THEN",
+                "branch_index": 0,
+                "parent_conditions": [],
+                "paired_statement": shared_statement,
+                "source_backed": True,
+            },
+            "postconditions": [],
+            "state_effects": [],
+            "data_effects": [],
+            "exceptions": [],
+            "exception_scope": [],
+            "compensations": [],
+            "compensation": [],
+            "trigger": {"raw": "金额超过1000"},
+            "raw_statement": "若金额超过1000，则管理员可以审批订单",
+            "source_spans": [
+                {
+                    "source_id": "source-rule",
+                    "locator": "rules.md#line=1",
+                    "quote": shared_statement,
+                    "quote_hash": "h1",
+                }
+            ],
+        },
+        {
+            "fact_id": "fact-else-if",
+            "kind": "RULE",
+            "status": "ACCEPTED",
+            "modality": "MAY",
+            "polarity": "POSITIVE",
+            "action": {"canonical": "审批", "raw": "审批"},
+            "subject": {"actor_refs": ["财务"], "entity_refs": ["订单"]},
+            "object": {"entity_refs": ["订单"]},
+            "conditions": ["金额超过500"],
+            "condition_combinator": "SINGLE_CONDITION",
+            "condition_frame": {
+                "kind": "IF_THEN_ELSE",
+                "combinator": "SINGLE_CONDITION",
+                "conditions": ["金额超过500"],
+                "exception_scopes": [],
+                "overlays": [],
+                "branch": "ELSE_IF",
+                "branch_index": 1,
+                "parent_conditions": ["金额超过1000"],
+                "paired_statement": shared_statement,
+                "source_backed": True,
+            },
+            "postconditions": [],
+            "state_effects": [],
+            "data_effects": [],
+            "exceptions": [],
+            "exception_scope": [],
+            "compensations": [],
+            "compensation": [],
+            "trigger": {"raw": "金额超过500"},
+            "raw_statement": "若金额超过500，则财务可以审批订单",
+            "source_spans": [
+                {
+                    "source_id": "source-rule",
+                    "locator": "rules.md#line=1",
+                    "quote": shared_statement,
+                    "quote_hash": "h1",
+                }
+            ],
+        },
+        {
+            "fact_id": "fact-else",
+            "kind": "RULE",
+            "status": "ACCEPTED",
+            "modality": "MUST_NOT",
+            "polarity": "NEGATIVE",
+            "action": {"canonical": "审批", "raw": "审批"},
+            "subject": {"actor_refs": ["普通用户"], "entity_refs": ["订单"]},
+            "object": {"entity_refs": ["订单"]},
+            "conditions": ["金额超过500"],
+            "condition_combinator": "SINGLE_CONDITION",
+            "condition_frame": {
+                "kind": "IF_THEN_ELSE",
+                "combinator": "SINGLE_CONDITION",
+                "conditions": ["金额超过500"],
+                "exception_scopes": [],
+                "overlays": [],
+                "branch": "ELSE",
+                "branch_index": 2,
+                "parent_conditions": ["金额超过1000"],
+                "paired_statement": shared_statement,
+                "source_backed": True,
+            },
+            "postconditions": [],
+            "state_effects": [],
+            "data_effects": [],
+            "exceptions": [],
+            "exception_scope": [],
+            "compensations": [],
+            "compensation": [],
+            "trigger": {"raw": "金额超过500"},
+            "raw_statement": "若金额超过500，则普通用户不得审批订单",
+            "source_spans": [
+                {
+                    "source_id": "source-rule",
+                    "locator": "rules.md#line=1",
+                    "quote": shared_statement,
+                    "quote_hash": "h1",
+                }
+            ],
+        },
+    ]
+    _rows, behaviors, _conflicts, _unknowns, _gate = build_governed_business_behavior_ir(
+        _asset(_matrix_structure(), facts), facts, [_operation()]
+    )
+    branches = {
+        behavior["condition_frame"]["branch"]: behavior
+        for behavior in behaviors
+        if behavior.get("condition_frame", {}).get("kind") == "IF_THEN_ELSE"
+    }
+    assert set(branches) == {"THEN", "ELSE_IF", "ELSE"}
+    assert branches["THEN"]["condition_frame"]["branch_index"] == 0
+    assert branches["ELSE_IF"]["condition_frame"]["parent_conditions"] == ["金额超过1000"]
+    assert branches["ELSE"]["permission_decision"] == "DENY"
+    assert branches["THEN"]["permission_decision"] == "ALLOW"

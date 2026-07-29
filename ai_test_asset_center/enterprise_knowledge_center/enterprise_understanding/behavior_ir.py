@@ -690,16 +690,36 @@ def _condition_signature(conditions: Iterable[dict[str, Any]]) -> str:
     return json.dumps(values, ensure_ascii=False, sort_keys=True, default=str)
 
 
+def _condition_frame_signature(frame: dict[str, Any]) -> str:
+    """Keep branch / overlay slots distinct so nested frames never silently merge away."""
+    return json.dumps(
+        {
+            "kind": text(frame.get("kind")),
+            "branch": text(frame.get("branch")),
+            "branch_index": frame.get("branch_index", ""),
+            "paired_statement": text(frame.get("paired_statement")),
+            "parent_conditions": as_list(frame.get("parent_conditions")),
+            "exception_scopes": as_list(frame.get("exception_scopes")),
+            "overlays": as_list(frame.get("overlays")),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+
+
 def _merge_exact_behaviors(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    merged: dict[tuple[str, tuple[str, ...], tuple[str, ...], str, str], dict[str, Any]] = {}
+    merged: dict[tuple[str, tuple[str, ...], tuple[str, ...], str, str, str], dict[str, Any]] = {}
     rank = {"CONFIRMED": 4, "CANDIDATE": 3, "INCOMPLETE": 2, "CONFLICTED": 1}
     for row in rows:
+        frame = as_dict(row.get("condition_frame"))
         key = (
             text(row.get("operation_ref")),
             tuple(unique_text(as_list(row.get("object_refs")))),
             tuple(unique_text(as_list(row.get("actor_refs")))),
             text(row.get("permission_decision")),
             _condition_signature(as_list(row.get("preconditions"))),
+            _condition_frame_signature(frame),
         )
         existing = merged.get(key)
         if existing is None:
@@ -714,6 +734,15 @@ def _merge_exact_behaviors(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         existing["unresolved_semantics"] = unique_text(
             [*as_list(existing.get("unresolved_semantics")), *as_list(row.get("unresolved_semantics"))]
         )
+        # Preserve the richer condition_frame rather than silently dropping overlays/branches.
+        existing_frame = as_dict(existing.get("condition_frame"))
+        incoming_frame = as_dict(row.get("condition_frame"))
+        if incoming_frame and (
+            not existing_frame
+            or len(json.dumps(incoming_frame, ensure_ascii=False, sort_keys=True, default=str))
+            > len(json.dumps(existing_frame, ensure_ascii=False, sort_keys=True, default=str))
+        ):
+            existing["condition_frame"] = dict(incoming_frame)
         if rank.get(text(row.get("status")), 0) > rank.get(text(existing.get("status")), 0):
             existing["status"] = row.get("status")
             existing["candidate_only"] = row.get("candidate_only")

@@ -94,8 +94,10 @@ Implemented in this phase:
 - multi-condition combinator honesty (`AND`/`OR` only from explicit source wording;
   otherwise `UNRESOLVED`, never default `AND`);
 - nested `若…且…否则…` / `除…外` / exception-overlay framing with explicit
-  `condition_frame` combinators (THEN/ELSE branches and EXCEPT_OVERLAY); underdetermined
-  frames stay `UNRESOLVED` with a visible unknown instead of silent drop;
+  `condition_frame` combinators (THEN/ELSE/ELSE_IF branches, nested EXCEPT overlays,
+  and chained `除外` scopes); underdetermined nesting stays `UNRESOLVED` with a
+  visible unknown instead of silent drop or default `AND`; frames project through
+  Behavior IR / rule library / operations without silent slot loss;
 - decision-matrix row slot completeness into Behavior IR (actor / object / operation /
   condition / permission / effect); empty cells stay incomplete, never wildcard `any`;
 - cross-document object identity merge only through ACCEPTED `TERM_ALIAS`
