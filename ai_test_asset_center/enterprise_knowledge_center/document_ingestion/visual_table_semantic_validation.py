@@ -83,6 +83,26 @@ def validate_visual_table_semantic_candidates(document_ir: dict[str, Any]) -> di
         }
     ]
 
+    raw_row_headers = [
+        dict(row)
+        for row in _list(result.get("table_row_header_candidates"))
+        if isinstance(row, dict)
+    ]
+    valid_row_headers: list[dict[str, Any]] = []
+    rejected_row_header_ids: set[str] = set()
+    for candidate in raw_row_headers:
+        table_id = text(candidate.get("table_block_id"))
+        table = table_blocks.get(table_id) or {}
+        if int(table.get("semantic_candidate_header_row_count") or 0) <= 0:
+            rejected_row_header_ids.add(text(candidate.get("source_cell_block_id")))
+            continue
+        valid_row_headers.append(candidate)
+    valid_row_header_cell_ids = {
+        text(row.get("source_cell_block_id"))
+        for row in valid_row_headers
+        if text(row.get("source_cell_block_id"))
+    }
+
     kept_roles: list[dict[str, Any]] = []
     rejected_role_ids: set[str] = set()
     for raw in _list(result.get("table_column_role_candidates")):
@@ -130,11 +150,18 @@ def validate_visual_table_semantic_candidates(document_ir: dict[str, Any]) -> di
             if isinstance(row, dict)
         ]
         if candidates:
+            block_id = text(block.get("block_id"))
             block["structural_role_candidates"] = [
                 row
                 for row in candidates
-                if not text(row.get("candidate_id"))
-                or text(row.get("candidate_id")) in kept_role_ids
+                if (
+                    text(row.get("role")) != "ROW_HEADER_CANDIDATE"
+                    or block_id in valid_row_header_cell_ids
+                )
+                and (
+                    not text(row.get("candidate_id"))
+                    or text(row.get("candidate_id")) in kept_role_ids
+                )
             ]
 
     roles_by_owner: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -254,10 +281,12 @@ def validate_visual_table_semantic_candidates(document_ir: dict[str, Any]) -> di
         )
 
     result["blocks"] = blocks
+    result["table_row_header_candidates"] = valid_row_headers
     result["table_column_role_candidates"] = kept_roles
     result["decision_matrix_candidates"] = decisions
     result["unsupported_content"] = unsupported
     receipt = dict(result.get("structure_receipt") or {})
+    receipt["table_row_header_candidate_count"] = len(valid_row_headers)
     receipt["table_condition_column_candidate_count"] = sum(
         1 for row in kept_roles if text(row.get("role")) == "CONDITION_COLUMN_CANDIDATE"
     )
@@ -265,19 +294,24 @@ def validate_visual_table_semantic_candidates(document_ir: dict[str, Any]) -> di
         1 for row in kept_roles if text(row.get("role")) == "RESULT_COLUMN_CANDIDATE"
     )
     receipt["decision_matrix_candidate_count"] = len(decisions)
+    receipt["rejected_row_header_candidate_count"] = len(rejected_row_header_ids)
     receipt["rejected_unsafe_column_role_candidate_count"] = len(rejected_role_ids)
     receipt["table_legend_token_ambiguity_count"] = len(ambiguous_tokens)
     receipt["table_symbol_legend_missing_cell_count"] = len(missing_symbol_cells)
     receipt["table_color_legend_unverified_count"] = len(color_legends)
     result["structure_receipt"] = receipt
     candidate_receipt = dict(result.get("visual_table_semantic_candidate_receipt") or {})
+    candidate_receipt["header_node_count"] = len(_list(result.get("table_header_nodes")))
+    candidate_receipt["row_header_candidate_count"] = len(valid_row_headers)
     candidate_receipt["column_role_candidate_count"] = len(kept_roles)
     candidate_receipt["decision_matrix_candidate_count"] = len(decisions)
+    candidate_receipt["legend_candidate_count"] = len(legends)
     candidate_receipt["formal_business_rules_created"] = 0
     candidate_receipt["business_semantics_added"] = False
     result["visual_table_semantic_candidate_receipt"] = candidate_receipt
     result["visual_table_semantic_validation_receipt"] = {
         "schema": SEMANTIC_VALIDATION_SCHEMA,
+        "rejected_row_header_candidate_count": len(rejected_row_header_ids),
         "rejected_unsafe_role_candidate_count": len(rejected_role_ids),
         "legend_token_ambiguity_count": len(ambiguous_tokens),
         "symbol_legend_missing_cell_count": len(missing_symbol_cells),
