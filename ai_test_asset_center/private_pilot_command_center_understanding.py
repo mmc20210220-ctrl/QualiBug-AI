@@ -2,7 +2,8 @@
 
 This module never builds a second knowledge model or a second readiness authority. It loads the
 persisted enterprise knowledge asset and enriches the existing ``knowledge_summary`` field with
-its current understanding, Scenario IR, execution-contract and Runtime Plan gate receipts.
+its current understanding, Scenario IR, execution-contract, Runtime Plan and Runtime
+Materialization gate receipts.
 """
 from __future__ import annotations
 
@@ -58,6 +59,17 @@ def _readable_reason(value: Any) -> str:
         "RUNTIME_PLAN_CREDENTIAL_REF_AMBIGUOUS": "同一业务角色对应多个测试凭证引用",
         "RUNTIME_PLAN_ORACLE_TEMPLATE_UNRESOLVED": "运行计划尚未形成可验证的观察模板",
         "RUNTIME_PLAN_CLEANUP_TEMPLATE_UNRESOLVED": "写操作尚未形成安全清理模板",
+        "RUNTIME_MATERIALIZATION_ENVIRONMENT_REF_UNRESOLVED": "运行实例尚未唯一绑定测试环境",
+        "RUNTIME_MATERIALIZATION_BASE_URL_UNRESOLVED": "运行实例尚未获得测试环境地址",
+        "RUNTIME_MATERIALIZATION_ENVIRONMENT_REF_AMBIGUOUS": "运行实例匹配到多个候选测试环境",
+        "RUNTIME_MATERIALIZATION_PRODUCTION_WRITE_FORBIDDEN": "生产环境写入被安全策略禁止",
+        "RUNTIME_MATERIALIZATION_NON_PRODUCTION_ENVIRONMENT_UNPROVEN": "尚未证明当前环境为非生产测试环境",
+        "RUNTIME_MATERIALIZATION_CREDENTIAL_REF_UNRESOLVED": "运行实例尚未绑定对应角色的凭据引用",
+        "RUNTIME_MATERIALIZATION_SOURCE_EVIDENCE_MISSING": "运行实例缺少可追溯的企业资料证据",
+        "RUNTIME_MATERIALIZATION_TEST_DATA_BINDING_MISSING": "运行实例缺少测试数据绑定",
+        "RUNTIME_MATERIALIZATION_TEST_DATA_BINDING_AMBIGUOUS": "运行实例存在多个测试数据候选绑定",
+        "RUNTIME_MATERIALIZATION_TEST_DATA_BINDING_NOT_APPROVED": "运行实例引用的测试数据尚未批准",
+        "RUNTIME_MATERIALIZATION_SAFE_CLEANUP_CAPABILITY_UNRESOLVED": "写操作尚未绑定可验证的安全清理能力",
     }
     return labels.get(code, code.replace("_", " ").strip())
 
@@ -84,15 +96,16 @@ def _row_message(value: Any) -> str:
 
 
 def _source_labels(asset: dict[str, Any]) -> dict[str, str]:
-    labels: dict[str, str] = {}
     raw_sources = asset.get("source_inventory") or asset.get("sources") or asset.get("items") or []
-    if isinstance(raw_sources, dict):
-        entries = [
+    entries = (
+        [
             ({"source_id": key, **value} if isinstance(value, dict) else {"source_id": key})
             for key, value in raw_sources.items()
         ]
-    else:
-        entries = _rows(raw_sources)
+        if isinstance(raw_sources, dict)
+        else _rows(raw_sources)
+    )
+    labels: dict[str, str] = {}
     for value in entries:
         row = _record(value)
         source_id = _text(row.get("source_id") or row.get("id") or row.get("source_ref"))
@@ -125,11 +138,20 @@ def _evidence_candidates(value: Any) -> list[dict[str, Any]]:
             candidates.extend(item for item in raw if isinstance(item, dict))
     if any(
         _text(row.get(key))
-        for key in ("source_id", "source_ref", "source_locator", "locator", "quote", "verbatim_quote")
+        for key in (
+            "source_id",
+            "source_ref",
+            "source_locator",
+            "locator",
+            "quote",
+            "verbatim_quote",
+        )
     ):
         candidates.append(row)
     for source_ref in _rows(row.get("source_refs")):
-        if _text(source_ref):
+        if isinstance(source_ref, dict):
+            candidates.append(source_ref)
+        elif _text(source_ref):
             candidates.append({"source_id": source_ref})
     return candidates
 
@@ -194,15 +216,19 @@ def _is_blocking_unknown(value: Any) -> bool:
             "blocks_scenario_ir",
             "blocks_execution_contract",
             "blocks_runtime_plan",
+            "blocks_runtime_materialization",
             "blocking",
         )
     )
 
 
-def _blocker_receipts(asset: dict[str, Any], model: dict[str, Any], gates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _blocker_receipts(
+    asset: dict[str, Any], model: dict[str, Any], gates: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    del gates  # Receipts come from existing asset unknown/conflict rows, never recomputed gates.
     labels = _source_labels(asset)
-    candidates: list[tuple[str, Any]] = []
     model_gate = _record(model.get("gate"))
+    candidates: list[tuple[str, Any]] = []
     candidates.extend(("critical_unknown", row) for row in _rows(model_gate.get("critical_unknowns")))
     candidates.extend(("source_conflict", row) for row in _rows(model_gate.get("unresolved_conflicts")))
     candidates.extend(
@@ -226,11 +252,22 @@ def _blocker_receipts(asset: dict[str, Any], model: dict[str, Any], gates: list[
         if _is_blocking_unknown(row)
     )
     candidates.extend(
+        ("runtime_materialization_unknown", row)
+        for row in _rows(asset.get("runtime_materialization_unknowns"))
+        if _is_blocking_unknown(row)
+    )
+    candidates.extend(
         ("coverage_gap", row)
         for row in _rows(asset.get("coverage_gaps"))
         if any(
             token in _text(_record(row).get("kind"))
-            for token in ("UNDERSTANDING", "SCENARIO", "EXECUTION_CONTRACT", "RUNTIME_PLAN")
+            for token in (
+                "UNDERSTANDING",
+                "SCENARIO",
+                "EXECUTION_CONTRACT",
+                "RUNTIME_PLAN",
+                "RUNTIME_MATERIALIZATION",
+            )
         )
     )
 
@@ -250,12 +287,21 @@ def _blocker_receipts(asset: dict[str, Any], model: dict[str, Any], gates: list[
                     or row.get("conflict_id")
                     or row.get("gap_id")
                     or row.get("runtime_plan_unknown_id")
-                ) or f"{category}:{kind}:{message}"[:180],
+                    or row.get("runtime_materialization_unknown_id")
+                )
+                or f"{category}:{kind}:{message}"[:180],
                 "category": category,
                 "kind": kind,
                 "message": message or _readable_reason(kind),
                 "operator_action": _text(row.get("operator_action") or row.get("recommended_action")),
-                "blocking": _is_blocking_unknown(row) or category in {"critical_unknown", "source_conflict", "runtime_plan_unknown"},
+                "blocking": _is_blocking_unknown(row)
+                or category
+                in {
+                    "critical_unknown",
+                    "source_conflict",
+                    "runtime_plan_unknown",
+                    "runtime_materialization_unknown",
+                },
                 "source_evidence": [],
             },
         )
@@ -278,7 +324,13 @@ def _blocker_receipts(asset: dict[str, Any], model: dict[str, Any], gates: list[
         receipt["source_backed"] = bool(deduped)
 
     ordered = list(merged.values())
-    ordered.sort(key=lambda row: (not bool(row.get("blocking")), not bool(row.get("source_backed")), _text(row.get("message"))))
+    ordered.sort(
+        key=lambda row: (
+            not bool(row.get("blocking")),
+            not bool(row.get("source_backed")),
+            _text(row.get("message")),
+        )
+    )
     return ordered[:8]
 
 
@@ -291,10 +343,12 @@ def _understanding_projection(asset: dict[str, Any]) -> dict[str, Any]:
     scenario_gate = _record(asset.get("scenario_ir_gate"))
     execution_gate = _record(asset.get("scenario_execution_contract_gate"))
     runtime_plan_gate = _record(asset.get("runtime_plan_gate"))
+    materialization_gate = _record(asset.get("runtime_materialization_gate"))
     model_metrics = _record(model_gate.get("metrics"))
     scenario_metrics = _record(scenario_gate.get("metrics"))
     execution_metrics = _record(execution_gate.get("metrics"))
     runtime_metrics = _record(runtime_plan_gate.get("metrics"))
+    materialization_metrics = _record(materialization_gate.get("metrics"))
 
     understanding_status = (
         _text(summary.get("enterprise_understanding_status"))
@@ -309,6 +363,9 @@ def _understanding_projection(asset: dict[str, Any]) -> dict[str, Any]:
     scenario_ready = _ready(scenario_gate, "entry_allowed")
     execution_ready = _ready(execution_gate, "execution_contract_ready", "entry_allowed")
     runtime_plan_ready = _ready(runtime_plan_gate, "runtime_plan_ready", "entry_allowed")
+    materialization_ready = _ready(
+        materialization_gate, "runtime_materialization_ready", "entry_allowed"
+    )
 
     gates = [
         {
@@ -341,6 +398,12 @@ def _understanding_projection(asset: dict[str, Any]) -> dict[str, Any]:
             "status": _text(runtime_plan_gate.get("status")) or "NOT_BUILT",
             "ready": runtime_plan_ready,
         },
+        {
+            "key": "runtime_materialization",
+            "label": "运行实例化",
+            "status": _text(materialization_gate.get("status")) or "NOT_BUILT",
+            "ready": materialization_ready,
+        },
     ]
 
     blockers: list[str] = []
@@ -352,24 +415,41 @@ def _understanding_projection(asset: dict[str, Any]) -> dict[str, Any]:
         message = _row_message(value)
         if message:
             blockers.append(message)
-    for gate in (model_gate, planning_gate, scenario_gate, execution_gate, runtime_plan_gate):
+    for gate in (
+        model_gate,
+        planning_gate,
+        scenario_gate,
+        execution_gate,
+        runtime_plan_gate,
+        materialization_gate,
+    ):
         for value in _rows(gate.get("blocking_reasons")):
             message = _readable_reason(value)
             if message:
                 blockers.append(message)
-    for value in _rows(asset.get("runtime_plan_unknowns")):
-        row = _record(value)
-        if not row.get("blocks_runtime_plan"):
-            continue
-        message = _row_message(row)
-        if message:
-            blockers.append(message)
+    for key, flag in (
+        ("runtime_plan_unknowns", "blocks_runtime_plan"),
+        ("runtime_materialization_unknowns", "blocks_runtime_materialization"),
+    ):
+        for value in _rows(asset.get(key)):
+            row = _record(value)
+            if not row.get(flag):
+                continue
+            message = _row_message(row)
+            if message:
+                blockers.append(message)
     for value in _rows(asset.get("coverage_gaps")):
         row = _record(value)
         kind = _text(row.get("kind"))
         if not any(
             token in kind
-            for token in ("UNDERSTANDING", "SCENARIO", "EXECUTION_CONTRACT", "RUNTIME_PLAN")
+            for token in (
+                "UNDERSTANDING",
+                "SCENARIO",
+                "EXECUTION_CONTRACT",
+                "RUNTIME_PLAN",
+                "RUNTIME_MATERIALIZATION",
+            )
         ):
             continue
         message = _text(row.get("message")) or _text(row.get("operator_action")) or _readable_reason(kind)
@@ -377,7 +457,11 @@ def _understanding_projection(asset: dict[str, Any]) -> dict[str, Any]:
             blockers.append(message)
 
     blocker_receipts = _blocker_receipts(asset, model, gates)
-    blockers.extend(_text(row.get("message")) for row in blocker_receipts if _text(row.get("message")))
+    blockers.extend(
+        _text(row.get("message"))
+        for row in blocker_receipts
+        if _text(row.get("message"))
+    )
 
     return {
         "enterprise_understanding_model_id": _text(summary.get("enterprise_understanding_model_id"))
@@ -452,7 +536,28 @@ def _understanding_projection(asset: dict[str, Any]) -> dict[str, Any]:
         "runtime_plan_unknown_count": _integer(
             runtime_metrics.get("runtime_plan_unknown_count"), len(_rows(asset.get("runtime_plan_unknowns")))
         ),
+        "runtime_materialization_status": _text(materialization_gate.get("status")) or "NOT_BUILT",
+        "runtime_materialization_ready": materialization_ready,
+        "runtime_materialization_count": _integer(
+            summary.get("runtime_materialization_count"),
+            _integer(
+                materialization_metrics.get("runtime_materialization_count"),
+                len(_rows(asset.get("runtime_materializations"))),
+            ),
+        ),
+        "runtime_materialization_incomplete_count": _integer(
+            summary.get("runtime_materialization_incomplete_count"),
+            _integer(materialization_metrics.get("incomplete_runtime_materialization_count")),
+        ),
+        "runtime_materialization_unknown_count": _integer(
+            summary.get("runtime_materialization_unknown_count"),
+            _integer(
+                materialization_metrics.get("runtime_materialization_unknown_count"),
+                len(_rows(asset.get("runtime_materialization_unknowns"))),
+            ),
+        ),
         "formal_scenario_chain_ready": all(bool(row.get("ready")) for row in gates),
+        "formal_runtime_chain_ready": all(bool(row.get("ready")) for row in gates),
         "understanding_gates": gates,
         "understanding_blockers": list(dict.fromkeys(value for value in blockers if value))[:8],
         "understanding_blocker_receipts": blocker_receipts,
