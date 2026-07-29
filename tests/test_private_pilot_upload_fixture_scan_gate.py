@@ -63,6 +63,21 @@ def _approved_binding(tmp_path: Path) -> dict[str, Any]:
     )
 
 
+def test_live_private_handler_resolves_scan_gate_from_mixin() -> None:
+    _install()
+    from ai_test_asset_center.private_pilot_service import PrivatePilotHandler
+
+    assert (
+        PrivatePilotHandler._handle_v12_scan
+        is scan_handlers.ScanHandlersMixin._handle_v12_scan
+    )
+    assert getattr(
+        scan_handlers.ScanHandlersMixin,
+        "_qualibug_upload_fixture_scan_gate_installed",
+        False,
+    ) is True
+
+
 def test_scan_gate_returns_conflict_for_missing_or_revoked_binding(
     tmp_path: Path,
 ) -> None:
