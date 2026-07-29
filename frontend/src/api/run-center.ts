@@ -37,18 +37,24 @@ function normalizedIdentities(
 
 function scenarioDraft(project: string): string[] {
   try {
-    const verified = globalThis.sessionStorage?.getItem(
-      `qualibug.run.ui-upload-scenarios-verified.${project}`,
-    );
-    if (verified !== 'true') return [];
     const raw = globalThis.localStorage?.getItem(
       `qualibug.run.ui-upload-scenarios.${project}`,
     ) || '[]';
     const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed)
-      ? parsed.filter((item): item is string => typeof item === 'string')
+    const selected = Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === 'string' && Boolean(item.trim()))
       : [];
-  } catch {
+    const verified = globalThis.sessionStorage?.getItem(
+      `qualibug.run.ui-upload-scenarios-verified.${project}`,
+    );
+    if (selected.length > 0 && verified !== 'true') {
+      throw new Error('上传场景审批状态尚未完成刷新，请先刷新场景后再运行。');
+    }
+    return verified === 'true' ? selected : [];
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('审批状态尚未完成刷新')) {
+      throw error;
+    }
     return [];
   }
 }
