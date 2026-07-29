@@ -10,20 +10,46 @@ from .real_project_onboarding import ROOT, _safe_project_id
 
 MASKED_CREDENTIAL_VALUE = "********"
 
+# Keep the customer ingest boundary aligned with the canonical enterprise
+# knowledge center vocabulary. The UI never asks customers to choose one of
+# these values; they are returned for diagnostics and accepted only as an
+# exceptional API override for compatibility.
 KNOWLEDGE_INGEST_SOURCE_TYPES = (
     "prd",
     "mrd",
     "openapi",
+    "markdown_api",
     "postman",
+    "har",
+    "application_log",
     "database_schema",
+    "db_field_dictionary",
     "permission_matrix",
     "historical_bug",
     "ticket",
+    "uiux_spec",
+    "uiux_svg",
+    "db_design",
+    "business_rules",
+    "ui_design",
+    "test_data",
+    "config",
+    "deploy",
     "feishu_document",
     "confluence_document",
     "collaboration_document",
     "other_document",
 )
+KNOWLEDGE_SOURCE_TYPE_ALIASES = {
+    "swagger": "openapi",
+    "api": "openapi",
+    "api_document": "markdown_api",
+    "db_schema": "database_schema",
+    "schema": "database_schema",
+    "permission": "permission_matrix",
+    "bugs": "historical_bug",
+    "other": "other_document",
+}
 KNOWLEDGE_INGEST_TEXT_EXTENSIONS = (
     ".md",
     ".markdown",
@@ -37,11 +63,42 @@ KNOWLEDGE_INGEST_TEXT_EXTENSIONS = (
     ".csv",
     ".sql",
     ".xml",
+    ".svg",
+    ".har",
+    ".log",
 )
-KNOWLEDGE_INGEST_BINARY_EXTENSIONS = (".pdf", ".docx")
+KNOWLEDGE_INGEST_BINARY_EXTENSIONS = (".pdf", ".docx", ".xlsx", ".xls")
 KNOWLEDGE_INGEST_EXTENSIONS = KNOWLEDGE_INGEST_TEXT_EXTENSIONS + KNOWLEDGE_INGEST_BINARY_EXTENSIONS
 ONBOARD_DOCUMENT_EXTENSIONS = (".md", ".markdown", ".txt", ".pdf", ".docx", ".html", ".htm")
 ONBOARD_OPENAPI_EXTENSIONS = (".yaml", ".yml", ".json")
+
+
+def resolve_knowledge_source_type(
+    filename: str,
+    extracted_text: str,
+    explicit_type: str | None = None,
+) -> tuple[str, str]:
+    """Resolve one canonical source type without asking the customer.
+
+    Missing type declarations are classified by the existing knowledge-center
+    authority using both the filename and extracted document text. Explicit
+    values remain an exception-only compatibility override and are validated
+    instead of silently falling back to PRD.
+    """
+    explicit = str(explicit_type or "").strip().lower()
+    if explicit:
+        normalized = KNOWLEDGE_SOURCE_TYPE_ALIASES.get(explicit, explicit)
+        if normalized not in KNOWLEDGE_INGEST_SOURCE_TYPES:
+            raise ValueError(f"unsupported knowledge source type: {explicit}")
+        return normalized, "explicit_override"
+
+    from .enterprise_knowledge_center import _classify_source
+
+    inferred = str(_classify_source(filename, extracted_text, None) or "").strip().lower()
+    normalized = KNOWLEDGE_SOURCE_TYPE_ALIASES.get(inferred, inferred)
+    if normalized not in KNOWLEDGE_INGEST_SOURCE_TYPES:
+        return "other_document", "automatic_fallback"
+    return normalized, "automatic"
 
 
 def _is_masked_credential_value(value: Any) -> bool:
