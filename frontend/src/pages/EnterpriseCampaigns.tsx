@@ -5,10 +5,15 @@ import {
   getKnowledgeAsset,
   getScanPreflight,
   getServiceCredentials,
-  runV12Scan,
   type ScanPreflight,
   type V12ScanResult,
 } from '../api/client';
+import {
+  listUploadFixtures,
+  type UploadFixtureRecord,
+} from '../api/upload-fixtures';
+import { runV12ScanFromRunCenter } from '../api/run-center';
+import { RunUploadFixtureSelector } from '../components/run/RunUploadFixtureSelector';
 import { useToast } from '../components/useToast';
 import { usePageTitle } from '../lib/page-title';
 import { useProjectNavigation } from '../lib/project-navigation';
@@ -91,6 +96,14 @@ function executionStatusLabel(status: string): string {
   return map[status.toLowerCase()] || status || 'unknown';
 }
 
+function activeApprovedFixtures(value: UploadFixtureRecord[]): UploadFixtureRecord[] {
+  return value.filter((fixture) => (
+    fixture.status === 'active'
+    && fixture.authority === 'approved_copy'
+    && Boolean(asText(fixture.binding_ref))
+  ));
+}
+
 export function EnterpriseCampaigns() {
   usePageTitle('运行中心');
   const [params] = useSearchParams();
@@ -104,6 +117,10 @@ export function EnterpriseCampaigns() {
   const [serviceError, setServiceError] = useState('');
   const [sources, setSources] = useState<SourceSummary[]>([]);
   const [sourceError, setSourceError] = useState('');
+  const [approvedFixtures, setApprovedFixtures] = useState<UploadFixtureRecord[]>([]);
+  const [selectedFixtureRefs, setSelectedFixtureRefs] = useState<string[]>([]);
+  const [fixtureError, setFixtureError] = useState('');
+  const [loadingFixtures, setLoadingFixtures] = useState(false);
 
   const [targetBaseUrl, setTargetBaseUrl] = useState('');
   const [scopeId, setScopeId] = useState('');
@@ -116,13 +133,22 @@ export function EnterpriseCampaigns() {
   const [error, setError] = useState('');
 
   const refreshContext = useCallback(async () => {
-    if (!project) { setPreflight(null); setServices([]); setSources([]); return; }
+    if (!project) {
+      setPreflight(null);
+      setServices([]);
+      setSources([]);
+      setApprovedFixtures([]);
+      setSelectedFixtureRefs([]);
+      return;
+    }
     setLoadingPreflight(true);
+    setLoadingFixtures(true);
     setError('');
-    const [preflightResult, serviceResult, knowledgeResult] = await Promise.allSettled([
+    const [preflightResult, serviceResult, knowledgeResult, fixtureResult] = await Promise.allSettled([
       getScanPreflight(project),
       getServiceCredentials(project),
       getKnowledgeAsset(project),
+      listUploadFixtures(project, false),
     ]);
     if (preflightResult.status === 'fulfilled') setPreflight(preflightResult.value);
     else { setPreflight(null); setError(preflightResult.reason instanceof Error ? preflightResult.reason.message : '运行前检查失败'); }
@@ -141,15 +167,27 @@ export function EnterpriseCampaigns() {
           source_type: asText(source.source_type) || asText(source.type),
           status: asText(source.status) || 'active',
         };
-      }).filter((s) => s.source_id && s.status !== 'deleted'));
+      }).filter((source) => source.source_id && source.status !== 'deleted'));
       setSourceError('');
     } else { setSources([]); setSourceError(knowledgeResult.reason instanceof Error ? knowledgeResult.reason.message : '资料读取失败'); }
+    if (fixtureResult.status === 'fulfilled') {
+      const fixtures = activeApprovedFixtures(fixtureResult.value.fixtures);
+      const activeRefs = new Set(fixtures.map((fixture) => asText(fixture.binding_ref)));
+      setApprovedFixtures(fixtures);
+      setSelectedFixtureRefs((current) => current.filter((bindingRef) => activeRefs.has(bindingRef)));
+      setFixtureError('');
+    } else {
+      setApprovedFixtures([]);
+      setSelectedFixtureRefs([]);
+      setFixtureError(fixtureResult.reason instanceof Error ? fixtureResult.reason.message : '上传 Fixture 读取失败');
+    }
     setLoadingPreflight(false);
+    setLoadingFixtures(false);
   }, [project]);
 
   useEffect(() => { void refreshContext(); }, [refreshContext]);
 
-  const enabledServices = useMemo(() => services.filter((s) => s.enabled !== false && asText(s.base_url)), [services]);
+  const enabledServices = useMemo(() => services.filter((service) => service.enabled !== false && asText(service.base_url)), [services]);
   const resolvedTargetBaseUrl = targetBaseUrl.trim() || asText(enabledServices[0]?.base_url);
   const configuredAuthCount = useMemo(() => services.filter(hasConfiguredAuth).length, [services]);
   const configuredDbCount = useMemo(() => services.filter(hasConfiguredDb).length, [services]);
@@ -158,13 +196,13 @@ export function EnterpriseCampaigns() {
     if (!targetBaseUrl.trim() && enabledServices.length === 1) setTargetBaseUrl(asText(enabledServices[0].base_url));
   }, [enabledServices, targetBaseUrl]);
 
-  // Filter registered sources to only show OpenAPI-type (executable) sources
+  // Filter registered sources to only show OpenAPI-type (executable) sources.
   const apiSources = useMemo(() => {
     const apiTypes = new Set(['openapi', 'openapi3', 'swagger', 'postman', 'api_spec']);
-    return sources.filter((s) => apiTypes.has((s.source_type || '').toLowerCase()));
+    return sources.filter((source) => apiTypes.has((source.source_type || '').toLowerCase()));
   }, [sources]);
 
-  // Auto-select first OpenAPI source when sources load and none is selected
+  // Auto-select first OpenAPI source when sources load and none is selected.
   useEffect(() => {
     if (!selectedSourceId && apiSources.length > 0) {
       setSelectedSourceId(apiSources[0].source_id);
@@ -180,6 +218,7 @@ export function EnterpriseCampaigns() {
     { label: '鉴权账号', value: configuredAuthCount > 0 ? `${configuredAuthCount} 组已配置` : '待配置', note: configuredAuthCount > 0 ? '运行时优先复用已保存鉴权' : '请补齐账号 / Token / API Key', tone: configuredAuthCount > 0 ? 'success' : 'warning' },
     { label: '数据库校验', value: configuredDbCount > 0 ? `${configuredDbCount} 组已配置` : '可选', note: configuredDbCount > 0 ? '可用于 DB 侧一致性验证' : '未配置数据库时仅执行接口/页面侧验证', tone: configuredDbCount > 0 ? 'success' : 'neutral' },
     { label: '来源资料', value: sources.length > 0 ? `${sources.length} 份已入库` : '待导入', note: sources.length > 0 ? '扫描时自动绑定最近入库来源快照' : '请在企业资料导入 PRD / OpenAPI 等', tone: sources.length > 0 ? 'success' : 'warning' },
+    { label: '上传 Fixture', value: loadingFixtures ? '读取中' : selectedFixtureRefs.length > 0 ? `已选 ${selectedFixtureRefs.length} 个` : `${approvedFixtures.length} 个可选`, note: selectedFixtureRefs.length > 0 ? '本次运行将请求受控上传写模式' : '不自动选择；按场景需要显式勾选', tone: loadingFixtures ? 'neutral' : selectedFixtureRefs.length > 0 ? 'warning' : approvedFixtures.length > 0 ? 'success' : 'neutral' },
     { label: '运行就绪', value: loadingPreflight ? '检查中' : preflightReady ? '已就绪' : `${blockers.length} 项待补齐`, note: loadingPreflight ? '正在读取运行前检查' : preflightReady ? '可以一键运行检测' : '补齐下方阻断项后再运行', tone: loadingPreflight ? 'neutral' : preflightReady ? 'success' : 'danger' },
   ];
 
@@ -188,18 +227,30 @@ export function EnterpriseCampaigns() {
     return { strategy, write_approved: false };
   }, [strategy]);
 
+  const toggleFixture = useCallback((bindingRef: string) => {
+    const normalized = bindingRef.trim();
+    if (!normalized) return;
+    setSelectedFixtureRefs((current) => (
+      current.includes(normalized)
+        ? current.filter((item) => item !== normalized)
+        : [...current, normalized]
+    ));
+  }, []);
+
   const runStandardScan = useCallback(async () => {
     if (!project) { setError('请先选择客户项目。'); return; }
     setRunning(true);
     setResult(null);
     setError('');
     try {
-      const response = await runV12Scan(project, {
+      const response = await runV12ScanFromRunCenter(project, {
         base_url: resolvedTargetBaseUrl || undefined,
         scope_id: scopeId.trim() || undefined,
         environment_ref: environmentRef.trim() || undefined,
         source_id: selectedSourceId || undefined,
+        execution_mode: selectedFixtureRefs.length > 0 ? 'approved_sandbox_write' : undefined,
         test_data_contract: buildTestDataContract(),
+        ui_upload_fixture_ids: selectedFixtureRefs,
       });
       setResult(response);
       if (response.ok) {
@@ -222,7 +273,7 @@ export function EnterpriseCampaigns() {
     } finally {
       setRunning(false);
     }
-  }, [buildTestDataContract, environmentRef, project, refreshContext, resolvedTargetBaseUrl, scopeId, selectedSourceId, toast]);
+  }, [buildTestDataContract, environmentRef, project, refreshContext, resolvedTargetBaseUrl, scopeId, selectedFixtureRefs, selectedSourceId, toast]);
 
   if (!project) {
     return <section className="state-panel"><div className="state-panel-badge">客户选择</div><h2>请先选择客户项目</h2><p>运行中心必须绑定真实客户上下文，才能把项目配置、资料、执行和结果回显串成同一条闭环。</p></section>;
@@ -231,6 +282,14 @@ export function EnterpriseCampaigns() {
   const coverageGaps = asArray(result?.coverage_gaps);
   const testDataStatus = asText(result?.test_data_plan?.status);
   const testDataMissing = result?.test_data_plan?.missing_requirements || [];
+  const runtimeContract = asRecord(result?.runtime_contract);
+  const runtimeFixtureSummary = asRecord(runtimeContract.ui_upload_fixture_binding_summary);
+  const runtimeFixtureCount = asNumber(runtimeFixtureSummary.binding_count);
+  const fixtureBindingMismatch = Boolean(
+    result
+    && selectedFixtureRefs.length > 0
+    && runtimeFixtureCount !== selectedFixtureRefs.length,
+  );
 
   return (
     <div>
@@ -278,19 +337,19 @@ export function EnterpriseCampaigns() {
         <div className="settings-grid">
           <label className="form-field">
             <span>目标地址（可选，缺省用已配置服务）</span>
-            <input value={targetBaseUrl} onChange={(e) => setTargetBaseUrl(e.target.value)} placeholder={enabledServices[0] ? asText(enabledServices[0].base_url) : 'https://已配置测试环境'} />
+            <input value={targetBaseUrl} onChange={(event) => setTargetBaseUrl(event.target.value)} placeholder={enabledServices[0] ? asText(enabledServices[0].base_url) : 'https://已配置测试环境'} />
           </label>
           <label className="form-field">
             <span>范围 ID（可选）</span>
-            <input value={scopeId} onChange={(e) => setScopeId(e.target.value)} placeholder="例如：结算流程、订单核心链路" />
+            <input value={scopeId} onChange={(event) => setScopeId(event.target.value)} placeholder="例如：结算流程、订单核心链路" />
           </label>
           <label className="form-field">
             <span>环境引用（可选）</span>
-            <input value={environmentRef} onChange={(e) => setEnvironmentRef(e.target.value)} placeholder="例如：sit / uat / staging" />
+            <input value={environmentRef} onChange={(event) => setEnvironmentRef(event.target.value)} placeholder="例如：sit / uat / staging" />
           </label>
           <label className="form-field">
             <span>测试数据策略</span>
-            <select value={strategy} onChange={(e) => setStrategy(e.target.value as DataStrategy)}>
+            <select value={strategy} onChange={(event) => setStrategy(event.target.value as DataStrategy)}>
               <option value="safe_read_only">安全只读（默认，不写入被测系统）</option>
               <option value="reuse_verified_existing">复用已核验数据</option>
               <option value="create_disposable">隔离一次性数据（需审批回执）</option>
@@ -299,17 +358,28 @@ export function EnterpriseCampaigns() {
           </label>
           <label className="form-field">
             <span>API 接口文档源（可选，默认自动选择最新 OpenAPI 源）</span>
-            <select value={selectedSourceId} onChange={(e) => setSelectedSourceId(e.target.value)}>
+            <select value={selectedSourceId} onChange={(event) => setSelectedSourceId(event.target.value)}>
               <option value="">自动推断（从已注册源中选择）</option>
-              {apiSources.map((s) => (
-                <option key={s.source_id} value={s.source_id}>{s.filename || s.source_id} · {s.source_type}</option>
+              {apiSources.map((source) => (
+                <option key={source.source_id} value={source.source_id}>{source.filename || source.source_id} · {source.source_type}</option>
               ))}
             </select>
             {apiSources.length === 0 && sources.length > 0 && (
-              <small className="muted" style={{color: 'var(--warning-color, #d97706)'}}>⚠ 已入库资料中未检测到 API 接口规范（OpenAPI / Swagger / Postman），扫描可能无法生成可执行探针。请上传接口文档后再运行。</small>
+              <small className="muted" style={{ color: 'var(--warning-color, #d97706)' }}>⚠ 已入库资料中未检测到 API 接口规范（OpenAPI / Swagger / Postman），扫描可能无法生成可执行探针。请上传接口文档后再运行。</small>
             )}
           </label>
         </div>
+
+        <RunUploadFixtureSelector
+          fixtures={approvedFixtures}
+          selectedRefs={selectedFixtureRefs}
+          loading={loadingFixtures}
+          error={fixtureError}
+          onToggle={toggleFixture}
+          onOpenSettings={() => navigateToProjectPath('/settings', project)}
+          onRefresh={() => void refreshContext()}
+        />
+
         <div className="settings-grid">
           <div><span className="muted">默认服务目标</span><p>{enabledServices[0] ? `${serviceDisplayName(enabledServices[0])} · ${asText(enabledServices[0].base_url)}` : (serviceError ? `未连通：${serviceError}` : '当前没有已启用服务，后端将尝试从项目上下文推断')}</p></div>
           <div><span className="muted">来源资料</span><p>{sourceError ? `未连通：${sourceError}` : sources.length > 0 ? `${sources.length} 份已入库，扫描时自动绑定最近来源快照` : '尚未导入来源资料'}</p></div>
@@ -317,12 +387,12 @@ export function EnterpriseCampaigns() {
           <div><span className="muted">运行前检查</span><p>{loadingPreflight ? '检查中…' : preflightReady ? '已就绪' : `${blockers.length} 项待补齐`}</p></div>
         </div>
         <div className="settings-actions">
-          <button type="button" className="btn btn-primary" onClick={() => void runStandardScan()} disabled={running || loadingPreflight}>
+          <button type="button" className="btn btn-primary" onClick={() => void runStandardScan()} disabled={running || loadingPreflight || loadingFixtures}>
             {running ? '正在运行检测…' : '执行标准扫描'}
           </button>
           <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/dashboard', project)}>查看风险总览</button>
         </div>
-        <p className="muted">运行成功后，结果会自动刷新到总览、缺陷和证据链页面；不会另起一套展示口径。阻断 / 仅计划 / 部分覆盖等状态会如实展示，不会伪装成通过。</p>
+        <p className="muted">运行成功后，结果会自动刷新到总览、缺陷和证据链页面；不会另起一套展示口径。阻断 / 仅计划 / 部分覆盖等状态会如实展示，不会伪装成通过。选择上传 Fixture 只提供受控文件绑定，实际上传必须由来源 UI 合同明确声明。</p>
       </section>
 
       {error && <section className="state-panel"><div className="state-panel-badge">需要处理</div><h2>运行未启动</h2><p>{error}</p></section>}
@@ -339,8 +409,15 @@ export function EnterpriseCampaigns() {
             <div><span className="muted">覆盖度</span><p>{asNumber(result.coverage)}</p></div>
             <div><span className="muted">Campaign 状态</span><p>{asText(result.campaign?.campaign_status) || '未报告'}</p></div>
             <div><span className="muted">测试数据合同</span><p>{testDataStatus || '未报告'}</p></div>
+            <div><span className="muted">上传 Fixture 绑定</span><p>{selectedFixtureRefs.length > 0 ? `${runtimeFixtureCount}/${selectedFixtureRefs.length} 已注入运行合同` : '本次未选择'}</p></div>
           </div>
           {!result.ok && <p className="muted">失败原因：{result.message || result.error || '未知错误'}</p>}
+          {fixtureBindingMismatch && (
+            <p className="settings-inline-feedback" role="alert">本次选择了 {selectedFixtureRefs.length} 个 Fixture，但运行合同仅确认 {runtimeFixtureCount} 个。请检查审批是否撤销、文件是否漂移以及项目范围是否一致。</p>
+          )}
+          {selectedFixtureRefs.length > 0 && !fixtureBindingMismatch && (
+            <p className="muted">运行合同已确认 {runtimeFixtureCount} 个上传绑定；是否真正执行 set_input_files，请以浏览器步骤回执和 cleanup receipt 为准。</p>
+          )}
           <div className="mt-3">
             <h3>真实执行证据</h3>
             <p className="muted">HAR 状态：共 {harEntries(result.auto_har).length} 条真实请求记录{Object.keys(asRecord((result as JsonRecord).execution_evidence_summary)).length ? '，已附带执行证据摘要' : ''}。</p>
@@ -361,8 +438,8 @@ export function EnterpriseCampaigns() {
             <div className="mt-3">
               <h3>未覆盖范围（{coverageGaps.length}）</h3>
               <ul>{coverageGaps.slice(0, 8).map((gap, index) => {
-                const g = asRecord(gap);
-                return <li key={`${asText(g.code)}-${index}`}>{asText(g.kind) || asText(g.code) || '覆盖缺口'}{asText(g.message) ? `：${asText(g.message)}` : ''}</li>;
+                const row = asRecord(gap);
+                return <li key={`${asText(row.code)}-${index}`}>{asText(row.kind) || asText(row.code) || '覆盖缺口'}{asText(row.message) ? `：${asText(row.message)}` : ''}</li>;
               })}</ul>
             </div>
           )}
