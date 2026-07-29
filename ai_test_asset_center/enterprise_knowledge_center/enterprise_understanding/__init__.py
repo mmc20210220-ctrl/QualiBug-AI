@@ -18,6 +18,11 @@ from .implementation_binding import (
 from .implementation_binding_governance import (
     build_governed_behavior_implementation_bindings,
 )
+from .implementation_binding_projection import (
+    SCENARIO_PLANNING_GATE_SCHEMA,
+    build_final_scenario_planning_gate,
+    project_final_scenario_planning_gate,
+)
 from .integration import (
     enrich_asset_with_enterprise_understanding,
     install_enterprise_understanding_model,
@@ -32,12 +37,15 @@ __all__ = [
     "BEHAVIOR_GATE_SCHEMA",
     "IMPLEMENTATION_BINDING_SCHEMA",
     "IMPLEMENTATION_BINDING_GATE_SCHEMA",
+    "SCENARIO_PLANNING_GATE_SCHEMA",
     "build_decision_matrix_row_ledger",
     "build_business_behavior_ir",
     "build_governed_business_behavior_ir",
     "build_business_behavior_ir_v1",
     "build_behavior_implementation_bindings",
     "build_governed_behavior_implementation_bindings",
+    "build_final_scenario_planning_gate",
+    "project_final_scenario_planning_gate",
     "build_enterprise_understanding_model",
     "assess_understanding_model",
     "enrich_asset_with_enterprise_understanding",
