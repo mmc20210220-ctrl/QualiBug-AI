@@ -67,7 +67,7 @@ jobs:
 
   playwright-upload-acceptance:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -82,7 +82,10 @@ jobs:
       - name: Install Chromium runtime
         run: python -m playwright install --with-deps chromium
       - name: Run governed upload browser acceptance
-        run: python -m pytest -q tests/test_ui_upload_fixture_playwright_e2e.py
+        run: >-
+          python -m pytest -q
+          tests/test_ui_upload_fixture_playwright_e2e.py
+          tests/test_ui_upload_scenario_playwright_e2e.py
 
   frontend-governance:
     runs-on: ubuntu-latest
