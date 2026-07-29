@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from ai_test_asset_center.enterprise_source_registry import register_source_asset
+from ai_test_asset_center.enterprise_knowledge_center import (
+    ingest_enterprise_knowledge_documents,
+)
 from ai_test_asset_center.ui_upload_fixture_registry import (
     approve_upload_fixture,
     register_upload_fixture,
@@ -21,21 +23,28 @@ from ai_test_asset_center.ui_upload_scenario_registry import (
     revoke_upload_scenario,
 )
 from ai_test_asset_center.ui_upload_scenario_runtime_binding import _hydrate_scenarios
+from ai_test_asset_center.ui_upload_scenario_source_authority import (
+    install_ui_upload_scenario_source_authority,
+)
 
 _PROJECT = "upload-scenario-test"
 _ACTOR = {"name": "qa-owner", "role": "qa_lead"}
 
 
-def _source(tmp_path: Path, content: str = "Upload scenario source v1") -> dict[str, str]:
-    return register_source_asset(
+def _source(tmp_path: Path, content: str = "Upload scenario source v1") -> dict[str, object]:
+    result = ingest_enterprise_knowledge_documents(
         _PROJECT,
-        "ui-upload-source",
-        content,
-        source_type="uiux_spec",
+        [{
+            "text": content,
+            "filename": "upload-ui.md",
+            "source_type": "uiux_spec",
+        }],
         root=tmp_path,
         actor=_ACTOR,
-        filename="upload-ui.md",
     )
+    assert result["ok"] is True
+    assert len(result["created"]) == 1
+    return result["created"][0]
 
 
 def _fixture(tmp_path: Path) -> dict[str, object]:
@@ -57,10 +66,10 @@ def _fixture(tmp_path: Path) -> dict[str, object]:
     )["fixture"]
 
 
-def _payload(binding_ref: str) -> dict[str, object]:
+def _payload(source_id: str, binding_ref: str) -> dict[str, object]:
     return {
         "title": "客户批量上传",
-        "source_id": "ui-upload-source",
+        "source_id": source_id,
         "source_locator": "section:bulk-upload",
         "operation_ref": "customer.bulk_upload",
         "actor_ref": "qa_operator",
@@ -75,13 +84,16 @@ def _payload(binding_ref: str) -> dict[str, object]:
     }
 
 
-def _approved_scenario(tmp_path: Path) -> tuple[dict[str, object], dict[str, object]]:
+def _approved_scenario(
+    tmp_path: Path,
+) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
     install_upload_fixture_registry_integrity()
-    _source(tmp_path)
+    install_ui_upload_scenario_source_authority()
+    source = _source(tmp_path)
     fixture = _fixture(tmp_path)
     candidate = register_upload_scenario(
         _PROJECT,
-        _payload(str(fixture["binding_ref"])),
+        _payload(str(source["source_id"]), str(fixture["binding_ref"])),
         root=tmp_path,
         actor=_ACTOR,
     )["scenario"]
@@ -91,11 +103,11 @@ def _approved_scenario(tmp_path: Path) -> tuple[dict[str, object], dict[str, obj
         root=tmp_path,
         actor=_ACTOR,
     )["scenario"]
-    return candidate, approved
+    return source, candidate, approved
 
 
 def test_approved_scenario_materializes_source_request_and_fixture(tmp_path: Path) -> None:
-    _candidate, approved = _approved_scenario(tmp_path)
+    source, _candidate, approved = _approved_scenario(tmp_path)
 
     materialized = approved_upload_scenario(
         _PROJECT,
@@ -106,8 +118,10 @@ def test_approved_scenario_materializes_source_request_and_fixture(tmp_path: Pat
     request = materialized["ui_execution_request"]
     assert request["provider"] == "playwright_browser_plan"
     assert request["execution_mode"] == "approved_sandbox_write"
-    assert request["source_refs"][0]["source_id"] == "ui-upload-source"
-    assert request["source_refs"][0]["version"].startswith("srcv_")
+    assert request["source_refs"][0]["source_id"] == source["source_id"]
+    assert request["source_refs"][0]["version"] == (
+        f"knowledge-source:{source['source_id']}:v{source['version']}"
+    )
     assert request["browser_plan"]["interaction_contract"]["equivalence_scope"] == "rendered_and_persistent_state"
     assert request["browser_plan"]["steps"][1]["action"] == "set_input_files"
     assert request["browser_plan"]["steps"][-1]["file_refs"] == []
@@ -115,7 +129,7 @@ def test_approved_scenario_materializes_source_request_and_fixture(tmp_path: Pat
 
 
 def test_runtime_hydration_merges_formal_request_and_fixture_refs(tmp_path: Path) -> None:
-    _candidate, approved = _approved_scenario(tmp_path)
+    _source_row, _candidate, approved = _approved_scenario(tmp_path)
 
     prepared = _hydrate_scenarios(
         _PROJECT,
@@ -129,10 +143,13 @@ def test_runtime_hydration_merges_formal_request_and_fixture_refs(tmp_path: Path
     summary = prepared["ui_upload_scenario_binding_summary"]
     assert summary["scenario_count"] == 1
     assert summary["registry_derived"] is True
+    assert summary["request_ids"] == [
+        prepared["ui_execution_requests"][0]["request_id"]
+    ]
 
 
 def test_source_version_change_blocks_old_approved_scenario(tmp_path: Path) -> None:
-    _candidate, approved = _approved_scenario(tmp_path)
+    _source_row, _candidate, approved = _approved_scenario(tmp_path)
     _source(tmp_path, "Upload scenario source v2 changed")
 
     with pytest.raises(RuntimeError, match="source_version_changed"):
@@ -144,7 +161,7 @@ def test_source_version_change_blocks_old_approved_scenario(tmp_path: Path) -> N
 
 
 def test_fixture_revocation_blocks_old_approved_scenario(tmp_path: Path) -> None:
-    _candidate, approved = _approved_scenario(tmp_path)
+    _source_row, _candidate, approved = _approved_scenario(tmp_path)
     fixture_ref = str(approved["fixture_binding_refs"][0])
     from ai_test_asset_center.ui_upload_fixture_registry import active_approved_upload_fixture
 
@@ -167,7 +184,7 @@ def test_fixture_revocation_blocks_old_approved_scenario(tmp_path: Path) -> None
 
 
 def test_candidate_revocation_cascades_to_approved_copy(tmp_path: Path) -> None:
-    candidate, approved = _approved_scenario(tmp_path)
+    _source_row, candidate, approved = _approved_scenario(tmp_path)
 
     result = revoke_upload_scenario(
         _PROJECT,
