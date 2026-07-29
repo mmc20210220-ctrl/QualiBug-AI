@@ -9,6 +9,7 @@ import { EvidenceChain } from './pages/EvidenceChain';
 import { ReleaseGate } from './pages/ReleaseGate';
 import { EnterpriseCampaigns } from './pages/EnterpriseCampaigns';
 import { CoverageMatrix } from './pages/CoverageMatrix';
+import { SystemJobs } from './pages/SystemJobs';
 import { Settings } from './pages/Settings';
 import { Login } from './pages/Login';
 
@@ -36,6 +37,8 @@ export default function App() {
               <Route path="/findings" element={<Findings />} />
               <Route path="/evidence" element={<EvidenceChain />} />
               <Route path="/release" element={<ReleaseGate />} />
+              {/* 企业认知 */}
+              <Route path="/jobs" element={<SystemJobs />} />
               {/* 执行面 */}
               <Route path="/campaigns" element={<EnterpriseCampaigns />} />
               <Route path="/coverage" element={<CoverageMatrix />} />
