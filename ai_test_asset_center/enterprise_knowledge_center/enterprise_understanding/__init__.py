@@ -37,13 +37,14 @@ from .object_graph import build_object_graph
 from .runtime_materialization import (
     RUNTIME_MATERIALIZATION_GATE_SCHEMA,
     RUNTIME_MATERIALIZATION_SCHEMA,
-    build_runtime_materializations_v1,
-    project_runtime_materializations_to_asset,
+    build_runtime_materializations_v1 as build_runtime_materializations_core_v1,
+    project_runtime_materializations_to_asset as project_runtime_materializations_core_to_asset,
 )
 from .runtime_materialization_governance import (
     project_governed_runtime_materializations_to_asset,
 )
 from .runtime_materialization_security import (
+    build_secure_runtime_materializations_v1,
     install_secure_runtime_value_resolver,
     project_secure_runtime_materializations_to_asset,
 )
@@ -78,6 +79,12 @@ install_interface_runtime_contract_parser()
 # All materialization entrypoints, including direct low-level builder calls, must scrub an
 # unapproved runtime value before any non-sendable draft is assembled.
 install_secure_runtime_value_resolver()
+
+# Backward-compatible package names now point to the single governed and security-audited
+# authority. The explicit ``*_core_*`` names remain module-internal primitives and are not exported
+# through ``__all__``.
+build_runtime_materializations_v1 = build_secure_runtime_materializations_v1
+project_runtime_materializations_to_asset = project_secure_runtime_materializations_to_asset
 
 __all__ = [
     "BEHAVIOR_SCHEMA",
@@ -114,9 +121,9 @@ __all__ = [
     "project_governed_runtime_plans_to_asset",
     "build_runtime_materializations_v1",
     "project_runtime_materializations_to_asset",
-    "project_governed_runtime_materializations_to_asset",
-    "install_secure_runtime_value_resolver",
+    "build_secure_runtime_materializations_v1",
     "project_secure_runtime_materializations_to_asset",
+    "install_secure_runtime_value_resolver",
     "enrich_openapi_runtime_contracts",
     "install_interface_runtime_contract_parser",
     "build_enterprise_understanding_model",
