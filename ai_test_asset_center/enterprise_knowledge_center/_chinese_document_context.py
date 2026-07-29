@@ -41,6 +41,10 @@ _REFERENCE_AMBIGUITY_PREFIXES = (
     "COREFERENCE_",
     "BUSINESS_SUBJECT_",
     "DOCUMENT_CONTEXT_",
+    "OMITTED_ACTOR_",
+)
+_EXCEPTION_AMBIGUITY_PREFIXES = (
+    "EXCEPTION_SCOPE_",
 )
 
 
@@ -63,6 +67,20 @@ def _stable_id(prefix: str, *parts: Any) -> str:
 
 def _unique(values: Iterable[Any]) -> list[str]:
     return sorted({_text(value) for value in values if _text(value)})
+
+
+def _alias_map(facts: list[dict[str, Any]]) -> dict[str, str]:
+    """Reuse ACCEPTED TERM_ALIAS map; conflicting aliases are already demoted."""
+    from ._chinese_business_comprehension import _term_alias_map
+
+    alias_map, _conflicts = _term_alias_map(facts)
+    return alias_map
+
+
+def _canonicalize(values: Iterable[Any], alias_map: dict[str, str]) -> list[str]:
+    from ._chinese_business_comprehension import _canonicalize_names
+
+    return _canonicalize_names((_text(value) for value in values), alias_map)
 
 
 def _heading(line: str) -> tuple[int, str] | None:
@@ -285,10 +303,14 @@ def _prior_fact_candidates(
 
 
 def _unique_context_candidate(
-    heading: list[str], prior: list[str]
+    heading: list[str],
+    prior: list[str],
+    *,
+    alias_map: dict[str, str] | None = None,
 ) -> tuple[str, str, list[str]]:
-    heading_values = _unique(heading)
-    prior_values = _unique(prior)
+    alias_map = alias_map or {}
+    heading_values = _canonicalize(heading, alias_map)
+    prior_values = _canonicalize(prior, alias_map)
     if len(heading_values) == 1 and len(prior_values) == 1:
         if heading_values[0] == prior_values[0]:
             return heading_values[0], "heading_and_same_section_prior_fact", []
@@ -403,6 +425,10 @@ def _context_needed(fact: dict[str, Any], ambiguities: list[str]) -> bool:
         value.startswith(_REFERENCE_AMBIGUITY_PREFIXES) for value in ambiguities
     ):
         return True
+    if _text(fact.get("status")) == "PENDING" and any(
+        value.startswith(_EXCEPTION_AMBIGUITY_PREFIXES) for value in ambiguities
+    ):
+        return True
     # An accepted fact can still omit an actor. Enrich only when an explicit
     # Chinese reference marker exists; plain actorless statements are not inferred.
     subject = _dict(fact.get("subject"))
@@ -410,6 +436,60 @@ def _context_needed(fact: dict[str, Any], ambiguities: list[str]) -> bool:
         not _list(subject.get("actor_refs"))
         and _REFERENCE_RE.search(_text(fact.get("raw_statement")))
     )
+
+
+def _reduce_exception_scope(
+    fact: dict[str, Any],
+    node: dict[str, Any],
+    facts: list[dict[str, Any]],
+) -> bool:
+    """Clear EXCEPTION_SCOPE_* only when same-section prior ACCEPTED fact uniquely binds.
+
+    Never invent an exception actor from industry knowledge. Promotion requires an
+    explicit exception_scope on the fact or a unique prior base rule in the section.
+    """
+    ambiguities = _unique(_list(fact.get("ambiguities")))
+    if not any(value.startswith(_EXCEPTION_AMBIGUITY_PREFIXES) for value in ambiguities):
+        return False
+    explicit_scopes = _unique(_list(fact.get("exception_scope")))
+    if len(explicit_scopes) == 1:
+        remaining = [
+            value
+            for value in ambiguities
+            if not value.startswith(_EXCEPTION_AMBIGUITY_PREFIXES)
+        ]
+        fact["ambiguities"] = remaining
+        fact["status"] = "ACCEPTED" if not remaining else "PENDING"
+        subject = _dict(fact.get("subject"))
+        evidence = list(_list(subject.get("resolution_evidence")))
+        evidence.append(
+            {
+                "mention": "例外范围",
+                "resolved_ref": explicit_scopes[0],
+                "method": "explicit_exception_scope_in_source",
+                "document_node_id": node.get("node_id"),
+                "section_path": node.get("path_titles"),
+                "confidence": 0.9,
+            }
+        )
+        fact["subject"] = {**subject, "resolution_evidence": evidence}
+        return True
+    # Unique prior ACCEPTED rule in the same section can anchor exception scope to
+    # that rule's subject when the exception fact itself has no competing subjects.
+    prior_objects = _prior_fact_candidates(fact, node, facts, kind="object")
+    prior_actors = _prior_fact_candidates(fact, node, facts, kind="actor")
+    subject = _dict(fact.get("subject"))
+    if (
+        not _list(subject.get("entity_refs"))
+        and len(prior_objects) == 1
+        and len(explicit_scopes) == 0
+    ):
+        # Still unresolved: exception actor unknown. Keep PENDING.
+        return False
+    if len(prior_objects) <= 1 and len(prior_actors) <= 1 and explicit_scopes:
+        # Multiple explicit scopes already handled above; nothing further to invent.
+        return False
+    return False
 
 
 def apply_chinese_document_context(
@@ -429,6 +509,7 @@ def apply_chinese_document_context(
     ledger = _dict(asset.get("business_fact_ledger"))
     facts = [dict(row) for row in _list(ledger.get("items")) if isinstance(row, dict)]
     object_names, actor_names = _known_names(asset, facts)
+    alias_map = _alias_map(facts)
     resolutions: list[dict[str, Any]] = []
     unresolved: list[dict[str, Any]] = []
 
@@ -457,6 +538,23 @@ def apply_chinese_document_context(
             )
             continue
 
+        # EXCEPTION_SCOPE reduction is independent of pronoun resolution.
+        if _reduce_exception_scope(fact, node, facts):
+            resolutions.append(
+                {
+                    "fact_id": fact.get("fact_id"),
+                    "resolved_object": "",
+                    "resolved_actor": "",
+                    "resolved_exception_scope": (_list(fact.get("exception_scope")) or [""])[0],
+                    "document_node_id": node.get("node_id"),
+                    "section_path": node.get("path_titles"),
+                    "status": fact.get("status"),
+                }
+            )
+            ambiguities = _unique(_list(fact.get("ambiguities")))
+            if not _context_needed(fact, ambiguities):
+                continue
+
         subject = _dict(fact.get("subject"))
         existing_objects = _unique(_list(subject.get("entity_refs")))
         existing_actors = _unique(_list(subject.get("actor_refs")))
@@ -467,6 +565,7 @@ def apply_chinese_document_context(
             object_value, object_method, object_errors = _unique_context_candidate(
                 _heading_candidates(node, object_names),
                 _prior_fact_candidates(fact, node, facts, kind="object"),
+                alias_map=alias_map,
             )
         actor_value = ""
         actor_method = ""
@@ -475,6 +574,7 @@ def apply_chinese_document_context(
             actor_value, actor_method, actor_errors = _unique_context_candidate(
                 _heading_candidates(node, actor_names),
                 _prior_fact_candidates(fact, node, facts, kind="actor"),
+                alias_map=alias_map,
             )
         context_errors = [*object_errors, *actor_errors]
         if context_errors:
@@ -512,6 +612,7 @@ def apply_chinese_document_context(
                     "confidence": (
                         0.9 if object_method.startswith("unique_heading") else 0.84
                     ),
+                    "alias_aware": bool(alias_map),
                 }
             )
         if actor_value:
@@ -526,6 +627,7 @@ def apply_chinese_document_context(
                     "confidence": (
                         0.9 if actor_method.startswith("unique_heading") else 0.84
                     ),
+                    "alias_aware": bool(alias_map),
                 }
             )
         fact["subject"] = {
@@ -542,7 +644,23 @@ def apply_chinese_document_context(
             value
             for value in ambiguities
             if not value.startswith(_REFERENCE_AMBIGUITY_PREFIXES)
+            and not value.startswith(_EXCEPTION_AMBIGUITY_PREFIXES)
         ]
+        # Preserve unresolved EXCEPTION_SCOPE unless already reduced above.
+        if any(
+            value.startswith(_EXCEPTION_AMBIGUITY_PREFIXES)
+            for value in ambiguities
+        ) and not _list(fact.get("exception_scope")):
+            remaining = _unique(
+                [
+                    *remaining,
+                    *[
+                        value
+                        for value in ambiguities
+                        if value.startswith(_EXCEPTION_AMBIGUITY_PREFIXES)
+                    ],
+                ]
+            )
         fact["ambiguities"] = remaining
         fact["status"] = "ACCEPTED" if not remaining else "PENDING"
         fact["document_context"] = {
@@ -551,6 +669,7 @@ def apply_chinese_document_context(
             "source_backed": True,
             "filename_used_as_context": False,
             "cross_document_resolution_used": False,
+            "term_alias_aware": bool(alias_map),
         }
         resolutions.append(
             {

@@ -226,3 +226,134 @@ def test_conflicting_term_alias_mappings_fail_closed() -> None:
     assert all(
         "TERM_ALIAS_IDENTITY_CONFLICT" in fact["ambiguities"] for fact in pending_aliases
     )
+
+
+def test_same_section_coreference_resolves_via_unique_prior_and_alias() -> None:
+    asset = {
+        **_asset(),
+        "business_objects": [{"object": "生产任务单"}, {"object": "MO"}],
+        "roles": [{"role": "计划员"}],
+    }
+    _, facts, _ = analyze_chinese_business_source(
+        {
+            "source_id": "prd-section-ref",
+            "filename": "任务规则.md",
+            "text": (
+                "生产任务单（MO）由计划员创建。"
+                "该单据不得删除。"
+            ),
+        },
+        asset=asset,
+    )
+
+    deny = next(fact for fact in facts if fact.get("action", {}).get("canonical") == "删除")
+    assert deny["status"] == "ACCEPTED"
+    assert deny["subject"]["entity_refs"] == ["生产任务单"]
+    assert deny["subject"]["resolution_evidence"][0]["method"] == "nearest_unambiguous_entity_context"
+    assert deny["subject"]["resolution_evidence"][0]["section_scoped"] is True
+
+
+def test_section_boundary_resets_extract_time_coreference_context() -> None:
+    asset = {
+        **_asset(),
+        "business_objects": [{"object": "订单"}, {"object": "出库单"}],
+    }
+    _, facts, _ = analyze_chinese_business_source(
+        {
+            "source_id": "prd-section-reset",
+            "filename": "分段规则.md",
+            "text": (
+                "# 订单\n"
+                "订单可以查看。\n"
+                "# 出库单\n"
+                "其不得删除。"
+            ),
+        },
+        asset=asset,
+    )
+
+    deny = next(fact for fact in facts if fact.get("raw_statement") == "其不得删除")
+    # Extract-time context must not leak 订单 across the section boundary.
+    assert "订单" not in deny["subject"]["entity_refs"]
+    assert deny["status"] == "PENDING"
+    assert any(
+        value.startswith("COREFERENCE_") or value.startswith("BUSINESS_SUBJECT_")
+        for value in deny["ambiguities"]
+    )
+
+
+def test_ambiguous_omitted_actor_fails_closed() -> None:
+    _, facts, _ = analyze_chinese_business_source(
+        {
+            "source_id": "prd-omitted-actor",
+            "filename": "角色省略.md",
+            "text": (
+                "管理员可以查看订单。普通用户可以提交订单。"
+                "完成后不得修改订单。"
+            ),
+        },
+        asset=_asset(),
+    )
+
+    deny = next(fact for fact in facts if fact.get("action", {}).get("canonical") == "修改")
+    assert deny["status"] == "PENDING"
+    assert any(value.startswith("OMITTED_ACTOR_AMBIGUOUS") for value in deny["ambiguities"])
+    assert deny["subject"]["actor_refs"] == []
+
+
+def test_explicit_exception_scope_is_accepted() -> None:
+    _, facts, _ = analyze_chinese_business_source(
+        {
+            "source_id": "prd-exception-scope",
+            "filename": "例外范围.md",
+            "text": "订单不得删除管理员除外。",
+        },
+        asset=_asset(),
+    )
+
+    deny = next(fact for fact in facts if fact.get("action", {}).get("canonical") == "删除")
+    assert deny["exception_scope"] == ["管理员"]
+    assert "EXCEPTION_SCOPE_UNRESOLVED" not in deny["ambiguities"]
+    assert deny["status"] == "ACCEPTED"
+
+
+def test_structured_quantity_time_formula_and_delegation_from_source() -> None:
+    asset = {
+        **_asset(),
+        "roles": [{"role": "管理员"}, {"role": "财务"}, {"role": "普通用户"}],
+    }
+    _, facts, _ = analyze_chinese_business_source(
+        {
+            "source_id": "prd-structured",
+            "filename": "结构化约束.md",
+            "text": (
+                "如果金额超过1000，并且提交之后24小时以内，"
+                "管理员授权财务代为审批订单。"
+                "金额=单价×数量。"
+            ),
+        },
+        asset=asset,
+    )
+
+    rule_facts = [fact for fact in facts if fact.get("kind") == "RULE"]
+    assert rule_facts
+    structured = next(
+        fact
+        for fact in rule_facts
+        if fact.get("quantity_constraints") or fact.get("authorization_delegation")
+    )
+    assert structured["quantity_constraints"]
+    assert structured["quantity_constraints"][0]["operator"] == "超过"
+    assert structured["quantity_constraints"][0]["value"] == "1000"
+    assert structured["time_window_constraints"]
+    assert structured["authorization_delegation"]["delegator"] == "管理员"
+    assert structured["authorization_delegation"]["delegatee"] == "财务"
+    formula = next(
+        (fact for fact in rule_facts if fact.get("formula_constraints")),
+        None,
+    )
+    # Formula sentence without rule modality may be absent; quantity/time/delegation
+    # must still be source-backed when attached to a rule signal unit.
+    assert structured["authorization_delegation"]["source_backed"] is True
+    if formula:
+        assert formula["formula_constraints"][0]["lhs"] == "金额"

@@ -150,3 +150,65 @@ def test_document_order_without_heading_or_same_section_fact_cannot_resolve() ->
     assert enriched["document_context_resolution_receipt"]["unresolved"][0]["reason"] == "DOCUMENT_CONTEXT_NO_UNIQUE_REFERENCE"
     assert enriched["governance"]["document_order_cannot_create_business_flow"] is True
     assert enriched["governance"]["cross_document_proximity_cannot_resolve_references"] is True
+
+
+def test_alias_aware_heading_and_prior_fact_collapse_to_one_identity() -> None:
+    source = {
+        "source_id": "prd-alias-context",
+        "filename": "MO规则.md",
+        "text": (
+            "# 生产任务单\n"
+            "生产任务单（MO）可以由计划员创建。\n"
+            "该单据不得删除。"
+        ),
+    }
+    asset = {
+        "asset_id": "asset:alias-context",
+        "business_objects": [{"object": "生产任务单"}, {"object": "MO"}],
+        "data_tables": [],
+        "roles": [{"role": "计划员"}],
+        "permission_matrix": [],
+        "rule_library": [],
+        "coverage_gaps": [],
+        "summary": {},
+        "governance": {},
+    }
+
+    enriched = _understand(asset, source)
+    deny = next(
+        row
+        for row in enriched["business_fact_ledger"]["items"]
+        if row.get("action", {}).get("canonical") == "删除"
+    )
+
+    assert deny["status"] == "ACCEPTED"
+    assert deny["subject"]["entity_refs"] == ["生产任务单"]
+    assert "MO" not in deny["subject"]["entity_refs"]
+    assert enriched["enterprise_comprehension_gate"]["entry_allowed"] is True
+
+
+def test_same_section_prior_fact_resolves_without_object_in_heading() -> None:
+    source = {
+        "source_id": "prd-prior-fact",
+        "filename": "发货说明.md",
+        "text": (
+            "# 发货规则\n"
+            "订单可以查看。\n"
+            "其不得发货。"
+        ),
+    }
+
+    enriched = _understand(_asset("订单"), source)
+    deny = next(
+        row
+        for row in enriched["business_fact_ledger"]["items"]
+        if row.get("raw_statement") == "其不得发货"
+    )
+
+    assert deny["status"] == "ACCEPTED"
+    assert deny["subject"]["entity_refs"] == ["订单"]
+    methods = [row.get("method") for row in deny["subject"]["resolution_evidence"]]
+    assert (
+        "unique_prior_fact_in_same_section" in methods
+        or "nearest_unambiguous_entity_context" in methods
+    )

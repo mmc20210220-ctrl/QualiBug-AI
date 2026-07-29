@@ -40,6 +40,19 @@ def _unique(values: Iterable[Any]) -> list[str]:
     return sorted({_text(value) for value in values if _text(value)})
 
 
+def _alias_map(facts: list[dict[str, Any]]) -> dict[str, str]:
+    from ._chinese_business_comprehension import _term_alias_map
+
+    alias_map, _conflicts = _term_alias_map(facts)
+    return alias_map
+
+
+def _canonicalize(values: Iterable[Any], alias_map: dict[str, str]) -> list[str]:
+    from ._chinese_business_comprehension import _canonicalize_names
+
+    return _canonicalize_names((_text(value) for value in values), alias_map)
+
+
 def _stable_id(prefix: str, *parts: Any) -> str:
     material = "\x1f".join(_text(part) for part in parts)
     return f"{prefix}:{hashlib.sha256(material.encode('utf-8')).hexdigest()[:20]}"
@@ -204,10 +217,14 @@ def _prior_candidates(
 
 
 def _unique_candidate(
-    heading_values: list[str], prior_values: list[str]
+    heading_values: list[str],
+    prior_values: list[str],
+    *,
+    alias_map: dict[str, str] | None = None,
 ) -> tuple[str, str, list[str]]:
-    headings = _unique(heading_values)
-    priors = _unique(prior_values)
+    alias_map = alias_map or {}
+    headings = _canonicalize(heading_values, alias_map)
+    priors = _canonicalize(prior_values, alias_map)
     if len(headings) == 1 and len(priors) == 1:
         if headings[0] == priors[0]:
             return headings[0], "document_ir_heading_and_same_section_prior_fact", []
@@ -230,6 +247,7 @@ def apply_document_ir_context(
     ledger = _dict(asset.get("business_fact_ledger"))
     facts = [dict(row) for row in _list(ledger.get("items")) if isinstance(row, dict)]
     object_names, actor_names = _known_names(asset, facts)
+    alias_map = _alias_map(facts)
     sources = [row for row in structured_sources if isinstance(row, dict)]
     source_map = {_text(row.get("source_id")): row for row in sources if _text(row.get("source_id"))}
     resolutions: list[dict[str, Any]] = []
@@ -279,6 +297,7 @@ def apply_document_ir_context(
                     block_index,
                     kind="object",
                 ),
+                alias_map=alias_map,
             )
             actor_value, actor_method, actor_errors = _unique_candidate(
                 _heading_mentions(chain, actor_names),
@@ -290,6 +309,7 @@ def apply_document_ir_context(
                     block_index,
                     kind="actor",
                 ),
+                alias_map=alias_map,
             )
             errors = [*object_errors, *actor_errors]
             if errors:

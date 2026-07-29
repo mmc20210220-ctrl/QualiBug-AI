@@ -27,8 +27,10 @@ GATE_SCHEMA = "qualibug.enterprise-comprehension-gate.v1"
 
 _CHINESE_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 _HEADING_RE = re.compile(
-    r"^\s*(?:第[一二三四五六七八九十百千]+[章节部分]|"
-    r"[一二三四五六七八九十]+[、.]|\d+(?:\.\d+)*[、.)．]?)\s*(?P<title>.+?)\s*$"
+    r"^\s*(?:#{1,6}\s+(?P<title>.+?)|"
+    r"第[一二三四五六七八九十百千]+[章节部分]\s*(?P<title2>.+?)|"
+    r"[一二三四五六七八九十]+[、.]\s*(?P<title3>.+?)|"
+    r"\d+(?:\.\d+)*[、.)．]?\s*(?P<title4>.+?))\s*$"
 )
 _SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[。！？!?；;])")
 _RULE_SIGNAL_RE = re.compile(
@@ -46,7 +48,12 @@ _NEGATIVE_RE = re.compile(r"不得|严禁|禁止|不允许|不可|不能|无权|
 _MUST_RE = re.compile(r"必须|应当|务必|需要|需(?=[由在对将把于])")
 _ONLY_IF_RE = re.compile(r"只有.+?才|仅当.+?才|除非|只能|仅能")
 _MAY_RE = re.compile(r"可以|允许|有权|可(?=[由在对将把于进行查看修改删除提交撤回])")
-_EXCEPTION_RE = re.compile(r"(?:但|但是|不过|然而|除[^，,；;。]+外|除非)(?P<value>.+)")
+_EXCEPTION_RE = re.compile(
+    r"(?:但|但是|不过|然而)(?P<contrast>.+)|"
+    r"除(?P<except_of>[^，,；;。外]{1,24})外|"
+    r"(?P<except_actor>[\u4e00-\u9fffA-Za-z0-9_-]{1,20})除外|"
+    r"除非(?P<unless>.+)"
+)
 _TEMPORAL_RE = re.compile(
     r"(?P<value>(?:在)?[^，,；;。]{0,48}?"
     r"(?:之前|之后|前|后|时|期间|以内|之内|超过\d+[^，,；;。]*|至少\d+[^，,；;。]*))"
@@ -68,14 +75,40 @@ _CRITICAL_AMBIGUITY_PREFIXES = (
     "CRITICAL_ACTION_",
     "EXCEPTION_SCOPE_",
     "CONDITION_COMBINATOR_",
+    "OMITTED_ACTOR_",
 )
 _COREFERENCE_RE = re.compile(
     r"该(?:对象|记录|数据|单据|申请|订单|工单|合同|任务)?|"
     r"本(?:单|记录|对象|申请|订单|工单|合同)?|"
     r"此(?:时|对象|记录|操作|流程)?|其|上述|前述|对应|相关|当前"
 )
+_OMITTED_ACTOR_RE = re.compile(r"其|该操作|完成后|通过后|退回后|审批后|审核后")
 _OWNERSHIP_SCOPE_RE = re.compile(r"本人|自己|其本人|原申请人|原发起人|本人创建|本人提交|本人负责")
 _ORG_SCOPE_RE = re.compile(r"本部门|本组织|本区域|本仓库|当前租户|本租户|所属组织|所属部门|所属区域")
+_DELEGATION_RE = re.compile(
+    r"(?P<delegator>[\u4e00-\u9fffA-Za-z0-9_-]{1,20})"
+    r"(?:授权|委托|转授)(?P<delegatee>[\u4e00-\u9fffA-Za-z0-9_-]{1,20})"
+    r"(?:代为|进行|执行|办理|审批|审核|操作)?"
+)
+_EXCEPTION_SCOPE_RE = re.compile(
+    r"除(?P<scope>[^，,；;。外]{1,24})外|(?P<actor>[\u4e00-\u9fffA-Za-z0-9_-]{1,20})除外"
+)
+_DEICTIC_GENERIC_RE = re.compile(
+    r"(?:该|本|此)(?P<generic>对象|记录|数据|单据|申请单|申请|订单|工单|合同|任务)"
+)
+_QUANTITY_RE = re.compile(
+    r"(?P<op>超过|不少于|至少|至多|不超过|大于|小于|等于|最多|最少)"
+    r"(?P<value>\d+(?:\.\d+)?)(?P<unit>[A-Za-z%％元件个台次天小时分钟]{0,8})"
+)
+_TIME_WINDOW_RE = re.compile(
+    r"(?P<raw>(?:在)?(?P<anchor>[^，,；;。]{0,24}?)"
+    r"(?P<rel>之前|之后|前|后|以内|之内|期间)"
+    r"(?:的?(?P<duration>\d+(?:\.\d+)?(?:天|日|小时|分钟|秒)))?)"
+)
+_FORMULA_RE = re.compile(
+    r"(?P<lhs>[\u4e00-\u9fffA-Za-z0-9_.]{1,24})\s*[=＝]\s*"
+    r"(?P<rhs>[^，,；;。]{1,48})"
+)
 _ROLE_SUFFIX_RE = re.compile(
     r"(?P<role>[\u4e00-\u9fffA-Za-z0-9_-]{1,20}"
     r"(?:管理员|操作员|审批人|审核人|申请人|发起人|负责人|经办人|"
@@ -198,7 +231,13 @@ def _paragraph_chunks(text: str, max_chars: int = 900) -> list[dict[str, Any]]:
         cursor = end
         heading = _HEADING_RE.match(paragraph)
         if heading and len(paragraph) <= 80:
-            section = _text(heading.group("title")) or paragraph
+            section = (
+                _text(heading.group("title"))
+                or _text(heading.group("title2"))
+                or _text(heading.group("title3"))
+                or _text(heading.group("title4"))
+                or paragraph
+            )
             chunks.append({"text": paragraph, "start": start, "end": end, "section": section, "kind": "heading"})
             continue
         parts = [part.strip() for part in _SENTENCE_BOUNDARY_RE.split(paragraph) if part.strip()]
@@ -342,7 +381,58 @@ def _modality(text: str) -> tuple[str, str]:
 
 
 def _exception(text: str) -> list[str]:
-    return list(dict.fromkeys(_text(match.group(0)) for match in _EXCEPTION_RE.finditer(text) if _text(match.group(0))))
+    rows: list[str] = []
+    for match in _EXCEPTION_RE.finditer(text):
+        quote = _text(match.group(0))
+        if quote and quote not in rows:
+            rows.append(quote)
+    return rows
+
+
+def _exception_scopes(
+    text: str,
+    exceptions: list[str],
+    *,
+    known_roles: list[str] | None = None,
+) -> list[str]:
+    """Extract explicit exception actors/scopes from source wording only."""
+    scopes: list[str] = []
+    corpus_parts = [*exceptions, text]
+    known = [_text(name) for name in (known_roles or []) if _text(name)]
+    for role in known:
+        for row in corpus_parts:
+            if f"除{role}外" in row or f"{role}除外" in row:
+                if role not in scopes:
+                    scopes.append(role)
+    if scopes:
+        return scopes
+    for row in corpus_parts:
+        for match in re.finditer(r"除([^，,；;。外]{1,24})外", row):
+            value = _text(match.group(1))
+            if value and value not in scopes:
+                scopes.append(value)
+        # Prefer the shortest rightmost role-like token before 除外 — never the whole clause.
+        short_matches = list(re.finditer(r"([\u4e00-\u9fffA-Za-z0-9_-]{2,6})除外", row))
+        if short_matches:
+            value = _text(short_matches[-1].group(1))
+            if value and value not in scopes:
+                scopes.append(value)
+    return scopes
+
+
+def _strip_deictic_placeholder_entities(
+    text: str, entities: list[str], known_entities: list[str]
+) -> list[str]:
+    """Treat 该单据/本记录 as pronouns when the generic token is not a known object."""
+    known = set(known_entities)
+    placeholders = {
+        _text(match.group("generic"))
+        for match in _DEICTIC_GENERIC_RE.finditer(text)
+        if _text(match.group("generic")) not in known
+    }
+    if not placeholders:
+        return entities
+    return [name for name in entities if name not in placeholders]
 
 
 def _scope(text: str) -> dict[str, str]:
@@ -354,6 +444,104 @@ def _scope(text: str) -> dict[str, str]:
         "ownership": ownership_match.group(0) if ownership_match else "",
         "data_scope": organization_match.group(0) if organization_match else "",
     }
+
+
+def _quantity_constraints(text: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for match in _QUANTITY_RE.finditer(text):
+        raw = match.group(0)
+        if raw in seen:
+            continue
+        seen.add(raw)
+        rows.append(
+            {
+                "raw": raw,
+                "operator": match.group("op"),
+                "value": match.group("value"),
+                "unit": _text(match.group("unit")),
+                "source_backed": True,
+            }
+        )
+    return rows
+
+
+def _time_window_constraints(text: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for match in _TIME_WINDOW_RE.finditer(text):
+        raw = _text(match.group("raw"))
+        if not raw or raw in seen:
+            continue
+        seen.add(raw)
+        rows.append(
+            {
+                "raw": raw,
+                "anchor": _text(match.group("anchor")),
+                "relation": _text(match.group("rel")),
+                "duration": _text(match.group("duration")),
+                "source_backed": True,
+            }
+        )
+    return rows
+
+
+def _formula_constraints(text: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for match in _FORMULA_RE.finditer(text):
+        raw = match.group(0)
+        if raw in seen:
+            continue
+        seen.add(raw)
+        rows.append(
+            {
+                "raw": raw,
+                "lhs": _text(match.group("lhs")),
+                "rhs": _text(match.group("rhs")),
+                "source_backed": True,
+            }
+        )
+    return rows
+
+
+def _authorization_delegation(text: str, known_roles: list[str]) -> dict[str, Any]:
+    match = _DELEGATION_RE.search(text)
+    if not match:
+        return {}
+    delegator = _text(match.group("delegator"))
+    delegatee = _text(match.group("delegatee"))
+    # Prefer known role names contained in the matched spans; never invent roles.
+    known = [name for name in known_roles if name]
+    for name in known:
+        if name in delegator:
+            delegator = name
+            break
+    for name in known:
+        if name in delegatee:
+            delegatee = name
+            break
+    if not delegator or not delegatee or delegator == delegatee:
+        return {}
+    return {
+        "raw": match.group(0),
+        "delegator": delegator,
+        "delegatee": delegatee,
+        "source_backed": True,
+    }
+
+
+def _canonicalize_names(names: Iterable[str], alias_map: dict[str, str] | None = None) -> list[str]:
+    """Collapse alias→canonical identities; preserve order of first occurrence."""
+    alias_map = alias_map or {}
+    result: list[str] = []
+    seen: set[str] = set()
+    for name in names:
+        canonical = _text(alias_map.get(_text(name), name))
+        if canonical and canonical not in seen:
+            seen.add(canonical)
+            result.append(canonical)
+    return result
 
 
 def _split_rule_units(text: str) -> list[str]:
@@ -373,16 +561,36 @@ def _split_rule_units(text: str) -> list[str]:
     return result
 
 
-def _resolve_reference(text: str, explicit_entities: list[str], context_entities: list[str]) -> tuple[list[str], list[dict[str, Any]], list[str]]:
+def _resolve_reference(
+    text: str,
+    explicit_entities: list[str],
+    context_entities: list[str],
+    *,
+    alias_map: dict[str, str] | None = None,
+) -> tuple[list[str], list[dict[str, Any]], list[str]]:
+    """Resolve pronouns only when same-section context collapses to one identity.
+
+    TERM_ALIAS evidence may collapse alias/canonical to one identity. Ambiguous or
+    empty context stays PENDING — never invent from industry knowledge.
+    """
     resolved = list(explicit_entities)
     evidence: list[dict[str, Any]] = []
     ambiguities: list[str] = []
     mention = _COREFERENCE_RE.search(text)
     if mention and not explicit_entities:
-        unique_context = list(dict.fromkeys(context_entities[-3:]))
+        unique_context = _canonicalize_names(context_entities[-3:], alias_map)
         if len(unique_context) == 1:
             resolved.append(unique_context[0])
-            evidence.append({"mention": mention.group(0), "resolved_ref": unique_context[0], "method": "nearest_unambiguous_entity_context", "confidence": 0.78})
+            evidence.append(
+                {
+                    "mention": mention.group(0),
+                    "resolved_ref": unique_context[0],
+                    "method": "nearest_unambiguous_entity_context",
+                    "confidence": 0.78,
+                    "section_scoped": True,
+                    "alias_aware": bool(alias_map),
+                }
+            )
         elif len(unique_context) > 1:
             ambiguities.append("COREFERENCE_AMBIGUOUS:" + ",".join(unique_context))
         else:
@@ -390,28 +598,59 @@ def _resolve_reference(text: str, explicit_entities: list[str], context_entities
     return sorted(set(resolved)), evidence, ambiguities
 
 
-def _fact_from_unit(unit: str, *, source_id: str, locator: str, known_entities: list[str], known_roles: list[str], context_entities: list[str], context_roles: list[str]) -> dict[str, Any] | None:
+def _fact_from_unit(
+    unit: str,
+    *,
+    source_id: str,
+    locator: str,
+    known_entities: list[str],
+    known_roles: list[str],
+    context_entities: list[str],
+    context_roles: list[str],
+    alias_map: dict[str, str] | None = None,
+) -> dict[str, Any] | None:
     raw = unit.strip()
     if not raw or not _RULE_SIGNAL_RE.search(raw):
         return None
     entities = _find_mentions(raw, known_entities, _ENTITY_SUFFIX_RE)
+    entities = _strip_deictic_placeholder_entities(raw, entities, known_entities)
     roles = _find_mentions(raw, known_roles, _ROLE_SUFFIX_RE)
-    entities, resolution_evidence, ambiguities = _resolve_reference(raw, entities, context_entities)
+    entities, resolution_evidence, ambiguities = _resolve_reference(
+        raw, entities, context_entities, alias_map=alias_map
+    )
+    entities = _canonicalize_names(entities, alias_map)
     if not roles and re.search(r"自动|系统", raw):
         roles = ["系统"]
-    elif not roles and context_roles and re.search(r"其|该操作|完成后|通过后|退回后", raw):
-        roles = [context_roles[-1]]
-        resolution_evidence.append({"mention": "省略Actor", "resolved_ref": context_roles[-1], "method": "nearest_actor_context", "confidence": 0.72})
+    elif not roles and context_roles and _OMITTED_ACTOR_RE.search(raw):
+        unique_roles = list(dict.fromkeys(_text(name) for name in context_roles[-3:] if _text(name)))
+        if len(unique_roles) == 1:
+            roles = [unique_roles[0]]
+            resolution_evidence.append(
+                {
+                    "mention": "省略Actor",
+                    "resolved_ref": unique_roles[0],
+                    "method": "nearest_unambiguous_actor_context",
+                    "confidence": 0.72,
+                    "section_scoped": True,
+                }
+            )
+        elif len(unique_roles) > 1:
+            ambiguities.append("OMITTED_ACTOR_AMBIGUOUS:" + ",".join(unique_roles))
 
     action = _action(raw)
     modality, polarity = _modality(raw)
     conditions = _conditions(raw)
     condition_combinator = _condition_combinator(raw, conditions)
     exceptions = _exception(raw)
+    exception_scopes = _exception_scopes(raw, exceptions, known_roles=known_roles)
     states = _state_effects(raw)
     temporal = [match.group("value") for match in _TEMPORAL_RE.finditer(raw)]
+    quantity_constraints = _quantity_constraints(raw)
+    time_window_constraints = _time_window_constraints(raw)
+    formula_constraints = _formula_constraints(raw)
+    delegation = _authorization_delegation(raw, known_roles)
     scope = _scope(raw)
-    if not action and not states and modality == "ASSERTS":
+    if not action and not states and modality == "ASSERTS" and not formula_constraints:
         return None
 
     critical = bool(_CRITICAL_SIGNAL_RE.search(raw))
@@ -420,7 +659,20 @@ def _fact_from_unit(unit: str, *, source_id: str, locator: str, known_entities: 
     if modality in {"MUST_NOT", "ONLY_IF"} and not action and not states:
         ambiguities.append("CRITICAL_ACTION_UNRESOLVED")
     if exceptions and len(_split_rule_units(raw)) == 1 and not conditions and not re.match(r"^(?:除[^，,；;。]+外|但|但是|不过|然而)", raw):
-        ambiguities.append("EXCEPTION_SCOPE_UNRESOLVED")
+        if len(exception_scopes) == 1:
+            # Source uniquely names the exception actor/scope — do not keep PENDING.
+            resolution_evidence.append(
+                {
+                    "mention": "例外范围",
+                    "resolved_ref": exception_scopes[0],
+                    "method": "explicit_exception_scope_in_source",
+                    "confidence": 0.9,
+                }
+            )
+        elif len(exception_scopes) > 1:
+            ambiguities.append("EXCEPTION_SCOPE_AMBIGUOUS:" + ",".join(exception_scopes))
+        else:
+            ambiguities.append("EXCEPTION_SCOPE_UNRESOLVED")
     if len(conditions) > 1 and condition_combinator == "UNRESOLVED":
         ambiguities.append("CONDITION_COMBINATOR_UNRESOLVED")
 
@@ -444,10 +696,15 @@ def _fact_from_unit(unit: str, *, source_id: str, locator: str, known_entities: 
         "modality": modality,
         "polarity": polarity,
         "exceptions": exceptions,
+        "exception_scope": exception_scopes,
         "postconditions": [],
         "state_effects": states,
         "data_effects": [],
         "temporal_constraints": temporal,
+        "quantity_constraints": quantity_constraints,
+        "time_window_constraints": time_window_constraints,
+        "formula_constraints": formula_constraints,
+        "authorization_delegation": delegation,
         "compensation": [],
         "raw_statement": raw,
         "normalized_statement": re.sub(r"\s+", "", raw),
@@ -472,10 +729,19 @@ def analyze_chinese_business_source(source: dict[str, Any], *, asset: dict[str, 
     glossary: list[dict[str, Any]] = []
     context_entities: list[str] = []
     context_roles: list[str] = []
+    alias_map: dict[str, str] = {}
+    current_section = ""
 
     for chunk in _paragraph_chunks(text):
         chunk_text = _text(chunk.get("text"))
-        locator = f"{filename or source_id}#section={chunk.get('section')};chars={chunk.get('start')}-{chunk.get('end')}"
+        section = _text(chunk.get("section")) or "document"
+        # Section boundary resets local 指代/省略 context. Prior-section objects must
+        # never leak; document-context stage may still resolve via unique heading.
+        if section != current_section:
+            context_entities = []
+            context_roles = []
+            current_section = section
+        locator = f"{filename or source_id}#section={section};chars={chunk.get('start')}-{chunk.get('end')}"
         chunk_id = _stable_id("chunk", source_id, locator, chunk_text)
         chunk_fact_ids: list[str] = []
         chunk_ambiguities: list[str] = []
@@ -483,10 +749,24 @@ def analyze_chinese_business_source(source: dict[str, Any], *, asset: dict[str, 
         glossary_rows = _extract_aliases(chunk_text, source_id, locator)
         glossary.extend(glossary_rows)
         chunk_fact_ids.extend(row["fact_id"] for row in glossary_rows)
+        for row in glossary_rows:
+            alias = _text(row.get("alias"))
+            canonical = _text(row.get("canonical_term"))
+            if alias and canonical and alias not in alias_map:
+                alias_map[alias] = canonical
 
         if chunk.get("kind") != "heading":
             for unit in _split_rule_units(chunk_text):
-                fact = _fact_from_unit(unit, source_id=source_id, locator=locator, known_entities=known_entities, known_roles=known_roles, context_entities=context_entities, context_roles=context_roles)
+                fact = _fact_from_unit(
+                    unit,
+                    source_id=source_id,
+                    locator=locator,
+                    known_entities=known_entities,
+                    known_roles=known_roles,
+                    context_entities=context_entities,
+                    context_roles=context_roles,
+                    alias_map=alias_map,
+                )
                 if not fact:
                     continue
                 chunk_facts.append(fact)
@@ -521,7 +801,7 @@ def analyze_chinese_business_source(source: dict[str, Any], *, asset: dict[str, 
             "source_id": source_id,
             "filename": filename,
             "language": language,
-            "section": _text(chunk.get("section")) or "document",
+            "section": section,
             "kind": _text(chunk.get("kind")) or "content",
             "start_offset": int(chunk.get("start") or 0),
             "end_offset": int(chunk.get("end") or 0),
@@ -779,6 +1059,10 @@ def build_chinese_first_comprehension(asset: dict[str, Any], parsed_sources: Ite
         "ambiguous_critical_chinese_rules_fail_closed": True,
         "multi_condition_default_and_forbidden": True,
         "term_alias_identity_merge_source_backed_only": True,
+        "section_scoped_coreference_only": True,
+        "omitted_actor_requires_unique_section_context": True,
+        "exception_scope_requires_explicit_source_actor": True,
+        "structured_quantity_time_formula_source_backed_only": True,
     })
     asset["governance"] = governance
     return asset

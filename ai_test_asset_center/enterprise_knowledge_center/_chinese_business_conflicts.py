@@ -111,6 +111,21 @@ def _conflict(
         "source_scope": "CROSS_SOURCE" if len(source_ids) > 1 else "INTRA_SOURCE",
         "source_ids": source_ids,
         "facts": sources,
+        "authority_decision": {
+            "status": "UNRESOLVED",
+            "selected_fact_id": "",
+            "authority_source_id": "",
+            "document_version": "",
+            "operator_required": True,
+            "automatic_resolution_allowed": False,
+            "disallowed_authority_signals": [
+                "recency",
+                "filename",
+                "document_order",
+                "model_confidence",
+                "industry_default",
+            ],
+        },
         "resolution_policy": (
             "explicit source authority/version decision required; recency, filename, "
             "document order and model confidence are not authority"

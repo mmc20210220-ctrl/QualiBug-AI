@@ -89,17 +89,24 @@ Implemented in this phase:
 - multi-condition combinator honesty (`AND`/`OR` only from explicit source wording;
   otherwise `UNRESOLVED`, never default `AND`);
 - cross-document object identity merge only through ACCEPTED `TERM_ALIAS`
-  evidence (conflicting alias mappings fail closed).
+  evidence (conflicting alias mappings fail closed);
+- section-scoped Chinese coreference / omitted-actor resolution (unique same-section
+  context or explicit heading; TERM_ALIAS-aware uniqueness; fail-closed when ambiguous);
+- source-backed structured quantity / time-window / formula / authorization-delegation
+  fields when the original statement states them;
+- conflict `authority_decision` marked `UNRESOLVED` (no automatic authority pick);
+- EXCEPTION_SCOPE promotion only when the source uniquely names the exception actor.
 
 Not yet complete:
 
 - full Chinese document semantic tree at enterprise scale;
-- cross-paragraph and cross-document coreference beyond nearest unambiguous
-  section context and source-backed term aliases;
+- cross-document coreference beyond source-backed TERM_ALIAS identity merge
+  (proximity / filename / order remain forbidden);
 - conditional branches, parallel branches, loops, compensation processes, and
-  long-running process reconstruction;
-- formula, quantity, time-window, organization, and policy-delegation semantics;
-- authority/version resolution workflow for conflicts;
+  long-running multi-object process reconstruction (builder still projects only
+  unique linear lifecycle chains);
+- operator authority/version *workflow UI* for resolving conflicts (receipts stay
+  UNRESOLVED until an explicit operator decision exists);
 - externally labeled Chinese enterprise understanding benchmark and measured
   precision/recall.
 

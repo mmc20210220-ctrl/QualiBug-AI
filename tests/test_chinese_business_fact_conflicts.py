@@ -108,6 +108,12 @@ def test_conflict_is_not_resolved_by_recency_or_model_confidence() -> None:
     assert conflict["status"] == "UNRESOLVED"
     assert "recency" in conflict["resolution_policy"]
     assert "model confidence" in conflict["resolution_policy"]
+    decision = conflict["authority_decision"]
+    assert decision["status"] == "UNRESOLVED"
+    assert decision["selected_fact_id"] == ""
+    assert decision["automatic_resolution_allowed"] is False
+    assert "recency" in decision["disallowed_authority_signals"]
+    assert "industry_default" in decision["disallowed_authority_signals"]
 
 
 def test_different_transition_targets_are_blocked() -> None:
