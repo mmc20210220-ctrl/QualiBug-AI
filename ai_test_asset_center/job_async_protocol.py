@@ -104,6 +104,37 @@ def compile_async_job_protocol(envelope: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _install_async_finalizer_guard() -> None:
+    """Keep a failed/blocked Job from satisfying receipt balance as completed.
+
+    The Job transport adapter already returns the existing plan-executor result
+    shape.  This guard only propagates its explicit terminal breakpoint into the
+    existing Finalizer observation contract; it does not derive a terminal state.
+    """
+    from . import job_async_runtime as runtime_module
+
+    current = runtime_module.execute_async_job_plan
+    if getattr(current, "_qualibug_job_finalizer_guard", False):
+        return
+
+    def guarded(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        result = current(*args, **kwargs)
+        reasons = [
+            _text(value)
+            for value in _list(result.get("pre_transport_block_reasons"))
+            if _text(value)
+        ]
+        observations = kwargs.get("observations")
+        if reasons and isinstance(observations, dict):
+            observations["finalizer_block_reason"] = reasons[0]
+            observations["formal_business_finding_eligible"] = False
+        return result
+
+    guarded._qualibug_job_finalizer_guard = True  # type: ignore[attr-defined]
+    guarded._qualibug_original_job_plan = current  # type: ignore[attr-defined]
+    runtime_module.execute_async_job_plan = guarded
+
+
 def register_job_async_protocol() -> str:
     """Register the Job compiler on the existing (family, template) authority."""
     # Install the already-existing process observer/assertion surfaces first.  This
@@ -112,6 +143,7 @@ def register_job_async_protocol() -> str:
     from .multi_step_protocol import register_v150_multi_step_protocols
 
     register_v150_multi_step_protocols()
+    _install_async_finalizer_guard()
     from .experiment_protocol_registry import (
         register_family_protocol,
         resolve_family_protocol,
