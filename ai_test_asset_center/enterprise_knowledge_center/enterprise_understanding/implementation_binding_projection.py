@@ -1,8 +1,8 @@
 """Project the final combined scenario-planning gate.
 
 The base implementation-binding closure already exposes bindings, unknowns, conflicts,
-relationships, summary metrics and governance.  This module runs only after the final semantic
-and document-structure gate is known.  It combines the two authorities without changing either
+relationships, summary metrics and governance. This module runs only after the final semantic
+and document-structure gate is known. It combines the two authorities without changing either
 one and never enables execution.
 """
 from __future__ import annotations
@@ -83,7 +83,7 @@ def build_final_scenario_planning_gate(model: dict[str, Any]) -> dict[str, Any]:
 def project_final_scenario_planning_gate(
     asset: dict[str, Any], model: dict[str, Any]
 ) -> dict[str, Any]:
-    """Expose a final gate after semantic, structure and implementation closure."""
+    """Expose the final gate and compile non-executable Scenario IR v1."""
     scenario_gate = build_final_scenario_planning_gate(model)
     asset["scenario_planning_gate"] = scenario_gate
 
@@ -144,7 +144,12 @@ def project_final_scenario_planning_gate(
         }
     )
     asset["governance"] = governance
-    return asset
+
+    # Keep Scenario IR behind the final gate. The compiler writes only non-executable
+    # design artifacts and an independent Scenario IR gate.
+    from .scenario_ir import project_scenario_ir_to_asset
+
+    return project_scenario_ir_to_asset(asset, model)
 
 
 __all__ = [
