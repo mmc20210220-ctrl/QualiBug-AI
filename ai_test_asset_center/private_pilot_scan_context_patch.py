@@ -40,6 +40,9 @@ from ai_test_asset_center.ui_upload_fixture_registry_integrity import (
 from ai_test_asset_center.ui_upload_fixture_runtime_binding import (
     install_ui_upload_fixture_runtime_binding,
 )
+from ai_test_asset_center.ui_upload_scenario_public_projection import (
+    install_ui_upload_scenario_public_projection,
+)
 from ai_test_asset_center.ui_upload_scenario_runtime_binding import (
     install_ui_upload_scenario_runtime_binding,
 )
@@ -60,7 +63,7 @@ def restore_scan_campaign_context_patch() -> None:
     _service._SCAN_CAMPAIGN_CONTEXT_PATCH_SOURCE = ""  # type: ignore[attr-defined]
     _service._ORIGINAL_V12_SCAN = None  # type: ignore[attr-defined]
     _service._ORIGINAL_HANDLE_V12_SCAN = None  # type: ignore[attr-defined]
-    _service._ORIGINAL_CONTINUOUS_START = None  # type: ignore[attr-defined]
+    _service._ORIGINAL_HANDLE_CONTINUOUS_START = None  # type: ignore[attr-defined]
     _service._ORIGINAL_CONTINUOUS_SCAN_LOOP = None  # type: ignore[attr-defined]
     CONTINUOUS_CAMPAIGN_CONTEXTS.clear()
 
@@ -71,11 +74,13 @@ def install_scan_campaign_context_patch(*, patch_source: str) -> None:
     # Upload scenarios expand into source-bound UI requests plus fixture refs. The
     # source identity comes from the knowledge-center registry; the semantic guard
     # binds one exact safe prerequisite operation and source role before approval;
-    # the fixture authority then materializes file bindings. Every installer is
-    # idempotent and performs no browser or target I/O.
+    # the fixture authority then materializes file bindings. Public list responses
+    # expose only minimized governance summaries, never selectors or probe URLs.
+    # Every installer is idempotent and performs no browser or target I/O.
     install_upload_fixture_registry_integrity()
     install_ui_upload_scenario_source_authority()
     install_ui_upload_scenario_semantic_authority()
+    install_ui_upload_scenario_public_projection()
     install_ui_upload_scenario_runtime_binding()
     install_ui_upload_fixture_runtime_binding()
     install_upload_fixture_scan_gate()
@@ -90,5 +95,5 @@ def install_scan_campaign_context_patch(*, patch_source: str) -> None:
     _service._SCAN_CAMPAIGN_CONTEXT_PATCH_SOURCE = patch_source  # type: ignore[attr-defined]
     _service._ORIGINAL_V12_SCAN = None  # type: ignore[attr-defined]
     _service._ORIGINAL_HANDLE_V12_SCAN = None  # type: ignore[attr-defined]
-    _service._ORIGINAL_CONTINUOUS_START = None  # type: ignore[attr-defined]
+    _service._ORIGINAL_HANDLE_CONTINUOUS_START = None  # type: ignore[attr-defined]
     _service._ORIGINAL_CONTINUOUS_SCAN_LOOP = None  # type: ignore[attr-defined]
