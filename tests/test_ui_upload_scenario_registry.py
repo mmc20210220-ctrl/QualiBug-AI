@@ -1,0 +1,191 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from ai_test_asset_center.enterprise_source_registry import register_source_asset
+from ai_test_asset_center.ui_upload_fixture_registry import (
+    approve_upload_fixture,
+    register_upload_fixture,
+    revoke_upload_fixture,
+)
+from ai_test_asset_center.ui_upload_fixture_registry_integrity import (
+    install_upload_fixture_registry_integrity,
+)
+from ai_test_asset_center.ui_upload_scenario_registry import (
+    approve_upload_scenario,
+    approved_upload_scenario,
+    list_upload_scenarios,
+    register_upload_scenario,
+    revoke_upload_scenario,
+)
+from ai_test_asset_center.ui_upload_scenario_runtime_binding import _hydrate_scenarios
+
+_PROJECT = "upload-scenario-test"
+_ACTOR = {"name": "qa-owner", "role": "qa_lead"}
+
+
+def _source(tmp_path: Path, content: str = "Upload scenario source v1") -> dict[str, str]:
+    return register_source_asset(
+        _PROJECT,
+        "ui-upload-source",
+        content,
+        source_type="uiux_spec",
+        root=tmp_path,
+        actor=_ACTOR,
+        filename="upload-ui.md",
+    )
+
+
+def _fixture(tmp_path: Path) -> dict[str, object]:
+    source = tmp_path / "platform_inputs" / _PROJECT / "inbox" / "sample.csv"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("id,name\n1,Alice\n", encoding="utf-8")
+    registered = register_upload_fixture(
+        _PROJECT,
+        file_path=source,
+        fixture_name="sample-csv",
+        root=tmp_path,
+        actor=_ACTOR,
+    )
+    return approve_upload_fixture(
+        _PROJECT,
+        fixture_id=registered["fixture"]["fixture_id"],
+        root=tmp_path,
+        actor=_ACTOR,
+    )["fixture"]
+
+
+def _payload(binding_ref: str) -> dict[str, object]:
+    return {
+        "title": "客户批量上传",
+        "source_id": "ui-upload-source",
+        "source_locator": "section:bulk-upload",
+        "operation_ref": "customer.bulk_upload",
+        "actor_ref": "qa_operator",
+        "start_url": "/customers/upload",
+        "fixture_binding_refs": [binding_ref],
+        "upload_selector": "input[type=file]",
+        "assertion_selector": "#upload-result",
+        "assertion_text": "上传成功",
+        "rendered_probe_selector": "#upload-result",
+        "persistent_probe_url": "/api/customers/import/state",
+        "persistent_json_pointer": "/count",
+    }
+
+
+def _approved_scenario(tmp_path: Path) -> tuple[dict[str, object], dict[str, object]]:
+    install_upload_fixture_registry_integrity()
+    _source(tmp_path)
+    fixture = _fixture(tmp_path)
+    candidate = register_upload_scenario(
+        _PROJECT,
+        _payload(str(fixture["binding_ref"])),
+        root=tmp_path,
+        actor=_ACTOR,
+    )["scenario"]
+    approved = approve_upload_scenario(
+        _PROJECT,
+        scenario_id=str(candidate["scenario_id"]),
+        root=tmp_path,
+        actor=_ACTOR,
+    )["scenario"]
+    return candidate, approved
+
+
+def test_approved_scenario_materializes_source_request_and_fixture(tmp_path: Path) -> None:
+    _candidate, approved = _approved_scenario(tmp_path)
+
+    materialized = approved_upload_scenario(
+        _PROJECT,
+        str(approved["scenario_ref"]),
+        root=tmp_path,
+    )
+
+    request = materialized["ui_execution_request"]
+    assert request["provider"] == "playwright_browser_plan"
+    assert request["execution_mode"] == "approved_sandbox_write"
+    assert request["source_refs"][0]["source_id"] == "ui-upload-source"
+    assert request["source_refs"][0]["version"].startswith("srcv_")
+    assert request["browser_plan"]["interaction_contract"]["equivalence_scope"] == "rendered_and_persistent_state"
+    assert request["browser_plan"]["steps"][1]["action"] == "set_input_files"
+    assert request["browser_plan"]["steps"][-1]["file_refs"] == []
+    assert materialized["raw_fixture_paths_embedded"] is False
+
+
+def test_runtime_hydration_merges_formal_request_and_fixture_refs(tmp_path: Path) -> None:
+    _candidate, approved = _approved_scenario(tmp_path)
+
+    prepared = _hydrate_scenarios(
+        _PROJECT,
+        tmp_path,
+        {"ui_upload_scenario_ids": [approved["scenario_ref"]]},
+    )
+
+    assert len(prepared["ui_execution_requests"]) == 1
+    assert prepared["ui_execution_requests"][0]["request_id"].startswith("ui_upload_")
+    assert prepared["ui_upload_fixture_ids"] == approved["fixture_binding_refs"]
+    summary = prepared["ui_upload_scenario_binding_summary"]
+    assert summary["scenario_count"] == 1
+    assert summary["registry_derived"] is True
+
+
+def test_source_version_change_blocks_old_approved_scenario(tmp_path: Path) -> None:
+    _candidate, approved = _approved_scenario(tmp_path)
+    _source(tmp_path, "Upload scenario source v2 changed")
+
+    with pytest.raises(RuntimeError, match="source_version_changed"):
+        approved_upload_scenario(
+            _PROJECT,
+            str(approved["scenario_ref"]),
+            root=tmp_path,
+        )
+
+
+def test_fixture_revocation_blocks_old_approved_scenario(tmp_path: Path) -> None:
+    _candidate, approved = _approved_scenario(tmp_path)
+    fixture_ref = str(approved["fixture_binding_refs"][0])
+    from ai_test_asset_center.ui_upload_fixture_registry import active_approved_upload_fixture
+
+    fixture = active_approved_upload_fixture(_PROJECT, fixture_ref, root=tmp_path)
+    assert fixture is not None
+    revoke_upload_fixture(
+        _PROJECT,
+        fixture_id=str(fixture["fixture_id"]),
+        reason="fixture retired",
+        root=tmp_path,
+        actor=_ACTOR,
+    )
+
+    with pytest.raises(KeyError, match="active_approved_upload_fixture_not_found"):
+        approved_upload_scenario(
+            _PROJECT,
+            str(approved["scenario_ref"]),
+            root=tmp_path,
+        )
+
+
+def test_candidate_revocation_cascades_to_approved_copy(tmp_path: Path) -> None:
+    candidate, approved = _approved_scenario(tmp_path)
+
+    result = revoke_upload_scenario(
+        _PROJECT,
+        scenario_id=str(candidate["scenario_id"]),
+        reason="source contract replaced",
+        root=tmp_path,
+        actor=_ACTOR,
+    )
+
+    assert result["status"] == "REVOKED"
+    assert len(result["revoked_records"]) == 2
+    listing = list_upload_scenarios(
+        _PROJECT,
+        root=tmp_path,
+        include_revoked=True,
+    )
+    row = next(
+        item for item in listing["scenarios"]
+        if item.get("scenario_id") == approved["scenario_id"]
+    )
+    assert row["status"] == "revoked"
