@@ -19,6 +19,7 @@ run materialization:
 from __future__ import annotations
 
 import copy
+import json
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,32 @@ def _text(value: Any, *, limit: int = 1000) -> str:
     return str(value or "").strip()[:limit]
 
 
+def _merged_rows(asset: dict[str, Any], *keys: str) -> list[dict[str, Any]]:
+    """Merge aliases without letting an empty preferred list hide a populated one.
+
+    Exact duplicate rows are collapsed. Conflicting rows with the same semantic id
+    remain distinct so the later unique-authority checks fail closed.
+    """
+    output: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for key in keys:
+        for value in _list(asset.get(key)):
+            if not isinstance(value, dict):
+                continue
+            marker = json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            )
+            if marker in seen:
+                continue
+            seen.add(marker)
+            output.append(value)
+    return output
+
+
 def _knowledge_asset(project: str, root: Path) -> dict[str, Any]:
     asset = load_enterprise_business_knowledge_asset(project, root=Path(root))
     if not isinstance(asset, dict) or not asset:
@@ -58,9 +85,8 @@ def _active_source_identity(
     identity = _text(source_id, limit=160)
     matches = [
         row
-        for row in _list(asset.get("sources") or asset.get("source_inventory"))
-        if isinstance(row, dict)
-        and _text(row.get("source_id") or row.get("id"), limit=160) == identity
+        for row in _merged_rows(asset, "sources", "source_inventory")
+        if _text(row.get("source_id") or row.get("id"), limit=160) == identity
         and _text(row.get("status") or "active", limit=40).lower() == "active"
     ]
     if len(matches) != 1:
@@ -88,9 +114,7 @@ def _safe_prerequisite_operation(
     if not identity:
         raise ValueError("ui_upload_scenario_operation_ref_required")
     candidates: list[dict[str, Any]] = []
-    for row in _list(asset.get("interfaces") or asset.get("operations")):
-        if not isinstance(row, dict):
-            continue
+    for row in _merged_rows(asset, "interfaces", "operations"):
         aliases = {
             _text(row.get("interface_id"), limit=240),
             _text(row.get("operation_id"), limit=240),
@@ -129,15 +153,11 @@ def _safe_prerequisite_operation(
 
 def _declared_roles(asset: dict[str, Any]) -> dict[str, str]:
     roles: dict[str, str] = {}
-    for row in _list(asset.get("roles")):
-        if not isinstance(row, dict):
-            continue
+    for row in _merged_rows(asset, "roles"):
         role = _text(row.get("role") or row.get("name") or row.get("id"), limit=160)
         if role:
             roles.setdefault(role.casefold(), role)
-    for row in _list(asset.get("permission_matrix") or asset.get("permissions")):
-        if not isinstance(row, dict):
-            continue
+    for row in _merged_rows(asset, "permission_matrix", "permissions"):
         role = _text(row.get("role") or row.get("actor") or row.get("principal"), limit=160)
         if role:
             roles.setdefault(role.casefold(), role)
