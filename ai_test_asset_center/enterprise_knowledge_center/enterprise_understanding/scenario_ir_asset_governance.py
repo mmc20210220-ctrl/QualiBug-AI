@@ -1,6 +1,7 @@
 """Project Scenario IR closure into asset gaps and relationship graph."""
 from __future__ import annotations
 
+from functools import wraps
 from typing import Any
 
 from .schema import as_dict, as_list, stable_id, text
@@ -80,6 +81,33 @@ def _relationships(scenarios: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if text(row.get("edge_id"))
         }.values()
     )
+
+
+def _install_probe_gate_guard() -> None:
+    """Prevent legacy risk-to-probe generation from bypassing Scenario IR closure."""
+    from .. import _api
+
+    current = _api._probes_from_asset
+    if getattr(current, "_qualibug_scenario_ir_gate_guard", False):
+        return
+    original = current
+
+    @wraps(original)
+    def guarded(asset: dict[str, Any], max_count: int = 140):
+        planning_gate = as_dict(asset.get("scenario_planning_gate"))
+        scenario_gate = as_dict(asset.get("scenario_ir_gate"))
+        if planning_gate:
+            if not bool(planning_gate.get("scenario_planning_allowed")):
+                return []
+            # Once an asset declares the new planning gate, absence of Scenario IR is a
+            # downstream gap, not permission to fall back to the legacy risk compiler.
+            if not scenario_gate or not bool(scenario_gate.get("entry_allowed")):
+                return []
+        return original(asset, max_count)
+
+    guarded._qualibug_scenario_ir_gate_guard = True  # type: ignore[attr-defined]
+    guarded._qualibug_original_probe_builder = original  # type: ignore[attr-defined]
+    _api._probes_from_asset = guarded
 
 
 def project_scenario_ir_asset_governance(
@@ -186,10 +214,12 @@ def project_scenario_ir_asset_governance(
             "scenario_ir_gaps_fail_visible": True,
             "scenario_ir_projection_is_idempotent": True,
             "scenario_ir_relationships_do_not_imply_execution": True,
+            "legacy_probe_generation_requires_scenario_ir_gate": True,
         }
     )
     asset["governance"] = governance
     model["scenario_ir_relationships"] = relationships
+    _install_probe_gate_guard()
     return asset
 
 
