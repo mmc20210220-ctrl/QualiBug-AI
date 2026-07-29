@@ -16,6 +16,7 @@ _MODULES = (
     "ai_test_asset_center.ui_upload_fixture_ingest",
     "ai_test_asset_center.ui_upload_fixture_runtime_binding",
     "ai_test_asset_center.private_pilot_upload_fixture_routes",
+    "ai_test_asset_center.private_pilot_upload_fixture_scan_gate",
 )
 
 
@@ -31,6 +32,7 @@ def upload_fixture_health_status() -> dict[str, Any]:
     registry_api_available = False
     integrity_installed = False
     runtime_binding_installed = False
+    scan_gate_installed = False
     routes_installed = False
     binary_upload_available = False
     campaign_context_binding_installed = False
@@ -47,6 +49,9 @@ def upload_fixture_health_status() -> dict[str, Any]:
         )
         scan_context = importlib.import_module(
             "ai_test_asset_center.private_pilot_scan_context_contract"
+        )
+        scan_handlers = importlib.import_module(
+            "ai_test_asset_center.private_pilot_scan_handlers"
         )
         pipeline_runtime = importlib.import_module(
             "ai_test_asset_center.pipeline_runtime"
@@ -79,6 +84,13 @@ def upload_fixture_health_status() -> dict[str, Any]:
             getattr(
                 scan_prep,
                 "_qualibug_ui_upload_fixture_runtime_binding_installed",
+                False,
+            )
+        )
+        scan_gate_installed = bool(
+            getattr(
+                scan_handlers.ScanHandlersMixin,
+                "_qualibug_upload_fixture_scan_gate_installed",
                 False,
             )
         )
@@ -118,6 +130,7 @@ def upload_fixture_health_status() -> dict[str, Any]:
     composed = all((
         integrity_installed,
         runtime_binding_installed,
+        scan_gate_installed,
         routes_installed,
         campaign_context_binding_installed,
         runtime_contract_binding_installed,
@@ -135,6 +148,7 @@ def upload_fixture_health_status() -> dict[str, Any]:
             "binary_upload_available": binary_upload_available,
             "approval_generation_integrity_installed": integrity_installed,
             "project_routes_installed": routes_installed,
+            "typed_scan_gate_installed": scan_gate_installed,
             "scan_prepare_binding_installed": runtime_binding_installed,
             "campaign_context_binding_installed": campaign_context_binding_installed,
             "runtime_contract_binding_installed": runtime_contract_binding_installed,
@@ -149,6 +163,8 @@ def upload_fixture_health_status() -> dict[str, Any]:
             "revoking_source_cascades_to_approved_copy": True,
             "revoked_binding_ref_can_be_reactivated": False,
             "new_approval_requires_new_binding_ref": True,
+            "invalid_scan_binding_returns_typed_4xx": True,
+            "invalid_scan_binding_traceback_exposed": False,
             "browser_binary_upload_base64_used": False,
             "browser_binary_upload_max_bytes": 10 * 1024 * 1024,
             "revoked_bytes_retained_for_audit": True,
