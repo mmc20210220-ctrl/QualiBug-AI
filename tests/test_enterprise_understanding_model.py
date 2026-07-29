@@ -30,6 +30,8 @@ def _fact(
     actors: list[str] | None = None,
     status: str = "ACCEPTED",
     critical: bool = False,
+    temporal_constraints: list[str] | None = None,
+    time_window_constraints: list[dict] | None = None,
 ) -> dict:
     return {
         "fact_id": fact_id,
@@ -46,7 +48,8 @@ def _fact(
         "postconditions": [],
         "data_effects": [],
         "exceptions": [],
-        "temporal_constraints": [],
+        "temporal_constraints": temporal_constraints or [],
+        "time_window_constraints": time_window_constraints or [],
         "scope": {},
         "modality": "ASSERTS",
         "polarity": "POSITIVE",
@@ -563,3 +566,150 @@ def test_compensation_branch_is_visible_exception_path() -> None:
     process = model["processes"][0]
     assert any(row["path_kind"] == "COMPENSATION" for row in process["exception_paths"])
     assert process["process_type"] in {"LIFECYCLE_CONDITIONAL", "LIFECYCLE_NONLINEAR"}
+
+
+def _lifecycle_pair_facts(object_name: str, prefix: str) -> list[dict]:
+    return [
+        _fact(
+            f"{prefix}-a",
+            f"{object_name}从待处理状态流转到处理中",
+            entities=[object_name],
+            action="开工",
+            states=[{"from_state": "待处理", "to_state": "处理中", "raw": "待处理到处理中"}],
+            actors=["经办人"],
+        ),
+        _fact(
+            f"{prefix}-b",
+            f"{object_name}从处理中状态流转到已完成",
+            entities=[object_name],
+            action="完工",
+            states=[{"from_state": "处理中", "to_state": "已完成", "raw": "处理中到已完成"}],
+            actors=["经办人"],
+        ),
+    ]
+
+
+def test_message_await_projects_multi_object_orchestration() -> None:
+    facts = [
+        *_lifecycle_pair_facts("销售订单", "order"),
+        *_lifecycle_pair_facts("生产任务", "task"),
+        _fact(
+            "fact-await",
+            "生产任务等待销售订单支付消息后开工",
+            entities=["生产任务", "销售订单"],
+            action="开工",
+            conditions=["等待销售订单支付消息后"],
+        ),
+    ]
+
+    model = build_enterprise_understanding_model(_asset(facts))
+    relations = [row for row in model["object_relations"] if row["relation_type"] == "AWAITS"]
+    assert relations
+    multi = [
+        row
+        for row in model["processes"]
+        if row["process_type"] in {"MULTI_OBJECT_ORCHESTRATION", "MULTI_OBJECT_LINKED"}
+    ]
+    assert len(multi) == 1
+    process = multi[0]
+    assert process["process_type"] == "MULTI_OBJECT_ORCHESTRATION"
+    assert "ASYNC_MESSAGE_JOIN" in process["process_features"]
+    assert process["waits"]
+    assert process["waits"][0]["wait_kind"] == "MESSAGE_WAIT"
+    assert [step["object_ref"] for step in process["steps"]] == ["销售订单", "生产任务"]
+
+
+def test_timed_wait_and_cross_system_markers_project_orchestration() -> None:
+    facts = [
+        *_lifecycle_pair_facts("销售订单", "order"),
+        *_lifecycle_pair_facts("出库单", "out"),
+        _fact(
+            "fact-notify",
+            "销售订单跨系统通知出库单，出库单须在支付之后24小时以内处理",
+            entities=["销售订单", "出库单"],
+            action="通知",
+            conditions=["跨系统通知", "支付之后24小时以内"],
+            temporal_constraints=["支付之后24小时以内"],
+            time_window_constraints=[
+                {
+                    "raw": "支付之后24小时以内",
+                    "anchor": "支付",
+                    "relation": "之后",
+                    "duration": "24小时",
+                    "source_backed": True,
+                }
+            ],
+        ),
+    ]
+
+    model = build_enterprise_understanding_model(_asset(facts))
+    notify = next(row for row in model["object_relations"] if row["relation_type"] == "NOTIFIES")
+    assert "CROSS_SYSTEM" in notify["orchestration_markers"]
+    multi = next(
+        row for row in model["processes"] if row["process_type"] == "MULTI_OBJECT_ORCHESTRATION"
+    )
+    assert "CROSS_SYSTEM" in multi["process_features"]
+    assert "TIMED_WAIT" in multi["process_features"]
+    assert any(row["wait_kind"] == "TIMED_WAIT" for row in multi["waits"])
+
+
+def test_explicit_join_marker_projects_multi_object_join() -> None:
+    facts = [
+        *_lifecycle_pair_facts("采购申请", "req"),
+        *_lifecycle_pair_facts("库存检查", "stock"),
+        *_lifecycle_pair_facts("采购订单", "po"),
+        _fact(
+            "fact-join-req",
+            "采购申请均完成后生成采购订单",
+            entities=["采购申请", "采购订单"],
+            action="创建",
+            conditions=["均完成后"],
+        ),
+        _fact(
+            "fact-join-stock",
+            "库存检查均完成后生成采购订单",
+            entities=["库存检查", "采购订单"],
+            action="创建",
+            conditions=["均完成后"],
+        ),
+    ]
+
+    model = build_enterprise_understanding_model(_asset(facts))
+    multi = next(
+        row for row in model["processes"] if row["process_type"] == "MULTI_OBJECT_ORCHESTRATION"
+    )
+    assert multi["joins"]
+    assert multi["joins"][0]["join_kind"] == "SOURCE_EXPLICIT_JOIN"
+    assert set(multi["joins"][0]["incoming_object_refs"]) == {"采购申请", "库存检查"}
+    assert multi["joins"][0]["target_object_ref"] == "采购订单"
+    assert not any(
+        row["reason_code"] == "MULTI_OBJECT_PROCESS_UNDERDETERMINED" for row in model["unknowns"]
+    )
+
+
+def test_join_without_marker_stays_underdetermined() -> None:
+    facts = [
+        *_lifecycle_pair_facts("采购申请", "req"),
+        *_lifecycle_pair_facts("库存检查", "stock"),
+        *_lifecycle_pair_facts("采购订单", "po"),
+        _fact(
+            "fact-gen-req",
+            "采购申请审核通过后生成采购订单",
+            entities=["采购申请", "采购订单"],
+            action="创建",
+        ),
+        _fact(
+            "fact-gen-stock",
+            "库存检查通过后生成采购订单",
+            entities=["库存检查", "采购订单"],
+            action="创建",
+        ),
+    ]
+
+    model = build_enterprise_understanding_model(_asset(facts))
+    assert not any(
+        row["process_type"] == "MULTI_OBJECT_ORCHESTRATION" for row in model["processes"]
+    )
+    assert any(
+        row["reason_code"] == "MULTI_OBJECT_PROCESS_UNDERDETERMINED" for row in model["unknowns"]
+    )

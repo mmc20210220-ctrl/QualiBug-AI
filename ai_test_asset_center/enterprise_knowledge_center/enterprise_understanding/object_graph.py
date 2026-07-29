@@ -31,6 +31,10 @@ _RELATION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("AFFECTS", re.compile(r"影响|联动|同步更新|同步变更")),
     ("COMPENSATES", re.compile(r"补偿|冲销|红冲|回滚|恢复")),
     ("CREATES", re.compile(r"创建|新建|新增")),
+    # Orchestration vocabulary — language markers, not industry rules.
+    ("NOTIFIES", re.compile(r"通知|告知|推送|发送消息|发消息|消息通知")),
+    ("AWAITS", re.compile(r"等待|等到|收到.+?后|监听|订阅")),
+    ("TRIGGERS", re.compile(r"触发|驱动")),
 )
 
 _RELATION_ALIASES = {
@@ -49,7 +53,33 @@ _RELATION_ALIASES = {
     "affects": "AFFECTS",
     "compensates": "COMPENSATES",
     "transitions_to": "TRANSITIONS_TO",
+    "notifies": "NOTIFIES",
+    "awaits": "AWAITS",
+    "triggers": "TRIGGERS",
 }
+
+_ASYNC_MARKER_RE = re.compile(r"异步|消息|回调|事件驱动|队列|通知|推送|订阅|监听")
+_TIMED_WAIT_MARKER_RE = re.compile(
+    r"超时|等待\d+|限时|时限|(?:\d+(?:\.\d+)?)?(?:分钟|小时|天|日|秒)(?:以内|之内|内)"
+)
+_CROSS_SYSTEM_MARKER_RE = re.compile(r"跨系统|系统间|对方系统|外部系统|异构系统|对接系统")
+_JOIN_MARKER_RE = re.compile(r"均完成|都完成|全部完成|都收到|均收到|同时满足后|汇合后|一并完成后|全部收到")
+
+
+def _orchestration_markers(statement: str, conditions: Iterable[Any] = ()) -> list[str]:
+    corpus = " ".join(
+        [text(statement), *[text(value) for value in conditions if text(value)]]
+    )
+    markers: list[str] = []
+    if _ASYNC_MARKER_RE.search(corpus):
+        markers.append("ASYNC_MESSAGE")
+    if _TIMED_WAIT_MARKER_RE.search(corpus):
+        markers.append("TIMED_WAIT")
+    if _CROSS_SYSTEM_MARKER_RE.search(corpus):
+        markers.append("CROSS_SYSTEM")
+    if _JOIN_MARKER_RE.search(corpus):
+        markers.append("EXPLICIT_JOIN")
+    return markers
 
 
 def _accepted_fact(fact: dict[str, Any]) -> bool:
@@ -150,6 +180,7 @@ def build_object_graph(
                 )
             )
             continue
+        conditions = unique_text(as_list(fact.get("conditions")))
         relation_id = stable_id("business_relation", source, relation_type, target, fact.get("fact_id"))
         relations.append(
             {
@@ -158,8 +189,13 @@ def build_object_graph(
                 "source_object_ref": source,
                 "relation_type": relation_type,
                 "target_object_ref": target,
-                "conditions": unique_text(as_list(fact.get("conditions"))),
+                "conditions": conditions,
                 "exceptions": unique_text(as_list(fact.get("exceptions"))),
+                "temporal_constraints": unique_text(as_list(fact.get("temporal_constraints"))),
+                "time_window_constraints": [
+                    row for row in as_list(fact.get("time_window_constraints")) if isinstance(row, dict)
+                ],
+                "orchestration_markers": _orchestration_markers(statement, conditions),
                 "raw_relation": relation_raw,
                 "fact_refs": unique_text([fact.get("fact_id")]),
                 "evidence": evidence,
@@ -204,6 +240,9 @@ def build_object_graph(
                     derivation=derivation or "existing_source_backed_relation",
                 )
             )
+        quote = ""
+        if evidence_rows:
+            quote = text(evidence_rows[0].get("quote"))
         relations.append(
             {
                 "schema": RELATION_SCHEMA,
@@ -213,6 +252,9 @@ def build_object_graph(
                 "target_object_ref": target,
                 "conditions": [],
                 "exceptions": [],
+                "temporal_constraints": [],
+                "time_window_constraints": [],
+                "orchestration_markers": _orchestration_markers(quote or raw_relation),
                 "raw_relation": raw_relation,
                 "fact_refs": [],
                 "evidence": dedupe_evidence(evidence_rows),
@@ -236,6 +278,19 @@ def build_object_graph(
             continue
         existing["conditions"] = unique_text([*as_list(existing.get("conditions")), *as_list(relation.get("conditions"))])
         existing["exceptions"] = unique_text([*as_list(existing.get("exceptions")), *as_list(relation.get("exceptions"))])
+        existing["temporal_constraints"] = unique_text(
+            [*as_list(existing.get("temporal_constraints")), *as_list(relation.get("temporal_constraints"))]
+        )
+        existing_windows = [
+            row for row in as_list(existing.get("time_window_constraints")) if isinstance(row, dict)
+        ]
+        for window in as_list(relation.get("time_window_constraints")):
+            if isinstance(window, dict) and window not in existing_windows:
+                existing_windows.append(window)
+        existing["time_window_constraints"] = existing_windows
+        existing["orchestration_markers"] = unique_text(
+            [*as_list(existing.get("orchestration_markers")), *as_list(relation.get("orchestration_markers"))]
+        )
         existing["fact_refs"] = unique_text([*as_list(existing.get("fact_refs")), *as_list(relation.get("fact_refs"))])
         existing["evidence"] = dedupe_evidence([*as_list(existing.get("evidence")), *as_list(relation.get("evidence"))])
 

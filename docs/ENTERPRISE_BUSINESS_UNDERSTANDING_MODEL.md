@@ -50,8 +50,10 @@ The model contains:
 - `processes`: source-backed lifecycle sequences. Unique linear chains remain
   `LIFECYCLE_UNIQUE_CHAIN`. Explicit multi-outcome conditions or distinct
   operations project `LIFECYCLE_CONDITIONAL` / nonlinear types; underdetermined
-  branches stay `LIFECYCLE_PARTIAL` with unknowns. Document order is never
-  treated as process order.
+  branches stay `LIFECYCLE_PARTIAL` with unknowns. Unique object-relation chains
+  project `MULTI_OBJECT_LINKED`; source-backed joins / message waits / timed waits /
+  cross-system markers project `MULTI_OBJECT_ORCHESTRATION`. Document order is
+  never treated as process order.
 - `rules`: accepted Chinese fact projections.
 - `unknowns`: unresolved subjects, objects, operations, relation endpoints,
   lifecycle states, disconnected lifecycle fragments, and missing business
@@ -104,15 +106,19 @@ Implemented in this phase:
   withdraw / return / compensation exception paths; underdetermined branches emit
   `LIFECYCLE_PARTIAL` + visible unknowns instead of silent omission;
 - unique source-backed multi-object process linking along GENERATES / CREATES /
-  COMPENSATES / DEPENDS_ON relation chains (branching relation graphs stay unresolved).
+  COMPENSATES / DEPENDS_ON / NOTIFIES / AWAITS / TRIGGERS / AFFECTS relation edges
+  (branching relation graphs stay unresolved unless the source states an explicit
+  join or parallel marker);
+- source-backed multi-object orchestration projection: message/async waits,
+  timed waits from temporal / time-window evidence, explicit joins, and
+  cross-system markers; underdetermined choreography emits PARTIAL + visible
+  unknowns instead of inventing order from document appearance.
 
 Not yet complete:
 
 - full Chinese document semantic tree at enterprise scale;
 - cross-document coreference beyond source-backed TERM_ALIAS identity merge
   (proximity / filename / order remain forbidden);
-- richer long-running multi-object orchestration (message/async joins, timed waits,
-  and cross-system choreography beyond unique relation chains);
 - operator authority/version *workflow UI* for resolving conflicts (receipts stay
   UNRESOLVED until an explicit operator decision exists);
 - externally labeled Chinese enterprise understanding benchmark and measured

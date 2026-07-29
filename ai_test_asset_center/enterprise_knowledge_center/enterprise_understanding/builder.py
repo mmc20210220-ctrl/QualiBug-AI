@@ -32,7 +32,15 @@ _PARALLEL_MARKER_RE = re.compile(r"同时|并行|同步进行|一并执行|同�
 _WITHDRAW_OPS = frozenset({"撤回", "撤销"})
 _RETURN_OPS = frozenset({"审批退回", "驳回"})
 _COMPENSATION_OPS = frozenset({"核销", "退款"})
-_LINK_RELATION_TYPES = frozenset({"GENERATES", "CREATES", "COMPENSATES", "DEPENDS_ON"})
+# Causal / creation links: process edge follows relation source → target.
+_FORWARD_LINK_RELATION_TYPES = frozenset(
+    {"GENERATES", "CREATES", "COMPENSATES", "TRIGGERS", "NOTIFIES", "AFFECTS"}
+)
+# Dependency / wait links: source depends on or awaits target → process edge target → source.
+_REVERSE_LINK_RELATION_TYPES = frozenset({"DEPENDS_ON", "AWAITS"})
+_LINK_RELATION_TYPES = _FORWARD_LINK_RELATION_TYPES | _REVERSE_LINK_RELATION_TYPES
+_JOIN_MARKER_RE = re.compile(r"均完成|都完成|全部完成|都收到|均收到|同时满足后|汇合后|一并完成后|全部收到")
+_PARALLEL_OBJECT_MARKER_RE = re.compile(r"同时|并行|同步进行|一并执行|同时进行|并行处理")
 
 
 def _transition_conditions(transition: dict[str, Any]) -> list[str]:
@@ -514,49 +522,141 @@ def _project_lifecycle_process(
     return _project_nonlinear_lifecycle_process(lifecycle)
 
 
+def _relation_process_edge(relation: dict[str, Any]) -> tuple[str, str] | None:
+    """Map a source relation to a process-order edge (predecessor → successor)."""
+    relation_type = text(relation.get("relation_type"))
+    source = text(relation.get("source_object_ref"))
+    target = text(relation.get("target_object_ref"))
+    if not source or not target or source == target:
+        return None
+    if relation_type in _FORWARD_LINK_RELATION_TYPES:
+        return source, target
+    if relation_type in _REVERSE_LINK_RELATION_TYPES:
+        return target, source
+    return None
+
+
+def _relation_corpus(relation: dict[str, Any]) -> str:
+    quotes = [text(as_dict(row).get("quote")) for row in as_list(relation.get("evidence"))]
+    return " ".join(
+        [
+            text(relation.get("raw_relation")),
+            *unique_text(as_list(relation.get("conditions"))),
+            *unique_text(as_list(relation.get("temporal_constraints"))),
+            *[text(as_dict(row).get("raw")) for row in as_list(relation.get("time_window_constraints"))],
+            *quotes,
+        ]
+    )
+
+
+def _relation_has_join_marker(relation: dict[str, Any]) -> bool:
+    markers = unique_text(as_list(relation.get("orchestration_markers")))
+    if "EXPLICIT_JOIN" in markers:
+        return True
+    return bool(_JOIN_MARKER_RE.search(_relation_corpus(relation)))
+
+
+def _relation_has_parallel_marker(relation: dict[str, Any]) -> bool:
+    return bool(_PARALLEL_OBJECT_MARKER_RE.search(_relation_corpus(relation)))
+
+
+def _waits_from_relation(relation: dict[str, Any], predecessor: str, successor: str) -> list[dict[str, Any]]:
+    markers = unique_text(as_list(relation.get("orchestration_markers")))
+    temporal = unique_text(as_list(relation.get("temporal_constraints")))
+    windows = [row for row in as_list(relation.get("time_window_constraints")) if isinstance(row, dict)]
+    relation_type = text(relation.get("relation_type"))
+    waits: list[dict[str, Any]] = []
+    if relation_type == "AWAITS" or "ASYNC_MESSAGE" in markers or "TIMED_WAIT" in markers or temporal or windows:
+        wait_kind = "TIMED_WAIT" if ("TIMED_WAIT" in markers or windows) else "MESSAGE_WAIT"
+        waits.append(
+            {
+                "wait_id": stable_id(
+                    "process_wait",
+                    wait_kind,
+                    predecessor,
+                    successor,
+                    relation.get("relation_id"),
+                ),
+                "wait_kind": wait_kind,
+                "awaiting_object_ref": successor,
+                "awaited_object_ref": predecessor,
+                "relation_type": relation_type,
+                "relation_id": relation.get("relation_id"),
+                "temporal_constraints": temporal,
+                "time_window_constraints": windows,
+                "orchestration_markers": markers,
+                "source_backed": True,
+            }
+        )
+    return waits
+
+
 def _project_multi_object_processes(
     processes: list[dict[str, Any]],
     object_relations: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Link object processes only along unique source-backed relation chains.
+    """Link object processes along source-backed relation / orchestration edges.
 
-    Relation direction is evidence; document order never sequences objects.
-    Branching relation graphs stay unresolved.
+    Unique causal chains remain MULTI_OBJECT_LINKED. Explicit joins, message waits,
+    timed waits, and cross-system markers project MULTI_OBJECT_ORCHESTRATION.
+    Branching without source join/parallel markers stays unresolved — never invent
+    order from document appearance.
     """
     by_object = {
         text(as_list(row.get("inputs"))[0] if as_list(row.get("inputs")) else ""): row
         for row in processes
         if isinstance(row, dict) and as_list(row.get("inputs"))
     }
-    outgoing: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    indegree: dict[str, int] = defaultdict(int)
+    outgoing: dict[str, list[tuple[str, dict[str, Any]]]] = defaultdict(list)
+    incoming: dict[str, list[tuple[str, dict[str, Any]]]] = defaultdict(list)
+    edge_relations: list[tuple[str, str, dict[str, Any]]] = []
     for relation in object_relations:
         if not isinstance(relation, dict):
             continue
-        relation_type = text(relation.get("relation_type"))
-        if relation_type not in _LINK_RELATION_TYPES:
+        if text(relation.get("relation_type")) not in _LINK_RELATION_TYPES:
             continue
-        source = text(relation.get("source_object_ref"))
-        target = text(relation.get("target_object_ref"))
-        if not source or not target or source not in by_object or target not in by_object:
+        edge = _relation_process_edge(relation)
+        if edge is None:
             continue
-        outgoing[source].append(relation)
-        indegree[target] += 1
+        predecessor, successor = edge
+        if predecessor not in by_object or successor not in by_object:
+            continue
+        outgoing[predecessor].append((successor, relation))
+        incoming[successor].append((predecessor, relation))
+        edge_relations.append((predecessor, successor, relation))
 
-    linked_objects = set(outgoing) | {text(relation.get("target_object_ref")) for rows in outgoing.values() for relation in rows}
+    linked_objects = {obj for pred, succ, _ in edge_relations for obj in (pred, succ)}
     if not linked_objects:
         return [], []
 
-    if any(len(rows) > 1 for rows in outgoing.values()) or any(
-        indegree.get(obj, 0) > 1 for obj in linked_objects
-    ):
-        evidence = dedupe_evidence(
-            [row for relation in object_relations if isinstance(relation, dict) for row in as_list(relation.get("evidence"))]
-        )
+    evidence = dedupe_evidence(
+        [
+            *[row for relation in object_relations if isinstance(relation, dict) for row in as_list(relation.get("evidence"))],
+            *[row for obj in linked_objects for row in as_list(by_object[obj].get("evidence"))],
+        ]
+    )
+    fork_objects = sorted(obj for obj, rows in outgoing.items() if len(rows) > 1)
+    join_objects = sorted(obj for obj, rows in incoming.items() if len(rows) > 1)
+    unknowns: list[dict[str, Any]] = []
+
+    # Forks require explicit parallel markers on every outgoing edge; otherwise fail closed.
+    underdetermined_forks = [
+        obj
+        for obj in fork_objects
+        if not all(_relation_has_parallel_marker(relation) for _, relation in outgoing[obj])
+    ]
+    # Joins require explicit join markers on every incoming edge; otherwise fail closed.
+    underdetermined_joins = [
+        obj
+        for obj in join_objects
+        if not all(_relation_has_join_marker(relation) for _, relation in incoming[obj])
+    ]
+
+    if underdetermined_forks or underdetermined_joins:
         return [], [
             new_unknown(
                 "MULTI_OBJECT_PROCESS_UNDERDETERMINED",
-                "多个业务对象之间存在可关联关系，但关系图存在分叉或汇合，资料未给出唯一跨对象流程顺序。",
+                "多个业务对象之间存在可关联关系，但关系图存在分叉或汇合且资料未给出唯一跨对象流程顺序或显式汇合/并行标记。",
                 related_objects=sorted(linked_objects),
                 evidence=evidence,
                 severity="P1",
@@ -564,25 +664,26 @@ def _project_multi_object_processes(
                 reason_code="MULTI_OBJECT_PROCESS_UNDERDETERMINED",
                 details={
                     "objects": sorted(linked_objects),
+                    "fork_objects": underdetermined_forks,
+                    "join_objects": underdetermined_joins,
                     "relation_types": sorted(
                         {
                             text(relation.get("relation_type"))
-                            for relation in object_relations
-                            if isinstance(relation, dict)
-                            and text(relation.get("relation_type")) in _LINK_RELATION_TYPES
+                            for _, _, relation in edge_relations
                         }
                     ),
                 },
             )
         ]
 
-    starts = sorted(obj for obj in linked_objects if indegree.get(obj, 0) == 0)
-    if len(starts) != 1:
+    starts = sorted(obj for obj in linked_objects if not incoming.get(obj))
+    if len(starts) != 1 and not join_objects:
         return [], [
             new_unknown(
                 "MULTI_OBJECT_PROCESS_START_UNDERDETERMINED",
                 "跨对象流程缺少唯一起始业务对象，不能按文档出现顺序臆造主流程。",
                 related_objects=sorted(linked_objects),
+                evidence=evidence,
                 severity="P1",
                 blocks_formal_understanding=False,
                 reason_code="MULTI_OBJECT_PROCESS_START_UNDERDETERMINED",
@@ -590,74 +691,263 @@ def _project_multi_object_processes(
             )
         ]
 
-    ordered_objects: list[str] = []
-    link_steps: list[dict[str, Any]] = []
-    current = starts[0]
-    visited: set[str] = set()
-    while current in outgoing:
-        if current in visited:
+    # Unique chain (no forks/joins): walk from the single start.
+    if not fork_objects and not join_objects:
+        ordered_objects: list[str] = []
+        link_steps: list[dict[str, Any]] = []
+        waits: list[dict[str, Any]] = []
+        current = starts[0]
+        visited: set[str] = set()
+        while current in outgoing:
+            if current in visited:
+                return [], [
+                    new_unknown(
+                        "MULTI_OBJECT_PROCESS_CYCLE",
+                        "跨对象关系形成环路，资料未声明循环边界，跨对象流程保持未决。",
+                        related_objects=sorted(linked_objects),
+                        evidence=evidence,
+                        severity="P1",
+                        blocks_formal_understanding=False,
+                        reason_code="MULTI_OBJECT_PROCESS_CYCLE",
+                        details={"objects": sorted(linked_objects)},
+                    )
+                ]
+            visited.add(current)
+            ordered_objects.append(current)
+            successor, relation = outgoing[current][0]
+            link_steps.append(
+                {
+                    "order": len(link_steps) + 1,
+                    "source_object_ref": current,
+                    "relation_type": relation.get("relation_type"),
+                    "relation_id": relation.get("relation_id"),
+                    "target_object_ref": successor,
+                    "source_process_ref": by_object[current].get("process_id"),
+                    "target_process_ref": by_object[successor].get("process_id"),
+                    "orchestration_markers": unique_text(as_list(relation.get("orchestration_markers"))),
+                }
+            )
+            waits.extend(_waits_from_relation(relation, current, successor))
+            current = successor
+        ordered_objects.append(current)
+        if set(ordered_objects) != linked_objects:
             return [], [
                 new_unknown(
-                    "MULTI_OBJECT_PROCESS_CYCLE",
-                    "跨对象关系形成环路，资料未声明循环边界，跨对象流程保持未决。",
+                    "MULTI_OBJECT_PROCESS_INCOMPLETE",
+                    "跨对象关系未能覆盖全部已关联对象，跨对象流程保持部分未决。",
                     related_objects=sorted(linked_objects),
+                    evidence=evidence,
                     severity="P1",
                     blocks_formal_understanding=False,
-                    reason_code="MULTI_OBJECT_PROCESS_CYCLE",
-                    details={"objects": sorted(linked_objects)},
+                    reason_code="MULTI_OBJECT_PROCESS_INCOMPLETE",
+                    details={"ordered_objects": ordered_objects, "objects": sorted(linked_objects)},
                 )
             ]
-        visited.add(current)
-        ordered_objects.append(current)
-        relation = outgoing[current][0]
-        target = text(relation.get("target_object_ref"))
-        link_steps.append(
+        features = ["MULTI_OBJECT"]
+        markers = unique_text(
+            [marker for step in link_steps for marker in as_list(step.get("orchestration_markers"))]
+        )
+        if any(marker in {"ASYNC_MESSAGE"} for marker in markers) or any(
+            text(step.get("relation_type")) in {"NOTIFIES", "AWAITS", "TRIGGERS"} for step in link_steps
+        ):
+            features.append("ASYNC_MESSAGE_JOIN")
+        if waits and any(text(row.get("wait_kind")) == "TIMED_WAIT" for row in waits):
+            features.append("TIMED_WAIT")
+        if "CROSS_SYSTEM" in markers:
+            features.append("CROSS_SYSTEM")
+        process_type = "MULTI_OBJECT_ORCHESTRATION" if len(features) > 1 else "MULTI_OBJECT_LINKED"
+        status = (
+            "PARTIAL"
+            if any(text(by_object[obj].get("status")) == "PARTIAL" for obj in ordered_objects)
+            else "UNDERSTOOD"
+        )
+        process = {
+            "schema": PROCESS_SCHEMA,
+            "process_id": stable_id(
+                "business_process", "multi_object", ordered_objects, [step.get("relation_id") for step in link_steps]
+            ),
+            "name": "→".join(ordered_objects) + "跨对象流程",
+            "process_type": process_type,
+            "process_features": unique_text(features),
+            "trigger": {"object_ref": starts[0]},
+            "inputs": [starts[0]],
+            "outputs": [{"object_ref": ordered_objects[-1]}],
+            "participants": unique_text(
+                [actor for obj in ordered_objects for actor in as_list(by_object[obj].get("participants"))]
+            ),
+            "steps": [
+                {
+                    "order": index + 1,
+                    "object_ref": obj,
+                    "process_ref": by_object[obj].get("process_id"),
+                    "object_process_type": by_object[obj].get("process_type"),
+                }
+                for index, obj in enumerate(ordered_objects)
+            ],
+            "object_links": link_steps,
+            "joins": [],
+            "waits": waits,
+            "branches": [],
+            "loops": [],
+            "parallel_groups": [],
+            "exception_paths": [
+                row
+                for obj in ordered_objects
+                for row in as_list(by_object[obj].get("exception_paths"))
+                if isinstance(row, dict)
+            ],
+            "exceptions": unique_text(
+                [value for obj in ordered_objects for value in as_list(by_object[obj].get("exceptions"))]
+            ),
+            "evidence": evidence,
+            "status": status,
+            "derivation": (
+                "source_backed_object_orchestration_chain"
+                if process_type == "MULTI_OBJECT_ORCHESTRATION"
+                else "unique_source_backed_object_relation_chain"
+            ),
+        }
+        return [process], []
+
+    # Explicit join / parallel orchestration graph.
+    joins: list[dict[str, Any]] = []
+    for obj in join_objects:
+        rows = incoming[obj]
+        joins.append(
             {
-                "order": len(link_steps) + 1,
-                "source_object_ref": current,
-                "relation_type": relation.get("relation_type"),
-                "relation_id": relation.get("relation_id"),
-                "target_object_ref": target,
-                "source_process_ref": by_object[current].get("process_id"),
-                "target_process_ref": by_object[target].get("process_id"),
+                "join_id": stable_id(
+                    "process_join",
+                    obj,
+                    [pred for pred, _ in rows],
+                    [relation.get("relation_id") for _, relation in rows],
+                ),
+                "join_kind": "SOURCE_EXPLICIT_JOIN",
+                "target_object_ref": obj,
+                "incoming_object_refs": sorted({pred for pred, _ in rows}),
+                "relation_ids": unique_text([relation.get("relation_id") for _, relation in rows]),
+                "markers": unique_text(
+                    [
+                        marker
+                        for _, relation in rows
+                        for marker in as_list(relation.get("orchestration_markers"))
+                    ]
+                ),
             }
         )
-        current = target
-    ordered_objects.append(current)
+    parallel_groups: list[dict[str, Any]] = []
+    for obj in fork_objects:
+        rows = outgoing[obj]
+        parallel_groups.append(
+            {
+                "group_id": stable_id(
+                    "process_object_parallel",
+                    obj,
+                    [succ for succ, _ in rows],
+                    [relation.get("relation_id") for _, relation in rows],
+                ),
+                "from_object_ref": obj,
+                "marker": "SOURCE_PARALLEL_MARKER",
+                "members": [
+                    {
+                        "target_object_ref": succ,
+                        "relation_type": relation.get("relation_type"),
+                        "relation_id": relation.get("relation_id"),
+                    }
+                    for succ, relation in rows
+                ],
+            }
+        )
+
+    # Topological layers from starts; fail closed on cycles.
+    ordered_objects = []
+    waits = []
+    link_steps = []
+    indegree_left = {obj: len(incoming.get(obj, [])) for obj in linked_objects}
+    queue = sorted(obj for obj, degree in indegree_left.items() if degree == 0)
+    visited_edges: set[str] = set()
+    while queue:
+        current = queue.pop(0)
+        ordered_objects.append(current)
+        for successor, relation in outgoing.get(current, []):
+            relation_id = text(relation.get("relation_id"))
+            if relation_id and relation_id not in visited_edges:
+                visited_edges.add(relation_id)
+                link_steps.append(
+                    {
+                        "order": len(link_steps) + 1,
+                        "source_object_ref": current,
+                        "relation_type": relation.get("relation_type"),
+                        "relation_id": relation.get("relation_id"),
+                        "target_object_ref": successor,
+                        "source_process_ref": by_object[current].get("process_id"),
+                        "target_process_ref": by_object[successor].get("process_id"),
+                        "orchestration_markers": unique_text(as_list(relation.get("orchestration_markers"))),
+                    }
+                )
+                waits.extend(_waits_from_relation(relation, current, successor))
+            indegree_left[successor] -= 1
+            if indegree_left[successor] == 0:
+                queue.append(successor)
+                queue.sort()
     if set(ordered_objects) != linked_objects:
         return [], [
             new_unknown(
-                "MULTI_OBJECT_PROCESS_INCOMPLETE",
-                "跨对象关系未能覆盖全部已关联对象，跨对象流程保持部分未决。",
+                "MULTI_OBJECT_PROCESS_CYCLE",
+                "跨对象编排关系形成环路或无法拓扑展开，资料未声明循环边界，跨对象流程保持未决。",
                 related_objects=sorted(linked_objects),
+                evidence=evidence,
                 severity="P1",
                 blocks_formal_understanding=False,
-                reason_code="MULTI_OBJECT_PROCESS_INCOMPLETE",
+                reason_code="MULTI_OBJECT_PROCESS_CYCLE",
                 details={"ordered_objects": ordered_objects, "objects": sorted(linked_objects)},
             )
         ]
 
-    evidence = dedupe_evidence(
-        [
-            *[row for obj in ordered_objects for row in as_list(by_object[obj].get("evidence"))],
-            *[
-                row
-                for step in link_steps
-                for relation in object_relations
-                if isinstance(relation, dict) and text(relation.get("relation_id")) == text(step.get("relation_id"))
-                for row in as_list(relation.get("evidence"))
-            ],
-        ]
+    features = ["MULTI_OBJECT", "ORCHESTRATION"]
+    if joins:
+        features.append("ASYNC_MESSAGE_JOIN" if any("ASYNC_MESSAGE" in as_list(row.get("markers")) for row in joins) else "EXPLICIT_JOIN")
+    if parallel_groups:
+        features.append("PARALLEL")
+    if waits and any(text(row.get("wait_kind")) == "TIMED_WAIT" for row in waits):
+        features.append("TIMED_WAIT")
+    if any("CROSS_SYSTEM" in as_list(step.get("orchestration_markers")) for step in link_steps):
+        features.append("CROSS_SYSTEM")
+    if waits and any(text(row.get("wait_kind")) == "MESSAGE_WAIT" for row in waits):
+        features.append("ASYNC_MESSAGE_JOIN")
+
+    terminals = sorted(obj for obj in linked_objects if not outgoing.get(obj))
+    status = (
+        "PARTIAL"
+        if any(text(by_object[obj].get("status")) == "PARTIAL" for obj in ordered_objects) or len(starts) != 1
+        else "UNDERSTOOD"
     )
+    if len(starts) != 1:
+        unknowns.append(
+            new_unknown(
+                "MULTI_OBJECT_PROCESS_START_UNDERDETERMINED",
+                "跨对象编排存在多个或零个起始业务对象；已按显式汇合/并行关系投影，但入口仍未唯一确定。",
+                related_objects=sorted(linked_objects),
+                evidence=evidence,
+                severity="P1",
+                blocks_formal_understanding=False,
+                reason_code="MULTI_OBJECT_PROCESS_START_UNDERDETERMINED",
+                details={"start_objects": starts, "objects": sorted(linked_objects)},
+            )
+        )
     process = {
         "schema": PROCESS_SCHEMA,
-        "process_id": stable_id("business_process", "multi_object", ordered_objects, [step.get("relation_id") for step in link_steps]),
-        "name": "→".join(ordered_objects) + "跨对象流程",
-        "process_type": "MULTI_OBJECT_LINKED",
-        "process_features": ["MULTI_OBJECT"],
-        "trigger": {"object_ref": starts[0]},
-        "inputs": [starts[0]],
-        "outputs": [{"object_ref": ordered_objects[-1]}],
+        "process_id": stable_id(
+            "business_process",
+            "multi_object_orchestration",
+            ordered_objects,
+            [step.get("relation_id") for step in link_steps],
+        ),
+        "name": "→".join(ordered_objects) + "跨对象编排流程",
+        "process_type": "MULTI_OBJECT_ORCHESTRATION",
+        "process_features": unique_text(features),
+        "trigger": {"object_ref": starts[0]} if len(starts) == 1 else {"object_refs": starts},
+        "inputs": starts if starts else sorted(linked_objects),
+        "outputs": [{"object_ref": obj} for obj in terminals],
         "participants": unique_text(
             [actor for obj in ordered_objects for actor in as_list(by_object[obj].get("participants"))]
         ),
@@ -671,9 +961,11 @@ def _project_multi_object_processes(
             for index, obj in enumerate(ordered_objects)
         ],
         "object_links": link_steps,
+        "joins": joins,
+        "waits": waits,
         "branches": [],
         "loops": [],
-        "parallel_groups": [],
+        "parallel_groups": parallel_groups,
         "exception_paths": [
             row
             for obj in ordered_objects
@@ -684,10 +976,10 @@ def _project_multi_object_processes(
             [value for obj in ordered_objects for value in as_list(by_object[obj].get("exceptions"))]
         ),
         "evidence": evidence,
-        "status": "PARTIAL" if any(text(by_object[obj].get("status")) == "PARTIAL" for obj in ordered_objects) else "UNDERSTOOD",
-        "derivation": "unique_source_backed_object_relation_chain",
+        "status": status,
+        "derivation": "source_backed_multi_object_orchestration",
     }
-    return [process], []
+    return [process], unknowns
 
 
 def _normalize_conflicts(asset: dict[str, Any]) -> list[dict[str, Any]]:
