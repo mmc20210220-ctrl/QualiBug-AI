@@ -28,7 +28,7 @@ export type UploadScenarioInput = {
   source_id: string;
   source_locator: string;
   operation_ref: string;
-  actor_ref: string;
+  actor_role: string;
   start_url: string;
   fixture_binding_refs: string[];
   upload_selector: string;
