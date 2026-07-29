@@ -191,15 +191,15 @@ export function EnterpriseUnderstandingPanel({ summary: value, onOpenMaterials }
   const residualBlockers = blockers.filter((blocker) => !receiptMessages.has(blocker));
   const firstBlocked = gates.find((gate) => !gate.ready);
   const statusTitle = chainReady
-    ? '运行准备链已闭合'
+    ? '运行草稿链已闭合'
     : understandingReady
-      ? '企业理解已闭合，运行准备链待完善'
+      ? '企业理解已闭合，运行草稿链待完善'
       : '企业理解尚未闭合';
   const statusDetail = chainReady
-    ? '企业理解、场景规划、Scenario IR、执行合同、Runtime Plan 和运行实例化均已通过现有门禁。真实执行仍由现有 Experiment Executor 继续检查现场凭据、动态值、观察回执和清理恢复。'
+    ? '企业理解、场景规划、Scenario IR、执行合同、Runtime Plan 和运行实例化均已通过现有门禁。当前仍只是不可发送的请求草稿和不可执行的断言草稿；秘密值、网络调用、SQL、清理执行与 Bug 判定保持关闭。'
     : firstBlocked
       ? `当前停在“${firstBlocked.label}”：${firstBlocked.status}。下方只读回执展示现有资产已经记录的资料来源或接入缺口；没有证据的条目不会被系统猜测补齐。`
-      : '现有知识资产尚未形成完整的运行准备链。';
+      : '现有知识资产尚未形成完整的运行草稿链。';
 
   return (
     <section className="focus-section" aria-label="企业理解状态">
