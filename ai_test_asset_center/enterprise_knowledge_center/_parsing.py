@@ -586,19 +586,17 @@ def _field_dictionary_entries(text: str, payload: Any, source_id: str) -> list[d
         field_type = _pick_first(item, ("type", "data_type", "dataType", "字段类型", "类型"))
         description = _pick_first(item, ("description", "desc", "comment", "说明", "描述", "remark", "备注"))
         required = _pick_first(item, ("required", "nullable", "必填", "is_required"))
+        required_value = _doc_bool(required)
         constraint = _pick_first(item, tuple(sorted(_IDENTITY_CONSTRAINT_HEADERS)))
-        # Preserve an exact source-declared excerpt so FIELD_REQUIRED_MISMATCH
-        # authority evidence can show both sides. Never invent business prose —
-        # only echo coordinates present on the source item.
-        excerpt_bits: list[str] = []
+        evidence_bits: list[str] = []
         if table_name:
-            excerpt_bits.append(f"table={table_name}")
-        excerpt_bits.append(f"field={field_name}")
-        if required is not None and str(required).strip() != "":
-            excerpt_bits.append(f"required={required}")
+            evidence_bits.append(f"table={table_name}")
+        evidence_bits.append(f"field={field_name}")
+        if required is not None and str(required).strip() != "" and isinstance(required_value, bool):
+            evidence_bits.append(f"required={'true' if required_value else 'false'}")
         if field_type:
-            excerpt_bits.append(f"type={field_type}")
-        source_excerpt = _redact_text("; ".join(excerpt_bits), 320)
+            evidence_bits.append(f"type={field_type}")
+        normalized_evidence = _redact_text("; ".join(evidence_bits), 320)
         rows.append({
             "field_id": f"field:{source_id}:{_short_hash({'table': table_name or 'default', 'field': field_name})}",
             "source_id": source_id,
@@ -607,14 +605,15 @@ def _field_dictionary_entries(text: str, payload: Any, source_id: str) -> list[d
             "field": field_name,
             "field_path": field_name,
             "type": field_type,
-            "required": _doc_bool(required),
+            "required": required_value,
             "constraint": _redact_text(constraint, 160),
             "identity": _declares_identity(constraint) or _doc_bool(
                 _pick_first(item, ("primary_key", "primaryKey", "unique", "is_unique", "主键", "唯一"))
             ) is True,
             "description": _redact_text(description, 320),
-            "source_excerpt": source_excerpt,
-            "quote": source_excerpt,
+            "normalized_evidence": normalized_evidence,
+            "evidence_kind": "NORMALIZED_STRUCTURED_DECLARATION",
+            "evidence_derivation": "normalized_field_dictionary_projection",
             "tokens": sorted(_tokens(f"{table_name} {field_name} {field_type} {description}")),
         })
     rows.extend(_infer_field_rows_from_markdown(text, source_id))
@@ -2134,5 +2133,3 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
         "document_structure": _doc_struct.to_dict(),
         "source_types": _source_types,
     }
-
-
