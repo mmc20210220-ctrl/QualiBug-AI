@@ -74,23 +74,34 @@ export async function runV12ScanFromRunCenter(
 ): Promise<V12ScanResult> {
   const project = projectId.trim();
   if (!project) throw new Error('未选择有效项目，无法执行扫描。');
-  const fixtureIds = normalizedIdentities(
-    options.ui_upload_fixture_ids,
-    /^uifb_[a-f0-9]{20}$/,
-    '上传 Fixture binding_ref',
-    20,
-  );
-  const scenarioIds = options.ui_upload_scenario_ids === undefined
-    ? await activeApprovedScenarioIds(project)
+
+  // An explicit read-only request is the operator kill switch. It must suppress
+  // every governed write input before scenario/fixture resolution, rather than
+  // being silently overridden by an approved background asset.
+  const forceReadOnly = options.execution_mode === 'safe_read_only';
+  const fixtureIds = forceReadOnly
+    ? []
     : normalizedIdentities(
-      options.ui_upload_scenario_ids,
-      /^(?:uisr|uisa)_[a-f0-9]{20}$/,
-      '上传场景引用',
+      options.ui_upload_fixture_ids,
+      /^uifb_[a-f0-9]{20}$/,
+      '上传 Fixture binding_ref',
       20,
     );
-  const executionMode = fixtureIds.length || scenarioIds.length
-    ? 'approved_sandbox_write'
-    : options.execution_mode;
+  const scenarioIds = forceReadOnly
+    ? []
+    : options.ui_upload_scenario_ids === undefined
+      ? await activeApprovedScenarioIds(project)
+      : normalizedIdentities(
+        options.ui_upload_scenario_ids,
+        /^(?:uisr|uisa)_[a-f0-9]{20}$/,
+        '上传场景引用',
+        20,
+      );
+  const executionMode = forceReadOnly
+    ? 'safe_read_only'
+    : fixtureIds.length || scenarioIds.length
+      ? 'approved_sandbox_write'
+      : options.execution_mode;
   const headers = new Headers({ 'Content-Type': 'application/json' });
   const token = currentToken();
   if (token) headers.set('Authorization', `Bearer ${token}`);
