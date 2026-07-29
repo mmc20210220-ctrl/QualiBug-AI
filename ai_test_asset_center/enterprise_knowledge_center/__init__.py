@@ -36,6 +36,16 @@ from ._job_assets import (  # noqa: F401
     enrich_job_assets,
     install_job_asset_enrichment,
 )
+from ..job_async_protocol import (  # noqa: F401
+    TEMPLATE_ASYNC_JOB_EXECUTION,
+    compile_async_job_protocol,
+    register_job_async_protocol,
+)
+from ..job_async_runtime import (  # noqa: F401
+    execute_async_job_plan,
+    execute_registered_job_operation,
+    install_job_async_execution_adapter,
+)
 from ._formal_ui_contracts import (  # noqa: F401
     extract_formal_ui_contracts,
     install_formal_ui_contract_parser,
@@ -59,6 +69,11 @@ install_formal_ui_contract_parser()
 install_formal_ui_persistent_probe_guard()
 install_formal_ui_visual_baseline_guard()
 install_formal_ui_visual_viewport_guard()
+
+# The Job capability is installed on the existing protocol and plan-execution
+# authorities. Non-Job plans delegate to the original executor unchanged.
+JOB_ASYNC_PROTOCOL_ID = register_job_async_protocol()
+execute_non_barrier_job_adapter = install_job_async_execution_adapter()
 
 # Install on the existing knowledge-center build authority. Chinese source spans
 # become governed facts first; unresolved contradictions are removed from formal
@@ -268,6 +283,13 @@ __all__ = [
     "discover_job_definitions_from_text",
     "enrich_job_assets",
     "install_job_asset_enrichment",
+    "TEMPLATE_ASYNC_JOB_EXECUTION",
+    "compile_async_job_protocol",
+    "register_job_async_protocol",
+    "execute_registered_job_operation",
+    "execute_async_job_plan",
+    "install_job_async_execution_adapter",
+    "JOB_ASYNC_PROTOCOL_ID",
     "build_enterprise_business_knowledge_asset",
     "load_enterprise_business_knowledge_asset",
     "generate_enterprise_business_knowledge_probes",
