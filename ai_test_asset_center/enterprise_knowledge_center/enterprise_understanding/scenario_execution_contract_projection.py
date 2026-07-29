@@ -97,6 +97,9 @@ def project_governed_scenario_execution_contracts(
     project_scenario_execution_contracts(asset, model)
     project_runtime_plans_to_asset(asset, model)
     install_scenario_execution_probe_guard()
+    governance = as_dict(asset.get("governance"))
+    governance["legacy_probe_generation_requires_runtime_plan_gate"] = True
+    asset["governance"] = governance
     return asset
 
 
