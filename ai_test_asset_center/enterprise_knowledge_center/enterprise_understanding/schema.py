@@ -17,6 +17,9 @@ OPERATION_SCHEMA = "qualibug.enterprise-business-operation.v1"
 RELATION_SCHEMA = "qualibug.enterprise-business-object-relation.v1"
 LIFECYCLE_SCHEMA = "qualibug.enterprise-business-lifecycle.v1"
 PROCESS_SCHEMA = "qualibug.enterprise-business-process.v1"
+BEHAVIOR_SCHEMA = "qualibug.enterprise-business-behavior.v1"
+BEHAVIOR_ROW_LEDGER_SCHEMA = "qualibug.decision-matrix-row-ledger.v1"
+BEHAVIOR_GATE_SCHEMA = "qualibug.enterprise-business-behavior-gate.v1"
 UNKNOWN_SCHEMA = "qualibug.enterprise-business-unknown.v1"
 GATE_SCHEMA = "qualibug.enterprise-understanding-model-gate.v1"
 
@@ -170,6 +173,15 @@ def empty_model() -> dict[str, Any]:
         "lifecycles": [],
         "processes": [],
         "rules": [],
+        "decision_matrix_row_ledger": [],
+        "business_behaviors": [],
+        "behavior_conflicts": [],
+        "behavior_ir_gate": {
+            "schema": BEHAVIOR_GATE_SCHEMA,
+            "status": "NOT_BUILT",
+            "entry_allowed": False,
+            "metrics": {},
+        },
         "unknowns": [],
         "conflicts": [],
         "evidence_index": [],
@@ -196,20 +208,46 @@ def validate_model_shape(model: dict[str, Any]) -> list[dict[str, Any]]:
         "lifecycles",
         "processes",
         "rules",
+        "decision_matrix_row_ledger",
+        "business_behaviors",
+        "behavior_conflicts",
         "unknowns",
         "conflicts",
         "evidence_index",
     ):
         if not isinstance(model.get(key), list):
             violations.append({"code": "MODEL_COLLECTION_INVALID", "field": key})
-    for collection in ("business_objects", "actors", "operations", "object_relations", "lifecycles", "processes"):
+    if not isinstance(model.get("behavior_ir_gate"), dict):
+        violations.append({"code": "MODEL_OBJECT_INVALID", "field": "behavior_ir_gate"})
+    for collection in (
+        "business_objects",
+        "actors",
+        "operations",
+        "object_relations",
+        "lifecycles",
+        "processes",
+        "business_behaviors",
+    ):
         for index, row in enumerate(as_list(model.get(collection))):
             if not isinstance(row, dict):
                 violations.append({"code": "MODEL_ENTRY_INVALID", "field": collection, "index": index})
                 continue
             evidence = row.get("evidence")
             if not isinstance(evidence, list) or not evidence:
-                violations.append({"code": "FORMAL_ENTRY_WITHOUT_EVIDENCE", "field": collection, "index": index, "id": row.get("object_id") or row.get("actor_id") or row.get("operation_id") or row.get("relation_id") or row.get("lifecycle_id") or row.get("process_id")})
+                violations.append(
+                    {
+                        "code": "FORMAL_ENTRY_WITHOUT_EVIDENCE",
+                        "field": collection,
+                        "index": index,
+                        "id": row.get("object_id")
+                        or row.get("actor_id")
+                        or row.get("operation_id")
+                        or row.get("relation_id")
+                        or row.get("lifecycle_id")
+                        or row.get("process_id")
+                        or row.get("behavior_id"),
+                    }
+                )
     return violations
 
 
@@ -221,6 +259,9 @@ __all__ = [
     "RELATION_SCHEMA",
     "LIFECYCLE_SCHEMA",
     "PROCESS_SCHEMA",
+    "BEHAVIOR_SCHEMA",
+    "BEHAVIOR_ROW_LEDGER_SCHEMA",
+    "BEHAVIOR_GATE_SCHEMA",
     "UNKNOWN_SCHEMA",
     "GATE_SCHEMA",
     "text",
