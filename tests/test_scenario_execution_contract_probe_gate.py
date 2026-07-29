@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from ai_test_asset_center.enterprise_knowledge_center import _api
+from ai_test_asset_center.enterprise_knowledge_center import _api, _linking
+from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.scenario_execution_probe_guard import (
+    install_scenario_execution_probe_guard,
+)
 from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.scenario_ir_asset_governance import (
     project_scenario_ir_asset_governance,
 )
@@ -81,18 +84,18 @@ def test_execution_contract_gate_blocks_legacy_probe_generation() -> None:
     assert probes == []
 
 
-def test_execution_contract_gate_pass_preserves_legacy_candidate_probe_compatibility() -> None:
-    project_scenario_ir_asset_governance(
-        {
-            "scenario_ir": [],
-            "scenario_ir_gate": {"status": "PASS", "entry_allowed": True},
-            "summary": {},
-            "governance": {},
-            "coverage_gaps": [],
-            "relationships": [],
-        },
-        {"source_summary": {}, "metrics": {}},
+def test_direct_linking_probe_entrypoint_is_also_fail_closed() -> None:
+    install_scenario_execution_probe_guard()
+
+    probes = _linking._probes_from_asset(
+        _legacy_probe_asset(contract_ready=False),
+        10,
     )
+    assert probes == []
+
+
+def test_execution_contract_gate_pass_preserves_legacy_candidate_probe_compatibility() -> None:
+    install_scenario_execution_probe_guard()
 
     probes = _api._probes_from_asset(
         _legacy_probe_asset(contract_ready=True),
