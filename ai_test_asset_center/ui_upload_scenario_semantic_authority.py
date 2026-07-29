@@ -1,0 +1,185 @@
+"""Bind UI upload scenarios to exact safe prerequisite operations and source roles.
+
+The formal UI Behavior-IR binder accepts one exact, read-only prerequisite
+operation and one executable actor identity.  Free-text operation/actor values can
+therefore survive scenario approval but fail much later during IR binding.  This
+installer moves that validation to scenario registration:
+
+* ``operation_ref`` must resolve uniquely to an enterprise interface;
+* the canonical reference is the interface id recorded in Behavior IR
+  ``source_operation_refs``;
+* only GET/HEAD/OPTIONS operations may be prerequisites;
+* ``actor_role`` must be explicitly declared by the role catalog or permission
+  matrix (``public``/``anonymous`` remain explicit built-in roles);
+* caller-authored ``actor_ref`` is rejected because Behavior-IR node ids are runtime
+  products, not stable source identities.
+"""
+from __future__ import annotations
+
+import copy
+from pathlib import Path
+from typing import Any
+
+from . import ui_upload_scenario_registry as _scenarios
+from .enterprise_knowledge_center import load_enterprise_business_knowledge_asset
+
+_INSTALL_MARKER = "_qualibug_upload_scenario_semantic_authority_installed"
+_ORIGINAL_MARKER = "_qualibug_upload_scenario_builder_before_semantic_authority"
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+_BUILTIN_ROLES = frozenset({"public", "anonymous"})
+
+
+def _dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _text(value: Any, *, limit: int = 1000) -> str:
+    return str(value or "").strip()[:limit]
+
+
+def _knowledge_asset(project: str, root: Path) -> dict[str, Any]:
+    asset = load_enterprise_business_knowledge_asset(project, root=Path(root))
+    if not isinstance(asset, dict) or not asset:
+        raise RuntimeError("ui_upload_scenario_knowledge_asset_missing")
+    return asset
+
+
+def _safe_prerequisite_operation(
+    asset: dict[str, Any],
+    operation_ref: str,
+) -> dict[str, str]:
+    identity = _text(operation_ref, limit=240)
+    if not identity:
+        raise ValueError("ui_upload_scenario_operation_ref_required")
+    candidates: list[dict[str, Any]] = []
+    for row in _list(asset.get("interfaces") or asset.get("operations")):
+        if not isinstance(row, dict):
+            continue
+        aliases = {
+            _text(row.get("interface_id"), limit=240),
+            _text(row.get("operation_id"), limit=240),
+            _text(row.get("id"), limit=240),
+        } - {""}
+        if identity in aliases:
+            candidates.append(row)
+    if len(candidates) != 1:
+        raise ValueError(
+            "ui_upload_scenario_prerequisite_operation_ambiguous"
+            if len(candidates) > 1
+            else "ui_upload_scenario_prerequisite_operation_not_found"
+        )
+    row = candidates[0]
+    method = _text(row.get("method") or row.get("http_method"), limit=20).upper()
+    if method not in _SAFE_METHODS:
+        raise ValueError(
+            "ui_upload_scenario_prerequisite_operation_must_be_safe_read"
+        )
+    path = _text(row.get("path") or row.get("endpoint") or row.get("url"), limit=2000)
+    interface_id = _text(row.get("interface_id"), limit=240)
+    if not interface_id or not path:
+        raise RuntimeError("ui_upload_scenario_prerequisite_identity_incomplete")
+    return {
+        "interface_id": interface_id,
+        "operation_id": _text(row.get("operation_id"), limit=240),
+        "method": method,
+        "path": path,
+        "source_id": _text(row.get("source_id"), limit=160),
+    }
+
+
+def _declared_roles(asset: dict[str, Any]) -> dict[str, str]:
+    roles: dict[str, str] = {}
+    for row in _list(asset.get("roles")):
+        if not isinstance(row, dict):
+            continue
+        role = _text(row.get("role") or row.get("name") or row.get("id"), limit=160)
+        if role:
+            roles.setdefault(role.casefold(), role)
+    for row in _list(asset.get("permission_matrix") or asset.get("permissions")):
+        if not isinstance(row, dict):
+            continue
+        role = _text(row.get("role") or row.get("actor") or row.get("principal"), limit=160)
+        if role:
+            roles.setdefault(role.casefold(), role)
+    for role in _BUILTIN_ROLES:
+        roles.setdefault(role, role)
+    return roles
+
+
+def _source_actor_role(asset: dict[str, Any], value: Any) -> str:
+    role = _text(value, limit=160)
+    if not role:
+        raise ValueError("ui_upload_scenario_actor_role_required")
+    declared = _declared_roles(asset)
+    canonical = declared.get(role.casefold())
+    if not canonical:
+        raise ValueError("ui_upload_scenario_actor_role_not_source_declared")
+    return canonical
+
+
+def install_ui_upload_scenario_semantic_authority() -> None:
+    if getattr(_scenarios, _INSTALL_MARKER, False):
+        return
+    original = getattr(
+        _scenarios,
+        _ORIGINAL_MARKER,
+        _scenarios.build_upload_scenario_contract,
+    )
+    setattr(_scenarios, _ORIGINAL_MARKER, original)
+
+    def build_semantically_bound_upload_scenario(
+        project_id: str,
+        payload: dict[str, Any],
+        *,
+        root: Path | None = None,
+    ) -> dict[str, Any]:
+        effective_root = Path(root or _scenarios.ROOT)
+        project = _scenarios._safe_project_id(project_id)
+        data = copy.deepcopy(_dict(payload))
+        if _text(data.get("actor_ref"), limit=240):
+            raise ValueError("ui_upload_scenario_actor_ref_not_source_stable")
+        asset = _knowledge_asset(project, effective_root)
+        operation = _safe_prerequisite_operation(
+            asset,
+            _text(data.get("operation_ref"), limit=240),
+        )
+        actor_role = _source_actor_role(asset, data.get("actor_role"))
+        data["operation_ref"] = operation["interface_id"]
+        # The legacy deterministic seed expects actor_ref. Feed it the canonical
+        # source role, then replace the semantic field before the contract is frozen.
+        data["actor_ref"] = actor_role
+        contract = copy.deepcopy(
+            original(project, data, root=effective_root)
+        )
+        contract.pop("actor_ref", None)
+        contract["actor_role"] = actor_role
+        contract["safe_prerequisite_operation"] = copy.deepcopy(operation)
+        request = copy.deepcopy(_dict(contract.get("ui_request")))
+        request.pop("actor_ref", None)
+        request["actor_role"] = actor_role
+        request["operation_ref"] = operation["interface_id"]
+        metadata = copy.deepcopy(_dict(request.get("metadata")))
+        metadata.update({
+            "safe_prerequisite_operation_bound": True,
+            "prerequisite_interface_id": operation["interface_id"],
+            "prerequisite_method": operation["method"],
+            "prerequisite_path": operation["path"],
+            "actor_role_source_declared": True,
+        })
+        request["metadata"] = metadata
+        contract["ui_request"] = request
+        return contract
+
+    _scenarios.build_upload_scenario_contract = (
+        build_semantically_bound_upload_scenario
+    )
+    setattr(_scenarios, _INSTALL_MARKER, True)
+
+
+__all__ = [
+    "install_ui_upload_scenario_semantic_authority",
+]
