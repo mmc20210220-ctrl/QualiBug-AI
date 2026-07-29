@@ -10,6 +10,7 @@ from collections import defaultdict
 from typing import Any
 
 from .contract import text
+from .decision_matrix_candidate_gate import apply_decision_matrix_candidate_gate
 from .visual_table_semantic_validation import validate_visual_table_semantic_candidates
 
 SEMANTIC_NORMALIZATION_SCHEMA = "qualibug.visual-table-semantic-normalization.v1"
@@ -29,10 +30,16 @@ def _covered_columns(cell: dict[str, Any]) -> range:
     return range(start, start + span)
 
 
+def _finalize(document_ir: dict[str, Any]) -> dict[str, Any]:
+    return apply_decision_matrix_candidate_gate(
+        validate_visual_table_semantic_candidates(document_ir)
+    )
+
+
 def normalize_visual_table_semantic_candidates(document_ir: dict[str, Any]) -> dict[str, Any]:
     prior = _dict(document_ir.get("visual_table_semantic_normalization_receipt"))
     if text(prior.get("schema")) == SEMANTIC_NORMALIZATION_SCHEMA:
-        return validate_visual_table_semantic_candidates(document_ir)
+        return _finalize(document_ir)
     result = dict(document_ir or {})
     blocks = [dict(row) for row in _list(result.get("blocks")) if isinstance(row, dict)]
     table_blocks = {
@@ -218,7 +225,7 @@ def normalize_visual_table_semantic_candidates(document_ir: dict[str, Any]) -> d
         "source_evidence_deleted": False,
         "business_semantics_added": False,
     }
-    return validate_visual_table_semantic_candidates(result)
+    return _finalize(result)
 
 
 __all__ = ["SEMANTIC_NORMALIZATION_SCHEMA", "normalize_visual_table_semantic_candidates"]
