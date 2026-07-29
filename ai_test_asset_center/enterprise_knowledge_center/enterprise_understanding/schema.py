@@ -84,6 +84,7 @@ def source_evidence(
 
 def evidence_from_fact(fact: dict[str, Any]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
+    attachment = as_dict(fact.get("structural_span_attachment"))
     for span in as_list(fact.get("source_spans")):
         if not isinstance(span, dict):
             continue
@@ -94,17 +95,31 @@ def evidence_from_fact(fact: dict[str, Any]) -> list[dict[str, Any]]:
             quote_hash=span.get("quote_hash"),
             fact_id=fact.get("fact_id"),
         )
+        block_id = text(
+            span.get("document_block_id")
+            or attachment.get("document_block_id")
+            or as_dict(fact.get("document_structure_alignment")).get("block_id")
+        )
+        if block_id:
+            row["document_block_id"] = block_id
+        if text(attachment.get("node_id")):
+            row["document_node_id"] = text(attachment.get("node_id"))
+        if text(attachment.get("section_node_id")):
+            row["section_node_id"] = text(attachment.get("section_node_id"))
         if row:
             rows.append(row)
     if not rows and text(fact.get("fact_id")):
-        rows.append(
-            source_evidence(
-                source_id=fact.get("source_id"),
-                source_locator=fact.get("source_locator"),
-                quote=fact.get("raw_statement") or fact.get("statement"),
-                fact_id=fact.get("fact_id"),
-            )
+        row = source_evidence(
+            source_id=fact.get("source_id"),
+            source_locator=fact.get("source_locator") or attachment.get("source_locator"),
+            quote=fact.get("raw_statement") or fact.get("statement"),
+            fact_id=fact.get("fact_id"),
         )
+        if text(attachment.get("document_block_id")):
+            row["document_block_id"] = text(attachment.get("document_block_id"))
+        if text(attachment.get("node_id")):
+            row["document_node_id"] = text(attachment.get("node_id"))
+        rows.append(row)
     return dedupe_evidence(rows)
 
 

@@ -1098,6 +1098,11 @@ def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any
                 "modality": fact.get("modality"),
                 "exceptions": as_list(fact.get("exceptions")),
                 "evidence": evidence_from_fact(fact),
+                "structural_span_attachment": as_dict(fact.get("structural_span_attachment")),
+                "document_block_id": text(
+                    as_dict(fact.get("structural_span_attachment")).get("document_block_id")
+                    or as_dict(fact.get("document_structure_alignment")).get("block_id")
+                ),
             }
         )
 

@@ -62,6 +62,29 @@ def _normalized(value: Any) -> str:
     return re.sub(r"\s+", "", _text(value))
 
 
+_BLOCK_SPECIFICITY = {
+    "TABLE_CELL": 40,
+    "LIST_ITEM": 30,
+    "KEY_VALUE": 30,
+    "NOTE": 20,
+    "PARAGRAPH": 10,
+    "TABLE": 0,
+}
+
+
+def _prefer_specific_blocks(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Prefer cell/list spans over containing TABLE aggregates."""
+    if len(candidates) <= 1:
+        return candidates
+    best = max(_BLOCK_SPECIFICITY.get(_text(row.get("type")), 0) for row in candidates)
+    refined = [
+        row
+        for row in candidates
+        if _BLOCK_SPECIFICITY.get(_text(row.get("type")), 0) == best
+    ]
+    return refined or candidates
+
+
 def _fact_source_id(fact: dict[str, Any]) -> str:
     spans = _list(fact.get("source_spans"))
     span = _dict(spans[0]) if spans else {}
@@ -129,7 +152,7 @@ def _statement_blocks(statement: str, blocks: list[dict[str, Any]]) -> list[dict
             exact.append(block)
         elif target in block_text:
             contained.append(block)
-    return exact or contained
+    return _prefer_specific_blocks(exact or contained)
 
 
 def _heading_chain(block: dict[str, Any], index: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:

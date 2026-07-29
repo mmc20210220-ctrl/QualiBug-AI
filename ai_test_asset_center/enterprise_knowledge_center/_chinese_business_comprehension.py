@@ -30,7 +30,10 @@ _HEADING_RE = re.compile(
     r"^\s*(?:#{1,6}\s+(?P<title>.+?)|"
     r"第[一二三四五六七八九十百千]+[章节部分]\s*(?P<title2>.+?)|"
     r"[一二三四五六七八九十]+[、.]\s*(?P<title3>.+?)|"
-    r"\d+(?:\.\d+)*[、.)．]?\s*(?P<title4>.+?))\s*$"
+    # Numbered headings require an explicit separator and whitespace. Lines such as
+    # ``1）其不得删除`` are list items with business rules, not headings — treating
+    # them as headings silently drops structured facts.
+    r"\d+(?:\.\d+)*[、.)）．]\s+(?P<title4>.+?))\s*$"
 )
 _SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[。！？!?；;])")
 _RULE_SIGNAL_RE = re.compile(
@@ -1506,8 +1509,21 @@ def _rule_from_fact(fact: dict[str, Any]) -> dict[str, Any] | None:
         return None
     subject = _dict(fact.get("subject"))
     action = _dict(fact.get("action"))
-    spans = _list(fact.get("source_spans"))
-    span = _dict(spans[0]) if spans else {}
+    spans = [row for row in _list(fact.get("source_spans")) if isinstance(row, dict)]
+    # Prefer the structure-aligned span so rule evidence does not silently keep only
+    # the coarse text locator after Document IR attachment.
+    preferred_span = next(
+        (
+            row
+            for row in spans
+            if _text(row.get("document_block_id"))
+            or _text(row.get("derivation")) == "document_ir_exact_statement_alignment"
+        ),
+        None,
+    )
+    span = preferred_span or (_dict(spans[0]) if spans else {})
+    attachment = _dict(fact.get("structural_span_attachment"))
+    alignment = _dict(fact.get("document_structure_alignment"))
     modality = _text(fact.get("modality"))
     if _list(fact.get("state_effects")):
         risk_type = "state_transition"
@@ -1515,10 +1531,12 @@ def _rule_from_fact(fact: dict[str, Any]) -> dict[str, Any] | None:
         risk_type = "authorization"
     else:
         risk_type = "business_logic"
-    return {
+    rule = {
         "rule_id": f"zh_business:{_text(fact.get('fact_id')).split(':')[-1]}",
         "source_id": span.get("source_id"),
-        "source_locator": span.get("locator"),
+        "source_locator": span.get("locator")
+        or attachment.get("source_locator")
+        or alignment.get("source_locator"),
         "source_type": "chinese_business_semantic_contract",
         "statement": statement,
         "rule_type": "permission" if risk_type == "authorization" else "business_rule",
@@ -1545,7 +1563,14 @@ def _rule_from_fact(fact: dict[str, Any]) -> dict[str, Any] | None:
         "authorization_delegation": _dict(fact.get("authorization_delegation")),
         "confidence": fact.get("confidence"),
         "derivation": "chinese_first_business_comprehension",
+        "document_block_id": _text(
+            span.get("document_block_id")
+            or attachment.get("document_block_id")
+            or alignment.get("block_id")
+        ),
+        "structural_span_attachment": attachment,
     }
+    return rule
 
 
 def _term_alias_map(facts: Iterable[dict[str, Any]]) -> tuple[dict[str, str], list[dict[str, Any]]]:

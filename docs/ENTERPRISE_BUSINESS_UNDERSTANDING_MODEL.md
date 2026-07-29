@@ -125,11 +125,17 @@ Implemented in this phase:
 - source-backed multi-object orchestration projection: message/async waits,
   timed waits from temporal / time-window evidence, explicit joins, and
   cross-system markers; underdetermined choreography emits PARTIAL + visible
-  unknowns instead of inventing order from document appearance.
+  unknowns instead of inventing order from document appearance;
+- full Chinese document semantic tree at enterprise scale from Document IR
+  headings / lists / tables / continued-table groups when present (text-heading
+  fallback only when IR body blocks are absent); structure-preserving
+  span → fact attachment with fail-closed ambiguous/unattached receipts;
+  same-section priors cannot join across heading spans from document order;
+  span attachment projects into rule library / understanding-model rules without
+  silent drop of document_block_id.
 
 Not yet complete:
 
-- full Chinese document semantic tree at enterprise scale;
 - cross-document coreference beyond broader source-backed TERM_ALIAS /
   synonym / glossary-table identity merge (proximity / filename / order remain
   forbidden);

@@ -21,11 +21,31 @@ Each source is represented as a hierarchy of:
 - chapter/part;
 - section;
 - subsection/item;
-- source character range.
+- list / table / table-cell / continued-table structural spans when Document IR
+  is available;
+- source character range / block locator.
 
-Supported heading evidence includes Markdown headings, Chinese chapter/section headings, numbered headings, and Chinese ordered headings.
+Supported heading evidence includes Markdown headings, Chinese chapter/section headings, numbered headings, Chinese ordered headings, and Document IR `HEADING` blocks. Content spans reuse Document IR `LIST_ITEM`, `TABLE`, `TABLE_CELL`, `PARAGRAPH`, and related body blocks. Cross-page continued tables are preserved only when the IR already stamped a `logical_table_id` / continuation group.
 
 The tree is structural context only. Document order is not business process order.
+
+## Structure-preserving span → fact attachment
+
+Every extracted fact is attached to exactly one structural span before same-section
+reference resolution:
+
+1. Prefer an existing unique Document IR alignment `block_id`.
+2. Otherwise require exactly one statement-matching content span.
+3. Otherwise fall back to a unique character-range node on the semantic tree.
+
+Ambiguous or missing attachments remain visible (`DOCUMENT_SEMANTIC_SPAN_AMBIGUOUS` /
+`DOCUMENT_SEMANTIC_SPAN_UNATTACHED`) and never invent a cross-section join from
+document order. Attachment identity projects into Chinese-derived rules and the
+enterprise understanding model without silently dropping `document_block_id`.
+
+Scale contract: multi-section enterprise documents must keep every structured fact
+and tree node unless a named fail-closed reason is emitted. Silent truncation of
+structured spans or attachments is forbidden.
 
 ## Reference resolution
 
@@ -73,6 +93,7 @@ Newly promoted context-resolved facts must pass the existing conflict authority 
 The asset emits:
 
 - `document_semantic_trees`;
+- `document_span_attachment_receipt`;
 - `document_context_resolution_receipt`;
 - updated `business_fact_ledger`;
 - updated `document_coverage_ledger`;
@@ -87,6 +108,10 @@ Unresolved or contradictory context remains visible through ambiguity codes such
 - `DOCUMENT_CONTEXT_PRIOR_FACT_AMBIGUOUS`;
 - `DOCUMENT_CONTEXT_CONFLICT`;
 - `DOCUMENT_CONTEXT_NO_UNIQUE_REFERENCE`;
-- `DOCUMENT_CONTEXT_SOURCE_RANGE_UNAVAILABLE`.
+- `DOCUMENT_CONTEXT_SOURCE_RANGE_UNAVAILABLE`;
+- `DOCUMENT_SEMANTIC_SPAN_AMBIGUOUS`;
+- `DOCUMENT_SEMANTIC_SPAN_UNATTACHED`;
+- `DOCUMENT_SEMANTIC_SPAN_TREE_UNAVAILABLE`;
+- `DOCUMENT_SEMANTIC_SPAN_CROSS_SECTION_JOIN_FORBIDDEN`.
 
 A critical unresolved reference prevents the Chinese comprehension gate from passing.

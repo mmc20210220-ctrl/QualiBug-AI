@@ -35,7 +35,9 @@ def _fact_source_id(fact: dict[str, Any]) -> str:
 
 
 def _eligible_blocks(structure: dict[str, Any]) -> list[dict[str, Any]]:
-    allowed = {"HEADING", "PARAGRAPH", "LIST_ITEM", "TABLE_CELL", "KEY_VALUE", "NOTE"}
+    # HEADING blocks are structural context only. Aligning business facts to heading
+    # titles silently promotes section labels into fact authority.
+    allowed = {"PARAGRAPH", "LIST_ITEM", "TABLE_CELL", "KEY_VALUE", "NOTE"}
     return [
         row
         for row in _list(structure.get("blocks"))
@@ -55,8 +57,28 @@ def _candidate_blocks(statement: str, blocks: list[dict[str, Any]]) -> list[dict
         return []
     exact = [row for row in blocks if _normalized(row.get("text")) == target]
     if exact:
-        return exact
-    return [row for row in blocks if target in _normalized(row.get("text"))]
+        return _prefer_specific_blocks(exact)
+    return _prefer_specific_blocks(
+        [row for row in blocks if target in _normalized(row.get("text"))]
+    )
+
+
+def _prefer_specific_blocks(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    specificity = {
+        "TABLE_CELL": 40,
+        "LIST_ITEM": 30,
+        "KEY_VALUE": 30,
+        "NOTE": 20,
+        "PARAGRAPH": 10,
+        "TABLE": 0,
+    }
+    if len(candidates) <= 1:
+        return candidates
+    best = max(specificity.get(_text(row.get("type")), 0) for row in candidates)
+    refined = [
+        row for row in candidates if specificity.get(_text(row.get("type")), 0) == best
+    ]
+    return refined or candidates
 
 
 def align_business_facts_to_document_ir(
@@ -79,10 +101,28 @@ def align_business_facts_to_document_ir(
     for source_id, source_facts in facts_by_source.items():
         source = source_map.get(source_id)
         if not source:
+            for fact in source_facts:
+                unresolved.append(
+                    {
+                        "fact_id": fact.get("fact_id"),
+                        "source_id": source_id,
+                        "reason": "DOCUMENT_IR_SOURCE_STRUCTURE_UNAVAILABLE",
+                        "candidate_block_ids": [],
+                    }
+                )
             continue
         structure = _dict(source.get("document_structure"))
         blocks = _eligible_blocks(structure)
         if not blocks:
+            for fact in source_facts:
+                unresolved.append(
+                    {
+                        "fact_id": fact.get("fact_id"),
+                        "source_id": source_id,
+                        "reason": "DOCUMENT_IR_ELIGIBLE_BLOCKS_EMPTY",
+                        "candidate_block_ids": [],
+                    }
+                )
             continue
         for fact in source_facts:
             statement = _text(fact.get("raw_statement") or fact.get("statement"))
