@@ -118,6 +118,7 @@ export function EnterpriseCampaigns() {
   const [sourceError, setSourceError] = useState('');
   const [approvedFixtures, setApprovedFixtures] = useState<UploadFixtureRecord[]>([]);
   const [selectedFixtureRefs, setSelectedFixtureRefs] = useState<string[]>([]);
+  const [autoScenarioRefs, setAutoScenarioRefs] = useState<string[]>([]);
   const [fixtureError, setFixtureError] = useState('');
   const [loadingFixtures, setLoadingFixtures] = useState(false);
 
@@ -140,6 +141,7 @@ export function EnterpriseCampaigns() {
       setSources([]);
       setApprovedFixtures([]);
       setSelectedFixtureRefs([]);
+      setAutoScenarioRefs([]);
       return;
     }
     setLoadingPreflight(true);
@@ -240,6 +242,14 @@ export function EnterpriseCampaigns() {
       current.includes(normalized)
         ? current.filter((item) => item !== normalized)
         : [...current, normalized]
+    ));
+  }, []);
+
+  const handleScenarioSelectionChange = useCallback((scenarioRefs: string[]) => {
+    setAutoScenarioRefs((current) => (
+      current.length === scenarioRefs.length && current.every((value, index) => value === scenarioRefs[index])
+        ? current
+        : scenarioRefs
     ));
   }, []);
 
@@ -356,6 +366,10 @@ export function EnterpriseCampaigns() {
             <p>{sourceError ? `读取失败：${sourceError}` : resolvedSourceId ? `${apiSources.find((source) => source.source_id === resolvedSourceId)?.filename || resolvedSourceId}` : `${sources.length} 份资料由后台自动选择`}</p>
           </div>
           <div>
+            <span className="muted">自动场景</span>
+            <p>{autoScenarioRefs.length > 0 ? `${autoScenarioRefs.length} 个已审批 UI 场景由后台自动纳入` : '普通接口、页面与只读验证由后台自动生成'}</p>
+          </div>
+          <div>
             <span className="muted">自动观察</span>
             <p>{configuredDbCount > 0 ? `接口、页面及 ${configuredDbCount} 组数据库观察自动编排` : '接口与页面观察自动编排；数据库为可选增强'}</p>
           </div>
@@ -411,6 +425,7 @@ export function EnterpriseCampaigns() {
           loading={loadingFixtures}
           error={fixtureError}
           onToggle={toggleFixture}
+          onScenarioSelectionChange={handleScenarioSelectionChange}
           onOpenSettings={() => navigateToProjectPath('/settings', project)}
           onRefresh={() => void refreshContext()}
         />
@@ -454,6 +469,7 @@ export function EnterpriseCampaigns() {
               <div><span className="muted">扫描 ID</span><p>{result.scan_id || '未生成'}</p></div>
               <div><span className="muted">Campaign 状态</span><p>{asText(result.campaign?.campaign_status) || '未报告'}</p></div>
               <div><span className="muted">测试数据合同</span><p>{testDataStatus || '未报告'}</p></div>
+              <div><span className="muted">自动 UI 场景</span><p>{forceReadOnly ? '只读熔断已跳过' : `${autoScenarioRefs.length} 个由后台解析`}</p></div>
               <div><span className="muted">额外 Fixture 绑定</span><p>{selectedFixtureRefs.length > 0 ? `${runtimeFixtureCount}/${selectedFixtureRefs.length} 已注入` : '未使用额外绑定'}</p></div>
             </div>
             <h3>真实 HTTP 请求</h3>
