@@ -30,9 +30,7 @@ def _request(*source_ids: str) -> dict[str, object]:
                 {"action": "goto", "url": "/orders"},
                 {
                     "action": "expect_visual_baseline",
-                    "baseline_ref": (
-                        "visual_baselines/orders__123456789abc.png"
-                    ),
+                    "baseline_ref": "visual_baselines/orders__123456789abc.png",
                     "baseline_sha256": "a" * 64,
                     "max_changed_pixel_ratio": 0.001,
                     "channel_tolerance": 2,
@@ -53,9 +51,7 @@ def _request(*source_ids: str) -> dict[str, object]:
 
 
 def test_discovery_runtime_captures_guarded_overlay_alias() -> None:
-    assert runtime_binding.overlay_scan_ui_contracts is (
-        overlay.overlay_scan_ui_contracts
-    )
+    assert runtime_binding.overlay_scan_ui_contracts is overlay.overlay_scan_ui_contracts
     assert getattr(
         overlay,
         "_qualibug_scan_ui_source_registry_guard_installed",
@@ -63,13 +59,13 @@ def test_discovery_runtime_captures_guarded_overlay_alias() -> None:
     ) is True
 
 
-def test_bound_scan_context_is_joined_to_enterprise_source_registry() -> None:
+def test_bound_context_accepts_active_primary_source_inventory() -> None:
     token = overlay.bind_scan_ui_contract_context({
         "ui_execution_requests": [_request("src-ui-orders")],
     })
     try:
         asset, receipt = overlay.overlay_scan_ui_contracts({
-            "sources": [
+            "source_inventory": [
                 {"source_id": "src-ui-orders", "status": "active"},
             ]
         })
@@ -77,17 +73,68 @@ def test_bound_scan_context_is_joined_to_enterprise_source_registry() -> None:
         overlay.reset_scan_ui_contract_context(token)
 
     assert receipt["contract_added_count"] == 1
-    assert receipt["coverage_gap_count"] == 0
     guard = receipt["source_registry_guard"]
     assert guard["status"] == "ACCEPTED"
-    assert guard["trusted_source_count"] == 1
-    assert guard["rejected_request_count"] == 0
-    assert asset["ui_formal_contracts"][0]["source_refs"][0][
-        "source_id"
-    ] == "src-ui-orders"
+    assert guard["trust_mode"] == "primary_active_source_inventory"
+    assert guard["provenance_surface_present"] is True
+    assert asset["ui_formal_contracts"][0]["source_refs"][0]["source_id"] == "src-ui-orders"
 
 
-def test_mixed_known_and_unknown_source_refs_lose_formal_authority() -> None:
+def test_revoked_primary_source_cannot_grant_formal_authority() -> None:
+    asset, receipt = overlay.overlay_scan_ui_contracts(
+        {
+            "source_inventory": [
+                {"source_id": "src-ui-orders", "status": "revoked"},
+            ]
+        },
+        {"ui_execution_requests": [_request("src-ui-orders")]},
+    )
+
+    assert asset.get("ui_formal_contracts", []) == []
+    assert receipt["contract_added_count"] == 0
+    guard = receipt["source_registry_guard"]
+    assert guard["status"] == "REJECTED"
+    assert guard["trusted_source_count"] == 0
+
+
+def test_primary_inventory_prevents_stale_operation_source_fallback() -> None:
+    asset, receipt = overlay.overlay_scan_ui_contracts(
+        {
+            "source_inventory": [
+                {"source_id": "src-current", "status": "active"},
+            ],
+            "operations": [
+                {"operation_id": "old-op", "source_id": "src-old"},
+            ],
+        },
+        {"ui_execution_requests": [_request("src-old")]},
+    )
+
+    assert asset.get("ui_formal_contracts", []) == []
+    guard = receipt["source_registry_guard"]
+    assert guard["trust_mode"] == "primary_active_source_inventory"
+    assert guard["rejected_request_count"] == 1
+
+
+def test_derived_provenance_is_compatibility_fallback_without_registry() -> None:
+    asset, receipt = overlay.overlay_scan_ui_contracts(
+        {
+            "operations": [
+                {"operation_id": "orders", "source_id": "src-derived"},
+            ]
+        },
+        {"ui_execution_requests": [_request("src-derived")]},
+    )
+
+    assert receipt["contract_added_count"] == 1
+    guard = receipt["source_registry_guard"]
+    assert guard["status"] == "ACCEPTED"
+    assert guard["trust_mode"] == "derived_provenance_fallback"
+    assert guard["provenance_surface_present"] is False
+    assert asset["ui_formal_contracts"][0]["source_id"] == "src-derived"
+
+
+def test_mixed_known_and_unknown_refs_lose_formal_authority_without_raw_ids() -> None:
     asset, receipt = overlay.overlay_scan_ui_contracts(
         {
             "sources": [
