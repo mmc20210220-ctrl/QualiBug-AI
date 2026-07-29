@@ -138,25 +138,46 @@ def project_scenario_ir_asset_governance(
     asset["coverage_gaps"] = gaps
 
     metrics = as_dict(gate.get("metrics"))
+    scenario_metrics = {
+        "scenario_ir_status": status,
+        "scenario_ir_count": int(metrics.get("scenario_count") or 0),
+        "scenario_ir_plannable_count": int(
+            metrics.get("plannable_scenario_count") or 0
+        ),
+        "scenario_ir_incomplete_count": int(
+            metrics.get("incomplete_scenario_count") or 0
+        ),
+        "scenario_ir_positive_count": int(
+            metrics.get("positive_scenario_count") or 0
+        ),
+        "scenario_ir_rejection_count": int(
+            metrics.get("rejection_scenario_count") or 0
+        ),
+        "scenario_ir_unauthorized_count": int(
+            metrics.get("unauthorized_scenario_count") or 0
+        ),
+        "scenario_ir_boundary_count": int(
+            metrics.get("boundary_scenario_count") or 0
+        ),
+        "scenario_ir_state_transition_count": int(
+            metrics.get("state_transition_scenario_count") or 0
+        ),
+        "scenario_ir_unknown_count": len(
+            as_list(asset.get("scenario_ir_unknowns"))
+        ),
+        "scenario_ir_relationship_count": len(relationships),
+    }
     summary = as_dict(asset.get("summary"))
-    summary.update(
-        {
-            "scenario_ir_relationship_count": len(relationships),
-            "scenario_ir_positive_count": int(
-                metrics.get("positive_scenario_count") or 0
-            ),
-            "scenario_ir_rejection_count": int(
-                metrics.get("rejection_scenario_count") or 0
-            ),
-            "scenario_ir_unauthorized_count": int(
-                metrics.get("unauthorized_scenario_count") or 0
-            ),
-            "scenario_ir_unknown_count": len(
-                as_list(asset.get("scenario_ir_unknowns"))
-            ),
-        }
-    )
+    summary.update(scenario_metrics)
     asset["summary"] = summary
+
+    source_summary = as_dict(model.get("source_summary"))
+    source_summary.update(scenario_metrics)
+    model["source_summary"] = source_summary
+    model_metrics = as_dict(model.get("metrics"))
+    model_metrics.update(scenario_metrics)
+    model_metrics["scenario_execution_allowed"] = False
+    model["metrics"] = model_metrics
 
     governance = as_dict(asset.get("governance"))
     governance.update(
