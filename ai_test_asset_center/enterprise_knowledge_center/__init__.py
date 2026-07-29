@@ -73,6 +73,40 @@ build_enterprise_business_knowledge_asset = install_enterprise_understanding_mod
 build_enterprise_business_knowledge_asset = install_chinese_business_downstream_refresh()
 build_enterprise_business_knowledge_asset = install_job_asset_enrichment()
 
+# Existing projects may already have a persisted knowledge asset. Enrich that loaded
+# asset in memory as well, so the Job asset center works without forcing customers
+# to rebuild or re-upload enterprise sources.
+from . import _api as _api_module  # noqa: E402
+
+_original_load_enterprise_business_knowledge_asset = (
+    _api_module.load_enterprise_business_knowledge_asset
+)
+
+
+def _load_enterprise_business_knowledge_asset_with_jobs(
+    project_id: str = "real_project_demo",
+    root=None,
+):
+    resolved_root = root or ROOT
+    project = _safe_project_id(project_id)
+    loaded = _original_load_enterprise_business_knowledge_asset(project, resolved_root)
+    if not loaded:
+        return None
+    return enrich_job_assets(
+        loaded,
+        project_id=project,
+        root=resolved_root,
+        options={},
+    )
+
+
+_api_module.load_enterprise_business_knowledge_asset = (
+    _load_enterprise_business_knowledge_asset_with_jobs
+)
+load_enterprise_business_knowledge_asset = (
+    _load_enterprise_business_knowledge_asset_with_jobs
+)
+
 # Explicit re-exports for underscore-prefixed symbols
 from ._common import _SEMANTIC_LEXICON_CACHE  # noqa: F401
 from ._utils import _semantic_lexicon, _lexicon_dict, _lexicon_list, _now, _detected_source_format, _parser_receipt, _hash_bytes, _short_hash, _norm, _tokens, _normalize_state_token, _safe_slug, _redact_text, _safe_actor, _require_manage_actor, _paths, _registry_default, _load_registry, _save_registry, _decode_docx, _decode_pdf, _read_source_bytes, _json_or_none, _contains_markdown_api_sections, _looks_like_field_dictionary, _looks_like_uiux_spec, _clean_markup_text  # noqa: F401
