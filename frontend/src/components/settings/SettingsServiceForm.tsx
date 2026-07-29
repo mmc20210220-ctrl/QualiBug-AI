@@ -1,5 +1,5 @@
-import { DbCredentialPanel, type DbOption } from './DbCredentialPanel';
 import { useState } from 'react';
+import { DbCredentialPanel, type DbOption } from './DbCredentialPanel';
 
 type AuthType = 'password_login' | 'bearer_token' | 'api_key';
 
@@ -19,13 +19,11 @@ type SettingsServiceFormProps = {
   enabled: boolean;
   statusText: string;
   credentialSummary: string;
-  /* ── API Auth ── */
   authType: AuthType;
   loginApi: string;
   roleAccounts: RoleAccount[];
   bearerToken: string;
   apiKey: string;
-  /* ── DB ── */
   dbOpen: boolean;
   dbType: string;
   dbHost: string;
@@ -44,13 +42,11 @@ type SettingsServiceFormProps = {
   onServiceNameChange: (value: string) => void;
   onEndpointRefChange: (value: string) => void;
   onEnabledChange: (value: boolean) => void;
-  /* ── Auth handlers ── */
   onAuthTypeChange: (value: AuthType) => void;
   onLoginApiChange: (value: string) => void;
   onRoleAccountsChange: (accounts: RoleAccount[]) => void;
   onBearerTokenChange: (value: string) => void;
   onApiKeyChange: (value: string) => void;
-  /* ── DB handlers ── */
   onToggleDbPanel: () => void;
   onDbTypeChange: (value: string) => void;
   onDbHostChange: (value: string) => void;
@@ -65,9 +61,9 @@ type SettingsServiceFormProps = {
 };
 
 const AUTH_TYPE_LABELS: Record<AuthType, string> = {
-  password_login: '🔐 密码自动登录',
-  bearer_token: '🎫 Bearer Token',
-  api_key: '🔑 API Key',
+  password_login: '账号密码',
+  bearer_token: 'Bearer Token',
+  api_key: 'API Key',
 };
 
 const ROLE_OPTIONS = [
@@ -78,225 +74,334 @@ const ROLE_OPTIONS = [
 ];
 
 export function SettingsServiceForm({
-  open, title,
-  systemName, moduleName, serviceName, endpointRef, enabled, statusText, credentialSummary,
-  authType, loginApi, roleAccounts, bearerToken, apiKey,
-  dbOpen, dbType, dbHost, dbPort, dbUser, dbPass, dbName,
-  dbTestLoad, dbTestOk, dbTestMsg, dbTestHintText, dbOptions, getDbDefaultPort,
-  onSystemNameChange, onModuleNameChange, onServiceNameChange, onEndpointRefChange,
+  open,
+  title,
+  systemName,
+  moduleName,
+  serviceName,
+  endpointRef,
+  enabled,
+  statusText,
+  credentialSummary,
+  authType,
+  loginApi,
+  roleAccounts,
+  bearerToken,
+  apiKey,
+  dbOpen,
+  dbType,
+  dbHost,
+  dbPort,
+  dbUser,
+  dbPass,
+  dbName,
+  dbTestLoad,
+  dbTestOk,
+  dbTestMsg,
+  dbTestHintText,
+  dbOptions,
+  getDbDefaultPort,
+  onSystemNameChange,
+  onModuleNameChange,
+  onServiceNameChange,
+  onEndpointRefChange,
   onEnabledChange,
-  onAuthTypeChange, onLoginApiChange, onRoleAccountsChange,
-  onBearerTokenChange, onApiKeyChange,
-  onToggleDbPanel, onDbTypeChange, onDbHostChange, onDbPortChange,
-  onDbUserChange, onDbPassChange, onDbNameChange, onDbTest, onApplyCredentialRef,
-  onSave, onCancel,
+  onAuthTypeChange,
+  onLoginApiChange,
+  onRoleAccountsChange,
+  onBearerTokenChange,
+  onApiKeyChange,
+  onToggleDbPanel,
+  onDbTypeChange,
+  onDbHostChange,
+  onDbPortChange,
+  onDbUserChange,
+  onDbPassChange,
+  onDbNameChange,
+  onDbTest,
+  onApplyCredentialRef,
+  onSave,
+  onCancel,
 }: SettingsServiceFormProps) {
-  const hasEndpoint = endpointRef.trim().length > 0;
   const [showExtraRoles, setShowExtraRoles] = useState(false);
 
   if (!open) return null;
 
-  // Derive admin account (always first)
   const adminAccount = roleAccounts.length > 0 && roleAccounts[0].role === 'admin'
     ? roleAccounts[0]
     : { role: 'admin', username: '', password: '' };
-  // Extra roles = all but admin
   const extraAccounts = roleAccounts.length > 0 && roleAccounts[0].role === 'admin'
     ? roleAccounts.slice(1)
     : [];
 
-  const updateAdmin = (field: 'username'|'password', value: string) => {
-    const next = [{ ...adminAccount, [field]: value }, ...extraAccounts];
-    onRoleAccountsChange(next);
+  const updateAdmin = (field: 'username' | 'password', value: string) => {
+    onRoleAccountsChange([{ ...adminAccount, [field]: value }, ...extraAccounts]);
   };
 
-  const updateExtraRole = (index: number, field: 'role'|'username'|'password', value: string) => {
+  const updateExtraRole = (index: number, field: 'role' | 'username' | 'password', value: string) => {
     const next = [...extraAccounts];
     next[index] = { ...next[index], [field]: value };
     onRoleAccountsChange([adminAccount, ...next]);
   };
 
   const addExtraRole = () => {
-    const used = new Set(extraAccounts.map(a => a.role));
-    const next = ROLE_OPTIONS.find(o => !used.has(o.value) && o.value !== '__custom__');
-    const roleName = next ? next.value : `role_${extraAccounts.length + 1}`;
-    onRoleAccountsChange([adminAccount, ...extraAccounts, { role: roleName, username: '', password: '' }]);
+    const used = new Set(extraAccounts.map((account) => account.role));
+    const nextRole = ROLE_OPTIONS.find((option) => option.value !== '__custom__' && !used.has(option.value));
+    onRoleAccountsChange([
+      adminAccount,
+      ...extraAccounts,
+      { role: nextRole?.value || `role_${extraAccounts.length + 1}`, username: '', password: '' },
+    ]);
     setShowExtraRoles(true);
   };
 
   const removeExtraRole = (index: number) => {
-    onRoleAccountsChange([adminAccount, ...extraAccounts.filter((_, i) => i !== index)]);
+    onRoleAccountsChange([adminAccount, ...extraAccounts.filter((_, current) => current !== index)]);
   };
 
   return (
     <div className="settings-service-form">
       <div className="settings-form-head">
         <div>
-          <span className="panel-kicker">服务配置</span>
+          <span className="panel-kicker">最小接入</span>
           <strong>{title}</strong>
         </div>
         <span className="settings-form-head-hint">
-          {hasEndpoint ? '已填写测试地址 · 可继续配置 API 认证' : '填写测试地址后配置 API 认证'}
+          只需提供系统名称、测试地址和可用凭据，其余由后台自动识别
         </span>
       </div>
 
-      {/* ── 基本信息 ── */}
       <div className="settings-form-grid">
-        <div><label className="form-label">系统名称</label><input className="form-input" value={systemName} onChange={(e) => onSystemNameChange(e.target.value)} placeholder="例：电商平台"/></div>
-        <div><label className="form-label">模块名称</label><input className="form-input" value={moduleName} onChange={(e) => onModuleNameChange(e.target.value)} placeholder="例：订单管理"/></div>
-        <div><label className="form-label">服务名称</label><input className="form-input" value={serviceName} onChange={(e) => onServiceNameChange(e.target.value)} placeholder="例：订单服务"/></div>
-        <div><label className="form-label">测试地址 (Base URL)</label><input className="form-input form-input-mono" value={endpointRef} onChange={(e) => onEndpointRefChange(e.target.value)} placeholder="例如：http://order-service.internal:8080"/></div>
+        <div>
+          <label className="form-label">系统名称</label>
+          <input
+            className="form-input"
+            value={systemName}
+            onChange={(event) => onSystemNameChange(event.target.value)}
+            placeholder="例如：制造执行系统"
+          />
+        </div>
+        <div>
+          <label className="form-label">测试环境地址</label>
+          <input
+            className="form-input form-input-mono"
+            value={endpointRef}
+            onChange={(event) => onEndpointRefChange(event.target.value)}
+            placeholder="例如：https://sit.example.internal"
+          />
+        </div>
       </div>
 
-      {/* ── API 认证 ── */}
-      {hasEndpoint && (
-        <div className="settings-auth-section">
-          <div className="settings-section-title">🔑 API 认证方式</div>
-          <div className="settings-auth-tabs">
-            {(Object.keys(AUTH_TYPE_LABELS) as AuthType[]).map((t) => (
-              <button
-                key={t}
-                className={`settings-auth-tab ${authType === t ? 'settings-auth-tab--active' : ''}`}
-                onClick={() => onAuthTypeChange(t)}
-                type="button"
-              >
-                {AUTH_TYPE_LABELS[t]}
-              </button>
+      <div className="settings-auth-section">
+        <div className="settings-section-title">登录凭据</div>
+        <p className="settings-auth-hint">
+          系统会自动探测登录接口、鉴权流程和会话保持方式。这里只提供无法从页面或接口文档推断的秘密材料。
+        </p>
+
+        <div style={{ maxWidth: 360, marginTop: 12 }}>
+          <label className="form-label">凭据类型</label>
+          <select
+            className="form-input"
+            value={authType}
+            onChange={(event) => onAuthTypeChange(event.target.value as AuthType)}
+          >
+            {(Object.keys(AUTH_TYPE_LABELS) as AuthType[]).map((type) => (
+              <option key={type} value={type}>{AUTH_TYPE_LABELS[type]}</option>
             ))}
-          </div>
-
-          {authType === 'password_login' && (
-            <>
-              {/* ── Admin (required, always visible) ── */}
-              <div style={{ marginTop: 14 }}>
-                <label className="form-label">Login API</label>
-                <input
-                  className="form-input form-input-mono"
-                  value={loginApi}
-                  onChange={(e) => onLoginApiChange(e.target.value)}
-                  placeholder="/auth/login"
-                />
-              </div>
-              <div style={{ marginTop: 14 }}>
-                <span className="form-label" style={{ marginBottom: 6, display: 'block' }}>管理员账号</span>
-                <div className="settings-role-row">
-                  <div className="settings-role-col settings-role-col--role">
-                    <span className="settings-role-badge">admin</span>
-                  </div>
-                  <div className="settings-role-col settings-role-col--user">
-                    <input className="form-input form-input-sm" value={adminAccount.username}
-                      onChange={(e) => updateAdmin('username', e.target.value)} placeholder="admin" />
-                  </div>
-                  <div className="settings-role-col settings-role-col--pass">
-                    <input className="form-input form-input-sm" type="password" value={adminAccount.password}
-                      onChange={(e) => updateAdmin('password', e.target.value)} placeholder="••••••••" />
-                  </div>
-                </div>
-                <p className="settings-auth-hint">
-                  admin 账号覆盖 API 契约、数据一致性、业务规则等 90% 检测，下图中的其他角色仅用于权限边界测试。
-                </p>
-              </div>
-
-              {/* ── 权限测试账号（可选、折叠） ── */}
-              <div className="settings-extra-roles">
-                <div
-                  className="settings-extra-roles-toggle"
-                  onClick={() => setShowExtraRoles(!showExtraRoles)}
-                >
-                  <span>{showExtraRoles ? '▾' : '▸'} 🔒 权限测试账号（可选）</span>
-                  {!showExtraRoles && extraAccounts.length > 0 && (
-                    <span className="settings-extra-roles-count">{extraAccounts.length}个</span>
-                  )}
-                </div>
-
-                {showExtraRoles && (
-                  <div className="settings-extra-roles-body">
-                    <p className="settings-auth-hint" style={{ marginBottom: 10 }}>
-                      添加其他角色账号用于检测数据越权和权限边界问题（如 viewer 是否能访问 admin 数据）。
-                    </p>
-                    {extraAccounts.map((acc, idx) => {
-                      const isCustom = !ROLE_OPTIONS.slice(0, -1).some(o => o.value === acc.role);
-                      return (
-                        <div key={idx} className="settings-role-row settings-role-row--extra">
-                          <div className="settings-role-col settings-role-col--role">
-                            {isCustom ? (
-                              <input className="form-input form-input-sm" value={acc.role}
-                                onChange={(e) => updateExtraRole(idx, 'role', e.target.value)} placeholder="角色名" />
-                            ) : (
-                              <select className="form-input form-input-sm" value={acc.role}
-                                onChange={(e) => {
-                                  if (e.target.value === '__custom__') updateExtraRole(idx, 'role', '');
-                                  else updateExtraRole(idx, 'role', e.target.value);
-                                }}>
-                                {ROLE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                              </select>
-                            )}
-                          </div>
-                          <div className="settings-role-col settings-role-col--user">
-                            <input className="form-input form-input-sm" value={acc.username}
-                              onChange={(e) => updateExtraRole(idx, 'username', e.target.value)}
-                              placeholder={acc.role} />
-                          </div>
-                          <div className="settings-role-col settings-role-col--pass">
-                            <input className="form-input form-input-sm" type="password" value={acc.password}
-                              onChange={(e) => updateExtraRole(idx, 'password', e.target.value)} placeholder="••••••••" />
-                          </div>
-                          <button type="button" className="settings-role-remove-btn"
-                            onClick={() => removeExtraRole(idx)} title="移除">✕</button>
-                        </div>
-                      );
-                    })}
-                    <button type="button" className="settings-role-add-btn" onClick={addExtraRole}>
-                      + 添加角色
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {/* ── 登录接口自动探测（用户无需关心） ── */}
-              <p className="settings-auth-hint" style={{ marginTop: 14, marginBottom: 0 }}>
-                系统启动时自动探测登录接口：依次尝试 <code>/auth/login</code>、<code>/api/auth/login</code>、<code>/login</code> 等常见路径，找到可用的即自动使用。
-              </p>
-            </>
-          )}
-
-          {authType === 'bearer_token' && (
-            <div style={{ marginTop: 14 }}>
-              <label className="form-label">Bearer Token</label>
-              <textarea className="form-input form-input-mono" rows={3} value={bearerToken}
-                onChange={(e) => onBearerTokenChange(e.target.value)}
-                placeholder="eyJhbGciOiJIUzI1NiIs..."
-                style={{ resize: 'vertical', maxWidth: '100%' }} />
-            </div>
-          )}
-
-          {authType === 'api_key' && (
-            <div style={{ marginTop: 14 }}>
-              <label className="form-label">API Key</label>
-              <input className="form-input form-input-mono" type="password" value={apiKey}
-                onChange={(e) => onApiKeyChange(e.target.value)} placeholder="sk-..." style={{ maxWidth: 420 }} />
-            </div>
-          )}
+          </select>
         </div>
-      )}
 
-      <DbCredentialPanel
-        dbOpen={dbOpen} credentialSummary={credentialSummary}
-        dbType={dbType} dbHost={dbHost} dbPort={dbPort}
-        dbUser={dbUser} dbPass={dbPass} dbName={dbName}
-        dbTestLoad={dbTestLoad} dbTestOk={dbTestOk}
-        dbTestMsg={dbTestMsg} dbTestHintText={dbTestHintText}
-        dbOptions={dbOptions} getDbDefaultPort={getDbDefaultPort}
-        onToggleOpen={onToggleDbPanel}
-        onDbTypeChange={onDbTypeChange} onDbHostChange={onDbHostChange}
-        onDbPortChange={onDbPortChange} onDbUserChange={onDbUserChange}
-        onDbPassChange={onDbPassChange} onDbNameChange={onDbNameChange}
-        onTest={onDbTest} onApplyCredentialRef={onApplyCredentialRef}
-      />
+        {authType === 'password_login' && (
+          <div className="settings-form-grid" style={{ marginTop: 14 }}>
+            <div>
+              <label className="form-label">测试账号</label>
+              <input
+                className="form-input"
+                value={adminAccount.username}
+                onChange={(event) => updateAdmin('username', event.target.value)}
+                placeholder="账号"
+              />
+            </div>
+            <div>
+              <label className="form-label">密码</label>
+              <input
+                className="form-input"
+                type="password"
+                value={adminAccount.password}
+                onChange={(event) => updateAdmin('password', event.target.value)}
+                placeholder="密码"
+              />
+            </div>
+          </div>
+        )}
+
+        {authType === 'bearer_token' && (
+          <div style={{ marginTop: 14 }}>
+            <label className="form-label">Bearer Token</label>
+            <textarea
+              className="form-input form-input-mono"
+              rows={3}
+              value={bearerToken}
+              onChange={(event) => onBearerTokenChange(event.target.value)}
+              placeholder="粘贴测试环境 Token"
+              style={{ resize: 'vertical', maxWidth: '100%' }}
+            />
+          </div>
+        )}
+
+        {authType === 'api_key' && (
+          <div style={{ marginTop: 14, maxWidth: 420 }}>
+            <label className="form-label">API Key</label>
+            <input
+              className="form-input form-input-mono"
+              type="password"
+              value={apiKey}
+              onChange={(event) => onApiKeyChange(event.target.value)}
+              placeholder="粘贴测试环境 API Key"
+            />
+          </div>
+        )}
+      </div>
+
+      <details className="settings-auth-section">
+        <summary><strong>高级选项</strong> <span className="muted">仅在自动识别失败时补充</span></summary>
+
+        <div className="settings-form-grid" style={{ marginTop: 14 }}>
+          <div>
+            <label className="form-label">模块名称（可选）</label>
+            <input
+              className="form-input"
+              value={moduleName}
+              onChange={(event) => onModuleNameChange(event.target.value)}
+              placeholder="后台将从资料和页面结构自动识别"
+            />
+          </div>
+          <div>
+            <label className="form-label">服务名称（可选）</label>
+            <input
+              className="form-input"
+              value={serviceName}
+              onChange={(event) => onServiceNameChange(event.target.value)}
+              placeholder="后台将从域名和接口规范自动生成"
+            />
+          </div>
+        </div>
+
+        {authType === 'password_login' && (
+          <div style={{ marginTop: 14, maxWidth: 420 }}>
+            <label className="form-label">登录接口（可选）</label>
+            <input
+              className="form-input form-input-mono"
+              value={loginApi}
+              onChange={(event) => onLoginApiChange(event.target.value)}
+              placeholder="自动探测失败时再填写，例如 /auth/login"
+            />
+          </div>
+        )}
+
+        {authType === 'password_login' && (
+          <div className="settings-extra-roles" style={{ marginTop: 14 }}>
+            <button
+              type="button"
+              className="settings-extra-roles-toggle"
+              onClick={() => setShowExtraRoles((visible) => !visible)}
+            >
+              <span>{showExtraRoles ? '▾' : '▸'} 权限边界测试账号（可选）</span>
+              {!showExtraRoles && extraAccounts.length > 0 && (
+                <span className="settings-extra-roles-count">{extraAccounts.length} 个</span>
+              )}
+            </button>
+
+            {showExtraRoles && (
+              <div className="settings-extra-roles-body">
+                <p className="settings-auth-hint" style={{ marginBottom: 10 }}>
+                  仅当企业希望验证跨角色越权时补充；普通业务验证不需要维护多套账号。
+                </p>
+                {extraAccounts.map((account, index) => {
+                  const customRole = !ROLE_OPTIONS.slice(0, -1).some((option) => option.value === account.role);
+                  return (
+                    <div key={`${account.role}-${index}`} className="settings-role-row settings-role-row--extra">
+                      <div className="settings-role-col settings-role-col--role">
+                        {customRole ? (
+                          <input
+                            className="form-input form-input-sm"
+                            value={account.role}
+                            onChange={(event) => updateExtraRole(index, 'role', event.target.value)}
+                            placeholder="角色名"
+                          />
+                        ) : (
+                          <select
+                            className="form-input form-input-sm"
+                            value={account.role}
+                            onChange={(event) => updateExtraRole(index, 'role', event.target.value === '__custom__' ? '' : event.target.value)}
+                          >
+                            {ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                          </select>
+                        )}
+                      </div>
+                      <div className="settings-role-col settings-role-col--user">
+                        <input
+                          className="form-input form-input-sm"
+                          value={account.username}
+                          onChange={(event) => updateExtraRole(index, 'username', event.target.value)}
+                          placeholder="账号"
+                        />
+                      </div>
+                      <div className="settings-role-col settings-role-col--pass">
+                        <input
+                          className="form-input form-input-sm"
+                          type="password"
+                          value={account.password}
+                          onChange={(event) => updateExtraRole(index, 'password', event.target.value)}
+                          placeholder="密码"
+                        />
+                      </div>
+                      <button type="button" className="settings-role-remove-btn" onClick={() => removeExtraRole(index)} title="移除">✕</button>
+                    </div>
+                  );
+                })}
+                <button type="button" className="settings-role-add-btn" onClick={addExtraRole}>+ 添加角色</button>
+              </div>
+            )}
+          </div>
+        )}
+
+        <DbCredentialPanel
+          dbOpen={dbOpen}
+          credentialSummary={credentialSummary}
+          dbType={dbType}
+          dbHost={dbHost}
+          dbPort={dbPort}
+          dbUser={dbUser}
+          dbPass={dbPass}
+          dbName={dbName}
+          dbTestLoad={dbTestLoad}
+          dbTestOk={dbTestOk}
+          dbTestMsg={dbTestMsg}
+          dbTestHintText={dbTestHintText}
+          dbOptions={dbOptions}
+          getDbDefaultPort={getDbDefaultPort}
+          onToggleOpen={onToggleDbPanel}
+          onDbTypeChange={onDbTypeChange}
+          onDbHostChange={onDbHostChange}
+          onDbPortChange={onDbPortChange}
+          onDbUserChange={onDbUserChange}
+          onDbPassChange={onDbPassChange}
+          onDbNameChange={onDbNameChange}
+          onTest={onDbTest}
+          onApplyCredentialRef={onApplyCredentialRef}
+        />
+
+        <label className="settings-enable-toggle" style={{ marginTop: 14 }}>
+          <input type="checkbox" checked={enabled} onChange={(event) => onEnabledChange(event.target.checked)} />
+          启用该接入
+        </label>
+      </details>
 
       <div className="settings-form-actions">
-        <label className="settings-enable-toggle"><input type="checkbox" checked={enabled} onChange={(e) => onEnabledChange(e.target.checked)}/> 启用</label>
-        <button onClick={onSave} className="btn btn-primary settings-btn-compact">保存</button>
+        <button onClick={onSave} className="btn btn-primary settings-btn-compact">
+          保存并自动验证
+        </button>
         <button onClick={onCancel} className="btn btn-secondary settings-btn-compact">取消</button>
       </div>
       {statusText && <p className="settings-inline-feedback">{statusText}</p>}
