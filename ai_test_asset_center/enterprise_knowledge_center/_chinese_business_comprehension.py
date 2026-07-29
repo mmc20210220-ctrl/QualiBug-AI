@@ -58,6 +58,17 @@ _CONDITION_PATTERNS = (
     re.compile(r"除非(?P<value>.+?)(?:，|,|；|;|$)"),
     re.compile(r"(?P<value>[^，,；;。]{1,60}(?:之前|之后|前|后))(?:，|,|；|;|$)"),
 )
+# Explicit source combinators only. Multiple conditions without one stay UNRESOLVED —
+# never default to AND.
+_AND_COMBINATOR_RE = re.compile(r"并且|同时满足|以及|(?<![并])且(?![不])")
+_OR_COMBINATOR_RE = re.compile(r"或者|或则|任一条件|其中之一")
+_CRITICAL_AMBIGUITY_PREFIXES = (
+    "COREFERENCE_",
+    "BUSINESS_SUBJECT_",
+    "CRITICAL_ACTION_",
+    "EXCEPTION_SCOPE_",
+    "CONDITION_COMBINATOR_",
+)
 _COREFERENCE_RE = re.compile(
     r"该(?:对象|记录|数据|单据|申请|订单|工单|合同|任务)?|"
     r"本(?:单|记录|对象|申请|订单|工单|合同)?|"
@@ -293,6 +304,21 @@ def _conditions(text: str) -> list[str]:
     return values
 
 
+def _condition_combinator(text: str, conditions: list[str]) -> str:
+    """Derive multi-condition combinator only from explicit source wording."""
+    if len(conditions) <= 1:
+        return "SINGLE_CONDITION" if conditions else ""
+    has_and = bool(_AND_COMBINATOR_RE.search(text))
+    has_or = bool(_OR_COMBINATOR_RE.search(text))
+    if has_and and has_or:
+        return "UNRESOLVED"
+    if has_and:
+        return "AND"
+    if has_or:
+        return "OR"
+    return "UNRESOLVED"
+
+
 def _state_effects(text: str) -> list[dict[str, Any]]:
     effects: list[dict[str, Any]] = []
     for match in _STATE_TRANSITION_RE.finditer(text):
@@ -380,6 +406,7 @@ def _fact_from_unit(unit: str, *, source_id: str, locator: str, known_entities: 
     action = _action(raw)
     modality, polarity = _modality(raw)
     conditions = _conditions(raw)
+    condition_combinator = _condition_combinator(raw, conditions)
     exceptions = _exception(raw)
     states = _state_effects(raw)
     temporal = [match.group("value") for match in _TEMPORAL_RE.finditer(raw)]
@@ -394,6 +421,8 @@ def _fact_from_unit(unit: str, *, source_id: str, locator: str, known_entities: 
         ambiguities.append("CRITICAL_ACTION_UNRESOLVED")
     if exceptions and len(_split_rule_units(raw)) == 1 and not conditions and not re.match(r"^(?:除[^，,；;。]+外|但|但是|不过|然而)", raw):
         ambiguities.append("EXCEPTION_SCOPE_UNRESOLVED")
+    if len(conditions) > 1 and condition_combinator == "UNRESOLVED":
+        ambiguities.append("CONDITION_COMBINATOR_UNRESOLVED")
 
     confidence = 0.62 + (0.08 if entities else 0.0) + (0.06 if roles else 0.0) + (0.10 if action else 0.0) + (0.07 if conditions else 0.0) + (0.04 if states else 0.0) + (0.03 if modality != "ASSERTS" else 0.0) - 0.12 * len(ambiguities)
     confidence = max(0.05, min(0.99, confidence))
@@ -407,6 +436,7 @@ def _fact_from_unit(unit: str, *, source_id: str, locator: str, known_entities: 
         "language": _language_of(raw),
         "subject": {"actor_refs": roles, "entity_refs": entities, "resolution_evidence": resolution_evidence},
         "conditions": conditions,
+        "condition_combinator": condition_combinator,
         "trigger": {"raw": conditions[0]} if conditions else {},
         "action": action,
         "object": {"entity_refs": entities},
@@ -537,8 +567,106 @@ def _rule_from_fact(fact: dict[str, Any]) -> dict[str, Any] | None:
         "entity_refs": _list(subject.get("entity_refs")),
         "action": action.get("canonical") or action.get("raw"),
         "modality": modality,
+        "conditions": _list(fact.get("conditions")),
+        "condition_combinator": _text(fact.get("condition_combinator")),
         "confidence": fact.get("confidence"),
         "derivation": "chinese_first_business_comprehension",
+    }
+
+
+def _term_alias_map(facts: Iterable[dict[str, Any]]) -> tuple[dict[str, str], list[dict[str, Any]]]:
+    """Build alias→canonical from ACCEPTED TERM_ALIAS facts; conflicting aliases stay unresolved."""
+    alias_to_canonical: dict[str, str] = {}
+    conflicting: dict[str, set[str]] = {}
+    for fact in facts:
+        if not isinstance(fact, dict):
+            continue
+        if _text(fact.get("kind")) != "TERM_ALIAS" or _text(fact.get("status")) != "ACCEPTED":
+            continue
+        canonical = _text(fact.get("canonical_term"))
+        alias = _text(fact.get("alias"))
+        if not canonical or not alias or canonical == alias:
+            continue
+        existing = alias_to_canonical.get(alias)
+        if existing and existing != canonical:
+            conflicting.setdefault(alias, {existing}).add(canonical)
+            continue
+        alias_to_canonical[alias] = canonical
+    conflict_rows: list[dict[str, Any]] = []
+    for alias, canons in sorted(conflicting.items()):
+        alias_to_canonical.pop(alias, None)
+        conflict_rows.append(
+            {
+                "kind": "TERM_ALIAS_IDENTITY_CONFLICT",
+                "alias": alias,
+                "canonical_candidates": sorted(canons),
+                "status": "UNRESOLVED",
+                "automatic_resolution_allowed": False,
+                "reason": "same alias maps to multiple source-backed canonical terms",
+            }
+        )
+    return alias_to_canonical, conflict_rows
+
+
+def apply_source_backed_term_aliases(facts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Rewrite entity refs through unambiguous TERM_ALIAS evidence without inventing identity.
+
+    Cross-document alias evidence is accepted when every TERM_ALIAS statement is ACCEPTED
+    and the alias maps to exactly one canonical term. Conflicting alias mappings are left
+    unresolved and never merged.
+    """
+    alias_map, conflicts = _term_alias_map(facts)
+    rewritten = 0
+    for fact in facts:
+        if not isinstance(fact, dict) or _text(fact.get("kind")) not in {"RULE", "STATE_TRANSITION"}:
+            continue
+        subject = _dict(fact.get("subject"))
+        object_part = _dict(fact.get("object"))
+        before = [
+            *_list(subject.get("entity_refs")),
+            *_list(object_part.get("entity_refs")),
+        ]
+        if not before or not any(name in alias_map for name in before):
+            continue
+        subject_refs = [_text(alias_map.get(_text(name), name)) for name in _list(subject.get("entity_refs"))]
+        object_refs = [_text(alias_map.get(_text(name), name)) for name in _list(object_part.get("entity_refs"))]
+        subject["entity_refs"] = sorted({name for name in subject_refs if name})
+        object_part["entity_refs"] = sorted({name for name in object_refs if name})
+        resolution = _list(subject.get("resolution_evidence"))
+        for name in before:
+            canonical = alias_map.get(_text(name))
+            if canonical and canonical != name:
+                resolution.append(
+                    {
+                        "mention": name,
+                        "resolved_ref": canonical,
+                        "method": "source_backed_term_alias",
+                        "confidence": 1.0,
+                    }
+                )
+                rewritten += 1
+        subject["resolution_evidence"] = resolution
+        fact["subject"] = subject
+        fact["object"] = object_part
+    for conflict in conflicts:
+        for fact in facts:
+            if not isinstance(fact, dict) or _text(fact.get("kind")) != "TERM_ALIAS":
+                continue
+            if _text(fact.get("alias")) != _text(conflict.get("alias")):
+                continue
+            fact["status"] = "PENDING"
+            ambiguities = _list(fact.get("ambiguities"))
+            if "TERM_ALIAS_IDENTITY_CONFLICT" not in ambiguities:
+                ambiguities.append("TERM_ALIAS_IDENTITY_CONFLICT")
+            fact["ambiguities"] = ambiguities
+    return {
+        "schema": "qualibug.enterprise-term-alias-identity-merge.v1",
+        "alias_to_canonical": dict(sorted(alias_map.items())),
+        "rewritten_entity_ref_count": rewritten,
+        "conflict_count": len(conflicts),
+        "conflicts": conflicts,
+        "automatic_inference_allowed": False,
+        "merge_policy": "source_backed_term_alias_only",
     }
 
 
@@ -555,11 +683,23 @@ def build_chinese_first_comprehension(asset: dict[str, Any], parsed_sources: Ite
             all_glossary.extend(glossary)
 
     all_facts = list({_text(row.get("fact_id")): row for row in [*all_facts, *all_glossary] if isinstance(row, dict) and _text(row.get("fact_id"))}.values())
+    identity_merge = apply_source_backed_term_aliases(all_facts)
     all_coverage = list({_text(row.get("chunk_id")): row for row in all_coverage if isinstance(row, dict) and _text(row.get("chunk_id"))}.values())
     statuses = Counter(_text(row.get("status")) for row in all_coverage)
     chinese_chunks = [row for row in all_coverage if _text(row.get("language")) in {"zh-CN", "zh-CN-mixed"}]
     unresolved = [row for row in chinese_chunks if _text(row.get("status")) in {"AMBIGUOUS", "UNRESOLVED_BUSINESS_TEXT"}]
-    critical_ambiguities = [{"chunk_id": row.get("chunk_id"), "source_id": row.get("source_id"), "source_locator": row.get("source_locator"), "ambiguities": row.get("ambiguities")} for row in unresolved if row.get("contains_business_signal") and (_text(row.get("status")) == "UNRESOLVED_BUSINESS_TEXT" or any(_text(value).startswith(("COREFERENCE_", "BUSINESS_SUBJECT_", "CRITICAL_ACTION_", "EXCEPTION_SCOPE_")) for value in _list(row.get("ambiguities"))))]
+    critical_ambiguities = [{"chunk_id": row.get("chunk_id"), "source_id": row.get("source_id"), "source_locator": row.get("source_locator"), "ambiguities": row.get("ambiguities")} for row in unresolved if row.get("contains_business_signal") and (_text(row.get("status")) == "UNRESOLVED_BUSINESS_TEXT" or any(_text(value).startswith(_CRITICAL_AMBIGUITY_PREFIXES) for value in _list(row.get("ambiguities"))))]
+    # Alias identity conflicts are critical even when the glossary chunk itself is UNDERSTOOD.
+    for conflict in _list(identity_merge.get("conflicts")):
+        critical_ambiguities.append(
+            {
+                "chunk_id": "",
+                "source_id": "*",
+                "source_locator": "",
+                "ambiguities": ["TERM_ALIAS_IDENTITY_CONFLICT"],
+                "details": conflict,
+            }
+        )
     accepted = [row for row in all_facts if _text(row.get("status")) == "ACCEPTED"]
     pending = [row for row in all_facts if _text(row.get("status")) == "PENDING"]
     terminal_statuses = {"UNDERSTOOD", "UNDERSTOOD_CONTEXT", "TERMINAL_NON_CHINESE", "AMBIGUOUS", "UNRESOLVED_BUSINESS_TEXT"}
@@ -583,6 +723,8 @@ def build_chinese_first_comprehension(asset: dict[str, Any], parsed_sources: Ite
             "pending_fact_count": len(pending),
             "unresolved_chunk_count": len(unresolved),
             "critical_ambiguity_count": len(critical_ambiguities),
+            "term_alias_rewrite_count": int(identity_merge.get("rewritten_entity_ref_count") or 0),
+            "term_alias_conflict_count": int(identity_merge.get("conflict_count") or 0),
             "status_distribution": dict(statuses),
         },
         "critical_unknowns": critical_ambiguities,
@@ -592,6 +734,7 @@ def build_chinese_first_comprehension(asset: dict[str, Any], parsed_sources: Ite
     asset["document_coverage_ledger"] = {"schema": COVERAGE_SCHEMA, "language_priority": ["zh-CN", "zh-CN-mixed"], "items": all_coverage}
     asset["business_fact_ledger"] = {"schema": FACT_SCHEMA, "fact_authority": "original_chinese_source_span", "translation_intermediate_forbidden": True, "items": all_facts}
     asset["chinese_business_glossary"] = {"schema": SCHEMA_VERSION, "merge_policy": "source_evidence_required", "items": all_glossary}
+    asset["term_alias_identity_merge"] = identity_merge
     asset["enterprise_comprehension_gate"] = gate
 
     existing_rules = [dict(row) for row in _list(asset.get("rule_library")) if isinstance(row, dict)]
@@ -625,10 +768,18 @@ def build_chinese_first_comprehension(asset: dict[str, Any], parsed_sources: Ite
         "business_comprehension_status": status,
         "business_comprehension_ready": status == "PASS",
         "chinese_source_is_fact_authority": True,
+        "term_alias_identity_merge_count": int(identity_merge.get("rewritten_entity_ref_count") or 0),
     })
     asset["summary"] = summary
     governance = _dict(asset.get("governance"))
-    governance.update({"chinese_first_enterprise_comprehension": True, "chinese_source_text_is_fact_authority": True, "translation_intermediate_cannot_promote_facts": True, "ambiguous_critical_chinese_rules_fail_closed": True})
+    governance.update({
+        "chinese_first_enterprise_comprehension": True,
+        "chinese_source_text_is_fact_authority": True,
+        "translation_intermediate_cannot_promote_facts": True,
+        "ambiguous_critical_chinese_rules_fail_closed": True,
+        "multi_condition_default_and_forbidden": True,
+        "term_alias_identity_merge_source_backed_only": True,
+    })
     asset["governance"] = governance
     return asset
 
@@ -708,6 +859,7 @@ __all__ = [
     "FACT_SCHEMA",
     "GATE_SCHEMA",
     "analyze_chinese_business_source",
+    "apply_source_backed_term_aliases",
     "build_chinese_first_comprehension",
     "install_chinese_first_business_comprehension",
 ]

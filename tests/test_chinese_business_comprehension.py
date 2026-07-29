@@ -126,3 +126,103 @@ def test_only_accepted_chinese_facts_enter_rule_library() -> None:
     assert promoted[0]["statement"] == "管理员可以查看订单"
     assert promoted[0]["semantic_contract"]["status"] == "ACCEPTED"
     assert enriched["summary"]["chinese_business_fact_pending"] == 1
+
+
+def test_multi_condition_without_explicit_combinator_stays_pending() -> None:
+    coverage, facts, _ = analyze_chinese_business_source(
+        {
+            "source_id": "prd-6",
+            "filename": "条件组合.md",
+            "text": "当金额超过1000时，如果审批未完成，管理员不得提交订单。",
+        },
+        asset=_asset(),
+    )
+
+    assert any(fact["status"] == "PENDING" for fact in facts)
+    pending = next(fact for fact in facts if fact["status"] == "PENDING")
+    assert len(pending["conditions"]) > 1
+    assert pending["condition_combinator"] == "UNRESOLVED"
+    assert "CONDITION_COMBINATOR_UNRESOLVED" in pending["ambiguities"]
+    assert coverage[0]["status"] == "AMBIGUOUS"
+
+
+def test_explicit_and_combinator_is_accepted() -> None:
+    _, facts, _ = analyze_chinese_business_source(
+        {
+            "source_id": "prd-7",
+            "filename": "条件并且.md",
+            "text": "如果金额超过1000，并且如果审批未完成，管理员不得提交订单。",
+        },
+        asset=_asset(),
+    )
+
+    assert facts
+    assert all(fact["status"] == "ACCEPTED" for fact in facts)
+    assert facts[0]["condition_combinator"] == "AND"
+    assert len(facts[0]["conditions"]) > 1
+
+
+def test_cross_document_term_alias_rewrites_entity_refs() -> None:
+    enriched = build_chinese_first_comprehension(
+        {
+            **_asset(),
+            "business_objects": [
+                {"object": "生产任务单"},
+                {"object": "MO"},
+            ],
+        },
+        [
+            {
+                "source_id": "glossary",
+                "filename": "术语表.md",
+                "text": "生产任务单（MO）由计划员创建。",
+            },
+            {
+                "source_id": "prd-mo",
+                "filename": "MO规则.md",
+                "text": "管理员可以查看MO。",
+            },
+        ],
+    )
+
+    merge = enriched["term_alias_identity_merge"]
+    assert merge["alias_to_canonical"]["MO"] == "生产任务单"
+    assert merge["rewritten_entity_ref_count"] >= 1
+    assert merge["conflict_count"] == 0
+    viewing = next(
+        fact
+        for fact in enriched["business_fact_ledger"]["items"]
+        if fact.get("action", {}).get("canonical") == "查看"
+    )
+    assert viewing["subject"]["entity_refs"] == ["生产任务单"]
+    assert enriched["enterprise_comprehension_gate"]["entry_allowed"] is True
+
+
+def test_conflicting_term_alias_mappings_fail_closed() -> None:
+    enriched = build_chinese_first_comprehension(
+        _asset(),
+        [
+            {
+                "source_id": "glossary-a",
+                "filename": "术语A.md",
+                "text": "生产任务单（MO）由计划员创建。",
+            },
+            {
+                "source_id": "glossary-b",
+                "filename": "术语B.md",
+                "text": "制造订单（MO）由计划员创建。",
+            },
+        ],
+    )
+
+    assert enriched["term_alias_identity_merge"]["conflict_count"] == 1
+    assert enriched["enterprise_comprehension_gate"]["entry_allowed"] is False
+    pending_aliases = [
+        fact
+        for fact in enriched["business_fact_ledger"]["items"]
+        if fact.get("kind") == "TERM_ALIAS" and fact.get("status") == "PENDING"
+    ]
+    assert pending_aliases
+    assert all(
+        "TERM_ALIAS_IDENTITY_CONFLICT" in fact["ambiguities"] for fact in pending_aliases
+    )

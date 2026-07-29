@@ -85,12 +85,17 @@ Implemented in this phase:
 - unique-chain lifecycle process projection;
 - conflict and unknown propagation;
 - minimum business behavior closure;
-- integration before downstream semantic binding.
+- integration before downstream semantic binding;
+- multi-condition combinator honesty (`AND`/`OR` only from explicit source wording;
+  otherwise `UNRESOLVED`, never default `AND`);
+- cross-document object identity merge only through ACCEPTED `TERM_ALIAS`
+  evidence (conflicting alias mappings fail closed).
 
 Not yet complete:
 
-- full Chinese document semantic tree;
-- cross-paragraph and cross-document coreference at enterprise scale;
+- full Chinese document semantic tree at enterprise scale;
+- cross-paragraph and cross-document coreference beyond nearest unambiguous
+  section context and source-backed term aliases;
 - conditional branches, parallel branches, loops, compensation processes, and
   long-running process reconstruction;
 - formula, quantity, time-window, organization, and policy-delegation semantics;

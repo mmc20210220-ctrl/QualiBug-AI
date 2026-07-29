@@ -221,3 +221,64 @@ def test_upstream_conflict_reason_is_preserved() -> None:
     assert enriched["enterprise_comprehension_gate"]["status"] == "BLOCKED_BUSINESS_COMPREHENSION_CONFLICTING_FACTS"
     assert enriched["enterprise_comprehension_gate"]["understanding_model"]["status"] == "BLOCKED_UPSTREAM_BUSINESS_COMPREHENSION_GATE"
     assert enriched["enterprise_understanding_model"]["conflicts"][0]["conflict_id"] == "conflict-1"
+
+
+def test_source_backed_alias_merges_cross_document_object_identity() -> None:
+    alias_fact = {
+        "fact_id": "fact-alias",
+        "kind": "TERM_ALIAS",
+        "status": "ACCEPTED",
+        "canonical_term": "生产任务单",
+        "alias": "MO",
+        "raw_statement": "生产任务单（MO）",
+        "source_spans": _span("glossary", "生产任务单（MO）"),
+    }
+    mo_fact = _fact(
+        "fact-mo-view",
+        "管理员可以查看MO",
+        entities=["MO"],
+        action="查看",
+        actors=["管理员"],
+    )
+    canonical_fact = _fact(
+        "fact-mo-create",
+        "计划员可以审核生产任务单",
+        entities=["生产任务单"],
+        action="审核",
+        actors=["计划员"],
+    )
+
+    model = build_enterprise_understanding_model(
+        _asset([alias_fact, mo_fact, canonical_fact])
+    )
+
+    assert [row["name"] for row in model["business_objects"]] == ["生产任务单"]
+    assert "MO" in model["business_objects"][0]["aliases"]
+    assert {row["name"] for row in model["operations"]} == {"查看", "审核"}
+    assert all(row["object_refs"] == ["生产任务单"] for row in model["operations"])
+    assert model["term_resolution"]["alias_to_object"]["MO"] == "生产任务单"
+    assert model["gate"]["entry_allowed"] is True
+
+
+def test_multi_condition_operation_without_combinator_is_visible_unknown() -> None:
+    fact = _fact(
+        "fact-multi-cond",
+        "当金额超过1000时，如果审批未完成，管理员不得提交订单",
+        entities=["订单"],
+        action="提交",
+        conditions=["金额超过1000", "审批未完成"],
+        actors=["管理员"],
+        critical=True,
+    )
+    fact["modality"] = "MUST_NOT"
+    fact["condition_combinator"] = "UNRESOLVED"
+
+    model = build_enterprise_understanding_model(_asset([fact]))
+
+    assert any(
+        row["reason_code"] == "CONDITION_COMBINATOR_UNRESOLVED" for row in model["unknowns"]
+    )
+    operation = model["operations"][0]
+    assert operation["condition_combinator"] == "UNRESOLVED"
+    assert operation["status"] == "PARTIAL"
+    assert model["gate"]["entry_allowed"] is False
