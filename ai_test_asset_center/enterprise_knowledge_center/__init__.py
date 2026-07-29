@@ -31,6 +31,11 @@ from ._chinese_business_downstream import (  # noqa: F401
     refresh_chinese_business_downstream,
     install_chinese_business_downstream_refresh,
 )
+from ._job_assets import (  # noqa: F401
+    discover_job_definitions_from_text,
+    enrich_job_assets,
+    install_job_asset_enrichment,
+)
 from ._formal_ui_contracts import (  # noqa: F401
     extract_formal_ui_contracts,
     install_formal_ui_contract_parser,
@@ -60,10 +65,13 @@ install_formal_ui_visual_viewport_guard()
 # rule input; the enterprise understanding model then compiles objects, actors,
 # operations, relations, lifecycles, processes and unknowns. Only after that gate
 # closes may downstream bindings, risks, Oracles, probes and evidence be rebuilt.
+# Job enrichment runs last and only appends source-backed ASYNC_JOB operations to
+# that same understanding model; it does not create a parallel behavior authority.
 build_enterprise_business_knowledge_asset = install_chinese_first_business_comprehension()
 build_enterprise_business_knowledge_asset = install_chinese_business_conflict_reconciliation()
 build_enterprise_business_knowledge_asset = install_enterprise_understanding_model()
 build_enterprise_business_knowledge_asset = install_chinese_business_downstream_refresh()
+build_enterprise_business_knowledge_asset = install_job_asset_enrichment()
 
 # Explicit re-exports for underscore-prefixed symbols
 from ._common import _SEMANTIC_LEXICON_CACHE  # noqa: F401
@@ -223,6 +231,9 @@ __all__ = [
     "install_enterprise_understanding_model",
     "refresh_chinese_business_downstream",
     "install_chinese_business_downstream_refresh",
+    "discover_job_definitions_from_text",
+    "enrich_job_assets",
+    "install_job_asset_enrichment",
     "build_enterprise_business_knowledge_asset",
     "load_enterprise_business_knowledge_asset",
     "generate_enterprise_business_knowledge_probes",
