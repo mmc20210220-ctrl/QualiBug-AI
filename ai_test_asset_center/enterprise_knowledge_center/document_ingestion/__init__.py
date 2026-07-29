@@ -44,6 +44,7 @@ from .visual_table_adapter import (
     VisualTableProvider,
     VisualTableSupplementalAdapter,
 )
+from .visual_table_provider_gate import GeometryFormalEnforcingVisualTableProvider
 
 __all__ = [
     "AdapterMatch",
@@ -78,6 +79,7 @@ __all__ = [
     "MergedCellRuledGridVisualTableProvider",
     "TextAlignedVisualTableProvider",
     "CompositeVisualTableProvider",
+    "GeometryFormalEnforcingVisualTableProvider",
     "build_default_advanced_visual_table_provider",
     "VisualTableSupplementalAdapter",
     "DocumentAdapterRegistry",
