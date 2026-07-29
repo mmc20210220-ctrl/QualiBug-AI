@@ -93,6 +93,12 @@ function fallbackGates(summary: JsonRecord): GateView[] {
       status: asText(summary.runtime_plan_status) || 'NOT_BUILT',
       ready: asBoolean(summary.runtime_plan_ready),
     },
+    {
+      key: 'runtime_materialization',
+      label: '运行实例化',
+      status: asText(summary.runtime_materialization_status) || 'NOT_BUILT',
+      ready: asBoolean(summary.runtime_materialization_ready),
+    },
   ];
 }
 
@@ -146,6 +152,7 @@ const categoryLabels: Record<string, string> = {
   scenario_ir_unknown: '场景缺口',
   execution_contract_unknown: '执行合同缺口',
   runtime_plan_unknown: '运行模板缺口',
+  runtime_materialization_unknown: '运行实例化缺口',
   coverage_gap: '覆盖缺口',
 };
 
@@ -161,13 +168,15 @@ export function EnterpriseUnderstandingPanel({ summary: value, onOpenMaterials }
   const operationCount = asNumber(summary.understood_operation_count);
   const scenarioCount = asNumber(summary.scenario_ir_count);
   const runtimePlanCount = asNumber(summary.runtime_plan_count);
+  const runtimeMaterializationCount = asNumber(summary.runtime_materialization_count);
   const available = Boolean(
     modelId
     || (understandingStatus && understandingStatus !== 'NOT_BUILT')
     || businessObjectCount
     || operationCount
     || scenarioCount
-    || runtimePlanCount,
+    || runtimePlanCount
+    || runtimeMaterializationCount,
   );
   if (!available) return null;
 
@@ -175,22 +184,22 @@ export function EnterpriseUnderstandingPanel({ summary: value, onOpenMaterials }
   const understandingReady = asBoolean(summary.enterprise_understanding_ready);
   const chainReady = gates.length > 0
     ? gates.every((gate) => gate.ready)
-    : asBoolean(summary.formal_scenario_chain_ready);
+    : asBoolean(summary.formal_runtime_chain_ready || summary.formal_scenario_chain_ready);
   const blockers = [...new Set(asArray(summary.understanding_blockers).map(asText).filter(Boolean))].slice(0, 8);
   const receipts = blockerReceipts(summary);
   const receiptMessages = new Set(receipts.map((receipt) => receipt.message));
   const residualBlockers = blockers.filter((blocker) => !receiptMessages.has(blocker));
   const firstBlocked = gates.find((gate) => !gate.ready);
   const statusTitle = chainReady
-    ? '运行模板链已闭合'
+    ? '运行准备链已闭合'
     : understandingReady
-      ? '企业理解已闭合，运行模板链待完善'
+      ? '企业理解已闭合，运行准备链待完善'
       : '企业理解尚未闭合';
   const statusDetail = chainReady
-    ? '企业理解、场景规划、Scenario IR、执行合同和 Runtime Plan 均已通过现有门禁。运行时仍会继续检查环境、凭据、测试数据、观察通道和清理义务。'
+    ? '企业理解、场景规划、Scenario IR、执行合同、Runtime Plan 和运行实例化均已通过现有门禁。真实执行仍由现有 Experiment Executor 继续检查现场凭据、动态值、观察回执和清理恢复。'
     : firstBlocked
-      ? `当前停在“${firstBlocked.label}”：${firstBlocked.status}。下方只读回执会展示现有资产已经记录的资料来源和定位；没有来源的条目不会被系统猜测补齐。`
-      : '现有知识资产尚未形成完整的运行模板链。';
+      ? `当前停在“${firstBlocked.label}”：${firstBlocked.status}。下方只读回执展示现有资产已经记录的资料来源或接入缺口；没有证据的条目不会被系统猜测补齐。`
+      : '现有知识资产尚未形成完整的运行准备链。';
 
   return (
     <section className="focus-section" aria-label="企业理解状态">
@@ -200,19 +209,19 @@ export function EnterpriseUnderstandingPanel({ summary: value, onOpenMaterials }
           <h2>QualiBug 对企业业务的理解</h2>
           <p>{statusTitle}。这里不创建第二套模型，也不要求用户人工确认或编辑业务结构。</p>
         </div>
-        {!chainReady && <button className="btn btn-secondary" onClick={onOpenMaterials}>补充企业资料</button>}
+        {!chainReady && <button className="btn btn-secondary" onClick={onOpenMaterials}>完善系统接入</button>}
       </div>
 
       <div className="customer-secondary-grid">
         <article className="customer-secondary-card">
-          <span className="customer-value-kicker">理解规模</span>
+          <span className="customer-value-kicker">理解与运行规模</span>
           <div className="customer-secondary-meta">
             <span><em>业务对象</em><b>{businessObjectCount}</b></span>
             <span><em>角色</em><b>{asNumber(summary.understood_actor_count)}</b></span>
             <span><em>业务操作</em><b>{operationCount}</b></span>
-            <span><em>生命周期</em><b>{asNumber(summary.understood_lifecycle_count)}</b></span>
             <span><em>正式场景</em><b>{scenarioCount}</b></span>
             <span><em>运行模板</em><b>{runtimePlanCount}</b></span>
+            <span><em>实例化草案</em><b>{runtimeMaterializationCount}</b></span>
           </div>
         </article>
 
@@ -223,7 +232,7 @@ export function EnterpriseUnderstandingPanel({ summary: value, onOpenMaterials }
             <span><em>操作对象绑定</em><b>{percent(summary.operation_object_binding_rate)}</b></span>
             <span><em>生命周期完整度</em><b>{percent(summary.lifecycle_completeness)}</b></span>
             <span><em>待关闭未知项</em><b>{asNumber(summary.enterprise_understanding_unknown_count)}</b></span>
-            <span><em>未解决冲突</em><b>{asNumber(summary.enterprise_understanding_conflict_count)}</b></span>
+            <span><em>实例化缺口</em><b>{asNumber(summary.runtime_materialization_unknown_count)}</b></span>
             <span><em>有资料定位的缺口</em><b>{asNumber(summary.understanding_source_receipt_count)}</b></span>
           </div>
         </article>
@@ -247,7 +256,7 @@ export function EnterpriseUnderstandingPanel({ summary: value, onOpenMaterials }
           </ul>
         )}
         <small className="muted">
-          状态来源：现有 enterprise business knowledge asset。系统不会通过人工点击“确认正确”或常识补全绕过门禁。
+          状态来源：现有 enterprise business knowledge asset。系统不会通过人工点击“确认正确”、常识补全或旧 Probe 回退绕过门禁。
         </small>
       </div>
 
@@ -279,7 +288,7 @@ export function EnterpriseUnderstandingPanel({ summary: value, onOpenMaterials }
                   ))
                 ) : (
                   <div className="settings-card-note settings-mt-10">
-                    现有门禁回执尚未附具体资料定位。QualiBug 不会猜测来源，请补充能够证明该规则、状态、接口或运行约束的原始资料。
+                    现有门禁回执尚未附具体资料定位。QualiBug 不会猜测来源，请补充对应企业资料，或完善测试环境、凭据、测试数据与安全清理能力。
                   </div>
                 )}
               </article>
