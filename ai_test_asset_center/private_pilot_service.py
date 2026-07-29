@@ -118,6 +118,7 @@ from .private_pilot_command_center_helpers import (  # noqa: F401
     _ui_verification_stats,
 )
 from .private_pilot_command_center_builder import CommandCenterBuilderMixin
+from .private_pilot_command_center_understanding import UnderstandingCommandCenterProjectionMixin
 from .private_pilot_credentials_handlers import CredentialsHandlerMixin
 from .private_pilot_http_routing import HttpRoutingMixin
 from .private_pilot_ingest_handlers import IngestHandlersMixin
@@ -191,6 +192,7 @@ class PrivatePilotHandler(
     FindingUtilsMixin,
     LlmHealthMixin,
     ReportLoadingMixin,
+    UnderstandingCommandCenterProjectionMixin,
     CommandCenterBuilderMixin,
     AuthScopeMixin,
     BaseHTTPRequestHandler,
