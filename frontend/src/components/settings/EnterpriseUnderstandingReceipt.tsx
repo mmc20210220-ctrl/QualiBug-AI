@@ -21,6 +21,7 @@ type UnderstandingView = {
   processCount: number;
   scenarioCount: number;
   runtimePlanCount: number;
+  runtimeMaterializationCount: number;
   unknownCount: number;
   conflictCount: number;
   blockers: string[];
@@ -74,6 +75,27 @@ const reasonLabels: Record<string, string> = {
   RUNTIME_PLAN_CREDENTIAL_REF_AMBIGUOUS: '同一业务角色对应多个测试凭证引用',
   RUNTIME_PLAN_ORACLE_TEMPLATE_UNRESOLVED: '运行计划尚未形成可验证的观察模板',
   RUNTIME_PLAN_CLEANUP_TEMPLATE_UNRESOLVED: '写操作尚未形成安全清理模板',
+  RUNTIME_MATERIALIZATION_ENVIRONMENT_REF_UNRESOLVED: '运行实例尚未唯一绑定测试环境',
+  RUNTIME_MATERIALIZATION_BASE_URL_UNRESOLVED: '运行实例尚未获得测试环境地址',
+  RUNTIME_MATERIALIZATION_ENVIRONMENT_REF_AMBIGUOUS: '运行实例匹配到多个候选测试环境',
+  RUNTIME_MATERIALIZATION_PRODUCTION_WRITE_FORBIDDEN: '生产环境写入被安全策略禁止',
+  RUNTIME_MATERIALIZATION_NON_PRODUCTION_ENVIRONMENT_UNPROVEN: '尚未证明当前环境为非生产测试环境',
+  RUNTIME_MATERIALIZATION_CREDENTIAL_REF_UNRESOLVED: '运行实例尚未绑定对应角色的凭据引用',
+  RUNTIME_MATERIALIZATION_REQUIRED_VALUE_BINDING_MISSING: '运行实例缺少必填动态值绑定',
+  RUNTIME_MATERIALIZATION_REQUIRED_VALUE_BINDING_AMBIGUOUS: '必填动态值匹配到多个候选绑定',
+  RUNTIME_MATERIALIZATION_VALUE_BINDING_NOT_APPROVED: '运行值绑定尚未批准用于测试',
+  RUNTIME_MATERIALIZATION_FIXTURE_REF_UNRESOLVED: '运行实例引用的测试Fixture不可用或尚未批准',
+  RUNTIME_MATERIALIZATION_MEDIA_TYPE_SELECTION_MISSING: '请求体存在多种媒体类型但尚未选择',
+  RUNTIME_MATERIALIZATION_MEDIA_TYPE_SELECTION_AMBIGUOUS: '请求体媒体类型存在多个已批准候选',
+  RUNTIME_MATERIALIZATION_ENTITY_IDENTITY_BINDING_UNRESOLVED: '前后快照尚未绑定同一业务实体标识',
+  RUNTIME_MATERIALIZATION_TEST_DATA_BINDING_MISSING: '运行实例缺少测试数据绑定',
+  RUNTIME_MATERIALIZATION_TEST_DATA_BINDING_AMBIGUOUS: '运行实例存在多个测试数据候选绑定',
+  RUNTIME_MATERIALIZATION_TEST_DATA_BINDING_NOT_APPROVED: '运行实例引用的测试数据尚未批准',
+  RUNTIME_MATERIALIZATION_CLEANUP_BINDING_MISSING: '写操作缺少唯一补偿操作绑定',
+  RUNTIME_MATERIALIZATION_CLEANUP_BINDING_AMBIGUOUS: '写操作匹配到多个补偿操作绑定',
+  RUNTIME_MATERIALIZATION_SAFE_CLEANUP_CAPABILITY_UNRESOLVED: '写操作尚未绑定可验证的安全清理能力',
+  RUNTIME_MATERIALIZATION_SENSITIVE_FIELD_REQUIRES_CREDENTIAL_REF: '敏感请求字段必须通过凭据引用注入',
+  RUNTIME_MATERIALIZATION_SOURCE_EVIDENCE_MISSING: '运行实例缺少可追溯的企业资料证据',
 };
 
 function readableReason(value: unknown): string {
@@ -113,8 +135,8 @@ function statusLabel(
   available: boolean,
 ): string {
   if (!available) return '等待后台理解';
-  if (chainReady) return '运行模板链已闭合';
-  if (understandingReady) return '理解已闭合，运行模板链待完成';
+  if (chainReady) return '运行草稿链已闭合';
+  if (understandingReady) return '理解已闭合，运行草稿链待完成';
   if (status.startsWith('BLOCKED')) return '理解被阻断';
   if (status.startsWith('PARTIAL')) return '理解部分完成';
   return '仍在理解中';
@@ -130,6 +152,7 @@ function projectUnderstanding(payload: unknown): UnderstandingView {
   const scenarioIrGate = asRecord(asset.scenario_ir_gate);
   const executionContractGate = asRecord(asset.scenario_execution_contract_gate);
   const runtimePlanGate = asRecord(asset.runtime_plan_gate);
+  const materializationGate = asRecord(asset.runtime_materialization_gate);
   const metrics = asRecord(modelGate.metrics);
   const modelId = firstText(summary.enterprise_understanding_model_id, model.model_id);
   const status = firstText(
@@ -160,14 +183,17 @@ function projectUnderstanding(payload: unknown): UnderstandingView {
     ...asArray(scenarioIrGate.blocking_reasons),
     ...asArray(executionContractGate.blocking_reasons),
     ...asArray(runtimePlanGate.blocking_reasons),
+    ...asArray(materializationGate.blocking_reasons),
   ].map(readableReason).filter(Boolean);
   const runtimeUnknowns = asArray(asset.runtime_plan_unknowns)
     .filter((value) => asBoolean(asRecord(value).blocks_runtime_plan));
+  const materializationUnknowns = asArray(asset.runtime_materialization_unknowns)
+    .filter((value) => asBoolean(asRecord(value).blocks_runtime_materialization));
   const gapMessages = asArray(asset.coverage_gaps)
     .map((value) => {
       const row = asRecord(value);
       const kind = asText(row.kind);
-      if (!/(UNDERSTANDING|SCENARIO|EXECUTION_CONTRACT|RUNTIME_PLAN)/.test(kind)) return '';
+      if (!/(UNDERSTANDING|SCENARIO|EXECUTION_CONTRACT|RUNTIME_PLAN|RUNTIME_MATERIALIZATION)/.test(kind)) return '';
       return firstText(row.message, row.operator_action, readableReason(row.kind));
     })
     .filter(Boolean);
@@ -175,6 +201,7 @@ function projectUnderstanding(payload: unknown): UnderstandingView {
     ...criticalUnknowns.map(rowMessage),
     ...conflicts.map(rowMessage),
     ...runtimeUnknowns.map(rowMessage),
+    ...materializationUnknowns.map(rowMessage),
     ...gateReasons,
     ...gapMessages,
   ].filter(Boolean))].slice(0, 8);
@@ -189,6 +216,7 @@ function projectUnderstanding(payload: unknown): UnderstandingView {
     gateView('Scenario IR', scenarioIrGate, ['entry_allowed']),
     gateView('执行合同', executionContractGate, ['execution_contract_ready', 'entry_allowed']),
     gateView('Runtime Plan', runtimePlanGate, ['runtime_plan_ready', 'entry_allowed']),
+    gateView('运行实例化', materializationGate, ['runtime_materialization_ready', 'entry_allowed']),
   ];
   const ready = understandingReady && gates.every((gate) => gate.ready);
 
@@ -207,6 +235,7 @@ function projectUnderstanding(payload: unknown): UnderstandingView {
     processCount: asNumber(summary.understood_process_count) || asArray(model.processes).length,
     scenarioCount: asNumber(summary.scenario_ir_count) || asArray(asset.scenario_ir).length,
     runtimePlanCount: asNumber(summary.runtime_plan_count) || asArray(asset.runtime_plans).length,
+    runtimeMaterializationCount: asNumber(summary.runtime_materialization_count) || asArray(asset.runtime_materializations).length,
     unknownCount: asNumber(summary.enterprise_understanding_unknown_count) || asArray(model.unknowns).length,
     conflictCount: asNumber(summary.enterprise_understanding_conflict_count) || conflicts.length,
     blockers,
@@ -251,6 +280,7 @@ export function EnterpriseUnderstandingReceipt({ payload, loading, hasSources }:
             <div className="settings-mini-stat"><span>流程</span><strong>{view.processCount}</strong></div>
             <div className="settings-mini-stat"><span>正式场景</span><strong>{view.scenarioCount}</strong></div>
             <div className="settings-mini-stat"><span>运行模板</span><strong>{view.runtimePlanCount}</strong></div>
+            <div className="settings-mini-stat"><span>实例草稿</span><strong>{view.runtimeMaterializationCount}</strong></div>
           </div>
 
           <div className="settings-info-list settings-mt-10">
@@ -282,8 +312,8 @@ export function EnterpriseUnderstandingReceipt({ payload, loading, hasSources }:
 
           {view.understandingReady && !view.ready && (
             <div className="settings-card-note settings-mt-10">
-              <strong>企业理解已经闭合，但运行模板链尚未全部放行。</strong>
-              <p>请查看下方现有门禁回执。通常还需要实现绑定、可观察结果、执行合同或Runtime Plan达到要求；系统不会把“理解完成”误报成“已经可以执行”。</p>
+              <strong>企业理解已经闭合，但运行草稿链尚未全部放行。</strong>
+              <p>请查看下方现有门禁回执。通常还需要实现绑定、执行合同、Runtime Plan，或测试环境、凭据引用、动态值、测试数据与安全清理绑定达到要求；系统不会把“理解完成”误报成“已经可以执行”。</p>
               {view.blockers.length > 0 && (
                 <ul>
                   {view.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}
@@ -294,7 +324,7 @@ export function EnterpriseUnderstandingReceipt({ payload, loading, hasSources }:
 
           {view.ready && (
             <div className="settings-card-note settings-mt-10">
-              企业理解、场景规划、Scenario IR、执行合同和Runtime Plan门禁已经闭合。运行时仍需物化环境、凭据、测试数据、请求值、断言和清理动作；这里不表示已经可以执行，也不宣称理解准确率或业务召回率达到某个百分比。
+              企业理解、场景规划、Scenario IR、执行合同、Runtime Plan和运行实例化门禁已经闭合。当前产物仍是不可发送请求草稿和不可执行断言草稿；秘密值未加载、生成器未运行、SQL未生成、网络调用和Bug判定仍被禁止。
             </div>
           )}
 
