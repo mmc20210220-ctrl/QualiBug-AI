@@ -35,6 +35,7 @@ from .scenario_ir import (
     build_scenario_ir_v1,
     project_scenario_ir_to_asset,
 )
+from .scenario_ir_asset_governance import project_scenario_ir_asset_governance
 from .schema import *  # noqa: F401,F403
 
 __all__ = [
@@ -56,6 +57,7 @@ __all__ = [
     "project_final_scenario_planning_gate",
     "build_scenario_ir_v1",
     "project_scenario_ir_to_asset",
+    "project_scenario_ir_asset_governance",
     "build_enterprise_understanding_model",
     "assess_understanding_model",
     "enrich_asset_with_enterprise_understanding",
