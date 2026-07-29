@@ -24,6 +24,7 @@ def _asset() -> dict:
             "enterprise_understanding_unknown_count": 0,
             "enterprise_understanding_conflict_count": 0,
             "scenario_ir_count": 7,
+            "runtime_plan_count": 7,
         },
         "enterprise_understanding_model": {
             "model_id": "eum_customer_a",
@@ -62,6 +63,18 @@ def _asset() -> dict:
                 "execution_contract_unknown_count": 0,
             },
         },
+        "runtime_plans": [{"runtime_plan_id": f"plan-{index}"} for index in range(7)],
+        "runtime_plan_unknowns": [],
+        "runtime_plan_gate": {
+            "status": "PASS",
+            "entry_allowed": True,
+            "runtime_plan_ready": True,
+            "metrics": {
+                "runtime_plan_count": 7,
+                "incomplete_runtime_plan_count": 0,
+                "runtime_plan_unknown_count": 0,
+            },
+        },
     }
 
 
@@ -96,6 +109,10 @@ def test_command_center_enriches_existing_knowledge_summary_without_replacing_it
     assert summary["understood_business_object_count"] == 5
     assert summary["scenario_ir_count"] == 7
     assert summary["scenario_execution_contract_count"] == 7
+    assert summary["runtime_plan_count"] == 7
+    assert summary["runtime_plan_ready"] is True
+    assert len(summary["understanding_gates"]) == 5
+    assert summary["understanding_gates"][-1]["label"] == "Runtime Plan"
     assert summary["formal_scenario_chain_ready"] is True
     assert summary["understanding_source_of_truth"] == "existing_enterprise_business_knowledge_asset"
     assert summary["understanding_projection_contract"] == "EXISTING_KNOWLEDGE_ASSET_GATE_PROJECTION_NOT_SECOND_AUTHORITY"
@@ -133,6 +150,11 @@ def test_command_center_projects_existing_blocker_without_claiming_readiness(
         "entry_allowed": False,
         "execution_contract_ready": False,
     }
+    asset["runtime_plan_gate"] = {
+        "status": "BLOCKED_RUNTIME_PLAN_UPSTREAM_EXECUTION_CONTRACT_GATE",
+        "entry_allowed": False,
+        "runtime_plan_ready": False,
+    }
     monkeypatch.setattr(
         enterprise_knowledge_center,
         "load_enterprise_business_knowledge_asset",
@@ -150,6 +172,40 @@ def test_command_center_projects_existing_blocker_without_claiming_readiness(
     assert summary["enterprise_understanding_ready"] is False
     assert "部分业务操作尚未确定唯一作用对象" in summary["understanding_blockers"]
     assert summary["understanding_gates"][0]["ready"] is False
+    assert summary["understanding_gates"][-1]["ready"] is False
+
+
+def test_command_center_projects_runtime_plan_unknowns(monkeypatch, tmp_path: Path) -> None:
+    asset = _asset()
+    asset["runtime_plan_gate"] = {
+        "status": "BLOCKED_RUNTIME_PLAN_INCOMPLETE",
+        "entry_allowed": False,
+        "runtime_plan_ready": False,
+        "blocking_reasons": ["RUNTIME_PLAN_CLEANUP_TEMPLATE_UNRESOLVED"],
+    }
+    asset["runtime_plan_unknowns"] = [
+        {
+            "reason_code": "RUNTIME_PLAN_CLEANUP_TEMPLATE_UNRESOLVED",
+            "blocks_runtime_plan": True,
+        }
+    ]
+    monkeypatch.setattr(
+        enterprise_knowledge_center,
+        "load_enterprise_business_knowledge_asset",
+        lambda project, root: asset,
+    )
+
+    result = project_existing_understanding_command_center(
+        {"knowledge_summary": {"active_source_count": 3}},
+        project="customer_runtime",
+        root=tmp_path,
+    )
+    summary = result["knowledge_summary"]
+
+    assert summary["enterprise_understanding_ready"] is True
+    assert summary["runtime_plan_ready"] is False
+    assert summary["formal_scenario_chain_ready"] is False
+    assert "写操作尚未形成安全清理模板" in summary["understanding_blockers"]
 
 
 def test_command_center_mixin_preserves_original_builder_result(monkeypatch, tmp_path: Path) -> None:
