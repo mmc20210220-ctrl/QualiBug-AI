@@ -12,6 +12,25 @@ type GateView = {
   ready: boolean;
 };
 
+type SourceEvidenceView = {
+  sourceId: string;
+  sourceName: string;
+  sourceLocator: string;
+  quote: string;
+  factId: string;
+};
+
+type BlockerReceiptView = {
+  id: string;
+  category: string;
+  kind: string;
+  message: string;
+  operatorAction: string;
+  blocking: boolean;
+  sourceBacked: boolean;
+  sourceEvidence: SourceEvidenceView[];
+};
+
 function asRecord(value: unknown): JsonRecord {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as JsonRecord
@@ -90,6 +109,50 @@ function understandingGates(summary: JsonRecord): GateView[] {
   return projected.length > 0 ? projected : fallbackGates(summary);
 }
 
+function sourceEvidence(value: unknown): SourceEvidenceView[] {
+  return asArray(value)
+    .map(asRecord)
+    .map((row) => ({
+      sourceId: asText(row.source_id),
+      sourceName: asText(row.source_name),
+      sourceLocator: asText(row.source_locator),
+      quote: asText(row.quote),
+      factId: asText(row.fact_id),
+    }))
+    .filter((row) => row.sourceId || row.sourceName || row.sourceLocator || row.quote || row.factId);
+}
+
+function blockerReceipts(summary: JsonRecord): BlockerReceiptView[] {
+  return asArray(summary.understanding_blocker_receipts)
+    .map(asRecord)
+    .map((row) => ({
+      id: asText(row.receipt_id) || `${asText(row.category)}:${asText(row.kind)}:${asText(row.message)}`,
+      category: asText(row.category),
+      kind: asText(row.kind),
+      message: asText(row.message),
+      operatorAction: asText(row.operator_action),
+      blocking: asBoolean(row.blocking),
+      sourceBacked: asBoolean(row.source_backed),
+      sourceEvidence: sourceEvidence(row.source_evidence),
+    }))
+    .filter((row) => row.id && row.message)
+    .slice(0, 8);
+}
+
+const categoryLabels: Record<string, string> = {
+  critical_unknown: '关键未知项',
+  enterprise_unknown: '企业理解缺口',
+  source_conflict: '资料冲突',
+  scenario_ir_unknown: '场景缺口',
+  execution_contract_unknown: '执行合同缺口',
+  runtime_plan_unknown: '运行模板缺口',
+  coverage_gap: '覆盖缺口',
+};
+
+function categoryLabel(receipt: BlockerReceiptView): string {
+  return categoryLabels[receipt.category] || receipt.kind || '理解缺口';
+}
+
 export function EnterpriseUnderstandingPanel({ summary: value, onOpenMaterials }: Props) {
   const summary = asRecord(value);
   const modelId = asText(summary.enterprise_understanding_model_id);
@@ -113,7 +176,10 @@ export function EnterpriseUnderstandingPanel({ summary: value, onOpenMaterials }
   const chainReady = gates.length > 0
     ? gates.every((gate) => gate.ready)
     : asBoolean(summary.formal_scenario_chain_ready);
-  const blockers = [...new Set(asArray(summary.understanding_blockers).map(asText).filter(Boolean))].slice(0, 6);
+  const blockers = [...new Set(asArray(summary.understanding_blockers).map(asText).filter(Boolean))].slice(0, 8);
+  const receipts = blockerReceipts(summary);
+  const receiptMessages = new Set(receipts.map((receipt) => receipt.message));
+  const residualBlockers = blockers.filter((blocker) => !receiptMessages.has(blocker));
   const firstBlocked = gates.find((gate) => !gate.ready);
   const statusTitle = chainReady
     ? '运行模板链已闭合'
@@ -123,7 +189,7 @@ export function EnterpriseUnderstandingPanel({ summary: value, onOpenMaterials }
   const statusDetail = chainReady
     ? '企业理解、场景规划、Scenario IR、执行合同和 Runtime Plan 均已通过现有门禁。运行时仍会继续检查环境、凭据、测试数据、观察通道和清理义务。'
     : firstBlocked
-      ? `当前停在“${firstBlocked.label}”：${firstBlocked.status}。请补充能够说明相关业务规则、状态流转、接口契约或运行约束的原始资料。`
+      ? `当前停在“${firstBlocked.label}”：${firstBlocked.status}。下方只读回执会展示现有资产已经记录的资料来源和定位；没有来源的条目不会被系统猜测补齐。`
       : '现有知识资产尚未形成完整的运行模板链。';
 
   return (
@@ -158,7 +224,7 @@ export function EnterpriseUnderstandingPanel({ summary: value, onOpenMaterials }
             <span><em>生命周期完整度</em><b>{percent(summary.lifecycle_completeness)}</b></span>
             <span><em>待关闭未知项</em><b>{asNumber(summary.enterprise_understanding_unknown_count)}</b></span>
             <span><em>未解决冲突</em><b>{asNumber(summary.enterprise_understanding_conflict_count)}</b></span>
-            <span><em>运行模板缺口</em><b>{asNumber(summary.runtime_plan_unknown_count)}</b></span>
+            <span><em>有资料定位的缺口</em><b>{asNumber(summary.understanding_source_receipt_count)}</b></span>
           </div>
         </article>
       </div>
@@ -175,15 +241,58 @@ export function EnterpriseUnderstandingPanel({ summary: value, onOpenMaterials }
       <div className="settings-card-note settings-mt-10">
         <strong>{statusTitle}</strong>
         <p>{statusDetail}</p>
-        {!chainReady && blockers.length > 0 && (
+        {!chainReady && residualBlockers.length > 0 && receipts.length === 0 && (
           <ul>
-            {blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}
+            {residualBlockers.map((blocker) => <li key={blocker}>{blocker}</li>)}
           </ul>
         )}
         <small className="muted">
           状态来源：现有 enterprise business knowledge asset。系统不会通过人工点击“确认正确”或常识补全绕过门禁。
         </small>
       </div>
+
+      {!chainReady && receipts.length > 0 && (
+        <details className="settings-auth-section settings-mt-10" open>
+          <summary>
+            <strong>查看缺口与原始资料回执</strong>
+            <span className="muted">{receipts.length} 条现有回执</span>
+          </summary>
+          <div className="customer-secondary-grid settings-mt-10">
+            {receipts.map((receipt) => (
+              <article key={receipt.id} className="customer-secondary-card">
+                <span className="customer-value-kicker">
+                  {categoryLabel(receipt)} · {receipt.blocking ? '阻断' : '待补充'}
+                </span>
+                <h3>{receipt.message}</h3>
+                {receipt.operatorAction && <p>{receipt.operatorAction}</p>}
+                {receipt.sourceEvidence.length > 0 ? (
+                  receipt.sourceEvidence.map((evidence, index) => (
+                    <div
+                      key={`${receipt.id}:${evidence.sourceId || evidence.sourceName}:${evidence.sourceLocator}:${index}`}
+                      className="settings-card-note settings-mt-10"
+                    >
+                      <strong>{evidence.sourceName || evidence.sourceId || '来源已记录'}</strong>
+                      {evidence.sourceLocator && <p>位置：{evidence.sourceLocator}</p>}
+                      {evidence.quote && <p>原文：{evidence.quote}</p>}
+                      {evidence.factId && <small className="muted">业务事实：{evidence.factId}</small>}
+                    </div>
+                  ))
+                ) : (
+                  <div className="settings-card-note settings-mt-10">
+                    现有门禁回执尚未附具体资料定位。QualiBug 不会猜测来源，请补充能够证明该规则、状态、接口或运行约束的原始资料。
+                  </div>
+                )}
+              </article>
+            ))}
+          </div>
+          {residualBlockers.length > 0 && (
+            <div className="settings-card-note settings-mt-10">
+              <strong>其余门禁原因</strong>
+              <ul>{residualBlockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul>
+            </div>
+          )}
+        </details>
+      )}
     </section>
   );
 }
