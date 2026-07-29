@@ -153,11 +153,17 @@ def _register_process_risk_family() -> None:
 
 def register_job_async_protocol() -> str:
     """Register the Job compiler on the existing (family, template) authority."""
-    # Install the already-existing process observer/assertion surfaces first.  This
-    # is idempotent and avoids weakening protocol-registry validation merely to make
-    # Job registration order-dependent.
+    # The enterprise-knowledge composition loads Job asset governance before this
+    # registration call.  Install one compatibility policy on that already-loaded
+    # authority so presentation labels never masquerade as execution-fact conflicts.
+    # When this protocol is used without the knowledge center, the installer is a
+    # no-op and does not import another composition root.
+    from .job_asset_merge_display_policy import (
+        install_job_asset_display_name_policy,
+    )
     from .multi_step_protocol import register_v150_multi_step_protocols
 
+    install_job_asset_display_name_policy()
     register_v150_multi_step_protocols()
     _register_process_risk_family()
     _install_async_finalizer_guard()
