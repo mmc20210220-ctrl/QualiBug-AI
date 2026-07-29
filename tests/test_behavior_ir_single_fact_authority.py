@@ -145,3 +145,61 @@ def test_matrix_candidate_cannot_conflict_with_accepted_fact_authority() -> None
     assert gate["status"] == "PARTIAL_BUSINESS_BEHAVIOR_IR"
     assert gate["metrics"]["confirmed_behavior_count"] == 1
     assert gate["metrics"]["candidate_behavior_count"] == 1
+
+
+def _accepted_and_conflict_fact() -> dict[str, Any]:
+    fact = _accepted_allow_fact()
+    fact.update(
+        {
+            "fact_id": "fact-and-conflict",
+            "raw_statement": "订单状态同时为已审核且待发货时可以发货",
+            "conditions": ["状态=已审核", "状态=待发货"],
+            "trigger": {"condition_combinator": "AND"},
+            "source_spans": [
+                {
+                    "source_id": "source-rule",
+                    "source_locator": "rules.md#fact=fact-and-conflict",
+                    "quote": "订单状态同时为已审核且待发货时可以发货",
+                }
+            ],
+        }
+    )
+    return fact
+
+
+def test_governed_fact_authority_recomputes_internal_and_contradiction() -> None:
+    fact = _accepted_and_conflict_fact()
+    _rows, behaviors, conflicts, _unknowns, gate = build_governed_business_behavior_ir(
+        {"business_fact_ledger": {"items": [fact]}, "document_structure_assets": {"items": []}},
+        [fact],
+        [_operation()],
+    )
+
+    assert len(behaviors) == 1
+    assert behaviors[0]["source_kind"] == "ACCEPTED_BUSINESS_FACT"
+    assert behaviors[0]["condition_combinator"] == "AND"
+    assert behaviors[0]["status"] == "CONFLICTED"
+    assert behaviors[0]["formal_business_rule"] is False
+    assert len(conflicts) == 1
+    assert conflicts[0]["kind"] == "BEHAVIOR_CONDITION_CONTRADICTION"
+    assert conflicts[0]["details"]["condition_combinator"] == "AND"
+    assert conflicts[0]["evidence"]
+    assert gate["status"] == "BLOCKED_BUSINESS_BEHAVIOR_CONFLICT"
+
+
+def test_incomplete_accepted_fact_never_becomes_formal_rule_or_conflict() -> None:
+    fact = _accepted_allow_fact()
+    fact["fact_id"] = "fact-missing-evidence"
+    fact["source_spans"] = []
+    _rows, behaviors, conflicts, _unknowns, gate = build_governed_business_behavior_ir(
+        {"business_fact_ledger": {"items": [fact]}, "document_structure_assets": {"items": []}},
+        [fact],
+        [_operation()],
+    )
+
+    assert len(behaviors) == 1
+    assert behaviors[0]["status"] == "INCOMPLETE"
+    assert behaviors[0]["formal_business_rule"] is False
+    assert "BEHAVIOR_EVIDENCE_MISSING" in behaviors[0]["unresolved_semantics"]
+    assert conflicts == []
+    assert gate["status"] == "PARTIAL_BUSINESS_BEHAVIOR_IR"
