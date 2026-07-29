@@ -310,30 +310,51 @@ def build_lifecycles(
                 existing["evidence"] = dedupe_evidence([*as_list(existing.get("evidence")), *as_list(transition.get("evidence"))])
         transition_rows = sorted(deduped.values(), key=lambda row: (text(row.get("from_state")), text(row.get("to_state")), text(row.get("operation_ref"))))
         states = set(states_by_object.get(object_ref, set()))
-        target_map: dict[tuple[str, str], set[str]] = defaultdict(set)
+        # Same (from_state, operation) to multiple targets is a contradiction only when
+        # source conditions do not distinguish the outcomes. Distinct non-empty condition
+        # sets are conditional multi-outcome, not contradiction.
+        outcome_map: dict[tuple[str, str], list[tuple[str, tuple[str, ...]]]] = defaultdict(list)
         for transition in transition_rows:
             if text(transition.get("transition_kind")) == "FORBIDDEN":
                 continue
-            key = (text(transition.get("from_state")), text(transition.get("operation_ref") or transition.get("event")))
+            from_state = text(transition.get("from_state"))
+            operation_ref = text(transition.get("operation_ref") or transition.get("event"))
             target = text(transition.get("to_state"))
-            if key[0] and key[1] and target:
-                target_map[key].add(target)
-        for (from_state, operation_ref), targets in target_map.items():
-            if len(targets) > 1:
-                related_evidence = [row for transition in transition_rows if text(transition.get("from_state")) == from_state and text(transition.get("operation_ref") or transition.get("event")) == operation_ref for row in as_list(transition.get("evidence"))]
-                unknowns.append(
-                    new_unknown(
-                        "LIFECYCLE_TARGET_CONTRADICTION",
-                        f"{object_ref}在状态“{from_state}”执行“{operation_ref}”被资料声明为多个目标状态：{'、'.join(sorted(targets))}。",
-                        related_objects=[object_ref],
-                        related_operations=[operation_ref],
-                        evidence=related_evidence,
-                        severity="P0",
-                        blocks_formal_understanding=True,
-                        reason_code="LIFECYCLE_TARGET_CONTRADICTION",
-                        details={"from_state": from_state, "operation_ref": operation_ref, "target_states": sorted(targets)},
-                    )
+            conditions = tuple(sorted(unique_text(as_list(transition.get("conditions")))))
+            if from_state and operation_ref and target:
+                outcome_map[(from_state, operation_ref)].append((target, conditions))
+        for (from_state, operation_ref), outcomes in outcome_map.items():
+            targets = {target for target, _conditions in outcomes}
+            if len(targets) <= 1:
+                continue
+            by_conditions: dict[tuple[str, ...], set[str]] = defaultdict(set)
+            for target, conditions in outcomes:
+                by_conditions[conditions].add(target)
+            distinguished = all(conditions for conditions in by_conditions) and all(
+                len(target_set) == 1 for target_set in by_conditions.values()
+            )
+            if distinguished:
+                continue
+            related_evidence = [
+                row
+                for transition in transition_rows
+                if text(transition.get("from_state")) == from_state
+                and text(transition.get("operation_ref") or transition.get("event")) == operation_ref
+                for row in as_list(transition.get("evidence"))
+            ]
+            unknowns.append(
+                new_unknown(
+                    "LIFECYCLE_TARGET_CONTRADICTION",
+                    f"{object_ref}在状态“{from_state}”执行“{operation_ref}”被资料声明为多个目标状态：{'、'.join(sorted(targets))}。",
+                    related_objects=[object_ref],
+                    related_operations=[operation_ref],
+                    evidence=related_evidence,
+                    severity="P0",
+                    blocks_formal_understanding=True,
+                    reason_code="LIFECYCLE_TARGET_CONTRADICTION",
+                    details={"from_state": from_state, "operation_ref": operation_ref, "target_states": sorted(targets)},
                 )
+            )
         components = _weak_components(states, transition_rows)
         nontrivial_components = [component for component in components if component]
         if len(nontrivial_components) > 1 and len(transition_rows) > 1:

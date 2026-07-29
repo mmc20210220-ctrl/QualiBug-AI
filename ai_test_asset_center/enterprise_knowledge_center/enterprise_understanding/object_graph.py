@@ -130,6 +130,10 @@ def build_object_graph(
         if not relation_type:
             continue
         entities = _fact_entities(fact, known)
+        # State-transition wording often contains vocabulary like “新建/生成”, but a
+        # single-object lifecycle sentence is not an object-relation claim.
+        if text(fact.get("kind")) == "STATE_TRANSITION" and len(entities) < 2:
+            continue
         source, target = _ordered_endpoints(statement, entities, relation_raw)
         evidence = evidence_from_fact(fact)
         if not source or not target:

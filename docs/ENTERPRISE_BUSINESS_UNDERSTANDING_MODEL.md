@@ -47,8 +47,11 @@ The model contains:
   related relations.
 - `lifecycles`: allowed/forbidden transitions, states, events, conditions, and
   graph completeness.
-- `processes`: only a uniquely provable source-backed sequence. Document order is
-  never treated as process order.
+- `processes`: source-backed lifecycle sequences. Unique linear chains remain
+  `LIFECYCLE_UNIQUE_CHAIN`. Explicit multi-outcome conditions or distinct
+  operations project `LIFECYCLE_CONDITIONAL` / nonlinear types; underdetermined
+  branches stay `LIFECYCLE_PARTIAL` with unknowns. Document order is never
+  treated as process order.
 - `rules`: accepted Chinese fact projections.
 - `unknowns`: unresolved subjects, objects, operations, relation endpoints,
   lifecycle states, disconnected lifecycle fragments, and missing business
@@ -95,16 +98,21 @@ Implemented in this phase:
 - source-backed structured quantity / time-window / formula / authorization-delegation
   fields when the original statement states them;
 - conflict `authority_decision` marked `UNRESOLVED` (no automatic authority pick);
-- EXCEPTION_SCOPE promotion only when the source uniquely names the exception actor.
+- EXCEPTION_SCOPE promotion only when the source uniquely names the exception actor;
+- source-backed non-linear process projection: conditional multi-outcome branches,
+  parallel groups (only with explicit parallel markers), lifecycle loops, and
+  withdraw / return / compensation exception paths; underdetermined branches emit
+  `LIFECYCLE_PARTIAL` + visible unknowns instead of silent omission;
+- unique source-backed multi-object process linking along GENERATES / CREATES /
+  COMPENSATES / DEPENDS_ON relation chains (branching relation graphs stay unresolved).
 
 Not yet complete:
 
 - full Chinese document semantic tree at enterprise scale;
 - cross-document coreference beyond source-backed TERM_ALIAS identity merge
   (proximity / filename / order remain forbidden);
-- conditional branches, parallel branches, loops, compensation processes, and
-  long-running multi-object process reconstruction (builder still projects only
-  unique linear lifecycle chains);
+- richer long-running multi-object orchestration (message/async joins, timed waits,
+  and cross-system choreography beyond unique relation chains);
 - operator authority/version *workflow UI* for resolving conflicts (receipts stay
   UNRESOLVED until an explicit operator decision exists);
 - externally labeled Chinese enterprise understanding benchmark and measured
