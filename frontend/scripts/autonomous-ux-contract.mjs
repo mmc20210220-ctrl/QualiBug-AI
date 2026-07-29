@@ -39,7 +39,8 @@ requireText(scenarioSelector, '已批准的 UI 场景自动纳入本次验证', 
 requireText(scenarioSelector, '用户不需要逐项选择或重复确认', 'upload scenario selector');
 forbidText(scenarioSelector, 'type="checkbox"', 'upload scenario selector');
 
-requireText(fixtureSelector, 'setSelectedScenarios(approved.map(scenarioRef))', 'upload fixture selector');
+requireText(fixtureSelector, 'const refs = approved.map(scenarioRef)', 'upload fixture selector');
+requireText(fixtureSelector, 'onScenarioSelectionChange(refs)', 'upload fixture selector');
 requireText(fixtureSelector, '<details className="run-fixture-selector">', 'upload fixture selector');
 requireText(fixtureSelector, '异常补充入口', 'upload fixture selector');
 forbidText(fixtureSelector, 'localStorage', 'upload fixture selector');
@@ -59,6 +60,8 @@ requireText(campaignsPage, '后台会自动选择目标服务、有效资料快�
 requireText(campaignsPage, '<details className="card mb-4">', 'campaigns page');
 requireText(campaignsPage, '异常覆盖与安全熔断', 'campaigns page');
 requireText(campaignsPage, '强制只读熔断：本次验证禁止任何写入', 'campaigns page');
+requireText(campaignsPage, 'onScenarioSelectionChange={handleScenarioSelectionChange}', 'campaigns page');
+requireText(campaignsPage, '个已审批 UI 场景由后台自动纳入', 'campaigns page');
 forbidText(campaignsPage, '测试数据策略', 'campaigns page');
 forbidText(campaignsPage, 'type DataStrategy', 'campaigns page');
 forbidText(campaignsPage, 'buildTestDataContract', 'campaigns page');
