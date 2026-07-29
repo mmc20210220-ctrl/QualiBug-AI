@@ -115,6 +115,27 @@ def _attach_document_structure_assets(
         int(as_dict(row.get("structure_receipt")).get("table_region_count") or 0)
         for row in rows
     )
+    visual_table_count = sum(
+        int(as_dict(row.get("structure_receipt")).get("visual_table_count") or 0)
+        for row in rows
+    )
+    formal_visual_table_count = sum(
+        int(as_dict(row.get("structure_receipt")).get("formal_visual_table_count") or 0)
+        for row in rows
+    )
+    visual_table_cell_count = sum(
+        int(as_dict(row.get("structure_receipt")).get("visual_table_cell_count") or 0)
+        for row in rows
+    )
+    unresolved_visual_table_region_count = sum(
+        int(
+            as_dict(row.get("structure_receipt")).get(
+                "unresolved_visual_table_region_count"
+            )
+            or 0
+        )
+        for row in rows
+    )
     multi_column_page_count = sum(
         int(as_dict(row.get("structure_receipt")).get("multi_column_page_count") or 0)
         for row in rows
@@ -151,6 +172,17 @@ def _attach_document_structure_assets(
             if str(page).isdigit()
         }
     )
+    visual_table_resolved_pages = sorted(
+        {
+            int(page)
+            for row in rows
+            for resolution in as_list(row.get("applied_gap_resolutions"))
+            if isinstance(resolution, dict)
+            and text(resolution.get("reason_code")) == "PDF_TABLE_REGION_NOT_CELL_PARSED"
+            for page in as_list(resolution.get("resolved_pages"))
+            if str(page).isdigit()
+        }
+    )
     asset["document_structure_assets"] = {
         "schema": "qualibug.enterprise-document-structure-assets.v1",
         "source_count": len(rows),
@@ -161,6 +193,12 @@ def _attach_document_structure_assets(
         "ocr_resolved_pages": ocr_resolved_pages,
         "image_count": image_count,
         "table_region_count": table_region_count,
+        "visual_table_count": visual_table_count,
+        "formal_visual_table_count": formal_visual_table_count,
+        "visual_table_cell_count": visual_table_cell_count,
+        "visual_table_resolved_page_count": len(visual_table_resolved_pages),
+        "visual_table_resolved_pages": visual_table_resolved_pages,
+        "unresolved_visual_table_region_count": unresolved_visual_table_region_count,
         "multi_column_page_count": multi_column_page_count,
         "unsupported_content_count": unsupported_count,
         "critical_structure_gap_count": critical_structure_gap_count,
@@ -283,6 +321,21 @@ def enrich_asset_with_enterprise_understanding(
             "document_structure_table_region_count": int(
                 structure_assets.get("table_region_count") or 0
             ),
+            "document_structure_visual_table_count": int(
+                structure_assets.get("visual_table_count") or 0
+            ),
+            "document_structure_formal_visual_table_count": int(
+                structure_assets.get("formal_visual_table_count") or 0
+            ),
+            "document_structure_visual_table_cell_count": int(
+                structure_assets.get("visual_table_cell_count") or 0
+            ),
+            "document_structure_visual_table_resolved_page_count": int(
+                structure_assets.get("visual_table_resolved_page_count") or 0
+            ),
+            "document_structure_unresolved_visual_table_region_count": int(
+                structure_assets.get("unresolved_visual_table_region_count") or 0
+            ),
             "document_structure_multi_column_page_count": int(
                 structure_assets.get("multi_column_page_count") or 0
             ),
@@ -336,6 +389,10 @@ def enrich_asset_with_enterprise_understanding(
             "merged_document_ir_text_reenters_chinese_fact_ledger": parsed_sources is not None,
             "document_ir_fact_evidence_alignment_enabled": parsed_sources is not None,
             "ocr_recovered_text_can_create_source_backed_facts": parsed_sources is not None,
+            "visual_table_structure_adapter_enabled": parsed_sources is not None,
+            "visual_table_cells_are_text_authority_when_formal": True,
+            "visual_table_partial_region_success_cannot_clear_page_gap": True,
+            "spreadsheet_visual_ocr_downgrade_forbidden": True,
             "docx_native_structure_ir_enabled": parsed_sources is not None,
             "pdf_page_layout_structure_ir_enabled": parsed_sources is not None,
             "pdf_scanned_pages_fail_closed": True,
