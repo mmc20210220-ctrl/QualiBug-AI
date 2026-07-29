@@ -61,7 +61,7 @@ def compile_async_job_protocol(envelope: dict[str, Any]) -> dict[str, Any]:
             "reason_code": ASYNC_JOB_NOT_EXECUTION_READY,
             "detail": _text(testability.get("execution_status")) or "execution_status_missing",
         }
-    if not _list(operation.get("evidence")):
+    if not _list(operation.get("source_refs") or operation.get("evidence")):
         return {
             "status": "BLOCKED",
             "reason_code": ASYNC_JOB_PROTOCOL_NOT_RESOLVED,
@@ -98,7 +98,9 @@ def compile_async_job_protocol(envelope: dict[str, Any]) -> dict[str, Any]:
         "per_step_evidence": True,
         "requires_state_precondition": False,
         "source_refs": [
-            dict(row) for row in _list(operation.get("evidence")) if isinstance(row, dict)
+            dict(row)
+            for row in _list(operation.get("source_refs") or operation.get("evidence"))
+            if isinstance(row, dict)
         ],
         "_registry_protocol_id": f"process:{TEMPLATE_ASYNC_JOB_EXECUTION}",
     }
@@ -135,6 +137,20 @@ def _install_async_finalizer_guard() -> None:
     runtime_module.execute_async_job_plan = guarded
 
 
+def _register_process_risk_family() -> None:
+    """Make ``process`` a complete existing-registry family before obligations exist."""
+    from .test_obligation import canonical_risk_families, register_risk_family
+
+    if "process" in canonical_risk_families():
+        return
+    register_risk_family(
+        "process",
+        relation_types={"observes"},
+        protocol_template=TEMPLATE_ASYNC_JOB_EXECUTION,
+        observers=["http_response", "after_state"],
+    )
+
+
 def register_job_async_protocol() -> str:
     """Register the Job compiler on the existing (family, template) authority."""
     # Install the already-existing process observer/assertion surfaces first.  This
@@ -143,6 +159,7 @@ def register_job_async_protocol() -> str:
     from .multi_step_protocol import register_v150_multi_step_protocols
 
     register_v150_multi_step_protocols()
+    _register_process_risk_family()
     _install_async_finalizer_guard()
     from .experiment_protocol_registry import (
         register_family_protocol,
