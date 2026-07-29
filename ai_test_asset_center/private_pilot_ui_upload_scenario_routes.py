@@ -11,6 +11,12 @@ from .ui_upload_scenario_registry import (
     list_upload_scenarios,
     operate_upload_scenario_registry,
 )
+from .ui_upload_scenario_semantic_authority import (
+    install_ui_upload_scenario_semantic_authority,
+)
+from .ui_upload_scenario_source_authority import (
+    install_ui_upload_scenario_source_authority,
+)
 
 _INSTALL_MARKER = "_qualibug_upload_scenario_routes_installed"
 _WRAPPER_MARKER = "_qualibug_upload_scenario_route_wrapper"
@@ -62,6 +68,11 @@ def _delegate(method: Any) -> Any:
 
 
 def install_private_pilot_ui_upload_scenario_routes() -> None:
+    # Route installation is a supported standalone bootstrap in tests and private
+    # deployments; always install the canonical source and semantic authorities
+    # before capturing registry callables.
+    install_ui_upload_scenario_source_authority()
+    install_ui_upload_scenario_semantic_authority()
     current_get = _routing.HttpRoutingMixin.do_GET
     current_post = _routing.HttpRoutingMixin.do_POST
     if (
