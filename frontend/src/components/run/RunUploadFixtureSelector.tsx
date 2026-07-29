@@ -8,13 +8,19 @@ import {
 import { RunUploadScenarioSelector } from './RunUploadScenarioSelector';
 import '../../styles/run-upload-fixtures.css';
 
+export type UploadScenarioRunState = {
+  refs: string[];
+  loading: boolean;
+  error: string;
+};
+
 type Props = {
   fixtures: UploadFixtureRecord[];
   selectedRefs: string[];
   loading: boolean;
   error: string;
   onToggle: (bindingRef: string) => void;
-  onScenarioSelectionChange: (scenarioRefs: string[]) => void;
+  onScenarioStateChange: (state: UploadScenarioRunState) => void;
   onOpenSettings: () => void;
   onRefresh: () => void;
 };
@@ -41,7 +47,7 @@ export function RunUploadFixtureSelector({
   loading,
   error,
   onToggle,
-  onScenarioSelectionChange,
+  onScenarioStateChange,
   onOpenSettings,
   onRefresh,
 }: Props) {
@@ -57,11 +63,16 @@ export function RunUploadFixtureSelector({
     if (!project) {
       setScenarios([]);
       setSelectedScenarios([]);
-      onScenarioSelectionChange([]);
+      setScenarioLoading(false);
+      setScenarioError('');
+      onScenarioStateChange({ refs: [], loading: false, error: '' });
       return;
     }
 
     setScenarioLoading(true);
+    setScenarioError('');
+    setSelectedScenarios([]);
+    onScenarioStateChange({ refs: [], loading: true, error: '' });
     try {
       const payload = await listUploadScenarios(project, false);
       const approved = payload.scenarios.filter((row) => (
@@ -72,17 +83,18 @@ export function RunUploadFixtureSelector({
       const refs = approved.map(scenarioRef);
       setScenarios(approved);
       setSelectedScenarios(refs);
-      onScenarioSelectionChange(refs);
       setScenarioError('');
+      onScenarioStateChange({ refs, loading: false, error: '' });
     } catch (caught) {
+      const message = caught instanceof Error ? caught.message : '上传场景读取失败';
       setScenarios([]);
       setSelectedScenarios([]);
-      onScenarioSelectionChange([]);
-      setScenarioError(caught instanceof Error ? caught.message : '上传场景读取失败');
+      setScenarioError(message);
+      onScenarioStateChange({ refs: [], loading: false, error: message });
     } finally {
       setScenarioLoading(false);
     }
-  }, [onScenarioSelectionChange, project]);
+  }, [onScenarioStateChange, project]);
 
   useEffect(() => { void refreshScenarios(); }, [refreshScenarios]);
 
