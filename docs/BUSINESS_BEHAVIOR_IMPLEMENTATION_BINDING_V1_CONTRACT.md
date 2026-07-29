@@ -143,6 +143,30 @@ NO_BEHAVIOR_IMPLEMENTATION_BINDING
 
 `PASS` permits scenario planning only. It does not permit execution.
 
+## Legacy downstream compatibility gate
+
+The previous Chinese-rule downstream could generate risks, Oracles and probes after a
+rule-to-interface edge was found. That path is no longer sufficient.
+
+For source-derived Chinese rules, downstream generation now requires both:
+
+```text
+authoritative rule-to-interface binding
+AND
+implementation_binding_gate.scenario_planning_allowed = true
+```
+
+When the implementation gate is missing, partial or blocked:
+
+- no new Chinese-rule risk, Oracle or probe may be generated;
+- previously auto-derived Chinese-rule risk and Oracle assets are removed;
+- the source-backed enterprise-understanding gate remains unchanged;
+- a separate `scenario_planning_gate` reports the downstream block;
+- `execution_allowed` remains false.
+
+This prevents legacy probe generation from bypassing Business Behavior IR implementation
+governance.
+
 ## Graph projection
 
 The asset exposes governed relationship edges:
