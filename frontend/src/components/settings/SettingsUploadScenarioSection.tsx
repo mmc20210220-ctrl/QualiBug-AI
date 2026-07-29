@@ -63,6 +63,10 @@ function knowledgeAsset(payload: unknown): JsonRecord {
   return asRecord(asRecord(payload).knowledge_asset);
 }
 
+function mergedValues(asset: JsonRecord, ...keys: string[]): unknown[] {
+  return keys.flatMap((key) => asArray(asset[key]));
+}
+
 function approvedFixtures(rows: UploadFixtureRecord[]): UploadFixtureRecord[] {
   return rows.filter((row) => (
     row.status === 'active'
@@ -72,41 +76,54 @@ function approvedFixtures(rows: UploadFixtureRecord[]): UploadFixtureRecord[] {
 }
 
 function activeSources(asset: JsonRecord): SourceOption[] {
-  const output: SourceOption[] = [];
-  for (const value of asArray(asset.sources || asset.source_inventory)) {
+  const byId = new Map<string, SourceOption>();
+  const ambiguous = new Set<string>();
+  for (const value of mergedValues(asset, 'sources', 'source_inventory')) {
     const row = asRecord(value);
-    const status = text(row.status) || 'active';
+    const status = (text(row.status) || 'active').toLowerCase();
     const sourceId = text(row.source_id) || text(row.id);
-    if (status !== 'active' || !sourceId) continue;
-    const filename = text(row.filename) || text(row.original_name) || text(row.name);
-    output.push({
+    if (status !== 'active' || !sourceId || ambiguous.has(sourceId)) continue;
+    const option = {
       source_id: sourceId,
-      label: filename || sourceId,
+      label: text(row.filename) || text(row.original_name) || text(row.name) || sourceId,
       source_type: text(row.source_type) || text(row.type),
-    });
+    };
+    const existing = byId.get(sourceId);
+    if (existing && JSON.stringify(existing) !== JSON.stringify(option)) {
+      byId.delete(sourceId);
+      ambiguous.add(sourceId);
+      continue;
+    }
+    byId.set(sourceId, option);
   }
-  return output;
+  return [...byId.values()].sort((left, right) => left.label.localeCompare(right.label));
 }
 
 function safeOperations(asset: JsonRecord): OperationOption[] {
-  const seen = new Set<string>();
-  const output: OperationOption[] = [];
-  for (const value of asArray(asset.interfaces || asset.operations)) {
+  const byId = new Map<string, OperationOption>();
+  const ambiguous = new Set<string>();
+  for (const value of mergedValues(asset, 'interfaces', 'operations')) {
     const row = asRecord(value);
     const interfaceId = text(row.interface_id);
     const method = text(row.method || row.http_method).toUpperCase();
     const path = text(row.path || row.endpoint || row.url);
-    if (!interfaceId || !path || !SAFE_METHODS.has(method) || seen.has(interfaceId)) continue;
-    seen.add(interfaceId);
-    output.push({
+    if (!interfaceId || !path || !SAFE_METHODS.has(method) || ambiguous.has(interfaceId)) continue;
+    const option = {
       interface_id: interfaceId,
       operation_id: text(row.operation_id || row.operationId),
       method,
       path,
       summary: text(row.summary || row.title),
-    });
+    };
+    const existing = byId.get(interfaceId);
+    if (existing && JSON.stringify(existing) !== JSON.stringify(option)) {
+      byId.delete(interfaceId);
+      ambiguous.add(interfaceId);
+      continue;
+    }
+    byId.set(interfaceId, option);
   }
-  return output.sort((left, right) => (
+  return [...byId.values()].sort((left, right) => (
     `${left.method} ${left.path} ${left.interface_id}`
       .localeCompare(`${right.method} ${right.path} ${right.interface_id}`)
   ));
@@ -118,11 +135,11 @@ function sourceRoles(asset: JsonRecord): string[] {
     const role = text(value);
     if (role) byKey.set(role.toLocaleLowerCase(), role);
   };
-  for (const value of asArray(asset.roles)) {
+  for (const value of mergedValues(asset, 'roles')) {
     const row = asRecord(value);
     add(row.role || row.name || row.id);
   }
-  for (const value of asArray(asset.permission_matrix || asset.permissions)) {
+  for (const value of mergedValues(asset, 'permission_matrix', 'permissions')) {
     const row = asRecord(value);
     add(row.role || row.actor || row.principal);
   }
@@ -159,6 +176,13 @@ function formError(form: UploadScenarioForm, selectedFixtures: string[]): string
   }
   if (selectedFixtures.length === 0) return '至少选择一个已审批 Fixture';
   return '';
+}
+
+function submissionLabel(value: unknown): string {
+  const mode = text(value);
+  if (mode === 'click_submit') return '点击提交';
+  if (mode === 'auto_on_file_selection') return '选择文件后自动上传';
+  return mode || '提交方式待确认';
 }
 
 export function SettingsUploadScenarioSection() {
@@ -234,8 +258,8 @@ export function SettingsUploadScenarioSection() {
       const activeRefs = new Set(nextFixtures.map((row) => text(row.binding_ref)));
       setSelectedFixtures((current) => current.filter((ref) => activeRefs.has(ref)));
       setStatus('');
-    } catch (error) {
-      setStatus(error instanceof Error ? `✗ ${error.message}` : '✗ 无法读取上传场景治理数据');
+    } catch (caught) {
+      setStatus(caught instanceof Error ? `✗ ${caught.message}` : '✗ 无法读取上传场景治理数据');
     }
   }, [includeRevoked, project]);
 
@@ -251,7 +275,7 @@ export function SettingsUploadScenarioSection() {
     [form, selectedFixtures],
   );
 
-  const setField = <K extends keyof UploadScenarioForm>(key: K, value: UploadScenarioForm[K]) => {
+  const setField = <K extends keyof UploadScenarioForm,>(key: K, value: UploadScenarioForm[K]) => {
     setForm((current) => ({ ...current, [key]: value }));
     setStatus('');
   };
@@ -296,8 +320,8 @@ export function SettingsUploadScenarioSection() {
         ? '✓ 相同候选场景已经存在'
         : '✓ 场景已登记为候选，审批后才会出现在运行中心');
       await refresh();
-    } catch (error) {
-      setStatus(error instanceof Error ? `✗ ${error.message}` : '✗ 上传场景登记失败');
+    } catch (caught) {
+      setStatus(caught instanceof Error ? `✗ ${caught.message}` : '✗ 上传场景登记失败');
     } finally {
       setBusy('');
     }
@@ -309,8 +333,8 @@ export function SettingsUploadScenarioSection() {
       const result = await approveUploadScenario(project, scenario.scenario_id);
       setStatus(`✓ 场景已审批：${result.scenario?.scenario_ref || ''}`);
       await refresh();
-    } catch (error) {
-      setStatus(error instanceof Error ? `✗ ${error.message}` : '✗ 审批失败');
+    } catch (caught) {
+      setStatus(caught instanceof Error ? `✗ ${caught.message}` : '✗ 审批失败');
     } finally {
       setBusy('');
     }
@@ -322,8 +346,8 @@ export function SettingsUploadScenarioSection() {
       await revokeUploadScenario(project, scenario.scenario_id, revocationReason);
       setStatus('✓ 场景 authority 已撤销，运行中心会自动移除');
       await refresh();
-    } catch (error) {
-      setStatus(error instanceof Error ? `✗ ${error.message}` : '✗ 撤销失败');
+    } catch (caught) {
+      setStatus(caught instanceof Error ? `✗ ${caught.message}` : '✗ 撤销失败');
     } finally {
       setBusy('');
     }
@@ -337,45 +361,23 @@ export function SettingsUploadScenarioSection() {
           <h2>上传场景合同登记与审批</h2>
           <p>把真实企业来源、安全前置操作、来源角色、审批 Fixture、提交动作、页面断言和 persistent cleanup 组合为正式 UI 合同。</p>
         </div>
-        <strong className={summary.approved > 0 ? 'is-positive' : 'is-neutral'}>
-          可运行 {summary.approved} 个
-        </strong>
+        <strong className={summary.approved > 0 ? 'is-positive' : 'is-neutral'}>可运行 {summary.approved} 个</strong>
       </div>
 
       <div className="browser-matrix-policy">
-        系统不推断 selector、成功文本或 cleanup。前置操作只允许 GET/HEAD/OPTIONS；上传必须明确是“选择文件后自动提交”还是“点击按钮提交”，并声明能够撤销业务写入的 cleanup 控件。来源版本、角色、合同哈希和 Fixture authority 任一变化，旧场景都会在扫描前被阻断。
+        系统不推断 selector、成功文本或 cleanup。前置操作只允许 GET/HEAD/OPTIONS；上传必须明确是自动提交还是点击按钮提交，并声明能够撤销业务写入的 cleanup 控件。来源版本、角色、合同哈希和 Fixture authority 任一变化，旧场景都会在扫描前被阻断。
       </div>
 
       <div className="settings-form-grid">
         <label className="form-field"><span>场景名称</span><input className="form-input" value={form.title} onChange={(event) => setField('title', event.target.value)} /></label>
         <label className="form-field"><span>活动企业来源</span><select className="form-input" value={form.source_id} onChange={(event) => setField('source_id', event.target.value)}><option value="">请选择来源</option>{sources.map((source) => <option key={source.source_id} value={source.source_id}>{source.label} · {source.source_type || 'source'}</option>)}</select></label>
         <label className="form-field"><span>来源定位</span><input className="form-input" value={form.source_locator} onChange={(event) => setField('source_locator', event.target.value)} /></label>
-        <label className="form-field"><span>安全前置接口操作</span><select className="form-input" value={form.operation_ref} onChange={(event) => setField('operation_ref', event.target.value)}><option value="">请选择 GET / HEAD / OPTIONS</option>{operations.map((operation) => <option key={operation.interface_id} value={operation.interface_id}>{operation.method} {operation.path}{operation.summary ? ` · ${operation.summary}` : ''}</option>)}</select>{operations.length === 0 && <small className="muted">当前知识资产没有可绑定的只读接口操作，请先导入 OpenAPI、Postman 或接口文档。</small>}</label>
+        <label className="form-field"><span>安全前置接口操作</span><select className="form-input" value={form.operation_ref} onChange={(event) => setField('operation_ref', event.target.value)}><option value="">请选择 GET / HEAD / OPTIONS</option>{operations.map((operation) => <option key={operation.interface_id} value={operation.interface_id}>{operation.method} {operation.path}{operation.summary ? ` · ${operation.summary}` : ''}</option>)}</select>{operations.length === 0 && <small className="muted">当前知识资产没有唯一可绑定的只读接口操作，请检查接口资料是否缺失或冲突。</small>}</label>
         <label className="form-field"><span>来源角色</span><select className="form-input" value={form.actor_role} onChange={(event) => setField('actor_role', event.target.value)}><option value="">请选择角色</option>{roles.map((role) => <option key={role} value={role}>{role}</option>)}</select><small className="muted">非 public/anonymous 角色仍需在项目账号配置中存在同 role 的运行账号。</small></label>
         <label className="form-field"><span>页面路径</span><input className="form-input" value={form.start_url} onChange={(event) => setField('start_url', event.target.value)} /></label>
         <label className="form-field"><span>上传控件 selector</span><input className="form-input" value={form.upload_selector} onChange={(event) => setField('upload_selector', event.target.value)} /></label>
-        <label className="form-field">
-          <span>提交方式</span>
-          <select
-            className="form-input"
-            value={form.submission_mode}
-            onChange={(event) => {
-              const mode = event.target.value as SubmissionMode;
-              setForm((current) => ({
-                ...current,
-                submission_mode: mode,
-                submit_selector: mode === 'auto_on_file_selection' ? '' : current.submit_selector || '#upload-submit',
-              }));
-              setStatus('');
-            }}
-          >
-            <option value="click_submit">选择文件后点击提交按钮</option>
-            <option value="auto_on_file_selection">选择文件后自动上传</option>
-          </select>
-        </label>
-        {form.submission_mode === 'click_submit' && (
-          <label className="form-field"><span>提交按钮 selector</span><input className="form-input" value={form.submit_selector} onChange={(event) => setField('submit_selector', event.target.value)} /></label>
-        )}
+        <label className="form-field"><span>提交方式</span><select className="form-input" value={form.submission_mode} onChange={(event) => { const mode = event.target.value as SubmissionMode; setForm((current) => ({ ...current, submission_mode: mode, submit_selector: mode === 'auto_on_file_selection' ? '' : current.submit_selector || '#upload-submit' })); setStatus(''); }}><option value="click_submit">选择文件后点击提交按钮</option><option value="auto_on_file_selection">选择文件后自动上传</option></select></label>
+        {form.submission_mode === 'click_submit' && <label className="form-field"><span>提交按钮 selector</span><input className="form-input" value={form.submit_selector} onChange={(event) => setField('submit_selector', event.target.value)} /></label>}
         <label className="form-field"><span>业务补偿 cleanup selector</span><input className="form-input" value={form.cleanup_selector} onChange={(event) => setField('cleanup_selector', event.target.value)} /><small className="muted">必须真正删除、撤销或回滚上传产生的业务记录；清空文件输入框本身不算业务 cleanup。</small></label>
         <label className="form-field"><span>断言 selector</span><input className="form-input" value={form.assertion_selector} onChange={(event) => setField('assertion_selector', event.target.value)} /></label>
         <label className="form-field"><span>来源声明的成功文本</span><input className="form-input" value={form.assertion_text} onChange={(event) => setField('assertion_text', event.target.value)} /></label>
@@ -388,25 +390,19 @@ export function SettingsUploadScenarioSection() {
 
       <div className="upload-fixture-toolbar"><strong>选择已审批 Fixture</strong><span> 已选 {selectedFixtures.length} 个</span></div>
       <div className="browser-matrix-profile-grid">
-        {fixtures.map((fixture) => {
-          const ref = text(fixture.binding_ref);
-          return <label key={fixture.fixture_id} className="browser-matrix-profile"><input type="checkbox" checked={selectedFixtures.includes(ref)} onChange={() => toggleFixture(ref)} /><span><strong>{fixture.fixture_name || fixture.fixture_id}</strong><small>{fixture.content_type || 'application/octet-stream'}</small><em>{ref}</em></span></label>;
-        })}
+        {fixtures.map((fixture) => { const ref = text(fixture.binding_ref); return <label key={fixture.fixture_id} className="browser-matrix-profile"><input type="checkbox" checked={selectedFixtures.includes(ref)} onChange={() => toggleFixture(ref)} /><span><strong>{fixture.fixture_name || fixture.fixture_id}</strong><small>{fixture.content_type || 'application/octet-stream'}</small><em>{ref}</em></span></label>; })}
         {fixtures.length === 0 && <p className="settings-inline-feedback">尚无已审批 Fixture，请先完成上方文件治理。</p>}
       </div>
       <div className="settings-actions"><button type="button" className="btn btn-primary" disabled={busy === 'register' || Boolean(validationError)} onClick={() => void register()}>{busy === 'register' ? '登记中…' : '登记候选场景'}</button></div>
       {validationError && <p className="muted">当前尚不可登记：{validationError}。</p>}
 
-      <div className="upload-fixture-toolbar">
-        <div><strong>场景登记表</strong><span> 候选 {summary.candidates} · 可运行 {summary.approved}</span></div>
-        <label className="upload-fixture-toggle"><input type="checkbox" checked={includeRevoked} onChange={(event) => setIncludeRevoked(event.target.checked)} />显示已撤销</label>
-      </div>
+      <div className="upload-fixture-toolbar"><div><strong>场景登记表</strong><span> 候选 {summary.candidates} · 可运行 {summary.approved}</span></div><label className="upload-fixture-toggle"><input type="checkbox" checked={includeRevoked} onChange={(event) => setIncludeRevoked(event.target.checked)} />显示已撤销</label></div>
       <label className="form-field upload-fixture-reason"><span>撤销原因</span><input className="form-input" value={revocationReason} onChange={(event) => setRevocationReason(event.target.value)} /></label>
       <div className="upload-fixture-list">
         {scenarios.map((scenario) => {
           const active = scenario.status === 'active';
           const candidate = scenario.authority === 'source_declared_candidate';
-          return <article key={scenario.scenario_id} className={`upload-fixture-row ${active ? '' : 'is-revoked'}`}><div className="upload-fixture-main"><div className="upload-fixture-title"><strong>{scenario.title || scenario.scenario_id}</strong><span>{candidate ? '候选待审批' : '已审批可运行'}</span>{!active && <span>已撤销</span>}</div><small>来源 {scenario.source_id} · Fixture {scenario.fixture_binding_refs?.length || 0} 个</small>{scenario.scenario_ref && <code>{scenario.scenario_ref}</code>}{!active && scenario.revocation_reason && <em>撤销原因：{scenario.revocation_reason}</em>}</div><div className="upload-fixture-actions">{active && candidate && <button type="button" className="btn btn-primary settings-btn-compact" disabled={busy === scenario.scenario_id} onClick={() => void approve(scenario)}>审批为可运行</button>}{active && <button type="button" className="btn btn-secondary settings-btn-compact" disabled={busy === scenario.scenario_id || !revocationReason.trim()} onClick={() => void revoke(scenario)}>撤销</button>}</div></article>;
+          return <article key={scenario.scenario_id} className={`upload-fixture-row ${active ? '' : 'is-revoked'}`}><div className="upload-fixture-main"><div className="upload-fixture-title"><strong>{scenario.title || scenario.scenario_id}</strong><span>{candidate ? '候选待审批' : '已审批可运行'}</span>{!active && <span>已撤销</span>}</div><small>来源 {scenario.source_id} · Fixture {scenario.fixture_binding_refs?.length || 0} 个 · {submissionLabel(scenario.submission_mode)} · {scenario.business_cleanup_required ? '业务补偿已声明' : '业务补偿待确认'}</small>{scenario.scenario_ref && <code>{scenario.scenario_ref}</code>}{!active && scenario.revocation_reason && <em>撤销原因：{scenario.revocation_reason}</em>}</div><div className="upload-fixture-actions">{active && candidate && <button type="button" className="btn btn-primary settings-btn-compact" disabled={busy === scenario.scenario_id} onClick={() => void approve(scenario)}>审批为可运行</button>}{active && <button type="button" className="btn btn-secondary settings-btn-compact" disabled={busy === scenario.scenario_id || !revocationReason.trim()} onClick={() => void revoke(scenario)}>撤销</button>}</div></article>;
         })}
       </div>
       {status && <p className="settings-inline-feedback" role="status">{status}</p>}
