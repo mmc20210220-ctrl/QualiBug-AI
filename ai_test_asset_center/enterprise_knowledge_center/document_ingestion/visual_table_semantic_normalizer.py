@@ -10,7 +10,7 @@ from collections import defaultdict
 from typing import Any
 
 from .contract import text
-from .visual_table_semantic_candidates import TABLE_SEMANTIC_CANDIDATE_SCHEMA
+from .visual_table_semantic_validation import validate_visual_table_semantic_candidates
 
 SEMANTIC_NORMALIZATION_SCHEMA = "qualibug.visual-table-semantic-normalization.v1"
 
@@ -32,7 +32,7 @@ def _covered_columns(cell: dict[str, Any]) -> range:
 def normalize_visual_table_semantic_candidates(document_ir: dict[str, Any]) -> dict[str, Any]:
     prior = _dict(document_ir.get("visual_table_semantic_normalization_receipt"))
     if text(prior.get("schema")) == SEMANTIC_NORMALIZATION_SCHEMA:
-        return dict(document_ir or {})
+        return validate_visual_table_semantic_candidates(document_ir)
     result = dict(document_ir or {})
     blocks = [dict(row) for row in _list(result.get("blocks")) if isinstance(row, dict)]
     table_blocks = {
@@ -218,7 +218,7 @@ def normalize_visual_table_semantic_candidates(document_ir: dict[str, Any]) -> d
         "source_evidence_deleted": False,
         "business_semantics_added": False,
     }
-    return result
+    return validate_visual_table_semantic_candidates(result)
 
 
 __all__ = ["SEMANTIC_NORMALIZATION_SCHEMA", "normalize_visual_table_semantic_candidates"]
