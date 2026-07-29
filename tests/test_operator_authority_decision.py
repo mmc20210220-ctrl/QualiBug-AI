@@ -285,6 +285,7 @@ def test_field_required_mismatch_select_fact_no_auto_pick(tmp_path: Path) -> Non
                 "required": True,
                 "source_id": "schema_a.sql",
                 "field_id": "a",
+                "source_excerpt": "table=orders; field=warehouse_id; required=true",
             },
             {
                 "field": "warehouse_id",
@@ -292,6 +293,7 @@ def test_field_required_mismatch_select_fact_no_auto_pick(tmp_path: Path) -> Non
                 "required": False,
                 "source_id": "schema_b.sql",
                 "field_id": "b",
+                "source_excerpt": "table=orders; field=warehouse_id; required=false",
             },
         ],
         [],
@@ -304,6 +306,11 @@ def test_field_required_mismatch_select_fact_no_auto_pick(tmp_path: Path) -> Non
     assert conflict["kind"] == "FIELD_REQUIRED_MISMATCH"
     assert conflict["authority_decision"]["automatic_resolution_allowed"] is False
     assert conflict["authority_decision"]["selected_fact_id"] == ""
+    evidence = conflict.get("evidence") or []
+    assert len(evidence) >= 2
+    assert all(str(row.get("quote") or "").strip() for row in evidence)
+    assert any("required=true" in str(row.get("quote") or "") for row in evidence)
+    assert any("required=false" in str(row.get("quote") or "") for row in evidence)
     participants = sorted(
         row["fact_id"] for row in conflict["facts"] if row.get("fact_id")
     )

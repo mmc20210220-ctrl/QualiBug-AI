@@ -497,8 +497,18 @@ def _pick_first(item: dict[str, Any], keys: Iterable[str]) -> str:
     norm_map = {_norm(key): key for key in item}
     for key in keys:
         actual = norm_map.get(_norm(key))
-        if actual:
-            return str(item.get(actual) or "").strip()
+        if not actual or actual not in item:
+            continue
+        value = item.get(actual)
+        if value is None:
+            continue
+        # Preserve explicit false/true booleans. ``value or ""`` would drop False
+        # and erase required=false / nullable declarations from field excerpts.
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        text = str(value).strip()
+        if text:
+            return text
     return ""
 
 
@@ -577,6 +587,18 @@ def _field_dictionary_entries(text: str, payload: Any, source_id: str) -> list[d
         description = _pick_first(item, ("description", "desc", "comment", "说明", "描述", "remark", "备注"))
         required = _pick_first(item, ("required", "nullable", "必填", "is_required"))
         constraint = _pick_first(item, tuple(sorted(_IDENTITY_CONSTRAINT_HEADERS)))
+        # Preserve an exact source-declared excerpt so FIELD_REQUIRED_MISMATCH
+        # authority evidence can show both sides. Never invent business prose —
+        # only echo coordinates present on the source item.
+        excerpt_bits: list[str] = []
+        if table_name:
+            excerpt_bits.append(f"table={table_name}")
+        excerpt_bits.append(f"field={field_name}")
+        if required is not None and str(required).strip() != "":
+            excerpt_bits.append(f"required={required}")
+        if field_type:
+            excerpt_bits.append(f"type={field_type}")
+        source_excerpt = _redact_text("; ".join(excerpt_bits), 320)
         rows.append({
             "field_id": f"field:{source_id}:{_short_hash({'table': table_name or 'default', 'field': field_name})}",
             "source_id": source_id,
@@ -591,6 +613,8 @@ def _field_dictionary_entries(text: str, payload: Any, source_id: str) -> list[d
                 _pick_first(item, ("primary_key", "primaryKey", "unique", "is_unique", "主键", "唯一"))
             ) is True,
             "description": _redact_text(description, 320),
+            "source_excerpt": source_excerpt,
+            "quote": source_excerpt,
             "tokens": sorted(_tokens(f"{table_name} {field_name} {field_type} {description}")),
         })
     rows.extend(_infer_field_rows_from_markdown(text, source_id))
@@ -1123,6 +1147,44 @@ def _permission_crosstab_entries(text: str, source_id: str) -> list[dict[str, An
     return rows
 
 
+def _permission_evidence_excerpt(
+    item: dict[str, Any],
+    *,
+    role: str,
+    resource: str,
+    decision: str,
+    actions: list[str],
+) -> str:
+    """Build operator-visible evidence from exact source-declared permission facts.
+
+    Prefer an explicit source ``evidence`` / quote string. Never dump ``str(dict)``
+    of the whole permission row — that is parser noise, not source evidence.
+    """
+    raw = item.get("evidence")
+    if isinstance(raw, str) and raw.strip():
+        return _redact_text(raw.strip(), 280)
+    if isinstance(raw, dict):
+        quote = str(raw.get("quote") or raw.get("verbatim_quote") or "").strip()
+        if quote:
+            return _redact_text(quote, 280)
+    for key in ("quote", "source_excerpt", "verbatim_quote"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return _redact_text(value.strip(), 280)
+    bits: list[str] = []
+    if role:
+        bits.append(f"role={role}")
+    if resource:
+        bits.append(f"resource={resource}")
+    if decision:
+        bits.append(f"decision={decision}")
+    if actions:
+        bits.append(
+            "actions=" + ",".join(str(action).strip() for action in actions if str(action).strip())
+        )
+    return _redact_text("; ".join(bits), 280)
+
+
 def _permission_entries(text: str, payload: Any, source_id: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     candidates: list[dict[str, Any]] = []
@@ -1139,11 +1201,6 @@ def _permission_entries(text: str, payload: Any, source_id: str) -> list[dict[st
         for row in _markdown_table_rows(text)
     ])
     for idx, item in enumerate(candidates):
-        evidence_item = {
-            key: value
-            for key, value in item.items()
-            if not str(key).startswith("__")
-        }
         role = str(_permission_field(item, {"role", "actor", "user_role", "principal", "角色", "用户角色"}) or "").strip()
         resource = str(_permission_field(item, {"resource", "module", "object", "path", "endpoint", "资源", "模块", "对象", "接口"}) or "").strip()
         actions = _permission_field(item, {"actions", "action", "permissions", "permission", "operation", "allowed_actions", "权限", "权限说明", "操作", "能力"})
@@ -1169,7 +1226,13 @@ def _permission_entries(text: str, payload: Any, source_id: str) -> list[dict[st
                 **({"decision": permission_decision} if permission_decision else {}),
                 **({"denied_actions": denied_action_values} if denied_action_values else {}),
                 "scope": "all",
-                "evidence": _redact_text(str(evidence_item), 280),
+                "evidence": _permission_evidence_excerpt(
+                    item,
+                    role=role,
+                    resource="*",
+                    decision=permission_decision,
+                    actions=["*"],
+                ),
             })
             continue
         clauses = [part.strip() for part in re.split(r"[,;，；、。]", narrative) if part.strip()]
@@ -1207,7 +1270,13 @@ def _permission_entries(text: str, payload: Any, source_id: str) -> list[dict[st
                     **({"decision": permission_decision} if permission_decision else {}),
                     **({"denied_actions": denied_action_values} if denied_action_values else {}),
                     "scope": str(scope_value or "").strip() or _permission_scope(clause),
-                    "evidence": _redact_text(str(evidence_item), 280),
+                    "evidence": _permission_evidence_excerpt(
+                        item,
+                        role=role,
+                        resource=resource_alias,
+                        decision=permission_decision,
+                        actions=action_values,
+                    ),
                 })
     role_words = _lexicon_dict("role_words") or ROLE_WORDS
     for line_index, line in enumerate(text.splitlines()):

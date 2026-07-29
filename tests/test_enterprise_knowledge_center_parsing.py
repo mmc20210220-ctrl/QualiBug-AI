@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from ai_test_asset_center.enterprise_knowledge_center import (
@@ -94,6 +95,68 @@ def test_parse_source_extracts_markdown_api_field_dictionary_and_svg() -> None:
     assert svg["ui_specs"][0]["name"] == "Orders Checkout"
     assert "Submit Order" in svg["ui_specs"][0]["text_labels"]
     assert "Loading" in svg["ui_specs"][0]["states"]
+
+
+def test_field_dictionary_json_preserves_required_false_in_excerpt() -> None:
+    from ai_test_asset_center.enterprise_knowledge_center._parsing import (
+        _field_dictionary_entries,
+    )
+
+    rows = _field_dictionary_entries(
+        '{"fields":[{"table":"orders","field":"warehouse_id","required":false}]}',
+        {
+            "fields": [
+                {"table": "orders", "field": "warehouse_id", "required": False},
+                {"table": "orders", "field": "sku", "required": True},
+            ]
+        },
+        "src_fields",
+    )
+    by_field = {row["field"]: row for row in rows}
+    assert by_field["warehouse_id"]["required"] is False
+    assert "required=false" in by_field["warehouse_id"]["source_excerpt"]
+    assert by_field["sku"]["required"] is True
+    assert "required=true" in by_field["sku"]["source_excerpt"]
+
+
+def test_permission_entries_prefer_source_evidence_string() -> None:
+    from ai_test_asset_center.enterprise_knowledge_center._parsing import (
+        _permission_entries,
+    )
+
+    rows = _permission_entries(
+        json.dumps(
+            {
+                "permissions": [
+                    {
+                        "permission_id": "perm:a",
+                        "role": "operator",
+                        "resource": "orders",
+                        "decision": "allow",
+                        "actions": ["write"],
+                        "evidence": "operator / orders / allow",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        {
+            "permissions": [
+                {
+                    "permission_id": "perm:a",
+                    "role": "operator",
+                    "resource": "orders",
+                    "decision": "allow",
+                    "actions": ["write"],
+                    "evidence": "operator / orders / allow",
+                }
+            ]
+        },
+        "src_perm",
+    )
+    assert rows
+    assert rows[0]["evidence"] == "operator / orders / allow"
+    assert "permission_id" not in rows[0]["evidence"]
 
 
 def test_parse_source_state_machine_ignores_sentence_and_layout_noise() -> None:
