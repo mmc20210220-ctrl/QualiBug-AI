@@ -241,3 +241,13 @@ def execute_governed_control_write(
     receipt["audit_record"] = audit_record
     receipt["audit_path"] = str(audit_path)
     return receipt
+
+
+# Explicit runtime entrypoint composition: a persisted Experiment may be replayed after process
+# restart without compiling a new plan. Install the same preflight/finalizer guard here because the
+# existing Experiment Executor always imports this governed transport facade before transport.
+from .runtime_materialization_replay_guard import (  # noqa: E402
+    install_runtime_materialization_replay_guard,
+)
+
+install_runtime_materialization_replay_guard()
