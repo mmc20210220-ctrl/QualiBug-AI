@@ -10,6 +10,7 @@ from typing import Any
 
 from .behavior_ir_logic_gate import build_business_behavior_ir_v1
 from .gate import assess_understanding_model
+from .implementation_binding import build_behavior_implementation_bindings
 from .schema import as_dict, as_list, dedupe_evidence, new_unknown, text
 
 
@@ -44,8 +45,32 @@ def apply_minimum_understanding_closure(
     model["behavior_conflicts"] = behavior_conflicts
     model["behavior_ir_gate"] = behavior_gate
 
+    (
+        implementation_bindings,
+        implementation_unknowns,
+        implementation_conflicts,
+        implementation_gate,
+    ) = build_behavior_implementation_bindings(asset, behaviors)
+    model["behavior_implementation_bindings"] = implementation_bindings
+    model["implementation_binding_unknowns"] = implementation_unknowns
+    model["implementation_binding_conflicts"] = implementation_conflicts
+    model["implementation_binding_gate"] = implementation_gate
+    model["implementation_evidence_index"] = dedupe_evidence(
+        [
+            evidence
+            for binding in implementation_bindings
+            for evidence in as_list(binding.get("evidence"))
+            if isinstance(evidence, dict)
+        ]
+    )
+
+    # Semantic understanding and implementation binding are separate gates.  Missing
+    # endpoints or observers must block scenario planning, not retroactively change
+    # what the enterprise source materials say.
     unknowns = [
-        row for row in [*as_list(model.get("unknowns")), *behavior_unknowns] if isinstance(row, dict)
+        row
+        for row in [*as_list(model.get("unknowns")), *behavior_unknowns]
+        if isinstance(row, dict)
     ]
     conflicts = [
         row
@@ -73,7 +98,10 @@ def apply_minimum_understanding_closure(
     facts_with_actions = [
         row
         for row in accepted_behavior_facts
-        if text(as_dict(row.get("action")).get("canonical") or as_dict(row.get("action")).get("raw"))
+        if text(
+            as_dict(row.get("action")).get("canonical")
+            or as_dict(row.get("action")).get("raw")
+        )
     ]
     if facts_with_actions and not as_list(model.get("operations")):
         unknowns.append(
@@ -124,6 +152,7 @@ def apply_minimum_understanding_closure(
         }.values()
     )
     behavior_metrics = as_dict(behavior_gate.get("metrics"))
+    implementation_metrics = as_dict(implementation_gate.get("metrics"))
     model["source_summary"] = {
         "active_source_count": len(active_sources),
         "business_fact_count": len(facts),
@@ -134,13 +163,28 @@ def apply_minimum_understanding_closure(
         "formal_lifecycle_count": len(as_list(model.get("lifecycles"))),
         "decision_matrix_row_count": len(row_ledger),
         "business_behavior_count": len(behaviors),
-        "confirmed_behavior_count": int(behavior_metrics.get("confirmed_behavior_count") or 0),
-        "candidate_behavior_count": int(behavior_metrics.get("candidate_behavior_count") or 0),
-        "incomplete_behavior_count": int(behavior_metrics.get("incomplete_behavior_count") or 0),
-        "conflicted_behavior_count": int(behavior_metrics.get("conflicted_behavior_count") or 0),
+        "confirmed_behavior_count": int(
+            behavior_metrics.get("confirmed_behavior_count") or 0
+        ),
+        "candidate_behavior_count": int(
+            behavior_metrics.get("candidate_behavior_count") or 0
+        ),
+        "incomplete_behavior_count": int(
+            behavior_metrics.get("incomplete_behavior_count") or 0
+        ),
+        "conflicted_behavior_count": int(
+            behavior_metrics.get("conflicted_behavior_count") or 0
+        ),
         "unresolved_condition_combinator_count": int(
             behavior_metrics.get("unresolved_condition_combinator_count") or 0
         ),
+        "behavior_implementation_binding_count": len(implementation_bindings),
+        "scenario_ready_binding_count": int(
+            implementation_metrics.get("scenario_ready_binding_count") or 0
+        ),
+        "implementation_binding_unknown_count": len(implementation_unknowns),
+        "implementation_binding_conflict_count": len(implementation_conflicts),
+        "implementation_binding_status": implementation_gate.get("status"),
     }
     gate = assess_understanding_model(
         model,
@@ -148,9 +192,13 @@ def apply_minimum_understanding_closure(
     )
     model["gate"] = gate
     model["metrics"] = dict(gate.get("metrics") or {})
+    model["metrics"]["implementation_binding_status"] = implementation_gate.get("status")
+    model["metrics"]["scenario_ready_binding_count"] = int(
+        implementation_metrics.get("scenario_ready_binding_count") or 0
+    )
 
-    # Document-structure completeness is part of the same formal closure.  Keeping
-    # it here prevents alternate callers from bypassing structure gaps.
+    # Document-structure completeness is part of the same formal semantic closure.
+    # Implementation binding remains a separate downstream gate.
     from .document_structure_gate import apply_document_structure_completeness
 
     return apply_document_structure_completeness(model, asset)
