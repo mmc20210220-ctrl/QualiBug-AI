@@ -388,7 +388,10 @@ function projectUnderstanding(payload: unknown): UnderstandingView {
     runtimePlanCount: asNumber(summary.runtime_plan_count) || asArray(asset.runtime_plans).length,
     runtimeMaterializationCount: asNumber(summary.runtime_materialization_count) || asArray(asset.runtime_materializations).length,
     unknownCount: asNumber(summary.enterprise_understanding_unknown_count) || asArray(model.unknowns).length,
-    conflictCount: asNumber(summary.enterprise_understanding_conflict_count) || unresolvedConflicts.length,
+    // Prefer the authority-aware unresolved list that this receipt actually
+    // renders. Summary.enterprise_understanding_conflict_count can lag or count
+    // historical RESOLVED rows; never let that inflate "未解决资料冲突".
+    conflictCount: unresolvedConflicts.length,
     blockers,
     conflicts: conflictDetails,
     resolvedConflicts,
@@ -611,20 +614,21 @@ export function EnterpriseUnderstandingReceipt({
             </div>
           )}
 
+          {(decisionNote || decisionError) && (
+            <p
+              className={`settings-inline-feedback settings-mt-10 ${decisionError ? 'is-negative' : ''}`}
+              role="status"
+            >
+              {decisionError || decisionNote}
+            </p>
+          )}
+
           {view.conflicts.length > 0 && (
             <details className="settings-auth-section settings-mt-10" open>
               <summary>
                 <strong>未解决资料冲突</strong>
                 <span className="muted">{view.conflicts.length} 条，系统不会自动选权威</span>
               </summary>
-              {(decisionNote || decisionError) && (
-                <p
-                  className={`settings-inline-feedback settings-mt-10 ${decisionError ? 'is-negative' : ''}`}
-                  role="status"
-                >
-                  {decisionError || decisionNote}
-                </p>
-              )}
               <div className="customer-secondary-grid settings-mt-10">
                 {view.conflicts.map((conflict) => (
                   <article key={conflict.id} className="customer-secondary-card">

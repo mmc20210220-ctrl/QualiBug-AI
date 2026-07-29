@@ -504,7 +504,15 @@ def _understanding_projection(asset: dict[str, Any]) -> dict[str, Any]:
             summary.get("enterprise_understanding_unknown_count"), len(_rows(model.get("unknowns")))
         ),
         "enterprise_understanding_conflict_count": _integer(
-            summary.get("enterprise_understanding_conflict_count"), len(_rows(model.get("conflicts")))
+            model_metrics.get("unresolved_conflict_count"),
+            len(
+                [
+                    row
+                    for row in _rows(model.get("conflicts"))
+                    if str(_record(row).get("status") or "UNRESOLVED").upper()
+                    not in {"RESOLVED", "SUPERSEDED", "DISMISSED"}
+                ]
+            ),
         ),
         "source_traceability_rate": _number(model_metrics.get("source_traceability_rate")),
         "operation_object_binding_rate": _number(model_metrics.get("operation_object_binding_rate")),

@@ -227,9 +227,15 @@ def _gate_projection(asset: dict[str, Any]) -> dict[str, Any]:
             summary.get("enterprise_understanding_unknown_count")
             or len(_rows(model.get("unknowns")))
         ),
-        "conflict_count": int(
-            summary.get("enterprise_understanding_conflict_count")
-            or len(_rows(model.get("conflicts")))
+        "conflict_count": len(_rows(model_gate.get("unresolved_conflicts")))
+        if "unresolved_conflicts" in model_gate
+        else len(
+            [
+                row
+                for row in _rows(model.get("conflicts"))
+                if str(_record(row).get("status") or "UNRESOLVED").upper()
+                not in {"RESOLVED", "SUPERSEDED", "DISMISSED"}
+            ]
         ),
         "gates": [
             {

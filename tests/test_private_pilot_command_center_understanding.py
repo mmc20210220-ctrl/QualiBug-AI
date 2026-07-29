@@ -263,3 +263,43 @@ def test_command_center_mixin_preserves_original_builder_result(monkeypatch, tmp
     assert result["defects"] == [{"id": "bug-1"}]
     assert result["knowledge_summary"]["active_source_count"] == 2
     assert result["knowledge_summary"]["formal_runtime_chain_ready"] is True
+
+
+def test_command_center_conflict_count_excludes_authority_resolved_rows(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Stale summary totals must not inflate unresolved conflict counts."""
+    asset = _asset()
+    asset["summary"]["enterprise_understanding_conflict_count"] = 4
+    asset["enterprise_understanding_model"]["conflicts"] = [
+        {
+            "conflict_id": "conflict:resolved-1",
+            "status": "RESOLVED",
+            "authority_decision": {"status": "RESOLVED"},
+        },
+        {
+            "conflict_id": "conflict:open-1",
+            "status": "UNRESOLVED",
+            "authority_decision": {"status": "UNRESOLVED"},
+        },
+    ]
+    asset["enterprise_understanding_model"]["gate"]["metrics"][
+        "unresolved_conflict_count"
+    ] = 1
+    asset["enterprise_understanding_model"]["gate"]["unresolved_conflicts"] = [
+        {"conflict_id": "conflict:open-1", "status": "UNRESOLVED"}
+    ]
+    monkeypatch.setattr(
+        enterprise_knowledge_center,
+        "load_enterprise_business_knowledge_asset",
+        lambda project, root: asset,
+    )
+
+    result = project_existing_understanding_command_center(
+        {"project_id": "customer_a", "knowledge_summary": {}},
+        project="customer_a",
+        root=tmp_path,
+    )
+
+    assert result["knowledge_summary"]["enterprise_understanding_conflict_count"] == 1

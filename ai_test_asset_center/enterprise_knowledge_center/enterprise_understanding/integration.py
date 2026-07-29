@@ -307,7 +307,13 @@ def enrich_asset_with_enterprise_understanding(
             "understood_lifecycle_count": len(model.get("lifecycles") or []),
             "understood_process_count": len(model.get("processes") or []),
             "enterprise_understanding_unknown_count": len(model.get("unknowns") or []),
-            "enterprise_understanding_conflict_count": len(model.get("conflicts") or []),
+            # Operator-visible "unresolved conflicts" must exclude authority-
+            # RESOLVED / SUPERSEDED / DISMISSED rows. Counting raw model.conflicts
+            # left the settings receipt showing a non-zero unresolved count after
+            # every SELECT_FACT decision.
+            "enterprise_understanding_conflict_count": len(
+                model_gate.get("unresolved_conflicts") or []
+            ),
             "enterprise_understanding_projection": as_dict(model.get("metrics")).get("model_completeness_projection"),
             "enterprise_understanding_projection_contract": "INTERNAL_MODEL_CLOSURE_NOT_RECALL_OR_ACCURACY",
             "document_structure_source_count": int(structure_assets.get("source_count") or 0),
