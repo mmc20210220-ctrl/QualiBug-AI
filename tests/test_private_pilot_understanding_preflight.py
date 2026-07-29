@@ -20,21 +20,8 @@ def _base_payload() -> dict:
     }
 
 
-def test_understanding_preflight_reuses_existing_passed_gates(monkeypatch, tmp_path: Path) -> None:
-    asset = {
-        "summary": {
-            "enterprise_understanding_model_id": "eum_passed",
-            "enterprise_understanding_status": "PASS",
-            "enterprise_understanding_ready": True,
-            "understood_business_object_count": 4,
-            "understood_actor_count": 2,
-            "understood_operation_count": 7,
-            "scenario_ir_count": 5,
-        },
-        "enterprise_understanding_model": {
-            "model_id": "eum_passed",
-            "gate": {"status": "PASS", "entry_allowed": True},
-        },
+def _passed_downstream_gates() -> dict:
+    return {
         "scenario_planning_gate": {
             "status": "PASS",
             "entry_allowed": True,
@@ -46,6 +33,34 @@ def test_understanding_preflight_reuses_existing_passed_gates(monkeypatch, tmp_p
             "entry_allowed": True,
             "execution_contract_ready": True,
         },
+        "runtime_plan_gate": {
+            "status": "PASS",
+            "entry_allowed": True,
+            "runtime_plan_ready": True,
+            "execution_allowed": False,
+        },
+    }
+
+
+def test_understanding_preflight_reuses_existing_passed_gates(
+    monkeypatch, tmp_path: Path
+) -> None:
+    asset = {
+        "summary": {
+            "enterprise_understanding_model_id": "eum_passed",
+            "enterprise_understanding_status": "PASS",
+            "enterprise_understanding_ready": True,
+            "understood_business_object_count": 4,
+            "understood_actor_count": 2,
+            "understood_operation_count": 7,
+            "scenario_ir_count": 5,
+            "runtime_plan_count": 5,
+        },
+        "enterprise_understanding_model": {
+            "model_id": "eum_passed",
+            "gate": {"status": "PASS", "entry_allowed": True},
+        },
+        **_passed_downstream_gates(),
     }
     monkeypatch.setattr(
         enterprise_knowledge_center,
@@ -61,12 +76,23 @@ def test_understanding_preflight_reuses_existing_passed_gates(monkeypatch, tmp_p
 
     assert result["ready"] is True
     assert result["blocking_codes"] == []
-    assert result["understanding_summary"]["source_of_truth"] == "existing_enterprise_business_knowledge_asset"
+    assert (
+        result["understanding_summary"]["source_of_truth"]
+        == "existing_enterprise_business_knowledge_asset"
+    )
     assert result["understanding_summary"]["model_id"] == "eum_passed"
+    assert result["understanding_summary"]["runtime_plan_count"] == 5
     assert result["input_checks"]["enterprise_understanding"]["status"] == "passed"
+    assert result["understanding_summary"]["gates"][-1] == {
+        "label": "Runtime Plan",
+        "status": "PASS",
+        "ready": True,
+    }
 
 
-def test_understanding_preflight_surfaces_first_existing_blocker(monkeypatch, tmp_path: Path) -> None:
+def test_understanding_preflight_surfaces_first_existing_blocker(
+    monkeypatch, tmp_path: Path
+) -> None:
     asset = {
         "summary": {
             "enterprise_understanding_model_id": "eum_blocked",
@@ -109,6 +135,11 @@ def test_understanding_preflight_surfaces_first_existing_blocker(monkeypatch, tm
             "entry_allowed": False,
             "execution_contract_ready": False,
         },
+        "runtime_plan_gate": {
+            "status": "BLOCKED_RUNTIME_PLAN_UPSTREAM_EXECUTION_CONTRACT_GATE",
+            "entry_allowed": False,
+            "runtime_plan_ready": False,
+        },
     }
     monkeypatch.setattr(
         enterprise_knowledge_center,
@@ -129,7 +160,58 @@ def test_understanding_preflight_surfaces_first_existing_blocker(monkeypatch, tm
     assert "人工确认" in result["reasons"][0]["message"]
 
 
-def test_understanding_preflight_does_not_duplicate_no_source_blocker(tmp_path: Path) -> None:
+def test_runtime_plan_is_the_first_blocker_after_prior_gates_pass(
+    monkeypatch, tmp_path: Path
+) -> None:
+    asset = {
+        "summary": {
+            "enterprise_understanding_model_id": "eum_runtime_blocked",
+            "enterprise_understanding_status": "PASS",
+            "enterprise_understanding_ready": True,
+        },
+        "enterprise_understanding_model": {
+            "model_id": "eum_runtime_blocked",
+            "gate": {"status": "PASS", "entry_allowed": True},
+        },
+        **_passed_downstream_gates(),
+        "runtime_plan_gate": {
+            "status": "BLOCKED_RUNTIME_PLAN_INCOMPLETE",
+            "entry_allowed": False,
+            "runtime_plan_ready": False,
+        },
+        "runtime_plan_unknowns": [
+            {
+                "kind": "RUNTIME_PLAN_REQUEST_FIELD_LOCATION_UNRESOLVED",
+                "reason_code": "RUNTIME_PLAN_REQUEST_FIELD_LOCATION_UNRESOLVED",
+                "blocks_runtime_plan": True,
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        enterprise_knowledge_center,
+        "load_enterprise_business_knowledge_asset",
+        lambda project, root: asset,
+    )
+
+    result = project_existing_understanding_preflight(
+        _base_payload(),
+        project="customer_runtime_blocked",
+        root=tmp_path,
+    )
+
+    assert result["ready"] is False
+    assert result["blocking_codes"] == ["RUNTIME_PLAN_BLOCKED"]
+    assert result["understanding_summary"]["gates"][-1] == {
+        "label": "Runtime Plan",
+        "status": "BLOCKED_RUNTIME_PLAN_INCOMPLETE",
+        "ready": False,
+    }
+    assert "请求字段在接口契约中的位置尚未明确" in result["reasons"][0]["message"]
+
+
+def test_understanding_preflight_does_not_duplicate_no_source_blocker(
+    tmp_path: Path,
+) -> None:
     payload = _base_payload()
     payload["ready"] = False
     payload["blocking_codes"] = ["NO_SOURCE"]
