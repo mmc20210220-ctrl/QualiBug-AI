@@ -22,6 +22,9 @@ from ai_test_asset_center.private_pilot_upload_fixture_health_patch import (
 from ai_test_asset_center.private_pilot_upload_fixture_routes import (
     install_private_pilot_upload_fixture_routes,
 )
+from ai_test_asset_center.private_pilot_upload_fixture_scan_gate import (
+    install_upload_fixture_scan_gate,
+)
 from ai_test_asset_center.ui_upload_fixture_registry_integrity import (
     install_upload_fixture_registry_integrity,
 )
@@ -39,7 +42,7 @@ def restore_scan_campaign_context_patch() -> None:
     _service._SCAN_CAMPAIGN_CONTEXT_PATCH_SOURCE = ""  # type: ignore[attr-defined]
     _service._ORIGINAL_V12_SCAN = None  # type: ignore[attr-defined]
     _service._ORIGINAL_HANDLE_V12_SCAN = None  # type: ignore[attr-defined]
-    _service._ORIGINAL_HANDLE_CONTINUOUS_START = None  # type: ignore[attr-defined]
+    _service._ORIGINAL_CONTINUOUS_START = None  # type: ignore[attr-defined]
     _service._ORIGINAL_CONTINUOUS_SCAN_LOOP = None  # type: ignore[attr-defined]
     CONTINUOUS_CAMPAIGN_CONTEXTS.clear()
 
@@ -51,6 +54,7 @@ def install_scan_campaign_context_patch(*, patch_source: str) -> None:
     # installers are idempotent and perform no browser or target I/O.
     install_upload_fixture_registry_integrity()
     install_ui_upload_fixture_runtime_binding()
+    install_upload_fixture_scan_gate()
     install_private_pilot_upload_fixture_routes()
     install_upload_fixture_health_patch()
     if getattr(_service, "_SCAN_CAMPAIGN_CONTEXT_PATCHED", False):
@@ -59,5 +63,5 @@ def install_scan_campaign_context_patch(*, patch_source: str) -> None:
     _service._SCAN_CAMPAIGN_CONTEXT_PATCH_SOURCE = patch_source  # type: ignore[attr-defined]
     _service._ORIGINAL_V12_SCAN = None  # type: ignore[attr-defined]
     _service._ORIGINAL_HANDLE_V12_SCAN = None  # type: ignore[attr-defined]
-    _service._ORIGINAL_HANDLE_CONTINUOUS_START = None  # type: ignore[attr-defined]
+    _service._ORIGINAL_CONTINUOUS_START = None  # type: ignore[attr-defined]
     _service._ORIGINAL_CONTINUOUS_SCAN_LOOP = None  # type: ignore[attr-defined]
