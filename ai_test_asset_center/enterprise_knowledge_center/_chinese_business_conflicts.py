@@ -102,15 +102,39 @@ def _conflict(
             }
         )
     source_ids = sorted({_text(row.get("source_id")) for row in sources if _text(row.get("source_id"))})
+    resolution_policy = (
+        "explicit source authority/version decision required; recency, filename, "
+        "document order and model confidence are not authority"
+    )
+    operator_action = (
+        "resolve source authority/version for each conflicting Chinese business fact; "
+        "do not choose by recency, filename order, document appearance, or model confidence"
+    )
+    # Standard evidence/message fields so product receipts never silently drop opposing spans.
+    evidence = [
+        {
+            "source_id": row.get("source_id"),
+            "source_locator": row.get("source_locator"),
+            "quote": row.get("quote") or row.get("statement"),
+            "quote_hash": row.get("quote_hash"),
+            "fact_id": row.get("fact_id"),
+            "derivation": "unresolved_business_fact_conflict",
+        }
+        for row in sources
+        if _text(row.get("quote") or row.get("statement") or row.get("fact_id") or row.get("source_id"))
+    ]
     return {
         "conflict_id": f"conflict:{kind.lower()}:{hashlib.sha256(material.encode('utf-8')).hexdigest()[:20]}",
         "schema": CONFLICT_SCHEMA,
         "kind": kind,
         "status": "UNRESOLVED",
         "reason": reason,
+        "message": reason,
+        "operator_action": operator_action,
         "source_scope": "CROSS_SOURCE" if len(source_ids) > 1 else "INTRA_SOURCE",
         "source_ids": source_ids,
         "facts": sources,
+        "evidence": evidence,
         "authority_decision": {
             "status": "UNRESOLVED",
             "selected_fact_id": "",
@@ -126,10 +150,7 @@ def _conflict(
                 "industry_default",
             ],
         },
-        "resolution_policy": (
-            "explicit source authority/version decision required; recency, filename, "
-            "document order and model confidence are not authority"
-        ),
+        "resolution_policy": resolution_policy,
         "automatic_resolution_allowed": False,
     }
 

@@ -750,3 +750,81 @@ def test_operation_projects_compensation_and_structured_slots() -> None:
     assert operation["exception_scopes"] == ["管理员"]
     assert operation["authorization_delegations"]
     assert operation["authorization_delegations"][0]["delegatee"] == "财务"
+    rule = next(row for row in model["rules"] if row["fact_id"] == "fact-cancel-comp")
+    assert "补偿释放库存" in rule["compensations"]
+    assert rule["postconditions"] == ["必须补偿释放库存"]
+    assert rule["quantity_constraints"]
+    assert rule["exception_scope"] == ["管理员"]
+    assert rule["authorization_delegation"]["delegatee"] == "财务"
+    assert rule["data_effects"]
+
+
+def test_model_rules_preserve_condition_frame_slot() -> None:
+    fact = _fact(
+        "fact-frame-rule",
+        "若订单已支付且库存充足，则仓库可以发货，否则系统标记缺货",
+        entities=["订单"],
+        action="发货",
+        actors=["仓库"],
+        conditions=["订单已支付", "库存充足"],
+    )
+    fact["condition_combinator"] = "AND"
+    fact["condition_frame"] = {
+        "kind": "IF_THEN_ELSE",
+        "combinator": "AND",
+        "branch": "THEN",
+        "source_backed": True,
+    }
+    model = build_enterprise_understanding_model(_asset([fact]))
+    rule = model["rules"][0]
+    assert rule["condition_frame"]["kind"] == "IF_THEN_ELSE"
+    assert rule["condition_frame"]["combinator"] == "AND"
+    assert rule["condition_combinator"] == "AND"
+
+
+def test_conflict_facts_promote_into_model_evidence_without_auto_pick() -> None:
+    asset = _asset([])
+    asset["cross_document_conflicts"] = [
+        {
+            "conflict_id": "conflict-modality-1",
+            "status": "UNRESOLVED",
+            "kind": "BUSINESS_MODALITY_CONTRADICTION",
+            "reason": "same subject/action has incompatible modalities MUST_NOT and MAY",
+            "automatic_resolution_allowed": False,
+            "authority_decision": {
+                "status": "UNRESOLVED",
+                "selected_fact_id": "",
+                "operator_required": True,
+                "automatic_resolution_allowed": False,
+            },
+            "facts": [
+                {
+                    "fact_id": "fact-deny",
+                    "source_id": "policy_v1",
+                    "source_locator": "policy_v1.md#规则",
+                    "quote": "普通用户不得修改已提交采购申请",
+                    "modality": "MUST_NOT",
+                    "statement": "普通用户不得修改已提交采购申请",
+                },
+                {
+                    "fact_id": "fact-allow",
+                    "source_id": "policy_v2",
+                    "source_locator": "policy_v2.md#规则",
+                    "quote": "普通用户可以修改已提交采购申请",
+                    "modality": "MAY",
+                    "statement": "普通用户可以修改已提交采购申请",
+                },
+            ],
+        }
+    ]
+    model = build_enterprise_understanding_model(asset)
+    conflict = model["conflicts"][0]
+    assert conflict["message"].startswith("same subject/action")
+    assert conflict["operator_action"]
+    assert conflict["authority_decision"]["selected_fact_id"] == ""
+    assert len(conflict["evidence"]) >= 2
+    quotes = {row.get("quote") for row in conflict["evidence"]}
+    assert "普通用户不得修改已提交采购申请" in quotes
+    assert "普通用户可以修改已提交采购申请" in quotes
+    assert model["gate"]["status"] == "BLOCKED_ENTERPRISE_UNDERSTANDING_CONFLICTING_FACTS"
+    assert model["gate"]["unresolved_conflicts"][0]["conflict_id"] == "conflict-modality-1"

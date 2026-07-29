@@ -81,11 +81,14 @@ def _row_message(value: Any) -> str:
         row.get("message"),
         row.get("description"),
         row.get("question"),
+        row.get("reason"),
         row.get("statement"),
         row.get("raw_statement"),
+        row.get("resolution_policy"),
         details.get("message"),
         details.get("question"),
         details.get("statement"),
+        details.get("reason"),
         _readable_reason(row.get("reason_code")),
         _readable_reason(row.get("kind")),
     ):
@@ -129,8 +132,11 @@ def _evidence_candidates(value: Any) -> list[dict[str, Any]]:
         row.get("evidence"),
         row.get("source_evidence"),
         row.get("evidence_refs"),
+        # Chinese business fact conflicts carry opposing spans under `facts`.
+        row.get("facts"),
         details.get("evidence"),
         details.get("source_evidence"),
+        details.get("facts"),
     ):
         if isinstance(raw, dict):
             candidates.append(raw)
@@ -145,6 +151,7 @@ def _evidence_candidates(value: Any) -> list[dict[str, Any]]:
             "locator",
             "quote",
             "verbatim_quote",
+            "statement",
         )
     ):
         candidates.append(row)
@@ -181,6 +188,8 @@ def _source_receipts(value: Any, labels: dict[str, str]) -> list[dict[str, str]]
             or row.get("verbatim_quote")
             or row.get("source_excerpt")
             or row.get("excerpt")
+            or row.get("statement")
+            or row.get("raw_statement")
         )[:240]
         fact_id = _text(row.get("fact_id"))
         if not any((source_id, source_name, locator, quote, fact_id)):
@@ -198,7 +207,7 @@ def _source_receipts(value: Any, labels: dict[str, str]) -> list[dict[str, str]]
                 "fact_id": fact_id,
             }
         )
-    return receipts[:3]
+    return receipts[:4]
 
 
 def _is_unresolved_conflict(value: Any) -> bool:
@@ -293,7 +302,12 @@ def _blocker_receipts(
                 "category": category,
                 "kind": kind,
                 "message": message or _readable_reason(kind),
-                "operator_action": _text(row.get("operator_action") or row.get("recommended_action")),
+                "operator_action": _text(
+                    row.get("operator_action")
+                    or row.get("recommended_action")
+                    or row.get("resolution_policy")
+                    or _record(row.get("authority_decision")).get("required_operator_action")
+                ),
                 "blocking": _is_blocking_unknown(row)
                 or category
                 in {
@@ -320,7 +334,7 @@ def _blocker_receipts(
                 continue
             seen.add(evidence_key)
             deduped.append(dict(evidence_row))
-        receipt["source_evidence"] = deduped[:3]
+        receipt["source_evidence"] = deduped[:4]
         receipt["source_backed"] = bool(deduped)
 
     ordered = list(merged.values())

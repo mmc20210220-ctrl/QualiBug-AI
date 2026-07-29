@@ -992,6 +992,48 @@ def _normalize_conflicts(asset: dict[str, Any]) -> list[dict[str, Any]]:
         row.setdefault("conflict_id", stable_id("business_conflict", row, index))
         row.setdefault("status", "UNRESOLVED")
         row.setdefault("automatic_resolution_allowed", False)
+        reason = text(row.get("reason") or row.get("message") or row.get("kind"))
+        if reason and not text(row.get("message")):
+            row["message"] = reason
+        if reason and not text(row.get("reason")):
+            row["reason"] = reason
+        authority = as_dict(row.get("authority_decision"))
+        if not text(row.get("operator_action")):
+            row["operator_action"] = text(
+                row.get("resolution_policy")
+                or authority.get("required_operator_action")
+                or (
+                    "resolve source authority/version for each unresolved conflict; "
+                    "automatic authority pick is forbidden"
+                    if authority.get("operator_required") is not False
+                    else ""
+                )
+            )
+        # Promote opposing fact spans into standard evidence when only `facts` is present.
+        if not as_list(row.get("evidence")):
+            promoted: list[dict[str, Any]] = []
+            for fact_row in as_list(row.get("facts")):
+                if not isinstance(fact_row, dict):
+                    continue
+                quote = text(fact_row.get("quote") or fact_row.get("statement"))
+                if not (
+                    text(fact_row.get("source_id"))
+                    or text(fact_row.get("fact_id"))
+                    or quote
+                ):
+                    continue
+                promoted.append(
+                    source_evidence(
+                        source_id=fact_row.get("source_id"),
+                        source_locator=fact_row.get("source_locator"),
+                        quote=quote,
+                        quote_hash=fact_row.get("quote_hash"),
+                        fact_id=fact_row.get("fact_id"),
+                        derivation="unresolved_business_fact_conflict",
+                    )
+                )
+            if promoted:
+                row["evidence"] = dedupe_evidence(promoted)
         conflicts.append(row)
     return conflicts
 
@@ -1085,6 +1127,8 @@ def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any
     for fact in _accepted_facts(facts):
         if text(fact.get("kind")) not in {"RULE", "STATE_TRANSITION"}:
             continue
+        # Keep structured slots that operations / Behavior IR / rule_library already retain.
+        # Thin rule shells previously dropped condition_frame / effects / constraints silently.
         rules.append(
             {
                 "fact_id": fact.get("fact_id"),
@@ -1095,8 +1139,42 @@ def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any
                 "action": as_dict(fact.get("action")),
                 "conditions": as_list(fact.get("conditions")),
                 "condition_combinator": text(fact.get("condition_combinator")),
+                "condition_frame": as_dict(fact.get("condition_frame")),
                 "modality": fact.get("modality"),
+                "polarity": text(fact.get("polarity")),
                 "exceptions": as_list(fact.get("exceptions")),
+                "exception_scope": as_list(fact.get("exception_scope")),
+                "postconditions": unique_text(as_list(fact.get("postconditions"))),
+                "state_effects": [
+                    dict(row) for row in as_list(fact.get("state_effects")) if isinstance(row, dict)
+                ],
+                "data_effects": [
+                    dict(row) for row in as_list(fact.get("data_effects")) if isinstance(row, dict)
+                ],
+                "compensations": unique_text(
+                    [
+                        *as_list(fact.get("compensations")),
+                        *as_list(fact.get("compensation")),
+                    ]
+                ),
+                "temporal_constraints": unique_text(as_list(fact.get("temporal_constraints"))),
+                "quantity_constraints": [
+                    dict(row)
+                    for row in as_list(fact.get("quantity_constraints"))
+                    if isinstance(row, dict)
+                ],
+                "time_window_constraints": [
+                    dict(row)
+                    for row in as_list(fact.get("time_window_constraints"))
+                    if isinstance(row, dict)
+                ],
+                "formula_constraints": [
+                    dict(row)
+                    for row in as_list(fact.get("formula_constraints"))
+                    if isinstance(row, dict)
+                ],
+                "authorization_delegation": as_dict(fact.get("authorization_delegation")),
+                "scope": as_dict(fact.get("scope")),
                 "evidence": evidence_from_fact(fact),
                 "structural_span_attachment": as_dict(fact.get("structural_span_attachment")),
                 "document_block_id": text(

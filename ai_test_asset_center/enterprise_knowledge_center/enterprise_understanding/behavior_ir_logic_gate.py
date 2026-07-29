@@ -15,11 +15,14 @@ from .schema import as_dict, as_list, dedupe_evidence, new_unknown, text
 
 
 def _explicit_combinator(behavior: dict[str, Any]) -> str:
-    value = text(
-        behavior.get("condition_combinator")
-        or as_dict(behavior.get("trigger")).get("condition_combinator")
-    ).upper()
-    return value if value in {"AND", "OR"} else ""
+    for candidate in (
+        behavior.get("condition_combinator"),
+        as_dict(behavior.get("trigger")).get("condition_combinator"),
+    ):
+        value = text(candidate).upper()
+        if value in {"AND", "OR"}:
+            return value
+    return ""
 
 
 def _restore_nonconflicted_status(behavior: dict[str, Any]) -> None:
@@ -109,6 +112,16 @@ def build_business_behavior_ir_v1(
             continue
         if explicit:
             behavior["condition_combinator"] = explicit
+            behavior["unresolved_semantics"] = sorted(
+                {
+                    text(value)
+                    for value in as_list(behavior.get("unresolved_semantics"))
+                    if text(value)
+                    and text(value) != "BEHAVIOR_CONDITION_COMBINATOR_UNRESOLVED"
+                }
+            )
+            if text(behavior.get("status")) != "CONFLICTED":
+                _restore_nonconflicted_status(behavior)
             continue
         behavior["condition_combinator"] = "UNRESOLVED"
         behavior["unresolved_semantics"] = sorted(

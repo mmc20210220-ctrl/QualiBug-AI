@@ -113,6 +113,13 @@ Implemented in this phase:
 - ONLY_IF / MUST modalities mapped to explicit permission decisions instead of
   false `UNSPECIFIED` when the source is unambiguous;
 - conflict `authority_decision` marked `UNRESOLVED` (no automatic authority pick);
+  opposing conflict fact spans project into standard `evidence` / `message` /
+  `operator_action` fields and into command-center / settings receipts so
+  UNRESOLVED conflicts remain visible with quotes (display only — never auto-pick);
+- understanding-model `rules` retain source-backed structured slots
+  (`condition_frame`, postconditions, data effects, compensations, quantity /
+  time-window / formula constraints, authorization delegation, exception scope)
+  instead of thin shells that silently drop them;
 - EXCEPTION_SCOPE promotion only when the source uniquely names the exception actor;
 - source-backed non-linear process projection: conditional multi-outcome branches,
   parallel groups (only with explicit parallel markers), lifecycle loops, and
@@ -139,8 +146,11 @@ Not yet complete:
 - cross-document coreference beyond broader source-backed TERM_ALIAS /
   synonym / glossary-table identity merge (proximity / filename / order remain
   forbidden);
-- operator authority/version *workflow UI* for resolving conflicts (receipts stay
-  UNRESOLVED until an explicit operator decision exists);
+- operator authority/version *decision workflow* that can change conflict
+  `authority_decision` from UNRESOLVED to an explicit operator-selected authority
+  (product surfaces already **display** UNRESOLVED conflicts with opposing
+  evidence and forbid auto-pick; they still cannot close a conflict without an
+  explicit authority/version decision);
 - externally labeled Chinese enterprise understanding benchmark and measured
   precision/recall.
 

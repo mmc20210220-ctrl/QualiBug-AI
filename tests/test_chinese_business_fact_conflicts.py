@@ -88,6 +88,26 @@ def test_opposite_modalities_block_and_remove_both_formal_rules() -> None:
     )
 
 
+def test_conflict_carries_standard_evidence_message_and_operator_action() -> None:
+    facts = [
+        _fact("fact-a", source_id="policy_v1", modality="MUST_NOT"),
+        _fact("fact-b", source_id="policy_v2", modality="MAY"),
+    ]
+    asset = reconcile_chinese_business_fact_conflicts(_asset(facts))
+    conflict = asset["cross_document_conflicts"][0]
+    assert conflict["status"] == "UNRESOLVED"
+    assert conflict["message"]
+    assert conflict["operator_action"]
+    assert "recency" in conflict["operator_action"]
+    assert conflict["automatic_resolution_allowed"] is False
+    assert len(conflict["evidence"]) >= 2
+    quotes = {row["quote"] for row in conflict["evidence"]}
+    assert any("MUST_NOT" in quote for quote in quotes)
+    assert any("MAY" in quote for quote in quotes)
+    assert conflict["authority_decision"]["selected_fact_id"] == ""
+    assert conflict["authority_decision"]["operator_required"] is True
+
+
 def test_conflict_is_not_resolved_by_recency_or_model_confidence() -> None:
     facts = [
         {

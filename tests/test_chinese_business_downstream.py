@@ -56,6 +56,12 @@ def _asset(statement: str, source_excerpt: str) -> dict:
             "status": "PASS",
             "entry_allowed": True,
         },
+        "implementation_binding_gate": {
+            "status": "PASS",
+            "entry_allowed": True,
+            "scenario_planning_allowed": True,
+            "metrics": {},
+        },
         "summary": {},
     }
 

@@ -6,6 +6,23 @@ type Props = {
   hasSources: boolean;
 };
 
+type ConflictEvidenceView = {
+  sourceId: string;
+  sourceLocator: string;
+  quote: string;
+  factId: string;
+  modality: string;
+};
+
+type ConflictView = {
+  id: string;
+  kind: string;
+  message: string;
+  operatorAction: string;
+  automaticResolutionAllowed: boolean;
+  evidence: ConflictEvidenceView[];
+};
+
 type UnderstandingView = {
   available: boolean;
   understandingReady: boolean;
@@ -25,6 +42,7 @@ type UnderstandingView = {
   unknownCount: number;
   conflictCount: number;
   blockers: string[];
+  conflicts: ConflictView[];
   gates: Array<{ label: string; status: string; ready: boolean }>;
 };
 
@@ -109,13 +127,68 @@ function rowMessage(value: unknown): string {
   return firstText(
     row.message,
     row.description,
+    row.question,
+    row.reason,
     row.statement,
     row.raw_statement,
+    row.resolution_policy,
     details.message,
     details.statement,
+    details.reason,
     readableReason(row.reason_code),
     readableReason(row.kind),
   );
+}
+
+function conflictEvidence(value: unknown): ConflictEvidenceView[] {
+  const row = asRecord(value);
+  const candidates = [
+    ...asArray(row.evidence),
+    ...asArray(row.facts),
+    ...asArray(row.source_evidence),
+  ];
+  const seen = new Set<string>();
+  const result: ConflictEvidenceView[] = [];
+  for (const candidate of candidates) {
+    const item = asRecord(candidate);
+    const sourceId = asText(item.source_id);
+    const sourceLocator = asText(item.source_locator || item.locator);
+    const quote = asText(item.quote || item.statement || item.raw_statement);
+    const factId = asText(item.fact_id);
+    const modality = asText(item.modality);
+    const key = `${sourceId}|${sourceLocator}|${quote}|${factId}`;
+    if (!sourceId && !sourceLocator && !quote && !factId) continue;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push({ sourceId, sourceLocator, quote, factId, modality });
+  }
+  return result.slice(0, 4);
+}
+
+function conflictViews(values: unknown[]): ConflictView[] {
+  const seen = new Set<string>();
+  const result: ConflictView[] = [];
+  for (const value of values) {
+    const row = asRecord(value);
+    const id = firstText(row.conflict_id, row.id, rowMessage(row));
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const authority = asRecord(row.authority_decision);
+    result.push({
+      id,
+      kind: asText(row.kind) || asText(row.reason_code) || 'SOURCE_CONFLICT',
+      message: rowMessage(row),
+      operatorAction: firstText(
+        row.operator_action,
+        row.resolution_policy,
+        authority.required_operator_action,
+        '资料冲突保持未决；系统不会按时间、文件名、文档顺序或模型置信度自动选权威。',
+      ),
+      automaticResolutionAllowed: asBoolean(row.automatic_resolution_allowed),
+      evidence: conflictEvidence(row),
+    });
+  }
+  return result.slice(0, 8);
 }
 
 function gateView(label: string, value: unknown, readyKeys: string[]): { label: string; status: string; ready: boolean } {
@@ -177,6 +250,7 @@ function projectUnderstanding(payload: unknown): UnderstandingView {
       return !['RESOLVED', 'SUPERSEDED', 'DISMISSED'].includes(rowStatus);
     }),
   ];
+  const conflictDetails = conflictViews(conflicts);
   const gateReasons = [
     ...asArray(modelGate.blocking_reasons),
     ...asArray(scenarioPlanningGate.blocking_reasons),
@@ -239,6 +313,7 @@ function projectUnderstanding(payload: unknown): UnderstandingView {
     unknownCount: asNumber(summary.enterprise_understanding_unknown_count) || asArray(model.unknowns).length,
     conflictCount: asNumber(summary.enterprise_understanding_conflict_count) || conflicts.length,
     blockers,
+    conflicts: conflictDetails,
     gates,
   };
 }
@@ -308,6 +383,45 @@ export function EnterpriseUnderstandingReceipt({ payload, loading, hasSources }:
                 </ul>
               )}
             </div>
+          )}
+
+          {view.conflicts.length > 0 && (
+            <details className="settings-auth-section settings-mt-10" open>
+              <summary>
+                <strong>未解决资料冲突</strong>
+                <span className="muted">{view.conflicts.length} 条，系统不会自动选权威</span>
+              </summary>
+              <div className="customer-secondary-grid settings-mt-10">
+                {view.conflicts.map((conflict) => (
+                  <article key={conflict.id} className="customer-secondary-card">
+                    <span className="customer-value-kicker">
+                      资料冲突 · {conflict.kind}
+                      {conflict.automaticResolutionAllowed ? '' : ' · 禁止自动裁决'}
+                    </span>
+                    <h3>{conflict.message || conflict.kind}</h3>
+                    {conflict.operatorAction && <p>{conflict.operatorAction}</p>}
+                    {conflict.evidence.length > 0 ? (
+                      conflict.evidence.map((evidence, index) => (
+                        <div
+                          key={`${conflict.id}:${evidence.factId || evidence.sourceId}:${index}`}
+                          className="settings-card-note settings-mt-10"
+                        >
+                          <strong>{evidence.sourceId || '来源已记录'}</strong>
+                          {evidence.modality && <p>模态：{evidence.modality}</p>}
+                          {evidence.sourceLocator && <p>位置：{evidence.sourceLocator}</p>}
+                          {evidence.quote && <p>原文：{evidence.quote}</p>}
+                          {evidence.factId && <small className="muted">业务事实：{evidence.factId}</small>}
+                        </div>
+                      ))
+                    ) : (
+                      <div className="settings-card-note settings-mt-10">
+                        冲突回执尚未附对立原文。QualiBug 不会猜测权威版本，请补充可判定权威/版本的原始资料。
+                      </div>
+                    )}
+                  </article>
+                ))}
+              </div>
+            </details>
           )}
 
           {view.understandingReady && !view.ready && (

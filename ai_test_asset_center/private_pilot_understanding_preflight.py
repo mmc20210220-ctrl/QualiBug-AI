@@ -65,8 +65,11 @@ def _row_message(value: Any) -> str:
         row.get("description"),
         row.get("statement"),
         row.get("raw_statement"),
+        row.get("reason"),
+        row.get("resolution_policy"),
         details.get("message"),
         details.get("statement"),
+        details.get("reason"),
         _readable_reason(row.get("reason_code")),
         _readable_reason(row.get("kind")),
     ):
