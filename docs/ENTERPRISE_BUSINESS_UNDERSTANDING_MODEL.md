@@ -94,11 +94,17 @@ Implemented in this phase:
 - multi-condition combinator honesty (`AND`/`OR` only from explicit source wording;
   otherwise `UNRESOLVED`, never default `AND`);
 - cross-document object identity merge only through ACCEPTED `TERM_ALIAS`
-  evidence (conflicting alias mappings fail closed);
+  evidence, including source-backed synonym markers (又称/也称/又名/简称/即/
+  等同于/是指/aka…) and glossary/definition tables (conflicting alias mappings
+  fail closed);
 - section-scoped Chinese coreference / omitted-actor resolution (unique same-section
   context or explicit heading; TERM_ALIAS-aware uniqueness; fail-closed when ambiguous);
 - source-backed structured quantity / time-window / formula / authorization-delegation
   fields when the original statement states them;
+- source-backed temporal trigger conditions, postconditions, data effects, and
+  compensations projected into facts / operations / behaviors (no silent drop);
+- ONLY_IF / MUST modalities mapped to explicit permission decisions instead of
+  false `UNSPECIFIED` when the source is unambiguous;
 - conflict `authority_decision` marked `UNRESOLVED` (no automatic authority pick);
 - EXCEPTION_SCOPE promotion only when the source uniquely names the exception actor;
 - source-backed non-linear process projection: conditional multi-outcome branches,
@@ -117,8 +123,9 @@ Implemented in this phase:
 Not yet complete:
 
 - full Chinese document semantic tree at enterprise scale;
-- cross-document coreference beyond source-backed TERM_ALIAS identity merge
-  (proximity / filename / order remain forbidden);
+- cross-document coreference beyond broader source-backed TERM_ALIAS /
+  synonym / glossary-table identity merge (proximity / filename / order remain
+  forbidden);
 - operator authority/version *workflow UI* for resolving conflicts (receipts stay
   UNRESOLVED until an explicit operator decision exists);
 - externally labeled Chinese enterprise understanding benchmark and measured

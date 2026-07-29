@@ -392,9 +392,17 @@ def _operation_lookup(operations: Iterable[dict[str, Any]]) -> dict[str, list[di
 def _fact_permission(fact: dict[str, Any]) -> str:
     modality = text(fact.get("modality")).upper()
     polarity = text(fact.get("polarity")).upper()
+    raw = text(fact.get("raw_statement"))
     if modality in {"MUST_NOT", "FORBIDDEN", "DENY"} or polarity in {"NEGATIVE", "NEGATED"}:
         return "DENY"
-    if modality in {"MAY", "CAN", "ALLOW", "PERMITTED"}:
+    if modality in {"MAY", "CAN", "ALLOW", "PERMITTED", "ONLY_IF"}:
+        return "ALLOW"
+    if modality in {"MUST", "SHALL", "REQUIRED"}:
+        if re.search(r"(?:需要|必须|须|需).{0,8}(?:审批|审核)|require.{0,8}approval", raw, re.I):
+            return "REQUIRE_APPROVAL"
+        if re.search(r"(?:需要|必须|须|需).{0,8}(?:确认)|require.{0,8}confirmation", raw, re.I):
+            return "REQUIRE_CONFIRMATION"
+        # Source-backed obligation to perform an action is an allow-with-must contract.
         return "ALLOW"
     return "UNSPECIFIED"
 
@@ -473,8 +481,18 @@ def _behavior_from_fact(fact: dict[str, Any]) -> dict[str, Any] | None:
         "state_effects": state_effects,
         "data_effects": data_effects,
         "permission_decision": _fact_permission(fact),
-        "exceptions": unique_text(as_list(fact.get("exceptions"))),
-        "compensations": unique_text(as_list(fact.get("compensations"))),
+        "exceptions": unique_text(
+            [
+                *as_list(fact.get("exceptions")),
+                *as_list(fact.get("exception_scope")),
+            ]
+        ),
+        "compensations": unique_text(
+            [
+                *as_list(fact.get("compensations")),
+                *as_list(fact.get("compensation")),
+            ]
+        ),
         "evidence": evidence,
         "unresolved_semantics": missing,
         "status": "INCOMPLETE" if missing else "CONFIRMED",

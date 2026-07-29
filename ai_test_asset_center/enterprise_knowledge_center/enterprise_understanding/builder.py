@@ -1395,6 +1395,8 @@ def _build_business_objects(
 def _effect_texts(fact: dict[str, Any]) -> list[str]:
     effects: list[str] = []
     effects.extend(unique_text(as_list(fact.get("postconditions"))))
+    effects.extend(unique_text(as_list(fact.get("compensations"))))
+    effects.extend(unique_text(as_list(fact.get("compensation"))))
     for raw in as_list(fact.get("data_effects")):
         if isinstance(raw, dict):
             value = text(raw.get("statement") or raw.get("effect") or raw.get("raw"))
@@ -1479,7 +1481,13 @@ def _build_operations(
                 "condition_combinator": combinator,
                 "effects": [],
                 "exceptions": [],
+                "exception_scopes": [],
                 "temporal_constraints": [],
+                "quantity_constraints": [],
+                "time_window_constraints": [],
+                "formula_constraints": [],
+                "authorization_delegations": [],
+                "compensations": [],
                 "scopes": [],
                 "modality_contracts": [],
                 "fact_refs": [],
@@ -1505,7 +1513,29 @@ def _build_operations(
             operation["condition_combinator"] = ""
         operation["effects"] = unique_text([*as_list(operation.get("effects")), *_effect_texts(fact)])
         operation["exceptions"] = unique_text([*as_list(operation.get("exceptions")), *as_list(fact.get("exceptions"))])
+        operation["exception_scopes"] = unique_text(
+            [*as_list(operation.get("exception_scopes")), *as_list(fact.get("exception_scope"))]
+        )
         operation["temporal_constraints"] = unique_text([*as_list(operation.get("temporal_constraints")), *as_list(fact.get("temporal_constraints"))])
+        operation["compensations"] = unique_text(
+            [
+                *as_list(operation.get("compensations")),
+                *as_list(fact.get("compensations")),
+                *as_list(fact.get("compensation")),
+            ]
+        )
+        for row in as_list(fact.get("quantity_constraints")):
+            if isinstance(row, dict) and row not in operation["quantity_constraints"]:
+                operation["quantity_constraints"].append(dict(row))
+        for row in as_list(fact.get("time_window_constraints")):
+            if isinstance(row, dict) and row not in operation["time_window_constraints"]:
+                operation["time_window_constraints"].append(dict(row))
+        for row in as_list(fact.get("formula_constraints")):
+            if isinstance(row, dict) and row not in operation["formula_constraints"]:
+                operation["formula_constraints"].append(dict(row))
+        delegation = as_dict(fact.get("authorization_delegation"))
+        if delegation and delegation not in operation["authorization_delegations"]:
+            operation["authorization_delegations"].append(dict(delegation))
         scope = {key: value for key, value in as_dict(fact.get("scope")).items() if text(value)}
         if scope and scope not in operation["scopes"]:
             operation["scopes"].append(scope)

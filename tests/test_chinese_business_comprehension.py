@@ -357,3 +357,161 @@ def test_structured_quantity_time_formula_and_delegation_from_source() -> None:
     assert structured["authorization_delegation"]["source_backed"] is True
     if formula:
         assert formula["formula_constraints"][0]["lhs"] == "金额"
+
+
+def test_synonym_markers_emit_source_backed_term_aliases() -> None:
+    samples = [
+        ("生产任务单又称MO。", "生产任务单", "MO"),
+        ("生产任务单也称制造订单。", "生产任务单", "制造订单"),
+        ("生产任务单又名MO。", "生产任务单", "MO"),
+        ("生产任务单即MO。", "生产任务单", "MO"),
+        ("生产任务单等同于制造订单。", "生产任务单", "制造订单"),
+        ("生产任务单是指MO。", "生产任务单", "MO"),
+        ("ManufacturingOrder also known as MO", "ManufacturingOrder", "MO"),
+    ]
+    asset = {
+        **_asset(),
+        "business_objects": [
+            {"object": "生产任务单"},
+            {"object": "制造订单"},
+            {"object": "MO"},
+            {"object": "ManufacturingOrder"},
+        ],
+    }
+    for text, canonical, alias in samples:
+        _, _, glossary = analyze_chinese_business_source(
+            {"source_id": "syn", "filename": "术语.md", "text": text},
+            asset=asset,
+        )
+        matched = [
+            row
+            for row in glossary
+            if row.get("canonical_term") == canonical and row.get("alias") == alias
+        ]
+        assert matched, f"expected TERM_ALIAS {canonical}->{alias} from {text!r}, got {glossary}"
+        assert matched[0]["status"] == "ACCEPTED"
+        assert matched[0]["source_spans"][0]["quote"]
+
+
+def test_glossary_definition_table_emits_term_aliases() -> None:
+    text = (
+        "| 术语 | 别名 |\n"
+        "| --- | --- |\n"
+        "| 生产任务单 | MO |\n"
+        "| 制造订单 | WO |\n"
+    )
+    _, _, glossary = analyze_chinese_business_source(
+        {"source_id": "glossary-table", "filename": "术语表.md", "text": text},
+        asset={
+            **_asset(),
+            "business_objects": [
+                {"object": "生产任务单"},
+                {"object": "制造订单"},
+                {"object": "MO"},
+                {"object": "WO"},
+            ],
+        },
+    )
+    pairs = {(row["canonical_term"], row["alias"]) for row in glossary}
+    assert ("生产任务单", "MO") in pairs
+    assert ("制造订单", "WO") in pairs
+
+
+def test_cross_document_synonym_alias_enables_identity_merge() -> None:
+    enriched = build_chinese_first_comprehension(
+        {
+            **_asset(),
+            "business_objects": [
+                {"object": "生产任务单"},
+                {"object": "MO"},
+            ],
+        },
+        [
+            {
+                "source_id": "glossary",
+                "filename": "术语表.md",
+                "text": "生产任务单又称MO。",
+            },
+            {
+                "source_id": "prd-mo",
+                "filename": "MO规则.md",
+                "text": "管理员可以查看MO。",
+            },
+        ],
+    )
+
+    merge = enriched["term_alias_identity_merge"]
+    assert merge["alias_to_canonical"]["MO"] == "生产任务单"
+    assert merge["conflict_count"] == 0
+    viewing = next(
+        fact
+        for fact in enriched["business_fact_ledger"]["items"]
+        if fact.get("action", {}).get("canonical") == "查看"
+    )
+    assert viewing["subject"]["entity_refs"] == ["生产任务单"]
+    assert enriched["enterprise_comprehension_gate"]["entry_allowed"] is True
+
+
+def test_trigger_effect_fills_condition_postcondition_and_compensation() -> None:
+    asset = {
+        **_asset(),
+        "business_objects": [
+            {"object": "出库单"},
+            {"object": "订单"},
+            {"object": "库存"},
+        ],
+    }
+    _, generate_facts, _ = analyze_chinese_business_source(
+        {
+            "source_id": "effect-1",
+            "filename": "出库.md",
+            "text": "审批通过后自动生成出库单。",
+        },
+        asset=asset,
+    )
+    generate = next(fact for fact in generate_facts if fact.get("kind") == "RULE")
+    assert generate["status"] == "ACCEPTED"
+    assert generate["action"]["canonical"] == "审批通过"
+    assert any("审批通过" in item for item in generate["conditions"])
+    assert any("生成出库单" in item for item in generate["postconditions"])
+    assert generate["data_effects"]
+    assert generate["data_effects"][0]["entity"] == "出库单"
+
+    _, cancel_facts, _ = analyze_chinese_business_source(
+        {
+            "source_id": "effect-2",
+            "filename": "取消.md",
+            "text": "取消订单后必须补偿释放库存。",
+        },
+        asset=asset,
+    )
+    cancel = next(fact for fact in cancel_facts if fact.get("kind") == "RULE")
+    assert cancel["status"] == "ACCEPTED"
+    assert cancel["action"]["canonical"] == "取消"
+    assert cancel["compensation"]
+    assert any("补偿" in item for item in cancel["compensation"])
+    assert cancel["compensations"] == cancel["compensation"]
+
+
+def test_only_if_permission_is_allow_not_unspecified() -> None:
+    from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.behavior_ir import (
+        _behavior_from_fact,
+        _fact_permission,
+    )
+
+    _, facts, _ = analyze_chinese_business_source(
+        {
+            "source_id": "perm-1",
+            "filename": "权限.md",
+            "text": "普通用户只能查看本人订单。",
+        },
+        asset=_asset(),
+    )
+    fact = next(fact for fact in facts if fact.get("action", {}).get("canonical") == "查看")
+    assert fact["modality"] == "ONLY_IF"
+    assert fact["status"] == "ACCEPTED"
+    assert _fact_permission(fact) == "ALLOW"
+    behavior = _behavior_from_fact(fact)
+    assert behavior is not None
+    assert behavior["permission_decision"] == "ALLOW"
+    assert behavior["status"] == "CONFIRMED"

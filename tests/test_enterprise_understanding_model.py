@@ -713,3 +713,40 @@ def test_join_without_marker_stays_underdetermined() -> None:
     assert any(
         row["reason_code"] == "MULTI_OBJECT_PROCESS_UNDERDETERMINED" for row in model["unknowns"]
     )
+
+
+def test_operation_projects_compensation_and_structured_slots() -> None:
+    fact = _fact(
+        "fact-cancel-comp",
+        "取消订单后必须补偿释放库存",
+        entities=["订单"],
+        action="取消",
+        conditions=["取消订单后"],
+        actors=["管理员"],
+    )
+    fact["modality"] = "MUST"
+    fact["postconditions"] = ["必须补偿释放库存"]
+    fact["compensation"] = ["补偿释放库存"]
+    fact["compensations"] = ["补偿释放库存"]
+    fact["data_effects"] = [
+        {"statement": "释放库存", "action": "释放", "entity": "库存", "source_backed": True}
+    ]
+    fact["quantity_constraints"] = [
+        {"raw": "超过1000", "operator": "超过", "value": "1000", "unit": "", "source_backed": True}
+    ]
+    fact["exception_scope"] = ["管理员"]
+    fact["authorization_delegation"] = {
+        "raw": "管理员授权财务代为审批",
+        "delegator": "管理员",
+        "delegatee": "财务",
+        "source_backed": True,
+    }
+
+    model = build_enterprise_understanding_model(_asset([fact]))
+    operation = model["operations"][0]
+    assert "补偿释放库存" in operation["compensations"]
+    assert "必须补偿释放库存" in operation["effects"] or "释放库存" in operation["effects"]
+    assert operation["quantity_constraints"]
+    assert operation["exception_scopes"] == ["管理员"]
+    assert operation["authorization_delegations"]
+    assert operation["authorization_delegations"][0]["delegatee"] == "财务"

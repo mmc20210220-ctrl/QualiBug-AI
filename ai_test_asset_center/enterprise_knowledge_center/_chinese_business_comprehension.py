@@ -63,7 +63,11 @@ _CONDITION_PATTERNS = (
     re.compile(r"只有(?P<value>.+?)才"),
     re.compile(r"仅当(?P<value>.+?)才"),
     re.compile(r"除非(?P<value>.+?)(?:，|,|；|;|$)"),
-    re.compile(r"(?P<value>[^，,；;。]{1,60}(?:之前|之后|前|后))(?:，|,|；|;|$)"),
+    # Temporal prefix before an effect/action — do not require a delimiter after 后/之前.
+    re.compile(
+        r"(?P<value>[^，,；;。]{1,60}?(?:之前|之后|以前|以后|前|后))"
+        r"(?=自动|必须|应当|需要|应|不得|不能|不可|只能|仅能|可以|允许|则|，|,|；|;|$)"
+    ),
 )
 # Explicit source combinators only. Multiple conditions without one stay UNRESOLVED —
 # never default to AND.
@@ -119,9 +123,58 @@ _ENTITY_SUFFIX_RE = re.compile(
     r"(?:申请单|申请|订单|工单|合同|出库单|入库单|任务单|任务|"
     r"记录|单据|凭证|发票|库存|商品|物料|批次|设备|计划|流程|数据))"
 )
+_TERM_TOKEN = r"[\u4e00-\u9fffA-Za-z0-9_.-]{1,40}"
 _ALIAS_PATTERNS = (
-    re.compile(r"(?P<canonical>[\u4e00-\u9fffA-Za-z0-9_-]{2,40})[（(](?P<alias>[^()（）]{1,30})[）)]"),
-    re.compile(r"(?P<canonical>[\u4e00-\u9fffA-Za-z0-9_-]{2,40})(?:以下简称|简称为|简称)(?P<alias>[\u4e00-\u9fffA-Za-z0-9_-]{1,30})"),
+    # Parenthetical short form: 生产任务单（MO）
+    re.compile(
+        rf"(?P<canonical>{_TERM_TOKEN})[（(](?P<alias>[^()（），,；;。]{{1,30}})[）)]"
+    ),
+    # Explicit short-name markers: 以下简称 / 简称为 / 简称
+    re.compile(
+        rf"(?P<canonical>{_TERM_TOKEN})(?:以下简称|简称为|简称)(?P<alias>{_TERM_TOKEN})"
+    ),
+    # Synonym / also-known-as markers (left = stated term, right = alternate)
+    re.compile(
+        rf"(?P<canonical>{_TERM_TOKEN})(?:又称|也称|又名|也叫|又叫|亦称)(?P<alias>{_TERM_TOKEN})"
+    ),
+    re.compile(
+        rf"(?P<canonical>{_TERM_TOKEN})(?:即为|即是|也即|即(?!可|使|便|将|刻|日|令))(?P<alias>{_TERM_TOKEN})"
+    ),
+    re.compile(
+        rf"(?P<canonical>{_TERM_TOKEN})(?:等同于|相当于|同义于)(?P<alias>{_TERM_TOKEN})"
+    ),
+    re.compile(
+        rf"(?P<canonical>{_TERM_TOKEN})(?:是指|指的是|定义为|定义是)(?P<alias>{_TERM_TOKEN})"
+    ),
+    # English source-backed markers
+    re.compile(
+        rf"(?P<canonical>{_TERM_TOKEN})\s*(?:aka|a\.k\.a\.|also known as|also called)\s*"
+        rf"(?P<alias>{_TERM_TOKEN})",
+        re.I,
+    ),
+)
+_GLOSSARY_TERM_HEADER_RE = re.compile(
+    r"术语|名称|中文名|中文|全称|词条|对象名|业务对象|定义项|标准名|canonical|term|name",
+    re.I,
+)
+_GLOSSARY_ALIAS_HEADER_RE = re.compile(
+    r"别名|简称|英文名|英文|代号|代码|别称|又称|缩写|同义词|alias|code|abbr|abbreviation|english",
+    re.I,
+)
+_GENERIC_TERM_SUFFIX_RE = re.compile(r"(?:单据|对象|记录|数据|实体|术语|名称)$")
+_TRIGGER_THEN_EFFECT_RE = re.compile(
+    r"(?P<trigger>[^，,；;。]{1,48}?)(?:之后|以后|后)"
+    r"(?P<effect>(?:自动|必须|应当|需要|应)?"
+    r"(?:生成|创建|新建|写入|更新|删除|释放|扣减|增加|发送|通知|补偿|回滚|冲正|冲销|红冲|退款)"
+    r"[^，,；;。]{0,40})"
+)
+_DATA_EFFECT_RE = re.compile(
+    r"(?:自动)?(?P<action>生成|创建|新建|写入|更新|删除|释放|扣减|增加|发送|通知)"
+    r"(?P<object>[\u4e00-\u9fffA-Za-z0-9_-]{1,24})"
+)
+_COMPENSATION_RE = re.compile(
+    r"(?P<raw>(?:补偿|回滚|冲正|冲销|红冲|退款|退货|反向冲销)"
+    r"[^，,；;。]{0,32})"
 )
 
 _ACTION_PATTERNS: tuple[tuple[str, str], ...] = (
@@ -262,30 +315,189 @@ def _paragraph_chunks(text: str, max_chars: int = 900) -> list[dict[str, Any]]:
     return chunks
 
 
+def _clean_term(value: str) -> str:
+    cleaned = _text(value).strip(" ：:、，,；;。\"'“”‘’[]【】")
+    cleaned = _GENERIC_TERM_SUFFIX_RE.sub("", cleaned)
+    return _text(cleaned)
+
+
+def _prefer_canonical_alias(left: str, right: str) -> tuple[str, str]:
+    """Order identity without industry knowledge: prefer CJK full form over short code."""
+    left_cjk = len(_CHINESE_RE.findall(left))
+    right_cjk = len(_CHINESE_RE.findall(right))
+    left_latin = bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,15}", left))
+    right_latin = bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,15}", right))
+    if left_cjk >= 2 and right_latin:
+        return left, right
+    if right_cjk >= 2 and left_latin:
+        return right, left
+    if left_cjk > right_cjk and len(left) >= len(right) + 1:
+        return left, right
+    if right_cjk > left_cjk and len(right) >= len(left) + 1:
+        return right, left
+    return left, right
+
+
+def _alias_fact(
+    *,
+    source_id: str,
+    locator: str,
+    canonical: str,
+    alias: str,
+    quote: str,
+) -> dict[str, Any] | None:
+    canonical = _clean_term(canonical)
+    alias = _clean_term(alias)
+    if not canonical or not alias or canonical == alias:
+        return None
+    if len(canonical) < 1 or len(alias) < 1:
+        return None
+    # Reject connector-only or modality fragments accidentally captured as terms.
+    if re.fullmatch(r"(?:必须|应当|可以|不得|如果|当|后|时|则|和|与|或|及)", canonical):
+        return None
+    if re.fullmatch(r"(?:必须|应当|可以|不得|如果|当|后|时|则|和|与|或|及)", alias):
+        return None
+    canonical, alias = _prefer_canonical_alias(canonical, alias)
+    return {
+        "fact_id": _stable_id("fact", source_id, locator, "TERM_ALIAS", canonical, alias),
+        "kind": "TERM_ALIAS",
+        "language": _language_of(quote),
+        "canonical_term": canonical,
+        "alias": alias,
+        "raw_statement": quote,
+        "source_spans": [
+            {
+                "source_id": source_id,
+                "locator": locator,
+                "quote": quote,
+                "quote_hash": hashlib.sha256(quote.encode("utf-8")).hexdigest(),
+            }
+        ],
+        "confidence": 0.98,
+        "status": "ACCEPTED",
+        "ambiguities": [],
+    }
+
+
+def _extract_glossary_table_aliases(
+    text: str, source_id: str, locator: str
+) -> list[dict[str, Any]]:
+    """Extract TERM_ALIAS rows from source-backed glossary/definition markdown tables."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) < 2:
+        return []
+    rows: list[list[str]] = []
+    for line in lines:
+        if "|" not in line:
+            continue
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if not cells or all(re.fullmatch(r":?-{2,}:?", cell or "") for cell in cells):
+            continue
+        rows.append(cells)
+    if len(rows) < 2:
+        return []
+    header = rows[0]
+    term_indexes = [index for index, cell in enumerate(header) if _GLOSSARY_TERM_HEADER_RE.search(cell)]
+    alias_indexes = [index for index, cell in enumerate(header) if _GLOSSARY_ALIAS_HEADER_RE.search(cell)]
+    if not term_indexes or not alias_indexes:
+        return []
+    # Prefer the first non-overlapping alias column.
+    term_idx = term_indexes[0]
+    alias_idx = next((index for index in alias_indexes if index != term_idx), None)
+    if alias_idx is None:
+        return []
+    aliases: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for cells in rows[1:]:
+        if max(term_idx, alias_idx) >= len(cells):
+            continue
+        canonical = _clean_term(cells[term_idx])
+        alias = _clean_term(cells[alias_idx])
+        if not canonical or not alias:
+            continue
+        quote = f"{header[term_idx]}={canonical};{header[alias_idx]}={alias}"
+        row = _alias_fact(
+            source_id=source_id,
+            locator=locator,
+            canonical=canonical,
+            alias=alias,
+            quote=quote,
+        )
+        if not row:
+            continue
+        key = (row["canonical_term"], row["alias"])
+        if key in seen:
+            continue
+        seen.add(key)
+        aliases.append(row)
+    return aliases
+
+
 def _extract_aliases(text: str, source_id: str, locator: str) -> list[dict[str, Any]]:
     aliases: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for pattern in _ALIAS_PATTERNS:
         for match in pattern.finditer(text):
-            canonical = _text(match.group("canonical"))
-            alias = _text(match.group("alias"))
-            if not canonical or not alias or canonical == alias or (canonical, alias) in seen:
-                continue
-            seen.add((canonical, alias))
             quote = match.group(0)
-            aliases.append({
-                "fact_id": _stable_id("fact", source_id, locator, "TERM_ALIAS", canonical, alias),
-                "kind": "TERM_ALIAS",
-                "language": _language_of(quote),
-                "canonical_term": canonical,
-                "alias": alias,
-                "raw_statement": quote,
-                "source_spans": [{"source_id": source_id, "locator": locator, "quote": quote, "quote_hash": hashlib.sha256(quote.encode("utf-8")).hexdigest()}],
-                "confidence": 0.98,
-                "status": "ACCEPTED",
-                "ambiguities": [],
-            })
+            row = _alias_fact(
+                source_id=source_id,
+                locator=locator,
+                canonical=match.group("canonical"),
+                alias=match.group("alias"),
+                quote=quote,
+            )
+            if not row:
+                continue
+            key = (row["canonical_term"], row["alias"])
+            if key in seen:
+                continue
+            seen.add(key)
+            aliases.append(row)
     return aliases
+
+
+def _data_effects(text: str) -> list[dict[str, Any]]:
+    effects: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for match in _DATA_EFFECT_RE.finditer(text):
+        raw = match.group(0)
+        if raw in seen:
+            continue
+        seen.add(raw)
+        effects.append(
+            {
+                "statement": raw,
+                "action": _text(match.group("action")),
+                "entity": _clean_term(match.group("object")),
+                "source_backed": True,
+            }
+        )
+    return effects
+
+
+def _compensations(text: str) -> list[str]:
+    rows: list[str] = []
+    for match in _COMPENSATION_RE.finditer(text):
+        value = _text(match.group("raw"))
+        if value and value not in rows:
+            rows.append(value)
+    return rows
+
+
+def _postconditions(text: str, *, data_effects: list[dict[str, Any]], compensations: list[str]) -> list[str]:
+    rows: list[str] = []
+    for match in _TRIGGER_THEN_EFFECT_RE.finditer(text):
+        effect = _text(match.group("effect"))
+        if effect and effect not in rows:
+            rows.append(effect)
+    for row in data_effects:
+        statement = _text(row.get("statement"))
+        if statement and statement not in rows:
+            rows.append(statement)
+    for value in compensations:
+        if value not in rows:
+            rows.append(value)
+    return rows
 
 
 def _find_mentions(text: str, known: Iterable[str], fallback: re.Pattern[str]) -> list[str]:
@@ -649,8 +861,39 @@ def _fact_from_unit(
     time_window_constraints = _time_window_constraints(raw)
     formula_constraints = _formula_constraints(raw)
     delegation = _authorization_delegation(raw, known_roles)
+    data_effects = _data_effects(raw)
+    compensation = _compensations(raw)
+    postconditions = _postconditions(raw, data_effects=data_effects, compensations=compensation)
     scope = _scope(raw)
-    if not action and not states and modality == "ASSERTS" and not formula_constraints:
+
+    # When source states "trigger后 effect", prefer the trigger action as the operation
+    # and keep the effect in postcondition / data_effect / compensation slots.
+    trigger_effect = _TRIGGER_THEN_EFFECT_RE.search(raw)
+    if trigger_effect:
+        trigger_text = _text(trigger_effect.group("trigger"))
+        effect_text = _text(trigger_effect.group("effect"))
+        temporal_condition = trigger_text
+        if temporal_condition and not temporal_condition.endswith(("之前", "之后", "以前", "以后", "前", "后")):
+            temporal_condition = f"{temporal_condition}后"
+        if temporal_condition and not any(
+            temporal_condition == item
+            or temporal_condition in item
+            or item in temporal_condition
+            for item in conditions
+        ):
+            conditions = [temporal_condition, *conditions]
+            condition_combinator = _condition_combinator(raw, conditions)
+        trigger_action = _action(trigger_text)
+        if trigger_action:
+            action = trigger_action
+        if effect_text and effect_text not in postconditions:
+            postconditions = [effect_text, *postconditions]
+        if not data_effects:
+            data_effects = _data_effects(effect_text)
+        if not compensation:
+            compensation = _compensations(effect_text)
+
+    if not action and not states and modality == "ASSERTS" and not formula_constraints and not postconditions:
         return None
 
     critical = bool(_CRITICAL_SIGNAL_RE.search(raw))
@@ -667,6 +910,7 @@ def _fact_from_unit(
                     "resolved_ref": exception_scopes[0],
                     "method": "explicit_exception_scope_in_source",
                     "confidence": 0.9,
+                    "source_backed": True,
                 }
             )
         elif len(exception_scopes) > 1:
@@ -676,7 +920,7 @@ def _fact_from_unit(
     if len(conditions) > 1 and condition_combinator == "UNRESOLVED":
         ambiguities.append("CONDITION_COMBINATOR_UNRESOLVED")
 
-    confidence = 0.62 + (0.08 if entities else 0.0) + (0.06 if roles else 0.0) + (0.10 if action else 0.0) + (0.07 if conditions else 0.0) + (0.04 if states else 0.0) + (0.03 if modality != "ASSERTS" else 0.0) - 0.12 * len(ambiguities)
+    confidence = 0.62 + (0.08 if entities else 0.0) + (0.06 if roles else 0.0) + (0.10 if action else 0.0) + (0.07 if conditions else 0.0) + (0.04 if states else 0.0) + (0.03 if modality != "ASSERTS" else 0.0) + (0.03 if postconditions or compensation else 0.0) - 0.12 * len(ambiguities)
     confidence = max(0.05, min(0.99, confidence))
     status = "PENDING" if ambiguities else "ACCEPTED"
     kind = "STATE_TRANSITION" if states else "RULE"
@@ -697,15 +941,16 @@ def _fact_from_unit(
         "polarity": polarity,
         "exceptions": exceptions,
         "exception_scope": exception_scopes,
-        "postconditions": [],
+        "postconditions": postconditions,
         "state_effects": states,
-        "data_effects": [],
+        "data_effects": data_effects,
         "temporal_constraints": temporal,
         "quantity_constraints": quantity_constraints,
         "time_window_constraints": time_window_constraints,
         "formula_constraints": formula_constraints,
         "authorization_delegation": delegation,
-        "compensation": [],
+        "compensation": compensation,
+        "compensations": compensation,
         "raw_statement": raw,
         "normalized_statement": re.sub(r"\s+", "", raw),
         "source_spans": [{"source_id": source_id, "locator": locator, "quote": raw, "quote_hash": quote_hash}],
@@ -732,6 +977,16 @@ def analyze_chinese_business_source(source: dict[str, Any], *, asset: dict[str, 
     alias_map: dict[str, str] = {}
     current_section = ""
 
+    # Glossary/definition tables are line-oriented; extract from the full source so
+    # paragraph chunking cannot silently drop TERM_ALIAS rows.
+    document_locator = f"{filename or source_id}#document"
+    for row in _extract_glossary_table_aliases(text, source_id, document_locator):
+        glossary.append(row)
+        alias = _text(row.get("alias"))
+        canonical = _text(row.get("canonical_term"))
+        if alias and canonical and alias not in alias_map:
+            alias_map[alias] = canonical
+
     for chunk in _paragraph_chunks(text):
         chunk_text = _text(chunk.get("text"))
         section = _text(chunk.get("section")) or "document"
@@ -747,13 +1002,19 @@ def analyze_chinese_business_source(source: dict[str, Any], *, asset: dict[str, 
         chunk_ambiguities: list[str] = []
         chunk_facts: list[dict[str, Any]] = []
         glossary_rows = _extract_aliases(chunk_text, source_id, locator)
-        glossary.extend(glossary_rows)
-        chunk_fact_ids.extend(row["fact_id"] for row in glossary_rows)
         for row in glossary_rows:
+            key = (_text(row.get("canonical_term")), _text(row.get("alias")))
+            if any(
+                (_text(existing.get("canonical_term")), _text(existing.get("alias"))) == key
+                for existing in glossary
+            ):
+                continue
+            glossary.append(row)
             alias = _text(row.get("alias"))
             canonical = _text(row.get("canonical_term"))
             if alias and canonical and alias not in alias_map:
                 alias_map[alias] = canonical
+        chunk_fact_ids.extend(row["fact_id"] for row in glossary_rows)
 
         if chunk.get("kind") != "heading":
             for unit in _split_rule_units(chunk_text):
@@ -849,6 +1110,16 @@ def _rule_from_fact(fact: dict[str, Any]) -> dict[str, Any] | None:
         "modality": modality,
         "conditions": _list(fact.get("conditions")),
         "condition_combinator": _text(fact.get("condition_combinator")),
+        "exceptions": _list(fact.get("exceptions")),
+        "exception_scope": _list(fact.get("exception_scope")),
+        "postconditions": _list(fact.get("postconditions")),
+        "state_effects": _list(fact.get("state_effects")),
+        "data_effects": _list(fact.get("data_effects")),
+        "compensation": _list(fact.get("compensation") or fact.get("compensations")),
+        "quantity_constraints": _list(fact.get("quantity_constraints")),
+        "time_window_constraints": _list(fact.get("time_window_constraints")),
+        "formula_constraints": _list(fact.get("formula_constraints")),
+        "authorization_delegation": _dict(fact.get("authorization_delegation")),
         "confidence": fact.get("confidence"),
         "derivation": "chinese_first_business_comprehension",
     }
