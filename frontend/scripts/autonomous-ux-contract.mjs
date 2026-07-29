@@ -34,6 +34,8 @@ const [
   infoSection,
   ingestHandler,
   projectAssets,
+  understandingPreflight,
+  serviceComposition,
   sidebar,
 ] = await Promise.all([
   source('src/components/run/RunUploadScenarioSelector.tsx'),
@@ -50,6 +52,8 @@ const [
   source('src/components/settings/SettingsInfoSection.tsx'),
   source('../ai_test_asset_center/private_pilot_ingest_handlers.py'),
   source('../ai_test_asset_center/private_pilot_project_assets.py'),
+  source('../ai_test_asset_center/private_pilot_understanding_preflight.py'),
+  source('../ai_test_asset_center/private_pilot_service.py'),
   source('src/components/Sidebar.tsx'),
 ]);
 
@@ -113,6 +117,17 @@ requireText(understandingReceipt, '不创建第二套模型', 'enterprise unders
 forbidText(understandingReceipt, 'contentEditable', 'enterprise understanding receipt');
 forbidText(understandingReceipt, '保存模型', 'enterprise understanding receipt');
 forbidText(understandingReceipt, '确认理解正确', 'enterprise understanding receipt');
+
+requireText(understandingPreflight, 'load_enterprise_business_knowledge_asset', 'understanding preflight projection');
+requireText(understandingPreflight, 'existing_enterprise_business_knowledge_asset', 'understanding preflight projection');
+requireText(understandingPreflight, 'first_blocked_gate', 'understanding preflight projection');
+requireText(understandingPreflight, '系统不会通过人工确认或常识补全绕过门禁', 'understanding preflight projection');
+requireText(understandingPreflight, 'super()._handle_scan_preflight(project, root, body)', 'understanding preflight projection');
+forbidText(understandingPreflight, 'build_enterprise_business_knowledge_asset', 'understanding preflight projection');
+forbidText(understandingPreflight, '第二套', 'understanding preflight projection');
+
+requireText(serviceComposition, 'from .private_pilot_understanding_preflight import UnderstandingPreflightProjectionMixin', 'private pilot composition');
+requireText(serviceComposition, 'UnderstandingPreflightProjectionMixin,\n    ScanHandlersMixin,', 'private pilot composition');
 
 requireText(knowledgeApi, "fetch('/api/knowledge/ingest'", 'knowledge ingest API');
 requireText(knowledgeApi, 'filename: file.name', 'knowledge ingest API');
