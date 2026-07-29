@@ -15,6 +15,9 @@ from .implementation_binding import (
     IMPLEMENTATION_BINDING_SCHEMA,
     build_behavior_implementation_bindings,
 )
+from .implementation_binding_governance import (
+    build_governed_behavior_implementation_bindings,
+)
 from .integration import (
     enrich_asset_with_enterprise_understanding,
     install_enterprise_understanding_model,
@@ -34,6 +37,7 @@ __all__ = [
     "build_governed_business_behavior_ir",
     "build_business_behavior_ir_v1",
     "build_behavior_implementation_bindings",
+    "build_governed_behavior_implementation_bindings",
     "build_enterprise_understanding_model",
     "assess_understanding_model",
     "enrich_asset_with_enterprise_understanding",
