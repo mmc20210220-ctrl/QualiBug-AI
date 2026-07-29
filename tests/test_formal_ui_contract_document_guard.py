@@ -69,9 +69,7 @@ def test_formal_contract_document_container_does_not_create_phantom_gap() -> Non
     assert len(contracts) == 1
     assert contracts[0]["contract_id"] == "visual-orders"
     assert contracts[0]["source_id"] == "src-ui-orders"
-    assert contracts[0]["ui_request"]["browser_plan"]["steps"][2][
-        "action"
-    ] == "expect_visual_baseline"
+    assert contracts[0]["ui_request"]["browser_plan"]["steps"][2]["action"] == "expect_visual_baseline"
     assert gaps == []
 
 
@@ -94,7 +92,7 @@ def test_standalone_formal_contract_schema_remains_supported() -> None:
     assert gaps == []
 
 
-def test_direct_scan_visual_request_shape_enters_existing_overlay() -> None:
+def test_direct_scan_visual_request_requires_active_real_source() -> None:
     request = {
         **_ui_request(),
         "operation_ref": "get-orders-page",
@@ -109,14 +107,49 @@ def test_direct_scan_visual_request_shape_enters_existing_overlay() -> None:
     }
 
     asset, receipt = overlay_scan_ui_contracts(
-        {},
+        {
+            "source_inventory": [
+                {"source_id": "src-ui-orders", "status": "active"},
+            ]
+        },
         {"ui_execution_requests": [request]},
     )
 
     assert receipt["status"] == "OVERLAID"
     assert receipt["contract_added_count"] == 1
     assert receipt["coverage_gap_count"] == 0
+    assert receipt["source_registry_guard"]["status"] == "ACCEPTED"
     contract = asset["ui_formal_contracts"][0]
     assert contract["operation_ref"] == "get-orders-page"
     assert contract["actor_role"] == "public"
     assert contract["source_refs"][0]["source_id"] == "src-ui-orders"
+
+
+def test_direct_scan_unknown_source_becomes_visible_gap() -> None:
+    request = {
+        **_ui_request(),
+        "operation_ref": "get-orders-page",
+        "actor_role": "public",
+        "source_refs": [
+            {
+                "source_id": "src-invented-orders",
+                "locator": "screen:orders",
+                "kind": "formal_ui_contract",
+            }
+        ],
+    }
+
+    asset, receipt = overlay_scan_ui_contracts(
+        {
+            "source_inventory": [
+                {"source_id": "src-real-orders", "status": "active"},
+            ]
+        },
+        {"ui_execution_requests": [request]},
+    )
+
+    assert receipt["contract_added_count"] == 0
+    assert receipt["coverage_gap_count"] == 1
+    assert receipt["source_registry_guard"]["status"] == "REJECTED"
+    assert asset.get("ui_formal_contracts", []) == []
+    assert "src-invented-orders" not in json.dumps(receipt)
