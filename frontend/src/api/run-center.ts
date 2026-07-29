@@ -9,6 +9,7 @@ export type RunCenterScanOptions = {
   environment_ref?: string;
   source_id?: string;
   source_hash?: string;
+  execution_mode?: 'safe_read_only' | 'approved_sandbox_write';
   test_data_contract?: JsonRecord;
   ui_upload_fixture_ids?: string[];
 };
@@ -51,6 +52,9 @@ export async function runV12ScanFromRunCenter(
   const project = projectId.trim();
   if (!project) throw new Error('未选择有效项目，无法执行扫描。');
   const fixtureIds = normalizedFixtureIds(options.ui_upload_fixture_ids);
+  const executionMode = fixtureIds.length
+    ? 'approved_sandbox_write'
+    : options.execution_mode;
   const headers = new Headers({ 'Content-Type': 'application/json' });
   const token = currentToken();
   if (token) headers.set('Authorization', `Bearer ${token}`);
@@ -65,6 +69,7 @@ export async function runV12ScanFromRunCenter(
       base_url: options.base_url || undefined,
       scope_id: options.scope_id || undefined,
       environment_ref: options.environment_ref || undefined,
+      execution_mode: executionMode || undefined,
       source_manifest: options.source_id || options.source_hash
         ? { source_id: options.source_id || '', source_hash: options.source_hash || '' }
         : undefined,
