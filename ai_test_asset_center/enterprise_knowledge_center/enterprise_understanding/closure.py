@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from .behavior_ir_governance import build_governed_business_behavior_ir
 from .gate import assess_understanding_model
-from .schema import as_dict, as_list, new_unknown, text
+from .schema import as_dict, as_list, dedupe_evidence, new_unknown, text
 
 
 def apply_minimum_understanding_closure(
@@ -30,13 +31,33 @@ def apply_minimum_understanding_closure(
         for row in as_list(asset.get("source_inventory"))
         if isinstance(row, dict) and text(row.get("status") or "active") == "active"
     ]
-    unknowns = [row for row in as_list(model.get("unknowns")) if isinstance(row, dict)]
 
-    if active_sources and not accepted_behavior_facts:
+    row_ledger, behaviors, behavior_conflicts, behavior_unknowns, behavior_gate = (
+        build_governed_business_behavior_ir(
+            asset,
+            facts,
+            [row for row in as_list(model.get("operations")) if isinstance(row, dict)],
+        )
+    )
+    model["decision_matrix_row_ledger"] = row_ledger
+    model["business_behaviors"] = behaviors
+    model["behavior_conflicts"] = behavior_conflicts
+    model["behavior_ir_gate"] = behavior_gate
+
+    unknowns = [
+        row for row in [*as_list(model.get("unknowns")), *behavior_unknowns] if isinstance(row, dict)
+    ]
+    conflicts = [
+        row
+        for row in [*as_list(model.get("conflicts")), *behavior_conflicts]
+        if isinstance(row, dict)
+    ]
+
+    if active_sources and not accepted_behavior_facts and not row_ledger:
         unknowns.append(
             new_unknown(
                 "NO_BUSINESS_BEHAVIOR_UNDERSTOOD",
-                "已接入企业资料，但尚未形成任何可追溯的业务规则或状态行为事实。字段、表名和对象清单不能替代业务理解。",
+                "已接入企业资料，但尚未形成任何可追溯的业务规则、状态行为事实或决策矩阵行。字段、表名和对象清单不能替代业务理解。",
                 severity="P0",
                 blocks_formal_understanding=True,
                 reason_code="NO_BUSINESS_BEHAVIOR_UNDERSTOOD",
@@ -44,6 +65,7 @@ def apply_minimum_understanding_closure(
                     "active_source_count": len(active_sources),
                     "fact_count": len(facts),
                     "pending_fact_count": len(pending_facts),
+                    "decision_matrix_row_count": len(row_ledger),
                 },
             )
         )
@@ -65,6 +87,17 @@ def apply_minimum_understanding_closure(
             )
         )
 
+    behavior_evidence = dedupe_evidence(
+        [
+            evidence
+            for behavior in behaviors
+            for evidence in as_list(behavior.get("evidence"))
+            if isinstance(evidence, dict)
+        ]
+    )
+    model["evidence_index"] = dedupe_evidence(
+        [*as_list(model.get("evidence_index")), *behavior_evidence]
+    )
     if active_sources and not as_list(model.get("evidence_index")):
         unknowns.append(
             new_unknown(
@@ -83,6 +116,14 @@ def apply_minimum_understanding_closure(
             if isinstance(row, dict) and text(row.get("unknown_id"))
         }.values()
     )
+    model["conflicts"] = list(
+        {
+            text(row.get("conflict_id")): row
+            for row in conflicts
+            if isinstance(row, dict) and text(row.get("conflict_id"))
+        }.values()
+    )
+    behavior_metrics = as_dict(behavior_gate.get("metrics"))
     model["source_summary"] = {
         "active_source_count": len(active_sources),
         "business_fact_count": len(facts),
@@ -91,6 +132,12 @@ def apply_minimum_understanding_closure(
         "formal_business_object_count": len(as_list(model.get("business_objects"))),
         "formal_operation_count": len(as_list(model.get("operations"))),
         "formal_lifecycle_count": len(as_list(model.get("lifecycles"))),
+        "decision_matrix_row_count": len(row_ledger),
+        "business_behavior_count": len(behaviors),
+        "confirmed_behavior_count": int(behavior_metrics.get("confirmed_behavior_count") or 0),
+        "candidate_behavior_count": int(behavior_metrics.get("candidate_behavior_count") or 0),
+        "incomplete_behavior_count": int(behavior_metrics.get("incomplete_behavior_count") or 0),
+        "conflicted_behavior_count": int(behavior_metrics.get("conflicted_behavior_count") or 0),
     }
     gate = assess_understanding_model(
         model,
