@@ -10,7 +10,10 @@ import re
 from typing import Any
 
 from .contract import text
-from .visual_table_continuation import apply_visual_table_continuations
+from .visual_table_continuation import (
+    TABLE_CONTINUATION_SCHEMA,
+    apply_visual_table_continuations,
+)
 
 
 def _list(value: Any) -> list[Any]:
@@ -115,10 +118,66 @@ def _table_method(table: dict[str, Any]) -> str:
     return text(_dict(table.get("structure_evidence")).get("detection_method"))
 
 
+def _sync_table_summaries(result: dict[str, Any], blocks: list[dict[str, Any]]) -> None:
+    table_blocks = {
+        text(row.get("block_id")): row
+        for row in blocks
+        if text(row.get("type")) == "TABLE" and text(row.get("block_id"))
+    }
+    continuation_fields = {
+        "logical_table_id",
+        "table_fragment_index",
+        "table_fragment_count",
+        "continued_from_table_id",
+        "continued_to_table_id",
+        "cross_page_relation_status",
+        "header_row_count",
+        "header_source_table_id",
+        "repeated_header_row_count",
+        "document_order_is_business_flow",
+    }
+    summaries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in _list(result.get("tables")):
+        if not isinstance(raw, dict):
+            continue
+        row = dict(raw)
+        block_id = text(row.get("block_id"))
+        block = table_blocks.get(block_id)
+        if block:
+            for field in continuation_fields:
+                if field in block:
+                    row[field] = block.get(field)
+        summaries.append(row)
+        if block_id:
+            seen.add(block_id)
+    for block_id, block in table_blocks.items():
+        if block_id in seen or not text(block.get("logical_table_id")):
+            continue
+        summaries.append(
+            {
+                "block_id": block_id,
+                "type": "TABLE",
+                "page": block.get("page"),
+                "bbox": block.get("bbox"),
+                "formal_table_structure": block.get("formal_table_structure"),
+                "source_locator": block.get("source_locator"),
+                **{field: block.get(field) for field in continuation_fields if field in block},
+            }
+        )
+    result["tables"] = summaries
+
+
 def apply_visual_table_projection_authority(document_ir: dict[str, Any]) -> dict[str, Any]:
     # Cross-page linking must run first so repeated continuation headers can remain as evidence
-    # while being excluded from the merged business-text projection below.
-    result = apply_visual_table_continuations(document_ir)
+    # while being excluded from the merged business-text projection below.  Respect an existing
+    # receipt so repeated pipeline invocation is idempotent.
+    prior_continuation = _dict(document_ir.get("visual_table_continuation_receipt"))
+    result = (
+        dict(document_ir or {})
+        if text(prior_continuation.get("schema")) == TABLE_CONTINUATION_SCHEMA
+        else apply_visual_table_continuations(document_ir)
+    )
     blocks = [dict(row) for row in _list(result.get("blocks")) if isinstance(row, dict)]
     visual_tables = [
         row
@@ -216,6 +275,7 @@ def apply_visual_table_projection_authority(document_ir: dict[str, Any]) -> dict
     previous_text = text(result.get("plain_text"))
     result["blocks"] = blocks
     result["plain_text"] = _compose(blocks, previous_text)
+    _sync_table_summaries(result, blocks)
     unresolved_region_count = sum(
         int(row.get("count") or 0)
         for row in _list(result.get("unsupported_content"))
