@@ -2,7 +2,7 @@
 
 This module never builds a second knowledge model or a second readiness authority. It loads the
 persisted enterprise knowledge asset and enriches the existing ``knowledge_summary`` field with
-its current model, Scenario IR and execution-contract gate receipts.
+its current understanding, Scenario IR, execution-contract and Runtime Plan gate receipts.
 """
 from __future__ import annotations
 
@@ -53,6 +53,11 @@ def _readable_reason(value: Any) -> str:
         "EXECUTION_CONTRACT_AUTHORITATIVE_ACTION_ENTRY_MISSING": "部分业务场景尚未绑定权威执行入口",
         "EXECUTION_CONTRACT_PERMISSION_RESPONSE_OBSERVER_UNRESOLVED": "权限结果缺少可验证的响应观察方式",
         "EXECUTION_CONTRACT_EFFECT_OBSERVER_UNRESOLVED": "业务效果缺少可验证的观察方式",
+        "RUNTIME_PLAN_REQUEST_FIELD_LOCATION_UNRESOLVED": "请求字段在接口契约中的位置尚未明确",
+        "RUNTIME_PLAN_REQUEST_FIELD_LOCATION_AMBIGUOUS": "同一请求字段在接口契约中存在多个位置",
+        "RUNTIME_PLAN_CREDENTIAL_REF_AMBIGUOUS": "同一业务角色对应多个测试凭证引用",
+        "RUNTIME_PLAN_ORACLE_TEMPLATE_UNRESOLVED": "运行计划尚未形成可验证的观察模板",
+        "RUNTIME_PLAN_CLEANUP_TEMPLATE_UNRESOLVED": "写操作尚未形成安全清理模板",
     }
     return labels.get(code, code.replace("_", " ").strip())
 
@@ -84,9 +89,11 @@ def _understanding_projection(asset: dict[str, Any]) -> dict[str, Any]:
     planning_gate = _record(asset.get("scenario_planning_gate"))
     scenario_gate = _record(asset.get("scenario_ir_gate"))
     execution_gate = _record(asset.get("scenario_execution_contract_gate"))
+    runtime_plan_gate = _record(asset.get("runtime_plan_gate"))
     model_metrics = _record(model_gate.get("metrics"))
     scenario_metrics = _record(scenario_gate.get("metrics"))
     execution_metrics = _record(execution_gate.get("metrics"))
+    runtime_metrics = _record(runtime_plan_gate.get("metrics"))
 
     understanding_status = (
         _text(summary.get("enterprise_understanding_status"))
@@ -100,6 +107,7 @@ def _understanding_projection(asset: dict[str, Any]) -> dict[str, Any]:
     planning_ready = _ready(planning_gate, "scenario_planning_allowed", "entry_allowed")
     scenario_ready = _ready(scenario_gate, "entry_allowed")
     execution_ready = _ready(execution_gate, "execution_contract_ready", "entry_allowed")
+    runtime_plan_ready = _ready(runtime_plan_gate, "runtime_plan_ready", "entry_allowed")
 
     gates = [
         {
@@ -126,6 +134,12 @@ def _understanding_projection(asset: dict[str, Any]) -> dict[str, Any]:
             "status": _text(execution_gate.get("status")) or "NOT_BUILT",
             "ready": execution_ready,
         },
+        {
+            "key": "runtime_plan",
+            "label": "Runtime Plan",
+            "status": _text(runtime_plan_gate.get("status")) or "NOT_BUILT",
+            "ready": runtime_plan_ready,
+        },
     ]
 
     blockers: list[str] = []
@@ -137,15 +151,25 @@ def _understanding_projection(asset: dict[str, Any]) -> dict[str, Any]:
         message = _row_message(value)
         if message:
             blockers.append(message)
-    for gate in (model_gate, planning_gate, scenario_gate, execution_gate):
+    for gate in (model_gate, planning_gate, scenario_gate, execution_gate, runtime_plan_gate):
         for value in _rows(gate.get("blocking_reasons")):
             message = _readable_reason(value)
             if message:
                 blockers.append(message)
+    for value in _rows(asset.get("runtime_plan_unknowns")):
+        row = _record(value)
+        if not row.get("blocks_runtime_plan"):
+            continue
+        message = _row_message(row)
+        if message:
+            blockers.append(message)
     for value in _rows(asset.get("coverage_gaps")):
         row = _record(value)
         kind = _text(row.get("kind"))
-        if not any(token in kind for token in ("UNDERSTANDING", "SCENARIO", "EXECUTION_CONTRACT")):
+        if not any(
+            token in kind
+            for token in ("UNDERSTANDING", "SCENARIO", "EXECUTION_CONTRACT", "RUNTIME_PLAN")
+        ):
             continue
         message = _text(row.get("message")) or _text(row.get("operator_action")) or _readable_reason(kind)
         if message:
@@ -211,6 +235,18 @@ def _understanding_projection(asset: dict[str, Any]) -> dict[str, Any]:
         "scenario_execution_contract_unknown_count": _integer(
             execution_metrics.get("execution_contract_unknown_count"),
             len(_rows(asset.get("scenario_execution_contract_unknowns"))),
+        ),
+        "runtime_plan_status": _text(runtime_plan_gate.get("status")) or "NOT_BUILT",
+        "runtime_plan_ready": runtime_plan_ready,
+        "runtime_plan_count": _integer(
+            summary.get("runtime_plan_count"),
+            _integer(runtime_metrics.get("runtime_plan_count"), len(_rows(asset.get("runtime_plans")))),
+        ),
+        "runtime_plan_incomplete_count": _integer(
+            runtime_metrics.get("incomplete_runtime_plan_count")
+        ),
+        "runtime_plan_unknown_count": _integer(
+            runtime_metrics.get("runtime_plan_unknown_count"), len(_rows(asset.get("runtime_plan_unknowns")))
         ),
         "formal_scenario_chain_ready": all(bool(row.get("ready")) for row in gates),
         "understanding_gates": gates,
