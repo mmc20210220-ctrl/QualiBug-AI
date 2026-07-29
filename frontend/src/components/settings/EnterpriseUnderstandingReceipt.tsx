@@ -8,6 +8,7 @@ type Props = {
 
 type UnderstandingView = {
   available: boolean;
+  understandingReady: boolean;
   ready: boolean;
   status: string;
   statusLabel: string;
@@ -99,9 +100,15 @@ function gateView(label: string, value: unknown, readyKeys: string[]): { label: 
   };
 }
 
-function statusLabel(status: string, ready: boolean, available: boolean): string {
+function statusLabel(
+  status: string,
+  understandingReady: boolean,
+  chainReady: boolean,
+  available: boolean,
+): string {
   if (!available) return '等待后台理解';
-  if (ready) return '理解已闭合';
+  if (chainReady) return '正式场景链已闭合';
+  if (understandingReady) return '理解已闭合，场景链待完成';
   if (status.startsWith('BLOCKED')) return '理解被阻断';
   if (status.startsWith('PARTIAL')) return '理解部分完成';
   return '仍在理解中';
@@ -125,7 +132,7 @@ function projectUnderstanding(payload: unknown): UnderstandingView {
     'NOT_BUILT',
   );
   const available = Boolean(modelId || Object.keys(model).length || status !== 'NOT_BUILT');
-  const ready = asBoolean(summary.enterprise_understanding_ready)
+  const understandingReady = asBoolean(summary.enterprise_understanding_ready)
     || asBoolean(modelGate.entry_allowed)
     || asBoolean(comprehensionGate.entry_allowed);
 
@@ -165,12 +172,20 @@ function projectUnderstanding(payload: unknown): UnderstandingView {
   const sourceTraceabilityRate = Number.isFinite(projection)
     ? Math.round(projection * 1000) / 10
     : null;
+  const gates = [
+    gateView('企业理解', modelGate, ['entry_allowed']),
+    gateView('场景规划', scenarioPlanningGate, ['scenario_planning_allowed', 'entry_allowed']),
+    gateView('Scenario IR', scenarioIrGate, ['entry_allowed']),
+    gateView('执行合同', executionContractGate, ['execution_contract_ready', 'entry_allowed']),
+  ];
+  const ready = understandingReady && gates.every((gate) => gate.ready);
 
   return {
     available,
+    understandingReady,
     ready,
     status,
-    statusLabel: statusLabel(status, ready, available),
+    statusLabel: statusLabel(status, understandingReady, ready, available),
     modelId,
     sourceTraceabilityRate,
     businessObjectCount: asNumber(summary.understood_business_object_count) || asArray(model.business_objects).length,
@@ -182,12 +197,7 @@ function projectUnderstanding(payload: unknown): UnderstandingView {
     unknownCount: asNumber(summary.enterprise_understanding_unknown_count) || asArray(model.unknowns).length,
     conflictCount: asNumber(summary.enterprise_understanding_conflict_count) || conflicts.length,
     blockers,
-    gates: [
-      gateView('企业理解', modelGate, ['entry_allowed']),
-      gateView('场景规划', scenarioPlanningGate, ['scenario_planning_allowed', 'entry_allowed']),
-      gateView('Scenario IR', scenarioIrGate, ['entry_allowed']),
-      gateView('执行合同', executionContractGate, ['execution_contract_ready', 'entry_allowed']),
-    ],
+    gates,
   };
 }
 
@@ -244,10 +254,22 @@ export function EnterpriseUnderstandingReceipt({ payload, loading, hasSources }:
             </div>
           </div>
 
-          {!view.ready && (
+          {!view.understandingReady && (
             <div className="settings-card-note settings-mt-10">
-              <strong>正式场景规划尚未放行。</strong>
+              <strong>企业理解尚未闭合，正式场景规划不会放行。</strong>
               <p>系统不会通过人工点击“确认正确”关闭缺口。请继续上传能够说明相关规则、角色、状态或接口契约的原始资料。</p>
+              {view.blockers.length > 0 && (
+                <ul>
+                  {view.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}
+                </ul>
+              )}
+            </div>
+          )}
+
+          {view.understandingReady && !view.ready && (
+            <div className="settings-card-note settings-mt-10">
+              <strong>企业理解已经闭合，但正式场景链尚未全部放行。</strong>
+              <p>请查看下方现有门禁回执。通常还需要已有资料中的实现绑定、可观察结果或执行合同达到要求；系统不会把“理解完成”误报成“已经可以执行”。</p>
               {view.blockers.length > 0 && (
                 <ul>
                   {view.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}
@@ -258,7 +280,7 @@ export function EnterpriseUnderstandingReceipt({ payload, loading, hasSources }:
 
           {view.ready && (
             <div className="settings-card-note settings-mt-10">
-              企业理解门禁已经闭合，后台可以继续使用同一知识资产进入正式场景规划；这不代表宣称理解准确率或业务召回率达到某个百分比。
+              企业理解、场景规划、Scenario IR 和执行合同门禁已经闭合。运行时仍会继续核对环境、凭据、测试数据、观察通道和清理义务；这里不宣称理解准确率或业务召回率达到某个百分比。
             </div>
           )}
 
