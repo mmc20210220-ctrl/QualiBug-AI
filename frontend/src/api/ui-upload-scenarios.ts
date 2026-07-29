@@ -32,6 +32,9 @@ export type UploadScenarioInput = {
   start_url: string;
   fixture_binding_refs: string[];
   upload_selector: string;
+  submission_mode: 'click_submit' | 'auto_on_file_selection';
+  submit_selector?: string;
+  cleanup_selector: string;
   assertion_selector: string;
   assertion_text: string;
   rendered_probe_selector: string;
