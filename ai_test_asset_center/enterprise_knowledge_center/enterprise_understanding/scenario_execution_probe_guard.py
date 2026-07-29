@@ -1,4 +1,4 @@
-"""Fail-close legacy Probe builders behind formal scenario design contracts."""
+"""Fail-close legacy Probe builders behind formal scenario design and materialization gates."""
 from __future__ import annotations
 
 from functools import wraps
@@ -8,7 +8,7 @@ from .schema import as_dict
 
 
 def _wrap(builder: Callable[..., Any]) -> Callable[..., Any]:
-    if getattr(builder, "_qualibug_runtime_plan_gate_guard", False):
+    if getattr(builder, "_qualibug_runtime_materialization_gate_guard", False):
         return builder
 
     @wraps(builder)
@@ -17,6 +17,7 @@ def _wrap(builder: Callable[..., Any]) -> Callable[..., Any]:
         scenario_gate = as_dict(asset.get("scenario_ir_gate"))
         contract_gate = as_dict(asset.get("scenario_execution_contract_gate"))
         runtime_plan_gate = as_dict(asset.get("runtime_plan_gate"))
+        materialization_gate = as_dict(asset.get("runtime_materialization_gate"))
         if planning_gate:
             if not bool(planning_gate.get("scenario_planning_allowed")):
                 return []
@@ -24,13 +25,15 @@ def _wrap(builder: Callable[..., Any]) -> Callable[..., Any]:
                 return []
             if not contract_gate or not bool(contract_gate.get("entry_allowed")):
                 return []
-            # Once the source-backed scenario pipeline exists, absence of Runtime Plan is a
-            # downstream closure gap. It is never permission to fall back to risk-only probes.
             if not runtime_plan_gate or not bool(runtime_plan_gate.get("entry_allowed")):
+                return []
+            # A closed Runtime Plan still contains unresolved runtime references. Missing or
+            # blocked materialization is never permission to fall back to risk-only Probes.
+            if not materialization_gate or not bool(materialization_gate.get("entry_allowed")):
                 return []
         return builder(asset, max_count)
 
-    guarded._qualibug_runtime_plan_gate_guard = True  # type: ignore[attr-defined]
+    guarded._qualibug_runtime_materialization_gate_guard = True  # type: ignore[attr-defined]
     guarded._qualibug_original_probe_builder = builder  # type: ignore[attr-defined]
     return guarded
 
