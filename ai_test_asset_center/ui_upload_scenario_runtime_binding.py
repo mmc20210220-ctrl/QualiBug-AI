@@ -1,9 +1,9 @@
 """Hydrate approved UI upload scenarios into private-pilot scan contracts.
 
-Callers submit only ``ui_upload_scenario_ids``.  The registry is re-read for every
+Callers submit only ``ui_upload_scenario_ids``. The registry is re-read for every
 manual or continuous scan; approved scenarios become source-bound
 ``ui_execution_requests`` and their fixture bindings are merged into the existing
-upload-fixture authority.  Caller-authored requests are preserved, never replaced.
+upload-fixture authority. Caller-authored requests are preserved, never replaced.
 """
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from . import pipeline_runtime as _pipeline_runtime
 from . import private_pilot_scan_context_contract as _scan_context
 from . import private_pilot_scan_prep as _scan_prep
 from .ui_upload_scenario_registry import (
@@ -24,6 +25,8 @@ _ORIGINAL_PREPARE = "_qualibug_scan_prepare_before_upload_scenario_binding"
 _ORIGINAL_CAMPAIGN_PREPARE = (
     "_qualibug_campaign_prepare_before_upload_scenario_binding"
 )
+_ORIGINAL_CONTEXT = "_qualibug_campaign_context_before_upload_scenario_binding"
+_ORIGINAL_RUNTIME = "_qualibug_runtime_contract_before_upload_scenario_binding"
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -92,6 +95,7 @@ def _hydrate_scenarios(
     ]
     scenario_refs: list[str] = []
     source_ids: list[str] = []
+    scenario_request_ids: list[str] = []
     for row in materialized:
         request = copy.deepcopy(_dict(row.get("ui_execution_request")))
         request_id = _request_identity(request)
@@ -103,6 +107,7 @@ def _hydrate_scenarios(
         if existing is None:
             existing_requests.append(request)
             requests_by_id[request_id] = request
+        scenario_request_ids.append(request_id)
         for fixture_ref in _list(row.get("fixture_binding_refs")):
             ref = _text(fixture_ref, limit=160)
             if ref and ref not in fixture_refs:
@@ -119,7 +124,7 @@ def _hydrate_scenarios(
         "schema_version": "qualibug.ui-upload-scenario-binding-summary.v1",
         "scenario_count": len(materialized),
         "scenario_refs": sorted(scenario_refs),
-        "request_ids": sorted(requests_by_id),
+        "request_ids": sorted(set(scenario_request_ids)),
         "source_ids": sorted(source_ids),
         "fixture_binding_count": len(fixture_refs),
         "registry_derived": True,
@@ -142,12 +147,24 @@ def install_ui_upload_scenario_runtime_binding() -> None:
         _ORIGINAL_CAMPAIGN_PREPARE,
         _scan_context.prepare_scan_body_for_campaign,
     )
+    original_context = getattr(
+        _scan_context,
+        _ORIGINAL_CONTEXT,
+        _scan_context.build_campaign_context_from_scan_body,
+    )
+    original_runtime = getattr(
+        _pipeline_runtime,
+        _ORIGINAL_RUNTIME,
+        _pipeline_runtime._runtime_contract,
+    )
     setattr(_scan_prep, _ORIGINAL_PREPARE, original_prepare)
     setattr(
         _scan_context,
         _ORIGINAL_CAMPAIGN_PREPARE,
         original_campaign_prepare,
     )
+    setattr(_scan_context, _ORIGINAL_CONTEXT, original_context)
+    setattr(_pipeline_runtime, _ORIGINAL_RUNTIME, original_runtime)
 
     def prepare_with_upload_scenarios(
         project: str,
@@ -174,10 +191,34 @@ def install_ui_upload_scenario_runtime_binding() -> None:
         prepared = original_campaign_prepare(project, root, body)
         return _hydrate_scenarios(project, Path(root), prepared)
 
+    def campaign_context_with_upload_scenarios(
+        body: dict[str, Any],
+    ) -> dict[str, Any]:
+        context = copy.deepcopy(original_context(body))
+        summary = _dict(body.get("ui_upload_scenario_binding_summary"))
+        if summary:
+            context["ui_upload_scenario_binding_summary"] = copy.deepcopy(summary)
+        return context
+
+    def runtime_contract_with_upload_scenarios(
+        context: dict[str, Any],
+        base_url: str,
+        source_text: Any,
+    ) -> dict[str, Any]:
+        contract = copy.deepcopy(original_runtime(context, base_url, source_text))
+        summary = _dict(context.get("ui_upload_scenario_binding_summary"))
+        if summary:
+            contract["ui_upload_scenario_binding_summary"] = copy.deepcopy(summary)
+        return contract
+
     _scan_prep._prepare_v12_scan_body = prepare_with_upload_scenarios
     _scan_context.prepare_scan_body_for_campaign = (
         campaign_prepare_with_upload_scenarios
     )
+    _scan_context.build_campaign_context_from_scan_body = (
+        campaign_context_with_upload_scenarios
+    )
+    _pipeline_runtime._runtime_contract = runtime_contract_with_upload_scenarios
 
     scan_handlers = sys.modules.get("ai_test_asset_center.private_pilot_scan_handlers")
     if scan_handlers is not None and getattr(
@@ -198,6 +239,14 @@ def install_ui_upload_scenario_runtime_binding() -> None:
         continuous_handlers.prepare_scan_body_for_campaign = (
             campaign_prepare_with_upload_scenarios
         )
+
+    pipeline = sys.modules.get("ai_test_asset_center.v12_pipeline")
+    if pipeline is not None and getattr(
+        pipeline,
+        "_runtime_contract",
+        None,
+    ) is original_runtime:
+        pipeline._runtime_contract = runtime_contract_with_upload_scenarios
 
     setattr(_scan_prep, _INSTALL_MARKER, True)
 
