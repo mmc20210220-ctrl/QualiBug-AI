@@ -15,6 +15,7 @@ def _formal_entries(model: dict[str, Any]) -> list[dict[str, Any]]:
         "object_relations",
         "lifecycles",
         "processes",
+        "business_behaviors",
     ):
         rows.extend(row for row in as_list(model.get(key)) if isinstance(row, dict))
     return rows
@@ -25,7 +26,8 @@ def _unresolved_conflicts(model: dict[str, Any]) -> list[dict[str, Any]]:
         row
         for row in as_list(model.get("conflicts"))
         if isinstance(row, dict)
-        and text(row.get("status") or "UNRESOLVED").upper() not in {"RESOLVED", "SUPERSEDED", "DISMISSED"}
+        and text(row.get("status") or "UNRESOLVED").upper()
+        not in {"RESOLVED", "SUPERSEDED", "DISMISSED"}
     ]
 
 
@@ -52,10 +54,13 @@ def assess_understanding_model(
         if isinstance(transition, dict)
     ]
     complete_transitions = [
-        row
-        for row in lifecycle_transitions
-        if text(row.get("completeness")) == "COMPLETE"
+        row for row in lifecycle_transitions if text(row.get("completeness")) == "COMPLETE"
     ]
+    behaviors = [row for row in as_list(model.get("business_behaviors")) if isinstance(row, dict)]
+    confirmed_behaviors = [row for row in behaviors if text(row.get("status")) == "CONFIRMED"]
+    candidate_behaviors = [row for row in behaviors if text(row.get("status")) == "CANDIDATE"]
+    incomplete_behaviors = [row for row in behaviors if text(row.get("status")) == "INCOMPLETE"]
+    conflicted_behaviors = [row for row in behaviors if text(row.get("status")) == "CONFLICTED"]
 
     def ratio(numerator: int, denominator: int) -> float:
         return round(numerator / denominator, 4) if denominator else 1.0
@@ -67,23 +72,39 @@ def assess_understanding_model(
         "object_relation_count": len(as_list(model.get("object_relations"))),
         "lifecycle_count": len(lifecycles),
         "process_count": len(as_list(model.get("processes"))),
+        "decision_matrix_row_count": len(as_list(model.get("decision_matrix_row_ledger"))),
+        "business_behavior_count": len(behaviors),
+        "confirmed_behavior_count": len(confirmed_behaviors),
+        "candidate_behavior_count": len(candidate_behaviors),
+        "incomplete_behavior_count": len(incomplete_behaviors),
+        "conflicted_behavior_count": len(conflicted_behaviors),
+        "behavior_conflict_count": len(as_list(model.get("behavior_conflicts"))),
         "unknown_count": len(unknowns),
         "critical_unknown_count": len(critical_unknowns),
         "unresolved_conflict_count": len(conflicts),
         "structural_violation_count": len(structural_violations),
         "source_traceability_rate": ratio(len(traceable_entries), len(formal_entries)),
         "operation_object_binding_rate": ratio(len(bound_operations), len(operations)),
-        "lifecycle_transition_completeness": ratio(len(complete_transitions), len(lifecycle_transitions)),
+        "lifecycle_transition_completeness": ratio(
+            len(complete_transitions), len(lifecycle_transitions)
+        ),
+        "confirmed_behavior_rate": ratio(len(confirmed_behaviors), len(behaviors)),
+        "behavior_source_traceability_rate": ratio(
+            len([row for row in behaviors if as_list(row.get("evidence"))]), len(behaviors)
+        ),
     }
     projection_inputs = (
         metrics["source_traceability_rate"],
         metrics["operation_object_binding_rate"],
         metrics["lifecycle_transition_completeness"],
+        metrics["behavior_source_traceability_rate"],
         1.0 if not critical_unknowns else 0.0,
         1.0 if not conflicts else 0.0,
         1.0 if not structural_violations else 0.0,
     )
-    metrics["model_completeness_projection"] = round(sum(projection_inputs) / len(projection_inputs), 4)
+    metrics["model_completeness_projection"] = round(
+        sum(projection_inputs) / len(projection_inputs), 4
+    )
     metrics["projection_contract"] = "INTERNAL_MODEL_CLOSURE_NOT_RECALL_OR_ACCURACY"
 
     upstream_ready = bool(upstream.get("entry_allowed", True))
@@ -95,13 +116,17 @@ def assess_understanding_model(
         blocking_reasons = ["MODEL_SCHEMA_OR_EVIDENCE_INVALID"]
     elif conflicts:
         status = "BLOCKED_ENTERPRISE_UNDERSTANDING_CONFLICTING_FACTS"
-        blocking_reasons = ["UNRESOLVED_BUSINESS_FACT_CONFLICTS"]
+        blocking_reasons = ["UNRESOLVED_BUSINESS_FACT_OR_BEHAVIOR_CONFLICTS"]
     elif critical_unknowns:
         status = "BLOCKED_ENTERPRISE_UNDERSTANDING_CRITICAL_UNKNOWN"
-        blocking_reasons = sorted({text(row.get("reason_code") or row.get("kind")) for row in critical_unknowns})
+        blocking_reasons = sorted(
+            {text(row.get("reason_code") or row.get("kind")) for row in critical_unknowns}
+        )
     elif unknowns:
         status = "PARTIAL_ENTERPRISE_UNDERSTANDING"
-        blocking_reasons = sorted({text(row.get("reason_code") or row.get("kind")) for row in unknowns})
+        blocking_reasons = sorted(
+            {text(row.get("reason_code") or row.get("kind")) for row in unknowns}
+        )
     else:
         status = "PASS"
         blocking_reasons = []
