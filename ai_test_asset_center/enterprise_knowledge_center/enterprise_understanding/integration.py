@@ -7,6 +7,7 @@ from typing import Any, Iterable
 
 from .builder import build_enterprise_understanding_model
 from .closure import apply_minimum_understanding_closure
+from .implementation_binding_projection import project_final_scenario_planning_gate
 from .schema import as_dict, as_list, text
 
 
@@ -242,6 +243,7 @@ def enrich_asset_with_enterprise_understanding(
 
     model = build_enterprise_understanding_model(asset)
     model = apply_minimum_understanding_closure(model, asset)
+    project_final_scenario_planning_gate(asset, model)
     model_gate = as_dict(model.get("gate"))
     asset["enterprise_understanding_model"] = model
 
@@ -460,7 +462,7 @@ def install_enterprise_understanding_model():
         return enriched
 
     wrapped._qualibug_enterprise_understanding_model = True  # type: ignore[attr-defined]
-    wrapped._qualibug_original_builder = original  # type: ignore[attr-defined]
+    wrapped._qualibug_original_builder = original
     _api.build_enterprise_business_knowledge_asset = wrapped
     return wrapped
 
