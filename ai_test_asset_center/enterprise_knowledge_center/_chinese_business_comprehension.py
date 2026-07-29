@@ -63,6 +63,10 @@ _CONDITION_PATTERNS = (
     re.compile(r"只有(?P<value>.+?)才"),
     re.compile(r"仅当(?P<value>.+?)才"),
     re.compile(r"除非(?P<value>.+?)(?:，|,|；|;|$)"),
+    # Explicit AND-joined follow-on clauses: 如果A，并且B，则…
+    re.compile(
+        r"(?:并且|同时满足|以及|(?<![并])且(?![不]))(?P<value>[^，,；;。则]{1,48})"
+    ),
     # Temporal prefix before an effect/action — do not require a delimiter after 后/之前.
     re.compile(
         r"(?P<value>[^，,；;。]{1,60}?(?:之前|之后|以前|以后|前|后))"
@@ -73,6 +77,15 @@ _CONDITION_PATTERNS = (
 # never default to AND.
 _AND_COMBINATOR_RE = re.compile(r"并且|同时满足|以及|(?<![并])且(?![不])")
 _OR_COMBINATOR_RE = re.compile(r"或者|或则|任一条件|其中之一")
+_IF_THEN_ELSE_RE = re.compile(
+    r"^(?P<prefix>(?:除[^，,；;。外]{1,24}外[，,]?)?)"
+    r"(?:如果|若|一旦)(?P<cond>.+?)"
+    r"(?:时)?[，,]?则(?P<then>.+?)"
+    r"[，,]?否则(?P<else>.+)$"
+)
+_EXCEPTION_OVERLAY_CLAUSE_RE = re.compile(
+    r"^(?:但|但是|不过|然而)?(?:除[^。外]{1,24}外|[\u4e00-\u9fffA-Za-z0-9_-]{1,20}除外)$"
+)
 _CRITICAL_AMBIGUITY_PREFIXES = (
     "COREFERENCE_",
     "BUSINESS_SUBJECT_",
@@ -80,6 +93,8 @@ _CRITICAL_AMBIGUITY_PREFIXES = (
     "EXCEPTION_SCOPE_",
     "CONDITION_COMBINATOR_",
     "OMITTED_ACTOR_",
+    "IF_THEN_ELSE_",
+    "BRANCH_",
 )
 _COREFERENCE_RE = re.compile(
     r"该(?:对象|记录|数据|单据|申请|订单|工单|合同|任务)?|"
@@ -544,7 +559,8 @@ def _conditions(text: str) -> list[str]:
     values: list[str] = []
     for pattern in _CONDITION_PATTERNS:
         for match in pattern.finditer(text):
-            value = _text(match.group("value"))
+            value = _text(match.group("value")).strip(" ，,")
+            value = re.split(r"[则]", value, maxsplit=1)[0].strip(" ，,")
             if value and value not in values:
                 values.append(value)
     state_condition = re.search(r"(?P<value>(?:已|未|待|处于)[^，,；;。]{1,32}?)(?=不得|不能|不可|只能|仅能|可以|允许|必须|应当)", text)
@@ -555,19 +571,144 @@ def _conditions(text: str) -> list[str]:
     return values
 
 
+def _split_condition_leaves(condition: str) -> tuple[list[str], str]:
+    """Split one captured condition on explicit AND/OR markers only."""
+    value = _text(condition)
+    if not value:
+        return [], ""
+    has_and = bool(_AND_COMBINATOR_RE.search(value))
+    has_or = bool(_OR_COMBINATOR_RE.search(value))
+    if has_and and has_or:
+        return [value], "UNRESOLVED"
+    if has_and:
+        parts = [
+            part.strip(" ，,")
+            for part in re.split(r"并且|同时满足|以及|(?<![并])且(?![不])", value)
+            if part and part.strip(" ，,")
+        ]
+        if len(parts) >= 2:
+            return parts, "AND"
+        return [value], "UNRESOLVED"
+    if has_or:
+        parts = [
+            part.strip(" ，,")
+            for part in re.split(r"或者|或则|任一条件|其中之一", value)
+            if part and part.strip(" ，,")
+        ]
+        if len(parts) >= 2:
+            return parts, "OR"
+        return [value], "UNRESOLVED"
+    return [value], "SINGLE_CONDITION"
+
+
+def _normalize_conditions(text: str, conditions: list[str]) -> tuple[list[str], str]:
+    """Project multi-condition leaves with an explicit combinator; never default AND."""
+    leaves: list[str] = []
+    leaf_combinators: list[str] = []
+    for condition in conditions:
+        parts, combinator = _split_condition_leaves(condition)
+        for part in parts:
+            if part and part not in leaves:
+                leaves.append(part)
+        if combinator and combinator not in {"", "SINGLE_CONDITION"}:
+            leaf_combinators.append(combinator)
+    if len(leaves) <= 1:
+        return leaves, "SINGLE_CONDITION" if leaves else ""
+    has_and = bool(_AND_COMBINATOR_RE.search(text)) or "AND" in leaf_combinators
+    has_or = bool(_OR_COMBINATOR_RE.search(text)) or "OR" in leaf_combinators
+    if has_and and has_or:
+        return leaves, "UNRESOLVED"
+    if has_and:
+        return leaves, "AND"
+    if has_or:
+        return leaves, "OR"
+    return leaves, "UNRESOLVED"
+
+
 def _condition_combinator(text: str, conditions: list[str]) -> str:
     """Derive multi-condition combinator only from explicit source wording."""
-    if len(conditions) <= 1:
-        return "SINGLE_CONDITION" if conditions else ""
-    has_and = bool(_AND_COMBINATOR_RE.search(text))
-    has_or = bool(_OR_COMBINATOR_RE.search(text))
-    if has_and and has_or:
-        return "UNRESOLVED"
-    if has_and:
-        return "AND"
-    if has_or:
-        return "OR"
-    return "UNRESOLVED"
+    _leaves, combinator = _normalize_conditions(text, conditions)
+    return combinator
+
+
+def _condition_frame(
+    *,
+    conditions: list[str],
+    combinator: str,
+    exception_scopes: list[str],
+    branch_meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Project nested condition / exception structure with explicit combinators only."""
+    branch_meta = dict(branch_meta or {})
+    if _text(branch_meta.get("kind")) == "IF_THEN_ELSE" or _text(branch_meta.get("branch")) in {
+        "THEN",
+        "ELSE",
+    }:
+        kind = "IF_THEN_ELSE"
+    elif exception_scopes:
+        kind = "EXCEPT_OVERLAY"
+    elif combinator == "AND":
+        kind = "ALL"
+    elif combinator == "OR":
+        kind = "ANY"
+    elif combinator == "UNRESOLVED":
+        kind = "UNRESOLVED"
+    elif conditions:
+        kind = "LEAF"
+    else:
+        kind = ""
+    frame = {
+        "kind": kind,
+        "combinator": combinator,
+        "conditions": list(conditions),
+        "exception_scopes": list(exception_scopes),
+        "branch": _text(branch_meta.get("branch")),
+        "paired_statement": _text(branch_meta.get("paired_statement")),
+        "source_backed": True,
+    }
+    if not kind:
+        return {}
+    return frame
+
+
+def _is_exception_overlay_clause(text: str) -> bool:
+    stripped = re.sub(r"^(?:但|但是|不过|然而)", "", _text(text)).strip(" ，,")
+    return bool(stripped and _EXCEPTION_OVERLAY_CLAUSE_RE.match(stripped))
+
+
+def _expand_conditional_units(unit: str) -> list[tuple[str, dict[str, Any]]]:
+    """Expand 若…则…否则… into THEN/ELSE units sharing the source condition frame."""
+    raw = _text(unit)
+    match = _IF_THEN_ELSE_RE.match(raw)
+    if not match:
+        return [(raw, {})]
+    prefix = _text(match.group("prefix"))
+    cond = _text(match.group("cond"))
+    then_body = _text(match.group("then"))
+    else_body = _text(match.group("else"))
+    if not cond or not then_body or not else_body:
+        return [
+            (
+                raw,
+                {
+                    "kind": "IF_THEN_ELSE",
+                    "branch": "",
+                    "paired_statement": raw,
+                    "underdetermined": True,
+                },
+            )
+        ]
+    cond_prefix = f"{prefix}若{cond}，则"
+    frame_base = {
+        "kind": "IF_THEN_ELSE",
+        "paired_statement": raw,
+        "condition_text": cond,
+        "source_backed": True,
+    }
+    return [
+        (f"{cond_prefix}{then_body}", {**frame_base, "branch": "THEN"}),
+        (f"{cond_prefix}{else_body}", {**frame_base, "branch": "ELSE"}),
+    ]
 
 
 def _state_effects(text: str) -> list[dict[str, Any]]:
@@ -764,13 +905,74 @@ def _split_rule_units(text: str) -> list[str]:
         if contrast and contrast.start() > 0:
             left = unit[: contrast.start()].strip(" ，,")
             right = unit[contrast.start() + 1 :].strip()
-            if left:
-                result.append(left)
-            if right:
-                result.append(right)
+            # Exception overlays cover the preceding main rule — never orphan-drop them.
+            if right and _is_exception_overlay_clause(right):
+                result.append(unit)
+            else:
+                if left:
+                    result.append(left)
+                if right:
+                    result.append(right)
         else:
             result.append(unit)
     return result
+
+
+def _pending_branch_fact(
+    unit: str,
+    *,
+    source_id: str,
+    locator: str,
+    branch_meta: dict[str, Any],
+    reason: str,
+) -> dict[str, Any]:
+    """Emit a visible unresolved branch instead of silently dropping IF/ELSE structure."""
+    raw = _text(unit)
+    quote_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return {
+        "fact_id": _stable_id("fact", source_id, locator, "RULE", raw, reason),
+        "kind": "RULE",
+        "language": _language_of(raw),
+        "subject": {"actor_refs": [], "entity_refs": [], "resolution_evidence": []},
+        "conditions": [],
+        "condition_combinator": "UNRESOLVED",
+        "condition_frame": {
+            "kind": "IF_THEN_ELSE",
+            "combinator": "UNRESOLVED",
+            "conditions": [],
+            "exception_scopes": [],
+            "branch": _text(branch_meta.get("branch")),
+            "paired_statement": _text(branch_meta.get("paired_statement") or raw),
+            "source_backed": True,
+        },
+        "trigger": {},
+        "action": {},
+        "object": {"entity_refs": []},
+        "scope": {"tenant": "", "organization": "", "ownership": "", "data_scope": ""},
+        "modality": "ASSERTS",
+        "polarity": "POSITIVE",
+        "exceptions": [],
+        "exception_scope": [],
+        "postconditions": [],
+        "state_effects": [],
+        "data_effects": [],
+        "temporal_constraints": [],
+        "quantity_constraints": [],
+        "time_window_constraints": [],
+        "formula_constraints": [],
+        "authorization_delegation": {},
+        "compensation": [],
+        "compensations": [],
+        "raw_statement": raw,
+        "normalized_statement": re.sub(r"\s+", "", raw),
+        "source_spans": [
+            {"source_id": source_id, "locator": locator, "quote": raw, "quote_hash": quote_hash}
+        ],
+        "confidence": 0.2,
+        "status": "PENDING",
+        "ambiguities": [reason],
+        "critical": True,
+    }
 
 
 def _resolve_reference(
@@ -820,10 +1022,24 @@ def _fact_from_unit(
     context_entities: list[str],
     context_roles: list[str],
     alias_map: dict[str, str] | None = None,
+    branch_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     raw = unit.strip()
     if not raw or not _RULE_SIGNAL_RE.search(raw):
         return None
+    branch_meta = dict(branch_meta or {})
+    if branch_meta.get("underdetermined"):
+        ambiguities = ["IF_THEN_ELSE_UNDERDETERMINED"]
+        return {
+            **_pending_branch_fact(
+                raw,
+                source_id=source_id,
+                locator=locator,
+                branch_meta=branch_meta,
+                reason="IF_THEN_ELSE_UNDERDETERMINED",
+            ),
+            "ambiguities": ambiguities,
+        }
     entities = _find_mentions(raw, known_entities, _ENTITY_SUFFIX_RE)
     entities = _strip_deictic_placeholder_entities(raw, entities, known_entities)
     roles = _find_mentions(raw, known_roles, _ROLE_SUFFIX_RE)
@@ -851,10 +1067,12 @@ def _fact_from_unit(
 
     action = _action(raw)
     modality, polarity = _modality(raw)
-    conditions = _conditions(raw)
-    condition_combinator = _condition_combinator(raw, conditions)
+    conditions, condition_combinator = _normalize_conditions(raw, _conditions(raw))
     exceptions = _exception(raw)
     exception_scopes = _exception_scopes(raw, exceptions, known_roles=known_roles)
+    # Exception scopes are overlays, not primary actors of the governing rule.
+    if exception_scopes:
+        roles = [role for role in roles if role not in exception_scopes]
     states = _state_effects(raw)
     temporal = [match.group("value") for match in _TEMPORAL_RE.finditer(raw)]
     quantity_constraints = _quantity_constraints(raw)
@@ -882,7 +1100,7 @@ def _fact_from_unit(
             for item in conditions
         ):
             conditions = [temporal_condition, *conditions]
-            condition_combinator = _condition_combinator(raw, conditions)
+            conditions, condition_combinator = _normalize_conditions(raw, conditions)
         trigger_action = _action(trigger_text)
         if trigger_action:
             action = trigger_action
@@ -920,12 +1138,19 @@ def _fact_from_unit(
     if len(conditions) > 1 and condition_combinator == "UNRESOLVED":
         ambiguities.append("CONDITION_COMBINATOR_UNRESOLVED")
 
+    condition_frame = _condition_frame(
+        conditions=conditions,
+        combinator=condition_combinator,
+        exception_scopes=exception_scopes,
+        branch_meta=branch_meta,
+    )
+
     confidence = 0.62 + (0.08 if entities else 0.0) + (0.06 if roles else 0.0) + (0.10 if action else 0.0) + (0.07 if conditions else 0.0) + (0.04 if states else 0.0) + (0.03 if modality != "ASSERTS" else 0.0) + (0.03 if postconditions or compensation else 0.0) - 0.12 * len(ambiguities)
     confidence = max(0.05, min(0.99, confidence))
     status = "PENDING" if ambiguities else "ACCEPTED"
     kind = "STATE_TRANSITION" if states else "RULE"
     quote_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
-    fact_id = _stable_id("fact", source_id, locator, kind, raw)
+    fact_id = _stable_id("fact", source_id, locator, kind, raw, branch_meta.get("branch"))
     return {
         "fact_id": fact_id,
         "kind": kind,
@@ -933,6 +1158,7 @@ def _fact_from_unit(
         "subject": {"actor_refs": roles, "entity_refs": entities, "resolution_evidence": resolution_evidence},
         "conditions": conditions,
         "condition_combinator": condition_combinator,
+        "condition_frame": condition_frame,
         "trigger": {"raw": conditions[0]} if conditions else {},
         "action": action,
         "object": {"entity_refs": entities},
@@ -1018,27 +1244,94 @@ def analyze_chinese_business_source(source: dict[str, Any], *, asset: dict[str, 
 
         if chunk.get("kind") != "heading":
             for unit in _split_rule_units(chunk_text):
-                fact = _fact_from_unit(
-                    unit,
-                    source_id=source_id,
-                    locator=locator,
-                    known_entities=known_entities,
-                    known_roles=known_roles,
-                    context_entities=context_entities,
-                    context_roles=context_roles,
-                    alias_map=alias_map,
+                branch_facts: list[dict[str, Any]] = []
+                for branch_unit, branch_meta in _expand_conditional_units(unit):
+                    fact = _fact_from_unit(
+                        branch_unit,
+                        source_id=source_id,
+                        locator=locator,
+                        known_entities=known_entities,
+                        known_roles=known_roles,
+                        context_entities=context_entities,
+                        context_roles=context_roles,
+                        alias_map=alias_map,
+                        branch_meta=branch_meta,
+                    )
+                    if fact is None and branch_meta:
+                        fact = _pending_branch_fact(
+                            branch_unit,
+                            source_id=source_id,
+                            locator=locator,
+                            branch_meta=branch_meta,
+                            reason="BRANCH_FACT_UNRESOLVED",
+                        )
+                    if not fact:
+                        continue
+                    branch_facts.append(fact)
+                # IF_THEN_ELSE ELSE branch may omit actor/object — inherit only from the
+                # paired THEN fact in the same source frame (not proximity coreference).
+                then_fact = next(
+                    (
+                        row
+                        for row in branch_facts
+                        if _text(_dict(row.get("condition_frame")).get("branch")) == "THEN"
+                    ),
+                    None,
                 )
-                if not fact:
-                    continue
-                chunk_facts.append(fact)
-                chunk_fact_ids.append(fact["fact_id"])
-                chunk_ambiguities.extend(_list(fact.get("ambiguities")))
-                for entity in _list(_dict(fact.get("subject")).get("entity_refs")):
-                    if entity:
-                        context_entities.append(_text(entity))
-                for role in _list(_dict(fact.get("subject")).get("actor_refs")):
-                    if role and role != "系统":
-                        context_roles.append(_text(role))
+                if then_fact is not None:
+                    then_subject = _dict(then_fact.get("subject"))
+                    then_entities = _list(then_subject.get("entity_refs"))
+                    then_actors = _list(then_subject.get("actor_refs"))
+                    then_action = _dict(then_fact.get("action"))
+                    for row in branch_facts:
+                        if _text(_dict(row.get("condition_frame")).get("branch")) != "ELSE":
+                            continue
+                        subject = _dict(row.get("subject"))
+                        if not _list(subject.get("entity_refs")) and then_entities:
+                            subject["entity_refs"] = list(then_entities)
+                            row["subject"] = subject
+                            row["object"] = {"entity_refs": list(then_entities)}
+                            evidence = _list(subject.get("resolution_evidence"))
+                            evidence.append(
+                                {
+                                    "mention": "否则分支省略对象",
+                                    "resolved_ref": then_entities[0],
+                                    "method": "if_then_else_frame_inheritance",
+                                    "confidence": 0.88,
+                                    "source_backed": True,
+                                }
+                            )
+                            subject["resolution_evidence"] = evidence
+                        if not _list(subject.get("actor_refs")) and then_actors:
+                            subject["actor_refs"] = list(then_actors)
+                            row["subject"] = subject
+                            evidence = _list(subject.get("resolution_evidence"))
+                            evidence.append(
+                                {
+                                    "mention": "否则分支省略Actor",
+                                    "resolved_ref": then_actors[0],
+                                    "method": "if_then_else_frame_inheritance",
+                                    "confidence": 0.88,
+                                    "source_backed": True,
+                                }
+                            )
+                            subject["resolution_evidence"] = evidence
+                        if not _dict(row.get("action")) and then_action:
+                            row["action"] = dict(then_action)
+                            ambiguities = _list(row.get("ambiguities"))
+                            if "BRANCH_ACTION_INHERITED_FROM_THEN" not in ambiguities:
+                                # Inheritance is source-frame structural, not an ambiguity.
+                                pass
+                for fact in branch_facts:
+                    chunk_facts.append(fact)
+                    chunk_fact_ids.append(fact["fact_id"])
+                    chunk_ambiguities.extend(_list(fact.get("ambiguities")))
+                    for entity in _list(_dict(fact.get("subject")).get("entity_refs")):
+                        if entity:
+                            context_entities.append(_text(entity))
+                    for role in _list(_dict(fact.get("subject")).get("actor_refs")):
+                        if role and role != "系统":
+                            context_roles.append(_text(role))
 
         facts.extend(chunk_facts)
         language = _language_of(chunk_text)
@@ -1110,6 +1403,7 @@ def _rule_from_fact(fact: dict[str, Any]) -> dict[str, Any] | None:
         "modality": modality,
         "conditions": _list(fact.get("conditions")),
         "condition_combinator": _text(fact.get("condition_combinator")),
+        "condition_frame": _dict(fact.get("condition_frame")),
         "exceptions": _list(fact.get("exceptions")),
         "exception_scope": _list(fact.get("exception_scope")),
         "postconditions": _list(fact.get("postconditions")),

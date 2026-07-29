@@ -93,6 +93,11 @@ Implemented in this phase:
 - integration before downstream semantic binding;
 - multi-condition combinator honesty (`AND`/`OR` only from explicit source wording;
   otherwise `UNRESOLVED`, never default `AND`);
+- nested `若…且…否则…` / `除…外` / exception-overlay framing with explicit
+  `condition_frame` combinators (THEN/ELSE branches and EXCEPT_OVERLAY); underdetermined
+  frames stay `UNRESOLVED` with a visible unknown instead of silent drop;
+- decision-matrix row slot completeness into Behavior IR (actor / object / operation /
+  condition / permission / effect); empty cells stay incomplete, never wildcard `any`;
 - cross-document object identity merge only through ACCEPTED `TERM_ALIAS`
   evidence, including source-backed synonym markers (又称/也称/又名/简称/即/
   等同于/是指/aka…) and glossary/definition tables (conflicting alias mappings

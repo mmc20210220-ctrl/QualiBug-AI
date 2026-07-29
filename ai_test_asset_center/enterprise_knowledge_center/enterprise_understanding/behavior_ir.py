@@ -48,6 +48,9 @@ _NUMBER_RE = re.compile(
     r"^\s*(?P<number>[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*(?P<scale>亿|万|千)?\s*(?P<unit>元|万元|亿元|%|％|个|件|天|小时|分钟|秒)?\s*$"
 )
 _ROLE_HEADER_RE = re.compile(r"(?:角色|人员|用户|岗位|操作者|经办人|actor|role|user)", re.I)
+_OBJECT_HEADER_RE = re.compile(
+    r"(?:对象|实体|资源|单据|业务对象|标的|object|entity|resource)", re.I
+)
 _STATE_HEADER_RE = re.compile(r"(?:状态|阶段|status|state)", re.I)
 _GENERIC_HEADER = {"判断", "条件", "输入", "结果", "输出", "动作", "condition", "input", "result", "output", "action"}
 
@@ -171,8 +174,27 @@ def _normalize_condition_slot(
 
 
 def _permission_decision(raw: str) -> str:
-    decisions = [decision for decision, pattern in _PERMISSION_PATTERNS if pattern.search(raw)]
-    return decisions[0] if len(set(decisions)) == 1 else "CONFLICTED" if decisions else "UNSPECIFIED"
+    """Parse permission with deny-first precedence.
+
+    Source phrases like “不允许” contain the ALLOW substring “允许”. Matching every
+    pattern and treating dual hits as CONFLICTED falsely marks a clear denial incomplete.
+    """
+    value = text(raw)
+    if not value:
+        return "UNSPECIFIED"
+    # Precedence matches behavior_ir_governance._permission — DENY before ALLOW.
+    ordered = (
+        "DENY",
+        "REQUIRE_APPROVAL",
+        "REQUIRE_CONFIRMATION",
+        "ALLOW",
+    )
+    by_name = {name: pattern for name, pattern in _PERMISSION_PATTERNS}
+    for decision in ordered:
+        pattern = by_name.get(decision)
+        if pattern is not None and pattern.search(value):
+            return decision
+    return "UNSPECIFIED"
 
 
 def _operation_candidate(raw: str) -> str:
@@ -291,15 +313,25 @@ def build_decision_matrix_row_ledger(
                     result_slots: list[dict[str, Any]] = []
                     evidence: list[dict[str, Any]] = []
                     actor_refs: list[str] = []
+                    object_refs: list[str] = []
                     for column in sorted(condition_columns):
                         cell = by_column.get(column, {})
                         header_path = _best_header_path(cell, owner_headers.get(column, []))
+                        header_text = "/".join(header_path)
                         slot = _normalize_condition_slot(
                             cell, header_path=header_path, column_index=column
                         )
+                        if _ROLE_HEADER_RE.search(header_text):
+                            slot["slot_role"] = "ACTOR"
+                            if text(cell.get("text")):
+                                actor_refs.append(text(cell.get("text")))
+                        elif _OBJECT_HEADER_RE.search(header_text):
+                            slot["slot_role"] = "OBJECT"
+                            if text(cell.get("text")):
+                                object_refs.append(text(cell.get("text")))
+                        else:
+                            slot["slot_role"] = "CONDITION"
                         condition_slots.append(slot)
-                        if _ROLE_HEADER_RE.search("/".join(header_path)) and text(cell.get("text")):
-                            actor_refs.append(text(cell.get("text")))
                         if cell:
                             evidence.append(
                                 _cell_evidence(
@@ -312,11 +344,11 @@ def build_decision_matrix_row_ledger(
                     for column in sorted(result_columns):
                         cell = by_column.get(column, {})
                         header_path = _best_header_path(cell, owner_headers.get(column, []))
-                        result_slots.append(
-                            _normalize_result_slot(
-                                cell, header_path=header_path, column_index=column
-                            )
+                        result_slot = _normalize_result_slot(
+                            cell, header_path=header_path, column_index=column
                         )
+                        result_slot["slot_role"] = "RESULT"
+                        result_slots.append(result_slot)
                         if cell:
                             evidence.append(
                                 _cell_evidence(
@@ -333,6 +365,50 @@ def build_decision_matrix_row_ledger(
                             if text(slot.get("status")) in {"INCOMPLETE", "CONFLICTED"}
                         ]
                     )
+                    operation_refs = unique_text(
+                        slot.get("operation_candidate") for slot in result_slots
+                    )
+                    permission_candidates = unique_text(
+                        slot.get("permission_decision_candidate")
+                        for slot in result_slots
+                        if text(slot.get("permission_decision_candidate"))
+                        not in {"", "UNSPECIFIED"}
+                    )
+                    effect_candidates = unique_text(
+                        slot.get("effect_candidate") for slot in result_slots
+                    )
+                    # Typed slot completeness: a classified column must project, not vanish.
+                    slot_completeness = {
+                        "actor": bool(actor_refs)
+                        or not any(
+                            text(slot.get("slot_role")) == "ACTOR" for slot in condition_slots
+                        ),
+                        "object": bool(object_refs)
+                        or not any(
+                            text(slot.get("slot_role")) == "OBJECT" for slot in condition_slots
+                        ),
+                        "operation": bool(operation_refs),
+                        "condition": any(
+                            text(slot.get("slot_role")) == "CONDITION"
+                            and text(slot.get("raw_value"))
+                            for slot in condition_slots
+                        )
+                        or not any(
+                            text(slot.get("slot_role")) == "CONDITION" for slot in condition_slots
+                        ),
+                        "permission": bool(permission_candidates),
+                        "effect": bool(effect_candidates),
+                    }
+                    missing_slots = [
+                        name for name, present in slot_completeness.items() if not present
+                    ]
+                    if missing_slots:
+                        unresolved = unique_text(
+                            [
+                                *unresolved,
+                                *[f"MATRIX_SLOT_MISSING_{name.upper()}" for name in missing_slots],
+                            ]
+                        )
                     row_id = stable_id(
                         "decision_matrix_row",
                         source_id,
@@ -352,8 +428,13 @@ def build_decision_matrix_row_ledger(
                         "page": table.get("page") or (row_cells[0].get("page") if row_cells else 0),
                         "row_index": row_index,
                         "actor_refs_candidate": unique_text(actor_refs),
+                        "object_refs_candidate": unique_text(object_refs),
+                        "operation_refs_candidate": operation_refs,
+                        "permission_decision_candidates": permission_candidates,
+                        "effect_candidates": effect_candidates,
                         "condition_slots": condition_slots,
                         "result_slots": result_slots,
+                        "slot_completeness": slot_completeness,
                         "unresolved_semantics": unresolved,
                         "evidence": dedupe_evidence(evidence),
                         "status": "INCOMPLETE" if unresolved else "CANDIDATE",
@@ -444,6 +525,11 @@ def _behavior_from_fact(fact: dict[str, Any]) -> dict[str, Any] | None:
         return None
     evidence = evidence_from_fact(fact)
     conditions = _fact_conditions(fact)
+    combinator = text(fact.get("condition_combinator"))
+    if len(conditions) > 1 and combinator not in {"AND", "OR"}:
+        combinator = "UNRESOLVED"
+    elif len(conditions) <= 1:
+        combinator = "SINGLE_CONDITION" if conditions else ""
     state_effects = [dict(row) for row in as_list(fact.get("state_effects")) if isinstance(row, dict)]
     data_effects = [
         dict(row) if isinstance(row, dict) else {"statement": text(row)}
@@ -455,6 +541,7 @@ def _behavior_from_fact(fact: dict[str, Any]) -> dict[str, Any] | None:
             "BEHAVIOR_OPERATION_UNRESOLVED" if not operation else "",
             "BEHAVIOR_OBJECT_UNRESOLVED" if not objects else "",
             "BEHAVIOR_EVIDENCE_MISSING" if not evidence else "",
+            "BEHAVIOR_CONDITION_COMBINATOR_UNRESOLVED" if combinator == "UNRESOLVED" else "",
         ]
     )
     behavior_id = stable_id("business_behavior", "fact", fact.get("fact_id"), operation, objects)
@@ -469,6 +556,8 @@ def _behavior_from_fact(fact: dict[str, Any]) -> dict[str, Any] | None:
         "object_refs": objects,
         "trigger": as_dict(fact.get("trigger")),
         "preconditions": conditions,
+        "condition_combinator": combinator,
+        "condition_frame": as_dict(fact.get("condition_frame")),
         "state_preconditions": [
             slot for slot in conditions if _STATE_HEADER_RE.search(text(slot.get("field_candidate")))
         ],
@@ -505,17 +594,35 @@ def _matrix_behavior(
     row: dict[str, Any], operation_index: dict[str, list[dict[str, Any]]]
 ) -> dict[str, Any]:
     result_slots = [slot for slot in as_list(row.get("result_slots")) if isinstance(slot, dict)]
-    operations = unique_text(slot.get("operation_candidate") for slot in result_slots)
+    operations = unique_text(
+        [
+            *as_list(row.get("operation_refs_candidate")),
+            *(slot.get("operation_candidate") for slot in result_slots),
+        ]
+    )
     decisions = unique_text(
-        slot.get("permission_decision_candidate")
-        for slot in result_slots
-        if text(slot.get("permission_decision_candidate")) not in {"", "UNSPECIFIED"}
+        [
+            *as_list(row.get("permission_decision_candidates")),
+            *(
+                slot.get("permission_decision_candidate")
+                for slot in result_slots
+                if text(slot.get("permission_decision_candidate")) not in {"", "UNSPECIFIED"}
+            ),
+        ]
     )
     operation = operations[0] if len(operations) == 1 else ""
     matched_operations = operation_index.get(operation, []) if operation else []
-    object_refs = unique_text(
+    matrix_objects = unique_text(as_list(row.get("object_refs_candidate")))
+    operation_objects = unique_text(
         [value for item in matched_operations for value in as_list(item.get("object_refs"))]
     ) if len(matched_operations) == 1 else []
+    # Prefer matrix object column; fall back to unique operation binding — never invent.
+    if matrix_objects:
+        object_refs = matrix_objects
+    elif operation_objects:
+        object_refs = operation_objects
+    else:
+        object_refs = []
     permission = decisions[0] if len(decisions) == 1 else "CONFLICTED" if len(decisions) > 1 else "UNSPECIFIED"
     unresolved = unique_text(
         [
@@ -542,10 +649,20 @@ def _matrix_behavior(
         "object_refs": object_refs,
         "trigger": {},
         "preconditions": conditions,
+        "condition_combinator": (
+            "SINGLE_CONDITION"
+            if len(conditions) <= 1
+            else "UNRESOLVED"
+        ),
         "state_preconditions": [
             slot for slot in conditions if _STATE_HEADER_RE.search(text(slot.get("field_candidate")))
         ],
-        "expected_effects": unique_text(slot.get("effect_candidate") for slot in result_slots),
+        "expected_effects": unique_text(
+            [
+                *as_list(row.get("effect_candidates")),
+                *(slot.get("effect_candidate") for slot in result_slots),
+            ]
+        ),
         "state_effects": [],
         "data_effects": [],
         "permission_decision": permission,
@@ -556,6 +673,7 @@ def _matrix_behavior(
         "status": status,
         "candidate_only": True,
         "formal_business_rule": False,
+        "slot_completeness": as_dict(row.get("slot_completeness")),
     }
 
 

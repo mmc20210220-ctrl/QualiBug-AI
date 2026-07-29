@@ -231,3 +231,94 @@ def test_closure_surfaces_candidate_behavior_and_keeps_model_partial() -> None:
     assert result["behavior_ir_gate"]["status"] == "PARTIAL_BUSINESS_BEHAVIOR_IR"
     assert result["gate"]["status"] == "PARTIAL_ENTERPRISE_UNDERSTANDING"
     assert result["metrics"]["candidate_behavior_count"] == 1
+
+
+def test_decision_matrix_object_actor_slots_are_not_silently_dropped() -> None:
+    table_id = "table-slots"
+    blocks = [
+        {
+            "block_id": table_id,
+            "type": "TABLE",
+            "page": 1,
+            "formal_table_structure": True,
+            "semantic_candidate_header_row_count": 1,
+            "source_locator": "matrix.pdf#page=1;table=table-slots",
+        },
+        {
+            **_cell(table_id, 0, 0, "角色", header=True),
+            "column_header_path": ["角色"],
+        },
+        {
+            **_cell(table_id, 0, 1, "对象", header=True),
+            "column_header_path": ["对象"],
+        },
+        {
+            **_cell(table_id, 0, 2, "状态", header=True),
+            "column_header_path": ["条件", "状态"],
+        },
+        {
+            **_cell(table_id, 0, 3, "权限", header=True),
+            "column_header_path": ["结果", "权限"],
+        },
+        {
+            **_cell(table_id, 1, 0, "管理员"),
+            "column_header_path": ["角色"],
+        },
+        {
+            **_cell(table_id, 1, 1, "订单"),
+            "column_header_path": ["对象"],
+        },
+        {
+            **_cell(table_id, 1, 2, "已审核"),
+            "column_header_path": ["条件", "状态"],
+        },
+        {
+            **_cell(table_id, 1, 3, "允许发货"),
+            "column_header_path": ["结果", "权限"],
+        },
+    ]
+    structure = {
+        "source_id": "source-matrix",
+        "filename": "matrix.pdf",
+        "format": "pdf",
+        "blocks": blocks,
+        "decision_matrix_candidates": [
+            {
+                "candidate_id": "matrix-candidate-slots",
+                "table_block_id": table_id,
+                "logical_table_id": "",
+                "condition_column_candidates": [0, 1, 2],
+                "result_column_candidates": [3],
+                "candidate_only": True,
+                "formal_business_rule": False,
+            }
+        ],
+        "table_column_role_candidates": [
+            {"table_block_id": table_id, "column_index": 0, "header_path": ["角色"]},
+            {"table_block_id": table_id, "column_index": 1, "header_path": ["对象"]},
+            {"table_block_id": table_id, "column_index": 2, "header_path": ["条件", "状态"]},
+            {"table_block_id": table_id, "column_index": 3, "header_path": ["结果", "权限"]},
+        ],
+        "structure_receipt": {"status": "COMPLETE", "page_count": 1, "text_page_count": 1},
+        "unsupported_content": [],
+    }
+    # No operation library — object must still project from the matrix object column.
+    rows, behaviors, _conflicts, _unknowns, _gate = build_governed_business_behavior_ir(
+        _asset(structure), [], []
+    )
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["actor_refs_candidate"] == ["管理员"]
+    assert row["object_refs_candidate"] == ["订单"]
+    assert row["operation_refs_candidate"] == ["发货"]
+    assert row["permission_decision_candidates"] == ["ALLOW"]
+    assert row["effect_candidates"] == ["允许发货"]
+    assert row["slot_completeness"]["actor"] is True
+    assert row["slot_completeness"]["object"] is True
+    assert row["slot_completeness"]["operation"] is True
+    assert row["slot_completeness"]["permission"] is True
+    assert row["slot_completeness"]["effect"] is True
+    assert behaviors[0]["actor_refs"] == ["管理员"]
+    assert behaviors[0]["object_refs"] == ["订单"]
+    assert behaviors[0]["operation_ref"] == "发货"
+    assert behaviors[0]["permission_decision"] == "ALLOW"

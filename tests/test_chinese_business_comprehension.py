@@ -515,3 +515,88 @@ def test_only_if_permission_is_allow_not_unspecified() -> None:
     assert behavior is not None
     assert behavior["permission_decision"] == "ALLOW"
     assert behavior["status"] == "CONFIRMED"
+
+
+def test_if_then_else_and_nested_exception_project_explicit_frames() -> None:
+    asset = {
+        **_asset(),
+        "roles": [{"role": "管理员"}, {"role": "普通用户"}, {"role": "财务"}],
+    }
+    _, facts, _ = analyze_chinese_business_source(
+        {
+            "source_id": "nested-1",
+            "filename": "分支.md",
+            "text": (
+                "若金额超过1000且审批未完成，则管理员不得提交订单，否则可以提交订单。"
+            ),
+        },
+        asset=asset,
+    )
+    assert len(facts) == 2
+    by_branch = {
+        fact["condition_frame"]["branch"]: fact
+        for fact in facts
+        if fact.get("condition_frame", {}).get("kind") == "IF_THEN_ELSE"
+    }
+    assert set(by_branch) == {"THEN", "ELSE"}
+    then_fact = by_branch["THEN"]
+    else_fact = by_branch["ELSE"]
+    assert then_fact["condition_combinator"] == "AND"
+    assert then_fact["conditions"] == ["金额超过1000", "审批未完成"]
+    assert then_fact["modality"] == "MUST_NOT"
+    assert else_fact["modality"] == "MAY"
+    assert else_fact["conditions"] == ["金额超过1000", "审批未完成"]
+    assert else_fact["condition_combinator"] == "AND"
+    assert then_fact["subject"]["entity_refs"] == ["订单"]
+    assert else_fact["subject"]["entity_refs"] == ["订单"]
+
+    _, except_facts, _ = analyze_chinese_business_source(
+        {
+            "source_id": "nested-2",
+            "filename": "例外覆盖.md",
+            "text": "订单不得删除，但管理员除外。",
+        },
+        asset=asset,
+    )
+    deny = next(fact for fact in except_facts if fact.get("action", {}).get("canonical") == "删除")
+    assert deny["exception_scope"] == ["管理员"]
+    assert deny["condition_frame"]["kind"] == "EXCEPT_OVERLAY"
+    assert "管理员" not in deny["subject"]["actor_refs"]
+    assert deny["status"] == "ACCEPTED"
+
+    _, scoped, _ = analyze_chinese_business_source(
+        {
+            "source_id": "nested-3",
+            "filename": "除外主规则.md",
+            "text": "除管理员外，普通用户不得删除订单。",
+        },
+        asset=asset,
+    )
+    scoped_deny = next(fact for fact in scoped if fact.get("action", {}).get("canonical") == "删除")
+    assert scoped_deny["exception_scope"] == ["管理员"]
+    assert scoped_deny["subject"]["actor_refs"] == ["普通用户"]
+    assert scoped_deny["condition_frame"]["kind"] == "EXCEPT_OVERLAY"
+
+
+def test_explicit_and_clause_after_comma_is_not_silently_dropped() -> None:
+    _, facts, _ = analyze_chinese_business_source(
+        {
+            "source_id": "and-clause",
+            "filename": "并且条件.md",
+            "text": "如果金额超过1000，并且状态为草稿，则普通用户可以提交订单，否则不得提交。",
+        },
+        asset=_asset(),
+    )
+    assert len(facts) == 2
+    then_fact = next(
+        fact for fact in facts if fact.get("condition_frame", {}).get("branch") == "THEN"
+    )
+    else_fact = next(
+        fact for fact in facts if fact.get("condition_frame", {}).get("branch") == "ELSE"
+    )
+    assert then_fact["condition_combinator"] == "AND"
+    assert "金额超过1000" in then_fact["conditions"]
+    assert any("草稿" in item for item in then_fact["conditions"])
+    assert then_fact["modality"] == "MAY"
+    assert else_fact["modality"] == "MUST_NOT"
+    assert else_fact["condition_combinator"] == "AND"
