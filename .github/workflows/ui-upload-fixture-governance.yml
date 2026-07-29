@@ -5,19 +5,26 @@ on:
     branches: [main]
     paths:
       - 'ai_test_asset_center/ui_upload_fixture_*.py'
+      - 'ai_test_asset_center/ui_upload_scenario_*.py'
       - 'ai_test_asset_center/private_pilot_upload_fixture_*.py'
+      - 'ai_test_asset_center/private_pilot_ui_upload_scenario_*.py'
       - 'ai_test_asset_center/private_pilot_scan_context_patch.py'
       - 'frontend/src/api/upload-fixtures.ts'
+      - 'frontend/src/api/ui-upload-scenarios.ts'
       - 'frontend/src/api/run-center.ts'
       - 'frontend/src/components/run/RunUploadFixtureSelector.tsx'
+      - 'frontend/src/components/run/RunUploadScenarioSelector.tsx'
       - 'frontend/src/components/settings/SettingsUploadFixtureSection.tsx'
+      - 'frontend/src/components/settings/SettingsUploadScenarioSection.tsx'
       - 'frontend/src/components/settings/SettingsComplexInteractionSection.tsx'
       - 'frontend/src/components/settings/SettingsInfoSection.tsx'
       - 'frontend/src/pages/EnterpriseCampaigns.tsx'
       - 'frontend/src/styles/upload-fixture-settings.css'
       - 'frontend/src/styles/run-upload-fixtures.css'
       - 'tests/test_ui_upload_fixture_*.py'
+      - 'tests/test_ui_upload_scenario_*.py'
       - 'tests/test_private_pilot_upload_fixture_*.py'
+      - 'tests/test_private_pilot_ui_upload_scenario_*.py'
       - '.github/workflows/ui-upload-fixture-governance.yml'
   workflow_dispatch:
 
@@ -40,12 +47,13 @@ jobs:
           cache: pip
       - name: Install Python test dependencies
         run: python -m pip install --upgrade pip && python -m pip install -e '.[dev]'
-      - name: Run upload fixture governance tests
+      - name: Run upload fixture and scenario governance tests
         run: >-
           python -m pytest -q
           tests/test_ui_upload_fixture_registry.py
           tests/test_ui_upload_fixture_registry_integrity.py
           tests/test_ui_upload_fixture_continuous_binding.py
+          tests/test_ui_upload_scenario_registry.py
           tests/test_private_pilot_upload_fixture_governance.py
           tests/test_private_pilot_upload_fixture_scan_gate.py
 
@@ -83,7 +91,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Install frontend dependencies
         run: npm ci
-      - name: Typecheck fixture governance UI
+      - name: Typecheck fixture and scenario governance UI
         run: npm run typecheck
-      - name: Lint fixture governance UI
+      - name: Lint fixture and scenario governance UI
         run: npm run lint
