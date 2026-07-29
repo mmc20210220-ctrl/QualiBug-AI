@@ -1,11 +1,12 @@
 """Govern Business Behavior IR implementation bindings before scenario planning.
 
-The base binder preserves every source-backed and diagnostic match.  This closure recomputes
-whether those observations are sufficient for scenario planning.  It never changes Business
+The base binder preserves every source-backed and diagnostic match. This closure recomputes
+whether those observations are sufficient for scenario planning. It never changes Business
 Behavior IR semantics and never compiles executable requests or assertions.
 """
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from typing import Any, Iterable
 
@@ -26,10 +27,19 @@ _FIELD_UNKNOWN_KINDS = {
     "IMPLEMENTATION_CONDITION_OBSERVER_UNRESOLVED",
     "IMPLEMENTATION_EFFECT_OBSERVER_UNRESOLVED",
 }
+_RECOMPUTED_UNKNOWN_KINDS = (
+    _ACTION_UNKNOWN_KINDS
+    | _FIELD_UNKNOWN_KINDS
+    | {"IMPLEMENTATION_BEHAVIOR_NOT_CONFIRMED"}
+)
 
 
 def _dicts(value: Any) -> list[dict[str, Any]]:
     return [row for row in as_list(value) if isinstance(row, dict)]
+
+
+def _norm(value: Any) -> str:
+    return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", text(value).lower())
 
 
 def _unknown_id(row: dict[str, Any]) -> str:
@@ -40,6 +50,7 @@ def _unknown_id(row: dict[str, Any]) -> str:
         row.get("slot_ref"),
         row.get("field_candidate"),
         row.get("interface_refs"),
+        row.get("candidate_interface_refs"),
     )
 
 
@@ -49,8 +60,8 @@ def _dedupe_unknowns(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         if not isinstance(raw, dict):
             continue
         row = dict(raw)
-        row.setdefault("unknown_id", _unknown_id(row))
-        result[text(row.get("unknown_id")) or _unknown_id(row)] = row
+        row["unknown_id"] = _unknown_id(row)
+        result[row["unknown_id"]] = row
     return sorted(result.values(), key=lambda row: text(row.get("unknown_id")))
 
 
@@ -62,7 +73,40 @@ def _authoritative_api_rows(binding: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def _govern_observer_slot(slot: dict[str, Any]) -> dict[str, Any]:
+def _table_identity_names(
+    binding: dict[str, Any], tables: dict[str, dict[str, Any]]
+) -> set[str]:
+    table = tables.get(text(binding.get("table_id"))) or {}
+    return {
+        _norm(value)
+        for value in [
+            binding.get("table"),
+            table.get("name"),
+            *as_list(table.get("aliases")),
+        ]
+        if _norm(value)
+    }
+
+
+def _database_binding_matches_behavior(
+    binding: dict[str, Any],
+    behavior: dict[str, Any],
+    tables: dict[str, dict[str, Any]],
+) -> bool:
+    object_names = {
+        _norm(value) for value in as_list(behavior.get("object_refs")) if _norm(value)
+    }
+    if not object_names:
+        return False
+    return bool(object_names & _table_identity_names(binding, tables))
+
+
+def _govern_observer_slot(
+    slot: dict[str, Any],
+    *,
+    behavior: dict[str, Any],
+    tables: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
     result = dict(slot)
     candidates = _dicts(result.get("bindings"))
     db_candidates = [
@@ -71,30 +115,41 @@ def _govern_observer_slot(slot: dict[str, Any]) -> dict[str, Any]:
         if text(row.get("binding_kind")) == "DATABASE_FIELD"
         and bool(row.get("authoritative"))
     ]
-    observable_candidates = [
+    matching_db_candidates = [
+        row
+        for row in db_candidates
+        if _database_binding_matches_behavior(row, behavior, tables)
+    ]
+    non_db_observers = [
         row
         for row in candidates
         if text(row.get("binding_kind"))
         in {
-            "DATABASE_FIELD",
             "API_RESPONSE_FIELD",
             "RUNTIME_STATE_OBSERVER",
             "UI_STATE_OBSERVER",
         }
         and bool(row.get("authoritative"))
     ]
+    observable_candidates = [*matching_db_candidates, *non_db_observers]
     db_tables = {
-        text(row.get("table_id")) for row in db_candidates if text(row.get("table_id"))
+        text(row.get("table_id"))
+        for row in matching_db_candidates
+        if text(row.get("table_id"))
     }
     api_contract_candidates = [
         row
         for row in candidates
         if text(row.get("binding_kind")) == "API_CONTRACT_FIELD"
     ]
+    object_refs = [value for value in as_list(behavior.get("object_refs")) if text(value)]
 
     if len(db_tables) > 1:
         status = "AMBIGUOUS"
         reason = "IMPLEMENTATION_FIELD_MULTIPLE_DATABASE_TABLES"
+    elif db_candidates and object_refs and not matching_db_candidates and not non_db_observers:
+        status = "OBJECT_TABLE_UNRESOLVED"
+        reason = "IMPLEMENTATION_FIELD_OBJECT_TABLE_UNRESOLVED"
     elif observable_candidates:
         status = "BOUND"
         reason = ""
@@ -108,6 +163,7 @@ def _govern_observer_slot(slot: dict[str, Any]) -> dict[str, Any]:
     result["status"] = status
     result["runtime_observer_available"] = status == "BOUND"
     result["request_contract_field_available"] = bool(api_contract_candidates)
+    result["object_table_identity_confirmed"] = bool(matching_db_candidates)
     result["api_request_field_is_runtime_observer"] = False
     if reason:
         result["reason_code"] = reason
@@ -159,11 +215,16 @@ def build_governed_behavior_implementation_bindings(
         for row in _dicts(asset.get("interfaces"))
         if text(row.get("interface_id"))
     }
+    tables = {
+        text(row.get("table_id")): row
+        for row in _dicts(asset.get("data_tables"))
+        if text(row.get("table_id"))
+    }
     unknowns = [
         dict(row)
         for row in base_unknowns
         if isinstance(row, dict)
-        and text(row.get("kind")) not in _ACTION_UNKNOWN_KINDS | _FIELD_UNKNOWN_KINDS
+        and text(row.get("kind")) not in _RECOMPUTED_UNKNOWN_KINDS
     ]
 
     governed: list[dict[str, Any]] = []
@@ -230,11 +291,11 @@ def build_governed_behavior_implementation_bindings(
             )
 
         condition_slots = [
-            _govern_observer_slot(row)
+            _govern_observer_slot(row, behavior=behavior, tables=tables)
             for row in _dicts(binding.get("condition_observer_bindings"))
         ]
         effect_slots = [
-            _govern_observer_slot(row)
+            _govern_observer_slot(row, behavior=behavior, tables=tables)
             for row in _dicts(binding.get("effect_observer_bindings"))
         ]
         binding["condition_observer_bindings"] = condition_slots
@@ -323,6 +384,7 @@ def build_governed_behavior_implementation_bindings(
         binding["request_payload_compiled"] = False
         binding["expected_assertion_compiled"] = False
         binding["runtime_observer_gate_enforced"] = True
+        binding["object_table_identity_gate_enforced"] = True
         binding["api_request_field_is_runtime_observer"] = False
         governed.append(binding)
 
@@ -370,6 +432,7 @@ def build_governed_behavior_implementation_bindings(
         "quality_claim": "IMPLEMENTATION_BINDING_CLOSURE_NOT_RUNTIME_VERIFICATION",
         "semantic_understanding_gate_is_separate": True,
         "single_primary_action_interface_required": True,
+        "object_table_identity_required_for_database_observers": True,
         "api_request_field_is_runtime_observer": False,
         "arbitrary_endpoint_fallback_allowed": False,
         "token_overlap_is_authoritative": False,
