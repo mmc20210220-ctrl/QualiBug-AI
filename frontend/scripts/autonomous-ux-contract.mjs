@@ -24,6 +24,8 @@ const [
   fixtureSelector,
   runCenter,
   campaignsPage,
+  dashboardPage,
+  dashboardUnderstanding,
   serviceForm,
   customerSection,
   understandingReceipt,
@@ -35,6 +37,7 @@ const [
   ingestHandler,
   projectAssets,
   understandingPreflight,
+  commandCenterUnderstanding,
   serviceComposition,
   sidebar,
 ] = await Promise.all([
@@ -42,6 +45,8 @@ const [
   source('src/components/run/RunUploadFixtureSelector.tsx'),
   source('src/api/run-center.ts'),
   source('src/pages/EnterpriseCampaigns.tsx'),
+  source('src/pages/Dashboard.tsx'),
+  source('src/components/dashboard/EnterpriseUnderstandingPanel.tsx'),
   source('src/components/settings/SettingsServiceForm.tsx'),
   source('src/components/settings/SettingsCustomerSection.tsx'),
   source('src/components/settings/EnterpriseUnderstandingReceipt.tsx'),
@@ -53,6 +58,7 @@ const [
   source('../ai_test_asset_center/private_pilot_ingest_handlers.py'),
   source('../ai_test_asset_center/private_pilot_project_assets.py'),
   source('../ai_test_asset_center/private_pilot_understanding_preflight.py'),
+  source('../ai_test_asset_center/private_pilot_command_center_understanding.py'),
   source('../ai_test_asset_center/private_pilot_service.py'),
   source('src/components/Sidebar.tsx'),
 ]);
@@ -89,6 +95,21 @@ requireText(campaignsPage, '个已审批 UI 场景由后台自动纳入', 'campa
 forbidText(campaignsPage, '测试数据策略', 'campaigns page');
 forbidText(campaignsPage, 'type DataStrategy', 'campaigns page');
 forbidText(campaignsPage, 'buildTestDataContract', 'campaigns page');
+
+requireText(dashboardPage, "import { EnterpriseUnderstandingPanel }", 'dashboard understanding projection');
+requireText(dashboardPage, 'const knowledgeSummary = asRecord(record.knowledge_summary);', 'dashboard understanding projection');
+requireText(dashboardPage, '<EnterpriseUnderstandingPanel', 'dashboard understanding projection');
+requireText(dashboardPage, "navigateToProjectPath('/settings', project)", 'dashboard understanding projection');
+
+requireText(dashboardUnderstanding, '已有知识资产的只读投影', 'dashboard enterprise understanding');
+requireText(dashboardUnderstanding, 'summary.understanding_gates', 'dashboard enterprise understanding');
+requireText(dashboardUnderstanding, "key: 'runtime_plan'", 'dashboard enterprise understanding');
+requireText(dashboardUnderstanding, "label: 'Runtime Plan'", 'dashboard enterprise understanding');
+requireText(dashboardUnderstanding, '运行模板链已闭合', 'dashboard enterprise understanding');
+requireText(dashboardUnderstanding, '系统不会通过人工点击“确认正确”或常识补全绕过门禁', 'dashboard enterprise understanding');
+forbidText(dashboardUnderstanding, 'contentEditable', 'dashboard enterprise understanding');
+forbidText(dashboardUnderstanding, '保存模型', 'dashboard enterprise understanding');
+forbidText(dashboardUnderstanding, '确认理解正确', 'dashboard enterprise understanding');
 
 requireText(serviceForm, '最小接入', 'service onboarding form');
 requireText(serviceForm, '只需提供系统名称、测试地址和可用凭据', 'service onboarding form');
@@ -131,8 +152,18 @@ requireText(understandingPreflight, 'super()._handle_scan_preflight(project, roo
 forbidText(understandingPreflight, 'build_enterprise_business_knowledge_asset', 'understanding preflight projection');
 forbidText(understandingPreflight, '第二套', 'understanding preflight projection');
 
+requireText(commandCenterUnderstanding, 'load_enterprise_business_knowledge_asset', 'command center understanding projection');
+requireText(commandCenterUnderstanding, 'data["knowledge_summary"] = {**existing, **_understanding_projection(asset)}', 'command center understanding projection');
+requireText(commandCenterUnderstanding, 'runtime_plan_gate', 'command center understanding projection');
+requireText(commandCenterUnderstanding, 'runtime_plan_unknowns', 'command center understanding projection');
+requireText(commandCenterUnderstanding, 'EXISTING_KNOWLEDGE_ASSET_GATE_PROJECTION_NOT_SECOND_AUTHORITY', 'command center understanding projection');
+requireText(commandCenterUnderstanding, 'super()._build_command_center(project_id, root)', 'command center understanding projection');
+forbidText(commandCenterUnderstanding, 'build_enterprise_business_knowledge_asset', 'command center understanding projection');
+
 requireText(serviceComposition, 'from .private_pilot_understanding_preflight import UnderstandingPreflightProjectionMixin', 'private pilot composition');
 requireText(serviceComposition, 'UnderstandingPreflightProjectionMixin,\n    ScanHandlersMixin,', 'private pilot composition');
+requireText(serviceComposition, 'from .private_pilot_command_center_understanding import UnderstandingCommandCenterProjectionMixin', 'private pilot composition');
+requireText(serviceComposition, 'UnderstandingCommandCenterProjectionMixin,\n    CommandCenterBuilderMixin,', 'private pilot composition');
 
 requireText(knowledgeApi, "fetch('/api/knowledge/ingest'", 'knowledge ingest API');
 requireText(knowledgeApi, 'filename: file.name', 'knowledge ingest API');
