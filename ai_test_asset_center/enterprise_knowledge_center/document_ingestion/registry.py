@@ -90,15 +90,17 @@ def build_default_registry() -> DocumentAdapterRegistry:
     )
     from .rendered_ocr_adapter import OcrSupplementalAdapter
     from .visual_table_adapter import VisualTableSupplementalAdapter
+    from .visual_table_provider_gate import GeometryFormalEnforcingVisualTableProvider
 
+    advanced_table_provider = GeometryFormalEnforcingVisualTableProvider(
+        build_default_advanced_visual_table_provider()
+    )
     return DocumentAdapterRegistry(
         [
             DocxDocumentAdapter(),
             PdfDocumentAdapter(),
             OcrSupplementalAdapter(),
-            VisualTableSupplementalAdapter(
-                provider=build_default_advanced_visual_table_provider()
-            ),
+            VisualTableSupplementalAdapter(provider=advanced_table_provider),
             GenericTextDocumentAdapter(),
             UnknownBinaryDocumentAdapter(),
         ]
