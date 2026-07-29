@@ -22,6 +22,24 @@ def _explicit_combinator(behavior: dict[str, Any]) -> str:
     return value if value in {"AND", "OR"} else ""
 
 
+def _restore_nonconflicted_status(behavior: dict[str, Any]) -> None:
+    unresolved = [
+        text(value) for value in as_list(behavior.get("unresolved_semantics")) if text(value)
+    ]
+    if unresolved:
+        behavior["status"] = "INCOMPLETE"
+        behavior["formal_business_rule"] = False
+        return
+    if text(behavior.get("source_kind")) == "ACCEPTED_BUSINESS_FACT":
+        behavior["status"] = "CONFIRMED"
+        behavior["formal_business_rule"] = True
+        behavior["candidate_only"] = False
+    else:
+        behavior["status"] = "CANDIDATE"
+        behavior["formal_business_rule"] = False
+        behavior["candidate_only"] = True
+
+
 def _rebuild_gate(
     rows: list[dict[str, Any]],
     behaviors: list[dict[str, Any]],
@@ -95,7 +113,11 @@ def build_business_behavior_ir_v1(
         behavior["condition_combinator"] = "UNRESOLVED"
         behavior["unresolved_semantics"] = sorted(
             {
-                *[text(value) for value in as_list(behavior.get("unresolved_semantics")) if text(value)],
+                *[
+                    text(value)
+                    for value in as_list(behavior.get("unresolved_semantics"))
+                    if text(value)
+                ],
                 "BEHAVIOR_CONDITION_COMBINATOR_UNRESOLVED",
             }
         )
@@ -110,12 +132,12 @@ def build_business_behavior_ir_v1(
         if text(conflict.get("kind")) != "BEHAVIOR_CONDITION_CONTRADICTION":
             kept_conflicts.append(conflict)
             continue
-        behavior_refs = [text(value) for value in as_list(conflict.get("behavior_refs")) if text(value)]
+        behavior_refs = [
+            text(value) for value in as_list(conflict.get("behavior_refs")) if text(value)
+        ]
         behavior = by_id.get(behavior_refs[0]) if len(behavior_refs) == 1 else None
         if behavior is not None and text(behavior.get("condition_combinator")) != "AND":
-            if text(behavior.get("status")) == "CONFLICTED":
-                behavior["status"] = "INCOMPLETE"
-                behavior["formal_business_rule"] = False
+            _restore_nonconflicted_status(behavior)
             continue
         kept_conflicts.append(conflict)
     conflicts = kept_conflicts
@@ -131,7 +153,9 @@ def build_business_behavior_ir_v1(
         }
     ]
     for behavior in behaviors:
-        unresolved = [text(value) for value in as_list(behavior.get("unresolved_semantics")) if text(value)]
+        unresolved = [
+            text(value) for value in as_list(behavior.get("unresolved_semantics")) if text(value)
+        ]
         if unresolved:
             preserved_unknowns.append(
                 new_unknown(
@@ -149,14 +173,20 @@ def build_business_behavior_ir_v1(
                     },
                 )
             )
-    candidates = [behavior for behavior in behaviors if text(behavior.get("status")) == "CANDIDATE"]
+    candidates = [
+        behavior for behavior in behaviors if text(behavior.get("status")) == "CANDIDATE"
+    ]
     if candidates:
         preserved_unknowns.append(
             new_unknown(
                 "BUSINESS_BEHAVIOR_CANDIDATE_UNCONFIRMED",
                 f"已形成{len(candidates)}条行为候选，但尚无足够来源证据将其升级为正式业务规则。",
                 evidence=dedupe_evidence(
-                    [evidence for behavior in candidates for evidence in as_list(behavior.get("evidence"))]
+                    [
+                        evidence
+                        for behavior in candidates
+                        for evidence in as_list(behavior.get("evidence"))
+                    ]
                 ),
                 severity="P1",
                 blocks_formal_understanding=False,
