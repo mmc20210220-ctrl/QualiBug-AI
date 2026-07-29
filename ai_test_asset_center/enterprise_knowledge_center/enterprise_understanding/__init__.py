@@ -29,6 +29,12 @@ from .integration import (
 )
 from .lifecycle_builder import build_lifecycles
 from .object_graph import build_object_graph
+from .scenario_ir import (
+    SCENARIO_IR_GATE_SCHEMA,
+    SCENARIO_IR_SCHEMA,
+    build_scenario_ir_v1,
+    project_scenario_ir_to_asset,
+)
 from .schema import *  # noqa: F401,F403
 
 __all__ = [
@@ -38,6 +44,8 @@ __all__ = [
     "IMPLEMENTATION_BINDING_SCHEMA",
     "IMPLEMENTATION_BINDING_GATE_SCHEMA",
     "SCENARIO_PLANNING_GATE_SCHEMA",
+    "SCENARIO_IR_SCHEMA",
+    "SCENARIO_IR_GATE_SCHEMA",
     "build_decision_matrix_row_ledger",
     "build_business_behavior_ir",
     "build_governed_business_behavior_ir",
@@ -46,6 +54,8 @@ __all__ = [
     "build_governed_behavior_implementation_bindings",
     "build_final_scenario_planning_gate",
     "project_final_scenario_planning_gate",
+    "build_scenario_ir_v1",
+    "project_scenario_ir_to_asset",
     "build_enterprise_understanding_model",
     "assess_understanding_model",
     "enrich_asset_with_enterprise_understanding",
