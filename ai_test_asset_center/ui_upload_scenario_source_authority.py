@@ -1,10 +1,10 @@
 """Bind UI upload scenarios to the canonical enterprise knowledge source registry.
 
 The settings page and discovery asset use ``enterprise_knowledge_center`` source
-identities.  The chunk-oriented ``enterprise_source_registry`` is a secondary index
-and must not become an independent executable authority.  This installer replaces
-the scenario registry's source lookup with the active, versioned knowledge-center
-record used by Behavior IR and the formal UI source guard.
+identities. The chunk-oriented ``enterprise_source_registry`` is a secondary index
+and must not become an independent executable authority. This installer replaces
+the scenario registry's source lookup with the versioned knowledge-center record
+used by Behavior IR and the formal UI source guard.
 """
 from __future__ import annotations
 
@@ -41,18 +41,20 @@ def install_ui_upload_scenario_source_authority() -> None:
         payload = list_enterprise_knowledge_sources(
             project,
             root=Path(root),
-            include_deleted=False,
+            include_deleted=True,
         )
         matches = [
             row
             for row in payload.get("sources", [])
             if isinstance(row, dict)
             and _text(row.get("source_id"), limit=160) == identity
-            and _text(row.get("status"), limit=40).lower() == "active"
         ]
         if len(matches) != 1:
-            raise KeyError("active_enterprise_source_not_found")
+            raise KeyError("enterprise_source_not_found")
         row = matches[0]
+        status = _text(row.get("status"), limit=40).lower()
+        if status != "active":
+            raise RuntimeError("ui_upload_scenario_source_version_changed")
         source_hash = _text(row.get("content_hash"), limit=64).lower()
         version = _text(row.get("version"), limit=80)
         if len(source_hash) != 64 or not version:
