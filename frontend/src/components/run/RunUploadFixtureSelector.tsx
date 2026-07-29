@@ -14,6 +14,7 @@ type Props = {
   loading: boolean;
   error: string;
   onToggle: (bindingRef: string) => void;
+  onScenarioSelectionChange: (scenarioRefs: string[]) => void;
   onOpenSettings: () => void;
   onRefresh: () => void;
 };
@@ -40,6 +41,7 @@ export function RunUploadFixtureSelector({
   loading,
   error,
   onToggle,
+  onScenarioSelectionChange,
   onOpenSettings,
   onRefresh,
 }: Props) {
@@ -55,6 +57,7 @@ export function RunUploadFixtureSelector({
     if (!project) {
       setScenarios([]);
       setSelectedScenarios([]);
+      onScenarioSelectionChange([]);
       return;
     }
 
@@ -66,17 +69,20 @@ export function RunUploadFixtureSelector({
         && row.authority === 'approved_copy'
         && Boolean(scenarioRef(row))
       ));
+      const refs = approved.map(scenarioRef);
       setScenarios(approved);
-      setSelectedScenarios(approved.map(scenarioRef));
+      setSelectedScenarios(refs);
+      onScenarioSelectionChange(refs);
       setScenarioError('');
     } catch (caught) {
       setScenarios([]);
       setSelectedScenarios([]);
+      onScenarioSelectionChange([]);
       setScenarioError(caught instanceof Error ? caught.message : '上传场景读取失败');
     } finally {
       setScenarioLoading(false);
     }
-  }, [project]);
+  }, [onScenarioSelectionChange, project]);
 
   useEffect(() => { void refreshScenarios(); }, [refreshScenarios]);
 
