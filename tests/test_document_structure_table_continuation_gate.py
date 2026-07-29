@@ -3,6 +3,9 @@ from __future__ import annotations
 from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.document_structure_gate import (
     apply_document_structure_completeness,
 )
+from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.schema import (
+    empty_model,
+)
 
 
 def _asset(reason_code: str, *, blocking: bool) -> dict:
@@ -50,13 +53,13 @@ def _asset(reason_code: str, *, blocking: bool) -> dict:
 
 def test_ambiguous_continuation_becomes_visible_nonblocking_unknown() -> None:
     model = apply_document_structure_completeness(
-        {"unknowns": [], "conflicts": []},
+        empty_model(),
         _asset("VISUAL_TABLE_CONTINUATION_AMBIGUOUS", blocking=False),
     )
     unknown = next(
         row
         for row in model["unknowns"]
-        if row.get("unknown_type") == "DOCUMENT_STRUCTURE_CONTENT_UNPARSED"
+        if row.get("kind") == "DOCUMENT_STRUCTURE_CONTENT_UNPARSED"
     )
     assert unknown["blocks_formal_understanding"] is False
     summary = model["document_structure_summary"]
@@ -70,13 +73,13 @@ def test_ambiguous_continuation_becomes_visible_nonblocking_unknown() -> None:
 
 def test_header_conflict_becomes_blocking_structure_unknown() -> None:
     model = apply_document_structure_completeness(
-        {"unknowns": [], "conflicts": []},
+        empty_model(),
         _asset("VISUAL_TABLE_CONTINUATION_HEADER_CONFLICT", blocking=True),
     )
     unknown = next(
         row
         for row in model["unknowns"]
-        if row.get("unknown_type") == "DOCUMENT_STRUCTURE_CONTENT_UNAVAILABLE"
+        if row.get("kind") == "DOCUMENT_STRUCTURE_CONTENT_UNAVAILABLE"
     )
     assert unknown["blocks_formal_understanding"] is True
     assert unknown["reason_code"] == "VISUAL_TABLE_CONTINUATION_HEADER_CONFLICT"
