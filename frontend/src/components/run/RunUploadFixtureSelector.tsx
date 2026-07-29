@@ -20,7 +20,8 @@ type Props = {
   loading: boolean;
   error: string;
   onToggle: (bindingRef: string) => void;
-  onScenarioStateChange: (state: UploadScenarioRunState) => void;
+  onScenarioStateChange?: (state: UploadScenarioRunState) => void;
+  onScenarioSelectionChange?: (scenarioRefs: string[]) => void;
   onOpenSettings: () => void;
   onRefresh: () => void;
 };
@@ -48,6 +49,7 @@ export function RunUploadFixtureSelector({
   error,
   onToggle,
   onScenarioStateChange,
+  onScenarioSelectionChange,
   onOpenSettings,
   onRefresh,
 }: Props) {
@@ -59,20 +61,25 @@ export function RunUploadFixtureSelector({
   const [scenarioLoading, setScenarioLoading] = useState(false);
   const [scenarioError, setScenarioError] = useState('');
 
+  const reportScenarioState = useCallback((state: UploadScenarioRunState) => {
+    onScenarioStateChange?.(state);
+    onScenarioSelectionChange?.(state.refs);
+  }, [onScenarioSelectionChange, onScenarioStateChange]);
+
   const refreshScenarios = useCallback(async () => {
     if (!project) {
       setScenarios([]);
       setSelectedScenarios([]);
       setScenarioLoading(false);
       setScenarioError('');
-      onScenarioStateChange({ refs: [], loading: false, error: '' });
+      reportScenarioState({ refs: [], loading: false, error: '' });
       return;
     }
 
     setScenarioLoading(true);
     setScenarioError('');
     setSelectedScenarios([]);
-    onScenarioStateChange({ refs: [], loading: true, error: '' });
+    reportScenarioState({ refs: [], loading: true, error: '' });
     try {
       const payload = await listUploadScenarios(project, false);
       const approved = payload.scenarios.filter((row) => (
@@ -84,17 +91,17 @@ export function RunUploadFixtureSelector({
       setScenarios(approved);
       setSelectedScenarios(refs);
       setScenarioError('');
-      onScenarioStateChange({ refs, loading: false, error: '' });
+      reportScenarioState({ refs, loading: false, error: '' });
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : '上传场景读取失败';
       setScenarios([]);
       setSelectedScenarios([]);
       setScenarioError(message);
-      onScenarioStateChange({ refs: [], loading: false, error: message });
+      reportScenarioState({ refs: [], loading: false, error: message });
     } finally {
       setScenarioLoading(false);
     }
-  }, [onScenarioStateChange, project]);
+  }, [project, reportScenarioState]);
 
   useEffect(() => { void refreshScenarios(); }, [refreshScenarios]);
 
