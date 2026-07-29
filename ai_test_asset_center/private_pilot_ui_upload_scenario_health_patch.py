@@ -15,6 +15,7 @@ _MODULES = (
     "ai_test_asset_center.ui_upload_scenario_source_authority",
     "ai_test_asset_center.ui_upload_scenario_submission_authority",
     "ai_test_asset_center.ui_upload_scenario_semantic_authority",
+    "ai_test_asset_center.ui_upload_scenario_public_projection",
     "ai_test_asset_center.ui_upload_scenario_runtime_binding",
     "ai_test_asset_center.private_pilot_ui_upload_scenario_routes",
     "ai_test_asset_center.private_pilot_ui_upload_scenario_scan_gate",
@@ -34,6 +35,7 @@ def upload_scenario_health_status() -> dict[str, Any]:
     source_authority_installed = False
     submission_authority_installed = False
     semantic_authority_installed = False
+    public_projection_installed = False
     runtime_binding_installed = False
     routes_installed = False
     scan_gate_installed = False
@@ -82,6 +84,13 @@ def upload_scenario_health_status() -> dict[str, Any]:
                 False,
             )
         )
+        public_projection_installed = bool(
+            getattr(
+                registry,
+                "_qualibug_upload_scenario_public_projection_installed",
+                False,
+            )
+        )
         runtime_binding_installed = bool(
             getattr(
                 scan_prep,
@@ -120,6 +129,7 @@ def upload_scenario_health_status() -> dict[str, Any]:
         source_authority_installed,
         submission_authority_installed,
         semantic_authority_installed,
+        public_projection_installed,
         runtime_binding_installed,
         routes_installed,
         scan_gate_installed,
@@ -139,6 +149,7 @@ def upload_scenario_health_status() -> dict[str, Any]:
                 submission_authority_installed
             ),
             "safe_operation_role_authority_installed": semantic_authority_installed,
+            "minimized_public_projection_installed": public_projection_installed,
             "runtime_binding_installed": runtime_binding_installed,
             "project_routes_installed": routes_installed,
             "typed_scan_gate_installed": scan_gate_installed,
@@ -167,6 +178,9 @@ def upload_scenario_health_status() -> dict[str, Any]:
             "revoked_scenario_can_execute": False,
             "server_builds_contract_from_explicit_fields": True,
             "caller_authored_arbitrary_browser_plan_supported": False,
+            "public_projection_contains_raw_selectors": False,
+            "public_projection_contains_assertion_text": False,
+            "public_projection_contains_probe_urls": False,
             "persistent_cleanup_equivalence_required": True,
             "raw_fixture_paths_embedded": False,
             "raw_fixture_content_embedded": False,
