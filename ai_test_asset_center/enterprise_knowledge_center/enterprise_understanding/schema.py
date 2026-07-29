@@ -28,6 +28,8 @@ SCENARIO_EXECUTION_CONTRACT_SCHEMA = "qualibug.scenario-execution-contract.v1"
 SCENARIO_EXECUTION_CONTRACT_GATE_SCHEMA = "qualibug.scenario-execution-contract-gate.v1"
 RUNTIME_PLAN_SCHEMA = "qualibug.runtime-plan.v1"
 RUNTIME_PLAN_GATE_SCHEMA = "qualibug.runtime-plan-gate.v1"
+RUNTIME_MATERIALIZATION_SCHEMA = "qualibug.runtime-materialization-contract.v1"
+RUNTIME_MATERIALIZATION_GATE_SCHEMA = "qualibug.runtime-materialization-gate.v1"
 UNKNOWN_SCHEMA = "qualibug.enterprise-business-unknown.v1"
 GATE_SCHEMA = "qualibug.enterprise-understanding-model-gate.v1"
 
@@ -238,6 +240,18 @@ def empty_model() -> dict[str, Any]:
             "execution_allowed": False,
             "metrics": {},
         },
+        "runtime_materializations": [],
+        "runtime_materialization_unknowns": [],
+        "runtime_materialization_evidence_index": [],
+        "runtime_materialization_relationships": [],
+        "runtime_materialization_gate": {
+            "schema": RUNTIME_MATERIALIZATION_GATE_SCHEMA,
+            "status": "NOT_BUILT",
+            "entry_allowed": False,
+            "runtime_materialization_ready": False,
+            "execution_allowed": False,
+            "metrics": {},
+        },
         "unknowns": [],
         "conflicts": [],
         "evidence_index": [],
@@ -292,6 +306,10 @@ def validate_model_shape(model: dict[str, Any]) -> list[dict[str, Any]]:
         "runtime_plan_unknowns",
         "runtime_plan_evidence_index",
         "runtime_plan_relationships",
+        "runtime_materializations",
+        "runtime_materialization_unknowns",
+        "runtime_materialization_evidence_index",
+        "runtime_materialization_relationships",
     ):
         if key in model and not isinstance(model.get(key), list):
             violations.append({"code": "MODEL_COLLECTION_INVALID", "field": key})
@@ -316,6 +334,12 @@ def validate_model_shape(model: dict[str, Any]) -> list[dict[str, Any]]:
         )
     if "runtime_plan_gate" in model and not isinstance(model.get("runtime_plan_gate"), dict):
         violations.append({"code": "MODEL_OBJECT_INVALID", "field": "runtime_plan_gate"})
+    if "runtime_materialization_gate" in model and not isinstance(
+        model.get("runtime_materialization_gate"), dict
+    ):
+        violations.append(
+            {"code": "MODEL_OBJECT_INVALID", "field": "runtime_materialization_gate"}
+        )
     for collection in (
         "business_objects",
         "actors",
@@ -367,6 +391,8 @@ __all__ = [
     "SCENARIO_EXECUTION_CONTRACT_GATE_SCHEMA",
     "RUNTIME_PLAN_SCHEMA",
     "RUNTIME_PLAN_GATE_SCHEMA",
+    "RUNTIME_MATERIALIZATION_SCHEMA",
+    "RUNTIME_MATERIALIZATION_GATE_SCHEMA",
     "UNKNOWN_SCHEMA",
     "GATE_SCHEMA",
     "text",
