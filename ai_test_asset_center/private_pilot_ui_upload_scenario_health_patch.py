@@ -12,6 +12,8 @@ _INSTALL_MARKER = "_qualibug_upload_scenario_health_patch_installed"
 _ORIGINAL_BUILDER = "_qualibug_health_builder_before_upload_scenarios"
 _MODULES = (
     "ai_test_asset_center.ui_upload_scenario_registry",
+    "ai_test_asset_center.ui_upload_scenario_source_authority",
+    "ai_test_asset_center.ui_upload_scenario_semantic_authority",
     "ai_test_asset_center.ui_upload_scenario_runtime_binding",
     "ai_test_asset_center.private_pilot_ui_upload_scenario_routes",
     "ai_test_asset_center.private_pilot_ui_upload_scenario_scan_gate",
@@ -28,6 +30,8 @@ def _available(name: str) -> bool:
 def upload_scenario_health_status() -> dict[str, Any]:
     modules_available = all(_available(name) for name in _MODULES)
     registry_api_available = False
+    source_authority_installed = False
+    semantic_authority_installed = False
     runtime_binding_installed = False
     routes_installed = False
     scan_gate_installed = False
@@ -53,6 +57,20 @@ def upload_scenario_health_status() -> dict[str, Any]:
                 "list_upload_scenarios",
                 "approved_upload_scenario",
                 "materialize_upload_scenarios",
+            )
+        )
+        source_authority_installed = bool(
+            getattr(
+                registry,
+                "_qualibug_upload_scenario_source_authority_installed",
+                False,
+            )
+        )
+        semantic_authority_installed = bool(
+            getattr(
+                registry,
+                "_qualibug_upload_scenario_semantic_authority_installed",
+                False,
             )
         )
         runtime_binding_installed = bool(
@@ -89,7 +107,13 @@ def upload_scenario_health_status() -> dict[str, Any]:
     except Exception:
         registry_api_available = False
     code_ready = modules_available and registry_api_available
-    composed = runtime_binding_installed and routes_installed and scan_gate_installed
+    composed = all((
+        source_authority_installed,
+        semantic_authority_installed,
+        runtime_binding_installed,
+        routes_installed,
+        scan_gate_installed,
+    ))
     return {
         "schema_version": "qualibug.ui-upload-scenario-health.v1",
         "status": "healthy" if code_ready else "degraded",
@@ -100,6 +124,8 @@ def upload_scenario_health_status() -> dict[str, Any]:
         "checks": {
             "modules_available": modules_available,
             "registry_api_available": registry_api_available,
+            "knowledge_source_authority_installed": source_authority_installed,
+            "safe_operation_role_authority_installed": semantic_authority_installed,
             "runtime_binding_installed": runtime_binding_installed,
             "project_routes_installed": routes_installed,
             "typed_scan_gate_installed": scan_gate_installed,
@@ -108,6 +134,12 @@ def upload_scenario_health_status() -> dict[str, Any]:
             "explicit_enterprise_source_required": True,
             "source_version_frozen_at_registration": True,
             "source_version_drift_blocks_execution": True,
+            "safe_prerequisite_methods": ["GET", "HEAD", "OPTIONS"],
+            "prerequisite_interface_identity_required": True,
+            "prerequisite_source_version_frozen": True,
+            "write_prerequisite_operation_supported": False,
+            "source_declared_actor_role_required": True,
+            "caller_authored_behavior_ir_actor_ref_supported": False,
             "approved_fixture_bindings_required": True,
             "fixture_revocation_blocks_execution": True,
             "explicit_approval_required": True,
