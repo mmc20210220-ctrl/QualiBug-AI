@@ -401,6 +401,9 @@ def _technical_declaration_fact(
     locator: str = "",
     details: dict[str, Any] | None = None,
     quote: str = "",
+    normalized_evidence: str = "",
+    evidence_kind: str = "",
+    evidence_derivation: str = "",
 ) -> dict[str, Any]:
     """Selectable projection of one exact technical source declaration.
 
@@ -417,6 +420,9 @@ def _technical_declaration_fact(
     # and locator may enter the evidence span.
     evidence_quote = str(quote or "")[:500]
     evidence_locator = str(locator or "").strip()
+    safe_normalized_evidence = str(normalized_evidence or "").strip()[:1000]
+    safe_evidence_kind = str(evidence_kind or "").strip()[:120]
+    safe_evidence_derivation = str(evidence_derivation or "").strip()[:240]
     return {
         "fact_id": fact_id,
         "kind": kind,
@@ -433,6 +439,9 @@ def _technical_declaration_fact(
                 "source_id": source,
                 "locator": evidence_locator,
                 "quote": evidence_quote,
+                "normalized_evidence": safe_normalized_evidence,
+                "evidence_kind": safe_evidence_kind,
+                "evidence_derivation": safe_evidence_derivation,
                 "quote_hash": (
                     hashlib.sha256(evidence_quote.encode("utf-8")).hexdigest()
                     if evidence_quote
@@ -551,6 +560,9 @@ def _detect_cross_document_conflicts(
                         "field": declaration.get("field"),
                     },
                     quote=str(declaration.get("quote") or declaration.get("source_excerpt") or ""),
+                    normalized_evidence=str(declaration.get("normalized_evidence") or ""),
+                    evidence_kind=str(declaration.get("evidence_kind") or ""),
+                    evidence_derivation=str(declaration.get("evidence_derivation") or ""),
                 )
             )
         participants = list(
