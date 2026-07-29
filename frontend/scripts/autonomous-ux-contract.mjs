@@ -94,7 +94,7 @@ requireText(topologySection, '不要求用户持续维护', 'topology section');
 requireText(metadataSection, '<details className="section-card settings-span-2">', 'metadata section');
 requireText(metadataSection, '异常覆盖：业务范围与绝对禁触边界', 'metadata section');
 requireText(metadataSection, '留空则由后台自动判断', 'metadata section');
-requireText(metadataSection, '这不是要求客户维护完整接口清单', 'metadata section');
+requireText(metadataSection, '不是要求客户维护完整接口清单', 'metadata section');
 
 requireText(llmSection, '<details className="section-card">', 'LLM section');
 requireText(llmSection, '属于部署级能力，不应成为每个客户项目的日常维护项', 'LLM section');
