@@ -13,6 +13,10 @@ from .contract import (
     DocumentSource,
     SupplementalContext,
 )
+from .decision_matrix_candidate_gate import (
+    DECISION_MATRIX_GATE_SCHEMA,
+    apply_decision_matrix_candidate_gate,
+)
 from .image_decoding import (
     CairoSvgImageDecoder,
     DecodedImageFrame,
@@ -106,6 +110,8 @@ __all__ = [
     "normalize_visual_table_semantic_candidates",
     "SEMANTIC_VALIDATION_SCHEMA",
     "validate_visual_table_semantic_candidates",
+    "DECISION_MATRIX_GATE_SCHEMA",
+    "apply_decision_matrix_candidate_gate",
     "DocumentAdapterRegistry",
     "build_default_registry",
     "plan_document_parsing",
