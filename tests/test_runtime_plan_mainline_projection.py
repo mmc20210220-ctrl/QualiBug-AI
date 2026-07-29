@@ -5,7 +5,7 @@ from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.i
 )
 
 
-def test_final_scenario_mainline_compiles_non_executable_runtime_plan() -> None:
+def test_final_scenario_mainline_compiles_non_executable_runtime_drafts() -> None:
     behavior = {
         "behavior_id": "behavior:ship-order",
         "behavior_family_id": "behavior-family:ship-order",
@@ -149,7 +149,13 @@ def test_final_scenario_mainline_compiles_non_executable_runtime_plan() -> None:
                 ],
                 "request_body_fields": [],
                 "response_contracts": [{"status": "200"}],
-                "security_requirements": [{"scheme": "bearerAuth", "type": "HTTP"}],
+                "security_requirements": [
+                    {
+                        "scheme": "bearerAuth",
+                        "type": "HTTP",
+                        "scheme_name": "bearer",
+                    }
+                ],
                 "request_contract_locations_preserved": True,
                 "credential_values_retained": False,
             }
@@ -162,6 +168,37 @@ def test_final_scenario_mainline_compiles_non_executable_runtime_plan() -> None:
             }
         ],
         "environment_ref": "env:test",
+        "runtime_environment": {
+            "environment_ref": "env:test",
+            "environment_kind": "TEST",
+            "is_production": False,
+            "capabilities": ["RESETTABLE"],
+            "reset_ref": "sandbox-reset:test",
+        },
+        "connectors": [
+            {
+                "connector_id": "connector:orders",
+                "interface_id": "api:POST:/orders/{order_id}/ship",
+                "enabled": True,
+                "endpoint_ref": "https://sit.example.internal",
+            }
+        ],
+        "runtime_input_bindings": [
+            {
+                "binding_id": "runtime-binding:order-id",
+                "field": "order_id",
+                "location": "PATH",
+                "value": "ORD-1001",
+                "approved_for_materialization": True,
+            },
+            {
+                "binding_id": "test-data-binding:status",
+                "slot_ref": "condition:status",
+                "field": "status",
+                "value": "approved",
+                "approved_for_materialization": True,
+            },
+        ],
         "summary": {},
         "governance": {},
         "coverage_gaps": [],
@@ -174,6 +211,8 @@ def test_final_scenario_mainline_compiles_non_executable_runtime_plan() -> None:
     assert asset["scenario_ir_gate"]["status"] == "PASS"
     assert asset["scenario_execution_contract_gate"]["status"] == "PASS"
     assert asset["runtime_plan_gate"]["status"] == "PASS"
+    assert asset["runtime_materialization_gate"]["status"] == "PASS"
+
     assert len(asset["runtime_plans"]) >= 1
     plan = asset["runtime_plans"][0]
     assert plan["status"] == "TEMPLATE_READY"
@@ -188,5 +227,27 @@ def test_final_scenario_mainline_compiles_non_executable_runtime_plan() -> None:
     assert plan["database_queries_executable"] is False
     assert plan["oracle_assertions_compiled"] is False
     assert plan["cleanup_actions_executable"] is False
+
+    assert len(asset["runtime_materializations"]) >= 1
+    materialization = asset["runtime_materializations"][0]
+    assert materialization["status"] == "DRAFT_READY"
+    assert materialization["request_draft"]["url_draft"] == (
+        "https://sit.example.internal/orders/ORD-1001/ship"
+    )
+    assert materialization["request_draft"]["request_sendable"] is False
+    assert materialization["credential_binding"]["secret_values_loaded"] is False
+    assert materialization["cleanup_draft"]["cleanup_binding_resolved"] is True
+    assert materialization["execution_allowed"] is False
+    assert materialization["request_sendable"] is False
+    assert materialization["network_calls_allowed"] is False
+    assert materialization["database_queries_executable"] is False
+    assert materialization["assertions_executable"] is False
+    assert materialization["cleanup_executable"] is False
+    assert materialization["bug_classification_allowed"] is False
+
     assert asset["summary"]["runtime_execution_allowed"] is False
+    assert asset["summary"]["materialized_execution_allowed"] is False
     assert asset["governance"]["legacy_probe_generation_requires_runtime_plan_gate"] is True
+    assert asset["governance"][
+        "legacy_probe_generation_requires_runtime_materialization_gate"
+    ] is True
