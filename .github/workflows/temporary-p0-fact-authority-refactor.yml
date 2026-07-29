@@ -1,0 +1,104 @@
+name: Temporary P0 fact authority refactor
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/temporary-p0-fact-authority-refactor.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refactor-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install project test dependencies
+        run: python -m pip install -e '.[dev]'
+
+      - name: Reproduce governed-mainline failure before fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from tools._temporary_p0_fact_authority_refactor import append_once, GOVERNED_TESTS
+          append_once(
+              "tests/test_behavior_ir_single_fact_authority.py",
+              "def test_governed_fact_authority_recomputes_internal_and_contradiction()",
+              GOVERNED_TESTS,
+          )
+          PY
+          set +e
+          python -m pytest -q \
+            tests/test_behavior_ir_single_fact_authority.py::test_governed_fact_authority_recomputes_internal_and_contradiction \
+            > /tmp/red-regression.txt 2>&1
+          status=$?
+          set -e
+          cat /tmp/red-regression.txt
+          if [ "$status" -eq 0 ]; then
+            echo 'Expected governed regression to fail before the fix, but it passed.' >&2
+            exit 1
+          fi
+          grep -Eq '1 failed' /tmp/red-regression.txt
+          git checkout -- tests/test_behavior_ir_single_fact_authority.py
+
+      - name: Apply root-cause refactor and syntax checks
+        run: python tools/_temporary_p0_fact_authority_refactor.py
+
+      - name: Run required six-file regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_behavior_ir_single_fact_authority.py \
+            tests/test_business_behavior_ir.py \
+            tests/test_business_behavior_ir_logic_gate.py \
+            tests/test_private_pilot_command_center_understanding.py \
+            tests/test_enterprise_knowledge_center_parsing.py \
+            tests/test_operator_authority_decision.py \
+            | tee /tmp/required-regression.txt
+
+      - name: Compile changed Python and review diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile \
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/behavior_ir_governance.py \
+            ai_test_asset_center/enterprise_knowledge_center/_parsing.py \
+            ai_test_asset_center/enterprise_knowledge_center/_api.py \
+            ai_test_asset_center/enterprise_knowledge_center/_chinese_business_conflicts.py \
+            tests/test_behavior_ir_single_fact_authority.py \
+            tests/test_enterprise_knowledge_center_parsing.py \
+            tests/test_operator_authority_decision.py
+          git diff --check
+          git diff --stat
+
+      - name: Commit tested fix to main without force
+        shell: bash
+        run: |
+          set -euo pipefail
+          test_summary="$(tail -n 1 /tmp/required-regression.txt)"
+          red_summary="$(tail -n 1 /tmp/red-regression.txt)"
+          rm tools/_temporary_p0_fact_authority_refactor.py
+          rm .github/workflows/temporary-p0-fact-authority-refactor.yml
+          git config user.name 'QualiBug P0 Refactor'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git commit \
+            -m 'fix(understanding): preserve formal condition conflicts and evidence truth' \
+            -m "Pre-fix governed regression: ${red_summary}" \
+            -m "Required regression: ${test_summary}"
+          git push origin HEAD:main
