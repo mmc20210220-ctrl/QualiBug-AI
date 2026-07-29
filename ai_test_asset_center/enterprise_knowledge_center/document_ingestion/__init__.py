@@ -1,4 +1,12 @@
 """Format-agnostic enterprise document ingestion."""
+from .advanced_visual_table_providers import (
+    CompositeVisualTableProvider,
+    MergedCellRuledGridVisualTableProvider,
+    TesseractWordLayoutProvider,
+    TextAlignedVisualTableProvider,
+    WordLayoutProvider,
+    build_default_advanced_visual_table_provider,
+)
 from .contract import (
     AdapterMatch,
     DocumentAdapter,
@@ -65,6 +73,12 @@ __all__ = [
     "build_default_page_renderer_registry",
     "VisualTableProvider",
     "RuledGridVisualTableProvider",
+    "WordLayoutProvider",
+    "TesseractWordLayoutProvider",
+    "MergedCellRuledGridVisualTableProvider",
+    "TextAlignedVisualTableProvider",
+    "CompositeVisualTableProvider",
+    "build_default_advanced_visual_table_provider",
     "VisualTableSupplementalAdapter",
     "DocumentAdapterRegistry",
     "build_default_registry",
