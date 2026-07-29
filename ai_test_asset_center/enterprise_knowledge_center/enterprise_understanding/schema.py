@@ -24,6 +24,8 @@ IMPLEMENTATION_BINDING_SCHEMA = "qualibug.business-behavior-implementation-bindi
 IMPLEMENTATION_BINDING_GATE_SCHEMA = "qualibug.business-behavior-implementation-binding-gate.v1"
 SCENARIO_IR_SCHEMA = "qualibug.enterprise-test-scenario-ir.v1"
 SCENARIO_IR_GATE_SCHEMA = "qualibug.enterprise-test-scenario-ir-gate.v1"
+SCENARIO_EXECUTION_CONTRACT_SCHEMA = "qualibug.scenario-execution-contract.v1"
+SCENARIO_EXECUTION_CONTRACT_GATE_SCHEMA = "qualibug.scenario-execution-contract-gate.v1"
 UNKNOWN_SCHEMA = "qualibug.enterprise-business-unknown.v1"
 GATE_SCHEMA = "qualibug.enterprise-understanding-model-gate.v1"
 
@@ -210,6 +212,18 @@ def empty_model() -> dict[str, Any]:
             "execution_allowed": False,
             "metrics": {},
         },
+        "scenario_execution_contracts": [],
+        "scenario_execution_contract_unknowns": [],
+        "scenario_execution_contract_evidence_index": [],
+        "scenario_execution_contract_relationships": [],
+        "scenario_execution_contract_gate": {
+            "schema": SCENARIO_EXECUTION_CONTRACT_GATE_SCHEMA,
+            "status": "NOT_BUILT",
+            "entry_allowed": False,
+            "execution_contract_ready": False,
+            "execution_allowed": False,
+            "metrics": {},
+        },
         "unknowns": [],
         "conflicts": [],
         "evidence_index": [],
@@ -245,8 +259,8 @@ def validate_model_shape(model: dict[str, Any]) -> list[dict[str, Any]]:
     ):
         if not isinstance(model.get(key), list):
             violations.append({"code": "MODEL_COLLECTION_INVALID", "field": key})
-    # Downstream binding and Scenario IR fields are additive and remain optional for persisted
-    # pre-v1 models. When present they must have the canonical container shape.
+    # Downstream fields are additive and remain optional for persisted pre-v1 models.
+    # When present they must have the canonical container shape.
     for key in (
         "behavior_implementation_bindings",
         "implementation_binding_unknowns",
@@ -256,6 +270,10 @@ def validate_model_shape(model: dict[str, Any]) -> list[dict[str, Any]]:
         "scenario_ir_unknowns",
         "scenario_ir_evidence_index",
         "scenario_ir_relationships",
+        "scenario_execution_contracts",
+        "scenario_execution_contract_unknowns",
+        "scenario_execution_contract_evidence_index",
+        "scenario_execution_contract_relationships",
     ):
         if key in model and not isinstance(model.get(key), list):
             violations.append({"code": "MODEL_COLLECTION_INVALID", "field": key})
@@ -269,6 +287,15 @@ def validate_model_shape(model: dict[str, Any]) -> list[dict[str, Any]]:
         )
     if "scenario_ir_gate" in model and not isinstance(model.get("scenario_ir_gate"), dict):
         violations.append({"code": "MODEL_OBJECT_INVALID", "field": "scenario_ir_gate"})
+    if "scenario_execution_contract_gate" in model and not isinstance(
+        model.get("scenario_execution_contract_gate"), dict
+    ):
+        violations.append(
+            {
+                "code": "MODEL_OBJECT_INVALID",
+                "field": "scenario_execution_contract_gate",
+            }
+        )
     for collection in (
         "business_objects",
         "actors",
@@ -316,6 +343,8 @@ __all__ = [
     "IMPLEMENTATION_BINDING_GATE_SCHEMA",
     "SCENARIO_IR_SCHEMA",
     "SCENARIO_IR_GATE_SCHEMA",
+    "SCENARIO_EXECUTION_CONTRACT_SCHEMA",
+    "SCENARIO_EXECUTION_CONTRACT_GATE_SCHEMA",
     "UNKNOWN_SCHEMA",
     "GATE_SCHEMA",
     "text",
