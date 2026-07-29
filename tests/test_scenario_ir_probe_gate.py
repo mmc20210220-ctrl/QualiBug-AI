@@ -11,9 +11,11 @@ def _legacy_probe_asset(
     scenario_ready: bool,
     contract_ready: bool | None = None,
     runtime_ready: bool | None = None,
+    materialization_ready: bool | None = None,
 ) -> dict:
     execution_ready = scenario_ready if contract_ready is None else contract_ready
     plan_ready = execution_ready if runtime_ready is None else runtime_ready
+    draft_ready = plan_ready if materialization_ready is None else materialization_ready
     return {
         "asset_id": "asset:test",
         "scenario_planning_gate": {
@@ -41,6 +43,16 @@ def _legacy_probe_asset(
             "status": "PASS" if plan_ready else "BLOCKED_RUNTIME_PLAN_INCOMPLETE",
             "entry_allowed": plan_ready,
             "runtime_plan_ready": plan_ready,
+            "execution_allowed": False,
+        },
+        "runtime_materialization_gate": {
+            "status": (
+                "PASS"
+                if draft_ready
+                else "BLOCKED_RUNTIME_MATERIALIZATION_INCOMPLETE"
+            ),
+            "entry_allowed": draft_ready,
+            "runtime_materialization_ready": draft_ready,
             "execution_allowed": False,
         },
         "interfaces": [
@@ -111,11 +123,26 @@ def test_runtime_plan_failure_blocks_legacy_probe_generation() -> None:
     assert probes == []
 
 
-def test_all_design_gates_pass_preserves_later_legacy_probe_compatibility() -> None:
+def test_runtime_materialization_failure_blocks_legacy_probe_generation() -> None:
     asset = _legacy_probe_asset(
         scenario_ready=True,
         contract_ready=True,
         runtime_ready=True,
+        materialization_ready=False,
+    )
+    project_scenario_ir_asset_governance(asset, {})
+
+    probes = _api._probes_from_asset(asset, 20)
+
+    assert probes == []
+
+
+def test_all_six_gates_pass_preserves_later_legacy_probe_compatibility() -> None:
+    asset = _legacy_probe_asset(
+        scenario_ready=True,
+        contract_ready=True,
+        runtime_ready=True,
+        materialization_ready=True,
     )
     project_scenario_ir_asset_governance(asset, {})
 
