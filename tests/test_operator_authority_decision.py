@@ -285,7 +285,9 @@ def test_field_required_mismatch_select_fact_no_auto_pick(tmp_path: Path) -> Non
                 "required": True,
                 "source_id": "schema_a.sql",
                 "field_id": "a",
-                "source_excerpt": "table=orders; field=warehouse_id; required=true",
+                "normalized_evidence": "table=orders; field=warehouse_id; required=true",
+                "evidence_kind": "NORMALIZED_STRUCTURED_DECLARATION",
+                "evidence_derivation": "normalized_field_dictionary_projection",
             },
             {
                 "field": "warehouse_id",
@@ -293,7 +295,9 @@ def test_field_required_mismatch_select_fact_no_auto_pick(tmp_path: Path) -> Non
                 "required": False,
                 "source_id": "schema_b.sql",
                 "field_id": "b",
-                "source_excerpt": "table=orders; field=warehouse_id; required=false",
+                "normalized_evidence": "table=orders; field=warehouse_id; required=false",
+                "evidence_kind": "NORMALIZED_STRUCTURED_DECLARATION",
+                "evidence_derivation": "normalized_field_dictionary_projection",
             },
         ],
         [],
@@ -308,9 +312,25 @@ def test_field_required_mismatch_select_fact_no_auto_pick(tmp_path: Path) -> Non
     assert conflict["authority_decision"]["selected_fact_id"] == ""
     evidence = conflict.get("evidence") or []
     assert len(evidence) >= 2
-    assert all(str(row.get("quote") or "").strip() for row in evidence)
-    assert any("required=true" in str(row.get("quote") or "") for row in evidence)
-    assert any("required=false" in str(row.get("quote") or "") for row in evidence)
+    assert all(str(row.get("normalized_evidence") or "").strip() for row in evidence)
+    assert any(
+        "required=true" in str(row.get("normalized_evidence") or "")
+        for row in evidence
+    )
+    assert any(
+        "required=false" in str(row.get("normalized_evidence") or "")
+        for row in evidence
+    )
+    assert all(
+        row.get("evidence_kind") == "NORMALIZED_STRUCTURED_DECLARATION"
+        for row in evidence
+    )
+    assert all(
+        row.get("evidence_derivation")
+        == "normalized_field_dictionary_projection"
+        for row in evidence
+    )
+    assert all(not str(row.get("quote") or "").strip() for row in evidence)
     participants = sorted(
         row["fact_id"] for row in conflict["facts"] if row.get("fact_id")
     )
