@@ -9,6 +9,8 @@ on:
       - 'ai_test_asset_center/private_pilot_upload_fixture_*.py'
       - 'ai_test_asset_center/private_pilot_ui_upload_scenario_*.py'
       - 'ai_test_asset_center/private_pilot_scan_context_patch.py'
+      - 'ai_test_asset_center/scan_ui_source_registry_guard.py'
+      - 'ai_test_asset_center/visual_baseline_registry.py'
       - 'frontend/src/api/upload-fixtures.ts'
       - 'frontend/src/api/ui-upload-scenarios.ts'
       - 'frontend/src/api/run-center.ts'
@@ -25,6 +27,8 @@ on:
       - 'tests/test_ui_upload_scenario_*.py'
       - 'tests/test_private_pilot_upload_fixture_*.py'
       - 'tests/test_private_pilot_ui_upload_scenario_*.py'
+      - 'tests/test_scan_ui_source_registry_guard.py'
+      - 'tests/test_formal_ui_contract_document_guard.py'
       - '.github/workflows/ui-upload-fixture-governance.yml'
   workflow_dispatch:
 
@@ -38,7 +42,7 @@ concurrency:
 jobs:
   python-governance:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -47,7 +51,7 @@ jobs:
           cache: pip
       - name: Install Python test dependencies
         run: python -m pip install --upgrade pip && python -m pip install -e '.[dev]'
-      - name: Run upload fixture and scenario governance tests
+      - name: Run upload fixture, scenario and source-authority tests
         run: >-
           python -m pytest -q
           tests/test_ui_upload_fixture_registry.py
@@ -56,6 +60,9 @@ jobs:
           tests/test_ui_upload_scenario_registry.py
           tests/test_private_pilot_upload_fixture_governance.py
           tests/test_private_pilot_upload_fixture_scan_gate.py
+          tests/test_private_pilot_ui_upload_scenario_governance.py
+          tests/test_scan_ui_source_registry_guard.py
+          tests/test_formal_ui_contract_document_guard.py
 
   playwright-upload-acceptance:
     runs-on: ubuntu-latest
