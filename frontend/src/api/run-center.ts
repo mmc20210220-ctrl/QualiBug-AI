@@ -1,4 +1,5 @@
 import { currentToken, type V12ScanResult } from './client';
+import { listUploadScenarios } from './ui-upload-scenarios';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -35,28 +36,24 @@ function normalizedIdentities(
   return result;
 }
 
-function scenarioDraft(project: string): string[] {
+async function activeApprovedScenarioIds(project: string): Promise<string[]> {
+  let payload;
   try {
-    const raw = globalThis.localStorage?.getItem(
-      `qualibug.run.ui-upload-scenarios.${project}`,
-    ) || '[]';
-    const parsed = JSON.parse(raw) as unknown;
-    const selected = Array.isArray(parsed)
-      ? parsed.filter((item): item is string => typeof item === 'string' && Boolean(item.trim()))
-      : [];
-    const verified = globalThis.sessionStorage?.getItem(
-      `qualibug.run.ui-upload-scenarios-verified.${project}`,
-    );
-    if (selected.length > 0 && verified !== 'true') {
-      throw new Error('上传场景审批状态尚未完成刷新，请先刷新场景后再运行。');
-    }
-    return verified === 'true' ? selected : [];
+    payload = await listUploadScenarios(project, false);
   } catch (error) {
-    if (error instanceof Error && error.message.includes('审批状态尚未完成刷新')) {
-      throw error;
-    }
-    return [];
+    const detail = error instanceof Error ? error.message : '上传场景读取失败';
+    throw new Error(`无法在运行前同步活动审批上传场景：${detail}`);
   }
+  const identities = payload.scenarios
+    .filter((scenario) => scenario.status === 'active' && scenario.authority === 'approved_copy')
+    .map((scenario) => String(scenario.scenario_ref || '').trim())
+    .filter(Boolean);
+  return normalizedIdentities(
+    identities,
+    /^uisr_[a-f0-9]{20}$/,
+    '上传场景引用',
+    20,
+  );
 }
 
 function responseError(status: number, payload: unknown): Error {
@@ -83,12 +80,14 @@ export async function runV12ScanFromRunCenter(
     '上传 Fixture binding_ref',
     20,
   );
-  const scenarioIds = normalizedIdentities(
-    options.ui_upload_scenario_ids ?? scenarioDraft(project),
-    /^(?:uisr|uisa)_[a-f0-9]{20}$/,
-    '上传场景引用',
-    20,
-  );
+  const scenarioIds = options.ui_upload_scenario_ids === undefined
+    ? await activeApprovedScenarioIds(project)
+    : normalizedIdentities(
+      options.ui_upload_scenario_ids,
+      /^(?:uisr|uisa)_[a-f0-9]{20}$/,
+      '上传场景引用',
+      20,
+    );
   const executionMode = fixtureIds.length || scenarioIds.length
     ? 'approved_sandbox_write'
     : options.execution_mode;
