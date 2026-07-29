@@ -408,6 +408,70 @@ def apply_authority_decisions_to_conflicts(
                 fact["status"] = "CONFLICTING"
                 fact["formal_promotion_allowed"] = False
                 fact["authority_resolution"] = "UNRESOLVED"
+
+    # TERM_ALIAS SELECT must clear every same-alias sibling, not only conflict
+    # participants. Extra PENDING rows with TERM_ALIAS_IDENTITY_CONFLICT would
+    # otherwise reappear as builder unknowns after rebuild/apply.
+    resolved_alias_winners: dict[str, str] = {}
+    for row in updated:
+        if (
+            _text(row.get("kind")) != "TERM_ALIAS_IDENTITY_CONFLICT"
+            or _text(row.get("status")) != "RESOLVED"
+        ):
+            continue
+        alias = _text(row.get("entity"))
+        selected = _text(_dict(row.get("authority_decision")).get("selected_fact_id"))
+        if not alias or not selected:
+            continue
+        winner_fact = next(
+            (item for item in ledger_facts if _fact_id(item) == selected),
+            None,
+        )
+        winner_canonical = _text(_dict(winner_fact).get("canonical_term"))
+        if winner_canonical:
+            resolved_alias_winners[alias] = winner_canonical
+    if resolved_alias_winners:
+        for fact in ledger_facts:
+            if _text(fact.get("kind")) != "TERM_ALIAS":
+                continue
+            alias = _text(fact.get("alias"))
+            if alias not in resolved_alias_winners:
+                continue
+            winner_canonical = resolved_alias_winners[alias]
+            winner_id = ""
+            for row in updated:
+                if (
+                    _text(row.get("kind")) == "TERM_ALIAS_IDENTITY_CONFLICT"
+                    and _text(row.get("entity")) == alias
+                    and _text(row.get("status")) == "RESOLVED"
+                ):
+                    winner_id = _text(
+                        _dict(row.get("authority_decision")).get("selected_fact_id")
+                    )
+                    break
+            if _text(fact.get("canonical_term")) == winner_canonical:
+                fact["status"] = "ACCEPTED"
+                fact["formal_promotion_allowed"] = True
+                fact["superseded_by_fact_id"] = ""
+                fact["authority_resolution"] = "OPERATOR_SELECTED"
+                ambiguities = [
+                    _text(value)
+                    for value in _list(fact.get("ambiguities"))
+                    if _text(value) and _text(value) != "TERM_ALIAS_IDENTITY_CONFLICT"
+                ]
+                fact["ambiguities"] = ambiguities
+            else:
+                fact["status"] = "SUPERSEDED"
+                fact["formal_promotion_allowed"] = False
+                fact["superseded_by_fact_id"] = winner_id
+                fact["authority_resolution"] = "OPERATOR_SUPERSEDED"
+                ambiguities = [
+                    _text(value)
+                    for value in _list(fact.get("ambiguities"))
+                    if _text(value) and _text(value) != "TERM_ALIAS_IDENTITY_CONFLICT"
+                ]
+                fact["ambiguities"] = ambiguities
+
     fact_ledger = _dict(asset.get("business_fact_ledger"))
     fact_ledger["items"] = ledger_facts
     fact_ledger["unresolved_conflict_count"] = len(unresolved)
@@ -489,6 +553,64 @@ def apply_authority_decisions_to_conflicts(
             gate["status"] = "PASS"
             gate["entry_allowed"] = True
             gate["required_operator_action"] = ""
+
+        # Keep identity-merge receipt and understanding-model unknowns aligned with
+        # the SELECT resolution so rebuild/apply does not leave stale unknown rows.
+        identity_merge = _dict(asset.get("term_alias_identity_merge"))
+        if identity_merge:
+            remaining_conflicts = [
+                dict(row)
+                for row in _list(identity_merge.get("conflicts"))
+                if isinstance(row, dict)
+                and _text(row.get("alias")) not in resolved_alias_ids
+            ]
+            identity_merge["conflicts"] = remaining_conflicts
+            identity_merge["conflict_count"] = len(remaining_conflicts)
+            asset["term_alias_identity_merge"] = identity_merge
+
+        model = _dict(asset.get("enterprise_understanding_model"))
+        if model:
+            unknowns = [
+                dict(row)
+                for row in _list(model.get("unknowns"))
+                if isinstance(row, dict)
+            ]
+            kept_unknowns = []
+            for row in unknowns:
+                reason = _text(row.get("reason_code") or row.get("kind"))
+                details = _dict(row.get("details"))
+                alias = _text(details.get("alias"))
+                if reason == "TERM_ALIAS_IDENTITY_CONFLICT" and (
+                    alias in resolved_alias_ids or (not alias and resolved_alias_ids)
+                ):
+                    continue
+                kept_unknowns.append(row)
+            model["unknowns"] = kept_unknowns
+            model_gate = _dict(model.get("gate"))
+            if model_gate:
+                model_critical = [
+                    dict(row)
+                    for row in _list(model_gate.get("critical_unknowns"))
+                    if isinstance(row, dict)
+                ]
+                model_gate["critical_unknowns"] = [
+                    row
+                    for row in model_critical
+                    if not (
+                        _text(row.get("reason_code") or row.get("kind"))
+                        == "TERM_ALIAS_IDENTITY_CONFLICT"
+                        and (
+                            _text(_dict(row.get("details")).get("alias"))
+                            in resolved_alias_ids
+                            or (
+                                not _text(_dict(row.get("details")).get("alias"))
+                                and resolved_alias_ids
+                            )
+                        )
+                    )
+                ]
+                model["gate"] = model_gate
+            asset["enterprise_understanding_model"] = model
 
     if unresolved:
         gate.update(

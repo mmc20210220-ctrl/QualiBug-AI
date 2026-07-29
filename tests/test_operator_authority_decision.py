@@ -478,3 +478,238 @@ def test_term_alias_leave_unresolved_stays_blocked(tmp_path: Path) -> None:
     assert result["conflict"]["status"] == "UNRESOLVED"
     assert result["conflict"]["authority_decision"]["explicit_leave_unresolved"] is True
     assert result["comprehension_gate"]["entry_allowed"] is False
+
+
+def test_permission_contradiction_select_fact_with_both_sides_evidence(tmp_path: Path) -> None:
+    from ai_test_asset_center.enterprise_knowledge_center._api import (
+        _detect_cross_document_conflicts,
+    )
+    from ai_test_asset_center.enterprise_knowledge_center._chinese_business_conflicts import (
+        TECHNICAL_CONFLICT_SCHEMA,
+    )
+
+    conflicts = _detect_cross_document_conflicts(
+        [],
+        [],
+        [],
+        [
+            {
+                "permission_id": "perm:a:1",
+                "role": "operator",
+                "resource": "orders",
+                "decision": "allow",
+                "actions": ["write"],
+                "source_id": "perm_a.json",
+                "evidence": "operator / orders / allow",
+            },
+            {
+                "permission_id": "perm:b:1",
+                "role": "operator",
+                "resource": "orders",
+                "decision": "deny",
+                "actions": ["write"],
+                "source_id": "perm_b.json",
+                "evidence": "operator / orders / deny",
+            },
+        ],
+    )
+    assert len(conflicts) == 1
+    conflict = conflicts[0]
+    assert conflict["schema"] == TECHNICAL_CONFLICT_SCHEMA
+    assert conflict["kind"] == "PERMISSION_CONTRADICTION"
+    assert conflict["conflict_type"] == "permission_contradiction"
+    assert conflict["authority_decision"]["automatic_resolution_allowed"] is False
+    evidence = conflict.get("evidence") or []
+    assert len(evidence) >= 2
+    assert all(row.get("fact_id") for row in evidence)
+    assert any("allow" in str(row.get("quote") or "").lower() for row in evidence)
+    assert any("deny" in str(row.get("quote") or "").lower() for row in evidence)
+    participants = sorted(row["fact_id"] for row in conflict["facts"] if row.get("fact_id"))
+
+    project = "perm-auth"
+    asset = {
+        "project_id": project,
+        "business_fact_ledger": {"items": []},
+        "rule_library": [],
+        "cross_document_conflicts": conflicts,
+        "enterprise_comprehension_gate": {"status": "PASS", "entry_allowed": True},
+        "coverage_gaps": [],
+        "summary": {},
+        "enterprise_understanding_model": {"conflicts": [], "gate": {}, "unknowns": []},
+    }
+    applied = apply_authority_decisions_to_conflicts(
+        asset, project_id=project, root=tmp_path
+    )
+    assert applied["cross_document_conflicts"][0]["status"] == "UNRESOLVED"
+    assert applied["enterprise_comprehension_gate"]["entry_allowed"] is False
+
+    _persist_asset(applied, project, tmp_path)
+    result = record_operator_authority_decision(
+        project,
+        conflict_id=conflict["conflict_id"],
+        action=ACTION_SELECT_FACT,
+        selected_fact_id=participants[0],
+        actor={"name": "ops-perm", "role": "qa_lead"},
+        rationale="operator chose allow-side source",
+        root=tmp_path,
+        rebuild=False,
+    )
+    assert result["conflict"]["status"] == "RESOLVED"
+    assert result["conflict"]["authority_decision"]["selected_fact_id"] == participants[0]
+    assert result["conflict"]["authority_decision"]["automatic_resolution_allowed"] is False
+    assert result["comprehension_gate"]["entry_allowed"] is True
+
+
+def test_rule_token_overlap_never_creates_authority_conflict() -> None:
+    from ai_test_asset_center.enterprise_knowledge_center._api import (
+        _detect_cross_document_conflicts,
+    )
+
+    conflicts = _detect_cross_document_conflicts(
+        [],
+        [
+            {
+                "rule_id": "rule:a",
+                "risk_type": "authorization",
+                "source_id": "policy_a.md",
+                "statement": "普通用户不得修改已提交订单",
+                "modality": "PROHIBITED",
+                "polarity": "negative",
+                "tokens": ["普通用户", "修改", "已提交", "订单"],
+            },
+            {
+                "rule_id": "rule:b",
+                "risk_type": "authorization",
+                "source_id": "policy_b.md",
+                "statement": "普通用户必须修改已提交订单",
+                "modality": "REQUIRED",
+                "polarity": "positive",
+                "tokens": ["普通用户", "修改", "已提交", "订单"],
+            },
+        ],
+        [],
+        [],
+    )
+    assert conflicts == []
+
+
+def test_term_alias_select_clears_sibling_unknowns_after_rebuild(tmp_path: Path) -> None:
+    from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.builder import (
+        build_enterprise_understanding_model,
+    )
+
+    project = "term-alias-siblings"
+    facts = [
+        {
+            "fact_id": "alias-a",
+            "kind": "TERM_ALIAS",
+            "status": "ACCEPTED",
+            "alias": "SO",
+            "canonical_term": "销售订单",
+            "raw_statement": "SO：销售订单",
+            "source_spans": [
+                {
+                    "source_id": "glossary_a.md",
+                    "locator": "glossary_a.md#L1",
+                    "quote": "SO：销售订单",
+                    "quote_hash": "h1",
+                }
+            ],
+        },
+        {
+            "fact_id": "alias-b",
+            "kind": "TERM_ALIAS",
+            "status": "ACCEPTED",
+            "alias": "SO",
+            "canonical_term": "服务工单",
+            "raw_statement": "SO：服务工单",
+            "source_spans": [
+                {
+                    "source_id": "glossary_b.md",
+                    "locator": "glossary_b.md#L1",
+                    "quote": "SO：服务工单",
+                    "quote_hash": "h2",
+                }
+            ],
+        },
+        {
+            "fact_id": "alias-c",
+            "kind": "TERM_ALIAS",
+            "status": "ACCEPTED",
+            "alias": "SO",
+            "canonical_term": "服务工单",
+            "raw_statement": "SO 表示服务工单",
+            "source_spans": [
+                {
+                    "source_id": "glossary_c.md",
+                    "locator": "glossary_c.md#L1",
+                    "quote": "SO 表示服务工单",
+                    "quote_hash": "h3",
+                }
+            ],
+        },
+    ]
+    asset = reconcile_chinese_business_fact_conflicts(
+        _asset(facts, project_id=project),
+        project_id=project,
+        root=tmp_path,
+    )
+    conflict = next(
+        row
+        for row in asset["cross_document_conflicts"]
+        if row.get("kind") == "TERM_ALIAS_IDENTITY_CONFLICT"
+    )
+    for row in asset["business_fact_ledger"]["items"]:
+        if row["fact_id"] == "alias-c":
+            row["status"] = "PENDING"
+            row["ambiguities"] = ["TERM_ALIAS_IDENTITY_CONFLICT"]
+    asset["enterprise_understanding_model"] = build_enterprise_understanding_model(asset)
+    before_unknowns = [
+        row
+        for row in (asset["enterprise_understanding_model"].get("unknowns") or [])
+        if row.get("reason_code") == "TERM_ALIAS_IDENTITY_CONFLICT"
+        or row.get("kind") == "TERM_ALIAS_IDENTITY_CONFLICT"
+        or (
+            "TERM_ALIAS_IDENTITY_CONFLICT"
+            in str((row.get("details") or {}).get("ambiguities") or [])
+        )
+    ]
+    assert before_unknowns
+
+    _persist_asset(asset, project, tmp_path)
+    result = record_operator_authority_decision(
+        project,
+        conflict_id=conflict["conflict_id"],
+        action=ACTION_SELECT_FACT,
+        selected_fact_id="alias-a",
+        actor={"name": "ops-alias", "role": "knowledge_admin"},
+        rationale="glossary_a is authoritative",
+        root=tmp_path,
+        rebuild=False,
+    )
+    assert result["conflict"]["status"] == "RESOLVED"
+
+    refreshed = reconcile_chinese_business_fact_conflicts(
+        _asset(facts, project_id=project),
+        project_id=project,
+        root=tmp_path,
+    )
+    by_id = {row["fact_id"]: row for row in refreshed["business_fact_ledger"]["items"]}
+    assert by_id["alias-a"]["status"] == "ACCEPTED"
+    assert by_id["alias-b"]["status"] == "SUPERSEDED"
+    assert by_id["alias-c"]["status"] == "SUPERSEDED"
+    assert "TERM_ALIAS_IDENTITY_CONFLICT" not in (by_id["alias-c"].get("ambiguities") or [])
+
+    model = build_enterprise_understanding_model(refreshed)
+    lingering = [
+        row
+        for row in (model.get("unknowns") or [])
+        if row.get("reason_code") == "TERM_ALIAS_IDENTITY_CONFLICT"
+        or row.get("kind") == "TERM_ALIAS_IDENTITY_CONFLICT"
+        or (
+            "TERM_ALIAS_IDENTITY_CONFLICT"
+            in str((row.get("details") or {}).get("ambiguities") or [])
+        )
+    ]
+    assert lingering == []
+    assert refreshed["enterprise_comprehension_gate"]["entry_allowed"] is True

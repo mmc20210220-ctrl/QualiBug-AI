@@ -386,3 +386,168 @@ def test_ambiguous_openapi_chinese_summary_stays_fail_closed() -> None:
             or "BUSINESS_SUBJECT" in str(row.get("ambiguities"))
             for row in facts
         )
+
+
+def test_openapi_prose_without_source_id_stays_unattached() -> None:
+    from ai_test_asset_center.enterprise_knowledge_center._chinese_business_comprehension import (
+        project_openapi_interface_chinese_spans,
+    )
+
+    coverage, facts = project_openapi_interface_chinese_spans(
+        {
+            "interfaces": [
+                {
+                    "interface_id": "api:POST:/orders",
+                    "source_kind": "openapi",
+                    "openapi_summary": "订单必须由客服创建。",
+                }
+            ]
+        }
+    )
+
+    assert facts == []
+    assert coverage[0]["status"] == "SOURCE_ID_MISSING"
+    assert coverage[0]["source_id"] == ""
+    assert coverage[0]["ambiguities"] == ["SOURCE_ID_MISSING"]
+
+
+def test_generic_interface_summary_is_not_treated_as_openapi_prose() -> None:
+    from ai_test_asset_center.enterprise_knowledge_center._chinese_business_comprehension import (
+        project_openapi_interface_chinese_spans,
+    )
+
+    coverage, facts = project_openapi_interface_chinese_spans(
+        {
+            "interfaces": [
+                {
+                    "interface_id": "custom:operation",
+                    "source_id": "custom.md",
+                    "summary": "订单必须由客服创建。",
+                }
+            ]
+        }
+    )
+
+    assert coverage == []
+    assert facts == []
+
+
+def test_token_overlap_does_not_create_formal_rule_conflict() -> None:
+    from ai_test_asset_center.enterprise_knowledge_center._api import (
+        _detect_cross_document_conflicts,
+    )
+
+    conflicts = _detect_cross_document_conflicts(
+        [],
+        [
+            {
+                "risk_type": "validation",
+                "source_id": "a.md",
+                "statement": "order status must be approved",
+                "tokens": ["order", "status", "approved"],
+            },
+            {
+                "risk_type": "validation",
+                "source_id": "b.md",
+                "statement": "order status must be rejected",
+                "tokens": ["order", "status", "rejected"],
+            },
+        ],
+        [],
+        [],
+    )
+
+    assert conflicts == []
+
+
+def test_permission_action_without_explicit_effect_is_not_a_conflict() -> None:
+    from ai_test_asset_center.enterprise_knowledge_center._api import (
+        _detect_cross_document_conflicts,
+    )
+
+    conflicts = _detect_cross_document_conflicts(
+        [],
+        [],
+        [],
+        [
+            {
+                "role": "operator",
+                "resource": "order",
+                "action": "read",
+                "source_id": "a.md",
+            },
+            {
+                "role": "operator",
+                "resource": "order",
+                "action": "deny",
+                "source_id": "b.md",
+            },
+        ],
+    )
+
+    assert conflicts == []
+
+
+def test_openapi_description_only_multi_unit_binds_with_context() -> None:
+    from ai_test_asset_center.enterprise_knowledge_center._chinese_business_comprehension import (
+        project_openapi_interface_chinese_spans,
+    )
+    from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.builder import (
+        build_enterprise_understanding_model,
+    )
+
+    asset = {
+        "interfaces": [
+            {
+                "interface_id": "api:POST:/orders/{id}/cancel",
+                "source_id": "api.openapi.yaml",
+                "source_kind": "openapi",
+                "method": "POST",
+                "path": "/orders/{id}/cancel",
+                "operation_id": "cancelOrder",
+                "openapi_summary": "",
+                "openapi_description": (
+                    "已提交订单必须由客服取消。"
+                    "该订单取消后不得再修改。"
+                ),
+                "summary": "",
+                "description": (
+                    "已提交订单必须由客服取消。"
+                    "该订单取消后不得再修改。"
+                ),
+            }
+        ],
+        "business_objects": [{"name": "订单"}],
+        "roles": [{"role": "客服"}],
+        "business_fact_ledger": {"items": []},
+        "data_tables": [],
+        "entity_relations": [],
+    }
+
+    coverage, facts = project_openapi_interface_chinese_spans(asset)
+    assert any(row.get("span_kind") == "OPENAPI_OPERATION_DESCRIPTION" for row in coverage)
+    assert len(facts) >= 2
+    assert all(row.get("interface_id") == "api:POST:/orders/{id}/cancel" for row in facts)
+    accepted = [row for row in facts if row.get("status") == "ACCEPTED"]
+    assert len(accepted) >= 1
+    # Second unit uses 该订单 — context from prior unit should resolve subject.
+    deictic = [
+        row
+        for row in facts
+        if "该订单" in str(row.get("raw_statement") or "")
+        or "不得再修改" in str(row.get("raw_statement") or "")
+    ]
+    assert deictic
+    assert any(
+        "订单" in str((row.get("subject") or {}).get("entity_refs") or [])
+        for row in deictic
+    )
+
+    asset["business_fact_ledger"] = {"items": facts}
+    model = build_enterprise_understanding_model(asset)
+    operations = model.get("operations") or []
+    assert operations
+    assert any(
+        "api:POST:/orders/{id}/cancel" in (row.get("interface_refs") or [])
+        for row in operations
+    )

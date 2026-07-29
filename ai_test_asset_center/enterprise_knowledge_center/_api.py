@@ -400,21 +400,29 @@ def _technical_declaration_fact(
     statement: str,
     locator: str = "",
     details: dict[str, Any] | None = None,
+    quote: str = "",
 ) -> dict[str, Any]:
-    """Synthetic selectable participant for technical inventory conflicts.
+    """Selectable projection of one exact technical source declaration.
 
     These are not Chinese business rules; they only give operators a SELECT_FACT
     target. Path vocabulary alone is never used to invent business meaning.
     """
+    source = str(source_id or "").strip()
+    if not source:
+        raise ValueError("technical_declaration_source_id_required")
     material = f"{kind}|{source_id}|{entity}|{statement}"
     fact_id = "techfact:" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:20]
-    quote = statement[:500]
+    # A structured projection may summarize the declaration in ``statement``,
+    # but generated prose is never source evidence. Only an exact captured quote
+    # and locator may enter the evidence span.
+    evidence_quote = str(quote or "")[:500]
+    evidence_locator = str(locator or "").strip()
     return {
         "fact_id": fact_id,
         "kind": kind,
         "status": "ACCEPTED",
-        "source_id": source_id,
-        "source_locator": locator or f"{source_id}#entity={entity}",
+        "source_id": source,
+        "source_locator": evidence_locator,
         "raw_statement": statement,
         "statement": statement,
         "entity": entity,
@@ -422,13 +430,86 @@ def _technical_declaration_fact(
         "formal_promotion_allowed": False,
         "source_spans": [
             {
-                "source_id": source_id,
-                "locator": locator or f"{source_id}#entity={entity}",
-                "quote": quote,
-                "quote_hash": hashlib.sha256(quote.encode("utf-8")).hexdigest(),
+                "source_id": source,
+                "locator": evidence_locator,
+                "quote": evidence_quote,
+                "quote_hash": (
+                    hashlib.sha256(evidence_quote.encode("utf-8")).hexdigest()
+                    if evidence_quote
+                    else ""
+                ),
+                "derivation": "structured_source_declaration_projection",
             }
         ],
     }
+
+
+def _permission_action_decisions(
+    entry: dict[str, Any],
+) -> list[tuple[str, str]]:
+    """Return exact (action, allow|deny) declarations from one permission row.
+
+    Role/resource vocabulary is insufficient to prove a contradiction. A formal
+    conflict requires the same explicit action identity on both sides.
+    """
+    raw_decision = str(entry.get("decision") or entry.get("effect") or "").strip().lower()
+    if raw_decision in {"allow", "grant", "permit", "allowed"}:
+        decision = "allow"
+    elif raw_decision in {
+        "deny",
+        "forbid",
+        "prohibit",
+        "denied",
+        "forbidden",
+    }:
+        decision = "deny"
+    else:
+        decision = ""
+
+    actions_value = entry.get("actions")
+    if isinstance(actions_value, list):
+        actions = [str(value).strip().lower() for value in actions_value]
+    elif isinstance(actions_value, str):
+        actions = [actions_value.strip().lower()]
+    else:
+        action = str(entry.get("action") or "").strip().lower()
+        actions = [action] if action else []
+
+    decisions: list[tuple[str, str]] = [
+        (action, decision)
+        for action in actions
+        if action and decision
+    ]
+    denied_value = entry.get("denied_actions")
+    if isinstance(denied_value, list):
+        denied_actions = [str(value).strip().lower() for value in denied_value]
+    elif isinstance(denied_value, str):
+        denied_actions = [denied_value.strip().lower()]
+    else:
+        denied_actions = []
+    decisions.extend(
+        (action, "deny")
+        for action in denied_actions
+        if action
+    )
+    return list(dict.fromkeys(decisions))
+
+
+def _rule_polarity_bucket(rule: dict[str, Any]) -> str:
+    """Return positive/negative from source-backed modality/polarity only."""
+    modality = str(rule.get("modality") or "").strip().upper()
+    polarity = str(rule.get("polarity") or "").strip().lower()
+    frame = rule.get("semantic_frame") or rule.get("business_semantic_frame") or {}
+    if isinstance(frame, dict):
+        modality = modality or str(frame.get("modality") or "").strip().upper()
+        polarity = polarity or str(frame.get("polarity") or "").strip().lower()
+    if modality in {"PROHIBITED", "MUST_NOT"} or polarity in {"negative"}:
+        return "negative"
+    if modality in {"REQUIRED", "EXCLUSIVE", "MUST", "MAY", "ONLY_IF"} or polarity in {
+        "positive"
+    }:
+        return "positive"
+    return ""
 
 
 def _detect_cross_document_conflicts(
@@ -439,10 +520,9 @@ def _detect_cross_document_conflicts(
 ) -> list[dict[str, Any]]:
     """Detect contradictions between knowledge extracted from different sources.
 
-    Conflict types (authority-eligible, fail-closed — no auto-pick):
-    - field_required_mismatch: same field declared required in one source, nullable in another
-    - permission_contradiction: same resource with conflicting access rules across sources
-    - rule_contradiction: rules from different sources making opposing claims about same entity
+    Authority-eligible conflicts require exact source identities and exact
+    technical coordinates. Token overlap alone, path vocabulary, and permission
+    action verbs without an explicit decision are never sufficient.
     """
     from ._chinese_business_conflicts import make_authority_eligible_conflict
 
@@ -451,9 +531,10 @@ def _detect_cross_document_conflicts(
     # 1. Field required/nullable mismatches across sources
     field_by_name: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for field in field_dictionary:
-        key = f"{str(field.get('table') or 'default').lower()}:{str(field.get('field') or '').lower()}"
-        if field.get("field"):
-            field_by_name[key].append(field)
+        table = str(field.get("table") or "").strip().lower()
+        field_name = str(field.get("field") or "").strip().lower()
+        if table and field_name:
+            field_by_name[f"{table}:{field_name}"].append(field)
     for key, entries in field_by_name.items():
         if len(entries) < 2:
             continue
@@ -461,86 +542,159 @@ def _detect_cross_document_conflicts(
         required_false = [e for e in entries if e.get("required") is False]
         if not required_true or not required_false:
             continue
-        left_src = required_true[0]
-        right_src = required_false[0]
-        left = _technical_declaration_fact(
-            kind="TECHNICAL_FIELD_DECLARATION",
-            source_id=str(left_src.get("source_id") or ""),
-            entity=key,
-            statement=f"Field '{key}' declared required=true",
-            details={"required": True, "table": left_src.get("table"), "field": left_src.get("field")},
+        participants: list[dict[str, Any]] = []
+        for declaration, required in [
+            *((row, True) for row in required_true),
+            *((row, False) for row in required_false),
+        ]:
+            source_id = str(declaration.get("source_id") or "").strip()
+            if not source_id:
+                continue
+            participants.append(
+                _technical_declaration_fact(
+                    kind="TECHNICAL_FIELD_DECLARATION",
+                    source_id=source_id,
+                    entity=key,
+                    statement=f"Field '{key}' declared required={str(required).lower()}",
+                    locator=str(
+                        declaration.get("source_locator")
+                        or declaration.get("locator")
+                        or declaration.get("field_id")
+                        or ""
+                    ),
+                    details={
+                        "required": required,
+                        "table": declaration.get("table"),
+                        "field": declaration.get("field"),
+                    },
+                    quote=str(declaration.get("quote") or declaration.get("source_excerpt") or ""),
+                )
+            )
+        participants = list(
+            {
+                str(row.get("fact_id") or ""): row
+                for row in participants
+                if str(row.get("fact_id") or "")
+            }.values()
         )
-        right = _technical_declaration_fact(
-            kind="TECHNICAL_FIELD_DECLARATION",
-            source_id=str(right_src.get("source_id") or ""),
-            entity=key,
-            statement=f"Field '{key}' declared required=false",
-            details={"required": False, "table": right_src.get("table"), "field": right_src.get("field")},
-        )
+        source_ids = {
+            str(row.get("source_id") or "")
+            for row in participants
+            if str(row.get("source_id") or "")
+        }
+        required_values = {
+            bool((row.get("technical_declaration") or {}).get("required"))
+            for row in participants
+        }
+        if len(source_ids) < 2 or required_values != {True, False}:
+            continue
         conflict = make_authority_eligible_conflict(
             "FIELD_REQUIRED_MISMATCH",
-            [left, right],
+            participants,
             f"Field '{key}' is declared required in one source but nullable/optional in another",
             entity=key,
         )
         conflict["conflict_type"] = "field_required_mismatch"
-        conflict["source_a"] = left["source_id"]
-        conflict["source_b"] = right["source_id"]
+        conflict["source_a"] = sorted(source_ids)[0]
+        conflict["source_b"] = sorted(source_ids)[1]
         conflict["detail"] = conflict["reason"]
         conflicts.append(conflict)
 
-    # 2. Permission contradictions across sources
-    perm_by_resource: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    # 2. Exact role + resource + action permission contradictions.
+    permission_by_coordinate: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for perm in permissions:
-        resource = str(perm.get("resource") or perm.get("scope") or "").lower()
-        role = str(perm.get("role") or perm.get("actor") or "").lower()
-        if resource and role:
-            perm_by_resource[f"{role}:{resource}"].append(perm)
-    for key, entries in perm_by_resource.items():
-        if len(entries) < 2:
+        resource = str(perm.get("resource") or perm.get("scope") or "").strip().lower()
+        role = str(perm.get("role") or perm.get("actor") or "").strip().lower()
+        if not resource or not role:
             continue
+        for action, decision in _permission_action_decisions(perm):
+            declaration = dict(perm)
+            declaration["_normalized_action"] = action
+            declaration["_normalized_decision"] = decision
+            permission_by_coordinate[f"{role}:{resource}:{action}"].append(declaration)
+
+    for key, entries in permission_by_coordinate.items():
         allow_rows = [
-            e
-            for e in entries
-            if str(e.get("effect") or e.get("action") or "").lower()
-            in {"allow", "grant", "permit", "read", "write", "admin"}
+            row for row in entries if row.get("_normalized_decision") == "allow"
         ]
         deny_rows = [
-            e
-            for e in entries
-            if str(e.get("effect") or e.get("action") or "").lower()
-            in {"deny", "forbid", "prohibit", "none", "no_access"}
+            row for row in entries if row.get("_normalized_decision") == "deny"
         ]
         if not allow_rows or not deny_rows:
             continue
-        left_src, right_src = allow_rows[0], deny_rows[0]
-        left = _technical_declaration_fact(
-            kind="TECHNICAL_PERMISSION_DECLARATION",
-            source_id=str(left_src.get("source_id") or ""),
-            entity=key,
-            statement=f"Permission '{key}' effect=allow",
-            details={"effect": "allow"},
+        participants = []
+        for declaration in [*allow_rows, *deny_rows]:
+            source_id = str(declaration.get("source_id") or "").strip()
+            if not source_id:
+                continue
+            decision = str(declaration.get("_normalized_decision") or "")
+            evidence = declaration.get("evidence")
+            if isinstance(evidence, str):
+                quote = evidence
+            elif isinstance(evidence, dict):
+                quote = str(
+                    evidence.get("quote")
+                    or evidence.get("verbatim_quote")
+                    or ""
+                )
+            else:
+                quote = str(
+                    declaration.get("quote")
+                    or declaration.get("source_excerpt")
+                    or ""
+                )
+            participants.append(
+                _technical_declaration_fact(
+                    kind="TECHNICAL_PERMISSION_DECLARATION",
+                    source_id=source_id,
+                    entity=key,
+                    statement=f"Permission '{key}' decision={decision}",
+                    locator=str(
+                        declaration.get("source_locator")
+                        or declaration.get("locator")
+                        or declaration.get("permission_id")
+                        or ""
+                    ),
+                    details={
+                        "effect": decision,
+                        "action": declaration.get("_normalized_action"),
+                        "permission_id": declaration.get("permission_id"),
+                    },
+                    quote=quote,
+                )
+            )
+        participants = list(
+            {
+                str(row.get("fact_id") or ""): row
+                for row in participants
+                if str(row.get("fact_id") or "")
+            }.values()
         )
-        right = _technical_declaration_fact(
-            kind="TECHNICAL_PERMISSION_DECLARATION",
-            source_id=str(right_src.get("source_id") or ""),
-            entity=key,
-            statement=f"Permission '{key}' effect=deny",
-            details={"effect": "deny"},
-        )
+        source_ids = {
+            str(row.get("source_id") or "")
+            for row in participants
+            if str(row.get("source_id") or "")
+        }
+        decisions = {
+            str((row.get("technical_declaration") or {}).get("effect") or "")
+            for row in participants
+        }
+        if len(source_ids) < 2 or decisions != {"allow", "deny"}:
+            continue
         conflict = make_authority_eligible_conflict(
             "PERMISSION_CONTRADICTION",
-            [left, right],
+            participants,
             f"Permission for '{key}' has conflicting allow/deny across sources",
             entity=key,
         )
         conflict["conflict_type"] = "permission_contradiction"
-        conflict["source_a"] = left["source_id"]
-        conflict["source_b"] = right["source_id"]
+        conflict["source_a"] = sorted(source_ids)[0]
+        conflict["source_b"] = sorted(source_ids)[1]
         conflict["detail"] = conflict["reason"]
         conflicts.append(conflict)
 
-    # 3. Rule contradictions (same risk_type + overlapping tokens, different sources)
+    # 3. Rule contradictions require opposing modality/polarity — token overlap alone
+    # is never enough for an authority-eligible conflict.
     rules_by_risk: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for rule in rules:
         risk_type = str(rule.get("risk_type") or rule.get("kind") or "").lower()
@@ -552,47 +706,67 @@ def _detect_cross_document_conflicts(
         for i in range(len(group)):
             for j in range(i + 1, min(i + 5, len(group))):
                 a, b = group[i], group[j]
-                src_a = str(a.get("source_id") or "")
-                src_b = str(b.get("source_id") or "")
+                src_a = str(a.get("source_id") or "").strip()
+                src_b = str(b.get("source_id") or "").strip()
                 if not src_a or not src_b or src_a == src_b:
                     continue
-                tokens_a = set(a.get("tokens") or [])
-                tokens_b = set(b.get("tokens") or [])
+                bucket_a = _rule_polarity_bucket(a)
+                bucket_b = _rule_polarity_bucket(b)
+                if not bucket_a or not bucket_b or bucket_a == bucket_b:
+                    continue
+                tokens_a = {str(t).lower() for t in (a.get("tokens") or []) if str(t).strip()}
+                tokens_b = {str(t).lower() for t in (b.get("tokens") or []) if str(t).strip()}
                 overlap = tokens_a & tokens_b
-                if len(overlap) >= 2:
-                    stmt_a = str(a.get("statement") or a.get("expected") or "")[:120]
-                    stmt_b = str(b.get("statement") or b.get("expected") or "")[:120]
-                    if stmt_a and stmt_b and _norm(stmt_a) != _norm(stmt_b):
-                        entity = f"{risk_type}:{','.join(sorted(overlap)[:3])}"
-                        left = _technical_declaration_fact(
-                            kind="TECHNICAL_RULE_DECLARATION",
-                            source_id=src_a,
-                            entity=entity,
-                            statement=stmt_a,
-                            details={"risk_type": risk_type, "rule_id": a.get("rule_id")},
-                        )
-                        right = _technical_declaration_fact(
-                            kind="TECHNICAL_RULE_DECLARATION",
-                            source_id=src_b,
-                            entity=entity,
-                            statement=stmt_b,
-                            details={"risk_type": risk_type, "rule_id": b.get("rule_id")},
-                        )
-                        conflict = make_authority_eligible_conflict(
-                            "RULE_CONTRADICTION",
-                            [left, right],
-                            (
-                                f"Rules about '{risk_type}' from different sources may "
-                                f"contradict: [{stmt_a}] vs [{stmt_b}]"
-                            ),
-                            entity=entity,
-                        )
-                        conflict["conflict_type"] = "rule_contradiction"
-                        conflict["source_a"] = src_a
-                        conflict["source_b"] = src_b
-                        conflict["detail"] = conflict["reason"]
-                        conflicts.append(conflict)
-                        break
+                if len(overlap) < 2:
+                    continue
+                stmt_a = str(a.get("statement") or a.get("expected") or "")[:120]
+                stmt_b = str(b.get("statement") or b.get("expected") or "")[:120]
+                if not stmt_a or not stmt_b or _norm(stmt_a) == _norm(stmt_b):
+                    continue
+                entity = f"{risk_type}:{','.join(sorted(overlap)[:3])}"
+                left = _technical_declaration_fact(
+                    kind="TECHNICAL_RULE_DECLARATION",
+                    source_id=src_a,
+                    entity=entity,
+                    statement=stmt_a,
+                    locator=str(a.get("rule_id") or a.get("source_locator") or ""),
+                    details={
+                        "risk_type": risk_type,
+                        "rule_id": a.get("rule_id"),
+                        "modality": a.get("modality"),
+                        "polarity": bucket_a,
+                    },
+                    quote=stmt_a,
+                )
+                right = _technical_declaration_fact(
+                    kind="TECHNICAL_RULE_DECLARATION",
+                    source_id=src_b,
+                    entity=entity,
+                    statement=stmt_b,
+                    locator=str(b.get("rule_id") or b.get("source_locator") or ""),
+                    details={
+                        "risk_type": risk_type,
+                        "rule_id": b.get("rule_id"),
+                        "modality": b.get("modality"),
+                        "polarity": bucket_b,
+                    },
+                    quote=stmt_b,
+                )
+                conflict = make_authority_eligible_conflict(
+                    "RULE_CONTRADICTION",
+                    [left, right],
+                    (
+                        f"Rules about '{risk_type}' from different sources make opposing "
+                        f"claims ({bucket_a} vs {bucket_b}): [{stmt_a}] vs [{stmt_b}]"
+                    ),
+                    entity=entity,
+                )
+                conflict["conflict_type"] = "rule_contradiction"
+                conflict["source_a"] = src_a
+                conflict["source_b"] = src_b
+                conflict["detail"] = conflict["reason"]
+                conflicts.append(conflict)
+                break
             else:
                 continue
             break

@@ -1346,6 +1346,44 @@ def _interface_prose_fields(interface: dict[str, Any]) -> list[tuple[str, str, s
     return rows
 
 
+def _asset_source_backed_alias_map(asset: dict[str, Any]) -> dict[str, str]:
+    """Collect unambiguous ACCEPTED TERM_ALIAS maps already on the asset.
+
+    Never invent aliases from path vocabulary. Conflicting alias→canonical pairs
+    are omitted until an operator SELECT resolves them.
+    """
+    alias_to_canonical: dict[str, str] = {}
+    conflicting: set[str] = set()
+    sources: list[dict[str, Any]] = []
+    sources.extend(
+        row
+        for row in _list(_dict(asset.get("business_fact_ledger")).get("items"))
+        if isinstance(row, dict)
+    )
+    sources.extend(
+        row
+        for row in _list(_dict(asset.get("chinese_business_glossary")).get("items"))
+        if isinstance(row, dict)
+    )
+    for fact in sources:
+        if _text(fact.get("kind")) != "TERM_ALIAS":
+            continue
+        if _text(fact.get("status")) not in {"", "ACCEPTED"}:
+            continue
+        alias = _text(fact.get("alias"))
+        canonical = _text(fact.get("canonical_term"))
+        if not alias or not canonical or alias == canonical:
+            continue
+        existing = alias_to_canonical.get(alias)
+        if existing and existing != canonical:
+            conflicting.add(alias)
+            continue
+        alias_to_canonical[alias] = canonical
+    for alias in conflicting:
+        alias_to_canonical.pop(alias, None)
+    return alias_to_canonical
+
+
 def project_openapi_interface_chinese_spans(
     asset: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -1356,29 +1394,45 @@ def project_openapi_interface_chinese_spans(
     - Facts come only from existing rule-signal extraction; path vocabulary alone
       never invents a business rule.
     - Ambiguous extraction stays PENDING / coverage AMBIGUOUS or UNRESOLVED.
+    - Within one interface, summary then description units thread entity/role
+      context so description-only multi-unit prose can bind without invention.
     """
     known_entities = _known_names(asset, "entity")
     known_roles = _known_names(asset, "role")
+    alias_map = _asset_source_backed_alias_map(asset)
     coverage: list[dict[str, Any]] = []
     facts: list[dict[str, Any]] = []
     for interface in _list(asset.get("interfaces")):
         if not isinstance(interface, dict):
             continue
         source_kind = _text(interface.get("source_kind")).lower()
-        if source_kind and source_kind not in {"openapi", "swagger"}:
+        has_openapi_prose_fields = any(
+            key in interface
+            for key in ("openapi_summary", "openapi_description")
+        )
+        if source_kind not in {"openapi", "swagger"} and not has_openapi_prose_fields:
             continue
         interface_id = _text(interface.get("interface_id") or interface.get("operation_id"))
-        source_id = _text(interface.get("source_id")) or "openapi"
+        source_id = _text(interface.get("source_id"))
         if not interface_id:
             continue
+        # Interface-scoped context: summary units seed description units.
+        context_entities: list[str] = []
+        context_roles: list[str] = []
         for span_kind, field_name, prose in _interface_prose_fields(interface):
             language = _language_of(prose)
-            locator = f"{source_id}#interface={interface_id}/{field_name}"
-            chunk_id = _stable_id("chunk", source_id, locator, prose)
+            locator = (
+                f"{source_id}#interface={interface_id}/{field_name}"
+                if source_id
+                else f"interface={interface_id}/{field_name}"
+            )
+            chunk_id = _stable_id("chunk", source_id, interface_id, field_name, prose)
             chunk_facts: list[dict[str, Any]] = []
             chunk_ambiguities: list[str] = []
             contains_business_signal = bool(_RULE_SIGNAL_RE.search(prose))
-            if language in {"zh-CN", "zh-CN-mixed"} and contains_business_signal:
+            if not source_id:
+                chunk_ambiguities.append("SOURCE_ID_MISSING")
+            elif language in {"zh-CN", "zh-CN-mixed"} and contains_business_signal:
                 for unit in _split_rule_units(prose):
                     for branch_unit, branch_meta in _expand_conditional_units(unit):
                         fact = _fact_from_unit(
@@ -1387,9 +1441,9 @@ def project_openapi_interface_chinese_spans(
                             locator=locator,
                             known_entities=known_entities,
                             known_roles=known_roles,
-                            context_entities=[],
-                            context_roles=[],
-                            alias_map={},
+                            context_entities=context_entities,
+                            context_roles=context_roles,
+                            alias_map=alias_map,
                             branch_meta=branch_meta,
                         )
                         if not fact:
@@ -1423,7 +1477,15 @@ def project_openapi_interface_chinese_spans(
                         fact["derivation"] = "openapi_interface_chinese_span"
                         chunk_facts.append(fact)
                         chunk_ambiguities.extend(_list(fact.get("ambiguities")))
-            if language not in {"zh-CN", "zh-CN-mixed"}:
+                        for entity in _list(_dict(fact.get("subject")).get("entity_refs")):
+                            if entity:
+                                context_entities.append(_text(entity))
+                        for role in _list(_dict(fact.get("subject")).get("actor_refs")):
+                            if role and role != "系统":
+                                context_roles.append(_text(role))
+            if not source_id:
+                status = "SOURCE_ID_MISSING"
+            elif language not in {"zh-CN", "zh-CN-mixed"}:
                 status = "TERMINAL_NON_CHINESE"
             elif contains_business_signal and not chunk_facts:
                 status = "UNRESOLVED_BUSINESS_TEXT"
@@ -1434,6 +1496,7 @@ def project_openapi_interface_chinese_spans(
                 status = "UNDERSTOOD"
             else:
                 # Chinese prose present but no rule signal — context only, never invent.
+                # Empty/non-rule summary still allows later description units to bind.
                 status = "UNDERSTOOD_CONTEXT"
             coverage.append(
                 {

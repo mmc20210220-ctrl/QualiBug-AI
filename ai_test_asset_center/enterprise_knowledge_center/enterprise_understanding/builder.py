@@ -1669,6 +1669,7 @@ def _build_operations(
                 "raw_action_names": [],
                 "actor_refs": [],
                 "object_refs": sorted(object_refs),
+                "interface_refs": [],
                 "preconditions": [],
                 "condition_combinator": combinator,
                 "condition_frames": [],
@@ -1690,6 +1691,11 @@ def _build_operations(
         )
         operation["raw_action_names"] = unique_text([*as_list(operation.get("raw_action_names")), action.get("raw"), action_name])
         operation["actor_refs"] = unique_text([*as_list(operation.get("actor_refs")), *actor_refs])
+        interface_id = text(fact.get("interface_id"))
+        if interface_id:
+            operation["interface_refs"] = unique_text(
+                [*as_list(operation.get("interface_refs")), interface_id]
+            )
         operation["preconditions"] = unique_text([*as_list(operation.get("preconditions")), *conditions])
         existing_combinator = text(operation.get("condition_combinator"))
         merged_preconditions = as_list(operation.get("preconditions"))
