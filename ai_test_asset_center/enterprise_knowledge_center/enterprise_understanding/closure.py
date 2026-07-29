@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .behavior_ir_governance import build_governed_business_behavior_ir
+from .behavior_ir_logic_gate import build_business_behavior_ir_v1
 from .gate import assess_understanding_model
 from .schema import as_dict, as_list, dedupe_evidence, new_unknown, text
 
@@ -33,7 +33,7 @@ def apply_minimum_understanding_closure(
     ]
 
     row_ledger, behaviors, behavior_conflicts, behavior_unknowns, behavior_gate = (
-        build_governed_business_behavior_ir(
+        build_business_behavior_ir_v1(
             asset,
             facts,
             [row for row in as_list(model.get("operations")) if isinstance(row, dict)],
@@ -138,6 +138,9 @@ def apply_minimum_understanding_closure(
         "candidate_behavior_count": int(behavior_metrics.get("candidate_behavior_count") or 0),
         "incomplete_behavior_count": int(behavior_metrics.get("incomplete_behavior_count") or 0),
         "conflicted_behavior_count": int(behavior_metrics.get("conflicted_behavior_count") or 0),
+        "unresolved_condition_combinator_count": int(
+            behavior_metrics.get("unresolved_condition_combinator_count") or 0
+        ),
     }
     gate = assess_understanding_model(
         model,
