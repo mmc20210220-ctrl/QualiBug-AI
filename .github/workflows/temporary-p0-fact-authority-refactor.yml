@@ -6,12 +6,18 @@ on:
     branches: [main]
     paths:
       - .github/workflows/temporary-p0-fact-authority-refactor.yml
+  issues:
+    types: [opened]
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   refactor-and-test:
+    if: >-
+      github.event_name == 'push' ||
+      github.event.issue.title == 'RUN_P0_FACT_AUTHORITY_REFACTOR_20260729'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -89,6 +95,8 @@ jobs:
 
       - name: Commit tested fix to main without force
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           test_summary="$(tail -n 1 /tmp/required-regression.txt)"
@@ -103,3 +111,7 @@ jobs:
             -m "Pre-fix governed regression: ${red_summary}" \
             -m "Required regression: ${test_summary}"
           git push origin HEAD:main
+          if [ "${{ github.event_name }}" = "issues" ]; then
+            gh issue close "${{ github.event.issue.number }}" \
+              --comment "P0 refactor committed after required regression: ${test_summary}"
+          fi
