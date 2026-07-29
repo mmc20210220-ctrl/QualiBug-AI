@@ -97,7 +97,7 @@ def test_parse_source_extracts_markdown_api_field_dictionary_and_svg() -> None:
     assert "Loading" in svg["ui_specs"][0]["states"]
 
 
-def test_field_dictionary_json_preserves_required_false_in_excerpt() -> None:
+def test_field_dictionary_json_preserves_required_false_in_normalized_evidence() -> None:
     from ai_test_asset_center.enterprise_knowledge_center._parsing import (
         _field_dictionary_entries,
     )
@@ -113,10 +113,25 @@ def test_field_dictionary_json_preserves_required_false_in_excerpt() -> None:
         "src_fields",
     )
     by_field = {row["field"]: row for row in rows}
-    assert by_field["warehouse_id"]["required"] is False
-    assert "required=false" in by_field["warehouse_id"]["source_excerpt"]
-    assert by_field["sku"]["required"] is True
-    assert "required=true" in by_field["sku"]["source_excerpt"]
+    warehouse = by_field["warehouse_id"]
+    assert warehouse["required"] is False
+    assert warehouse["normalized_evidence"] == (
+        "table=orders; field=warehouse_id; required=false"
+    )
+    assert warehouse["evidence_kind"] == "NORMALIZED_STRUCTURED_DECLARATION"
+    assert warehouse["evidence_derivation"] == (
+        "normalized_field_dictionary_projection"
+    )
+    assert "quote" not in warehouse
+    assert "source_excerpt" not in warehouse
+
+    sku = by_field["sku"]
+    assert sku["required"] is True
+    assert sku["normalized_evidence"] == "table=orders; field=sku; required=true"
+    assert sku["evidence_kind"] == "NORMALIZED_STRUCTURED_DECLARATION"
+    assert sku["evidence_derivation"] == "normalized_field_dictionary_projection"
+    assert "quote" not in sku
+    assert "source_excerpt" not in sku
 
 
 def test_permission_entries_prefer_source_evidence_string() -> None:
