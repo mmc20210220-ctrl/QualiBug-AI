@@ -3,6 +3,10 @@ from __future__ import annotations
 from ai_test_asset_center.enterprise_knowledge_center.job_asset_governance import (
     merge_cross_source_job_assets,
     normalize_job_definition_with_governance,
+    to_async_operation_with_governance,
+)
+from ai_test_asset_center.enterprise_knowledge_center.job_behavior_projection import (
+    project_job_behaviors,
 )
 
 
@@ -84,6 +88,22 @@ def _code_job(*, cron: str = "") -> dict:
     )
 
 
+def _model(operation: dict) -> dict:
+    return {
+        "operations": [operation],
+        "actors": [
+            {
+                "actor_id": "actor-job-runner",
+                "role": "job_runner",
+                "account_ref": "job-runner-account",
+                "credential_secret_ref": "secret://test/job-runner",
+                "runtime_bound": True,
+                "evidence": [_platform_source()],
+            }
+        ],
+    }
+
+
 def test_platform_and_code_views_merge_into_one_execution_ready_job_asset() -> None:
     platform_asset = _platform_job()
     code_asset = _code_job()
@@ -94,6 +114,9 @@ def test_platform_and_code_views_merge_into_one_execution_ready_job_asset() -> N
     assert len(merged) == 1
     asset = merged[0]
     assert asset["platform_job_id"] == "report-daily"
+    assert asset["display_name"] == "日报聚合"
+    assert set(asset["display_name_variants"]) == {"日报聚合", "report-daily"}
+    assert asset["display_name_conflict_policy"] == "NON_AUTHORITATIVE_VARIANT"
     assert asset["identity"]["handler"] == "ReportJob.handle"
     assert asset["identity"]["service"] == "report-service"
     assert asset["connector_id"] == "conn-job"
@@ -105,6 +128,27 @@ def test_platform_and_code_views_merge_into_one_execution_ready_job_asset() -> N
         "CROSS_SOURCE_IMPLEMENTATION_EVIDENCE"
     )
     assert len(asset["merged_source_job_asset_ids"]) == 2
+
+
+def test_automatically_merged_job_projects_to_confirmed_existing_behavior() -> None:
+    asset = merge_cross_source_job_assets([_platform_job(), _code_job()])[0]
+    operation = to_async_operation_with_governance(asset)
+
+    behaviors, ledger, lineages, gate = project_job_behaviors(
+        {"job_assets": [asset]},
+        _model(operation),
+    )
+
+    assert len(behaviors) == 1
+    behavior = behaviors[0]
+    assert behavior["schema"] == "qualibug.enterprise-business-behavior.v1"
+    assert behavior["status"] == "CONFIRMED"
+    assert behavior["candidate_only"] is False
+    assert behavior["formal_business_rule"] is True
+    assert behavior["formal_business_finding_eligible"] is False
+    assert ledger[0]["formal_obligation_eligible"] is True
+    assert lineages[0]["identity_complete"] is True
+    assert gate["status"] == "PASS"
 
 
 def test_conflicting_cron_values_are_retained_and_block_automatic_promotion() -> None:
