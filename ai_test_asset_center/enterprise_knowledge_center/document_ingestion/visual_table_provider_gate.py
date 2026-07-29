@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .contract import text
 from .page_rendering import RenderedPage
 from .visual_table_adapter import VisualTableProvider
 
@@ -48,6 +49,12 @@ class GeometryFormalEnforcingVisualTableProvider:
         result: list[dict[str, Any]] = []
         for row in rows:
             table = dict(row)
+            contributing_provider = text(table.get("contributing_provider"))
+            method = text(table.get("detection_method"))
+            if contributing_provider and f"observed_by={contributing_provider}" not in method:
+                table["detection_method"] = (
+                    method + f"+observed_by={contributing_provider}"
+                ).strip("+")
             if table.get("geometry_formal") is False:
                 cells: list[dict[str, Any]] = []
                 for value in table.get("cells") or []:
