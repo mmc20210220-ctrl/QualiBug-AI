@@ -78,9 +78,13 @@ def test_partial_implementation_binding_blocks_chinese_probe_mainline() -> None:
     )
 
     assert probes == []
-    assert asset["scenario_planning_gate"]["status"] == "BLOCKED_IMPLEMENTATION_BINDING_GATE"
-    assert asset["scenario_planning_gate"]["entry_allowed"] is False
-    assert asset["scenario_planning_gate"]["execution_allowed"] is False
+    scenario_gate = asset["scenario_planning_gate"]
+    assert scenario_gate["schema"] == "qualibug.business-behavior-scenario-planning-gate.v1"
+    assert scenario_gate["status"] == "PARTIAL_SCENARIO_PLANNING_IMPLEMENTATION_BINDING"
+    assert scenario_gate["entry_allowed"] is False
+    assert scenario_gate["execution_allowed"] is False
+    assert scenario_gate["chinese_rule_downstream_status"] == "BLOCKED_IMPLEMENTATION_BINDING_GATE"
+    assert asset["chinese_rule_downstream_gate"]["status"] == "BLOCKED_IMPLEMENTATION_BINDING_GATE"
     assert asset["enterprise_comprehension_gate"]["status"] == "PASS"
     assert asset["enterprise_comprehension_gate"]["entry_allowed"] is True
     assert asset["enterprise_comprehension_gate"]["scenario_planning_allowed"] is False
@@ -105,18 +109,25 @@ def test_missing_implementation_gate_cannot_bypass_new_mainline() -> None:
     asset, probes = refresh_chinese_business_downstream(_asset(None))
 
     assert probes == []
-    assert asset["scenario_planning_gate"]["status"] == "BLOCKED_IMPLEMENTATION_BINDING_GATE"
-    assert asset["scenario_planning_gate"]["implementation_binding_gate_present"] is False
-    assert asset["scenario_planning_gate"]["implementation_binding_status"] == "NOT_BUILT"
+    scenario_gate = asset["scenario_planning_gate"]
+    assert scenario_gate["schema"] == "qualibug.business-behavior-scenario-planning-gate.v1"
+    assert scenario_gate["status"] == "PARTIAL_SCENARIO_PLANNING_IMPLEMENTATION_BINDING"
+    downstream = asset["chinese_rule_downstream_gate"]
+    assert downstream["status"] == "BLOCKED_IMPLEMENTATION_BINDING_GATE"
+    assert downstream["implementation_binding_gate_present"] is False
+    assert downstream["implementation_binding_status"] == "NOT_BUILT"
 
 
 def test_passed_implementation_binding_allows_scenario_asset_generation() -> None:
     asset, _probes = refresh_chinese_business_downstream(_asset("PASS"))
 
-    assert asset["scenario_planning_gate"]["status"] == "PASS"
-    assert asset["scenario_planning_gate"]["entry_allowed"] is True
-    assert asset["scenario_planning_gate"]["scenario_planning_allowed"] is True
-    assert asset["scenario_planning_gate"]["execution_allowed"] is False
+    scenario_gate = asset["scenario_planning_gate"]
+    assert scenario_gate["schema"] == "qualibug.business-behavior-scenario-planning-gate.v1"
+    assert scenario_gate["status"] == "PASS"
+    assert scenario_gate["entry_allowed"] is True
+    assert scenario_gate["scenario_planning_allowed"] is True
+    assert scenario_gate["execution_allowed"] is False
+    assert scenario_gate["chinese_rule_downstream_status"] == "PASS"
     assert asset["rule_library"][0]["downstream_binding_status"] == "READY_AUTHORITATIVE_OPERATION_BOUND"
     assert any(row.get("source_rule_id") == "rule:ship" for row in asset["risk_domains"])
     assert any(row.get("rule_id") == "rule:ship" for row in asset["oracle_library"])
