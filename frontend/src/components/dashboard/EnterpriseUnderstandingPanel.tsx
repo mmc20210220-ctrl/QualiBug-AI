@@ -110,8 +110,9 @@ export function EnterpriseUnderstandingPanel({ summary: value, onOpenMaterials }
 
   const gates = understandingGates(summary);
   const understandingReady = asBoolean(summary.enterprise_understanding_ready);
-  const chainReady = asBoolean(summary.formal_scenario_chain_ready)
-    || (gates.length > 0 && gates.every((gate) => gate.ready));
+  const chainReady = gates.length > 0
+    ? gates.every((gate) => gate.ready)
+    : asBoolean(summary.formal_scenario_chain_ready);
   const blockers = [...new Set(asArray(summary.understanding_blockers).map(asText).filter(Boolean))].slice(0, 6);
   const firstBlocked = gates.find((gate) => !gate.ready);
   const statusTitle = chainReady
