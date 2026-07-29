@@ -18,14 +18,6 @@ type Props = {
   onRefresh: () => void;
 };
 
-function uploadScenarioDraftKey(project: string): string {
-  return `qualibug.run.ui-upload-scenarios.${project.trim()}`;
-}
-
-function uploadScenarioVerifiedKey(project: string): string {
-  return `qualibug.run.ui-upload-scenarios-verified.${project.trim()}`;
-}
-
 function formatBytes(value?: number): string {
   const bytes = Number(value || 0);
   if (bytes < 1024) return `${bytes} B`;
@@ -39,26 +31,7 @@ function shortHash(value?: string): string {
 }
 
 function scenarioRef(row: UploadScenarioRecord): string {
-  return String(row.scenario_ref || row.scenario_id || '').trim();
-}
-
-function writeScenarioDraft(project: string, refs: string[]): void {
-  if (!project) return;
-  try {
-    localStorage.setItem(uploadScenarioDraftKey(project), JSON.stringify(refs));
-  } catch {
-    // Browser storage is only a transport bridge to run-center.ts. The backend
-    // still validates every approved scenario against the active project scope.
-  }
-}
-
-function markScenarioDraftVerified(project: string, verified: boolean): void {
-  if (!project) return;
-  try {
-    sessionStorage.setItem(uploadScenarioVerifiedKey(project), verified ? 'true' : 'false');
-  } catch {
-    // Fail closed: run-center.ts treats a missing marker as unverified.
-  }
+  return String(row.scenario_ref || '').trim();
 }
 
 export function RunUploadFixtureSelector({
@@ -85,7 +58,6 @@ export function RunUploadFixtureSelector({
       return;
     }
 
-    markScenarioDraftVerified(project, false);
     setScenarioLoading(true);
     try {
       const payload = await listUploadScenarios(project, false);
@@ -94,18 +66,12 @@ export function RunUploadFixtureSelector({
         && row.authority === 'approved_copy'
         && Boolean(scenarioRef(row))
       ));
-      const automaticallySelected = approved.map(scenarioRef);
-
       setScenarios(approved);
-      setSelectedScenarios(automaticallySelected);
-      writeScenarioDraft(project, automaticallySelected);
-      markScenarioDraftVerified(project, true);
+      setSelectedScenarios(approved.map(scenarioRef));
       setScenarioError('');
     } catch (caught) {
       setScenarios([]);
       setSelectedScenarios([]);
-      writeScenarioDraft(project, []);
-      markScenarioDraftVerified(project, false);
       setScenarioError(caught instanceof Error ? caught.message : '上传场景读取失败');
     } finally {
       setScenarioLoading(false);
