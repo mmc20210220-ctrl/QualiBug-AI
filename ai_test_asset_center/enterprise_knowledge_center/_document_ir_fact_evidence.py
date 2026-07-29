@@ -43,6 +43,7 @@ def _eligible_blocks(structure: dict[str, Any]) -> list[dict[str, Any]]:
         and _text(row.get("type")) in allowed
         and _text(row.get("region")) in {"", "body"}
         and not row.get("excluded_from_main_flow")
+        and not row.get("excluded_from_plain_text_projection")
         and _text(row.get("text"))
         and _text(row.get("source_locator"))
     ]
@@ -142,6 +143,7 @@ def align_business_facts_to_document_ir(
         "unique_block_required": True,
         "business_semantics_changed": False,
         "ambiguous_matches_are_not_selected": True,
+        "blocks_excluded_from_plain_text_projection_are_not_fact_authority": True,
     }
     asset["business_fact_ledger"] = ledger
     asset["document_ir_fact_evidence_receipt"] = {
