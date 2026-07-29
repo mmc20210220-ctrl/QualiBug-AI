@@ -159,19 +159,34 @@ def _remerge_governed_behaviors(behaviors: list[dict[str, Any]]) -> list[dict[st
 
 
 def _recalculate_conflicts(behaviors: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Recalculate only conflicts backed by accepted business facts.
+
+    Decision-matrix rows are direct structural interpretations and remain candidate-only
+    until corroborated into the business fact ledger. They may expose ambiguity or a
+    coverage gap, but they cannot conflict with, downgrade, or block a formal fact-backed
+    behavior.
+    """
     conflicts: list[dict[str, Any]] = []
     families: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for behavior in behaviors:
-        if text(behavior.get("source_kind")) == "ACCEPTED_BUSINESS_FACT":
-            behavior["status"] = (
-                "INCOMPLETE" if as_list(behavior.get("unresolved_semantics")) else "CONFIRMED"
-            )
+        source_kind = text(behavior.get("source_kind"))
+        unresolved = unique_text(as_list(behavior.get("unresolved_semantics")))
+        is_fact_backed = source_kind == "ACCEPTED_BUSINESS_FACT"
+
+        if is_fact_backed:
+            behavior["status"] = "INCOMPLETE" if unresolved else "CONFIRMED"
             behavior["formal_business_rule"] = text(behavior.get("status")) == "CONFIRMED"
-        elif text(behavior.get("status")) != "CONFLICTED":
-            behavior["status"] = (
-                "INCOMPLETE" if as_list(behavior.get("unresolved_semantics")) else "CANDIDATE"
-            )
+        else:
+            if text(behavior.get("permission_decision")) == "CONFLICTED":
+                unresolved.append("BEHAVIOR_CANDIDATE_RESULT_CONFLICT")
+            behavior["unresolved_semantics"] = unique_text(unresolved)
+            behavior["status"] = "INCOMPLETE" if unresolved else "CANDIDATE"
+            behavior["candidate_only"] = True
             behavior["formal_business_rule"] = False
+
+        if not behavior.get("formal_business_rule"):
+            continue
+
         signature = _condition_signature(as_list(behavior.get("preconditions")))
         families[(text(behavior.get("behavior_family_id")), signature)].append(behavior)
 
