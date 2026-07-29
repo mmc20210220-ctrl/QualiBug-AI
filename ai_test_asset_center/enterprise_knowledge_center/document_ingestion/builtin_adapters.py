@@ -60,6 +60,54 @@ def _decoded_text(data: bytes) -> tuple[str, float]:
     return decoded, round(confidence, 4)
 
 
+def _enrich_pdf_table_gap_targets(document_ir: dict[str, Any]) -> dict[str, Any]:
+    """Attach exact native table-region targets to the PDF gap receipt.
+
+    The PDF extractor already emits source-preserving TABLE_REGION blocks.  Deferred visual
+    recovery needs their page and identity to avoid clearing every table on a page after one
+    partial success.  This function adds evidence only; it does not change table semantics.
+    """
+    result = dict(document_ir or {})
+    tables = [
+        dict(row)
+        for row in (result.get("tables") or [])
+        if isinstance(row, dict) and str(row.get("type") or "").strip() == "TABLE_REGION"
+    ]
+    pages = sorted(
+        {
+            int(row.get("page") or 0)
+            for row in tables
+            if str(row.get("page") or "").isdigit() and int(row.get("page") or 0) > 0
+        }
+    )
+    region_ids = sorted(
+        {
+            str(row.get("block_id") or row.get("source_locator") or "").strip()
+            for row in tables
+            if str(row.get("block_id") or row.get("source_locator") or "").strip()
+        }
+    )
+    unsupported: list[dict[str, Any]] = []
+    for raw in result.get("unsupported_content") or []:
+        if not isinstance(raw, dict):
+            continue
+        row = dict(raw)
+        reason = str(row.get("reason_code") or row.get("kind") or "").strip()
+        if reason == "PDF_TABLE_REGION_NOT_CELL_PARSED":
+            row["pages"] = pages
+            row["region_ids"] = region_ids
+            row["count"] = len(region_ids) or int(row.get("count") or 0)
+            row["target_evidence_complete"] = bool(region_ids)
+        unsupported.append(row)
+    receipt = dict(result.get("structure_receipt") or {})
+    receipt["unsupported_content"] = unsupported
+    receipt["unsupported_content_count"] = sum(int(row.get("count") or 0) for row in unsupported)
+    result["tables"] = tables
+    result["unsupported_content"] = unsupported
+    result["structure_receipt"] = receipt
+    return result
+
+
 class DocxDocumentAdapter(DocumentAdapter):
     name = "docx-native-structure"
     parser_version = "1"
@@ -122,7 +170,9 @@ class PdfDocumentAdapter(DocumentAdapter):
     def extract(self, source: DocumentSource) -> dict[str, Any]:
         from .._pdf_document_structure_ir import extract_pdf_document_ir
 
-        return extract_pdf_document_ir(source.data, filename=source.filename)
+        return _enrich_pdf_table_gap_targets(
+            extract_pdf_document_ir(source.data, filename=source.filename)
+        )
 
 
 class GenericTextDocumentAdapter(DocumentAdapter):
