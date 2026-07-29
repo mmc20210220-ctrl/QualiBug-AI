@@ -39,6 +39,13 @@ def _passed_downstream_gates() -> dict:
             "runtime_plan_ready": True,
             "execution_allowed": False,
         },
+        "runtime_materialization_gate": {
+            "status": "PASS",
+            "entry_allowed": True,
+            "runtime_materialization_ready": True,
+            "execution_allowed": False,
+            "request_sendable": False,
+        },
     }
 
 
@@ -55,6 +62,7 @@ def test_understanding_preflight_reuses_existing_passed_gates(
             "understood_operation_count": 7,
             "scenario_ir_count": 5,
             "runtime_plan_count": 5,
+            "runtime_materialization_count": 5,
         },
         "enterprise_understanding_model": {
             "model_id": "eum_passed",
@@ -82,9 +90,10 @@ def test_understanding_preflight_reuses_existing_passed_gates(
     )
     assert result["understanding_summary"]["model_id"] == "eum_passed"
     assert result["understanding_summary"]["runtime_plan_count"] == 5
+    assert result["understanding_summary"]["runtime_materialization_count"] == 5
     assert result["input_checks"]["enterprise_understanding"]["status"] == "passed"
     assert result["understanding_summary"]["gates"][-1] == {
-        "label": "Runtime Plan",
+        "label": "运行实例化",
         "status": "PASS",
         "ready": True,
     }
@@ -140,6 +149,11 @@ def test_understanding_preflight_surfaces_first_existing_blocker(
             "entry_allowed": False,
             "runtime_plan_ready": False,
         },
+        "runtime_materialization_gate": {
+            "status": "BLOCKED_RUNTIME_MATERIALIZATION_UPSTREAM_PLAN_GATE",
+            "entry_allowed": False,
+            "runtime_materialization_ready": False,
+        },
     }
     monkeypatch.setattr(
         enterprise_knowledge_center,
@@ -179,6 +193,11 @@ def test_runtime_plan_is_the_first_blocker_after_prior_gates_pass(
             "entry_allowed": False,
             "runtime_plan_ready": False,
         },
+        "runtime_materialization_gate": {
+            "status": "BLOCKED_RUNTIME_MATERIALIZATION_UPSTREAM_PLAN_GATE",
+            "entry_allowed": False,
+            "runtime_materialization_ready": False,
+        },
         "runtime_plan_unknowns": [
             {
                 "kind": "RUNTIME_PLAN_REQUEST_FIELD_LOCATION_UNRESOLVED",
@@ -201,12 +220,70 @@ def test_runtime_plan_is_the_first_blocker_after_prior_gates_pass(
 
     assert result["ready"] is False
     assert result["blocking_codes"] == ["RUNTIME_PLAN_BLOCKED"]
-    assert result["understanding_summary"]["gates"][-1] == {
+    runtime_gate = next(
+        row
+        for row in result["understanding_summary"]["gates"]
+        if row["label"] == "Runtime Plan"
+    )
+    assert runtime_gate == {
         "label": "Runtime Plan",
         "status": "BLOCKED_RUNTIME_PLAN_INCOMPLETE",
         "ready": False,
     }
     assert "请求字段在接口契约中的位置尚未明确" in result["reasons"][0]["message"]
+
+
+def test_runtime_materialization_is_first_blocker_after_plan_passes(
+    monkeypatch, tmp_path: Path
+) -> None:
+    asset = {
+        "summary": {
+            "enterprise_understanding_model_id": "eum_materialization_blocked",
+            "enterprise_understanding_status": "PASS",
+            "enterprise_understanding_ready": True,
+            "runtime_plan_count": 1,
+            "runtime_materialization_count": 1,
+        },
+        "enterprise_understanding_model": {
+            "model_id": "eum_materialization_blocked",
+            "gate": {"status": "PASS", "entry_allowed": True},
+        },
+        **_passed_downstream_gates(),
+        "runtime_materialization_gate": {
+            "status": "BLOCKED_RUNTIME_MATERIALIZATION_INCOMPLETE",
+            "entry_allowed": False,
+            "runtime_materialization_ready": False,
+            "execution_allowed": False,
+        },
+        "runtime_materialization_unknowns": [
+            {
+                "kind": "RUNTIME_MATERIALIZATION_REQUIRED_VALUE_BINDING_MISSING",
+                "reason_code": "RUNTIME_MATERIALIZATION_REQUIRED_VALUE_BINDING_MISSING",
+                "field": "order_id",
+                "blocks_runtime_materialization": True,
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        enterprise_knowledge_center,
+        "load_enterprise_business_knowledge_asset",
+        lambda project, root: asset,
+    )
+
+    result = project_existing_understanding_preflight(
+        _base_payload(),
+        project="customer_materialization_blocked",
+        root=tmp_path,
+    )
+
+    assert result["ready"] is False
+    assert result["blocking_codes"] == ["RUNTIME_MATERIALIZATION_BLOCKED"]
+    assert result["understanding_summary"]["gates"][-1] == {
+        "label": "运行实例化",
+        "status": "BLOCKED_RUNTIME_MATERIALIZATION_INCOMPLETE",
+        "ready": False,
+    }
+    assert "RUNTIME MATERIALIZATION REQUIRED VALUE BINDING MISSING" in result["reasons"][0]["message"]
 
 
 def test_understanding_preflight_does_not_duplicate_no_source_blocker(
