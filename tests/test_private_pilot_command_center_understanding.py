@@ -25,6 +25,7 @@ def _asset() -> dict:
             "enterprise_understanding_conflict_count": 0,
             "scenario_ir_count": 7,
             "runtime_plan_count": 7,
+            "runtime_materialization_count": 7,
         },
         "enterprise_understanding_model": {
             "model_id": "eum_customer_a",
@@ -75,6 +76,22 @@ def _asset() -> dict:
                 "runtime_plan_unknown_count": 0,
             },
         },
+        "runtime_materializations": [
+            {"materialization_id": f"materialization-{index}", "status": "DRAFT_READY"}
+            for index in range(7)
+        ],
+        "runtime_materialization_unknowns": [],
+        "runtime_materialization_gate": {
+            "status": "PASS",
+            "entry_allowed": True,
+            "runtime_materialization_ready": True,
+            "execution_allowed": False,
+            "metrics": {
+                "runtime_materialization_count": 7,
+                "incomplete_runtime_materialization_count": 0,
+                "runtime_materialization_unknown_count": 0,
+            },
+        },
     }
 
 
@@ -111,9 +128,12 @@ def test_command_center_enriches_existing_knowledge_summary_without_replacing_it
     assert summary["scenario_execution_contract_count"] == 7
     assert summary["runtime_plan_count"] == 7
     assert summary["runtime_plan_ready"] is True
-    assert len(summary["understanding_gates"]) == 5
-    assert summary["understanding_gates"][-1]["label"] == "Runtime Plan"
+    assert summary["runtime_materialization_count"] == 7
+    assert summary["runtime_materialization_ready"] is True
+    assert len(summary["understanding_gates"]) == 6
+    assert summary["understanding_gates"][-1]["label"] == "运行实例化"
     assert summary["formal_scenario_chain_ready"] is True
+    assert summary["formal_runtime_chain_ready"] is True
     assert summary["understanding_source_of_truth"] == "existing_enterprise_business_knowledge_asset"
     assert summary["understanding_projection_contract"] == "EXISTING_KNOWLEDGE_ASSET_GATE_PROJECTION_NOT_SECOND_AUTHORITY"
 
@@ -155,6 +175,11 @@ def test_command_center_projects_existing_blocker_without_claiming_readiness(
         "entry_allowed": False,
         "runtime_plan_ready": False,
     }
+    asset["runtime_materialization_gate"] = {
+        "status": "BLOCKED_RUNTIME_MATERIALIZATION_UPSTREAM_RUNTIME_PLAN_GATE",
+        "entry_allowed": False,
+        "runtime_materialization_ready": False,
+    }
     monkeypatch.setattr(
         enterprise_knowledge_center,
         "load_enterprise_business_knowledge_asset",
@@ -169,6 +194,7 @@ def test_command_center_projects_existing_blocker_without_claiming_readiness(
     summary = result["knowledge_summary"]
 
     assert summary["formal_scenario_chain_ready"] is False
+    assert summary["formal_runtime_chain_ready"] is False
     assert summary["enterprise_understanding_ready"] is False
     assert "部分业务操作尚未确定唯一作用对象" in summary["understanding_blockers"]
     assert summary["understanding_gates"][0]["ready"] is False
@@ -189,6 +215,11 @@ def test_command_center_projects_runtime_plan_unknowns(monkeypatch, tmp_path: Pa
             "blocks_runtime_plan": True,
         }
     ]
+    asset["runtime_materialization_gate"] = {
+        "status": "BLOCKED_RUNTIME_MATERIALIZATION_UPSTREAM_RUNTIME_PLAN_GATE",
+        "entry_allowed": False,
+        "runtime_materialization_ready": False,
+    }
     monkeypatch.setattr(
         enterprise_knowledge_center,
         "load_enterprise_business_knowledge_asset",
@@ -204,6 +235,7 @@ def test_command_center_projects_runtime_plan_unknowns(monkeypatch, tmp_path: Pa
 
     assert summary["enterprise_understanding_ready"] is True
     assert summary["runtime_plan_ready"] is False
+    assert summary["runtime_materialization_ready"] is False
     assert summary["formal_scenario_chain_ready"] is False
     assert "写操作尚未形成安全清理模板" in summary["understanding_blockers"]
 
@@ -230,4 +262,4 @@ def test_command_center_mixin_preserves_original_builder_result(monkeypatch, tmp
 
     assert result["defects"] == [{"id": "bug-1"}]
     assert result["knowledge_summary"]["active_source_count"] == 2
-    assert result["knowledge_summary"]["formal_scenario_chain_ready"] is True
+    assert result["knowledge_summary"]["formal_runtime_chain_ready"] is True
