@@ -21,6 +21,7 @@ from .contract import (
 from .merger import merge_document_irs
 from .planner import plan_deferred_supplementals, plan_document_parsing
 from .registry import DocumentAdapterRegistry, build_default_registry
+from .visual_table_projection import apply_visual_table_projection_authority
 
 
 def _match_from_plan(row: dict[str, Any]) -> AdapterMatch:
@@ -303,6 +304,9 @@ def build_document_structure_ir(
         executions,
         execution_errors=errors,
     )
+    # OCR paragraphs remain evidence, but a formal table's TABLE_CELL blocks become the
+    # merged text authority inside that rendered-page region.
+    merged = apply_visual_table_projection_authority(merged)
     merged = _apply_capability_gaps(merged, parsing_plan)
     merged["ingestion_pipeline_receipt"] = {
         "schema": "qualibug.document-ingestion-pipeline-receipt.v1",
