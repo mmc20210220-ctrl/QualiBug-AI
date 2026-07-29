@@ -140,6 +140,14 @@ def _path_shape_candidate(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def install_runtime_materialization_operation_matching() -> None:
+    # The batch wrapper covers every correct fail-closed early return that never reaches Finalizer.
+    # It changes no execution decision and is installed here because this installer is already the
+    # one mainline entry invoked by the existing Experiment facade.
+    from .runtime_materialization_batch_lineage import (
+        install_runtime_materialization_batch_lineage,
+    )
+
+    install_runtime_materialization_batch_lineage()
     original = getattr(_bridge, "_match_materialization", None)
     if not callable(original) or getattr(original, _INSTALL_MARKER, False):
         return
