@@ -16,7 +16,16 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
-from ._chinese_business_conflicts import CONFLICT_SCHEMA, _fact_id, _span, _text, _dict, _list
+from ._chinese_business_conflicts import (
+    AUTHORITY_ELIGIBLE_SCHEMAS,
+    CONFLICT_SCHEMA,
+    TECHNICAL_CONFLICT_SCHEMA,
+    _fact_id,
+    _span,
+    _text,
+    _dict,
+    _list,
+)
 from ._common import ROOT, _load_json, _safe_project_id, _write_json
 from ._utils import _now, _paths
 
@@ -171,6 +180,25 @@ def _source_ref_for_fact(asset: dict[str, Any], fact_id: str) -> dict[str, Any]:
                 fact.get("document_version") or span.get("document_version")
             ),
         }
+    # Technical inventory participants may exist only on conflict rows.
+    for conflict in _list(asset.get("cross_document_conflicts")):
+        if not isinstance(conflict, dict):
+            continue
+        for key in ("facts", "evidence"):
+            for row in _list(conflict.get(key)):
+                if not isinstance(row, dict):
+                    continue
+                if _text(row.get("fact_id")) != fact_id:
+                    continue
+                return {
+                    "fact_id": fact_id,
+                    "source_id": _text(row.get("source_id")),
+                    "source_locator": _text(
+                        row.get("source_locator") or row.get("locator")
+                    ),
+                    "quote_hash": _text(row.get("quote_hash")),
+                    "document_version": _text(row.get("document_version")),
+                }
     return {"fact_id": fact_id, "source_id": "", "source_locator": "", "quote_hash": "", "document_version": ""}
 
 
@@ -256,7 +284,12 @@ def apply_authority_decisions_to_conflicts(
     ]
     updated: list[dict[str, Any]] = []
     for conflict in conflicts:
-        if _text(conflict.get("schema")) != CONFLICT_SCHEMA:
+        schema = _text(conflict.get("schema"))
+        if schema and schema not in AUTHORITY_ELIGIBLE_SCHEMAS:
+            updated.append(conflict)
+            continue
+        # Legacy thin technical rows without schema stay visible but not selectable.
+        if not schema and not _participant_fact_ids(conflict):
             updated.append(conflict)
             continue
         participants = _participant_fact_ids(conflict)
@@ -327,21 +360,39 @@ def apply_authority_decisions_to_conflicts(
         fact_id = _fact_id(fact)
         if fact_id in restored_fact_ids:
             fact["status"] = "ACCEPTED"
-            fact["formal_promotion_allowed"] = True
+            fact["formal_promotion_allowed"] = _text(fact.get("kind")) in {
+                "RULE",
+                "STATE_TRANSITION",
+                "TERM_ALIAS",
+            }
             fact["superseded_by_fact_id"] = ""
             fact["authority_resolution"] = "OPERATOR_SELECTED"
+            if _text(fact.get("kind")) == "TERM_ALIAS":
+                ambiguities = [
+                    _text(value)
+                    for value in _list(fact.get("ambiguities"))
+                    if _text(value) and _text(value) != "TERM_ALIAS_IDENTITY_CONFLICT"
+                ]
+                fact["ambiguities"] = ambiguities
         elif fact_id in removed_rule_fact_ids:
             # Losers of a SELECT, or any side of an unresolved conflict.
             if any(
                 fact_id in _participant_fact_ids(row)
                 and _text(row.get("status")) == "RESOLVED"
                 for row in updated
-                if _text(row.get("schema")) == CONFLICT_SCHEMA
+                if _text(row.get("schema")) in AUTHORITY_ELIGIBLE_SCHEMAS
+                or (
+                    not _text(row.get("schema"))
+                    and _participant_fact_ids(row)
+                )
             ):
                 winner = ""
                 for row in updated:
                     if (
-                        _text(row.get("schema")) == CONFLICT_SCHEMA
+                        (
+                            _text(row.get("schema")) in AUTHORITY_ELIGIBLE_SCHEMAS
+                            or _participant_fact_ids(row)
+                        )
                         and _text(row.get("status")) == "RESOLVED"
                         and fact_id in _participant_fact_ids(row)
                     ):
@@ -381,10 +432,64 @@ def apply_authority_decisions_to_conflicts(
             (row for row in ledger_facts if _fact_id(row) == fact_id),
             None,
         )
-        if isinstance(fact, dict):
+        if isinstance(fact, dict) and _text(fact.get("kind")) in {
+            "RULE",
+            "STATE_TRANSITION",
+        }:
             _restore_rule_for_fact(asset, fact)
 
+    # Clear TERM_ALIAS critical unknowns when the alias conflict was SELECT_FACT resolved.
     gate = _dict(asset.get("enterprise_comprehension_gate"))
+    resolved_alias_ids = {
+        _text(row.get("entity"))
+        for row in updated
+        if isinstance(row, dict)
+        and _text(row.get("kind")) == "TERM_ALIAS_IDENTITY_CONFLICT"
+        and _text(row.get("status")) == "RESOLVED"
+    }
+    if resolved_alias_ids:
+        critical = [
+            dict(row)
+            for row in _list(gate.get("critical_unknowns"))
+            if isinstance(row, dict)
+        ]
+        kept_critical = []
+        for row in critical:
+            details = _dict(row.get("details"))
+            alias = _text(details.get("alias"))
+            ambiguities = {_text(value) for value in _list(row.get("ambiguities"))}
+            if alias in resolved_alias_ids and "TERM_ALIAS_IDENTITY_CONFLICT" in ambiguities:
+                continue
+            if (
+                not alias
+                and ambiguities == {"TERM_ALIAS_IDENTITY_CONFLICT"}
+                and resolved_alias_ids
+            ):
+                # Drop generic alias-conflict markers once all such conflicts resolved.
+                if all(
+                    _text(c.get("status")) == "RESOLVED"
+                    for c in updated
+                    if _text(c.get("kind")) == "TERM_ALIAS_IDENTITY_CONFLICT"
+                ):
+                    continue
+            kept_critical.append(row)
+        gate["critical_unknowns"] = kept_critical
+        metrics = _dict(gate.get("metrics"))
+        metrics["critical_ambiguity_count"] = len(kept_critical)
+        gate["metrics"] = metrics
+        if (
+            not kept_critical
+            and not unresolved
+            and _text(gate.get("status"))
+            in {
+                "BLOCKED_BUSINESS_COMPREHENSION_INCOMPLETE",
+                "BLOCKED_BUSINESS_COMPREHENSION_CONFLICTING_FACTS",
+            }
+        ):
+            gate["status"] = "PASS"
+            gate["entry_allowed"] = True
+            gate["required_operator_action"] = ""
+
     if unresolved:
         gate.update(
             {
@@ -392,9 +497,9 @@ def apply_authority_decisions_to_conflicts(
                 "entry_allowed": False,
                 "unresolved_business_fact_conflicts": unresolved,
                 "required_operator_action": (
-                    "resolve source authority/version for each conflicting Chinese "
-                    "business fact via explicit operator authority decision; do not "
-                    "choose by recency, filename order or model confidence"
+                    "resolve source authority/version for each conflicting fact via "
+                    "explicit operator authority decision; do not choose by recency, "
+                    "filename order or model confidence"
                 ),
             }
         )
@@ -403,9 +508,11 @@ def apply_authority_decisions_to_conflicts(
         gate["unresolved_business_fact_conflicts"] = []
         gate["removed_conflicting_rule_ids"] = []
         if _text(gate.get("status")) == "BLOCKED_BUSINESS_COMPREHENSION_CONFLICTING_FACTS":
-            gate["status"] = "PASS"
-            gate["entry_allowed"] = True
-            gate["required_operator_action"] = ""
+            # Only auto-clear to PASS when critical unknowns are also empty.
+            if not _list(gate.get("critical_unknowns")):
+                gate["status"] = "PASS"
+                gate["entry_allowed"] = True
+                gate["required_operator_action"] = ""
     asset["enterprise_comprehension_gate"] = gate
 
     gaps = [
@@ -435,6 +542,14 @@ def apply_authority_decisions_to_conflicts(
                     row
                     for row in updated
                     if isinstance(row, dict) and _text(row.get("schema")) == CONFLICT_SCHEMA
+                ]
+            ),
+            "technical_cross_source_conflict_count": len(
+                [
+                    row
+                    for row in updated
+                    if isinstance(row, dict)
+                    and _text(row.get("schema")) == TECHNICAL_CONFLICT_SCHEMA
                 ]
             ),
             "chinese_business_unresolved_conflict_count": len(unresolved),

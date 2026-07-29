@@ -267,3 +267,214 @@ def test_participant_drift_fails_closed(tmp_path: Path) -> None:
     )
     assert drifted["cross_document_conflicts"][0]["status"] == "UNRESOLVED"
     assert drifted["enterprise_comprehension_gate"]["entry_allowed"] is False
+
+
+def test_field_required_mismatch_select_fact_no_auto_pick(tmp_path: Path) -> None:
+    from ai_test_asset_center.enterprise_knowledge_center._api import (
+        _detect_cross_document_conflicts,
+    )
+    from ai_test_asset_center.enterprise_knowledge_center._chinese_business_conflicts import (
+        TECHNICAL_CONFLICT_SCHEMA,
+    )
+
+    conflicts = _detect_cross_document_conflicts(
+        [
+            {
+                "field": "warehouse_id",
+                "table": "orders",
+                "required": True,
+                "source_id": "schema_a.sql",
+                "field_id": "a",
+            },
+            {
+                "field": "warehouse_id",
+                "table": "orders",
+                "required": False,
+                "source_id": "schema_b.sql",
+                "field_id": "b",
+            },
+        ],
+        [],
+        [],
+        [],
+    )
+    assert len(conflicts) == 1
+    conflict = conflicts[0]
+    assert conflict["schema"] == TECHNICAL_CONFLICT_SCHEMA
+    assert conflict["kind"] == "FIELD_REQUIRED_MISMATCH"
+    assert conflict["authority_decision"]["automatic_resolution_allowed"] is False
+    assert conflict["authority_decision"]["selected_fact_id"] == ""
+    participants = sorted(
+        row["fact_id"] for row in conflict["facts"] if row.get("fact_id")
+    )
+    assert len(participants) == 2
+
+    project = "tech-field-auth"
+    asset = {
+        "project_id": project,
+        "business_fact_ledger": {"items": []},
+        "rule_library": [],
+        "cross_document_conflicts": conflicts,
+        "enterprise_comprehension_gate": {"status": "PASS", "entry_allowed": True},
+        "coverage_gaps": [],
+        "summary": {},
+        "enterprise_understanding_model": {"conflicts": [], "gate": {}},
+    }
+    applied = apply_authority_decisions_to_conflicts(
+        asset, project_id=project, root=tmp_path
+    )
+    assert applied["cross_document_conflicts"][0]["status"] == "UNRESOLVED"
+    assert applied["enterprise_comprehension_gate"]["entry_allowed"] is False
+
+    _persist_asset(applied, project, tmp_path)
+    result = record_operator_authority_decision(
+        project,
+        conflict_id=conflict["conflict_id"],
+        action=ACTION_SELECT_FACT,
+        selected_fact_id=participants[0],
+        actor={"name": "ops-tech", "role": "qa_lead"},
+        rationale="operator chose required=true source",
+        root=tmp_path,
+        rebuild=False,
+    )
+    assert result["conflict"]["status"] == "RESOLVED"
+    assert result["conflict"]["authority_decision"]["selected_fact_id"] == participants[0]
+    assert result["conflict"]["authority_decision"]["automatic_resolution_allowed"] is False
+    assert result["comprehension_gate"]["entry_allowed"] is True
+
+
+def test_term_alias_identity_conflict_select_fact(tmp_path: Path) -> None:
+    project = "term-alias-auth"
+    facts = [
+        {
+            "fact_id": "alias-a",
+            "kind": "TERM_ALIAS",
+            "status": "ACCEPTED",
+            "alias": "SO",
+            "canonical_term": "销售订单",
+            "raw_statement": "SO：销售订单",
+            "source_spans": [
+                {
+                    "source_id": "glossary_a.md",
+                    "locator": "glossary_a.md#L1",
+                    "quote": "SO：销售订单",
+                    "quote_hash": "h1",
+                }
+            ],
+        },
+        {
+            "fact_id": "alias-b",
+            "kind": "TERM_ALIAS",
+            "status": "ACCEPTED",
+            "alias": "SO",
+            "canonical_term": "服务工单",
+            "raw_statement": "SO：服务工单",
+            "source_spans": [
+                {
+                    "source_id": "glossary_b.md",
+                    "locator": "glossary_b.md#L1",
+                    "quote": "SO：服务工单",
+                    "quote_hash": "h2",
+                }
+            ],
+        },
+    ]
+    asset = reconcile_chinese_business_fact_conflicts(
+        _asset(facts, project_id=project),
+        project_id=project,
+        root=tmp_path,
+    )
+    alias_conflicts = [
+        row
+        for row in asset["cross_document_conflicts"]
+        if row.get("kind") == "TERM_ALIAS_IDENTITY_CONFLICT"
+    ]
+    assert len(alias_conflicts) == 1
+    conflict = alias_conflicts[0]
+    assert conflict["authority_decision"]["automatic_resolution_allowed"] is False
+    assert conflict["status"] == "UNRESOLVED"
+    assert asset["enterprise_comprehension_gate"]["entry_allowed"] is False
+
+    _persist_asset(asset, project, tmp_path)
+    result = record_operator_authority_decision(
+        project,
+        conflict_id=conflict["conflict_id"],
+        action=ACTION_SELECT_FACT,
+        selected_fact_id="alias-a",
+        actor={"name": "ops-alias", "role": "knowledge_admin"},
+        rationale="glossary_a is the governing terminology source",
+        root=tmp_path,
+        rebuild=False,
+    )
+    assert result["conflict"]["status"] == "RESOLVED"
+    assert result["conflict"]["authority_decision"]["selected_fact_id"] == "alias-a"
+
+    refreshed = reconcile_chinese_business_fact_conflicts(
+        _asset(facts, project_id=project),
+        project_id=project,
+        root=tmp_path,
+    )
+    by_id = {row["fact_id"]: row for row in refreshed["business_fact_ledger"]["items"]}
+    assert by_id["alias-a"]["status"] == "ACCEPTED"
+    assert by_id["alias-b"]["status"] == "SUPERSEDED"
+    assert refreshed["enterprise_comprehension_gate"]["entry_allowed"] is True
+
+
+def test_term_alias_leave_unresolved_stays_blocked(tmp_path: Path) -> None:
+    project = "term-alias-leave"
+    facts = [
+        {
+            "fact_id": "alias-1",
+            "kind": "TERM_ALIAS",
+            "status": "ACCEPTED",
+            "alias": "PO",
+            "canonical_term": "采购订单",
+            "raw_statement": "PO：采购订单",
+            "source_spans": [
+                {
+                    "source_id": "a.md",
+                    "locator": "a.md#1",
+                    "quote": "PO：采购订单",
+                    "quote_hash": "x1",
+                }
+            ],
+        },
+        {
+            "fact_id": "alias-2",
+            "kind": "TERM_ALIAS",
+            "status": "ACCEPTED",
+            "alias": "PO",
+            "canonical_term": "生产订单",
+            "raw_statement": "PO：生产订单",
+            "source_spans": [
+                {
+                    "source_id": "b.md",
+                    "locator": "b.md#1",
+                    "quote": "PO：生产订单",
+                    "quote_hash": "x2",
+                }
+            ],
+        },
+    ]
+    asset = reconcile_chinese_business_fact_conflicts(
+        _asset(facts, project_id=project),
+        project_id=project,
+        root=tmp_path,
+    )
+    conflict = next(
+        row
+        for row in asset["cross_document_conflicts"]
+        if row.get("kind") == "TERM_ALIAS_IDENTITY_CONFLICT"
+    )
+    _persist_asset(asset, project, tmp_path)
+    result = record_operator_authority_decision(
+        project,
+        conflict_id=conflict["conflict_id"],
+        action=ACTION_LEAVE_UNRESOLVED,
+        actor={"name": "ops-leave", "role": "admin"},
+        root=tmp_path,
+        rebuild=False,
+    )
+    assert result["conflict"]["status"] == "UNRESOLVED"
+    assert result["conflict"]["authority_decision"]["explicit_leave_unresolved"] is True
+    assert result["comprehension_gate"]["entry_allowed"] is False

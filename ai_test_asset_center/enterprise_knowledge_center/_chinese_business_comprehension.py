@@ -1322,6 +1322,139 @@ def _fact_from_unit(
     }
 
 
+def _interface_prose_fields(interface: dict[str, Any]) -> list[tuple[str, str, str]]:
+    """Return (span_kind, field_name, prose) for OpenAPI Chinese attachment.
+
+    Path / operationId are never returned — vocabulary alone is not business text.
+    """
+    summary = _text(
+        interface.get("openapi_summary")
+        if "openapi_summary" in interface
+        else interface.get("summary")
+    )
+    description = _text(
+        interface.get("openapi_description")
+        if "openapi_description" in interface
+        else interface.get("description")
+    )
+    # When parser only coalesced description into summary, avoid double-processing.
+    rows: list[tuple[str, str, str]] = []
+    if summary:
+        rows.append(("OPENAPI_OPERATION_SUMMARY", "summary", summary))
+    if description and description != summary:
+        rows.append(("OPENAPI_OPERATION_DESCRIPTION", "description", description))
+    return rows
+
+
+def project_openapi_interface_chinese_spans(
+    asset: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Project Chinese OpenAPI summary/description onto interface-attached spans.
+
+    Fail-closed contract:
+    - Only Chinese (or Chinese-mixed) prose is considered.
+    - Facts come only from existing rule-signal extraction; path vocabulary alone
+      never invents a business rule.
+    - Ambiguous extraction stays PENDING / coverage AMBIGUOUS or UNRESOLVED.
+    """
+    known_entities = _known_names(asset, "entity")
+    known_roles = _known_names(asset, "role")
+    coverage: list[dict[str, Any]] = []
+    facts: list[dict[str, Any]] = []
+    for interface in _list(asset.get("interfaces")):
+        if not isinstance(interface, dict):
+            continue
+        source_kind = _text(interface.get("source_kind")).lower()
+        if source_kind and source_kind not in {"openapi", "swagger"}:
+            continue
+        interface_id = _text(interface.get("interface_id") or interface.get("operation_id"))
+        source_id = _text(interface.get("source_id")) or "openapi"
+        if not interface_id:
+            continue
+        for span_kind, field_name, prose in _interface_prose_fields(interface):
+            language = _language_of(prose)
+            locator = f"{source_id}#interface={interface_id}/{field_name}"
+            chunk_id = _stable_id("chunk", source_id, locator, prose)
+            chunk_facts: list[dict[str, Any]] = []
+            chunk_ambiguities: list[str] = []
+            contains_business_signal = bool(_RULE_SIGNAL_RE.search(prose))
+            if language in {"zh-CN", "zh-CN-mixed"} and contains_business_signal:
+                for unit in _split_rule_units(prose):
+                    for branch_unit, branch_meta in _expand_conditional_units(unit):
+                        fact = _fact_from_unit(
+                            branch_unit,
+                            source_id=source_id,
+                            locator=locator,
+                            known_entities=known_entities,
+                            known_roles=known_roles,
+                            context_entities=[],
+                            context_roles=[],
+                            alias_map={},
+                            branch_meta=branch_meta,
+                        )
+                        if not fact:
+                            continue
+                        spans = [
+                            dict(row)
+                            for row in _list(fact.get("source_spans"))
+                            if isinstance(row, dict)
+                        ]
+                        if spans:
+                            spans[0]["interface_id"] = interface_id
+                            spans[0]["span_kind"] = span_kind
+                            spans[0]["attachment"] = "openapi_interface_prose"
+                        else:
+                            spans = [
+                                {
+                                    "source_id": source_id,
+                                    "locator": locator,
+                                    "quote": _text(fact.get("raw_statement") or prose),
+                                    "quote_hash": hashlib.sha256(
+                                        prose.encode("utf-8")
+                                    ).hexdigest(),
+                                    "interface_id": interface_id,
+                                    "span_kind": span_kind,
+                                    "attachment": "openapi_interface_prose",
+                                }
+                            ]
+                        fact["source_spans"] = spans
+                        fact["interface_id"] = interface_id
+                        fact["interface_span_kind"] = span_kind
+                        fact["derivation"] = "openapi_interface_chinese_span"
+                        chunk_facts.append(fact)
+                        chunk_ambiguities.extend(_list(fact.get("ambiguities")))
+            if language not in {"zh-CN", "zh-CN-mixed"}:
+                status = "TERMINAL_NON_CHINESE"
+            elif contains_business_signal and not chunk_facts:
+                status = "UNRESOLVED_BUSINESS_TEXT"
+                chunk_ambiguities.append("BUSINESS_FACT_NOT_EXTRACTED")
+            elif any(_text(row.get("status")) == "PENDING" for row in chunk_facts):
+                status = "AMBIGUOUS"
+            elif chunk_facts:
+                status = "UNDERSTOOD"
+            else:
+                # Chinese prose present but no rule signal — context only, never invent.
+                status = "UNDERSTOOD_CONTEXT"
+            coverage.append(
+                {
+                    "chunk_id": chunk_id,
+                    "source_id": source_id,
+                    "source_locator": locator,
+                    "interface_id": interface_id,
+                    "span_kind": span_kind,
+                    "language": language,
+                    "status": status,
+                    "contains_business_signal": contains_business_signal,
+                    "fact_ids": [_text(row.get("fact_id")) for row in chunk_facts],
+                    "ambiguities": sorted({_text(v) for v in chunk_ambiguities if _text(v)}),
+                    "quote": prose[:500],
+                    "attachment": "openapi_interface_prose",
+                }
+            )
+            facts.extend(chunk_facts)
+    return coverage, facts
+
+
 def analyze_chinese_business_source(source: dict[str, Any], *, asset: dict[str, Any] | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """Return coverage chunks, business facts and glossary facts for one source."""
     asset = asset or {}
@@ -1681,6 +1814,12 @@ def build_chinese_first_comprehension(asset: dict[str, Any], parsed_sources: Ite
             all_facts.extend(facts)
             all_glossary.extend(glossary)
 
+    # Attach Chinese OpenAPI summary/description as interface-scoped source spans.
+    # Never invent rules from path / operationId vocabulary alone.
+    openapi_coverage, openapi_facts = project_openapi_interface_chinese_spans(asset)
+    all_coverage.extend(openapi_coverage)
+    all_facts.extend(openapi_facts)
+
     all_facts = list({_text(row.get("fact_id")): row for row in [*all_facts, *all_glossary] if isinstance(row, dict) and _text(row.get("fact_id"))}.values())
     identity_merge = apply_source_backed_term_aliases(all_facts)
     all_coverage = list({_text(row.get("chunk_id")): row for row in all_coverage if isinstance(row, dict) and _text(row.get("chunk_id"))}.values())
@@ -1782,8 +1921,27 @@ def build_chinese_first_comprehension(asset: dict[str, Any], parsed_sources: Ite
         "omitted_actor_requires_unique_section_context": True,
         "exception_scope_requires_explicit_source_actor": True,
         "structured_quantity_time_formula_source_backed_only": True,
+        "openapi_interface_chinese_span_attachment": True,
+        "openapi_path_vocabulary_not_business_fact_authority": True,
     })
     asset["governance"] = governance
+    receipt = {
+        "schema": "qualibug.openapi-interface-span-attachment.v1",
+        "attached_interface_prose_chunk_count": len(openapi_coverage),
+        "attached_interface_prose_fact_count": len(openapi_facts),
+        "chinese_interface_prose_chunk_count": len(
+            [
+                row
+                for row in openapi_coverage
+                if _text(row.get("language")) in {"zh-CN", "zh-CN-mixed"}
+            ]
+        ),
+        "automatic_inference_from_path_vocabulary_allowed": False,
+    }
+    asset["openapi_interface_span_attachment_receipt"] = receipt
+    summary["openapi_interface_prose_chunk_count"] = receipt["attached_interface_prose_chunk_count"]
+    summary["openapi_interface_prose_fact_count"] = receipt["attached_interface_prose_fact_count"]
+    asset["summary"] = summary
     return asset
 
 
@@ -1865,4 +2023,5 @@ __all__ = [
     "apply_source_backed_term_aliases",
     "build_chinese_first_comprehension",
     "install_chinese_first_business_comprehension",
+    "project_openapi_interface_chinese_spans",
 ]

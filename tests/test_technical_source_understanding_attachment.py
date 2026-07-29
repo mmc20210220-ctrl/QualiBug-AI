@@ -237,3 +237,152 @@ def test_fk_relation_attaches_when_both_tables_are_understood_objects() -> None:
         and row.get("relation_type") == "REFERENCES"
         for row in relations
     )
+
+
+def test_openapi_chinese_summary_projects_into_fact_with_interface_span() -> None:
+    from ai_test_asset_center.enterprise_knowledge_center._chinese_business_comprehension import (
+        build_chinese_first_comprehension,
+        project_openapi_interface_chinese_spans,
+    )
+
+    asset = {
+        "project_id": "openapi-zh-span",
+        "interfaces": [
+            {
+                "interface_id": "api:POST:/orders/{id}/cancel",
+                "source_id": "api.openapi.yaml",
+                "source_kind": "openapi",
+                "method": "POST",
+                "path": "/orders/{id}/cancel",
+                "operation_id": "cancelOrder",
+                "openapi_summary": "已提交订单必须由客服取消。",
+                "openapi_description": "",
+                "summary": "已提交订单必须由客服取消。",
+                "description": "",
+            }
+        ],
+        "business_objects": [{"name": "订单"}],
+        "roles": [{"role": "客服"}],
+        "summary": {},
+        "rule_library": [],
+        "coverage_gaps": [],
+    }
+
+    coverage, facts = project_openapi_interface_chinese_spans(asset)
+    assert coverage
+    assert any(row.get("span_kind") == "OPENAPI_OPERATION_SUMMARY" for row in coverage)
+    assert facts
+    assert all(row.get("interface_id") == "api:POST:/orders/{id}/cancel" for row in facts)
+    assert all(
+        any(
+            span.get("interface_id") == "api:POST:/orders/{id}/cancel"
+            and span.get("attachment") == "openapi_interface_prose"
+            for span in (row.get("source_spans") or [])
+        )
+        for row in facts
+    )
+
+    enriched = build_chinese_first_comprehension(asset, [])
+    receipt = enriched.get("openapi_interface_span_attachment_receipt") or {}
+    assert receipt.get("automatic_inference_from_path_vocabulary_allowed") is False
+    assert receipt.get("attached_interface_prose_fact_count", 0) >= 1
+    ledger_facts = (enriched.get("business_fact_ledger") or {}).get("items") or []
+    assert any(
+        row.get("interface_id") == "api:POST:/orders/{id}/cancel"
+        for row in ledger_facts
+    )
+
+
+def test_openapi_path_vocabulary_alone_does_not_invent_business_facts() -> None:
+    from ai_test_asset_center.enterprise_knowledge_center._chinese_business_comprehension import (
+        project_openapi_interface_chinese_spans,
+    )
+    from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.builder import (
+        build_enterprise_understanding_model,
+    )
+
+    asset = {
+        "asset_id": "path-only",
+        "interfaces": [
+            {
+                "interface_id": "api:POST:/orders",
+                "source_id": "api.openapi.yaml",
+                "source_kind": "openapi",
+                "method": "POST",
+                "path": "/orders",
+                "operation_id": "createOrder",
+                "summary": "Create order",
+                "openapi_summary": "Create order",
+                "description": "",
+                "openapi_description": "",
+            }
+        ],
+        "data_tables": [],
+        "business_fact_ledger": {"items": []},
+        "entity_relations": [],
+    }
+
+    coverage, facts = project_openapi_interface_chinese_spans(asset)
+    assert facts == []
+    assert all(row.get("status") == "TERMINAL_NON_CHINESE" for row in coverage)
+
+    model = build_enterprise_understanding_model(asset)
+    kinds = {row.get("kind") for row in model.get("unknowns") or []}
+    assert "TECHNICAL_OPERATIONS_WITHOUT_BUSINESS_OPERATIONS" in kinds
+
+
+def test_openapi_preserves_separate_summary_and_description() -> None:
+    from ai_test_asset_center.enterprise_knowledge_center._parsing import _openapi_operations
+
+    rows = _openapi_operations(
+        {
+            "paths": {
+                "/items": {
+                    "post": {
+                        "summary": "创建条目",
+                        "description": "操作员可以创建条目，但已关闭条目不得修改。",
+                        "operationId": "createItem",
+                        "responses": {"201": {"description": "created"}},
+                    }
+                }
+            }
+        },
+        source_id="spec.yaml",
+    )
+    assert len(rows) == 1
+    assert rows[0]["openapi_summary"] == "创建条目"
+    assert "不得修改" in rows[0]["openapi_description"]
+    assert rows[0]["description"] == rows[0]["openapi_description"]
+
+
+def test_ambiguous_openapi_chinese_summary_stays_fail_closed() -> None:
+    from ai_test_asset_center.enterprise_knowledge_center._chinese_business_comprehension import (
+        project_openapi_interface_chinese_spans,
+    )
+
+    coverage, facts = project_openapi_interface_chinese_spans(
+        {
+            "interfaces": [
+                {
+                    "interface_id": "api:POST:/x",
+                    "source_id": "api.yaml",
+                    "source_kind": "openapi",
+                    "summary": "该对象必须处理。",
+                    "openapi_summary": "该对象必须处理。",
+                    "description": "",
+                }
+            ]
+        }
+    )
+    # Deictic subject without unique context → PENDING / AMBIGUOUS, never invented entity.
+    assert coverage
+    if facts:
+        assert all(row.get("status") in {"PENDING", "ACCEPTED"} for row in facts)
+        pending_or_ambiguous = any(row.get("status") == "PENDING" for row in facts) or any(
+            row.get("status") == "AMBIGUOUS" for row in coverage
+        )
+        assert pending_or_ambiguous or any(
+            "COREFERENCE" in str(row.get("ambiguities"))
+            or "BUSINESS_SUBJECT" in str(row.get("ambiguities"))
+            for row in facts
+        )

@@ -392,6 +392,45 @@ def _extract_entity_relations(
     return deduped
 
 
+def _technical_declaration_fact(
+    *,
+    kind: str,
+    source_id: str,
+    entity: str,
+    statement: str,
+    locator: str = "",
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Synthetic selectable participant for technical inventory conflicts.
+
+    These are not Chinese business rules; they only give operators a SELECT_FACT
+    target. Path vocabulary alone is never used to invent business meaning.
+    """
+    material = f"{kind}|{source_id}|{entity}|{statement}"
+    fact_id = "techfact:" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:20]
+    quote = statement[:500]
+    return {
+        "fact_id": fact_id,
+        "kind": kind,
+        "status": "ACCEPTED",
+        "source_id": source_id,
+        "source_locator": locator or f"{source_id}#entity={entity}",
+        "raw_statement": statement,
+        "statement": statement,
+        "entity": entity,
+        "technical_declaration": dict(details or {}),
+        "formal_promotion_allowed": False,
+        "source_spans": [
+            {
+                "source_id": source_id,
+                "locator": locator or f"{source_id}#entity={entity}",
+                "quote": quote,
+                "quote_hash": hashlib.sha256(quote.encode("utf-8")).hexdigest(),
+            }
+        ],
+    }
+
+
 def _detect_cross_document_conflicts(
     field_dictionary: list[dict[str, Any]],
     rules: list[dict[str, Any]],
@@ -400,11 +439,13 @@ def _detect_cross_document_conflicts(
 ) -> list[dict[str, Any]]:
     """Detect contradictions between knowledge extracted from different sources.
 
-    Conflict types:
+    Conflict types (authority-eligible, fail-closed — no auto-pick):
     - field_required_mismatch: same field declared required in one source, nullable in another
     - permission_contradiction: same resource with conflicting access rules across sources
     - rule_contradiction: rules from different sources making opposing claims about same entity
     """
+    from ._chinese_business_conflicts import make_authority_eligible_conflict
+
     conflicts: list[dict[str, Any]] = []
 
     # 1. Field required/nullable mismatches across sources
@@ -416,17 +457,37 @@ def _detect_cross_document_conflicts(
     for key, entries in field_by_name.items():
         if len(entries) < 2:
             continue
-        has_true = any(e.get("required") is True for e in entries)
-        has_false = any(e.get("required") is False for e in entries)
-        if has_true and has_false:
-            sources = sorted({str(e.get("source_id") or "") for e in entries})
-            conflicts.append({
-                "conflict_type": "field_required_mismatch",
-                "entity": key,
-                "source_a": sources[0] if sources else "",
-                "source_b": sources[1] if len(sources) > 1 else "",
-                "detail": f"Field '{key}' is declared required in one source but nullable/optional in another",
-            })
+        required_true = [e for e in entries if e.get("required") is True]
+        required_false = [e for e in entries if e.get("required") is False]
+        if not required_true or not required_false:
+            continue
+        left_src = required_true[0]
+        right_src = required_false[0]
+        left = _technical_declaration_fact(
+            kind="TECHNICAL_FIELD_DECLARATION",
+            source_id=str(left_src.get("source_id") or ""),
+            entity=key,
+            statement=f"Field '{key}' declared required=true",
+            details={"required": True, "table": left_src.get("table"), "field": left_src.get("field")},
+        )
+        right = _technical_declaration_fact(
+            kind="TECHNICAL_FIELD_DECLARATION",
+            source_id=str(right_src.get("source_id") or ""),
+            entity=key,
+            statement=f"Field '{key}' declared required=false",
+            details={"required": False, "table": right_src.get("table"), "field": right_src.get("field")},
+        )
+        conflict = make_authority_eligible_conflict(
+            "FIELD_REQUIRED_MISMATCH",
+            [left, right],
+            f"Field '{key}' is declared required in one source but nullable/optional in another",
+            entity=key,
+        )
+        conflict["conflict_type"] = "field_required_mismatch"
+        conflict["source_a"] = left["source_id"]
+        conflict["source_b"] = right["source_id"]
+        conflict["detail"] = conflict["reason"]
+        conflicts.append(conflict)
 
     # 2. Permission contradictions across sources
     perm_by_resource: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -438,18 +499,46 @@ def _detect_cross_document_conflicts(
     for key, entries in perm_by_resource.items():
         if len(entries) < 2:
             continue
-        effects = {str(e.get("effect") or e.get("action") or "").lower() for e in entries}
-        has_allow = bool(effects & {"allow", "grant", "permit", "read", "write", "admin"})
-        has_deny = bool(effects & {"deny", "forbid", "prohibit", "none", "no_access"})
-        if has_allow and has_deny:
-            sources = sorted({str(e.get("source_id") or "") for e in entries})
-            conflicts.append({
-                "conflict_type": "permission_contradiction",
-                "entity": key,
-                "source_a": sources[0] if sources else "",
-                "source_b": sources[1] if len(sources) > 1 else "",
-                "detail": f"Permission for '{key}' has conflicting allow/deny across sources",
-            })
+        allow_rows = [
+            e
+            for e in entries
+            if str(e.get("effect") or e.get("action") or "").lower()
+            in {"allow", "grant", "permit", "read", "write", "admin"}
+        ]
+        deny_rows = [
+            e
+            for e in entries
+            if str(e.get("effect") or e.get("action") or "").lower()
+            in {"deny", "forbid", "prohibit", "none", "no_access"}
+        ]
+        if not allow_rows or not deny_rows:
+            continue
+        left_src, right_src = allow_rows[0], deny_rows[0]
+        left = _technical_declaration_fact(
+            kind="TECHNICAL_PERMISSION_DECLARATION",
+            source_id=str(left_src.get("source_id") or ""),
+            entity=key,
+            statement=f"Permission '{key}' effect=allow",
+            details={"effect": "allow"},
+        )
+        right = _technical_declaration_fact(
+            kind="TECHNICAL_PERMISSION_DECLARATION",
+            source_id=str(right_src.get("source_id") or ""),
+            entity=key,
+            statement=f"Permission '{key}' effect=deny",
+            details={"effect": "deny"},
+        )
+        conflict = make_authority_eligible_conflict(
+            "PERMISSION_CONTRADICTION",
+            [left, right],
+            f"Permission for '{key}' has conflicting allow/deny across sources",
+            entity=key,
+        )
+        conflict["conflict_type"] = "permission_contradiction"
+        conflict["source_a"] = left["source_id"]
+        conflict["source_b"] = right["source_id"]
+        conflict["detail"] = conflict["reason"]
+        conflicts.append(conflict)
 
     # 3. Rule contradictions (same risk_type + overlapping tokens, different sources)
     rules_by_risk: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -474,13 +563,35 @@ def _detect_cross_document_conflicts(
                     stmt_a = str(a.get("statement") or a.get("expected") or "")[:120]
                     stmt_b = str(b.get("statement") or b.get("expected") or "")[:120]
                     if stmt_a and stmt_b and _norm(stmt_a) != _norm(stmt_b):
-                        conflicts.append({
-                            "conflict_type": "rule_contradiction",
-                            "entity": f"{risk_type}:{','.join(sorted(overlap)[:3])}",
-                            "source_a": src_a,
-                            "source_b": src_b,
-                            "detail": f"Rules about '{risk_type}' from different sources may contradict: [{stmt_a}] vs [{stmt_b}]",
-                        })
+                        entity = f"{risk_type}:{','.join(sorted(overlap)[:3])}"
+                        left = _technical_declaration_fact(
+                            kind="TECHNICAL_RULE_DECLARATION",
+                            source_id=src_a,
+                            entity=entity,
+                            statement=stmt_a,
+                            details={"risk_type": risk_type, "rule_id": a.get("rule_id")},
+                        )
+                        right = _technical_declaration_fact(
+                            kind="TECHNICAL_RULE_DECLARATION",
+                            source_id=src_b,
+                            entity=entity,
+                            statement=stmt_b,
+                            details={"risk_type": risk_type, "rule_id": b.get("rule_id")},
+                        )
+                        conflict = make_authority_eligible_conflict(
+                            "RULE_CONTRADICTION",
+                            [left, right],
+                            (
+                                f"Rules about '{risk_type}' from different sources may "
+                                f"contradict: [{stmt_a}] vs [{stmt_b}]"
+                            ),
+                            entity=entity,
+                        )
+                        conflict["conflict_type"] = "rule_contradiction"
+                        conflict["source_a"] = src_a
+                        conflict["source_b"] = src_b
+                        conflict["detail"] = conflict["reason"]
+                        conflicts.append(conflict)
                         break
             else:
                 continue

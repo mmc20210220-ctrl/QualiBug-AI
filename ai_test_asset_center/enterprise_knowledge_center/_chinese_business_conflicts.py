@@ -8,12 +8,21 @@ from pathlib import Path
 from typing import Any
 
 CONFLICT_SCHEMA = "qualibug.chinese-business-fact-conflicts.v1"
+TECHNICAL_CONFLICT_SCHEMA = "qualibug.technical-cross-source-conflict.v1"
+AUTHORITY_ELIGIBLE_SCHEMAS = frozenset({CONFLICT_SCHEMA, TECHNICAL_CONFLICT_SCHEMA})
 _CONFLICTING_MODALITIES = {
     frozenset({"MUST_NOT", "MAY"}),
     frozenset({"MUST_NOT", "MUST"}),
     frozenset({"MUST_NOT", "ASSERTS"}),
     frozenset({"MUST_NOT", "ONLY_IF"}),
 }
+_DISALLOWED_AUTHORITY_SIGNALS = (
+    "recency",
+    "filename",
+    "document_order",
+    "model_confidence",
+    "industry_default",
+)
 
 
 def _text(value: Any) -> str:
@@ -84,6 +93,8 @@ def _conflict(
     left: dict[str, Any],
     right: dict[str, Any],
     reason: str,
+    *,
+    schema: str = CONFLICT_SCHEMA,
 ) -> dict[str, Any]:
     facts = [left, right]
     material = "|".join(sorted(_fact_id(fact) for fact in facts))
@@ -93,12 +104,12 @@ def _conflict(
         sources.append(
             {
                 "fact_id": _fact_id(fact),
-                "source_id": span.get("source_id"),
-                "source_locator": span.get("locator"),
-                "quote": span.get("quote"),
+                "source_id": span.get("source_id") or fact.get("source_id"),
+                "source_locator": span.get("locator") or fact.get("source_locator"),
+                "quote": span.get("quote") or fact.get("raw_statement") or fact.get("statement"),
                 "quote_hash": span.get("quote_hash"),
                 "modality": fact.get("modality"),
-                "statement": fact.get("raw_statement"),
+                "statement": fact.get("raw_statement") or fact.get("statement"),
             }
         )
     source_ids = sorted({_text(row.get("source_id")) for row in sources if _text(row.get("source_id"))})
@@ -107,8 +118,9 @@ def _conflict(
         "document order and model confidence are not authority"
     )
     operator_action = (
-        "resolve source authority/version for each conflicting Chinese business fact; "
-        "do not choose by recency, filename order, document appearance, or model confidence"
+        "resolve source authority/version for each conflicting fact via explicit "
+        "operator SELECT_FACT or LEAVE_UNRESOLVED; do not choose by recency, "
+        "filename order, document appearance, or model confidence"
     )
     # Standard evidence/message fields so product receipts never silently drop opposing spans.
     evidence = [
@@ -125,8 +137,9 @@ def _conflict(
     ]
     return {
         "conflict_id": f"conflict:{kind.lower()}:{hashlib.sha256(material.encode('utf-8')).hexdigest()[:20]}",
-        "schema": CONFLICT_SCHEMA,
+        "schema": schema,
         "kind": kind,
+        "conflict_type": kind.lower(),
         "status": "UNRESOLVED",
         "reason": reason,
         "message": reason,
@@ -142,17 +155,125 @@ def _conflict(
             "document_version": "",
             "operator_required": True,
             "automatic_resolution_allowed": False,
-            "disallowed_authority_signals": [
-                "recency",
-                "filename",
-                "document_order",
-                "model_confidence",
-                "industry_default",
-            ],
+            "disallowed_authority_signals": list(_DISALLOWED_AUTHORITY_SIGNALS),
         },
         "resolution_policy": resolution_policy,
         "automatic_resolution_allowed": False,
     }
+
+
+def make_authority_eligible_conflict(
+    kind: str,
+    participants: list[dict[str, Any]],
+    reason: str,
+    *,
+    schema: str = TECHNICAL_CONFLICT_SCHEMA,
+    entity: str = "",
+) -> dict[str, Any]:
+    """Build a fail-closed SELECT_FACT / LEAVE_UNRESOLVED conflict row.
+
+    Participants must each expose a stable ``fact_id``. Never auto-picks a winner.
+    """
+    rows = [dict(row) for row in participants if isinstance(row, dict) and _fact_id(row)]
+    if len(rows) < 2:
+        raise ValueError("authority_eligible_conflict_requires_two_participants")
+    # Pairwise expand via first two for stable id; retain all participants in facts.
+    base = _conflict(kind, rows[0], rows[1], reason, schema=schema)
+    if len(rows) > 2:
+        sources: list[dict[str, Any]] = []
+        for fact in rows:
+            span = _span(fact)
+            sources.append(
+                {
+                    "fact_id": _fact_id(fact),
+                    "source_id": span.get("source_id") or fact.get("source_id"),
+                    "source_locator": span.get("locator") or fact.get("source_locator"),
+                    "quote": span.get("quote") or fact.get("raw_statement") or fact.get("statement"),
+                    "quote_hash": span.get("quote_hash"),
+                    "modality": fact.get("modality"),
+                    "statement": fact.get("raw_statement") or fact.get("statement"),
+                }
+            )
+        material = "|".join(sorted(_fact_id(fact) for fact in rows))
+        base["conflict_id"] = (
+            f"conflict:{kind.lower()}:"
+            f"{hashlib.sha256(material.encode('utf-8')).hexdigest()[:20]}"
+        )
+        base["facts"] = sources
+        base["evidence"] = [
+            {
+                "source_id": row.get("source_id"),
+                "source_locator": row.get("source_locator"),
+                "quote": row.get("quote") or row.get("statement"),
+                "quote_hash": row.get("quote_hash"),
+                "fact_id": row.get("fact_id"),
+                "derivation": "unresolved_technical_cross_source_conflict",
+            }
+            for row in sources
+            if _text(row.get("quote") or row.get("statement") or row.get("fact_id") or row.get("source_id"))
+        ]
+        base["source_ids"] = sorted(
+            {_text(row.get("source_id")) for row in sources if _text(row.get("source_id"))}
+        )
+        base["source_scope"] = (
+            "CROSS_SOURCE" if len(base["source_ids"]) > 1 else "INTRA_SOURCE"
+        )
+    if entity:
+        base["entity"] = entity
+    return base
+
+
+def _term_alias_authority_conflicts(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Promote TERM_ALIAS identity clashes into authority-eligible conflict rows."""
+    by_alias: dict[str, list[dict[str, Any]]] = {}
+    for fact in facts:
+        if not isinstance(fact, dict):
+            continue
+        if _text(fact.get("kind")) != "TERM_ALIAS":
+            continue
+        if _text(fact.get("status")) not in {"ACCEPTED", "PENDING", "CONFLICTING", "SUPERSEDED"}:
+            continue
+        alias = _text(fact.get("alias"))
+        canonical = _text(fact.get("canonical_term"))
+        if not alias or not canonical:
+            continue
+        by_alias.setdefault(alias, []).append(fact)
+
+    conflicts: list[dict[str, Any]] = []
+    for alias, group in sorted(by_alias.items()):
+        canons = sorted(
+            {
+                _text(row.get("canonical_term"))
+                for row in group
+                if _text(row.get("canonical_term"))
+            }
+        )
+        if len(canons) < 2:
+            continue
+        # One representative fact per canonical candidate (stable SELECT targets).
+        representatives: list[dict[str, Any]] = []
+        seen_canons: set[str] = set()
+        for row in group:
+            canon = _text(row.get("canonical_term"))
+            if canon in seen_canons:
+                continue
+            seen_canons.add(canon)
+            representatives.append(row)
+        if len(representatives) < 2:
+            continue
+        conflicts.append(
+            make_authority_eligible_conflict(
+                "TERM_ALIAS_IDENTITY_CONFLICT",
+                representatives,
+                (
+                    f"alias '{alias}' is declared as multiple canonical terms: "
+                    f"{', '.join(canons)}"
+                ),
+                schema=TECHNICAL_CONFLICT_SCHEMA,
+                entity=alias,
+            )
+        )
+    return conflicts
 
 
 def _pairs(rows: list[dict[str, Any]]):
@@ -222,6 +343,13 @@ def reconcile_chinese_business_fact_conflicts(
             )
             conflicting_ids.update({_fact_id(left), _fact_id(right)})
 
+    for conflict in _term_alias_authority_conflicts(facts):
+        conflicts.append(conflict)
+        for row in _list(conflict.get("facts")):
+            fact_id = _text(_dict(row).get("fact_id"))
+            if fact_id:
+                conflicting_ids.add(fact_id)
+
     conflicts = list({_text(row.get("conflict_id")): row for row in conflicts}.values())
     refs: dict[str, list[str]] = {}
     for conflict in conflicts:
@@ -258,17 +386,44 @@ def reconcile_chinese_business_fact_conflicts(
         if (
             _text(rule.get("derivation")) == "chinese_first_business_comprehension"
             and fact_id in conflicting_ids
+            and _text(
+                next(
+                    (row.get("kind") for row in facts if _fact_id(row) == fact_id),
+                    "",
+                )
+            )
+            in {"RULE", "STATE_TRANSITION"}
         ):
             removed_rule_ids.append(_text(rule.get("rule_id")))
         else:
             retained_rules.append(dict(rule))
     asset["rule_library"] = retained_rules
 
+    # Preserve prior technical inventory conflicts (non-Chinese schema). Chinese and
+    # TERM_ALIAS rows are re-emitted above and must not be double-counted.
     prior = [
-        dict(row) for row in _list(asset.get("cross_document_conflicts"))
-        if isinstance(row, dict) and _text(row.get("schema")) != CONFLICT_SCHEMA
+        dict(row)
+        for row in _list(asset.get("cross_document_conflicts"))
+        if isinstance(row, dict)
+        and _text(row.get("schema")) not in AUTHORITY_ELIGIBLE_SCHEMAS
+        and _text(row.get("kind")) != "TERM_ALIAS_IDENTITY_CONFLICT"
     ]
-    asset["cross_document_conflicts"] = [*prior, *conflicts]
+    # Deduplicate technical TERM_ALIAS if a thin legacy row somehow used no schema.
+    prior = [
+        row
+        for row in prior
+        if _text(row.get("conflict_type") or row.get("kind")).upper()
+        != "TERM_ALIAS_IDENTITY_CONFLICT"
+    ]
+    # Keep already-normalized technical rows from _detect_cross_document_conflicts.
+    prior_technical = [
+        dict(row)
+        for row in _list(asset.get("cross_document_conflicts"))
+        if isinstance(row, dict)
+        and _text(row.get("schema")) == TECHNICAL_CONFLICT_SCHEMA
+        and _text(row.get("kind")) != "TERM_ALIAS_IDENTITY_CONFLICT"
+    ]
+    asset["cross_document_conflicts"] = [*prior, *prior_technical, *conflicts]
 
     gate = _dict(asset.get("enterprise_comprehension_gate"))
     if conflicts:
@@ -309,9 +464,23 @@ def reconcile_chinese_business_fact_conflicts(
     summary.update(
         {
             "rule_count": len(retained_rules),
-            "chinese_business_fact_conflict_count": len(conflicts),
+            "chinese_business_fact_conflict_count": len(
+                [
+                    row
+                    for row in conflicts
+                    if _text(row.get("schema")) == CONFLICT_SCHEMA
+                ]
+            ),
             "chinese_business_conflicting_fact_count": len(conflicting_ids),
             "chinese_business_conflicting_rules_removed": len(removed_rule_ids),
+            "technical_cross_source_conflict_count": len(prior_technical)
+            + len(
+                [
+                    row
+                    for row in conflicts
+                    if _text(row.get("schema")) == TECHNICAL_CONFLICT_SCHEMA
+                ]
+            ),
         }
     )
     asset["summary"] = summary
@@ -360,7 +529,10 @@ def install_chinese_business_conflict_reconciliation():
 
 
 __all__ = [
+    "AUTHORITY_ELIGIBLE_SCHEMAS",
     "CONFLICT_SCHEMA",
+    "TECHNICAL_CONFLICT_SCHEMA",
+    "make_authority_eligible_conflict",
     "reconcile_chinese_business_fact_conflicts",
     "install_chinese_business_conflict_reconciliation",
 ]

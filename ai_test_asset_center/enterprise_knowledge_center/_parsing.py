@@ -370,7 +370,11 @@ def _openapi_operations(openapi: dict[str, Any], source_id: str = "") -> list[di
             parameters = operation.get("parameters") or []
             parameter_names = [str(row.get("name")) for row in parameters if isinstance(row, dict) and row.get("name")]
             tags = [str(x) for x in operation.get("tags") or []]
-            summary = str(operation.get("summary") or operation.get("description") or "")
+            # Keep summary and description separate so Chinese prose can attach as
+            # interface spans. Display ``summary`` still coalesces for inventory.
+            summary_text = str(operation.get("summary") or "")
+            description_text = str(operation.get("description") or "")
+            summary = summary_text or description_text
             operation_id = str(operation.get("operationId") or f"{method.lower()}_{str(path).strip('/').replace('/', '_').replace('{', '').replace('}', '') or 'root'}")
             interface_id = f"api:{method_u}:{path}"
             rows.append({
@@ -381,6 +385,9 @@ def _openapi_operations(openapi: dict[str, Any], source_id: str = "") -> list[di
                 "path": str(path),
                 "operation_id": operation_id,
                 "summary": summary,
+                "description": description_text,
+                "openapi_summary": summary_text,
+                "openapi_description": description_text,
                 "tags": tags,
                 "parameters": parameter_names,
                 "tokens": sorted(_tokens(f"{path} {operation_id} {summary} {' '.join(tags)} {' '.join(parameter_names)}")),

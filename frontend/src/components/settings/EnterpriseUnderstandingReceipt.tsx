@@ -226,7 +226,7 @@ function conflictViews(values: unknown[], sourceLabels: Record<string, string>):
       : asArray(authority.disallowed_authority_signals);
     result.push({
       id,
-      kind: asText(row.kind) || asText(row.reason_code) || 'SOURCE_CONFLICT',
+      kind: asText(row.kind) || asText(row.conflict_type) || asText(row.reason_code) || 'SOURCE_CONFLICT',
       message: rowMessage(row),
       operatorAction: firstText(
         row.operator_action,
@@ -305,8 +305,22 @@ function projectUnderstanding(payload: unknown): UnderstandingView {
       const rowStatus = (asText(asRecord(value).status) || 'UNRESOLVED').toUpperCase();
       return !['RESOLVED', 'SUPERSEDED', 'DISMISSED'].includes(rowStatus);
     }),
+    ...asArray(comprehensionGate.unresolved_business_fact_conflicts).filter((value) => {
+      const rowStatus = (asText(asRecord(value).status) || 'UNRESOLVED').toUpperCase();
+      return !['RESOLVED', 'SUPERSEDED', 'DISMISSED'].includes(rowStatus);
+    }),
+    ...asArray(asset.cross_document_conflicts).filter((value) => {
+      const row = asRecord(value);
+      const rowStatus = (asText(row.status) || 'UNRESOLVED').toUpperCase();
+      if (['RESOLVED', 'SUPERSEDED', 'DISMISSED'].includes(rowStatus)) return false;
+      // Authority-eligible technical or Chinese conflicts with selectable participants.
+      return Boolean(asText(row.conflict_id) && conflictEvidence(row, sourceLabels).some((item) => item.factId));
+    }),
   ];
-  const resolvedConflictRows = asArray(model.conflicts).filter((value) => {
+  const resolvedConflictRows = [
+    ...asArray(model.conflicts),
+    ...asArray(asset.cross_document_conflicts),
+  ].filter((value) => {
     const row = asRecord(value);
     const rowStatus = (asText(row.status) || '').toUpperCase();
     const authorityStatus = (asText(asRecord(row.authority_decision).status) || '').toUpperCase();
