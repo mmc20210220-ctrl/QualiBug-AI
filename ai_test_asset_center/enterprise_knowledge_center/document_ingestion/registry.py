@@ -88,12 +88,14 @@ def build_default_registry() -> DocumentAdapterRegistry:
         UnknownBinaryDocumentAdapter,
     )
     from .rendered_ocr_adapter import OcrSupplementalAdapter
+    from .visual_table_adapter import VisualTableSupplementalAdapter
 
     return DocumentAdapterRegistry(
         [
             DocxDocumentAdapter(),
             PdfDocumentAdapter(),
             OcrSupplementalAdapter(),
+            VisualTableSupplementalAdapter(),
             GenericTextDocumentAdapter(),
             UnknownBinaryDocumentAdapter(),
         ]
