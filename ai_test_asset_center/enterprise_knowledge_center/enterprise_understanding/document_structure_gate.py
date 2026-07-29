@@ -215,8 +215,14 @@ def apply_document_structure_completeness(
         "decision_column_role_ambiguity_count": _sum_receipt_metric(
             structures, "decision_column_role_ambiguity_count"
         ),
+        "rejected_row_header_candidate_count": _sum_receipt_metric(
+            structures, "rejected_row_header_candidate_count"
+        ),
         "rejected_unsafe_column_role_candidate_count": _sum_receipt_metric(
             structures, "rejected_unsafe_column_role_candidate_count"
+        ),
+        "rejected_overlapping_decision_matrix_candidate_count": _sum_receipt_metric(
+            structures, "rejected_overlapping_decision_matrix_candidate_count"
         ),
         "table_legend_token_ambiguity_count": _sum_receipt_metric(
             structures, "table_legend_token_ambiguity_count"
