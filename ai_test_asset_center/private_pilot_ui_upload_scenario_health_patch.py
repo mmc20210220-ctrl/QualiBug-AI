@@ -13,6 +13,7 @@ _ORIGINAL_BUILDER = "_qualibug_health_builder_before_upload_scenarios"
 _MODULES = (
     "ai_test_asset_center.ui_upload_scenario_registry",
     "ai_test_asset_center.ui_upload_scenario_source_authority",
+    "ai_test_asset_center.ui_upload_scenario_submission_authority",
     "ai_test_asset_center.ui_upload_scenario_semantic_authority",
     "ai_test_asset_center.ui_upload_scenario_runtime_binding",
     "ai_test_asset_center.private_pilot_ui_upload_scenario_routes",
@@ -31,6 +32,7 @@ def upload_scenario_health_status() -> dict[str, Any]:
     modules_available = all(_available(name) for name in _MODULES)
     registry_api_available = False
     source_authority_installed = False
+    submission_authority_installed = False
     semantic_authority_installed = False
     runtime_binding_installed = False
     routes_installed = False
@@ -63,6 +65,13 @@ def upload_scenario_health_status() -> dict[str, Any]:
             getattr(
                 registry,
                 "_qualibug_upload_scenario_source_authority_installed",
+                False,
+            )
+        )
+        submission_authority_installed = bool(
+            getattr(
+                registry,
+                "_qualibug_upload_scenario_submission_authority_installed",
                 False,
             )
         )
@@ -109,6 +118,7 @@ def upload_scenario_health_status() -> dict[str, Any]:
     code_ready = modules_available and registry_api_available
     composed = all((
         source_authority_installed,
+        submission_authority_installed,
         semantic_authority_installed,
         runtime_binding_installed,
         routes_installed,
@@ -125,6 +135,9 @@ def upload_scenario_health_status() -> dict[str, Any]:
             "modules_available": modules_available,
             "registry_api_available": registry_api_available,
             "knowledge_source_authority_installed": source_authority_installed,
+            "submission_compensation_authority_installed": (
+                submission_authority_installed
+            ),
             "safe_operation_role_authority_installed": semantic_authority_installed,
             "runtime_binding_installed": runtime_binding_installed,
             "project_routes_installed": routes_installed,
@@ -142,6 +155,14 @@ def upload_scenario_health_status() -> dict[str, Any]:
             "caller_authored_behavior_ir_actor_ref_supported": False,
             "approved_fixture_bindings_required": True,
             "fixture_revocation_blocks_execution": True,
+            "explicit_submission_mode_required": True,
+            "supported_submission_modes": [
+                "auto_on_file_selection",
+                "click_submit",
+            ],
+            "click_submit_selector_required": True,
+            "business_compensation_selector_required": True,
+            "clearing_file_input_is_business_cleanup": False,
             "explicit_approval_required": True,
             "revoked_scenario_can_execute": False,
             "server_builds_contract_from_explicit_fields": True,
