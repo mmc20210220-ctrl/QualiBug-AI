@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -23,27 +24,91 @@ from ai_test_asset_center.ui_upload_scenario_registry import (
     revoke_upload_scenario,
 )
 from ai_test_asset_center.ui_upload_scenario_runtime_binding import _hydrate_scenarios
+from ai_test_asset_center.ui_upload_scenario_semantic_authority import (
+    install_ui_upload_scenario_semantic_authority,
+)
 from ai_test_asset_center.ui_upload_scenario_source_authority import (
     install_ui_upload_scenario_source_authority,
 )
 
 _PROJECT = "upload-scenario-test"
 _ACTOR = {"name": "qa-owner", "role": "qa_lead"}
+_SAFE_INTERFACE = "api:GET:/customers/upload"
+_WRITE_INTERFACE = "api:POST:/customers/upload"
+_SOURCE_FILENAME = "upload-ui.md"
 
 
-def _source(tmp_path: Path, content: str = "Upload scenario source v1") -> dict[str, object]:
+def _seed_knowledge(tmp_path: Path) -> dict[str, object]:
+    openapi = {
+        "openapi": "3.0.0",
+        "info": {"title": "Upload API", "version": "1.0.0"},
+        "paths": {
+            "/customers/upload": {
+                "get": {
+                    "operationId": "getCustomerUploadPage",
+                    "summary": "Read upload page state",
+                    "responses": {"200": {"description": "ok"}},
+                },
+                "post": {
+                    "operationId": "submitCustomerUpload",
+                    "summary": "Submit upload",
+                    "responses": {"200": {"description": "ok"}},
+                },
+            }
+        },
+    }
+    permissions = {
+        "permissions": [
+            {
+                "role": "admin",
+                "resource": "/customers/upload",
+                "actions": ["read"],
+                "decision": "allow",
+            }
+        ]
+    }
+    result = ingest_enterprise_knowledge_documents(
+        _PROJECT,
+        [
+            {
+                "text": "# Bulk upload\nAdmin uploads a CSV and sees 上传成功.",
+                "filename": _SOURCE_FILENAME,
+                "source_type": "uiux_spec",
+            },
+            {
+                "text": json.dumps(openapi),
+                "filename": "upload-openapi.json",
+                "source_type": "openapi",
+            },
+            {
+                "text": json.dumps(permissions),
+                "filename": "upload-permissions.json",
+                "source_type": "permission_matrix",
+            },
+        ],
+        root=tmp_path,
+        actor=_ACTOR,
+    )
+    assert result["ok"] is True
+    source = next(
+        row for row in result["created"]
+        if row.get("filename") == _SOURCE_FILENAME
+    )
+    return source
+
+
+def _replace_ui_source(tmp_path: Path) -> dict[str, object]:
     result = ingest_enterprise_knowledge_documents(
         _PROJECT,
         [{
-            "text": content,
-            "filename": "upload-ui.md",
+            "text": "# Bulk upload v2\nThe upload contract has changed.",
+            "filename": _SOURCE_FILENAME,
             "source_type": "uiux_spec",
         }],
         root=tmp_path,
         actor=_ACTOR,
     )
     assert result["ok"] is True
-    assert len(result["created"]) == 1
     return result["created"][0]
 
 
@@ -70,9 +135,9 @@ def _payload(source_id: str, binding_ref: str) -> dict[str, object]:
     return {
         "title": "客户批量上传",
         "source_id": source_id,
-        "source_locator": "section:bulk-upload",
-        "operation_ref": "customer.bulk_upload",
-        "actor_ref": "qa_operator",
+        "source_locator": "heading:Bulk upload",
+        "operation_ref": _SAFE_INTERFACE,
+        "actor_role": "admin",
         "start_url": "/customers/upload",
         "fixture_binding_refs": [binding_ref],
         "upload_selector": "input[type=file]",
@@ -89,7 +154,8 @@ def _approved_scenario(
 ) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
     install_upload_fixture_registry_integrity()
     install_ui_upload_scenario_source_authority()
-    source = _source(tmp_path)
+    install_ui_upload_scenario_semantic_authority()
+    source = _seed_knowledge(tmp_path)
     fixture = _fixture(tmp_path)
     candidate = register_upload_scenario(
         _PROJECT,
@@ -106,7 +172,7 @@ def _approved_scenario(
     return source, candidate, approved
 
 
-def test_approved_scenario_materializes_source_request_and_fixture(tmp_path: Path) -> None:
+def test_approved_scenario_materializes_semantically_bound_request(tmp_path: Path) -> None:
     source, _candidate, approved = _approved_scenario(tmp_path)
 
     materialized = approved_upload_scenario(
@@ -122,6 +188,11 @@ def test_approved_scenario_materializes_source_request_and_fixture(tmp_path: Pat
     assert request["source_refs"][0]["version"] == (
         f"knowledge-source:{source['source_id']}:v{source['version']}"
     )
+    assert request["operation_ref"] == _SAFE_INTERFACE
+    assert request["actor_role"] == "admin"
+    assert "actor_ref" not in request
+    assert request["metadata"]["safe_prerequisite_operation_bound"] is True
+    assert request["metadata"]["prerequisite_method"] == "GET"
     assert request["browser_plan"]["interaction_contract"]["equivalence_scope"] == "rendered_and_persistent_state"
     assert request["browser_plan"]["steps"][1]["action"] == "set_input_files"
     assert request["browser_plan"]["steps"][-1]["file_refs"] == []
@@ -148,9 +219,43 @@ def test_runtime_hydration_merges_formal_request_and_fixture_refs(tmp_path: Path
     ]
 
 
+def test_write_prerequisite_operation_is_rejected_at_registration(tmp_path: Path) -> None:
+    install_ui_upload_scenario_source_authority()
+    install_ui_upload_scenario_semantic_authority()
+    source = _seed_knowledge(tmp_path)
+    fixture = _fixture(tmp_path)
+    payload = _payload(str(source["source_id"]), str(fixture["binding_ref"]))
+    payload["operation_ref"] = _WRITE_INTERFACE
+
+    with pytest.raises(ValueError, match="must_be_safe_read"):
+        register_upload_scenario(
+            _PROJECT, payload, root=tmp_path, actor=_ACTOR
+        )
+
+
+def test_unknown_role_and_actor_ref_are_rejected_at_registration(tmp_path: Path) -> None:
+    install_ui_upload_scenario_source_authority()
+    install_ui_upload_scenario_semantic_authority()
+    source = _seed_knowledge(tmp_path)
+    fixture = _fixture(tmp_path)
+    payload = _payload(str(source["source_id"]), str(fixture["binding_ref"]))
+    payload["actor_role"] = "invented_role"
+    with pytest.raises(ValueError, match="actor_role_not_source_declared"):
+        register_upload_scenario(
+            _PROJECT, payload, root=tmp_path, actor=_ACTOR
+        )
+
+    payload["actor_role"] = "admin"
+    payload["actor_ref"] = "bir_invented_actor"
+    with pytest.raises(ValueError, match="actor_ref_not_source_stable"):
+        register_upload_scenario(
+            _PROJECT, payload, root=tmp_path, actor=_ACTOR
+        )
+
+
 def test_source_version_change_blocks_old_approved_scenario(tmp_path: Path) -> None:
     _source_row, _candidate, approved = _approved_scenario(tmp_path)
-    _source(tmp_path, "Upload scenario source v2 changed")
+    _replace_ui_source(tmp_path)
 
     with pytest.raises(RuntimeError, match="source_version_changed"):
         approved_upload_scenario(
