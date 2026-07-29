@@ -1,8 +1,8 @@
-"""Choose formal visual-table cells over overlapping page-level OCR text.
+"""Choose formal visual-table cells over overlapping page-level text projections.
 
-Both OCR and table adapters remain in Document IR for evidence.  Only the merged text
-projection changes: when a formal visual table covers an OCR paragraph, the paragraph is
-excluded from fact extraction and the source-preserving TABLE_CELL blocks become authority.
+Page-level OCR and native PDF text remain in Document IR as evidence.  When a formally
+recovered visual table covers those blocks, the source-preserving TABLE_CELL blocks become
+the merged business-text authority.  No evidence block is deleted.
 """
 from __future__ import annotations
 
@@ -80,20 +80,47 @@ def _compose(blocks: list[dict[str, Any]], fallback: str) -> str:
     return "\n".join(values).strip() or text(fallback)
 
 
+def _native_table_regions(blocks: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {
+        text(row.get("block_id")): row
+        for row in blocks
+        if text(row.get("type")) == "TABLE_REGION"
+        and text(row.get("block_id"))
+        and len(_bbox(row.get("bbox"))) == 4
+    }
+
+
+def _authority_region(
+    table: dict[str, Any],
+    native_regions: dict[str, dict[str, Any]],
+) -> tuple[str, list[float], str]:
+    evidence = _dict(table.get("structure_evidence"))
+    target_region_id = text(evidence.get("target_region_id") or table.get("target_region_id"))
+    native_region = native_regions.get(target_region_id)
+    if native_region is not None:
+        return (
+            "PDF_BOTTOM_LEFT_POINTS",
+            _bbox(native_region.get("bbox")),
+            target_region_id,
+        )
+    return (
+        "IMAGE_PIXELS_LOCAL_TO_RENDERED_PAGE",
+        _bbox(table.get("bbox")),
+        target_region_id,
+    )
+
+
 def apply_visual_table_projection_authority(document_ir: dict[str, Any]) -> dict[str, Any]:
     result = dict(document_ir or {})
     blocks = [dict(row) for row in _list(result.get("blocks")) if isinstance(row, dict)]
     visual_tables = [
         row
         for row in blocks
-        if text(row.get("type")) == "TABLE"
-        and (
-            "formal_table_structure" in row
-            or text(_dict(row.get("structure_evidence")).get("provider"))
-            in {"ruled-grid-visual-table-provider", "region-table-test-provider"}
-        )
+        if text(row.get("type")) == "TABLE" and "formal_table_structure" in row
     ]
-    visual_table_ids = {text(row.get("block_id")) for row in visual_tables if text(row.get("block_id"))}
+    visual_table_ids = {
+        text(row.get("block_id")) for row in visual_tables if text(row.get("block_id"))
+    }
     visual_cells = [
         row
         for row in blocks
@@ -105,14 +132,12 @@ def apply_visual_table_projection_authority(document_ir: dict[str, Any]) -> dict
         for row in visual_tables
         if bool(row.get("formal_table_structure")) and len(_bbox(row.get("bbox"))) == 4
     ]
+    native_regions = _native_table_regions(blocks)
 
     superseded: list[dict[str, Any]] = []
     if formal_tables:
         for block in blocks:
             if text(block.get("type")) not in {"PARAGRAPH", "LIST_ITEM"}:
-                continue
-            evidence = _dict(block.get("structure_evidence"))
-            if text(evidence.get("coordinate_system")) != "IMAGE_PIXELS_LOCAL_TO_RENDERED_PAGE":
                 continue
             block_bbox = _bbox(block.get("bbox"))
             if not block_bbox:
@@ -121,6 +146,15 @@ def apply_visual_table_projection_authority(document_ir: dict[str, Any]) -> dict
                 page = int(block.get("page") or 0)
             except (TypeError, ValueError):
                 continue
+            evidence = _dict(block.get("structure_evidence"))
+            block_coordinate_system = text(evidence.get("coordinate_system"))
+            # Native PDF text fragments do not always repeat the coordinate-system marker.
+            # Presence of a targeted PDF TABLE_REGION is sufficient to keep comparison in
+            # the primary PDF coordinate space; rendered OCR remains in image pixels.
+            block_is_rendered_text = (
+                block_coordinate_system == "IMAGE_PIXELS_LOCAL_TO_RENDERED_PAGE"
+                or bool(block.get("rendered_page_source_locator"))
+            )
             for table in formal_tables:
                 try:
                     table_page = int(table.get("page") or 0)
@@ -128,15 +162,30 @@ def apply_visual_table_projection_authority(document_ir: dict[str, Any]) -> dict
                     continue
                 if table_page != page:
                     continue
-                if not _center_inside(block_bbox, _bbox(table.get("bbox"))):
+                authority_system, authority_bbox, target_region_id = _authority_region(
+                    table, native_regions
+                )
+                if not authority_bbox:
+                    continue
+                if authority_system == "PDF_BOTTOM_LEFT_POINTS" and block_is_rendered_text:
+                    continue
+                if (
+                    authority_system == "IMAGE_PIXELS_LOCAL_TO_RENDERED_PAGE"
+                    and not block_is_rendered_text
+                ):
+                    continue
+                if not _center_inside(block_bbox, authority_bbox):
                     continue
                 block["excluded_from_plain_text_projection"] = True
                 block["superseded_by_table_block_id"] = table.get("block_id")
+                block["superseded_by_table_region_id"] = target_region_id
                 superseded.append(
                     {
                         "block_id": block.get("block_id"),
                         "table_block_id": table.get("block_id"),
+                        "table_region_id": target_region_id,
                         "page": page,
+                        "coordinate_system": authority_system,
                         "reason": "FORMAL_TABLE_CELL_TEXT_HAS_HIGHER_STRUCTURE_AUTHORITY",
                     }
                 )
@@ -160,10 +209,13 @@ def apply_visual_table_projection_authority(document_ir: dict[str, Any]) -> dict
         "visual_table_count": len(visual_tables),
         "formal_table_count": len(formal_tables),
         "visual_table_cell_count": len(visual_cells),
+        "native_table_region_count": len(native_regions),
         "unresolved_visual_table_region_count": unresolved_region_count,
         "superseded_visual_text_block_count": len(superseded),
         "superseded_visual_text_blocks": superseded,
         "table_cells_are_projection_authority": bool(formal_tables),
+        "native_pdf_table_text_can_be_superseded": True,
+        "rendered_ocr_table_text_can_be_superseded": True,
         "evidence_blocks_deleted": False,
         "business_semantics_added": False,
     }
