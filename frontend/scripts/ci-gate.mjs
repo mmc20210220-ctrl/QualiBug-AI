@@ -39,7 +39,7 @@ async function waitForFrontend(url, server) {
   throw new Error(`Vite readiness timeout at ${url}: ${lastError}`);
 }
 
-for (const script of ["typecheck", "lint", "brand:check", "test:brand-mark"]) {
+for (const script of ["typecheck", "lint", "brand:check", "test:brand-mark", "test:autonomous-ux"]) {
   await run(process.execPath, [npmCli, "run", script]);
 }
 
