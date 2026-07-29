@@ -14,6 +14,87 @@ from .implementation_binding import build_behavior_implementation_bindings
 from .schema import as_dict, as_list, dedupe_evidence, new_unknown, text
 
 
+def _project_implementation_binding_asset(
+    asset: dict[str, Any],
+    *,
+    bindings: list[dict[str, Any]],
+    unknowns: list[dict[str, Any]],
+    conflicts: list[dict[str, Any]],
+    gate: dict[str, Any],
+) -> None:
+    """Expose the downstream implementation gate without changing semantic truth."""
+    asset["behavior_implementation_bindings"] = bindings
+    asset["implementation_binding_unknowns"] = unknowns
+    asset["implementation_binding_conflicts"] = conflicts
+    asset["implementation_binding_gate"] = gate
+
+    metrics = as_dict(gate.get("metrics"))
+    summary = as_dict(asset.get("summary"))
+    summary.update(
+        {
+            "implementation_binding_status": gate.get("status"),
+            "implementation_binding_ready": bool(gate.get("entry_allowed")),
+            "scenario_planning_allowed": bool(gate.get("scenario_planning_allowed")),
+            "implementation_execution_allowed": bool(gate.get("execution_allowed")),
+            "behavior_implementation_binding_count": len(bindings),
+            "scenario_ready_binding_count": int(
+                metrics.get("scenario_ready_binding_count") or 0
+            ),
+            "implementation_binding_unknown_count": len(unknowns),
+            "implementation_binding_conflict_count": len(conflicts),
+        }
+    )
+    asset["summary"] = summary
+
+    prior_gaps = [
+        dict(row)
+        for row in as_list(asset.get("coverage_gaps"))
+        if isinstance(row, dict)
+        and text(row.get("kind"))
+        not in {
+            "IMPLEMENTATION_BINDING_PARTIAL",
+            "BLOCKED_IMPLEMENTATION_BINDING_CONFLICT",
+        }
+    ]
+    status = text(gate.get("status"))
+    if status != "PASS":
+        blocked = status.startswith("BLOCKED")
+        prior_gaps.append(
+            {
+                "kind": (
+                    "BLOCKED_IMPLEMENTATION_BINDING_CONFLICT"
+                    if blocked
+                    else "IMPLEMENTATION_BINDING_PARTIAL"
+                ),
+                "gap_type": "business_behavior_not_bound_to_observable_system_surface",
+                "source_id": "*",
+                "implementation_binding_status": status,
+                "scenario_planning_allowed": bool(
+                    gate.get("scenario_planning_allowed")
+                ),
+                "execution_allowed": bool(gate.get("execution_allowed")),
+                "unknown_count": len(unknowns),
+                "conflict_count": len(conflicts),
+                "operator_action": gate.get("required_operator_action"),
+                "semantic_understanding_is_not_changed": True,
+            }
+        )
+    asset["coverage_gaps"] = prior_gaps
+
+    governance = as_dict(asset.get("governance"))
+    governance.update(
+        {
+            "business_behavior_implementation_binding_enabled": True,
+            "semantic_and_implementation_gates_are_separate": True,
+            "token_overlap_cannot_authorize_endpoint_binding": True,
+            "scenario_planning_requires_confirmed_behavior_and_observers": True,
+            "implementation_binding_does_not_create_executable_tests": True,
+            "implementation_execution_requires_later_assertion_compilation": True,
+        }
+    )
+    asset["governance"] = governance
+
+
 def apply_minimum_understanding_closure(
     model: dict[str, Any],
     asset: dict[str, Any],
@@ -63,10 +144,16 @@ def apply_minimum_understanding_closure(
             if isinstance(evidence, dict)
         ]
     )
+    _project_implementation_binding_asset(
+        asset,
+        bindings=implementation_bindings,
+        unknowns=implementation_unknowns,
+        conflicts=implementation_conflicts,
+        gate=implementation_gate,
+    )
 
-    # Semantic understanding and implementation binding are separate gates.  Missing
-    # endpoints or observers must block scenario planning, not retroactively change
-    # what the enterprise source materials say.
+    # Semantic understanding and implementation binding are separate gates. Missing
+    # endpoints or observers block scenario planning, not what the source materials say.
     unknowns = [
         row
         for row in [*as_list(model.get("unknowns")), *behavior_unknowns]
@@ -197,7 +284,7 @@ def apply_minimum_understanding_closure(
         implementation_metrics.get("scenario_ready_binding_count") or 0
     )
 
-    # Document-structure completeness is part of the same formal semantic closure.
+    # Document-structure completeness is part of the semantic closure.
     # Implementation binding remains a separate downstream gate.
     from .document_structure_gate import apply_document_structure_completeness
 
