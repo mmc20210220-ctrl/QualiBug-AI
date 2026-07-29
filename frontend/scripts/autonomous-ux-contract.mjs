@@ -40,7 +40,9 @@ requireText(scenarioSelector, '用户不需要逐项选择或重复确认', 'upl
 forbidText(scenarioSelector, 'type="checkbox"', 'upload scenario selector');
 
 requireText(fixtureSelector, 'const refs = approved.map(scenarioRef)', 'upload fixture selector');
-requireText(fixtureSelector, 'onScenarioSelectionChange(refs)', 'upload fixture selector');
+requireText(fixtureSelector, 'reportScenarioState({ refs, loading: false, error:', 'upload fixture selector');
+requireText(fixtureSelector, 'onScenarioStateChange?:', 'upload fixture selector');
+requireText(fixtureSelector, 'onScenarioSelectionChange?:', 'upload fixture selector');
 requireText(fixtureSelector, '<details className="run-fixture-selector">', 'upload fixture selector');
 requireText(fixtureSelector, '异常补充入口', 'upload fixture selector');
 forbidText(fixtureSelector, 'localStorage', 'upload fixture selector');
