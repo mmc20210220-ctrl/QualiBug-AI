@@ -13,6 +13,14 @@ def _severity(rows: list[dict[str, Any]], default: str) -> str:
     return min(values, key=lambda value: order[value]) if values else default
 
 
+def _sum_receipt_metric(structures: dict[str, Any], key: str) -> int:
+    return sum(
+        int(as_dict(row.get("structure_receipt")).get(key) or 0)
+        for row in as_list(structures.get("items"))
+        if isinstance(row, dict)
+    )
+
+
 def apply_document_structure_completeness(
     model: dict[str, Any], asset: dict[str, Any]
 ) -> dict[str, Any]:
@@ -148,6 +156,31 @@ def apply_document_structure_completeness(
         "scanned_page_count": int(structures.get("scanned_page_count") or 0),
         "image_count": int(structures.get("image_count") or 0),
         "table_region_count": int(structures.get("table_region_count") or 0),
+        "visual_table_count": _sum_receipt_metric(structures, "visual_table_count"),
+        "formal_visual_table_count": _sum_receipt_metric(structures, "formal_visual_table_count"),
+        "borderless_visual_table_count": _sum_receipt_metric(structures, "borderless_visual_table_count"),
+        "merged_visual_table_count": _sum_receipt_metric(structures, "merged_visual_table_count"),
+        "logical_visual_table_group_count": _sum_receipt_metric(
+            structures, "logical_visual_table_group_count"
+        ),
+        "continued_visual_table_fragment_count": _sum_receipt_metric(
+            structures, "continued_visual_table_fragment_count"
+        ),
+        "multi_level_header_group_count": _sum_receipt_metric(
+            structures, "multi_level_header_group_count"
+        ),
+        "repeated_header_cell_count": _sum_receipt_metric(
+            structures, "repeated_header_cell_count"
+        ),
+        "header_inherited_data_cell_count": _sum_receipt_metric(
+            structures, "header_inherited_data_cell_count"
+        ),
+        "ambiguous_table_continuation_count": _sum_receipt_metric(
+            structures, "ambiguous_table_continuation_count"
+        ),
+        "table_continuation_header_conflict_count": _sum_receipt_metric(
+            structures, "table_continuation_header_conflict_count"
+        ),
         "multi_column_page_count": int(structures.get("multi_column_page_count") or 0),
         "unsupported_content_count": int(structures.get("unsupported_content_count") or 0),
         "critical_structure_gap_count": int(structures.get("critical_structure_gap_count") or 0),
