@@ -71,7 +71,9 @@ def _reapply_matrix_permissions(
     for behavior in behaviors:
         if text(behavior.get("source_kind")) != "DECISION_MATRIX_ROW":
             continue
-        source_ref = next((text(value) for value in as_list(behavior.get("source_refs")) if text(value)), "")
+        source_ref = next(
+            (text(value) for value in as_list(behavior.get("source_refs")) if text(value)), ""
+        )
         row = rows_by_id.get(source_ref)
         if not row:
             continue
@@ -80,7 +82,13 @@ def _reapply_matrix_permissions(
             for slot in as_list(row.get("result_slots"))
             if isinstance(slot, dict) and _permission(slot.get("raw_value")) != "UNSPECIFIED"
         )
-        permission = decisions[0] if len(decisions) == 1 else "CONFLICTED" if len(decisions) > 1 else "UNSPECIFIED"
+        permission = (
+            decisions[0]
+            if len(decisions) == 1
+            else "CONFLICTED"
+            if len(decisions) > 1
+            else "UNSPECIFIED"
+        )
         behavior["permission_decision"] = permission
         unresolved = [
             value
@@ -98,6 +106,43 @@ def _reapply_matrix_permissions(
             behavior["status"] = "CANDIDATE"
         behavior["candidate_only"] = True
         behavior["formal_business_rule"] = False
+
+
+def _remerge_governed_behaviors(behaviors: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: dict[tuple[str, tuple[str, ...], tuple[str, ...], str, str], dict[str, Any]] = {}
+    rank = {"CONFIRMED": 4, "CANDIDATE": 3, "INCOMPLETE": 2, "CONFLICTED": 1}
+    for raw in behaviors:
+        behavior = dict(raw)
+        key = (
+            text(behavior.get("operation_ref")),
+            tuple(unique_text(as_list(behavior.get("object_refs")))),
+            tuple(unique_text(as_list(behavior.get("actor_refs")))),
+            text(behavior.get("permission_decision")),
+            _condition_signature(as_list(behavior.get("preconditions"))),
+        )
+        existing = merged.get(key)
+        if existing is None:
+            merged[key] = behavior
+            continue
+        existing["source_refs"] = unique_text(
+            [*as_list(existing.get("source_refs")), *as_list(behavior.get("source_refs"))]
+        )
+        existing["evidence"] = dedupe_evidence(
+            [*as_list(existing.get("evidence")), *as_list(behavior.get("evidence"))]
+        )
+        existing["unresolved_semantics"] = unique_text(
+            [
+                *as_list(existing.get("unresolved_semantics")),
+                *as_list(behavior.get("unresolved_semantics")),
+            ]
+        )
+        if rank.get(text(behavior.get("status")), 0) > rank.get(text(existing.get("status")), 0):
+            existing["status"] = behavior.get("status")
+            existing["source_kind"] = behavior.get("source_kind")
+            existing["candidate_only"] = behavior.get("candidate_only")
+            existing["formal_business_rule"] = behavior.get("formal_business_rule")
+        existing["corroborated_by_multiple_sources"] = len(as_list(existing.get("source_refs"))) > 1
+    return sorted(merged.values(), key=lambda row: text(row.get("behavior_id")))
 
 
 def _recalculate_conflicts(behaviors: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -119,7 +164,10 @@ def _recalculate_conflicts(behaviors: list[dict[str, Any]]) -> list[dict[str, An
 
         equal_values: dict[str, set[str]] = defaultdict(set)
         for condition in as_list(behavior.get("preconditions")):
-            if not isinstance(condition, dict) or text(condition.get("operator_candidate")) != "EQUALS":
+            if (
+                not isinstance(condition, dict)
+                or text(condition.get("operator_candidate")) != "EQUALS"
+            ):
                 continue
             field = text(condition.get("field_candidate"))
             if field:
@@ -186,7 +234,16 @@ def _recalculate_conflicts(behaviors: list[dict[str, Any]]) -> list[dict[str, An
 def _governance_unknowns(
     behaviors: list[dict[str, Any]], existing: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    unknowns = list(existing)
+    by_id = {text(row.get("behavior_id")): row for row in behaviors}
+    unknowns: list[dict[str, Any]] = []
+    for row in existing:
+        if not isinstance(row, dict):
+            continue
+        if text(row.get("kind")) == "BUSINESS_BEHAVIOR_INCOMPLETE":
+            behavior = by_id.get(text(as_dict(row.get("details")).get("behavior_id")))
+            if behavior is not None and not as_list(behavior.get("unresolved_semantics")):
+                continue
+        unknowns.append(row)
     candidates = [row for row in behaviors if text(row.get("status")) == "CANDIDATE"]
     if candidates:
         unknowns.append(
@@ -254,11 +311,18 @@ def build_governed_business_behavior_ir(
     asset: dict[str, Any],
     facts: Iterable[dict[str, Any]],
     operations: Iterable[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    dict[str, Any],
+]:
     row_ledger, behaviors, _base_conflicts, unknowns, _base_gate = build_business_behavior_ir(
         asset, facts, operations
     )
     _reapply_matrix_permissions(row_ledger, behaviors)
+    behaviors = _remerge_governed_behaviors(behaviors)
     conflicts = _recalculate_conflicts(behaviors)
     unknowns = _governance_unknowns(behaviors, unknowns)
     return row_ledger, behaviors, conflicts, unknowns, _gate(row_ledger, behaviors, conflicts)
