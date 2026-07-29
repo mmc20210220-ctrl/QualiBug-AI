@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import type { UploadFixtureRecord } from '../../api/upload-fixtures';
 import {
@@ -18,7 +18,7 @@ type Props = {
   onRefresh: () => void;
 };
 
-export function uploadScenarioDraftKey(project: string): string {
+function uploadScenarioDraftKey(project: string): string {
   return `qualibug.run.ui-upload-scenarios.${project.trim()}`;
 }
 
@@ -113,8 +113,6 @@ export function RunUploadFixtureSelector({
     });
   }, [project]);
 
-  const fixtureCount = useMemo(() => fixtures.length, [fixtures]);
-
   return (
     <>
       <RunUploadScenarioSelector
@@ -135,7 +133,7 @@ export function RunUploadFixtureSelector({
             </p>
           </div>
           <strong className={selectedRefs.length ? 'is-positive' : 'is-neutral'}>
-            已选 {selectedRefs.length}/{fixtureCount}
+            已选 {selectedRefs.length}/{fixtures.length}
           </strong>
         </div>
 
