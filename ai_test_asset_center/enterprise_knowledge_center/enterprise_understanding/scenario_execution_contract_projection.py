@@ -5,6 +5,7 @@ from typing import Any
 
 from .schema import as_dict, as_list, text, unique_text
 from .scenario_execution_contract import project_scenario_execution_contracts
+from .scenario_execution_probe_guard import install_scenario_execution_probe_guard
 
 
 def _authoritative_api_binding(binding: dict[str, Any]) -> dict[str, Any]:
@@ -65,7 +66,9 @@ def project_governed_scenario_execution_contracts(
         }
     )
     asset["governance"] = governance
-    return project_scenario_execution_contracts(asset, model)
+    project_scenario_execution_contracts(asset, model)
+    install_scenario_execution_probe_guard()
+    return asset
 
 
 __all__ = ["project_governed_scenario_execution_contracts"]
