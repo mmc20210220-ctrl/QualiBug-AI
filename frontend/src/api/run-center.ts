@@ -12,24 +12,26 @@ export type RunCenterScanOptions = {
   execution_mode?: 'safe_read_only' | 'approved_sandbox_write';
   test_data_contract?: JsonRecord;
   ui_upload_fixture_ids?: string[];
+  ui_upload_scenario_ids?: string[];
 };
 
-function normalizedFixtureIds(value: string[] | undefined): string[] {
+function normalizedIdentities(
+  value: string[] | undefined,
+  pattern: RegExp,
+  label: string,
+  limit: number,
+): string[] {
   if (!Array.isArray(value)) return [];
   const seen = new Set<string>();
   const result: string[] = [];
   for (const item of value) {
     const identity = String(item || '').trim();
     if (!identity || seen.has(identity)) continue;
-    if (!/^uifb_[a-f0-9]{20}$/.test(identity)) {
-      throw new Error(`无效的上传 Fixture binding_ref：${identity}`);
-    }
+    if (!pattern.test(identity)) throw new Error(`无效的${label}：${identity}`);
     seen.add(identity);
     result.push(identity);
   }
-  if (result.length > 20) {
-    throw new Error('单次扫描最多绑定 20 个上传 Fixture。');
-  }
+  if (result.length > limit) throw new Error(`单次扫描最多选择 ${limit} 个${label}。`);
   return result;
 }
 
@@ -51,8 +53,19 @@ export async function runV12ScanFromRunCenter(
 ): Promise<V12ScanResult> {
   const project = projectId.trim();
   if (!project) throw new Error('未选择有效项目，无法执行扫描。');
-  const fixtureIds = normalizedFixtureIds(options.ui_upload_fixture_ids);
-  const executionMode = fixtureIds.length
+  const fixtureIds = normalizedIdentities(
+    options.ui_upload_fixture_ids,
+    /^uifb_[a-f0-9]{20}$/,
+    '上传 Fixture binding_ref',
+    20,
+  );
+  const scenarioIds = normalizedIdentities(
+    options.ui_upload_scenario_ids,
+    /^(?:uisr|uisa)_[a-f0-9]{20}$/,
+    '上传场景引用',
+    20,
+  );
+  const executionMode = fixtureIds.length || scenarioIds.length
     ? 'approved_sandbox_write'
     : options.execution_mode;
   const headers = new Headers({ 'Content-Type': 'application/json' });
@@ -75,6 +88,7 @@ export async function runV12ScanFromRunCenter(
         : undefined,
       test_data_contract: options.test_data_contract,
       ui_upload_fixture_ids: fixtureIds.length ? fixtureIds : undefined,
+      ui_upload_scenario_ids: scenarioIds.length ? scenarioIds : undefined,
     }),
   });
 
