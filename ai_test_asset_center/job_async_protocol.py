@@ -106,6 +106,12 @@ def compile_async_job_protocol(envelope: dict[str, Any]) -> dict[str, Any]:
 
 def register_job_async_protocol() -> str:
     """Register the Job compiler on the existing (family, template) authority."""
+    # Install the already-existing process observer/assertion surfaces first.  This
+    # is idempotent and avoids weakening protocol-registry validation merely to make
+    # Job registration order-dependent.
+    from .multi_step_protocol import register_v150_multi_step_protocols
+
+    register_v150_multi_step_protocols()
     from .experiment_protocol_registry import (
         register_family_protocol,
         resolve_family_protocol,
