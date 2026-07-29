@@ -11,6 +11,7 @@ on:
       - "ai_test_asset_center/discovery_runtime_semantic_binding.py"
       - "ai_test_asset_center/adaptive_discovery_planner.py"
       - "ai_test_asset_center/enterprise_knowledge_center/**"
+      - "ai_test_asset_center/scan_post_hooks.py"
       - "tests/test_job_*.py"
       - ".github/workflows/job-02-proof.yml"
 
@@ -87,6 +88,7 @@ jobs:
           set -o pipefail
           python -m pytest -q \
             tests/test_job_formal_compile_lineage.py \
+            tests/test_job_formal_planning_proof.py \
             tests/test_job_process_planner.py \
             tests/test_job_scenario_gate_compat.py \
             --junitxml=artifacts/job_02_proof/formal_job_tests.xml \
