@@ -13,7 +13,198 @@ from .gate import assess_understanding_model
 from .implementation_binding_governance import (
     build_governed_behavior_implementation_bindings,
 )
-from .schema import as_dict, as_list, dedupe_evidence, new_unknown, text
+from .schema import (
+    as_dict,
+    as_list,
+    dedupe_evidence,
+    new_unknown,
+    stable_id,
+    text,
+)
+
+
+def _implementation_binding_relationships(
+    bindings: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Project governed bindings into graph edges without inventing executability."""
+    edges: list[dict[str, Any]] = []
+    for binding in bindings:
+        behavior_ref = text(binding.get("behavior_ref"))
+        binding_id = text(binding.get("binding_id"))
+        if not behavior_ref:
+            continue
+        for row in as_list(binding.get("api_operation_bindings")):
+            if not isinstance(row, dict) or not text(row.get("interface_id")):
+                continue
+            authoritative = bool(row.get("authoritative")) and text(row.get("status")) == "BOUND"
+            target = text(row.get("interface_id"))
+            edges.append(
+                {
+                    "edge_id": stable_id(
+                        "edge", "behavior_to_interface", behavior_ref, target
+                    ),
+                    "from": behavior_ref,
+                    "to": target,
+                    "relation": "behavior_to_interface",
+                    "confidence": 1.0 if authoritative else 0.0,
+                    "status": "accepted" if authoritative else "candidate",
+                    "derivation": text(row.get("derivation"))
+                    or "behavior_implementation_binding",
+                    "evidence_gate": (
+                        "governed_authoritative_action_binding"
+                        if authoritative
+                        else "diagnostic_only"
+                    ),
+                    "evidence": {
+                        "binding_id": binding_id,
+                        "source_evidence": as_list(row.get("evidence")),
+                        "scenario_planning_ready": bool(
+                            binding.get("scenario_planning_ready")
+                        ),
+                    },
+                }
+            )
+        for row in as_list(binding.get("ui_action_bindings")):
+            if not isinstance(row, dict) or not text(row.get("ui_spec_id")):
+                continue
+            target = text(row.get("ui_spec_id"))
+            edges.append(
+                {
+                    "edge_id": stable_id(
+                        "edge", "behavior_to_ui_design_candidate", behavior_ref, target
+                    ),
+                    "from": behavior_ref,
+                    "to": target,
+                    "relation": "behavior_to_ui_design_candidate",
+                    "confidence": 0.0,
+                    "status": "candidate",
+                    "derivation": text(row.get("derivation"))
+                    or "exact_ui_label_or_component",
+                    "evidence_gate": "ui_design_label_without_executable_locator",
+                    "evidence": {
+                        "binding_id": binding_id,
+                        "label": row.get("label"),
+                        "executable_locator_available": False,
+                        "source_evidence": as_list(row.get("evidence")),
+                    },
+                }
+            )
+        for collection, relation in (
+            ("condition_observer_bindings", "behavior_condition_observed_by_field"),
+            ("effect_observer_bindings", "behavior_effect_observed_by_field"),
+        ):
+            for slot in as_list(binding.get(collection)):
+                if not isinstance(slot, dict):
+                    continue
+                for candidate in as_list(slot.get("bindings")):
+                    if not isinstance(candidate, dict):
+                        continue
+                    kind = text(candidate.get("binding_kind"))
+                    if kind == "DATABASE_FIELD" and text(candidate.get("field_id")):
+                        target = text(candidate.get("field_id"))
+                        accepted = (
+                            text(slot.get("status")) == "BOUND"
+                            and bool(candidate.get("authoritative"))
+                        )
+                        edges.append(
+                            {
+                                "edge_id": stable_id(
+                                    "edge",
+                                    relation,
+                                    behavior_ref,
+                                    slot.get("slot_ref"),
+                                    target,
+                                ),
+                                "from": behavior_ref,
+                                "to": target,
+                                "relation": relation,
+                                "confidence": 1.0 if accepted else 0.0,
+                                "status": "accepted" if accepted else "candidate",
+                                "derivation": text(candidate.get("derivation"))
+                                or "exact_field_identity",
+                                "evidence_gate": (
+                                    "exact_field_and_object_table_identity"
+                                    if accepted
+                                    else "field_identity_not_sufficient"
+                                ),
+                                "evidence": {
+                                    "binding_id": binding_id,
+                                    "slot_ref": slot.get("slot_ref"),
+                                    "field_candidate": slot.get(
+                                        "source_field_candidate"
+                                    ),
+                                    "source_evidence": as_list(
+                                        candidate.get("evidence")
+                                    ),
+                                },
+                            }
+                        )
+                    elif kind == "API_CONTRACT_FIELD" and text(
+                        candidate.get("interface_id")
+                    ):
+                        target = text(candidate.get("interface_id"))
+                        edges.append(
+                            {
+                                "edge_id": stable_id(
+                                    "edge",
+                                    "behavior_field_candidate_in_interface",
+                                    behavior_ref,
+                                    slot.get("slot_ref"),
+                                    target,
+                                    candidate.get("field"),
+                                ),
+                                "from": behavior_ref,
+                                "to": target,
+                                "relation": "behavior_field_candidate_in_interface",
+                                "confidence": 0.0,
+                                "status": "candidate",
+                                "derivation": text(candidate.get("derivation"))
+                                or "exact_bound_interface_contract_field",
+                                "evidence_gate": "request_contract_field_is_not_runtime_observer",
+                                "evidence": {
+                                    "binding_id": binding_id,
+                                    "slot_ref": slot.get("slot_ref"),
+                                    "field": candidate.get("field"),
+                                    "source_evidence": as_list(
+                                        candidate.get("evidence")
+                                    ),
+                                },
+                            }
+                        )
+        for row in as_list(binding.get("response_observer_bindings")):
+            if not isinstance(row, dict) or not text(row.get("interface_id")):
+                continue
+            target = text(row.get("interface_id"))
+            edges.append(
+                {
+                    "edge_id": stable_id(
+                        "edge",
+                        "behavior_effect_observed_by_api_response",
+                        behavior_ref,
+                        target,
+                    ),
+                    "from": behavior_ref,
+                    "to": target,
+                    "relation": "behavior_effect_observed_by_api_response",
+                    "confidence": 1.0,
+                    "status": "accepted",
+                    "derivation": text(row.get("derivation"))
+                    or "bound_api_operation_response_channel",
+                    "evidence_gate": "response_channel_only_assertion_not_compiled",
+                    "evidence": {
+                        "binding_id": binding_id,
+                        "expected_assertion_compiled": False,
+                        "source_evidence": as_list(row.get("evidence")),
+                    },
+                }
+            )
+    return list(
+        {
+            text(row.get("edge_id")): row
+            for row in edges
+            if text(row.get("edge_id"))
+        }.values()
+    )
 
 
 def _project_implementation_binding_asset(
@@ -25,10 +216,22 @@ def _project_implementation_binding_asset(
     gate: dict[str, Any],
 ) -> None:
     """Expose the downstream implementation gate without changing semantic truth."""
+    relationship_edges = _implementation_binding_relationships(bindings)
     asset["behavior_implementation_bindings"] = bindings
     asset["implementation_binding_unknowns"] = unknowns
     asset["implementation_binding_conflicts"] = conflicts
     asset["implementation_binding_gate"] = gate
+    asset["implementation_binding_relationships"] = relationship_edges
+    asset["relationships"] = list(
+        {
+            text(row.get("edge_id")): dict(row)
+            for row in [
+                *as_list(asset.get("relationships")),
+                *relationship_edges,
+            ]
+            if isinstance(row, dict) and text(row.get("edge_id"))
+        }.values()
+    )
 
     metrics = as_dict(gate.get("metrics"))
     summary = as_dict(asset.get("summary"))
@@ -39,6 +242,7 @@ def _project_implementation_binding_asset(
             "scenario_planning_allowed": bool(gate.get("scenario_planning_allowed")),
             "implementation_execution_allowed": bool(gate.get("execution_allowed")),
             "behavior_implementation_binding_count": len(bindings),
+            "implementation_binding_relationship_count": len(relationship_edges),
             "scenario_ready_binding_count": int(
                 metrics.get("scenario_ready_binding_count") or 0
             ),
@@ -90,6 +294,8 @@ def _project_implementation_binding_asset(
             "semantic_and_implementation_gates_are_separate": True,
             "token_overlap_cannot_authorize_endpoint_binding": True,
             "scenario_planning_requires_confirmed_behavior_and_observers": True,
+            "implementation_binding_relationship_graph_enabled": True,
+            "ui_design_binding_without_locator_is_candidate_only": True,
             "implementation_binding_does_not_create_executable_tests": True,
             "implementation_execution_requires_later_assertion_compilation": True,
         }
