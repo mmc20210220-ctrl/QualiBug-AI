@@ -13,11 +13,20 @@ type SettingsInfoSectionProps = {
 
 export function SettingsInfoSection({ productVersion, serviceStatus, auditStatus, statusToneClass }: SettingsInfoSectionProps) {
   return (
-    <>
-      <div className="section-card">
+    <details className="section-card settings-span-2">
+      <summary>
+        <strong>内部治理与兼容工具</strong>
+        <span className="muted">正常客户流程不需要维护</span>
+      </summary>
+      <div className="settings-card-note settings-mt-10">
+        浏览器矩阵、无障碍规则、上传 Fixture、上传场景和复杂交互合同应优先由后台从企业资料、页面结构和执行轨迹自动生成。
+        这里仅保留给自动识别失败、历史项目迁移或安全审计排查，不作为开始验证前的必填步骤。
+      </div>
+
+      <div className="section-card settings-mt-10">
         <div className="settings-card-head">
           <div>
-            <span className="panel-kicker">运行状态</span>
+            <span className="panel-kicker">只读诊断</span>
             <h2>系统信息</h2>
           </div>
         </div>
@@ -34,11 +43,12 @@ export function SettingsInfoSection({ productVersion, serviceStatus, auditStatus
           ))}
         </div>
       </div>
+
       <SettingsBrowserMatrixSection />
       <SettingsAccessibilitySection />
       <SettingsUploadFixtureSection />
       <SettingsUploadScenarioSection />
       <SettingsComplexInteractionSection />
-    </>
+    </details>
   );
 }
