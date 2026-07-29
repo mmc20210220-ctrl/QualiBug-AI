@@ -83,7 +83,7 @@ def build_final_scenario_planning_gate(model: dict[str, Any]) -> dict[str, Any]:
 def project_final_scenario_planning_gate(
     asset: dict[str, Any], model: dict[str, Any]
 ) -> dict[str, Any]:
-    """Expose the final gate and compile non-executable Scenario IR v1."""
+    """Expose final gates, Scenario IR and non-executable execution requirements."""
     scenario_gate = build_final_scenario_planning_gate(model)
     asset["scenario_planning_gate"] = scenario_gate
 
@@ -145,13 +145,15 @@ def project_final_scenario_planning_gate(
     )
     asset["governance"] = governance
 
-    # Keep Scenario IR behind the final gate. The compiler writes only non-executable
-    # design artifacts and an independent Scenario IR gate.
+    from .scenario_execution_contract_projection import (
+        project_governed_scenario_execution_contracts,
+    )
     from .scenario_ir import project_scenario_ir_to_asset
     from .scenario_ir_asset_governance import project_scenario_ir_asset_governance
 
     project_scenario_ir_to_asset(asset, model)
-    return project_scenario_ir_asset_governance(asset, model)
+    project_scenario_ir_asset_governance(asset, model)
+    return project_governed_scenario_execution_contracts(asset, model)
 
 
 __all__ = [
