@@ -158,14 +158,17 @@ def _source_actor_role(asset: dict[str, Any], value: Any) -> str:
 
 
 def install_ui_upload_scenario_semantic_authority() -> None:
-    # Semantic validation depends on the canonical knowledge-center source lookup.
-    # Install it here as well as in the service composition so standalone callers
-    # cannot accidentally bind against the secondary chunk registry.
+    # Both prerequisites are installed before checking our own marker. This makes
+    # the entry point safe for fresh processes and hot-loaded processes alike.
     from .ui_upload_scenario_source_authority import (
         install_ui_upload_scenario_source_authority,
     )
+    from .ui_upload_scenario_submission_authority import (
+        install_ui_upload_scenario_submission_authority,
+    )
 
     install_ui_upload_scenario_source_authority()
+    install_ui_upload_scenario_submission_authority()
     if getattr(_scenarios, _INSTALL_MARKER, False):
         return
     original = getattr(
