@@ -145,6 +145,8 @@ def _raw_definition(
                 quote=display_name or handler or platform_job_id,
             )
         ],
+        # Static source discovery deliberately does not invent runtime, fixture,
+        # observer, business effects or cleanup contracts.
         "behavior": {
             "process_steps": [],
             "selection_predicates": [],
@@ -333,15 +335,23 @@ def _connector_job_sources(
         if not isinstance(connector, dict):
             continue
         kind = _text(connector.get("kind")).lower()
-        if kind not in JOB_CONNECTOR_KINDS or not bool(connector.get("enabled", True)):
+        external_ref = _text(connector.get("external_ref"))
+        declared_job_kind = ""
+        if external_ref.lower().startswith("job_platform:"):
+            declared_job_kind = external_ref.split(":", 1)[1].strip().lower()
+        if (
+            kind not in JOB_CONNECTOR_KINDS
+            and not declared_job_kind
+        ) or not bool(connector.get("enabled", True)):
             continue
+        adapter_kind = declared_job_kind or kind
         connector_id = _text(connector.get("connector_id"))
         source = {
             "connector_id": connector_id,
-            "kind": kind,
-            "display_name": _text(connector.get("display_name")) or kind,
+            "kind": adapter_kind,
+            "display_name": _text(connector.get("display_name")) or adapter_kind,
             "endpoint_ref": _text(connector.get("endpoint_ref")),
-            "external_ref": _text(connector.get("external_ref")),
+            "external_ref": external_ref,
             "read_only": bool(connector.get("read_only", True)),
             "last_sync_at_utc": _text(connector.get("last_sync_at_utc")),
             "last_sync_status": _text(connector.get("last_sync_status")) or "not_synced",
@@ -355,7 +365,7 @@ def _connector_job_sources(
                 if not isinstance(raw, dict):
                     continue
                 row = dict(raw)
-                row.setdefault("platform_type", kind)
+                row.setdefault("platform_type", adapter_kind)
                 row.setdefault(
                     "source_refs",
                     [_source_evidence(source, connector_id=connector_id)],
@@ -363,13 +373,13 @@ def _connector_job_sources(
                 definitions.append(row)
             continue
 
-        adapter = get_job_platform_adapter(kind)
+        adapter = get_job_platform_adapter(adapter_kind)
         if adapter is None:
             gaps.append(
                 {
                     "kind": "JOB_PLATFORM_ADAPTER_NOT_REGISTERED",
                     "connector_id": connector_id,
-                    "connector_kind": kind,
+                    "connector_kind": adapter_kind,
                     "blocks_remote_job_discovery": True,
                     "operator_action": (
                         "install a source-bound adapter or import a platform export; "
@@ -394,7 +404,7 @@ def _connector_job_sources(
                     continue
                 row = {**summary, **full}
                 row.setdefault("platform_job_id", platform_job_id)
-                row.setdefault("platform_type", kind)
+                row.setdefault("platform_type", adapter_kind)
                 row.setdefault(
                     "source_refs",
                     [_source_evidence(source, connector_id=connector_id)],
@@ -405,7 +415,7 @@ def _connector_job_sources(
                 {
                     "kind": "JOB_PLATFORM_DISCOVERY_FAILED",
                     "connector_id": connector_id,
-                    "connector_kind": kind,
+                    "connector_kind": adapter_kind,
                     "error": f"{type(exc).__name__}: {exc}"[:500],
                 }
             )
