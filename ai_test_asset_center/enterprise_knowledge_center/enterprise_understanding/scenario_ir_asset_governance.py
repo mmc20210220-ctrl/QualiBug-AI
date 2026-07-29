@@ -84,7 +84,7 @@ def _relationships(scenarios: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _install_probe_gate_guard() -> None:
-    """Prevent legacy risk-to-probe generation from bypassing Scenario IR closure."""
+    """Prevent legacy risk-to-probe generation from bypassing formal contracts."""
     from .. import _api
 
     current = _api._probes_from_asset
@@ -96,12 +96,19 @@ def _install_probe_gate_guard() -> None:
     def guarded(asset: dict[str, Any], max_count: int = 140):
         planning_gate = as_dict(asset.get("scenario_planning_gate"))
         scenario_gate = as_dict(asset.get("scenario_ir_gate"))
+        execution_contract_gate = as_dict(
+            asset.get("scenario_execution_contract_gate")
+        )
         if planning_gate:
             if not bool(planning_gate.get("scenario_planning_allowed")):
                 return []
-            # Once an asset declares the new planning gate, absence of Scenario IR is a
-            # downstream gap, not permission to fall back to the legacy risk compiler.
             if not scenario_gate or not bool(scenario_gate.get("entry_allowed")):
+                return []
+            # New assets must also enumerate request, observer, snapshot and cleanup
+            # obligations before the legacy candidate-probe compatibility path is visible.
+            if not execution_contract_gate or not bool(
+                execution_contract_gate.get("entry_allowed")
+            ):
                 return []
         return original(asset, max_count)
 
@@ -215,6 +222,7 @@ def project_scenario_ir_asset_governance(
             "scenario_ir_projection_is_idempotent": True,
             "scenario_ir_relationships_do_not_imply_execution": True,
             "legacy_probe_generation_requires_scenario_ir_gate": True,
+            "legacy_probe_generation_requires_execution_contract_gate": True,
         }
     )
     asset["governance"] = governance
