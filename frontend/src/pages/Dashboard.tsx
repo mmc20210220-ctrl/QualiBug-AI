@@ -1,4 +1,4 @@
-﻿import { useCallback, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { emitScanCompleted, isCustomerReadyFinding, usePipelineData } from '../api/data';
 import { runRegression } from '../api/client';
@@ -12,6 +12,7 @@ import { Skeleton, StatePanel } from '../components/dashboard/DashboardPrimitive
 import { ValueHero } from '../components/dashboard/ValueHero';
 import { ScanFacts } from '../components/dashboard/ScanFacts';
 import { DecisionCards } from '../components/dashboard/DecisionCards';
+import { EnterpriseUnderstandingPanel } from '../components/dashboard/EnterpriseUnderstandingPanel';
 import { JourneyStrip } from '../components/dashboard/JourneyStrip';
 import { TrustPanel, type TrustSignal } from '../components/dashboard/TrustPanel';
 import {
@@ -90,6 +91,7 @@ export function Dashboard() {
   const valueMetrics = asRecord(record.value_metrics);
   const scanMeta = asRecord(record.scan_meta);
   const formalCounts = asRecord(record.formal_count_projection);
+  const knowledgeSummary = asRecord(record.knowledge_summary);
 
   const totalRiskCount = findings.length;
   const p0Count = findings.filter((f) => f.severity === 'P0').length;
@@ -175,7 +177,11 @@ export function Dashboard() {
   if (!hasMaterializedMetrics) {
     return (
       <div>
-        <div className="page-header"><div><h1>{asText(record.project_name) || project} · 价值总览</h1><p>当前项目还没有形成真实检测数据。按下面四步完成首次检测。</p></div></div>
+        <div className="page-header"><div><h1>{asText(record.project_name) || project} · 价值总览</h1><p>当前项目还没有形成真实检测数据。企业理解进度与执行准备状态如下。</p></div></div>
+        <EnterpriseUnderstandingPanel
+          summary={knowledgeSummary}
+          onOpenMaterials={() => navigateToProjectPath('/settings', project)}
+        />
         <JourneyStrip onNavigate={(path) => navigateToProjectPath(path, project)} />
         <section className="empty-value-promise">
           <h2>运行首次检测后，您将看到：</h2>
@@ -203,6 +209,11 @@ export function Dashboard() {
         metrics={{ confirmedDefects: currentScanDefects, p0Count: currentScanP0Count, testPoints: aiTestPoints, modulesCount }}
         scanTime={formatScanTime(asText(scanMeta.last_scan_at) || asText(record.updated_at))}
         evidenceTrust={evidenceTrust}
+      />
+
+      <EnterpriseUnderstandingPanel
+        summary={knowledgeSummary}
+        onOpenMaterials={() => navigateToProjectPath('/settings', project)}
       />
 
       {/* 检测事实区 — 只展示真实执行与后端记账数字 */}
