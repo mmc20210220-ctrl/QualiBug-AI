@@ -112,6 +112,9 @@ requireText(understandingReceipt, 'asset.enterprise_comprehension_gate', 'enterp
 requireText(understandingReceipt, 'asset.scenario_planning_gate', 'enterprise understanding receipt');
 requireText(understandingReceipt, 'asset.scenario_ir_gate', 'enterprise understanding receipt');
 requireText(understandingReceipt, 'asset.scenario_execution_contract_gate', 'enterprise understanding receipt');
+requireText(understandingReceipt, 'asset.runtime_plan_gate', 'enterprise understanding receipt');
+requireText(understandingReceipt, 'asset.runtime_plan_unknowns', 'enterprise understanding receipt');
+requireText(understandingReceipt, "gateView('Runtime Plan'", 'enterprise understanding receipt');
 requireText(understandingReceipt, '系统不会通过人工点击“确认正确”关闭缺口', 'enterprise understanding receipt');
 requireText(understandingReceipt, '不创建第二套模型', 'enterprise understanding receipt');
 forbidText(understandingReceipt, 'contentEditable', 'enterprise understanding receipt');
@@ -120,6 +123,8 @@ forbidText(understandingReceipt, '确认理解正确', 'enterprise understanding
 
 requireText(understandingPreflight, 'load_enterprise_business_knowledge_asset', 'understanding preflight projection');
 requireText(understandingPreflight, 'existing_enterprise_business_knowledge_asset', 'understanding preflight projection');
+requireText(understandingPreflight, 'runtime_plan_gate', 'understanding preflight projection');
+requireText(understandingPreflight, 'RUNTIME_PLAN_BLOCKED', 'understanding preflight projection');
 requireText(understandingPreflight, 'first_blocked_gate', 'understanding preflight projection');
 requireText(understandingPreflight, '系统不会通过人工确认或常识补全绕过门禁', 'understanding preflight projection');
 requireText(understandingPreflight, 'super()._handle_scan_preflight(project, root, body)', 'understanding preflight projection');
