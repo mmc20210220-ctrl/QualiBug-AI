@@ -83,6 +83,14 @@ def _preferred_display_name(assets: list[dict[str, Any]]) -> tuple[str, list[str
     return preferred, variants
 
 
+def _install_behavior_conflict_policy() -> None:
+    # The enterprise package loads its Job behavior projector before protocol
+    # registration.  This call is a no-op in standalone protocol-only imports.
+    from .job_behavior_conflict_policy import install_job_behavior_conflict_policy
+
+    install_job_behavior_conflict_policy()
+
+
 def install_job_asset_display_name_policy() -> bool:
     """Patch the loaded merge authority without importing a second composition root."""
     governance = sys.modules.get(_GOVERNANCE_MODULE)
@@ -92,6 +100,7 @@ def install_job_asset_display_name_policy() -> bool:
     if not callable(current):
         return False
     if getattr(current, _INSTALL_MARKER, False):
+        _install_behavior_conflict_policy()
         return True
     original = current
 
@@ -157,6 +166,7 @@ def install_job_asset_display_name_policy() -> bool:
     setattr(merge_without_display_conflict, _INSTALL_MARKER, True)
     merge_without_display_conflict._qualibug_original_merge = original  # type: ignore[attr-defined]
     setattr(governance, "_merge_job_asset_group", merge_without_display_conflict)
+    _install_behavior_conflict_policy()
     return True
 
 
