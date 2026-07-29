@@ -9,6 +9,7 @@ execution, Oracle, cleanup or delivery decision.
 from __future__ import annotations
 
 import functools
+import sys
 from typing import Any
 
 from . import experiment_batch_executor as _batch
@@ -179,6 +180,11 @@ def install_runtime_materialization_batch_lineage() -> None:
     setattr(wrapped, _INSTALL_MARKER, True)
     setattr(wrapped, "__qualibug_original__", original)
     _batch.execute_selected_experiments = wrapped
+    # Hot reload/tests may have imported the compatibility alias first. Keep that alias on the
+    # same existing batch authority instead of leaving two callable versions in one process.
+    executor = sys.modules.get(f"{__package__}.experiment_executor")
+    if executor is not None:
+        executor.execute_selected_experiments = wrapped
 
 
 __all__ = [
