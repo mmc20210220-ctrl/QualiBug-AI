@@ -1,14 +1,16 @@
 """Bind UI upload scenarios to exact safe prerequisite operations and source roles.
 
 The formal UI Behavior-IR binder accepts one exact, read-only prerequisite
-operation and one executable actor identity.  Free-text operation/actor values can
-therefore survive scenario approval but fail much later during IR binding.  This
-installer moves that validation to scenario registration:
+operation and one executable actor identity. Free-text operation/actor values can
+therefore survive scenario approval but fail much later during IR binding. This
+installer moves validation to scenario registration and repeats it at approval and
+run materialization:
 
 * ``operation_ref`` must resolve uniquely to an enterprise interface;
 * the canonical reference is the interface id recorded in Behavior IR
   ``source_operation_refs``;
 * only GET/HEAD/OPTIONS operations may be prerequisites;
+* the prerequisite interface's source id, version and hash are frozen;
 * ``actor_role`` must be explicitly declared by the role catalog or permission
   matrix (``public``/``anonymous`` remain explicit built-in roles);
 * caller-authored ``actor_ref`` is rejected because Behavior-IR node ids are runtime
@@ -25,6 +27,7 @@ from .enterprise_knowledge_center import load_enterprise_business_knowledge_asse
 
 _INSTALL_MARKER = "_qualibug_upload_scenario_semantic_authority_installed"
 _ORIGINAL_MARKER = "_qualibug_upload_scenario_builder_before_semantic_authority"
+_ORIGINAL_VERIFY_MARKER = "_qualibug_upload_scenario_verify_before_semantic_authority"
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _BUILTIN_ROLES = frozenset({"public", "anonymous"})
 
@@ -46,6 +49,35 @@ def _knowledge_asset(project: str, root: Path) -> dict[str, Any]:
     if not isinstance(asset, dict) or not asset:
         raise RuntimeError("ui_upload_scenario_knowledge_asset_missing")
     return asset
+
+
+def _active_source_identity(
+    asset: dict[str, Any],
+    source_id: str,
+) -> dict[str, str]:
+    identity = _text(source_id, limit=160)
+    matches = [
+        row
+        for row in _list(asset.get("sources") or asset.get("source_inventory"))
+        if isinstance(row, dict)
+        and _text(row.get("source_id") or row.get("id"), limit=160) == identity
+        and _text(row.get("status") or "active", limit=40).lower() == "active"
+    ]
+    if len(matches) != 1:
+        raise RuntimeError("ui_upload_scenario_prerequisite_source_not_active")
+    row = matches[0]
+    digest = _text(
+        row.get("content_hash") or row.get("text_hash") or row.get("hash"),
+        limit=64,
+    ).lower()
+    version = _text(row.get("version"), limit=80)
+    if len(digest) != 64 or not version:
+        raise RuntimeError("ui_upload_scenario_prerequisite_source_identity_incomplete")
+    return {
+        "source_id": identity,
+        "source_hash": digest,
+        "source_version": version,
+    }
 
 
 def _safe_prerequisite_operation(
@@ -80,6 +112,10 @@ def _safe_prerequisite_operation(
         )
     path = _text(row.get("path") or row.get("endpoint") or row.get("url"), limit=2000)
     interface_id = _text(row.get("interface_id"), limit=240)
+    source = _active_source_identity(
+        asset,
+        _text(row.get("source_id"), limit=160),
+    )
     if not interface_id or not path:
         raise RuntimeError("ui_upload_scenario_prerequisite_identity_incomplete")
     return {
@@ -87,7 +123,7 @@ def _safe_prerequisite_operation(
         "operation_id": _text(row.get("operation_id"), limit=240),
         "method": method,
         "path": path,
-        "source_id": _text(row.get("source_id"), limit=160),
+        **source,
     }
 
 
@@ -129,7 +165,13 @@ def install_ui_upload_scenario_semantic_authority() -> None:
         _ORIGINAL_MARKER,
         _scenarios.build_upload_scenario_contract,
     )
+    original_verify = getattr(
+        _scenarios,
+        _ORIGINAL_VERIFY_MARKER,
+        _scenarios._verify_candidate,
+    )
     setattr(_scenarios, _ORIGINAL_MARKER, original)
+    setattr(_scenarios, _ORIGINAL_VERIFY_MARKER, original_verify)
 
     def build_semantically_bound_upload_scenario(
         project_id: str,
@@ -168,15 +210,44 @@ def install_ui_upload_scenario_semantic_authority() -> None:
             "prerequisite_interface_id": operation["interface_id"],
             "prerequisite_method": operation["method"],
             "prerequisite_path": operation["path"],
+            "prerequisite_source_id": operation["source_id"],
+            "prerequisite_source_version": operation["source_version"],
             "actor_role_source_declared": True,
         })
         request["metadata"] = metadata
         contract["ui_request"] = request
         return contract
 
+    def verify_semantically_bound_candidate(
+        project: str,
+        root: Path,
+        record: dict[str, Any],
+    ) -> dict[str, Any]:
+        contract = copy.deepcopy(original_verify(project, root, record))
+        asset = _knowledge_asset(project, Path(root))
+        stored_operation = copy.deepcopy(
+            _dict(contract.get("safe_prerequisite_operation"))
+        )
+        if not stored_operation:
+            raise RuntimeError("ui_upload_scenario_prerequisite_contract_missing")
+        current_operation = _safe_prerequisite_operation(
+            asset,
+            _text(stored_operation.get("interface_id"), limit=240),
+        )
+        if current_operation != stored_operation:
+            raise RuntimeError(
+                "ui_upload_scenario_prerequisite_operation_version_changed"
+            )
+        stored_role = _text(contract.get("actor_role"), limit=160)
+        current_role = _source_actor_role(asset, stored_role)
+        if current_role != stored_role:
+            raise RuntimeError("ui_upload_scenario_actor_role_changed")
+        return contract
+
     _scenarios.build_upload_scenario_contract = (
         build_semantically_bound_upload_scenario
     )
+    _scenarios._verify_candidate = verify_semantically_bound_candidate
     setattr(_scenarios, _INSTALL_MARKER, True)
 
 
