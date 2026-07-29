@@ -42,25 +42,13 @@ function scenarioRef(row: UploadScenarioRecord): string {
   return String(row.scenario_ref || row.scenario_id || '').trim();
 }
 
-function readScenarioDraft(project: string): string[] {
-  if (!project) return [];
-  try {
-    const value = JSON.parse(localStorage.getItem(uploadScenarioDraftKey(project)) || '[]') as unknown;
-    return Array.isArray(value)
-      ? value.filter((item): item is string => typeof item === 'string' && Boolean(item.trim()))
-      : [];
-  } catch {
-    return [];
-  }
-}
-
 function writeScenarioDraft(project: string, refs: string[]): void {
   if (!project) return;
   try {
     localStorage.setItem(uploadScenarioDraftKey(project), JSON.stringify(refs));
   } catch {
-    // The backend still validates explicit requests; unavailable browser storage
-    // simply means this page cannot persist the local run draft.
+    // Browser storage is only a transport bridge to run-center.ts. The backend
+    // still validates every approved scenario against the active project scope.
   }
 }
 
@@ -86,7 +74,7 @@ export function RunUploadFixtureSelector({
   const project = params.get('project')?.trim() || '';
   const selected = new Set(selectedRefs);
   const [scenarios, setScenarios] = useState<UploadScenarioRecord[]>([]);
-  const [selectedScenarios, setSelectedScenarios] = useState<string[]>(() => readScenarioDraft(project));
+  const [selectedScenarios, setSelectedScenarios] = useState<string[]>([]);
   const [scenarioLoading, setScenarioLoading] = useState(false);
   const [scenarioError, setScenarioError] = useState('');
 
@@ -96,6 +84,7 @@ export function RunUploadFixtureSelector({
       setSelectedScenarios([]);
       return;
     }
+
     markScenarioDraftVerified(project, false);
     setScenarioLoading(true);
     try {
@@ -105,11 +94,11 @@ export function RunUploadFixtureSelector({
         && row.authority === 'approved_copy'
         && Boolean(scenarioRef(row))
       ));
-      const activeRefs = new Set(approved.map(scenarioRef));
-      const nextSelected = readScenarioDraft(project).filter((ref) => activeRefs.has(ref));
+      const automaticallySelected = approved.map(scenarioRef);
+
       setScenarios(approved);
-      setSelectedScenarios(nextSelected);
-      writeScenarioDraft(project, nextSelected);
+      setSelectedScenarios(automaticallySelected);
+      writeScenarioDraft(project, automaticallySelected);
       markScenarioDraftVerified(project, true);
       setScenarioError('');
     } catch (caught) {
@@ -125,17 +114,6 @@ export function RunUploadFixtureSelector({
 
   useEffect(() => { void refreshScenarios(); }, [refreshScenarios]);
 
-  const toggleScenario = useCallback((ref: string) => {
-    setSelectedScenarios((current) => {
-      const next = current.includes(ref)
-        ? current.filter((item) => item !== ref)
-        : [...current, ref];
-      writeScenarioDraft(project, next);
-      markScenarioDraftVerified(project, true);
-      return next;
-    });
-  }, [project]);
-
   return (
     <>
       <RunUploadScenarioSelector
@@ -143,34 +121,37 @@ export function RunUploadFixtureSelector({
         selected={selectedScenarios}
         loading={scenarioLoading}
         error={scenarioError}
-        onToggle={toggleScenario}
         onRefresh={() => void refreshScenarios()}
       />
-      <section className="run-fixture-selector" aria-labelledby="run-fixture-selector-title">
+
+      <details className="run-fixture-selector">
+        <summary>
+          <strong>高级兼容：额外 Fixture</strong>
+          <span className="muted">仅在审批场景尚未绑定所需文件时使用</span>
+        </summary>
+
         <div className="run-fixture-selector-head">
           <div>
-            <span className="panel-kicker">受控上传输入</span>
+            <span className="panel-kicker">异常补充入口</span>
             <h3 id="run-fixture-selector-title">额外绑定的审批 Fixture</h3>
             <p>
-              审批上传场景会自动携带自己的 Fixture。这里只用于已有来源合同需要额外文件、但尚未登记为治理场景的兼容路径。
+              正常情况下，系统会从审批场景自动携带 Fixture。这里仅保留给来源合同缺失绑定的兼容情况，
+              不再作为每次运行的必选步骤。
             </p>
           </div>
           <strong className={selectedRefs.length ? 'is-positive' : 'is-neutral'}>
-            已选 {selectedRefs.length}/{fixtures.length}
+            已补充 {selectedRefs.length}/{fixtures.length}
           </strong>
         </div>
 
         <div className="run-fixture-policy">
-          不会自动选择文件。扫描启动时后端会重新校验项目范围、活动审批状态、文件大小和 SHA-256；撤销或漂移的绑定会阻断运行。
+          只有已审批、仍在当前项目范围内且文件指纹未漂移的绑定才能进入运行合同；后台会在启动时重新校验。
         </div>
 
         {error && <p className="settings-inline-feedback" role="alert">✗ {error}</p>}
         {!error && !loading && fixtures.length === 0 && (
           <div className="run-fixture-empty">
-            <p>当前项目没有可执行的上传 Fixture。</p>
-            <button type="button" className="btn btn-secondary settings-btn-compact" onClick={onOpenSettings}>
-              前往设置登记与审批
-            </button>
+            <p>当前没有需要人工补充的 Fixture。系统将按自动绑定结果继续运行。</p>
           </div>
         )}
 
@@ -210,13 +191,13 @@ export function RunUploadFixtureSelector({
             }}
             disabled={loading || scenarioLoading}
           >
-            {loading || scenarioLoading ? '刷新中…' : '刷新审批记录'}
+            {loading || scenarioLoading ? '同步中…' : '重新同步审批记录'}
           </button>
           <button type="button" className="btn btn-secondary settings-btn-compact" onClick={onOpenSettings}>
-            管理 Fixture 与场景
+            查看审批与来源配置
           </button>
         </div>
-      </section>
+      </details>
     </>
   );
 }
