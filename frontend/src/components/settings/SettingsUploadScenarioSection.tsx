@@ -22,6 +22,26 @@ type OperationOption = {
   path: string;
   summary: string;
 };
+type SubmissionMode = 'click_submit' | 'auto_on_file_selection';
+type UploadScenarioForm = {
+  title: string;
+  source_id: string;
+  source_locator: string;
+  operation_ref: string;
+  actor_role: string;
+  start_url: string;
+  upload_selector: string;
+  submission_mode: SubmissionMode;
+  submit_selector: string;
+  cleanup_selector: string;
+  assertion_selector: string;
+  assertion_text: string;
+  rendered_probe_selector: string;
+  persistent_probe_url: string;
+  persistent_json_pointer: string;
+  frame_selector: string;
+  frame_origin: string;
+};
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
@@ -111,6 +131,36 @@ function sourceRoles(asset: JsonRecord): string[] {
   return [...byKey.values()].sort((left, right) => left.localeCompare(right));
 }
 
+function formError(form: UploadScenarioForm, selectedFixtures: string[]): string {
+  if (!form.title.trim()) return '场景名称不能为空';
+  if (!form.source_id) return '必须选择活动企业来源';
+  if (!form.source_locator.trim()) return '来源定位不能为空';
+  if (!form.operation_ref) return '必须选择真实 GET/HEAD/OPTIONS 前置操作';
+  if (!form.actor_role) return '必须选择来源声明角色';
+  if (!form.start_url.trim()) return '页面路径不能为空';
+  if (!form.upload_selector.trim()) return '上传控件 selector 不能为空';
+  if (form.submission_mode === 'click_submit' && !form.submit_selector.trim()) {
+    return '点击提交模式必须声明提交按钮 selector';
+  }
+  if (form.submission_mode === 'auto_on_file_selection' && form.submit_selector.trim()) {
+    return '自动上传模式不能同时声明提交按钮 selector';
+  }
+  if (!form.cleanup_selector.trim()) return '必须声明业务补偿 cleanup selector';
+  if (!form.assertion_selector.trim() || !form.assertion_text.trim()) {
+    return '必须声明成功断言 selector 和文本';
+  }
+  if (!form.rendered_probe_selector.trim()) return 'Rendered state probe selector 不能为空';
+  if (!form.persistent_probe_url.trim()) return 'Persistent probe GET URL 不能为空';
+  if (!form.persistent_json_pointer.trim().startsWith('/')) {
+    return 'Persistent JSON pointer 必须以 / 开头';
+  }
+  if (Boolean(form.frame_selector.trim()) !== Boolean(form.frame_origin.trim())) {
+    return 'iframe selector 和精确 origin 必须同时填写';
+  }
+  if (selectedFixtures.length === 0) return '至少选择一个已审批 Fixture';
+  return '';
+}
+
 export function SettingsUploadScenarioSection() {
   const [params] = useSearchParams();
   const project = params.get('project')?.trim() || '';
@@ -124,7 +174,7 @@ export function SettingsUploadScenarioSection() {
   const [busy, setBusy] = useState('');
   const [status, setStatus] = useState('');
   const [revocationReason, setRevocationReason] = useState('来源、页面或上传规则已发生变化');
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<UploadScenarioForm>({
     title: '上传文件并验证结果',
     source_id: '',
     source_locator: 'UI 上传场景说明',
@@ -132,6 +182,9 @@ export function SettingsUploadScenarioSection() {
     actor_role: '',
     start_url: '/upload',
     upload_selector: 'input[type=file]',
+    submission_mode: 'click_submit',
+    submit_selector: '#upload-submit',
+    cleanup_selector: '#remove-upload',
     assertion_selector: '#upload-result',
     assertion_text: '上传成功',
     rendered_probe_selector: '#upload-result',
@@ -193,7 +246,12 @@ export function SettingsUploadScenarioSection() {
     approved: scenarios.filter((row) => row.status === 'active' && row.authority === 'approved_copy').length,
   }), [scenarios]);
 
-  const setField = (key: keyof typeof form, value: string) => {
+  const validationError = useMemo(
+    () => formError(form, selectedFixtures),
+    [form, selectedFixtures],
+  );
+
+  const setField = <K extends keyof UploadScenarioForm>(key: K, value: UploadScenarioForm[K]) => {
     setForm((current) => ({ ...current, [key]: value }));
     setStatus('');
   };
@@ -208,18 +266,31 @@ export function SettingsUploadScenarioSection() {
 
   const register = async () => {
     if (!project) { setStatus('✗ 请先选择客户项目'); return; }
-    if (!form.source_id) { setStatus('✗ 必须选择活动企业来源'); return; }
-    if (!form.operation_ref) { setStatus('✗ 必须选择真实 GET/HEAD/OPTIONS 前置操作'); return; }
-    if (!form.actor_role) { setStatus('✗ 必须选择来源声明角色'); return; }
-    if (selectedFixtures.length === 0) { setStatus('✗ 至少选择一个已审批 Fixture'); return; }
+    if (validationError) { setStatus(`✗ ${validationError}`); return; }
     setBusy('register');
-    setStatus('正在校验来源、前置操作、角色、Fixture 和完整合同…');
+    setStatus('正在校验来源、前置操作、角色、Fixture、提交动作和业务 cleanup…');
     try {
       const result = await registerUploadScenario(project, {
-        ...form,
+        title: form.title.trim(),
+        source_id: form.source_id,
+        source_locator: form.source_locator.trim(),
+        operation_ref: form.operation_ref,
+        actor_role: form.actor_role,
+        start_url: form.start_url.trim(),
         fixture_binding_refs: selectedFixtures,
-        frame_selector: form.frame_selector || undefined,
-        frame_origin: form.frame_origin || undefined,
+        upload_selector: form.upload_selector.trim(),
+        submission_mode: form.submission_mode,
+        submit_selector: form.submission_mode === 'click_submit'
+          ? form.submit_selector.trim()
+          : undefined,
+        cleanup_selector: form.cleanup_selector.trim(),
+        assertion_selector: form.assertion_selector.trim(),
+        assertion_text: form.assertion_text.trim(),
+        rendered_probe_selector: form.rendered_probe_selector.trim(),
+        persistent_probe_url: form.persistent_probe_url.trim(),
+        persistent_json_pointer: form.persistent_json_pointer.trim(),
+        frame_selector: form.frame_selector.trim() || undefined,
+        frame_origin: form.frame_origin.trim() || undefined,
       });
       setStatus(result.status === 'DUPLICATE_ACTIVE'
         ? '✓ 相同候选场景已经存在'
@@ -264,7 +335,7 @@ export function SettingsUploadScenarioSection() {
         <div>
           <span className="panel-kicker">来源 UI 上传场景</span>
           <h2>上传场景合同登记与审批</h2>
-          <p>把真实企业来源、安全前置操作、来源角色、审批 Fixture、页面断言和 persistent cleanup 组合为正式 UI 合同。</p>
+          <p>把真实企业来源、安全前置操作、来源角色、审批 Fixture、提交动作、页面断言和 persistent cleanup 组合为正式 UI 合同。</p>
         </div>
         <strong className={summary.approved > 0 ? 'is-positive' : 'is-neutral'}>
           可运行 {summary.approved} 个
@@ -272,7 +343,7 @@ export function SettingsUploadScenarioSection() {
       </div>
 
       <div className="browser-matrix-policy">
-        系统不推断 selector、成功文本或 cleanup。前置操作只允许 GET/HEAD/OPTIONS；来源版本、角色、合同哈希和 Fixture authority 任一变化，旧场景都会在扫描前被阻断。
+        系统不推断 selector、成功文本或 cleanup。前置操作只允许 GET/HEAD/OPTIONS；上传必须明确是“选择文件后自动提交”还是“点击按钮提交”，并声明能够撤销业务写入的 cleanup 控件。来源版本、角色、合同哈希和 Fixture authority 任一变化，旧场景都会在扫描前被阻断。
       </div>
 
       <div className="settings-form-grid">
@@ -283,6 +354,29 @@ export function SettingsUploadScenarioSection() {
         <label className="form-field"><span>来源角色</span><select className="form-input" value={form.actor_role} onChange={(event) => setField('actor_role', event.target.value)}><option value="">请选择角色</option>{roles.map((role) => <option key={role} value={role}>{role}</option>)}</select><small className="muted">非 public/anonymous 角色仍需在项目账号配置中存在同 role 的运行账号。</small></label>
         <label className="form-field"><span>页面路径</span><input className="form-input" value={form.start_url} onChange={(event) => setField('start_url', event.target.value)} /></label>
         <label className="form-field"><span>上传控件 selector</span><input className="form-input" value={form.upload_selector} onChange={(event) => setField('upload_selector', event.target.value)} /></label>
+        <label className="form-field">
+          <span>提交方式</span>
+          <select
+            className="form-input"
+            value={form.submission_mode}
+            onChange={(event) => {
+              const mode = event.target.value as SubmissionMode;
+              setForm((current) => ({
+                ...current,
+                submission_mode: mode,
+                submit_selector: mode === 'auto_on_file_selection' ? '' : current.submit_selector || '#upload-submit',
+              }));
+              setStatus('');
+            }}
+          >
+            <option value="click_submit">选择文件后点击提交按钮</option>
+            <option value="auto_on_file_selection">选择文件后自动上传</option>
+          </select>
+        </label>
+        {form.submission_mode === 'click_submit' && (
+          <label className="form-field"><span>提交按钮 selector</span><input className="form-input" value={form.submit_selector} onChange={(event) => setField('submit_selector', event.target.value)} /></label>
+        )}
+        <label className="form-field"><span>业务补偿 cleanup selector</span><input className="form-input" value={form.cleanup_selector} onChange={(event) => setField('cleanup_selector', event.target.value)} /><small className="muted">必须真正删除、撤销或回滚上传产生的业务记录；清空文件输入框本身不算业务 cleanup。</small></label>
         <label className="form-field"><span>断言 selector</span><input className="form-input" value={form.assertion_selector} onChange={(event) => setField('assertion_selector', event.target.value)} /></label>
         <label className="form-field"><span>来源声明的成功文本</span><input className="form-input" value={form.assertion_text} onChange={(event) => setField('assertion_text', event.target.value)} /></label>
         <label className="form-field"><span>Rendered state probe selector</span><input className="form-input" value={form.rendered_probe_selector} onChange={(event) => setField('rendered_probe_selector', event.target.value)} /></label>
@@ -300,7 +394,8 @@ export function SettingsUploadScenarioSection() {
         })}
         {fixtures.length === 0 && <p className="settings-inline-feedback">尚无已审批 Fixture，请先完成上方文件治理。</p>}
       </div>
-      <div className="settings-actions"><button type="button" className="btn btn-primary" disabled={busy === 'register' || !form.operation_ref || !form.actor_role} onClick={() => void register()}>{busy === 'register' ? '登记中…' : '登记候选场景'}</button></div>
+      <div className="settings-actions"><button type="button" className="btn btn-primary" disabled={busy === 'register' || Boolean(validationError)} onClick={() => void register()}>{busy === 'register' ? '登记中…' : '登记候选场景'}</button></div>
+      {validationError && <p className="muted">当前尚不可登记：{validationError}。</p>}
 
       <div className="upload-fixture-toolbar">
         <div><strong>场景登记表</strong><span> 候选 {summary.candidates} · 可运行 {summary.approved}</span></div>
