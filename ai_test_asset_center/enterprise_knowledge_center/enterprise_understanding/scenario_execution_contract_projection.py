@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .runtime_plan import project_runtime_plans_to_asset
+from .runtime_plan_governance import project_governed_runtime_plans_to_asset
 from .schema import as_dict, as_list, text, unique_text
 from .scenario_execution_contract import project_scenario_execution_contracts
 from .scenario_execution_probe_guard import install_scenario_execution_probe_guard
@@ -95,7 +95,7 @@ def project_governed_scenario_execution_contracts(
     )
     asset["governance"] = governance
     project_scenario_execution_contracts(asset, model)
-    project_runtime_plans_to_asset(asset, model)
+    project_governed_runtime_plans_to_asset(asset, model)
     install_scenario_execution_probe_guard()
     governance = as_dict(asset.get("governance"))
     governance["legacy_probe_generation_requires_runtime_plan_gate"] = True
