@@ -82,6 +82,20 @@ def source_evidence(
     return {key: value for key, value in evidence.items() if value}
 
 
+def is_source_backed_evidence(row: dict[str, Any]) -> bool:
+    """Return whether evidence satisfies the formal source-traceability contract."""
+    evidence = as_dict(row)
+    source_identity = text(evidence.get("source_id"))
+    source_anchor = text(
+        evidence.get("source_locator")
+        or evidence.get("asset_ref")
+        or evidence.get("document_block_id")
+        or evidence.get("document_node_id")
+    )
+    exact_content = text(evidence.get("quote") or evidence.get("quote_hash"))
+    return bool(source_identity and source_anchor and exact_content)
+
+
 def evidence_from_fact(fact: dict[str, Any]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     attachment = as_dict(fact.get("structural_span_attachment"))
@@ -91,7 +105,7 @@ def evidence_from_fact(fact: dict[str, Any]) -> list[dict[str, Any]]:
         row = source_evidence(
             source_id=span.get("source_id"),
             source_locator=span.get("locator") or span.get("source_locator"),
-            quote=span.get("quote") or fact.get("raw_statement"),
+            quote=span.get("quote"),
             quote_hash=span.get("quote_hash"),
             fact_id=fact.get("fact_id"),
         )
@@ -106,20 +120,22 @@ def evidence_from_fact(fact: dict[str, Any]) -> list[dict[str, Any]]:
             row["document_node_id"] = text(attachment.get("node_id"))
         if text(attachment.get("section_node_id")):
             row["section_node_id"] = text(attachment.get("section_node_id"))
-        if row:
+        if is_source_backed_evidence(row):
             rows.append(row)
     if not rows and text(fact.get("fact_id")):
         row = source_evidence(
             source_id=fact.get("source_id"),
             source_locator=fact.get("source_locator") or attachment.get("source_locator"),
-            quote=fact.get("raw_statement") or fact.get("statement"),
+            quote=fact.get("source_quote") or fact.get("quote"),
+            quote_hash=fact.get("quote_hash"),
             fact_id=fact.get("fact_id"),
         )
         if text(attachment.get("document_block_id")):
             row["document_block_id"] = text(attachment.get("document_block_id"))
         if text(attachment.get("node_id")):
             row["document_node_id"] = text(attachment.get("node_id"))
-        rows.append(row)
+        if is_source_backed_evidence(row):
+            rows.append(row)
     return dedupe_evidence(rows)
 
 
