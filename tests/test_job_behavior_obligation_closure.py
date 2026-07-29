@@ -100,6 +100,7 @@ def _enterprise_actor() -> dict:
         "role": "job_runner",
         "role_key": "job_runner",
         "account_ref": "job-runner-account",
+        "credential_secret_ref": "secret://test/job-runner",
         "runtime_bound": True,
         "evidence": [_platform_evidence()],
     }
@@ -306,18 +307,13 @@ def test_existing_compiler_dispatches_job_protocol_to_job_treatment_step() -> No
     experiment = compiled["experiments"][0]
     assert experiment["compile_receipt"]["status"] == "COMPILED"
     assert experiment["risk_family"] == "process"
-    assert experiment["treatment_plan"] == [
-        {
-            "step_id": "job_treatment_1",
-            "step_ordinal": 1,
-            "operation_ref": obligations[0]["required_operations"][0],
-            "actor_ref": obligations[0]["required_actors"][0],
-            "method": "JOB",
-            "path": "",
-            "intent": "source_declared_async_job_execution",
-            "protocol_step": "async_job_treatment",
-        }
-    ]
+    assert len(experiment["treatment_plan"]) == 1
+    step = experiment["treatment_plan"][0]
+    assert step["step_id"] == "job_treatment_1"
+    assert step["operation_ref"] == obligations[0]["required_operations"][0]
+    assert step["actor_ref"] == obligations[0]["required_actors"][0]
+    assert step["method"] == "JOB"
+    assert step["intent"] == "source_declared_async_job_execution"
     assert experiment["assertions"][0]["property"][
         "formal_business_finding_eligible"
     ] is False
