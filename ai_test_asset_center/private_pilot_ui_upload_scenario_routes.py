@@ -7,6 +7,9 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from . import private_pilot_http_routing as _routing
 from .real_project_onboarding import _safe_project_id
+from .ui_upload_scenario_public_projection import (
+    install_ui_upload_scenario_public_projection,
+)
 from .ui_upload_scenario_registry import (
     list_upload_scenarios,
     operate_upload_scenario_registry,
@@ -69,10 +72,11 @@ def _delegate(method: Any) -> Any:
 
 def install_private_pilot_ui_upload_scenario_routes() -> None:
     # Route installation is a supported standalone bootstrap in tests and private
-    # deployments; always install the canonical source and semantic authorities
+    # deployments; always install every authority and the minimized public projection
     # before capturing registry callables.
     install_ui_upload_scenario_source_authority()
     install_ui_upload_scenario_semantic_authority()
+    install_ui_upload_scenario_public_projection()
     current_get = _routing.HttpRoutingMixin.do_GET
     current_post = _routing.HttpRoutingMixin.do_POST
     if (
