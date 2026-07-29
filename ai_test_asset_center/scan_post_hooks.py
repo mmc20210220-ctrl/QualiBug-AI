@@ -4,6 +4,7 @@ Repair/refresh installers register here instead of replacing ``scan``.
 """
 from __future__ import annotations
 
+import importlib
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,12 @@ from typing import Any
 ScanPostHook = Callable[..., dict[str, Any]]
 
 _SCAN_POST_HOOKS: dict[str, ScanPostHook | None] = {}
+_BUILTIN_HOOK_INSTALLERS: tuple[tuple[str, str], ...] = (
+    (
+        "ai_test_asset_center.job_formal_planning_proof",
+        "install_job_formal_planning_proof",
+    ),
+)
 
 
 def register_scan_post_hook(name: str, hook: ScanPostHook | None) -> None:
@@ -31,6 +38,24 @@ def list_scan_post_hooks() -> list[str]:
     return [name for name, hook in _SCAN_POST_HOOKS.items() if callable(hook)]
 
 
+def _install_builtin_scan_post_hooks() -> None:
+    """Install product-owned projections idempotently for every public scan entry.
+
+    Tests and hot-reload paths may clear the registry. Calling the installer on each
+    scan is cheap and restores the same named hook without stacking wrappers.
+    Import or installer failures are isolated so a projection cannot hide the source
+    scan result.
+    """
+    for module_name, installer_name in _BUILTIN_HOOK_INSTALLERS:
+        try:
+            module = importlib.import_module(module_name)
+            installer = getattr(module, installer_name, None)
+            if callable(installer):
+                installer()
+        except Exception:
+            continue
+
+
 def apply_scan_post_hooks(
     result: Any,
     *,
@@ -39,6 +64,7 @@ def apply_scan_post_hooks(
 ) -> Any:
     if not isinstance(result, dict):
         return result
+    _install_builtin_scan_post_hooks()
     payload = result
     for name, hook in list(_SCAN_POST_HOOKS.items()):
         if not callable(hook):
