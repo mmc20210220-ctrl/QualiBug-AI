@@ -6,9 +6,17 @@ from typing import Any
 
 from . import experiment_compiler_conflict_base as _base
 from .experiment_compiler_conflict_base import *  # noqa: F401,F403
+from .runtime_materialization_experiment_bridge import (
+    bind_experiment_pack_to_captured_materializations,
+    install_runtime_materialization_execution_bridge,
+)
 
 
 _original_compile_experiment = _base._original_compile_experiment
+
+# Additive only: capture the existing knowledge asset, bind its governed materialization drafts to
+# experiments, and extend the existing runtime preflight/finalizer. No second compiler or executor.
+install_runtime_materialization_execution_bridge()
 
 
 def __getattr__(name: str) -> Any:
@@ -261,18 +269,23 @@ def compile_experiments(
     policy_version: str = "",
     available_adapters: "set[str] | frozenset[str] | None" = None,
 ) -> dict[str, Any]:
-    """Compile a batch through the explicitly selected facade dispatch.
+    """Compile through the existing facade, then bind one governed materialization.
 
     ``available_adapters`` names the observation adapters this target may be observed
     through. Omitting it keeps the http_api-only default, so every existing caller is
     unaffected; ``adapter_capability.resolve_available_adapters`` is what supplies a wider
     set from customer-declared configuration.
     """
-    return _base._base.compile_experiments(
+    pack = _base._base.compile_experiments(
         obligations,
         behavior_ir=behavior_ir,
         environment_type=environment_type,
         policy_version=policy_version,
         compile_one=compile_experiment_for_obligation,
         available_adapters=available_adapters,
+    )
+    return bind_experiment_pack_to_captured_materializations(
+        pack,
+        behavior_ir=behavior_ir,
+        obligations=obligations,
     )
