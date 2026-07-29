@@ -68,6 +68,12 @@ function fallbackGates(summary: JsonRecord): GateView[] {
       status: asText(summary.scenario_execution_contract_status) || 'NOT_BUILT',
       ready: asBoolean(summary.scenario_execution_contract_ready),
     },
+    {
+      key: 'runtime_plan',
+      label: 'Runtime Plan',
+      status: asText(summary.runtime_plan_status) || 'NOT_BUILT',
+      ready: asBoolean(summary.runtime_plan_ready),
+    },
   ];
 }
 
@@ -91,12 +97,14 @@ export function EnterpriseUnderstandingPanel({ summary: value, onOpenMaterials }
   const businessObjectCount = asNumber(summary.understood_business_object_count);
   const operationCount = asNumber(summary.understood_operation_count);
   const scenarioCount = asNumber(summary.scenario_ir_count);
+  const runtimePlanCount = asNumber(summary.runtime_plan_count);
   const available = Boolean(
     modelId
     || (understandingStatus && understandingStatus !== 'NOT_BUILT')
     || businessObjectCount
     || operationCount
-    || scenarioCount,
+    || scenarioCount
+    || runtimePlanCount,
   );
   if (!available) return null;
 
@@ -107,15 +115,15 @@ export function EnterpriseUnderstandingPanel({ summary: value, onOpenMaterials }
   const blockers = [...new Set(asArray(summary.understanding_blockers).map(asText).filter(Boolean))].slice(0, 6);
   const firstBlocked = gates.find((gate) => !gate.ready);
   const statusTitle = chainReady
-    ? '正式场景链已闭合'
+    ? '运行模板链已闭合'
     : understandingReady
-      ? '企业理解已闭合，正式场景链待完善'
+      ? '企业理解已闭合，运行模板链待完善'
       : '企业理解尚未闭合';
   const statusDetail = chainReady
-    ? '企业理解、场景规划、Scenario IR 和执行合同均已通过现有门禁。运行时仍会继续检查环境、凭据、测试数据、观察通道和清理义务。'
+    ? '企业理解、场景规划、Scenario IR、执行合同和 Runtime Plan 均已通过现有门禁。运行时仍会继续检查环境、凭据、测试数据、观察通道和清理义务。'
     : firstBlocked
-      ? `当前停在“${firstBlocked.label}”：${firstBlocked.status}。请补充能够说明相关业务规则、状态流转或接口契约的原始资料。`
-      : '现有知识资产尚未形成完整的正式场景链。';
+      ? `当前停在“${firstBlocked.label}”：${firstBlocked.status}。请补充能够说明相关业务规则、状态流转、接口契约或运行约束的原始资料。`
+      : '现有知识资产尚未形成完整的运行模板链。';
 
   return (
     <section className="focus-section" aria-label="企业理解状态">
@@ -136,8 +144,8 @@ export function EnterpriseUnderstandingPanel({ summary: value, onOpenMaterials }
             <span><em>角色</em><b>{asNumber(summary.understood_actor_count)}</b></span>
             <span><em>业务操作</em><b>{operationCount}</b></span>
             <span><em>生命周期</em><b>{asNumber(summary.understood_lifecycle_count)}</b></span>
-            <span><em>流程</em><b>{asNumber(summary.understood_process_count)}</b></span>
             <span><em>正式场景</em><b>{scenarioCount}</b></span>
+            <span><em>运行模板</em><b>{runtimePlanCount}</b></span>
           </div>
         </article>
 
@@ -149,7 +157,7 @@ export function EnterpriseUnderstandingPanel({ summary: value, onOpenMaterials }
             <span><em>生命周期完整度</em><b>{percent(summary.lifecycle_completeness)}</b></span>
             <span><em>待关闭未知项</em><b>{asNumber(summary.enterprise_understanding_unknown_count)}</b></span>
             <span><em>未解决冲突</em><b>{asNumber(summary.enterprise_understanding_conflict_count)}</b></span>
-            <span><em>执行合同缺口</em><b>{asNumber(summary.scenario_execution_contract_incomplete_count)}</b></span>
+            <span><em>运行模板缺口</em><b>{asNumber(summary.runtime_plan_unknown_count)}</b></span>
           </div>
         </article>
       </div>
