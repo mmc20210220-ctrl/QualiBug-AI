@@ -181,6 +181,18 @@ def _refresh_projection(asset: dict[str, Any], model: dict[str, Any]) -> None:
             "execution_allowed": False,
         }
     )
+    media_selection_count = sum(
+        1
+        for row in unknowns
+        if text(row.get("reason_code"))
+        == "RUNTIME_PLAN_REQUEST_MEDIA_TYPE_SELECTION_REQUIRED"
+    )
+    contract_conflict_count = sum(
+        1
+        for row in unknowns
+        if text(row.get("reason_code"))
+        == "RUNTIME_PLAN_REQUEST_FIELD_CONTRACT_CONFLICT"
+    )
     metrics = dict(as_dict(gate.get("metrics")))
     metrics.update(
         {
@@ -188,18 +200,8 @@ def _refresh_projection(asset: dict[str, Any], model: dict[str, Any]) -> None:
             "ready_runtime_plan_count": ready,
             "incomplete_runtime_plan_count": incomplete,
             "runtime_plan_unknown_count": len(unknowns),
-            "request_media_type_selection_requirement_count": sum(
-                1
-                for row in unknowns
-                if text(row.get("reason_code"))
-                == "RUNTIME_PLAN_REQUEST_MEDIA_TYPE_SELECTION_REQUIRED"
-            ),
-            "request_field_contract_conflict_count": sum(
-                1
-                for row in unknowns
-                if text(row.get("reason_code"))
-                == "RUNTIME_PLAN_REQUEST_FIELD_CONTRACT_CONFLICT"
-            ),
+            "request_media_type_selection_requirement_count": media_selection_count,
+            "request_field_contract_conflict_count": contract_conflict_count,
         }
     )
     gate["metrics"] = metrics
@@ -259,9 +261,16 @@ def _refresh_projection(asset: dict[str, Any], model: dict[str, Any]) -> None:
         dict(row)
         for row in as_list(asset.get("coverage_gaps"))
         if isinstance(row, dict)
-        and text(row.get("kind")) != "RUNTIME_PLAN_INCOMPLETE"
     ]
-    if status == "BLOCKED_RUNTIME_PLAN_INCOMPLETE":
+    # Preserve the compiler's original gap and operator action for ordinary causes such as
+    # unresolved locations or missing Oracle templates. Replace it only when this governance
+    # layer discovered a source-contract conflict requiring a more specific resolution.
+    if status == "BLOCKED_RUNTIME_PLAN_INCOMPLETE" and contract_conflict_count:
+        gaps = [
+            row
+            for row in gaps
+            if text(row.get("kind")) != "RUNTIME_PLAN_INCOMPLETE"
+        ]
         gaps.append(
             {
                 "kind": "RUNTIME_PLAN_INCOMPLETE",
