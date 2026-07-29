@@ -110,6 +110,10 @@ def _authority_region(
     )
 
 
+def _table_method(table: dict[str, Any]) -> str:
+    return text(_dict(table.get("structure_evidence")).get("detection_method"))
+
+
 def apply_visual_table_projection_authority(document_ir: dict[str, Any]) -> dict[str, Any]:
     result = dict(document_ir or {})
     blocks = [dict(row) for row in _list(result.get("blocks")) if isinstance(row, dict)]
@@ -133,6 +137,21 @@ def apply_visual_table_projection_authority(document_ir: dict[str, Any]) -> dict
         if bool(row.get("formal_table_structure")) and len(_bbox(row.get("bbox"))) == 4
     ]
     native_regions = _native_table_regions(blocks)
+
+    borderless_tables = [
+        row for row in visual_tables if "borderless" in _table_method(row)
+    ]
+    ruled_tables = [
+        row for row in visual_tables if "ruled_grid" in _table_method(row)
+    ]
+    merged_cells = [
+        row
+        for row in visual_cells
+        if int(row.get("row_span") or 1) > 1 or int(row.get("column_span") or 1) > 1
+    ]
+    merged_table_ids = {
+        text(row.get("table_block_id")) for row in merged_cells if text(row.get("table_block_id"))
+    }
 
     superseded: list[dict[str, Any]] = []
     if formal_tables:
@@ -204,11 +223,23 @@ def apply_visual_table_projection_authority(document_ir: dict[str, Any]) -> dict
             "VISUAL_TABLE_STRUCTURE_NOT_RECOVERED",
         }
     )
+    unresolved_merged_structure_count = sum(
+        int(row.get("count") or 0)
+        for row in _list(result.get("unsupported_content"))
+        if isinstance(row, dict)
+        and text(row.get("reason_code") or row.get("kind"))
+        == "VISUAL_TABLE_MERGED_CELL_OR_BORDER_UNRESOLVED"
+    )
     receipt = {
         "schema": "qualibug.visual-table-text-authority-receipt.v1",
         "visual_table_count": len(visual_tables),
         "formal_table_count": len(formal_tables),
+        "ruled_visual_table_count": len(ruled_tables),
+        "borderless_visual_table_count": len(borderless_tables),
         "visual_table_cell_count": len(visual_cells),
+        "merged_visual_table_count": len(merged_table_ids),
+        "merged_visual_table_cell_count": len(merged_cells),
+        "unresolved_merged_structure_count": unresolved_merged_structure_count,
         "native_table_region_count": len(native_regions),
         "unresolved_visual_table_region_count": unresolved_region_count,
         "superseded_visual_text_block_count": len(superseded),
@@ -223,7 +254,12 @@ def apply_visual_table_projection_authority(document_ir: dict[str, Any]) -> dict
     structure_receipt = dict(result.get("structure_receipt") or {})
     structure_receipt["visual_table_count"] = len(visual_tables)
     structure_receipt["formal_visual_table_count"] = len(formal_tables)
+    structure_receipt["ruled_visual_table_count"] = len(ruled_tables)
+    structure_receipt["borderless_visual_table_count"] = len(borderless_tables)
     structure_receipt["visual_table_cell_count"] = len(visual_cells)
+    structure_receipt["merged_visual_table_count"] = len(merged_table_ids)
+    structure_receipt["merged_visual_table_cell_count"] = len(merged_cells)
+    structure_receipt["unresolved_merged_structure_count"] = unresolved_merged_structure_count
     structure_receipt["unresolved_visual_table_region_count"] = unresolved_region_count
     structure_receipt["visual_table_text_authority"] = receipt
     result["structure_receipt"] = structure_receipt
