@@ -230,16 +230,24 @@ def install_ui_upload_scenario_semantic_authority() -> None:
         )
         if not stored_operation:
             raise RuntimeError("ui_upload_scenario_prerequisite_contract_missing")
-        current_operation = _safe_prerequisite_operation(
-            asset,
-            _text(stored_operation.get("interface_id"), limit=240),
-        )
+        try:
+            current_operation = _safe_prerequisite_operation(
+                asset,
+                _text(stored_operation.get("interface_id"), limit=240),
+            )
+        except (ValueError, RuntimeError) as exc:
+            raise RuntimeError(
+                "ui_upload_scenario_prerequisite_operation_version_changed"
+            ) from exc
         if current_operation != stored_operation:
             raise RuntimeError(
                 "ui_upload_scenario_prerequisite_operation_version_changed"
             )
         stored_role = _text(contract.get("actor_role"), limit=160)
-        current_role = _source_actor_role(asset, stored_role)
+        try:
+            current_role = _source_actor_role(asset, stored_role)
+        except ValueError as exc:
+            raise RuntimeError("ui_upload_scenario_actor_role_changed") from exc
         if current_role != stored_role:
             raise RuntimeError("ui_upload_scenario_actor_role_changed")
         return contract
