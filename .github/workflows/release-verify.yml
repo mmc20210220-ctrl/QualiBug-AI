@@ -24,6 +24,16 @@ jobs:
         run: |
           python -m pytest tests/test_phase92a_evidence_bridge.py tests/test_phase94abcd_bug_discovery_engine.py -q
           python -m pytest tests/test_discovery_engine_verifier_quality.py tests/test_grounded_probe_executor.py tests/test_blind_project_runner.py -q
+      - name: Enterprise knowledge evidence regression
+        run: |
+          python -m pytest -q \
+            tests/test_field_dictionary_evidence_truth.py \
+            tests/test_enterprise_knowledge_center_parsing.py \
+            tests/test_operator_authority_decision.py \
+            tests/test_behavior_ir_single_fact_authority.py \
+            tests/test_business_behavior_ir.py \
+            tests/test_business_behavior_ir_logic_gate.py \
+            tests/test_private_pilot_command_center_understanding.py
       - name: Build clean release archive
         run: python build_release.py --output build/QualiBug_V11_PRODUCTION_FINAL_CLEAN.zip
 
