@@ -181,6 +181,58 @@ def apply_document_structure_completeness(
         "table_continuation_header_conflict_count": _sum_receipt_metric(
             structures, "table_continuation_header_conflict_count"
         ),
+        "table_header_node_count": _sum_receipt_metric(structures, "table_header_node_count"),
+        "table_header_group_node_count": _sum_receipt_metric(
+            structures, "table_header_group_node_count"
+        ),
+        "table_header_leaf_node_count": _sum_receipt_metric(
+            structures, "table_header_leaf_node_count"
+        ),
+        "table_row_header_candidate_count": _sum_receipt_metric(
+            structures, "table_row_header_candidate_count"
+        ),
+        "table_condition_column_candidate_count": _sum_receipt_metric(
+            structures, "table_condition_column_candidate_count"
+        ),
+        "table_result_column_candidate_count": _sum_receipt_metric(
+            structures, "table_result_column_candidate_count"
+        ),
+        "decision_matrix_candidate_count": _sum_receipt_metric(
+            structures, "decision_matrix_candidate_count"
+        ),
+        "table_legend_candidate_count": _sum_receipt_metric(
+            structures, "table_legend_candidate_count"
+        ),
+        "table_color_legend_candidate_count": _sum_receipt_metric(
+            structures, "table_color_legend_candidate_count"
+        ),
+        "table_symbol_legend_candidate_count": _sum_receipt_metric(
+            structures, "table_symbol_legend_candidate_count"
+        ),
+        "legend_mapped_cell_count": _sum_receipt_metric(
+            structures, "legend_mapped_cell_count"
+        ),
+        "decision_column_role_ambiguity_count": _sum_receipt_metric(
+            structures, "decision_column_role_ambiguity_count"
+        ),
+        "rejected_unsafe_column_role_candidate_count": _sum_receipt_metric(
+            structures, "rejected_unsafe_column_role_candidate_count"
+        ),
+        "table_legend_token_ambiguity_count": _sum_receipt_metric(
+            structures, "table_legend_token_ambiguity_count"
+        ),
+        "table_symbol_legend_missing_cell_count": _sum_receipt_metric(
+            structures, "table_symbol_legend_missing_cell_count"
+        ),
+        "table_color_legend_unverified_count": _sum_receipt_metric(
+            structures, "table_color_legend_unverified_count"
+        ),
+        "semantic_candidate_inherited_fragment_count": _sum_receipt_metric(
+            structures, "semantic_candidate_inherited_fragment_count"
+        ),
+        "semantic_candidate_inherited_cell_count": _sum_receipt_metric(
+            structures, "semantic_candidate_inherited_cell_count"
+        ),
         "multi_column_page_count": int(structures.get("multi_column_page_count") or 0),
         "unsupported_content_count": int(structures.get("unsupported_content_count") or 0),
         "critical_structure_gap_count": int(structures.get("critical_structure_gap_count") or 0),
