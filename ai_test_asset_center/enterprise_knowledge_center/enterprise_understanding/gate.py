@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .schema import GATE_SCHEMA, as_dict, as_list, text, validate_model_shape
+from .schema import BEHAVIOR_GATE_SCHEMA, GATE_SCHEMA, as_dict, as_list, text, validate_model_shape
 
 
 def _formal_entries(model: dict[str, Any]) -> list[dict[str, Any]]:
@@ -31,6 +31,24 @@ def _unresolved_conflicts(model: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def _validation_view(model: dict[str, Any]) -> dict[str, Any]:
+    """Supply additive v1 behavior fields for older hand-built model fixtures."""
+    result = dict(model or {})
+    result.setdefault("decision_matrix_row_ledger", [])
+    result.setdefault("business_behaviors", [])
+    result.setdefault("behavior_conflicts", [])
+    result.setdefault(
+        "behavior_ir_gate",
+        {
+            "schema": BEHAVIOR_GATE_SCHEMA,
+            "status": "NOT_BUILT",
+            "entry_allowed": False,
+            "metrics": {},
+        },
+    )
+    return result
+
+
 def assess_understanding_model(
     model: dict[str, Any],
     *,
@@ -38,7 +56,7 @@ def assess_understanding_model(
 ) -> dict[str, Any]:
     """Assess structural and semantic completeness without claiming recall."""
     upstream = as_dict(upstream_gate)
-    structural_violations = validate_model_shape(model)
+    structural_violations = validate_model_shape(_validation_view(model))
     unknowns = [row for row in as_list(model.get("unknowns")) if isinstance(row, dict)]
     critical_unknowns = [row for row in unknowns if bool(row.get("blocks_formal_understanding"))]
     conflicts = _unresolved_conflicts(model)
