@@ -107,7 +107,11 @@ requireText(dashboardUnderstanding, 'summary.understanding_blocker_receipts', 'd
 requireText(dashboardUnderstanding, 'summary.understanding_source_receipt_count', 'dashboard enterprise understanding');
 requireText(dashboardUnderstanding, "key: 'runtime_plan'", 'dashboard enterprise understanding');
 requireText(dashboardUnderstanding, "label: 'Runtime Plan'", 'dashboard enterprise understanding');
-requireText(dashboardUnderstanding, '运行模板链已闭合', 'dashboard enterprise understanding');
+requireText(dashboardUnderstanding, "key: 'runtime_materialization'", 'dashboard enterprise understanding');
+requireText(dashboardUnderstanding, "label: '运行实例化'", 'dashboard enterprise understanding');
+requireText(dashboardUnderstanding, '运行草稿链已闭合', 'dashboard enterprise understanding');
+requireText(dashboardUnderstanding, '不可发送', 'dashboard enterprise understanding');
+requireText(dashboardUnderstanding, '不可执行', 'dashboard enterprise understanding');
 requireText(dashboardUnderstanding, '查看缺口与原始资料回执', 'dashboard enterprise understanding');
 requireText(dashboardUnderstanding, '现有门禁回执尚未附具体资料定位', 'dashboard enterprise understanding');
 requireText(dashboardUnderstanding, '没有来源的条目不会被系统猜测补齐', 'dashboard enterprise understanding');
@@ -140,7 +144,12 @@ requireText(understandingReceipt, 'asset.scenario_ir_gate', 'enterprise understa
 requireText(understandingReceipt, 'asset.scenario_execution_contract_gate', 'enterprise understanding receipt');
 requireText(understandingReceipt, 'asset.runtime_plan_gate', 'enterprise understanding receipt');
 requireText(understandingReceipt, 'asset.runtime_plan_unknowns', 'enterprise understanding receipt');
+requireText(understandingReceipt, 'asset.runtime_materialization_gate', 'enterprise understanding receipt');
+requireText(understandingReceipt, 'asset.runtime_materialization_unknowns', 'enterprise understanding receipt');
 requireText(understandingReceipt, "gateView('Runtime Plan'", 'enterprise understanding receipt');
+requireText(understandingReceipt, "gateView('运行实例化'", 'enterprise understanding receipt');
+requireText(understandingReceipt, '不可发送请求草稿', 'enterprise understanding receipt');
+requireText(understandingReceipt, '不可执行断言草稿', 'enterprise understanding receipt');
 requireText(understandingReceipt, '系统不会通过人工点击“确认正确”关闭缺口', 'enterprise understanding receipt');
 requireText(understandingReceipt, '不创建第二套模型', 'enterprise understanding receipt');
 forbidText(understandingReceipt, 'contentEditable', 'enterprise understanding receipt');
@@ -150,9 +159,11 @@ forbidText(understandingReceipt, '确认理解正确', 'enterprise understanding
 requireText(understandingPreflight, 'load_enterprise_business_knowledge_asset', 'understanding preflight projection');
 requireText(understandingPreflight, 'existing_enterprise_business_knowledge_asset', 'understanding preflight projection');
 requireText(understandingPreflight, 'runtime_plan_gate', 'understanding preflight projection');
+requireText(understandingPreflight, 'runtime_materialization_gate', 'understanding preflight projection');
 requireText(understandingPreflight, 'RUNTIME_PLAN_BLOCKED', 'understanding preflight projection');
+requireText(understandingPreflight, 'RUNTIME_MATERIALIZATION_BLOCKED', 'understanding preflight projection');
 requireText(understandingPreflight, 'first_blocked_gate', 'understanding preflight projection');
-requireText(understandingPreflight, '系统不会通过人工确认或常识补全绕过门禁', 'understanding preflight projection');
+requireText(understandingPreflight, '旧 Probe 回退绕过门禁', 'understanding preflight projection');
 requireText(understandingPreflight, 'super()._handle_scan_preflight(project, root, body)', 'understanding preflight projection');
 forbidText(understandingPreflight, 'build_enterprise_business_knowledge_asset', 'understanding preflight projection');
 forbidText(understandingPreflight, '第二套', 'understanding preflight projection');
@@ -161,6 +172,8 @@ requireText(commandCenterUnderstanding, 'load_enterprise_business_knowledge_asse
 requireText(commandCenterUnderstanding, 'data["knowledge_summary"] = {**existing, **_understanding_projection(asset)}', 'command center understanding projection');
 requireText(commandCenterUnderstanding, 'runtime_plan_gate', 'command center understanding projection');
 requireText(commandCenterUnderstanding, 'runtime_plan_unknowns', 'command center understanding projection');
+requireText(commandCenterUnderstanding, 'runtime_materialization_gate', 'command center understanding projection');
+requireText(commandCenterUnderstanding, 'runtime_materialization_unknowns', 'command center understanding projection');
 requireText(commandCenterUnderstanding, 'def _source_receipts(', 'command center understanding projection');
 requireText(commandCenterUnderstanding, '"understanding_blocker_receipts": blocker_receipts', 'command center understanding projection');
 requireText(commandCenterUnderstanding, '"understanding_source_receipt_count"', 'command center understanding projection');
