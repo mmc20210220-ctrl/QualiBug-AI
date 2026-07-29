@@ -103,9 +103,14 @@ requireText(dashboardPage, "navigateToProjectPath('/settings', project)", 'dashb
 
 requireText(dashboardUnderstanding, '已有知识资产的只读投影', 'dashboard enterprise understanding');
 requireText(dashboardUnderstanding, 'summary.understanding_gates', 'dashboard enterprise understanding');
+requireText(dashboardUnderstanding, 'summary.understanding_blocker_receipts', 'dashboard enterprise understanding');
+requireText(dashboardUnderstanding, 'summary.understanding_source_receipt_count', 'dashboard enterprise understanding');
 requireText(dashboardUnderstanding, "key: 'runtime_plan'", 'dashboard enterprise understanding');
 requireText(dashboardUnderstanding, "label: 'Runtime Plan'", 'dashboard enterprise understanding');
 requireText(dashboardUnderstanding, '运行模板链已闭合', 'dashboard enterprise understanding');
+requireText(dashboardUnderstanding, '查看缺口与原始资料回执', 'dashboard enterprise understanding');
+requireText(dashboardUnderstanding, '现有门禁回执尚未附具体资料定位', 'dashboard enterprise understanding');
+requireText(dashboardUnderstanding, '没有来源的条目不会被系统猜测补齐', 'dashboard enterprise understanding');
 requireText(dashboardUnderstanding, '系统不会通过人工点击“确认正确”或常识补全绕过门禁', 'dashboard enterprise understanding');
 forbidText(dashboardUnderstanding, 'contentEditable', 'dashboard enterprise understanding');
 forbidText(dashboardUnderstanding, '保存模型', 'dashboard enterprise understanding');
@@ -156,6 +161,9 @@ requireText(commandCenterUnderstanding, 'load_enterprise_business_knowledge_asse
 requireText(commandCenterUnderstanding, 'data["knowledge_summary"] = {**existing, **_understanding_projection(asset)}', 'command center understanding projection');
 requireText(commandCenterUnderstanding, 'runtime_plan_gate', 'command center understanding projection');
 requireText(commandCenterUnderstanding, 'runtime_plan_unknowns', 'command center understanding projection');
+requireText(commandCenterUnderstanding, 'def _source_receipts(', 'command center understanding projection');
+requireText(commandCenterUnderstanding, '"understanding_blocker_receipts": blocker_receipts', 'command center understanding projection');
+requireText(commandCenterUnderstanding, '"understanding_source_receipt_count"', 'command center understanding projection');
 requireText(commandCenterUnderstanding, 'EXISTING_KNOWLEDGE_ASSET_GATE_PROJECTION_NOT_SECOND_AUTHORITY', 'command center understanding projection');
 requireText(commandCenterUnderstanding, 'super()._build_command_center(project_id, root)', 'command center understanding projection');
 forbidText(commandCenterUnderstanding, 'build_enterprise_business_knowledge_asset', 'command center understanding projection');
