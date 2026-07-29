@@ -1,0 +1,52 @@
+"""Human-readable messages for Runtime Materialization receipts.
+
+Messages explain an existing formal Unknown. They do not resolve it, change gate status or become a
+second semantic authority.
+"""
+from __future__ import annotations
+
+from typing import Any
+
+RUNTIME_MATERIALIZATION_REASON_MESSAGES = {
+    "RUNTIME_MATERIALIZATION_ENVIRONMENT_REF_UNRESOLVED": "运行实例尚未唯一绑定测试环境",
+    "RUNTIME_MATERIALIZATION_BASE_URL_UNRESOLVED": "运行实例尚未获得测试环境地址",
+    "RUNTIME_MATERIALIZATION_ENVIRONMENT_REF_AMBIGUOUS": "运行实例匹配到多个候选测试环境",
+    "RUNTIME_MATERIALIZATION_PRODUCTION_WRITE_FORBIDDEN": "生产环境写入被安全策略禁止",
+    "RUNTIME_MATERIALIZATION_NON_PRODUCTION_ENVIRONMENT_UNPROVEN": "尚未证明当前环境为非生产测试环境",
+    "RUNTIME_MATERIALIZATION_CREDENTIAL_REF_UNRESOLVED": "运行实例尚未绑定对应角色的凭据引用",
+    "RUNTIME_MATERIALIZATION_REQUIRED_VALUE_BINDING_MISSING": "运行实例缺少必填动态值绑定",
+    "RUNTIME_MATERIALIZATION_REQUIRED_VALUE_BINDING_AMBIGUOUS": "必填动态值匹配到多个候选绑定",
+    "RUNTIME_MATERIALIZATION_VALUE_BINDING_NOT_APPROVED": "运行值绑定尚未批准用于测试",
+    "RUNTIME_MATERIALIZATION_REQUIRED_VALUE_IS_NULL": "必填运行值为空，不能形成具体草稿",
+    "RUNTIME_MATERIALIZATION_BINDING_HAS_NO_VALUE_SOURCE": "运行值绑定没有Literal、Fixture、Value Ref或Generator来源",
+    "RUNTIME_MATERIALIZATION_SOURCE_LITERAL_INVALID": "来源语义值与接口字段类型不兼容",
+    "RUNTIME_MATERIALIZATION_BOUND_LITERAL_INVALID": "已绑定运行值不是受支持的安全Literal",
+    "RUNTIME_MATERIALIZATION_FIXTURE_REF_UNRESOLVED": "运行实例引用的测试Fixture不可用或尚未批准",
+    "RUNTIME_MATERIALIZATION_FIXTURE_VALUE_PATH_UNRESOLVED": "测试Fixture中缺少所需字段路径",
+    "RUNTIME_MATERIALIZATION_MEDIA_TYPE_SELECTION_MISSING": "请求体存在多种媒体类型但尚未选择",
+    "RUNTIME_MATERIALIZATION_MEDIA_TYPE_SELECTION_AMBIGUOUS": "请求体媒体类型存在多个已批准候选",
+    "RUNTIME_MATERIALIZATION_GENERATOR_UNSUPPORTED": "运行值生成器类型不受支持",
+    "RUNTIME_MATERIALIZATION_ENTITY_IDENTITY_BINDING_UNRESOLVED": "前后快照尚未绑定同一业务实体标识",
+    "RUNTIME_MATERIALIZATION_TEST_DATA_BINDING_MISSING": "运行实例缺少测试数据绑定",
+    "RUNTIME_MATERIALIZATION_TEST_DATA_BINDING_AMBIGUOUS": "运行实例存在多个测试数据候选绑定",
+    "RUNTIME_MATERIALIZATION_TEST_DATA_BINDING_NOT_APPROVED": "运行实例引用的测试数据尚未批准",
+    "RUNTIME_MATERIALIZATION_TEST_DATA_BINDING_HAS_NO_VALUE_SOURCE": "测试数据绑定没有Fixture、实体、值引用、Literal或Generator来源",
+    "RUNTIME_MATERIALIZATION_CLEANUP_BINDING_MISSING": "写操作缺少唯一补偿操作绑定",
+    "RUNTIME_MATERIALIZATION_CLEANUP_BINDING_AMBIGUOUS": "写操作匹配到多个补偿操作绑定",
+    "RUNTIME_MATERIALIZATION_SAFE_CLEANUP_CAPABILITY_UNRESOLVED": "写操作尚未绑定可验证的安全清理能力",
+    "RUNTIME_MATERIALIZATION_SENSITIVE_FIELD_REQUIRES_CREDENTIAL_REF": "敏感请求字段必须通过凭据引用注入",
+    "RUNTIME_MATERIALIZATION_SOURCE_EVIDENCE_MISSING": "运行实例缺少可追溯的企业资料证据",
+}
+
+
+def materialization_reason_message(value: Any) -> str:
+    code = str(value or "").strip()
+    return RUNTIME_MATERIALIZATION_REASON_MESSAGES.get(
+        code, code.replace("_", " ").strip()
+    )
+
+
+__all__ = [
+    "RUNTIME_MATERIALIZATION_REASON_MESSAGES",
+    "materialization_reason_message",
+]
