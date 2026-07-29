@@ -8,31 +8,26 @@ type NavItem = { to: string; icon: string; label: string; badgeKey?: 'findings' 
 
 const sections: NavSection[] = [
   {
-    label: '成果面',
+    label: '主流程',
     items: [
-      { to: 'dashboard', icon: 'overview', label: '价值总览' },
+      { to: 'dashboard', icon: 'overview', label: '系统总览' },
+      { to: 'campaigns', icon: 'campaign', label: '开始验证' },
       { to: 'findings', icon: 'bug', label: '问题清单', badgeKey: 'findings' },
       { to: 'evidence', icon: 'shield', label: '证据中心' },
-      { to: 'release', icon: 'release', label: '发布门禁' },
     ],
   },
   {
-    label: '企业认知',
+    label: '项目接入',
     items: [
-      { to: 'jobs', icon: 'workflow', label: '系统 Job 与异步任务' },
+      { to: 'settings', icon: 'settings', label: '系统接入与资料' },
     ],
   },
   {
-    label: '执行面',
+    label: '高级视图',
     items: [
-      { to: 'campaigns', icon: 'campaign', label: '运行中心' },
       { to: 'coverage', icon: 'matrix', label: '覆盖矩阵' },
-    ],
-  },
-  {
-    label: '配置',
-    items: [
-      { to: 'settings', icon: 'settings', label: '项目设置' },
+      { to: 'release', icon: 'release', label: '发布门禁' },
+      { to: 'jobs', icon: 'workflow', label: '后台任务' },
     ],
   },
 ];
@@ -70,8 +65,8 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
       : (currentDefectCount || 0) > 0
         ? '可进入整改'
         : (clueCount || 0) > 0
-          ? '补证进行中'
-          : '等待首次检测';
+          ? '后台补证中'
+          : '等待首次验证';
 
   return (
     <>
@@ -85,7 +80,7 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
           <button type="button" className="side-close" onClick={onClose} aria-label="关闭导航">
             ×
           </button>
-          <BrandLogo variant="full" detail="compact" tone="dark" size={38} subtitle="客户成果台" />
+          <BrandLogo variant="full" detail="compact" tone="dark" size={38} subtitle="自主验证台" />
         </div>
 
         <div className="side-project">
@@ -101,7 +96,7 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
               <strong>{currentDefectCount ?? 0}</strong>
             </div>
             <div className="side-project-metric">
-              <span>待补证</span>
+              <span>后台补证</span>
               <strong>{clueCount ?? 0}</strong>
             </div>
           </div>
@@ -139,7 +134,7 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
 
         <div className="side-bottom">
           <b>QualiBug AI</b>
-          AI 驱动 · 真实验证 · 可量化价值
+          少配置 · 自动理解 · 真实验证
         </div>
       </aside>
     </>
