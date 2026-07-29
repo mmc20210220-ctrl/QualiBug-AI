@@ -40,6 +40,7 @@ from .runtime_plan import (
     build_runtime_plans_v1,
     project_runtime_plans_to_asset,
 )
+from .runtime_plan_governance import project_governed_runtime_plans_to_asset
 from .scenario_execution_contract import (
     SCENARIO_EXECUTION_CONTRACT_GATE_SCHEMA,
     SCENARIO_EXECUTION_CONTRACT_SCHEMA,
@@ -92,6 +93,7 @@ __all__ = [
     "project_governed_scenario_execution_contracts",
     "build_runtime_plans_v1",
     "project_runtime_plans_to_asset",
+    "project_governed_runtime_plans_to_asset",
     "enrich_openapi_runtime_contracts",
     "install_interface_runtime_contract_parser",
     "build_enterprise_understanding_model",
