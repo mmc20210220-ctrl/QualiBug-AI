@@ -9,7 +9,12 @@ from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.s
 )
 
 
-def _legacy_probe_asset(*, contract_ready: bool, runtime_ready: bool) -> dict:
+def _legacy_probe_asset(
+    *,
+    contract_ready: bool,
+    runtime_ready: bool,
+    materialization_ready: bool,
+) -> dict:
     return {
         "scenario_planning_gate": {
             "status": "PASS",
@@ -33,6 +38,16 @@ def _legacy_probe_asset(*, contract_ready: bool, runtime_ready: bool) -> dict:
             "status": "PASS" if runtime_ready else "BLOCKED_RUNTIME_PLAN_INCOMPLETE",
             "entry_allowed": runtime_ready,
             "runtime_plan_ready": runtime_ready,
+            "execution_allowed": False,
+        },
+        "runtime_materialization_gate": {
+            "status": (
+                "PASS"
+                if materialization_ready
+                else "BLOCKED_RUNTIME_MATERIALIZATION_INCOMPLETE"
+            ),
+            "entry_allowed": materialization_ready,
+            "runtime_materialization_ready": materialization_ready,
             "execution_allowed": False,
         },
         "interfaces": [
@@ -88,7 +103,11 @@ def _install_guard() -> None:
 def test_execution_contract_gate_blocks_legacy_probe_generation() -> None:
     _install_guard()
     probes = _api._probes_from_asset(
-        _legacy_probe_asset(contract_ready=False, runtime_ready=False),
+        _legacy_probe_asset(
+            contract_ready=False,
+            runtime_ready=False,
+            materialization_ready=False,
+        ),
         10,
     )
     assert probes == []
@@ -97,7 +116,24 @@ def test_execution_contract_gate_blocks_legacy_probe_generation() -> None:
 def test_runtime_plan_gate_blocks_legacy_probe_generation() -> None:
     _install_guard()
     probes = _api._probes_from_asset(
-        _legacy_probe_asset(contract_ready=True, runtime_ready=False),
+        _legacy_probe_asset(
+            contract_ready=True,
+            runtime_ready=False,
+            materialization_ready=False,
+        ),
+        10,
+    )
+    assert probes == []
+
+
+def test_runtime_materialization_gate_blocks_legacy_probe_generation() -> None:
+    _install_guard()
+    probes = _api._probes_from_asset(
+        _legacy_probe_asset(
+            contract_ready=True,
+            runtime_ready=True,
+            materialization_ready=False,
+        ),
         10,
     )
     assert probes == []
@@ -106,16 +142,24 @@ def test_runtime_plan_gate_blocks_legacy_probe_generation() -> None:
 def test_direct_linking_probe_entrypoint_is_also_fail_closed() -> None:
     _install_guard()
     probes = _linking._probes_from_asset(
-        _legacy_probe_asset(contract_ready=True, runtime_ready=False),
+        _legacy_probe_asset(
+            contract_ready=True,
+            runtime_ready=True,
+            materialization_ready=False,
+        ),
         10,
     )
     assert probes == []
 
 
-def test_runtime_plan_gate_pass_preserves_legacy_candidate_probe_compatibility() -> None:
+def test_all_six_gates_preserve_legacy_candidate_probe_compatibility() -> None:
     _install_guard()
     probes = _api._probes_from_asset(
-        _legacy_probe_asset(contract_ready=True, runtime_ready=True),
+        _legacy_probe_asset(
+            contract_ready=True,
+            runtime_ready=True,
+            materialization_ready=True,
+        ),
         10,
     )
     assert len(probes) == 1
