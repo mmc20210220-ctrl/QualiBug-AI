@@ -17,6 +17,12 @@ const sections: NavSection[] = [
     ],
   },
   {
+    label: '企业认知',
+    items: [
+      { to: 'jobs', icon: 'workflow', label: '系统 Job 与异步任务' },
+    ],
+  },
+  {
     label: '执行面',
     items: [
       { to: 'campaigns', icon: 'campaign', label: '运行中心' },
@@ -37,6 +43,7 @@ const icons: Record<string, string> = {
   shield: 'M12 3 20 6v5c0 5-3.3 8.5-8 10-4.7-1.5-8-5-8-10V6l8-3Z',
   campaign: 'M4 5h16v14H4V5Zm3 3h5v3H7V8Zm0 5h10v3H7v-3Zm7-5h3v3h-3V8Z',
   release: 'M6 4h12v16H6z M9 8h6M9 12h6M9 16h3',
+  workflow: 'M4 5h5v4H4V5Zm11 0h5v4h-5V5ZM9 7h6M6.5 9v4m0 0h11m0 0V9M10 15h4v4h-4v-4Z',
   settings: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm8.2 4a7.6 7.6 0 0 0-.13-1.4l2.04-1.58-2-3.46-2.4.97a7.4 7.4 0 0 0-2.42-1.4L14.93 2h-4l-.37 3.13a7.4 7.4 0 0 0-2.42 1.4l-2.4-.97-2 3.46 2.04 1.58A7.6 7.6 0 0 0 5.8 12c0 .48.05.95.13 1.4l-2.04 1.58 2 3.46 2.4-.97a7.4 7.4 0 0 0 2.42 1.4l.37 3.13h4l.37-3.13a7.4 7.4 0 0 0 2.42-1.4l2.4.97 2-3.46-2.04-1.58c.08-.45.13-.92.13-1.4Z',
   matrix: 'M4 4h16v16H4V4Zm4 0v16M4 9h16M4 14h16M12 4v16',
 };
@@ -138,4 +145,3 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
     </>
   );
 }
-
