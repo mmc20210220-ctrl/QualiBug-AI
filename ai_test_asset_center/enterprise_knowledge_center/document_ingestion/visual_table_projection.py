@@ -83,66 +83,96 @@ def _compose(blocks: list[dict[str, Any]], fallback: str) -> str:
 def apply_visual_table_projection_authority(document_ir: dict[str, Any]) -> dict[str, Any]:
     result = dict(document_ir or {})
     blocks = [dict(row) for row in _list(result.get("blocks")) if isinstance(row, dict)]
-    formal_tables = [
+    visual_tables = [
         row
         for row in blocks
         if text(row.get("type")) == "TABLE"
-        and bool(row.get("formal_table_structure"))
-        and len(_bbox(row.get("bbox"))) == 4
+        and (
+            "formal_table_structure" in row
+            or text(_dict(row.get("structure_evidence")).get("provider"))
+            in {"ruled-grid-visual-table-provider", "region-table-test-provider"}
+        )
     ]
-    if not formal_tables:
-        result["blocks"] = blocks
-        return result
+    visual_table_ids = {text(row.get("block_id")) for row in visual_tables if text(row.get("block_id"))}
+    visual_cells = [
+        row
+        for row in blocks
+        if text(row.get("type")) == "TABLE_CELL"
+        and text(row.get("table_block_id")) in visual_table_ids
+    ]
+    formal_tables = [
+        row
+        for row in visual_tables
+        if bool(row.get("formal_table_structure")) and len(_bbox(row.get("bbox"))) == 4
+    ]
 
     superseded: list[dict[str, Any]] = []
-    for block in blocks:
-        if text(block.get("type")) not in {"PARAGRAPH", "LIST_ITEM"}:
-            continue
-        evidence = _dict(block.get("structure_evidence"))
-        if text(evidence.get("coordinate_system")) != "IMAGE_PIXELS_LOCAL_TO_RENDERED_PAGE":
-            continue
-        block_bbox = _bbox(block.get("bbox"))
-        if not block_bbox:
-            continue
-        try:
-            page = int(block.get("page") or 0)
-        except (TypeError, ValueError):
-            continue
-        for table in formal_tables:
+    if formal_tables:
+        for block in blocks:
+            if text(block.get("type")) not in {"PARAGRAPH", "LIST_ITEM"}:
+                continue
+            evidence = _dict(block.get("structure_evidence"))
+            if text(evidence.get("coordinate_system")) != "IMAGE_PIXELS_LOCAL_TO_RENDERED_PAGE":
+                continue
+            block_bbox = _bbox(block.get("bbox"))
+            if not block_bbox:
+                continue
             try:
-                table_page = int(table.get("page") or 0)
+                page = int(block.get("page") or 0)
             except (TypeError, ValueError):
                 continue
-            if table_page != page:
-                continue
-            if not _center_inside(block_bbox, _bbox(table.get("bbox"))):
-                continue
-            block["excluded_from_plain_text_projection"] = True
-            block["superseded_by_table_block_id"] = table.get("block_id")
-            superseded.append(
-                {
-                    "block_id": block.get("block_id"),
-                    "table_block_id": table.get("block_id"),
-                    "page": page,
-                    "reason": "FORMAL_TABLE_CELL_TEXT_HAS_HIGHER_STRUCTURE_AUTHORITY",
-                }
-            )
-            break
+            for table in formal_tables:
+                try:
+                    table_page = int(table.get("page") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if table_page != page:
+                    continue
+                if not _center_inside(block_bbox, _bbox(table.get("bbox"))):
+                    continue
+                block["excluded_from_plain_text_projection"] = True
+                block["superseded_by_table_block_id"] = table.get("block_id")
+                superseded.append(
+                    {
+                        "block_id": block.get("block_id"),
+                        "table_block_id": table.get("block_id"),
+                        "page": page,
+                        "reason": "FORMAL_TABLE_CELL_TEXT_HAS_HIGHER_STRUCTURE_AUTHORITY",
+                    }
+                )
+                break
 
     previous_text = text(result.get("plain_text"))
     result["blocks"] = blocks
     result["plain_text"] = _compose(blocks, previous_text)
+    unresolved_region_count = sum(
+        int(row.get("count") or 0)
+        for row in _list(result.get("unsupported_content"))
+        if isinstance(row, dict)
+        and text(row.get("reason_code") or row.get("kind"))
+        in {
+            "PDF_TABLE_REGION_NOT_CELL_PARSED",
+            "VISUAL_TABLE_STRUCTURE_NOT_RECOVERED",
+        }
+    )
     receipt = {
         "schema": "qualibug.visual-table-text-authority-receipt.v1",
+        "visual_table_count": len(visual_tables),
         "formal_table_count": len(formal_tables),
+        "visual_table_cell_count": len(visual_cells),
+        "unresolved_visual_table_region_count": unresolved_region_count,
         "superseded_visual_text_block_count": len(superseded),
         "superseded_visual_text_blocks": superseded,
-        "table_cells_are_projection_authority": True,
+        "table_cells_are_projection_authority": bool(formal_tables),
         "evidence_blocks_deleted": False,
         "business_semantics_added": False,
     }
     result["visual_table_text_authority_receipt"] = receipt
     structure_receipt = dict(result.get("structure_receipt") or {})
+    structure_receipt["visual_table_count"] = len(visual_tables)
+    structure_receipt["formal_visual_table_count"] = len(formal_tables)
+    structure_receipt["visual_table_cell_count"] = len(visual_cells)
+    structure_receipt["unresolved_visual_table_region_count"] = unresolved_region_count
     structure_receipt["visual_table_text_authority"] = receipt
     result["structure_receipt"] = structure_receipt
     return result
