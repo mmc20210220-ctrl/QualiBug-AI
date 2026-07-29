@@ -90,21 +90,23 @@ def _seed_knowledge(tmp_path: Path) -> dict[str, object]:
         actor=_ACTOR,
     )
     assert result["ok"] is True
-    source = next(
-        row for row in result["created"]
+    return next(
+        row
+        for row in result["created"]
         if row.get("filename") == _SOURCE_FILENAME
     )
-    return source
 
 
 def _replace_ui_source(tmp_path: Path) -> dict[str, object]:
     result = ingest_enterprise_knowledge_documents(
         _PROJECT,
-        [{
-            "text": "# Bulk upload v2\nThe upload contract has changed.",
-            "filename": _SOURCE_FILENAME,
-            "source_type": "uiux_spec",
-        }],
+        [
+            {
+                "text": "# Bulk upload v2\nThe upload contract has changed.",
+                "filename": _SOURCE_FILENAME,
+                "source_type": "uiux_spec",
+            }
+        ],
         root=tmp_path,
         actor=_ACTOR,
     )
@@ -141,6 +143,9 @@ def _payload(source_id: str, binding_ref: str) -> dict[str, object]:
         "start_url": "/customers/upload",
         "fixture_binding_refs": [binding_ref],
         "upload_selector": "input[type=file]",
+        "submission_mode": "click_submit",
+        "submit_selector": "#upload-submit",
+        "cleanup_selector": "#remove-upload",
         "assertion_selector": "#upload-result",
         "assertion_text": "上传成功",
         "rendered_probe_selector": "#upload-result",
@@ -193,10 +198,84 @@ def test_approved_scenario_materializes_semantically_bound_request(tmp_path: Pat
     assert "actor_ref" not in request
     assert request["metadata"]["safe_prerequisite_operation_bound"] is True
     assert request["metadata"]["prerequisite_method"] == "GET"
-    assert request["browser_plan"]["interaction_contract"]["equivalence_scope"] == "rendered_and_persistent_state"
-    assert request["browser_plan"]["steps"][1]["action"] == "set_input_files"
-    assert request["browser_plan"]["steps"][-1]["file_refs"] == []
+    assert request["metadata"]["upload_submission_mode"] == "click_submit"
+    assert request["metadata"]["upload_persistent_compensation_required"] is True
+    assert request["browser_plan"]["interaction_contract"]["equivalence_scope"] == (
+        "rendered_and_persistent_state"
+    )
+    steps = request["browser_plan"]["steps"]
+    assert [(row["phase"], row["action"]) for row in steps] == [
+        ("setup", "goto"),
+        ("treatment", "set_input_files"),
+        ("treatment", "click"),
+        ("assertion", "expect_text"),
+        ("cleanup", "click"),
+        ("cleanup", "set_input_files"),
+    ]
+    assert steps[2]["selector"] == "#upload-submit"
+    assert steps[4]["selector"] == "#remove-upload"
+    assert steps[-1]["file_refs"] == []
     assert materialized["raw_fixture_paths_embedded"] is False
+
+
+def test_auto_submission_omits_submit_click_but_keeps_compensation(
+    tmp_path: Path,
+) -> None:
+    install_upload_fixture_registry_integrity()
+    install_ui_upload_scenario_source_authority()
+    install_ui_upload_scenario_semantic_authority()
+    source = _seed_knowledge(tmp_path)
+    fixture = _fixture(tmp_path)
+    payload = _payload(str(source["source_id"]), str(fixture["binding_ref"]))
+    payload["submission_mode"] = "auto_on_file_selection"
+    payload.pop("submit_selector")
+
+    candidate = register_upload_scenario(
+        _PROJECT, payload, root=tmp_path, actor=_ACTOR
+    )["scenario"]
+    approved = approve_upload_scenario(
+        _PROJECT,
+        scenario_id=str(candidate["scenario_id"]),
+        root=tmp_path,
+        actor=_ACTOR,
+    )["scenario"]
+    request = approved_upload_scenario(
+        _PROJECT, str(approved["scenario_ref"]), root=tmp_path
+    )["ui_execution_request"]
+    steps = request["browser_plan"]["steps"]
+
+    assert request["metadata"]["upload_submission_mode"] == "auto_on_file_selection"
+    assert [(row["phase"], row["action"]) for row in steps] == [
+        ("setup", "goto"),
+        ("treatment", "set_input_files"),
+        ("assertion", "expect_text"),
+        ("cleanup", "click"),
+        ("cleanup", "set_input_files"),
+    ]
+    assert steps[3]["selector"] == "#remove-upload"
+
+
+def test_submission_and_business_cleanup_are_explicitly_required(tmp_path: Path) -> None:
+    install_upload_fixture_registry_integrity()
+    install_ui_upload_scenario_source_authority()
+    install_ui_upload_scenario_semantic_authority()
+    source = _seed_knowledge(tmp_path)
+    fixture = _fixture(tmp_path)
+    base = _payload(str(source["source_id"]), str(fixture["binding_ref"]))
+
+    missing_cleanup = dict(base)
+    missing_cleanup.pop("cleanup_selector")
+    with pytest.raises(ValueError, match="cleanup_selector_required"):
+        register_upload_scenario(
+            _PROJECT, missing_cleanup, root=tmp_path, actor=_ACTOR
+        )
+
+    invalid_auto = dict(base)
+    invalid_auto["submission_mode"] = "auto_on_file_selection"
+    with pytest.raises(ValueError, match="submit_selector_not_allowed_for_auto"):
+        register_upload_scenario(
+            _PROJECT, invalid_auto, root=tmp_path, actor=_ACTOR
+        )
 
 
 def test_runtime_hydration_merges_formal_request_and_fixture_refs(tmp_path: Path) -> None:
@@ -307,7 +386,8 @@ def test_candidate_revocation_cascades_to_approved_copy(tmp_path: Path) -> None:
         include_revoked=True,
     )
     row = next(
-        item for item in listing["scenarios"]
+        item
+        for item in listing["scenarios"]
         if item.get("scenario_id") == approved["scenario_id"]
     )
     assert row["status"] == "revoked"
