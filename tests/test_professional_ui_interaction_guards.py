@@ -62,6 +62,17 @@ def _source_ref() -> dict[str, Any]:
     }
 
 
+def _asset_with_active_source() -> dict[str, Any]:
+    return {
+        "sources": [
+            {
+                "source_id": _source_ref()["source_id"],
+                "status": "active",
+            }
+        ]
+    }
+
+
 def _interaction_plan() -> dict[str, Any]:
     return {
         "execution_mode": "approved_sandbox_write",
@@ -158,7 +169,7 @@ def test_direct_scan_accepts_complete_governed_interaction_contract() -> None:
     _install_complete_ui_contract_chain()
 
     asset, receipt = scan_overlay.overlay_scan_ui_contracts(
-        {},
+        _asset_with_active_source(),
         {"ui_execution_requests": [_scan_request()]},
     )
 
@@ -180,7 +191,7 @@ def test_direct_scan_rejects_mode_drift_before_behavior_ir() -> None:
     request["browser_plan"]["execution_mode"] = "safe_read_only"
 
     asset, receipt = scan_overlay.overlay_scan_ui_contracts(
-        {},
+        _asset_with_active_source(),
         {"ui_execution_requests": [request]},
     )
 
@@ -204,7 +215,7 @@ def test_direct_scan_rejects_missing_persistent_cleanup_probe() -> None:
     ]
 
     asset, receipt = scan_overlay.overlay_scan_ui_contracts(
-        {},
+        _asset_with_active_source(),
         {"ui_execution_requests": [request]},
     )
 

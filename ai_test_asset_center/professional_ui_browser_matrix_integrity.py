@@ -34,7 +34,7 @@ def install_professional_ui_browser_matrix_integrity() -> None:
         return
     original_context = getattr(
         _matrix._MatrixBrowser,
-        ORIGINAL_CONTEXT,
+        _ORIGINAL_CONTEXT,
         _matrix._MatrixBrowser.new_context,
     )
     # This must capture the CURRENT adapter, which is the matrix-aware wrapper
@@ -42,11 +42,11 @@ def install_professional_ui_browser_matrix_integrity() -> None:
     # pre-matrix snapshot would silently restore the single-browser path.
     original_adapter = getattr(
         _adapter,
-        ORIGINAL_ADAPTER,
+        _ORIGINAL_ADAPTER,
         _adapter._playwright_request_result,
     )
-    setattr(_matrix._MatrixBrowser, ORIGINAL_CONTEXT, original_context)
-    setattr(_adapter, ORIGINAL_ADAPTER, original_adapter)
+    setattr(_matrix._MatrixBrowser, _ORIGINAL_CONTEXT, original_context)
+    setattr(_adapter, _ORIGINAL_ADAPTER, original_adapter)
 
     def new_context_with_engine_compatibility(
         self: Any,

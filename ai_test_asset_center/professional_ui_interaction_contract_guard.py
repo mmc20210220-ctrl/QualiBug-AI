@@ -33,10 +33,10 @@ def install_controlled_ui_interaction_contract_guard() -> None:
         return
     original = getattr(
         _interaction,
-        ORIGINAL_WRITE_VALIDATOR,
+        _ORIGINAL_WRITE_VALIDATOR,
         _interaction._validate_write_plan,
     )
-    setattr(_interaction, ORIGINAL_WRITE_VALIDATOR, original)
+    setattr(_interaction, _ORIGINAL_WRITE_VALIDATOR, original)
 
     def validate_guarded_write_plan(
         plan: dict[str, Any],

@@ -495,23 +495,6 @@ def _permission_action_decisions(
     return list(dict.fromkeys(decisions))
 
 
-def _rule_polarity_bucket(rule: dict[str, Any]) -> str:
-    """Return positive/negative from source-backed modality/polarity only."""
-    modality = str(rule.get("modality") or "").strip().upper()
-    polarity = str(rule.get("polarity") or "").strip().lower()
-    frame = rule.get("semantic_frame") or rule.get("business_semantic_frame") or {}
-    if isinstance(frame, dict):
-        modality = modality or str(frame.get("modality") or "").strip().upper()
-        polarity = polarity or str(frame.get("polarity") or "").strip().lower()
-    if modality in {"PROHIBITED", "MUST_NOT"} or polarity in {"negative"}:
-        return "negative"
-    if modality in {"REQUIRED", "EXCLUSIVE", "MUST", "MAY", "ONLY_IF"} or polarity in {
-        "positive"
-    }:
-        return "positive"
-    return ""
-
-
 def _detect_cross_document_conflicts(
     field_dictionary: list[dict[str, Any]],
     rules: list[dict[str, Any]],
@@ -693,83 +676,9 @@ def _detect_cross_document_conflicts(
         conflict["detail"] = conflict["reason"]
         conflicts.append(conflict)
 
-    # 3. Rule contradictions require opposing modality/polarity — token overlap alone
-    # is never enough for an authority-eligible conflict.
-    rules_by_risk: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for rule in rules:
-        risk_type = str(rule.get("risk_type") or rule.get("kind") or "").lower()
-        if risk_type:
-            rules_by_risk[risk_type].append(rule)
-    for risk_type, group in rules_by_risk.items():
-        if len(group) < 2:
-            continue
-        for i in range(len(group)):
-            for j in range(i + 1, min(i + 5, len(group))):
-                a, b = group[i], group[j]
-                src_a = str(a.get("source_id") or "").strip()
-                src_b = str(b.get("source_id") or "").strip()
-                if not src_a or not src_b or src_a == src_b:
-                    continue
-                bucket_a = _rule_polarity_bucket(a)
-                bucket_b = _rule_polarity_bucket(b)
-                if not bucket_a or not bucket_b or bucket_a == bucket_b:
-                    continue
-                tokens_a = {str(t).lower() for t in (a.get("tokens") or []) if str(t).strip()}
-                tokens_b = {str(t).lower() for t in (b.get("tokens") or []) if str(t).strip()}
-                overlap = tokens_a & tokens_b
-                if len(overlap) < 2:
-                    continue
-                stmt_a = str(a.get("statement") or a.get("expected") or "")[:120]
-                stmt_b = str(b.get("statement") or b.get("expected") or "")[:120]
-                if not stmt_a or not stmt_b or _norm(stmt_a) == _norm(stmt_b):
-                    continue
-                entity = f"{risk_type}:{','.join(sorted(overlap)[:3])}"
-                left = _technical_declaration_fact(
-                    kind="TECHNICAL_RULE_DECLARATION",
-                    source_id=src_a,
-                    entity=entity,
-                    statement=stmt_a,
-                    locator=str(a.get("rule_id") or a.get("source_locator") or ""),
-                    details={
-                        "risk_type": risk_type,
-                        "rule_id": a.get("rule_id"),
-                        "modality": a.get("modality"),
-                        "polarity": bucket_a,
-                    },
-                    quote=stmt_a,
-                )
-                right = _technical_declaration_fact(
-                    kind="TECHNICAL_RULE_DECLARATION",
-                    source_id=src_b,
-                    entity=entity,
-                    statement=stmt_b,
-                    locator=str(b.get("rule_id") or b.get("source_locator") or ""),
-                    details={
-                        "risk_type": risk_type,
-                        "rule_id": b.get("rule_id"),
-                        "modality": b.get("modality"),
-                        "polarity": bucket_b,
-                    },
-                    quote=stmt_b,
-                )
-                conflict = make_authority_eligible_conflict(
-                    "RULE_CONTRADICTION",
-                    [left, right],
-                    (
-                        f"Rules about '{risk_type}' from different sources make opposing "
-                        f"claims ({bucket_a} vs {bucket_b}): [{stmt_a}] vs [{stmt_b}]"
-                    ),
-                    entity=entity,
-                )
-                conflict["conflict_type"] = "rule_contradiction"
-                conflict["source_a"] = src_a
-                conflict["source_b"] = src_b
-                conflict["detail"] = conflict["reason"]
-                conflicts.append(conflict)
-                break
-            else:
-                continue
-            break
+    # Prose rule overlap stays diagnostic-only. This inventory surface has no
+    # exact source-backed rule identity or accepted semantic link, so it cannot
+    # create a formal contradiction or authority target.
 
     return conflicts[:50]
 

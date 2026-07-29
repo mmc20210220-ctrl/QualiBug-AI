@@ -488,6 +488,76 @@ def test_permission_action_without_explicit_effect_is_not_a_conflict() -> None:
     assert conflicts == []
 
 
+def test_field_conflict_retains_every_source_declaration() -> None:
+    from ai_test_asset_center.enterprise_knowledge_center._api import (
+        _detect_cross_document_conflicts,
+    )
+
+    conflicts = _detect_cross_document_conflicts(
+        [
+            {
+                "table": "orders",
+                "field": "warehouse_id",
+                "required": True,
+                "source_id": "a.sql",
+            },
+            {
+                "table": "orders",
+                "field": "warehouse_id",
+                "required": True,
+                "source_id": "b.sql",
+            },
+            {
+                "table": "orders",
+                "field": "warehouse_id",
+                "required": False,
+                "source_id": "c.yaml",
+            },
+        ],
+        [],
+        [],
+        [],
+    )
+
+    assert len(conflicts) == 1
+    assert len(conflicts[0]["facts"]) == 3
+    assert {row["source_id"] for row in conflicts[0]["facts"]} == {
+        "a.sql",
+        "b.sql",
+        "c.yaml",
+    }
+
+
+def test_permission_decisions_for_different_actions_are_not_conflicting() -> None:
+    from ai_test_asset_center.enterprise_knowledge_center._api import (
+        _detect_cross_document_conflicts,
+    )
+
+    conflicts = _detect_cross_document_conflicts(
+        [],
+        [],
+        [],
+        [
+            {
+                "role": "operator",
+                "resource": "order",
+                "decision": "allow",
+                "actions": ["read"],
+                "source_id": "a.md",
+            },
+            {
+                "role": "operator",
+                "resource": "order",
+                "decision": "deny",
+                "actions": ["write"],
+                "source_id": "b.md",
+            },
+        ],
+    )
+
+    assert conflicts == []
+
+
 def test_openapi_description_only_multi_unit_binds_with_context() -> None:
     from ai_test_asset_center.enterprise_knowledge_center._chinese_business_comprehension import (
         project_openapi_interface_chinese_spans,
