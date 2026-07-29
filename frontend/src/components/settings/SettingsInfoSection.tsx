@@ -2,6 +2,7 @@ import { SettingsAccessibilitySection } from './SettingsAccessibilitySection';
 import { SettingsBrowserMatrixSection } from './SettingsBrowserMatrixSection';
 import { SettingsComplexInteractionSection } from './SettingsComplexInteractionSection';
 import { SettingsUploadFixtureSection } from './SettingsUploadFixtureSection';
+import { SettingsUploadScenarioSection } from './SettingsUploadScenarioSection';
 
 type SettingsInfoSectionProps = {
   productVersion: string;
@@ -36,6 +37,7 @@ export function SettingsInfoSection({ productVersion, serviceStatus, auditStatus
       <SettingsBrowserMatrixSection />
       <SettingsAccessibilitySection />
       <SettingsUploadFixtureSection />
+      <SettingsUploadScenarioSection />
       <SettingsComplexInteractionSection />
     </>
   );
