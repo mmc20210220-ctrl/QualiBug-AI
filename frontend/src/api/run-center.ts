@@ -35,6 +35,18 @@ function normalizedIdentities(
   return result;
 }
 
+function scenarioDraft(project: string): string[] {
+  try {
+    const raw = globalThis.localStorage?.getItem(`qualibug.run.ui-upload-scenarios.${project}`) || '[]';
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === 'string')
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 function responseError(status: number, payload: unknown): Error {
   const record = payload && typeof payload === 'object' && !Array.isArray(payload)
     ? payload as Record<string, unknown>
@@ -60,7 +72,7 @@ export async function runV12ScanFromRunCenter(
     20,
   );
   const scenarioIds = normalizedIdentities(
-    options.ui_upload_scenario_ids,
+    options.ui_upload_scenario_ids ?? scenarioDraft(project),
     /^(?:uisr|uisa)_[a-f0-9]{20}$/,
     '上传场景引用',
     20,
