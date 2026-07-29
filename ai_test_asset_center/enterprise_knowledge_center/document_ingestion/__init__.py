@@ -49,6 +49,18 @@ from .visual_table_continuation import (
     apply_visual_table_continuations,
 )
 from .visual_table_provider_gate import GeometryFormalEnforcingVisualTableProvider
+from .visual_table_semantic_candidates import (
+    TABLE_SEMANTIC_CANDIDATE_SCHEMA,
+    apply_visual_table_semantic_candidates,
+)
+from .visual_table_semantic_normalizer import (
+    SEMANTIC_NORMALIZATION_SCHEMA,
+    normalize_visual_table_semantic_candidates,
+)
+from .visual_table_semantic_validation import (
+    SEMANTIC_VALIDATION_SCHEMA,
+    validate_visual_table_semantic_candidates,
+)
 
 __all__ = [
     "AdapterMatch",
@@ -88,6 +100,12 @@ __all__ = [
     "VisualTableSupplementalAdapter",
     "TABLE_CONTINUATION_SCHEMA",
     "apply_visual_table_continuations",
+    "TABLE_SEMANTIC_CANDIDATE_SCHEMA",
+    "apply_visual_table_semantic_candidates",
+    "SEMANTIC_NORMALIZATION_SCHEMA",
+    "normalize_visual_table_semantic_candidates",
+    "SEMANTIC_VALIDATION_SCHEMA",
+    "validate_visual_table_semantic_candidates",
     "DocumentAdapterRegistry",
     "build_default_registry",
     "plan_document_parsing",
