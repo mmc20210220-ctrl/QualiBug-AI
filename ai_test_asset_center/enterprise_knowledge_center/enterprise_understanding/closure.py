@@ -10,7 +10,9 @@ from typing import Any
 
 from .behavior_ir_logic_gate import build_business_behavior_ir_v1
 from .gate import assess_understanding_model
-from .implementation_binding import build_behavior_implementation_bindings
+from .implementation_binding_governance import (
+    build_governed_behavior_implementation_bindings,
+)
 from .schema import as_dict, as_list, dedupe_evidence, new_unknown, text
 
 
@@ -131,7 +133,7 @@ def apply_minimum_understanding_closure(
         implementation_unknowns,
         implementation_conflicts,
         implementation_gate,
-    ) = build_behavior_implementation_bindings(asset, behaviors)
+    ) = build_governed_behavior_implementation_bindings(asset, behaviors)
     model["behavior_implementation_bindings"] = implementation_bindings
     model["implementation_binding_unknowns"] = implementation_unknowns
     model["implementation_binding_conflicts"] = implementation_conflicts
