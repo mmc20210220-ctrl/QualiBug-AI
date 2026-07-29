@@ -13,6 +13,14 @@ export type UploadScenarioRecord = {
   contract_id?: string;
   contract_sha256?: string;
   fixture_binding_refs?: string[];
+  submission_mode?: 'click_submit' | 'auto_on_file_selection' | string;
+  business_cleanup_required?: boolean;
+  cleanup_action?: string;
+  safe_prerequisite_method?: string;
+  actor_role?: string;
+  raw_selectors_included?: boolean;
+  raw_assertion_text_included?: boolean;
+  raw_probe_urls_included?: boolean;
   created_at_utc?: string;
   created_by?: string;
   approved_at_utc?: string;
