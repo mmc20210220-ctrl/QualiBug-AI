@@ -185,7 +185,7 @@ def test_approved_upload_fixture_executes_and_cleanup_restores_state(
                     "phase": "assertion",
                     "action": "expect_text",
                     "selector": "#selected",
-                    "expected": f"selected:{approved_filename}",
+                    "text": f"selected:{approved_filename}",
                     "match": "equals",
                 },
                 {
