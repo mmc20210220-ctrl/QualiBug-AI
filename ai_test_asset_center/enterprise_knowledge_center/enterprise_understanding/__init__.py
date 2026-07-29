@@ -75,6 +75,9 @@ from .schema import *  # noqa: F401,F403
 # Additive parser metadata only. This wrapper stores field locations, response contracts and
 # security scheme names; it never retains request examples, secret values or credentials.
 install_interface_runtime_contract_parser()
+# All materialization entrypoints, including direct low-level builder calls, must scrub an
+# unapproved runtime value before any non-sendable draft is assembled.
+install_secure_runtime_value_resolver()
 
 __all__ = [
     "BEHAVIOR_SCHEMA",
