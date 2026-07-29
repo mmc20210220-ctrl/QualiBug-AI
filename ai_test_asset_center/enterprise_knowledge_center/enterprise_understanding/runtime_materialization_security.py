@@ -11,6 +11,7 @@ from typing import Any
 
 from . import runtime_materialization as _base
 from . import runtime_materialization_governance as _governance
+from .runtime_materialization_messages import materialization_reason_message
 from .schema import as_dict, as_list, stable_id, text
 
 
@@ -111,6 +112,7 @@ def _materialization_unknown(
         ),
         "kind": reason,
         "reason_code": reason,
+        "message": materialization_reason_message(reason),
         "runtime_materialization_ref": materialization_id,
         "blocks_runtime_materialization": True,
         "execution_allowed": False,
@@ -125,6 +127,17 @@ def _binding_has_value_source(binding: dict[str, Any]) -> bool:
         return _base._safe_literal(binding.get("value"))
     generator = as_dict(binding.get("generator"))
     return bool(text(generator.get("kind") or binding.get("generator_kind")))
+
+
+def _attach_messages(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for raw in rows:
+        row = dict(raw)
+        reason = text(row.get("reason_code") or row.get("kind"))
+        if reason and not text(row.get("message")):
+            row["message"] = materialization_reason_message(reason)
+        result.append(row)
+    return result
 
 
 def _post_audit(asset: dict[str, Any], model: dict[str, Any]) -> None:
@@ -163,7 +176,7 @@ def _post_audit(asset: dict[str, Any], model: dict[str, Any]) -> None:
     all_unknowns = list(
         {
             text(row.get("unknown_id")): row
-            for row in unknowns
+            for row in _attach_messages(unknowns)
             if text(row.get("unknown_id"))
         }.values()
     )
@@ -186,6 +199,7 @@ def project_secure_runtime_materializations_to_asset(
             "runtime_materialization_required_null_values_block": True,
             "runtime_materialization_test_data_requires_actual_value_source": True,
             "runtime_materialization_environment_identity_required": True,
+            "runtime_materialization_unknowns_include_readable_messages": True,
         }
     )
     asset["governance"] = governance
