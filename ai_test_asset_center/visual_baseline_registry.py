@@ -9,7 +9,8 @@ semantics through an early-captured function reference.
 The private-pilot service imports this surface while installing its governed UI
 routes. That same safe bootstrap point installs additive visual, browser-matrix,
 accessibility and complex-interaction health metadata without launching or
-downloading a browser.
+downloading a browser. It also installs the direct-scan source registry guard
+before discovery captures ``overlay_scan_ui_contracts`` by value.
 """
 from __future__ import annotations
 
@@ -32,9 +33,13 @@ from .private_pilot_complex_interaction_health_patch import (
 from .private_pilot_visual_baseline_health_patch import (
     install_visual_baseline_health_patch,
 )
+from .scan_ui_source_registry_guard import (
+    install_scan_ui_source_registry_guard,
+)
 
 install_visual_baseline_registry_guard()
 install_visual_baseline_registry_projection_guard()
+install_scan_ui_source_registry_guard()
 install_visual_baseline_health_patch()
 install_browser_matrix_health_patch()
 install_accessibility_health_patch()
