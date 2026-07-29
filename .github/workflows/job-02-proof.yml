@@ -1,0 +1,196 @@
+name: JOB-02 Proof
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "ai_test_asset_center/job_*.py"
+      - "ai_test_asset_center/source_job_*.py"
+      - "ai_test_asset_center/discovery_runtime_semantic_binding.py"
+      - "ai_test_asset_center/adaptive_discovery_planner.py"
+      - "ai_test_asset_center/enterprise_knowledge_center/**"
+      - "tests/test_job_*.py"
+      - ".github/workflows/job-02-proof.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: job-02-proof-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  proof:
+    name: Job planning and compilation proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout frozen revision
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install QualiBug and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Freeze repository identity
+        run: |
+          mkdir -p artifacts/job_02_proof
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          def git(*args: str) -> str:
+              return subprocess.check_output(["git", *args], text=True).strip()
+
+          payload = {
+              "schema": "qualibug.job-02-freeze-manifest.v1",
+              "branch": os.environ.get("GITHUB_REF_NAME", ""),
+              "commit_sha": git("rev-parse", "HEAD"),
+              "tree_hash": git("rev-parse", "HEAD^{tree}"),
+              "worktree_clean_before_proof": not bool(git("status", "--porcelain")),
+              "workflow_run_id": os.environ.get("GITHUB_RUN_ID", ""),
+              "workflow_attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
+          }
+          Path("artifacts/job_02_proof/freeze_manifest.json").write_text(
+              json.dumps(payload, ensure_ascii=False, indent=2),
+              encoding="utf-8",
+          )
+          if not payload["worktree_clean_before_proof"]:
+              raise SystemExit("repository_not_clean_before_job_02_proof")
+          PY
+
+      - name: Inventory Job tests
+        run: |
+          find tests -type f -name 'test_*.py' | sort | grep -Ei 'job|async' \
+            > artifacts/job_02_proof/job_test_inventory.txt || true
+          cat artifacts/job_02_proof/job_test_inventory.txt
+
+      - name: Run focused formal Job proof tests
+        id: formal_job_tests
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q \
+            tests/test_job_formal_compile_lineage.py \
+            tests/test_job_process_planner.py \
+            tests/test_job_scenario_gate_compat.py \
+            --junitxml=artifacts/job_02_proof/formal_job_tests.xml \
+            2>&1 | tee artifacts/job_02_proof/formal_job_tests.log
+
+      - name: Run all Job and async Job tests
+        id: job_tests
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q tests \
+            -k "job or async_job or source_job" \
+            --junitxml=artifacts/job_02_proof/job_tests.xml \
+            2>&1 | tee artifacts/job_02_proof/job_tests.log
+
+      - name: Run representative non-Job regression
+        id: non_job_tests
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q tests \
+            -k "(authorization or validation or state_transition or conservation or source_event or performance or formal_ui) and not (job or async_job or source_job)" \
+            --junitxml=artifacts/job_02_proof/non_job_regression.xml \
+            2>&1 | tee artifacts/job_02_proof/non_job_regression.log
+
+      - name: Build immutable proof summary
+        if: always()
+        env:
+          FORMAL_JOB_OUTCOME: ${{ steps.formal_job_tests.outcome }}
+          JOB_TEST_OUTCOME: ${{ steps.job_tests.outcome }}
+          NON_JOB_OUTCOME: ${{ steps.non_job_tests.outcome }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          root = Path("artifacts/job_02_proof")
+
+          def junit(name: str) -> dict:
+              path = root / name
+              if not path.exists():
+                  return {"present": False, "tests": 0, "failures": 0, "errors": 0, "skipped": 0}
+              xml = ET.parse(path).getroot()
+              suites = [xml] if xml.tag == "testsuite" else list(xml.findall("testsuite"))
+              return {
+                  "present": True,
+                  "tests": sum(int(s.attrib.get("tests", 0)) for s in suites),
+                  "failures": sum(int(s.attrib.get("failures", 0)) for s in suites),
+                  "errors": sum(int(s.attrib.get("errors", 0)) for s in suites),
+                  "skipped": sum(int(s.attrib.get("skipped", 0)) for s in suites),
+                  "time_seconds": sum(float(s.attrib.get("time", 0.0)) for s in suites),
+              }
+
+          freeze = json.loads((root / "freeze_manifest.json").read_text(encoding="utf-8"))
+          summary = {
+              "schema": "qualibug.job-02-proof-summary.v1",
+              "freeze": freeze,
+              "outcomes": {
+                  "formal_job_tests": os.environ.get("FORMAL_JOB_OUTCOME", "unknown"),
+                  "all_job_tests": os.environ.get("JOB_TEST_OUTCOME", "unknown"),
+                  "representative_non_job_regression": os.environ.get("NON_JOB_OUTCOME", "unknown"),
+              },
+              "junit": {
+                  "formal_job_tests": junit("formal_job_tests.xml"),
+                  "all_job_tests": junit("job_tests.xml"),
+                  "representative_non_job_regression": junit("non_job_regression.xml"),
+              },
+              "claim_boundary": {
+                  "job_asset_to_compiled_experiment": "TESTED_BY_FORMAL_JOB_TESTS",
+                  "post_api_v1_scan": "NOT_MEASURED_BY_THIS_WORKFLOW",
+                  "real_job_platform_runtime": "NOT_MEASURED",
+                  "job_true_completed": "NOT_MEASURED",
+                  "job_bug_discovery": "NOT_MEASURED",
+              },
+          }
+          summary["passed"] = all(
+              value == "success" for value in summary["outcomes"].values()
+          )
+          (root / "proof_summary.json").write_text(
+              json.dumps(summary, ensure_ascii=False, indent=2),
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Upload JOB-02 proof artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: job-02-proof-${{ github.sha }}
+          path: artifacts/job_02_proof
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Enforce proof gate
+        if: always()
+        env:
+          FORMAL_JOB_OUTCOME: ${{ steps.formal_job_tests.outcome }}
+          JOB_TEST_OUTCOME: ${{ steps.job_tests.outcome }}
+          NON_JOB_OUTCOME: ${{ steps.non_job_tests.outcome }}
+        run: |
+          test "$FORMAL_JOB_OUTCOME" = "success"
+          test "$JOB_TEST_OUTCOME" = "success"
+          test "$NON_JOB_OUTCOME" = "success"
