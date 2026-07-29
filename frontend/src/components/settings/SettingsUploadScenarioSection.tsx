@@ -52,17 +52,20 @@ function approvedFixtures(rows: UploadFixtureRecord[]): UploadFixtureRecord[] {
 }
 
 function activeSources(asset: JsonRecord): SourceOption[] {
-  return asArray(asset.sources || asset.source_inventory).map((value) => {
+  const output: SourceOption[] = [];
+  for (const value of asArray(asset.sources || asset.source_inventory)) {
     const row = asRecord(value);
+    const status = text(row.status) || 'active';
     const sourceId = text(row.source_id) || text(row.id);
+    if (status !== 'active' || !sourceId) continue;
     const filename = text(row.filename) || text(row.original_name) || text(row.name);
-    return {
+    output.push({
       source_id: sourceId,
       label: filename || sourceId,
       source_type: text(row.source_type) || text(row.type),
-      status: text(row.status) || 'active',
-    };
-  }).filter((row) => row.source_id && row.status === 'active').map(({ status: _status, ...row }) => row);
+    });
+  }
+  return output;
 }
 
 function safeOperations(asset: JsonRecord): OperationOption[] {
