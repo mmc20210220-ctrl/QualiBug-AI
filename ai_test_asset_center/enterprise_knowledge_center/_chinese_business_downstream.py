@@ -15,6 +15,7 @@ DOWNSTREAM_GATE_SCHEMA = "qualibug.chinese-business-downstream-gate.v1"
 _READY = "READY_AUTHORITATIVE_OPERATION_BOUND"
 _BLOCKED = "BLOCKED_NO_AUTHORITATIVE_OPERATION_LINK"
 _IMPLEMENTATION_BLOCKED = "BLOCKED_IMPLEMENTATION_BINDING_GATE"
+_UPSTREAM_BLOCKED = "BLOCKED_UPSTREAM_BUSINESS_COMPREHENSION_GATE"
 
 
 def _text(value: Any) -> str:
@@ -39,6 +40,78 @@ def _promoted_chinese_rules(asset: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def _ensure_final_scenario_planning_gate(asset: dict[str, Any]) -> dict[str, Any]:
+    """Build the generic final gate when the installed chain has not projected it yet."""
+    from .enterprise_understanding.implementation_binding_projection import (
+        SCENARIO_PLANNING_GATE_SCHEMA,
+        project_final_scenario_planning_gate,
+    )
+
+    model = _dict(asset.get("enterprise_understanding_model"))
+    if model:
+        project_final_scenario_planning_gate(asset, model)
+        return _dict(asset.get("scenario_planning_gate"))
+
+    existing = _dict(asset.get("scenario_planning_gate"))
+    if _text(existing.get("schema")) == SCENARIO_PLANNING_GATE_SCHEMA:
+        return existing
+
+    semantic_gate = _dict(asset.get("enterprise_comprehension_gate"))
+    implementation_gate = _dict(asset.get("implementation_binding_gate"))
+    semantic_ready = bool(semantic_gate.get("entry_allowed", True))
+    implementation_status = _text(implementation_gate.get("status")) or "NOT_BUILT"
+    implementation_ready = bool(
+        implementation_gate.get("scenario_planning_allowed")
+        or implementation_gate.get("entry_allowed")
+    )
+    if not semantic_ready:
+        status = "BLOCKED_SCENARIO_PLANNING_SEMANTIC_GATE"
+    elif implementation_status.startswith("BLOCKED"):
+        status = implementation_status
+    elif not implementation_ready:
+        status = "PARTIAL_SCENARIO_PLANNING_IMPLEMENTATION_BINDING"
+    else:
+        status = "PASS"
+    ready = status == "PASS"
+    gate = {
+        "schema": SCENARIO_PLANNING_GATE_SCHEMA,
+        "status": status,
+        "entry_allowed": ready,
+        "scenario_planning_allowed": ready,
+        "execution_allowed": False,
+        "semantic_understanding_status": _text(semantic_gate.get("status")) or "UNKNOWN",
+        "semantic_understanding_ready": semantic_ready,
+        "implementation_binding_status": implementation_status,
+        "implementation_binding_ready": implementation_ready,
+        "implementation_binding_metrics": dict(
+            _dict(implementation_gate.get("metrics"))
+        ),
+        "blocking_reasons": [
+            reason
+            for reason in (
+                "SEMANTIC_UNDERSTANDING_NOT_CLOSED" if not semantic_ready else "",
+                (
+                    "IMPLEMENTATION_BINDING_NOT_CLOSED"
+                    if semantic_ready and not implementation_ready
+                    else ""
+                ),
+                (
+                    "IMPLEMENTATION_BINDING_CONFLICT"
+                    if implementation_status.startswith("BLOCKED")
+                    else ""
+                ),
+            )
+            if reason
+        ],
+        "request_payload_compiled": False,
+        "expected_assertion_compiled": False,
+        "runtime_environment_validated": False,
+        "quality_claim": "SCENARIO_PLANNING_ENTRY_CLOSURE_NOT_RUNTIME_EXECUTABILITY",
+    }
+    asset["scenario_planning_gate"] = gate
+    return gate
+
+
 def refresh_chinese_business_downstream(
     asset: dict[str, Any],
     *,
@@ -47,6 +120,7 @@ def refresh_chinese_business_downstream(
     """Bind accepted Chinese rules and rebuild downstream artifacts safely."""
     from . import _api
 
+    base_scenario_gate = _ensure_final_scenario_planning_gate(asset)
     rules = [dict(row) for row in _list(asset.get("rule_library")) if isinstance(row, dict)]
     promoted = _promoted_chinese_rules(asset)
     interfaces = [dict(row) for row in _list(asset.get("interfaces")) if isinstance(row, dict)]
@@ -102,30 +176,32 @@ def refresh_chinese_business_downstream(
     implementation_gate = _dict(asset.get("implementation_binding_gate"))
     implementation_gate_status = _text(implementation_gate.get("status")) or "NOT_BUILT"
     implementation_gate_present = bool(implementation_gate)
+    semantic_ready = bool(base_scenario_gate.get("semantic_understanding_ready", True))
+    implementation_ready = bool(base_scenario_gate.get("implementation_binding_ready"))
+    base_scenario_ready = bool(base_scenario_gate.get("scenario_planning_allowed"))
     implementation_required = bool(promoted)
-    implementation_ready = (
-        not implementation_required
-        or (
-            implementation_gate_present
-            and bool(implementation_gate.get("scenario_planning_allowed"))
-        )
-    )
-    implementation_blocked_rule_ids: set[str] = set()
-    if implementation_required and not implementation_ready:
+
+    if promoted and not base_scenario_ready:
+        if not semantic_ready:
+            blocking_status = _UPSTREAM_BLOCKED
+        elif not implementation_ready:
+            blocking_status = _IMPLEMENTATION_BLOCKED
+        else:
+            blocking_status = _text(base_scenario_gate.get("status")) or _IMPLEMENTATION_BLOCKED
         for rule in rules:
             rule_id = _text(rule.get("rule_id"))
             if rule_id not in ready_rule_ids:
                 continue
             ready_rule_ids.discard(rule_id)
-            implementation_blocked_rule_ids.add(rule_id)
-            rule["downstream_binding_status"] = _IMPLEMENTATION_BLOCKED
+            rule["downstream_binding_status"] = blocking_status
             blocked_rules.append(
                 {
                     "rule_id": rule_id,
                     "source_id": rule.get("source_id"),
                     "source_locator": rule.get("source_locator"),
                     "statement": rule.get("statement"),
-                    "reason": _IMPLEMENTATION_BLOCKED,
+                    "reason": blocking_status,
+                    "scenario_planning_status": base_scenario_gate.get("status"),
                     "implementation_binding_status": implementation_gate_status,
                 }
             )
@@ -234,6 +310,7 @@ def refresh_chinese_business_downstream(
         if rule_id in ready_rule_ids:
             lineage["business_comprehension_gate"] = _READY
             lineage["implementation_binding_gate"] = implementation_gate_status
+            lineage["scenario_planning_gate"] = base_scenario_gate.get("status")
             lineage["fact_authority"] = "original_chinese_source_span"
             probe["knowledge_lineage"] = lineage
 
@@ -267,6 +344,9 @@ def refresh_chinese_business_downstream(
                         "implementation_binding_gate": lineage.get(
                             "implementation_binding_gate", "NOT_APPLICABLE"
                         ),
+                        "scenario_planning_gate": lineage.get(
+                            "scenario_planning_gate", "NOT_APPLICABLE"
+                        ),
                     },
                 }
             )
@@ -277,11 +357,15 @@ def refresh_chinese_business_downstream(
 
     source_gate = _dict(asset.get("enterprise_comprehension_gate"))
     source_ready = bool(source_gate.get("entry_allowed", True))
-    downstream_ready = source_ready and not blocked_rules and implementation_ready
+    downstream_ready = source_ready and base_scenario_ready and not blocked_rules
     if not source_ready:
-        downstream_status = "BLOCKED_UPSTREAM_BUSINESS_COMPREHENSION_GATE"
-    elif implementation_required and not implementation_ready:
-        downstream_status = _IMPLEMENTATION_BLOCKED
+        downstream_status = _UPSTREAM_BLOCKED
+    elif not base_scenario_ready:
+        downstream_status = (
+            _IMPLEMENTATION_BLOCKED
+            if semantic_ready and not implementation_ready
+            else _text(base_scenario_gate.get("status")) or _UPSTREAM_BLOCKED
+        )
     elif blocked_rules:
         downstream_status = "BLOCKED_BUSINESS_COMPREHENSION_DOWNSTREAM_UNBOUND"
     else:
@@ -300,9 +384,10 @@ def refresh_chinese_business_downstream(
         "implementation_binding_gate_present": implementation_gate_present,
         "implementation_binding_status": implementation_gate_status,
         "implementation_binding_ready": implementation_ready,
+        "base_scenario_planning_status": base_scenario_gate.get("status"),
         "binding_contract": (
-            "accepted Chinese facts may create scenario assets only after an authoritative "
-            "rule-to-interface relation and the independent implementation binding gate pass"
+            "accepted Chinese facts may create scenario assets only after authoritative "
+            "rule-to-interface binding and the generic scenario-planning gate pass"
         ),
         "arbitrary_endpoint_fallback_allowed": False,
         "semantic_understanding_gate_is_not_rewritten": True,
@@ -311,7 +396,25 @@ def refresh_chinese_business_downstream(
     source_gate["downstream"] = downstream_gate
     source_gate["scenario_planning_allowed"] = downstream_ready
     asset["enterprise_comprehension_gate"] = source_gate
-    asset["scenario_planning_gate"] = downstream_gate
+    asset["chinese_rule_downstream_gate"] = downstream_gate
+
+    final_scenario_gate = dict(base_scenario_gate)
+    final_scenario_gate["chinese_rule_downstream_gate"] = downstream_gate
+    final_scenario_gate["chinese_rule_downstream_status"] = downstream_status
+    final_scenario_gate["entry_allowed"] = downstream_ready
+    final_scenario_gate["scenario_planning_allowed"] = downstream_ready
+    final_scenario_gate["execution_allowed"] = False
+    if base_scenario_ready and blocked_rules:
+        final_scenario_gate["status"] = "BLOCKED_BUSINESS_COMPREHENSION_DOWNSTREAM_UNBOUND"
+        final_scenario_gate["blocking_reasons"] = list(
+            dict.fromkeys(
+                [
+                    *_list(final_scenario_gate.get("blocking_reasons")),
+                    "CHINESE_RULE_AUTHORITATIVE_INTERFACE_BINDING_INCOMPLETE",
+                ]
+            )
+        )
+    asset["scenario_planning_gate"] = final_scenario_gate
 
     gaps = [
         dict(row)
@@ -328,20 +431,21 @@ def refresh_chinese_business_downstream(
             {
                 "kind": (
                     "BLOCKED_IMPLEMENTATION_BINDING_GATE"
-                    if implementation_required and not implementation_ready
+                    if not base_scenario_ready and semantic_ready
                     else "BLOCKED_BUSINESS_COMPREHENSION_DOWNSTREAM_UNBOUND"
                 ),
                 "gap_type": (
                     "business_behavior_implementation_binding_not_ready"
-                    if implementation_required and not implementation_ready
+                    if not base_scenario_ready and semantic_ready
                     else "accepted_chinese_rule_missing_authoritative_operation"
                 ),
                 "source_id": "*",
                 "blocked_rules": blocked_rules,
+                "scenario_planning_status": final_scenario_gate.get("status"),
                 "implementation_binding_status": implementation_gate_status,
                 "operator_action": (
-                    "resolve the implementation binding gate before scenario planning"
-                    if implementation_required and not implementation_ready
+                    "resolve the generic scenario-planning gate before generating probes"
+                    if not base_scenario_ready
                     else "provide or resolve a source-backed rule-to-interface binding; do not bind the rule to the first or nearest endpoint"
                 ),
             }
@@ -359,7 +463,7 @@ def refresh_chinese_business_downstream(
             "chinese_rules_downstream_blocked": len(blocked_rules),
             "business_comprehension_pipeline_status": downstream_status,
             "business_comprehension_pipeline_ready": downstream_ready,
-            "scenario_planning_gate_status": downstream_status,
+            "scenario_planning_gate_status": final_scenario_gate.get("status"),
             "scenario_planning_allowed": downstream_ready,
             "implementation_binding_gate_status": implementation_gate_status,
             "implementation_binding_gate_ready": implementation_ready,
