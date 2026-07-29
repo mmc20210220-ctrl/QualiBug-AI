@@ -536,15 +536,58 @@ def _csv_rows(text: str) -> list[dict[str, str]]:
         return []
 
 
+def _normalized_field_projection(row: dict[str, Any]) -> str:
+    """Reconstruct only the parser-generated field summary, never source prose."""
+    bits: list[str] = []
+    table = str(row.get("table") or "").strip()
+    if table and table != "default":
+        bits.append(f"table={table}")
+    field = str(row.get("field") or "").strip()
+    if not field:
+        return ""
+    bits.append(f"field={field}")
+    if "required" in row:
+        bits.append(f"required={'true' if row.get('required') is True else 'false'}")
+    field_type = str(row.get("type") or "").strip()
+    if field_type:
+        bits.append(f"type={field_type}")
+    return "; ".join(bits)
+
+
+def _normalize_field_evidence(row: dict[str, Any]) -> dict[str, Any]:
+    """Keep generated field coordinates as normalized evidence, not exact quotes."""
+    clean = dict(row)
+    if clean.get("evidence_kind") == "EXACT_SOURCE_QUOTE":
+        return clean
+    quote = str(clean.get("quote") or "").strip()
+    excerpt = str(clean.get("source_excerpt") or "").strip()
+    generated = quote or excerpt
+    if not generated:
+        return clean
+    expected = _normalized_field_projection(clean)
+    expected_without_required = "; ".join(
+        bit for bit in expected.split("; ") if not bit.startswith("required=")
+    )
+    if generated not in {expected, expected_without_required}:
+        return clean
+    clean.pop("quote", None)
+    clean.pop("source_excerpt", None)
+    clean["normalized_evidence"] = generated
+    clean["evidence_kind"] = "NORMALIZED_STRUCTURED_DECLARATION"
+    clean["evidence_derivation"] = "normalized_field_dictionary_projection"
+    return clean
+
+
 def _dedupe_by_id(rows: Iterable[dict[str, Any]], id_field: str) -> list[dict[str, Any]]:
     seen: set[str] = set()
     result: list[dict[str, Any]] = []
     for row in rows:
         if not isinstance(row, dict):
             continue
-        key = str(row.get(id_field) or _short_hash(row))
+        candidate = _normalize_field_evidence(row) if id_field == "field_id" else row
+        key = str(candidate.get(id_field) or _short_hash(candidate))
         if key in seen:
             continue
         seen.add(key)
-        result.append(row)
+        result.append(candidate)
     return result
