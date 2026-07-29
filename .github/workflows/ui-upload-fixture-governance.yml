@@ -17,7 +17,7 @@ on:
       - 'frontend/src/styles/upload-fixture-settings.css'
       - 'frontend/src/styles/run-upload-fixtures.css'
       - 'tests/test_ui_upload_fixture_*.py'
-      - 'tests/test_private_pilot_upload_fixture_governance.py'
+      - 'tests/test_private_pilot_upload_fixture_*.py'
       - '.github/workflows/ui-upload-fixture-governance.yml'
   workflow_dispatch:
 
@@ -47,6 +47,7 @@ jobs:
           tests/test_ui_upload_fixture_registry_integrity.py
           tests/test_ui_upload_fixture_continuous_binding.py
           tests/test_private_pilot_upload_fixture_governance.py
+          tests/test_private_pilot_upload_fixture_scan_gate.py
 
   playwright-upload-acceptance:
     runs-on: ubuntu-latest
