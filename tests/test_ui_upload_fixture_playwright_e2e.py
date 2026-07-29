@@ -29,10 +29,18 @@ _HTML = b"""<!doctype html>
 </body>
 </html>
 """
+_STATE = b'{"count":0}'
 
 
 class _UploadFixturePage(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
+        if self.path == "/state":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(_STATE)))
+            self.end_headers()
+            self.wfile.write(_STATE)
+            return
         if self.path not in {"/", "/index.html"}:
             self.send_response(404)
             self.end_headers()
@@ -66,6 +74,13 @@ def test_approved_upload_fixture_executes_and_cleanup_restores_state(
     from ai_test_asset_center import discovery_runtime_semantic_binding as _runtime  # noqa: F401
     from ai_test_asset_center import professional_ui_interaction_cleanup as interaction
     from ai_test_asset_center import ui_upload_fixture_registry as registry
+    from ai_test_asset_center.professional_ui_interaction_privacy_guard import (
+        EVIDENCE_POLICY,
+    )
+    from ai_test_asset_center.professional_ui_persistent_cleanup_probe import (
+        EQUIVALENCE_SCOPE,
+        PERSISTENT_PROBE_PROPERTY,
+    )
     from ai_test_asset_center.ui_upload_fixture_registry_integrity import (
         install_upload_fixture_registry_integrity,
     )
@@ -133,14 +148,25 @@ def test_approved_upload_fixture_executes_and_cleanup_restores_state(
             "interaction_contract": {
                 "cleanup_strategy": "browser_compensation",
                 "equivalence": "source_declared_state_probes",
+                "equivalence_scope": EQUIVALENCE_SCOPE,
                 "target_scope": "approved_nonproduction_target",
+                "evidence_policy": EVIDENCE_POLICY,
             },
             "state_probes": [
                 {
                     "probe_id": "selected_file_state",
                     "property": "text",
                     "selector": "#selected",
-                }
+                },
+                {
+                    "probe_id": "persistent_upload_state",
+                    "property": PERSISTENT_PROBE_PROPERTY,
+                    "method": "GET",
+                    "url": "/state",
+                    "json_pointer": "/count",
+                    "expected_status_class": 2,
+                    "max_response_bytes": 100_000,
+                },
             ],
             "steps": [
                 {
@@ -200,6 +226,9 @@ def test_approved_upload_fixture_executes_and_cleanup_restores_state(
         if row.get("action") == "set_input_files" and row.get("phase") == "cleanup"
     )
     assert cleanup["uploaded_file_count"] == 0
+    assert result["evidence_privacy"]["policy"] == EVIDENCE_POLICY
+    assert result["evidence_privacy"]["har_persisted"] is False
+    assert result["evidence_privacy"]["trace_persisted"] is False
 
     serialized = json.dumps(result, ensure_ascii=False)
     assert str((tmp_path / binding["file_path"]).resolve()) not in serialized
