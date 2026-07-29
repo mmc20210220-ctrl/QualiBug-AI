@@ -177,17 +177,20 @@ runtime_environment_validated = false
 
 ## Legacy Probe guard
 
-When the new scenario pipeline is present, legacy Probe generation requires all four design gates:
+When the formal scenario pipeline is present, legacy Probe generation requires the downstream
+Runtime Materialization Gate in addition to the design gates:
 
 ```text
 Scenario Planning Gate
 Scenario IR Gate
 Scenario Execution Contract Gate
 Runtime Plan Gate
+Runtime Materialization Gate
 ```
 
-A missing, Partial or Blocked Runtime Plan returns zero legacy Probes from both the public API
-entrypoint and the direct linking entrypoint.
+A missing, Partial or Blocked Runtime Plan returns zero legacy Probes. A Runtime Plan `PASS` with a
+missing or Blocked Runtime Materialization also returns zero Probes. Both the public API entrypoint
+and the direct linking entrypoint are fail-closed; risk-only Probe fallback is not permitted.
 
 ## Current limitations
 
