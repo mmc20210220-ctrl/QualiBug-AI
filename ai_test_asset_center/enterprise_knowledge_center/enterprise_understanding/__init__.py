@@ -29,6 +29,15 @@ from .integration import (
 )
 from .lifecycle_builder import build_lifecycles
 from .object_graph import build_object_graph
+from .scenario_execution_contract import (
+    SCENARIO_EXECUTION_CONTRACT_GATE_SCHEMA,
+    SCENARIO_EXECUTION_CONTRACT_SCHEMA,
+    build_scenario_execution_contracts,
+    project_scenario_execution_contracts,
+)
+from .scenario_execution_contract_projection import (
+    project_governed_scenario_execution_contracts,
+)
 from .scenario_ir import (
     SCENARIO_IR_GATE_SCHEMA,
     SCENARIO_IR_SCHEMA,
@@ -47,6 +56,8 @@ __all__ = [
     "SCENARIO_PLANNING_GATE_SCHEMA",
     "SCENARIO_IR_SCHEMA",
     "SCENARIO_IR_GATE_SCHEMA",
+    "SCENARIO_EXECUTION_CONTRACT_SCHEMA",
+    "SCENARIO_EXECUTION_CONTRACT_GATE_SCHEMA",
     "build_decision_matrix_row_ledger",
     "build_business_behavior_ir",
     "build_governed_business_behavior_ir",
@@ -58,6 +69,9 @@ __all__ = [
     "build_scenario_ir_v1",
     "project_scenario_ir_to_asset",
     "project_scenario_ir_asset_governance",
+    "build_scenario_execution_contracts",
+    "project_scenario_execution_contracts",
+    "project_governed_scenario_execution_contracts",
     "build_enterprise_understanding_model",
     "assess_understanding_model",
     "enrich_asset_with_enterprise_understanding",
