@@ -34,6 +34,15 @@ from .interface_runtime_contracts import (
 )
 from .lifecycle_builder import build_lifecycles
 from .object_graph import build_object_graph
+from .runtime_materialization import (
+    RUNTIME_MATERIALIZATION_GATE_SCHEMA,
+    RUNTIME_MATERIALIZATION_SCHEMA,
+    build_runtime_materializations_v1,
+    project_runtime_materializations_to_asset,
+)
+from .runtime_materialization_governance import (
+    project_governed_runtime_materializations_to_asset,
+)
 from .runtime_plan import (
     RUNTIME_PLAN_GATE_SCHEMA,
     RUNTIME_PLAN_SCHEMA,
@@ -76,6 +85,8 @@ __all__ = [
     "SCENARIO_EXECUTION_CONTRACT_GATE_SCHEMA",
     "RUNTIME_PLAN_SCHEMA",
     "RUNTIME_PLAN_GATE_SCHEMA",
+    "RUNTIME_MATERIALIZATION_SCHEMA",
+    "RUNTIME_MATERIALIZATION_GATE_SCHEMA",
     "OPENAPI_RUNTIME_CONTRACT_SCHEMA",
     "build_decision_matrix_row_ledger",
     "build_business_behavior_ir",
@@ -94,6 +105,9 @@ __all__ = [
     "build_runtime_plans_v1",
     "project_runtime_plans_to_asset",
     "project_governed_runtime_plans_to_asset",
+    "build_runtime_materializations_v1",
+    "project_runtime_materializations_to_asset",
+    "project_governed_runtime_materializations_to_asset",
     "enrich_openapi_runtime_contracts",
     "install_interface_runtime_contract_parser",
     "build_enterprise_understanding_model",
