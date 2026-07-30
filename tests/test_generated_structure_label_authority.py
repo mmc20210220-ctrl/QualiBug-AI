@@ -8,29 +8,35 @@ from ai_test_asset_center.enterprise_knowledge_center.document_ingestion.evidenc
 )
 
 
-def test_generated_slide_label_is_not_business_text_authority() -> None:
-    source = DocumentSource(
+def _source() -> DocumentSource:
+    return DocumentSource(
         source_id="source:pptx",
         filename="empty-slide.pptx",
         data=b"presentation",
     )
+
+
+def _generated_heading() -> dict:
+    return {
+        "block_id": "slide:1",
+        "type": "HEADING",
+        "region": "body",
+        "order": 1,
+        "text": "Slide 1",
+        "source_locator": "empty-slide.pptx#slide=1",
+        "slide": 1,
+        "structure_evidence": {"method": "native_presentation_slide_identity"},
+    }
+
+
+def test_generated_slide_label_is_not_business_text_authority() -> None:
+    source = _source()
     document_ir = {
         "format": "pptx",
         "filename": source.filename,
         "plain_text": "## Slide 1\n真实图片文字",
         "blocks": [
-            {
-                "block_id": "slide:1",
-                "type": "HEADING",
-                "region": "body",
-                "order": 1,
-                "text": "Slide 1",
-                "source_locator": "empty-slide.pptx#slide=1",
-                "slide": 1,
-                "structure_evidence": {
-                    "method": "native_presentation_slide_identity"
-                },
-            },
+            _generated_heading(),
             {
                 "block_id": "ocr:1",
                 "type": "PARAGRAPH",
@@ -58,3 +64,25 @@ def test_generated_slide_label_is_not_business_text_authority() -> None:
     assert receipt["formal_authority_block_count"] == 1
     assert receipt["source_traceability_rate"] == 1.0
     assert receipt["exact_address_rate"] == 1.0
+
+
+def test_generated_only_blank_slide_is_textless_not_orphan_authority() -> None:
+    source = _source()
+    document_ir = {
+        "format": "pptx",
+        "filename": source.filename,
+        "plain_text": "## Slide 1",
+        "blocks": [_generated_heading()],
+        "unsupported_content": [],
+        "structure_receipt": {"status": "COMPLETE", "unsupported_content": []},
+    }
+
+    result = apply_document_evidence_closure(document_ir, source)
+
+    assert result["plain_text"] == ""
+    receipt = result["evidence_closure_receipt"]
+    assert receipt["status"] == "PASS"
+    assert receipt["generated_structure_label_count"] == 1
+    assert receipt["non_generated_text_block_count"] == 0
+    assert receipt["formal_authority_block_count"] == 0
+    assert receipt["gaps"] == []
