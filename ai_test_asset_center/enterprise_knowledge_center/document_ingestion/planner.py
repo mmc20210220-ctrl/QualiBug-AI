@@ -36,10 +36,12 @@ from .contract import (
 from .image_decoding import sniff_image_source
 from .registry import DocumentAdapterRegistry
 
-# Native OOXML families are structurally parseable without rasterizing every page.
-# Legacy binary/ODF visual formats remain rendering/OCR workloads until a native adapter exists.
-_LEGACY_VISUAL_OFFICE_FAMILIES = {"doc", "rtf", "odt", "ppt", "odp"}
-_LEGACY_TABLE_OFFICE_FAMILIES = {"xls", "xlsb", "ods"}
+# Compatible Office, ODF and WPS families are normalized to OOXML and then reuse the
+# same native structural adapters. Rendering/OCR remains supplemental for concrete
+# embedded-image gaps; it is no longer the primary parser for these containers.
+_COMPATIBLE_WORD_FAMILIES = {"doc", "dot", "rtf", "odt", "wps", "wpt"}
+_COMPATIBLE_SPREADSHEET_FAMILIES = {"xls", "xlt", "xlsb", "ods", "et", "ett"}
+_COMPATIBLE_PRESENTATION_FAMILIES = {"ppt", "pot", "pps", "odp", "dps", "dpt"}
 _TEXT_FIRST_FAMILIES = {"text", "structured_text"}
 _DEFERRED_CAPABILITIES_BY_GAP: dict[str, tuple[str, ...]] = {
     "SCANNED_PAGE_REQUIRES_OCR": (
@@ -110,18 +112,47 @@ def _detected_family(source: DocumentSource) -> tuple[str, str]:
     return suffix or "unknown", "filename_suffix_or_unknown"
 
 
+def _word_capabilities() -> list[str]:
+    return unique_text(
+        [
+            CAP_TEXT_EXTRACTION,
+            CAP_HEADING_HIERARCHY,
+            CAP_LIST_HIERARCHY,
+            CAP_TABLE_STRUCTURE,
+            CAP_HEADER_FOOTER,
+            CAP_FONT_EVIDENCE,
+        ]
+    )
+
+
+def _spreadsheet_capabilities() -> list[str]:
+    return unique_text(
+        [
+            CAP_TEXT_EXTRACTION,
+            CAP_TABLE_STRUCTURE,
+            CAP_FORMULA_EXTRACTION,
+            CAP_COMMENT_EXTRACTION,
+            CAP_STYLE_SEMANTICS,
+        ]
+    )
+
+
+def _presentation_capabilities() -> list[str]:
+    return unique_text(
+        [
+            CAP_TEXT_EXTRACTION,
+            CAP_HEADING_HIERARCHY,
+            CAP_TABLE_STRUCTURE,
+            CAP_IMAGE_PRESENCE,
+            CAP_COMMENT_EXTRACTION,
+            CAP_STYLE_SEMANTICS,
+        ]
+    )
+
+
 def _required_capabilities(family: str) -> list[str]:
-    if family == "docx":
-        return unique_text(
-            [
-                CAP_TEXT_EXTRACTION,
-                CAP_HEADING_HIERARCHY,
-                CAP_LIST_HIERARCHY,
-                CAP_TABLE_STRUCTURE,
-                CAP_HEADER_FOOTER,
-                CAP_FONT_EVIDENCE,
-            ]
-        )
+    if family == "docx" or family in _COMPATIBLE_WORD_FAMILIES:
+        return _word_capabilities()
     if family == "pdf":
         return unique_text(
             [
@@ -136,27 +167,10 @@ def _required_capabilities(family: str) -> list[str]:
                 CAP_HEADER_FOOTER,
             ]
         )
-    if family == "xlsx":
-        return unique_text(
-            [
-                CAP_TEXT_EXTRACTION,
-                CAP_TABLE_STRUCTURE,
-                CAP_FORMULA_EXTRACTION,
-                CAP_COMMENT_EXTRACTION,
-                CAP_STYLE_SEMANTICS,
-            ]
-        )
-    if family == "pptx":
-        return unique_text(
-            [
-                CAP_TEXT_EXTRACTION,
-                CAP_HEADING_HIERARCHY,
-                CAP_TABLE_STRUCTURE,
-                CAP_IMAGE_PRESENCE,
-                CAP_COMMENT_EXTRACTION,
-                CAP_STYLE_SEMANTICS,
-            ]
-        )
+    if family == "xlsx" or family in _COMPATIBLE_SPREADSHEET_FAMILIES:
+        return _spreadsheet_capabilities()
+    if family == "pptx" or family in _COMPATIBLE_PRESENTATION_FAMILIES:
+        return _presentation_capabilities()
     if family == "image":
         return unique_text(
             [
@@ -167,27 +181,6 @@ def _required_capabilities(family: str) -> list[str]:
                 CAP_PAGE_LAYOUT,
                 CAP_TABLE_REGION_DETECTION,
                 CAP_TABLE_STRUCTURE,
-            ]
-        )
-    if family in _LEGACY_VISUAL_OFFICE_FAMILIES:
-        return unique_text(
-            [
-                CAP_PAGE_RENDERING,
-                CAP_OCR,
-                CAP_TEXT_EXTRACTION,
-                CAP_TEXT_COORDINATES,
-                CAP_PAGE_LAYOUT,
-                CAP_TABLE_REGION_DETECTION,
-                CAP_TABLE_STRUCTURE,
-            ]
-        )
-    if family in _LEGACY_TABLE_OFFICE_FAMILIES:
-        return unique_text(
-            [
-                CAP_TEXT_EXTRACTION,
-                CAP_TABLE_STRUCTURE,
-                CAP_FORMULA_EXTRACTION,
-                CAP_STYLE_SEMANTICS,
             ]
         )
     if family in {
