@@ -150,6 +150,22 @@ def test_exact_explicit_field_name_can_bind_when_no_field_id_exists() -> None:
     assert assertion["database_state_transition_binding"]["match_basis"] == "EXACT_FIELD_NAME"
 
 
+def test_explicit_field_id_mismatch_never_downgrades_to_matching_name() -> None:
+    experiment = _experiment(field_id="api-field:Order.lifecycle")
+    experiment["assertions"][0]["operands"] = [
+        {"field_id": "api-field:Order.lifecycle", "field": "status"}
+    ]
+
+    result = project_database_state_transition_assertions(_pack(experiment))
+
+    projected = result["experiments"][0]
+    assert projected["assertions"][0]["kind"] == "state_transition"
+    assert projected["database_state_transition_projection_status"] == "INCOMPLETE"
+    gap = projected["database_state_transition_projection_gaps"][0]
+    assert gap["explicit_field_ids"] == ["api-field:Order.lifecycle"]
+    assert gap["explicit_field_names"] == ["status"]
+
+
 def test_missing_exact_field_binding_keeps_original_assertion_and_gap() -> None:
     experiment = _experiment(field_id="api-field:Order.lifecycle")
     experiment["assertions"][0]["operands"] = [
