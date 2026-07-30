@@ -1,9 +1,9 @@
 """Safe package expansion before enterprise documents enter the Document IR pipeline.
 
-Archives are transport containers, never business documents. This module expands supported
-packages into ordinary immutable document envelopes, preserving package/member provenance so
-all children reuse the existing classification, versioning, parsing, evidence and runtime
-registration transaction. No archive member is extracted to an archive-controlled path.
+Archives are transport containers, never business documents. Supported packages are read
+from immutable bytes and expanded into ordinary document envelopes; every child then reuses
+the existing classification, versioning, parsing, evidence and runtime-registration chain.
+Archive-controlled paths are never written to the filesystem.
 """
 from __future__ import annotations
 
@@ -27,6 +27,11 @@ _ARCHIVE_SUFFIXES = {".zip", ".tar", ".tgz", ".gz", ".7z", ".rar"}
 _SUPPORTED_ARCHIVE_KINDS = {"zip", "tar", "tar_gzip", "gzip"}
 _SYSTEM_JUNK_NAMES = {".ds_store", "thumbs.db", "desktop.ini"}
 _DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
+_TEXT_PREVIEW_SUFFIXES = {
+    ".txt", ".md", ".markdown", ".rst", ".html", ".htm", ".yaml", ".yml",
+    ".csv", ".tsv", ".sql", ".json", ".xml", ".svg", ".har", ".log",
+    ".feature", ".http", ".rest", ".graphql", ".gql", ".mmd", ".bpmn",
+}
 
 
 @dataclass(frozen=True)
@@ -70,6 +75,14 @@ class _ExpansionBudget:
     nested_archive_count: int = 0
 
 
+@dataclass
+class _ArchiveResult:
+    documents: list[dict[str, Any]] = field(default_factory=list)
+    packages: list[dict[str, Any]] = field(default_factory=list)
+    errors: list[dict[str, Any]] = field(default_factory=list)
+    warnings: list[dict[str, Any]] = field(default_factory=list)
+
+
 class ArchiveExpansionError(ValueError):
     def __init__(self, code: str, detail: str, *, member_path: str = "") -> None:
         super().__init__(detail)
@@ -106,7 +119,7 @@ def _full_suffix(filename: str) -> str:
     return Path(lower).suffix
 
 
-def _archive_kind(filename: str, data: bytes) -> str:
+def _archive_kind(filename: str) -> str:
     suffix = _full_suffix(filename)
     if suffix == ".zip":
         return "zip"
@@ -130,12 +143,18 @@ def is_archive_envelope(envelope: dict[str, Any]) -> bool:
     return _full_suffix(filename) in _ARCHIVE_SUFFIXES or filename.lower().endswith(".tar.gz")
 
 
+def _text_preview(blob: bytes, filename: str) -> str:
+    if Path(filename).suffix.lower() not in _TEXT_PREVIEW_SUFFIXES:
+        return ""
+    return blob[:256_000].decode("utf-8", errors="replace")
+
+
 def read_document_envelope_bytes(
     envelope: dict[str, Any],
     *,
     max_bytes: int = MAX_SOURCE_BYTES,
 ) -> tuple[bytes, str, str]:
-    """Read a standard envelope, including immutable bytes produced by archive expansion."""
+    """Read paths, inline text or immutable bytes under one bounded envelope contract."""
 
     raw_bytes = envelope.get("content_bytes")
     if raw_bytes is not None:
@@ -145,7 +164,7 @@ def read_document_envelope_bytes(
         filename = str(envelope.get("filename") or envelope.get("name") or "document.bin")
         if len(blob) > max_bytes:
             raise ValueError(f"source file exceeds {max_bytes // (1024 * 1024)}MB limit")
-        return blob, filename, ""
+        return blob, filename, _text_preview(blob, filename)
 
     if envelope.get("text") is not None:
         value = str(envelope.get("text"))
@@ -163,27 +182,31 @@ def read_document_envelope_bytes(
         raise ValueError(f"source file exceeds {max_bytes // (1024 * 1024)}MB limit")
     blob = file_path.read_bytes()
     filename = str(envelope.get("filename") or envelope.get("name") or file_path.name)
-    return blob, filename, ""
+    return blob, filename, _text_preview(blob, filename)
 
 
 def _normalize_member_path(raw_name: str) -> str:
     value = str(raw_name or "").replace("\\", "/")
     if not value or "\x00" in value:
-        raise ArchiveExpansionError("ARCHIVE_MEMBER_PATH_INVALID", "archive member path is empty or contains NUL")
+        raise ArchiveExpansionError(
+            "ARCHIVE_MEMBER_PATH_INVALID",
+            "archive member path is empty or contains NUL",
+            member_path=value,
+        )
     if value.startswith("/") or value.startswith("//") or _DRIVE_PREFIX_RE.match(value):
         raise ArchiveExpansionError(
             "ARCHIVE_MEMBER_PATH_ABSOLUTE",
             "archive member uses an absolute or drive-qualified path",
             member_path=value,
         )
-    path = PurePosixPath(value)
-    if any(part in {"", ".", ".."} for part in path.parts):
+    segments = value.split("/")
+    if any(part in {"", ".", ".."} for part in segments):
         raise ArchiveExpansionError(
             "ARCHIVE_MEMBER_PATH_TRAVERSAL",
             "archive member path contains traversal or ambiguous segments",
             member_path=value,
         )
-    normalized = str(path)
+    normalized = str(PurePosixPath(*segments))
     if len(normalized) > 500:
         raise ArchiveExpansionError(
             "ARCHIVE_MEMBER_PATH_TOO_LONG",
@@ -259,6 +282,15 @@ def _read_limited(stream: Any, expected_size: int, limit: int, member_path: str)
     return data
 
 
+def _virtual_member_path(archive_chain: list[dict[str, Any]], member_path: str) -> str:
+    entered = [
+        str(row.get("entered_via_member_path") or "")
+        for row in archive_chain[1:]
+        if str(row.get("entered_via_member_path") or "")
+    ]
+    return "!/".join([*entered, member_path])
+
+
 def _member_envelope(
     *,
     parent: dict[str, Any],
@@ -266,19 +298,19 @@ def _member_envelope(
     data: bytes,
     archive_chain: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    package = archive_chain[-1]
+    virtual_path = _virtual_member_path(archive_chain, member_path)
     inherited_tags = [str(value) for value in (parent.get("tags") or []) if str(value).strip()]
-    return {
+    envelope: dict[str, Any] = {
         "content_bytes": data,
-        "filename": member_path,
-        "source_type": parent.get("source_type"),
+        "filename": virtual_path,
         "tags": inherited_tags,
-        "external_ref": f"archive://{package['archive_hash']}/{member_path}",
+        "external_ref": f"archive://{archive_chain[0]['archive_hash']}/{virtual_path}",
         "archive_provenance": {
             "schema": ARCHIVE_EXPANSION_SCHEMA,
             "top_level_archive_hash": archive_chain[0]["archive_hash"],
             "top_level_archive_name": archive_chain[0]["archive_name"],
             "member_path": member_path,
+            "virtual_member_path": virtual_path,
             "member_hash": _hash_bytes(data),
             "member_size": len(data),
             "archive_depth": len(archive_chain),
@@ -287,6 +319,9 @@ def _member_envelope(
             "archive_container_is_business_source": False,
         },
     }
+    if parent.get("inherit_source_type_to_members") is True and parent.get("source_type"):
+        envelope["source_type"] = parent.get("source_type")
+    return envelope
 
 
 def _package_receipt(
@@ -296,6 +331,7 @@ def _package_receipt(
     kind: str,
     depth: int,
     parent_archive_hash: str,
+    entered_via_member_path: str,
     stored_path: str,
 ) -> dict[str, Any]:
     return {
@@ -305,6 +341,7 @@ def _package_receipt(
         "archive_kind": kind,
         "archive_depth": depth,
         "parent_archive_hash": parent_archive_hash,
+        "entered_via_member_path": entered_via_member_path,
         "compressed_byte_count": len(data),
         "stored_path": stored_path,
         "status": "PENDING",
@@ -319,6 +356,40 @@ def _package_receipt(
     }
 
 
+def _nested_result(
+    *,
+    filename: str,
+    data: bytes,
+    parent_envelope: dict[str, Any],
+    policy: ArchiveExpansionPolicy,
+    budget: _ExpansionBudget,
+    depth: int,
+    chain: list[dict[str, Any]],
+    entered_via_member_path: str,
+) -> _ArchiveResult:
+    budget.nested_archive_count += 1
+    if budget.nested_archive_count > policy.max_nested_archive_count:
+        return _ArchiveResult(
+            errors=[
+                ArchiveExpansionError(
+                    "ARCHIVE_NESTED_COUNT_LIMIT_EXCEEDED",
+                    f"nested archive count exceeds {policy.max_nested_archive_count}",
+                    member_path=entered_via_member_path,
+                ).to_dict()
+            ]
+        )
+    return _expand_archive_bytes(
+        filename=filename,
+        data=data,
+        parent_envelope=parent_envelope,
+        policy=policy,
+        budget=budget,
+        depth=depth,
+        chain=chain,
+        entered_via_member_path=entered_via_member_path,
+    )
+
+
 def _expand_archive_bytes(
     *,
     filename: str,
@@ -326,12 +397,12 @@ def _expand_archive_bytes(
     parent_envelope: dict[str, Any],
     policy: ArchiveExpansionPolicy,
     budget: _ExpansionBudget,
-    batch: ArchiveExpansionBatch,
     depth: int,
     chain: list[dict[str, Any]],
+    entered_via_member_path: str = "",
     stored_path: str = "",
-) -> None:
-    kind = _archive_kind(filename, data)
+) -> _ArchiveResult:
+    kind = _archive_kind(filename)
     archive_hash = _hash_bytes(data)
     parent_hash = chain[-1]["archive_hash"] if chain else ""
     receipt = _package_receipt(
@@ -340,34 +411,37 @@ def _expand_archive_bytes(
         kind=kind or "unknown",
         depth=depth,
         parent_archive_hash=parent_hash,
+        entered_via_member_path=entered_via_member_path,
         stored_path=stored_path,
     )
-    batch.packages.append(receipt)
-    local_errors: list[dict[str, Any]] = []
-    local_warnings: list[dict[str, Any]] = []
-    leaf_before = len(batch.documents)
+    result = _ArchiveResult(packages=[receipt])
+    local_member_count = 0
+    local_uncompressed_bytes = 0
 
     if depth > policy.max_recursion_depth:
-        error = ArchiveExpansionError(
-            "ARCHIVE_RECURSION_DEPTH_EXCEEDED",
-            f"nested archive depth exceeds {policy.max_recursion_depth}",
-            member_path=filename,
-        ).to_dict(archive_name=filename, archive_hash=archive_hash)
-        local_errors.append(error)
+        result.errors.append(
+            ArchiveExpansionError(
+                "ARCHIVE_RECURSION_DEPTH_EXCEEDED",
+                f"nested archive depth exceeds {policy.max_recursion_depth}",
+                member_path=filename,
+            ).to_dict(archive_name=filename, archive_hash=archive_hash)
+        )
     elif kind in {"7z", "rar"}:
-        error = ArchiveExpansionError(
-            "ARCHIVE_RUNTIME_DEPENDENCY_UNAVAILABLE",
-            f"{kind.upper()} expansion runtime is not installed; source remains fail-visible",
-            member_path=filename,
-        ).to_dict(archive_name=filename, archive_hash=archive_hash, archive_kind=kind)
-        local_errors.append(error)
+        result.errors.append(
+            ArchiveExpansionError(
+                "ARCHIVE_RUNTIME_DEPENDENCY_UNAVAILABLE",
+                f"{kind.upper()} expansion runtime is not installed; source remains fail-visible",
+                member_path=filename,
+            ).to_dict(archive_name=filename, archive_hash=archive_hash, archive_kind=kind)
+        )
     elif kind not in _SUPPORTED_ARCHIVE_KINDS:
-        error = ArchiveExpansionError(
-            "ARCHIVE_FORMAT_UNSUPPORTED",
-            "archive format is not supported",
-            member_path=filename,
-        ).to_dict(archive_name=filename, archive_hash=archive_hash, archive_kind=kind)
-        local_errors.append(error)
+        result.errors.append(
+            ArchiveExpansionError(
+                "ARCHIVE_FORMAT_UNSUPPORTED",
+                "archive format is not supported",
+                member_path=filename,
+            ).to_dict(archive_name=filename, archive_hash=archive_hash, archive_kind=kind)
+        )
     else:
         current_chain = [
             *chain,
@@ -376,6 +450,7 @@ def _expand_archive_bytes(
                 "archive_hash": archive_hash,
                 "archive_kind": kind,
                 "archive_depth": depth,
+                "entered_via_member_path": entered_via_member_path,
             },
         ]
         seen_paths: set[str] = set()
@@ -383,9 +458,9 @@ def _expand_archive_bytes(
             if kind == "zip":
                 with zipfile.ZipFile(io.BytesIO(data)) as archive:
                     for info in archive.infolist():
+                        member_path = _normalize_member_path(info.filename.rstrip("/") if info.is_dir() else info.filename)
                         if info.is_dir():
                             continue
-                        member_path = _normalize_member_path(info.filename)
                         if member_path in seen_paths:
                             raise ArchiveExpansionError(
                                 "ARCHIVE_MEMBER_PATH_COLLISION",
@@ -394,7 +469,7 @@ def _expand_archive_bytes(
                             )
                         seen_paths.add(member_path)
                         if _is_system_junk(member_path):
-                            local_warnings.append(
+                            result.warnings.append(
                                 {
                                     "stage": "archive_expansion",
                                     "code": "ARCHIVE_SYSTEM_JUNK_SKIPPED",
@@ -424,30 +499,35 @@ def _expand_archive_bytes(
                             policy=policy,
                             budget=budget,
                         )
+                        local_member_count += 1
+                        local_uncompressed_bytes += int(info.file_size)
                         with archive.open(info, "r") as stream:
                             member_data = _read_limited(
                                 stream, int(info.file_size), policy.max_member_bytes, member_path
                             )
                         if is_archive_envelope({"filename": member_path}):
-                            budget.nested_archive_count += 1
-                            if budget.nested_archive_count > policy.max_nested_archive_count:
-                                raise ArchiveExpansionError(
-                                    "ARCHIVE_NESTED_COUNT_LIMIT_EXCEEDED",
-                                    f"nested archive count exceeds {policy.max_nested_archive_count}",
-                                    member_path=member_path,
-                                )
-                            _expand_archive_bytes(
+                            nested = _nested_result(
                                 filename=member_path,
                                 data=member_data,
                                 parent_envelope=parent_envelope,
                                 policy=policy,
                                 budget=budget,
-                                batch=batch,
                                 depth=depth + 1,
                                 chain=current_chain,
+                                entered_via_member_path=member_path,
                             )
+                            result.packages.extend(nested.packages)
+                            result.warnings.extend(nested.warnings)
+                            if nested.errors:
+                                result.errors.extend(nested.errors)
+                                raise ArchiveExpansionError(
+                                    "ARCHIVE_NESTED_MEMBER_BLOCKED",
+                                    "nested archive could not be expanded completely",
+                                    member_path=member_path,
+                                )
+                            result.documents.extend(nested.documents)
                         else:
-                            batch.documents.append(
+                            result.documents.append(
                                 _member_envelope(
                                     parent=parent_envelope,
                                     member_path=member_path,
@@ -458,9 +538,9 @@ def _expand_archive_bytes(
             elif kind in {"tar", "tar_gzip"}:
                 with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as archive:
                     for info in archive.getmembers():
+                        member_path = _normalize_member_path(info.name.rstrip("/") if info.isdir() else info.name)
                         if info.isdir():
                             continue
-                        member_path = _normalize_member_path(info.name)
                         if member_path in seen_paths:
                             raise ArchiveExpansionError(
                                 "ARCHIVE_MEMBER_PATH_COLLISION",
@@ -469,7 +549,7 @@ def _expand_archive_bytes(
                             )
                         seen_paths.add(member_path)
                         if _is_system_junk(member_path):
-                            local_warnings.append(
+                            result.warnings.append(
                                 {
                                     "stage": "archive_expansion",
                                     "code": "ARCHIVE_SYSTEM_JUNK_SKIPPED",
@@ -498,6 +578,8 @@ def _expand_archive_bytes(
                             policy=policy,
                             budget=budget,
                         )
+                        local_member_count += 1
+                        local_uncompressed_bytes += int(info.size)
                         stream = archive.extractfile(info)
                         if stream is None:
                             raise ArchiveExpansionError(
@@ -510,25 +592,28 @@ def _expand_archive_bytes(
                                 stream, int(info.size), policy.max_member_bytes, member_path
                             )
                         if is_archive_envelope({"filename": member_path}):
-                            budget.nested_archive_count += 1
-                            if budget.nested_archive_count > policy.max_nested_archive_count:
-                                raise ArchiveExpansionError(
-                                    "ARCHIVE_NESTED_COUNT_LIMIT_EXCEEDED",
-                                    f"nested archive count exceeds {policy.max_nested_archive_count}",
-                                    member_path=member_path,
-                                )
-                            _expand_archive_bytes(
+                            nested = _nested_result(
                                 filename=member_path,
                                 data=member_data,
                                 parent_envelope=parent_envelope,
                                 policy=policy,
                                 budget=budget,
-                                batch=batch,
                                 depth=depth + 1,
                                 chain=current_chain,
+                                entered_via_member_path=member_path,
                             )
+                            result.packages.extend(nested.packages)
+                            result.warnings.extend(nested.warnings)
+                            if nested.errors:
+                                result.errors.extend(nested.errors)
+                                raise ArchiveExpansionError(
+                                    "ARCHIVE_NESTED_MEMBER_BLOCKED",
+                                    "nested archive could not be expanded completely",
+                                    member_path=member_path,
+                                )
+                            result.documents.extend(nested.documents)
                         else:
-                            batch.documents.append(
+                            result.documents.append(
                                 _member_envelope(
                                     parent=parent_envelope,
                                     member_path=member_path,
@@ -536,6 +621,14 @@ def _expand_archive_bytes(
                                     archive_chain=current_chain,
                                 )
                             )
+                if kind == "tar_gzip" and local_uncompressed_bytes > 0:
+                    ratio = local_uncompressed_bytes / max(1, len(data))
+                    if ratio > policy.max_compression_ratio:
+                        raise ArchiveExpansionError(
+                            "ARCHIVE_COMPRESSION_RATIO_LIMIT_EXCEEDED",
+                            f"package compression ratio {ratio:.1f} exceeds {policy.max_compression_ratio:.1f}",
+                            member_path=filename,
+                        )
             elif kind == "gzip":
                 output_name = filename[:-3] if filename.lower().endswith(".gz") else "decompressed"
                 member_path = _normalize_member_path(Path(output_name).name or "decompressed")
@@ -554,20 +647,31 @@ def _expand_archive_bytes(
                         f"gzip output exceeds {policy.max_member_bytes // (1024 * 1024)}MB limit",
                         member_path=member_path,
                     )
+                local_member_count = 1
+                local_uncompressed_bytes = len(member_data)
                 if is_archive_envelope({"filename": member_path}):
-                    budget.nested_archive_count += 1
-                    _expand_archive_bytes(
+                    nested = _nested_result(
                         filename=member_path,
                         data=member_data,
                         parent_envelope=parent_envelope,
                         policy=policy,
                         budget=budget,
-                        batch=batch,
                         depth=depth + 1,
                         chain=current_chain,
+                        entered_via_member_path=member_path,
                     )
+                    result.packages.extend(nested.packages)
+                    result.warnings.extend(nested.warnings)
+                    if nested.errors:
+                        result.errors.extend(nested.errors)
+                        raise ArchiveExpansionError(
+                            "ARCHIVE_NESTED_MEMBER_BLOCKED",
+                            "nested archive could not be expanded completely",
+                            member_path=member_path,
+                        )
+                    result.documents.extend(nested.documents)
                 else:
-                    batch.documents.append(
+                    result.documents.append(
                         _member_envelope(
                             parent=parent_envelope,
                             member_path=member_path,
@@ -576,9 +680,9 @@ def _expand_archive_bytes(
                         )
                     )
         except ArchiveExpansionError as exc:
-            local_errors.append(exc.to_dict(archive_name=filename, archive_hash=archive_hash))
+            result.errors.append(exc.to_dict(archive_name=filename, archive_hash=archive_hash))
         except (zipfile.BadZipFile, tarfile.TarError, gzip.BadGzipFile, EOFError, OSError) as exc:
-            local_errors.append(
+            result.errors.append(
                 ArchiveExpansionError(
                     "ARCHIVE_CONTAINER_CORRUPT",
                     f"{type(exc).__name__}: {exc}",
@@ -586,18 +690,29 @@ def _expand_archive_bytes(
                 ).to_dict(archive_name=filename, archive_hash=archive_hash)
             )
 
-    receipt["member_count"] = budget.member_count
-    receipt["expanded_leaf_count"] = len(batch.documents) - leaf_before
+    if not result.documents and not result.errors:
+        result.errors.append(
+            ArchiveExpansionError(
+                "ARCHIVE_NO_IMPORTABLE_MEMBERS",
+                "archive contains no importable document members",
+                member_path=filename,
+            ).to_dict(archive_name=filename, archive_hash=archive_hash)
+        )
+    if result.errors:
+        result.documents = []
+
+    receipt["member_count"] = local_member_count
+    receipt["expanded_leaf_count"] = len(result.documents)
+    receipt["uncompressed_byte_count"] = local_uncompressed_bytes
     receipt["skipped_junk_count"] = sum(
-        1 for row in local_warnings if row.get("code") == "ARCHIVE_SYSTEM_JUNK_SKIPPED"
+        1 for row in result.warnings if row.get("code") == "ARCHIVE_SYSTEM_JUNK_SKIPPED"
     )
-    receipt["error_count"] = len(local_errors)
-    receipt["warning_count"] = len(local_warnings)
-    receipt["status"] = "BLOCKED" if local_errors else "PARTIAL" if local_warnings else "COMPLETE"
-    receipt["errors"] = local_errors
-    receipt["warnings"] = local_warnings
-    batch.errors.extend(local_errors)
-    batch.warnings.extend(local_warnings)
+    receipt["error_count"] = len(result.errors)
+    receipt["warning_count"] = len(result.warnings)
+    receipt["status"] = "BLOCKED" if result.errors else "PARTIAL" if result.warnings else "COMPLETE"
+    receipt["errors"] = list(result.errors)
+    receipt["warnings"] = list(result.warnings)
+    return result
 
 
 def expand_document_envelopes(
@@ -655,17 +770,20 @@ def expand_document_envelopes(
             if not target.exists():
                 target.write_bytes(data)
             stored_path = str(target)
-        _expand_archive_bytes(
+        result = _expand_archive_bytes(
             filename=filename,
             data=data,
             parent_envelope=envelope,
             policy=resolved_policy,
             budget=budget,
-            batch=batch,
             depth=1,
             chain=[],
             stored_path=stored_path,
         )
+        batch.documents.extend(result.documents)
+        batch.packages.extend(result.packages)
+        batch.errors.extend(result.errors)
+        batch.warnings.extend(result.warnings)
     return batch
 
 
