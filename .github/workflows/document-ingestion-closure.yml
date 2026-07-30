@@ -17,6 +17,7 @@ on:
       - "tests/test_source_registry_lifecycle.py"
       - "tests/test_document_ingestion_text_first_planner.py"
       - "tests/test_compatible_office_normalization.py"
+      - "tests/test_office_adapter_policy_contracts.py"
       - "tests/test_document_ir_fact_evidence_spans.py"
       - "tests/test_document_structure_fact_receipt_gate.py"
       - "tests/test_document_evidence_address_quality.py"
@@ -59,6 +60,8 @@ jobs:
           python -m py_compile \
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/office_adapters.py \
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/compatible_office_adapter.py \
+            ai_test_asset_center/enterprise_knowledge_center/document_ingestion/native_office_policy_adapters.py \
+            ai_test_asset_center/enterprise_knowledge_center/document_ingestion/page_render_registry.py \
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/evidence_closure.py \
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/rendered_ocr_adapter.py \
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/pipeline.py \
@@ -79,6 +82,7 @@ jobs:
             tests/test_source_registry_lifecycle.py \
             tests/test_document_ingestion_text_first_planner.py \
             tests/test_compatible_office_normalization.py \
+            tests/test_office_adapter_policy_contracts.py \
             tests/test_document_ir_fact_evidence_spans.py \
             tests/test_document_structure_fact_receipt_gate.py \
             tests/test_document_evidence_address_quality.py \
