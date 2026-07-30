@@ -109,10 +109,14 @@ def _explicit_field_tokens(
     ids: set[str] = set()
     names: set[str] = set()
     _walk_field_tokens(assertion, ids, names)
-    runtime_contract = _dict(experiment.get("field_oracle_runtime_contract"))
-    for value in _list(runtime_contract.get("required_field_ids")):
-        if _text(value):
-            ids.add(_text(value))
+    # Experiment-level field authority is only a fallback for a source assertion
+    # that contains no identifier of its own. Injecting the same global field id
+    # into every assertion can silently bind an unrelated second rule.
+    if not ids:
+        runtime_contract = _dict(experiment.get("field_oracle_runtime_contract"))
+        for value in _list(runtime_contract.get("required_field_ids")):
+            if _text(value):
+                ids.add(_text(value))
     return ids, names
 
 
@@ -381,10 +385,11 @@ def project_database_state_transition_assertions(
                     == DATABASE_STATE_TRANSITION_ASSERTION_KIND
                 ]
             )
+            projection_status = "PARTIAL" if gaps else "BOUND"
             receipt = _dict(experiment.get("compile_receipt"))
             receipt.update(
                 {
-                    "database_state_transition_projection_status": "BOUND",
+                    "database_state_transition_projection_status": projection_status,
                     "database_state_transition_assertion_fingerprint": fingerprint,
                     "database_state_transition_assertion_count": sum(
                         1
@@ -399,7 +404,7 @@ def project_database_state_transition_assertions(
                 }
             )
             experiment["compile_receipt"] = receipt
-            experiment["database_state_transition_projection_status"] = "BOUND"
+            experiment["database_state_transition_projection_status"] = projection_status
             experiment["database_state_transition_assertion_fingerprint"] = fingerprint
         elif gaps:
             experiment["database_state_transition_projection_status"] = "INCOMPLETE"
