@@ -4,7 +4,6 @@ from pathlib import Path
 
 from ai_test_asset_center import document_change_watcher
 from ai_test_asset_center import enterprise_source_registry
-from ai_test_asset_center.enterprise_knowledge_center import archive_ingestion
 from ai_test_asset_center import enterprise_knowledge_center
 from ai_test_asset_center.private_pilot_ingest_authority import (
     UPLOAD_INGEST_AUTHORITY_SCHEMA,
@@ -52,6 +51,14 @@ def test_normal_upload_uses_knowledge_authority_and_composed_runtime_manifest(
             "errors": [],
             "warnings": [],
             "source_count": 1,
+            "archive_expansion": {
+                "status": "COMPLETE",
+                "document_count": 1,
+                "package_count": 0,
+                "error_count": 0,
+                "warning_count": 0,
+                "packages": [],
+            },
         }
 
     monkeypatch.setattr(
@@ -88,42 +95,52 @@ def test_normal_upload_uses_knowledge_authority_and_composed_runtime_manifest(
     assert result["source_id"] == "src_prd"
     assert result["source_manifest"]["source_id"] == "src_project_composed_all"
     assert result["second_source_registration_performed"] is False
+    assert result["parallel_archive_parser_called"] is False
     assert captured[0]["file_path"] == str(source)
 
 
-def test_archive_upload_delegates_members_and_never_parses_package_as_document(
+def test_archive_upload_uses_canonical_knowledge_transaction_and_skips_document_watcher(
     monkeypatch,
     tmp_path,
 ) -> None:
     source = tmp_path / "资料.zip"
     source.write_bytes(b"PK synthetic fixture")
-    called = {"archive": 0, "document": 0}
+    called = {"knowledge": 0, "document_watcher": 0}
+    captured: list[dict] = []
 
-    def fake_archive(project, paths, *, root, actor, source_type_hints):
-        called["archive"] += 1
-        assert list(paths) == [source]
+    def fake_ingest(project, documents, *, root, actor):
+        called["knowledge"] += 1
+        captured.extend(documents)
         return {
-            "schema": "qualibug.archive-ingestion-receipt.v1",
             "ok": True,
             "created": [{"source_id": "src_member_1"}, {"source_id": "src_member_2"}],
             "duplicates": [],
             "errors": [],
             "warnings": [],
             "source_count": 2,
-            "expanded_document_count": 2,
-            "archive_receipts": [{"status": "COMPLETE"}],
-            "archive_transport_artifacts": [{"archive_hash": "c" * 64}],
+            "archive_expansion": {
+                "status": "COMPLETE",
+                "document_count": 2,
+                "package_count": 1,
+                "error_count": 0,
+                "warning_count": 0,
+                "packages": [{"status": "COMPLETE", "archive_hash": "c" * 64}],
+                "canonical_archive_authority": "archive_ingestion_core",
+                "duplicate_archive_parser_present": False,
+            },
         }
 
     monkeypatch.setattr(
-        archive_ingestion,
-        "ingest_enterprise_knowledge_archives",
-        fake_archive,
+        enterprise_knowledge_center,
+        "ingest_enterprise_knowledge_documents",
+        fake_ingest,
     )
     monkeypatch.setattr(
         document_change_watcher,
         "ingest_document",
-        lambda path: called.__setitem__("document", called["document"] + 1),
+        lambda path: called.__setitem__(
+            "document_watcher", called["document_watcher"] + 1
+        ),
     )
     monkeypatch.setattr(
         enterprise_source_registry,
@@ -145,7 +162,10 @@ def test_archive_upload_delegates_members_and_never_parses_package_as_document(
     assert result["doc_type"] == "archive_package"
     assert result["source_ids"] == ["src_member_1", "src_member_2"]
     assert result["doc_info"]["expanded_document_count"] == 2
-    assert called == {"archive": 1, "document": 0}
+    assert result["doc_info"]["canonical_archive_authority"] == "archive_ingestion_core"
+    assert called == {"knowledge": 1, "document_watcher": 0}
+    assert captured == [{"file_path": str(source), "filename": source.name}]
+    assert result["parallel_archive_parser_called"] is False
     assert result["canonical_runtime_corpus_used"] is True
 
 
@@ -158,15 +178,23 @@ def test_archive_member_failure_is_returned_without_composing_runtime_manifest(
     composed = {"called": False}
 
     monkeypatch.setattr(
-        archive_ingestion,
-        "ingest_enterprise_knowledge_archives",
+        enterprise_knowledge_center,
+        "ingest_enterprise_knowledge_documents",
         lambda *args, **kwargs: {
             "ok": False,
             "created": [],
             "duplicates": [],
             "errors": [{"code": "ARCHIVE_MEMBER_PATH_TRAVERSAL"}],
-            "archive_receipts": [{"status": "BLOCKED"}],
-            "expanded_document_count": 0,
+            "warnings": [],
+            "archive_expansion": {
+                "status": "BLOCKED",
+                "document_count": 0,
+                "package_count": 1,
+                "error_count": 1,
+                "warning_count": 0,
+                "packages": [{"status": "BLOCKED"}],
+                "canonical_archive_authority": "archive_ingestion_core",
+            },
         },
     )
 
@@ -191,4 +219,6 @@ def test_archive_member_failure_is_returned_without_composing_runtime_manifest(
 
     assert result["ok"] is False
     assert result["ingest_result"]["errors"][0]["code"] == "ARCHIVE_MEMBER_PATH_TRAVERSAL"
+    assert result["doc_info"]["archive_error_count"] == 1
+    assert result["parallel_archive_parser_called"] is False
     assert composed["called"] is False
