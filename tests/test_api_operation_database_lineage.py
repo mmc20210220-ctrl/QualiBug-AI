@@ -1,5 +1,16 @@
 from __future__ import annotations
 
+import json
+
+from ai_test_asset_center.enterprise_knowledge_center.api_artifact_asset_projection import (
+    enrich_asset_with_api_artifact_semantics,
+)
+from ai_test_asset_center.enterprise_knowledge_center.document_ingestion import (
+    build_document_structure_ir,
+)
+from ai_test_asset_center.enterprise_knowledge_center.openapi_schema_fact_asset_projection import (
+    enrich_asset_with_openapi_schema_facts,
+)
 from ai_test_asset_center.enterprise_knowledge_center.api_operation_database_projection import (
     API_OPERATION_DATABASE_PROJECTION_SCHEMA,
     enrich_asset_with_api_operation_database_candidates,
@@ -241,3 +252,72 @@ def test_unreferenced_storage_candidates_do_not_become_operation_candidates() ->
     assert result["api_database_entity_alignment_candidates"][0][
         "operation_scope_status"
     ] == "NOT_REFERENCED_BY_EXACT_API_OPERATION"
+
+
+def test_real_openapi_document_ir_closes_operation_schema_binding() -> None:
+    payload = {
+        "openapi": "3.0.3",
+        "info": {"title": "Orders", "version": "1"},
+        "components": {
+            "schemas": {
+                "Order": {
+                    "type": "object",
+                    "properties": {
+                        "amount": {"type": "number", "minimum": 0}
+                    },
+                }
+            }
+        },
+        "paths": {
+            "/orders": {
+                "post": {
+                    "operationId": "createOrder",
+                    "requestBody": {
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/Order"}
+                            }
+                        }
+                    },
+                    "responses": {"201": {"description": "Created"}},
+                }
+            }
+        },
+    }
+    structure = build_document_structure_ir(
+        json.dumps(payload).encode("utf-8"),
+        filename="orders.openapi.json",
+        source_id="src_api",
+    )
+    source = {"source_id": "src_api", "document_structure": structure}
+    asset = {
+        "source_inventory": [
+            {"source_id": "src_api", "source_type": "openapi"}
+        ],
+        "interfaces": [],
+        "relationships": [],
+        "coverage_gaps": [],
+        "summary": {},
+        "governance": {},
+    }
+
+    asset = enrich_asset_with_openapi_schema_facts(asset, [source])
+    asset = enrich_asset_with_api_artifact_semantics(asset, [source])
+    result = enrich_asset_with_api_operation_schema_bindings(asset)
+
+    assert {row["name"] for row in result["openapi_schema_entities"]} == {
+        "Order"
+    }
+    assert len(result["interfaces"]) == 1
+    binding = result["api_operation_schema_bindings"][0]
+    assert binding["interface_id"] == "api:POST:/orders"
+    assert binding["api_schema_name"] == "Order"
+    assert binding["direction"] == "request"
+    assert binding["json_pointer"] == (
+        "/paths/~1orders/post/requestBody/content/"
+        "application~1json/schema"
+    )
+    assert binding["source_locator"].startswith(
+        "orders.openapi.json#block=json-pointer:"
+    )
+    assert result["api_operation_schema_binding_receipt"]["status"] == "COMPLETE"
