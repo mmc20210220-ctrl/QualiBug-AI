@@ -81,13 +81,14 @@ def _children_by_parent(blocks: Iterable[dict[str, Any]]) -> dict[str, list[dict
 
 
 def _operation_index(rows: Iterable[Any]) -> dict[tuple[str, str], dict[str, Any]]:
+    """Index the actual row objects so enrichments cannot disappear into copies."""
+
     result: dict[tuple[str, str], dict[str, Any]] = {}
     for raw in rows:
         if not isinstance(raw, dict):
             continue
-        row = dict(raw)
-        key = (_method(row.get("method")), _path(row.get("path")))
-        result.setdefault(key, row)
+        key = (_method(raw.get("method")), _path(raw.get("path")))
+        result.setdefault(key, raw)
     return result
 
 
@@ -119,6 +120,11 @@ def _attach_openapi_evidence(
         row.update(
             {
                 **_evidence(block),
+                "interface_id": _text(row.get("interface_id"))
+                or f"api:{key[0]}:{key[1]}",
+                "source_kind": "openapi",
+                "method": key[0],
+                "path": key[1],
                 "contract_authority": "OPENAPI_SOURCE_DECLARATION",
                 "business_flow_inferred": False,
             }
@@ -188,6 +194,25 @@ def _postman_parameter_contract(block: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _merge_parameter_contracts(variants: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, bool]] = set()
+    for variant in variants:
+        for descriptor in _list(variant.get("parameter_contracts")):
+            if not isinstance(descriptor, dict):
+                continue
+            key = (
+                _text(descriptor.get("name")),
+                _text(descriptor.get("location")),
+                bool(descriptor.get("disabled")),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(dict(descriptor))
+    return result
+
+
 def _postman_rows(
     existing: Iterable[Any],
     blocks: list[dict[str, Any]],
@@ -203,8 +228,8 @@ def _postman_rows(
         path = _path(block.get("api_path"))
         key = (method, path)
         row = by_key.get(key)
+        name = _text(block.get("request_name")) or "Postman request"
         if row is None:
-            name = _text(block.get("request_name")) or "Postman request"
             row = {
                 "interface_id": f"postman:{method}:{path}",
                 "source_id": source_id,
@@ -261,22 +286,63 @@ def _postman_rows(
                     **_evidence(block),
                 }
             )
+        variant = {
+            "request_name": name,
+            "folder_path": list(block.get("folder_path") or []),
+            "body_mode": _text(block.get("body_mode")),
+            "auth_type": auth_type,
+            "parameter_contracts": parameter_contracts,
+            "script_contracts": scripts,
+            "response_examples": response_examples,
+            "security_requirements": security,
+            "credential_values_retained": False,
+            **_evidence(block),
+        }
+        variants = [
+            dict(item)
+            for item in _list(row.get("postman_request_variants"))
+            if isinstance(item, dict)
+        ]
+        if not any(
+            _text(item.get("json_pointer")) == _text(variant.get("json_pointer"))
+            for item in variants
+        ):
+            variants.append(variant)
         row.update(
             {
                 **_evidence(block),
+                "interface_id": _text(row.get("interface_id"))
+                or f"postman:{method}:{path}",
                 "runtime_contract_schema": POSTMAN_RUNTIME_CONTRACT_SCHEMA,
                 "source_id": source_id or row.get("source_id"),
                 "source_kind": "postman",
                 "method": method,
                 "path": path,
-                "request_name": _text(block.get("request_name")),
-                "folder_path": list(block.get("folder_path") or []),
-                "body_mode": _text(block.get("body_mode")),
-                "auth_type": auth_type,
-                "parameter_contracts": parameter_contracts,
-                "script_contracts": scripts,
-                "response_examples": response_examples,
-                "security_requirements": security,
+                "postman_request_variants": variants,
+                "request_variant_count": len(variants),
+                "request_name": _text(variants[0].get("request_name")),
+                "folder_path": list(variants[0].get("folder_path") or []),
+                "body_mode": _text(variants[0].get("body_mode")),
+                "auth_type": _text(variants[0].get("auth_type")),
+                "parameter_contracts": _merge_parameter_contracts(variants),
+                "script_contracts": [
+                    dict(script)
+                    for item in variants
+                    for script in _list(item.get("script_contracts"))
+                    if isinstance(script, dict)
+                ],
+                "response_examples": [
+                    dict(example)
+                    for item in variants
+                    for example in _list(item.get("response_examples"))
+                    if isinstance(example, dict)
+                ],
+                "security_requirements": [
+                    dict(requirement)
+                    for item in variants
+                    for requirement in _list(item.get("security_requirements"))
+                    if isinstance(requirement, dict)
+                ],
                 "request_contract_locations_preserved": True,
                 "credential_values_retained": False,
                 "contract_authority": "POSTMAN_SOURCE_DECLARATION",
@@ -344,19 +410,57 @@ def _har_rows(
                 "HAR_RESPONSE_HEADER",
             }
         ]
+        observation = {
+            "observed_status": block.get("response_status"),
+            "elapsed_ms": block.get("elapsed_ms"),
+            "started_at": _text(block.get("started_at")),
+            "response_mime_type": _text(block.get("response_mime_type")),
+            "field_observations": field_observations,
+            "credential_values_retained": False,
+            **_evidence(block),
+        }
+        observations = [
+            dict(item)
+            for item in _list(row.get("runtime_observations"))
+            if isinstance(item, dict)
+        ]
+        if not any(
+            _text(item.get("json_pointer")) == _text(observation.get("json_pointer"))
+            for item in observations
+        ):
+            observations.append(observation)
+        statuses: dict[str, int] = defaultdict(int)
+        elapsed: list[float] = []
+        for item in observations:
+            status = _text(item.get("observed_status")) or "unknown"
+            statuses[status] += 1
+            try:
+                elapsed.append(float(item.get("elapsed_ms")))
+            except (TypeError, ValueError):
+                pass
         row.update(
             {
                 **_evidence(block),
+                "interface_id": _text(row.get("interface_id"))
+                or f"har:{method}:{path}",
+                "operation_id": _text(row.get("operation_id"))
+                or _safe_slug(f"observed_{method}_{path}"),
                 "runtime_observation_schema": HAR_RUNTIME_OBSERVATION_SCHEMA,
                 "source_id": source_id or row.get("source_id"),
                 "source_kind": "har_observation",
                 "method": method,
                 "path": path,
-                "observed_status": block.get("response_status"),
-                "elapsed_ms": block.get("elapsed_ms"),
-                "started_at": _text(block.get("started_at")),
-                "response_mime_type": _text(block.get("response_mime_type")),
-                "field_observations": field_observations,
+                "runtime_observations": observations,
+                "observation_count": len(observations),
+                "observed_status_distribution": dict(sorted(statuses.items())),
+                "observed_error_count": sum(
+                    count
+                    for status, count in statuses.items()
+                    if status.isdigit() and int(status) >= 400
+                ),
+                "minimum_elapsed_ms": min(elapsed) if elapsed else None,
+                "maximum_elapsed_ms": max(elapsed) if elapsed else None,
+                "latest_observation": dict(observations[-1]),
                 "credential_values_retained": False,
                 "observation_authority": "HAR_RUNTIME_EVIDENCE",
                 "contract_authority": False,
@@ -396,8 +500,12 @@ def enrich_parsed_api_artifact_semantics(
         operations = _har_rows(operations, blocks, source_id)
 
     exact_count = sum(
-        1 for row in operations if _text(row.get("source_locator")) and _text(row.get("json_pointer"))
+        1
+        for row in operations
+        if _text(row.get("source_locator")) and _text(row.get("json_pointer"))
     )
+    variant_count = sum(int(row.get("request_variant_count") or 0) for row in operations)
+    observation_count = sum(int(row.get("observation_count") or 0) for row in operations)
     result["operations"] = operations
     result["api_artifact_semantic_receipt"] = {
         "schema": API_ARTIFACT_SEMANTIC_RECEIPT_SCHEMA,
@@ -406,6 +514,8 @@ def enrich_parsed_api_artifact_semantics(
         "declared_source_type": source_type,
         "operation_count_before_projection": before,
         "operation_count_after_projection": len(operations),
+        "postman_request_variant_count": variant_count,
+        "har_runtime_observation_count": observation_count,
         "exact_operation_evidence_count": exact_count,
         "exact_operation_evidence_rate": round(exact_count / len(operations), 4)
         if operations
