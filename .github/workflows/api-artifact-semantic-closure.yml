@@ -1,0 +1,57 @@
+name: API artifact semantic closure
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "ai_test_asset_center/enterprise_knowledge_center/document_ingestion/api_artifact_adapter.py"
+      - "ai_test_asset_center/enterprise_knowledge_center/document_ir_api_semantics.py"
+      - "ai_test_asset_center/enterprise_knowledge_center/api_artifact_asset_projection.py"
+      - "ai_test_asset_center/enterprise_knowledge_center/composition.py"
+      - "tests/test_api_artifact_structure_adapter.py"
+      - "tests/test_api_artifact_semantic_projection.py"
+      - "tests/test_api_artifact_asset_projection.py"
+      - ".github/workflows/api-artifact-semantic-closure.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  closure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install product and tests
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Compile API semantic stages
+        run: |
+          python -m py_compile \
+            ai_test_asset_center/enterprise_knowledge_center/document_ingestion/api_artifact_adapter.py \
+            ai_test_asset_center/enterprise_knowledge_center/document_ir_api_semantics.py \
+            ai_test_asset_center/enterprise_knowledge_center/api_artifact_asset_projection.py \
+            ai_test_asset_center/enterprise_knowledge_center/composition.py
+
+      - name: Run API artifact closure tests
+        run: |
+          pytest -q \
+            tests/test_api_artifact_structure_adapter.py \
+            tests/test_api_artifact_semantic_projection.py \
+            tests/test_api_artifact_asset_projection.py
