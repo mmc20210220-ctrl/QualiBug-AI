@@ -11,6 +11,9 @@ from .database_observer_experiment_projection import (
 from .database_state_transition_experiment_projection import (
     project_database_state_transition_assertions,
 )
+from .database_state_transition_finding_bridge import (
+    install_database_state_transition_finding_bridge,
+)
 from .experiment_compiler_conflict_base import *  # noqa: F401,F403
 from .runtime_materialization_experiment_bridge import (
     bind_experiment_pack_to_captured_materializations,
@@ -26,6 +29,7 @@ _original_compile_experiment = _base._original_compile_experiment
 # Additive only: capture the existing knowledge asset, bind its governed materialization drafts to
 # experiments, and extend the existing runtime preflight/finalizer. No second compiler or executor.
 install_runtime_materialization_execution_bridge()
+install_database_state_transition_finding_bridge()
 install_runtime_materialization_operation_matching()
 
 
