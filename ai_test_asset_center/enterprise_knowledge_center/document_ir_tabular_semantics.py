@@ -263,9 +263,12 @@ def _record(
         or semantic_values.get("steps")
     ):
         return None
-    prefix = "bug" if profile == "historical_bug" else "test_case_row"
-    return {
-        f"{prefix}_id": _stable_id(prefix, source_id, table["table_id"], row_number),
+
+    stable_prefix = "historical_bug_record" if profile == "historical_bug" else "test_case_row"
+    stable_record_id = _stable_id(
+        stable_prefix, source_id, table["table_id"], row_number
+    )
+    record = {
         "source_id": source_id,
         "source_profile": profile,
         "table_id": table["table_id"],
@@ -288,6 +291,12 @@ def _record(
         "business_semantics_inferred": False,
         "field_mapping_method": "source_declared_header_alias",
     }
+    if profile == "historical_bug":
+        record["historical_bug_record_id"] = stable_record_id
+        record.setdefault("bug_id", stable_record_id)
+    else:
+        record["test_case_row_id"] = stable_record_id
+    return record
 
 
 def _append_unique(values: list[str], value: Any) -> None:
@@ -334,7 +343,10 @@ def _merge_test_case_row(target: dict[str, Any], row: dict[str, Any]) -> None:
         existing = _text(target.get(field))
         if field in multi_value_fields:
             values = list(target.setdefault("_aggregated_values", {}).setdefault(field, []))
-            _append_unique(values, existing)
+            # Initialize the accumulator exactly once. Re-adding the already-rendered
+            # multi-line target on every continuation row duplicates all prior steps.
+            if not values:
+                _append_unique(values, existing)
             step_no = _text(row.get("step_no"))
             rendered = f"{step_no}. {value}" if step_no and field in {"steps", "expected"} else value
             _append_unique(values, rendered)
