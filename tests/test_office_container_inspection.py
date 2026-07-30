@@ -137,10 +137,11 @@ def test_odf_basic_script_tree_is_blocked_before_normalization() -> None:
     result = GuardedCompatibleOfficeDocumentAdapter(NeverNormalizer()).extract(source)
 
     assert result["structure_receipt"]["status"] == "BLOCKED"
-    assert result["office_container_inspection"]["automation_artifact_detected"] is True
+    inspection = result["structure_receipt"]["office_container_inspection"]
+    assert inspection["automation_artifact_detected"] is True
     assert any(
         "ZIP_SCRIPT_TREE" in value or "ZIP_BASIC_MODULE" in value
-        for value in result["office_container_inspection"]["automation_indicators"]
+        for value in inspection["automation_indicators"]
     )
 
 
@@ -183,9 +184,12 @@ def test_safe_zip_container_uses_native_docx_ir_with_original_evidence() -> None
         registry=_guarded_registry(StaticNormalizer(_docx_bytes())),
     )
 
-    assert result["office_container_inspection"]["inspection_complete"] is True
-    assert result["office_container_inspection"]["automation_artifact_detected"] is False
-    assert result["office_normalization_receipt"]["source_conversion_succeeded"] is True
+    receipt = result["structure_receipt"]
+    inspection = receipt["office_container_inspection"]
+    normalization = receipt["normalization_receipt"]
+    assert inspection["inspection_complete"] is True
+    assert inspection["automation_artifact_detected"] is False
+    assert normalization["source_conversion_succeeded"] is True
     assert result["blocks"]
     assert all(block["source_filename"] == "需求.wps" for block in result["blocks"])
     assert all(str(block["source_locator"]).startswith("需求.wps") for block in result["blocks"])
@@ -201,11 +205,13 @@ def test_opaque_wps_is_fail_visible_but_can_normalize_as_supplemental_compatibil
         registry=_guarded_registry(StaticNormalizer(_docx_bytes())),
     )
 
-    assert result["office_container_inspection"]["inspection_complete"] is False
-    assert result["office_container_inspection"]["container_kind"] == "OPAQUE_CONTAINER"
+    receipt = result["structure_receipt"]
+    inspection = receipt["office_container_inspection"]
+    assert inspection["inspection_complete"] is False
+    assert inspection["container_kind"] == "OPAQUE_CONTAINER"
     reasons = {row.get("reason_code") for row in result.get("unsupported_content") or []}
     assert "OFFICE_CONTAINER_AUTOMATION_INSPECTION_PARTIAL" in reasons
-    assert result["structure_receipt"]["status"] == "PARTIAL"
+    assert receipt["status"] == "PARTIAL"
     assert result["plain_text"]
 
 
