@@ -5,6 +5,9 @@ from typing import Any
 
 from . import experiment_compiler_obligation as _experiment_compiler
 from .database_observer_experiment_runtime import install_experiment_database_observer
+from .database_state_transition_oracle import (
+    install_database_state_transition_assertion,
+)
 from .observer_contracts_base import (
     _receipt,
     register_observer,
@@ -143,7 +146,7 @@ def _process_timeline_handler(envelope: dict[str, Any]) -> dict[str, Any]:
 
 
 def install_non_http_observers() -> None:
-    """Register product-ledger and approved read-only database observers."""
+    """Register product-ledger, database facts, and database Oracle assertions."""
 
     if _PROCESS_OBSERVER_ID not in registered_observer_ids():
         register_observer(
@@ -161,6 +164,9 @@ def install_non_http_observers() -> None:
     # The formal handler aggregates true BEFORE/AFTER receipts produced by the existing
     # Experiment Executor. It never re-queries the database during finalization.
     install_experiment_database_observer()
+    # Assertion registration happens only after the aggregate Observer has declared the
+    # evidence key it produces. The Assertion DSL rejects structurally unproducible kinds.
+    install_database_state_transition_assertion()
 
     if hasattr(_experiment_compiler, _ORIGINAL_COMPILER_MARKER):
         original_compile = getattr(
