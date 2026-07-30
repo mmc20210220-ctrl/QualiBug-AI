@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import experiment_compiler_obligation as _experiment_compiler
-from .database_observer_runtime import install_approved_database_observer
+from .database_observer_experiment_runtime import install_experiment_database_observer
 from .observer_contracts_base import (
     _receipt,
     register_observer,
@@ -158,9 +158,9 @@ def install_non_http_observers() -> None:
             ),
         )
 
-    # Registration is side-effect free with respect to the target: no config is read and no
-    # connection is opened until a compiled experiment dispatches the Observer handler.
-    install_approved_database_observer()
+    # The formal handler aggregates true BEFORE/AFTER receipts produced by the existing
+    # Experiment Executor. It never re-queries the database during finalization.
+    install_experiment_database_observer()
 
     if hasattr(_experiment_compiler, _ORIGINAL_COMPILER_MARKER):
         original_compile = getattr(
