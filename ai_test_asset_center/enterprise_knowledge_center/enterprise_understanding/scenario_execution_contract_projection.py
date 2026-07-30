@@ -9,7 +9,6 @@ from .runtime_materialization_security import (
 from .runtime_plan_governance import project_governed_runtime_plans_to_asset
 from .schema import as_dict, as_list, text, unique_text
 from .scenario_execution_contract import project_scenario_execution_contracts
-from .scenario_execution_probe_guard import install_scenario_execution_probe_guard
 
 
 def _authoritative_api_binding(binding: dict[str, Any]) -> dict[str, Any]:
@@ -33,9 +32,9 @@ def project_governed_scenario_execution_contracts(
 ) -> dict[str, Any]:
     """Project one governed interface authority through non-executable runtime drafts.
 
-    The projection never changes behavior semantics, reads a secret, sends a request, executes a
-    query or enables execution. Request locations are copied only from the source-declared
-    interface contract retained on the knowledge asset.
+    The projection never changes behavior semantics, reads a secret, sends a request,
+    executes a query or enables execution. Probe admission is deliberately absent from
+    this stage and belongs to the final composition root.
     """
     bindings = {
         text(row.get("binding_id")): row
@@ -54,7 +53,9 @@ def project_governed_scenario_execution_contracts(
         if not isinstance(raw, dict):
             continue
         scenario = dict(raw)
-        binding = as_dict(bindings.get(text(scenario.get("implementation_binding_ref"))))
+        binding = as_dict(
+            bindings.get(text(scenario.get("implementation_binding_ref")))
+        )
         api = _authoritative_api_binding(binding)
         action = dict(as_dict(scenario.get("action_entry")))
         if api and text(api.get("interface_id")) == text(action.get("interface_id")):
@@ -94,18 +95,19 @@ def project_governed_scenario_execution_contracts(
             "scenario_contract_field_projection_count": projected_count,
             "scenario_source_declared_location_metadata_count": location_metadata_count,
             "scenario_runtime_contract_metadata_retains_secret_values": False,
+            "probe_admission_is_final_composition_responsibility": True,
         }
     )
     asset["governance"] = governance
     project_scenario_execution_contracts(asset, model)
     project_governed_runtime_plans_to_asset(asset, model)
     project_secure_runtime_materializations_to_asset(asset, model)
-    install_scenario_execution_probe_guard()
     governance = as_dict(asset.get("governance"))
     governance.update(
         {
             "legacy_probe_generation_requires_runtime_plan_gate": True,
             "legacy_probe_generation_requires_runtime_materialization_gate": True,
+            "runtime_projection_mutates_probe_compiler": False,
         }
     )
     asset["governance"] = governance
