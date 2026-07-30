@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import experiment_compiler_obligation as _experiment_compiler
+from .database_observer_runtime import install_approved_database_observer
 from .observer_contracts_base import (
     _receipt,
     register_observer,
@@ -142,7 +143,7 @@ def _process_timeline_handler(envelope: dict[str, Any]) -> dict[str, Any]:
 
 
 def install_non_http_observers() -> None:
-    """Register process-ledger evidence for protocols that guarantee it."""
+    """Register product-ledger and approved read-only database observers."""
 
     if _PROCESS_OBSERVER_ID not in registered_observer_ids():
         register_observer(
@@ -156,6 +157,10 @@ def install_non_http_observers() -> None:
                 "required_steps_executed",
             ),
         )
+
+    # Registration is side-effect free with respect to the target: no config is read and no
+    # connection is opened until a compiled experiment dispatches the Observer handler.
+    install_approved_database_observer()
 
     if hasattr(_experiment_compiler, _ORIGINAL_COMPILER_MARKER):
         original_compile = getattr(
