@@ -1,9 +1,10 @@
 """Execute approved database Observer drafts in their real Experiment phases.
 
 BEFORE runs after fixtures and runtime binding validation but before any control/treatment transport.
-AFTER runs after all business transport and before cleanup. The final registered Observer aggregates
-those typed receipts and never re-queries after cleanup. A missing BEFORE receipt blocks transport;
-a missing AFTER receipt stays INDETERMINATE and can never become a Bug verdict.
+AFTER runs after all business transport and before cleanup. The final phase-aggregate Observer
+consumes only those typed receipts and never re-queries after cleanup. Single-query readback and
+phase aggregation intentionally use different Observer IDs, so registration order cannot change
+runtime authority.
 """
 from __future__ import annotations
 
@@ -17,12 +18,13 @@ from typing import Any, Iterable
 from .database_observer_runtime import (
     ADAPTER,
     EVIDENCE_KEY,
-    OBSERVER_ID,
+    OBSERVER_ID as DIRECT_READBACK_OBSERVER_ID,
     execute_database_observer_contract,
     observe_approved_database_contract,
 )
 from .observer_contracts_base import _receipt, register_observer, registered_observer_ids
 
+PHASE_AGGREGATE_OBSERVER_ID = "approved_database_phase_aggregate"
 PHASE_RECEIPT_SCHEMA = "qualibug.database-observer-phase-receipt.v1"
 AGGREGATE_SCHEMA = "qualibug.database-observer-phase-aggregate.v1"
 _DRAFT_SCHEMA = "qualibug.database-observer-execution-draft.v1"
@@ -42,7 +44,13 @@ def _list(value: Any) -> list[Any]:
 
 
 def _canonical(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
 
 
 def _fingerprint(value: Any) -> str:
@@ -62,7 +70,10 @@ def _dedupe(rows: Iterable[Any], key: str) -> list[dict[str, Any]]:
 
 def _materialize(value: Any, runtime_bindings: dict[str, Any]) -> Any:
     if isinstance(value, dict):
-        return {key: _materialize(child, runtime_bindings) for key, child in value.items()}
+        return {
+            key: _materialize(child, runtime_bindings)
+            for key, child in value.items()
+        }
     if isinstance(value, list):
         return [_materialize(child, runtime_bindings) for child in value]
     if isinstance(value, str):
@@ -82,7 +93,9 @@ def _path_get(value: Any, parts: list[str]) -> Any:
     return current
 
 
-def _treatment_request(exp: dict[str, Any], runtime_bindings: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def _treatment_request(
+    exp: dict[str, Any], runtime_bindings: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
     body: dict[str, Any] = {}
     parameters = dict(runtime_bindings)
     for raw in _list(exp.get("treatment_plan")):
@@ -97,7 +110,9 @@ def _treatment_request(exp: dict[str, Any], runtime_bindings: dict[str, Any]) ->
     return body, parameters
 
 
-def _latest_treatment_response(steps_out: list[dict[str, Any]]) -> dict[str, Any]:
+def _latest_treatment_response(
+    steps_out: list[dict[str, Any]],
+) -> dict[str, Any]:
     for raw in reversed(steps_out):
         row = _dict(raw)
         phase = _text(row.get("phase")).lower()
@@ -167,7 +182,7 @@ def execute_database_observer_phase(
     campaign_id: str,
     execution_id: str,
 ) -> dict[str, Any]:
-    """Execute every required draft for one true phase and mutate observations with receipts."""
+    """Execute every required draft for one true phase and store typed receipts."""
     target = _text(phase).upper()
     if target not in {"BEFORE", "AFTER"}:
         raise ValueError("database_observer_phase_invalid")
@@ -202,6 +217,7 @@ def execute_database_observer_phase(
         )
         receipt = {
             **receipt,
+            "source_observer_id": DIRECT_READBACK_OBSERVER_ID,
             "phase_receipt_id": _fingerprint(
                 {
                     "draft_id": draft.get("draft_id"),
@@ -218,14 +234,16 @@ def execute_database_observer_phase(
         }
         receipts.append(receipt)
 
+    current_draft_ids = {_text(item.get("draft_id")) for item in drafts}
     existing = [
         dict(row)
-        for row in _list(observations.get("approved_database_observer_phase_receipts"))
+        for row in _list(
+            observations.get("approved_database_observer_phase_receipts")
+        )
         if isinstance(row, dict)
         and not (
             _text(row.get("observation_phase")) == target
-            and _text(row.get("draft_id"))
-            in {_text(item.get("draft_id")) for item in drafts}
+            and _text(row.get("draft_id")) in current_draft_ids
         )
     ]
     observations["approved_database_observer_phase_receipts"] = _dedupe(
@@ -272,20 +290,28 @@ def _expected_drafts(exp: dict[str, Any]) -> list[dict[str, Any]]:
 def aggregate_database_observer_phase_receipts(
     envelope: dict[str, Any],
 ) -> dict[str, Any]:
-    """Registered final Observer: aggregate real phase receipts; never perform a second query."""
+    """Aggregate true phase receipts; never perform a second database query."""
     env = _dict(envelope)
     experiment = _dict(env.get("experiment"))
     drafts = _expected_drafts(experiment)
     if not drafts:
+        # This aggregate ID is not a replacement for the standalone readback Observer. The
+        # fallback exists only for explicit callers that intentionally supplied the direct
+        # contract envelope under the aggregate handler.
         return observe_approved_database_contract(env)
     observations = _dict(env.get("observations"))
     receipts = [
         dict(row)
-        for row in _list(observations.get("approved_database_observer_phase_receipts"))
+        for row in _list(
+            observations.get("approved_database_observer_phase_receipts")
+        )
         if isinstance(row, dict)
     ]
     by_key = {
-        (_text(row.get("draft_id")), _text(row.get("observation_phase")).upper()): row
+        (
+            _text(row.get("draft_id")),
+            _text(row.get("observation_phase")).upper(),
+        ): row
         for row in receipts
         if _text(row.get("draft_id")) and _text(row.get("observation_phase"))
     }
@@ -307,6 +333,7 @@ def aggregate_database_observer_phase_receipts(
                 "phase": key[1],
                 "observer_contract_ref": draft.get("observer_contract_ref"),
                 "receipt_id": receipt.get("receipt_id"),
+                "source_observer_id": DIRECT_READBACK_OBSERVER_ID,
                 "snapshot": payload,
                 "snapshot_fingerprint": payload.get("row_fingerprint"),
                 "oracle_verdict_emitted": False,
@@ -318,8 +345,12 @@ def aggregate_database_observer_phase_receipts(
         "required_phase_count": len(drafts),
         "observed_phase_count": len(phase_rows),
         "missing_required_phases": missing,
-        "before_phase_count": sum(1 for row in phase_rows if row["phase"] == "BEFORE"),
-        "after_phase_count": sum(1 for row in phase_rows if row["phase"] == "AFTER"),
+        "before_phase_count": sum(
+            1 for row in phase_rows if row["phase"] == "BEFORE"
+        ),
+        "after_phase_count": sum(
+            1 for row in phase_rows if row["phase"] == "AFTER"
+        ),
         "phase_pair_complete": not missing,
         "finalizer_database_requery_count": 0,
         "query_execution_count": len(phase_rows),
@@ -329,7 +360,7 @@ def aggregate_database_observer_phase_receipts(
     }
     if missing:
         return _receipt(
-            observer_id=OBSERVER_ID,
+            observer_id=PHASE_AGGREGATE_OBSERVER_ID,
             status="INDETERMINATE",
             reason_code="DATABASE_OBSERVER_REQUIRED_PHASE_RECEIPT_MISSING",
             evidence=evidence,
@@ -337,7 +368,7 @@ def aggregate_database_observer_phase_receipts(
             execution_id=_text(env.get("execution_id")),
         )
     return _receipt(
-        observer_id=OBSERVER_ID,
+        observer_id=PHASE_AGGREGATE_OBSERVER_ID,
         status="OBSERVED",
         evidence=evidence,
         campaign_id=_text(env.get("campaign_id")),
@@ -346,20 +377,21 @@ def aggregate_database_observer_phase_receipts(
 
 
 def install_experiment_database_observer() -> str:
-    """Register phase aggregation on the existing typed Observer registry."""
-    if OBSERVER_ID in registered_observer_ids():
-        return OBSERVER_ID
+    """Register phase aggregation under its own stable Observer authority."""
+    if PHASE_AGGREGATE_OBSERVER_ID in registered_observer_ids():
+        return PHASE_AGGREGATE_OBSERVER_ID
     return register_observer(
-        OBSERVER_ID,
+        PHASE_AGGREGATE_OBSERVER_ID,
         surface="database_read_only",
         adapter=ADAPTER,
         handler=aggregate_database_observer_phase_receipts,
-        evidence_keys=(EVIDENCE_KEY, "approved_database_snapshots"),
+        evidence_keys=("approved_database_snapshots",),
     )
 
 
 __all__ = [
     "AGGREGATE_SCHEMA",
+    "PHASE_AGGREGATE_OBSERVER_ID",
     "PHASE_RECEIPT_SCHEMA",
     "aggregate_database_observer_phase_receipts",
     "execute_database_observer_phase",
