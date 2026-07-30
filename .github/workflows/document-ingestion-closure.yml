@@ -34,15 +34,18 @@ on:
       - "tests/test_office_container_inspection.py"
       - "tests/test_office_container_resource_limits.py"
       - "tests/test_api_artifact_document_adapter.py"
+      - "tests/test_openapi_schema_projection.py"
       - "tests/test_enterprise_archive_expansion.py"
       - "tests/test_enterprise_archive_ingestion_transaction.py"
       - "tests/test_archive_ingestion.py"
       - "tests/test_archive_ingestion_atomicity.py"
       - "tests/test_archive_transport_document_container_guard.py"
       - "tests/test_archive_member_activation_atomicity.py"
+      - "tests/test_archive_member_reconciliation.py"
       - "tests/test_private_pilot_ingest_authority.py"
       - "tests/test_archive_explicit_type_override.py"
       - "tests/test_document_ir_tabular_semantics.py"
+      - "tests/test_multi_row_test_case_semantics.py"
       - "tests/test_tabular_semantics_ingestion_bridge.py"
       - "tests/test_test_asset_source_types.py"
       - "tests/test_document_ir_fact_evidence_spans.py"
@@ -95,6 +98,7 @@ jobs:
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/guarded_compatible_office_adapter.py \
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/api_artifact_adapter.py \
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/guarded_api_artifact_adapter.py \
+            ai_test_asset_center/enterprise_knowledge_center/document_ingestion/openapi_schema_projection.py \
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/page_render_registry.py \
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/evidence_closure.py \
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/rendered_ocr_adapter.py \
@@ -132,15 +136,18 @@ jobs:
             tests/test_office_container_inspection.py \
             tests/test_office_container_resource_limits.py \
             tests/test_api_artifact_document_adapter.py \
+            tests/test_openapi_schema_projection.py \
             tests/test_enterprise_archive_expansion.py \
             tests/test_enterprise_archive_ingestion_transaction.py \
             tests/test_archive_ingestion.py \
             tests/test_archive_ingestion_atomicity.py \
             tests/test_archive_transport_document_container_guard.py \
             tests/test_archive_member_activation_atomicity.py \
+            tests/test_archive_member_reconciliation.py \
             tests/test_private_pilot_ingest_authority.py \
             tests/test_archive_explicit_type_override.py \
             tests/test_document_ir_tabular_semantics.py \
+            tests/test_multi_row_test_case_semantics.py \
             tests/test_tabular_semantics_ingestion_bridge.py \
             tests/test_test_asset_source_types.py \
             tests/test_document_ir_fact_evidence_spans.py \
