@@ -9,6 +9,7 @@ import mimetypes
 from typing import Any, Iterable
 
 from .contract import (
+    CAP_COMMENT_EXTRACTION,
     CAP_FONT_EVIDENCE,
     CAP_FORMULA_EXTRACTION,
     CAP_HEADER_FOOTER,
@@ -35,11 +36,11 @@ from .contract import (
 from .image_decoding import sniff_image_source
 from .registry import DocumentAdapterRegistry
 
-_VISUAL_OFFICE_FAMILIES = {"doc", "rtf", "odt", "ppt", "pptx", "odp"}
-_TABLE_OFFICE_FAMILIES = {"xls", "xlsx", "xlsm", "xlsb", "ods"}
+# Native OOXML families are structurally parseable without rasterizing every page.
+# Legacy binary/ODF visual formats remain rendering/OCR workloads until a native adapter exists.
+_LEGACY_VISUAL_OFFICE_FAMILIES = {"doc", "rtf", "odt", "ppt", "odp"}
+_LEGACY_TABLE_OFFICE_FAMILIES = {"xls", "xlsb", "ods"}
 _DEFERRED_CAPABILITIES_BY_GAP: dict[str, tuple[str, ...]] = {
-    # A scanned page may contain body text, a table, or both.  Rendering is shared and
-    # supplemental adapters independently recover text and table structure.
     "SCANNED_PAGE_REQUIRES_OCR": (
         CAP_PAGE_RENDERING,
         CAP_OCR,
@@ -51,6 +52,15 @@ _DEFERRED_CAPABILITIES_BY_GAP: dict[str, tuple[str, ...]] = {
         CAP_TABLE_STRUCTURE,
     ),
     "PDF_IMAGE_CONTENT_UNPARSED": ("DIAGRAM_STRUCTURE", CAP_PAGE_RENDERING),
+    "PRESENTATION_IMAGE_CONTENT_UNPARSED": (
+        CAP_PAGE_RENDERING,
+        CAP_OCR,
+        CAP_TEXT_EXTRACTION,
+    ),
+    "SPREADSHEET_EMBEDDED_IMAGE_NOT_SEMANTICALLY_PARSED": (
+        CAP_OCR,
+        CAP_TEXT_EXTRACTION,
+    ),
 }
 
 
@@ -112,6 +122,27 @@ def _required_capabilities(family: str) -> list[str]:
                 CAP_HEADER_FOOTER,
             ]
         )
+    if family == "xlsx":
+        return unique_text(
+            [
+                CAP_TEXT_EXTRACTION,
+                CAP_TABLE_STRUCTURE,
+                CAP_FORMULA_EXTRACTION,
+                CAP_COMMENT_EXTRACTION,
+                CAP_STYLE_SEMANTICS,
+            ]
+        )
+    if family == "pptx":
+        return unique_text(
+            [
+                CAP_TEXT_EXTRACTION,
+                CAP_HEADING_HIERARCHY,
+                CAP_TABLE_STRUCTURE,
+                CAP_IMAGE_PRESENCE,
+                CAP_COMMENT_EXTRACTION,
+                CAP_STYLE_SEMANTICS,
+            ]
+        )
     if family == "image":
         return unique_text(
             [
@@ -124,7 +155,7 @@ def _required_capabilities(family: str) -> list[str]:
                 CAP_TABLE_STRUCTURE,
             ]
         )
-    if family in _VISUAL_OFFICE_FAMILIES:
+    if family in _LEGACY_VISUAL_OFFICE_FAMILIES:
         return unique_text(
             [
                 CAP_PAGE_RENDERING,
@@ -136,8 +167,15 @@ def _required_capabilities(family: str) -> list[str]:
                 CAP_TABLE_STRUCTURE,
             ]
         )
-    if family in _TABLE_OFFICE_FAMILIES:
-        return unique_text([CAP_TABLE_STRUCTURE, CAP_FORMULA_EXTRACTION, CAP_STYLE_SEMANTICS])
+    if family in _LEGACY_TABLE_OFFICE_FAMILIES:
+        return unique_text(
+            [
+                CAP_TEXT_EXTRACTION,
+                CAP_TABLE_STRUCTURE,
+                CAP_FORMULA_EXTRACTION,
+                CAP_STYLE_SEMANTICS,
+            ]
+        )
     if family in {
         "text",
         "structured_text",
@@ -156,7 +194,9 @@ def _required_capabilities(family: str) -> list[str]:
         "csv",
         "tsv",
     }:
-        return unique_text([CAP_TEXT_EXTRACTION, CAP_HEADING_HIERARCHY, CAP_LIST_HIERARCHY])
+        return unique_text(
+            [CAP_TEXT_EXTRACTION, CAP_HEADING_HIERARCHY, CAP_LIST_HIERARCHY]
+        )
     return []
 
 
@@ -184,9 +224,6 @@ def plan_document_parsing(
     if primary_rows:
         selected.append(primary_rows[0])
     else:
-        # A visual source needs several independent capabilities.  Select every standalone
-        # adapter that contributes a still-missing required capability; do not force OCR,
-        # table recovery and future diagram analysis into one monolithic adapter.
         provided: set[str] = set()
         for row in supplemental_rows:
             adapter, match = row
@@ -203,7 +240,9 @@ def plan_document_parsing(
     provided_capabilities = unique_text(
         capability for _adapter, match in selected for capability in match.capabilities
     )
-    missing_capabilities = sorted(set(required_capabilities) - set(provided_capabilities))
+    missing_capabilities = sorted(
+        set(required_capabilities) - set(provided_capabilities)
+    )
     selected_rows = [_adapter_row(adapter, match) for adapter, match in selected]
     alternatives = [
         match.to_dict()
@@ -252,7 +291,8 @@ def plan_deferred_supplementals(
         dict(row)
         for row in (primary_document_ir.get("unsupported_content") or [])
         if isinstance(row, dict)
-        and text(row.get("reason_code") or row.get("kind")) in _DEFERRED_CAPABILITIES_BY_GAP
+        and text(row.get("reason_code") or row.get("kind"))
+        in _DEFERRED_CAPABILITIES_BY_GAP
         and int(row.get("count") or 0) > 0
     ]
     requested = unique_text(
@@ -283,8 +323,6 @@ def plan_deferred_supplementals(
     missing = sorted(set(requested) - provided)
     status = "NOT_REQUIRED"
     if trigger_gaps and selected:
-        # READY means one or more adapters can execute. Missing capabilities remain explicit
-        # and the original structural gaps remain until a supplemental result resolves them.
         status = "READY"
     elif trigger_gaps and not selected:
         status = "BLOCKED_REQUIRED_SUPPLEMENTAL_ADAPTER_UNAVAILABLE"
@@ -295,7 +333,9 @@ def plan_deferred_supplementals(
         "requested_capabilities": requested,
         "provided_capabilities": sorted(provided),
         "missing_capabilities": missing,
-        "selected_adapters": [_adapter_row(adapter, match) for adapter, match in selected],
+        "selected_adapters": [
+            _adapter_row(adapter, match) for adapter, match in selected
+        ],
         "business_semantics_added": False,
         "document_order_is_business_flow": False,
     }
