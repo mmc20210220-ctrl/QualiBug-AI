@@ -103,7 +103,38 @@ The workflow blocks when:
 The comparison derives precision, recall and F1 only from the external scorer's aggregate
 TP/FP/FN. The comparator never opens the hidden answer registry.
 
-## What this workflow does not prove
+## Enterprise-understanding measurement
+
+The evaluator also measures the product's persisted enterprise-understanding asset against a
+human-authored, source-backed Ground Truth. This workflow is evaluator-only; the Ground Truth must
+not be copied into `ai_test_asset_center` or imported by product runtime.
+
+```bash
+python -m benchmark_evaluator.enterprise_understanding \
+  --project <project_id> \
+  --ground-truth <evaluator-ground-truth.json> \
+  --asset <immutable-product-asset.json> \
+  --output <evaluator-output-directory>
+```
+
+It reports object, actor, operation, rule, Behavior and state-transition recall; slot and evidence
+accuracy; Expected/Unexpected Unknown quality; false-confirmation risk; Bug dependency coverage;
+and the earliest P0/P1-weighted understanding breakpoint.
+
+Both the Ground Truth and product asset are fingerprinted. The workflow receipt explicitly records:
+
+```text
+hidden_ground_truth_entered_product_runtime = false
+model_writeback_allowed = false
+```
+
+The evaluator never creates a second enterprise model and never repairs the product asset. Its next
+repair target always points to the earliest existing product-mainline module where information was
+lost.
+
+See `benchmark_evaluator/enterprise_understanding/README.md` for the detailed contract.
+
+## What these workflows do not prove
 
 A successful comparison proves only the externally scored change on the declared target and
 source snapshot. It does not prove universal cross-industry recall, production safety or
