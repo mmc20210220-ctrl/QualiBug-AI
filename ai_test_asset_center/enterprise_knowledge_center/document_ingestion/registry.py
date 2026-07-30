@@ -87,12 +87,12 @@ def build_default_registry() -> DocumentAdapterRegistry:
         PdfDocumentAdapter,
         UnknownBinaryDocumentAdapter,
     )
+    from .guarded_compatible_office_adapter import GuardedCompatibleOfficeDocumentAdapter
     from .native_office_policy_adapters import (
         MacroAwareDocxDocumentAdapter,
         MacroAwarePresentationDocumentAdapter,
         MacroAwareSpreadsheetDocumentAdapter,
     )
-    from .office_runtime_capabilities import RuntimeAwareCompatibleOfficeDocumentAdapter
     from .rendered_ocr_adapter import OcrSupplementalAdapter
     from .visual_table_adapter import VisualTableSupplementalAdapter
     from .visual_table_provider_gate import GeometryFormalEnforcingVisualTableProvider
@@ -106,7 +106,7 @@ def build_default_registry() -> DocumentAdapterRegistry:
             PdfDocumentAdapter(),
             MacroAwareSpreadsheetDocumentAdapter(),
             MacroAwarePresentationDocumentAdapter(),
-            RuntimeAwareCompatibleOfficeDocumentAdapter(),
+            GuardedCompatibleOfficeDocumentAdapter(),
             OcrSupplementalAdapter(),
             VisualTableSupplementalAdapter(provider=advanced_table_provider),
             GenericTextDocumentAdapter(),
