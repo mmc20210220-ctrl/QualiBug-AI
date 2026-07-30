@@ -1,7 +1,6 @@
 """Project Scenario IR closure into asset gaps and relationship graph."""
 from __future__ import annotations
 
-from functools import wraps
 from typing import Any
 
 from .schema import as_dict, as_list, stable_id, text
@@ -83,45 +82,14 @@ def _relationships(scenarios: list[dict[str, Any]]) -> list[dict[str, Any]]:
     )
 
 
-def _install_probe_gate_guard() -> None:
-    """Prevent legacy risk-to-probe generation from bypassing formal contracts."""
-    from .. import _api
-
-    current = _api._probes_from_asset
-    if getattr(current, "_qualibug_scenario_ir_gate_guard", False):
-        return
-    original = current
-
-    @wraps(original)
-    def guarded(asset: dict[str, Any], max_count: int = 140):
-        planning_gate = as_dict(asset.get("scenario_planning_gate"))
-        scenario_gate = as_dict(asset.get("scenario_ir_gate"))
-        execution_contract_gate = as_dict(
-            asset.get("scenario_execution_contract_gate")
-        )
-        if planning_gate:
-            if not bool(planning_gate.get("scenario_planning_allowed")):
-                return []
-            if not scenario_gate or not bool(scenario_gate.get("entry_allowed")):
-                return []
-            # New assets must also enumerate request, observer, snapshot and cleanup
-            # obligations before the legacy candidate-probe compatibility path is visible.
-            if not execution_contract_gate or not bool(
-                execution_contract_gate.get("entry_allowed")
-            ):
-                return []
-        return original(asset, max_count)
-
-    guarded._qualibug_scenario_ir_gate_guard = True  # type: ignore[attr-defined]
-    guarded._qualibug_original_probe_builder = original  # type: ignore[attr-defined]
-    _api._probes_from_asset = guarded
-
-
 def project_scenario_ir_asset_governance(
     asset: dict[str, Any], model: dict[str, Any]
 ) -> dict[str, Any]:
+    """Project Scenario IR metadata without replacing any Probe compiler."""
     scenarios = [
-        dict(row) for row in as_list(asset.get("scenario_ir")) if isinstance(row, dict)
+        dict(row)
+        for row in as_list(asset.get("scenario_ir"))
+        if isinstance(row, dict)
     ]
     gate = as_dict(asset.get("scenario_ir_gate"))
     relationships = _relationships(scenarios)
@@ -197,9 +165,7 @@ def project_scenario_ir_asset_governance(
         "scenario_ir_state_transition_count": int(
             metrics.get("state_transition_scenario_count") or 0
         ),
-        "scenario_ir_unknown_count": len(
-            as_list(asset.get("scenario_ir_unknowns"))
-        ),
+        "scenario_ir_unknown_count": len(as_list(asset.get("scenario_ir_unknowns"))),
         "scenario_ir_relationship_count": len(relationships),
     }
     summary = as_dict(asset.get("summary"))
@@ -223,11 +189,11 @@ def project_scenario_ir_asset_governance(
             "scenario_ir_relationships_do_not_imply_execution": True,
             "legacy_probe_generation_requires_scenario_ir_gate": True,
             "legacy_probe_generation_requires_execution_contract_gate": True,
+            "scenario_ir_projection_mutates_probe_compiler": False,
         }
     )
     asset["governance"] = governance
     model["scenario_ir_relationships"] = relationships
-    _install_probe_gate_guard()
     return asset
 
 
