@@ -1,7 +1,6 @@
 """Knowledge ingest / delete handlers for PrivatePilotHandler."""
 from __future__ import annotations
 
-import re
 import time
 from pathlib import Path
 from typing import Any
@@ -10,16 +9,14 @@ from .private_pilot_json_io import _write_json_object_atomic
 from .private_pilot_project_assets import (
     KNOWLEDGE_INGEST_EXTENSIONS,
     KNOWLEDGE_INGEST_SOURCE_TYPES,
-    resolve_knowledge_source_type,
 )
 from .private_pilot_scan_prep import _run_ingest_auto_scan
 
 
 class IngestHandlersMixin:
     def _handle_ingest(self, project: str, body: dict[str, Any], root: Path, actor: dict[str, str]) -> None:
-        """Ingest raw customer material and let the backend classify it."""
+        """Ingest one customer transport artifact through the canonical knowledge authority."""
         import base64
-        from .enterprise_knowledge_center import ingest_enterprise_knowledge_documents
 
         if not self._require_known_project(project, root):
             return
@@ -43,125 +40,81 @@ class IngestHandlersMixin:
         if not content_b64:
             return self._json({"ok": False, "error": "MISSING_CONTENT", "message": "缺少文件内容。"}, 400)
 
-        # Decode once and persist the original bytes so PDF/DOCX/XLSX uploads are
-        # not corrupted by an unnecessary UTF-8 text round-trip.
         try:
             raw = base64.b64decode(content_b64, validate=True)
         except Exception:
-            return self._json({"ok": False, "error": "DECODE_FAILED", "message": "文件内容解码失败，请重新选择原始文件。"}, 400)
+            return self._json(
+                {"ok": False, "error": "DECODE_FAILED", "message": "文件内容解码失败，请重新选择原始文件。"},
+                400,
+            )
 
         input_dir = root / "platform_workspace" / project / "input"
         input_dir.mkdir(parents=True, exist_ok=True)
         out_path = input_dir / filename
         out_path.write_bytes(raw)
 
-        # The document intelligence layer extracts text first. Classification and
-        # source-registry hashing must use that extracted text rather than binary
-        # PDF/DOCX bytes decoded as replacement characters.
-        from .document_change_watcher import ingest_document
-
-        doc_info = ingest_document(str(out_path))
-        if not isinstance(doc_info, dict) or doc_info.get("ok") is not True:
-            message = str(doc_info.get("error") or "document intelligence returned an invalid result") if isinstance(doc_info, dict) else "document intelligence result must be an object"
-            out_path.unlink(missing_ok=True)
-            return self._json(
-                {"ok": False, "error": "DOCUMENT_INGEST_FAILED", "message": message},
-                500,
-            )
-
-        extracted_text = str(doc_info.get("text") or "")
-        if not extracted_text and suffix not in {".pdf", ".docx", ".xlsx", ".xls"}:
-            extracted_text = raw.decode("utf-8", errors="replace")
-        try:
-            doc_type, type_resolution = resolve_knowledge_source_type(
-                filename,
-                extracted_text,
-                explicit_type or None,
-            )
-        except ValueError as exc:
-            out_path.unlink(missing_ok=True)
-            return self._json(
-                {
-                    "ok": False,
-                    "error": "UNSUPPORTED_SOURCE_TYPE",
-                    "message": str(exc),
-                    "supported_source_types": list(KNOWLEDGE_INGEST_SOURCE_TYPES),
-                },
-                400,
-            )
-
         source_manifest: dict[str, Any] = {}
         knowledge_updated = False
         source_id = ""
+        source_ids: list[str] = []
         ingest_status = "pending"
         auto_scan_reason = ""
-        ingest_phase = "knowledge_center"
+        ingest_phase = "upload_dispatch"
         defer_auto_scan = body.get("defer_auto_scan") is True
         finalize_batch = body.get("finalize_batch") is True
+        doc_type = ""
+        type_resolution = ""
+        doc_info: dict[str, Any] = {}
+        transport = "document"
+        ingest_result: dict[str, Any] = {}
         try:
-            ingest_result = ingest_enterprise_knowledge_documents(
-                project,
-                [{"file_path": str(out_path), "filename": filename, "source_type": doc_type}],
+            from .private_pilot_ingest_authority import ingest_uploaded_enterprise_material
+
+            authority_result = ingest_uploaded_enterprise_material(
+                project=project,
                 root=root,
                 actor=actor,
+                out_path=out_path,
+                filename=filename,
+                raw=raw,
+                explicit_type=explicit_type,
             )
-            if not isinstance(ingest_result, dict):
-                raise TypeError("knowledge ingest result must be an object")
-            if "ok" not in ingest_result:
-                raise ValueError("knowledge ingest result missing ok=true")
-            if ingest_result.get("ok") is not True and ingest_result.get("ok") is not False:
-                raise ValueError("knowledge ingest result ok must be a boolean")
-            if ingest_result.get("ok") is False:
-                out_path.unlink(missing_ok=True)
+            if not isinstance(authority_result, dict):
+                raise TypeError("upload ingest authority result must be an object")
+            ingest_result = dict(authority_result.get("ingest_result") or {})
+            doc_type = str(authority_result.get("doc_type") or "")
+            type_resolution = str(authority_result.get("type_resolution") or "")
+            doc_info = dict(authority_result.get("doc_info") or {})
+            transport = str(authority_result.get("transport") or "document")
+            source_manifest = dict(authority_result.get("source_manifest") or {})
+            source_ids = [
+                str(value)
+                for value in authority_result.get("source_ids") or []
+                if str(value).strip()
+            ]
+            source_id = str(authority_result.get("source_id") or "")
+            if authority_result.get("ok") is not True:
                 errors = ingest_result.get("errors") if isinstance(ingest_result.get("errors"), list) else []
-                first_error = errors[0].get("error") if errors and isinstance(errors[0], dict) else "unknown"
+                first = errors[0] if errors and isinstance(errors[0], dict) else {}
+                detail = first.get("error") or first.get("detail") or first.get("code") or "unknown"
+                out_path.unlink(missing_ok=True)
                 return self._json(
-                    {"ok": False, "error": "INGEST_FAILED", "message": "资料导入失败：" + str(first_error)},
+                    {
+                        "ok": False,
+                        "error": "INGEST_FAILED",
+                        "message": "资料导入失败：" + str(detail),
+                        "transport": transport,
+                        "archive_receipts": ingest_result.get("archive_receipts") or [],
+                    },
                     500,
                 )
 
-            knowledge_updated = True
-            created = ingest_result.get("created", [])
-            duplicates = ingest_result.get("duplicates", [])
-            if not isinstance(created, list):
-                raise ValueError("knowledge ingest result created must be a list")
-            if not isinstance(duplicates, list):
-                raise ValueError("knowledge ingest result duplicates must be a list")
-            ingest_status = "created"
-            if created and isinstance(created[0], dict):
-                source_id = str(created[0].get("source_id") or "")
-            elif duplicates and isinstance(duplicates[0], dict):
-                source_id = str(duplicates[0].get("source_id") or "")
-                ingest_status = "duplicate"
-
-            ingest_phase = "source_registry"
-            from .enterprise_source_registry import register_source_asset, resolve_source_manifest
-
-            source_asset_id = source_id or f"{doc_type}:{filename}"
-            source_manifest = resolve_source_manifest(project, extracted_text, root=root)
-            if not source_manifest:
-                source_manifest = register_source_asset(
-                    project,
-                    source_asset_id,
-                    extracted_text,
-                    source_type=doc_type,
-                    root=root,
-                    actor=actor,
-                    origin="knowledge_ingest",
-                    filename=filename,
-                    metadata={
-                        "knowledge_source_id": source_id,
-                        "storage_mode": "verbatim_bytes",
-                        "input_path": str(out_path.relative_to(root)) if str(out_path).startswith(str(root)) else str(out_path),
-                        "source_type_resolution": type_resolution,
-                    },
-                )
-            if not isinstance(source_manifest, dict):
-                raise TypeError("source manifest must be an object")
-            manifest_source_id = str(source_manifest.get("source_id") or "").strip()
-            manifest_source_hash = str(source_manifest.get("source_hash") or "").strip().lower().removeprefix("sha256:")
-            if not manifest_source_id or re.fullmatch(r"[0-9a-f]{64}", manifest_source_hash) is None:
-                raise ValueError("source manifest missing valid source_id/source_hash")
+            created = ingest_result.get("created") or []
+            duplicates = ingest_result.get("duplicates") or []
+            if not isinstance(created, list) or not isinstance(duplicates, list):
+                raise ValueError("knowledge ingest result source lists are invalid")
+            knowledge_updated = bool(created)
+            ingest_status = "created" if created else "duplicate" if duplicates else "accepted"
 
             ingest_phase = "cache_invalidation"
             knowledge_cache = root / "platform_workspace" / project / "defect_discovery" / "enterprise_business_knowledge_asset.json"
@@ -171,18 +124,21 @@ class IngestHandlersMixin:
             if dash_html.exists():
                 dash_html.unlink()
 
-            # Every meaningful source can change the combined business model. A
-            # multi-file customer selection defers intermediate scans and starts
-            # one combined background analysis after the last file is indexed.
+            # Every meaningful source can change the combined business model. A package
+            # or multi-file selection triggers one scan against the composed corpus.
             ingest_phase = "auto_scan_validation"
             non_scan_types = {"other_document", "application_log", "har"}
             should_auto_scan = not defer_auto_scan and (
-                finalize_batch or doc_type not in non_scan_types
+                finalize_batch or transport == "archive" or doc_type not in non_scan_types
             )
             if defer_auto_scan:
                 auto_scan_reason = "批量资料仍在导入，等待最后一份资料后统一启动后台理解。"
 
-            if should_auto_scan and doc_type in {"openapi", "markdown_api", "postman"}:
+            if should_auto_scan and transport != "archive" and doc_type in {
+                "openapi",
+                "markdown_api",
+                "postman",
+            }:
                 try:
                     from .universal_api_parser import parse_to_openapi
 
@@ -225,9 +181,11 @@ class IngestHandlersMixin:
                     "filename": filename,
                     "doc_type": doc_type,
                     "source_type_resolution": type_resolution,
+                    "transport": transport,
                     "phase": ingest_phase,
                     "knowledge_updated": knowledge_updated,
                     "source_id": source_id,
+                    "source_ids": source_ids,
                     "error_type": type(exc).__name__,
                     "error": str(exc),
                     "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -244,14 +202,22 @@ class IngestHandlersMixin:
             if "scan_skipped" in ingest_status
             else "not_applicable"
         )
+        expanded_count = int(ingest_result.get("expanded_document_count") or 0)
+        message = (
+            f"'{filename}' 已安全展开并导入 {expanded_count} 份资料。"
+            if transport == "archive"
+            else f"'{filename}' 已导入，后台自动识别为 {doc_type}。"
+        )
         return self._json({
             "ok": True,
             "source_id": source_id,
+            "source_ids": source_ids,
             "ingest_status": ingest_status,
             "auto_scan": auto_scan,
             "auto_scan_reason": auto_scan_reason,
             "filename": filename,
             "doc_type": doc_type,
+            "transport": transport,
             "source_type_resolution": type_resolution,
             "size_bytes": len(raw),
             "path": str(out_path),
@@ -261,7 +227,10 @@ class IngestHandlersMixin:
             "supported_extensions": list(KNOWLEDGE_INGEST_EXTENSIONS),
             "doc_info": doc_info,
             "knowledge_updated": knowledge_updated,
-            "message": f"'{filename}' 已导入，后台自动识别为 {doc_type}。",
+            "expanded_document_count": expanded_count,
+            "archive_receipts": ingest_result.get("archive_receipts") or [],
+            "second_source_registration_performed": False,
+            "message": message,
         })
 
     def _handle_delete(self, project: str, body: dict[str, Any], root: Path, actor: dict[str, str]) -> None:
