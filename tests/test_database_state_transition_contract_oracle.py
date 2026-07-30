@@ -150,9 +150,13 @@ def test_contract_oracle_promotes_database_assertion_violation_not_observer() ->
 
     assert result["status"] == "VIOLATION"
     assert result["verdict"] == "customer_deliverable_defect_candidate"
-    assert result["failed_assertions"] == ["assert:orders:status"]
-    assertion = result["assertions"][0]
+    assert len(result["failed_assertions"]) == 1
+    assertion = result["failed_assertions"][0]
+    assert result["assertions"] == result["failed_assertions"]
+    assert assertion["assertion_id"] == "assert:orders:status"
     assert assertion["kind"] == DATABASE_STATE_TRANSITION_ASSERTION_KIND
     assert assertion["status"] == "VIOLATION"
     assert assertion["reason_code"] == "DATABASE_STATE_TRANSITION_NOT_OBSERVED"
     assert assertion["actual"]["observer_performed_oracle_verdict"] is False
+    assert result["customer_deliverable"] is False
+    assert result["customer_deliverable_candidate"] is True
