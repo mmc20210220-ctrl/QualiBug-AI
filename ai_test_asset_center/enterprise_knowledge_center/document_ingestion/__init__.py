@@ -17,6 +17,10 @@ from .decision_matrix_candidate_gate import (
     DECISION_MATRIX_GATE_SCHEMA,
     apply_decision_matrix_candidate_gate,
 )
+from .evidence_closure import (
+    EVIDENCE_CLOSURE_SCHEMA,
+    apply_document_evidence_closure,
+)
 from .image_decoding import (
     CairoSvgImageDecoder,
     DecodedImageFrame,
@@ -29,6 +33,7 @@ from .image_decoding import (
     sniff_image_source,
 )
 from .ocr_adapter import OcrProvider, TesseractOcrProvider
+from .office_adapters import PresentationDocumentAdapter, SpreadsheetDocumentAdapter
 from .page_render_registry import PageRendererRegistry, build_default_page_renderer_registry
 from .page_rendering import (
     LibreOfficeDocumentPageRenderer,
@@ -74,6 +79,10 @@ __all__ = [
     "OcrProvider",
     "OcrSupplementalAdapter",
     "TesseractOcrProvider",
+    "SpreadsheetDocumentAdapter",
+    "PresentationDocumentAdapter",
+    "EVIDENCE_CLOSURE_SCHEMA",
+    "apply_document_evidence_closure",
     "DecodedImageFrame",
     "ImageDecodeBatch",
     "ImageDecoder",
