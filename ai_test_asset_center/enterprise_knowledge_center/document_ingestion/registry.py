@@ -88,6 +88,7 @@ def build_default_registry() -> DocumentAdapterRegistry:
         PdfDocumentAdapter,
         UnknownBinaryDocumentAdapter,
     )
+    from .compatible_office_adapter import CompatibleOfficeDocumentAdapter
     from .office_adapters import PresentationDocumentAdapter, SpreadsheetDocumentAdapter
     from .rendered_ocr_adapter import OcrSupplementalAdapter
     from .visual_table_adapter import VisualTableSupplementalAdapter
@@ -102,6 +103,7 @@ def build_default_registry() -> DocumentAdapterRegistry:
             PdfDocumentAdapter(),
             SpreadsheetDocumentAdapter(),
             PresentationDocumentAdapter(),
+            CompatibleOfficeDocumentAdapter(),
             OcrSupplementalAdapter(),
             VisualTableSupplementalAdapter(provider=advanced_table_provider),
             GenericTextDocumentAdapter(),
