@@ -35,6 +35,14 @@ class FakeNormalizer:
         raise AssertionError("readiness reporting must not execute source conversion")
 
 
+class RaisingNormalizer(FakeNormalizer):
+    def __init__(self) -> None:
+        super().__init__(False)
+
+    def available(self) -> bool:
+        raise OSError("runtime probe failed")
+
+
 class WorkingNormalizer(FakeNormalizer):
     def __init__(self) -> None:
         super().__init__(True)
@@ -160,6 +168,18 @@ def test_runtime_aware_adapter_preserves_format_capabilities_but_blocks_runtime(
     assert receipt["runtime_ready"] is False
     assert receipt["runtime_dependency_available"] is False
     assert receipt["format_conversion_verified_with_this_source"] is False
+
+
+def test_runtime_probe_exception_is_fail_visible_not_raised() -> None:
+    adapter = RuntimeAwareCompatibleOfficeDocumentAdapter(RaisingNormalizer())
+    source = DocumentSource("src_probe", "需求.wps", b"legacy-word")
+
+    match = adapter.probe(source)
+
+    assert match is not None
+    assert match.runtime_ready is False
+    assert match.runtime_reason == "RUNTIME_DEPENDENCY_UNAVAILABLE"
+    assert "unavailable_at_runtime" in match.reason
 
 
 def test_successful_real_source_conversion_is_marked_only_after_extract(monkeypatch) -> None:
