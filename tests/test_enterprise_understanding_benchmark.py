@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import json
 from copy import deepcopy
 
-from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding_benchmark import (
+from benchmark_evaluator.enterprise_understanding import (
     align_enterprise_understanding,
     analyse_miss_root_causes,
     calculate_benchmark_metrics,
@@ -78,16 +77,10 @@ def _ground_truth(*, scope_complete: bool = True) -> dict:
                 "operation": "发货",
                 "object_refs": ["订单"],
                 "preconditions": [
-                    {
-                        "field": "订单状态",
-                        "operator": "EQUALS",
-                        "value": "已审核",
-                    }
+                    {"field": "订单状态", "operator": "EQUALS", "value": "已审核"}
                 ],
                 "permission_decision": "ALLOW",
-                "state_effects": [
-                    {"from_state": "已审核", "to_state": "已发货"}
-                ],
+                "state_effects": [{"from_state": "已审核", "to_state": "已发货"}],
                 "criticality": "P0",
                 "source_refs": ["source:policy"],
                 "annotation_status": "CONFIRMED",
@@ -188,9 +181,7 @@ def _asset() -> dict:
                         }
                     ],
                     "permission_decision": "ALLOW",
-                    "state_effects": [
-                        {"from_state": "已审核", "to_state": "已发货"}
-                    ],
+                    "state_effects": [{"from_state": "已审核", "to_state": "已发货"}],
                     "status": "CONFIRMED",
                     "evidence": [{"source_id": "source:policy"}],
                 }
@@ -209,10 +200,10 @@ def _asset() -> dict:
     }
 
 
-def test_benchmark_reads_existing_model_and_measures_exact_understanding(tmp_path) -> None:
+def test_evaluator_measures_existing_model_without_mutation(tmp_path) -> None:
     ground_truth = _ground_truth()
     asset = _asset()
-    asset_before = deepcopy(asset)
+    before = deepcopy(asset)
 
     result = run_benchmark(ground_truth, asset, output_dir=str(tmp_path))
 
@@ -223,40 +214,43 @@ def test_benchmark_reads_existing_model_and_measures_exact_understanding(tmp_pat
     assert result["metrics"]["business_behavior_recall"] == 1.0
     assert result["metrics"]["state_transition_recall"] == 1.0
     assert result["metrics"]["expected_unknown_exposure_rate"] == 1.0
+    assert result["metrics"]["unexpected_unknown_count"] == 0
     assert result["metrics"]["bug_dependency_metrics"]["bug_dependency_rule_coverage_rate"] == 1.0
     assert result["metrics"]["false_confirmation_metrics"]["false_confirmation_rate"] == 0.0
     assert result["root_cause_analysis"]["misses"] == []
-    assert asset == asset_before
+    assert result["workflow_receipt"]["hidden_ground_truth_entered_product_runtime"] is False
+    assert result["workflow_receipt"]["model_writeback_allowed"] is False
+    assert result["ground_truth_fingerprint"]
+    assert result["product_asset_fingerprint"]
+    assert asset == before
+    assert (tmp_path / "workflow_receipt.json").exists()
     assert (tmp_path / "metric_summary.json").exists()
-    assert (tmp_path / "root_cause_distribution.json").exists()
-    assert "企业业务理解 Benchmark" in (tmp_path / "report.md").read_text(encoding="utf-8")
+    assert (tmp_path / "report.md").exists()
 
 
-def test_missing_source_is_reported_before_downstream_behavior_gap() -> None:
+def test_missing_source_precedes_downstream_behavior_gap() -> None:
     ground_truth = validate_ground_truth(_ground_truth())
     asset = _asset()
     asset["sources"] = [{"source_id": "source:bug-catalog"}]
-    model = asset["enterprise_understanding_model"]
-    model["business_behaviors"] = []
-    model["operations"] = []
+    asset["enterprise_understanding_model"]["business_behaviors"] = []
+    asset["enterprise_understanding_model"]["operations"] = []
 
     alignment = align_enterprise_understanding(ground_truth, asset)
-    root_causes = analyse_miss_root_causes(ground_truth, asset, alignment)
+    roots = analyse_miss_root_causes(ground_truth, asset, alignment)
 
-    behavior_miss = next(
-        row
-        for row in root_causes["misses"]
+    behavior = next(
+        row for row in roots["misses"]
         if row["ground_truth_id"] == "gt:behavior:ship-approved-order"
     )
-    assert behavior_miss["root_cause"] == "SOURCE_NOT_PARSED"
-    bug = root_causes["bug_dependency_root_causes"][0]
-    assert bug["earliest_root_cause"] == "SOURCE_NOT_PARSED"
+    assert behavior["root_cause"] == "SOURCE_NOT_PARSED"
+    assert roots["bug_dependency_root_causes"][0]["earliest_root_cause"] == "SOURCE_NOT_PARSED"
 
 
-def test_wrong_operation_object_binding_is_not_counted_as_recall() -> None:
+def test_wrong_operation_object_binding_is_not_recall() -> None:
     ground_truth = validate_ground_truth(_ground_truth())
     asset = _asset()
-    asset["enterprise_understanding_model"]["business_objects"].append(
+    model = asset["enterprise_understanding_model"]
+    model["business_objects"].append(
         {
             "object_id": "object:customer",
             "name": "客户",
@@ -264,15 +258,12 @@ def test_wrong_operation_object_binding_is_not_counted_as_recall() -> None:
             "evidence": [{"source_id": "source:policy"}],
         }
     )
-    asset["enterprise_understanding_model"]["operations"][0]["object_refs"] = [
-        "object:customer"
-    ]
+    model["operations"][0]["object_refs"] = ["object:customer"]
 
     alignment = align_enterprise_understanding(ground_truth, asset)
     metrics = calculate_benchmark_metrics(ground_truth, alignment)
     operation = next(
-        row
-        for row in alignment["alignments"]
+        row for row in alignment["alignments"]
         if row["ground_truth_id"] == "gt:operation:ship"
     )
 
@@ -281,7 +272,27 @@ def test_wrong_operation_object_binding_is_not_counted_as_recall() -> None:
     assert metrics["operation_object_binding_accuracy"] == 0.0
 
 
-def test_false_confirmation_rate_is_not_claimed_for_incomplete_scope() -> None:
+def test_unexpected_unknown_is_separate_from_missing_expected_unknown() -> None:
+    ground_truth = validate_ground_truth(_ground_truth())
+    asset = _asset()
+    asset["enterprise_understanding_model"]["unknowns"].append(
+        {
+            "unknown_id": "unknown:should-have-resolved",
+            "reason_code": "OBJECT_ALIAS_UNRESOLVED",
+            "status": "UNRESOLVED",
+            "evidence": [{"source_id": "source:policy"}],
+        }
+    )
+
+    alignment = align_enterprise_understanding(ground_truth, asset)
+    metrics = calculate_benchmark_metrics(ground_truth, alignment)
+
+    assert metrics["expected_unknown_exposure_rate"] == 1.0
+    assert metrics["unexpected_unknown_count"] == 1
+    assert alignment["unexpected_unknowns"][0]["alignment_status"] == "UNKNOWN_SHOULD_HAVE_BEEN_RESOLVED"
+
+
+def test_false_confirmation_rate_requires_complete_scope() -> None:
     ground_truth = validate_ground_truth(_ground_truth(scope_complete=False))
     asset = _asset()
     asset["enterprise_understanding_model"]["business_objects"].append(
@@ -293,13 +304,15 @@ def test_false_confirmation_rate_is_not_claimed_for_incomplete_scope() -> None:
         }
     )
 
-    alignment = align_enterprise_understanding(ground_truth, asset)
-    metrics = calculate_benchmark_metrics(ground_truth, alignment)
-    false_confirmation = metrics["false_confirmation_metrics"]
+    metrics = calculate_benchmark_metrics(
+        ground_truth,
+        align_enterprise_understanding(ground_truth, asset),
+    )
 
-    assert false_confirmation["status"] == "NOT_MEASURABLE_INCOMPLETE_GROUND_TRUTH_SCOPE"
-    assert false_confirmation["false_confirmation_rate"] is None
-    assert false_confirmation["unmatched_confirmed_candidate_count"] == 1
+    receipt = metrics["false_confirmation_metrics"]
+    assert receipt["status"] == "NOT_MEASURABLE_INCOMPLETE_GROUND_TRUTH_SCOPE"
+    assert receipt["false_confirmation_rate"] is None
+    assert receipt["unmatched_confirmed_candidate_count"] == 1
 
 
 def test_minimum_profile_shortfall_is_fail_visible() -> None:
@@ -311,11 +324,7 @@ def test_minimum_profile_shortfall_is_fail_visible() -> None:
 
     assert validated["validation_receipt"]["status"] == "BENCHMARK_GROUND_TRUTH_INCOMPLETE"
     assert validated["validation_receipt"]["shortfalls"] == [
-        {
-            "collection": "business_objects",
-            "expected_minimum": 10,
-            "actual": 1,
-        }
+        {"collection": "business_objects", "expected_minimum": 10, "actual": 1}
     ]
     assert result["status"] == "BENCHMARK_GROUND_TRUTH_INCOMPLETE"
-    assert result["model_writeback_allowed"] is False
+    assert result["workflow_receipt"]["model_writeback_allowed"] is False
