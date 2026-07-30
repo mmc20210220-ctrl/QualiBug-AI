@@ -1,18 +1,18 @@
 """Security and evidence policy wrapper for compatible Office normalization.
 
 The existing compatible adapter remains the only conversion/OOXML delegation implementation.
-This wrapper adds one precondition: inspect the immutable source container before LibreOffice
-opens it, and fail closed when embedded automation is present or a structured container cannot
-be inspected reliably.
+This wrapper combines the canonical runtime-readiness contract with one precondition: inspect
+the immutable source container before LibreOffice opens it, and fail closed when embedded
+automation is present or a structured container cannot be inspected reliably.
 """
 from __future__ import annotations
 
 from typing import Any
 
 from .._document_structure_ir import DOCUMENT_IR_SCHEMA, STRUCTURE_RECEIPT_SCHEMA
-from .compatible_office_adapter import CompatibleOfficeDocumentAdapter
 from .contract import DocumentSource
 from .office_container_inspection import inspect_office_container
+from .office_runtime_capabilities import RuntimeAwareCompatibleOfficeDocumentAdapter
 
 
 def _blocked_document_ir(
@@ -118,10 +118,10 @@ def _attach_inspection(
     return result
 
 
-class GuardedCompatibleOfficeDocumentAdapter(CompatibleOfficeDocumentAdapter):
-    """Compatible Office adapter with pre-conversion automation blocking."""
+class GuardedCompatibleOfficeDocumentAdapter(RuntimeAwareCompatibleOfficeDocumentAdapter):
+    """Runtime-aware compatible Office adapter with pre-conversion automation blocking."""
 
-    parser_version = "3"
+    parser_version = "4"
 
     def extract(self, source: DocumentSource) -> dict[str, Any]:
         inspection = inspect_office_container(source)
