@@ -21,6 +21,9 @@ from ._formal_ui_visual_viewport_guard import install_formal_ui_visual_viewport_
 from ._utils import _load_registry, _now, _paths, _save_registry
 from .api_artifact_asset_projection import enrich_asset_with_api_artifact_semantics
 from .database_model_asset_projection import enrich_asset_with_database_model_facts
+from .database_model_index_reconciliation import (
+    reconcile_database_model_index_assets,
+)
 from .database_model_semantic_bridge import install_database_model_semantic_bridge
 from .enterprise_understanding.integration import (
     _parsed_sources_for_context,
@@ -175,6 +178,7 @@ def build_enterprise_business_knowledge_asset(
     # stage invents a business sequence from document or diagram order.
     asset = enrich_asset_with_api_artifact_semantics(asset, parsed_sources)
     asset = enrich_asset_with_database_model_facts(asset, parsed_sources)
+    asset = reconcile_database_model_index_assets(asset)
     asset = enrich_asset_with_enterprise_understanding(
         asset, parsed_sources=parsed_sources
     )
@@ -232,6 +236,7 @@ def build_enterprise_business_knowledge_asset(
             "api_artifact_projection_precedes_enterprise_understanding": True,
             "database_model_projection_precedes_enterprise_understanding": True,
             "database_model_semantic_bridge_installed_explicitly": True,
+            "database_model_index_reconciliation_precedes_enterprise_understanding": True,
         }
     )
     asset["governance"] = governance
