@@ -1,9 +1,9 @@
 """Runtime capability reporting for native and compatible Office ingestion.
 
-This module does not parse documents and does not duplicate the adapter registry. It
-inspects the adapters and normalizer already used by the ingestion pipeline and exposes
-an auditable deployment-time support matrix. A filename suffix being recognized is never
-reported as a verified conversion until a real source has completed normalization.
+This module does not add another document parser. It inspects and wraps the compatible
+Office adapter already used by the ingestion pipeline, exposing deployment readiness and
+binding every successful conversion to a source-specific runtime receipt. Recognizing a
+suffix is never reported as a verified conversion until that immutable source succeeds.
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from .compatible_office_adapter import (
     _capabilities_for_target,
     _target_suffix,
 )
-from .contract import DocumentSource
+from .contract import AdapterMatch, DocumentSource
 
 OFFICE_RUNTIME_CAPABILITY_SCHEMA = "qualibug.office-runtime-capability-report.v1"
 OFFICE_SOURCE_RUNTIME_PROBE_SCHEMA = "qualibug.office-source-runtime-probe.v1"
@@ -37,6 +37,13 @@ def _family(source_suffix: str) -> str:
     if suffix in _PRESENTATION_SUFFIXES:
         return "presentation"
     return "unknown"
+
+
+def _normalizer_available(normalizer: OfficeContainerNormalizer) -> bool:
+    try:
+        return bool(normalizer.available())
+    except Exception:
+        return False
 
 
 def _normalizer_binary(normalizer: OfficeContainerNormalizer) -> str:
@@ -72,10 +79,7 @@ def build_compatible_office_runtime_report(
     """Describe what this deployment can attempt without claiming sample verification."""
 
     resolved = normalizer or LibreOfficeContainerNormalizer()
-    try:
-        dependency_available = bool(resolved.available())
-    except Exception:
-        dependency_available = False
+    dependency_available = _normalizer_available(resolved)
     binary = _normalizer_binary(resolved)
     version = _normalizer_version(binary) if dependency_available else ""
     rows: list[dict[str, Any]] = []
@@ -101,6 +105,7 @@ def build_compatible_office_runtime_report(
                 "original_source_remains_evidence_root": True,
                 "derived_container_is_evidence_root": False,
                 "embedded_automation_semantics_interpreted": False,
+                "network_isolation_enforced": False,
                 "external_resource_resolution_isolation_verified": False,
             }
         )
@@ -118,6 +123,7 @@ def build_compatible_office_runtime_report(
         "real_source_verified_format_count": 0,
         "formats": rows,
         "recognition_is_not_conversion_verification": True,
+        "network_isolation_enforced": False,
         "business_semantics_added": False,
     }
 
@@ -132,10 +138,7 @@ def probe_compatible_office_source_runtime(
     suffix = source.suffix
     target = _target_suffix(suffix)
     recognized = bool(target)
-    try:
-        dependency_available = bool(resolved.available())
-    except Exception:
-        dependency_available = False
+    dependency_available = _normalizer_available(resolved)
     if not recognized:
         status = "UNSUPPORTED_SOURCE_SUFFIX"
     elif not dependency_available:
@@ -159,8 +162,65 @@ def probe_compatible_office_source_runtime(
         "format_conversion_verified_with_this_source": False,
         "conversion_must_succeed_before_activation": True,
         "original_source_remains_evidence_root": True,
+        "network_isolation_enforced": False,
         "business_semantics_added": False,
     }
+
+
+class RuntimeAwareCompatibleOfficeDocumentAdapter(CompatibleOfficeDocumentAdapter):
+    """Compatible Office adapter whose planning and receipts reflect runtime reality."""
+
+    parser_version = "3"
+
+    def probe(self, source: DocumentSource) -> AdapterMatch | None:
+        match = super().probe(source)
+        if match is None:
+            return None
+        runtime = probe_compatible_office_source_runtime(source, self.normalizer)
+        if runtime["runtime_dependency_available"]:
+            return match
+        return AdapterMatch(
+            adapter_name=match.adapter_name,
+            score=match.score,
+            reason=f"{match.reason};runtime_dependency=unavailable",
+            capabilities=(),
+            mode=match.mode,
+        )
+
+    def receipt(self, source: DocumentSource, match: AdapterMatch) -> dict[str, Any]:
+        receipt = super().receipt(source, match)
+        runtime = probe_compatible_office_source_runtime(source, self.normalizer)
+        receipt["runtime_source_probe"] = runtime
+        receipt["runtime_dependency_available"] = runtime["runtime_dependency_available"]
+        receipt["format_conversion_verified_with_this_source"] = False
+        receipt["recognition_is_not_conversion_verification"] = True
+        return receipt
+
+    def extract(self, source: DocumentSource) -> dict[str, Any]:
+        runtime = probe_compatible_office_source_runtime(source, self.normalizer)
+        if runtime["status"] != "READY_FOR_SOURCE_CONVERSION":
+            raise RuntimeError(
+                "compatible Office normalization is unavailable: " + str(runtime["status"])
+            )
+        result = super().extract(source)
+        normalization_receipt = dict(result.get("office_normalization_receipt") or {})
+        normalization_receipt.update(
+            {
+                "runtime_source_probe_before_conversion": runtime,
+                "source_conversion_succeeded": True,
+                "format_conversion_verified_with_this_source": True,
+                "network_access_used": "UNKNOWN",
+                "network_isolation_enforced": False,
+                "external_resource_resolution_isolation_verified": False,
+            }
+        )
+        result["office_normalization_receipt"] = normalization_receipt
+        structure_receipt = dict(result.get("structure_receipt") or {})
+        structure_receipt["normalization_receipt"] = normalization_receipt
+        structure_receipt["runtime_dependency_available"] = True
+        structure_receipt["format_conversion_verified_with_this_source"] = True
+        result["structure_receipt"] = structure_receipt
+        return result
 
 
 def main() -> int:
@@ -175,6 +235,7 @@ if __name__ == "__main__":  # pragma: no cover
 __all__ = [
     "OFFICE_RUNTIME_CAPABILITY_SCHEMA",
     "OFFICE_SOURCE_RUNTIME_PROBE_SCHEMA",
+    "RuntimeAwareCompatibleOfficeDocumentAdapter",
     "build_compatible_office_runtime_report",
     "probe_compatible_office_source_runtime",
 ]
