@@ -7,6 +7,15 @@ from .advanced_visual_table_providers import (
     WordLayoutProvider,
     build_default_advanced_visual_table_provider,
 )
+from .compatible_office_adapter import (
+    OFFICE_NORMALIZATION_RECEIPT_SCHEMA,
+    CompatibleOfficeDocumentAdapter,
+    CompatibleOfficePageRenderer,
+    LibreOfficeContainerNormalizer,
+    NormalizedOfficeContainer,
+    OfficeContainerNormalizer,
+    rebase_normalized_document_ir,
+)
 from .contract import (
     AdapterMatch,
     DocumentAdapter,
@@ -31,6 +40,12 @@ from .image_decoding import (
     RawpyCameraImageDecoder,
     build_default_image_decoder_registry,
     sniff_image_source,
+)
+from .native_office_policy_adapters import (
+    MacroAwareDocxDocumentAdapter,
+    MacroAwarePresentationDocumentAdapter,
+    MacroAwareSpreadsheetDocumentAdapter,
+    apply_native_office_container_policy,
 )
 from .ocr_adapter import OcrProvider, TesseractOcrProvider
 from .office_adapters import PresentationDocumentAdapter, SpreadsheetDocumentAdapter
@@ -81,6 +96,17 @@ __all__ = [
     "TesseractOcrProvider",
     "SpreadsheetDocumentAdapter",
     "PresentationDocumentAdapter",
+    "MacroAwareDocxDocumentAdapter",
+    "MacroAwareSpreadsheetDocumentAdapter",
+    "MacroAwarePresentationDocumentAdapter",
+    "apply_native_office_container_policy",
+    "OFFICE_NORMALIZATION_RECEIPT_SCHEMA",
+    "NormalizedOfficeContainer",
+    "OfficeContainerNormalizer",
+    "LibreOfficeContainerNormalizer",
+    "CompatibleOfficeDocumentAdapter",
+    "CompatibleOfficePageRenderer",
+    "rebase_normalized_document_ir",
     "EVIDENCE_CLOSURE_SCHEMA",
     "apply_document_evidence_closure",
     "DecodedImageFrame",
