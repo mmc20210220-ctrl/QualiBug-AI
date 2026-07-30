@@ -12,6 +12,7 @@ on:
       - "tests/test_document_ir_fact_evidence_spans.py"
       - "tests/test_document_structure_fact_receipt_gate.py"
       - "tests/test_document_evidence_address_quality.py"
+      - "tests/test_office_visual_ocr_supplemental.py"
       - "pyproject.toml"
       - ".github/workflows/document-ingestion-closure.yml"
 
@@ -47,6 +48,7 @@ jobs:
           python -m py_compile \
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/office_adapters.py \
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/evidence_closure.py \
+            ai_test_asset_center/enterprise_knowledge_center/document_ingestion/rendered_ocr_adapter.py \
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/pipeline.py \
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/planner.py \
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/registry.py \
@@ -59,4 +61,5 @@ jobs:
             tests/test_enterprise_document_ingestion_closure.py \
             tests/test_document_ir_fact_evidence_spans.py \
             tests/test_document_structure_fact_receipt_gate.py \
-            tests/test_document_evidence_address_quality.py
+            tests/test_document_evidence_address_quality.py \
+            tests/test_office_visual_ocr_supplemental.py
