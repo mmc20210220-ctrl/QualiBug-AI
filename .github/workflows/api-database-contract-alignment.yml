@@ -22,6 +22,7 @@ on:
       - "tests/test_api_database_contract_alignment.py"
       - "tests/test_api_operation_database_lineage.py"
       - "tests/test_database_mapping_authority.py"
+      - "tests/test_database_observer_authority_rebuild.py"
       - "tests/test_database_observer_identity_precedence.py"
       - "tests/test_database_observer_implementation_binding.py"
       - ".github/workflows/api-database-contract-alignment.yml"
@@ -77,5 +78,6 @@ jobs:
             tests/test_api_database_contract_alignment.py \
             tests/test_api_operation_database_lineage.py \
             tests/test_database_mapping_authority.py \
+            tests/test_database_observer_authority_rebuild.py \
             tests/test_database_observer_identity_precedence.py \
             tests/test_database_observer_implementation_binding.py
