@@ -188,7 +188,10 @@ def _matching_bindings(
             elif explicit_names.intersection(_binding_name_values(binding)):
                 candidate["match_basis"] = "EXACT_FIELD_NAME"
                 name_matches.append(candidate)
-    selected = id_matches if id_matches else name_matches
+    # An explicit field identifier is stronger than every presentation name. If it
+    # does not resolve, fail visibly rather than silently downgrading to a matching
+    # name that may refer to a different field or table.
+    selected = id_matches if explicit_ids else name_matches
     deduped: dict[tuple[str, str], dict[str, Any]] = {}
     for row in selected:
         key = (
