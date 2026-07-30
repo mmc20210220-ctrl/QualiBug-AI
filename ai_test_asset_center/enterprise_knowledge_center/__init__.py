@@ -1,8 +1,8 @@
 """Enterprise knowledge-center public facade.
 
-The facade only exports symbols. Importing it no longer assembles the product by
-stacking wrappers around a shared builder or loader. The public build authority is
-the explicit composition root in :mod:`composition`.
+The facade only exports symbols. Importing it no longer assembles the product by stacking
+wrappers around a shared builder or loader. Public ingestion adds archive-wide activation
+atomicity above the unchanged canonical single-document CRUD transaction.
 """
 from ._common import *  # noqa: F401,F403
 from ._utils import *  # noqa: F401,F403
@@ -89,13 +89,21 @@ from ._formal_ui_visual_viewport_guard import (  # noqa: F401
 JOB_ASYNC_PROTOCOL_ID = None
 execute_non_barrier_job_adapter = None
 
-# Public authorities. These names intentionally shadow the extraction primitives
-# imported from ``_api`` without modifying that module's globals.
+# Public authorities. These names intentionally shadow the extraction primitives imported
+# from ``_api`` without modifying that module's globals.
 from .composition import (  # noqa: E402,F401
     build_enterprise_business_knowledge_asset,
     configure_source_parser_extensions,
     generate_enterprise_business_knowledge_probes,
     load_enterprise_business_knowledge_asset,
+)
+
+# Public ingestion authorities intentionally shadow the single-document primitives imported
+# from ``_crud``. The atomic layer delegates every leaf to those primitives and only adds
+# archive-group rollback; it is not another parser or registry.
+from .atomic_ingestion import (  # noqa: E402,F401
+    ingest_enterprise_knowledge_documents,
+    ingest_enterprise_knowledge_files,
 )
 
 # Explicit re-exports for underscore-prefixed compatibility symbols.
