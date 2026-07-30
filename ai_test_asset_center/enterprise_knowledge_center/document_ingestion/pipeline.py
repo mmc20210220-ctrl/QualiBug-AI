@@ -18,6 +18,7 @@ from .contract import (
     text,
     unique_text,
 )
+from .evidence_closure import apply_document_evidence_closure
 from .merger import merge_document_irs
 from .planner import plan_deferred_supplementals, plan_document_parsing
 from .registry import DocumentAdapterRegistry, build_default_registry
@@ -29,7 +30,11 @@ def _match_from_plan(row: dict[str, Any]) -> AdapterMatch:
         adapter_name=text(row.get("adapter_name")),
         score=int(row.get("score") or 0),
         reason=text(row.get("reason")),
-        capabilities=tuple(str(value) for value in (row.get("capabilities") or []) if str(value).strip()),
+        capabilities=tuple(
+            str(value)
+            for value in (row.get("capabilities") or [])
+            if str(value).strip()
+        ),
         mode=text(row.get("mode")),
     )
 
@@ -140,7 +145,9 @@ def _apply_capability_gaps(
     receipt = dict(result.get("structure_receipt") or {})
     receipt["status"] = final_status
     receipt["unsupported_content"] = unsupported
-    receipt["unsupported_content_count"] = sum(int(row.get("count") or 0) for row in unsupported)
+    receipt["unsupported_content_count"] = sum(
+        int(row.get("count") or 0) for row in unsupported
+    )
     receipt["critical_unsupported_content_count"] = sum(
         int(row.get("count") or 0)
         for row in unsupported
@@ -154,7 +161,9 @@ def _apply_capability_gaps(
     return result
 
 
-def _primary_execution(executions: list[dict[str, Any]]) -> dict[str, Any] | None:
+def _primary_execution(
+    executions: list[dict[str, Any]],
+) -> dict[str, Any] | None:
     for execution in executions:
         if text(execution.get("mode")) == MODE_PRIMARY:
             return execution
@@ -204,8 +213,7 @@ def build_document_structure_ir(
             )
 
     # A primary adapter failure may still leave a reliable generic text projection.
-    # The fallback is attempted only when no adapter produced valid IR; it never masks
-    # the failed primary receipt, which remains a formal structure gap.
+    # The failed primary receipt remains a formal gap and is never masked by fallback.
     if not executions:
         for row in _fallback_rows(source, resolved_registry, selected_names):
             try:
@@ -304,10 +312,14 @@ def build_document_structure_ir(
         executions,
         execution_errors=errors,
     )
-    # OCR paragraphs remain evidence, but a formal table's TABLE_CELL blocks become the
-    # merged text authority inside that rendered-page region.
+    # OCR paragraphs remain evidence, but formal TABLE_CELL blocks are the text authority
+    # inside a successfully recovered table region.
     merged = apply_visual_table_projection_authority(merged)
     merged = _apply_capability_gaps(merged, parsing_plan)
+    # Final source evidence closure is mandatory for every format.  It attaches the
+    # immutable source fingerprint to every formal block and blocks orphan plain text.
+    merged = apply_document_evidence_closure(merged, source)
+    evidence_receipt = dict(merged.get("evidence_closure_receipt") or {})
     merged["ingestion_pipeline_receipt"] = {
         "schema": "qualibug.document-ingestion-pipeline-receipt.v1",
         "source_id": source.source_id,
@@ -316,11 +328,23 @@ def build_document_structure_ir(
         "plan_status": parsing_plan.get("status"),
         "deferred_plan_status": deferred_plan.get("status"),
         "selected_adapter_count": len(selected_rows),
-        "deferred_selected_adapter_count": len(deferred_plan.get("selected_adapters") or []),
+        "deferred_selected_adapter_count": len(
+            deferred_plan.get("selected_adapters") or []
+        ),
         "executed_adapter_count": len(executions),
         "execution_error_count": len(errors),
         "runtime_fallback_used": bool(parsing_plan.get("runtime_fallback_adapter")),
-        "missing_capability_count": len(parsing_plan.get("missing_capabilities") or []),
+        "missing_capability_count": len(
+            parsing_plan.get("missing_capabilities") or []
+        ),
+        "evidence_closure_status": evidence_receipt.get("status"),
+        "evidence_source_traceability_rate": evidence_receipt.get(
+            "source_traceability_rate"
+        ),
+        "evidence_exact_address_rate": evidence_receipt.get("exact_address_rate"),
+        "untraceable_authority_block_count": evidence_receipt.get(
+            "untraceable_authority_block_count"
+        ),
         "final_status": (merged.get("structure_receipt") or {}).get("status"),
         "business_semantics_added": False,
         "document_order_is_business_flow": False,
