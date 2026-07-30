@@ -7,6 +7,11 @@ from .advanced_visual_table_providers import (
     WordLayoutProvider,
     build_default_advanced_visual_table_provider,
 )
+from .api_artifact_adapter import (
+    API_ARTIFACT_REDACTION_SCHEMA,
+    API_ARTIFACT_STRUCTURE_SCHEMA,
+    ApiArtifactDocumentAdapter,
+)
 from .compatible_office_adapter import (
     OFFICE_NORMALIZATION_RECEIPT_SCHEMA,
     CompatibleOfficeDocumentAdapter,
@@ -30,6 +35,7 @@ from .evidence_closure import (
     EVIDENCE_CLOSURE_SCHEMA,
     apply_document_evidence_closure,
 )
+from .guarded_api_artifact_adapter import GuardedApiArtifactDocumentAdapter
 from .image_decoding import (
     CairoSvgImageDecoder,
     DecodedImageFrame,
@@ -91,6 +97,10 @@ __all__ = [
     "DocumentAdapter",
     "DocumentSource",
     "SupplementalContext",
+    "API_ARTIFACT_STRUCTURE_SCHEMA",
+    "API_ARTIFACT_REDACTION_SCHEMA",
+    "ApiArtifactDocumentAdapter",
+    "GuardedApiArtifactDocumentAdapter",
     "OcrProvider",
     "OcrSupplementalAdapter",
     "TesseractOcrProvider",
