@@ -1,49 +1,34 @@
-"""Fail-close legacy Probe builders behind formal scenario design and materialization gates."""
+"""Compatibility helpers for explicit Probe admission.
+
+This module no longer rewrites ``_api._probes_from_asset`` or
+``_linking._probes_from_asset``. The single composition root calls the pure policy
+in :mod:`probe_policy` after all runtime gates are known.
+"""
 from __future__ import annotations
 
-from functools import wraps
 from typing import Any, Callable
 
-from .schema import as_dict
+from .probe_policy import build_gated_probes, probe_generation_allowed
 
 
-def _wrap(builder: Callable[..., Any]) -> Callable[..., Any]:
-    if getattr(builder, "_qualibug_runtime_materialization_gate_guard", False):
-        return builder
+def guard_probe_builder(
+    builder: Callable[[dict[str, Any], int], list[dict[str, Any]]]
+) -> Callable[[dict[str, Any], int], list[dict[str, Any]]]:
+    """Return a local guarded callable without modifying the supplied module."""
 
-    @wraps(builder)
-    def guarded(asset: dict[str, Any], max_count: int = 140):
-        planning_gate = as_dict(asset.get("scenario_planning_gate"))
-        scenario_gate = as_dict(asset.get("scenario_ir_gate"))
-        contract_gate = as_dict(asset.get("scenario_execution_contract_gate"))
-        runtime_plan_gate = as_dict(asset.get("runtime_plan_gate"))
-        materialization_gate = as_dict(asset.get("runtime_materialization_gate"))
-        if planning_gate:
-            if not bool(planning_gate.get("scenario_planning_allowed")):
-                return []
-            if not scenario_gate or not bool(scenario_gate.get("entry_allowed")):
-                return []
-            if not contract_gate or not bool(contract_gate.get("entry_allowed")):
-                return []
-            if not runtime_plan_gate or not bool(runtime_plan_gate.get("entry_allowed")):
-                return []
-            # A closed Runtime Plan still contains unresolved runtime references. Missing or
-            # blocked materialization is never permission to fall back to risk-only Probes.
-            if not materialization_gate or not bool(materialization_gate.get("entry_allowed")):
-                return []
-        return builder(asset, max_count)
+    def guarded(asset: dict[str, Any], max_count: int = 140) -> list[dict[str, Any]]:
+        return build_gated_probes(asset, max_count, compiler=builder)
 
-    guarded._qualibug_runtime_materialization_gate_guard = True  # type: ignore[attr-defined]
-    guarded._qualibug_original_probe_builder = builder  # type: ignore[attr-defined]
     return guarded
 
 
 def install_scenario_execution_probe_guard() -> None:
-    """Guard both the public API aggregation and direct linking entrypoint."""
-    from .. import _api, _linking
-
-    _api._probes_from_asset = _wrap(_api._probes_from_asset)
-    _linking._probes_from_asset = _wrap(_linking._probes_from_asset)
+    """Deprecated compatibility no-op; global Probe patching has been removed."""
+    return None
 
 
-__all__ = ["install_scenario_execution_probe_guard"]
+__all__ = [
+    "probe_generation_allowed",
+    "guard_probe_builder",
+    "install_scenario_execution_probe_guard",
+]
