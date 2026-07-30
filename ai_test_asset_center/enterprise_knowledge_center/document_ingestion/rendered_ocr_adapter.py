@@ -21,6 +21,7 @@ _SUPPORTED_SUPPLEMENTAL_GAPS = {
     "SPREADSHEET_EMBEDDED_IMAGE_NOT_SEMANTICALLY_PARSED",
 }
 _SLIDE_LOCATOR_RE = re.compile(r"#slide=(\d+)")
+_FORMAL_OCR_MINIMUM_CONFIDENCE = 0.85
 
 
 def _list(value: Any) -> list[Any]:
@@ -61,7 +62,7 @@ class OcrSupplementalAdapter(_LegacyOcrSupplementalAdapter):
     def __init__(
         self,
         provider: OcrProvider | None = None,
-        minimum_confidence: float = 0.55,
+        minimum_confidence: float = _FORMAL_OCR_MINIMUM_CONFIDENCE,
         renderer_registry: PageRendererRegistry | None = None,
     ) -> None:
         super().__init__(provider=provider, minimum_confidence=minimum_confidence)
@@ -154,10 +155,18 @@ class OcrSupplementalAdapter(_LegacyOcrSupplementalAdapter):
                 {text(row.get("renderer_name")) for row in render_rows if text(row.get("renderer_name"))}
             )
 
-        unsupported = [
+        raw_unsupported = [
             dict(row)
             for row in (result.get("unsupported_content") or [])
             if isinstance(row, dict)
+        ]
+        # A high-confidence OCR page with explicit image coordinates is formal evidence,
+        # not an unresolved gap. Keep the projection receipt separately for audit.
+        projected_rows = [
+            row for row in raw_unsupported if _reason(row) == "OCR_PAGE_LAYOUT_PROJECTED"
+        ]
+        unsupported = [
+            row for row in raw_unsupported if _reason(row) != "OCR_PAGE_LAYOUT_PROJECTED"
         ]
         if not batch.pages:
             unsupported.append(
@@ -199,6 +208,12 @@ class OcrSupplementalAdapter(_LegacyOcrSupplementalAdapter):
         receipt["page_renderer_name"] = batch.receipt.get("renderer_name")
         receipt["page_renderer_version"] = batch.receipt.get("renderer_version")
         receipt["rendered_page_count"] = len(render_by_page)
+        receipt["formal_ocr_minimum_confidence"] = self.minimum_confidence
+        receipt["formal_ocr_projection_count"] = sum(
+            int(row.get("count") or 0) for row in projected_rows
+        )
+        receipt["formal_ocr_projection_evidence"] = projected_rows
+        receipt["high_confidence_ocr_coordinates_are_formal_evidence"] = True
         result["unsupported_content"] = unsupported
         result["structure_receipt"] = receipt
         result["page_rendering_receipt"] = batch.receipt
@@ -251,7 +266,7 @@ class OcrSupplementalAdapter(_LegacyOcrSupplementalAdapter):
                 continue
             required = set(target_pages) if target_pages else rendered_pages
             # Office visual gaps are emitted as one whole-source/slide group without a
-            # page list.  Clear them only when every rendered target was recovered.
+            # page list. Clear them only when every rendered target was recovered.
             if required and required <= resolved_pages:
                 resolutions.append(
                     {
