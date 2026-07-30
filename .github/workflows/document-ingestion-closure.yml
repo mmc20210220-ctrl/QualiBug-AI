@@ -18,6 +18,7 @@ on:
       - "tests/test_document_ingestion_text_first_planner.py"
       - "tests/test_compatible_office_normalization.py"
       - "tests/test_office_adapter_policy_contracts.py"
+      - "tests/test_office_format_identity_planner.py"
       - "tests/test_document_ir_fact_evidence_spans.py"
       - "tests/test_document_structure_fact_receipt_gate.py"
       - "tests/test_document_evidence_address_quality.py"
@@ -83,6 +84,7 @@ jobs:
             tests/test_document_ingestion_text_first_planner.py \
             tests/test_compatible_office_normalization.py \
             tests/test_office_adapter_policy_contracts.py \
+            tests/test_office_format_identity_planner.py \
             tests/test_document_ir_fact_evidence_spans.py \
             tests/test_document_structure_fact_receipt_gate.py \
             tests/test_document_evidence_address_quality.py \
