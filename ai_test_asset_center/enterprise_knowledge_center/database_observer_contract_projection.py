@@ -1,9 +1,9 @@
-"""Compile approved storage mappings into formal read-only database observers.
+"""Compile current approved storage mappings into read-only database observers.
 
-A mapping decision authorizes observation only. Runtime binding still requires a source-declared
-identity key and an approved API value source for every identity component. This stage emits a
-parameterized read plan; it never opens a database, embeds credentials, generates raw SQL, grants
-write authority, or declares an Oracle verdict.
+Observer assets are rebuilt, never merged with an older final asset. This prevents a revoked,
+rejected or drift-invalidated decision from leaving stale runtime authority behind. Compilation
+requires a source-declared identity and approved API value sources, emits only parameterized read
+plans, and never grants write-target or Oracle authority.
 """
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from typing import Any, Iterable
 DATABASE_OBSERVER_CONTRACT_SCHEMA = "qualibug.database-observer-contract.v1"
 DATABASE_OBSERVER_PROJECTION_SCHEMA = "qualibug.database-observer-projection.v1"
 DATABASE_OBSERVER_FIELD_BINDING_SCHEMA = "qualibug.database-observer-field-binding.v1"
+_OBSERVER_RELATIONS = {"api_operation_has_database_observer"}
 
 
 def _text(value: Any) -> str:
@@ -34,38 +35,33 @@ def _stable_id(prefix: str, *parts: Any) -> str:
 
 
 def _dedupe(rows: Iterable[Any], identity_field: str) -> list[dict[str, Any]]:
-    result: list[dict[str, Any]] = []
+    output: list[dict[str, Any]] = []
     seen: set[str] = set()
     for raw in rows:
         if not isinstance(raw, dict):
             continue
-        row = deepcopy(raw)
-        identity = _text(row.get(identity_field))
+        identity = _text(raw.get(identity_field))
         if not identity or identity in seen:
             continue
         seen.add(identity)
-        result.append(row)
-    return result
+        output.append(deepcopy(raw))
+    return output
 
 
 def _lookup(rows: Iterable[Any], identity_field: str) -> dict[str, dict[str, Any]]:
-    result: dict[str, dict[str, Any]] = {}
+    output: dict[str, dict[str, Any]] = {}
     for raw in rows:
         if not isinstance(raw, dict):
             continue
         identity = _text(raw.get(identity_field))
         if identity:
-            result[identity] = deepcopy(raw)
-    return result
+            output[identity] = deepcopy(raw)
+    return output
 
 
 def _identity_options(table: dict[str, Any]) -> list[dict[str, Any]]:
-    """Prefer exact PK/UNIQUE groups; use aggregate field flags only as fallback.
-
-    ``identity_fields`` is an aggregate vocabulary and may contain members from several unique
-    keys. Treating it before ``identity_keys`` can fabricate an unnecessary composite key.
-    """
-    options: list[dict[str, Any]] = []
+    """Prefer exact PK/UNIQUE groups over the aggregate identity-field vocabulary."""
+    output: list[dict[str, Any]] = []
     seen: set[tuple[str, ...]] = set()
     for raw in _list(table.get("identity_keys")):
         if isinstance(raw, dict):
@@ -74,17 +70,17 @@ def _identity_options(table: dict[str, Any]) -> list[dict[str, Any]]:
                 for value in _list(raw.get("columns") or raw.get("fields"))
                 if _text(value)
             ]
-            source = _text(raw.get("kind")) or "SOURCE_DECLARED_IDENTITY_KEY"
             key_id = _text(raw.get("identity_key_id") or raw.get("index_id"))
+            source = _text(raw.get("kind")) or "SOURCE_DECLARED_IDENTITY_KEY"
         else:
             columns = [_text(value) for value in _list(raw) if _text(value)]
-            source = "SOURCE_DECLARED_IDENTITY_KEY"
             key_id = ""
+            source = "SOURCE_DECLARED_IDENTITY_KEY"
         signature = tuple(columns)
         if not signature or signature in seen:
             continue
         seen.add(signature)
-        options.append(
+        output.append(
             {
                 "identity_key_id": key_id,
                 "columns": columns,
@@ -92,22 +88,23 @@ def _identity_options(table: dict[str, Any]) -> list[dict[str, Any]]:
                 "explicit_group": True,
             }
         )
-    if options:
-        return options
-
-    aggregate = [
+    if output:
+        return output
+    fallback = [
         _text(value) for value in _list(table.get("identity_fields")) if _text(value)
     ]
-    if aggregate:
-        options.append(
+    return (
+        [
             {
                 "identity_key_id": "",
-                "columns": aggregate,
+                "columns": fallback,
                 "source": "AGGREGATED_SOURCE_DECLARED_IDENTITY_FIELDS",
                 "explicit_group": False,
             }
-        )
-    return options
+        ]
+        if fallback
+        else []
+    )
 
 
 def _value_source(candidate: dict[str, Any]) -> str:
@@ -117,23 +114,21 @@ def _value_source(candidate: dict[str, Any]) -> str:
         if _text(value) and _text(value) not in {"[]", "*"}
     ]
     leaf = ".".join(path) or _text(candidate.get("api_field_name"))
+    direction = _text(candidate.get("direction"))
     if not leaf:
         return ""
-    direction = _text(candidate.get("direction"))
-    if direction == "request":
-        return f"request.body.{leaf}"
-    if direction == "response":
-        return f"response.body.{leaf}"
-    if direction == "parameter":
-        return f"request.parameter.{leaf}"
-    return ""
+    return {
+        "request": f"request.body.{leaf}",
+        "response": f"response.body.{leaf}",
+        "parameter": f"request.parameter.{leaf}",
+    }.get(direction, "")
 
 
-def _mapping_decision_id(candidate: dict[str, Any]) -> str:
+def _decision_id(candidate: dict[str, Any]) -> str:
     return _text(_dict(candidate.get("mapping_authority")).get("decision_id"))
 
 
-def _evidence_row(kind: str, row: dict[str, Any]) -> dict[str, Any] | None:
+def _evidence_item(kind: str, row: dict[str, Any]) -> dict[str, Any] | None:
     source_id = _text(row.get("source_id"))
     locator = _text(row.get("source_locator"))
     asset_ref = _text(
@@ -153,57 +148,62 @@ def _evidence_row(kind: str, row: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def _source_evidence(
+def _evidence(
     *,
     api_binding: dict[str, Any],
     api_field: dict[str, Any] | None = None,
-    database_table: dict[str, Any] | None = None,
+    table: dict[str, Any] | None = None,
     database_field: dict[str, Any] | None = None,
     decision_id: str = "",
 ) -> list[dict[str, Any]]:
-    evidence: list[dict[str, Any]] = []
-    for kind, row in (
+    rows: list[dict[str, Any]] = []
+    for kind, source in (
         ("OPENAPI_OPERATION_SCHEMA_BINDING", api_binding),
         ("OPENAPI_SCHEMA_FIELD", api_field or {}),
-        ("DATABASE_TABLE_DECLARATION", database_table or {}),
+        ("DATABASE_TABLE_DECLARATION", table or {}),
         ("DATABASE_FIELD_DECLARATION", database_field or {}),
     ):
-        item = _evidence_row(kind, row)
+        item = _evidence_item(kind, source)
         if item:
-            evidence.append(item)
+            rows.append(item)
     if decision_id:
-        evidence.append(
+        rows.append(
             {
                 "kind": "OPERATOR_DATABASE_MAPPING_AUTHORITY",
                 "decision_id": decision_id,
                 "exact": True,
             }
         )
-    return evidence
+    return rows
+
+
+def _approved_candidates(asset: dict[str, Any], collection: str, status: str) -> list[dict[str, Any]]:
+    return [
+        deepcopy(row)
+        for row in _list(asset.get(collection))
+        if isinstance(row, dict)
+        and _text(row.get("status")) == status
+        and bool(row.get("observer_authority_allowed"))
+    ]
 
 
 def enrich_asset_with_database_observer_contracts(
     asset: dict[str, Any],
 ) -> dict[str, Any]:
-    """Compile currently approved operation-scoped mappings into read-only plans."""
+    """Rebuild formal Observer contracts from the currently valid approval set."""
     result = dict(asset or {})
-    table_candidates = [
-        deepcopy(row)
-        for row in _list(result.get("api_operation_database_table_candidates"))
-        if isinstance(row, dict)
-        and _text(row.get("status")) == "APPROVED_READ_ONLY_OBSERVER_TABLE"
-        and bool(row.get("observer_authority_allowed"))
-    ]
-    field_candidates = [
-        deepcopy(row)
-        for row in _list(result.get("api_operation_database_field_candidates"))
-        if isinstance(row, dict)
-        and _text(row.get("status")) == "APPROVED_READ_ONLY_OBSERVER_FIELD"
-        and bool(row.get("observer_authority_allowed"))
-    ]
+    table_candidates = _approved_candidates(
+        result,
+        "api_operation_database_table_candidates",
+        "APPROVED_READ_ONLY_OBSERVER_TABLE",
+    )
+    field_candidates = _approved_candidates(
+        result,
+        "api_operation_database_field_candidates",
+        "APPROVED_READ_ONLY_OBSERVER_FIELD",
+    )
 
-    # Compatibility ``data_tables`` are loaded first. Exact database-model ``tables`` win on
-    # identical table_id so PK/UNIQUE groups, locators and source declarations cannot be erased.
+    # Compatibility tables load first; exact database-model rows overwrite them by table_id.
     tables = _lookup(
         [*_list(result.get("data_tables")), *_list(result.get("tables"))],
         "table_id",
@@ -213,7 +213,6 @@ def enrich_asset_with_database_observer_contracts(
     api_bindings = _lookup(
         result.get("api_operation_schema_bindings") or [], "binding_id"
     )
-
     fields_by_scope: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for candidate in field_candidates:
         scope = (
@@ -223,12 +222,17 @@ def enrich_asset_with_database_observer_contracts(
         fields_by_scope.setdefault(scope, []).append(candidate)
 
     contracts: list[dict[str, Any]] = []
-    approved_bindings: list[dict[str, Any]] = []
+    field_bindings: list[dict[str, Any]] = []
     gaps: list[dict[str, Any]] = []
+    # Rebuild this derived relation family from current authority only.
     relationships = [
         deepcopy(row)
         for row in _list(result.get("relationships"))
         if isinstance(row, dict)
+        and _text(row.get("relation")) not in _OBSERVER_RELATIONS
+        and not _text(row.get("edge_id")).startswith(
+            "edge:api-operation-database-observer:"
+        )
     ]
 
     for table_candidate in table_candidates:
@@ -236,16 +240,15 @@ def enrich_asset_with_database_observer_contracts(
         table_id = _text(table_candidate.get("database_table_id"))
         table = tables.get(table_id, {})
         api_binding = api_bindings.get(binding_id, {})
-        field_rows = fields_by_scope.get((binding_id, table_id), [])
-
+        approved_fields = fields_by_scope.get((binding_id, table_id), [])
         mappings: list[dict[str, Any]] = []
-        mappings_by_database_name: dict[str, list[dict[str, Any]]] = {}
-        for candidate in field_rows:
+        by_database_name: dict[str, list[dict[str, Any]]] = {}
+
+        for candidate in approved_fields:
             api_field_id = _text(candidate.get("api_field_id"))
             database_field_id = _text(candidate.get("database_field_id"))
             database_name = _text(candidate.get("database_field_name"))
-            value_source = _value_source(candidate)
-            field_binding_id = _stable_id(
+            mapping_id = _stable_id(
                 "database_observer_field_binding",
                 binding_id,
                 table_id,
@@ -254,7 +257,7 @@ def enrich_asset_with_database_observer_contracts(
             )
             mapping = {
                 "schema": DATABASE_OBSERVER_FIELD_BINDING_SCHEMA,
-                "field_binding_id": field_binding_id,
+                "field_binding_id": mapping_id,
                 "operation_schema_binding_id": binding_id,
                 "interface_id": _text(candidate.get("interface_id")),
                 "database_table_id": table_id,
@@ -265,45 +268,44 @@ def enrich_asset_with_database_observer_contracts(
                 ),
                 "database_field_id": database_field_id,
                 "database_field_name": database_name,
-                "value_source": value_source,
+                "value_source": _value_source(candidate),
                 "direction": _text(candidate.get("direction")),
                 "type_compatibility": deepcopy(
                     _dict(candidate.get("type_compatibility"))
                 ),
-                "mapping_decision_id": _mapping_decision_id(candidate),
+                "mapping_decision_id": _decision_id(candidate),
                 "authoritative": True,
                 "read_only": True,
                 "write_target_allowed": False,
                 "oracle_authority_allowed": False,
-                "evidence": _source_evidence(
+                "evidence": _evidence(
                     api_binding=api_binding,
                     api_field=api_fields.get(api_field_id),
-                    database_table=table,
+                    table=table,
                     database_field=database_fields.get(database_field_id),
-                    decision_id=_mapping_decision_id(candidate),
+                    decision_id=_decision_id(candidate),
                 ),
             }
             mappings.append(mapping)
             if database_name:
-                mappings_by_database_name.setdefault(database_name, []).append(mapping)
+                by_database_name.setdefault(database_name, []).append(mapping)
 
         identity_options = _identity_options(table)
-        selected_identity: dict[str, Any] = {}
+        selected: dict[str, Any] = {}
         predicates: list[dict[str, Any]] = []
         for option in identity_options:
             columns = [
                 _text(value) for value in _list(option.get("columns")) if _text(value)
             ]
             resolved: list[dict[str, Any]] = []
-            valid = bool(columns)
             for column in columns:
                 choices = [
                     row
-                    for row in mappings_by_database_name.get(column, [])
+                    for row in by_database_name.get(column, [])
                     if _text(row.get("value_source"))
                 ]
                 if len(choices) != 1:
-                    valid = False
+                    resolved = []
                     break
                 chosen = choices[0]
                 resolved.append(
@@ -317,12 +319,12 @@ def enrich_asset_with_database_observer_contracts(
                         "field_binding_id": _text(chosen.get("field_binding_id")),
                     }
                 )
-            if valid:
-                selected_identity = deepcopy(option)
+            if columns and len(resolved) == len(columns):
+                selected = deepcopy(option)
                 predicates = resolved
                 break
 
-        if not field_rows:
+        if not approved_fields:
             status = "BLOCKED_NO_APPROVED_OBSERVER_FIELDS"
             reason = "DATABASE_OBSERVER_APPROVED_FIELDS_REQUIRED"
         elif not table:
@@ -331,7 +333,7 @@ def enrich_asset_with_database_observer_contracts(
         elif not identity_options:
             status = "BLOCKED_DATABASE_IDENTITY_NOT_DECLARED"
             reason = "DATABASE_OBSERVER_TABLE_IDENTITY_REQUIRED"
-        elif not selected_identity:
+        elif not selected:
             status = "BLOCKED_IDENTITY_FIELD_MAPPING_REQUIRED"
             reason = "DATABASE_OBSERVER_IDENTITY_MAPPING_REQUIRED"
         else:
@@ -344,6 +346,7 @@ def enrich_asset_with_database_observer_contracts(
             table_id,
             *sorted(_text(row.get("field_binding_id")) for row in mappings),
         )
+        ready = status == "READY_FOR_RUNTIME_CONNECTION_BINDING"
         contract = {
             "schema": DATABASE_OBSERVER_CONTRACT_SCHEMA,
             "observer_id": observer_id,
@@ -369,18 +372,14 @@ def enrich_asset_with_database_observer_contracts(
                 table.get("qualified_name")
                 or table_candidate.get("database_qualified_name")
             ),
-            "table_mapping_decision_id": _mapping_decision_id(table_candidate),
+            "table_mapping_decision_id": _decision_id(table_candidate),
             "field_bindings": mappings,
             "identity_key_options": identity_options,
-            "selected_identity_key": deepcopy(
-                _list(selected_identity.get("columns"))
-            ),
-            "selected_identity_key_id": _text(
-                selected_identity.get("identity_key_id")
-            ),
-            "selected_identity_source": _text(selected_identity.get("source")),
+            "selected_identity_key": deepcopy(_list(selected.get("columns"))),
+            "selected_identity_key_id": _text(selected.get("identity_key_id")),
+            "selected_identity_source": _text(selected.get("source")),
             "selected_identity_is_explicit_group": bool(
-                selected_identity.get("explicit_group")
+                selected.get("explicit_group")
             ),
             "identity_predicates": predicates,
             "query_plan": {
@@ -401,8 +400,7 @@ def enrich_asset_with_database_observer_contracts(
             "status": status,
             "reason_code": reason,
             "mapping_authoritative": True,
-            "runtime_observer_authoritative": status
-            == "READY_FOR_RUNTIME_CONNECTION_BINDING",
+            "runtime_observer_authoritative": ready,
             "observer_surface": "database_read_only",
             "read_only": True,
             "mutation_allowed": False,
@@ -414,26 +412,24 @@ def enrich_asset_with_database_observer_contracts(
             "raw_sql_generated": False,
             "database_rows_read": 0,
             "business_flow_inferred": False,
-            "evidence": _source_evidence(
+            "evidence": _evidence(
                 api_binding=api_binding,
-                database_table=table,
-                decision_id=_mapping_decision_id(table_candidate),
+                table=table,
+                decision_id=_decision_id(table_candidate),
             ),
         }
         contracts.append(contract)
-        approved_bindings.extend(
+        field_bindings.extend(
             {
                 **deepcopy(mapping),
                 "observer_id": observer_id,
                 "observer_status": status,
-                "runtime_observer_authoritative": bool(
-                    contract["runtime_observer_authoritative"]
-                ),
+                "runtime_observer_authoritative": ready,
             }
             for mapping in mappings
         )
 
-        if contract["runtime_observer_authoritative"]:
+        if ready:
             relationships.append(
                 {
                     "edge_id": f"edge:api-operation-database-observer:{observer_id}",
@@ -478,17 +474,9 @@ def enrich_asset_with_database_observer_contracts(
                 }
             )
 
-    contracts = _dedupe(
-        [*_list(result.get("database_observer_contracts")), *contracts],
-        "observer_id",
-    )
-    approved_bindings = _dedupe(
-        [
-            *_list(result.get("approved_database_observer_field_bindings")),
-            *approved_bindings,
-        ],
-        "field_binding_id",
-    )
+    # These are derived authority assets: never merge old contracts or field bindings.
+    contracts = _dedupe(contracts, "observer_id")
+    field_bindings = _dedupe(field_bindings, "field_binding_id")
     relationships = _dedupe(relationships, "edge_id")
     retained_gaps = [
         deepcopy(row)
@@ -497,7 +485,7 @@ def enrich_asset_with_database_observer_contracts(
         and _text(row.get("kind")) != "DATABASE_OBSERVER_CONTRACT_BLOCKED"
     ]
     result["database_observer_contracts"] = contracts
-    result["approved_database_observer_field_bindings"] = approved_bindings
+    result["approved_database_observer_field_bindings"] = field_bindings
     result["relationships"] = relationships
     result["coverage_gaps"] = [*retained_gaps, *gaps]
 
@@ -528,6 +516,8 @@ def enrich_asset_with_database_observer_contracts(
         "runtime_connection_binding_required": True,
         "explicit_identity_keys_preferred": True,
         "exact_database_model_tables_override_compatibility_tables": True,
+        "derived_observer_assets_rebuilt_from_current_authority": True,
+        "stale_observer_authority_retained": False,
     }
     summary = _dict(result.get("summary"))
     summary.update(
@@ -550,6 +540,7 @@ def enrich_asset_with_database_observer_contracts(
             "database_observers_do_not_authorize_writes": True,
             "database_observers_do_not_self_authorize_oracles": True,
             "database_observers_use_high_fidelity_table_assets": True,
+            "database_observer_derived_authority_is_rebuilt_each_build": True,
         }
     )
     result["governance"] = governance
