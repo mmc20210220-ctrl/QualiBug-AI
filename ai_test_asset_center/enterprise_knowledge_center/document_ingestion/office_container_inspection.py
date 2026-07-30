@@ -1,8 +1,8 @@
 """Source-container inspection before compatible Office normalization.
 
-The normalizer is a transport bridge, not a macro interpreter.  This module inspects the
+The normalizer is a transport bridge, not a macro interpreter. This module inspects the
 immutable source container before LibreOffice opens it, records exactly what was checked,
-and blocks known embedded automation.  It never treats a successful OOXML conversion as
+and blocks known embedded automation. It never treats a successful OOXML conversion as
 proof that the original source contained no macros or scripts.
 """
 from __future__ import annotations
@@ -85,11 +85,19 @@ def inspect_office_container(source: DocumentSource) -> dict[str, Any]:
     inspected_members = 0
     nested_ole_members = 0
     errors: list[dict[str, Any]] = []
-    container_kind = "OPAQUE_OR_TEXT"
-    inspection_complete = True
+    stripped = data.lstrip()
+    if source.suffix == ".rtf" or stripped.startswith(b"{\\rtf"):
+        container_kind = "RTF_TEXT"
+        inspection_complete = True
+    else:
+        container_kind = "OPAQUE_CONTAINER"
+        inspection_complete = False
+        errors.append({"code": "OPAQUE_OFFICE_CONTAINER_AUTOMATION_NOT_VERIFIABLE"})
 
     if data.startswith(b"PK"):
         container_kind = "ZIP_PACKAGE"
+        inspection_complete = True
+        errors = []
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as archive:
                 names = archive.namelist()
@@ -122,12 +130,7 @@ def inspect_office_container(source: DocumentSource) -> dict[str, Any]:
                     stream_names, status = _ole_stream_names(member)
                     if status != "COMPLETE":
                         inspection_complete = False
-                        errors.append(
-                            {
-                                "code": status,
-                                "member": name,
-                            }
-                        )
+                        errors.append({"code": status, "member": name})
                         continue
                     indicators.extend(
                         _ole_automation_indicators(stream_names, prefix=f"{name}:")
@@ -142,12 +145,14 @@ def inspect_office_container(source: DocumentSource) -> dict[str, Any]:
             )
     elif data.startswith(_OLE_SIGNATURE):
         container_kind = "OLE_COMPOUND_FILE"
+        errors = []
         stream_names, status = _ole_stream_names(data)
         inspected_members = len(stream_names)
         if status != "COMPLETE":
             inspection_complete = False
             errors.append({"code": status})
         else:
+            inspection_complete = True
             indicators.extend(_ole_automation_indicators(stream_names))
 
     indicators = sorted(set(indicators))
@@ -156,6 +161,8 @@ def inspect_office_container(source: DocumentSource) -> dict[str, Any]:
         status = "BLOCKED_EMBEDDED_AUTOMATION_PRESENT"
     elif inspection_complete:
         status = "PASS_NO_KNOWN_AUTOMATION_ARTIFACTS"
+    elif container_kind == "OPAQUE_CONTAINER":
+        status = "PARTIAL_OPAQUE_CONTAINER_NOT_INSPECTABLE"
     else:
         status = "PARTIAL_AUTOMATION_INSPECTION_INCOMPLETE"
 
