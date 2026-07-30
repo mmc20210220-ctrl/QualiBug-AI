@@ -12,6 +12,9 @@ on:
       - "ai_test_asset_center/database_state_transition_oracle.py"
       - "ai_test_asset_center/database_state_transition_experiment_projection.py"
       - "ai_test_asset_center/database_state_transition_finding_bridge.py"
+      - "ai_test_asset_center/database_numeric_oracle.py"
+      - "ai_test_asset_center/database_numeric_experiment_projection.py"
+      - "ai_test_asset_center/database_numeric_finding_bridge.py"
       - "ai_test_asset_center/experiment_compiler.py"
       - "ai_test_asset_center/experiment_executor.py"
       - "ai_test_asset_center/non_http_observers.py"
@@ -51,6 +54,10 @@ on:
       - "tests/test_database_state_transition_contract_oracle.py"
       - "tests/test_database_state_transition_finding_bridge.py"
       - "tests/test_database_state_transition_mixed_assertions.py"
+      - "tests/test_database_numeric_oracle.py"
+      - "tests/test_database_numeric_experiment_projection.py"
+      - "tests/test_database_numeric_contract_oracle.py"
+      - "tests/test_database_numeric_finding_bridge.py"
       - ".github/workflows/api-database-contract-alignment.yml"
 
 permissions:
@@ -89,6 +96,9 @@ jobs:
             ai_test_asset_center/database_state_transition_oracle.py \
             ai_test_asset_center/database_state_transition_experiment_projection.py \
             ai_test_asset_center/database_state_transition_finding_bridge.py \
+            ai_test_asset_center/database_numeric_oracle.py \
+            ai_test_asset_center/database_numeric_experiment_projection.py \
+            ai_test_asset_center/database_numeric_finding_bridge.py \
             ai_test_asset_center/experiment_compiler.py \
             ai_test_asset_center/experiment_executor.py \
             ai_test_asset_center/non_http_observers.py \
@@ -131,4 +141,8 @@ jobs:
             tests/test_database_state_transition_experiment_projection.py \
             tests/test_database_state_transition_contract_oracle.py \
             tests/test_database_state_transition_finding_bridge.py \
-            tests/test_database_state_transition_mixed_assertions.py
+            tests/test_database_state_transition_mixed_assertions.py \
+            tests/test_database_numeric_oracle.py \
+            tests/test_database_numeric_experiment_projection.py \
+            tests/test_database_numeric_contract_oracle.py \
+            tests/test_database_numeric_finding_bridge.py
