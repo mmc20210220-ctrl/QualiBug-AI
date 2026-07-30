@@ -6,6 +6,7 @@ canonical receipts/provenance into that contract. It contains no archive parser.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -204,27 +205,66 @@ def _limits(policy: ArchiveExpansionPolicy) -> ArchiveLimits:
     )
 
 
-def _provenance_compat(document: dict[str, Any]) -> dict[str, Any]:
+def _source_policies(
+    documents: list[Any],
+    *,
+    max_archive_bytes: int,
+) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for raw in documents:
+        if not isinstance(raw, dict) or not is_archive_envelope(raw):
+            continue
+        try:
+            data, _filename, _preview = read_document_envelope_bytes(
+                raw,
+                max_bytes=max_archive_bytes,
+            )
+        except Exception:
+            continue
+        result[hashlib.sha256(data).hexdigest()] = {
+            "tags": [str(value) for value in (raw.get("tags") or []) if str(value).strip()][:20],
+            "source_type": str(raw.get("source_type") or ""),
+            "inherit_source_type": raw.get("inherit_source_type_to_members") is True,
+        }
+    return result
+
+
+def _provenance_compat(
+    document: dict[str, Any],
+    policies: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
     row = dict(document)
     provenance = dict(row.get("archive_provenance") or {})
     if not provenance:
         return row
     chain = [dict(item) for item in provenance.get("chain") or [] if isinstance(item, dict)]
-    virtual_path = str(row.get("filename") or provenance.get("member_path") or "")
+    virtual_path = "!/".join(
+        str(item.get("member_path") or "") for item in chain if str(item.get("member_path") or "")
+    )
+    root_hash = str(
+        provenance.get("root_archive_hash")
+        or (chain[0].get("archive_hash") if chain else "")
+    )
+    policy = policies.get(root_hash, {})
+    row["filename"] = virtual_path or str(row.get("filename") or "")
+    row["tags"] = list(policy.get("tags") or [])
+    if policy.get("inherit_source_type") and policy.get("source_type"):
+        row["source_type"] = str(policy["source_type"])
+    else:
+        row.pop("source_type", None)
     provenance.update(
         {
             "top_level_archive_name": str(
                 provenance.get("root_archive_filename")
                 or (chain[0].get("archive_filename") if chain else "")
             ),
-            "top_level_archive_hash": str(
-                provenance.get("root_archive_hash")
-                or (chain[0].get("archive_hash") if chain else "")
-            ),
-            "virtual_member_path": virtual_path,
-            "member_path": str(chain[-1].get("member_path") if chain else virtual_path),
+            "top_level_archive_hash": root_hash,
+            "virtual_member_path": row["filename"],
+            "member_path": str(chain[-1].get("member_path") if chain else row["filename"]),
+            "member_size": len(bytes(row.get("content_bytes") or b"")),
             "archive_depth": len(chain),
             "archive_chain": chain,
+            "archive_member_is_business_source": True,
             "archive_container_is_business_source": False,
         }
     )
@@ -232,9 +272,27 @@ def _provenance_compat(document: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
+def _archive_kind(filename: str, provider_name: str) -> str:
+    suffix = _full_suffix(filename)
+    if suffix == ".zip":
+        return "zip"
+    if suffix in {".tar.gz", ".tgz"}:
+        return "tar_gzip"
+    if suffix == ".tar":
+        return "tar"
+    if suffix == ".gz":
+        return "gzip"
+    if suffix == ".7z":
+        return "7z"
+    if suffix == ".rar":
+        return "rar"
+    return provider_name or "unknown"
+
+
 def _package_rows(
     receipts: list[dict[str, Any]],
     stored_paths: dict[str, str],
+    ignored_members: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for raw in receipts:
@@ -242,12 +300,20 @@ def _package_rows(
             continue
         receipt = dict(raw)
         archive_hash = str(receipt.get("archive_hash") or "")
+        warnings = [
+            dict(item)
+            for item in ignored_members
+            if isinstance(item, dict) and str(item.get("archive_hash") or "") == archive_hash
+        ]
         rows.append(
             {
                 "schema": ARCHIVE_PACKAGE_RECEIPT_SCHEMA,
                 "archive_name": str(receipt.get("archive_filename") or ""),
                 "archive_hash": archive_hash,
-                "archive_kind": str(receipt.get("provider_name") or "unknown"),
+                "archive_kind": _archive_kind(
+                    str(receipt.get("archive_filename") or ""),
+                    str(receipt.get("provider_name") or ""),
+                ),
                 "archive_depth": int(receipt.get("depth") or 0),
                 "parent_archive_hash": "",
                 "compressed_byte_count": int(receipt.get("archive_byte_count") or 0),
@@ -257,9 +323,9 @@ def _package_rows(
                 "expanded_leaf_count": int(receipt.get("expanded_document_count") or 0),
                 "skipped_junk_count": int(receipt.get("ignored_member_count") or 0),
                 "error_count": len(receipt.get("errors") or []),
-                "warning_count": int(receipt.get("ignored_member_count") or 0),
+                "warning_count": len(warnings),
                 "errors": list(receipt.get("errors") or []),
-                "warnings": [],
+                "warnings": warnings,
                 "canonical_receipt": receipt,
                 "canonical_archive_authority": "archive_ingestion_core",
             }
@@ -275,10 +341,15 @@ def expand_document_envelopes(
 ) -> ArchiveExpansionBatch:
     """Delegate all package parsing to the canonical atomic archive authority."""
 
+    resolved_policy = policy or ArchiveExpansionPolicy()
     source_documents = [dict(row) if isinstance(row, dict) else row for row in documents or []]
+    policies = _source_policies(
+        source_documents,
+        max_archive_bytes=resolved_policy.max_archive_bytes,
+    )
     canonical = expand_archive_documents(
         source_documents,  # type: ignore[arg-type]
-        limits=_limits(policy or ArchiveExpansionPolicy()),
+        limits=_limits(resolved_policy),
     )
     stored_paths: dict[str, str] = {}
     if package_store_dir is not None:
@@ -308,11 +379,15 @@ def expand_document_envelopes(
     ]
     return ArchiveExpansionBatch(
         documents=[
-            _provenance_compat(row)
+            _provenance_compat(row, policies)
             for row in canonical.documents
             if isinstance(row, dict)
         ],
-        packages=_package_rows(canonical.receipts, stored_paths),
+        packages=_package_rows(
+            canonical.receipts,
+            stored_paths,
+            canonical.ignored_members,
+        ),
         errors=errors,
         warnings=warnings,
     )
