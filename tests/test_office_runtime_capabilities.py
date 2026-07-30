@@ -9,6 +9,9 @@ from ai_test_asset_center.enterprise_knowledge_center.document_ingestion.compati
 from ai_test_asset_center.enterprise_knowledge_center.document_ingestion.contract import (
     DocumentSource,
 )
+from ai_test_asset_center.enterprise_knowledge_center.document_ingestion.guarded_compatible_office_adapter import (
+    GuardedCompatibleOfficeDocumentAdapter,
+)
 from ai_test_asset_center.enterprise_knowledge_center.document_ingestion.office_runtime_capabilities import (
     OFFICE_RUNTIME_CAPABILITY_SCHEMA,
     OFFICE_SOURCE_RUNTIME_PROBE_SCHEMA,
@@ -203,8 +206,9 @@ def test_successful_real_source_conversion_is_marked_only_after_extract(monkeypa
     assert result["structure_receipt"]["format_conversion_verified_with_this_source"] is True
 
 
-def test_default_registry_uses_runtime_aware_compatible_office_adapter() -> None:
+def test_default_registry_uses_guarded_runtime_aware_compatible_office_adapter() -> None:
     adapter = build_default_registry().get("compatible-office-normalization")
 
     assert isinstance(adapter, RuntimeAwareCompatibleOfficeDocumentAdapter)
-    assert adapter.parser_version == "3"
+    assert isinstance(adapter, GuardedCompatibleOfficeDocumentAdapter)
+    assert adapter.parser_version == "4"
