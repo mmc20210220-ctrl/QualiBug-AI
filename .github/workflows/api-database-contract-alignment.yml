@@ -42,6 +42,7 @@ on:
       - "tests/test_database_observer_experiment_projection.py"
       - "tests/test_database_observer_experiment_runtime.py"
       - "tests/test_database_observer_experiment_executor_integration.py"
+      - "tests/test_database_observer_registration_authority.py"
       - ".github/workflows/api-database-contract-alignment.yml"
 
 permissions:
@@ -113,4 +114,5 @@ jobs:
             tests/test_database_observer_runtime_materialization_projection.py \
             tests/test_database_observer_experiment_projection.py \
             tests/test_database_observer_experiment_runtime.py \
-            tests/test_database_observer_experiment_executor_integration.py
+            tests/test_database_observer_experiment_executor_integration.py \
+            tests/test_database_observer_registration_authority.py
