@@ -14,6 +14,7 @@ from typing import Any, Iterable
 
 from ._parsing import _parse_source, _risk_type_from_text
 from .document_ingestion import build_document_structure_ir
+from .document_ir_api_semantics import enrich_parsed_api_artifact_semantics
 from .document_ir_tabular_semantics import extract_tabular_enterprise_semantics
 
 SEMANTIC_SOURCE_PROJECTION_SCHEMA = "qualibug.semantic-source-projection.v1"
@@ -322,7 +323,8 @@ def _bug_ticket_projection(bug: dict[str, Any], source_type: str) -> dict[str, A
         "severity_raw": _text(bug.get("severity") or bug.get("priority")),
         "status": _text(bug.get("status")) or "historical",
         "risk_type": _risk_type_from_text(" ".join([title, _text(bug.get("actual"))])),
-        "evidence": "; ".join(value for value in evidence_parts if value)[:1200] or title[:600],
+        "evidence": "; ".join(value for value in evidence_parts if value)[:1200]
+        or title[:600],
         "field_evidence": dict(bug.get("field_evidence") or {}),
         "source_locators": list(bug.get("source_locators") or []),
         "high_fidelity_document_ir_projection": True,
@@ -363,6 +365,12 @@ def parse_enterprise_source(
         source_type,
         source_id,
     )
+    parsed = enrich_parsed_api_artifact_semantics(
+        parsed,
+        document_ir,
+        source_id=source_id,
+        source_type=source_type,
+    )
     tabular = extract_tabular_enterprise_semantics(
         document_ir,
         source_id=source_id,
@@ -387,6 +395,7 @@ def parse_enterprise_source(
     structure_receipt = _dict(document_ir.get("structure_receipt"))
     evidence_receipt = _dict(document_ir.get("evidence_closure_receipt"))
     ingestion_receipt = _dict(document_ir.get("ingestion_pipeline_receipt"))
+    api_semantic_receipt = _dict(parsed.get("api_artifact_semantic_receipt"))
     document_errors = _document_ir_errors(document_ir, source_id)
     parse_errors = [
         dict(row)
@@ -408,6 +417,7 @@ def parse_enterprise_source(
     outputs = dict(receipt.get("outputs") or {})
     outputs.update(
         {
+            "operations": len(_list(parsed.get("operations"))),
             "tickets": len(parsed["tickets"]),
             "historical_bugs": len(historical_bugs),
             "test_cases": len(test_cases),
@@ -440,6 +450,7 @@ def parse_enterprise_source(
             "document_ir_status": formal_status,
             "document_ir_format": _text(document_ir.get("format")),
             "semantic_projection_receipt": projection_receipt,
+            "api_artifact_semantic_receipt": api_semantic_receipt,
             "tabular_semantic_receipt": tabular,
             "ingestion_pipeline_receipt": ingestion_receipt,
             "evidence_closure_receipt": evidence_receipt,
