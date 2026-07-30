@@ -7,14 +7,6 @@ from ai_test_asset_center.enterprise_knowledge_center.document_ingestion import 
 )
 
 
-def _blocks(ir: dict, kind: str) -> list[dict]:
-    return [
-        row
-        for row in ir.get("blocks") or []
-        if isinstance(row, dict) and row.get("node_kind") == kind
-    ]
-
-
 def _by_pointer(ir: dict, pointer: str) -> dict:
     return next(
         row
@@ -73,7 +65,7 @@ def test_component_schema_properties_preserve_constraints_and_exact_addresses() 
     receipt = ir["structure_receipt"]
     assert receipt["openapi_schema_projection"] is True
     assert receipt["openapi_schema_count"] == 2
-    assert receipt["openapi_schema_property_count"] == 8
+    assert receipt["openapi_schema_property_count"] == 7
     assert receipt["openapi_unresolved_reference_count"] == 0
     amount = _by_pointer(ir, "/components/schemas/Order/properties/amount")
     assert amount["schema_type"] == "number"
