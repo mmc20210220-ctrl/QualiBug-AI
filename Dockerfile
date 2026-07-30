@@ -37,9 +37,12 @@ WORKDIR /app
 # - LibreOffice renders DOC/PPT/XLS and OOXML visual pages without desktop UI.
 # - Tesseract Chinese + English recovers scanned pages and image-only slides.
 # - Noto CJK fonts preserve Chinese layout during Office-to-PDF rendering.
+# - libarchive/bsdtar reads RAR and 7Z packages into bounded memory without
+#   reconstructing member paths on disk.
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     curl \
     fonts-noto-cjk \
+    libarchive-tools \
     libreoffice-calc \
     libreoffice-core \
     libreoffice-impress \
@@ -48,6 +51,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     tesseract-ocr-chi-sim \
     tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/* \
+    && bsdtar --version \
     && libreoffice --headless --version \
     && tesseract --version
 
