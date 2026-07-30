@@ -134,7 +134,7 @@ def test_component_ref_closure_attaches_only_reachable_schema_properties() -> No
     amount = next(
         row
         for row in create_order["technical_declarations"]
-        if row.get("property_path") == "amount"
+        if row.get("property_path") == ["amount"]
         and row.get("json_pointer")
         == "/components/schemas/OrderCreate/properties/amount"
     )
