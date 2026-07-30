@@ -1,9 +1,9 @@
 """Pure Probe admission policy for the enterprise-understanding pipeline.
 
-Probe generation is a downstream compilation step.  It must never be enabled by
+Probe generation is a downstream compilation step. It must never be enabled by
 replacing ``_probes_from_asset`` at import time or by stacking wrappers around a
-shared global function.  This module evaluates the completed asset explicitly and
-then delegates to the unchanged legacy compiler only when every formal gate is open.
+shared global function. This module evaluates the completed asset explicitly and
+then delegates only when every formal gate is open and the budget is positive.
 """
 from __future__ import annotations
 
@@ -45,8 +45,9 @@ def build_gated_probes(
     *,
     compiler: Callable[[dict[str, Any], int], list[dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Compile Probes after gate closure without mutating any module-level authority."""
-    if not probe_generation_allowed(asset):
+    """Compile Probes after gate closure without mutating module-level authority."""
+    limit = max(0, int(max_count))
+    if limit == 0 or not probe_generation_allowed(asset):
         return []
     if compiler is None:
         from .. import _linking
@@ -54,7 +55,7 @@ def build_gated_probes(
         compiler = _linking._probes_from_asset
     return [
         dict(row)
-        for row in compiler(asset, max(0, int(max_count)))
+        for row in compiler(asset, limit)
         if isinstance(row, dict)
     ]
 
