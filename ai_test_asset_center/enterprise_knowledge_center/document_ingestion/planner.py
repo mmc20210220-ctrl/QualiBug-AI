@@ -8,6 +8,7 @@ from __future__ import annotations
 import mimetypes
 from typing import Any, Iterable
 
+from ...enterprise_material_formats import inspect_pk_document_container
 from .contract import (
     CAP_COMMENT_EXTRACTION,
     CAP_FONT_EVIDENCE,
@@ -48,6 +49,7 @@ _COMPATIBLE_PRESENTATION_FORMATS = {"ppt", "pot", "pps", "odp", "dps", "dpt"}
 _ALL_WORD_FORMATS = _NATIVE_WORD_FORMATS | _COMPATIBLE_WORD_FORMATS
 _ALL_SPREADSHEET_FORMATS = _NATIVE_SPREADSHEET_FORMATS | _COMPATIBLE_SPREADSHEET_FORMATS
 _ALL_PRESENTATION_FORMATS = _NATIVE_PRESENTATION_FORMATS | _COMPATIBLE_PRESENTATION_FORMATS
+_DATABASE_MODEL_FORMATS = {"pdm", "mwb", "sqlite", "sqlite3", "db"}
 _TEXT_FIRST_FAMILIES = {"text", "structured_text"}
 _DEFERRED_CAPABILITIES_BY_GAP: dict[str, tuple[str, ...]] = {
     "SCANNED_PAGE_REQUIRES_OCR": (
@@ -94,16 +96,23 @@ def _office_format_or_default(source: DocumentSource, allowed: set[str], default
 def _detected_family(source: DocumentSource) -> tuple[str, str]:
     """Return a source format identifier plus the detection method.
 
-    For Office sources the returned identifier is the exact container subtype, not merely
-    the normalized parser family. This prevents DOCM/XLSM/PPTM and ZIP-based WPS/XLSB files
-    from being mislabeled as DOCX/XLSX/PPTX or ZIP after successful parsing.
+    Exact Office and database-model subtypes are retained so the final Document IR never
+    labels a MySQL Workbench model as ZIP or a SQLite database as an unknown binary.
     """
 
     stripped = source.data.lstrip()
     declared = _declared_format(source)
     if stripped.startswith(b"%PDF-"):
         return "pdf", "pdf_file_signature"
+    if source.data.startswith(b"SQLite format 3\x00"):
+        return (
+            declared if declared in {"sqlite", "sqlite3", "db"} else "sqlite",
+            "sqlite_file_signature",
+        )
     if source.data.startswith(b"PK"):
+        structural_family = inspect_pk_document_container(source.data)
+        if structural_family == "mysql_workbench_model":
+            return "mwb", "mysql_workbench_document_xml_container"
         try:
             import io
             import zipfile
@@ -168,6 +177,8 @@ def _capability_family(source_format: str) -> str:
         return "spreadsheet"
     if source_format in _ALL_PRESENTATION_FORMATS:
         return "presentation"
+    if source_format in _DATABASE_MODEL_FORMATS:
+        return "database_model"
     if source_format in {"text", "structured_text"}:
         return source_format
     return source_format
@@ -232,6 +243,8 @@ def _required_capabilities(family: str) -> list[str]:
         return _spreadsheet_capabilities()
     if family == "presentation":
         return _presentation_capabilities()
+    if family == "database_model":
+        return unique_text([CAP_TEXT_EXTRACTION, CAP_TABLE_STRUCTURE])
     if family == "image":
         return unique_text(
             [
