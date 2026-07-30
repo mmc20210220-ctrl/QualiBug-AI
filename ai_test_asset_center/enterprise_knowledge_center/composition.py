@@ -25,6 +25,9 @@ from .database_model_index_reconciliation import (
     reconcile_database_model_index_assets,
 )
 from .database_model_semantic_bridge import install_database_model_semantic_bridge
+from .database_table_source_alignment import (
+    enrich_asset_with_database_table_alignment_candidates,
+)
 from .enterprise_understanding.integration import (
     _parsed_sources_for_context,
     enrich_asset_with_enterprise_understanding,
@@ -179,6 +182,7 @@ def build_enterprise_business_knowledge_asset(
     asset = enrich_asset_with_api_artifact_semantics(asset, parsed_sources)
     asset = enrich_asset_with_database_model_facts(asset, parsed_sources)
     asset = reconcile_database_model_index_assets(asset)
+    asset = enrich_asset_with_database_table_alignment_candidates(asset)
     asset = enrich_asset_with_enterprise_understanding(
         asset, parsed_sources=parsed_sources
     )
@@ -237,6 +241,7 @@ def build_enterprise_business_knowledge_asset(
             "database_model_projection_precedes_enterprise_understanding": True,
             "database_model_semantic_bridge_installed_explicitly": True,
             "database_model_index_reconciliation_precedes_enterprise_understanding": True,
+            "database_table_alignment_precedes_enterprise_understanding": True,
         }
     )
     asset["governance"] = governance
