@@ -1,8 +1,8 @@
 """Exact database state-transition assertions on approved read-only snapshots.
 
 The database Observer remains fact-only. This module registers one restricted
-Assertion DSL kind that compares exact BEFORE/AFTER snapshots emitted by the
-approved database phase aggregate. It never opens a connection, executes SQL,
+Assertion DSL kind that compares exact BEFORE/AFTER receipts emitted by the
+approved database observer phases. It never opens a connection, executes SQL,
 invents a field mapping, or authors a delivery decision; the existing Contract
 Oracle remains the only verdict authority.
 """
@@ -14,8 +14,9 @@ from .assertion_dsl_base import register_assertion_kind, registered_assertion_ki
 
 DATABASE_STATE_TRANSITION_ASSERTION_KIND = "database_state_transition"
 DATABASE_STATE_TRANSITION_ORACLE_SCHEMA = "qualibug.database-state-transition-oracle.v1"
-_REQUIRED_EVIDENCE_KEY = "approved_database_snapshots"
+_REQUIRED_EVIDENCE_KEY = "approved_database_observer_phase_receipts"
 _DIRECT_READBACK_OBSERVER_ID = "approved_database_readback"
+_SNAPSHOT_EVIDENCE_KEY = "approved_database_snapshot"
 _UNKNOWN_STATES = frozenset({"", "unknown", "unknown_state"})
 
 
@@ -40,6 +41,28 @@ def _reason(code: str, *, expected: dict[str, Any], actual: dict[str, Any]) -> d
     return {"passed": None, "reason_code": code, "expected": expected, "actual": actual}
 
 
+def _normalized_phase_row(raw: Any) -> dict[str, Any]:
+    row = _dict(raw)
+    if not row:
+        return {}
+    # Runtime phase receipts are typed direct-readback Observer receipts augmented
+    # with phase lineage. Normalize them into the aggregate row shape without
+    # mutating or re-querying anything.
+    if _text(row.get("observation_phase")):
+        return {
+            "draft_id": _text(row.get("draft_id")),
+            "phase": _text(row.get("observation_phase")).upper(),
+            "observer_contract_ref": _text(row.get("observer_contract_ref")),
+            "receipt_id": _text(row.get("receipt_id")),
+            "source_observer_id": _text(row.get("observer_id")),
+            "snapshot": _dict(_dict(row.get("evidence")).get(_SNAPSHOT_EVIDENCE_KEY)),
+            "oracle_verdict_emitted": row.get("oracle_verdict_emitted"),
+            "campaign_id": _text(row.get("campaign_id")),
+            "execution_id": _text(row.get("execution_id")),
+        }
+    return row
+
+
 def _phase_rows(
     observations: dict[str, Any],
     *,
@@ -50,7 +73,7 @@ def _phase_rows(
     before: list[dict[str, Any]] = []
     after: list[dict[str, Any]] = []
     for raw in _list(observations.get(_REQUIRED_EVIDENCE_KEY)):
-        row = _dict(raw)
+        row = _normalized_phase_row(raw)
         if _text(row.get("observer_contract_ref")) != contract_ref:
             continue
         phase = _text(row.get("phase")).upper()
@@ -74,6 +97,8 @@ def _snapshot_value(
         "phase": _text(phase_row.get("phase")).upper(),
         "phase_receipt_id": _text(phase_row.get("receipt_id")),
         "source_observer_id": _text(phase_row.get("source_observer_id")),
+        "campaign_id": _text(phase_row.get("campaign_id")),
+        "execution_id": _text(phase_row.get("execution_id")),
         "database_table_ref": _text(snapshot.get("database_table_ref")),
         "database_table_name": _text(snapshot.get("database_table_name")),
         "match_status": _text(snapshot.get("match_status")),
