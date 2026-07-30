@@ -1,9 +1,9 @@
 """Canonical upload dispatch for the private-pilot knowledge endpoint.
 
-The HTTP handler owns request validation and response scheduling only. This module chooses
-between ordinary document ingestion and archive transport expansion, then returns the
-canonical runtime corpus manifest already produced by the knowledge subsystem. It never
-registers a second source asset.
+The HTTP handler owns request validation and response scheduling only. Ordinary documents
+and archive transports both enter ``ingest_enterprise_knowledge_documents``; archive
+expansion is an internal stage of that transaction. This module never registers a second
+source asset and never calls a parallel archive parser.
 """
 from __future__ import annotations
 
@@ -54,12 +54,17 @@ def ingest_uploaded_enterprise_material(
 ) -> dict[str, Any]:
     """Ingest one uploaded transport artifact through the canonical knowledge authority."""
 
+    from .enterprise_knowledge_center import ingest_enterprise_knowledge_documents
+
     suffix = Path(filename).suffix.lower()
     is_archive = suffix in KNOWLEDGE_INGEST_ARCHIVE_EXTENSIONS
     extracted_text = ""
     doc_info: dict[str, Any] = {}
+    envelope: dict[str, Any] = {
+        "file_path": str(out_path),
+        "filename": filename,
+    }
     if is_archive:
-        source_hint = ""
         type_resolution = "member_automatic"
         if explicit_type:
             source_hint, _resolution = resolve_knowledge_source_type(
@@ -67,33 +72,11 @@ def ingest_uploaded_enterprise_material(
                 "",
                 explicit_type,
             )
+            envelope["source_type"] = source_hint
             type_resolution = "explicit_member_override"
-        from .enterprise_knowledge_center.archive_ingestion import (
-            ingest_enterprise_knowledge_archives,
-        )
-
-        ingest_result = ingest_enterprise_knowledge_archives(
-            project,
-            [out_path],
-            root=root,
-            actor=actor,
-            source_type_hints={str(out_path): source_hint} if source_hint else {},
-        )
         doc_type = "archive_package"
-        doc_info = {
-            "ok": bool(ingest_result.get("ok")),
-            "transport": "archive",
-            "archive_receipts": list(ingest_result.get("archive_receipts") or []),
-            "expanded_document_count": int(
-                ingest_result.get("expanded_document_count") or 0
-            ),
-            "archive_transport_artifacts": list(
-                ingest_result.get("archive_transport_artifacts") or []
-            ),
-        }
     else:
         from .document_change_watcher import ingest_document
-        from .enterprise_knowledge_center import ingest_enterprise_knowledge_documents
 
         observed = ingest_document(str(out_path))
         if not isinstance(observed, dict) or observed.get("ok") is not True:
@@ -112,20 +95,33 @@ def ingest_uploaded_enterprise_material(
             extracted_text,
             explicit_type or None,
         )
-        ingest_result = ingest_enterprise_knowledge_documents(
-            project,
-            [
-                {
-                    "file_path": str(out_path),
-                    "filename": filename,
-                    "source_type": doc_type,
-                }
-            ],
-            root=root,
-            actor=actor,
-        )
+        envelope["source_type"] = doc_type
 
+    ingest_result = ingest_enterprise_knowledge_documents(
+        project,
+        [envelope],
+        root=root,
+        actor=actor,
+    )
     ingest_result = _validate_ingest_result(ingest_result)
+    if is_archive:
+        archive_expansion = dict(ingest_result.get("archive_expansion") or {})
+        doc_info = {
+            "ok": bool(ingest_result.get("ok")),
+            "transport": "archive",
+            "archive_receipts": list(archive_expansion.get("packages") or []),
+            "expanded_document_count": int(
+                archive_expansion.get("document_count") or 0
+            ),
+            "archive_error_count": int(archive_expansion.get("error_count") or 0),
+            "archive_warning_count": int(
+                archive_expansion.get("warning_count") or 0
+            ),
+            "canonical_archive_authority": archive_expansion.get(
+                "canonical_archive_authority"
+            ),
+        }
+
     source_ids = _source_ids(ingest_result)
     if ingest_result["ok"] is False:
         return {
@@ -142,6 +138,7 @@ def ingest_uploaded_enterprise_material(
             "doc_info": doc_info,
             "ingest_result": ingest_result,
             "second_source_registration_performed": False,
+            "parallel_archive_parser_called": False,
         }
 
     from .enterprise_source_registry import compose_project_source_manifest
@@ -171,6 +168,7 @@ def ingest_uploaded_enterprise_material(
         "doc_info": doc_info,
         "ingest_result": ingest_result,
         "second_source_registration_performed": False,
+        "parallel_archive_parser_called": False,
         "canonical_runtime_corpus_used": True,
     }
 
