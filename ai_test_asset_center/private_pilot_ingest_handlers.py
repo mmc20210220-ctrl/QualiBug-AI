@@ -13,6 +13,29 @@ from .private_pilot_project_assets import (
 from .private_pilot_scan_prep import _run_ingest_auto_scan
 
 
+def _archive_response_projection(
+    ingest_result: dict[str, Any],
+    doc_info: dict[str, Any],
+) -> tuple[int, list[dict[str, Any]], dict[str, Any]]:
+    """Project the canonical nested archive receipt onto the stable HTTP response."""
+
+    archive_expansion = dict(ingest_result.get("archive_expansion") or {})
+    expanded_count = int(
+        ingest_result.get("expanded_document_count")
+        or archive_expansion.get("document_count")
+        or doc_info.get("expanded_document_count")
+        or 0
+    )
+    raw_receipts = (
+        ingest_result.get("archive_receipts")
+        or archive_expansion.get("packages")
+        or doc_info.get("archive_receipts")
+        or []
+    )
+    receipts = [dict(row) for row in raw_receipts if isinstance(row, dict)]
+    return expanded_count, receipts, archive_expansion
+
+
 class IngestHandlersMixin:
     def _handle_ingest(self, project: str, body: dict[str, Any], root: Path, actor: dict[str, str]) -> None:
         """Ingest one customer transport artifact through the canonical knowledge authority."""
@@ -93,6 +116,10 @@ class IngestHandlersMixin:
                 if str(value).strip()
             ]
             source_id = str(authority_result.get("source_id") or "")
+            expanded_count, archive_receipts, archive_expansion = _archive_response_projection(
+                ingest_result,
+                doc_info,
+            )
             if authority_result.get("ok") is not True:
                 errors = ingest_result.get("errors") if isinstance(ingest_result.get("errors"), list) else []
                 first = errors[0] if errors and isinstance(errors[0], dict) else {}
@@ -104,7 +131,9 @@ class IngestHandlersMixin:
                         "error": "INGEST_FAILED",
                         "message": "资料导入失败：" + str(detail),
                         "transport": transport,
-                        "archive_receipts": ingest_result.get("archive_receipts") or [],
+                        "expanded_document_count": expanded_count,
+                        "archive_receipts": archive_receipts,
+                        "archive_expansion": archive_expansion,
                     },
                     500,
                 )
@@ -202,7 +231,10 @@ class IngestHandlersMixin:
             if "scan_skipped" in ingest_status
             else "not_applicable"
         )
-        expanded_count = int(ingest_result.get("expanded_document_count") or 0)
+        expanded_count, archive_receipts, archive_expansion = _archive_response_projection(
+            ingest_result,
+            doc_info,
+        )
         message = (
             f"'{filename}' 已安全展开并导入 {expanded_count} 份资料。"
             if transport == "archive"
@@ -228,7 +260,8 @@ class IngestHandlersMixin:
             "doc_info": doc_info,
             "knowledge_updated": knowledge_updated,
             "expanded_document_count": expanded_count,
-            "archive_receipts": ingest_result.get("archive_receipts") or [],
+            "archive_receipts": archive_receipts,
+            "archive_expansion": archive_expansion,
             "second_source_registration_performed": False,
             "message": message,
         })
