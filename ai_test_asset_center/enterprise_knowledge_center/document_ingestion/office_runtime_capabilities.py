@@ -173,17 +173,21 @@ class RuntimeAwareCompatibleOfficeDocumentAdapter(CompatibleOfficeDocumentAdapte
     parser_version = "3"
 
     def probe(self, source: DocumentSource) -> AdapterMatch | None:
-        match = super().probe(source)
-        if match is None:
+        target = _target_suffix(source.suffix)
+        if not target:
             return None
         runtime = probe_compatible_office_source_runtime(source, self.normalizer)
         runtime_ready = bool(runtime["runtime_dependency_available"])
+        availability = "available" if runtime_ready else "unavailable_at_runtime"
         return AdapterMatch(
-            adapter_name=match.adapter_name,
-            score=match.score,
-            reason=match.reason,
-            capabilities=match.capabilities,
-            mode=match.mode,
+            adapter_name=self.name,
+            score=112,
+            reason=(
+                f"compatible_office_suffix:{source.suffix}->{target};"
+                f"normalizer={availability}"
+            ),
+            capabilities=tuple(sorted(_capabilities_for_target(target))),
+            mode=self.mode,
             runtime_ready=runtime_ready,
             runtime_reason=("" if runtime_ready else "RUNTIME_DEPENDENCY_UNAVAILABLE"),
         )
