@@ -15,6 +15,7 @@ def test_default_python_distribution_contains_formal_document_runtime() -> None:
     }
 
     required_prefixes = {
+        "olefile",
         "openpyxl",
         "pillow",
         "pypdf",
@@ -42,4 +43,4 @@ def test_customer_runtime_image_provisions_office_rendering_and_chinese_ocr() ->
 
     assert "libreoffice --headless --version" in dockerfile
     assert "tesseract --version" in dockerfile
-    assert "import openpyxl, pptx, pypdfium2, pytesseract" in dockerfile
+    assert "import olefile, openpyxl, pptx, pypdfium2, pytesseract" in dockerfile
