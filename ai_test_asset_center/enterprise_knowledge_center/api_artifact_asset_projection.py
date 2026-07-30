@@ -279,6 +279,14 @@ def _merge_source_records(
     return result
 
 
+def _record_observations(record: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        dict(item)
+        for item in _list(record.get("runtime_observations"))
+        if isinstance(item, dict)
+    ]
+
+
 def _apply_record_ledger(
     canonical: dict[str, Any], records: list[dict[str, Any]]
 ) -> dict[str, Any]:
@@ -295,6 +303,10 @@ def _apply_record_ledger(
             for locator in [
                 _text(record.get("source_locator")),
                 *[_text(value) for value in _list(record.get("source_locators"))],
+                *[
+                    _text(item.get("source_locator"))
+                    for item in _record_observations(record)
+                ],
             ]
             if locator
         }
@@ -306,11 +318,19 @@ def _apply_record_ledger(
             for pointer in [
                 _text(record.get("json_pointer")),
                 *[_text(value) for value in _list(record.get("json_pointers"))],
+                *[
+                    _text(item.get("json_pointer"))
+                    for item in _record_observations(record)
+                ],
             ]
             if pointer
         }
     )
-    if len(records) == 1:
+    single_observation_set = (
+        len(records) == 1
+        and len(_record_observations(records[0])) > 1
+    )
+    if len(records) == 1 and not single_observation_set:
         record = records[0]
         for field in _SOURCE_EVIDENCE_FIELDS:
             if record.get(field) not in (None, "", [], {}):
@@ -320,9 +340,28 @@ def _apply_record_ledger(
     else:
         for field in _SOURCE_EVIDENCE_FIELDS:
             row.pop(field, None)
-        row["evidence_scope"] = "MULTI_SOURCE_DECLARATION_LEDGER"
+        row["evidence_scope"] = (
+            "SINGLE_SOURCE_RUNTIME_OBSERVATION_SET"
+            if single_observation_set
+            else "MULTI_SOURCE_DECLARATION_LEDGER"
+        )
         row["canonical_contract_source_id"] = ""
         row["single_source_evidence_claim_forbidden"] = True
+    if single_observation_set:
+        observations = _record_observations(records[0])
+        row["runtime_observations"] = observations
+        row["observation_count"] = len(observations)
+        row["runtime_observation_count"] = len(observations)
+        row["runtime_observation_statuses"] = sorted(
+            {
+                _text(item.get("observed_status") or item.get("status"))
+                for item in observations
+                if _text(item.get("observed_status") or item.get("status"))
+            }
+        )
+        row["contract_authority"] = "runtime_observation_only"
+        row["design_contract_inference_allowed"] = False
+        row["observation_authority"] = "HAR_RUNTIME_EVIDENCE"
     row["credential_values_retained"] = False
     row["business_flow_inferred"] = False
     return row
@@ -465,6 +504,7 @@ def enrich_asset_with_api_artifact_semantics(
         if isinstance(record, dict)
         and (
             (_text(record.get("json_pointer")) and _text(record.get("source_locator")))
+            or (_record_observations(record))
             or (_list(record.get("json_pointers")) and _list(record.get("source_locators")))
         )
     )
@@ -478,7 +518,11 @@ def enrich_asset_with_api_artifact_semantics(
         )
     )
     har_observation_count = sum(
-        sum(int(record.get("observation_count") or record.get("runtime_observation_count") or 0) for record in _list(interface.get("api_artifact_source_records")) if isinstance(record, dict))
+        sum(
+            int(record.get("observation_count") or record.get("runtime_observation_count") or 0)
+            for record in _list(interface.get("api_artifact_source_records"))
+            if isinstance(record, dict)
+        )
         for interface in interfaces
     )
     har_observation_set_count = sum(
