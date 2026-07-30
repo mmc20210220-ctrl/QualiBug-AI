@@ -31,6 +31,9 @@ KNOWLEDGE_INGEST_SOURCE_TYPES = (
     "permission_matrix",
     "historical_bug",
     "ticket",
+    "test_case",
+    "test_plan",
+    "test_report",
     "uiux_spec",
     "uiux_svg",
     "db_design",
@@ -52,6 +55,11 @@ KNOWLEDGE_SOURCE_TYPE_ALIASES = {
     "schema": "database_schema",
     "permission": "permission_matrix",
     "bugs": "historical_bug",
+    "testcase": "test_case",
+    "testcases": "test_case",
+    "test_case_document": "test_case",
+    "testplan": "test_plan",
+    "testreport": "test_report",
     "other": "other_document",
 }
 
