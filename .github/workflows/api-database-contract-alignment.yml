@@ -50,6 +50,7 @@ on:
       - "tests/test_database_state_transition_experiment_projection.py"
       - "tests/test_database_state_transition_contract_oracle.py"
       - "tests/test_database_state_transition_finding_bridge.py"
+      - "tests/test_database_state_transition_mixed_assertions.py"
       - ".github/workflows/api-database-contract-alignment.yml"
 
 permissions:
@@ -129,4 +130,5 @@ jobs:
             tests/test_database_state_transition_oracle.py \
             tests/test_database_state_transition_experiment_projection.py \
             tests/test_database_state_transition_contract_oracle.py \
-            tests/test_database_state_transition_finding_bridge.py
+            tests/test_database_state_transition_finding_bridge.py \
+            tests/test_database_state_transition_mixed_assertions.py
