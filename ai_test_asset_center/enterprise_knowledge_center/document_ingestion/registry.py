@@ -88,6 +88,7 @@ def build_default_registry() -> DocumentAdapterRegistry:
         PdfDocumentAdapter,
         UnknownBinaryDocumentAdapter,
     )
+    from .office_adapters import PresentationDocumentAdapter, SpreadsheetDocumentAdapter
     from .rendered_ocr_adapter import OcrSupplementalAdapter
     from .visual_table_adapter import VisualTableSupplementalAdapter
     from .visual_table_provider_gate import GeometryFormalEnforcingVisualTableProvider
@@ -99,6 +100,8 @@ def build_default_registry() -> DocumentAdapterRegistry:
         [
             DocxDocumentAdapter(),
             PdfDocumentAdapter(),
+            SpreadsheetDocumentAdapter(),
+            PresentationDocumentAdapter(),
             OcrSupplementalAdapter(),
             VisualTableSupplementalAdapter(provider=advanced_table_provider),
             GenericTextDocumentAdapter(),
