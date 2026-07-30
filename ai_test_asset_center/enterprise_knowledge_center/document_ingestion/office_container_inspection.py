@@ -15,7 +15,11 @@ from .contract import DocumentSource
 
 OFFICE_CONTAINER_INSPECTION_SCHEMA = "qualibug.office-container-inspection.v1"
 _OLE_SIGNATURE = bytes.fromhex("d0cf11e0a1b11ae1")
+_MAX_ZIP_MEMBER_COUNT = 5_000
+_MAX_ZIP_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
+_MAX_ZIP_COMPRESSION_RATIO = 200
 _MAX_NESTED_OLE_MEMBER_BYTES = 20 * 1024 * 1024
+_MAX_TOTAL_NESTED_OLE_BYTES = 64 * 1024 * 1024
 _MAX_NESTED_OLE_MEMBERS = 64
 
 
@@ -77,6 +81,43 @@ def _ole_automation_indicators(names: list[str], *, prefix: str = "") -> list[st
     return sorted(set(indicators))
 
 
+def _zip_limits(infos: list[zipfile.ZipInfo]) -> tuple[bool, list[dict[str, Any]]]:
+    errors: list[dict[str, Any]] = []
+    if len(infos) > _MAX_ZIP_MEMBER_COUNT:
+        errors.append(
+            {
+                "code": "OFFICE_ZIP_MEMBER_LIMIT_EXCEEDED",
+                "observed": len(infos),
+                "limit": _MAX_ZIP_MEMBER_COUNT,
+            }
+        )
+    total_uncompressed = sum(max(0, int(info.file_size)) for info in infos if not info.is_dir())
+    if total_uncompressed > _MAX_ZIP_UNCOMPRESSED_BYTES:
+        errors.append(
+            {
+                "code": "OFFICE_ZIP_UNCOMPRESSED_SIZE_LIMIT_EXCEEDED",
+                "observed": total_uncompressed,
+                "limit": _MAX_ZIP_UNCOMPRESSED_BYTES,
+            }
+        )
+    for info in infos:
+        if info.is_dir() or info.file_size <= 0:
+            continue
+        compressed = max(1, int(info.compress_size))
+        ratio = int(info.file_size) / compressed
+        if ratio > _MAX_ZIP_COMPRESSION_RATIO:
+            errors.append(
+                {
+                    "code": "OFFICE_ZIP_COMPRESSION_RATIO_LIMIT_EXCEEDED",
+                    "member": info.filename,
+                    "observed_ratio": round(ratio, 2),
+                    "limit": _MAX_ZIP_COMPRESSION_RATIO,
+                }
+            )
+            break
+    return not errors, errors
+
+
 def inspect_office_container(source: DocumentSource) -> dict[str, Any]:
     """Inspect one immutable source without executing or interpreting embedded automation."""
 
@@ -84,6 +125,7 @@ def inspect_office_container(source: DocumentSource) -> dict[str, Any]:
     indicators: list[str] = []
     inspected_members = 0
     nested_ole_members = 0
+    nested_ole_bytes = 0
     errors: list[dict[str, Any]] = []
     stripped = data.lstrip()
     if source.suffix == ".rtf" or stripped.startswith(b"{\\rtf"):
@@ -100,25 +142,48 @@ def inspect_office_container(source: DocumentSource) -> dict[str, Any]:
         errors = []
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as archive:
-                names = archive.namelist()
+                infos = archive.infolist()
+                names = [info.filename for info in infos]
                 inspected_members = len(names)
                 indicators.extend(_zip_automation_indicators(names))
-                for name in names:
+                limits_ok, limit_errors = _zip_limits(infos)
+                if not limits_ok:
+                    inspection_complete = False
+                    errors.extend(limit_errors)
+                for info in infos[:_MAX_ZIP_MEMBER_COUNT]:
                     if nested_ole_members >= _MAX_NESTED_OLE_MEMBERS:
+                        inspection_complete = False
+                        errors.append(
+                            {
+                                "code": "NESTED_OLE_MEMBER_LIMIT_EXCEEDED",
+                                "limit": _MAX_NESTED_OLE_MEMBERS,
+                            }
+                        )
                         break
-                    info = archive.getinfo(name)
                     if info.is_dir() or info.file_size <= 0 or info.file_size > _MAX_NESTED_OLE_MEMBER_BYTES:
                         continue
-                    lower = name.lower()
+                    if nested_ole_bytes + int(info.file_size) > _MAX_TOTAL_NESTED_OLE_BYTES:
+                        inspection_complete = False
+                        errors.append(
+                            {
+                                "code": "NESTED_OLE_TOTAL_SIZE_LIMIT_EXCEEDED",
+                                "limit": _MAX_TOTAL_NESTED_OLE_BYTES,
+                            }
+                        )
+                        break
+                    lower = info.filename.lower()
                     if not lower.endswith((".bin", ".ole", ".dat")):
                         continue
+                    compressed = max(1, int(info.compress_size))
+                    if int(info.file_size) / compressed > _MAX_ZIP_COMPRESSION_RATIO:
+                        continue
                     try:
-                        member = archive.read(name)
+                        member = archive.read(info)
                     except Exception as exc:
                         errors.append(
                             {
                                 "code": "NESTED_OFFICE_MEMBER_READ_FAILED",
-                                "member": name,
+                                "member": info.filename,
                                 "detail": f"{type(exc).__name__}: {exc}"[:300],
                             }
                         )
@@ -127,13 +192,14 @@ def inspect_office_container(source: DocumentSource) -> dict[str, Any]:
                     if not member.startswith(_OLE_SIGNATURE):
                         continue
                     nested_ole_members += 1
+                    nested_ole_bytes += len(member)
                     stream_names, status = _ole_stream_names(member)
                     if status != "COMPLETE":
                         inspection_complete = False
-                        errors.append({"code": status, "member": name})
+                        errors.append({"code": status, "member": info.filename})
                         continue
                     indicators.extend(
-                        _ole_automation_indicators(stream_names, prefix=f"{name}:")
+                        _ole_automation_indicators(stream_names, prefix=f"{info.filename}:")
                     )
         except Exception as exc:
             inspection_complete = False
@@ -177,10 +243,19 @@ def inspect_office_container(source: DocumentSource) -> dict[str, Any]:
         "inspection_complete": inspection_complete,
         "inspected_member_count": inspected_members,
         "nested_ole_member_count": nested_ole_members,
+        "nested_ole_byte_count": nested_ole_bytes,
         "automation_artifact_detected": automation_present,
         "automation_indicators": indicators,
         "error_count": len(errors),
         "errors": errors,
+        "resource_limits": {
+            "max_zip_member_count": _MAX_ZIP_MEMBER_COUNT,
+            "max_zip_uncompressed_bytes": _MAX_ZIP_UNCOMPRESSED_BYTES,
+            "max_zip_compression_ratio": _MAX_ZIP_COMPRESSION_RATIO,
+            "max_nested_ole_member_bytes": _MAX_NESTED_OLE_MEMBER_BYTES,
+            "max_total_nested_ole_bytes": _MAX_TOTAL_NESTED_OLE_BYTES,
+            "max_nested_ole_members": _MAX_NESTED_OLE_MEMBERS,
+        },
         "automation_code_executed": False,
         "automation_semantics_interpreted": False,
         "absence_of_known_indicators_is_not_proof_of_no_behavior": True,
