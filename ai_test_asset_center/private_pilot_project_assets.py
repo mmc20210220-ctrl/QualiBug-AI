@@ -50,6 +50,10 @@ KNOWLEDGE_SOURCE_TYPE_ALIASES = {
     "bugs": "historical_bug",
     "other": "other_document",
 }
+
+# The HTTP boundary must not reject formats already supported by the canonical
+# document-ingestion registry. These groups describe transport acceptance only;
+# semantic fidelity remains visible in each parser/normalizer receipt.
 KNOWLEDGE_INGEST_TEXT_EXTENSIONS = (
     ".md",
     ".markdown",
@@ -60,15 +64,89 @@ KNOWLEDGE_INGEST_TEXT_EXTENSIONS = (
     ".yaml",
     ".yml",
     ".json",
+    ".jsonl",
+    ".ndjson",
     ".csv",
+    ".tsv",
     ".sql",
     ".xml",
     ".svg",
     ".har",
     ".log",
+    ".toml",
+    ".ini",
+    ".conf",
+    ".properties",
+    ".env",
+    ".feature",
+    ".jmx",
+    ".wsdl",
+    ".xsd",
+    ".proto",
+    ".graphql",
+    ".gql",
+    ".raml",
+    ".http",
+    ".rest",
+    ".mmd",
+    ".bpmn",
+    ".drawio",
 )
-KNOWLEDGE_INGEST_BINARY_EXTENSIONS = (".pdf", ".docx", ".xlsx", ".xls")
-KNOWLEDGE_INGEST_EXTENSIONS = KNOWLEDGE_INGEST_TEXT_EXTENSIONS + KNOWLEDGE_INGEST_BINARY_EXTENSIONS
+KNOWLEDGE_INGEST_BINARY_EXTENSIONS = (
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".docm",
+    ".dot",
+    ".dotm",
+    ".rtf",
+    ".odt",
+    ".wps",
+    ".wpt",
+    ".xls",
+    ".xlsx",
+    ".xlsm",
+    ".xlsb",
+    ".xlt",
+    ".xltx",
+    ".xltm",
+    ".ods",
+    ".et",
+    ".ett",
+    ".ppt",
+    ".pptx",
+    ".pptm",
+    ".pot",
+    ".potx",
+    ".potm",
+    ".pps",
+    ".ppsx",
+    ".ppsm",
+    ".odp",
+    ".dps",
+    ".dpt",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+    ".bmp",
+    ".tif",
+    ".tiff",
+    ".gif",
+)
+KNOWLEDGE_INGEST_ARCHIVE_EXTENSIONS = (
+    ".zip",
+    ".tar",
+    ".tgz",
+    ".gz",
+    ".7z",
+    ".rar",
+)
+KNOWLEDGE_INGEST_EXTENSIONS = (
+    KNOWLEDGE_INGEST_TEXT_EXTENSIONS
+    + KNOWLEDGE_INGEST_BINARY_EXTENSIONS
+    + KNOWLEDGE_INGEST_ARCHIVE_EXTENSIONS
+)
 ONBOARD_DOCUMENT_EXTENSIONS = (".md", ".markdown", ".txt", ".pdf", ".docx", ".html", ".htm")
 ONBOARD_OPENAPI_EXTENSIONS = (".yaml", ".yml", ".json")
 
