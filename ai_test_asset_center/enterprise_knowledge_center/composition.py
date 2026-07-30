@@ -1,9 +1,9 @@
 """Single explicit composition root for enterprise knowledge construction.
 
 The module owns one call graph:
-base source asset -> API artifact projection -> database-model fact projection ->
-enterprise understanding -> downstream binding -> governed Jobs -> final Probe
-admission -> one final persistence receipt.
+base source asset -> OpenAPI schema facts -> API artifact projection -> database-model facts ->
+cross-source contract alignment -> enterprise understanding -> downstream binding ->
+governed Jobs -> final Probe admission -> one final persistence receipt.
 """
 from __future__ import annotations
 
@@ -20,6 +20,9 @@ from ._formal_ui_visual_baseline_guard import install_formal_ui_visual_baseline_
 from ._formal_ui_visual_viewport_guard import install_formal_ui_visual_viewport_guard
 from ._utils import _load_registry, _now, _paths, _save_registry
 from .api_artifact_asset_projection import enrich_asset_with_api_artifact_semantics
+from .api_database_contract_alignment import (
+    enrich_asset_with_api_database_alignment_candidates,
+)
 from .database_model_asset_projection import enrich_asset_with_database_model_facts
 from .database_model_index_reconciliation import (
     reconcile_database_model_index_assets,
@@ -41,6 +44,7 @@ from .enterprise_understanding.probe_policy import (
 )
 from .job_asset_pipeline import enrich_job_assets_with_governance
 from .job_behavior_projection import refresh_job_behavior_projection
+from .openapi_schema_fact_asset_projection import enrich_asset_with_openapi_schema_facts
 
 
 def _probe_limit(value: Any, *, default: int = 140) -> int:
@@ -177,12 +181,14 @@ def build_enterprise_business_knowledge_asset(
     )
     parsed_sources = _parsed_sources_for_context(asset, resolved_root)
 
-    # Technical declarations must be projected before enterprise cognition. Neither
-    # stage invents a business sequence from document or diagram order.
+    # Technical declarations must be projected before enterprise cognition. No stage
+    # below invents a business sequence from document, schema or diagram order.
+    asset = enrich_asset_with_openapi_schema_facts(asset, parsed_sources)
     asset = enrich_asset_with_api_artifact_semantics(asset, parsed_sources)
     asset = enrich_asset_with_database_model_facts(asset, parsed_sources)
     asset = reconcile_database_model_index_assets(asset)
     asset = enrich_asset_with_database_table_alignment_candidates(asset)
+    asset = enrich_asset_with_api_database_alignment_candidates(asset)
     asset = enrich_asset_with_enterprise_understanding(
         asset, parsed_sources=parsed_sources
     )
@@ -237,11 +243,13 @@ def build_enterprise_business_knowledge_asset(
             "job_governance_uses_direct_function_calls": True,
             "package_import_replaces_build_authority": False,
             "parser_extension_registration_is_explicit_compatibility_boundary": True,
+            "openapi_schema_fact_projection_precedes_enterprise_understanding": True,
             "api_artifact_projection_precedes_enterprise_understanding": True,
             "database_model_projection_precedes_enterprise_understanding": True,
             "database_model_semantic_bridge_installed_explicitly": True,
             "database_model_index_reconciliation_precedes_enterprise_understanding": True,
             "database_table_alignment_precedes_enterprise_understanding": True,
+            "api_database_contract_alignment_precedes_enterprise_understanding": True,
         }
     )
     asset["governance"] = governance
