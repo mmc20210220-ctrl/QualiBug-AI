@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import experiment_compiler_obligation as _experiment_compiler
+from .database_numeric_oracle import install_database_numeric_assertions
 from .database_observer_experiment_runtime import (
     PHASE_AGGREGATE_OBSERVER_ID,
     install_experiment_database_observer,
@@ -171,7 +172,7 @@ def install_non_http_observers() -> None:
     install_experiment_database_observer()
     # Phase receipts are emitted by the aggregate Observer pipeline before Assertion DSL
     # evaluation. Declare the standard key explicitly so the kind-to-evidence compile gate
-    # can prove that the database state assertion is structurally satisfiable.
+    # can prove that the database assertions are structurally satisfiable.
     aggregate_contract = _dict(OBSERVER_REGISTRY.get(PHASE_AGGREGATE_OBSERVER_ID))
     evidence_keys = tuple(
         dict.fromkeys(
@@ -190,6 +191,7 @@ def install_non_http_observers() -> None:
     # Assertion registration happens only after the aggregate Observer has declared the
     # evidence key it produces. The Assertion DSL rejects structurally unproducible kinds.
     install_database_state_transition_assertion()
+    install_database_numeric_assertions()
 
     if hasattr(_experiment_compiler, _ORIGINAL_COMPILER_MARKER):
         original_compile = getattr(
