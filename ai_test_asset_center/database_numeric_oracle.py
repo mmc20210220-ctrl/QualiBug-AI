@@ -1,10 +1,9 @@
 """Exact numeric assertions over approved read-only database phase receipts.
 
-The database Observer remains fact-only.  These registered Assertion DSL kinds
-consume exact BEFORE/AFTER receipts that were already captured by the existing
-Experiment Executor.  They never open a connection, execute SQL, infer a field
-mapping, or author a delivery decision; Contract Oracle remains the only verdict
-authority.
+The database Observer remains fact-only. These registered Assertion DSL kinds
+consume exact BEFORE/AFTER receipts already captured by the existing Experiment
+Executor. They never open a connection, execute SQL, infer a field mapping, or
+author a delivery decision; Contract Oracle remains the only verdict authority.
 """
 from __future__ import annotations
 
@@ -44,8 +43,19 @@ def _decimal(value: Any) -> Decimal | None:
 def _decimal_text(value: Decimal | None) -> str | None:
     if value is None:
         return None
-    normalized = value.normalize()
-    return format(normalized, "f")
+    return format(value.normalize(), "f")
+
+
+def _declared_decimal(
+    source: dict[str, Any],
+    key: str,
+    *,
+    default: Decimal,
+) -> tuple[Decimal | None, bool]:
+    if key not in source or source.get(key) in (None, ""):
+        return default, True
+    parsed = _decimal(source.get(key))
+    return parsed, parsed is not None
 
 
 def _reason(
@@ -70,8 +80,6 @@ def _load_numeric_term(
     contract_ref = _text(term.get("database_observer_contract_ref"))
     table_ref = _text(term.get("database_table_ref"))
     field_name = _text(term.get("database_field_name"))
-    before_draft_id = _text(term.get("before_draft_id"))
-    after_draft_id = _text(term.get("after_draft_id"))
     actual: dict[str, Any] = {
         "term_id": _text(term.get("term_id")),
         "database_observer_contract_ref": contract_ref,
@@ -95,8 +103,8 @@ def _load_numeric_term(
     before_rows, after_rows = _phase_rows(
         observations,
         contract_ref=contract_ref,
-        before_draft_id=before_draft_id,
-        after_draft_id=after_draft_id,
+        before_draft_id=_text(term.get("before_draft_id")),
+        after_draft_id=_text(term.get("after_draft_id")),
     )
     if len(before_rows) != 1 or len(after_rows) != 1:
         actual["before_candidate_count"] = len(before_rows)
@@ -124,7 +132,9 @@ def _load_numeric_term(
         return actual, before_reason or after_reason
 
     lineage_match = bool(
-        before_snapshot.get("campaign_id") == after_snapshot.get("campaign_id")
+        before_snapshot.get("campaign_id")
+        and before_snapshot.get("execution_id")
+        and before_snapshot.get("campaign_id") == after_snapshot.get("campaign_id")
         and before_snapshot.get("execution_id") == after_snapshot.get("execution_id")
     )
     actual["lineage_match"] = lineage_match
@@ -164,7 +174,10 @@ def _same_execution(term_results: list[dict[str, Any]]) -> bool:
         (_text(row.get("campaign_id")), _text(row.get("execution_id")))
         for row in term_results
     }
-    return bool(lineages) and len(lineages) == 1 and all(lineages.pop())
+    if len(lineages) != 1:
+        return False
+    campaign_id, execution_id = next(iter(lineages))
+    return bool(campaign_id and execution_id)
 
 
 def evaluate_database_numeric_delta(envelope: dict[str, Any]) -> dict[str, Any]:
@@ -210,23 +223,26 @@ def evaluate_database_numeric_delta(envelope: dict[str, Any]) -> dict[str, Any]:
 
     all_passed = True
     for term, result in zip(terms, results):
-        before_value = _decimal(result.get("observed_before_decimal"))
         after_value = _decimal(result.get("observed_after_decimal"))
         delta = _decimal(result.get("actual_delta"))
-        if before_value is None or after_value is None or delta is None:
+        if after_value is None or delta is None:
             return _reason(
                 "DATABASE_NUMERIC_VALUE_NOT_NUMERIC",
                 expected=expected,
                 actual=actual,
             )
-        tolerance = _decimal(term.get("tolerance"))
-        tolerance = tolerance if tolerance is not None else Decimal("0")
-        if tolerance < 0:
+        tolerance, tolerance_valid = _declared_decimal(
+            term,
+            "tolerance",
+            default=Decimal("0"),
+        )
+        if not tolerance_valid or tolerance is None or tolerance < 0:
             return _reason(
                 "DATABASE_NUMERIC_TOLERANCE_INVALID",
                 expected=expected,
                 actual=actual,
             )
+
         expected_delta = _decimal(term.get("expected_delta"))
         expected_after = _decimal(term.get("expected_value"))
         direction = _text(term.get("expected_delta_direction")).casefold()
@@ -332,8 +348,18 @@ def evaluate_database_numeric_conservation(envelope: dict[str, Any]) -> dict[str
         if reason:
             actual["term_results"] = results
             return _reason(reason, expected=expected, actual=actual)
-        coefficient = _decimal(term.get("coefficient"))
-        coefficient = coefficient if coefficient is not None else Decimal("1")
+        coefficient, coefficient_valid = _declared_decimal(
+            term,
+            "coefficient",
+            default=Decimal("1"),
+        )
+        if not coefficient_valid or coefficient is None:
+            actual["term_results"] = results
+            return _reason(
+                "DATABASE_NUMERIC_COEFFICIENT_INVALID",
+                expected=expected,
+                actual=actual,
+            )
         before_value = _decimal(loaded.get("observed_before_decimal"))
         after_value = _decimal(loaded.get("observed_after_decimal"))
         if before_value is None or after_value is None:
@@ -377,9 +403,12 @@ def evaluate_database_numeric_conservation(envelope: dict[str, Any]) -> dict[str
             actual=actual,
         )
 
-    tolerance = _decimal(spec.get("tolerance"))
-    tolerance = tolerance if tolerance is not None else Decimal("0")
-    if tolerance < 0:
+    tolerance, tolerance_valid = _declared_decimal(
+        spec,
+        "tolerance",
+        default=Decimal("0"),
+    )
+    if not tolerance_valid or tolerance is None or tolerance < 0:
         return _reason(
             "DATABASE_NUMERIC_TOLERANCE_INVALID",
             expected=expected,
