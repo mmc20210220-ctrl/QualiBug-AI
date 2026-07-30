@@ -17,6 +17,7 @@ on:
       - "tests/test_database_model_document_adapter.py"
       - "tests/test_database_model_semantic_projection.py"
       - "tests/test_database_model_semantic_bridge.py"
+      - "tests/test_database_model_index_identity.py"
       - ".github/workflows/database-model-ingestion-closure.yml"
 
 permissions:
@@ -64,4 +65,5 @@ jobs:
           pytest -q \
             tests/test_database_model_document_adapter.py \
             tests/test_database_model_semantic_projection.py \
-            tests/test_database_model_semantic_bridge.py
+            tests/test_database_model_semantic_bridge.py \
+            tests/test_database_model_index_identity.py
