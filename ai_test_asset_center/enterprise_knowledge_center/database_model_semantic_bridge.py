@@ -9,6 +9,9 @@ from __future__ import annotations
 from functools import wraps
 from typing import Any
 
+from .database_model_index_reconciliation import (
+    reconcile_database_model_index_assets,
+)
 from .document_ir_database_model_semantics import enrich_parsed_database_model_semantics
 
 
@@ -45,6 +48,7 @@ def install_database_model_semantic_bridge() -> None:
         if not semantic_receipt:
             return result
 
+        result = reconcile_database_model_index_assets(result)
         parser_receipt = dict(result.get("parser_receipt") or {})
         outputs = dict(parser_receipt.get("outputs") or {})
         outputs.update(
@@ -61,6 +65,9 @@ def install_database_model_semantic_bridge() -> None:
         )
         parser_receipt["outputs"] = outputs
         parser_receipt["database_model_semantic_receipt"] = semantic_receipt
+        parser_receipt["database_model_index_reconciliation"] = dict(
+            result.get("database_model_index_reconciliation") or {}
+        )
         parser_receipt["database_model_semantics_use_document_ir"] = True
         parser_receipt["database_model_generic_markdown_guess_replaced"] = (
             str(semantic_receipt.get("status") or "") != "BLOCKED"
