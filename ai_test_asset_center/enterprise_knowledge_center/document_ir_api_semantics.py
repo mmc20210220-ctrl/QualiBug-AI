@@ -15,6 +15,7 @@ from typing import Any, Iterable
 from .enterprise_understanding.interface_runtime_contracts import (
     enrich_openapi_runtime_contracts,
 )
+from .openapi_technical_declarations import attach_openapi_technical_declarations
 
 API_ARTIFACT_SEMANTIC_RECEIPT_SCHEMA = "qualibug.api-artifact-semantic-projection.v1"
 POSTMAN_RUNTIME_CONTRACT_SCHEMA = "qualibug.postman-runtime-contract-metadata.v1"
@@ -522,6 +523,7 @@ def enrich_parsed_api_artifact_semantics(
         openapi = _dict(result.get("openapi") or result.get("payload"))
         operations = enrich_openapi_runtime_contracts(openapi, operations)
         operations = _attach_openapi_evidence(operations, blocks)
+        operations = attach_openapi_technical_declarations(operations, blocks, openapi)
     elif artifact_kind == "postman":
         operations = _postman_rows(operations, blocks, source_id)
     else:
@@ -531,6 +533,12 @@ def enrich_parsed_api_artifact_semantics(
         1
         for row in operations
         if _text(row.get("source_locator")) and _text(row.get("json_pointer"))
+    )
+    technical_count = sum(
+        int(row.get("technical_declaration_count") or 0) for row in operations
+    )
+    exact_technical_count = sum(
+        int(row.get("exact_technical_declaration_count") or 0) for row in operations
     )
     variant_count = sum(int(row.get("request_variant_count") or 0) for row in operations)
     observation_count = sum(int(row.get("observation_count") or 0) for row in operations)
@@ -542,6 +550,13 @@ def enrich_parsed_api_artifact_semantics(
         "declared_source_type": source_type,
         "operation_count_before_projection": before,
         "operation_count_after_projection": len(operations),
+        "openapi_technical_declaration_count": technical_count,
+        "openapi_exact_technical_declaration_count": exact_technical_count,
+        "openapi_exact_technical_declaration_rate": (
+            round(exact_technical_count / technical_count, 4)
+            if technical_count
+            else 1.0
+        ),
         "postman_request_variant_count": variant_count,
         "har_runtime_observation_count": observation_count,
         "exact_operation_evidence_count": exact_count,
