@@ -36,6 +36,7 @@ def _assertion() -> dict:
             "database_table_ref": "table:orders",
             "database_field_id": "field:orders:status",
             "database_field_name": "status",
+            "lineage_match": True,
             "identity_match": True,
             "observed_before": "PENDING",
             "observed_after": "PENDING",
@@ -163,6 +164,7 @@ def test_replaces_legacy_http_db_snapshot_with_exact_database_evidence() -> None
     assert db["actual"] == {
         "before": "PENDING",
         "after": "PENDING",
+        "lineage_match": True,
         "identity_match": True,
     }
     assert db["before_receipt"]["phase_receipt_id"] == "readback-before"
@@ -195,10 +197,25 @@ def test_database_evidence_is_secret_free_and_preserves_delivery_authority() -> 
     assert database_evidence["database_observer_authority"] == "FACT_ONLY"
     assert database_evidence["oracle_authority"] == "ContractOracle"
     assert database_evidence["observer_performed_oracle_verdict"] is False
+    assert database_evidence["lineage_match"] is True
     assert finding["gate_passed"] is False
     assert finding["customer_delivery_status"] == "candidate"
     assert finding["final_review_status"] == "PENDING_DELIVERY_GATE"
     assert finding["oracle"]["customer_deliverable"] is False
+
+
+def test_primary_non_database_failure_cannot_receive_secondary_database_evidence() -> None:
+    result = _result()
+    primary = {
+        "assertion_id": "assert:http",
+        "kind": "http_status",
+        "status": "VIOLATION",
+    }
+    result["finding"]["evidence"]["assertion"] = primary
+    result["finding"]["failed_assertions"] = [primary, _assertion()]
+    baseline = deepcopy(result)
+
+    assert enrich_database_state_transition_finding(result) == baseline
 
 
 def test_non_database_assertion_result_is_unchanged() -> None:
