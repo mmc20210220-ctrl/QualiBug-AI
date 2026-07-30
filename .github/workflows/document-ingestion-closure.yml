@@ -12,6 +12,7 @@ on:
       - "ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/document_structure_gate.py"
       - "tests/test_enterprise_document_ingestion_closure.py"
       - "tests/test_enterprise_source_document_ir_bridge.py"
+      - "tests/test_document_ingestion_text_first_planner.py"
       - "tests/test_document_ir_fact_evidence_spans.py"
       - "tests/test_document_structure_fact_receipt_gate.py"
       - "tests/test_document_evidence_address_quality.py"
@@ -68,6 +69,7 @@ jobs:
           pytest -q \
             tests/test_enterprise_document_ingestion_closure.py \
             tests/test_enterprise_source_document_ir_bridge.py \
+            tests/test_document_ingestion_text_first_planner.py \
             tests/test_document_ir_fact_evidence_spans.py \
             tests/test_document_structure_fact_receipt_gate.py \
             tests/test_document_evidence_address_quality.py \
