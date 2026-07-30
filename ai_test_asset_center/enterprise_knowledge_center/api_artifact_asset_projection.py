@@ -3,12 +3,14 @@
 This is a composition stage, not a parser. It consumes interfaces already extracted by the
 knowledge compiler and source-preserving Document IR prepared by the explicit composition
 root. One source is processed at a time so identical method/path pairs from different
-artifacts cannot steal each other's evidence.
+artifacts cannot steal each other's evidence. Repeated HAR entries remain an observation
+set instead of being collapsed into a fabricated design contract.
 """
 from __future__ import annotations
 
 import hashlib
 import re
+from collections import defaultdict
 from typing import Any, Iterable
 
 from .document_ir_api_semantics import enrich_parsed_api_artifact_semantics
@@ -107,11 +109,10 @@ def _merge_interfaces(
     ]
     seen: set[str] = set()
     merged: list[dict[str, Any]] = []
-    for raw in [*retained, *replacements]:
-        if not isinstance(raw, dict):
-            continue
-        row = dict(raw)
-        row.setdefault("source_id", source_id if raw in replacements else row.get("source_id"))
+    replacement_rows = [dict(row) for row in replacements if isinstance(row, dict)]
+    for row in [*retained, *replacement_rows]:
+        if row in replacement_rows and not _text(row.get("source_id")):
+            row["source_id"] = source_id
         identity = _interface_identity(row)
         row.setdefault("interface_id", identity)
         if identity in seen:
@@ -119,6 +120,74 @@ def _merge_interfaces(
         seen.add(identity)
         merged.append(row)
     return merged
+
+
+def _har_observation_sets(
+    structure: dict[str, Any],
+) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for raw in _list(structure.get("blocks")):
+        if not isinstance(raw, dict) or _text(raw.get("node_kind")) != "HAR_ENTRY":
+            continue
+        row = dict(raw)
+        key = (_method(row.get("http_method")), _path(row.get("api_path")))
+        address = _dict(row.get("evidence_address"))
+        grouped[key].append(
+            {
+                "block_id": _text(row.get("block_id")),
+                "json_pointer": _text(row.get("json_pointer")),
+                "source_locator": _text(
+                    row.get("source_locator") or address.get("source_locator")
+                ),
+                "status": row.get("response_status"),
+                "elapsed_ms": row.get("elapsed_ms"),
+                "response_mime_type": _text(row.get("response_mime_type")),
+                "address_kind": _text(address.get("address_kind"))
+                or "EXACT_SOURCE_LOCATOR",
+                "credential_values_retained": False,
+            }
+        )
+    return grouped
+
+
+def _attach_har_observation_sets(
+    operations: list[dict[str, Any]], structure: dict[str, Any]
+) -> list[dict[str, Any]]:
+    observations = _har_observation_sets(structure)
+    result: list[dict[str, Any]] = []
+    for raw in operations:
+        row = dict(raw)
+        key = (_method(row.get("method")), _path(row.get("path")))
+        items = observations.get(key, [])
+        if items:
+            row["runtime_observations"] = items
+            row["runtime_observation_count"] = len(items)
+            row["source_locators"] = [
+                item["source_locator"] for item in items if item["source_locator"]
+            ]
+            row["json_pointers"] = [
+                item["json_pointer"] for item in items if item["json_pointer"]
+            ]
+            row["runtime_observation_statuses"] = sorted(
+                {
+                    str(item["status"])
+                    for item in items
+                    if item.get("status") not in (None, "")
+                }
+            )
+            row["source_kind"] = "har_observation"
+            row["contract_authority"] = "runtime_observation_only"
+            row["design_contract_inference_allowed"] = False
+            if len(items) == 1:
+                row["source_locator"] = items[0]["source_locator"]
+                row["json_pointer"] = items[0]["json_pointer"]
+                row["document_ir_block_id"] = items[0]["block_id"]
+            else:
+                row.pop("source_locator", None)
+                row.pop("json_pointer", None)
+                row.pop("document_ir_block_id", None)
+        result.append(row)
+    return result
 
 
 def enrich_asset_with_api_artifact_semantics(
@@ -158,6 +227,8 @@ def enrich_asset_with_api_artifact_semantics(
             for row in _list(parsed.get("operations"))
             if isinstance(row, dict)
         ]
+        if artifact_kind == "har":
+            enriched = _attach_har_observation_sets(enriched, structure)
         interfaces = _merge_interfaces(
             interfaces,
             enriched,
@@ -166,18 +237,36 @@ def enrich_asset_with_api_artifact_semantics(
         )
         receipt = _dict(parsed.get("api_artifact_semantic_receipt"))
         if receipt:
+            receipt["runtime_observation_set_count"] = sum(
+                1 for row in enriched if int(row.get("runtime_observation_count") or 0) > 1
+            )
             receipts.append(receipt)
         processed_sources.append(source_id)
 
     exact_count = sum(
         1
         for row in interfaces
-        if _text(row.get("json_pointer")) and _text(row.get("source_locator"))
+        if (
+            _text(row.get("json_pointer")) and _text(row.get("source_locator"))
+        )
+        or (
+            _list(row.get("json_pointers")) and _list(row.get("source_locators"))
+        )
+    )
+    unresolved_count = sum(
+        int(receipt.get("unresolved_interface_count") or 0) for receipt in receipts
+    )
+    projection_status = (
+        "NOT_APPLICABLE"
+        if not receipts
+        else "PARTIAL"
+        if unresolved_count
+        else "COMPLETE"
     )
     result["interfaces"] = interfaces
     result["api_artifact_semantic_projection"] = {
         "schema": API_ARTIFACT_ASSET_PROJECTION_SCHEMA,
-        "status": "COMPLETE" if receipts else "NOT_APPLICABLE",
+        "status": projection_status,
         "processed_source_count": len(processed_sources),
         "processed_source_ids": processed_sources,
         "receipt_count": len(receipts),
@@ -186,6 +275,13 @@ def enrich_asset_with_api_artifact_semantics(
         "exact_pointer_interface_count": exact_count,
         "exact_pointer_interface_rate": (
             round(exact_count / len(interfaces), 4) if interfaces else 1.0
+        ),
+        "unresolved_interface_count": unresolved_count,
+        "har_runtime_observation_count": sum(
+            int(row.get("runtime_observation_count") or 0) for row in interfaces
+        ),
+        "har_observation_set_count": sum(
+            1 for row in interfaces if int(row.get("runtime_observation_count") or 0) > 1
         ),
         "source_scoped_projection": True,
         "credential_values_retained": False,
@@ -197,6 +293,7 @@ def enrich_asset_with_api_artifact_semantics(
         {
             "api_artifact_source_count": len(processed_sources),
             "api_artifact_exact_pointer_interface_count": exact_count,
+            "api_artifact_unresolved_interface_count": unresolved_count,
         }
     )
     result["summary"] = summary
@@ -206,6 +303,7 @@ def enrich_asset_with_api_artifact_semantics(
             "api_artifact_semantics_use_document_ir": bool(receipts),
             "api_artifact_evidence_is_source_scoped": True,
             "har_is_runtime_observation_not_design_contract": True,
+            "har_repeated_observations_are_not_collapsed": True,
             "postman_credentials_are_not_retained": True,
             "api_artifact_business_flow_inference_forbidden": True,
         }
