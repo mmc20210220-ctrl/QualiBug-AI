@@ -123,10 +123,7 @@ def _detected_family(source: DocumentSource) -> tuple[str, str]:
                         "office_open_xml_excel_container",
                     )
                 if "xl/workbook.bin" in names:
-                    return (
-                        "xlsb" if declared == "xlsb" else "xlsb",
-                        "office_open_xml_binary_excel_container",
-                    )
+                    return "xlsb", "office_open_xml_binary_excel_container"
                 if "ppt/presentation.xml" in names:
                     return (
                         _office_format_or_default(
@@ -273,12 +270,18 @@ def _required_capabilities(family: str) -> list[str]:
 
 
 def _adapter_row(adapter: Any, match: Any) -> dict[str, Any]:
-    return {
+    row = {
         **match.to_dict(),
         "parser_version": str(getattr(adapter, "parser_version", "")),
         "priority": int(getattr(adapter, "priority", 0)),
         "standalone": bool(getattr(adapter, "standalone", False)),
     }
+    # Compatibility for adapters created before runtime readiness became part of the
+    # contract. Their reason field already exposed this state; normalize it centrally.
+    if "unavailable_at_runtime" in text(row.get("reason")):
+        row["runtime_ready"] = False
+        row["runtime_reason"] = text(row.get("runtime_reason")) or "RUNTIME_DEPENDENCY_UNAVAILABLE"
+    return row
 
 
 def plan_document_parsing(
@@ -323,15 +326,25 @@ def plan_document_parsing(
     )
     selected_rows = [_adapter_row(adapter, match) for adapter, match in selected]
     alternatives = [
-        match.to_dict()
+        _adapter_row(adapter, match)
         for adapter, match in matches
         if all(adapter.name != chosen.name for chosen, _chosen_match in selected)
+    ]
+    runtime_blockers = [
+        {
+            "adapter_name": row.get("adapter_name"),
+            "runtime_reason": row.get("runtime_reason") or "RUNTIME_DEPENDENCY_UNAVAILABLE",
+        }
+        for row in selected_rows
+        if row.get("runtime_ready") is False
     ]
     status = "READY"
     if not selected_rows:
         status = "BLOCKED_NO_ADAPTER"
     elif selected_rows[0]["adapter_name"] == "unknown-binary-fallback":
         status = "BLOCKED_UNSUPPORTED_SOURCE"
+    elif runtime_blockers:
+        status = "BLOCKED_RUNTIME_DEPENDENCY_UNAVAILABLE"
     elif missing_capabilities:
         status = "PARTIAL_CAPABILITY_COVERAGE"
     return {
@@ -349,6 +362,7 @@ def plan_document_parsing(
         "signature_hex": source.signature_hex,
         "selected_adapters": selected_rows,
         "alternative_adapters": alternatives,
+        "runtime_blockers": runtime_blockers,
         "required_capabilities": required_capabilities,
         "provided_capabilities": provided_capabilities,
         "missing_capabilities": missing_capabilities,
@@ -401,9 +415,20 @@ def plan_deferred_supplementals(
             continue
         selected.append((adapter, match))
         provided.update(set(match.capabilities) & set(requested))
+    selected_rows = [_adapter_row(adapter, match) for adapter, match in selected]
+    runtime_blockers = [
+        {
+            "adapter_name": row.get("adapter_name"),
+            "runtime_reason": row.get("runtime_reason") or "RUNTIME_DEPENDENCY_UNAVAILABLE",
+        }
+        for row in selected_rows
+        if row.get("runtime_ready") is False
+    ]
     missing = sorted(set(requested) - provided)
     status = "NOT_REQUIRED"
-    if trigger_gaps and selected:
+    if trigger_gaps and runtime_blockers:
+        status = "BLOCKED_RUNTIME_DEPENDENCY_UNAVAILABLE"
+    elif trigger_gaps and selected:
         status = "READY"
     elif trigger_gaps and not selected:
         status = "BLOCKED_REQUIRED_SUPPLEMENTAL_ADAPTER_UNAVAILABLE"
@@ -414,9 +439,8 @@ def plan_deferred_supplementals(
         "requested_capabilities": requested,
         "provided_capabilities": sorted(provided),
         "missing_capabilities": missing,
-        "selected_adapters": [
-            _adapter_row(adapter, match) for adapter, match in selected
-        ],
+        "selected_adapters": selected_rows,
+        "runtime_blockers": runtime_blockers,
         "business_semantics_added": False,
         "document_order_is_business_flow": False,
     }
