@@ -1,12 +1,9 @@
-"""Execute one approved database Observer contract against a declared non-production source.
+"""Execute an approved database Observer contract on a declared non-production source.
 
-This is the runtime half of ``database_observer_contract_projection``.  It accepts only a
-current, operator-approved, read-only contract; resolves one customer-declared database profile;
-materializes identity predicates from runtime request/response values; validates identifiers
-against the live schema; and executes one parameterized ``SELECT ... LIMIT 2``.
-
-It never accepts raw SQL, never guesses a business table, never opens production, never executes a
-mutation, and never places a password, DSN or raw predicate value in the observation receipt.
+Only the current ``database-observer-contract.v1`` authority is accepted. Runtime binding is
+read-only, identity-scoped, schema-introspected, parameterized and row-capped. The receipt never
+retains a password, DSN, host, user, raw SQL or raw identity predicate value, and it never emits an
+Oracle verdict.
 """
 from __future__ import annotations
 
@@ -18,9 +15,10 @@ import sqlite3
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Callable, Iterable
+from urllib.parse import quote
 
 from .observer_contracts_base import _receipt, register_observer, registered_observer_ids
-from .persistence_observer import PersistenceObserverError, persistence_read_allowed
+from .persistence_observer import persistence_read_allowed
 
 OBSERVER_ID = "approved_database_readback"
 SURFACE = "database_read_only"
@@ -29,13 +27,22 @@ EVIDENCE_KEY = "approved_database_snapshot"
 RUNTIME_RECEIPT_SCHEMA = "qualibug.database-observer-runtime-receipt.v1"
 
 _MAX_ROWS = 2
-_STATEMENT_TIMEOUT_MS = 5_000
+_DEFAULT_CONNECT_TIMEOUT_SECONDS = 5
+_DEFAULT_STATEMENT_TIMEOUT_MS = 5_000
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
-_SECRET_FIELD = re.compile(
-    r"(?:^|_)(?:password|passwd|pwd|secret|token|credential|cookie|authorization|private_key)(?:$|_)",
-    re.I,
-)
 _READ_ONLY_MODES = {"read_only", "readonly", "read-only", "ro"}
+_SECRET_TOKENS = {
+    "authorization",
+    "cookie",
+    "credential",
+    "credentials",
+    "password",
+    "passwd",
+    "privatekey",
+    "pwd",
+    "secret",
+    "token",
+}
 
 
 class DatabaseObserverRuntimeError(RuntimeError):
@@ -55,11 +62,29 @@ def _list(value: Any) -> list[Any]:
 
 
 def _canonical(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
 
 
 def _fingerprint(value: Any) -> str:
     return hashlib.sha256(_canonical(value).encode("utf-8")).hexdigest()
+
+
+def _json_safe(value: Any) -> Any:
+    return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+
+
+def _bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value if value not in (None, "") else default)
+    except (TypeError, ValueError) as exc:
+        raise DatabaseObserverRuntimeError("database_observer_numeric_config_invalid") from exc
+    return min(max(parsed, minimum), maximum)
 
 
 def _config_candidates(root: Path, project: str) -> list[Path]:
@@ -69,7 +94,7 @@ def _config_candidates(root: Path, project: str) -> list[Path]:
     ]
 
 
-def _declared_config(root: Path, project: str) -> dict[str, Any]:
+def _declared_config(root: Path, project: str) -> tuple[dict[str, Any], Path | None]:
     for path in _config_candidates(root, project):
         if not path.is_file():
             continue
@@ -81,30 +106,34 @@ def _declared_config(root: Path, project: str) -> dict[str, Any]:
             ) from exc
         if not isinstance(loaded, dict):
             raise DatabaseObserverRuntimeError("database_observer_config_root_invalid")
-        return loaded
-    return {}
+        return loaded, path
+    return {}, None
 
 
 def _dialect(block: dict[str, Any]) -> tuple[str, str]:
-    declared = _text(block.get("dialect") or block.get("driver") or block.get("type")).lower()
+    declared = _text(
+        block.get("dialect") or block.get("driver") or block.get("type")
+    ).lower()
     aliases = {
+        "mariadb": "mysql",
+        "mysql": "mysql",
         "postgres": "postgresql",
         "postgresql": "postgresql",
         "psql": "postgresql",
-        "mysql": "mysql",
-        "mariadb": "mysql",
         "sqlite": "sqlite",
         "sqlite3": "sqlite",
     }
     if declared:
         resolved = aliases.get(declared)
         if not resolved:
-            raise DatabaseObserverRuntimeError(f"database_observer_dialect_unsupported:{declared}")
+            raise DatabaseObserverRuntimeError(
+                f"database_observer_dialect_unsupported:{declared}"
+            )
         return resolved, "EXPLICIT_DECLARATION"
-    if _text(block.get("path")) or _text(block.get("file")):
+    if _text(block.get("path") or block.get("file")):
         return "sqlite", "DECLARED_FILE_DATABASE"
-    # Backward compatibility with the existing multi_service_config contract, whose DB block
-    # historically meant PostgreSQL. This is a transport default, never a table/business guess.
+    # Existing multi_service_config DB blocks historically represented PostgreSQL.
+    # This is transport compatibility only; no table, field or business mapping is inferred.
     return "postgresql", "LEGACY_POSTGRESQL_CONFIG_DEFAULT"
 
 
@@ -117,19 +146,28 @@ def _password(block: dict[str, Any]) -> tuple[str, str]:
                 f"database_observer_password_environment_missing:{env_name}"
             )
         return value, "ENVIRONMENT_REFERENCE"
-    return _text(block.get("password")), "INLINE_DECLARED_SECRET" if "password" in block else "NONE"
+    if "password" in block:
+        return _text(block.get("password")), "INLINE_DECLARED_SECRET"
+    return "", "NONE"
+
+
+def _resolved_sqlite_path(raw: str, config_path: Path | None) -> Path:
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        if config_path is None:
+            raise DatabaseObserverRuntimeError(
+                "database_observer_relative_sqlite_path_without_config"
+            )
+        path = config_path.parent / path
+    return path.resolve(strict=False)
 
 
 def resolve_declared_read_only_database_profiles(
     root: Path | str,
     project: str,
 ) -> list[dict[str, Any]]:
-    """Resolve customer-declared DB profiles without returning a DSN.
-
-    The returned dicts are runtime-only and may carry a password for the connector. Callers must
-    never serialize them. Every profile must explicitly declare read-only access.
-    """
-    config = _declared_config(Path(root), project)
+    """Resolve runtime-only profiles; every source must explicitly declare read-only access."""
+    config, config_path = _declared_config(Path(root), project)
     profiles: list[dict[str, Any]] = []
     seen_refs: set[str] = set()
     for raw_service in _list(config.get("services")):
@@ -137,62 +175,74 @@ def resolve_declared_read_only_database_profiles(
         block = _dict(service.get("db"))
         if not block:
             continue
-        service_ref = _text(
-            block.get("connection_ref") or block.get("service_ref") or service.get("name")
+        connection_ref = _text(
+            block.get("connection_ref")
+            or block.get("service_ref")
+            or service.get("name")
         )
-        if not service_ref:
-            raise DatabaseObserverRuntimeError("database_observer_connection_ref_missing")
-        if service_ref in seen_refs:
+        if not connection_ref:
             raise DatabaseObserverRuntimeError(
-                f"database_observer_connection_ref_duplicate:{service_ref}"
+                "database_observer_connection_ref_missing"
             )
-        seen_refs.add(service_ref)
+        if connection_ref in seen_refs:
+            raise DatabaseObserverRuntimeError(
+                f"database_observer_connection_ref_duplicate:{connection_ref}"
+            )
+        seen_refs.add(connection_ref)
         access_mode = _text(block.get("access_mode")).lower()
-        read_only = bool(block.get("read_only")) or access_mode in _READ_ONLY_MODES
-        if not read_only:
+        if not (bool(block.get("read_only")) or access_mode in _READ_ONLY_MODES):
             raise DatabaseObserverRuntimeError(
-                f"database_observer_read_only_declaration_required:{service_ref}"
+                f"database_observer_read_only_declaration_required:{connection_ref}"
             )
+
         dialect, dialect_derivation = _dialect(block)
         password, password_source = _password(block)
         profile: dict[str, Any] = {
-            "connection_ref": service_ref,
-            "service": _text(service.get("name")) or service_ref,
+            "connection_ref": connection_ref,
+            "service": _text(service.get("name")) or connection_ref,
             "dialect": dialect,
             "dialect_derivation": dialect_derivation,
             "read_only": True,
             "password_source": password_source,
             "password": password,
-            "connect_timeout_seconds": min(
-                max(int(block.get("connect_timeout_seconds") or 5), 1), 30
+            "connect_timeout_seconds": _bounded_int(
+                block.get("connect_timeout_seconds"),
+                default=_DEFAULT_CONNECT_TIMEOUT_SECONDS,
+                minimum=1,
+                maximum=30,
             ),
-            "statement_timeout_ms": min(
-                max(int(block.get("statement_timeout_ms") or _STATEMENT_TIMEOUT_MS), 100),
-                30_000,
+            "statement_timeout_ms": _bounded_int(
+                block.get("statement_timeout_ms"),
+                default=_DEFAULT_STATEMENT_TIMEOUT_MS,
+                minimum=100,
+                maximum=30_000,
             ),
         }
         if dialect == "sqlite":
-            path = _text(block.get("path") or block.get("file") or block.get("name"))
-            if not path:
+            raw_path = _text(block.get("path") or block.get("file") or block.get("name"))
+            if not raw_path or raw_path == ":memory:":
                 raise DatabaseObserverRuntimeError(
-                    f"database_observer_sqlite_path_missing:{service_ref}"
+                    f"database_observer_sqlite_read_only_path_required:{connection_ref}"
                 )
-            profile["path"] = path
-            profile["database"] = Path(path).name
+            resolved = _resolved_sqlite_path(raw_path, config_path)
+            profile["path"] = str(resolved)
+            profile["database"] = resolved.name
         else:
             host = _text(block.get("host"))
             database = _text(block.get("name") or block.get("database"))
             user = _text(block.get("user"))
             if not (host and database and user):
                 raise DatabaseObserverRuntimeError(
-                    f"database_observer_config_incomplete:{service_ref}"
+                    f"database_observer_config_incomplete:{connection_ref}"
                 )
             profile.update(
                 {
                     "host": host,
-                    "port": int(
-                        block.get("port")
-                        or (3306 if dialect == "mysql" else 5432)
+                    "port": _bounded_int(
+                        block.get("port"),
+                        default=3306 if dialect == "mysql" else 5432,
+                        minimum=1,
+                        maximum=65_535,
                     ),
                     "database": database,
                     "user": user,
@@ -214,6 +264,7 @@ def _public_profile(profile: dict[str, Any]) -> dict[str, Any]:
         "dsn_retained": False,
         "host_retained": False,
         "user_retained": False,
+        "path_retained": False,
     }
 
 
@@ -222,7 +273,9 @@ def _select_profile(
 ) -> dict[str, Any]:
     if connection_ref:
         matches = [
-            row for row in profiles if _text(row.get("connection_ref")) == connection_ref
+            row
+            for row in profiles
+            if _text(row.get("connection_ref")) == connection_ref
         ]
         if len(matches) != 1:
             raise DatabaseObserverRuntimeError(
@@ -238,18 +291,63 @@ def _select_profile(
     )
 
 
+def _normalized_field(value: str) -> str:
+    camel_split = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", _text(value))
+    return re.sub(r"[^a-z0-9]+", "_", camel_split.lower()).strip("_")
+
+
+def _sensitive_field(value: str) -> bool:
+    normalized = _normalized_field(value)
+    compact = normalized.replace("_", "")
+    tokens = {token for token in normalized.split("_") if token}
+    return bool(tokens.intersection(_SECRET_TOKENS)) or any(
+        marker in compact
+        for marker in ("accesstoken", "refreshtoken", "privatekey", "clientsecret")
+    )
+
+
+def _validate_identifier_shape(value: str) -> str:
+    name = _text(value)
+    if not _SAFE_IDENTIFIER.fullmatch(name):
+        raise DatabaseObserverRuntimeError(
+            f"database_observer_identifier_shape_refused:{name[:40]}"
+        )
+    return name
+
+
 def _validate_contract(contract: dict[str, Any]) -> dict[str, Any]:
     row = deepcopy(_dict(contract))
     if _text(row.get("schema")) != "qualibug.database-observer-contract.v1":
-        raise DatabaseObserverRuntimeError("database_observer_contract_schema_invalid")
+        raise DatabaseObserverRuntimeError(
+            "database_observer_contract_schema_invalid"
+        )
     if _text(row.get("status")) != "READY_FOR_RUNTIME_CONNECTION_BINDING":
-        raise DatabaseObserverRuntimeError("database_observer_contract_not_runtime_bindable")
+        raise DatabaseObserverRuntimeError(
+            "database_observer_contract_not_runtime_bindable"
+        )
     if not bool(row.get("runtime_observer_authoritative")):
-        raise DatabaseObserverRuntimeError("database_observer_runtime_authority_missing")
+        raise DatabaseObserverRuntimeError(
+            "database_observer_runtime_authority_missing"
+        )
     if not bool(row.get("read_only")) or bool(row.get("mutation_allowed")):
-        raise DatabaseObserverRuntimeError("database_observer_contract_not_read_only")
-    if bool(row.get("write_target_allowed")) or bool(row.get("oracle_authority_allowed")):
-        raise DatabaseObserverRuntimeError("database_observer_contract_authority_scope_invalid")
+        raise DatabaseObserverRuntimeError(
+            "database_observer_contract_not_read_only"
+        )
+    if bool(row.get("write_target_allowed")) or bool(
+        row.get("oracle_authority_allowed")
+    ):
+        raise DatabaseObserverRuntimeError(
+            "database_observer_contract_authority_scope_invalid"
+        )
+    if bool(row.get("connection_secret_embedded")):
+        raise DatabaseObserverRuntimeError(
+            "database_observer_contract_embedded_secret_refused"
+        )
+
+    table = _validate_identifier_shape(_text(row.get("database_table_name")))
+    schema_name = _text(row.get("database_schema_name"))
+    if schema_name:
+        _validate_identifier_shape(schema_name)
     plan = _dict(row.get("query_plan"))
     if (
         _text(plan.get("operation")) != "SELECT_ONE"
@@ -257,28 +355,61 @@ def _validate_contract(contract: dict[str, Any]) -> dict[str, Any]:
         or _text(plan.get("raw_sql"))
         or int(plan.get("maximum_rows") or 0) != _MAX_ROWS
     ):
-        raise DatabaseObserverRuntimeError("database_observer_query_plan_invalid")
-    predicates = [item for item in _list(row.get("identity_predicates")) if isinstance(item, dict)]
-    projection = [_text(value) for value in _list(plan.get("projection")) if _text(value)]
-    table = _text(row.get("database_table_name"))
-    if not (table and predicates and projection):
-        raise DatabaseObserverRuntimeError("database_observer_query_contract_incomplete")
+        raise DatabaseObserverRuntimeError(
+            "database_observer_query_plan_invalid"
+        )
+
+    projection = [
+        _validate_identifier_shape(_text(value))
+        for value in _list(plan.get("projection"))
+        if _text(value)
+    ]
+    predicates = [
+        dict(value)
+        for value in _list(row.get("identity_predicates"))
+        if isinstance(value, dict)
+    ]
+    selected_key = [
+        _validate_identifier_shape(_text(value))
+        for value in _list(row.get("selected_identity_key"))
+        if _text(value)
+    ]
+    predicate_names = [
+        _validate_identifier_shape(_text(item.get("database_field_name")))
+        for item in predicates
+    ]
+    if (
+        not table
+        or not projection
+        or len(set(projection)) != len(projection)
+        or not predicates
+        or not selected_key
+        or predicate_names != selected_key
+        or any(_text(item.get("operator")) != "=" for item in predicates)
+        or any(not _text(item.get("value_source")) for item in predicates)
+    ):
+        raise DatabaseObserverRuntimeError(
+            "database_observer_query_contract_incomplete"
+        )
     sensitive = sorted(
-        {name for name in [*projection, *[_text(p.get("database_field_name")) for p in predicates]] if _SECRET_FIELD.search(name)}
+        name
+        for name in {*projection, *predicate_names}
+        if _sensitive_field(name)
     )
     if sensitive:
         raise DatabaseObserverRuntimeError(
             "database_observer_secret_field_refused:" + ",".join(sensitive)
         )
+    row["database_table_name"] = table
+    row["database_schema_name"] = schema_name
+    row["identity_predicates"] = predicates
+    row["selected_identity_key"] = selected_key
+    row["query_plan"] = {**plan, "projection": projection}
     return row
 
 
-def _validated_identifier(name: str, allowed: Iterable[str]) -> str:
-    candidate = _text(name)
-    if not _SAFE_IDENTIFIER.fullmatch(candidate):
-        raise DatabaseObserverRuntimeError(
-            f"database_observer_identifier_shape_refused:{candidate[:40]}"
-        )
+def _validated_live_identifier(name: str, allowed: Iterable[str]) -> str:
+    candidate = _validate_identifier_shape(name)
     if candidate not in set(allowed):
         raise DatabaseObserverRuntimeError(
             f"database_observer_identifier_not_introspected:{candidate}"
@@ -287,20 +418,21 @@ def _validated_identifier(name: str, allowed: Iterable[str]) -> str:
 
 
 def _quote_identifier(name: str, dialect: str) -> str:
-    if dialect == "mysql":
-        return f"`{name}`"
-    return f'"{name}"'
+    return f"`{name}`" if dialect == "mysql" else f'"{name}"'
 
 
 def _connect(profile: dict[str, Any]) -> Any:
     dialect = _text(profile.get("dialect"))
     if dialect == "sqlite":
-        path = Path(_text(profile.get("path"))).expanduser()
-        uri = f"file:{path.as_posix()}?mode=ro"
+        path = Path(_text(profile.get("path")))
+        uri = "file:" + quote(path.as_posix(), safe="/:") + "?mode=ro"
         conn = sqlite3.connect(
             uri,
             uri=True,
-            timeout=float(profile.get("connect_timeout_seconds") or 5),
+            timeout=float(
+                profile.get("connect_timeout_seconds")
+                or _DEFAULT_CONNECT_TIMEOUT_SECONDS
+            ),
         )
         conn.execute("PRAGMA query_only=ON")
         return conn
@@ -330,8 +462,8 @@ def _connect(profile: dict[str, Any]) -> Any:
         try:
             cursor.execute("SET TRANSACTION READ ONLY")
             cursor.execute(
-                "SET LOCAL statement_timeout = %s",
-                (int(profile.get("statement_timeout_ms") or _STATEMENT_TIMEOUT_MS),),
+                "SELECT set_config('statement_timeout', %s, true)",
+                (str(profile.get("statement_timeout_ms") or _DEFAULT_STATEMENT_TIMEOUT_MS),),
             )
         finally:
             cursor.close()
@@ -343,15 +475,26 @@ def _connect(profile: dict[str, Any]) -> Any:
             raise DatabaseObserverRuntimeError(
                 "database_observer_mysql_driver_missing"
             ) from exc
+        timeout_seconds = max(
+            1,
+            int(
+                profile.get("statement_timeout_ms")
+                or _DEFAULT_STATEMENT_TIMEOUT_MS
+            )
+            // 1000,
+        )
         conn = pymysql.connect(
             host=profile.get("host"),
             port=int(profile.get("port") or 3306),
             database=profile.get("database"),
             user=profile.get("user"),
             password=profile.get("password"),
-            connect_timeout=int(profile.get("connect_timeout_seconds") or 5),
-            read_timeout=max(1, int(profile.get("statement_timeout_ms") or 5000) // 1000),
-            write_timeout=max(1, int(profile.get("statement_timeout_ms") or 5000) // 1000),
+            connect_timeout=int(
+                profile.get("connect_timeout_seconds")
+                or _DEFAULT_CONNECT_TIMEOUT_SECONDS
+            ),
+            read_timeout=timeout_seconds,
+            write_timeout=timeout_seconds,
             autocommit=False,
         )
         cursor = conn.cursor()
@@ -360,31 +503,38 @@ def _connect(profile: dict[str, Any]) -> Any:
         finally:
             cursor.close()
         return conn
-    raise DatabaseObserverRuntimeError(f"database_observer_dialect_unsupported:{dialect}")
+    raise DatabaseObserverRuntimeError(
+        f"database_observer_dialect_unsupported:{dialect}"
+    )
 
 
-def _introspect(conn: Any, profile: dict[str, Any], schema_name: str) -> dict[str, set[str]]:
+def _introspect(
+    conn: Any,
+    profile: dict[str, Any],
+    schema_name: str,
+) -> dict[str, set[str]]:
     dialect = _text(profile.get("dialect"))
     cursor = conn.cursor()
     try:
         if dialect == "sqlite":
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            tables = [_text(row[0]) for row in cursor.fetchall() if row and _text(row[0])]
             result: dict[str, set[str]] = {}
-            for table in tables:
+            for raw in cursor.fetchall():
+                table = _text(raw[0] if raw else "")
                 if not _SAFE_IDENTIFIER.fullmatch(table):
                     continue
                 cursor.execute(f'PRAGMA table_info("{table}")')
                 result[table] = {
-                    _text(row[1]) for row in cursor.fetchall() if len(row) > 1 and _text(row[1])
+                    _text(row[1])
+                    for row in cursor.fetchall()
+                    if len(row) > 1 and _text(row[1])
                 }
             return result
         if dialect == "postgresql":
-            schema = schema_name or "public"
             cursor.execute(
                 "SELECT table_name, column_name FROM information_schema.columns "
                 "WHERE table_schema=%s ORDER BY table_name, ordinal_position",
-                (schema,),
+                (schema_name or "public",),
             )
         else:
             cursor.execute(
@@ -401,14 +551,19 @@ def _introspect(conn: Any, profile: dict[str, Any], schema_name: str) -> dict[st
         cursor.close()
 
 
-def _get_path(value: Any, path: list[str]) -> Any:
-    current = value
-    for part in path:
-        if isinstance(current, dict) and part in current:
-            current = current[part]
-        else:
-            return None
-    return current
+def _merge_parameters(target: dict[str, Any], source: Any) -> None:
+    if isinstance(source, dict):
+        target.update(source)
+        return
+    for raw in _list(source):
+        row = _dict(raw)
+        name = _text(row.get("field") or row.get("name"))
+        if not name:
+            continue
+        if "materialized_value" in row:
+            target[name] = row.get("materialized_value")
+        elif "value" in row:
+            target[name] = row.get("value")
 
 
 def _runtime_context(
@@ -419,11 +574,13 @@ def _runtime_context(
     env = _dict(envelope)
     observations = _dict(env.get("observations"))
     treatment = _dict(
-        env.get("treatment_observation") or observations.get("treatment_observation")
+        env.get("treatment_observation")
+        or observations.get("treatment_observation")
     )
     experiment = _dict(env.get("experiment"))
     materialized = _dict(
-        experiment.get("materialized_request") or observations.get("materialized_request")
+        experiment.get("materialized_request")
+        or observations.get("materialized_request")
     )
     request_body = (
         explicit.get("request_body")
@@ -441,8 +598,7 @@ def _runtime_context(
         materialized.get("query_parameters"),
         treatment.get("request_parameters"),
     ):
-        if isinstance(source, dict):
-            request_parameters.update(source)
+        _merge_parameters(request_parameters, source)
     response_body = (
         explicit.get("response_body")
         or _dict(explicit.get("response")).get("body")
@@ -457,18 +613,113 @@ def _runtime_context(
     }
 
 
+def _get_path(value: Any, parts: list[str]) -> Any:
+    current = value
+    for part in parts:
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+        else:
+            return None
+    return current
+
+
 def _resolve_value(source: str, context: dict[str, Any]) -> Any:
     direct = _dict(context.get("direct"))
     if source in direct:
         return direct[source]
     parts = [_text(value) for value in source.split(".") if _text(value)]
-    if not parts:
-        return None
-    return _get_path(context, parts)
+    return _get_path(context, parts) if parts else None
 
 
-def _json_safe(value: Any) -> Any:
-    return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+def _execute_query(
+    *,
+    approved: dict[str, Any],
+    profile: dict[str, Any],
+    values: list[Any],
+    connection_factory: Callable[[dict[str, Any]], Any] | None,
+) -> tuple[list[dict[str, Any]], list[str], bool]:
+    conn = None
+    cursor = None
+    rows: list[dict[str, Any]] = []
+    projection: list[str] = []
+    failure: DatabaseObserverRuntimeError | None = None
+    rollback_ok = False
+    try:
+        conn = (connection_factory or _connect)(profile)
+        schema_name = _text(approved.get("database_schema_name"))
+        schema = _introspect(conn, profile, schema_name)
+        table = _validated_live_identifier(
+            _text(approved.get("database_table_name")), schema.keys()
+        )
+        columns = schema.get(table, set())
+        projection = [
+            _validated_live_identifier(_text(value), columns)
+            for value in _list(_dict(approved.get("query_plan")).get("projection"))
+        ]
+        predicates = _list(approved.get("identity_predicates"))
+        predicate_columns = [
+            _validated_live_identifier(
+                _text(_dict(row).get("database_field_name")), columns
+            )
+            for row in predicates
+        ]
+        dialect = _text(profile.get("dialect"))
+        placeholder = "?" if dialect == "sqlite" else "%s"
+        qualified = _quote_identifier(table, dialect)
+        if schema_name and dialect == "postgresql":
+            qualified = (
+                f"{_quote_identifier(schema_name, dialect)}."
+                f"{_quote_identifier(table, dialect)}"
+            )
+        projection_sql = ", ".join(
+            _quote_identifier(name, dialect) for name in projection
+        )
+        predicate_sql = " AND ".join(
+            f"{_quote_identifier(name, dialect)} = {placeholder}"
+            for name in predicate_columns
+        )
+        statement = (
+            f"SELECT {projection_sql} FROM {qualified} "
+            f"WHERE {predicate_sql} LIMIT {_MAX_ROWS}"
+        )
+        cursor = conn.cursor()
+        cursor.execute(statement, tuple(values))
+        rows = [
+            {
+                projection[index]: record[index]
+                for index in range(min(len(projection), len(record)))
+            }
+            for record in cursor.fetchall()
+        ]
+    except DatabaseObserverRuntimeError as exc:
+        failure = exc
+    except Exception as exc:  # noqa: BLE001 - never expose driver text or credentials
+        failure = DatabaseObserverRuntimeError(
+            f"database_observer_driver_failure:{type(exc).__name__}"
+        )
+    finally:
+        try:
+            if cursor is not None:
+                cursor.close()
+        except Exception:
+            pass
+        if conn is not None:
+            try:
+                conn.rollback()
+                rollback_ok = True
+            except Exception:
+                rollback_ok = False
+            try:
+                conn.close()
+            except Exception:
+                pass
+    if conn is not None and not rollback_ok:
+        raise DatabaseObserverRuntimeError(
+            "database_observer_transaction_rollback_failed"
+        )
+    if failure is not None:
+        raise failure
+    return rows, projection, rollback_ok
 
 
 def execute_database_observer_contract(
@@ -484,7 +735,7 @@ def execute_database_observer_contract(
     campaign_id: str = "",
     execution_id: str = "",
 ) -> dict[str, Any]:
-    """Execute a single approved, parameterized Observer contract and return a typed receipt."""
+    """Execute one approved identity-bound read and return a typed Observer receipt."""
 
     def refuse(reason_code: str, **evidence: Any) -> dict[str, Any]:
         return _receipt(
@@ -495,7 +746,9 @@ def execute_database_observer_contract(
                 "schema": RUNTIME_RECEIPT_SCHEMA,
                 "write_attempted": False,
                 "raw_sql_retained": False,
+                "predicate_values_retained": False,
                 "secret_values_retained": False,
+                "dsn_retained": False,
                 **_json_safe(evidence),
             },
             campaign_id=campaign_id,
@@ -507,7 +760,9 @@ def execute_database_observer_contract(
     except DatabaseObserverRuntimeError as exc:
         return refuse("DATABASE_OBSERVER_CONTRACT_REFUSED", detail=str(exc))
 
-    allowed, detail = persistence_read_allowed(Path(root), project, runtime_contract)
+    allowed, detail = persistence_read_allowed(
+        Path(root), project, runtime_contract
+    )
     if not allowed:
         return refuse("DATABASE_OBSERVER_READ_NOT_PERMITTED", detail=detail)
 
@@ -515,18 +770,15 @@ def execute_database_observer_contract(
         profiles = resolve_declared_read_only_database_profiles(root, project)
         profile = _select_profile(profiles, _text(connection_ref))
     except DatabaseObserverRuntimeError as exc:
-        return refuse("DATABASE_OBSERVER_CONNECTION_BINDING_FAILED", detail=str(exc))
+        return refuse(
+            "DATABASE_OBSERVER_CONNECTION_BINDING_FAILED", detail=str(exc)
+        )
 
-    predicates = [
-        dict(row)
-        for row in _list(approved.get("identity_predicates"))
-        if isinstance(row, dict)
-    ]
     context = _runtime_context(runtime_values, envelope)
     values: list[Any] = []
     missing_sources: list[str] = []
-    for predicate in predicates:
-        source = _text(predicate.get("value_source"))
+    for raw in _list(approved.get("identity_predicates")):
+        source = _text(_dict(raw).get("value_source"))
         value = _resolve_value(source, context)
         if value is None or value == "":
             missing_sources.append(source)
@@ -540,87 +792,32 @@ def execute_database_observer_contract(
             connection_profile=_public_profile(profile),
         )
 
-    conn = None
-    cursor = None
-    rolled_back = False
     try:
-        conn = (connection_factory or _connect)(profile)
-        schema_name = _text(approved.get("database_schema_name"))
-        schema = _introspect(conn, profile, schema_name)
-        table = _validated_identifier(
-            _text(approved.get("database_table_name")), schema.keys()
+        rows, projection, rolled_back = _execute_query(
+            approved=approved,
+            profile=profile,
+            values=values,
+            connection_factory=connection_factory,
         )
-        columns = schema.get(table, set())
-        projection = [
-            _validated_identifier(_text(value), columns)
-            for value in _list(_dict(approved.get("query_plan")).get("projection"))
-            if _text(value)
-        ]
-        predicate_columns = [
-            _validated_identifier(_text(row.get("database_field_name")), columns)
-            for row in predicates
-        ]
-        dialect = _text(profile.get("dialect"))
-        placeholder = "?" if dialect == "sqlite" else "%s"
-        qualified = _quote_identifier(table, dialect)
-        if schema_name and dialect == "postgresql":
-            if not _SAFE_IDENTIFIER.fullmatch(schema_name):
-                raise DatabaseObserverRuntimeError(
-                    f"database_observer_identifier_shape_refused:{schema_name[:40]}"
-                )
-            qualified = (
-                f"{_quote_identifier(schema_name, dialect)}."
-                f"{_quote_identifier(table, dialect)}"
-            )
-        projection_sql = ", ".join(_quote_identifier(name, dialect) for name in projection)
-        predicate_sql = " AND ".join(
-            f"{_quote_identifier(name, dialect)} = {placeholder}"
-            for name in predicate_columns
-        )
-        sql = f"SELECT {projection_sql} FROM {qualified} WHERE {predicate_sql} LIMIT {_MAX_ROWS}"
-        cursor = conn.cursor()
-        cursor.execute(sql, tuple(values))
-        raw_rows = cursor.fetchall()
-        rows = [
-            {projection[index]: record[index] for index in range(min(len(projection), len(record)))}
-            for record in raw_rows
-        ]
-        if hasattr(conn, "rollback"):
-            conn.rollback()
-            rolled_back = True
     except DatabaseObserverRuntimeError as exc:
         return refuse(
-            "DATABASE_OBSERVER_QUERY_REFUSED",
+            "DATABASE_OBSERVER_QUERY_FAILED",
             detail=str(exc),
             observer_contract_ref=approved.get("observer_id"),
             connection_profile=_public_profile(profile),
-            transaction_rolled_back=rolled_back,
+            transaction_rolled_back=(
+                "transaction_rollback_failed" not in str(exc)
+            ),
         )
-    except Exception as exc:  # noqa: BLE001 - runtime failure becomes explicit evidence
-        return refuse(
-            "DATABASE_OBSERVER_QUERY_FAILED",
-            detail=f"{type(exc).__name__}:{exc}",
-            observer_contract_ref=approved.get("observer_id"),
-            connection_profile=_public_profile(profile),
-            transaction_rolled_back=rolled_back,
-        )
-    finally:
-        try:
-            if cursor is not None:
-                cursor.close()
-        except Exception:
-            pass
-        try:
-            if conn is not None:
-                if not rolled_back and hasattr(conn, "rollback"):
-                    conn.rollback()
-                    rolled_back = True
-                conn.close()
-        except Exception:
-            pass
 
     safe_rows = _json_safe(rows)
-    match_status = "NOT_FOUND" if not safe_rows else "MATCHED_ONE" if len(safe_rows) == 1 else "NON_UNIQUE_IDENTITY"
+    match_status = (
+        "NOT_FOUND"
+        if not safe_rows
+        else "MATCHED_ONE"
+        if len(safe_rows) == 1
+        else "NON_UNIQUE_IDENTITY"
+    )
     payload = {
         "schema": RUNTIME_RECEIPT_SCHEMA,
         "observer_contract_ref": _text(approved.get("observer_id")),
@@ -632,8 +829,12 @@ def execute_database_observer_contract(
         "database_table_ref": _text(approved.get("database_table_id")),
         "database_table_name": _text(approved.get("database_table_name")),
         "projection": projection,
-        "identity_key": deepcopy(_list(approved.get("selected_identity_key"))),
-        "identity_parameter_fingerprints": [_fingerprint(value)[:20] for value in values],
+        "identity_key": deepcopy(
+            _list(approved.get("selected_identity_key"))
+        ),
+        "identity_parameter_fingerprints": [
+            _fingerprint(value)[:20] for value in values
+        ],
         "row_count": len(safe_rows),
         "match_status": match_status,
         "rows": safe_rows,
@@ -642,7 +843,7 @@ def execute_database_observer_contract(
         "parameterized": True,
         "read_only": True,
         "write_attempted": False,
-        "transaction_rolled_back": True,
+        "transaction_rolled_back": rolled_back,
         "raw_sql_retained": False,
         "predicate_values_retained": False,
         "secret_values_retained": False,
@@ -652,24 +853,33 @@ def execute_database_observer_contract(
     return _receipt(
         observer_id=OBSERVER_ID,
         status="OBSERVED",
-        evidence={EVIDENCE_KEY: payload, "observation_fingerprint": _fingerprint(payload)},
+        evidence={
+            EVIDENCE_KEY: payload,
+            "observation_fingerprint": _fingerprint(payload),
+        },
         campaign_id=campaign_id,
         execution_id=execution_id,
     )
 
 
-def observe_approved_database_contract(envelope: dict[str, Any]) -> dict[str, Any]:
-    """Registered Observer handler for one formal database Observer contract."""
+def observe_approved_database_contract(
+    envelope: dict[str, Any]
+) -> dict[str, Any]:
+    """Registered handler for one formal database Observer contract."""
     env = _dict(envelope)
     observations = _dict(env.get("observations"))
-    prop = _dict(env.get("property") or _dict(env.get("assertion")).get("property"))
+    prop = _dict(
+        env.get("property") or _dict(env.get("assertion")).get("property")
+    )
     experiment = _dict(env.get("experiment"))
     contract = _dict(
         prop.get("database_observer_contract")
         or observations.get("database_observer_contract")
         or experiment.get("database_observer_contract")
     )
-    root = _text(prop.get("persistence_root") or experiment.get("persistence_root"))
+    root = _text(
+        prop.get("persistence_root") or experiment.get("persistence_root")
+    )
     project = _text(prop.get("project") or experiment.get("project"))
     if not contract or not root or not project:
         return _receipt(
@@ -681,6 +891,7 @@ def observe_approved_database_contract(envelope: dict[str, Any]) -> dict[str, An
                 "root_present": bool(root),
                 "project_present": bool(project),
                 "secret_values_retained": False,
+                "dsn_retained": False,
             },
         )
     runtime_values = _dict(
@@ -704,7 +915,7 @@ def observe_approved_database_contract(envelope: dict[str, Any]) -> dict[str, An
 
 
 def install_approved_database_observer() -> str:
-    """Register the formal read-only database Observer; registration opens no connection."""
+    """Register the read-only Observer; registration opens no connection."""
     if OBSERVER_ID in registered_observer_ids():
         return OBSERVER_ID
     return register_observer(
