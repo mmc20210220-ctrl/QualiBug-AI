@@ -1,0 +1,59 @@
+name: Archive ingestion closure
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "ai_test_asset_center/enterprise_knowledge_center/archive_ingestion.py"
+      - "ai_test_asset_center/private_pilot_ingest_authority.py"
+      - "ai_test_asset_center/private_pilot_ingest_handlers.py"
+      - "ai_test_asset_center/private_pilot_project_assets.py"
+      - "tests/test_archive_ingestion.py"
+      - "tests/test_private_pilot_ingest_authority.py"
+      - "Dockerfile"
+      - ".github/workflows/archive-ingestion-closure.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  closure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install archive runtime and product
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libarchive-tools
+          bsdtar --version
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Compile archive and upload authorities
+        run: |
+          python -m py_compile \
+            ai_test_asset_center/enterprise_knowledge_center/archive_ingestion.py \
+            ai_test_asset_center/private_pilot_ingest_authority.py \
+            ai_test_asset_center/private_pilot_ingest_handlers.py \
+            ai_test_asset_center/private_pilot_project_assets.py
+
+      - name: Run archive closure tests
+        run: |
+          pytest -q \
+            tests/test_archive_ingestion.py \
+            tests/test_private_pilot_ingest_authority.py
