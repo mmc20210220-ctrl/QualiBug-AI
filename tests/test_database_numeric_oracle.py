@@ -140,6 +140,25 @@ def test_cross_run_numeric_snapshots_are_indeterminate() -> None:
     assert result["reason_code"] == "DATABASE_NUMERIC_RECEIPT_LINEAGE_MISMATCH"
 
 
+def test_invalid_explicit_tolerance_is_indeterminate() -> None:
+    result = evaluate_database_numeric_delta(
+        {
+            "spec": {
+                "numeric_terms": [
+                    _term("balance", expected_delta=-10, tolerance="approximately")
+                ]
+            },
+            "observations": _observations(
+                {"id": "a-1", "balance": 100},
+                {"id": "a-1", "balance": 90},
+            ),
+        }
+    )
+
+    assert result["passed"] is None
+    assert result["reason_code"] == "DATABASE_NUMERIC_TOLERANCE_INVALID"
+
+
 def test_same_row_weighted_conservation_passes() -> None:
     result = evaluate_database_numeric_conservation(
         {
@@ -183,3 +202,24 @@ def test_same_row_conservation_violation_is_detected() -> None:
     assert result["passed"] is False
     assert result["reason_code"] == "DATABASE_NUMERIC_CONSERVATION_VIOLATED"
     assert result["actual"]["difference"] == "-10"
+
+
+def test_invalid_explicit_coefficient_is_indeterminate() -> None:
+    result = evaluate_database_numeric_conservation(
+        {
+            "spec": {
+                "numeric_policy": "UNCHANGED_WEIGHTED_SUM",
+                "numeric_terms": [
+                    _term("available_qty", coefficient="one"),
+                    _term("reserved_qty", coefficient=1),
+                ],
+            },
+            "observations": _observations(
+                {"id": "a-1", "available_qty": 80, "reserved_qty": 20},
+                {"id": "a-1", "available_qty": 70, "reserved_qty": 30},
+            ),
+        }
+    )
+
+    assert result["passed"] is None
+    assert result["reason_code"] == "DATABASE_NUMERIC_COEFFICIENT_INVALID"
