@@ -31,6 +31,7 @@ on:
       - "tests/test_office_runtime_capabilities.py"
       - "tests/test_office_container_inspection.py"
       - "tests/test_office_container_resource_limits.py"
+      - "tests/test_api_artifact_document_adapter.py"
       - "tests/test_enterprise_archive_expansion.py"
       - "tests/test_enterprise_archive_ingestion_transaction.py"
       - "tests/test_archive_ingestion.py"
@@ -87,6 +88,8 @@ jobs:
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/office_runtime_capabilities.py \
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/office_container_inspection.py \
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/guarded_compatible_office_adapter.py \
+            ai_test_asset_center/enterprise_knowledge_center/document_ingestion/api_artifact_adapter.py \
+            ai_test_asset_center/enterprise_knowledge_center/document_ingestion/guarded_api_artifact_adapter.py \
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/page_render_registry.py \
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/evidence_closure.py \
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/rendered_ocr_adapter.py \
@@ -121,6 +124,7 @@ jobs:
             tests/test_office_runtime_capabilities.py \
             tests/test_office_container_inspection.py \
             tests/test_office_container_resource_limits.py \
+            tests/test_api_artifact_document_adapter.py \
             tests/test_enterprise_archive_expansion.py \
             tests/test_enterprise_archive_ingestion_transaction.py \
             tests/test_archive_ingestion.py \
