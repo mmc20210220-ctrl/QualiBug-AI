@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import gzip
 import io
+import shutil
 import stat
 import tarfile
 import zipfile
 from pathlib import Path
 
+from ai_test_asset_center.enterprise_knowledge_center import archive_ingestion
+from ai_test_asset_center.enterprise_knowledge_center import archive_ingestion_core
 from ai_test_asset_center.enterprise_knowledge_center.archive_expansion import (
     ArchiveExpansionPolicy,
     expand_document_envelopes,
@@ -38,6 +41,8 @@ def test_zip_expands_to_standard_document_envelopes_with_package_provenance(tmp_
     assert receipt["status"] == "COMPLETE"
     assert receipt["document_count"] == 2
     assert receipt["package_count"] == 1
+    assert receipt["canonical_archive_authority"] == "archive_ingestion_core"
+    assert receipt["duplicate_archive_parser_present"] is False
     assert {row["filename"] for row in batch.documents} == {
         "requirements/order.md",
         "bugs/history.csv",
@@ -54,6 +59,27 @@ def test_zip_expands_to_standard_document_envelopes_with_package_provenance(tmp_
     assert package_receipt["status"] == "COMPLETE"
     assert package_receipt["expanded_leaf_count"] == 2
     assert Path(package_receipt["stored_path"]).is_file()
+
+
+def test_source_type_is_inherited_only_when_explicitly_requested() -> None:
+    package = _zip_bytes([("rules.md", b"# Rule\nfinance approval required")])
+
+    automatic = expand_document_envelopes(
+        [{"content_bytes": package, "filename": "auto.zip", "source_type": "prd"}]
+    )
+    inherited = expand_document_envelopes(
+        [
+            {
+                "content_bytes": package,
+                "filename": "explicit.zip",
+                "source_type": "prd",
+                "inherit_source_type_to_members": True,
+            }
+        ]
+    )
+
+    assert automatic.documents[0].get("source_type") is None
+    assert inherited.documents[0]["source_type"] == "prd"
 
 
 def test_security_violation_rolls_back_all_members_from_that_package() -> None:
@@ -101,7 +127,7 @@ def test_zip_compression_ratio_limit_blocks_package_without_partial_activation()
 
     assert batch.documents == []
     assert any(
-        row["code"] == "ARCHIVE_COMPRESSION_RATIO_LIMIT_EXCEEDED"
+        row["code"] == "ARCHIVE_MEMBER_COMPRESSION_RATIO_EXCEEDED"
         for row in batch.errors
     )
 
@@ -139,7 +165,7 @@ def test_tar_link_member_is_forbidden() -> None:
     )
 
     assert batch.documents == []
-    assert any(row["code"] == "ARCHIVE_LINK_MEMBER_FORBIDDEN" for row in batch.errors)
+    assert any(row["code"] == "ARCHIVE_NON_REGULAR_MEMBER_FORBIDDEN" for row in batch.errors)
 
 
 def test_gzip_single_member_expands_without_writing_archive_controlled_path() -> None:
@@ -155,14 +181,18 @@ def test_gzip_single_member_expands_without_writing_archive_controlled_path() ->
     assert batch.documents[0]["content_bytes"] == b"service error line"
 
 
-def test_rar_and_7z_remain_fail_visible_without_runtime_dependency() -> None:
+def test_rar_and_7z_follow_runtime_provider_contract() -> None:
     for filename in ("materials.rar", "materials.7z"):
         batch = expand_document_envelopes(
             [{"content_bytes": b"opaque", "filename": filename}]
         )
         assert batch.documents == []
         assert batch.packages[0]["status"] == "BLOCKED"
-        assert batch.errors[0]["code"] == "ARCHIVE_RUNTIME_DEPENDENCY_UNAVAILABLE"
+        codes = {row["code"] for row in batch.errors}
+        if shutil.which("bsdtar"):
+            assert "ARCHIVE_RUNTIME_DEPENDENCY_UNAVAILABLE" not in codes
+        else:
+            assert "ARCHIVE_RUNTIME_DEPENDENCY_UNAVAILABLE" in codes
 
 
 def test_archive_with_only_system_junk_is_not_reported_as_success() -> None:
@@ -175,3 +205,11 @@ def test_archive_with_only_system_junk_is_not_reported_as_success() -> None:
     assert batch.documents == []
     assert batch.packages[0]["status"] == "BLOCKED"
     assert any(row["code"] == "ARCHIVE_NO_IMPORTABLE_MEMBERS" for row in batch.errors)
+
+
+def test_public_archive_ingestion_module_is_only_a_core_facade() -> None:
+    assert archive_ingestion.expand_archive_documents is archive_ingestion_core.expand_archive_documents
+    assert (
+        archive_ingestion.ingest_enterprise_knowledge_archives
+        is archive_ingestion_core.ingest_enterprise_knowledge_archives
+    )
