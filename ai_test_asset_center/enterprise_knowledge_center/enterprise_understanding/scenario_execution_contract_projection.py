@@ -3,6 +3,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..database_observer_runtime_plan_projection import (
+    project_database_observers_into_runtime_plans,
+)
 from .runtime_materialization_security import (
     project_secure_runtime_materializations_to_asset,
 )
@@ -101,6 +104,9 @@ def project_governed_scenario_execution_contracts(
     asset["governance"] = governance
     project_scenario_execution_contracts(asset, model)
     project_governed_runtime_plans_to_asset(asset, model)
+    # Generic DB snapshots are replaced with exact operator-approved Observer contracts before
+    # any materialization draft is built. This stage still opens no connection and reads no secret.
+    project_database_observers_into_runtime_plans(asset, model)
     project_secure_runtime_materializations_to_asset(asset, model)
     governance = as_dict(asset.get("governance"))
     governance.update(
@@ -108,6 +114,7 @@ def project_governed_scenario_execution_contracts(
             "legacy_probe_generation_requires_runtime_plan_gate": True,
             "legacy_probe_generation_requires_runtime_materialization_gate": True,
             "runtime_projection_mutates_probe_compiler": False,
+            "approved_database_observer_projection_precedes_runtime_materialization": True,
         }
     )
     asset["governance"] = governance
