@@ -352,12 +352,16 @@ def project_database_state_transition_assertions(
             _text(row.get("kind")) == DATABASE_STATE_TRANSITION_ASSERTION_KIND
             for row in projected
         ):
-            experiment["observers"] = [
-                dict(row)
-                for row in _list(experiment.get("observers"))
-                if isinstance(row, dict)
-                and _text(row.get("observer_id")) not in {"before_state", "after_state"}
-            ]
+            remaining_source_state_assertions = any(
+                _source_state_assertion(row) for row in projected
+            )
+            if not remaining_source_state_assertions:
+                experiment["observers"] = [
+                    dict(row)
+                    for row in _list(experiment.get("observers"))
+                    if isinstance(row, dict)
+                    and _text(row.get("observer_id")) not in {"before_state", "after_state"}
+                ]
             contract = _dict(experiment.get("field_oracle_runtime_contract"))
             if contract:
                 contract.update(
@@ -389,6 +393,9 @@ def project_database_state_transition_assertions(
                         == DATABASE_STATE_TRANSITION_ASSERTION_KIND
                     ),
                     "database_state_transition_fuzzy_matching_used": False,
+                    "database_state_transition_http_observers_removed": (
+                        not remaining_source_state_assertions
+                    ),
                 }
             )
             experiment["compile_receipt"] = receipt
