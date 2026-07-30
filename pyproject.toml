@@ -52,6 +52,10 @@ ocr = ["pytesseract>=0.3.13,<1.0.0"]
 render = ["pypdfium2>=4.30.0,<6.0.0"]
 browser = ["playwright>=1.40.0"]
 api_fuzz = ["schemathesis>=4.20.3,<5"]
+database = [
+    "psycopg[binary]>=3.1.0,<4.0.0",
+    "pymysql>=1.1.0,<2.0.0",
+]
 all = [
     "anthropic>=0.18.0",
     "openai>=1.0.0",
@@ -59,6 +63,8 @@ all = [
     "pypdfium2>=4.30.0,<6.0.0",
     "playwright>=1.40.0",
     "schemathesis>=4.20.3,<5",
+    "psycopg[binary]>=3.1.0,<4.0.0",
+    "pymysql>=1.1.0,<2.0.0",
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
     "pytest-html>=4.1.0",
