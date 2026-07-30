@@ -89,6 +89,14 @@ def _runtime_plan() -> dict:
                     "field": "status",
                 },
                 {
+                    "template_id": "unrelated-same-field",
+                    "template_kind": "DATABASE_FIELD_SNAPSHOT",
+                    "phase": "BEFORE",
+                    "table_ref": "table:main.shipments",
+                    "table": "table:main.shipments",
+                    "field": "status",
+                },
+                {
                     "template_id": "http-response",
                     "template_kind": "HTTP_RESPONSE_CAPTURE",
                     "phase": "AFTER",
@@ -96,7 +104,10 @@ def _runtime_plan() -> dict:
             ]
         },
         "snapshot_template": {
-            "before_oracle_template_refs": ["generic-db-field"],
+            "before_oracle_template_refs": [
+                "generic-db-field",
+                "unrelated-same-field",
+            ],
             "after_oracle_template_refs": ["generic-db-field", "http-response"],
         },
     }
@@ -109,12 +120,31 @@ def _asset() -> dict:
         "runtime_plans": [_runtime_plan()],
         "runtime_plan_unknowns": [],
         "runtime_plan_gate": {"status": "PASS", "metrics": {}},
+        "relationships": [
+            {
+                "edge_id": "edge:contract-plan",
+                "from": "execution-contract:create-order",
+                "to": "runtime-plan:create-order",
+                "relation": "execution_contract_to_runtime_plan",
+                "status": "accepted",
+                "confidence": 1.0,
+            },
+            {
+                "edge_id": "edge:plan-interface",
+                "from": "runtime-plan:create-order",
+                "to": "api:POST:/orders",
+                "relation": "runtime_plan_to_interface",
+                "status": "accepted",
+                "confidence": 1.0,
+            },
+        ],
+        "coverage_gaps": [],
         "summary": {},
         "governance": {},
     }
 
 
-def test_exact_approved_observer_replaces_generic_database_snapshot() -> None:
+def test_exact_approved_observer_replaces_only_its_generic_snapshot() -> None:
     asset = _asset()
     model = {"behavior_implementation_bindings": [_binding()]}
 
@@ -123,6 +153,7 @@ def test_exact_approved_observer_replaces_generic_database_snapshot() -> None:
     plan = result["runtime_plans"][0]
     templates = plan["oracle_query_templates"]["templates"]
     assert not any(row["template_id"] == "generic-db-field" for row in templates)
+    assert any(row["template_id"] == "unrelated-same-field" for row in templates)
     exact = next(
         row
         for row in templates
@@ -152,16 +183,19 @@ def test_exact_approved_observer_replaces_generic_database_snapshot() -> None:
     assert plan["database_observer_runtime_template_count"] == 1
     assert exact["template_id"] in plan["snapshot_template"]["before_oracle_template_refs"]
     assert exact["template_id"] in plan["snapshot_template"]["after_oracle_template_refs"]
+    assert "unrelated-same-field" in plan["snapshot_template"]["before_oracle_template_refs"]
     assert "http-response" in plan["snapshot_template"]["after_oracle_template_refs"]
     assert result["runtime_plan_gate"]["status"] == "PASS"
+    assert all(row["status"] == "accepted" for row in result["runtime_plan_relationships"])
     receipt = result["database_observer_runtime_plan_projection"]
     assert receipt["runtime_template_count"] == 1
     assert receipt["runtime_connection_open_count"] == 0
     assert receipt["query_execution_count"] == 0
     assert receipt["oracle_verdict_count"] == 0
+    assert receipt["stale_runtime_plan_authority_retained"] is False
 
 
-def test_missing_current_contract_blocks_runtime_plan() -> None:
+def test_missing_current_contract_blocks_plan_and_downgrades_relationships() -> None:
     asset = _asset()
     asset["database_observer_contracts"] = []
     model = {"behavior_implementation_bindings": [_binding()]}
@@ -178,18 +212,39 @@ def test_missing_current_contract_blocks_runtime_plan() -> None:
         == "RUNTIME_PLAN_APPROVED_DATABASE_OBSERVER_CONTRACT_MISSING"
         for row in result["runtime_plan_unknowns"]
     )
-    assert result["database_observer_runtime_plan_projection"]["missing_contract_count"] == 1
+    assert all(row["status"] == "candidate" for row in result["runtime_plan_relationships"])
+    assert all(row["confidence"] == 0.0 for row in result["runtime_plan_relationships"])
+    assert any(
+        row["kind"] == "RUNTIME_PLAN_APPROVED_DATABASE_OBSERVER_CONTRACT_MISSING"
+        for row in result["coverage_gaps"]
+    )
+    projection = result["database_observer_runtime_plan_projection"]
+    assert projection["status"] == "PARTIAL"
+    assert projection["missing_contract_count"] == 1
 
 
-def test_projection_rebuilds_exact_templates_without_retaining_old_contract() -> None:
+def test_projection_rebuilds_templates_and_resolved_unknowns_from_current_contract() -> None:
     asset = _asset()
-    stale = {
-        "template_id": "old-approved-template",
-        "template_kind": "APPROVED_DATABASE_OBSERVER_SNAPSHOT",
-        "observer_contract_ref": "revoked-observer",
-        "phase": "AFTER",
-    }
-    asset["runtime_plans"][0]["oracle_query_templates"]["templates"].append(stale)
+    asset["runtime_plans"][0]["oracle_query_templates"]["templates"].append(
+        {
+            "template_id": "old-approved-template",
+            "template_kind": "APPROVED_DATABASE_OBSERVER_SNAPSHOT",
+            "observer_contract_ref": "revoked-observer",
+            "phase": "AFTER",
+        }
+    )
+    asset["runtime_plan_unknowns"].append(
+        {
+            "unknown_id": "old-missing-contract",
+            "reason_code": "RUNTIME_PLAN_APPROVED_DATABASE_OBSERVER_CONTRACT_MISSING",
+        }
+    )
+    asset["coverage_gaps"].append(
+        {
+            "kind": "RUNTIME_PLAN_APPROVED_DATABASE_OBSERVER_CONTRACT_MISSING",
+            "missing_contract_count": 1,
+        }
+    )
     model = {"behavior_implementation_bindings": [_binding()]}
 
     result = project_database_observers_into_runtime_plans(asset, model)
@@ -200,3 +255,11 @@ def test_projection_rebuilds_exact_templates_without_retaining_old_contract() ->
         row["template_kind"] == "APPROVED_DATABASE_OBSERVER_SNAPSHOT"
         for row in templates
     ) == 1
+    assert not any(
+        row.get("unknown_id") == "old-missing-contract"
+        for row in result["runtime_plan_unknowns"]
+    )
+    assert not any(
+        row.get("kind") == "RUNTIME_PLAN_APPROVED_DATABASE_OBSERVER_CONTRACT_MISSING"
+        for row in result["coverage_gaps"]
+    )
