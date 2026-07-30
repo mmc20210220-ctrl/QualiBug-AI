@@ -36,12 +36,18 @@ from .contract import (
 from .image_decoding import sniff_image_source
 from .registry import DocumentAdapterRegistry
 
-# Compatible Office, ODF and WPS families are normalized to OOXML and then reuse the
-# same native structural adapters. Rendering/OCR remains supplemental for concrete
-# embedded-image gaps; it is no longer the primary parser for these containers.
-_COMPATIBLE_WORD_FAMILIES = {"doc", "dot", "rtf", "odt", "wps", "wpt"}
-_COMPATIBLE_SPREADSHEET_FAMILIES = {"xls", "xlt", "xlsb", "ods", "et", "ett"}
-_COMPATIBLE_PRESENTATION_FAMILIES = {"ppt", "pot", "pps", "odp", "dps", "dpt"}
+# Exact Office subtypes are kept in detected_family for backward compatibility with the
+# merger, which uses that field as the final source format. capability_family is the new
+# normalized field used solely for capability selection.
+_NATIVE_WORD_FORMATS = {"docx", "docm", "dotx", "dotm"}
+_NATIVE_SPREADSHEET_FORMATS = {"xlsx", "xlsm", "xltx", "xltm"}
+_NATIVE_PRESENTATION_FORMATS = {"pptx", "pptm", "potx", "potm", "ppsx", "ppsm"}
+_COMPATIBLE_WORD_FORMATS = {"doc", "dot", "rtf", "odt", "wps", "wpt"}
+_COMPATIBLE_SPREADSHEET_FORMATS = {"xls", "xlt", "xlsb", "ods", "et", "ett"}
+_COMPATIBLE_PRESENTATION_FORMATS = {"ppt", "pot", "pps", "odp", "dps", "dpt"}
+_ALL_WORD_FORMATS = _NATIVE_WORD_FORMATS | _COMPATIBLE_WORD_FORMATS
+_ALL_SPREADSHEET_FORMATS = _NATIVE_SPREADSHEET_FORMATS | _COMPATIBLE_SPREADSHEET_FORMATS
+_ALL_PRESENTATION_FORMATS = _NATIVE_PRESENTATION_FORMATS | _COMPATIBLE_PRESENTATION_FORMATS
 _TEXT_FIRST_FAMILIES = {"text", "structured_text"}
 _DEFERRED_CAPABILITIES_BY_GAP: dict[str, tuple[str, ...]] = {
     "SCANNED_PAGE_REQUIRES_OCR": (
@@ -76,8 +82,25 @@ def _looks_like_svg_markup(source: DocumentSource) -> bool:
     return stripped.startswith(b"<?xml") and b"<svg" in stripped
 
 
+def _declared_format(source: DocumentSource) -> str:
+    return source.suffix.lstrip(".").lower()
+
+
+def _office_format_or_default(source: DocumentSource, allowed: set[str], default: str) -> str:
+    declared = _declared_format(source)
+    return declared if declared in allowed else default
+
+
 def _detected_family(source: DocumentSource) -> tuple[str, str]:
+    """Return a source format identifier plus the detection method.
+
+    For Office sources the returned identifier is the exact container subtype, not merely
+    the normalized parser family. This prevents DOCM/XLSM/PPTM and ZIP-based WPS/XLSB files
+    from being mislabeled as DOCX/XLSX/PPTX or ZIP after successful parsing.
+    """
+
     stripped = source.data.lstrip()
+    declared = _declared_format(source)
     if stripped.startswith(b"%PDF-"):
         return "pdf", "pdf_file_signature"
     if source.data.startswith(b"PK"):
@@ -88,13 +111,43 @@ def _detected_family(source: DocumentSource) -> tuple[str, str]:
             with zipfile.ZipFile(io.BytesIO(source.data)) as archive:
                 names = set(archive.namelist())
                 if "word/document.xml" in names:
-                    return "docx", "office_open_xml_word_container"
+                    return (
+                        _office_format_or_default(source, _NATIVE_WORD_FORMATS, "docx"),
+                        "office_open_xml_word_container",
+                    )
                 if "xl/workbook.xml" in names:
-                    return "xlsx", "office_open_xml_excel_container"
+                    return (
+                        _office_format_or_default(
+                            source, _NATIVE_SPREADSHEET_FORMATS, "xlsx"
+                        ),
+                        "office_open_xml_excel_container",
+                    )
+                if "xl/workbook.bin" in names:
+                    return (
+                        "xlsb" if declared == "xlsb" else "xlsb",
+                        "office_open_xml_binary_excel_container",
+                    )
                 if "ppt/presentation.xml" in names:
-                    return "pptx", "office_open_xml_presentation_container"
+                    return (
+                        _office_format_or_default(
+                            source, _NATIVE_PRESENTATION_FORMATS, "pptx"
+                        ),
+                        "office_open_xml_presentation_container",
+                    )
+                if declared in (
+                    _COMPATIBLE_WORD_FORMATS
+                    | _COMPATIBLE_SPREADSHEET_FORMATS
+                    | _COMPATIBLE_PRESENTATION_FORMATS
+                ):
+                    return declared, "compatible_office_zip_container"
             return "zip", "zip_container_signature"
         except Exception:
+            if declared in (
+                _COMPATIBLE_WORD_FORMATS
+                | _COMPATIBLE_SPREADSHEET_FORMATS
+                | _COMPATIBLE_PRESENTATION_FORMATS
+            ):
+                return declared, "compatible_office_pk_container_unreadable"
             return "zip_or_corrupt_container", "pk_signature_without_readable_zip_directory"
     # SVG is both an image and XML. Preserve its native tags, labels and identifiers before
     # any rendered/OCR supplemental path; otherwise the semantic layer receives pixels only.
@@ -108,8 +161,19 @@ def _detected_family(source: DocumentSource) -> tuple[str, str]:
     mime, _encoding = mimetypes.guess_type(source.filename)
     if mime and mime.startswith("text/"):
         return "text", "mime_guess"
-    suffix = source.suffix.lstrip(".")
-    return suffix or "unknown", "filename_suffix_or_unknown"
+    return declared or "unknown", "filename_suffix_or_unknown"
+
+
+def _capability_family(source_format: str) -> str:
+    if source_format in _ALL_WORD_FORMATS:
+        return "word"
+    if source_format in _ALL_SPREADSHEET_FORMATS:
+        return "spreadsheet"
+    if source_format in _ALL_PRESENTATION_FORMATS:
+        return "presentation"
+    if source_format in {"text", "structured_text"}:
+        return source_format
+    return source_format
 
 
 def _word_capabilities() -> list[str]:
@@ -151,7 +215,7 @@ def _presentation_capabilities() -> list[str]:
 
 
 def _required_capabilities(family: str) -> list[str]:
-    if family == "docx" or family in _COMPATIBLE_WORD_FAMILIES:
+    if family == "word":
         return _word_capabilities()
     if family == "pdf":
         return unique_text(
@@ -167,9 +231,9 @@ def _required_capabilities(family: str) -> list[str]:
                 CAP_HEADER_FOOTER,
             ]
         )
-    if family == "xlsx" or family in _COMPATIBLE_SPREADSHEET_FAMILIES:
+    if family == "spreadsheet":
         return _spreadsheet_capabilities()
-    if family == "pptx" or family in _COMPATIBLE_PRESENTATION_FAMILIES:
+    if family == "presentation":
         return _presentation_capabilities()
     if family == "image":
         return unique_text(
@@ -221,17 +285,18 @@ def plan_document_parsing(
     source: DocumentSource,
     registry: DocumentAdapterRegistry,
 ) -> dict[str, Any]:
-    family, detection_method = _detected_family(source)
+    source_format, detection_method = _detected_family(source)
+    capability_family = _capability_family(source_format)
     matches = registry.matches(source)
     primary_rows = [row for row in matches if row[1].mode == MODE_PRIMARY]
     supplemental_rows = [row for row in matches if row[1].mode == MODE_SUPPLEMENTAL]
     fallback_rows = [row for row in matches if row[1].mode == MODE_FALLBACK]
-    required_capabilities = _required_capabilities(family)
+    required_capabilities = _required_capabilities(capability_family)
 
     selected: list[tuple[Any, Any]] = []
     if primary_rows:
         selected.append(primary_rows[0])
-    elif family in _TEXT_FIRST_FAMILIES and fallback_rows:
+    elif capability_family in _TEXT_FIRST_FAMILIES and fallback_rows:
         # A source that is natively decodable text must not be rasterized first merely
         # because a visual renderer is available. Rendering can supplement a structural
         # parser later, but cannot replace exact tags, identifiers or source lines.
@@ -276,7 +341,10 @@ def plan_document_parsing(
         "filename": source.filename,
         "source_hash": source.content_hash,
         "declared_mime": source.declared_mime,
-        "detected_family": family,
+        # Legacy field retained because downstream mergers currently use it as source format.
+        "detected_family": source_format,
+        "detected_format": source_format,
+        "capability_family": capability_family,
         "detection_method": detection_method,
         "signature_hex": source.signature_hex,
         "selected_adapters": selected_rows,
