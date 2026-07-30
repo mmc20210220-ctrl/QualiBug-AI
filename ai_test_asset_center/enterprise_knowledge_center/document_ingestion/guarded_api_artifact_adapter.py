@@ -1,9 +1,9 @@
-"""Security guard for source-declared API artifacts.
+"""Security and exact-structure guard for source-declared API artifacts.
 
-The structural adapter must never receive live credential values. This guard sanitizes the
-parsed source tree before the canonical JSON projection and JSON-Pointer blocks are built.
-It is the only registered API-artifact adapter; the underlying adapter remains a structure
-primitive and is not registered independently.
+The structural primitive never receives live credential values. This is the only registered
+API-artifact adapter: it sanitizes the parsed tree, delegates operation/Postman/HAR structure
+to the existing adapter, normalizes every JSON Pointer to the canonical exact-block address,
+and enriches OpenAPI with field-level schema evidence.
 """
 from __future__ import annotations
 
@@ -19,8 +19,12 @@ from .api_artifact_adapter import (
     _decode_payload,
 )
 from .contract import DocumentSource
+from .openapi_schema_projection import (
+    apply_openapi_schema_projection,
+    normalize_api_json_pointer_locators,
+)
 
-_GUARD_SCHEMA = "qualibug.api-artifact-secret-guard.v1"
+_GUARD_SCHEMA = "qualibug.api-artifact-secret-guard.v2"
 _REDACTED = "<redacted>"
 _SENSITIVE_NAME_RE = re.compile(
     r"(?i)(?:^|[^a-z0-9])(?:authorization|proxy[-_ ]?authorization|cookie|"
@@ -28,7 +32,8 @@ _SENSITIVE_NAME_RE = re.compile(
     r"api[-_ ]?key|apikey|client[-_ ]?secret|password|passwd|secret|bearer|"
     r"private[-_ ]?key|session[-_ ]?id)(?:$|[^a-z0-9])"
 )
-_VALUE_FIELDS = {"value", "current", "initial", "default"}
+_VALUE_FIELDS = {"value", "current", "initial", "default", "const", "example"}
+_COLLECTION_VALUE_FIELDS = {"enum", "examples"}
 _BODY_FIELDS = {"raw", "text", "body"}
 _URL_FIELDS = {"url"}
 
@@ -112,6 +117,14 @@ def _sanitize_embedded(value: str) -> tuple[str, int]:
     return _redact_form_text(text)
 
 
+def _redacted_collection(value: Any) -> tuple[Any, int]:
+    if isinstance(value, list):
+        return [_REDACTED for _item in value], len(value)
+    if isinstance(value, dict):
+        return {str(key): _REDACTED for key in value}, len(value)
+    return _REDACTED, 1
+
+
 def _sanitize(value: Any, *, key_hint: str = "") -> tuple[Any, int]:
     if isinstance(value, list):
         rows: list[Any] = []
@@ -129,14 +142,20 @@ def _sanitize(value: Any, *, key_hint: str = "") -> tuple[Any, int]:
 
     identity_name = _text(value.get("name") or value.get("key"))
     identity_sensitive = _sensitive_name(identity_name)
+    parent_sensitive = _sensitive_name(key_hint)
+    value_container_sensitive = identity_sensitive or parent_sensitive
     result: dict[str, Any] = {}
     count = 0
     for raw_key, raw_value in value.items():
         key = str(raw_key)
         key_lower = key.lower()
-        if identity_sensitive and key_lower in _VALUE_FIELDS:
+        if value_container_sensitive and key_lower in _VALUE_FIELDS:
             result[key] = _REDACTED
             count += 1
+            continue
+        if value_container_sensitive and key_lower in _COLLECTION_VALUE_FIELDS:
+            result[key], child_count = _redacted_collection(raw_value)
+            count += child_count
             continue
         if _sensitive_name(key) and not isinstance(raw_value, (dict, list)):
             result[key] = _REDACTED
@@ -156,14 +175,15 @@ def _sanitize(value: Any, *, key_hint: str = "") -> tuple[Any, int]:
 
 
 class GuardedApiArtifactDocumentAdapter(ApiArtifactDocumentAdapter):
-    """Registered API-artifact authority with mandatory pre-parse redaction."""
+    """Registered API-artifact authority with redaction and exact structural evidence."""
 
     name = "guarded-api-artifact-json-pointer-structure"
-    parser_version = "2"
+    parser_version = "3"
 
     def extract(self, source: DocumentSource) -> dict[str, Any]:
         payload, _decoded, error = _decode_payload(source)
-        if payload is None or not _artifact_kind(payload):
+        kind = _artifact_kind(payload) if payload is not None else ""
+        if payload is None or not kind:
             return super().extract(source)
 
         sanitized, redaction_count = _sanitize(payload)
@@ -175,6 +195,17 @@ class GuardedApiArtifactDocumentAdapter(ApiArtifactDocumentAdapter):
             legacy_text="",
         )
         document_ir = super().extract(safe_source)
+        document_ir = normalize_api_json_pointer_locators(
+            document_ir,
+            filename=source.filename,
+        )
+        if kind == "openapi":
+            document_ir = apply_openapi_schema_projection(
+                document_ir,
+                payload=dict(sanitized),
+                source=safe_source,
+            )
+
         receipt = dict(document_ir.get("structure_receipt") or {})
         receipt.update(
             {
@@ -183,8 +214,10 @@ class GuardedApiArtifactDocumentAdapter(ApiArtifactDocumentAdapter):
                 "redaction_schema": API_ARTIFACT_REDACTION_SCHEMA,
                 "redaction_count": int(redaction_count),
                 "pre_parse_secret_redaction_applied": True,
+                "sensitive_schema_defaults_and_examples_redacted": True,
                 "credential_values_retained": False,
                 "original_source_bytes_exposed_to_structure_adapter": False,
+                "json_pointer_exact_source_addresses": True,
             }
         )
         document_ir["structure_receipt"] = receipt
