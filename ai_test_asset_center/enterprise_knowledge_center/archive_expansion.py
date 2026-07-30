@@ -1,8 +1,8 @@
 """Compatibility bridge from knowledge CRUD to the canonical archive authority.
 
-All archive parsing and security policy lives in :mod:`archive_ingestion_core`. This module
-preserves the older ``expand_document_envelopes`` contract used by ``_crud`` and maps the
-canonical receipts/provenance into that contract. It contains no archive parser.
+All archive parsing and security policy lives in :mod:`archive_ingestion_core`; transport
+classification lives in the stable :mod:`archive_ingestion` facade. This module preserves the
+older ``expand_document_envelopes`` contract used by ``_crud`` and contains no archive parser.
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from ._common import MAX_SOURCE_BYTES
-from .archive_ingestion_core import (
+from .archive_ingestion import (
     ArchiveLimits,
     expand_archive_documents,
 )
@@ -84,6 +84,7 @@ class ArchiveExpansionBatch:
             "archive_members_are_not_executed": True,
             "archive_controlled_paths_are_never_written": True,
             "canonical_archive_authority": "archive_ingestion_core",
+            "transport_classification_authority": "archive_ingestion",
             "duplicate_archive_parser_present": False,
         }
 
@@ -127,6 +128,8 @@ def _archive_signature(prefix: bytes) -> bool:
 
 
 def is_archive_envelope(envelope: dict[str, Any]) -> bool:
+    """Compatibility predicate; final routing is still decided by archive_ingestion."""
+
     filename = str(envelope.get("filename") or envelope.get("name") or "")
     if not filename and envelope.get("file_path"):
         filename = Path(str(envelope.get("file_path"))).name
@@ -347,14 +350,14 @@ def expand_document_envelopes(
         source_documents,
         max_archive_bytes=resolved_policy.max_archive_bytes,
     )
-    canonical = expand_archive_documents(
-        source_documents,  # type: ignore[arg-type]
+    expansion = expand_archive_documents(
+        source_documents,
         limits=_limits(resolved_policy),
     )
     stored_paths: dict[str, str] = {}
     if package_store_dir is not None:
         package_store_dir.mkdir(parents=True, exist_ok=True)
-        for artifact in canonical.transport_artifacts:
+        for artifact in expansion.transport_artifacts:
             if not isinstance(artifact, dict):
                 continue
             archive_hash = str(artifact.get("archive_hash") or "")
@@ -366,30 +369,21 @@ def expand_document_envelopes(
             if not target.exists():
                 target.write_bytes(bytes(data))
             stored_paths[archive_hash] = str(target)
-
-    errors = [
-        {"stage": "archive_expansion", **dict(row)}
-        for row in canonical.errors
-        if isinstance(row, dict)
-    ]
-    warnings = [
-        {"stage": "archive_expansion", **dict(row)}
-        for row in canonical.ignored_members
-        if isinstance(row, dict)
-    ]
     return ArchiveExpansionBatch(
         documents=[
             _provenance_compat(row, policies)
-            for row in canonical.documents
+            for row in expansion.documents
             if isinstance(row, dict)
         ],
         packages=_package_rows(
-            canonical.receipts,
+            list(expansion.receipts),
             stored_paths,
-            canonical.ignored_members,
+            list(expansion.ignored_members),
         ),
-        errors=errors,
-        warnings=warnings,
+        errors=[dict(row) for row in expansion.errors if isinstance(row, dict)],
+        warnings=[
+            dict(row) for row in expansion.ignored_members if isinstance(row, dict)
+        ],
     )
 
 
