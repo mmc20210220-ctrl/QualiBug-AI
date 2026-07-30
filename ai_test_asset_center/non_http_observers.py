@@ -4,11 +4,15 @@ from __future__ import annotations
 from typing import Any
 
 from . import experiment_compiler_obligation as _experiment_compiler
-from .database_observer_experiment_runtime import install_experiment_database_observer
+from .database_observer_experiment_runtime import (
+    PHASE_AGGREGATE_OBSERVER_ID,
+    install_experiment_database_observer,
+)
 from .database_state_transition_oracle import (
     install_database_state_transition_assertion,
 )
 from .observer_contracts_base import (
+    OBSERVER_REGISTRY,
     _receipt,
     register_observer,
     registered_observer_ids,
@@ -21,6 +25,7 @@ _ORIGINAL_COMPILER_MARKER = "_qualibug_original_compile_observer_requirements"
 # ProcessStepLedger. Pure concurrency barriers have their own barrier_timeline
 # and must not be forced to provide a different ledger they may never create.
 _PROCESS_LEDGER_FAMILIES = frozenset({"temporal"})
+_DATABASE_PHASE_RECEIPT_KEY = "approved_database_observer_phase_receipts"
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -164,6 +169,24 @@ def install_non_http_observers() -> None:
     # The formal handler aggregates true BEFORE/AFTER receipts produced by the existing
     # Experiment Executor. It never re-queries the database during finalization.
     install_experiment_database_observer()
+    # Phase receipts are emitted by the aggregate Observer pipeline before Assertion DSL
+    # evaluation. Declare the standard key explicitly so the kind-to-evidence compile gate
+    # can prove that the database state assertion is structurally satisfiable.
+    aggregate_contract = _dict(OBSERVER_REGISTRY.get(PHASE_AGGREGATE_OBSERVER_ID))
+    evidence_keys = tuple(
+        dict.fromkeys(
+            [
+                *[
+                    _text(value)
+                    for value in aggregate_contract.get("evidence_keys", ())
+                    if _text(value)
+                ],
+                _DATABASE_PHASE_RECEIPT_KEY,
+            ]
+        )
+    )
+    aggregate_contract["evidence_keys"] = evidence_keys
+    OBSERVER_REGISTRY[PHASE_AGGREGATE_OBSERVER_ID] = aggregate_contract
     # Assertion registration happens only after the aggregate Observer has declared the
     # evidence key it produces. The Assertion DSL rejects structurally unproducible kinds.
     install_database_state_transition_assertion()
