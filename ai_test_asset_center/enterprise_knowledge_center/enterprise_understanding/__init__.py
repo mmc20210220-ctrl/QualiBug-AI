@@ -1,4 +1,8 @@
-"""Enterprise business understanding model package."""
+"""Enterprise business understanding model package.
+
+Importing this package is declarative: it exports builders and schemas but does not
+register parsers, replace resolvers or wrap Probe compilers.
+"""
 from .behavior_ir import (
     BEHAVIOR_GATE_SCHEMA,
     BEHAVIOR_ROW_LEDGER_SCHEMA,
@@ -34,6 +38,11 @@ from .interface_runtime_contracts import (
 )
 from .lifecycle_builder import build_lifecycles
 from .object_graph import build_object_graph
+from .probe_policy import (
+    build_gated_probes,
+    probe_generation_allowed,
+    probe_generation_block_reason,
+)
 from .runtime_materialization import (
     RUNTIME_MATERIALIZATION_GATE_SCHEMA,
     RUNTIME_MATERIALIZATION_SCHEMA,
@@ -73,16 +82,8 @@ from .scenario_ir import (
 from .scenario_ir_asset_governance import project_scenario_ir_asset_governance
 from .schema import *  # noqa: F401,F403
 
-# Additive parser metadata only. This wrapper stores field locations, response contracts and
-# security scheme names; it never retains request examples, secret values or credentials.
-install_interface_runtime_contract_parser()
-# All materialization entrypoints, including direct low-level builder calls, must scrub an
-# unapproved runtime value before any non-sendable draft is assembled.
-install_secure_runtime_value_resolver()
-
-# Backward-compatible package names now point to the single governed and security-audited
-# authority. The explicit ``*_core_*`` names remain module-internal primitives and are not exported
-# through ``__all__``.
+# Package-level public names point to the secure projection, but no module-level
+# function is replaced to achieve this alias.
 build_runtime_materializations_v1 = build_secure_runtime_materializations_v1
 project_runtime_materializations_to_asset = project_secure_runtime_materializations_to_asset
 
@@ -126,6 +127,9 @@ __all__ = [
     "install_secure_runtime_value_resolver",
     "enrich_openapi_runtime_contracts",
     "install_interface_runtime_contract_parser",
+    "build_gated_probes",
+    "probe_generation_allowed",
+    "probe_generation_block_reason",
     "build_enterprise_understanding_model",
     "assess_understanding_model",
     "enrich_asset_with_enterprise_understanding",
