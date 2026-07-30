@@ -46,6 +46,50 @@ def test_probe_policy_is_pure_and_fail_closed() -> None:
     assert calls == [12]
 
 
+def test_zero_probe_budget_is_strict_at_base_authority() -> None:
+    from ai_test_asset_center.enterprise_knowledge_center import _api, _linking
+
+    asset = {
+        "asset_id": "asset-1",
+        "interfaces": [
+            {
+                "interface_id": "api:GET:/orders",
+                "method": "GET",
+                "path": "/orders",
+            }
+        ],
+        "risk_domains": [
+            {
+                "risk_id": "risk:r1",
+                "source_rule_id": "r1",
+                "risk_type": "business_rule",
+            }
+        ],
+        "relationships": [
+            {
+                "edge_id": "edge:r1",
+                "from": "r1",
+                "to": "api:GET:/orders",
+                "relation": "rule_to_interface",
+                "status": "accepted",
+                "derivation": "exact_source_section",
+            }
+        ],
+    }
+    assert _linking._probes_from_asset(asset, 0) == []
+    assert _api._probes_from_asset(asset, 0) == []
+    assert len(_linking._probes_from_asset(asset, 1)) == 1
+
+
+def test_explicit_zero_is_not_replaced_by_default_budget() -> None:
+    from ai_test_asset_center.enterprise_knowledge_center.composition import _probe_limit
+
+    assert _probe_limit(None) == 140
+    assert _probe_limit(0) == 0
+    assert _probe_limit("0") == 0
+    assert _probe_limit(7) == 7
+
+
 def test_secure_installer_no_longer_replaces_resolver() -> None:
     from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding import runtime_materialization, runtime_materialization_security
 
