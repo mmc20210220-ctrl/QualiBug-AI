@@ -47,7 +47,7 @@ def _product_environment(
             continue
         clean[str(key)] = str(value)
     clean["QUALIBUG_ENTERPRISE_UNDERSTANDING_PRODUCT_PHASE"] = "1"
-    clean["QUALIBUG_GROUND_TRUTH_ACCESS_ALLOWED"] = "0"
+    clean["QUALIBUG_EVALUATOR_PRIVATE_INPUT_ACCESS_ALLOWED"] = "0"
     return clean, sorted(removed)
 
 
