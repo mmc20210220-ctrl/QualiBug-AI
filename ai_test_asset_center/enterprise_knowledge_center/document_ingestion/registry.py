@@ -83,13 +83,16 @@ class DocumentAdapterRegistry:
 def build_default_registry() -> DocumentAdapterRegistry:
     from .advanced_visual_table_providers import build_default_advanced_visual_table_provider
     from .builtin_adapters import (
-        DocxDocumentAdapter,
         GenericTextDocumentAdapter,
         PdfDocumentAdapter,
         UnknownBinaryDocumentAdapter,
     )
     from .compatible_office_adapter import CompatibleOfficeDocumentAdapter
-    from .office_adapters import PresentationDocumentAdapter, SpreadsheetDocumentAdapter
+    from .native_office_policy_adapters import (
+        MacroAwareDocxDocumentAdapter,
+        MacroAwarePresentationDocumentAdapter,
+        MacroAwareSpreadsheetDocumentAdapter,
+    )
     from .rendered_ocr_adapter import OcrSupplementalAdapter
     from .visual_table_adapter import VisualTableSupplementalAdapter
     from .visual_table_provider_gate import GeometryFormalEnforcingVisualTableProvider
@@ -99,10 +102,10 @@ def build_default_registry() -> DocumentAdapterRegistry:
     )
     return DocumentAdapterRegistry(
         [
-            DocxDocumentAdapter(),
+            MacroAwareDocxDocumentAdapter(),
             PdfDocumentAdapter(),
-            SpreadsheetDocumentAdapter(),
-            PresentationDocumentAdapter(),
+            MacroAwareSpreadsheetDocumentAdapter(),
+            MacroAwarePresentationDocumentAdapter(),
             CompatibleOfficeDocumentAdapter(),
             OcrSupplementalAdapter(),
             VisualTableSupplementalAdapter(provider=advanced_table_provider),
