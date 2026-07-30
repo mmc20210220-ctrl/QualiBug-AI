@@ -7,11 +7,13 @@ on:
     paths:
       - "ai_test_asset_center/enterprise_material_formats.py"
       - "ai_test_asset_center/enterprise_knowledge_center/document_ingestion/**"
+      - "ai_test_asset_center/enterprise_knowledge_center/document_ir_tabular_semantics.py"
       - "ai_test_asset_center/enterprise_knowledge_center/archive_expansion.py"
       - "ai_test_asset_center/enterprise_knowledge_center/archive_ingestion.py"
       - "ai_test_asset_center/enterprise_knowledge_center/archive_ingestion_core.py"
       - "ai_test_asset_center/enterprise_knowledge_center/atomic_ingestion.py"
       - "ai_test_asset_center/enterprise_knowledge_center/source_ingestion.py"
+      - "ai_test_asset_center/enterprise_knowledge_center/_common.py"
       - "ai_test_asset_center/enterprise_knowledge_center/_crud.py"
       - "ai_test_asset_center/enterprise_knowledge_center/__init__.py"
       - "ai_test_asset_center/private_pilot_project_assets.py"
@@ -40,6 +42,9 @@ on:
       - "tests/test_archive_member_activation_atomicity.py"
       - "tests/test_private_pilot_ingest_authority.py"
       - "tests/test_archive_explicit_type_override.py"
+      - "tests/test_document_ir_tabular_semantics.py"
+      - "tests/test_tabular_semantics_ingestion_bridge.py"
+      - "tests/test_test_asset_source_types.py"
       - "tests/test_document_ir_fact_evidence_spans.py"
       - "tests/test_document_structure_fact_receipt_gate.py"
       - "tests/test_document_evidence_address_quality.py"
@@ -96,11 +101,13 @@ jobs:
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/pipeline.py \
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/planner.py \
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/registry.py \
+            ai_test_asset_center/enterprise_knowledge_center/document_ir_tabular_semantics.py \
             ai_test_asset_center/enterprise_knowledge_center/archive_expansion.py \
             ai_test_asset_center/enterprise_knowledge_center/archive_ingestion.py \
             ai_test_asset_center/enterprise_knowledge_center/archive_ingestion_core.py \
             ai_test_asset_center/enterprise_knowledge_center/atomic_ingestion.py \
             ai_test_asset_center/enterprise_knowledge_center/source_ingestion.py \
+            ai_test_asset_center/enterprise_knowledge_center/_common.py \
             ai_test_asset_center/enterprise_knowledge_center/_crud.py \
             ai_test_asset_center/enterprise_knowledge_center/__init__.py \
             ai_test_asset_center/private_pilot_project_assets.py \
@@ -133,6 +140,9 @@ jobs:
             tests/test_archive_member_activation_atomicity.py \
             tests/test_private_pilot_ingest_authority.py \
             tests/test_archive_explicit_type_override.py \
+            tests/test_document_ir_tabular_semantics.py \
+            tests/test_tabular_semantics_ingestion_bridge.py \
+            tests/test_test_asset_source_types.py \
             tests/test_document_ir_fact_evidence_spans.py \
             tests/test_document_structure_fact_receipt_gate.py \
             tests/test_document_evidence_address_quality.py \
