@@ -15,6 +15,7 @@ from typing import Any
 _exec_logger = logging.getLogger("qualibug.execution")
 
 from .contract_oracles import contract_activation_requirements
+from .database_observer_experiment_runtime import execute_database_observer_phase
 from .real_id_resolver import bind_entity_fields  # compatibility re-export
 from .sandbox_write_executor import (  # noqa: F401
     _http_request,
@@ -477,70 +478,107 @@ def execute_one_experiment(
             ),
         }
 
-    barrier_result = execute_barrier_plans(
-        control_plan=_list(exp.get("control_plan")),
-        treatment_plan=_list(exp.get("treatment_plan")),
-        actors=actors,
-        ops=ops,
-        tokens=tokens,
-        runtime_bindings=runtime_bindings,
-        activation_requirements=activation_requirements,
-        eid=eid,
-        oid=oid,
-        resolved_campaign_id=resolved_campaign_id,
-        resolved_execution_id=resolved_execution_id,
-        campaign_id=resolved_campaign_id,
+    # A required database BEFORE draft is evaluated after fixture/binding proof but before any
+    # barrier or sequential transport. Failure blocks transport while preserving cleanup.
+    database_before = execute_database_observer_phase(
+        exp,
+        phase="BEFORE",
         root=root,
         project=project,
-        base_url=base_url,
         runtime_contract=runtime_contract,
-        observations=observations,
-    )
-    steps_out.extend(list(barrier_result.get("steps") or []))
-    contract_evidence_receipts.extend(
-        list(barrier_result.get("contract_evidence_receipts") or [])
-    )
-    request_bodies_for_cleanup.update(
-        dict(barrier_result.get("request_bodies_for_cleanup") or {})
-    )
-    pre_transport_block_reasons.extend(
-        list(barrier_result.get("pre_transport_block_reasons") or [])
-    )
-    consumed_barrier_steps = set(barrier_result.get("consumed_barrier_steps") or set())
-    control_plan = _list(exp.get("control_plan"))
-    treatment_plan = _list(exp.get("treatment_plan"))
-    plan_result = execute_non_barrier_plans(
-        control_plan=control_plan,
-        treatment_plan=treatment_plan,
-        consumed_barrier_steps=consumed_barrier_steps,
-        actors=actors,
-        ops=ops,
-        tokens=tokens,
         runtime_bindings=runtime_bindings,
-        activation_requirements=activation_requirements,
         observations=observations,
-        eid=eid,
-        oid=oid,
-        resolved_campaign_id=resolved_campaign_id,
-        resolved_execution_id=resolved_execution_id,
+        steps_out=steps_out,
         campaign_id=resolved_campaign_id,
-        root=root,
-        project=project,
-        base_url=base_url,
-        runtime_contract=runtime_contract,
-        cleanup_failures=cleanup_failures,
+        execution_id=resolved_execution_id,
     )
-    steps_out.extend(list(plan_result.get("steps") or []))
-    contract_evidence_receipts.extend(
-        list(plan_result.get("contract_evidence_receipts") or [])
-    )
-    request_bodies_for_cleanup.update(
-        dict(plan_result.get("request_bodies_for_cleanup") or {})
-    )
-    pre_transport_block_reasons.extend(
-        list(plan_result.get("pre_transport_block_reasons") or [])
-    )
-    cleanup_failures = int(plan_result.get("cleanup_failures") or cleanup_failures)
+    database_before_blocked = bool(database_before.get("blocked"))
+    if database_before_blocked:
+        pre_transport_block_reasons.append(
+            _text(database_before.get("reason_code"))
+            or "DATABASE_OBSERVER_BEFORE_PHASE_INCOMPLETE"
+        )
+        observations["database_observer_transport_blocked"] = True
+        barrier_result: dict[str, Any] = {
+            "steps": [],
+            "contract_evidence_receipts": [],
+            "request_bodies_for_cleanup": {},
+            "pre_transport_block_reasons": [],
+            "consumed_barrier_steps": set(),
+        }
+        plan_result: dict[str, Any] = {
+            "steps": [],
+            "contract_evidence_receipts": [],
+            "request_bodies_for_cleanup": {},
+            "pre_transport_block_reasons": [],
+            "cleanup_failures": cleanup_failures,
+        }
+    else:
+        barrier_result = execute_barrier_plans(
+            control_plan=_list(exp.get("control_plan")),
+            treatment_plan=_list(exp.get("treatment_plan")),
+            actors=actors,
+            ops=ops,
+            tokens=tokens,
+            runtime_bindings=runtime_bindings,
+            activation_requirements=activation_requirements,
+            eid=eid,
+            oid=oid,
+            resolved_campaign_id=resolved_campaign_id,
+            resolved_execution_id=resolved_execution_id,
+            campaign_id=resolved_campaign_id,
+            root=root,
+            project=project,
+            base_url=base_url,
+            runtime_contract=runtime_contract,
+            observations=observations,
+        )
+        steps_out.extend(list(barrier_result.get("steps") or []))
+        contract_evidence_receipts.extend(
+            list(barrier_result.get("contract_evidence_receipts") or [])
+        )
+        request_bodies_for_cleanup.update(
+            dict(barrier_result.get("request_bodies_for_cleanup") or {})
+        )
+        pre_transport_block_reasons.extend(
+            list(barrier_result.get("pre_transport_block_reasons") or [])
+        )
+        consumed_barrier_steps = set(barrier_result.get("consumed_barrier_steps") or set())
+        control_plan = _list(exp.get("control_plan"))
+        treatment_plan = _list(exp.get("treatment_plan"))
+        plan_result = execute_non_barrier_plans(
+            control_plan=control_plan,
+            treatment_plan=treatment_plan,
+            consumed_barrier_steps=consumed_barrier_steps,
+            actors=actors,
+            ops=ops,
+            tokens=tokens,
+            runtime_bindings=runtime_bindings,
+            activation_requirements=activation_requirements,
+            observations=observations,
+            eid=eid,
+            oid=oid,
+            resolved_campaign_id=resolved_campaign_id,
+            resolved_execution_id=resolved_execution_id,
+            campaign_id=resolved_campaign_id,
+            root=root,
+            project=project,
+            base_url=base_url,
+            runtime_contract=runtime_contract,
+            cleanup_failures=cleanup_failures,
+        )
+        steps_out.extend(list(plan_result.get("steps") or []))
+        contract_evidence_receipts.extend(
+            list(plan_result.get("contract_evidence_receipts") or [])
+        )
+        request_bodies_for_cleanup.update(
+            dict(plan_result.get("request_bodies_for_cleanup") or {})
+        )
+        pre_transport_block_reasons.extend(
+            list(plan_result.get("pre_transport_block_reasons") or [])
+        )
+        cleanup_failures = int(plan_result.get("cleanup_failures") or cleanup_failures)
+
     # V1.6.2-R1: propagate ledger id/hash + step id sets into Finalizer observations.
     # Live ProcessStepLedger remains SSOT on observations; do not drop step lists.
     from .process_step_execution import attach_ledger_refs_to_observations as _attach_ledger
@@ -561,6 +599,27 @@ def execute_one_experiment(
         ):
             if plan_result.get(_k) is not None:
                 observations[_k] = plan_result[_k]
+
+    # AFTER runs only after all business transport and before cleanup can restore state.
+    if not database_before_blocked:
+        database_after = execute_database_observer_phase(
+            exp,
+            phase="AFTER",
+            root=root,
+            project=project,
+            runtime_contract=runtime_contract,
+            runtime_bindings=runtime_bindings,
+            observations=observations,
+            steps_out=steps_out,
+            campaign_id=resolved_campaign_id,
+            execution_id=resolved_execution_id,
+        )
+        if _text(database_after.get("status")) == "INDETERMINATE":
+            pre_transport_block_reasons.append(
+                _text(database_after.get("reason_code"))
+                or "DATABASE_OBSERVER_AFTER_PHASE_INCOMPLETE"
+            )
+            observations["database_observer_after_phase_incomplete"] = True
 
     _exec_logger.info(
         f"Experiment started: {eid} obligation={oid} campaign={resolved_campaign_id}",
