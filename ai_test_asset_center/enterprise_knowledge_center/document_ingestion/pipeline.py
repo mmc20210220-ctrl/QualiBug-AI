@@ -36,7 +36,25 @@ def _match_from_plan(row: dict[str, Any]) -> AdapterMatch:
             if str(value).strip()
         ),
         mode=text(row.get("mode")),
+        runtime_ready=row.get("runtime_ready") is not False,
+        runtime_reason=text(row.get("runtime_reason")),
     )
+
+
+def _runtime_unavailable_error(
+    row: dict[str, Any],
+    *,
+    primary: bool,
+    code: str = "DOCUMENT_ADAPTER_RUNTIME_DEPENDENCY_UNAVAILABLE",
+) -> dict[str, Any]:
+    return {
+        "adapter_name": row.get("adapter_name"),
+        "code": code,
+        "detail": text(row.get("runtime_reason")) or "adapter runtime dependency is unavailable",
+        "primary": bool(primary),
+        "mode": row.get("mode"),
+        "runtime_ready": False,
+    }
 
 
 def _execute_adapter(
@@ -131,7 +149,7 @@ def _apply_capability_gaps(
                 "reason_code": "DOCUMENT_ADAPTER_CAPABILITY_GAP",
                 "missing_capability": capability,
                 "count": 1,
-                "status": "NO_SELECTED_ADAPTER_PROVIDES_REQUIRED_CAPABILITY",
+                "status": "NO_EXECUTED_ADAPTER_PROVIDES_REQUIRED_CAPABILITY",
                 "severity": "P0" if critical else "P1",
                 "blocks_formal_understanding": critical,
                 "included_in_plain_text_authority": False,
@@ -170,6 +188,16 @@ def _primary_execution(
     return executions[0] if executions else None
 
 
+def _executed_capabilities(executions: list[dict[str, Any]]) -> list[str]:
+    return unique_text(
+        capability
+        for execution in executions
+        for capability in (
+            (execution.get("adapter_receipt") or {}).get("capabilities") or []
+        )
+    )
+
+
 def build_document_structure_ir(
     data: bytes,
     *,
@@ -199,6 +227,10 @@ def build_document_structure_ir(
     selected_names = {text(row.get("adapter_name")) for row in selected_rows}
 
     for index, row in enumerate(selected_rows):
+        primary = index == 0 and text(row.get("mode")) != MODE_FALLBACK
+        if row.get("runtime_ready") is False:
+            errors.append(_runtime_unavailable_error(row, primary=primary))
+            continue
         try:
             executions.append(_execute_adapter(source, resolved_registry, row))
         except Exception as exc:
@@ -207,7 +239,7 @@ def build_document_structure_ir(
                     "adapter_name": row.get("adapter_name"),
                     "code": "DOCUMENT_ADAPTER_EXECUTION_FAILED",
                     "detail": f"{type(exc).__name__}: {exc}"[:500],
-                    "primary": index == 0 and text(row.get("mode")) != MODE_FALLBACK,
+                    "primary": primary,
                     "mode": row.get("mode"),
                 }
             )
@@ -216,6 +248,15 @@ def build_document_structure_ir(
     # The failed primary receipt remains a formal gap and is never masked by fallback.
     if not executions:
         for row in _fallback_rows(source, resolved_registry, selected_names):
+            if row.get("runtime_ready") is False:
+                errors.append(
+                    _runtime_unavailable_error(
+                        row,
+                        primary=True,
+                        code="DOCUMENT_FALLBACK_RUNTIME_DEPENDENCY_UNAVAILABLE",
+                    )
+                )
+                continue
             try:
                 execution = _execute_adapter(source, resolved_registry, row)
                 executions.append(execution)
@@ -244,6 +285,7 @@ def build_document_structure_ir(
         "provided_capabilities": [],
         "missing_capabilities": [],
         "selected_adapters": [],
+        "runtime_blockers": [],
     }
     primary = _primary_execution(executions)
     if primary is not None:
@@ -270,6 +312,15 @@ def build_document_structure_ir(
         for row in deferred_plan.get("selected_adapters") or []:
             if not isinstance(row, dict):
                 continue
+            if row.get("runtime_ready") is False:
+                errors.append(
+                    _runtime_unavailable_error(
+                        row,
+                        primary=False,
+                        code="DOCUMENT_SUPPLEMENTAL_RUNTIME_DEPENDENCY_UNAVAILABLE",
+                    )
+                )
+                continue
             try:
                 executions.append(
                     _execute_supplemental_adapter(
@@ -286,16 +337,14 @@ def build_document_structure_ir(
                         "adapter_name": row.get("adapter_name"),
                         "code": "DOCUMENT_SUPPLEMENTAL_ADAPTER_EXECUTION_FAILED",
                         "detail": f"{type(exc).__name__}: {exc}"[:500],
-                        "primary": True,
+                        "primary": False,
                         "mode": row.get("mode"),
                     }
                 )
 
-    provided = unique_text(
-        [
-            *(parsing_plan.get("provided_capabilities") or []),
-            *(deferred_plan.get("provided_capabilities") or []),
-        ]
+    provided = _executed_capabilities(executions)
+    parsing_plan["planned_capabilities"] = list(
+        parsing_plan.get("provided_capabilities") or []
     )
     parsing_plan["provided_capabilities"] = provided
     parsing_plan["missing_capabilities"] = sorted(
@@ -305,6 +354,10 @@ def build_document_structure_ir(
     parsing_plan["deferred_selected_adapters"] = list(
         deferred_plan.get("selected_adapters") or []
     )
+    parsing_plan["execution_error_count"] = len(errors)
+    parsing_plan["executed_adapter_names"] = [
+        text(row.get("adapter_name")) for row in executions if text(row.get("adapter_name"))
+    ]
 
     merged = merge_document_irs(
         source,
@@ -316,7 +369,7 @@ def build_document_structure_ir(
     # inside a successfully recovered table region.
     merged = apply_visual_table_projection_authority(merged)
     merged = _apply_capability_gaps(merged, parsing_plan)
-    # Final source evidence closure is mandatory for every format.  It attaches the
+    # Final source evidence closure is mandatory for every format. It attaches the
     # immutable source fingerprint to every formal block and blocks orphan plain text.
     merged = apply_document_evidence_closure(merged, source)
     evidence_receipt = dict(merged.get("evidence_closure_receipt") or {})
@@ -333,7 +386,11 @@ def build_document_structure_ir(
         ),
         "executed_adapter_count": len(executions),
         "execution_error_count": len(errors),
+        "runtime_blocker_count": len(parsing_plan.get("runtime_blockers") or [])
+        + len(deferred_plan.get("runtime_blockers") or []),
         "runtime_fallback_used": bool(parsing_plan.get("runtime_fallback_adapter")),
+        "planned_capability_count": len(parsing_plan.get("planned_capabilities") or []),
+        "executed_capability_count": len(provided),
         "missing_capability_count": len(
             parsing_plan.get("missing_capabilities") or []
         ),
