@@ -134,6 +134,9 @@ def test_exact_field_id_projects_database_delta() -> None:
         "approved_database_phase_aggregate"
     }
     assert projected["compile_receipt"]["database_numeric_assertion_fingerprint"]
+    assert projected["field_oracle_runtime_contract"]["assertion_kind"] == (
+        DATABASE_NUMERIC_DELTA_ASSERTION_KIND
+    )
 
 
 def test_same_contract_unchanged_sum_projects_conservation() -> None:
@@ -236,6 +239,87 @@ def test_explicit_field_id_never_downgrades_to_matching_name() -> None:
     gap = projected["database_numeric_projection_gaps"][0]
     assert gap["reason_code"] == "DATABASE_NUMERIC_EXACT_FIELD_BINDING_MISSING"
     assert gap["explicit_field_ids"] == ["api-field:Account.ledger_balance"]
+
+
+def test_identifier_shaped_string_never_downgrades_to_tail_name() -> None:
+    experiment = _experiment(
+        {
+            "assertion_id": "assert:wrong-string-id",
+            "kind": "conservation",
+            "equation": {
+                "operator": "unchanged_sum",
+                "terms": ["api-field:Other.balance"],
+            },
+        }
+    )
+
+    result = project_database_numeric_assertions(_pack(experiment))
+
+    projected = result["experiments"][0]
+    assert projected["assertions"][0]["kind"] == "conservation"
+    gap = projected["database_numeric_projection_gaps"][0]
+    assert gap["reason_code"] == "DATABASE_NUMERIC_EXACT_FIELD_BINDING_MISSING"
+    assert gap["explicit_field_ids"] == ["api-field:Other.balance"]
+    assert gap["explicit_field_names"] == []
+
+
+def test_duplicate_conservation_term_is_not_silently_double_counted() -> None:
+    experiment = _experiment(
+        {
+            "assertion_id": "assert:duplicate",
+            "kind": "conservation",
+            "equation": {
+                "operator": "unchanged_sum",
+                "terms": [
+                    {"field_id": "api-field:Account.balance"},
+                    {"field_id": "api-field:Account.balance"},
+                ],
+            },
+        }
+    )
+
+    result = project_database_numeric_assertions(_pack(experiment))
+
+    projected = result["experiments"][0]
+    assert projected["assertions"][0]["kind"] == "conservation"
+    gap = projected["database_numeric_projection_gaps"][0]
+    assert gap["reason_code"] == "DATABASE_NUMERIC_DUPLICATE_FIELD_TERM"
+    assert gap["automatic_deduplication_allowed"] is False
+
+
+def test_unresolved_numeric_rule_without_http_fallback_is_blocked() -> None:
+    experiment = _experiment(
+        {
+            "assertion_id": "assert:unresolved",
+            "kind": "field_delta",
+            "fields": [
+                {
+                    "field_id": "api-field:Account.missing",
+                    "expected_delta": -10,
+                }
+            ],
+        }
+    )
+    # This is the state-projection mixed-assertion edge: another exact DB rule may
+    # have removed legacy HTTP observers before this unresolved numeric rule is seen.
+    experiment["observers"] = [
+        {
+            "observer_id": "approved_database_phase_aggregate",
+            "adapter": "db_sql",
+        }
+    ]
+
+    result = project_database_numeric_assertions(_pack(experiment))
+
+    assert result["experiments"] == []
+    assert result["blocked_count"] == 1
+    blocked = result["blocked_experiments"][0]
+    assert blocked["compile_receipt"]["reason_code"] == (
+        "BLOCKED_DATABASE_NUMERIC_HTTP_FALLBACK_OBSERVER_MISSING"
+    )
+    assert blocked["compile_receipt"]["database_numeric_oracle_detail"][
+        "automatic_observer_recreation_allowed"
+    ] is False
 
 
 def test_two_exact_bindings_block_without_automatic_winner() -> None:
