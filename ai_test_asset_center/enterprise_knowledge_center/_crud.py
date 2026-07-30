@@ -23,6 +23,11 @@ from .source_ingestion import (
     build_document_ir_retrieval_chunks,
     parse_enterprise_source,
 )
+from ..enterprise_source_registry import register_source_asset
+from ..enterprise_source_registry_lifecycle import (
+    deactivate_source_asset,
+    rollback_source_asset_activation,
+)
 
 __all__ = [
     "_logical_key",
@@ -108,7 +113,11 @@ def _logical_key(name: str, source_type: str) -> str:
     return f"{source_type}:{_safe_slug(Path(name).stem, 72).lower()}"
 
 
-def _parse_summary(parsed: dict[str, Any], chunk_receipt: dict[str, Any]) -> dict[str, Any]:
+def _parse_summary(
+    parsed: dict[str, Any],
+    chunk_receipt: dict[str, Any],
+    runtime_manifest: dict[str, Any],
+) -> dict[str, Any]:
     receipt = dict(parsed.get("parser_receipt") or {})
     evidence = dict(receipt.get("evidence_closure_receipt") or {})
     projection = dict(parsed.get("semantic_projection_receipt") or {})
@@ -135,6 +144,7 @@ def _parse_summary(parsed: dict[str, Any], chunk_receipt: dict[str, Any]) -> dic
         "errors": list(parsed.get("parse_errors") or []),
         "receipt": receipt,
         "chunk_index": dict(chunk_receipt or {}),
+        "runtime_source_manifest": dict(runtime_manifest or {}),
     }
 
 
@@ -168,6 +178,78 @@ def _remove_record_chunk_index(root: Path, record: dict[str, Any]) -> list[str]:
     return removed
 
 
+def _runtime_asset_id(logical_key: str) -> str:
+    return "knowledge_" + _short_hash({"logical_key": logical_key}, 24)
+
+
+def _register_runtime_source(
+    *,
+    project: str,
+    root: Path,
+    runtime_asset_id: str,
+    filename: str,
+    source_type: str,
+    source_id: str,
+    content_hash: str,
+    version: int,
+    external_ref: str,
+    parsed: dict[str, Any],
+    actor: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    projection = str(parsed.get("text") or "")
+    receipt = dict(parsed.get("parser_receipt") or {})
+    evidence = dict(receipt.get("evidence_closure_receipt") or {})
+    try:
+        manifest = register_source_asset(
+            project,
+            runtime_asset_id,
+            projection,
+            source_type=source_type,
+            root=root,
+            actor=actor,
+            origin="enterprise_knowledge_center_document_ir",
+            filename=filename,
+            external_ref=external_ref,
+            metadata={
+                "knowledge_source_id": source_id,
+                "knowledge_source_version": version,
+                "original_content_hash": content_hash,
+                "document_ir_format": str(parsed.get("document_ir", {}).get("format") or ""),
+                "document_ir_status": str(parsed.get("document_ir_status") or "UNKNOWN"),
+                "parser_receipt_id": str(receipt.get("receipt_id") or ""),
+                "evidence_exact_address_rate": evidence.get("exact_address_rate"),
+                "projection_schema": str(
+                    (parsed.get("semantic_projection_receipt") or {}).get("schema") or ""
+                ),
+            },
+        )
+        return {
+            **manifest,
+            "status": "REGISTERED",
+            "runtime_asset_id": runtime_asset_id,
+            "original_content_hash": content_hash,
+            "knowledge_source_id": source_id,
+        }, None
+    except Exception as exc:
+        error = {
+            "stage": "runtime_source_registry",
+            "code": "SOURCE_RUNTIME_REGISTRATION_FAILED",
+            "identity": source_id,
+            "retryability": "after_source_registry_or_projection_fix",
+            "operator_action": "inspect the canonical enterprise source registry",
+            "detail": f"{type(exc).__name__}: {exc}"[:500],
+            "severity": "P0",
+            "blocks_formal_understanding": True,
+        }
+        return {
+            "status": "FAILED",
+            "runtime_asset_id": runtime_asset_id,
+            "original_content_hash": content_hash,
+            "knowledge_source_id": source_id,
+            "error": error["detail"],
+        }, error
+
+
 def _register_chunks(
     *,
     project: str,
@@ -176,6 +258,7 @@ def _register_chunks(
     content_hash: str,
     version: int,
     parsed: dict[str, Any],
+    runtime_manifest: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     chunks, receipt = build_document_ir_retrieval_chunks(
         parsed,
@@ -183,6 +266,13 @@ def _register_chunks(
         source_hash=content_hash,
         source_version=version,
     )
+    runtime_source_id = str(runtime_manifest.get("source_id") or "")
+    runtime_source_hash = str(runtime_manifest.get("source_hash") or "")
+    for chunk in chunks:
+        chunk["runtime_source_id"] = runtime_source_id
+        chunk["runtime_source_hash"] = runtime_source_hash
+    receipt["runtime_source_id"] = runtime_source_id
+    receipt["runtime_source_hash"] = runtime_source_hash
     if not chunks:
         warning = {
             "stage": "retrieval_index",
@@ -249,6 +339,8 @@ def ingest_enterprise_knowledge_documents(
             errors.append({"index": index, "error": "document envelope must be object"})
             continue
         stored: Path | None = None
+        runtime_manifest: dict[str, Any] = {}
+        previous_runtime_manifest: dict[str, Any] = {}
         try:
             file_path = Path(str(doc.get("file_path"))) if doc.get("file_path") else None
             inline_text = str(doc.get("text")) if doc.get("text") is not None else None
@@ -284,13 +376,16 @@ def ingest_enterprise_knowledge_documents(
                 if row.get("logical_key") == logical_key
             ]
             version = max(versions, default=0) + 1
-            source_id = "src_" + _short_hash(
-                {
-                    "project": project,
-                    "hash": content_hash,
-                    "logical_key": logical_key,
-                    "version": version,
-                }
+            source_id = (
+                "src_"
+                + _short_hash(
+                    {
+                        "project": project,
+                        "hash": content_hash,
+                        "logical_key": logical_key,
+                        "version": version,
+                    }
+                )
             )
             storage_name = f"{source_id}_v{version}_{_safe_slug(filename)}"
             stored = paths["source_dir"] / storage_name
@@ -316,17 +411,61 @@ def ingest_enterprise_knowledge_documents(
 
             formal_status = str(parsed.get("document_ir_status") or "UNKNOWN")
             parse_failed = str(parsed.get("parse_status") or "") == "failed"
+            previous_active = next(
+                (row for row in active if row.get("logical_key") == logical_key),
+                None,
+            )
+            previous_runtime_manifest = dict(
+                (previous_active or {}).get("runtime_source_manifest") or {}
+            )
+            runtime_asset_id = _runtime_asset_id(logical_key)
+            runtime_manifest: dict[str, Any] = {
+                "status": "NOT_REGISTERED_PARSE_FAILED" if parse_failed else "PENDING",
+                "runtime_asset_id": runtime_asset_id,
+                "original_content_hash": content_hash,
+                "knowledge_source_id": source_id,
+            }
+            runtime_error: dict[str, Any] | None = None
+            if not parse_failed:
+                runtime_manifest, runtime_error = _register_runtime_source(
+                    project=project,
+                    root=root,
+                    runtime_asset_id=runtime_asset_id,
+                    filename=filename,
+                    source_type=source_type,
+                    source_id=source_id,
+                    content_hash=content_hash,
+                    version=version,
+                    external_ref=str(doc.get("external_ref") or "")[:500],
+                    parsed=parsed,
+                    actor=clean_actor,
+                )
+                if runtime_error:
+                    parsed.setdefault("parse_errors", []).append(runtime_error)
+                    parser_receipt = dict(parsed.get("parser_receipt") or {})
+                    parser_receipt["errors"] = list(parsed.get("parse_errors") or [])
+                    parser_receipt["parser_status"] = "failed"
+                    parser_receipt["runtime_source_manifest"] = runtime_manifest
+                    parsed["parser_receipt"] = parser_receipt
+                else:
+                    parser_receipt = dict(parsed.get("parser_receipt") or {})
+                    parser_receipt["runtime_source_manifest"] = runtime_manifest
+                    parsed["parser_receipt"] = parser_receipt
+
+            activation_failed = parse_failed or runtime_error is not None
             chunk_receipt: dict[str, Any] = {
                 "schema": "qualibug.document-ir-chunk-index-receipt.v1",
                 "source_id": source_id,
                 "source_hash": content_hash,
                 "chunk_count": 0,
-                "status": "NOT_REGISTERED_PARSE_FAILED" if parse_failed else "PENDING",
+                "status": "NOT_REGISTERED_SOURCE_INACTIVE" if activation_failed else "PENDING",
                 "raw_binary_utf8_decode_used": False,
                 "silent_failure_allowed": False,
+                "runtime_source_id": str(runtime_manifest.get("source_id") or ""),
+                "runtime_source_hash": str(runtime_manifest.get("source_hash") or ""),
             }
             chunk_warning: dict[str, Any] | None = None
-            if not parse_failed:
+            if not activation_failed:
                 chunk_receipt, chunk_warning = _register_chunks(
                     project=project,
                     root=root,
@@ -334,6 +473,7 @@ def ingest_enterprise_knowledge_documents(
                     content_hash=content_hash,
                     version=version,
                     parsed=parsed,
+                    runtime_manifest=runtime_manifest,
                 )
                 if chunk_warning:
                     warnings.append({"index": index, "filename": filename, **chunk_warning})
@@ -343,7 +483,7 @@ def ingest_enterprise_knowledge_documents(
                     parser_receipt["parser_status"] = "degraded"
                     parsed["parser_receipt"] = parser_receipt
 
-            status = "failed" if parse_failed else "active"
+            status = "failed" if activation_failed else "active"
             record = {
                 "source_id": source_id,
                 "logical_key": logical_key,
@@ -361,12 +501,16 @@ def ingest_enterprise_knowledge_documents(
                 "stored_path": str(stored.relative_to(root)).replace("\\", "/"),
                 "created_at_utc": _now(),
                 "created_by": clean_actor,
-                "parse": _parse_summary(parsed, chunk_receipt),
+                "runtime_asset_id": runtime_asset_id,
+                "runtime_source_manifest": runtime_manifest,
+                "parse": _parse_summary(parsed, chunk_receipt, runtime_manifest),
             }
 
             superseded: list[dict[str, Any]] = []
             if status == "active":
-                superseded = [row for row in active if row.get("logical_key") == logical_key]
+                superseded = [
+                    row for row in active if row.get("logical_key") == logical_key
+                ]
                 for previous in superseded:
                     previous["status"] = "superseded"
                     previous["superseded_at_utc"] = _now()
@@ -392,9 +536,17 @@ def ingest_enterprise_knowledge_documents(
                         "index": index,
                         "filename": filename,
                         "source_id": source_id,
-                        "code": "SOURCE_FORMAL_PARSE_BLOCKED",
+                        "code": (
+                            "SOURCE_RUNTIME_REGISTRATION_FAILED"
+                            if runtime_error
+                            else "SOURCE_FORMAL_PARSE_BLOCKED"
+                        ),
                         "formal_status": formal_status,
-                        "error": error_detail[:500],
+                        "error": (
+                            str(runtime_error.get("detail") or "")[:500]
+                            if runtime_error
+                            else error_detail[:500]
+                        ),
                     }
                 )
 
@@ -403,6 +555,23 @@ def ingest_enterprise_knowledge_documents(
             for previous in superseded:
                 _remove_record_chunk_index(root, previous)
         except Exception as exc:
+            if runtime_manifest.get("status") == "REGISTERED":
+                try:
+                    rollback_source_asset_activation(
+                        project,
+                        str(runtime_manifest.get("source_id") or ""),
+                        root=root,
+                        actor=clean_actor,
+                        restore_source_hash=str(
+                            previous_runtime_manifest.get("source_hash") or ""
+                        ),
+                        restore_version_id=str(
+                            previous_runtime_manifest.get("source_version_id") or ""
+                        ),
+                        reason="knowledge_ingest_transaction_rolled_back",
+                    )
+                except Exception:
+                    pass
             if stored is not None:
                 try:
                     if stored.exists():
@@ -488,7 +657,11 @@ def list_enterprise_knowledge_sources(
                 [row for row in registry["sources"] if row.get("status") == "active"]
             ),
             "superseded_source_count": len(
-                [row for row in registry["sources"] if row.get("status") == "superseded"]
+                [
+                    row
+                    for row in registry["sources"]
+                    if row.get("status") == "superseded"
+                ]
             ),
             "failed_source_count": len(
                 [row for row in registry["sources"] if row.get("status") == "failed"]
@@ -600,10 +773,29 @@ def delete_enterprise_knowledge_source(
         try:
             if candidate.exists() and candidate.is_file():
                 candidate.unlink()
-                removed_paths.append(str(candidate.relative_to(root)).replace("\\", "/"))
+                removed_paths.append(
+                    str(candidate.relative_to(root)).replace("\\", "/")
+                )
         except Exception:
             continue
     removed_paths.extend(_remove_record_chunk_index(root, record))
+    runtime_asset_id = str(record.get("runtime_asset_id") or "") or _runtime_asset_id(
+        str(record.get("logical_key") or "")
+    )
+    try:
+        runtime_deactivation = deactivate_source_asset(
+            project,
+            runtime_asset_id,
+            root=root,
+            actor=clean_actor,
+            reason="knowledge_source_deleted",
+        )
+    except Exception as exc:
+        runtime_deactivation = {
+            "source_id": runtime_asset_id,
+            "deactivated": False,
+            "reason": f"{type(exc).__name__}: {exc}"[:500],
+        }
     registry["sources"].pop(record_index)
     registry["audit_events"].append(
         {
@@ -623,6 +815,7 @@ def delete_enterprise_knowledge_source(
         "original_name": original_name,
         "purged_bytes": bool(removed_paths),
         "removed_paths": removed_paths,
+        "runtime_source_deactivation": runtime_deactivation,
         "rebuild_recommended": True,
     }
 
