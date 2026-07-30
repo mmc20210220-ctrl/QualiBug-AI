@@ -13,9 +13,5 @@
       "blob_sha": "33a386809c6f9d75107e864aefa3ae32e5b98560"
     }
   ],
-  "excluded_from_product_phase": [
-    "_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json",
-    "benchmark_evaluator/enterprise_understanding/fixtures/ticketsla_d/ground_truth.json"
-  ],
   "product_phase_may_load_ground_truth": false
 }
