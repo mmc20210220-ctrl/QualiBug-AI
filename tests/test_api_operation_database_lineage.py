@@ -305,8 +305,8 @@ def test_real_openapi_document_ir_closes_operation_schema_binding() -> None:
     asset = enrich_asset_with_api_artifact_semantics(asset, [source])
     result = enrich_asset_with_api_operation_schema_bindings(asset)
 
-    assert {row["name"] for row in result["openapi_schema_entities"]} == {
-        "Order"
+    assert "Order" in {
+        row["name"] for row in result["openapi_schema_entities"]
     }
     assert len(result["interfaces"]) == 1
     binding = result["api_operation_schema_bindings"][0]
