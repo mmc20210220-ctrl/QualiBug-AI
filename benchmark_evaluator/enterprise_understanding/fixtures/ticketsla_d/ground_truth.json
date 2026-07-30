@@ -1,0 +1,847 @@
+{
+  "schema": "qualibug.enterprise-understanding-ground-truth.v1",
+  "project_id": "ticketsla_d",
+  "annotation_version": "1.0.0",
+  "scope_complete": false,
+  "scope_statement": "第一批人工来源化标注，仅覆盖显式对象、角色、核心操作、对象关系、Ticket状态转换以及部分高价值状态、权限、租户和校验规则；不宣称覆盖全部跨对象效果、复杂流程、冲突和隐含规则。",
+  "source_snapshot": [
+    {
+      "path": "projects/ticketsla_d/input/BUSINESS_RULES.md",
+      "blob_sha": "b31f5b1a5da7c16a64767996a836839b8c262745",
+      "authority": "public_enterprise_business_source"
+    },
+    {
+      "path": "projects/ticketsla_d/input/openapi.yaml",
+      "blob_sha": "33a386809c6f9d75107e864aefa3ae32e5b98560",
+      "authority": "public_interface_contract"
+    },
+    {
+      "path": "_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json",
+      "blob_sha": "3183ddce8210b9b6feb769c030c3685881382c36",
+      "authority": "evaluator_only_bug_dependency_source"
+    }
+  ],
+  "minimum_profile": {
+    "business_objects": 10,
+    "actors": 4,
+    "operations": 12,
+    "object_relations": 7,
+    "state_transitions": 6,
+    "business_behaviors": 24,
+    "bug_dependencies": 15
+  },
+  "business_objects": [
+    {
+      "ground_truth_id": "gt:ticketsla:object:ticket",
+      "canonical_name": "Ticket",
+      "aliases": ["工单"],
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L13"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:object:sla",
+      "canonical_name": "SLA",
+      "aliases": ["服务等级协议"],
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L14"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:object:assignment",
+      "canonical_name": "Assignment",
+      "aliases": ["工单分配记录", "分配记录"],
+      "criticality": "P1",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L15"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:object:escalation",
+      "canonical_name": "Escalation",
+      "aliases": ["工单升级记录", "升级记录"],
+      "criticality": "P1",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L16"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:object:comment",
+      "canonical_name": "Comment",
+      "aliases": ["工单评论", "评论"],
+      "criticality": "P1",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L17"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:object:attachment",
+      "canonical_name": "Attachment",
+      "aliases": ["工单附件", "附件"],
+      "criticality": "P1",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L18"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:object:customer",
+      "canonical_name": "Customer",
+      "aliases": ["客户"],
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L19"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:object:agent",
+      "canonical_name": "Agent",
+      "aliases": ["客服代理", "代理"],
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L20"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:object:team",
+      "canonical_name": "Team",
+      "aliases": ["客服团队", "团队"],
+      "criticality": "P1",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L21"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:object:notification",
+      "canonical_name": "Notification",
+      "aliases": ["通知"],
+      "criticality": "P2",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L22"],
+      "annotation_status": "CONFIRMED"
+    }
+  ],
+  "actors": [
+    {
+      "ground_truth_id": "gt:ticketsla:actor:customer",
+      "canonical_name": "CUSTOMER",
+      "aliases": ["客户"],
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L28"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:actor:agent",
+      "canonical_name": "AGENT",
+      "aliases": ["客服代理", "代理"],
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L29"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:actor:supervisor",
+      "canonical_name": "SUPERVISOR",
+      "aliases": ["主管"],
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L30"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:actor:admin",
+      "canonical_name": "ADMIN",
+      "aliases": ["管理员"],
+      "criticality": "P1",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L31"],
+      "annotation_status": "CONFIRMED"
+    }
+  ],
+  "operations": [
+    {
+      "ground_truth_id": "gt:ticketsla:operation:list-tickets",
+      "canonical_name": "listTickets",
+      "aliases": ["获取工单列表", "list_tickets"],
+      "object_refs": ["Ticket"],
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/openapi.yaml#L215-L230"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:operation:get-ticket",
+      "canonical_name": "getTicket",
+      "aliases": ["获取工单详情", "get_ticket"],
+      "object_refs": ["Ticket"],
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/openapi.yaml#L260-L280"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:operation:create-ticket",
+      "canonical_name": "createTicket",
+      "aliases": ["创建工单", "create_ticket"],
+      "object_refs": ["Ticket"],
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/openapi.yaml#L231-L260"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:operation:update-ticket",
+      "canonical_name": "updateTicket",
+      "aliases": ["更新工单", "update_ticket"],
+      "object_refs": ["Ticket"],
+      "criticality": "P1",
+      "source_refs": ["projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/openapi.yaml#L282-L319"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:operation:assign-ticket",
+      "canonical_name": "assignTicket",
+      "aliases": ["分配工单", "assign_ticket"],
+      "object_refs": ["Ticket"],
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/openapi.yaml#L321-L357"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:operation:start-ticket",
+      "canonical_name": "startTicket",
+      "aliases": ["开始处理工单", "start_ticket"],
+      "object_refs": ["Ticket"],
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/openapi.yaml#L358-L381"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:operation:resolve-ticket",
+      "canonical_name": "resolveTicket",
+      "aliases": ["解决工单", "resolve_ticket"],
+      "object_refs": ["Ticket"],
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/openapi.yaml#L382-L417"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:operation:close-ticket",
+      "canonical_name": "closeTicket",
+      "aliases": ["关闭工单", "close_ticket"],
+      "object_refs": ["Ticket"],
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/openapi.yaml#L418-L444"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:operation:reopen-ticket",
+      "canonical_name": "reopenTicket",
+      "aliases": ["重开工单", "reopen_ticket"],
+      "object_refs": ["Ticket"],
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/openapi.yaml#L445-L479"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:operation:escalate-ticket",
+      "canonical_name": "escalateTicket",
+      "aliases": ["升级工单", "escalate_ticket"],
+      "object_refs": ["Ticket"],
+      "criticality": "P1",
+      "source_refs": ["projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/openapi.yaml#L481-L514"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:operation:add-comment",
+      "canonical_name": "addComment",
+      "aliases": ["添加评论", "add_comment"],
+      "object_refs": ["Comment", "Ticket"],
+      "criticality": "P1",
+      "source_refs": ["projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/openapi.yaml#L563-L595"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:operation:add-attachment",
+      "canonical_name": "addAttachment",
+      "aliases": ["上传附件", "add_attachment"],
+      "object_refs": ["Attachment", "Ticket"],
+      "criticality": "P1",
+      "source_refs": ["projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/openapi.yaml#L610-L641"],
+      "annotation_status": "CONFIRMED"
+    }
+  ],
+  "object_relations": [
+    {
+      "ground_truth_id": "gt:ticketsla:relation:ticket-customer",
+      "from_object": "Ticket",
+      "to_object": "Customer",
+      "relation_type": "belongs_to",
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/openapi.yaml#L32-L35"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:relation:ticket-agent",
+      "from_object": "Ticket",
+      "to_object": "Agent",
+      "relation_type": "assigned_to",
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/openapi.yaml#L46-L48"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:relation:ticket-sla",
+      "from_object": "Ticket",
+      "to_object": "SLA",
+      "relation_type": "governed_by",
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/openapi.yaml#L44-L45"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:relation:comment-ticket",
+      "from_object": "Comment",
+      "to_object": "Ticket",
+      "relation_type": "on",
+      "criticality": "P1",
+      "source_refs": ["projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/openapi.yaml#L145-L151"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:relation:attachment-ticket",
+      "from_object": "Attachment",
+      "to_object": "Ticket",
+      "relation_type": "on",
+      "criticality": "P1",
+      "source_refs": ["projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/openapi.yaml#L165-L171"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:relation:escalation-ticket",
+      "from_object": "Escalation",
+      "to_object": "Ticket",
+      "relation_type": "for",
+      "criticality": "P1",
+      "source_refs": ["projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/openapi.yaml#L185-L191"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:relation:agent-team",
+      "from_object": "Agent",
+      "to_object": "Team",
+      "relation_type": "member_of",
+      "criticality": "P1",
+      "source_refs": ["projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/openapi.yaml#L97-L99"],
+      "annotation_status": "CONFIRMED"
+    }
+  ],
+  "lifecycles": [],
+  "state_transitions": [
+    {
+      "ground_truth_id": "gt:ticketsla:transition:open-assigned",
+      "object_ref": "Ticket",
+      "from_state": "OPEN",
+      "to_state": "ASSIGNED",
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L35-L46"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:transition:assigned-in-progress",
+      "object_ref": "Ticket",
+      "from_state": "ASSIGNED",
+      "to_state": "IN_PROGRESS",
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L35-L47"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:transition:in-progress-resolved",
+      "object_ref": "Ticket",
+      "from_state": "IN_PROGRESS",
+      "to_state": "RESOLVED",
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L35-L48"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:transition:resolved-closed",
+      "object_ref": "Ticket",
+      "from_state": "RESOLVED",
+      "to_state": "CLOSED",
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L35-L49"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:transition:resolved-open",
+      "object_ref": "Ticket",
+      "from_state": "RESOLVED",
+      "to_state": "OPEN",
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L38-L50"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:transition:closed-open",
+      "object_ref": "Ticket",
+      "from_state": "CLOSED",
+      "to_state": "OPEN",
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L38-L50"],
+      "annotation_status": "CONFIRMED"
+    }
+  ],
+  "business_rules": [],
+  "business_behaviors": [
+    {
+      "ground_truth_id": "gt:ticketsla:behavior:list-own-tickets",
+      "actor_refs": ["CUSTOMER"],
+      "operation": "listTickets",
+      "object_refs": ["Ticket"],
+      "preconditions": [{"field": "Ticket.customer_id", "operator": "EQUALS", "value": "current_customer_id"}],
+      "permission_decision": "ALLOW",
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md", "projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L79", "projects/ticketsla_d/input/openapi.yaml#L215-L223"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:behavior:list-tenant-tickets",
+      "operation": "listTickets",
+      "object_refs": ["Ticket"],
+      "preconditions": [{"field": "Ticket.tenant", "operator": "EQUALS", "value": "current_tenant"}],
+      "permission_decision": "ALLOW",
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md", "projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L88-L93", "projects/ticketsla_d/input/openapi.yaml#L215-L223"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:behavior:get-ticket-same-tenant",
+      "operation": "getTicket",
+      "object_refs": ["Ticket"],
+      "preconditions": [{"field": "Ticket.tenant", "operator": "EQUALS", "value": "current_tenant"}],
+      "permission_decision": "ALLOW",
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md", "projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L88", "projects/ticketsla_d/input/openapi.yaml#L260-L280"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:behavior:create-ticket-customer",
+      "actor_refs": ["CUSTOMER"],
+      "operation": "createTicket",
+      "object_refs": ["Ticket"],
+      "permission_decision": "ALLOW",
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md", "projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L68", "projects/ticketsla_d/input/openapi.yaml#L231-L260"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:behavior:create-ticket-priority-enum",
+      "operation": "createTicket",
+      "object_refs": ["Ticket"],
+      "preconditions": [{"field": "Ticket.priority", "operator": "IN", "value": "LOW|MEDIUM|HIGH|CRITICAL"}],
+      "criticality": "P1",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md", "projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L111", "projects/ticketsla_d/input/openapi.yaml#L231-L252"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:behavior:update-ticket-version",
+      "operation": "updateTicket",
+      "object_refs": ["Ticket"],
+      "preconditions": [{"field": "request.version", "operator": "EQUALS", "value": "Ticket.version"}],
+      "criticality": "P1",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md", "projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L122", "projects/ticketsla_d/input/openapi.yaml#L282-L319"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:behavior:assign-open-ticket",
+      "operation": "assignTicket",
+      "object_refs": ["Ticket"],
+      "preconditions": [{"field": "Ticket.status", "operator": "EQUALS", "value": "OPEN"}],
+      "permission_decision": "ALLOW",
+      "state_effects": [{"from_state": "OPEN", "to_state": "ASSIGNED"}],
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md", "projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L45", "projects/ticketsla_d/input/openapi.yaml#L321-L357"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:behavior:assign-supervisor",
+      "actor_refs": ["SUPERVISOR"],
+      "operation": "assignTicket",
+      "object_refs": ["Ticket"],
+      "permission_decision": "ALLOW",
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md", "projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L69", "projects/ticketsla_d/input/openapi.yaml#L321-L357"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:behavior:assign-same-tenant",
+      "operation": "assignTicket",
+      "object_refs": ["Ticket", "Agent"],
+      "preconditions": [{"field": "Agent.tenant", "operator": "EQUALS", "value": "Ticket.tenant"}],
+      "permission_decision": "ALLOW",
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md", "projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L89", "projects/ticketsla_d/input/openapi.yaml#L321-L357"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:behavior:assign-agent-capacity",
+      "operation": "assignTicket",
+      "object_refs": ["Ticket", "Agent"],
+      "preconditions": [{"field": "Agent.current_tickets", "operator": "LESS_THAN", "value": "Agent.max_tickets"}],
+      "permission_decision": "ALLOW",
+      "criticality": "P1",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md", "projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L115", "projects/ticketsla_d/input/openapi.yaml#L321-L357"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:behavior:start-assigned-ticket",
+      "operation": "startTicket",
+      "object_refs": ["Ticket"],
+      "preconditions": [{"field": "Ticket.status", "operator": "EQUALS", "value": "ASSIGNED"}],
+      "permission_decision": "ALLOW",
+      "state_effects": [{"from_state": "ASSIGNED", "to_state": "IN_PROGRESS"}],
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md", "projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L46", "projects/ticketsla_d/input/openapi.yaml#L358-L381"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:behavior:start-assigned-agent",
+      "actor_refs": ["AGENT"],
+      "operation": "startTicket",
+      "object_refs": ["Ticket"],
+      "preconditions": [{"field": "Ticket.assigned_agent", "operator": "EQUALS", "value": "current_actor_id"}],
+      "permission_decision": "ALLOW",
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md", "projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L70", "projects/ticketsla_d/input/openapi.yaml#L358-L381"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:behavior:resolve-in-progress-ticket",
+      "operation": "resolveTicket",
+      "object_refs": ["Ticket"],
+      "preconditions": [{"field": "Ticket.status", "operator": "EQUALS", "value": "IN_PROGRESS"}],
+      "permission_decision": "ALLOW",
+      "state_effects": [{"from_state": "IN_PROGRESS", "to_state": "RESOLVED"}],
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md", "projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L47", "projects/ticketsla_d/input/openapi.yaml#L382-L417"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:behavior:resolve-assigned-agent",
+      "actor_refs": ["AGENT"],
+      "operation": "resolveTicket",
+      "object_refs": ["Ticket"],
+      "preconditions": [{"field": "Ticket.assigned_agent", "operator": "EQUALS", "value": "current_actor_id"}],
+      "permission_decision": "ALLOW",
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md", "projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L71", "projects/ticketsla_d/input/openapi.yaml#L382-L417"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:behavior:close-resolved-ticket",
+      "operation": "closeTicket",
+      "object_refs": ["Ticket"],
+      "preconditions": [{"field": "Ticket.status", "operator": "EQUALS", "value": "RESOLVED"}],
+      "permission_decision": "ALLOW",
+      "state_effects": [{"from_state": "RESOLVED", "to_state": "CLOSED"}],
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md", "projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L48", "projects/ticketsla_d/input/openapi.yaml#L418-L444"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:behavior:close-own-ticket",
+      "actor_refs": ["CUSTOMER"],
+      "operation": "closeTicket",
+      "object_refs": ["Ticket"],
+      "preconditions": [{"field": "Ticket.customer_id", "operator": "EQUALS", "value": "current_customer_id"}],
+      "permission_decision": "ALLOW",
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md", "projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L80", "projects/ticketsla_d/input/openapi.yaml#L418-L444"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:behavior:reopen-resolved-ticket",
+      "actor_refs": ["CUSTOMER"],
+      "operation": "reopenTicket",
+      "object_refs": ["Ticket"],
+      "preconditions": [{"field": "Ticket.status", "operator": "EQUALS", "value": "RESOLVED"}],
+      "permission_decision": "ALLOW",
+      "state_effects": [{"from_state": "RESOLVED", "to_state": "OPEN"}],
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md", "projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L49-L50", "projects/ticketsla_d/input/openapi.yaml#L445-L479"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:behavior:reopen-closed-ticket",
+      "actor_refs": ["CUSTOMER"],
+      "operation": "reopenTicket",
+      "object_refs": ["Ticket"],
+      "preconditions": [{"field": "Ticket.status", "operator": "EQUALS", "value": "CLOSED"}],
+      "permission_decision": "ALLOW",
+      "state_effects": [{"from_state": "CLOSED", "to_state": "OPEN"}],
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md", "projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L49-L50", "projects/ticketsla_d/input/openapi.yaml#L445-L479"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:behavior:reopen-own-ticket",
+      "actor_refs": ["CUSTOMER"],
+      "operation": "reopenTicket",
+      "object_refs": ["Ticket"],
+      "preconditions": [{"field": "Ticket.customer_id", "operator": "EQUALS", "value": "current_customer_id"}],
+      "permission_decision": "ALLOW",
+      "criticality": "P0",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md", "projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L81", "projects/ticketsla_d/input/openapi.yaml#L445-L479"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:behavior:comment-not-closed",
+      "operation": "addComment",
+      "object_refs": ["Comment", "Ticket"],
+      "preconditions": [{"field": "Ticket.status", "operator": "NOT_EQUALS", "value": "CLOSED"}],
+      "permission_decision": "ALLOW",
+      "criticality": "P1",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md", "projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L50", "projects/ticketsla_d/input/openapi.yaml#L563-L595"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:behavior:comment-length",
+      "operation": "addComment",
+      "object_refs": ["Comment", "Ticket"],
+      "preconditions": [{"field": "Comment.content.length", "operator": "LESS_THAN_OR_EQUAL", "value": "5000"}],
+      "criticality": "P2",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md", "projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L112", "projects/ticketsla_d/input/openapi.yaml#L563-L595"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:behavior:attachment-size",
+      "operation": "addAttachment",
+      "object_refs": ["Attachment", "Ticket"],
+      "preconditions": [{"field": "Attachment.size", "operator": "LESS_THAN_OR_EQUAL", "value": "10485760"}],
+      "criticality": "P2",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md", "projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L113", "projects/ticketsla_d/input/openapi.yaml#L610-L641"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:behavior:escalate-not-resolved",
+      "actor_refs": ["SUPERVISOR"],
+      "operation": "escalateTicket",
+      "object_refs": ["Ticket"],
+      "preconditions": [{"field": "Ticket.status", "operator": "NOT_EQUALS", "value": "RESOLVED"}],
+      "permission_decision": "ALLOW",
+      "criticality": "P1",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md", "projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L51-L74", "projects/ticketsla_d/input/openapi.yaml#L481-L514"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:behavior:escalate-not-closed",
+      "actor_refs": ["SUPERVISOR"],
+      "operation": "escalateTicket",
+      "object_refs": ["Ticket"],
+      "preconditions": [{"field": "Ticket.status", "operator": "NOT_EQUALS", "value": "CLOSED"}],
+      "permission_decision": "ALLOW",
+      "criticality": "P1",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md", "projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L51-L74", "projects/ticketsla_d/input/openapi.yaml#L481-L514"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:behavior:reopen-reset-sla",
+      "operation": "reopenTicket",
+      "object_refs": ["Ticket", "SLA"],
+      "preconditions": [{"field": "SLA.deadline", "operator": "RECALCULATED_AFTER", "value": "reopenTicket"}],
+      "criticality": "P1",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md", "projects/ticketsla_d/input/openapi.yaml"],
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L61", "projects/ticketsla_d/input/openapi.yaml#L445-L479"],
+      "annotation_status": "CONFIRMED"
+    }
+  ],
+  "conflicts": [],
+  "expected_unknowns": [],
+  "bug_dependencies": [
+    {
+      "ground_truth_id": "gt:ticketsla:bug:001",
+      "bug_id": "TSLA-BUG-001",
+      "required_ground_truth_ids": ["gt:ticketsla:behavior:list-own-tickets", "gt:ticketsla:behavior:list-tenant-tickets"],
+      "criticality": "P0",
+      "source_refs": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json"],
+      "source_locators": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json#TSLA-BUG-001"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:bug:002",
+      "bug_id": "TSLA-BUG-002",
+      "required_ground_truth_ids": ["gt:ticketsla:behavior:get-ticket-same-tenant"],
+      "criticality": "P0",
+      "source_refs": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json"],
+      "source_locators": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json#TSLA-BUG-002"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:bug:003",
+      "bug_id": "TSLA-BUG-003",
+      "required_ground_truth_ids": ["gt:ticketsla:behavior:create-ticket-priority-enum"],
+      "criticality": "P1",
+      "source_refs": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json"],
+      "source_locators": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json#TSLA-BUG-003"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:bug:004",
+      "bug_id": "TSLA-BUG-004",
+      "required_ground_truth_ids": ["gt:ticketsla:behavior:assign-open-ticket"],
+      "criticality": "P0",
+      "source_refs": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json"],
+      "source_locators": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json#TSLA-BUG-004"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:bug:005",
+      "bug_id": "TSLA-BUG-005",
+      "required_ground_truth_ids": ["gt:ticketsla:behavior:assign-same-tenant"],
+      "criticality": "P0",
+      "source_refs": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json"],
+      "source_locators": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json#TSLA-BUG-005"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:bug:006",
+      "bug_id": "TSLA-BUG-006",
+      "required_ground_truth_ids": ["gt:ticketsla:behavior:assign-agent-capacity"],
+      "criticality": "P1",
+      "source_refs": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json"],
+      "source_locators": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json#TSLA-BUG-006"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:bug:008",
+      "bug_id": "TSLA-BUG-008",
+      "required_ground_truth_ids": ["gt:ticketsla:behavior:start-assigned-ticket", "gt:ticketsla:behavior:start-assigned-agent"],
+      "criticality": "P0",
+      "source_refs": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json"],
+      "source_locators": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json#TSLA-BUG-008"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:bug:009",
+      "bug_id": "TSLA-BUG-009",
+      "required_ground_truth_ids": ["gt:ticketsla:behavior:comment-not-closed"],
+      "criticality": "P1",
+      "source_refs": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json"],
+      "source_locators": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json#TSLA-BUG-009"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:bug:010",
+      "bug_id": "TSLA-BUG-010",
+      "required_ground_truth_ids": ["gt:ticketsla:behavior:comment-length"],
+      "criticality": "P2",
+      "source_refs": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json"],
+      "source_locators": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json#TSLA-BUG-010"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:bug:011",
+      "bug_id": "TSLA-BUG-011",
+      "required_ground_truth_ids": ["gt:ticketsla:behavior:attachment-size"],
+      "criticality": "P2",
+      "source_refs": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json"],
+      "source_locators": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json#TSLA-BUG-011"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:bug:012",
+      "bug_id": "TSLA-BUG-012",
+      "required_ground_truth_ids": ["gt:ticketsla:behavior:escalate-not-resolved", "gt:ticketsla:behavior:escalate-not-closed"],
+      "criticality": "P1",
+      "source_refs": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json"],
+      "source_locators": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json#TSLA-BUG-012"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:bug:014",
+      "bug_id": "TSLA-BUG-014",
+      "required_ground_truth_ids": ["gt:ticketsla:behavior:resolve-in-progress-ticket", "gt:ticketsla:behavior:resolve-assigned-agent"],
+      "criticality": "P0",
+      "source_refs": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json"],
+      "source_locators": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json#TSLA-BUG-014"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:bug:016",
+      "bug_id": "TSLA-BUG-016",
+      "required_ground_truth_ids": ["gt:ticketsla:behavior:close-resolved-ticket"],
+      "criticality": "P0",
+      "source_refs": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json"],
+      "source_locators": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json#TSLA-BUG-016"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:bug:017",
+      "bug_id": "TSLA-BUG-017",
+      "required_ground_truth_ids": ["gt:ticketsla:behavior:close-own-ticket"],
+      "criticality": "P0",
+      "source_refs": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json"],
+      "source_locators": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json#TSLA-BUG-017"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:bug:019",
+      "bug_id": "TSLA-BUG-019",
+      "required_ground_truth_ids": ["gt:ticketsla:behavior:reopen-resolved-ticket", "gt:ticketsla:behavior:reopen-closed-ticket"],
+      "criticality": "P1",
+      "source_refs": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json"],
+      "source_locators": ["_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json#TSLA-BUG-019"],
+      "annotation_status": "CONFIRMED"
+    }
+  ]
+}
