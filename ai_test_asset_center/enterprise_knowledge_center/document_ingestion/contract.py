@@ -1,8 +1,8 @@
 """Contracts for format-agnostic enterprise document ingestion.
 
-Adapters interpret source containers and emit source-preserving Document IR.  They
+Adapters interpret source containers and emit source-preserving Document IR. They
 must not create business facts, infer business flow from document order, or hide
-unsupported content.  Higher layers consume the same IR regardless of source format.
+unsupported content. Higher layers consume the same IR regardless of source format.
 """
 from __future__ import annotations
 
@@ -94,11 +94,20 @@ class DocumentSource:
 
 @dataclass(frozen=True)
 class AdapterMatch:
+    """A source-format match plus the adapter's current runtime readiness.
+
+    A format can be recognized while an external runtime dependency is unavailable.
+    Keeping these states separate prevents preflight from claiming READY merely because
+    a suffix matched an adapter whose converter/OCR engine cannot execute.
+    """
+
     adapter_name: str
     score: int
     reason: str
     capabilities: tuple[str, ...]
     mode: str
+    runtime_ready: bool = True
+    runtime_reason: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -107,6 +116,8 @@ class AdapterMatch:
             "reason": self.reason,
             "capabilities": list(self.capabilities),
             "mode": self.mode,
+            "runtime_ready": bool(self.runtime_ready),
+            "runtime_reason": self.runtime_reason,
         }
 
 
@@ -115,7 +126,7 @@ class SupplementalContext:
     """Evidence passed to a deferred supplemental adapter.
 
     Supplemental adapters may inspect structural gaps produced by the primary adapter,
-    but they still may not infer business meaning.  ``primary_document_ir`` is immutable
+    but they still may not infer business meaning. ``primary_document_ir`` is immutable
     by contract: supplemental output is merged later by the central merger.
     """
 
@@ -128,7 +139,7 @@ class DocumentAdapter:
     """Base adapter contract.
 
     Subclasses may inspect container bytes and source metadata, but extract() must
-    return Document IR only.  Business meaning belongs to the fact-ledger stage.
+    return Document IR only. Business meaning belongs to the fact-ledger stage.
     """
 
     name: ClassVar[str] = "document-adapter"
@@ -170,7 +181,9 @@ class DocumentAdapter:
             "standalone": bool(self.standalone),
             "match_score": int(match.score),
             "match_reason": match.reason,
-            "capabilities": unique_text(self.capabilities),
+            "capabilities": unique_text(match.capabilities),
+            "runtime_ready": bool(match.runtime_ready),
+            "runtime_reason": match.runtime_reason,
             "source_id": source.source_id,
             "filename": source.filename,
             "source_hash": source.content_hash,
