@@ -2,7 +2,7 @@
 
 This module is intentionally a transport/format bridge, not another document parser.
 Legacy Office, ODF and WPS containers are converted to OOXML with LibreOffice and then
-passed to the existing DOCX/XLSX/PPTX adapters.  The resulting IR is rebound to the
+passed to the existing DOCX/XLSX/PPTX adapters. The resulting IR is rebound to the
 immutable original source identity so conversion artifacts never become evidence roots.
 """
 from __future__ import annotations
@@ -32,6 +32,7 @@ from .contract import (
     MODE_PRIMARY,
     text,
 )
+from .page_rendering import LibreOfficeDocumentPageRenderer
 
 OFFICE_NORMALIZATION_RECEIPT_SCHEMA = "qualibug.office-container-normalization-receipt.v1"
 _MAX_NORMALIZED_BYTES = 100 * 1024 * 1024
@@ -40,6 +41,36 @@ _WORD_SUFFIXES = {".doc", ".dot", ".rtf", ".odt", ".wps", ".wpt"}
 _SPREADSHEET_SUFFIXES = {".xls", ".xlt", ".xlsb", ".ods", ".et", ".ett"}
 _PRESENTATION_SUFFIXES = {".ppt", ".pot", ".pps", ".odp", ".dps", ".dpt"}
 _COMPATIBLE_SUFFIXES = _WORD_SUFFIXES | _SPREADSHEET_SUFFIXES | _PRESENTATION_SUFFIXES
+
+_WORD_CAPABILITIES = frozenset(
+    {
+        CAP_TEXT_EXTRACTION,
+        CAP_HEADING_HIERARCHY,
+        CAP_LIST_HIERARCHY,
+        CAP_TABLE_STRUCTURE,
+        CAP_HEADER_FOOTER,
+        CAP_FONT_EVIDENCE,
+    }
+)
+_SPREADSHEET_CAPABILITIES = frozenset(
+    {
+        CAP_TEXT_EXTRACTION,
+        CAP_TABLE_STRUCTURE,
+        CAP_FORMULA_EXTRACTION,
+        CAP_COMMENT_EXTRACTION,
+        CAP_STYLE_SEMANTICS,
+    }
+)
+_PRESENTATION_CAPABILITIES = frozenset(
+    {
+        CAP_TEXT_EXTRACTION,
+        CAP_HEADING_HIERARCHY,
+        CAP_TABLE_STRUCTURE,
+        CAP_IMAGE_PRESENCE,
+        CAP_COMMENT_EXTRACTION,
+        CAP_STYLE_SEMANTICS,
+    }
+)
 
 
 def _stable_id(prefix: str, *parts: Any) -> str:
@@ -62,6 +93,26 @@ def _status_from_gaps(gaps: list[dict[str, Any]]) -> str:
     if any(bool(row.get("blocks_formal_understanding")) for row in gaps):
         return "BLOCKED"
     return "PARTIAL" if gaps else "COMPLETE"
+
+
+def _target_suffix(source_suffix: str) -> str:
+    if source_suffix in _WORD_SUFFIXES:
+        return ".docx"
+    if source_suffix in _SPREADSHEET_SUFFIXES:
+        return ".xlsx"
+    if source_suffix in _PRESENTATION_SUFFIXES:
+        return ".pptx"
+    return ""
+
+
+def _capabilities_for_target(target_suffix: str) -> frozenset[str]:
+    if target_suffix == ".docx":
+        return _WORD_CAPABILITIES
+    if target_suffix == ".xlsx":
+        return _SPREADSHEET_CAPABILITIES
+    if target_suffix == ".pptx":
+        return _PRESENTATION_CAPABILITIES
+    return frozenset()
 
 
 @dataclass(frozen=True)
@@ -180,14 +231,15 @@ class LibreOfficeContainerNormalizer:
             )
 
 
-def _target_suffix(source_suffix: str) -> str:
-    if source_suffix in _WORD_SUFFIXES:
-        return ".docx"
-    if source_suffix in _SPREADSHEET_SUFFIXES:
-        return ".xlsx"
-    if source_suffix in _PRESENTATION_SUFFIXES:
-        return ".pptx"
-    return ""
+class CompatibleOfficePageRenderer(LibreOfficeDocumentPageRenderer):
+    """Reuse the shared LibreOffice-to-PDF renderer for compatible Office/WPS files."""
+
+    name = "libreoffice-compatible-office-page-renderer"
+    version = "1"
+    priority = 105
+
+    def supports(self, source: DocumentSource) -> bool:
+        return source.suffix in _COMPATIBLE_SUFFIXES
 
 
 def _delegate_for(target_suffix: str) -> DocumentAdapter:
@@ -378,22 +430,15 @@ class CompatibleOfficeDocumentAdapter(DocumentAdapter):
     """Normalize compatible Office/WPS containers and reuse native OOXML adapters."""
 
     name = "compatible-office-normalization"
-    parser_version = "1"
+    parser_version = "2"
     priority = 108
     mode = MODE_PRIMARY
+    # The union exists only for adapter-contract validation. probe() and receipt() expose
+    # the exact source-family capability set so no Word source claims spreadsheet abilities.
     capabilities = frozenset(
-        {
-            CAP_TEXT_EXTRACTION,
-            CAP_HEADING_HIERARCHY,
-            CAP_LIST_HIERARCHY,
-            CAP_TABLE_STRUCTURE,
-            CAP_HEADER_FOOTER,
-            CAP_FONT_EVIDENCE,
-            CAP_FORMULA_EXTRACTION,
-            CAP_COMMENT_EXTRACTION,
-            CAP_IMAGE_PRESENCE,
-            CAP_STYLE_SEMANTICS,
-        }
+        set(_WORD_CAPABILITIES)
+        | set(_SPREADSHEET_CAPABILITIES)
+        | set(_PRESENTATION_CAPABILITIES)
     )
 
     def __init__(self, normalizer: OfficeContainerNormalizer | None = None) -> None:
@@ -408,9 +453,16 @@ class CompatibleOfficeDocumentAdapter(DocumentAdapter):
             self.name,
             112,
             f"compatible_office_suffix:{source.suffix}->{target};normalizer={availability}",
-            tuple(sorted(self.capabilities)),
+            tuple(sorted(_capabilities_for_target(target))),
             self.mode,
         )
+
+    def receipt(self, source: DocumentSource, match: AdapterMatch) -> dict[str, Any]:
+        receipt = super().receipt(source, match)
+        receipt["capabilities"] = list(match.capabilities)
+        receipt["capability_scope"] = "source_family_specific"
+        receipt["normalized_target_format"] = _target_suffix(source.suffix).lstrip(".")
+        return receipt
 
     def extract(self, source: DocumentSource) -> dict[str, Any]:
         target = _target_suffix(source.suffix)
@@ -438,6 +490,7 @@ __all__ = [
     "NormalizedOfficeContainer",
     "OfficeContainerNormalizer",
     "LibreOfficeContainerNormalizer",
+    "CompatibleOfficePageRenderer",
     "CompatibleOfficeDocumentAdapter",
     "rebase_normalized_document_ir",
 ]
