@@ -20,6 +20,7 @@ on:
       - "tests/test_office_adapter_policy_contracts.py"
       - "tests/test_office_format_identity_planner.py"
       - "tests/test_document_adapter_runtime_readiness.py"
+      - "tests/test_office_runtime_capabilities.py"
       - "tests/test_document_ir_fact_evidence_spans.py"
       - "tests/test_document_structure_fact_receipt_gate.py"
       - "tests/test_document_evidence_address_quality.py"
@@ -64,6 +65,7 @@ jobs:
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/office_adapters.py \
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/compatible_office_adapter.py \
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/native_office_policy_adapters.py \
+            ai_test_asset_center/enterprise_knowledge_center/document_ingestion/office_runtime_capabilities.py \
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/page_render_registry.py \
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/evidence_closure.py \
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/rendered_ocr_adapter.py \
@@ -88,6 +90,7 @@ jobs:
             tests/test_office_adapter_policy_contracts.py \
             tests/test_office_format_identity_planner.py \
             tests/test_document_adapter_runtime_readiness.py \
+            tests/test_office_runtime_capabilities.py \
             tests/test_document_ir_fact_evidence_spans.py \
             tests/test_document_structure_fact_receipt_gate.py \
             tests/test_document_evidence_address_quality.py \
