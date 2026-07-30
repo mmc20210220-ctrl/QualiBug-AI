@@ -14,6 +14,7 @@ on:
       - "tests/test_enterprise_document_ingestion_closure.py"
       - "tests/test_enterprise_source_document_ir_bridge.py"
       - "tests/test_enterprise_source_runtime_bridge.py"
+      - "tests/test_source_registry_lifecycle.py"
       - "tests/test_document_ingestion_text_first_planner.py"
       - "tests/test_document_ir_fact_evidence_spans.py"
       - "tests/test_document_structure_fact_receipt_gate.py"
@@ -73,6 +74,7 @@ jobs:
             tests/test_enterprise_document_ingestion_closure.py \
             tests/test_enterprise_source_document_ir_bridge.py \
             tests/test_enterprise_source_runtime_bridge.py \
+            tests/test_source_registry_lifecycle.py \
             tests/test_document_ingestion_text_first_planner.py \
             tests/test_document_ir_fact_evidence_spans.py \
             tests/test_document_structure_fact_receipt_gate.py \
