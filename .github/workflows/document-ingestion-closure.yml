@@ -22,6 +22,7 @@ on:
       - "tests/test_document_adapter_runtime_readiness.py"
       - "tests/test_office_runtime_capabilities.py"
       - "tests/test_office_container_inspection.py"
+      - "tests/test_office_container_resource_limits.py"
       - "tests/test_document_ir_fact_evidence_spans.py"
       - "tests/test_document_structure_fact_receipt_gate.py"
       - "tests/test_document_evidence_address_quality.py"
@@ -95,6 +96,7 @@ jobs:
             tests/test_document_adapter_runtime_readiness.py \
             tests/test_office_runtime_capabilities.py \
             tests/test_office_container_inspection.py \
+            tests/test_office_container_resource_limits.py \
             tests/test_document_ir_fact_evidence_spans.py \
             tests/test_document_structure_fact_receipt_gate.py \
             tests/test_document_evidence_address_quality.py \
