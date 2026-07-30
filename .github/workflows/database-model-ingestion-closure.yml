@@ -11,9 +11,12 @@ on:
       - "ai_test_asset_center/enterprise_knowledge_center/document_ingestion/registry.py"
       - "ai_test_asset_center/enterprise_knowledge_center/document_ir_database_model_semantics.py"
       - "ai_test_asset_center/enterprise_knowledge_center/database_model_asset_projection.py"
+      - "ai_test_asset_center/enterprise_knowledge_center/database_model_index_reconciliation.py"
+      - "ai_test_asset_center/enterprise_knowledge_center/database_model_semantic_bridge.py"
       - "ai_test_asset_center/enterprise_knowledge_center/composition.py"
       - "tests/test_database_model_document_adapter.py"
       - "tests/test_database_model_semantic_projection.py"
+      - "tests/test_database_model_semantic_bridge.py"
       - ".github/workflows/database-model-ingestion-closure.yml"
 
 permissions:
@@ -52,10 +55,13 @@ jobs:
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/registry.py \
             ai_test_asset_center/enterprise_knowledge_center/document_ir_database_model_semantics.py \
             ai_test_asset_center/enterprise_knowledge_center/database_model_asset_projection.py \
+            ai_test_asset_center/enterprise_knowledge_center/database_model_index_reconciliation.py \
+            ai_test_asset_center/enterprise_knowledge_center/database_model_semantic_bridge.py \
             ai_test_asset_center/enterprise_knowledge_center/composition.py
 
       - name: Run database model closure tests
         run: |
           pytest -q \
             tests/test_database_model_document_adapter.py \
-            tests/test_database_model_semantic_projection.py
+            tests/test_database_model_semantic_projection.py \
+            tests/test_database_model_semantic_bridge.py
