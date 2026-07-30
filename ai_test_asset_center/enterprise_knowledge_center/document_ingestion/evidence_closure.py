@@ -25,10 +25,17 @@ _FORMAL_TEXT_BLOCK_TYPES = {
     "CAPTION",
     "FORMULA",
 }
+_EXACT_ADDRESS_KINDS = {
+    "PAGE_BBOX",
+    "SPREADSHEET_CELL",
+    "PRESENTATION_SHAPE",
+    "EXACT_SOURCE_LOCATOR",
+}
 _EXACT_LOCATOR_MARKERS = (
     "#line=",
     "#page=",
     "#paragraph=",
+    "#block=",
     "#table=",
     "#sheet=",
     "#slide=",
@@ -178,7 +185,7 @@ def apply_document_evidence_closure(
                         ],
                     }
                 )
-            if address_kind != "UNADDRESSED":
+            if address_kind in _EXACT_ADDRESS_KINDS:
                 exact_blocks.append(block)
 
     for locator, normalized_values in locator_texts.items():
@@ -256,7 +263,7 @@ def apply_document_evidence_closure(
         "traceable_authority_block_count": len(traceable_blocks),
         "exact_address_authority_block_count": len(exact_blocks),
         "untraceable_authority_block_count": len(formal_blocks) - len(traceable_blocks),
-        "weak_address_authority_block_count": len(formal_blocks) - len(exact_blocks),
+        "weak_address_authority_block_count": len(traceable_blocks) - len(exact_blocks),
         "source_traceability_rate": _ratio(len(traceable_blocks), len(formal_blocks)),
         "exact_address_rate": _ratio(len(exact_blocks), len(formal_blocks)),
         "locator_conflict_count": sum(
@@ -268,6 +275,7 @@ def apply_document_evidence_closure(
         "gaps": gaps,
         "source_bytes_fingerprinted": True,
         "plain_text_requires_block_evidence": True,
+        "weak_source_locators_do_not_count_as_exact_addresses": True,
         "business_semantics_added": False,
         "document_order_is_business_flow": False,
         "filename_is_business_context": False,
