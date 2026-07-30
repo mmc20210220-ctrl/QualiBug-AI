@@ -40,6 +40,7 @@ from .registry import DocumentAdapterRegistry
 # Legacy binary/ODF visual formats remain rendering/OCR workloads until a native adapter exists.
 _LEGACY_VISUAL_OFFICE_FAMILIES = {"doc", "rtf", "odt", "ppt", "odp"}
 _LEGACY_TABLE_OFFICE_FAMILIES = {"xls", "xlsb", "ods"}
+_TEXT_FIRST_FAMILIES = {"text", "structured_text"}
 _DEFERRED_CAPABILITIES_BY_GAP: dict[str, tuple[str, ...]] = {
     "SCANNED_PAGE_REQUIRES_OCR": (
         CAP_PAGE_RENDERING,
@@ -64,6 +65,15 @@ _DEFERRED_CAPABILITIES_BY_GAP: dict[str, tuple[str, ...]] = {
 }
 
 
+def _looks_like_svg_markup(source: DocumentSource) -> bool:
+    if source.suffix != ".svg":
+        return False
+    stripped = source.data.lstrip()[:4096].lower()
+    if stripped.startswith(b"<svg"):
+        return True
+    return stripped.startswith(b"<?xml") and b"<svg" in stripped
+
+
 def _detected_family(source: DocumentSource) -> tuple[str, str]:
     stripped = source.data.lstrip()
     if stripped.startswith(b"%PDF-"):
@@ -84,6 +94,10 @@ def _detected_family(source: DocumentSource) -> tuple[str, str]:
             return "zip", "zip_container_signature"
         except Exception:
             return "zip_or_corrupt_container", "pk_signature_without_readable_zip_directory"
+    # SVG is both an image and XML. Preserve its native tags, labels and identifiers before
+    # any rendered/OCR supplemental path; otherwise the semantic layer receives pixels only.
+    if _looks_like_svg_markup(source):
+        return "structured_text", "svg_xml_markup_signature"
     image_family, image_reason = sniff_image_source(source)
     if image_family:
         return "image", image_reason
@@ -193,6 +207,7 @@ def _required_capabilities(family: str) -> list[str]:
         "log",
         "csv",
         "tsv",
+        "svg",
     }:
         return unique_text(
             [CAP_TEXT_EXTRACTION, CAP_HEADING_HIERARCHY, CAP_LIST_HIERARCHY]
@@ -223,6 +238,11 @@ def plan_document_parsing(
     selected: list[tuple[Any, Any]] = []
     if primary_rows:
         selected.append(primary_rows[0])
+    elif family in _TEXT_FIRST_FAMILIES and fallback_rows:
+        # A source that is natively decodable text must not be rasterized first merely
+        # because a visual renderer is available. Rendering can supplement a structural
+        # parser later, but cannot replace exact tags, identifiers or source lines.
+        selected.append(fallback_rows[0])
     else:
         provided: set[str] = set()
         for row in supplemental_rows:
