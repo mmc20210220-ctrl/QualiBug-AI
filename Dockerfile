@@ -57,7 +57,7 @@ COPY pyproject.toml README.md ./
 COPY ai_test_asset_center/ ./ai_test_asset_center/
 COPY aitestops/ ./aitestops/
 RUN pip install --no-cache-dir . \
-    && python -c "import openpyxl, pptx, pypdfium2, pytesseract"
+    && python -c "import olefile, openpyxl, pptx, pypdfium2, pytesseract"
 
 # Copy prebuilt customer pilot SPA so the backend serves UI + API on one port
 COPY frontend/dist ./frontend_dist/
