@@ -183,6 +183,11 @@ def test_failed_product_phase_never_parses_ground_truth(tmp_path: Path) -> None:
     assert str(ground_truth) not in "\n".join(captured["command"])  # type: ignore[arg-type]
     assert "QUALIBUG_HIDDEN_BUG_REGISTRY" not in captured["env"]  # type: ignore[operator]
     assert "QUALIBUG_GROUND_TRUTH_PATH" not in captured["env"]  # type: ignore[operator]
+    assert not any(
+        "GROUND_TRUTH" in str(key).upper()
+        for key in captured["env"]  # type: ignore[union-attr]
+    )
+    assert captured["env"]["QUALIBUG_EVALUATOR_PRIVATE_INPUT_ACCESS_ALLOWED"] == "0"  # type: ignore[index]
     assert not (tmp_path / "output" / "evaluation").exists()
 
 
