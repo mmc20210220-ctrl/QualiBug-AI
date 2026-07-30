@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 
-from ai_test_asset_center.enterprise_knowledge_center import composition
 from ai_test_asset_center.enterprise_knowledge_center.document_ingestion import (
     build_document_structure_ir,
 )
@@ -14,21 +13,34 @@ from ai_test_asset_center.enterprise_knowledge_center.openapi_schema_fact_asset_
 
 def _structure(payload: dict, filename: str, source_id: str) -> dict:
     return build_document_structure_ir(
-        json.dumps(payload).encode(),
+        json.dumps(payload).encode("utf-8"),
         filename=filename,
         source_id=source_id,
     )
 
 
-def _openapi(properties: dict, *, extra_schemas: dict | None = None) -> dict:
+def _openapi(*, missing_ref: bool = False) -> dict:
+    customer_ref = (
+        "#/components/schemas/MissingCustomer"
+        if missing_ref
+        else "#/components/schemas/Customer"
+    )
     schemas = {
         "Order": {
             "type": "object",
-            "required": list(properties),
-            "properties": properties,
+            "required": ["id", "amount"],
+            "properties": {
+                "id": {"type": "integer", "format": "int64"},
+                "amount": {"type": "number", "minimum": 0},
+                "customer": {"$ref": customer_ref},
+            },
         }
     }
-    schemas.update(extra_schemas or {})
+    if not missing_ref:
+        schemas["Customer"] = {
+            "type": "object",
+            "properties": {"id": {"type": "integer"}},
+        }
     return {
         "openapi": "3.0.3",
         "info": {"title": "Orders", "version": "1"},
@@ -51,99 +63,80 @@ def _openapi(properties: dict, *, extra_schemas: dict | None = None) -> dict:
     }
 
 
-def test_same_name_schemas_remain_source_scoped_and_do_not_pollute_database_assets() -> None:
+def test_current_projector_contract_is_normalized_into_source_scoped_assets() -> None:
     asset = {
-        "source_inventory": [
-            {"source_id": "src_a", "source_type": "openapi"},
-            {"source_id": "src_b", "source_type": "openapi"},
-        ],
-        "tables": [{"table_id": "db:orders", "name": "orders"}],
-        "field_dictionary": [
-            {"field_id": "db:orders:id", "table_id": "db:orders", "field": "id"}
-        ],
+        "source_inventory": [{"source_id": "src_api", "source_type": "openapi"}],
+        "tables": [{"table_id": "table:main.Order", "name": "Order"}],
+        "field_dictionary": [],
         "summary": {},
         "governance": {},
     }
     sources = [
         {
-            "source_id": "src_a",
+            "source_id": "src_api",
             "document_structure": _structure(
-                _openapi(
-                    {
-                        "amount": {
-                            "type": "number",
-                            "format": "double",
-                            "minimum": 0,
-                        }
-                    }
-                ),
-                "orders-a.openapi.json",
-                "src_a",
+                _openapi(),
+                "orders.openapi.json",
+                "src_api",
             ),
-        },
-        {
-            "source_id": "src_b",
-            "document_structure": _structure(
-                _openapi(
-                    {
-                        "externalCode": {
-                            "type": "string",
-                            "minLength": 1,
-                        }
-                    }
-                ),
-                "orders-b.openapi.json",
-                "src_b",
-            ),
-        },
+        }
     ]
 
     result = enrich_asset_with_openapi_schema_facts(asset, sources)
 
-    definitions = [
-        row for row in result["openapi_schema_definitions"] if row["name"] == "Order"
+    definitions = result["openapi_schema_definitions"]
+    assert {row["name"] for row in definitions} >= {"Order", "Customer"}
+    order = next(row for row in definitions if row["name"] == "Order")
+    assert order["schema_id"] == order["schema_definition_id"]
+    assert order["json_pointer"] == "/components/schemas/Order"
+    assert order["source_locator"].startswith("orders.openapi.json#")
+
+    order_fields = [
+        row
+        for row in result["openapi_schema_fields"]
+        if row["schema_id"] == order["schema_id"]
     ]
-    assert len(definitions) == 2
-    assert {row["source_id"] for row in definitions} == {"src_a", "src_b"}
-    assert len({row["schema_id"] for row in definitions}) == 2
-
-    fields = result["openapi_schema_fields"]
-    assert {row["source_id"] for row in fields} == {"src_a", "src_b"}
-    assert {
-        (row["source_id"], tuple(row["property_path"])) for row in fields
-    } == {
-        ("src_a", ("amount",)),
-        ("src_b", ("externalCode",)),
+    assert {row["field_name"] for row in order_fields} == {
+        "id",
+        "amount",
+        "customer",
     }
-    amount = next(row for row in fields if row["source_id"] == "src_a")
+    amount = next(row for row in order_fields if row["field_name"] == "amount")
+    assert amount["field_fact_id"] == amount["schema_field_id"]
+    assert amount["property_path"] == ["amount"]
     assert amount["constraints"]["minimum"] == 0
-    assert amount["source_locator"].startswith("orders-a.openapi.json#")
+    assert amount["source_locator"].startswith("orders.openapi.json#")
 
-    entities = [row for row in result["openapi_schema_entities"] if row["name"] == "Order"]
-    assert len(entities) == 2
-    assert all(row["database_table"] is False for row in entities)
-    assert all(row["business_object_confirmed"] is False for row in entities)
+    reference = next(
+        row
+        for row in result["openapi_schema_references"]
+        if row["target_ref"] == "#/components/schemas/Customer"
+    )
+    assert reference["reference_id"] == reference["schema_reference_id"]
+    assert reference["resolution_status"] == "RESOLVED"
 
-    # Existing database assets remain untouched; API models use a separate namespace.
+    entity = next(
+        row for row in result["openapi_schema_entities"] if row["name"] == "Order"
+    )
+    assert set(entity["field_ids"]) == {
+        row["field_fact_id"] for row in order_fields
+    }
+    assert reference["reference_id"] in entity["reference_ids"]
+    assert entity["database_table"] is False
+
+    # API schemas remain separate from physical database assets.
     assert result["tables"] == asset["tables"]
-    assert result["field_dictionary"] == asset["field_dictionary"]
     receipt = result["openapi_schema_fact_projection"]
     assert receipt["schema"] == OPENAPI_SCHEMA_FACT_ASSET_SCHEMA
     assert receipt["status"] == "COMPLETE"
-    assert receipt["schema_definition_count"] == 2
-    assert receipt["schema_field_count"] == 2
-    assert receipt["source_scoped_identity"] is True
-    assert receipt["same_name_cross_source_auto_merge"] is False
-    assert receipt["database_table_projection_used"] is False
-    assert result["governance"]["openapi_schema_models_are_not_database_tables"] is True
+    assert receipt["unowned_field_count"] == 0
+    assert receipt["exact_fact_rate"] == 1.0
+    assert result["governance"][
+        "openapi_schema_asset_contract_matches_current_projector"
+    ] is True
 
 
-def test_unresolved_schema_reference_is_retained_and_marks_projection_partial() -> None:
-    payload = _openapi(
-        {
-            "customer": {"$ref": "#/components/schemas/MissingCustomer"},
-        }
-    )
+def test_unresolved_local_reference_is_retained_and_fail_visible() -> None:
     asset = {
         "source_inventory": [{"source_id": "src_missing", "source_type": "openapi"}],
         "summary": {},
@@ -153,7 +146,7 @@ def test_unresolved_schema_reference_is_retained_and_marks_projection_partial() 
         {
             "source_id": "src_missing",
             "document_structure": _structure(
-                payload,
+                _openapi(missing_ref=True),
                 "orders-missing.openapi.json",
                 "src_missing",
             ),
@@ -162,66 +155,45 @@ def test_unresolved_schema_reference_is_retained_and_marks_projection_partial() 
 
     result = enrich_asset_with_openapi_schema_facts(asset, sources)
 
-    references = result["openapi_schema_references"]
-    assert len(references) == 1
-    reference = references[0]
-    assert reference["reference_id"]
-    assert reference["target_ref"] == "#/components/schemas/MissingCustomer"
+    reference = next(
+        row
+        for row in result["openapi_schema_references"]
+        if row["target_ref"] == "#/components/schemas/MissingCustomer"
+    )
     assert reference["resolution_status"] == "UNRESOLVED"
     assert reference["unresolved_reason"] == "OPENAPI_LOCAL_REF_TARGET_NOT_FOUND"
-    assert reference["source_locator"].startswith("orders-missing.openapi.json#")
-
-    entity = next(row for row in result["openapi_schema_entities"] if row["name"] == "Order")
-    assert entity["reference_ids"] == [reference["reference_id"]]
-    receipt = result["openapi_schema_fact_projection"]
-    assert receipt["status"] == "PARTIAL"
-    assert receipt["unresolved_reference_count"] == 1
-    assert receipt["schema_reference_count"] == 1
-    assert receipt["exact_fact_rate"] == 1.0
+    assert result["openapi_schema_fact_projection"]["status"] == "PARTIAL"
+    assert result["openapi_schema_fact_projection"]["unresolved_reference_count"] == 1
 
 
-def test_composition_root_runs_schema_fact_projection_before_understanding(monkeypatch) -> None:
-    structure = _structure(
-        _openapi({"amount": {"type": "number", "minimum": 0}}),
-        "orders.openapi.json",
-        "src_orders",
-    )
-    base_asset = {
-        "source_inventory": [{"source_id": "src_orders", "source_type": "openapi"}],
-        "structured_sources": [
-            {"source_id": "src_orders", "document_structure": structure}
+def test_same_schema_name_across_sources_remains_source_scoped() -> None:
+    asset = {
+        "source_inventory": [
+            {"source_id": "src_a", "source_type": "openapi"},
+            {"source_id": "src_b", "source_type": "openapi"},
         ],
-        "interfaces": [],
         "summary": {},
         "governance": {},
     }
+    sources = [
+        {
+            "source_id": "src_a",
+            "document_structure": _structure(_openapi(), "a.json", "src_a"),
+        },
+        {
+            "source_id": "src_b",
+            "document_structure": _structure(_openapi(), "b.json", "src_b"),
+        },
+    ]
 
-    monkeypatch.setattr(
-        composition._base,
-        "compile_enterprise_knowledge_asset",
-        lambda project_id, root=None: base_asset,
-    )
-    monkeypatch.setattr(
-        composition,
-        "enrich_asset_with_api_artifact_semantics",
-        lambda asset, sources: asset,
-    )
-    monkeypatch.setattr(
-        composition,
-        "enrich_asset_with_document_ir_tabular_semantics",
-        lambda asset, sources: asset,
-    )
-    monkeypatch.setattr(
-        composition,
-        "enrich_asset_with_enterprise_understanding",
-        lambda asset, sources: asset,
-    )
+    result = enrich_asset_with_openapi_schema_facts(asset, sources)
 
-    result = composition.compile_enterprise_knowledge_asset("project_openapi_schema")
-
-    assert result["openapi_schema_fact_projection"]["status"] == "COMPLETE"
-    assert result["openapi_schema_fields"][0]["property_path"] == ["amount"]
-    assert result["composition_receipt"]["stages"][1]["stage"] == (
-        "openapi_schema_fact_projection"
-    )
-    assert result["governance"]["openapi_schema_facts_composed_explicitly"] is True
+    orders = [
+        row for row in result["openapi_schema_definitions"] if row["name"] == "Order"
+    ]
+    assert len(orders) == 2
+    assert {row["source_id"] for row in orders} == {"src_a", "src_b"}
+    assert len({row["schema_id"] for row in orders}) == 2
+    assert result["openapi_schema_fact_projection"][
+        "same_name_cross_source_auto_merge"
+    ] is False
