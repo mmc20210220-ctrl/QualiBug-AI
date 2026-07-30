@@ -27,6 +27,18 @@ from ._chinese_business_authority_decision import (  # noqa: F401
     list_operator_authority_decisions,
     record_operator_authority_decision,
 )
+from .database_mapping_authority import (  # noqa: F401
+    ACTION_APPROVE_READ_ONLY_OBSERVER,
+    ACTION_REJECT_MAPPING,
+    apply_database_mapping_authority_decisions,
+    database_mapping_candidate_fingerprint,
+    list_database_mapping_authority_decisions,
+    load_database_mapping_authority_ledger,
+    record_database_mapping_authority_decision,
+)
+from .database_observer_contract_projection import (  # noqa: F401
+    enrich_asset_with_database_observer_contracts,
+)
 from .enterprise_understanding import (  # noqa: F401
     assess_understanding_model,
     build_enterprise_understanding_model,
