@@ -85,9 +85,28 @@ def test_aggregate_dispatch_uses_phase_receipts_without_direct_runtime_inputs() 
     assert receipt["observer_id"] == PHASE_AGGREGATE_OBSERVER_ID
     assert receipt["status"] == "OBSERVED"
     assert receipt["evidence"]["finalizer_database_requery_count"] == 0
+    assert receipt["evidence"]["direct_query_fallback_allowed"] is False
     assert receipt["evidence"]["approved_database_snapshots"][0]["snapshot"][
         "rows"
     ] == [{"id": "o-1", "status": "PAID"}]
+
+
+def test_aggregate_without_phase_drafts_never_falls_back_to_query() -> None:
+    install_experiment_database_observer()
+    receipts = observe_experiment_requirements(
+        {"observers": [{"observer_id": PHASE_AGGREGATE_OBSERVER_ID}]},
+        observations={},
+        campaign_id="campaign-1",
+        execution_id="execution-1",
+    )
+
+    assert len(receipts) == 1
+    receipt = receipts[0]
+    assert receipt["status"] == "INDETERMINATE"
+    assert receipt["reason_code"] == "DATABASE_OBSERVER_PHASE_DRAFTS_MISSING"
+    assert receipt["evidence"]["finalizer_database_requery_count"] == 0
+    assert receipt["evidence"]["query_execution_count"] == 0
+    assert receipt["evidence"]["direct_query_fallback_allowed"] is False
 
 
 def test_phase_aggregate_requires_db_sql_compile_authority() -> None:
