@@ -168,7 +168,7 @@ def probe_compatible_office_source_runtime(
 
 
 class RuntimeAwareCompatibleOfficeDocumentAdapter(CompatibleOfficeDocumentAdapter):
-    """Compatible Office adapter whose planning and receipts reflect runtime reality."""
+    """Enrich compatible Office receipts while using the shared runtime-ready contract."""
 
     parser_version = "3"
 
@@ -177,14 +177,15 @@ class RuntimeAwareCompatibleOfficeDocumentAdapter(CompatibleOfficeDocumentAdapte
         if match is None:
             return None
         runtime = probe_compatible_office_source_runtime(source, self.normalizer)
-        if runtime["runtime_dependency_available"]:
-            return match
+        runtime_ready = bool(runtime["runtime_dependency_available"])
         return AdapterMatch(
             adapter_name=match.adapter_name,
             score=match.score,
-            reason=f"{match.reason};runtime_dependency=unavailable",
-            capabilities=(),
+            reason=match.reason,
+            capabilities=match.capabilities,
             mode=match.mode,
+            runtime_ready=runtime_ready,
+            runtime_reason=("" if runtime_ready else "RUNTIME_DEPENDENCY_UNAVAILABLE"),
         )
 
     def receipt(self, source: DocumentSource, match: AdapterMatch) -> dict[str, Any]:
