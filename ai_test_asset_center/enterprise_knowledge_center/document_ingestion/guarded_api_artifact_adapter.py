@@ -174,11 +174,58 @@ def _sanitize(value: Any, *, key_hint: str = "") -> tuple[Any, int]:
     return result, count
 
 
+def _apply_legacy_json_pointer_locator_alias(
+    document_ir: dict[str, Any],
+    *,
+    filename: str,
+) -> dict[str, Any]:
+    """Keep old locator suffixes while retaining the new exact ``#block=`` marker."""
+
+    result = dict(document_ir or {})
+    for collection_name in ("blocks", "sections", "tables", "pages"):
+        rows: list[dict[str, Any]] = []
+        for raw in result.get(collection_name) or []:
+            if not isinstance(raw, dict):
+                continue
+            row = dict(raw)
+            pointer = _text(row.get("json_pointer"))
+            if pointer:
+                exact_locator = f"{filename}#block=json-pointer:{pointer};legacy=#json-pointer={pointer}"
+                row["source_locator"] = exact_locator
+                row["legacy_source_locator"] = f"{filename}#json-pointer={pointer}"
+                address = dict(row.get("evidence_address") or {})
+                address.update(
+                    {
+                        "address_kind": "EXACT_SOURCE_LOCATOR",
+                        "source_locator": exact_locator,
+                        "json_pointer": pointer,
+                    }
+                )
+                row["evidence_address"] = address
+            rows.append(row)
+        if collection_name in result or rows:
+            result[collection_name] = rows
+    unsupported: list[dict[str, Any]] = []
+    for raw in result.get("unsupported_content") or []:
+        if not isinstance(raw, dict):
+            continue
+        row = dict(raw)
+        pointer = _text(row.get("json_pointer"))
+        if pointer:
+            row["source_locator"] = (
+                f"{filename}#block=json-pointer:{pointer};legacy=#json-pointer={pointer}"
+            )
+            row["legacy_source_locator"] = f"{filename}#json-pointer={pointer}"
+        unsupported.append(row)
+    result["unsupported_content"] = unsupported
+    return result
+
+
 class GuardedApiArtifactDocumentAdapter(ApiArtifactDocumentAdapter):
     """Registered API-artifact authority with redaction and exact structural evidence."""
 
     name = "guarded-api-artifact-json-pointer-structure"
-    parser_version = "3"
+    parser_version = "4"
 
     def extract(self, source: DocumentSource) -> dict[str, Any]:
         payload, _decoded, error = _decode_payload(source)
@@ -205,6 +252,10 @@ class GuardedApiArtifactDocumentAdapter(ApiArtifactDocumentAdapter):
                 payload=dict(sanitized),
                 source=safe_source,
             )
+        document_ir = _apply_legacy_json_pointer_locator_alias(
+            document_ir,
+            filename=source.filename,
+        )
 
         receipt = dict(document_ir.get("structure_receipt") or {})
         receipt.update(
@@ -218,6 +269,7 @@ class GuardedApiArtifactDocumentAdapter(ApiArtifactDocumentAdapter):
                 "credential_values_retained": False,
                 "original_source_bytes_exposed_to_structure_adapter": False,
                 "json_pointer_exact_source_addresses": True,
+                "json_pointer_locator_migration_compatibility": True,
             }
         )
         document_ir["structure_receipt"] = receipt
