@@ -1,9 +1,9 @@
 """Bind captured database Observer execution drafts to already-compiled Experiments.
 
-This is an additive projection after the existing Runtime Materialization bridge. It creates no
-second compiler and no executor. Each Experiment receives only the drafts of its exact bound
-materialization; the secret-free draft set is fingerprinted into the compile receipt. Missing or
-malformed required drafts fail closed before transport.
+Each Experiment receives only the drafts of its exact bound Runtime Materialization. The direct
+readback handler remains frozen on each phase draft, while the Experiment declares a separate
+phase-aggregate Observer for Finalizer consumption. Missing or malformed required drafts fail
+closed before transport; registration order cannot change which authority executes.
 """
 from __future__ import annotations
 
@@ -12,11 +12,13 @@ import json
 from copy import deepcopy
 from typing import Any, Iterable
 
+from .database_observer_experiment_runtime import PHASE_AGGREGATE_OBSERVER_ID
 from .runtime_materialization_experiment_bridge import _CAPTURED_ASSET
 
 PROJECTION_SCHEMA = "qualibug.database-observer-experiment-projection.v1"
 DRAFT_SCHEMA = "qualibug.database-observer-execution-draft.v1"
-OBSERVER_ID = "approved_database_readback"
+READBACK_HANDLER_ID = "approved_database_readback"
+OBSERVER_ID = PHASE_AGGREGATE_OBSERVER_ID
 _BLOCK_REASON = "BLOCKED_APPROVED_DATABASE_OBSERVER_DRAFT_INVALID"
 
 
@@ -33,7 +35,13 @@ def _list(value: Any) -> list[Any]:
 
 
 def _canonical(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
 
 
 def _fingerprint(value: Any) -> str:
@@ -53,10 +61,13 @@ def _dedupe(rows: Iterable[Any], key: str) -> list[dict[str, Any]]:
 
 def _materialization_id(experiment: dict[str, Any]) -> str:
     contract = _dict(experiment.get("runtime_materialization_contract"))
+    authority = _dict(contract.get("authority"))
+    lineage = _dict(authority.get("lineage"))
+    receipt = _dict(experiment.get("compile_receipt"))
     return _text(
         contract.get("materialization_id")
-        or _dict(contract.get("authority")).get("lineage", {}).get("materialization_id")
-        or _dict(experiment.get("compile_receipt")).get("runtime_materialization_id")
+        or lineage.get("materialization_id")
+        or receipt.get("runtime_materialization_id")
     )
 
 
@@ -69,6 +80,17 @@ def _captured_materializations() -> dict[str, dict[str, Any]]:
     }
 
 
+def _expected_count(materialization: dict[str, Any]) -> int | None:
+    raw = materialization.get("database_observer_execution_draft_count")
+    if raw in (None, ""):
+        return 0
+    try:
+        count = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return count if count >= 0 else None
+
+
 def _valid_draft(raw: Any, materialization_id: str) -> bool:
     row = _dict(raw)
     contract = _dict(row.get("database_observer_contract"))
@@ -76,11 +98,13 @@ def _valid_draft(raw: Any, materialization_id: str) -> bool:
         _text(row.get("schema")) == DRAFT_SCHEMA
         and _text(row.get("draft_id"))
         and _text(row.get("runtime_materialization_ref")) == materialization_id
-        and _text(row.get("observer_handler_id")) == OBSERVER_ID
+        and _text(row.get("observer_handler_id")) == READBACK_HANDLER_ID
         and _text(row.get("observation_phase")) in {"BEFORE", "AFTER"}
         and _text(row.get("observer_contract_ref"))
-        and _text(contract.get("schema")) == "qualibug.database-observer-contract.v1"
-        and _text(contract.get("status")) == "READY_FOR_RUNTIME_CONNECTION_BINDING"
+        and _text(contract.get("schema"))
+        == "qualibug.database-observer-contract.v1"
+        and _text(contract.get("status"))
+        == "READY_FOR_RUNTIME_CONNECTION_BINDING"
         and bool(contract.get("runtime_observer_authoritative"))
         and bool(contract.get("read_only"))
         and not bool(contract.get("mutation_allowed"))
@@ -103,7 +127,9 @@ def _observer_rows(experiment: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
-def _blocked(experiment: dict[str, Any], detail: dict[str, Any]) -> dict[str, Any]:
+def _blocked(
+    experiment: dict[str, Any], detail: dict[str, Any]
+) -> dict[str, Any]:
     row = dict(experiment)
     receipt = _dict(row.get("compile_receipt"))
     receipt.update(
@@ -126,7 +152,7 @@ def _blocked(experiment: dict[str, Any], detail: dict[str, Any]) -> dict[str, An
 def project_database_observers_to_experiment_pack(
     experiment_pack: dict[str, Any],
 ) -> dict[str, Any]:
-    """Attach exact phase drafts and one typed Observer requirement to each Experiment."""
+    """Attach exact phase drafts and the phase-aggregate Observer requirement."""
     pack = dict(experiment_pack or {})
     materializations = _captured_materializations()
     compiled: list[dict[str, Any]] = []
@@ -141,25 +167,26 @@ def project_database_observers_to_experiment_pack(
         materialization_id = _materialization_id(experiment)
         materialization = materializations.get(materialization_id)
         if not materialization:
-            # The existing bridge owns missing-materialization blocking. Do not create a second
-            # interpretation when this Experiment has no database phase authority to project.
+            # The existing Runtime Materialization bridge owns this missing-authority case.
             compiled.append(experiment)
             continue
-        expected_count = int(
-            materialization.get("database_observer_execution_draft_count") or 0
+        expected_count = _expected_count(materialization)
+        raw_drafts = _list(
+            materialization.get("database_observer_execution_drafts")
         )
-        raw_drafts = _list(materialization.get("database_observer_execution_drafts"))
         if expected_count == 0 and not raw_drafts:
             experiment["database_observer_projection_status"] = "NOT_APPLICABLE"
             compiled.append(experiment)
             continue
-        valid = [
-            deepcopy(row)
-            for row in raw_drafts
-            if _valid_draft(row, materialization_id)
-        ]
-        valid = _dedupe(valid, "draft_id")
-        if len(valid) != expected_count or not valid:
+        valid = _dedupe(
+            [
+                deepcopy(row)
+                for row in raw_drafts
+                if _valid_draft(row, materialization_id)
+            ],
+            "draft_id",
+        )
+        if expected_count is None or len(valid) != expected_count or not valid:
             newly_blocked.append(
                 _blocked(
                     experiment,
@@ -177,11 +204,12 @@ def project_database_observers_to_experiment_pack(
         observers = _observer_rows(experiment)
         observers.append(
             {
-                "observer_id": OBSERVER_ID,
+                "observer_id": PHASE_AGGREGATE_OBSERVER_ID,
                 "surface": "database_read_only",
                 "adapter": "db_sql",
                 "required": True,
                 "phase_receipts_required": True,
+                "direct_readback_observer_id": READBACK_HANDLER_ID,
             }
         )
         experiment["observers"] = _dedupe(observers, "observer_id")
@@ -197,6 +225,10 @@ def project_database_observers_to_experiment_pack(
                 "database_observer_execution_draft_count": len(valid),
                 "database_observer_execution_draft_fingerprint": fingerprint,
                 "database_observer_phase_receipts_required": True,
+                "database_observer_phase_aggregate_id": (
+                    PHASE_AGGREGATE_OBSERVER_ID
+                ),
+                "database_observer_direct_readback_id": READBACK_HANDLER_ID,
                 "database_observer_finalizer_requery_allowed": False,
             }
         )
@@ -229,11 +261,14 @@ def project_database_observers_to_experiment_pack(
                 "observer_experiment_count": observer_experiment_count,
                 "execution_draft_count": draft_count,
                 "newly_blocked_experiment_count": len(newly_blocked),
+                "phase_aggregate_observer_id": PHASE_AGGREGATE_OBSERVER_ID,
+                "direct_readback_observer_id": READBACK_HANDLER_ID,
                 "runtime_query_execution_count": 0,
                 "oracle_verdict_count": 0,
                 "secret_value_retained": False,
                 "raw_sql_retained": False,
                 "second_compiler_created": False,
+                "observer_registration_order_affects_authority": False,
                 "existing_experiment_executor_remains_authority": True,
             },
         }
@@ -245,5 +280,6 @@ __all__ = [
     "DRAFT_SCHEMA",
     "OBSERVER_ID",
     "PROJECTION_SCHEMA",
+    "READBACK_HANDLER_ID",
     "project_database_observers_to_experiment_pack",
 ]
