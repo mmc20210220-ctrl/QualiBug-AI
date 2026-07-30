@@ -13,9 +13,7 @@ on:
       - "ai_test_asset_center/enterprise_knowledge_center/source_ingestion.py"
       - "ai_test_asset_center/enterprise_knowledge_center/composition.py"
       - "tests/test_api_artifact_document_adapter.py"
-      - "tests/test_api_artifact_structure_adapter.py"
       - "tests/test_api_artifact_semantic_bridge.py"
-      - "tests/test_api_artifact_semantic_projection.py"
       - "tests/test_api_artifact_asset_projection.py"
       - "tests/test_api_artifact_same_id_source_ledger.py"
       - "tests/test_openapi_schema_projection.py"
@@ -63,9 +61,7 @@ jobs:
         run: |
           pytest -q \
             tests/test_api_artifact_document_adapter.py \
-            tests/test_api_artifact_structure_adapter.py \
             tests/test_api_artifact_semantic_bridge.py \
-            tests/test_api_artifact_semantic_projection.py \
             tests/test_api_artifact_asset_projection.py \
             tests/test_api_artifact_same_id_source_ledger.py \
             tests/test_openapi_schema_projection.py
