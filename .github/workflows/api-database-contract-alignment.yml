@@ -9,6 +9,9 @@ on:
       - "ai_test_asset_center/database_observer_runtime.py"
       - "ai_test_asset_center/database_observer_experiment_projection.py"
       - "ai_test_asset_center/database_observer_experiment_runtime.py"
+      - "ai_test_asset_center/database_state_transition_oracle.py"
+      - "ai_test_asset_center/database_state_transition_experiment_projection.py"
+      - "ai_test_asset_center/database_state_transition_finding_bridge.py"
       - "ai_test_asset_center/experiment_compiler.py"
       - "ai_test_asset_center/experiment_executor.py"
       - "ai_test_asset_center/non_http_observers.py"
@@ -43,6 +46,10 @@ on:
       - "tests/test_database_observer_experiment_runtime.py"
       - "tests/test_database_observer_experiment_executor_integration.py"
       - "tests/test_database_observer_registration_authority.py"
+      - "tests/test_database_state_transition_oracle.py"
+      - "tests/test_database_state_transition_experiment_projection.py"
+      - "tests/test_database_state_transition_contract_oracle.py"
+      - "tests/test_database_state_transition_finding_bridge.py"
       - ".github/workflows/api-database-contract-alignment.yml"
 
 permissions:
@@ -72,12 +79,15 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
-      - name: Compile database understanding and execution stages
+      - name: Compile database understanding, observation and Oracle stages
         run: |
           python -m py_compile \
             ai_test_asset_center/database_observer_runtime.py \
             ai_test_asset_center/database_observer_experiment_projection.py \
             ai_test_asset_center/database_observer_experiment_runtime.py \
+            ai_test_asset_center/database_state_transition_oracle.py \
+            ai_test_asset_center/database_state_transition_experiment_projection.py \
+            ai_test_asset_center/database_state_transition_finding_bridge.py \
             ai_test_asset_center/experiment_compiler.py \
             ai_test_asset_center/experiment_executor.py \
             ai_test_asset_center/non_http_observers.py \
@@ -98,7 +108,7 @@ jobs:
             ai_test_asset_center/enterprise_knowledge_center/composition.py \
             ai_test_asset_center/enterprise_knowledge_center/__init__.py
 
-      - name: Run database understanding and execution closure tests
+      - name: Run database understanding, execution and Oracle closure tests
         run: |
           pytest -q \
             tests/test_openapi_schema_fact_asset_projection.py \
@@ -115,4 +125,8 @@ jobs:
             tests/test_database_observer_experiment_projection.py \
             tests/test_database_observer_experiment_runtime.py \
             tests/test_database_observer_experiment_executor_integration.py \
-            tests/test_database_observer_registration_authority.py
+            tests/test_database_observer_registration_authority.py \
+            tests/test_database_state_transition_oracle.py \
+            tests/test_database_state_transition_experiment_projection.py \
+            tests/test_database_state_transition_contract_oracle.py \
+            tests/test_database_state_transition_finding_bridge.py
