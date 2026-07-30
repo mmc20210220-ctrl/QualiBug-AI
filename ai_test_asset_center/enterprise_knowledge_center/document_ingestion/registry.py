@@ -82,12 +82,12 @@ class DocumentAdapterRegistry:
 
 def build_default_registry() -> DocumentAdapterRegistry:
     from .advanced_visual_table_providers import build_default_advanced_visual_table_provider
-    from .api_artifact_adapter import ApiArtifactDocumentAdapter
     from .builtin_adapters import (
         GenericTextDocumentAdapter,
         PdfDocumentAdapter,
         UnknownBinaryDocumentAdapter,
     )
+    from .guarded_api_artifact_adapter import GuardedApiArtifactDocumentAdapter
     from .guarded_compatible_office_adapter import GuardedCompatibleOfficeDocumentAdapter
     from .native_office_policy_adapters import (
         MacroAwareDocxDocumentAdapter,
@@ -108,7 +108,7 @@ def build_default_registry() -> DocumentAdapterRegistry:
             MacroAwareSpreadsheetDocumentAdapter(),
             MacroAwarePresentationDocumentAdapter(),
             GuardedCompatibleOfficeDocumentAdapter(),
-            ApiArtifactDocumentAdapter(),
+            GuardedApiArtifactDocumentAdapter(),
             OcrSupplementalAdapter(),
             VisualTableSupplementalAdapter(provider=advanced_table_provider),
             GenericTextDocumentAdapter(),
