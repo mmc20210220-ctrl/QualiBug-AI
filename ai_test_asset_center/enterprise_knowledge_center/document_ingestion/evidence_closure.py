@@ -49,6 +49,7 @@ _EXACT_LOCATOR_MARKERS = (
     ";speaker-notes",
     "chars=",
 )
+_GENERATED_PRESENTATION_LABEL_RE = re.compile(r"^Slide\s+\d+$", re.I)
 
 
 def _list(value: Any) -> list[Any]:
@@ -78,6 +79,37 @@ def _address_kind(block: dict[str, Any]) -> str:
     if any(marker in locator for marker in _EXACT_LOCATOR_MARKERS):
         return "EXACT_SOURCE_LOCATOR"
     return "SOURCE_LOCATOR" if locator else "UNADDRESSED"
+
+
+def _is_generated_structure_label(block: dict[str, Any]) -> bool:
+    evidence = _dict(block.get("structure_evidence"))
+    return bool(
+        text(evidence.get("method")) == "native_presentation_slide_identity"
+        and _GENERATED_PRESENTATION_LABEL_RE.fullmatch(text(block.get("text")))
+    )
+
+
+def _authority_text(blocks: list[dict[str, Any]]) -> str:
+    values: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for block in blocks:
+        if text(block.get("type")) not in _FORMAL_TEXT_BLOCK_TYPES:
+            continue
+        if text(block.get("region")) not in {"", "body"}:
+            continue
+        if block.get("excluded_from_main_flow") or block.get(
+            "excluded_from_plain_text_projection"
+        ):
+            continue
+        value = text(block.get("text"))
+        if not value:
+            continue
+        identity = (text(block.get("source_locator")), _normalized(value))
+        if identity in seen:
+            continue
+        seen.add(identity)
+        values.append(value)
+    return "\n".join(values).strip()
 
 
 def _dedupe_gaps(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -123,8 +155,14 @@ def apply_document_evidence_closure(
     exact_blocks: list[dict[str, Any]] = []
     locator_texts: dict[str, set[str]] = defaultdict(set)
     locator_block_ids: dict[str, list[str]] = defaultdict(list)
+    generated_label_count = 0
 
     for block in blocks:
+        if _is_generated_structure_label(block):
+            block["generated_structure_label"] = True
+            block["excluded_from_plain_text_projection"] = True
+            block["business_semantics_allowed"] = False
+            generated_label_count += 1
         block_id = text(block.get("block_id"))
         locator = text(block.get("source_locator"))
         value = text(block.get("text"))
@@ -207,8 +245,12 @@ def apply_document_evidence_closure(
             }
         )
 
+    original_plain_text = text(result.get("plain_text"))
+    rebuilt_plain_text = _authority_text(blocks)
+    if blocks:
+        result["plain_text"] = rebuilt_plain_text
     plain_text = text(result.get("plain_text"))
-    if plain_text and not formal_blocks:
+    if original_plain_text and not formal_blocks:
         gaps.append(
             {
                 "kind": "PLAIN_TEXT_WITHOUT_BLOCK_EVIDENCE",
@@ -219,7 +261,7 @@ def apply_document_evidence_closure(
                 "blocks_formal_understanding": True,
                 "included_in_plain_text_authority": False,
                 "source_locator": f"{source.filename}#whole-file",
-                "plain_text_hash": hashlib.sha256(plain_text.encode("utf-8")).hexdigest(),
+                "plain_text_hash": hashlib.sha256(original_plain_text.encode("utf-8")).hexdigest(),
             }
         )
 
@@ -271,10 +313,16 @@ def apply_document_evidence_closure(
             for row in gaps
             if text(row.get("reason_code")) == "DOCUMENT_EVIDENCE_LOCATOR_CONFLICT"
         ),
+        "generated_structure_label_count": generated_label_count,
+        "plain_text_rebuilt_from_formal_blocks": bool(blocks),
+        "plain_text_authority_hash": (
+            hashlib.sha256(plain_text.encode("utf-8")).hexdigest() if plain_text else ""
+        ),
         "critical_gap_count": critical_gap_count,
         "gaps": gaps,
         "source_bytes_fingerprinted": True,
         "plain_text_requires_block_evidence": True,
+        "generated_structure_labels_are_not_source_authority": True,
         "weak_source_locators_do_not_count_as_exact_addresses": True,
         "business_semantics_added": False,
         "document_order_is_business_flow": False,
@@ -296,6 +344,7 @@ def apply_document_evidence_closure(
     structure_receipt["evidence_locator_conflict_count"] = receipt[
         "locator_conflict_count"
     ]
+    structure_receipt["generated_structure_label_count"] = generated_label_count
     structure_receipt["unsupported_content"] = unsupported
     structure_receipt["unsupported_content_count"] = sum(
         int(row.get("count") or 0) for row in unsupported
