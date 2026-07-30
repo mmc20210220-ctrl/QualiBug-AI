@@ -2,7 +2,7 @@
 
 BEFORE runs after fixtures and runtime binding validation but before any control/treatment transport.
 AFTER runs after all business transport and before cleanup. The final phase-aggregate Observer
-consumes only those typed receipts and never re-queries after cleanup. Single-query readback and
+consumes only those typed receipts and has no direct-query fallback. Single-query readback and
 phase aggregation intentionally use different Observer IDs, so registration order cannot change
 runtime authority.
 """
@@ -20,7 +20,6 @@ from .database_observer_runtime import (
     EVIDENCE_KEY,
     OBSERVER_ID as DIRECT_READBACK_OBSERVER_ID,
     execute_database_observer_contract,
-    observe_approved_database_contract,
 )
 from .observer_contracts_base import _receipt, register_observer, registered_observer_ids
 
@@ -290,15 +289,29 @@ def _expected_drafts(exp: dict[str, Any]) -> list[dict[str, Any]]:
 def aggregate_database_observer_phase_receipts(
     envelope: dict[str, Any],
 ) -> dict[str, Any]:
-    """Aggregate true phase receipts; never perform a second database query."""
+    """Aggregate true phase receipts; this handler has no database-query path."""
     env = _dict(envelope)
     experiment = _dict(env.get("experiment"))
     drafts = _expected_drafts(experiment)
     if not drafts:
-        # This aggregate ID is not a replacement for the standalone readback Observer. The
-        # fallback exists only for explicit callers that intentionally supplied the direct
-        # contract envelope under the aggregate handler.
-        return observe_approved_database_contract(env)
+        return _receipt(
+            observer_id=PHASE_AGGREGATE_OBSERVER_ID,
+            status="INDETERMINATE",
+            reason_code="DATABASE_OBSERVER_PHASE_DRAFTS_MISSING",
+            evidence={
+                "schema": AGGREGATE_SCHEMA,
+                "required_phase_count": 0,
+                "observed_phase_count": 0,
+                "missing_required_phases": [],
+                "finalizer_database_requery_count": 0,
+                "query_execution_count": 0,
+                "write_attempt_count": 0,
+                "oracle_verdict_emitted": False,
+                "direct_query_fallback_allowed": False,
+            },
+            campaign_id=_text(env.get("campaign_id")),
+            execution_id=_text(env.get("execution_id")),
+        )
     observations = _dict(env.get("observations"))
     receipts = [
         dict(row)
@@ -357,6 +370,7 @@ def aggregate_database_observer_phase_receipts(
         "write_attempt_count": 0,
         "oracle_verdict_emitted": False,
         "cleanup_state_used_as_after_snapshot": False,
+        "direct_query_fallback_allowed": False,
     }
     if missing:
         return _receipt(
