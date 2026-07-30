@@ -80,6 +80,34 @@ def _children_by_parent(blocks: Iterable[dict[str, Any]]) -> dict[str, list[dict
     return result
 
 
+def _dedupe_operation_rows(existing: Iterable[Any]) -> list[dict[str, Any]]:
+    """Collapse shallow parser duplicates onto one method/path interface identity."""
+
+    rows: list[dict[str, Any]] = []
+    by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    for raw in existing:
+        if not isinstance(raw, dict):
+            continue
+        candidate = dict(raw)
+        key = (_method(candidate.get("method")), _path(candidate.get("path")))
+        current = by_key.get(key)
+        if current is None:
+            by_key[key] = candidate
+            rows.append(candidate)
+            continue
+        for field, value in candidate.items():
+            if field in {"tags", "parameters", "tokens"}:
+                merged = []
+                for item in [*_list(current.get(field)), *_list(value)]:
+                    if item not in merged:
+                        merged.append(item)
+                current[field] = merged
+            elif current.get(field) in (None, "", [], {}):
+                current[field] = value
+        current["identity_duplicate_count"] = int(current.get("identity_duplicate_count") or 1) + 1
+    return rows
+
+
 def _operation_index(rows: Iterable[Any]) -> dict[tuple[str, str], dict[str, Any]]:
     """Index the actual row objects so enrichments cannot disappear into copies."""
 
@@ -218,7 +246,7 @@ def _postman_rows(
     blocks: list[dict[str, Any]],
     source_id: str,
 ) -> list[dict[str, Any]]:
-    rows = [dict(row) for row in existing if isinstance(row, dict)]
+    rows = _dedupe_operation_rows(existing)
     by_key = _operation_index(rows)
     children = _children_by_parent(blocks)
     for block in blocks:
@@ -374,7 +402,7 @@ def _har_rows(
     blocks: list[dict[str, Any]],
     source_id: str,
 ) -> list[dict[str, Any]]:
-    rows = [dict(row) for row in existing if isinstance(row, dict)]
+    rows = _dedupe_operation_rows(existing)
     by_key = _operation_index(rows)
     children = _children_by_parent(blocks)
     for block in blocks:
