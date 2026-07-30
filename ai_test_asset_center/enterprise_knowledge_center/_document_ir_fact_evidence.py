@@ -151,8 +151,24 @@ def _candidate_spans(
     return _contiguous_block_candidates(statement, blocks)
 
 
+def _candidate_block_payload(
+    candidates: list[list[dict[str, Any]]],
+) -> tuple[list[str], list[list[str]]]:
+    """Keep the legacy flat ID list while exposing span groupings additively."""
+    spans = [
+        [_text(row.get("block_id")) for row in span if _text(row.get("block_id"))]
+        for span in candidates
+    ]
+    flat = sorted({block_id for span in spans for block_id in span})
+    return flat, spans
+
+
 def _span_locator(span: list[dict[str, Any]]) -> str:
-    locators = [_text(row.get("source_locator")) for row in span if _text(row.get("source_locator"))]
+    locators = [
+        _text(row.get("source_locator"))
+        for row in span
+        if _text(row.get("source_locator"))
+    ]
     if not locators:
         return ""
     if len(locators) == 1:
@@ -189,6 +205,7 @@ def align_business_facts_to_document_ir(
                         "source_id": source_id,
                         "reason": "DOCUMENT_IR_SOURCE_STRUCTURE_UNAVAILABLE",
                         "candidate_block_ids": [],
+                        "candidate_block_spans": [],
                     }
                 )
             continue
@@ -202,6 +219,7 @@ def align_business_facts_to_document_ir(
                         "source_id": source_id,
                         "reason": "DOCUMENT_IR_ELIGIBLE_BLOCKS_EMPTY",
                         "candidate_block_ids": [],
+                        "candidate_block_spans": [],
                     }
                 )
             continue
@@ -209,6 +227,9 @@ def align_business_facts_to_document_ir(
             statement = _text(fact.get("raw_statement") or fact.get("statement"))
             candidates = _candidate_spans(statement, blocks)
             if len(candidates) != 1:
+                candidate_block_ids, candidate_block_spans = _candidate_block_payload(
+                    candidates
+                )
                 unresolved.append(
                     {
                         "fact_id": fact.get("fact_id"),
@@ -218,10 +239,8 @@ def align_business_facts_to_document_ir(
                             if not candidates
                             else "DOCUMENT_IR_FACT_BLOCK_NOT_UNIQUE"
                         ),
-                        "candidate_block_ids": [
-                            [row.get("block_id") for row in span]
-                            for span in candidates
-                        ],
+                        "candidate_block_ids": candidate_block_ids,
+                        "candidate_block_spans": candidate_block_spans,
                     }
                 )
                 continue
@@ -229,7 +248,9 @@ def align_business_facts_to_document_ir(
             locator = _span_locator(span)
             block_ids = [_text(row.get("block_id")) for row in span]
             primary = span[0]
-            match_kind = "SINGLE_BLOCK" if len(span) == 1 else "CONTIGUOUS_BLOCK_SPAN"
+            match_kind = (
+                "SINGLE_BLOCK" if len(span) == 1 else "CONTIGUOUS_BLOCK_SPAN"
+            )
             if len(span) == 1:
                 single_block_count += 1
             else:
@@ -311,6 +332,8 @@ def align_business_facts_to_document_ir(
         "ambiguous_matches_are_not_selected": True,
         "blocks_excluded_from_plain_text_projection_are_not_fact_authority": True,
         "cross_page_sheet_or_slide_spans_forbidden": True,
+        "candidate_block_ids_remain_flat_for_compatibility": True,
+        "candidate_block_spans_are_additive": True,
     }
     asset["business_fact_ledger"] = ledger
     asset["document_ir_fact_evidence_receipt"] = {
