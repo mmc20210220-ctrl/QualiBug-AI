@@ -60,13 +60,22 @@ def _clean(value: Any) -> Any:
 
 
 def _database_assertion(finding: dict[str, Any]) -> dict[str, Any]:
+    """Return only the assertion that the existing Finalizer chose for this finding."""
     evidence_assertion = _dict(_dict(finding.get("evidence")).get("assertion"))
-    if _text(evidence_assertion.get("kind")) == DATABASE_STATE_TRANSITION_ASSERTION_KIND:
-        return evidence_assertion
-    for raw in _list(finding.get("failed_assertions")):
-        row = _dict(raw)
-        if _text(row.get("kind")) == DATABASE_STATE_TRANSITION_ASSERTION_KIND:
-            return row
+    if evidence_assertion:
+        return (
+            evidence_assertion
+            if _text(evidence_assertion.get("kind"))
+            == DATABASE_STATE_TRANSITION_ASSERTION_KIND
+            else {}
+        )
+    failed = [_dict(raw) for raw in _list(finding.get("failed_assertions")) if _dict(raw)]
+    if (
+        len(failed) == 1
+        and _text(failed[0].get("kind"))
+        == DATABASE_STATE_TRANSITION_ASSERTION_KIND
+    ):
+        return failed[0]
     return {}
 
 
@@ -130,6 +139,7 @@ def build_database_state_transition_finding_evidence(
         "expected_after": expected.get("after"),
         "observed_before": actual.get("observed_before"),
         "observed_after": actual.get("observed_after"),
+        "lineage_match": actual.get("lineage_match") is True,
         "identity_match": actual.get("identity_match") is True,
         "before_snapshot": before,
         "after_snapshot": after,
@@ -189,6 +199,7 @@ def enrich_database_state_transition_finding(
         "actual": {
             "before": database_evidence["observed_before"],
             "after": database_evidence["observed_after"],
+            "lineage_match": database_evidence["lineage_match"],
             "identity_match": database_evidence["identity_match"],
         },
         "before_receipt": database_evidence["before_snapshot"],
