@@ -35,6 +35,13 @@ from .job_asset_pipeline import enrich_job_assets_with_governance
 from .job_behavior_projection import refresh_job_behavior_projection
 
 
+def _probe_limit(value: Any, *, default: int = 140) -> int:
+    """Resolve a Probe budget without treating an explicit zero as missing."""
+    if value is None or value == "":
+        return default
+    return max(0, int(value))
+
+
 def configure_source_parser_extensions() -> None:
     """Explicit compatibility boundary for legacy parser plugins.
 
@@ -149,7 +156,7 @@ def build_enterprise_business_knowledge_asset(
     resolved_root = root or ROOT
     project = _safe_project_id(project_id)
     resolved_options = dict(options or {})
-    final_probe_limit = max(0, int(resolved_options.get("probe_limit") or 140))
+    final_probe_limit = _probe_limit(resolved_options.get("probe_limit"))
 
     configure_source_parser_extensions()
 
@@ -210,6 +217,7 @@ def build_enterprise_business_knowledge_asset(
             "knowledge_builder_uses_explicit_composition_root": True,
             "knowledge_builder_wrapper_chain_enabled": False,
             "probe_generation_occurs_after_final_gates": True,
+            "zero_probe_budget_is_strict": True,
             "job_governance_uses_direct_function_calls": True,
             "package_import_replaces_build_authority": False,
             "parser_extension_registration_is_explicit_compatibility_boundary": True,
@@ -243,7 +251,7 @@ def generate_enterprise_business_knowledge_probes(
         asset = build_enterprise_business_knowledge_asset(
             project,
             resolved_root,
-            {"probe_limit": max_count or 140},
+            {"probe_limit": _probe_limit(max_count)},
         )
     catalog = _base_api._load_json(_paths(project, resolved_root)["probe_catalog"], {})
     rows = [
@@ -251,7 +259,7 @@ def generate_enterprise_business_knowledge_probes(
         for row in (catalog.get("items") if isinstance(catalog, dict) else []) or []
         if isinstance(row, dict)
     ]
-    return rows[: max(0, int(max_count))] if max_count is not None else rows
+    return rows[: _probe_limit(max_count, default=len(rows))] if max_count is not None else rows
 
 
 __all__ = [
