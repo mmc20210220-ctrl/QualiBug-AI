@@ -7,6 +7,10 @@ on:
     paths:
       - "pyproject.toml"
       - "ai_test_asset_center/database_observer_runtime.py"
+      - "ai_test_asset_center/database_observer_experiment_projection.py"
+      - "ai_test_asset_center/database_observer_experiment_runtime.py"
+      - "ai_test_asset_center/experiment_compiler.py"
+      - "ai_test_asset_center/experiment_executor.py"
       - "ai_test_asset_center/non_http_observers.py"
       - "ai_test_asset_center/enterprise_knowledge_center/openapi_schema_fact_projection.py"
       - "ai_test_asset_center/enterprise_knowledge_center/openapi_schema_fact_asset_projection.py"
@@ -19,6 +23,7 @@ on:
       - "ai_test_asset_center/enterprise_knowledge_center/database_observer_contract_projection.py"
       - "ai_test_asset_center/enterprise_knowledge_center/database_observer_implementation_binding.py"
       - "ai_test_asset_center/enterprise_knowledge_center/database_observer_runtime_plan_projection.py"
+      - "ai_test_asset_center/enterprise_knowledge_center/database_observer_runtime_materialization_projection.py"
       - "ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/implementation_binding_governance.py"
       - "ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/scenario_execution_contract_projection.py"
       - "ai_test_asset_center/enterprise_knowledge_center/composition.py"
@@ -33,6 +38,10 @@ on:
       - "tests/test_database_observer_implementation_binding.py"
       - "tests/test_database_observer_runtime.py"
       - "tests/test_database_observer_runtime_plan_projection.py"
+      - "tests/test_database_observer_runtime_materialization_projection.py"
+      - "tests/test_database_observer_experiment_projection.py"
+      - "tests/test_database_observer_experiment_runtime.py"
+      - "tests/test_database_observer_experiment_executor_integration.py"
       - ".github/workflows/api-database-contract-alignment.yml"
 
 permissions:
@@ -62,10 +71,14 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
-      - name: Compile contract alignment, observer and runtime stages
+      - name: Compile database understanding and execution stages
         run: |
           python -m py_compile \
             ai_test_asset_center/database_observer_runtime.py \
+            ai_test_asset_center/database_observer_experiment_projection.py \
+            ai_test_asset_center/database_observer_experiment_runtime.py \
+            ai_test_asset_center/experiment_compiler.py \
+            ai_test_asset_center/experiment_executor.py \
             ai_test_asset_center/non_http_observers.py \
             ai_test_asset_center/enterprise_knowledge_center/openapi_schema_fact_projection.py \
             ai_test_asset_center/enterprise_knowledge_center/openapi_schema_fact_asset_projection.py \
@@ -78,12 +91,13 @@ jobs:
             ai_test_asset_center/enterprise_knowledge_center/database_observer_contract_projection.py \
             ai_test_asset_center/enterprise_knowledge_center/database_observer_implementation_binding.py \
             ai_test_asset_center/enterprise_knowledge_center/database_observer_runtime_plan_projection.py \
+            ai_test_asset_center/enterprise_knowledge_center/database_observer_runtime_materialization_projection.py \
             ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/implementation_binding_governance.py \
             ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/scenario_execution_contract_projection.py \
             ai_test_asset_center/enterprise_knowledge_center/composition.py \
             ai_test_asset_center/enterprise_knowledge_center/__init__.py
 
-      - name: Run database understanding and runtime closure tests
+      - name: Run database understanding and execution closure tests
         run: |
           pytest -q \
             tests/test_openapi_schema_fact_asset_projection.py \
@@ -95,4 +109,8 @@ jobs:
             tests/test_database_observer_identity_precedence.py \
             tests/test_database_observer_implementation_binding.py \
             tests/test_database_observer_runtime.py \
-            tests/test_database_observer_runtime_plan_projection.py
+            tests/test_database_observer_runtime_plan_projection.py \
+            tests/test_database_observer_runtime_materialization_projection.py \
+            tests/test_database_observer_experiment_projection.py \
+            tests/test_database_observer_experiment_runtime.py \
+            tests/test_database_observer_experiment_executor_integration.py
