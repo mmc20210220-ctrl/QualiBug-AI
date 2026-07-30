@@ -87,6 +87,7 @@ def build_default_registry() -> DocumentAdapterRegistry:
         PdfDocumentAdapter,
         UnknownBinaryDocumentAdapter,
     )
+    from .database_model_adapter import DatabaseModelDocumentAdapter
     from .guarded_api_artifact_adapter import GuardedApiArtifactDocumentAdapter
     from .guarded_compatible_office_adapter import GuardedCompatibleOfficeDocumentAdapter
     from .native_office_policy_adapters import (
@@ -107,6 +108,7 @@ def build_default_registry() -> DocumentAdapterRegistry:
             PdfDocumentAdapter(),
             MacroAwareSpreadsheetDocumentAdapter(),
             MacroAwarePresentationDocumentAdapter(),
+            DatabaseModelDocumentAdapter(),
             GuardedCompatibleOfficeDocumentAdapter(),
             GuardedApiArtifactDocumentAdapter(),
             OcrSupplementalAdapter(),
