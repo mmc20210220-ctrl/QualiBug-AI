@@ -11,6 +11,9 @@ from ai_test_asset_center.enterprise_knowledge_center.document_ingestion.api_art
 from ai_test_asset_center.enterprise_knowledge_center.document_ingestion.contract import (
     DocumentSource,
 )
+from ai_test_asset_center.enterprise_knowledge_center.source_ingestion import (
+    project_document_ir_for_semantic_extraction,
+)
 
 
 def _serialized(value) -> str:
@@ -60,8 +63,10 @@ def test_default_pipeline_selects_openapi_adapter_and_preserves_json_pointer() -
         source_id="src_openapi",
     )
 
-    assert ir["structure_receipt"]["api_artifact_adapter"] is True
-    assert ir["artifact_structure"]["artifact_kind"] == "openapi"
+    receipt = ir["structure_receipt"]
+    assert receipt["api_artifact_adapter"] is True
+    assert receipt["api_artifact_secret_guard"] is True
+    assert receipt["artifact_kind"] == "openapi"
     operation = _blocks(ir, "OPENAPI_OPERATION")[0]
     assert operation["http_method"] == "GET"
     assert operation["api_path"] == "/orders/{id}"
@@ -70,10 +75,11 @@ def test_default_pipeline_selects_openapi_adapter_and_preserves_json_pointer() -
         "#json-pointer=/paths/~1orders~1{id}/get"
     )
     assert operation["evidence_address"]["address_kind"] == "EXACT_SOURCE_LOCATOR"
-    assert ir["structure_receipt"]["json_pointer_traceability_rate"] == 1.0
+    assert receipt["json_pointer_traceability_rate"] == 1.0
+    assert receipt["credential_values_retained"] is False
 
 
-def test_yaml_openapi_is_projected_to_canonical_json_for_existing_semantic_chain() -> None:
+def test_yaml_openapi_projects_canonical_json_into_existing_semantic_chain() -> None:
     source = b"""openapi: 3.0.3
 info:
   title: Inventory
@@ -98,16 +104,21 @@ paths:
         filename="inventory.openapi.yaml",
         source_id="src_yaml_openapi",
     )
+    projection, projection_receipt = project_document_ir_for_semantic_extraction(
+        ir,
+        filename="inventory.openapi.yaml",
+    )
+    canonical = json.loads(projection)
 
-    canonical = json.loads(ir["plain_text"])
     assert canonical["openapi"] == "3.0.3"
     assert canonical["paths"]["/items"]["post"]["operationId"] == "createItem"
+    assert projection_receipt["business_semantics_added"] is False
     assert _blocks(ir, "OPENAPI_REQUEST_BODY")[0]["json_pointer"].endswith(
         "/requestBody/content/application~1json"
     )
 
 
-def test_postman_structure_retains_declared_contract_but_removes_secrets() -> None:
+def test_postman_structure_retains_contract_but_removes_secrets_before_parsing() -> None:
     payload = {
         "info": {
             "name": "Orders",
@@ -128,10 +139,7 @@ def test_postman_structure_retains_declared_contract_but_removes_secrets() -> No
                         ],
                     },
                     "header": [
-                        {
-                            "key": "Authorization",
-                            "value": "Bearer HEADER_SECRET",
-                        },
+                        {"key": "Authorization", "value": "Bearer HEADER_SECRET"},
                         {"key": "X-Trace", "value": "trace-1"},
                     ],
                     "url": {
@@ -184,7 +192,10 @@ def test_postman_structure_retains_declared_contract_but_removes_secrets() -> No
         "BODY_SECRET",
     ):
         assert secret not in material
-    assert ir["artifact_structure"]["artifact_kind"] == "postman"
+    receipt = ir["structure_receipt"]
+    assert receipt["artifact_kind"] == "postman"
+    assert receipt["pre_parse_secret_redaction_applied"] is True
+    assert receipt["redaction_count"] >= 6
     request = _blocks(ir, "POSTMAN_REQUEST")[0]
     assert request["http_method"] == "POST"
     assert request["api_path"] == "/orders"
@@ -197,7 +208,7 @@ def test_postman_structure_retains_declared_contract_but_removes_secrets() -> No
     assert "pm.response" not in _serialized(script)
 
 
-def test_har_observation_structure_keeps_status_and_timing_without_credentials() -> None:
+def test_har_observation_keeps_status_and_timing_without_credentials() -> None:
     payload = {
         "log": {
             "version": "1.2",
@@ -210,10 +221,7 @@ def test_har_observation_structure_keeps_status_and_timing_without_credentials()
                         "method": "GET",
                         "url": "https://api.example.test/orders/42?access_token=HAR_URL_SECRET",
                         "headers": [
-                            {
-                                "name": "Authorization",
-                                "value": "Bearer HAR_HEADER_SECRET",
-                            }
+                            {"name": "Authorization", "value": "Bearer HAR_HEADER_SECRET"}
                         ],
                         "queryString": [
                             {"name": "access_token", "value": "HAR_QUERY_SECRET"}
@@ -263,7 +271,7 @@ def test_har_observation_structure_keeps_status_and_timing_without_credentials()
     assert entry["credential_values_retained"] is False
 
 
-def test_plain_json_does_not_get_claimed_as_api_artifact() -> None:
+def test_plain_json_is_not_claimed_as_api_artifact() -> None:
     adapter = ApiArtifactDocumentAdapter()
     source = DocumentSource(
         source_id="src_plain_json",
