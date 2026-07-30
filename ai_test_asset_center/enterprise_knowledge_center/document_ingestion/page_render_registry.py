@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
+from .compatible_office_adapter import CompatibleOfficePageRenderer
 from .contract import DocumentSource
 from .page_rendering import (
     PAGE_RENDER_RECEIPT_SCHEMA,
@@ -144,6 +145,7 @@ def build_default_page_renderer_registry() -> PageRendererRegistry:
         [
             UniversalImagePageRenderer(),
             PdfiumPdfPageRenderer(),
+            CompatibleOfficePageRenderer(),
             LibreOfficeDocumentPageRenderer(),
             PypdfEmbeddedImagePageRenderer(),
         ]
