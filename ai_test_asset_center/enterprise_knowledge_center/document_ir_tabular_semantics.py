@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections import defaultdict
-from typing import Any, Iterable
+from typing import Any
 
 TABULAR_SEMANTIC_RECEIPT_SCHEMA = "qualibug.document-ir-tabular-semantics-receipt.v1"
 
@@ -24,9 +24,7 @@ def _list(value: Any) -> list[Any]:
 
 
 def _normalize_header(value: Any) -> str:
-    text = _text(value).lower()
-    text = re.sub(r"[\s_\-./\\:：()（）\[\]【】]+", "", text)
-    return text
+    return re.sub(r"[\s_\-./\\:：()（）\[\]【】]+", "", _text(value).lower())
 
 
 def _stable_id(prefix: str, *parts: Any) -> str:
@@ -55,7 +53,6 @@ _BUG_ALIASES: dict[str, set[str]] = {
     "requirement": {"关联需求", "需求编号", "需求", "requirement", "story", "storyid"},
     "comments": {"备注", "评论", "处理意见", "comments", "comment", "remark"},
 }
-
 _TEST_CASE_ALIASES: dict[str, set[str]] = {
     "case_id": {"用例id", "用例编号", "测试用例编号", "caseid", "testcaseid", "编号", "id"},
     "title": {"用例标题", "用例名称", "测试点", "标题", "casetitle", "title", "name"},
@@ -75,11 +72,11 @@ _TEST_CASE_ALIASES: dict[str, set[str]] = {
 
 
 def _reverse_aliases(aliases: dict[str, set[str]]) -> dict[str, str]:
-    result: dict[str, str] = {}
-    for semantic, labels in aliases.items():
-        for label in labels:
-            result[_normalize_header(label)] = semantic
-    return result
+    return {
+        _normalize_header(label): semantic
+        for semantic, labels in aliases.items()
+        for label in labels
+    }
 
 
 _BUG_HEADERS = _reverse_aliases(_BUG_ALIASES)
@@ -115,13 +112,13 @@ def _tables(document_ir: dict[str, Any]) -> list[dict[str, Any]]:
     for raw in _list(document_ir.get("blocks")):
         if not isinstance(raw, dict) or _text(raw.get("type")) != "TABLE_CELL":
             continue
-        row = dict(raw)
-        if int(row.get("row_index") or 0) <= 0 or int(row.get("column_index") or 0) <= 0:
+        cell = dict(raw)
+        if int(cell.get("row_index") or 0) <= 0 or int(cell.get("column_index") or 0) <= 0:
             continue
-        key = membership.get(_text(row.get("block_id"))) or _fallback_table_key(row)
-        grouped[key].append(row)
+        key = membership.get(_text(cell.get("block_id"))) or _fallback_table_key(cell)
+        grouped[key].append(cell)
 
-    tables: list[dict[str, Any]] = []
+    result: list[dict[str, Any]] = []
     for table_id, cells in grouped.items():
         grid: dict[int, dict[int, dict[str, Any]]] = defaultdict(dict)
         for cell in cells:
@@ -130,27 +127,31 @@ def _tables(document_ir: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         row_numbers = sorted(grid)
         max_column = max(max(columns) for columns in grid.values() if columns)
-        tables.append(
+        locator = _text(cells[0].get("source_locator"))
+        result.append(
             {
                 "table_id": table_id,
                 "rows": grid,
                 "row_numbers": row_numbers,
                 "max_column": max_column,
-                "source_locator": _text(cells[0].get("source_locator")).split(";cell=", 1)[0].split(";table-cell=", 1)[0],
+                "source_locator": locator.split(";cell=", 1)[0].split(";table-cell=", 1)[0],
                 "sheet": _text(cells[0].get("sheet")),
             }
         )
-    return tables
+    return result
 
 
 def _header_candidates(table: dict[str, Any], limit: int = 5) -> list[int]:
-    rows = table["rows"]
-    candidates: list[int] = []
-    for row_number in table["row_numbers"][:limit]:
-        nonempty = sum(1 for cell in rows[row_number].values() if _text(cell.get("text")))
-        if nonempty >= 2:
-            candidates.append(row_number)
-    return candidates
+    return [
+        row_number
+        for row_number in table["row_numbers"][:limit]
+        if sum(
+            1
+            for cell in table["rows"][row_number].values()
+            if _text(cell.get("text"))
+        )
+        >= 2
+    ]
 
 
 def _profile_score(
@@ -165,34 +166,23 @@ def _profile_score(
         if semantic and semantic not in mapped.values():
             mapped[column] = semantic
     values = set(mapped.values())
+    score = len(values)
     if profile == "historical_bug":
-        score = len(values)
-        if "title" in values:
-            score += 4
-        if "actual" in values:
-            score += 3
-        if "steps" in values:
-            score += 3
-        if values & {"severity", "status", "bug_id"}:
-            score += 2
-        if "expected" in values and "actual" in values:
-            score += 2
+        score += 4 if "title" in values else 0
+        score += 3 if "actual" in values else 0
+        score += 3 if "steps" in values else 0
+        score += 2 if values & {"severity", "status", "bug_id"} else 0
+        score += 2 if {"expected", "actual"} <= values else 0
     else:
-        score = len(values)
-        if "title" in values:
-            score += 4
-        if "steps" in values:
-            score += 4
-        if "expected" in values:
-            score += 4
-        if values & {"case_id", "precondition", "test_data"}:
-            score += 2
+        score += 4 if "title" in values else 0
+        score += 4 if "steps" in values else 0
+        score += 4 if "expected" in values else 0
+        score += 2 if values & {"case_id", "precondition", "test_data"} else 0
     return score, mapped
 
 
 def _choose_profile(
-    table: dict[str, Any],
-    source_type: str,
+    table: dict[str, Any], source_type: str
 ) -> tuple[str, int, int, dict[int, str]] | None:
     best: tuple[str, int, int, dict[int, str]] | None = None
     for header_row in _header_candidates(table):
@@ -201,12 +191,11 @@ def _choose_profile(
             ("test_case", *_profile_score(table, header_row, _TEST_CASE_HEADERS, "test_case")),
         ]
         for profile, score, mapped in candidates:
-            explicit_bonus = 4 if (
+            explicit = (
                 profile == "historical_bug" and source_type in {"historical_bug", "ticket"}
-            ) or (profile == "test_case" and source_type in {"test_case", "test_plan"}) else 0
-            total = score + explicit_bonus
-            threshold = 8 if explicit_bonus else 11
-            if total < threshold:
+            ) or (profile == "test_case" and source_type in {"test_case", "test_plan"})
+            total = score + (4 if explicit else 0)
+            if total < (8 if explicit else 11):
                 continue
             candidate = (profile, total, header_row, mapped)
             if best is None or candidate[1] > best[1]:
@@ -234,6 +223,7 @@ def _record(
     profile: str,
     source_id: str,
     table: dict[str, Any],
+    header_row: int,
     row_number: int,
     mapped_columns: dict[int, str],
 ) -> dict[str, Any] | None:
@@ -241,7 +231,6 @@ def _record(
     semantic_values: dict[str, str] = {}
     evidence: dict[str, dict[str, Any]] = {}
     original_fields: dict[str, str] = {}
-    header_row = min(table["row_numbers"])
     for column in range(1, int(table["max_column"]) + 1):
         cell = row.get(column)
         if not isinstance(cell, dict):
@@ -271,14 +260,14 @@ def _record(
     ):
         return None
     prefix = "bug" if profile == "historical_bug" else "test_case"
-    record_id = _stable_id(prefix, source_id, table["table_id"], row_number)
     return {
-        f"{prefix}_id": record_id,
+        f"{prefix}_id": _stable_id(prefix, source_id, table["table_id"], row_number),
         "source_id": source_id,
         "source_profile": profile,
         "table_id": table["table_id"],
         "table_source_locator": table["source_locator"],
         "sheet": table["sheet"],
+        "header_row_index": header_row,
         "row_index": row_number,
         **semantic_values,
         "original_fields": original_fields,
@@ -309,7 +298,6 @@ def extract_tabular_enterprise_semantics(
     table_receipts: list[dict[str, Any]] = []
     exact_evidence_fields = 0
     total_evidence_fields = 0
-
     for table in _tables(document_ir):
         chosen = _choose_profile(table, source_type)
         if chosen is None:
@@ -332,6 +320,7 @@ def extract_tabular_enterprise_semantics(
                 profile=profile,
                 source_id=source_id,
                 table=table,
+                header_row=header_row,
                 row_number=row_number,
                 mapped_columns=mapped_columns,
             )
@@ -342,10 +331,7 @@ def extract_tabular_enterprise_semantics(
                 total_evidence_fields += 1
                 if _text(evidence.get("source_locator")) and _text(evidence.get("source_hash")):
                     exact_evidence_fields += 1
-        if profile == "historical_bug":
-            bugs.extend(records)
-        else:
-            test_cases.extend(records)
+        (bugs if profile == "historical_bug" else test_cases).extend(records)
         table_receipts.append(
             {
                 "table_id": table["table_id"],
@@ -371,7 +357,9 @@ def extract_tabular_enterprise_semantics(
         "historical_bugs": bugs,
         "test_cases": test_cases,
         "table_count": len(table_receipts),
-        "matched_table_count": sum(1 for row in table_receipts if row["status"] != "NOT_APPLICABLE"),
+        "matched_table_count": sum(
+            1 for row in table_receipts if row["status"] != "NOT_APPLICABLE"
+        ),
         "historical_bug_count": len(bugs),
         "test_case_count": len(test_cases),
         "exact_field_evidence_rate": (
