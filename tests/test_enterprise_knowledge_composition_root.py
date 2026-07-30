@@ -42,6 +42,8 @@ def test_probe_policy_is_pure_and_fail_closed() -> None:
     blocked["runtime_materialization_gate"] = {"entry_allowed": False}
     assert build_gated_probes(blocked, 12, compiler=compiler) == []
     assert calls == []
+    assert build_gated_probes(_open_gates(), 0, compiler=compiler) == []
+    assert calls == []
     assert build_gated_probes(_open_gates(), 12, compiler=compiler) == [{"probe_id": "p1"}]
     assert calls == [12]
 
