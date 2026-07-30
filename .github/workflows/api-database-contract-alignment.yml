@@ -7,11 +7,15 @@ on:
     paths:
       - "ai_test_asset_center/enterprise_knowledge_center/openapi_schema_fact_projection.py"
       - "ai_test_asset_center/enterprise_knowledge_center/openapi_schema_fact_asset_projection.py"
+      - "ai_test_asset_center/enterprise_knowledge_center/api_artifact_asset_projection.py"
+      - "ai_test_asset_center/enterprise_knowledge_center/api_operation_schema_binding.py"
       - "ai_test_asset_center/enterprise_knowledge_center/api_database_contract_alignment.py"
+      - "ai_test_asset_center/enterprise_knowledge_center/api_operation_database_projection.py"
       - "ai_test_asset_center/enterprise_knowledge_center/database_model_asset_projection.py"
       - "ai_test_asset_center/enterprise_knowledge_center/composition.py"
       - "tests/test_openapi_schema_fact_asset_projection.py"
       - "tests/test_api_database_contract_alignment.py"
+      - "tests/test_api_operation_database_lineage.py"
       - ".github/workflows/api-database-contract-alignment.yml"
 
 permissions:
@@ -46,7 +50,10 @@ jobs:
           python -m py_compile \
             ai_test_asset_center/enterprise_knowledge_center/openapi_schema_fact_projection.py \
             ai_test_asset_center/enterprise_knowledge_center/openapi_schema_fact_asset_projection.py \
+            ai_test_asset_center/enterprise_knowledge_center/api_artifact_asset_projection.py \
+            ai_test_asset_center/enterprise_knowledge_center/api_operation_schema_binding.py \
             ai_test_asset_center/enterprise_knowledge_center/api_database_contract_alignment.py \
+            ai_test_asset_center/enterprise_knowledge_center/api_operation_database_projection.py \
             ai_test_asset_center/enterprise_knowledge_center/database_model_asset_projection.py \
             ai_test_asset_center/enterprise_knowledge_center/composition.py
 
@@ -54,4 +61,5 @@ jobs:
         run: |
           pytest -q \
             tests/test_openapi_schema_fact_asset_projection.py \
-            tests/test_api_database_contract_alignment.py
+            tests/test_api_database_contract_alignment.py \
+            tests/test_api_operation_database_lineage.py
