@@ -14,6 +14,7 @@ on:
       - "tests/test_document_evidence_address_quality.py"
       - "tests/test_office_visual_ocr_supplemental.py"
       - "tests/test_document_runtime_packaging.py"
+      - "tests/test_generated_structure_label_authority.py"
       - "pyproject.toml"
       - "Dockerfile"
       - ".github/workflows/document-ingestion-closure.yml"
@@ -65,4 +66,5 @@ jobs:
             tests/test_document_structure_fact_receipt_gate.py \
             tests/test_document_evidence_address_quality.py \
             tests/test_office_visual_ocr_supplemental.py \
-            tests/test_document_runtime_packaging.py
+            tests/test_document_runtime_packaging.py \
+            tests/test_generated_structure_label_authority.py
