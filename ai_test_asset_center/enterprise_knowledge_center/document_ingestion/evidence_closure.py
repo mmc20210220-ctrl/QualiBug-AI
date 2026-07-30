@@ -156,9 +156,11 @@ def apply_document_evidence_closure(
     locator_texts: dict[str, set[str]] = defaultdict(set)
     locator_block_ids: dict[str, list[str]] = defaultdict(list)
     generated_label_count = 0
+    non_generated_text_block_count = 0
 
     for block in blocks:
-        if _is_generated_structure_label(block):
+        generated_label = _is_generated_structure_label(block)
+        if generated_label:
             block["generated_structure_label"] = True
             block["excluded_from_plain_text_projection"] = True
             block["business_semantics_allowed"] = False
@@ -166,6 +168,8 @@ def apply_document_evidence_closure(
         block_id = text(block.get("block_id"))
         locator = text(block.get("source_locator"))
         value = text(block.get("text"))
+        if value and not generated_label:
+            non_generated_text_block_count += 1
         block["source_id"] = source.source_id
         block["source_hash"] = source.content_hash
         block["source_filename"] = source.filename
@@ -250,7 +254,11 @@ def apply_document_evidence_closure(
     if blocks:
         result["plain_text"] = rebuilt_plain_text
     plain_text = text(result.get("plain_text"))
-    if original_plain_text and not formal_blocks:
+    # Generated-only structural labels (for example an untitled "Slide 1") are not
+    # source text and do not require a fake text block. Orphan real text still blocks.
+    if original_plain_text and not formal_blocks and (
+        not blocks or non_generated_text_block_count > 0
+    ):
         gaps.append(
             {
                 "kind": "PLAIN_TEXT_WITHOUT_BLOCK_EVIDENCE",
@@ -314,6 +322,7 @@ def apply_document_evidence_closure(
             if text(row.get("reason_code")) == "DOCUMENT_EVIDENCE_LOCATOR_CONFLICT"
         ),
         "generated_structure_label_count": generated_label_count,
+        "non_generated_text_block_count": non_generated_text_block_count,
         "plain_text_rebuilt_from_formal_blocks": bool(blocks),
         "plain_text_authority_hash": (
             hashlib.sha256(plain_text.encode("utf-8")).hexdigest() if plain_text else ""
@@ -323,6 +332,7 @@ def apply_document_evidence_closure(
         "source_bytes_fingerprinted": True,
         "plain_text_requires_block_evidence": True,
         "generated_structure_labels_are_not_source_authority": True,
+        "generated_only_textless_structures_are_allowed": True,
         "weak_source_locators_do_not_count_as_exact_addresses": True,
         "business_semantics_added": False,
         "document_order_is_business_flow": False,
