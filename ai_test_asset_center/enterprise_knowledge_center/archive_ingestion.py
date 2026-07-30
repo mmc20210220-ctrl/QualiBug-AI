@@ -1,8 +1,9 @@
 """Stable public facade for the canonical atomic archive-ingestion authority.
 
 The archive parser and transaction implementation live in :mod:`archive_ingestion_core`.
-This facade owns the transport boundary: ZIP-based Office/ODF/WPS documents are ordinary
-documents, not archive transports, even though their bytes begin with the PK signature.
+This facade owns the transport boundary for every recursion depth: ZIP-based Office/ODF/WPS
+documents are ordinary documents, not archive transports, even though their bytes begin with
+the PK signature.
 """
 from __future__ import annotations
 
@@ -16,6 +17,25 @@ from ..enterprise_material_formats import (
 )
 from . import archive_ingestion_core as _core
 from .archive_ingestion_core import *  # noqa: F401,F403
+
+_CORE_ARCHIVE_CLASSIFIER = _core._looks_like_archive
+
+
+def _is_archive_transport(filename: str, data: bytes) -> bool:
+    """Classify one top-level or nested payload without confusing document containers."""
+
+    if is_declared_document_container(filename):
+        return False
+    if data and inspect_pk_document_container(data):
+        return False
+    if is_declared_archive_transport(filename):
+        return True
+    return bool(_CORE_ARCHIVE_CLASSIFIER(filename, data))
+
+
+# The core owns parsing and recursion; the facade owns transport classification. Binding the
+# classifier once means nested members and top-level uploads obey exactly the same policy.
+_core._looks_like_archive = _is_archive_transport
 
 
 def _envelope_filename(row: dict[str, Any]) -> str:
