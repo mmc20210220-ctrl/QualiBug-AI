@@ -3,6 +3,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..database_observer_runtime_materialization_projection import (
+    project_database_observer_runtime_materializations,
+)
 from ..database_observer_runtime_plan_projection import (
     project_database_observers_into_runtime_plans,
 )
@@ -108,6 +111,9 @@ def project_governed_scenario_execution_contracts(
     # any materialization draft is built. This stage still opens no connection and reads no secret.
     project_database_observers_into_runtime_plans(asset, model)
     project_secure_runtime_materializations_to_asset(asset, model)
+    # Materialization freezes real BEFORE/AFTER phase requirements. Response-derived identities
+    # are AFTER-only; no stage is allowed to fabricate a pre-write snapshot for a server ID.
+    project_database_observer_runtime_materializations(asset, model)
     governance = as_dict(asset.get("governance"))
     governance.update(
         {
@@ -115,6 +121,7 @@ def project_governed_scenario_execution_contracts(
             "legacy_probe_generation_requires_runtime_materialization_gate": True,
             "runtime_projection_mutates_probe_compiler": False,
             "approved_database_observer_projection_precedes_runtime_materialization": True,
+            "approved_database_observer_phase_projection_follows_materialization": True,
         }
     )
     asset["governance"] = governance
