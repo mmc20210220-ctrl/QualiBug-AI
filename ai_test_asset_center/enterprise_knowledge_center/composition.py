@@ -1,9 +1,10 @@
 """Single explicit composition root for enterprise knowledge construction.
 
 The module owns one call graph:
-base source asset -> OpenAPI schema facts -> API artifact projection -> database-model facts ->
-cross-source contract alignment -> enterprise understanding -> downstream binding ->
-governed Jobs -> final Probe admission -> one final persistence receipt.
+base source asset -> OpenAPI schema facts -> API artifact projection -> exact operation-schema
+binding -> database-model facts -> cross-source contract alignment -> operation-scoped storage
+candidates -> enterprise understanding -> downstream binding -> governed Jobs -> final Probe
+admission -> one final persistence receipt.
 """
 from __future__ import annotations
 
@@ -22,6 +23,12 @@ from ._utils import _load_registry, _now, _paths, _save_registry
 from .api_artifact_asset_projection import enrich_asset_with_api_artifact_semantics
 from .api_database_contract_alignment import (
     enrich_asset_with_api_database_alignment_candidates,
+)
+from .api_operation_database_projection import (
+    enrich_asset_with_api_operation_database_candidates,
+)
+from .api_operation_schema_binding import (
+    enrich_asset_with_api_operation_schema_bindings,
 )
 from .database_model_asset_projection import enrich_asset_with_database_model_facts
 from .database_model_index_reconciliation import (
@@ -185,10 +192,12 @@ def build_enterprise_business_knowledge_asset(
     # below invents a business sequence from document, schema or diagram order.
     asset = enrich_asset_with_openapi_schema_facts(asset, parsed_sources)
     asset = enrich_asset_with_api_artifact_semantics(asset, parsed_sources)
+    asset = enrich_asset_with_api_operation_schema_bindings(asset)
     asset = enrich_asset_with_database_model_facts(asset, parsed_sources)
     asset = reconcile_database_model_index_assets(asset)
     asset = enrich_asset_with_database_table_alignment_candidates(asset)
     asset = enrich_asset_with_api_database_alignment_candidates(asset)
+    asset = enrich_asset_with_api_operation_database_candidates(asset)
     asset = enrich_asset_with_enterprise_understanding(
         asset, parsed_sources=parsed_sources
     )
@@ -245,11 +254,13 @@ def build_enterprise_business_knowledge_asset(
             "parser_extension_registration_is_explicit_compatibility_boundary": True,
             "openapi_schema_fact_projection_precedes_enterprise_understanding": True,
             "api_artifact_projection_precedes_enterprise_understanding": True,
+            "api_operation_schema_binding_precedes_enterprise_understanding": True,
             "database_model_projection_precedes_enterprise_understanding": True,
             "database_model_semantic_bridge_installed_explicitly": True,
             "database_model_index_reconciliation_precedes_enterprise_understanding": True,
             "database_table_alignment_precedes_enterprise_understanding": True,
             "api_database_contract_alignment_precedes_enterprise_understanding": True,
+            "api_operation_database_projection_precedes_enterprise_understanding": True,
         }
     )
     asset["governance"] = governance
