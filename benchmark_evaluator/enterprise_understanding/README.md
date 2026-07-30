@@ -11,14 +11,39 @@ to repair the product model during a benchmark run.
 ```text
 product sources
   -> existing product enterprise-understanding mainline
-  -> immutable product asset JSON
+  -> persisted final enterprise knowledge asset
+  -> immutable evaluator asset snapshot
   -> evaluator-only deterministic alignment
   -> recall / safety / root-cause receipts
 ```
 
 The Benchmark creates no second business model and writes nothing back to the product asset.
 
-## CLI
+## Capture one finalized product asset
+
+First build the project through the existing product composition root. The evaluator does not own
+or repeat that build.
+
+Then capture the already-persisted final asset:
+
+```bash
+python -m benchmark_evaluator.enterprise_understanding.capture_product_asset \
+  --project <project_id> \
+  --root <qualibug-product-root> \
+  --output <immutable-product-asset.json>
+```
+
+The capture command calls only:
+
+```text
+ai_test_asset_center.enterprise_knowledge_center.composition
+  .load_enterprise_business_knowledge_asset
+```
+
+It never calls the builder, never loads Ground Truth and never enriches or rewrites the persisted
+asset. Missing finalized assets block the capture instead of triggering an implicit rebuild.
+
+## Run the evaluator
 
 ```bash
 python -m benchmark_evaluator.enterprise_understanding \
@@ -30,6 +55,60 @@ python -m benchmark_evaluator.enterprise_understanding \
 
 Both Ground Truth and product asset are fingerprinted. The workflow receipt proves that hidden
 Ground Truth did not enter product runtime.
+
+## First source-backed baseline: TicketSLA
+
+The first committed evaluator annotation set is:
+
+```text
+benchmark_evaluator/enterprise_understanding/fixtures/ticketsla_d/ground_truth.json
+```
+
+Its authority is limited to:
+
+```text
+projects/ticketsla_d/input/BUSINESS_RULES.md
+projects/ticketsla_d/input/openapi.yaml
+_private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json
+```
+
+The first annotation batch contains:
+
+```text
+10 business objects
+4 actors
+12 core operations
+7 object relations
+6 Ticket state transitions
+25 explicit Business Behaviors
+15 Bug-to-required-Behavior dependency mappings
+```
+
+It deliberately declares:
+
+```text
+scope_complete = false
+```
+
+Therefore it can rank real misses and calculate recall for the annotated scope, but it cannot
+claim full TicketSLA business coverage or emit a false-confirmation rate. Cross-object propagation,
+complex processes, source conflicts, Expected Unknowns and implicit rules remain future human
+annotation work, not automatically generated truth.
+
+Example:
+
+```bash
+python -m benchmark_evaluator.enterprise_understanding.capture_product_asset \
+  --project ticketsla_d \
+  --root . \
+  --output evaluator_outputs/ticketsla_d/final_asset.json
+
+python -m benchmark_evaluator.enterprise_understanding \
+  --project ticketsla_d \
+  --ground-truth benchmark_evaluator/enterprise_understanding/fixtures/ticketsla_d/ground_truth.json \
+  --asset evaluator_outputs/ticketsla_d/final_asset.json \
+  --output evaluator_outputs/ticketsla_d/understanding
+```
 
 ## Ground Truth collections
 
