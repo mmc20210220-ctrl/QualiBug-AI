@@ -1,9 +1,8 @@
 """Public atomic composition root for enterprise material ingestion.
 
 The canonical CRUD transaction remains the only authority for one document. This module adds
-one missing transport invariant: members of a top-level archive activate as a group. If any
-member fails formal parsing or runtime registration, every new member from that package is
-rolled back and the previously active corpus is restored, including retrieval chunks.
+transport invariants above it: members of a top-level archive activate as a group, and a
+successful replacement package retires members no longer present in the new package version.
 """
 from __future__ import annotations
 
@@ -16,13 +15,15 @@ from ..enterprise_material_formats import (
     is_declared_archive_transport,
     is_declared_document_container,
 )
-from ..enterprise_source_registry_lifecycle import rollback_source_asset_activation
+from ..enterprise_source_registry_lifecycle import (
+    deactivate_source_asset,
+    rollback_source_asset_activation,
+)
 from . import _crud
 from ._common import PHASE, ROOT, _safe_project_id
 from ._utils import (
     _load_registry,
     _now,
-    _paths,
     _require_manage_actor,
     _save_registry,
 )
@@ -41,6 +42,10 @@ def _envelope_filename(row: dict[str, Any]) -> str:
     if not filename and row.get("file_path"):
         filename = Path(str(row.get("file_path"))).name
     return filename
+
+
+def _archive_identity(filename: str) -> str:
+    return Path(str(filename or "archive")).name.casefold()
 
 
 def _bounded_envelope_bytes(row: dict[str, Any], limit: int = 100 * 1024 * 1024) -> bytes:
@@ -109,7 +114,13 @@ def _restore_previous_chunks(
                 runtime_manifest=manifest,
             )
             if warning or str(receipt.get("status") or "") not in {"REGISTERED", "EMPTY"}:
-                raise RuntimeError(str((warning or {}).get("detail") or receipt.get("status") or "chunk restore failed"))
+                raise RuntimeError(
+                    str(
+                        (warning or {}).get("detail")
+                        or receipt.get("status")
+                        or "chunk restore failed"
+                    )
+                )
         except Exception as exc:
             errors.append(
                 {
@@ -134,7 +145,9 @@ def _rollback_archive_activation(
     failed_result: dict[str, Any],
     archive_filename: str,
 ) -> dict[str, Any]:
-    created = [dict(row) for row in failed_result.get("created") or [] if isinstance(row, dict)]
+    created = [
+        dict(row) for row in failed_result.get("created") or [] if isinstance(row, dict)
+    ]
     previous_active = {
         str(row.get("logical_key") or ""): dict(row)
         for row in before_registry.get("sources") or []
@@ -160,7 +173,11 @@ def _rollback_archive_activation(
             try:
                 rollback_source_asset_activation(
                     project,
-                    str(manifest.get("source_id") or record.get("runtime_asset_id") or ""),
+                    str(
+                        manifest.get("source_id")
+                        or record.get("runtime_asset_id")
+                        or ""
+                    ),
                     root=root,
                     actor=actor,
                     restore_source_hash=str(previous_manifest.get("source_hash") or ""),
@@ -217,12 +234,152 @@ def _rollback_archive_activation(
         "schema": "qualibug.archive-activation-rollback.v1",
         "status": "PARTIAL" if rollback_errors else "COMPLETE",
         "archive_filename": archive_filename,
-        "rolled_back_source_ids": [str(row.get("source_id") or "") for row in created],
-        "restored_source_ids": [str(row.get("source_id") or "") for row in affected_previous],
+        "rolled_back_source_ids": [
+            str(row.get("source_id") or "") for row in created
+        ],
+        "restored_source_ids": [
+            str(row.get("source_id") or "") for row in affected_previous
+        ],
         "removed_paths": sorted(set(removed_paths)),
         "errors": rollback_errors,
         "archive_members_active_after_rollback": False,
         "immutable_runtime_versions_retained": True,
+    }
+
+
+def _member_virtual_path(row: dict[str, Any]) -> str:
+    provenance = dict(row.get("archive_provenance") or {})
+    return str(
+        provenance.get("virtual_member_path")
+        or provenance.get("member_path")
+        or row.get("original_name")
+        or row.get("filename")
+        or ""
+    )
+
+
+def _record_belongs_to_archive(record: dict[str, Any], archive_filename: str) -> bool:
+    provenance = dict(record.get("archive_provenance") or {})
+    root_name = str(
+        provenance.get("top_level_archive_name")
+        or provenance.get("root_archive_filename")
+        or ""
+    )
+    return bool(root_name) and _archive_identity(root_name) == _archive_identity(
+        archive_filename
+    )
+
+
+def _reconcile_removed_archive_members(
+    *,
+    project: str,
+    root: Path,
+    actor: dict[str, Any],
+    before_registry: dict[str, Any],
+    successful_result: dict[str, Any],
+    archive_filename: str,
+) -> dict[str, Any]:
+    current_paths = {
+        _member_virtual_path(row)
+        for key in ("created", "duplicates")
+        for row in successful_result.get(key) or []
+        if isinstance(row, dict) and _member_virtual_path(row)
+    }
+    previous_members = [
+        dict(row)
+        for row in before_registry.get("sources") or []
+        if isinstance(row, dict)
+        and row.get("status") == "active"
+        and _record_belongs_to_archive(row, archive_filename)
+    ]
+    stale = [
+        row
+        for row in previous_members
+        if _member_virtual_path(row) not in current_paths
+    ]
+    if not stale:
+        return {
+            "schema": "qualibug.archive-member-reconciliation.v1",
+            "status": "COMPLETE",
+            "archive_filename": archive_filename,
+            "current_member_count": len(current_paths),
+            "retired_member_count": 0,
+            "retired_source_ids": [],
+            "errors": [],
+        }
+
+    registry = _load_registry(project, root)
+    errors: list[dict[str, Any]] = []
+    retired: list[str] = []
+    removed_chunk_paths: list[str] = []
+    for previous in stale:
+        source_id = str(previous.get("source_id") or "")
+        current = next(
+            (
+                row
+                for row in registry.get("sources") or []
+                if isinstance(row, dict)
+                and str(row.get("source_id") or "") == source_id
+                and row.get("status") == "active"
+            ),
+            None,
+        )
+        if not isinstance(current, dict):
+            continue
+        runtime_asset_id = str(current.get("runtime_asset_id") or "")
+        try:
+            deactivation = deactivate_source_asset(
+                project,
+                runtime_asset_id,
+                root=root,
+                actor=actor,
+                reason="archive_member_removed_in_new_package_version",
+            )
+            if deactivation.get("deactivated") is not True:
+                raise RuntimeError(str(deactivation.get("reason") or "runtime source not deactivated"))
+            removed_chunk_paths.extend(_crud._remove_record_chunk_index(root, current))
+            current["status"] = "retired_archive_member"
+            current["retired_at_utc"] = _now()
+            current["retired_by_archive"] = archive_filename
+            current["retired_reason"] = "member_absent_from_new_archive_version"
+            retired.append(source_id)
+        except Exception as exc:
+            errors.append(
+                {
+                    "stage": "archive_member_reconciliation",
+                    "code": "ARCHIVE_REMOVED_MEMBER_DEACTIVATION_FAILED",
+                    "source_id": source_id,
+                    "detail": f"{type(exc).__name__}: {exc}"[:500],
+                    "severity": "P0",
+                    "blocks_formal_understanding": True,
+                    "silent_failure_allowed": False,
+                }
+            )
+
+    registry.setdefault("audit_events", []).append(
+        {
+            "event": "archive_member_reconciliation",
+            "at_utc": _now(),
+            "actor": actor,
+            "archive_filename": archive_filename,
+            "current_member_paths": sorted(current_paths),
+            "retired_source_ids": retired,
+            "removed_chunk_paths": sorted(set(removed_chunk_paths)),
+            "error_count": len(errors),
+            "historical_source_bytes_retained": True,
+        }
+    )
+    _save_registry(project, root, registry)
+    return {
+        "schema": "qualibug.archive-member-reconciliation.v1",
+        "status": "PARTIAL" if errors else "COMPLETE",
+        "archive_filename": archive_filename,
+        "current_member_count": len(current_paths),
+        "retired_member_count": len(retired),
+        "retired_source_ids": retired,
+        "removed_chunk_paths": sorted(set(removed_chunk_paths)),
+        "errors": errors,
+        "historical_source_bytes_retained": True,
     }
 
 
@@ -274,6 +431,7 @@ def ingest_enterprise_knowledge_documents(
         "errors": [],
         "warnings": [],
         "rolled_back_archives": [],
+        "archive_reconciliations": [],
         "archive_expansion": {
             "schema": "qualibug.enterprise-archive-expansion.v1",
             "status": "COMPLETE",
@@ -336,6 +494,16 @@ def ingest_enterprise_knowledge_documents(
             aggregate["errors"].extend(rollback.get("errors") or [])
             aggregate["warnings"].extend(result.get("warnings") or [])
             continue
+        reconciliation = _reconcile_removed_archive_members(
+            project=project,
+            root=resolved_root,
+            actor=clean_actor,
+            before_registry=before,
+            successful_result=result,
+            archive_filename=archive_filename,
+        )
+        aggregate["archive_reconciliations"].append(reconciliation)
+        aggregate["errors"].extend(reconciliation.get("errors") or [])
         aggregate["created"].extend(result.get("created") or [])
         aggregate["duplicates"].extend(result.get("duplicates") or [])
         aggregate["warnings"].extend(result.get("warnings") or [])
@@ -351,6 +519,7 @@ def ingest_enterprise_knowledge_documents(
     aggregate["ok"] = not aggregate["errors"]
     aggregate["rebuild_recommended"] = bool(aggregate["created"])
     aggregate["archive_activation_atomic"] = True
+    aggregate["archive_member_removal_reconciled"] = True
     aggregate["ordinary_document_transaction_unchanged"] = True
     return aggregate
 
