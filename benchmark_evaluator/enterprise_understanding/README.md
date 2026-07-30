@@ -19,12 +19,46 @@ product sources
 
 The Benchmark creates no second business model and writes nothing back to the product asset.
 
-## Capture one finalized product asset
+## Isolated source-backed workflow
 
-First build the project through the existing product composition root. The evaluator does not own
-or repeat that build.
+The preferred entrypoint runs two strictly ordered phases:
 
-Then capture the already-persisted final asset:
+```text
+Phase 1 child process
+  public source manifest only
+  -> existing ingest_enterprise_knowledge_files
+  -> existing explicit composition root
+  -> persisted final asset
+  -> immutable product snapshot
+  -> child process exits
+
+Phase 2 evaluator process
+  Ground Truth is loaded only now
+  -> deterministic alignment
+  -> metrics
+  -> earliest root-cause ranking
+```
+
+Run:
+
+```bash
+python -m benchmark_evaluator.enterprise_understanding.run_source_backed_workflow \
+  --project <project_id> \
+  --product-root <qualibug-product-root> \
+  --workspace-root <clean-isolated-workspace-root> \
+  --manifest <public-source-manifest.json> \
+  --ground-truth <evaluator-ground-truth.json> \
+  --output <evaluator-output-directory>
+```
+
+The product child-process command, manifest and environment contain no Ground Truth path or hidden
+answer input. Sensitive evaluator environment variables are removed before process creation. The
+product phase uses `probe_limit=0`; it measures understanding rather than execution or Bug discovery.
+
+## Capture one already-finalized product asset
+
+For a project that has already been built through the existing product composition root, capture the
+persisted final asset directly:
 
 ```bash
 python -m benchmark_evaluator.enterprise_understanding.capture_product_asset \
@@ -43,7 +77,7 @@ ai_test_asset_center.enterprise_knowledge_center.composition
 It never calls the builder, never loads Ground Truth and never enriches or rewrites the persisted
 asset. Missing finalized assets block the capture instead of triggering an implicit rebuild.
 
-## Run the evaluator
+Then run the evaluator:
 
 ```bash
 python -m benchmark_evaluator.enterprise_understanding \
@@ -64,11 +98,22 @@ The first committed evaluator annotation set is:
 benchmark_evaluator/enterprise_understanding/fixtures/ticketsla_d/ground_truth.json
 ```
 
-Its authority is limited to:
+The product phase receives only this public manifest:
+
+```text
+benchmark_evaluator/enterprise_understanding/fixtures/ticketsla_d/source_manifest.json
+```
+
+Its public business authority is limited to:
 
 ```text
 projects/ticketsla_d/input/BUSINESS_RULES.md
 projects/ticketsla_d/input/openapi.yaml
+```
+
+Bug dependency annotations are evaluator-only and cite:
+
+```text
 _private_eval/_evaluator_private/benchmark_ticketsla_d/ground_truth.json
 ```
 
@@ -95,20 +140,36 @@ claim full TicketSLA business coverage or emit a false-confirmation rate. Cross-
 complex processes, source conflicts, Expected Unknowns and implicit rules remain future human
 annotation work, not automatically generated truth.
 
-Example:
+Run the complete TicketSLA baseline from the repository root:
 
 ```bash
-python -m benchmark_evaluator.enterprise_understanding.capture_product_asset \
+python -m benchmark_evaluator.enterprise_understanding.run_source_backed_workflow \
   --project ticketsla_d \
-  --root . \
-  --output evaluator_outputs/ticketsla_d/final_asset.json
-
-python -m benchmark_evaluator.enterprise_understanding \
-  --project ticketsla_d \
+  --product-root . \
+  --workspace-root evaluator_outputs/ticketsla_d/isolated_workspace \
+  --manifest benchmark_evaluator/enterprise_understanding/fixtures/ticketsla_d/source_manifest.json \
   --ground-truth benchmark_evaluator/enterprise_understanding/fixtures/ticketsla_d/ground_truth.json \
-  --asset evaluator_outputs/ticketsla_d/final_asset.json \
-  --output evaluator_outputs/ticketsla_d/understanding
+  --output evaluator_outputs/ticketsla_d/source_backed_baseline
 ```
+
+The isolated workspace must not already contain:
+
+```text
+platform_workspace/ticketsla_d
+platform_outputs/ticketsla_d
+```
+
+A dirty workspace blocks the run instead of silently reusing old sources or assets.
+
+The decision artifact is:
+
+```text
+evaluator_outputs/ticketsla_d/source_backed_baseline/
+  evaluation/root_cause_distribution.json
+```
+
+Its highest weighted root cause becomes the next product repair target. No understanding code should
+be changed before this receipt exists.
 
 ## Ground Truth collections
 
@@ -182,17 +243,20 @@ forbidden.
 ## Outputs
 
 ```text
-workflow_receipt.json
-ground_truth_summary.json
-understanding_alignment.json
-metric_summary.json
-missed_objects.json
-missed_operations.json
-missed_rules.json
-false_confirmations.json
-unknown_analysis.json
-conflict_analysis.json
-bug_dependency_analysis.json
-root_cause_distribution.json
-report.md
+source_backed_workflow_receipt.json
+final_enterprise_understanding_asset.json
+product_phase_receipt.json
+evaluation/workflow_receipt.json
+evaluation/ground_truth_summary.json
+evaluation/understanding_alignment.json
+evaluation/metric_summary.json
+evaluation/missed_objects.json
+evaluation/missed_operations.json
+evaluation/missed_rules.json
+evaluation/false_confirmations.json
+evaluation/unknown_analysis.json
+evaluation/conflict_analysis.json
+evaluation/bug_dependency_analysis.json
+evaluation/root_cause_distribution.json
+evaluation/report.md
 ```
