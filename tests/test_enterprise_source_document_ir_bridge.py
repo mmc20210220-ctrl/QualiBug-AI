@@ -205,3 +205,142 @@ def test_crud_does_not_decode_raw_binary_for_chunking() -> None:
     assert "from .enterprise_source_registry" not in crud
     assert "build_document_ir_retrieval_chunks" in crud
     assert '"raw_binary_utf8_decode_used": False' in crud
+
+
+def _crud_parsed_result(*, failed: bool = False) -> dict:
+    status = "BLOCKED" if failed else "COMPLETE"
+    parse_status = "failed" if failed else "parsed"
+    errors = (
+        [
+            {
+                "stage": "document_structure",
+                "code": "DOCUMENT_STRUCTURE_BLOCKED",
+                "detail": "synthetic blocked source",
+            }
+        ]
+        if failed
+        else []
+    )
+    document_ir = {
+        "format": "docx",
+        "blocks": [
+            {
+                "block_id": "paragraph-1",
+                "type": "PARAGRAPH",
+                "order": 1,
+                "text": "订单审批规则",
+                "source_locator": "requirements.docx#paragraph=1",
+                "evidence_address": {"address_kind": "EXACT_SOURCE_LOCATOR"},
+            }
+        ],
+        "tables": [],
+    }
+    return {
+        "text": "订单审批规则",
+        "payload": None,
+        "openapi": {},
+        "operations": [],
+        "tables": [],
+        "field_dictionary": [],
+        "ui_specs": [],
+        "permissions": [],
+        "tickets": [],
+        "har_errors": [],
+        "log_errors": [],
+        "rules": [],
+        "roles": [],
+        "state_machines": [],
+        "parse_status": parse_status,
+        "parser": "document_ir+md",
+        "text_hash": "b" * 64,
+        "text_length": 6,
+        "parse_errors": errors,
+        "document_ir_status": status,
+        "document_ir": document_ir,
+        "document_structure": document_ir,
+        "semantic_projection_receipt": {"projected_table_count": 0},
+        "parser_receipt": {
+            "parser": "document_ir+md",
+            "parser_status": parse_status,
+            "fidelity": "blocked" if failed else "full",
+            "evidence_closure_receipt": {"exact_address_rate": 1.0},
+            "errors": errors,
+        },
+    }
+
+
+def test_failed_new_version_does_not_supersede_active_source(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from ai_test_asset_center.enterprise_knowledge_center import _crud
+
+    monkeypatch.setattr(
+        _crud,
+        "_register_chunks",
+        lambda **kwargs: (
+            {
+                "schema": "qualibug.document-ir-chunk-index-receipt.v1",
+                "source_id": kwargs["source_id"],
+                "source_hash": kwargs["content_hash"],
+                "chunk_count": 1,
+                "exact_address_rate": 1.0,
+                "status": "REGISTERED",
+                "raw_binary_utf8_decode_used": False,
+                "silent_failure_allowed": False,
+            },
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        _crud,
+        "parse_enterprise_source",
+        lambda *args, **kwargs: _crud_parsed_result(failed=False),
+    )
+    first = _crud.ingest_enterprise_knowledge_documents(
+        "transaction_project",
+        [
+            {
+                "text": "first valid requirements",
+                "filename": "requirements.docx",
+                "source_type": "prd",
+            }
+        ],
+        root=tmp_path,
+        actor={"name": "tester", "role": "admin"},
+    )
+    first_id = first["created"][0]["source_id"]
+    assert first["ok"] is True
+    assert first["created"][0]["status"] == "active"
+
+    monkeypatch.setattr(
+        _crud,
+        "parse_enterprise_source",
+        lambda *args, **kwargs: _crud_parsed_result(failed=True),
+    )
+    second = _crud.ingest_enterprise_knowledge_documents(
+        "transaction_project",
+        [
+            {
+                "text": "second broken requirements",
+                "filename": "requirements.docx",
+                "source_type": "prd",
+            }
+        ],
+        root=tmp_path,
+        actor={"name": "tester", "role": "admin"},
+    )
+
+    inventory = _crud.list_enterprise_knowledge_sources(
+        "transaction_project",
+        root=tmp_path,
+        include_deleted=True,
+    )
+    active = [row for row in inventory["sources"] if row.get("status") == "active"]
+    failed = [row for row in inventory["sources"] if row.get("status") == "failed"]
+
+    assert second["ok"] is False
+    assert second["errors"][0]["code"] == "SOURCE_FORMAL_PARSE_BLOCKED"
+    assert [row["source_id"] for row in active] == [first_id]
+    assert len(failed) == 1
+    assert inventory["summary"]["failed_source_count"] == 1
