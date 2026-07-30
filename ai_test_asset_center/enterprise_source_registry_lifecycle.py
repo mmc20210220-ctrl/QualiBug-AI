@@ -107,15 +107,17 @@ def rollback_source_asset_activation(
     restore_hash = str(restore_source_hash or "").strip().lower()
     restore_version = str(restore_version_id or "").strip()
     versions = [row for row in asset.get("versions") or [] if isinstance(row, dict)]
-    candidate = next(
-        (
-            row
-            for row in reversed(versions)
-            if (not restore_hash or str(row.get("source_hash") or "") == restore_hash)
-            and (not restore_version or str(row.get("version_id") or "") == restore_version)
-        ),
-        None,
-    )
+    candidate = None
+    if restore_hash or restore_version:
+        candidate = next(
+            (
+                row
+                for row in reversed(versions)
+                if (not restore_hash or str(row.get("source_hash") or "") == restore_hash)
+                and (not restore_version or str(row.get("version_id") or "") == restore_version)
+            ),
+            None,
+        )
     previous_latest_hash = str(asset.get("latest_source_hash") or "")
     if candidate is None:
         assets.pop(asset_id, None)
