@@ -19,6 +19,10 @@ from ._utils import (
     _save_registry,
     _short_hash,
 )
+from .archive_expansion import (
+    expand_document_envelopes,
+    read_document_envelope_bytes,
+)
 from .source_ingestion import (
     build_document_ir_retrieval_chunks,
     parse_enterprise_source,
@@ -113,6 +117,45 @@ def _logical_key(name: str, source_type: str) -> str:
     return f"{source_type}:{_safe_slug(Path(name).stem, 72).lower()}"
 
 
+def _logical_key_for_envelope(
+    name: str,
+    source_type: str,
+    envelope: dict[str, Any],
+) -> str:
+    provenance = envelope.get("archive_provenance")
+    if not isinstance(provenance, dict):
+        return _logical_key(name, source_type)
+    package_name = str(provenance.get("top_level_archive_name") or "archive")
+    virtual_path = str(provenance.get("virtual_member_path") or name)
+    package_key = _safe_slug(Path(package_name).stem, 48).lower()
+    member_key = _short_hash({"virtual_member_path": virtual_path}, 24)
+    return f"{source_type}:archive:{package_key}:{member_key}"
+
+
+def _relative_archive_receipt_paths(
+    root: Path,
+    archive_expansion: dict[str, Any],
+) -> dict[str, Any]:
+    result = dict(archive_expansion or {})
+    packages: list[dict[str, Any]] = []
+    for raw in result.get("packages") or []:
+        if not isinstance(raw, dict):
+            continue
+        row = dict(raw)
+        stored_path = str(row.get("stored_path") or "")
+        if stored_path:
+            try:
+                row["stored_path"] = str(
+                    Path(stored_path).resolve().relative_to(root.resolve())
+                ).replace("\\", "/")
+            except (OSError, ValueError):
+                row["stored_path"] = ""
+                row["stored_path_outside_project_root"] = True
+        packages.append(row)
+    result["packages"] = packages
+    return result
+
+
 def _parse_summary(
     parsed: dict[str, Any],
     chunk_receipt: dict[str, Any],
@@ -195,6 +238,7 @@ def _register_runtime_source(
     external_ref: str,
     parsed: dict[str, Any],
     actor: dict[str, Any],
+    archive_provenance: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     projection = str(parsed.get("text") or "")
     receipt = dict(parsed.get("parser_receipt") or {})
@@ -221,6 +265,7 @@ def _register_runtime_source(
                 "projection_schema": str(
                     (parsed.get("semantic_projection_receipt") or {}).get("schema") or ""
                 ),
+                "archive_provenance": dict(archive_provenance or {}),
             },
         )
         return {
@@ -315,11 +360,11 @@ def ingest_enterprise_knowledge_documents(
     root: Path | None = None,
     actor: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Ingest path or text envelopes into project-scoped versioned source storage.
+    """Ingest local documents and archive members into one canonical source transaction.
 
-    Accepted envelope fields: file_path, text, filename/name, source_type,
-    tags and external_ref. external_ref is metadata only; this function never
-    fetches remote Feishu/Confluence content by URL.
+    Accepted envelope fields include file_path, text, content_bytes, filename/name,
+    source_type, tags and external_ref. Archive packages are retained as audit containers;
+    only their safely expanded members become business sources. No remote URL is fetched.
     """
 
     root = root or ROOT
@@ -334,7 +379,21 @@ def ingest_enterprise_knowledge_documents(
     errors: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
 
-    for index, doc in enumerate(documents or []):
+    archive_batch = expand_document_envelopes(
+        documents or [],
+        package_store_dir=paths["workspace"] / "packages",
+    )
+    archive_expansion = _relative_archive_receipt_paths(root, archive_batch.to_dict())
+    errors.extend(dict(row) for row in archive_batch.errors if isinstance(row, dict))
+    warnings.extend(dict(row) for row in archive_batch.warnings if isinstance(row, dict))
+    expanded_documents = archive_batch.documents
+    if archive_expansion.get("package_count"):
+        governance = registry.setdefault("governance", {})
+        governance["original_archive_packages_retained"] = True
+        governance["archive_members_expanded_without_archive_controlled_path_writes"] = True
+        governance["archive_security_failures_are_visible"] = True
+
+    for index, doc in enumerate(expanded_documents):
         if not isinstance(doc, dict):
             errors.append({"index": index, "error": "document envelope must be object"})
             continue
@@ -342,9 +401,12 @@ def ingest_enterprise_knowledge_documents(
         runtime_manifest: dict[str, Any] = {}
         previous_runtime_manifest: dict[str, Any] = {}
         try:
-            file_path = Path(str(doc.get("file_path"))) if doc.get("file_path") else None
-            inline_text = str(doc.get("text")) if doc.get("text") is not None else None
-            blob, detected_name, raw_text = _read_source_bytes(file_path, inline_text)
+            if doc.get("content_bytes") is not None:
+                blob, detected_name, raw_text = read_document_envelope_bytes(doc)
+            else:
+                file_path = Path(str(doc.get("file_path"))) if doc.get("file_path") else None
+                inline_text = str(doc.get("text")) if doc.get("text") is not None else None
+                blob, detected_name, raw_text = _read_source_bytes(file_path, inline_text)
             filename = str(doc.get("filename") or doc.get("name") or detected_name)
             explicit_source_type = str(doc.get("source_type") or "")
             source_type = _classify_source(filename, raw_text, explicit_source_type)
@@ -365,11 +427,12 @@ def ingest_enterprise_knowledge_documents(
                         "source_id": duplicate.get("source_id"),
                         "reason": "same_content_hash",
                         "source_type": source_type,
+                        "archive_provenance": dict(doc.get("archive_provenance") or {}),
                     }
                 )
                 continue
 
-            logical_key = _logical_key(filename, source_type)
+            logical_key = _logical_key_for_envelope(filename, source_type, doc)
             versions = [
                 int(row.get("version") or 0)
                 for row in registry["sources"]
@@ -419,7 +482,7 @@ def ingest_enterprise_knowledge_documents(
                 (previous_active or {}).get("runtime_source_manifest") or {}
             )
             runtime_asset_id = _runtime_asset_id(logical_key)
-            runtime_manifest: dict[str, Any] = {
+            runtime_manifest = {
                 "status": "NOT_REGISTERED_PARSE_FAILED" if parse_failed else "PENDING",
                 "runtime_asset_id": runtime_asset_id,
                 "original_content_hash": content_hash,
@@ -439,6 +502,7 @@ def ingest_enterprise_knowledge_documents(
                     external_ref=str(doc.get("external_ref") or "")[:500],
                     parsed=parsed,
                     actor=clean_actor,
+                    archive_provenance=dict(doc.get("archive_provenance") or {}),
                 )
                 if runtime_error:
                     parsed.setdefault("parse_errors", []).append(runtime_error)
@@ -498,6 +562,7 @@ def ingest_enterprise_knowledge_documents(
                     if str(value).strip()
                 ][:20],
                 "external_ref": str(doc.get("external_ref") or "")[:500],
+                "archive_provenance": dict(doc.get("archive_provenance") or {}),
                 "stored_path": str(stored.relative_to(root)).replace("\\", "/"),
                 "created_at_utc": _now(),
                 "created_by": clean_actor,
@@ -595,6 +660,16 @@ def ingest_enterprise_knowledge_documents(
             "duplicate_count": len(duplicates),
             "error_count": len(errors),
             "warning_count": len(warnings),
+            "archive_package_count": int(archive_expansion.get("package_count") or 0),
+            "archive_expanded_document_count": int(
+                archive_expansion.get("document_count") or 0
+            ),
+            "archive_error_count": int(archive_expansion.get("error_count") or 0),
+            "archive_hashes": [
+                str(row.get("archive_hash") or "")
+                for row in archive_expansion.get("packages") or []
+                if isinstance(row, dict) and str(row.get("archive_hash") or "")
+            ],
         }
     )
     _save_registry(project, root, registry)
@@ -606,6 +681,7 @@ def ingest_enterprise_knowledge_documents(
         "duplicates": duplicates,
         "errors": errors,
         "warnings": warnings,
+        "archive_expansion": archive_expansion,
         "source_count": len(
             [row for row in registry["sources"] if row.get("status") == "active"]
         ),
@@ -709,9 +785,10 @@ def update_enterprise_knowledge_source(
         if source_type not in SOURCE_TYPES:
             raise ValueError("unsupported source_type")
         record["source_type"] = source_type
-        record["logical_key"] = _logical_key(
+        record["logical_key"] = _logical_key_for_envelope(
             str(record.get("original_name") or "document"),
             source_type,
+            {"archive_provenance": record.get("archive_provenance") or {}},
         )
     if "external_ref" in patch:
         record["external_ref"] = str(patch.get("external_ref") or "")[:500]
