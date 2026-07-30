@@ -10,6 +10,9 @@ import re
 from collections import defaultdict
 from typing import Any, Iterable
 
+from ..database_observer_implementation_binding import (
+    apply_approved_database_observers_to_slot,
+)
 from .implementation_binding import (
     IMPLEMENTATION_BINDING_GATE_SCHEMA,
     _authoritative_interface_ids,
@@ -93,6 +96,15 @@ def _database_binding_matches_behavior(
     behavior: dict[str, Any],
     tables: dict[str, dict[str, Any]],
 ) -> bool:
+    # An exact operator-approved operation-scoped Observer does not need to re-prove
+    # object-table identity through names. The durable mapping decision is that authority.
+    if (
+        text(binding.get("derivation"))
+        == "operator_approved_database_observer_contract"
+        and bool(binding.get("authoritative"))
+        and text(binding.get("observer_id"))
+    ):
+        return True
     object_names = {
         _norm(value) for value in as_list(behavior.get("object_refs")) if _norm(value)
     }
@@ -164,6 +176,11 @@ def _govern_observer_slot(
     result["runtime_observer_available"] = status == "BOUND"
     result["request_contract_field_available"] = bool(api_contract_candidates)
     result["object_table_identity_confirmed"] = bool(matching_db_candidates)
+    result["approved_database_observer_used"] = any(
+        text(row.get("derivation"))
+        == "operator_approved_database_observer_contract"
+        for row in matching_db_candidates
+    )
     result["api_request_field_is_runtime_observer"] = False
     if reason:
         result["reason_code"] = reason
@@ -217,7 +234,7 @@ def build_governed_behavior_implementation_bindings(
     }
     tables = {
         text(row.get("table_id")): row
-        for row in _dicts(asset.get("data_tables"))
+        for row in [*_dicts(asset.get("data_tables")), *_dicts(asset.get("tables"))]
         if text(row.get("table_id"))
     }
     unknowns = [
@@ -228,6 +245,7 @@ def build_governed_behavior_implementation_bindings(
     ]
 
     governed: list[dict[str, Any]] = []
+    approved_observer_use_count = 0
     for raw_binding in bindings:
         binding = dict(raw_binding)
         behavior_id = text(binding.get("behavior_ref"))
@@ -291,13 +309,34 @@ def build_governed_behavior_implementation_bindings(
             )
 
         condition_slots = [
-            _govern_observer_slot(row, behavior=behavior, tables=tables)
+            _govern_observer_slot(
+                apply_approved_database_observers_to_slot(
+                    row,
+                    asset=asset,
+                    api_rows=api_rows,
+                ),
+                behavior=behavior,
+                tables=tables,
+            )
             for row in _dicts(binding.get("condition_observer_bindings"))
         ]
         effect_slots = [
-            _govern_observer_slot(row, behavior=behavior, tables=tables)
+            _govern_observer_slot(
+                apply_approved_database_observers_to_slot(
+                    row,
+                    asset=asset,
+                    api_rows=api_rows,
+                ),
+                behavior=behavior,
+                tables=tables,
+            )
             for row in _dicts(binding.get("effect_observer_bindings"))
         ]
+        approved_observer_use_count += sum(
+            1
+            for slot in [*condition_slots, *effect_slots]
+            if bool(slot.get("approved_database_observer_used"))
+        )
         binding["condition_observer_bindings"] = condition_slots
         binding["effect_observer_bindings"] = effect_slots
 
@@ -385,6 +424,7 @@ def build_governed_behavior_implementation_bindings(
         binding["expected_assertion_compiled"] = False
         binding["runtime_observer_gate_enforced"] = True
         binding["object_table_identity_gate_enforced"] = True
+        binding["database_mapping_authority_gate_enforced"] = True
         binding["api_request_field_is_runtime_observer"] = False
         governed.append(binding)
 
@@ -418,6 +458,7 @@ def build_governed_behavior_implementation_bindings(
             "conflicted_binding_count": counts["CONFLICTED"],
             "implementation_binding_conflict_count": len(conflicts),
             "implementation_binding_unknown_count": len(deduped_unknowns),
+            "approved_database_observer_slot_count": approved_observer_use_count,
             "scenario_ready_rate": round(ready / len(governed), 4)
             if governed
             else 0.0,
@@ -433,6 +474,8 @@ def build_governed_behavior_implementation_bindings(
         "semantic_understanding_gate_is_separate": True,
         "single_primary_action_interface_required": True,
         "object_table_identity_required_for_database_observers": True,
+        "operator_approved_mapping_required_for_scoped_database_observers": True,
+        "raw_database_fields_cannot_bypass_mapping_authority": True,
         "api_request_field_is_runtime_observer": False,
         "arbitrary_endpoint_fallback_allowed": False,
         "token_overlap_is_authoritative": False,
