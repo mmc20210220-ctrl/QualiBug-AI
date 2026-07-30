@@ -12,7 +12,7 @@ import re
 from collections import defaultdict
 from typing import Any
 
-TABULAR_SEMANTIC_RECEIPT_SCHEMA = "qualibug.document-ir-tabular-semantics-receipt.v1"
+TABULAR_SEMANTIC_RECEIPT_SCHEMA = "qualibug.document-ir-tabular-semantics-receipt.v2"
 
 
 def _text(value: Any) -> str:
@@ -58,6 +58,7 @@ _TEST_CASE_ALIASES: dict[str, set[str]] = {
     "title": {"用例标题", "用例名称", "测试点", "标题", "casetitle", "title", "name"},
     "module": {"模块", "所属模块", "功能模块", "module", "feature"},
     "precondition": {"前置条件", "前提条件", "precondition", "prerequisite"},
+    "step_no": {"步骤序号", "步骤编号", "序号", "stepno", "stepnumber", "stepindex"},
     "steps": {"测试步骤", "操作步骤", "执行步骤", "步骤", "teststeps", "steps"},
     "expected": {"预期结果", "期望结果", "检查点", "expectedresult", "expected"},
     "test_data": {"测试数据", "输入数据", "数据", "testdata", "input"},
@@ -177,7 +178,7 @@ def _profile_score(
         score += 4 if "title" in values else 0
         score += 4 if "steps" in values else 0
         score += 4 if "expected" in values else 0
-        score += 2 if values & {"case_id", "precondition", "test_data"} else 0
+        score += 2 if values & {"case_id", "precondition", "test_data", "step_no"} else 0
     return score, mapped
 
 
@@ -193,7 +194,7 @@ def _choose_profile(
         for profile, score, mapped in candidates:
             explicit = (
                 profile == "historical_bug" and source_type in {"historical_bug", "ticket"}
-            ) or (profile == "test_case" and source_type in {"test_case", "test_plan"})
+            ) or (profile == "test_case" and source_type in {"test_case", "test_plan", "test_data"})
             total = score + (4 if explicit else 0)
             if total < (8 if explicit else 11):
                 continue
@@ -230,6 +231,7 @@ def _record(
     row = table["rows"].get(row_number) or {}
     semantic_values: dict[str, str] = {}
     evidence: dict[str, dict[str, Any]] = {}
+    evidence_spans: dict[str, list[dict[str, Any]]] = {}
     original_fields: dict[str, str] = {}
     for column in range(1, int(table["max_column"]) + 1):
         cell = row.get(column)
@@ -244,7 +246,9 @@ def _record(
         semantic = mapped_columns.get(column)
         if semantic:
             semantic_values[semantic] = value
-            evidence[semantic] = _cell_evidence(cell)
+            cell_evidence = _cell_evidence(cell)
+            evidence[semantic] = cell_evidence
+            evidence_spans[semantic] = [cell_evidence]
     if not semantic_values:
         return None
     if profile == "historical_bug" and not (
@@ -259,7 +263,7 @@ def _record(
         or semantic_values.get("steps")
     ):
         return None
-    prefix = "bug" if profile == "historical_bug" else "test_case"
+    prefix = "bug" if profile == "historical_bug" else "test_case_row"
     return {
         f"{prefix}_id": _stable_id(prefix, source_id, table["table_id"], row_number),
         "source_id": source_id,
@@ -269,9 +273,11 @@ def _record(
         "sheet": table["sheet"],
         "header_row_index": header_row,
         "row_index": row_number,
+        "row_indices": [row_number],
         **semantic_values,
         "original_fields": original_fields,
         "field_evidence": evidence,
+        "field_evidence_spans": evidence_spans,
         "source_locators": sorted(
             {
                 _text(item.get("source_locator"))
@@ -282,6 +288,144 @@ def _record(
         "business_semantics_inferred": False,
         "field_mapping_method": "source_declared_header_alias",
     }
+
+
+def _append_unique(values: list[str], value: Any) -> None:
+    normalized = _text(value)
+    if normalized and normalized not in values:
+        values.append(normalized)
+
+
+def _test_case_identity(record: dict[str, Any]) -> str:
+    case_id = _text(record.get("case_id"))
+    title = _text(record.get("title"))
+    if case_id:
+        return f"id:{case_id.casefold()}"
+    if title:
+        return f"title:{title.casefold()}"
+    return ""
+
+
+def _merge_test_case_row(target: dict[str, Any], row: dict[str, Any]) -> None:
+    multi_value_fields = {"steps", "expected", "test_data", "remarks"}
+    conflicts = list(target.get("field_conflicts") or [])
+    for field, raw_value in row.items():
+        if field in {
+            "test_case_row_id",
+            "source_id",
+            "source_profile",
+            "table_id",
+            "table_source_locator",
+            "sheet",
+            "header_row_index",
+            "row_index",
+            "row_indices",
+            "original_fields",
+            "field_evidence",
+            "field_evidence_spans",
+            "source_locators",
+            "business_semantics_inferred",
+            "field_mapping_method",
+        }:
+            continue
+        value = _text(raw_value)
+        if not value:
+            continue
+        existing = _text(target.get(field))
+        if field in multi_value_fields:
+            values = list(target.setdefault("_aggregated_values", {}).setdefault(field, []))
+            _append_unique(values, existing)
+            step_no = _text(row.get("step_no"))
+            rendered = f"{step_no}. {value}" if step_no and field in {"steps", "expected"} else value
+            _append_unique(values, rendered)
+            target["_aggregated_values"][field] = values
+            target[field] = "\n".join(values)
+        elif not existing:
+            target[field] = value
+        elif existing != value and field != "step_no":
+            conflicts.append(
+                {
+                    "field": field,
+                    "kept_value": existing,
+                    "conflicting_value": value,
+                    "row_index": int(row.get("row_index") or 0),
+                    "source_locator": next(
+                        (
+                            _text(item.get("source_locator"))
+                            for item in (row.get("field_evidence_spans") or {}).get(field, [])
+                            if _text(item.get("source_locator"))
+                        ),
+                        "",
+                    ),
+                }
+            )
+    target["field_conflicts"] = conflicts
+    target["row_indices"] = sorted(
+        {
+            *[int(value) for value in target.get("row_indices") or [] if int(value) > 0],
+            *[int(value) for value in row.get("row_indices") or [] if int(value) > 0],
+        }
+    )
+    target["row_index"] = min(target["row_indices"]) if target["row_indices"] else 0
+    for header, value in (row.get("original_fields") or {}).items():
+        target.setdefault("original_fields", {}).setdefault(header, value)
+    for field, spans in (row.get("field_evidence_spans") or {}).items():
+        bucket = target.setdefault("field_evidence_spans", {}).setdefault(field, [])
+        known = {_text(item.get("block_id")) for item in bucket if isinstance(item, dict)}
+        for evidence in spans or []:
+            if not isinstance(evidence, dict):
+                continue
+            block_id = _text(evidence.get("block_id"))
+            if block_id and block_id not in known:
+                bucket.append(dict(evidence))
+                known.add(block_id)
+        if bucket:
+            target.setdefault("field_evidence", {})[field] = dict(bucket[0])
+    target["source_locators"] = sorted(
+        {
+            *[_text(value) for value in target.get("source_locators") or [] if _text(value)],
+            *[_text(value) for value in row.get("source_locators") or [] if _text(value)],
+        }
+    )
+
+
+def _group_test_case_rows(
+    records: list[dict[str, Any]],
+    *,
+    source_id: str,
+    table_id: str,
+) -> list[dict[str, Any]]:
+    grouped: list[dict[str, Any]] = []
+    by_identity: dict[str, dict[str, Any]] = {}
+    last: dict[str, Any] | None = None
+    for row in records:
+        identity = _test_case_identity(row)
+        target = by_identity.get(identity) if identity else None
+        if target is None and not identity and last is not None and (
+            _text(row.get("steps"))
+            or _text(row.get("expected"))
+            or _text(row.get("test_data"))
+        ):
+            target = last
+        if target is None:
+            target = dict(row)
+            target.pop("test_case_row_id", None)
+            stable_identity = identity or f"row:{int(row.get('row_index') or 0)}"
+            target["test_case_id"] = _stable_id(
+                "test_case", source_id, table_id, stable_identity
+            )
+            target["aggregated_from_multiple_rows"] = False
+            grouped.append(target)
+            if identity:
+                by_identity[identity] = target
+        else:
+            _merge_test_case_row(target, row)
+            target["aggregated_from_multiple_rows"] = len(target.get("row_indices") or []) > 1
+        last = target
+    for record in grouped:
+        record.pop("_aggregated_values", None)
+        record["field_conflict_count"] = len(record.get("field_conflicts") or [])
+    return grouped
 
 
 def extract_tabular_enterprise_semantics(
@@ -298,6 +442,7 @@ def extract_tabular_enterprise_semantics(
     table_receipts: list[dict[str, Any]] = []
     exact_evidence_fields = 0
     total_evidence_fields = 0
+    conflict_count = 0
     for table in _tables(document_ir):
         chosen = _choose_profile(table, source_type)
         if chosen is None:
@@ -312,7 +457,7 @@ def extract_tabular_enterprise_semantics(
             )
             continue
         profile, score, header_row, mapped_columns = chosen
-        records: list[dict[str, Any]] = []
+        raw_records: list[dict[str, Any]] = []
         for row_number in table["row_numbers"]:
             if row_number <= header_row:
                 continue
@@ -324,13 +469,24 @@ def extract_tabular_enterprise_semantics(
                 row_number=row_number,
                 mapped_columns=mapped_columns,
             )
-            if record is None:
-                continue
-            records.append(record)
-            for evidence in record["field_evidence"].values():
-                total_evidence_fields += 1
-                if _text(evidence.get("source_locator")) and _text(evidence.get("source_hash")):
-                    exact_evidence_fields += 1
+            if record is not None:
+                raw_records.append(record)
+        records = (
+            _group_test_case_rows(
+                raw_records,
+                source_id=source_id,
+                table_id=table["table_id"],
+            )
+            if profile == "test_case"
+            else raw_records
+        )
+        for record in records:
+            for spans in (record.get("field_evidence_spans") or {}).values():
+                for evidence in spans or []:
+                    total_evidence_fields += 1
+                    if _text(evidence.get("source_locator")) and _text(evidence.get("source_hash")):
+                        exact_evidence_fields += 1
+            conflict_count += int(record.get("field_conflict_count") or 0)
         (bugs if profile == "historical_bug" else test_cases).extend(records)
         table_receipts.append(
             {
@@ -340,10 +496,13 @@ def extract_tabular_enterprise_semantics(
                 "profile_score": score,
                 "header_row": header_row,
                 "mapped_columns": {
-                    str(column): semantic for column, semantic in sorted(mapped_columns.items())
+                    str(column): semantic
+                    for column, semantic in sorted(mapped_columns.items())
                 },
                 "row_count": len(table["row_numbers"]),
+                "raw_record_count": len(raw_records),
                 "record_count": len(records),
+                "multi_row_records_grouped": max(0, len(raw_records) - len(records)),
                 "source_locator": table["source_locator"],
                 "business_semantics_added": False,
             }
@@ -362,6 +521,10 @@ def extract_tabular_enterprise_semantics(
         ),
         "historical_bug_count": len(bugs),
         "test_case_count": len(test_cases),
+        "multi_row_test_case_count": sum(
+            1 for row in test_cases if row.get("aggregated_from_multiple_rows")
+        ),
+        "field_conflict_count": conflict_count,
         "exact_field_evidence_rate": (
             round(exact_evidence_fields / total_evidence_fields, 4)
             if total_evidence_fields
@@ -371,6 +534,8 @@ def extract_tabular_enterprise_semantics(
         "container_format_parsing_performed": False,
         "business_semantics_added": False,
         "header_aliases_are_source_label_normalization_only": True,
+        "blank_identity_rows_attach_only_to_preceding_source_declared_case": True,
+        "table_order_is_not_business_flow": True,
     }
 
 
