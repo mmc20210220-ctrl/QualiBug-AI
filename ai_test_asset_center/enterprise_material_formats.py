@@ -2,8 +2,8 @@
 
 This module answers one narrow question: what kind of transport container reached the
 system? It does not claim semantic fidelity. Document adapters, archive providers and HTTP
-boundaries import the same immutable sets so a ZIP-based Office document cannot be routed as
-an archive merely because both containers begin with the PK signature.
+boundaries import the same immutable sets so a ZIP-based Office or database-model document
+cannot be routed as an archive merely because both containers begin with the PK signature.
 """
 from __future__ import annotations
 
@@ -44,7 +44,12 @@ ENTERPRISE_PRESENTATION_CONTAINER_SUFFIXES = frozenset(
 ENTERPRISE_IMAGE_SUFFIXES = frozenset(
     {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif"}
 )
-ENTERPRISE_OTHER_BINARY_DOCUMENT_SUFFIXES = frozenset({".pdf"})
+ENTERPRISE_DATABASE_MODEL_SUFFIXES = frozenset(
+    {".pdm", ".mwb", ".sqlite", ".sqlite3", ".db"}
+)
+ENTERPRISE_OTHER_BINARY_DOCUMENT_SUFFIXES = frozenset(
+    {".pdf"} | ENTERPRISE_DATABASE_MODEL_SUFFIXES
+)
 
 ENTERPRISE_OFFICE_CONTAINER_SUFFIXES = frozenset(
     ENTERPRISE_WORD_CONTAINER_SUFFIXES
@@ -76,6 +81,7 @@ ZIP_BASED_DOCUMENT_SUFFIXES = frozenset(
         ".xlsx", ".xlsm", ".xlsb", ".xltx", ".xltm",
         ".pptx", ".pptm", ".potx", ".potm", ".ppsx", ".ppsm",
         ".odt", ".ods", ".odp", ".wps", ".wpt", ".et", ".ett", ".dps", ".dpt",
+        ".mwb",
     }
 )
 
@@ -103,7 +109,8 @@ def inspect_pk_document_container(data: bytes, *, max_members: int = 20_000) -> 
     """Return a known ZIP-based document family without extracting member content.
 
     The check is intentionally structural and bounded. It prevents extensionless or renamed
-    OOXML/ODF packages from being recursively expanded as user archive transports.
+    OOXML/ODF/MySQL Workbench packages from being recursively expanded as user archive
+    transports.
     """
 
     value = bytes(data or b"")
@@ -124,6 +131,8 @@ def inspect_pk_document_container(data: bytes, *, max_members: int = 20_000) -> 
                     return "ooxml_binary_spreadsheet"
                 if "ppt/presentation.xml" in names:
                     return "ooxml_presentation"
+            if "document.mwb.xml" in names:
+                return "mysql_workbench_model"
             # ODF packages contain content.xml and META-INF/manifest.xml. Several WPS-family
             # packages also expose a document manifest; the declared suffix remains primary.
             if "content.xml" in names and "META-INF/manifest.xml" in names:
@@ -139,6 +148,7 @@ __all__ = [
     "ENTERPRISE_SPREADSHEET_CONTAINER_SUFFIXES",
     "ENTERPRISE_PRESENTATION_CONTAINER_SUFFIXES",
     "ENTERPRISE_IMAGE_SUFFIXES",
+    "ENTERPRISE_DATABASE_MODEL_SUFFIXES",
     "ENTERPRISE_OTHER_BINARY_DOCUMENT_SUFFIXES",
     "ENTERPRISE_OFFICE_CONTAINER_SUFFIXES",
     "ENTERPRISE_BINARY_DOCUMENT_SUFFIXES",
