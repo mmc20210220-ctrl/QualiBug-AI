@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Phase58: Enterprise knowledge unified ingestion.
 
-This module is intentionally small and composable.  It does not introduce a
+This module is intentionally small and composable. It does not introduce a
 second business-rule engine: it normalizes enterprise-provided materials into a
 versioned, traceable knowledge asset and reuses the existing Phase57 industry
 reasoning, Phase56 assurance coverage, probe planner and reporting chain.
@@ -14,9 +14,10 @@ Supported local/imported materials:
 - SQL / database schema exports
 - permission matrices (CSV/JSON/text)
 - historical bugs / tickets (CSV/JSON/text)
+- test cases / plans / reports
 - Feishu / Confluence exported documents or connector-provided text envelopes
 
-No network crawling is performed.  External systems must provide exported
+No network crawling is performed. External systems must provide exported
 content or a trusted connector payload to keep access control and audit scope
 explicit.
 """
@@ -51,7 +52,6 @@ except ImportError:
 from ..real_project_onboarding import ROOT, _html_escape, _load_json, _safe_project_id, _write_json, config_paths, load_real_project_config
 from ..product_ui import _icon, callout, detail_list, empty_state, h, metric_card, product_shell, section, status_badge, table
 
-# Re-export underscore-prefixed helpers so `from ._common import *` propagates them
 __all__ = [
     "ROOT", "_html_escape", "_load_json", "_safe_project_id", "_write_json",
     "config_paths", "load_real_project_config",
@@ -72,6 +72,7 @@ SOURCE_TYPES = {
     "prd", "mrd", "openapi", "markdown_api", "postman", "har",
     "application_log", "database_schema", "db_field_dictionary",
     "permission_matrix", "historical_bug", "ticket",
+    "test_case", "test_plan", "test_report",
     "uiux_spec", "uiux_svg",
     "db_design", "business_rules", "ui_design", "test_data",
     "config", "deploy",
@@ -149,5 +150,3 @@ SEMANTIC_LEXICON_PATH = (
     Path(__file__).resolve().parents[1] / "policies" / "semantic_lexicon.json"
 )
 _SEMANTIC_LEXICON_CACHE: dict[str, Any] | None = None
-
-
