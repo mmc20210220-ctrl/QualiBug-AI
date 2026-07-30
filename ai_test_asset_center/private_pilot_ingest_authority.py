@@ -73,6 +73,7 @@ def ingest_uploaded_enterprise_material(
                 explicit_type,
             )
             envelope["source_type"] = source_hint
+            envelope["inherit_source_type_to_members"] = True
             type_resolution = "explicit_member_override"
         doc_type = "archive_package"
     else:
@@ -120,6 +121,7 @@ def ingest_uploaded_enterprise_material(
             "canonical_archive_authority": archive_expansion.get(
                 "canonical_archive_authority"
             ),
+            "archive_member_type_mode": type_resolution,
         }
 
     source_ids = _source_ids(ingest_result)
