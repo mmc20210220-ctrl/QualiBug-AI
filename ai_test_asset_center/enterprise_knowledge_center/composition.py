@@ -21,6 +21,7 @@ from ._formal_ui_visual_viewport_guard import install_formal_ui_visual_viewport_
 from ._utils import _load_registry, _now, _paths, _save_registry
 from .api_artifact_asset_projection import enrich_asset_with_api_artifact_semantics
 from .database_model_asset_projection import enrich_asset_with_database_model_facts
+from .database_model_semantic_bridge import install_database_model_semantic_bridge
 from .enterprise_understanding.integration import (
     _parsed_sources_for_context,
     enrich_asset_with_enterprise_understanding,
@@ -56,6 +57,7 @@ def configure_source_parser_extensions() -> None:
     install_formal_ui_visual_baseline_guard()
     install_formal_ui_visual_viewport_guard()
     install_interface_runtime_contract_parser()
+    install_database_model_semantic_bridge()
 
 
 def _finalize_probe_relationships(
@@ -229,6 +231,7 @@ def build_enterprise_business_knowledge_asset(
             "parser_extension_registration_is_explicit_compatibility_boundary": True,
             "api_artifact_projection_precedes_enterprise_understanding": True,
             "database_model_projection_precedes_enterprise_understanding": True,
+            "database_model_semantic_bridge_installed_explicitly": True,
         }
     )
     asset["governance"] = governance
