@@ -19,14 +19,16 @@ def _phase(
     match_status: str = "MATCHED_ONE",
     identity: list[str] | None = None,
     contract_ref: str = "observer:orders",
+    campaign_id: str = "campaign-1",
+    execution_id: str = "execution-1",
 ) -> dict:
     rows = [{"id": "o-1", "status": value}] if match_status == "MATCHED_ONE" else []
     row_count = 1 if match_status == "MATCHED_ONE" else 2 if match_status == "NON_UNIQUE_IDENTITY" else 0
     return {
         "schema_version": "qualibug.observer-receipt.v1",
-        "receipt_id": f"obs-{phase.lower()}-{value}",
-        "campaign_id": "campaign-1",
-        "execution_id": "execution-1",
+        "receipt_id": f"obs-{phase.lower()}-{value}-{execution_id}",
+        "campaign_id": campaign_id,
+        "execution_id": execution_id,
         "observer_id": "approved_database_readback",
         "status": "OBSERVED",
         "reason_code": "",
@@ -90,6 +92,7 @@ def test_exact_pending_to_paid_transition_passes() -> None:
 
     assert receipt["status"] == "PASS"
     assert receipt["passed"] is True
+    assert receipt["actual"]["lineage_match"] is True
     assert receipt["actual"]["identity_match"] is True
     assert receipt["actual"]["observed_before"] == "PENDING"
     assert receipt["actual"]["observed_after"] == "PAID"
@@ -150,6 +153,16 @@ def test_identity_drift_between_phases_is_indeterminate() -> None:
 
     assert receipt["status"] == "INDETERMINATE"
     assert receipt["reason_code"] == "DATABASE_STATE_IDENTITY_MISMATCH"
+
+
+def test_cross_execution_phase_pair_is_indeterminate() -> None:
+    before = _phase("BEFORE", "PENDING", execution_id="execution-1")
+    after = _phase("AFTER", "PAID", execution_id="execution-2")
+    receipt = _evaluate(_assertion(), before, after)
+
+    assert receipt["status"] == "INDETERMINATE"
+    assert receipt["reason_code"] == "DATABASE_STATE_RECEIPT_LINEAGE_MISMATCH"
+    assert receipt["actual"]["lineage_match"] is False
 
 
 def test_missing_after_phase_is_indeterminate() -> None:
