@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - "ai_test_asset_center/enterprise_knowledge_center/document_ingestion/**"
+      - "ai_test_asset_center/enterprise_knowledge_center/archive_expansion.py"
       - "ai_test_asset_center/enterprise_knowledge_center/source_ingestion.py"
       - "ai_test_asset_center/enterprise_knowledge_center/_crud.py"
       - "ai_test_asset_center/enterprise_source_registry_lifecycle.py"
@@ -23,6 +24,8 @@ on:
       - "tests/test_office_runtime_capabilities.py"
       - "tests/test_office_container_inspection.py"
       - "tests/test_office_container_resource_limits.py"
+      - "tests/test_enterprise_archive_expansion.py"
+      - "tests/test_enterprise_archive_ingestion_transaction.py"
       - "tests/test_document_ir_fact_evidence_spans.py"
       - "tests/test_document_structure_fact_receipt_gate.py"
       - "tests/test_document_evidence_address_quality.py"
@@ -76,6 +79,7 @@ jobs:
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/pipeline.py \
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/planner.py \
             ai_test_asset_center/enterprise_knowledge_center/document_ingestion/registry.py \
+            ai_test_asset_center/enterprise_knowledge_center/archive_expansion.py \
             ai_test_asset_center/enterprise_knowledge_center/source_ingestion.py \
             ai_test_asset_center/enterprise_knowledge_center/_crud.py \
             ai_test_asset_center/enterprise_source_registry_lifecycle.py \
@@ -97,6 +101,8 @@ jobs:
             tests/test_office_runtime_capabilities.py \
             tests/test_office_container_inspection.py \
             tests/test_office_container_resource_limits.py \
+            tests/test_enterprise_archive_expansion.py \
+            tests/test_enterprise_archive_ingestion_transaction.py \
             tests/test_document_ir_fact_evidence_spans.py \
             tests/test_document_structure_fact_receipt_gate.py \
             tests/test_document_evidence_address_quality.py \
