@@ -1,7 +1,7 @@
 """Bind numeric business rules to exact approved database fields.
 
 This projection runs after approved database Observer drafts and the database
-state-transition projection have been attached to an Experiment.  It replaces
+state-transition projection have been attached to an Experiment. It replaces
 only source ``field_delta`` assertions and simple ``unchanged_sum`` conservation
 rules whose every term resolves to exactly one approved database field binding.
 No fuzzy matching, automatic conflict winner, cross-contract relation guess, or
@@ -19,7 +19,6 @@ from .database_numeric_oracle import (
 from .database_state_transition_experiment_projection import (
     _binding_identity_values,
     _binding_name_values,
-    _dedupe,
     _dict,
     _draft_pairs,
     _fingerprint,
@@ -29,7 +28,14 @@ from .database_state_transition_experiment_projection import (
 
 PROJECTION_SCHEMA = "qualibug.database-numeric-experiment-projection.v1"
 _BLOCK_REASON = "BLOCKED_DATABASE_NUMERIC_ORACLE_BINDING_AMBIGUOUS"
+_FALLBACK_BLOCK_REASON = "BLOCKED_DATABASE_NUMERIC_HTTP_FALLBACK_OBSERVER_MISSING"
 _SOURCE_KINDS = frozenset({"field_delta", "conservation"})
+_NUMERIC_KINDS = frozenset(
+    {
+        DATABASE_NUMERIC_DELTA_ASSERTION_KIND,
+        DATABASE_NUMERIC_CONSERVATION_ASSERTION_KIND,
+    }
+)
 _HTTP_STATE_DEPENDENT_KINDS = frozenset(
     {
         "state_transition",
@@ -68,7 +74,17 @@ def _source_kind(assertion: dict[str, Any]) -> str:
     return _text(assertion.get("kind") or assertion.get("type")).lower()
 
 
-def _walk_tokens(value: Any, ids: set[str], names: set[str], literals: set[str]) -> None:
+def _looks_like_identifier(value: Any) -> bool:
+    text = _text(value)
+    return bool(
+        text.startswith("#/")
+        or ":" in text
+        or text.startswith("field_")
+        or text.startswith("binding_")
+    )
+
+
+def _walk_tokens(value: Any, ids: set[str], names: set[str]) -> None:
     if isinstance(value, dict):
         for key, child in value.items():
             normalized = _text(key).lower()
@@ -77,12 +93,10 @@ def _walk_tokens(value: Any, ids: set[str], names: set[str], literals: set[str])
             elif normalized in _NAME_KEYS and _name_token(child):
                 names.add(_name_token(child))
             if isinstance(child, (dict, list)):
-                _walk_tokens(child, ids, names, literals)
+                _walk_tokens(child, ids, names)
     elif isinstance(value, list):
         for child in value:
-            _walk_tokens(child, ids, names, literals)
-    elif isinstance(value, str) and _text(value):
-        literals.add(_text(value))
+            _walk_tokens(child, ids, names)
 
 
 def _term_tokens(raw: Any) -> tuple[set[str], set[str], set[str]]:
@@ -90,13 +104,21 @@ def _term_tokens(raw: Any) -> tuple[set[str], set[str], set[str]]:
     names: set[str] = set()
     literals: set[str] = set()
     if isinstance(raw, str):
-        literals.add(_text(raw))
+        text = _text(raw)
+        if _looks_like_identifier(text):
+            ids.add(text)
+        elif _name_token(text):
+            names.add(_name_token(text))
+            literals.add(text)
     else:
-        _walk_tokens(raw, ids, names, literals)
+        _walk_tokens(raw, ids, names)
     return ids, names, literals
 
 
-def _approved_field_candidates(raw_term: Any, experiment: dict[str, Any]) -> list[dict[str, Any]]:
+def _approved_field_candidates(
+    raw_term: Any,
+    experiment: dict[str, Any],
+) -> list[dict[str, Any]]:
     explicit_ids, explicit_names, literals = _term_tokens(raw_term)
     id_matches: list[dict[str, Any]] = []
     name_matches: list[dict[str, Any]] = []
@@ -113,7 +135,7 @@ def _approved_field_candidates(raw_term: Any, experiment: dict[str, Any]) -> lis
             identities = _binding_identity_values(binding)
             names = _binding_name_values(binding)
             candidate = {**pair, "field_binding": binding}
-            if explicit_ids.intersection(identities) or literals.intersection(identities):
+            if explicit_ids.intersection(identities):
                 candidate["match_basis"] = "EXACT_FIELD_ID"
                 id_matches.append(candidate)
             elif explicit_names.intersection(names) or {
@@ -122,9 +144,10 @@ def _approved_field_candidates(raw_term: Any, experiment: dict[str, Any]) -> lis
                 candidate["match_basis"] = "EXACT_FIELD_NAME"
                 name_matches.append(candidate)
 
-    # Explicit identifiers and literal values that exactly equal a binding identity
-    # dominate presentation names.  A failed explicit id must never downgrade to name.
-    selected = id_matches if explicit_ids or id_matches else name_matches
+    # Explicit identifiers dominate presentation names. If an explicit id does
+    # not resolve, fail visibly rather than silently downgrading to a matching
+    # field name that may refer to another table or business concept.
+    selected = id_matches if explicit_ids else name_matches
     deduped: dict[tuple[str, str], dict[str, Any]] = {}
     for row in selected:
         key = (
@@ -246,13 +269,18 @@ def _project_assertion(
     }
 
 
-def _blocked(experiment: dict[str, Any], detail: dict[str, Any]) -> dict[str, Any]:
+def _blocked(
+    experiment: dict[str, Any],
+    detail: dict[str, Any],
+    *,
+    reason_code: str = _BLOCK_REASON,
+) -> dict[str, Any]:
     row = deepcopy(experiment)
     receipt = _dict(row.get("compile_receipt"))
     receipt.update(
         {
             "status": "BLOCKED",
-            "reason_code": _BLOCK_REASON,
+            "reason_code": reason_code,
             "database_numeric_oracle_detail": detail,
         }
     )
@@ -268,6 +296,14 @@ def _blocked(experiment: dict[str, Any], detail: dict[str, Any]) -> dict[str, An
 
 def _source_requires_http_state(assertion: dict[str, Any]) -> bool:
     return _source_kind(assertion) in _HTTP_STATE_DEPENDENT_KINDS
+
+
+def _observer_ids(experiment: dict[str, Any]) -> set[str]:
+    return {
+        _text(row.get("observer_id"))
+        for row in _list(experiment.get("observers"))
+        if isinstance(row, dict) and _text(row.get("observer_id"))
+    }
 
 
 def project_database_numeric_assertions(experiment_pack: dict[str, Any]) -> dict[str, Any]:
@@ -356,6 +392,30 @@ def project_database_numeric_assertions(experiment_pack: dict[str, Any]) -> dict
                 incomplete_count += 1
                 continue
 
+            binding_keys = [
+                (
+                    _text(row.get("database_observer_contract_ref")),
+                    _text(row.get("field_binding_id")),
+                )
+                for row in terms
+            ]
+            if len(set(binding_keys)) != len(binding_keys):
+                gaps.append(
+                    {
+                        "assertion_id": _text(assertion.get("assertion_id")),
+                        "reason_code": "DATABASE_NUMERIC_DUPLICATE_FIELD_TERM",
+                        "duplicate_binding_keys": [
+                            {"observer_contract_ref": contract_ref, "field_binding_id": field_binding_id}
+                            for contract_ref, field_binding_id in binding_keys
+                            if binding_keys.count((contract_ref, field_binding_id)) > 1
+                        ],
+                        "automatic_deduplication_allowed": False,
+                    }
+                )
+                projected.append(assertion)
+                incomplete_count += 1
+                continue
+
             if source_kind == "conservation":
                 contract_refs = {
                     _text(row.get("database_observer_contract_ref")) for row in terms
@@ -381,14 +441,32 @@ def project_database_numeric_assertions(experiment_pack: dict[str, Any]) -> dict
             continue
 
         experiment["assertions"] = projected
+        unresolved_numeric = [
+            row for row in projected if _source_kind(row) in _SOURCE_KINDS
+        ]
+        if unresolved_numeric and not {
+            "before_state",
+            "after_state",
+        }.issubset(_observer_ids(experiment)):
+            newly_blocked.append(
+                _blocked(
+                    experiment,
+                    {
+                        "reason": "legacy_numeric_assertion_requires_http_before_after",
+                        "unresolved_assertion_ids": [
+                            _text(row.get("assertion_id")) for row in unresolved_numeric
+                        ],
+                        "required_observer_ids": ["before_state", "after_state"],
+                        "present_observer_ids": sorted(_observer_ids(experiment)),
+                        "automatic_observer_recreation_allowed": False,
+                    },
+                    reason_code=_FALLBACK_BLOCK_REASON,
+                )
+            )
+            continue
+
         numeric_rows = [
-            row
-            for row in projected
-            if _source_kind(row)
-            in {
-                DATABASE_NUMERIC_DELTA_ASSERTION_KIND,
-                DATABASE_NUMERIC_CONSERVATION_ASSERTION_KIND,
-            }
+            row for row in projected if _source_kind(row) in _NUMERIC_KINDS
         ]
         if numeric_rows:
             remaining_http_state = any(_source_requires_http_state(row) for row in projected)
@@ -431,6 +509,11 @@ def project_database_numeric_assertions(experiment_pack: dict[str, Any]) -> dict
                         "assertion_kinds": sorted(kinds),
                     }
                 )
+                all_assertion_kinds = {
+                    _source_kind(row) for row in projected if _source_kind(row)
+                }
+                if len(all_assertion_kinds) == 1:
+                    runtime_contract["assertion_kind"] = next(iter(all_assertion_kinds))
                 experiment["field_oracle_runtime_contract"] = runtime_contract
         elif gaps:
             experiment["database_numeric_projection_status"] = "INCOMPLETE"
@@ -447,8 +530,10 @@ def project_database_numeric_assertions(experiment_pack: dict[str, Any]) -> dict
     ]
     blocked = [*existing_blocked, *newly_blocked]
     reason_counts = dict(_dict(pack.get("block_reason_counts")))
-    if newly_blocked:
-        reason_counts[_BLOCK_REASON] = reason_counts.get(_BLOCK_REASON, 0) + len(newly_blocked)
+    for row in newly_blocked:
+        reason = _text(_dict(row.get("compile_receipt")).get("reason_code"))
+        if reason:
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
     pack.update(
         {
             "experiments": compiled,
@@ -470,6 +555,8 @@ def project_database_numeric_assertions(experiment_pack: dict[str, Any]) -> dict
                 "fuzzy_name_matching_count": 0,
                 "automatic_relation_mapping_count": 0,
                 "automatic_conflict_winner_count": 0,
+                "automatic_observer_recreation_count": 0,
+                "automatic_duplicate_term_removal_count": 0,
                 "second_oracle_created": False,
                 "contract_oracle_remains_authority": True,
             },
