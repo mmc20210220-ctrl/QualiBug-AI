@@ -30,7 +30,7 @@ def test_late_member_failure_rolls_back_previously_expanded_sibling() -> None:
             return True
 
         def supports(self, filename: str, data: bytes) -> bool:
-            return filename.endswith(".atomic")
+            return filename.endswith(".zip")
 
         def members(self, filename: str, data: bytes, limits: ArchiveLimits):
             return [
@@ -39,7 +39,7 @@ def test_late_member_failure_rolls_back_previously_expanded_sibling() -> None:
             ]
 
     result = expand_archive_documents(
-        [{"content_bytes": b"synthetic", "filename": "materials.atomic"}],
+        [{"content_bytes": b"synthetic", "filename": "materials.zip"}],
         registry=ArchiveProviderRegistry([OrderedProvider()]),
     )
 
