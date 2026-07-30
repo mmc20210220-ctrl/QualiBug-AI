@@ -146,15 +146,18 @@ def test_source_probe_rejects_unknown_suffix_without_guessing() -> None:
     assert probe["declared_capabilities"] == []
 
 
-def test_runtime_aware_adapter_declares_no_capabilities_when_converter_is_missing() -> None:
+def test_runtime_aware_adapter_preserves_format_capabilities_but_blocks_runtime() -> None:
     adapter = RuntimeAwareCompatibleOfficeDocumentAdapter(FakeNormalizer(False))
     source = DocumentSource("src_3", "规则.et", b"legacy-sheet")
 
     match = adapter.probe(source)
 
     assert match is not None
-    assert match.capabilities == ()
+    assert match.capabilities
+    assert match.runtime_ready is False
+    assert match.runtime_reason == "RUNTIME_DEPENDENCY_UNAVAILABLE"
     receipt = adapter.receipt(source, match)
+    assert receipt["runtime_ready"] is False
     assert receipt["runtime_dependency_available"] is False
     assert receipt["format_conversion_verified_with_this_source"] is False
 
