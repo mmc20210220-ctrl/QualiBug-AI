@@ -163,9 +163,10 @@ def test_compatible_office_pipeline_reuses_native_ir_and_original_evidence(
         registry=registry,
     )
 
+    normalization = result["structure_receipt"]["normalization_receipt"]
     assert result["format"] == filename.rsplit(".", 1)[1]
-    assert result["office_normalization_receipt"]["derived_container_is_not_evidence_root"] is True
-    assert result["office_normalization_receipt"]["source_hash"] == original_hash
+    assert normalization["derived_container_is_not_evidence_root"] is True
+    assert normalization["source_hash"] == original_hash
     assert result["evidence_closure_receipt"]["source_hash"] == original_hash
     assert result["evidence_closure_receipt"]["source_traceability_rate"] == 1.0
     assert result["blocks"]
