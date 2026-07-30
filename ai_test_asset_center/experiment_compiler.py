@@ -5,6 +5,12 @@ from copy import deepcopy
 from typing import Any
 
 from . import experiment_compiler_conflict_base as _base
+from .database_numeric_experiment_projection import (
+    project_database_numeric_assertions,
+)
+from .database_numeric_finding_bridge import (
+    install_database_numeric_finding_bridge,
+)
 from .database_observer_experiment_projection import (
     project_database_observers_to_experiment_pack,
 )
@@ -30,6 +36,7 @@ _original_compile_experiment = _base._original_compile_experiment
 # experiments, and extend the existing runtime preflight/finalizer. No second compiler or executor.
 install_runtime_materialization_execution_bridge()
 install_database_state_transition_finding_bridge()
+install_database_numeric_finding_bridge()
 install_runtime_materialization_operation_matching()
 
 
@@ -283,12 +290,12 @@ def compile_experiments(
     policy_version: str = "",
     available_adapters: "set[str] | frozenset[str] | None" = None,
 ) -> dict[str, Any]:
-    """Compile, bind one materialization, attach DB drafts, then exact DB assertions.
+    """Compile and project one governed database observation/oracle chain.
 
     ``available_adapters`` names the observation adapters this target may be observed
     through. Omitting it keeps the http_api-only default, so every existing caller is
-    unaffected; ``adapter_capability.resolve_available_adapters`` is what supplies a wider
-    set from customer-declared configuration.
+    unaffected; ``adapter_capability.resolve_available_adapters`` supplies a wider set
+    from customer-declared configuration.
     """
     pack = _base._base.compile_experiments(
         obligations,
@@ -304,4 +311,5 @@ def compile_experiments(
         obligations=obligations,
     )
     observer_bound = project_database_observers_to_experiment_pack(bridged)
-    return project_database_state_transition_assertions(observer_bound)
+    state_bound = project_database_state_transition_assertions(observer_bound)
+    return project_database_numeric_assertions(state_bound)
