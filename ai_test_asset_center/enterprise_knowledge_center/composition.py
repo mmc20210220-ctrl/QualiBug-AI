@@ -3,8 +3,8 @@
 The previous package assembled the build by repeatedly replacing one public function
 with another wrapper during import. Ordering, identity and persistence therefore
 depended on import history. This module owns the complete call graph explicitly:
-base source asset -> enterprise understanding -> downstream binding -> governed Jobs
--> final Probe admission -> one final persistence receipt.
+base source asset -> API artifact projection -> enterprise understanding -> downstream
+binding -> governed Jobs -> final Probe admission -> one final persistence receipt.
 """
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from ._formal_ui_persistent_probe_guard import install_formal_ui_persistent_prob
 from ._formal_ui_visual_baseline_guard import install_formal_ui_visual_baseline_guard
 from ._formal_ui_visual_viewport_guard import install_formal_ui_visual_viewport_guard
 from ._utils import _load_registry, _now, _paths, _save_registry
+from .api_artifact_asset_projection import enrich_asset_with_api_artifact_semantics
 from .enterprise_understanding.integration import (
     _parsed_sources_for_context,
     enrich_asset_with_enterprise_understanding,
@@ -47,7 +48,7 @@ def configure_source_parser_extensions() -> None:
 
     Parser extension registration remains idempotent, but it is no longer performed
     merely by importing the knowledge package and it never replaces the build
-    authority. New parser work should move into a registry rather than add wrappers.
+authority. New parser work should move into a registry rather than add wrappers.
     """
     install_formal_ui_root_array_guard()
     install_formal_ui_contract_parser()
@@ -167,6 +168,10 @@ def build_enterprise_business_knowledge_asset(
         project, resolved_root, base_options
     )
     parsed_sources = _parsed_sources_for_context(asset, resolved_root)
+    # API artifacts are technical source declarations. Exact operation/request/HAR
+    # pointers must be attached before enterprise relationships and scenarios consume
+    # interfaces; this stage never invents a business sequence from document order.
+    asset = enrich_asset_with_api_artifact_semantics(asset, parsed_sources)
     asset = enrich_asset_with_enterprise_understanding(
         asset, parsed_sources=parsed_sources
     )
@@ -221,6 +226,7 @@ def build_enterprise_business_knowledge_asset(
             "job_governance_uses_direct_function_calls": True,
             "package_import_replaces_build_authority": False,
             "parser_extension_registration_is_explicit_compatibility_boundary": True,
+            "api_artifact_projection_precedes_enterprise_understanding": True,
         }
     )
     asset["governance"] = governance
