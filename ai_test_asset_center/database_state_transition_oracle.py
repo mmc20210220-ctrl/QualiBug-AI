@@ -55,6 +55,7 @@ def _normalized_phase_row(raw: Any) -> dict[str, Any]:
             "observer_contract_ref": _text(row.get("observer_contract_ref")),
             "receipt_id": _text(row.get("receipt_id")),
             "source_observer_id": _text(row.get("observer_id")),
+            "status": _text(row.get("status")).upper(),
             "snapshot": _dict(_dict(row.get("evidence")).get(_SNAPSHOT_EVIDENCE_KEY)),
             "oracle_verdict_emitted": row.get("oracle_verdict_emitted"),
             "campaign_id": _text(row.get("campaign_id")),
@@ -96,6 +97,7 @@ def _snapshot_value(
         "draft_id": _text(phase_row.get("draft_id")),
         "phase": _text(phase_row.get("phase")).upper(),
         "phase_receipt_id": _text(phase_row.get("receipt_id")),
+        "phase_receipt_status": _text(phase_row.get("status")).upper(),
         "source_observer_id": _text(phase_row.get("source_observer_id")),
         "campaign_id": _text(phase_row.get("campaign_id")),
         "execution_id": _text(phase_row.get("execution_id")),
@@ -111,6 +113,12 @@ def _snapshot_value(
     }
     if actual["source_observer_id"] != _DIRECT_READBACK_OBSERVER_ID:
         return actual, "DATABASE_STATE_SNAPSHOT_SOURCE_INVALID"
+    if actual["phase_receipt_status"] != "OBSERVED":
+        return actual, "DATABASE_STATE_PHASE_RECEIPT_NOT_OBSERVED"
+    if not actual["phase_receipt_id"]:
+        return actual, "DATABASE_STATE_PHASE_RECEIPT_ID_MISSING"
+    if not actual["campaign_id"] or not actual["execution_id"]:
+        return actual, "DATABASE_STATE_PHASE_RECEIPT_LINEAGE_MISSING"
     if phase_row.get("oracle_verdict_emitted") is not False:
         return actual, "DATABASE_STATE_OBSERVER_AUTHORITY_INVALID"
     if expected_table_ref and actual["database_table_ref"] != expected_table_ref:
@@ -123,6 +131,8 @@ def _snapshot_value(
     rows = [dict(row) for row in _list(snapshot.get("rows")) if isinstance(row, dict)]
     if match_status != "MATCHED_ONE" or actual["row_count"] != 1 or len(rows) != 1:
         return actual, "DATABASE_STATE_UNIQUE_ROW_NOT_PROVEN"
+    if not actual["row_fingerprint"]:
+        return actual, "DATABASE_STATE_ROW_FINGERPRINT_MISSING"
     if field_name not in rows[0]:
         return actual, "DATABASE_STATE_FIELD_NOT_OBSERVED"
     actual["field_value"] = rows[0].get(field_name)
@@ -164,6 +174,7 @@ def evaluate_database_state_transition(envelope: dict[str, Any]) -> dict[str, An
         "database_field_name": field_name,
         "before_snapshot": {},
         "after_snapshot": {},
+        "lineage_match": False,
         "identity_match": False,
         "observed_before": None,
         "observed_after": None,
@@ -204,6 +215,14 @@ def evaluate_database_state_transition(envelope: dict[str, Any]) -> dict[str, An
     actual["after_snapshot"] = after_snapshot
     if before_reason or after_reason:
         return _reason(before_reason or after_reason, expected=expected, actual=actual)
+
+    lineage_match = bool(
+        before_snapshot["campaign_id"] == after_snapshot["campaign_id"]
+        and before_snapshot["execution_id"] == after_snapshot["execution_id"]
+    )
+    actual["lineage_match"] = lineage_match
+    if not lineage_match:
+        return _reason("DATABASE_STATE_RECEIPT_LINEAGE_MISMATCH", expected=expected, actual=actual)
 
     before_identity = before_snapshot["identity_parameter_fingerprints"]
     after_identity = after_snapshot["identity_parameter_fingerprints"]
