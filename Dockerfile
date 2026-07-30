@@ -10,6 +10,8 @@ ENV QUALIBUG_PORT=8088
 ENV QUALIBUG_BIND_HOST=0.0.0.0
 ENV QUALIBUG_ALLOW_PUBLIC_BIND=1
 ENV QUALIBUG_FRONTEND_DIST=/app/frontend_dist
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
 
 # Runtime state root.  Without this, _root() falls back to the installed package's
 # parent (site-packages), which USER qualibug cannot write and which none of the
@@ -31,17 +33,31 @@ ENV QUALIBUG_REQUIRE_CREDENTIAL_ENCRYPTION=1
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Formal document-understanding runtime:
+# - LibreOffice renders DOC/PPT/XLS and OOXML visual pages without desktop UI.
+# - Tesseract Chinese + English recovers scanned pages and image-only slides.
+# - Noto CJK fonts preserve Chinese layout during Office-to-PDF rendering.
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     curl \
-    && rm -rf /var/lib/apt/lists/*
+    fonts-noto-cjk \
+    libreoffice-calc \
+    libreoffice-core \
+    libreoffice-impress \
+    libreoffice-writer \
+    tesseract-ocr \
+    tesseract-ocr-chi-sim \
+    tesseract-ocr-eng \
+    && rm -rf /var/lib/apt/lists/* \
+    && libreoffice --headless --version \
+    && tesseract --version
 
 # Copy the product distribution before installing it.  The image deliberately
 # excludes evaluator/private packages through .dockerignore and pyproject.toml.
 COPY pyproject.toml README.md ./
 COPY ai_test_asset_center/ ./ai_test_asset_center/
 COPY aitestops/ ./aitestops/
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir . \
+    && python -c "import openpyxl, pptx, pypdfium2, pytesseract"
 
 # Copy prebuilt customer pilot SPA so the backend serves UI + API on one port
 COPY frontend/dist ./frontend_dist/
