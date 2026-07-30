@@ -8,6 +8,9 @@ from . import experiment_compiler_conflict_base as _base
 from .database_observer_experiment_projection import (
     project_database_observers_to_experiment_pack,
 )
+from .database_state_transition_experiment_projection import (
+    project_database_state_transition_assertions,
+)
 from .experiment_compiler_conflict_base import *  # noqa: F401,F403
 from .runtime_materialization_experiment_bridge import (
     bind_experiment_pack_to_captured_materializations,
@@ -276,7 +279,7 @@ def compile_experiments(
     policy_version: str = "",
     available_adapters: "set[str] | frozenset[str] | None" = None,
 ) -> dict[str, Any]:
-    """Compile, bind one governed materialization, then attach its Observer drafts.
+    """Compile, bind one materialization, attach DB drafts, then exact DB assertions.
 
     ``available_adapters`` names the observation adapters this target may be observed
     through. Omitting it keeps the http_api-only default, so every existing caller is
@@ -296,4 +299,5 @@ def compile_experiments(
         behavior_ir=behavior_ir,
         obligations=obligations,
     )
-    return project_database_observers_to_experiment_pack(bridged)
+    observer_bound = project_database_observers_to_experiment_pack(bridged)
+    return project_database_state_transition_assertions(observer_bound)
