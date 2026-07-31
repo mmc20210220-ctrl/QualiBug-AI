@@ -9,6 +9,12 @@ from ..database_observer_runtime_materialization_projection import (
 from ..database_observer_runtime_plan_projection import (
     project_database_observers_into_runtime_plans,
 )
+from .binding_identity_projection import (
+    project_binding_identities_to_execution_contracts,
+    project_binding_identities_to_materializations,
+    project_binding_identities_to_runtime_plans,
+    project_binding_identities_to_scenario_ir,
+)
 from .runtime_materialization_security import (
     project_secure_runtime_materializations_to_asset,
 )
@@ -92,6 +98,11 @@ def project_governed_scenario_execution_contracts(
         scenarios.append(scenario)
     asset["scenario_ir"] = scenarios
     model["scenario_ir"] = [dict(row) for row in scenarios]
+
+    # Compile one durable identity graph before any downstream stage copies the
+    # governed action, field, observer or UI contract into another representation.
+    project_binding_identities_to_scenario_ir(asset, model)
+
     governance = as_dict(asset.get("governance"))
     governance.update(
         {
@@ -102,18 +113,31 @@ def project_governed_scenario_execution_contracts(
             "scenario_source_declared_location_metadata_count": location_metadata_count,
             "scenario_runtime_contract_metadata_retains_secret_values": False,
             "probe_admission_is_final_composition_responsibility": True,
+            "binding_identity_graph_is_single_downstream_authority": True,
+            "downstream_binding_reselection_allowed": False,
         }
     )
     asset["governance"] = governance
+
     project_scenario_execution_contracts(asset, model)
+    project_binding_identities_to_execution_contracts(asset, model)
+
     project_governed_runtime_plans_to_asset(asset, model)
+    project_binding_identities_to_runtime_plans(asset, model)
+
     # Generic DB snapshots are replaced with exact operator-approved Observer contracts before
     # any materialization draft is built. This stage still opens no connection and reads no secret.
     project_database_observers_into_runtime_plans(asset, model)
+    # Re-project identity references after Observer replacement; this validates that
+    # the replacement did not change action or request-field identity.
+    project_binding_identities_to_runtime_plans(asset, model)
+
     project_secure_runtime_materializations_to_asset(asset, model)
     # Materialization freezes real BEFORE/AFTER phase requirements. Response-derived identities
     # are AFTER-only; no stage is allowed to fabricate a pre-write snapshot for a server ID.
     project_database_observer_runtime_materializations(asset, model)
+    project_binding_identities_to_materializations(asset, model)
+
     governance = as_dict(asset.get("governance"))
     governance.update(
         {
@@ -122,6 +146,9 @@ def project_governed_scenario_execution_contracts(
             "runtime_projection_mutates_probe_compiler": False,
             "approved_database_observer_projection_precedes_runtime_materialization": True,
             "approved_database_observer_phase_projection_follows_materialization": True,
+            "scenario_contract_runtime_plan_materialization_share_binding_ids": True,
+            "formal_ui_contracts_reuse_source_ui_contract_authority": True,
+            "ui_locator_generation_from_labels_allowed": False,
         }
     )
     asset["governance"] = governance
