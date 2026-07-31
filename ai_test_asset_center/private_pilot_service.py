@@ -120,6 +120,7 @@ from .private_pilot_command_center_builder import CommandCenterBuilderMixin
 from .private_pilot_command_center_understanding import (
     UnderstandingCommandCenterProjectionMixin,
 )
+from .private_pilot_connector_handlers import KnowledgeConnectorHandlersMixin
 from .private_pilot_credentials_handlers import CredentialsHandlerMixin
 from .private_pilot_http_routing import HttpRoutingMixin
 from .private_pilot_ingest_handlers import IngestHandlersMixin
@@ -198,6 +199,7 @@ def _normalize_command_center_envelope(payload: dict[str, Any]) -> dict[str, Any
 
 
 class PrivatePilotHandler(
+    KnowledgeConnectorHandlersMixin,
     HttpRoutingMixin,
     CredentialsHandlerMixin,
     IngestHandlersMixin,
