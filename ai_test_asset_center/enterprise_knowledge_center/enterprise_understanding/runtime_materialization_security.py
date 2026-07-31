@@ -11,6 +11,7 @@ from urllib.parse import quote
 
 from . import runtime_materialization as _base
 from . import runtime_materialization_governance as _governance
+from .credential_identity import govern_runtime_materialization_credentials
 from .runtime_materialization_messages import materialization_reason_message
 from .schema import as_dict, as_list, stable_id, text
 
@@ -332,8 +333,9 @@ def install_secure_runtime_value_resolver() -> None:
 def project_secure_runtime_materializations_to_asset(
     asset: dict[str, Any], model: dict[str, Any]
 ) -> dict[str, Any]:
-    """Project governed drafts, scrub unsafe values, then rebuild the formal gate."""
+    """Project governed drafts, preserve credential identity, then rebuild the gate."""
     _governance.project_governed_runtime_materializations_to_asset(asset, model)
+    govern_runtime_materialization_credentials(asset, model)
     _secure_projected_bindings(asset, model)
     _post_audit(asset, model)
     governance = dict(as_dict(asset.get("governance")))
@@ -346,6 +348,9 @@ def project_secure_runtime_materializations_to_asset(
             "runtime_materialization_unknowns_include_readable_messages": True,
             "runtime_materialization_secure_projection_is_public_authority": True,
             "runtime_materialization_resolver_global_patch_enabled": False,
+            "runtime_materialization_credential_identity_coordinates_preserved": True,
+            "runtime_materialization_credential_substitution_allowed": False,
+            "runtime_materialization_role_order_selection_allowed": False,
         }
     )
     asset["governance"] = governance
