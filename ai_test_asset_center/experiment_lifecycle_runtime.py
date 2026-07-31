@@ -103,7 +103,10 @@ def attach_lifecycle_ledger(
         "pending_semantic_step_ids"
     ]
     if _finalizer_inputs_sealed(ledger):
-        target["process_step_ledger"] = ProcessStepSemanticView(ledger)
+        target["process_step_ledger"] = ProcessStepSemanticView(
+            ledger,
+            observations=target,
+        )
         target["process_step_ledger_view"] = "semantic_completion"
     return target
 
