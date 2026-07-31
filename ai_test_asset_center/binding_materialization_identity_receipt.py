@@ -1,11 +1,4 @@
-"""Content-addressed identity receipts for final runtime bindings.
-
-The fixture materializer owns resolution and cleanup mutates its receipt status in
-place. This authority runs only after governed execution/cleanup has returned and
-seals the minimum customer-delivery identity projection: target, final BOUND status,
-and the already-redacted value fingerprint. It never stores the bound value, resolves
-a binding, or changes execution semantics.
-"""
+"""Content-addressed identity receipts for final runtime bindings."""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -13,18 +6,12 @@ import hashlib
 import json
 from typing import Any, Iterable
 
-
 SCHEMA_VERSION = "qualibug.binding-materialization-identity-receipt.v1"
-_PROOF_FIELDS = {
-    "receipt_id",
-    "target",
-    "status",
-    "value_fingerprint",
-}
+_PROOF_FIELDS = {"receipt_id", "target", "status", "value_fingerprint"}
 
 
 class BindingMaterializationIdentityError(ValueError):
-    """A runtime binding identity projection is missing or has been altered."""
+    """A runtime binding identity projection is missing or altered."""
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -55,13 +42,9 @@ def _payload(value: dict[str, Any]) -> dict[str, str]:
     status = _text(row.get("status")).upper()
     value_fingerprint = _text(row.get("value_fingerprint"))
     if not target:
-        raise BindingMaterializationIdentityError(
-            "binding_materialization_target_missing"
-        )
+        raise BindingMaterializationIdentityError("binding_materialization_target_missing")
     if status != "BOUND":
-        raise BindingMaterializationIdentityError(
-            "binding_materialization_status_not_bound"
-        )
+        raise BindingMaterializationIdentityError("binding_materialization_status_not_bound")
     if not value_fingerprint:
         raise BindingMaterializationIdentityError(
             "binding_materialization_value_fingerprint_missing"
@@ -82,12 +65,8 @@ def _receipt_id(payload: dict[str, str]) -> str:
 def build_binding_materialization_identity_receipt(
     value: dict[str, Any],
 ) -> dict[str, str]:
-    """Build one receipt without exposing the materialized runtime value."""
     payload = _payload(value)
-    return {
-        "receipt_id": _receipt_id(payload),
-        **payload,
-    }
+    return {"receipt_id": _receipt_id(payload), **payload}
 
 
 def validate_binding_materialization_identity_receipt(
@@ -109,7 +88,6 @@ def validate_binding_materialization_identity_receipt(
 def seal_binding_materialization_receipts(
     result: dict[str, Any],
 ) -> dict[str, Any]:
-    """Attach final identity receipt IDs after cleanup without mutating input."""
     output = deepcopy(_dict(result))
     sealed_rows: list[dict[str, Any]] = []
     seen_targets: set[str] = set()
@@ -125,6 +103,7 @@ def seal_binding_materialization_receipts(
                     f"binding_materialization_target_ambiguous:{target}"
                 )
             seen_targets.add(target)
+            row.pop("receipt_id", None)
             row["materialization_receipt_id"] = receipt["receipt_id"]
             row["materialization_identity_receipt"] = receipt
         sealed_rows.append(row)
@@ -136,7 +115,6 @@ def binding_identity_proofs_for_targets(
     rows: Iterable[Any],
     targets: Iterable[Any],
 ) -> list[dict[str, str]]:
-    """Project exact validated identity receipts for the requested binding targets."""
     required = {_text(value) for value in targets if _text(value)}
     proofs: list[dict[str, str]] = []
     seen: set[str] = set()
@@ -161,8 +139,7 @@ def binding_identity_proofs_for_targets(
     if seen != required:
         missing = sorted(required - seen)
         raise BindingMaterializationIdentityError(
-            "binding_materialization_identity_missing:"
-            + ",".join(missing)
+            "binding_materialization_identity_missing:" + ",".join(missing)
         )
     return sorted(proofs, key=lambda value: value["target"])
 
