@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from .probe_binding_lineage import attach_runtime_observer_lineage
 from .schema import as_dict
 
 
@@ -59,7 +60,7 @@ def build_gated_probes(
     *,
     compiler: Callable[[dict[str, Any], int], list[dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Compile Probes after gate closure without mutating module-level authority."""
+    """Compile Probes only after gates and observer identities close."""
     limit = max(0, int(max_count))
     if limit == 0 or not probe_generation_allowed(asset):
         return []
@@ -67,11 +68,12 @@ def build_gated_probes(
         from .. import _linking
 
         compiler = _linking._probes_from_asset
-    return [
+    compiled = [
         dict(row)
         for row in compiler(asset, limit)
         if isinstance(row, dict)
     ]
+    return attach_runtime_observer_lineage(asset, compiled)
 
 
 __all__ = [
