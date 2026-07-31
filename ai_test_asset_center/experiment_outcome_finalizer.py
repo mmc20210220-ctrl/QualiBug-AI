@@ -15,6 +15,22 @@ from .process_step_receipt_scope import synchronize_scoped_receipts_from_observa
 from .process_step_semantic_view import ProcessStepSemanticView
 
 
+_DERIVED_STEP_SNAPSHOT_FIELDS = (
+    "process_step_receipts",
+    "process_step_ledger_hash",
+    "process_step_semantic_projection",
+    "recorded_step_ids",
+    "attempted_step_ids",
+    "executed_step_ids",
+    "accepted_step_ids",
+    "completed_step_ids",
+    "failed_step_ids",
+    "pending_semantic_step_ids",
+    "per_step_evidence_completeness",
+    "process_step_balance",
+)
+
+
 def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
@@ -48,6 +64,12 @@ def _merge_receipt_rows(*groups: Any) -> list[dict[str, Any]]:
             seen.add(key)
             merged.append(row)
     return merged
+
+
+def _invalidate_derived_step_snapshot(observations: dict[str, Any]) -> None:
+    """Force all derived step facts to be resealed after final evidence exists."""
+    for field in _DERIVED_STEP_SNAPSHOT_FIELDS:
+        observations.pop(field, None)
 
 
 class _ExactScopeFinalizerLedger:
@@ -144,6 +166,7 @@ def finalize_experiment_execution(*args: Any, **kwargs: Any) -> dict[str, Any]:
         semantic_view.source_ledger,
         observations,
     )
+    _invalidate_derived_step_snapshot(observations)
     observations["process_step_ledger"] = _ExactScopeFinalizerLedger(semantic_view)
     observations["process_step_ledger_view"] = "exact_scope_finalizer"
     try:
