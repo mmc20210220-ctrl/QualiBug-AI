@@ -78,6 +78,20 @@ def _phase_receipt(
     }, ""
 
 
+def _merge_pair_lineage(
+    snapshot: Any,
+    *,
+    pair_id: str,
+    lineage: dict[str, Any],
+) -> dict[str, Any]:
+    row = _dict(snapshot)
+    row["relation_pair_id"] = pair_id
+    row["phase_receipt_id"] = _text(
+        row.get("phase_receipt_id") or lineage.get("phase_receipt_id")
+    )
+    return row
+
+
 def evaluate_database_relation_delta_with_lineage(
     envelope: dict[str, Any],
 ) -> dict[str, Any]:
@@ -167,6 +181,16 @@ def evaluate_database_relation_delta_with_lineage(
     result_actual["relation_pair_match"] = True
     result_actual["relation_before_lineage"] = before
     result_actual["relation_after_lineage"] = after
+    result_actual["relation_before_snapshot"] = _merge_pair_lineage(
+        result_actual.get("relation_before_snapshot"),
+        pair_id=expected_pair_id,
+        lineage=before,
+    )
+    result_actual["relation_after_snapshot"] = _merge_pair_lineage(
+        result_actual.get("relation_after_snapshot"),
+        pair_id=expected_pair_id,
+        lineage=after,
+    )
     result["expected"] = result_expected
     result["actual"] = result_actual
     return result
