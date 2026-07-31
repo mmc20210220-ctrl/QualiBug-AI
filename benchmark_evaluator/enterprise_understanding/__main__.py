@@ -48,6 +48,7 @@ def main(argv: list[str] | None = None) -> int:
         "ground_truth_fingerprint": result.get("ground_truth_fingerprint"),
         "product_asset_fingerprint": result.get("product_asset_fingerprint"),
         "next_repair_target": result.get("next_repair_target"),
+        "next_ingestion_repair_target": result.get("next_ingestion_repair_target"),
         "workflow_receipt": result.get("workflow_receipt"),
         "output_files": result.get("output_files") or {},
     }
