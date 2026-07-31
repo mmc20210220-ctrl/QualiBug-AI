@@ -33,7 +33,7 @@ def test_sidebar_exposes_online_first_enterprise_materials_mainline():
 
 def test_materials_page_keeps_online_primary_and_upload_supplemental():
     page = _text(PAGE)
-    assert "连接一次，系统自动读取、识别、去重和维护企业资料" in page
+    assert "连接一次，系统自动读取、识别和去重" in page
     assert page.index("主要采集方式") < page.index("补充采集方式")
     assert "listKnowledgeConnectors" in page
     assert "connectFeishuKnowledge" in page
@@ -57,6 +57,7 @@ def test_normal_user_path_is_two_steps_and_one_primary_action():
     assert "删除策略" not in page
     assert "降级策略" not in page
     assert "同步游标" not in page
+    assert "系统自动维护" not in page
     for term in (
         "Source Occurrence",
         "Sync Epoch",
