@@ -5,6 +5,9 @@ from copy import deepcopy
 from typing import Any
 
 from . import experiment_compiler_conflict_base as _base
+from .authorization_comparison_contract import (
+    attach_authorization_comparison_contract,
+)
 from .database_numeric_experiment_projection import (
     project_database_numeric_assertions,
 )
@@ -296,7 +299,20 @@ def compile_experiment_for_obligation(
         policy_version=policy_version,
         available_adapters=available_adapters,
     )
-    return _attach_source_observed_mutations(experiment, behavior_ir)
+    experiment = _attach_source_observed_mutations(experiment, behavior_ir)
+    governed, reason, detail = attach_authorization_comparison_contract(
+        experiment,
+        obligation,
+        behavior_ir,
+    )
+    if reason:
+        obligation_id = _text(_dict(obligation).get("obligation_id")) or "unknown_obligation"
+        return _base._base.blocked_experiment(
+            obligation_id,
+            reason,
+            detail,
+        )
+    return governed
 
 
 def compile_experiments(
