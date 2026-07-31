@@ -66,6 +66,14 @@ def _dedupe(rows: Iterable[Any], key: str) -> list[dict[str, Any]]:
     return list(output.values())
 
 
+def _optional_pair(payload: dict[str, Any], pair_id: Any) -> dict[str, Any]:
+    row = dict(payload)
+    normalized = _text(pair_id)
+    if normalized:
+        row["relation_pair_id"] = normalized
+    return row
+
+
 def _phase_drafts(exp: dict[str, Any], phase: str) -> list[dict[str, Any]]:
     target = _text(phase).upper()
     return [
@@ -134,30 +142,32 @@ def execute_database_relation_observer_phase(
             execution_id=execution_id,
         )
         relation_pair_id = _text(draft.get("relation_pair_id"))
-        receipt = {
-            **receipt,
-            "source_observer_id": DIRECT_RELATION_OBSERVER_ID,
-            "phase_receipt_id": _fingerprint(
-                {
-                    "draft_id": draft.get("draft_id"),
-                    "relation_pair_id": relation_pair_id,
-                    "phase": target,
-                    "receipt_id": receipt.get("receipt_id"),
-                }
-            )[:32],
-            "draft_id": draft.get("draft_id"),
-            "relation_pair_id": relation_pair_id,
-            "relation_observer_contract_ref": draft.get(
-                "relation_observer_contract_ref"
-            ),
-            "root_observer_contract_ref": draft.get(
-                "root_observer_contract_ref"
-            ),
-            "observation_phase": target,
-            "required": True,
-            "executed_before_cleanup": True,
-            "oracle_verdict_emitted": False,
-        }
+        receipt = _optional_pair(
+            {
+                **receipt,
+                "source_observer_id": DIRECT_RELATION_OBSERVER_ID,
+                "phase_receipt_id": _fingerprint(
+                    {
+                        "draft_id": draft.get("draft_id"),
+                        "relation_pair_id": relation_pair_id,
+                        "phase": target,
+                        "receipt_id": receipt.get("receipt_id"),
+                    }
+                )[:32],
+                "draft_id": draft.get("draft_id"),
+                "relation_observer_contract_ref": draft.get(
+                    "relation_observer_contract_ref"
+                ),
+                "root_observer_contract_ref": draft.get(
+                    "root_observer_contract_ref"
+                ),
+                "observation_phase": target,
+                "required": True,
+                "executed_before_cleanup": True,
+                "oracle_verdict_emitted": False,
+            },
+            relation_pair_id,
+        )
         receipts.append(receipt)
 
     current_ids = {_text(row.get("draft_id")) for row in drafts}
@@ -242,7 +252,7 @@ def aggregate_database_relation_phase_receipts(
         if all(key):
             groups.setdefault(key, []).append(row)
 
-    missing: list[dict[str, str]] = []
+    missing: list[dict[str, Any]] = []
     duplicates: list[dict[str, Any]] = []
     snapshots: list[dict[str, Any]] = []
     for draft in drafts:
@@ -250,53 +260,57 @@ def aggregate_database_relation_phase_receipts(
             _text(draft.get("draft_id")),
             _text(draft.get("observation_phase")).upper(),
         )
+        pair_id = _text(draft.get("relation_pair_id"))
         matches = groups.get(key, [])
         if len(matches) > 1:
             duplicates.append(
-                {
-                    "draft_id": key[0],
-                    "relation_pair_id": _text(draft.get("relation_pair_id")),
-                    "phase": key[1],
-                    "receipt_count": len(matches),
-                    "receipt_ids": sorted(
-                        _text(row.get("receipt_id"))
-                        for row in matches
-                        if _text(row.get("receipt_id"))
-                    ),
-                }
+                _optional_pair(
+                    {
+                        "draft_id": key[0],
+                        "phase": key[1],
+                        "receipt_count": len(matches),
+                        "receipt_ids": sorted(
+                            _text(row.get("receipt_id"))
+                            for row in matches
+                            if _text(row.get("receipt_id"))
+                        ),
+                    },
+                    pair_id,
+                )
             )
             continue
         receipt = matches[0] if matches else {}
         if not receipt or _text(receipt.get("status")).upper() != "OBSERVED":
             missing.append(
-                {
-                    "draft_id": key[0],
-                    "relation_pair_id": _text(draft.get("relation_pair_id")),
-                    "phase": key[1],
-                }
+                _optional_pair(
+                    {"draft_id": key[0], "phase": key[1]},
+                    pair_id,
+                )
             )
             continue
         payload = _dict(_dict(receipt.get("evidence")).get(EVIDENCE_KEY))
         snapshots.append(
-            {
-                "draft_id": key[0],
-                "relation_pair_id": _text(receipt.get("relation_pair_id")),
-                "phase": key[1],
-                "relation_observer_contract_ref": draft.get(
-                    "relation_observer_contract_ref"
-                ),
-                "root_observer_contract_ref": draft.get(
-                    "root_observer_contract_ref"
-                ),
-                "receipt_id": receipt.get("receipt_id"),
-                "phase_receipt_id": receipt.get("phase_receipt_id"),
-                "source_observer_id": DIRECT_RELATION_OBSERVER_ID,
-                "snapshot": payload,
-                "snapshot_fingerprint": payload.get("aggregate_fingerprint"),
-                "campaign_id": receipt.get("campaign_id"),
-                "execution_id": receipt.get("execution_id"),
-                "oracle_verdict_emitted": False,
-            }
+            _optional_pair(
+                {
+                    "draft_id": key[0],
+                    "phase": key[1],
+                    "relation_observer_contract_ref": draft.get(
+                        "relation_observer_contract_ref"
+                    ),
+                    "root_observer_contract_ref": draft.get(
+                        "root_observer_contract_ref"
+                    ),
+                    "receipt_id": receipt.get("receipt_id"),
+                    "phase_receipt_id": receipt.get("phase_receipt_id"),
+                    "source_observer_id": DIRECT_RELATION_OBSERVER_ID,
+                    "snapshot": payload,
+                    "snapshot_fingerprint": payload.get("aggregate_fingerprint"),
+                    "campaign_id": receipt.get("campaign_id"),
+                    "execution_id": receipt.get("execution_id"),
+                    "oracle_verdict_emitted": False,
+                },
+                _text(receipt.get("relation_pair_id")) or pair_id,
+            )
         )
 
     complete = bool(drafts) and not missing and not duplicates
