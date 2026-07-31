@@ -19,7 +19,7 @@
     },
     {
       "path": "benchmark_evaluator/enterprise_understanding/fixtures/implicit_rules_v1/payment_api.openapi.json",
-      "blob_sha": "f276e89c2d240cc167a75e3109304cdbf284ebce",
+      "blob_sha": "9793ce74f7aa4ea1bce19b8b711a32f21f905e6f",
       "authority": "unchanged_exact_interface_contract"
     }
   ],
