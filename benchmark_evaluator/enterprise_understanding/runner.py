@@ -7,6 +7,7 @@ from benchmark_evaluator.scored_run_comparison import _fingerprint
 
 from .alignment import align_enterprise_understanding
 from .ground_truth import SUPPORTED_COLLECTIONS, validate_ground_truth
+from .ingestion_evidence import measure_ingestion_evidence
 from .metrics import calculate_benchmark_metrics
 from .report import write_benchmark_outputs
 from .root_cause import analyse_miss_root_causes
@@ -34,6 +35,12 @@ def run_benchmark(
     model = _model(product_asset)
     ground_truth_fingerprint = _fingerprint(validated)
     product_asset_fingerprint = _fingerprint(product_asset)
+    ingestion_evidence = measure_ingestion_evidence(product_asset)
+    ingestion_summary = (
+        ingestion_evidence.get("summary")
+        if isinstance(ingestion_evidence.get("summary"), dict)
+        else {}
+    )
     model_available = bool(model) and any(
         isinstance(model.get(key), list)
         for key in (
@@ -62,6 +69,8 @@ def run_benchmark(
             "ground_truth_summary": ground_truth_summary,
             "alignment": {"alignments": [], "model_writeback_allowed": False},
             "metrics": {},
+            "ingestion_evidence_measurement": ingestion_evidence,
+            "next_ingestion_repair_target": ingestion_summary.get("highest_impact_gap") or "",
             "root_cause_analysis": {
                 "highest_impact_root_cause": "SOURCE_NOT_PARSED",
                 "repair_policy": "BUILD_THE_EXISTING_ENTERPRISE_UNDERSTANDING_MAINLINE_ASSET",
@@ -85,6 +94,8 @@ def run_benchmark(
             "ground_truth_summary": ground_truth_summary,
             "alignment": alignment,
             "metrics": metrics,
+            "ingestion_evidence_measurement": ingestion_evidence,
+            "next_ingestion_repair_target": ingestion_summary.get("highest_impact_gap") or "",
             "root_cause_analysis": root_causes,
             "next_repair_target": root_causes.get("highest_impact_root_cause") or "",
             "repair_policy": "FIX_THE_EARLIEST_EXISTING_MAINLINE_MODULE_NOT_A_DOWNSTREAM_PATCH",
@@ -98,6 +109,9 @@ def run_benchmark(
         "ground_truth_fingerprint": ground_truth_fingerprint,
         "product_asset_fingerprint": product_asset_fingerprint,
         "metric_authority": "evaluator_side_human_source_backed_ground_truth",
+        "ingestion_evidence_measurement_status": ingestion_evidence.get("status"),
+        "ingestion_evidence_highest_impact_gap": ingestion_summary.get("highest_impact_gap"),
+        "product_ingestion_receipts_are_ground_truth": False,
         "hidden_ground_truth_entered_product_runtime": False,
         "model_writeback_allowed": False,
     }
