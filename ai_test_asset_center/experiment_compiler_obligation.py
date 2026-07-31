@@ -2,9 +2,10 @@
 
 The existing semantic compiler remains in ``experiment_compiler_obligation_core``.
 This facade supplies final FlowDataRequirement authority, binds Observer subjects
-inside the compiled Experiment Contract, and isolates one legacy compatibility
-projection for graph cleanup. Runtime consumes these compiled identities; it does
-not infer a different Observer subject after execution.
+inside the compiled Experiment Contract, persists the one canonical Process
+Graph extracted from treatment steps, and isolates one legacy compatibility
+projection for graph cleanup. Runtime consumes these compiled identities; it
+does not infer a different Observer subject or graph after execution.
 """
 from __future__ import annotations
 
@@ -47,7 +48,12 @@ class _AuthorityScopedBehaviorIR(dict):
 
     fixture_data_authority: str
 
-    def __init__(self, source: dict[str, Any], *, fixture_data_authority: str) -> None:
+    def __init__(
+        self,
+        source: dict[str, Any],
+        *,
+        fixture_data_authority: str,
+    ) -> None:
         super().__init__(source)
         self.fixture_data_authority = fixture_data_authority
 
@@ -178,7 +184,10 @@ def _bind_observer_subjects(
     return bound, receipt
 
 
-def _subject_bound_make_experiment(*args: Any, **kwargs: Any) -> dict[str, Any]:
+def _subject_bound_make_experiment(
+    *args: Any,
+    **kwargs: Any,
+) -> dict[str, Any]:
     observers, binding_receipt = _bind_observer_subjects(
         observers=kwargs.get("observers"),
         control_plan=kwargs.get("control_plan"),
@@ -242,13 +251,43 @@ def _install_core_hooks() -> None:
     _core.make_experiment = _subject_bound_make_experiment
 
 
+def _persist_compiled_execution_graph(
+    experiment: dict[str, Any],
+) -> dict[str, Any]:
+    """Promote the canonical step-embedded graph into the Experiment Contract."""
+    result = dict(experiment)
+    if _text(_dict(result.get("compile_receipt")).get("status")) != "COMPILED":
+        return result
+    from .process_graph_runtime import extract_execution_graph
+
+    graph, graph_error = extract_execution_graph(
+        [
+            row
+            for row in _list(result.get("treatment_plan"))
+            if isinstance(row, dict)
+        ]
+    )
+    if graph_error or not graph:
+        return result
+    result["execution_graph"] = deepcopy(graph)
+    receipt = dict(_dict(result.get("compile_receipt")))
+    receipt.update(
+        {
+            "execution_graph_id": _text(graph.get("execution_graph_id")),
+            "process_id": _text(graph.get("process_id")),
+            "execution_graph_persisted": True,
+        }
+    )
+    result["compile_receipt"] = receipt
+    return result
+
+
 _install_core_hooks()
 
 for _name in dir(_core):
     if not _name.startswith("__"):
         globals()[_name] = getattr(_core, _name)
 
-# Public construction uses the same subject-binding authority as core compile.
 make_experiment = _subject_bound_make_experiment
 
 
@@ -260,19 +299,20 @@ def compile_experiment_for_obligation(
     policy_version: str = "",
     available_adapters: "set[str] | frozenset[str] | None" = None,
 ) -> dict[str, Any]:
-    """Compile with final-flow data and Observer subject authority."""
+    """Compile with final-flow data, Observer subject and graph authority."""
     _install_core_hooks()
     scoped_ir = _AuthorityScopedBehaviorIR(
         behavior_ir,
         fixture_data_authority=FLOW_DATA_AUTHORITY,
     )
-    return _core.compile_experiment_for_obligation(
+    compiled = _core.compile_experiment_for_obligation(
         obligation,
         behavior_ir=scoped_ir,
         environment_type=environment_type,
         policy_version=policy_version,
         available_adapters=available_adapters,
     )
+    return _persist_compiled_execution_graph(compiled)
 
 
 __all__ = sorted(
