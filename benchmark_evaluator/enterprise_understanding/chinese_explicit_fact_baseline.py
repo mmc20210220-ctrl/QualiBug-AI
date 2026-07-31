@@ -34,6 +34,7 @@ TARGETS = {
     "slot_exact_accuracy": 0.92,
     "p0_exact_fact_recall": 0.95,
     "source_locator_exact_accuracy": 0.98,
+    "accepted_fact_precision": 0.98,
 }
 _CRITICALITY_WEIGHT = {"P0": 4.0, "P1": 3.0, "P2": 2.0, "P3": 1.0}
 
@@ -146,6 +147,26 @@ def _first_loss_analysis(measurement: dict[str, Any]) -> dict[str, Any]:
                 "slot_alignments": alignment.get("slot_alignments") or {},
             }
         )
+
+    for false_fact in measurement.get("false_accepted_facts") or []:
+        if not isinstance(false_fact, dict):
+            continue
+        stage = "FACT_DISCOVERY_FALSE_ACCEPTANCE"
+        distribution[stage] += 1
+        weighted[stage] += _CRITICALITY_WEIGHT["P1"]
+        rows.append(
+            {
+                "ground_truth_id": "",
+                "criticality": "P1",
+                "alignment_status": "FALSE_ACCEPTED",
+                "first_loss_stage": stage,
+                "candidate_id": false_fact.get("candidate_id"),
+                "candidate_ids": [],
+                "slot_alignments": {},
+                "false_accepted_fact": false_fact,
+            }
+        )
+
     ranking = sorted(
         (
             {
@@ -193,11 +214,6 @@ def _threshold_status(metrics: dict[str, Any]) -> tuple[str, dict[str, Any]]:
 
 
 def _quality_result_status(measurement_status: Any, threshold_status: Any) -> str:
-    """Return the authoritative isolated-baseline outcome.
-
-    Completing evaluation is not success. The source-backed product workflow passes
-    only when measurement itself completed and every frozen quality target was met.
-    """
     measured = str(measurement_status or "").strip().upper()
     threshold = str(threshold_status or "").strip().upper()
     if measured != "PASS":
@@ -206,7 +222,6 @@ def _quality_result_status(measurement_status: Any, threshold_status: Any) -> st
 
 
 def _baseline_exit_code(result: dict[str, Any]) -> int:
-    """Keep blocked execution distinct from a measured quality regression."""
     status = str(result.get("status") or "").strip().upper()
     if status == "PASS":
         return 0
