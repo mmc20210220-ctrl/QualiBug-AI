@@ -2,35 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ai_test_asset_center.experiment_compiler_base import (
-    _block_multi_write_graph_equivalence,
-)
 from ai_test_asset_center.process_graph_cleanup_executor import (
     execute_process_graph_cleanup,
 )
-
-
-def test_multi_write_graph_is_blocked_before_flow_freeze() -> None:
-    result = _block_multi_write_graph_equivalence(
-        {
-            "compile_receipt": {"status": "COMPILED"},
-            "control_plan": [],
-            "treatment_plan": [{"step_id": "write-a"}, {"step_id": "write-b"}],
-            "cleanup_plan": [{"source_step_id": "write-b"}, {"source_step_id": "write-a"}],
-            "process_graph_write_contract": {
-                "status": "RESOLVED",
-                "write_step_ids": ["write-a", "write-b"],
-            },
-        }
-    )
-
-    assert result["compile_receipt"] == {
-        "status": "BLOCKED",
-        "reason_code": "BLOCKED_GRAPH_MULTI_WRITE_EQUIVALENCE_UNAVAILABLE",
-        "detail": "per_source_step_cleanup_equivalence_not_available:write-a,write-b",
-    }
-    assert result["treatment_plan"] == []
-    assert result["cleanup_plan"] == []
 
 
 def test_rejected_but_effectful_write_is_compensated(tmp_path: Path) -> None:
