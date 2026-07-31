@@ -79,27 +79,37 @@ def _resolve_sources(
     for index, raw in enumerate(manifest.get("sources") or []):
         if not isinstance(raw, dict):
             raise ProductPhaseError(f"source_manifest_entry_not_object:{index}")
-        source_ref = _portable_source_ref(raw.get("path"))
+        path_ref = _portable_source_ref(raw.get("path"))
+        source_ref = _portable_source_ref(raw.get("source_ref") or path_ref)
         source_type = str(raw.get("source_type") or "").strip()
         expected_sha = str(raw.get("blob_sha") or "").strip()
         if not source_type or not expected_sha:
             raise ProductPhaseError(f"source_manifest_entry_incomplete:{index}")
-        if source_ref in excluded or "ground_truth" in source_ref.lower():
-            raise ProductPhaseError(f"ground_truth_path_in_product_sources:{source_ref}")
-        resolved = (product_root / source_ref).resolve()
+        if (
+            path_ref in excluded
+            or source_ref in excluded
+            or "ground_truth" in path_ref.lower()
+            or "ground_truth" in source_ref.lower()
+        ):
+            raise ProductPhaseError(
+                f"ground_truth_path_in_product_sources:{path_ref}:{source_ref}"
+            )
+        resolved = (product_root / path_ref).resolve()
         try:
             resolved.relative_to(product_root)
         except ValueError as exc:
-            raise ProductPhaseError(f"source_outside_product_root:{source_ref}") from exc
-        if resolved in seen_paths or source_ref in seen_refs:
-            raise ProductPhaseError(f"duplicate_source_path:{source_ref}")
+            raise ProductPhaseError(f"source_outside_product_root:{path_ref}") from exc
+        if resolved in seen_paths:
+            raise ProductPhaseError(f"duplicate_source_path:{path_ref}")
+        if source_ref in seen_refs:
+            raise ProductPhaseError(f"duplicate_source_ref:{source_ref}")
         if not resolved.is_file():
-            raise ProductPhaseError(f"source_file_missing:{source_ref}")
+            raise ProductPhaseError(f"source_file_missing:{path_ref}")
         data = resolved.read_bytes()
         actual_sha = _git_blob_sha(data)
         if actual_sha != expected_sha:
             raise ProductPhaseError(
-                f"source_blob_sha_mismatch:{source_ref}:expected={expected_sha}:actual={actual_sha}"
+                f"source_blob_sha_mismatch:{path_ref}:expected={expected_sha}:actual={actual_sha}"
             )
         seen_paths.add(resolved)
         seen_refs.add(source_ref)
@@ -114,12 +124,13 @@ def _resolve_sources(
         )
         receipts.append(
             {
-                "path": source_ref,
+                "path": path_ref,
                 "source_ref": source_ref,
                 "source_type": source_type,
                 "blob_sha": actual_sha,
                 "size": len(data),
                 "source_identity_authority": "SOURCE_MANIFEST_EXTERNAL_REF",
+                "fixture_path_separate_from_source_identity": path_ref != source_ref,
                 "absolute_workspace_path_persisted_as_identity": False,
             }
         )
