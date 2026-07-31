@@ -1,4 +1,9 @@
-"""HTTP GET/POST routing for PrivatePilotHandler."""
+"""Canonical HTTP routing for the private-pilot service.
+
+Public routes are limited to health, login and governed tenant bootstrap/password
+change. Every customer-data route authenticates one principal and authorizes the
+project from the server-side tenant/project registry before dispatch.
+"""
 from __future__ import annotations
 
 import os
@@ -29,13 +34,15 @@ def _svc():
 def _normalize_command_center_envelope(payload: dict[str, Any]) -> dict[str, Any]:
     return normalize_command_center_envelope(payload)
 
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
 class HttpRoutingMixin:
     def _init_request_context(self) -> None:
-        """Initialize per-request correlation ID and timer for structured logging."""
-        import time as _time
-        import uuid as _uuid
-        self._qualibug_req_start = _time.time()
-        self._qualibug_corr_id = _uuid.uuid4().hex[:12]
+        self._qualibug_req_start = time.time()
+        self._qualibug_corr_id = uuid.uuid4().hex[:12]
 
     def _authority_decision_error(
         self,
@@ -43,10 +50,10 @@ class HttpRoutingMixin:
         *,
         project: str,
     ) -> Any:
-        code = str(exc or "").strip()
+        detail = str(exc or "").strip()
         if isinstance(exc, PermissionError):
             return self._json(
-                {"ok": False, "error": "FORBIDDEN", "message": code},
+                {"ok": False, "error": "FORBIDDEN", "message": detail},
                 403,
             )
         if isinstance(exc, KeyError):
@@ -54,7 +61,7 @@ class HttpRoutingMixin:
                 {
                     "ok": False,
                     "error": "AUTHORITY_DECISION_NOT_FOUND",
-                    "message": code,
+                    "message": detail,
                 },
                 404,
             )
@@ -63,7 +70,7 @@ class HttpRoutingMixin:
                 {
                     "ok": False,
                     "error": "AUTHORITY_DECISION_BAD_REQUEST",
-                    "message": code,
+                    "message": detail,
                 },
                 400,
             )
@@ -72,17 +79,16 @@ class HttpRoutingMixin:
             msg="[ERROR] authority decision route failed",
             data={
                 "project_id": project,
-                "path": str(getattr(self, "path", "") or ""),
+                "path": _text(getattr(self, "path", "")),
                 "exc_type": type(exc).__name__,
-                "error": code[:300],
             },
-            trace_id=str(getattr(self, "_qualibug_corr_id", "") or ""),
+            trace_id=_text(getattr(self, "_qualibug_corr_id", "")),
         )
         return self._json(
             {
                 "ok": False,
                 "error": "AUTHORITY_DECISION_INTERNAL_ERROR",
-                "message": code[:300],
+                "message": "权限裁决资源暂时不可用。",
             },
             500,
         )
@@ -100,7 +106,7 @@ class HttpRoutingMixin:
 
         try:
             result = list_operator_authority_decisions(project, root=root)
-        except Exception as exc:  # noqa: BLE001 - typed at the HTTP boundary
+        except Exception as exc:
             return self._authority_decision_error(exc, project=project)
         return self._json({"ok": True, "data": result})
 
@@ -125,7 +131,7 @@ class HttpRoutingMixin:
             record_operator_authority_decision,
         )
 
-        action = str(body.get("action") or "").strip().upper()
+        action = _text(body.get("action")).upper()
         try:
             if action not in {ACTION_SELECT_FACT, ACTION_LEAVE_UNRESOLVED}:
                 raise ValueError(
@@ -133,350 +139,421 @@ class HttpRoutingMixin:
                 )
             result = record_operator_authority_decision(
                 project,
-                conflict_id=str(body.get("conflict_id") or "").strip(),
+                conflict_id=_text(body.get("conflict_id")),
                 action=action,
                 actor=actor,
                 root=root,
-                selected_fact_id=str(body.get("selected_fact_id") or "").strip(),
-                rationale=str(body.get("rationale") or "").strip()[:2000],
-                document_version=str(body.get("document_version") or "").strip()[:200],
+                selected_fact_id=_text(body.get("selected_fact_id")),
+                rationale=_text(body.get("rationale"))[:2000],
+                document_version=_text(body.get("document_version"))[:200],
                 rebuild=True,
             )
-        except Exception as exc:  # noqa: BLE001 - typed at the HTTP boundary
+        except Exception as exc:
             return self._authority_decision_error(exc, project=project)
-        return self._json(
-            {"ok": True, "action": action, "data": result},
-            201,
+        return self._json({"ok": True, "action": action, "data": result}, 201)
+
+    def _serve_public_frontend(self, parsed: Any, root: Path) -> Any:
+        aliases = {
+            "/knowledge": "/materials",
+            "/benchmark": "/coverage",
+            "/onboard": "/products",
+        }
+        if parsed.path in aliases:
+            target = aliases[parsed.path]
+            if parsed.query:
+                target = f"{target}?{parsed.query}"
+            self.send_response(302)
+            self.send_header("Location", target)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return None
+        return self._serve_frontend(parsed, root)
+
+    def _health(self, root: Path) -> Any:
+        from . import private_pilot_service as service
+        from .private_pilot_health_contract import build_private_pilot_health_payload
+
+        patch_source = _text(
+            getattr(service, "_DEPLOYMENT_CONTRACT_PATCH_SOURCE", "")
+        ) or "ai_test_asset_center.private_pilot_http_routing"
+        payload = build_private_pilot_health_payload(
+            self,
+            fallback_root=root,
+            patch_source=patch_source,
         )
+        if not isinstance(payload, dict):
+            return self._json(
+                {"ok": False, "status": "unhealthy", "error": "HEALTH_INVALID"},
+                503,
+            )
+        healthy = payload.get("ok") is True and _text(
+            payload.get("status")
+        ).lower() not in {"blocked", "failed", "unhealthy"}
+        return self._json(payload, 200 if healthy else 503)
+
+    def _route_project(self, parsed: Any) -> tuple[str, list[str]]:
+        parts = [unquote(part) for part in parsed.path.split("/") if part]
+        project = ""
+        if len(parts) >= 4 and parts[:3] == ["api", "v1", "projects"]:
+            project = parts[3]
+        return project, parts
+
+    def _handle_project_list(self, root: Path) -> Any:
+        tenant_id = self._request_tenant()
+        items = db_persist.list_projects(root, tenant_id)
+        return self._json({"ok": True, "data": items})
+
+    def _handle_command_center(
+        self,
+        project: str,
+        root: Path,
+    ) -> Any:
+        trace_id = uuid.uuid4().hex
+        started = time.perf_counter()
+        try:
+            payload = self._build_command_center(project, root)
+            if not isinstance(payload, dict):
+                raise TypeError("command-center payload must be an object")
+            from .display_ready_formatter import sanitize_customer_evidence_payload
+
+            sanitized = sanitize_customer_evidence_payload(payload)
+            if not isinstance(sanitized, dict):
+                raise TypeError("sanitized command-center payload must be an object")
+            normalized = _normalize_command_center_envelope(sanitized)
+            _dbg_report(
+                hypothesis_id="COMMAND_CENTER",
+                msg="[DEBUG] command-center customer payload ready",
+                data={
+                    "project_id": project,
+                    "elapsed_ms": int((time.perf_counter() - started) * 1000),
+                },
+                trace_id=trace_id,
+            )
+            return self._json(normalized)
+        except Exception as exc:
+            _dbg_report(
+                hypothesis_id="COMMAND_CENTER",
+                msg="[ERROR] command-center blocked before delivery",
+                data={
+                    "project_id": project,
+                    "exc_type": type(exc).__name__,
+                },
+                trace_id=trace_id,
+            )
+            return self._json(
+                {
+                    "ok": False,
+                    "error": "COMMAND_CENTER_DELIVERY_BLOCKED",
+                    "message": "客户证据脱敏或交付格式校验失败，原始数据未返回。",
+                },
+                500,
+            )
 
     def do_GET(self) -> None:  # noqa: N802
         self._init_request_context()
         parsed = urlparse(self.path)
-        project = self._project()
         root = self._root()
-        # Serve the React console for any non-API path (public, before the auth
-        # gate so /login is reachable). Retired server-rendered aliases redirect
-        # onto first-class SPA routes; do not regenerate HTML pages here.
         if not parsed.path.startswith("/api") and parsed.path != "/health":
-            _spa_aliases = {
-                "/knowledge": "/materials",
-                "/benchmark": "/coverage",
-                "/onboard": "/products",
-            }
-            if parsed.path in _spa_aliases:
-                target = _spa_aliases[parsed.path]
-                if parsed.query:
-                    target = f"{target}?{parsed.query}"
-                self.send_response(302)
-                self.send_header("Location", target)
-                self.end_headers()
-                return
-            return self._serve_frontend(parsed, root)
+            return self._serve_public_frontend(parsed, root)
         if parsed.path in {"/health", "/api/health"}:
-            from . import private_pilot_service as _service
-            from .private_pilot_health_contract import build_private_pilot_health_payload
+            return self._health(root)
 
-            patch_source = str(
-                getattr(_service, "_DEPLOYMENT_CONTRACT_PATCH_SOURCE", "")
-                or "ai_test_asset_center.private_pilot_http_routing"
-            )
-            return self._json(
-                build_private_pilot_health_payload(
-                    self,
-                    fallback_root=root,
-                    patch_source=patch_source,
-                )
-            )
-        # Every non-health route requires a trusted actor. `_require_actor()`
-        # keeps the narrowly-scoped localhost development fallback, but only
-        # when public binding is disabled and the caller has not explicitly
-        # requested a negative-auth probe. This prevents public/private-cloud
-        # GET endpoints from silently serving project data to anonymous users.
         actor = self._require_actor()
-        if actor is None:
-            return
-        if self._require_tenant(root) is None:
-            return
-        _route_parts = [unquote(part) for part in parsed.path.split("/") if part]
-        _route_project = (
-            _route_parts[3]
-            if len(_route_parts) >= 4 and _route_parts[:3] == ["api", "v1", "projects"]
-            else ""
-        )
-        _authority_decision_route = (
-            len(_route_parts) == 5
-            and _route_parts[:3] == ["api", "v1", "projects"]
-            and _route_parts[4] == "authority-decisions"
-        )
-        if _route_project:
-            project = _safe_project_id(_route_project)
-        if _authority_decision_route and _route_project != project:
-            return self._json({"ok": False, "error": "NOT_FOUND"}, 404)
-        if not self._require_project_scope(project):
-            return
-        if _authority_decision_route:
-            return self._handle_authority_decision_get(project, root)
+        if actor is None or self._require_tenant(root) is None:
+            return None
+        route_project, route_parts = self._route_project(parsed)
         if parsed.path == "/api/v1/projects":
-            # Merge DB projects + filesystem-discovered projects (dedup by project_id)
-            tenant_id = self._request_tenant()
-            try:
-                db_persist.init_db(root)
-                items = db_persist.list_projects(root, tenant_id)
-            except Exception:
-                items = []
-            # Always scan filesystem to discover projects not yet in DB
-            scopes, wildcard = self._project_list_scope_filter()
-            seen: set[str] = {str(it.get("project_id") or "") for it in items}
-            for base_name in ("platform_outputs", "platform_workspace", "platform_inputs"):
-                for d in sorted((root / base_name).glob("*")):
-                    if not d.is_dir():
-                        continue
-                    if not wildcard and d.name not in scopes:
-                        continue
-                    if d.name in seen:
-                        continue
-                    seen.add(d.name)
-                    items.append({
-                        "project_id": d.name,
-                        "customer_name": d.name,
-                        "project_name": d.name,
-                        "source": base_name,
-                    })
-            return self._json({"ok": True, "data": items})
-        if len(_route_parts) >= 5 and _route_parts[:3] == ["api", "v1", "projects"] and _route_parts[4] == "campaigns":
-            return self._handle_campaign_get(project, _route_parts[5:], parse_qs(parsed.query), root)
-        # Bridge: serve V12 results in legacy format for Dashboard/Findings
-        if parsed.path.startswith("/api/v1/projects/") and parsed.path.endswith("/command-center"):
-            pid = parsed.path.split("/")[4] if len(parsed.path.split("/")) >= 5 else ""
-            pid = unquote(pid)
-            trace_id = uuid.uuid4().hex
-            started = time.perf_counter()
-            _dbg_report(
-                hypothesis_id="C",
-                msg="[DEBUG] command-center enter",
-                data={"project_id": pid, "path": parsed.path},
-                trace_id=trace_id,
+            return self._handle_project_list(root)
+
+        try:
+            project = _safe_project_id(route_project or self._project())
+        except ValueError:
+            return self._json({"ok": False, "error": "PROJECT_NOT_FOUND"}, 404)
+        if not self._require_project_scope(project):
+            return None
+
+        authority_route = (
+            len(route_parts) == 5
+            and route_parts[:3] == ["api", "v1", "projects"]
+            and route_parts[4] == "authority-decisions"
+        )
+        if authority_route:
+            return self._handle_authority_decision_get(project, root)
+        if (
+            len(route_parts) >= 5
+            and route_parts[:3] == ["api", "v1", "projects"]
+            and route_parts[4] == "campaigns"
+        ):
+            return self._handle_campaign_get(
+                project,
+                route_parts[5:],
+                parse_qs(parsed.query),
+                root,
             )
-            try:
-                payload = self._build_command_center(pid, root)
-                try:
-                    from .display_ready_formatter import sanitize_customer_evidence_payload
-                    payload = sanitize_customer_evidence_payload(payload)
-                except Exception as sanitize_exc:
-                    _dbg_report(
-                        hypothesis_id="F",
-                        msg="[WARN] command-center evidence response sanitize skipped",
-                        data={"project_id": pid, "error": str(sanitize_exc)},
-                        trace_id=trace_id,
-                    )
-                payload = _normalize_command_center_envelope(payload)
-                _dbg_report(
-                    hypothesis_id="C",
-                    msg="[DEBUG] command-center built",
-                    data={
-                        "project_id": pid,
-                        "elapsed_ms": int((time.perf_counter() - started) * 1000),
-                        "keys": list(payload.keys())[:16],
-                        "defect_count": len(((payload.get("data") if isinstance(payload.get("data"), dict) else payload).get("defects") or [])),
-                        "clue_count": len(((payload.get("data") if isinstance(payload.get("data"), dict) else payload).get("clues") or [])),
-                        "scan_meta": (((payload.get("data") if isinstance(payload.get("data"), dict) else payload).get("scan_meta") if isinstance((payload.get("data") if isinstance(payload.get("data"), dict) else payload).get("scan_meta"), dict) else {})),
-                    },
-                    trace_id=trace_id,
-                )
-                return self._json(payload)
-            except BaseException as exc:
-                _dbg_report(
-                    hypothesis_id="B",
-                    msg="[DEBUG] command-center exception",
-                    data={"project_id": pid, "exc_type": type(exc).__name__, "exc": str(exc)},
-                    trace_id=trace_id,
-                )
-                return self._json(
-                    {"ok": False, "error": "COMMAND_CENTER_FAILED", "message": str(exc)},
-                    500,
-                )
-        if parsed.path == "/api/tenants/create":
-            return self._json({"ok": False, "error": "METHOD_NOT_ALLOWED", "message": "Use POST /api/tenants/create."}, 405)
-        if parsed.path == "/api/auth/password/reset":
-            return self._json({"ok": False, "error": "METHOD_NOT_ALLOWED", "message": "Use POST /api/auth/password/reset."}, 405)
+        if (
+            parsed.path.startswith("/api/v1/projects/")
+            and parsed.path.endswith("/command-center")
+        ):
+            return self._handle_command_center(project, root)
         if parsed.path == "/api/connectors/list":
             from .enterprise_pilot_runtime import load_connector_registry
+
             registry = load_connector_registry(project, root)
             connectors = registry.get("connectors", [])
             return self._json({"ok": True, "connectors": connectors})
         if parsed.path == "/api/control-plane/overview":
-            from .enterprise_testops_control_plane import build_enterprise_testops_control_plane, load_enterprise_testops_control_plane
+            from .enterprise_testops_control_plane import (
+                build_enterprise_testops_control_plane,
+                load_enterprise_testops_control_plane,
+            )
 
-            return self._json({"ok": True, "control_plane": load_enterprise_testops_control_plane(project, root) or build_enterprise_testops_control_plane(project, root)})
+            control_plane = load_enterprise_testops_control_plane(
+                project, root
+            ) or build_enterprise_testops_control_plane(project, root)
+            return self._json({"ok": True, "control_plane": control_plane})
         if parsed.path == "/api/knowledge/asset":
-            from .enterprise_knowledge_center import build_enterprise_business_knowledge_asset, load_enterprise_business_knowledge_asset
+            from .enterprise_knowledge_center import (
+                build_enterprise_business_knowledge_asset,
+                load_enterprise_business_knowledge_asset,
+            )
 
-            asset = load_enterprise_business_knowledge_asset(project, root) or build_enterprise_business_knowledge_asset(project, root)
-            # Also include project input files as knowledge sources
+            asset = load_enterprise_business_knowledge_asset(
+                project, root
+            ) or build_enterprise_business_knowledge_asset(project, root)
+            if not isinstance(asset, dict):
+                raise TypeError("knowledge asset must be an object")
             input_files = self._list_project_inputs(project, root)
-            existing_sources = _knowledge_asset_sources(asset, root)
-            if not isinstance(existing_sources, list):
-                existing_sources = []
-            input_sources = input_files.get("sources", [])
-            if not isinstance(input_sources, list):
-                input_sources = []
-            merged_by_key: dict[str, dict[str, Any]] = {}
-            order: list[str] = []
-            for item in list(existing_sources) + list(input_sources):
+            existing = _knowledge_asset_sources(asset, root)
+            inputs = (
+                input_files.get("sources", [])
+                if isinstance(input_files, dict)
+                and isinstance(input_files.get("sources"), list)
+                else []
+            )
+            merged: dict[str, dict[str, Any]] = {}
+            for item in [*existing, *inputs]:
                 if not isinstance(item, dict):
                     continue
-                key = str(item.get("source_id") or item.get("id") or item.get("filename") or "")
-                if not key:
-                    continue
-                current = merged_by_key.get(key)
-                if current is None:
-                    merged_by_key[key] = dict(item)
-                    order.append(key)
-                    continue
-                incoming_uploaded_at = str(item.get("uploaded_at") or item.get("created_at_utc") or item.get("created_at") or "").strip()
-                if not str(current.get("uploaded_at") or current.get("created_at_utc") or current.get("created_at") or "").strip() and incoming_uploaded_at:
-                    current["uploaded_at"] = incoming_uploaded_at
-                if int(current.get("size_bytes") or 0) <= 0 and int(item.get("size_bytes") or 0) > 0:
-                    current["size_bytes"] = int(item.get("size_bytes") or 0)
-            merged = [merged_by_key[k] for k in order]
-            asset["sources"] = merged
-            if not isinstance(asset.get("summary"), dict):
-                asset["summary"] = {}
-            asset["summary"]["active_source_count"] = len(asset["sources"])
+                key = _text(
+                    item.get("source_id")
+                    or item.get("id")
+                    or item.get("filename")
+                )
+                if key:
+                    merged.setdefault(key, dict(item))
+            asset["sources"] = list(merged.values())
+            summary = asset.get("summary")
+            if not isinstance(summary, dict):
+                summary = {}
+                asset["summary"] = summary
+            summary["active_source_count"] = len(asset["sources"])
             return self._json({"ok": True, "knowledge_asset": asset})
         if parsed.path == "/api/knowledge/preview":
-            return self._handle_preview(project, {"source_id": parse_qs(parsed.query).get("source_id", [""])[0]}, root)
+            source_id = (parse_qs(parsed.query).get("source_id") or [""])[0]
+            return self._handle_preview(project, {"source_id": source_id}, root)
         if parsed.path == "/api/evidence/artifact":
-            return self._handle_evidence_artifact(project, parse_qs(parsed.query).get("ref", [""])[0], root)
-        # Settings-page read-back routes (P0-1 fix): these were previously only
-        # declared inside do_POST behind a `if self.command == "GET"` guard that can
-        # never be true there, so real GET requests fell through to 404. Wire them
-        # into do_GET so the customer settings page can load saved config.
+            artifact_ref = (parse_qs(parsed.query).get("ref") or [""])[0]
+            return self._handle_evidence_artifact(project, artifact_ref, root)
         if parsed.path == "/api/v1/services/credentials":
+            if not self._require_role(
+                actor,
+                _svc().CONFIG_MANAGER_ROLES,
+                "service credential read",
+            ):
+                return None
             return self._handle_get_service_credentials(project, root)
         if parsed.path == "/api/v1/project/metadata":
             return self._handle_get_project_metadata(project, root)
         if parsed.path == "/api/v1/scan/preflight":
             return self._handle_scan_preflight(project, root)
+        if parsed.path in {"/api/tenants/create", "/api/auth/password/reset"}:
+            return self._json(
+                {"ok": False, "error": "METHOD_NOT_ALLOWED"},
+                405,
+            )
+        return self._json({"ok": False, "error": "NOT_FOUND"}, 404)
+
+    def _handle_public_auth_post(self, parsed: Any, root: Path) -> Any:
+        try:
+            body = self._body()
+        except ValueError as exc:
+            return self._json(
+                {"ok": False, "error": "BAD_REQUEST", "message": str(exc)},
+                400,
+            )
+        db_persist.init_db(root)
+        if parsed.path == "/api/auth/login":
+            username = _text(body.get("username") or body.get("api_key"))
+            password = str(body.get("password") or "")
+            account = db_persist.authenticate_tenant(root, username, password)
+            if not account:
+                return self._json(
+                    {"ok": False, "error": "INVALID_CREDENTIALS"},
+                    401,
+                )
+            token = jwt_auth.create_token(
+                _text(account.get("tenant_id")),
+                _text(account.get("role")) or "viewer",
+            )
+            cookie_flags = "HttpOnly; SameSite=Strict; Path=/"
+            if os.environ.get("QUALIBUG_ALLOW_PUBLIC_BIND") == "1":
+                cookie_flags += "; Secure"
+            return self._json(
+                {
+                    "ok": True,
+                    "token": token,
+                    "tenant_id": account["tenant_id"],
+                    "role": account.get("role") or "viewer",
+                },
+                extra_headers={
+                    "Set-Cookie": f"qualibug_token={token}; {cookie_flags}"
+                },
+            )
+        if parsed.path == "/api/auth/password/reset":
+            result = db_persist.reset_tenant_password(
+                root,
+                tenant_id=_text(body.get("tenant_id") or body.get("workspace_id")),
+                username=_text(body.get("username")),
+                current_password=str(body.get("current_password") or ""),
+                new_password=str(
+                    body.get("new_password") or body.get("password") or ""
+                ),
+            )
+            if result.get("ok") is not True:
+                error = _text(result.get("error")) or "RESET_DENIED"
+                status = 400 if error in {
+                    "MISSING_FIELDS",
+                    "PASSWORD_TOO_SHORT",
+                    "RESET_AUTH_REQUIRED",
+                } else 403
+                return self._json(
+                    {
+                        "ok": False,
+                        "error": error,
+                        "message": "密码变更需要正确的工作区、账号和当前密码。",
+                    },
+                    status,
+                )
+            return self._json(
+                {
+                    "ok": True,
+                    "tenant_id": result["tenant_id"],
+                    "username": result["username"],
+                }
+            )
+        if parsed.path == "/api/tenants/create":
+            tenant_id = _text(body.get("tenant_id"))
+            name = _text(body.get("name"))
+            username = _text(body.get("username"))
+            password = str(body.get("password") or "")
+            if not tenant_id or not name or not username or not password:
+                return self._json(
+                    {"ok": False, "error": "MISSING_FIELDS"},
+                    400,
+                )
+            bootstrap_token = _text(
+                self.headers.get("X-QualiBug-Bootstrap-Token")
+                or body.get("bootstrap_token")
+            )
+            tenant_result = db_persist.create_tenant(
+                root,
+                tenant_id,
+                name,
+                username=username,
+                password=password,
+                provisioning_token=bootstrap_token,
+            )
+            if tenant_result.get("ok") is not True:
+                error = _text(tenant_result.get("error")) or "TENANT_CREATE_FAILED"
+                status = 403 if error in {
+                    "TENANT_PROVISIONING_DISABLED",
+                    "TENANT_BOOTSTRAP_TOKEN_REQUIRED",
+                } else 409 if error in {
+                    "TENANT_EXISTS",
+                    "USERNAME_EXISTS",
+                } else 400
+                return self._json(
+                    {"ok": False, "error": error},
+                    status,
+                )
+            project_result = db_persist.create_project(
+                root,
+                tenant_result["tenant_id"],
+                tenant_result["tenant_id"],
+                name,
+            )
+            if project_result.get("ok") is not True:
+                return self._json(
+                    {
+                        "ok": False,
+                        "error": "INITIAL_PROJECT_CREATE_FAILED",
+                    },
+                    500,
+                )
+            return self._json(
+                {
+                    "ok": True,
+                    "tenant_id": tenant_result["tenant_id"],
+                    "username": tenant_result["username"],
+                    "role": tenant_result["role"],
+                },
+                201,
+            )
         return self._json({"ok": False, "error": "NOT_FOUND"}, 404)
 
     def do_POST(self) -> None:  # noqa: N802
         self._init_request_context()
         parsed = urlparse(self.path)
         root = self._root()
-        # Auth & tenant routes — no actor required
-        if parsed.path in ("/api/auth/login", "/api/tenants/create", "/api/auth/password/reset"):
-            try:
-                body = self._body()
-            except Exception:
-                return self._json({"ok": False, "error": "BAD_REQUEST"}, 400)
-            db_persist.init_db(root)
-            if parsed.path == "/api/auth/login":
-                username = str(body.get("username") or body.get("api_key") or "").strip()
-                password = str(body.get("password") or "").strip()
-                auth_result = db_persist.authenticate_tenant(root, username, password)
-                if not auth_result:
-                    return self._json({"ok": False, "error": "INVALID_CREDENTIALS"}, 401)
-                token = jwt_auth.create_token(
-                    str(auth_result["tenant_id"]),
-                    str(auth_result.get("role") or "admin"),
-                )
-                _cookie_flags = "HttpOnly; SameSite=Lax; Path=/"
-                if os.environ.get("QUALIBUG_ALLOW_PUBLIC_BIND") == "1":
-                    _cookie_flags += "; Secure"
-                return self._json({
-                    "ok": True,
-                    "token": token,
-                    "tenant_id": auth_result["tenant_id"],
-                    "role": auth_result.get("role") or "admin",
-                }, extra_headers={"Set-Cookie": f"qualibug_token={token}; {_cookie_flags}"})
-            if parsed.path == "/api/auth/password/reset":
-                tid = str(body.get("tenant_id") or body.get("workspace_id") or "").strip()
-                username = str(body.get("username") or "").strip()
-                new_password = str(body.get("new_password") or body.get("password") or "")
-                reset_result = db_persist.reset_tenant_password(
-                    root,
-                    tenant_id=tid,
-                    username=username,
-                    new_password=new_password,
-                )
-                if not reset_result.get("ok"):
-                    error = str(reset_result.get("error") or "RESET_DENIED")
-                    if error == "PASSWORD_TOO_SHORT":
-                        return self._json({"ok": False, "error": error, "message": "密码长度至少 8 位"}, 400)
-                    if error == "MISSING_FIELDS":
-                        return self._json({"ok": False, "error": error, "message": "请填写完整重置信息"}, 400)
-                    # Generic denial — do not reveal which field mismatched.
-                    return self._json(
-                        {"ok": False, "error": "RESET_DENIED", "message": "工作区或账号不匹配，无法重置密码"},
-                        403,
-                    )
-                return self._json({
-                    "ok": True,
-                    "tenant_id": reset_result["tenant_id"],
-                    "username": reset_result["username"],
-                })
-            if parsed.path == "/api/tenants/create":
-                tid = str(body.get("tenant_id") or "").strip()
-                name = str(body.get("name") or "").strip()
-                username = str(body.get("username") or "").strip()
-                password = str(body.get("password") or "").strip()
-                role = str(body.get("role") or "admin").strip() or "admin"
-                if not tid or not name or not username or not password:
-                    return self._json({"ok": False, "error": "MISSING_FIELDS"}, 400)
-                tenant_result = db_persist.create_tenant(
-                    root,
-                    tid,
-                    name,
-                    username=username,
-                    password=password,
-                    role=role,
-                )
-                if not tenant_result.get("ok"):
-                    return self._json(tenant_result)
-                db_persist.create_project(root, tid, tid, name)
-                return self._json({"ok": True, "tenant_id": tid, "username": username, "role": role})
+        if parsed.path in {
+            "/api/auth/login",
+            "/api/tenants/create",
+            "/api/auth/password/reset",
+        }:
+            return self._handle_public_auth_post(parsed, root)
+
         actor = self._require_actor()
-        if actor is None:
-            return
-        if self._require_tenant(root) is None:
-            return
+        if actor is None or self._require_tenant(root) is None:
+            return None
         try:
             body = self._body()
-            route_project = ""
-            route_parts = [unquote(part) for part in parsed.path.split("/") if part]
-            if len(route_parts) >= 4 and route_parts[:3] == ["api", "v1", "projects"]:
-                route_project = route_parts[3]
-            authority_decision_route = (
+            route_project, route_parts = self._route_project(parsed)
+            project = _safe_project_id(
+                _text(body.get("project_id") or route_project or self._project())
+            )
+            if not self._require_project_scope(project):
+                return None
+            authority_route = (
                 len(route_parts) == 5
                 and route_parts[:3] == ["api", "v1", "projects"]
                 and route_parts[4] == "authority-decisions"
             )
-            if authority_decision_route:
-                project = _safe_project_id(route_project)
-                if not route_project or route_project != project:
-                    return self._json({"ok": False, "error": "NOT_FOUND"}, 404)
-            else:
-                project = _safe_project_id(
-                    str(body.get("project_id") or route_project or self._project())
-                )
-            if not self._require_project_scope(project):
-                return
-            if authority_decision_route:
+            if authority_route:
                 return self._handle_authority_decision_post(
-                    project,
-                    root,
-                    actor,
-                    body,
+                    project, root, actor, body
                 )
             if parsed.path == "/api/v1/evaluations/submissions":
+                if not self._require_role(actor, _svc().CONFIG_MANAGER_ROLES, "evaluation submission"):
+                    return None
                 from .campaign_api_contract import build_evaluation_submission
 
-                return self._json({"ok": True, "data": build_evaluation_submission(root, project, body)}, 201)
-            if len(route_parts) == 5 and route_parts[:3] == ["api", "v1", "projects"] and route_parts[4] == "campaigns":
+                return self._json(
+                    {"ok": True, "data": build_evaluation_submission(root, project, body)},
+                    201,
+                )
+            if (
+                len(route_parts) == 5
+                and route_parts[:3] == ["api", "v1", "projects"]
+                and route_parts[4] == "campaigns"
+            ):
+                if not self._require_role(actor, _svc().CONFIG_MANAGER_ROLES, "campaign creation"):
+                    return None
                 from .campaign_api_contract import create_campaign
 
-                return self._json({"ok": True, "data": create_campaign(root, project, body)}, 201)
+                return self._json(
+                    {"ok": True, "data": create_campaign(root, project, body)},
+                    201,
+                )
             if (
                 len(route_parts) == 7
                 and route_parts[:3] == ["api", "v1", "projects"]
@@ -485,20 +562,30 @@ class HttpRoutingMixin:
             ):
                 from .campaign_api_contract import load_created_campaign
 
-                campaign_contract = load_created_campaign(root, project, route_parts[5])
-                if campaign_contract.get("status") != "ready":
+                campaign = load_created_campaign(root, project, route_parts[5])
+                if campaign.get("status") != "ready":
                     raise CampaignContractError(
-                        "campaign is not ready; resolve target_policy_decision.blocking_codes before execution"
+                        "campaign is not ready; resolve target policy blockers"
                     )
-                runtime_input = campaign_contract.get("runtime_input") if isinstance(campaign_contract.get("runtime_input"), dict) else {}
-                scan_body = {
-                    **body,
-                    **runtime_input,
-                    "project_id": project,
-                    "campaign_id": route_parts[5],
-                    "target_policy_decision": campaign_contract.get("target_policy_decision"),
-                }
-                return self._handle_v12_scan(project, root, actor, scan_body)
+                runtime_input = (
+                    campaign.get("runtime_input")
+                    if isinstance(campaign.get("runtime_input"), dict)
+                    else {}
+                )
+                return self._handle_v12_scan(
+                    project,
+                    root,
+                    actor,
+                    {
+                        **body,
+                        **runtime_input,
+                        "project_id": project,
+                        "campaign_id": route_parts[5],
+                        "target_policy_decision": campaign.get(
+                            "target_policy_decision"
+                        ),
+                    },
+                )
             if (
                 len(route_parts) == 6
                 and route_parts[:3] == ["api", "v1", "projects"]
@@ -506,64 +593,96 @@ class HttpRoutingMixin:
             ):
                 return self._handle_scan_preflight(project, root, body)
             if parsed.path == "/api/knowledge/ingest":
-                if not self._require_role(actor, _svc().KNOWLEDGE_MANAGER_ROLES, "knowledge source ingestion"):
-                    return
+                if not self._require_role(
+                    actor,
+                    _svc().KNOWLEDGE_MANAGER_ROLES,
+                    "knowledge source ingestion",
+                ):
+                    return None
                 return self._handle_ingest(project, body, root, actor)
-            elif parsed.path.startswith("/api/knowledge/delete"):
-                if not self._require_role(actor, _svc().KNOWLEDGE_MANAGER_ROLES, "knowledge source deletion"):
-                    return
+            if parsed.path.startswith("/api/knowledge/delete"):
+                if not self._require_role(
+                    actor,
+                    _svc().KNOWLEDGE_MANAGER_ROLES,
+                    "knowledge source deletion",
+                ):
+                    return None
                 return self._handle_delete(project, body, root, actor)
-            elif parsed.path == "/api/environment/config":
+            if parsed.path == "/api/environment/config":
+                if not self._require_role(actor, _svc().CONFIG_MANAGER_ROLES, "environment configuration"):
+                    return None
                 from .enterprise_testops_control_plane import save_environment_config
-                result = save_environment_config(project, body.get("payload") or body, root, actor)
-                # Clear dashboard cache so it picks up new env config
-                dash_html = root / "platform_outputs" / project / "enterprise_pilot_runtime" / "enterprise_pilot_center.html"
-                if dash_html.exists(): dash_html.unlink()
-                return self._json(result)
-            elif parsed.path == "/api/v1/scan":
-                # #region debug-point A0:scan-route-enter
-                _dbg_report(
-                    hypothesis_id="A0",
-                    msg="[DEBUG] do_POST matched /api/v1/scan",
-                    data={"project": project, "path": parsed.path, "body_keys": sorted(body.keys()) if isinstance(body, dict) else []},
-                    trace_id=str(uuid.uuid4()),
+
+                result = save_environment_config(
+                    project,
+                    body.get("payload") or body,
+                    root,
+                    actor,
                 )
-                # #endregion
+                dashboard = (
+                    root
+                    / "platform_outputs"
+                    / project
+                    / "enterprise_pilot_runtime"
+                    / "enterprise_pilot_center.html"
+                )
+                if dashboard.exists():
+                    dashboard.unlink()
+                return self._json(result)
+            if parsed.path == "/api/v1/scan":
                 return self._handle_v12_scan(project, root, actor, body)
-            elif parsed.path == "/api/v1/scan/preflight":
-                return self._handle_scan_preflight(project, root)
-            elif parsed.path == "/api/v1/continuous/status":
+            if parsed.path == "/api/v1/scan/preflight":
+                return self._handle_scan_preflight(project, root, body)
+            if parsed.path == "/api/v1/continuous/status":
                 return self._json(_get_continuous_state(root, project))
-            elif parsed.path == "/api/v1/continuous/start":
+            if parsed.path == "/api/v1/continuous/start":
                 return self._handle_continuous_start(project, root, actor, body)
-            elif parsed.path == "/api/v1/continuous/stop":
+            if parsed.path == "/api/v1/continuous/stop":
                 return self._handle_continuous_stop(project, root)
-            elif parsed.path == "/api/v1/spectrum/status":
+            if parsed.path == "/api/v1/spectrum/status":
                 return self._get_spectrum_status(project, root)
-            elif parsed.path == "/api/v1/db-test":
+            if parsed.path == "/api/v1/db-test":
+                if not self._require_role(actor, _svc().CONFIG_MANAGER_ROLES, "database connection test"):
+                    return None
                 return self._handle_db_test(body)
-            elif parsed.path == "/api/v1/replay":
+            if parsed.path == "/api/v1/replay":
+                if not self._require_role(actor, _svc().CONFIG_MANAGER_ROLES, "finding replay"):
+                    return None
                 return self._handle_replay(project, root, body)
-            elif parsed.path.startswith("/api/v1/projects/") and parsed.path.endswith("/regression/run"):
+            if (
+                parsed.path.startswith("/api/v1/projects/")
+                and parsed.path.endswith("/regression/run")
+            ):
                 return self._handle_regression_run(project, root, body)
-            elif parsed.path == "/api/v1/services/credentials":
-                if self.command == "GET":
-                    return self._handle_get_service_credentials(project, root)
+            if parsed.path == "/api/v1/services/credentials":
+                if not self._require_role(actor, _svc().CONFIG_MANAGER_ROLES, "service credential update"):
+                    return None
                 return self._handle_save_service_credentials(project, root, body)
-            elif parsed.path == "/api/v1/project/metadata":
-                if self.command == "GET":
-                    return self._handle_get_project_metadata(project, root)
+            if parsed.path == "/api/v1/project/metadata":
+                if not self._require_role(actor, _svc().CONFIG_MANAGER_ROLES, "project metadata update"):
+                    return None
                 return self._handle_save_project_metadata(project, root, body)
-            elif parsed.path == "/api/settings/save":
-                if not self._require_role(actor, _svc().SETTINGS_MANAGER_ROLES, "system settings update"):
-                    return
+            if parsed.path == "/api/settings/save":
                 return self._handle_settings_save(body)
-            elif parsed.path == "/api/connectors/register":
-                result = operate_enterprise_pilot_runtime(project, "register_connector", body, root, actor)
-                return self._json({"ok": True, "message": "Connector registered."})
-            else:
-                return self._json({"ok": False, "error": "NOT_FOUND"}, 404)
-            return self._json(result)
+            if parsed.path == "/api/connectors/register":
+                if not self._require_role(actor, _svc().CONFIG_MANAGER_ROLES, "connector registration"):
+                    return None
+                result = operate_enterprise_pilot_runtime(
+                    project,
+                    "register_connector",
+                    body,
+                    root,
+                    actor,
+                )
+                return self._json(
+                    {
+                        "ok": bool(result.get("ok", True))
+                        if isinstance(result, dict)
+                        else True,
+                        "message": "Connector registered.",
+                    }
+                )
+            return self._json({"ok": False, "error": "NOT_FOUND"}, 404)
         except CampaignContractError as exc:
             error = structured_error(
                 stage="campaign_api",
@@ -573,18 +692,40 @@ class HttpRoutingMixin:
                 operator_action=str(exc),
             )
             return self._json({"ok": False, "error": error}, 409)
-        except PermissionError as exc:
-            return self._json({"ok": False, "error": "FORBIDDEN", "message": str(exc)}, 403)
+        except PermissionError:
+            return self._json({"ok": False, "error": "FORBIDDEN"}, 403)
         except (ValueError, KeyError) as exc:
-            return self._json({"ok": False, "error": "BAD_REQUEST", "message": str(exc)}, 400)
+            return self._json(
+                {"ok": False, "error": "BAD_REQUEST", "message": str(exc)},
+                400,
+            )
         except ProductError as exc:
-            return self._json({
-                "ok": False,
-                "error": exc.code,
-                "error_code": exc.code,
-                "message": exc.user_message + (f" | {exc.detail}" if exc.detail else ""),
-                "severity": exc.severity,
-                "support_hint": "如问题持续，请运行 qualibug-doctor --export-bundle 并发送给技术支持",
-            }, 500)
-        except Exception as exc:  # pragma: no cover - defensive private-service boundary
-            return self._json({"ok": False, "error": "INTERNAL_ERROR", "message": str(exc)[:300]}, 500)
+            return self._json(
+                {
+                    "ok": False,
+                    "error": exc.code,
+                    "error_code": exc.code,
+                    "message": exc.user_message,
+                    "severity": exc.severity,
+                    "support_hint": (
+                        "如问题持续，请运行 qualibug-doctor --export-bundle "
+                        "并发送给技术支持"
+                    ),
+                },
+                500,
+            )
+        except Exception as exc:
+            _dbg_report(
+                hypothesis_id="HTTP_POST",
+                msg="[ERROR] protected route failed",
+                data={"path": parsed.path, "exc_type": type(exc).__name__},
+                trace_id=_text(getattr(self, "_qualibug_corr_id", "")),
+            )
+            return self._json(
+                {
+                    "ok": False,
+                    "error": "INTERNAL_ERROR",
+                    "message": "请求处理失败，请使用关联日志排查。",
+                },
+                500,
+            )
