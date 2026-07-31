@@ -1,15 +1,20 @@
-"""Public source-authoritative process-graph wait contract facade.
+"""Public source-authoritative process-graph async wait authority.
 
-The existing bounded polling compiler/runtime remains unchanged in
-``process_graph_wait_contract_core``. Before delegating, this facade proves that
-a wait contract only REFERENCES the declared observer operation: it cannot
-replace that operation's HTTP method, path or target system.
+The mature bounded polling compiler/runtime remains in
+``process_graph_wait_contract_core``. This facade proves that a wait references
+one declared read operation and, when the source declares message/callback
+semantics, freezes an event transition contract behind that same wait entry.
+
+There is still one scheduler and one pre-transport gate. State convergence
+continues through the core; event delivery delegates to the source-declared
+event transition evaluator and returns the same wait receipt status vocabulary.
 """
 from __future__ import annotations
 
 from copy import deepcopy
 from typing import Any
 
+from . import process_graph_event_transition as _event
 from . import process_graph_wait_contract_core as _core
 from .real_id_resolver import normalize_path_placeholders
 
@@ -17,6 +22,19 @@ from .real_id_resolver import normalize_path_placeholders
 for _name in dir(_core):
     if not _name.startswith("__"):
         globals()[_name] = getattr(_core, _name)
+
+EVENT_TRANSITION_INVALID = _event.EVENT_TRANSITION_INVALID
+EVENT_CORRELATION_UNRESOLVED = _event.EVENT_CORRELATION_UNRESOLVED
+EVENT_OBSERVATION_INCOMPLETE = _event.EVENT_OBSERVATION_INCOMPLETE
+EVENT_DELIVERY_COUNT_BELOW_MINIMUM = (
+    _event.EVENT_DELIVERY_COUNT_BELOW_MINIMUM
+)
+EVENT_DELIVERY_COUNT_ABOVE_MAXIMUM = (
+    _event.EVENT_DELIVERY_COUNT_ABOVE_MAXIMUM
+)
+EVENT_ID_REUSE_CONFLICT = _event.EVENT_ID_REUSE_CONFLICT
+EVENT_IDEMPOTENCY_KEY_MISMATCH = _event.EVENT_IDEMPOTENCY_KEY_MISMATCH
+EVENT_RETRY_LIMIT_EXCEEDED = _event.EVENT_RETRY_LIMIT_EXCEEDED
 
 
 def _text(value: Any) -> str:
@@ -57,22 +75,59 @@ def _operation_system(operation: dict[str, Any]) -> str:
     )
 
 
+def _wait_id(raw: dict[str, Any], index: int) -> str:
+    return _text(raw.get("wait_id") or raw.get("contract_id")) or (
+        f"wait_{index + 1}"
+    )
+
+
+def _edge_relation(
+    graph: dict[str, Any],
+    *,
+    source_node_id: str,
+    target_node_id: str,
+) -> tuple[str, str]:
+    relations = list(
+        dict.fromkeys(
+            _text(_dict(edge).get("relation_type")).upper()
+            for edge in _list(graph.get("edges"))
+            if isinstance(edge, dict)
+            and _text(edge.get("source_node_id")) == source_node_id
+            and _text(edge.get("target_node_id")) == target_node_id
+            and _text(edge.get("relation_type"))
+        )
+    )
+    if len(relations) != 1:
+        return "", (
+            "event_edge_relation_ambiguous:"
+            f"{source_node_id}->{target_node_id}:{relations}"
+        )
+    return relations[0], ""
+
+
+def _event_contract_fingerprint_valid(contract: dict[str, Any]) -> bool:
+    row = deepcopy(_dict(contract))
+    attached = _text(row.pop("contract_fingerprint", ""))
+    return bool(attached and attached == _event._fingerprint(row))
+
+
 def compile_process_graph_wait_contracts(
     graph: dict[str, Any],
     *,
     behavior_ir: dict[str, Any],
 ) -> dict[str, Any]:
-    """Reject wait transport drift, then invoke the existing compiler."""
+    """Freeze declared read transport, waits and optional event semantics."""
     source = deepcopy(_dict(graph))
     operations = _operations(behavior_ir)
     nodes = _nodes(source)
     issues: list[str] = []
+    raw_by_wait_id: dict[str, dict[str, Any]] = {}
 
     for index, raw_value in enumerate(_list(source.get("wait_contracts"))):
-        raw = _dict(raw_value)
-        wait_id = _text(raw.get("wait_id") or raw.get("contract_id")) or (
-            f"wait_{index + 1}"
-        )
+        raw = deepcopy(_dict(raw_value))
+        wait_id = _wait_id(raw, index)
+        raw["wait_id"] = wait_id
+        raw_by_wait_id[wait_id] = deepcopy(raw)
         target_node_id = _text(
             raw.get("target_node_id")
             or raw.get("before_node_id")
@@ -87,6 +142,7 @@ def compile_process_graph_wait_contracts(
         operation = _dict(operations.get(observer_ref))
         if not operation:
             # The mature core emits the canonical unresolved-operation detail.
+            source["wait_contracts"][index] = raw
             continue
 
         declared_method = _text(operation.get("method")).upper()
@@ -132,12 +188,12 @@ def compile_process_graph_wait_contracts(
                 f"{operation_system}!=primary"
             )
 
-        # Pass the declared transport shape to the mature compiler, never the
-        # caller-provided aliases.
+        # The core receives only the exact source operation transport shape.
         raw["method"] = declared_method
         raw["path"] = declared_path
         raw.pop("path_template", None)
         source["wait_contracts"][index] = raw
+        raw_by_wait_id[wait_id] = deepcopy(raw)
 
     if issues:
         return {
@@ -146,14 +202,164 @@ def compile_process_graph_wait_contracts(
             "detail": ";".join(issues[:16]),
             "issues": issues,
         }
-    return _core.compile_process_graph_wait_contracts(
+
+    result = _core.compile_process_graph_wait_contracts(
         source,
         behavior_ir=behavior_ir,
     )
+    if _text(result.get("status")) != _core.STATUS_COMPILED:
+        return result
+
+    compiled_graph = deepcopy(_dict(result.get("graph")))
+    compiled_waits = [
+        deepcopy(row)
+        for row in _list(compiled_graph.get("wait_contracts"))
+        if isinstance(row, dict)
+    ]
+    event_fingerprints: list[str] = []
+    event_issues: list[str] = []
+    for row in compiled_waits:
+        wait_id = _text(row.get("wait_id"))
+        raw = _dict(raw_by_wait_id.get(wait_id))
+        if not _event.has_event_transition(raw):
+            continue
+        relation, relation_error = _edge_relation(
+            compiled_graph,
+            source_node_id=_text(row.get("source_node_id")),
+            target_node_id=_text(row.get("target_node_id")),
+        )
+        if relation_error:
+            event_issues.append(f"{wait_id}:{relation_error}")
+            continue
+        event_contract, event_error = _event.compile_event_transition_contract(
+            raw_wait=raw,
+            compiled_wait=row,
+            relation_type=relation,
+        )
+        if event_error:
+            event_issues.append(f"{wait_id}:{event_error}")
+            continue
+        row["transition_kind"] = "event_delivery"
+        row["event_transition_contract"] = event_contract
+        row["contract_fingerprint"] = _core._fingerprint(row)
+        event_fingerprints.append(
+            _text(event_contract.get("contract_fingerprint"))
+        )
+
+    if event_issues:
+        return {
+            "status": _core.STATUS_BLOCKED,
+            "reason_code": EVENT_TRANSITION_INVALID,
+            "detail": ";".join(event_issues[:16]),
+            "issues": event_issues,
+        }
+
+    compiled_graph["wait_contracts"] = compiled_waits
+    compiled_graph["wait_contracts_by_target"] = {
+        _text(row.get("target_node_id")): row for row in compiled_waits
+    }
+    runtime = deepcopy(_dict(compiled_graph.get("wait_runtime_contract")))
+    runtime.update(
+        {
+            "contract_fingerprints": [
+                _text(row.get("contract_fingerprint"))
+                for row in compiled_waits
+            ],
+            "event_transition_count": len(event_fingerprints),
+            "event_transition_fingerprints": event_fingerprints,
+        }
+    )
+    compiled_graph["wait_runtime_contract"] = runtime
+    return {
+        **result,
+        "graph": compiled_graph,
+        "wait_contracts": compiled_waits,
+    }
+
+
+def compiled_wait_runtime_ready(graph: dict[str, Any]) -> tuple[bool, str]:
+    ready, detail = _core.compiled_wait_runtime_ready(graph)
+    if not ready:
+        return ready, detail
+    waits = [
+        _dict(row)
+        for row in _list(_dict(graph).get("wait_contracts"))
+        if isinstance(row, dict)
+    ]
+    event_contracts = [
+        _dict(row.get("event_transition_contract"))
+        for row in waits
+        if _text(row.get("transition_kind")) == "event_delivery"
+    ]
+    if any(
+        _text(contract.get("schema_version"))
+        != _event.CONTRACT_SCHEMA_VERSION
+        or _text(contract.get("status")) != _event.STATUS_COMPILED
+        or not _event_contract_fingerprint_valid(contract)
+        for contract in event_contracts
+    ):
+        return False, "event_transition_contract_drift"
+    runtime = _dict(_dict(graph).get("wait_runtime_contract"))
+    if int(runtime.get("event_transition_count") or 0) != len(event_contracts):
+        return False, "event_transition_count_mismatch"
+    if list(runtime.get("event_transition_fingerprints") or []) != [
+        _text(row.get("contract_fingerprint")) for row in event_contracts
+    ]:
+        return False, "event_transition_fingerprint_scope_mismatch"
+    return True, ""
+
+
+def execute_process_graph_wait(
+    *,
+    graph: dict[str, Any],
+    step: dict[str, Any],
+    context: dict[str, Any],
+    actors: dict[str, dict[str, Any]],
+    tokens: dict[str, str],
+    read_once: Any = None,
+    sleep: Any = None,
+    monotonic: Any = None,
+) -> dict[str, Any]:
+    """Execute state convergence or event delivery through one wait gate."""
+    step_id = _text(_dict(step).get("step_id"))
+    contract = _dict(
+        _dict(_dict(graph).get("wait_contracts_by_target")).get(step_id)
+    )
+    event_contract = _dict(contract.get("event_transition_contract"))
+    if event_contract:
+        kwargs: dict[str, Any] = {
+            "contract": event_contract,
+            "context": context,
+            "actors": actors,
+            "tokens": tokens,
+            "read_once": read_once,
+        }
+        if sleep is not None:
+            kwargs["sleep"] = sleep
+        if monotonic is not None:
+            kwargs["monotonic"] = monotonic
+        receipt = _event.execute_event_transition(**kwargs)
+        receipt.setdefault("step_id", step_id)
+        return receipt
+
+    kwargs = {
+        "graph": graph,
+        "step": step,
+        "context": context,
+        "actors": actors,
+        "tokens": tokens,
+        "read_once": read_once,
+    }
+    if sleep is not None:
+        kwargs["sleep"] = sleep
+    if monotonic is not None:
+        kwargs["monotonic"] = monotonic
+    return _core.execute_process_graph_wait(**kwargs)
 
 
 __all__ = sorted(
     name
     for name in globals()
-    if not name.startswith("__") and name not in {"_core", "_name"}
+    if not name.startswith("__")
+    and name not in {"_core", "_event", "_name"}
 )
