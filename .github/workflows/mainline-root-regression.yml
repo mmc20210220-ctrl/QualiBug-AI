@@ -42,7 +42,10 @@ jobs:
             ai_test_asset_center/replay_engine.py \
             ai_test_asset_center/ssrf_guard.py \
             ai_test_asset_center/db_persistence.py \
-            ai_test_asset_center/enterprise_knowledge_center/_crud.py
+            ai_test_asset_center/enterprise_knowledge_center/_crud.py \
+            ai_test_asset_center/formal_event_execution_preflight.py \
+            ai_test_asset_center/formal_event_observation_count_bridge.py \
+            ai_test_asset_center/formal_event_execution_outcome_bridge.py
       - name: Run P0 root regression suite
         env:
           QUALIBUG_JWT_SECRET: ci-mainline-root-secret
@@ -51,4 +54,6 @@ jobs:
         run: |
           pytest -q \
             tests/test_p0_root_security_boundaries.py \
-            tests/test_p0_atomic_mainline_contracts.py
+            tests/test_p0_atomic_mainline_contracts.py \
+            tests/test_formal_event_mainline.py \
+            tests/test_formal_event_runtime_execution.py
