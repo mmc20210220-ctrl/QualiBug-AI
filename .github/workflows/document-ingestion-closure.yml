@@ -14,10 +14,15 @@ on:
       - "ai_test_asset_center/authorization_oracle_causality.py"
       - "ai_test_asset_center/authorization_delivery_gate.py"
       - "ai_test_asset_center/binding_materialization_identity_receipt.py"
+      - "ai_test_asset_center/historical_authorization_quarantine.py"
+      - "ai_test_asset_center/historical_authorization_artifact_migration.py"
+      - "ai_test_asset_center/private_pilot_historical_authorization_migration.py"
       - "ai_test_asset_center/experiment_compiler.py"
       - "ai_test_asset_center/experiment_executor.py"
       - "ai_test_asset_center/experiment_executor_governance.py"
       - "ai_test_asset_center/formal_delivery_scope.py"
+      - "ai_test_asset_center/formal_delivery_authority.py"
+      - "ai_test_asset_center/private_pilot_service.py"
       - "ai_test_asset_center/experiment_runtime_support.py"
       - "ai_test_asset_center/enterprise_source_registry_lifecycle.py"
       - "ai_test_asset_center/private_pilot_project_assets.py"
@@ -86,10 +91,15 @@ jobs:
             ai_test_asset_center/authorization_oracle_causality.py \
             ai_test_asset_center/authorization_delivery_gate.py \
             ai_test_asset_center/binding_materialization_identity_receipt.py \
+            ai_test_asset_center/historical_authorization_quarantine.py \
+            ai_test_asset_center/historical_authorization_artifact_migration.py \
+            ai_test_asset_center/private_pilot_historical_authorization_migration.py \
             ai_test_asset_center/experiment_compiler.py \
             ai_test_asset_center/experiment_executor.py \
             ai_test_asset_center/experiment_executor_governance.py \
-            ai_test_asset_center/formal_delivery_scope.py
+            ai_test_asset_center/formal_delivery_scope.py \
+            ai_test_asset_center/formal_delivery_authority.py \
+            ai_test_asset_center/private_pilot_service.py
 
       - name: Run document ingestion closure
         run: |
@@ -114,6 +124,7 @@ jobs:
             tests/test_enterprise_understanding_authorization_oracle_causality.py \
             tests/test_enterprise_understanding_authorization_delivery_*.py \
             tests/test_enterprise_understanding_binding_materialization_identity_receipt.py \
+            tests/test_enterprise_understanding_historical_authorization_*.py \
             tests/test_enterprise_understanding_ingestion_evidence*.py \
             tests/test_enterprise_understanding_document_ground_truth.py \
             tests/test_enterprise_understanding_source_*.py \
