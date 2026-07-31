@@ -19,6 +19,7 @@ from ..business_object_recognition import (
     publish_recognition_and_identity,
     recognize_business_objects,
 )
+from ..identity_annotation_manifest import project_identity_annotation_manifest
 from ..identity_authority_projection import project_identity_authority_receipt
 from ..identity_benchmark import project_identity_benchmark
 from ..identity_evidence_policy import apply_identity_evidence_policy
@@ -74,6 +75,7 @@ def _publish_identity_audit_receipts(
         "identity_evidence_policy_receipt",
         "enterprise_identity_registry_recompute_receipt",
         "enterprise_identity_authority_projection_receipt",
+        "enterprise_identity_annotation_manifest",
         "enterprise_identity_benchmark",
     ):
         if key in recognized_asset:
@@ -92,6 +94,10 @@ def _attach_identity_audit_receipts(
     model["identity_authority_projection"] = as_dict(
         resolution.get("authority_decision_projection")
         or asset.get("enterprise_identity_authority_projection_receipt")
+    )
+    model["identity_annotation_manifest"] = as_dict(
+        resolution.get("annotation_manifest")
+        or asset.get("enterprise_identity_annotation_manifest")
     )
     benchmark = as_dict(
         resolution.get("benchmark") or asset.get("enterprise_identity_benchmark")
@@ -124,6 +130,10 @@ def _attach_identity_audit_receipts(
             "enterprise_identity_quality_gate_enforced": bool(
                 quality_gate.get("enforced")
             ),
+            "enterprise_identity_annotation_manifest_count": int(
+                as_dict(model.get("identity_annotation_manifest")).get("mention_count")
+                or 0
+            ),
         }
     )
     if measured:
@@ -147,6 +157,7 @@ def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any
     resolution = govern_identity_registry(prior_registry, resolution, asset=recognized_asset)
     resolution = augment_technical_identity_projection(recognized_asset, resolution)
     resolution = project_identity_authority_receipt(recognized_asset, resolution)
+    resolution = project_identity_annotation_manifest(recognized_asset, resolution)
     resolution = project_identity_benchmark(recognized_asset, resolution)
     _govern_identity_conflicts(resolution)
     publish_recognition_and_identity(asset, recognized_asset, resolution)
