@@ -258,7 +258,9 @@ def begin_connector_sync_ownership(
                 root=root,
             )
             if status.get("owner_alive") is True:
-                raise ConnectorSyncOwnershipError("connector_sync_owner_active")
+                raise ConnectorSyncOwnershipError(
+                    "connector_sync_already_running_owner_active"
+                )
         path.parent.mkdir(parents=True, exist_ok=True)
         _write_json_object_atomic(path, payload)
         previous = _HEARTBEATS.pop(key, None)
