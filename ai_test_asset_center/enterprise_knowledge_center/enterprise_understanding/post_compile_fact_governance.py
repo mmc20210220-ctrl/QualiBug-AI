@@ -9,6 +9,7 @@ from .._chinese_business_conflicts import reconcile_chinese_business_fact_confli
 from .atomic_claim_projection import project_atomic_claim_facts
 from .identity_evidence_policy import apply_identity_evidence_policy
 from .typed_fact_conflicts import reconcile_typed_fact_conflicts
+from .typed_relation_projection import project_typed_object_relations
 
 
 def _text(value: Any) -> str:
@@ -118,15 +119,16 @@ def govern_compiled_business_facts(
     project_id: str,
     root: Path,
 ) -> dict[str, Any]:
-    """Materialize claims, classify identities, and reconcile final typed facts.
+    """Materialize claims/relations, classify identities, and reconcile typed facts.
 
     The first understanding pass discovers source-backed terms and rules. Structure-first
     compilation upgrades that same ledger. This second pass never extracts from text; it
-    materializes accepted atomic data effects in the same ledger, normalizes typed values,
-    classifies identity evidence, and uses existing durable conflict authority.
+    materializes accepted atomic effects, projects typed object relations into the existing
+    object-graph input, normalizes values, and uses existing durable conflict authority.
     """
     asset = project_atomic_claim_facts(asset)
     asset = _normalize_typed_fact_values(asset)
+    asset = project_typed_object_relations(asset)
     asset = apply_identity_evidence_policy(asset)
     asset = reconcile_chinese_business_fact_conflicts(
         asset,
@@ -143,6 +145,7 @@ def govern_compiled_business_facts(
         {
             "second_pass_after_structure_compilation": True,
             "atomic_claims_materialized_in_existing_ledger": True,
+            "typed_relations_projected_into_existing_object_graph": True,
             "typed_value_contract_normalized": True,
             "conflict_authority_reapplied": True,
             "typed_fact_conflicts_reconciled": True,
@@ -155,6 +158,7 @@ def govern_compiled_business_facts(
         {
             "business_fact_two_pass_identity_governance": True,
             "atomic_data_effects_become_bindable_facts": True,
+            "typed_object_relations_use_existing_object_graph": True,
             "typed_atomic_value_projection_is_single_boundary": True,
             "typed_atomic_value_projection_never_selects_multiple_claims": True,
             "identity_policy_runs_after_structure_fact_compilation": True,
