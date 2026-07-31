@@ -13,11 +13,14 @@ from ai_test_asset_center.database_relation_delta_experiment_projection import (
     ASSERTION_KIND as BASE_ASSERTION_KIND,
 )
 
+_RELATION_DECISION_ID = "decision:ledger-relation"
+
 
 def _relation_contract() -> dict:
     return {
         "schema": "qualibug.database-relation-observer-contract.v1",
         "relation_observer_id": "relation-observer:ledger",
+        "relation_mapping_decision_id": _RELATION_DECISION_ID,
         "root_observer_id": "observer:accounts",
         "database_relationship_id": "fk:ledger:accounts",
         "relation_predicates": [
@@ -54,7 +57,7 @@ def _assertion(**causal_overrides: object) -> dict:
         "value_source": "request.body.request_id",
         "child_database_field_id": "field:ledger_entries:request_id",
         "child_database_field_name": "request_id",
-        "mapping_decision_id": "decision:ledger-request-id",
+        "mapping_decision_id": _RELATION_DECISION_ID,
         "source_refs": [
             {"kind": "business_rule", "locator": "BR-LEDGER-REQUEST-ID"}
         ],
@@ -72,7 +75,7 @@ def _assertion(**causal_overrides: object) -> dict:
         "relation_after_draft_id": "draft:relation:after",
         "database_relation_observer_ref": "relation-observer:ledger",
         "database_relation_delta_binding": {
-            "relation_mapping_decision_id": "decision:relation",
+            "relation_mapping_decision_id": _RELATION_DECISION_ID,
         },
         "causal_attribution": causal,
     }
@@ -143,8 +146,12 @@ def test_exact_request_correlation_promotes_causal_delta() -> None:
     causal = assertion["causal_attribution_contract"]
     assert causal["status"] == "BOUND"
     assert causal["value_source"] == "request.body.request_id"
+    assert causal["mapping_decision_id"] == _RELATION_DECISION_ID
     assert causal["timestamp_window_attribution_allowed"] is False
-    assert assertion["database_relation_delta_binding"]["causal_scope_exact"] is True
+    binding = assertion["database_relation_delta_binding"]
+    assert binding["causal_scope_exact"] is True
+    assert binding["causal_mapping_decision_id"] == _RELATION_DECISION_ID
+    assert binding["relation_mapping_decision_id"] == _RELATION_DECISION_ID
     assert "operation_causality_transport" in {
         row["observer_id"] for row in experiment["observers"]
     }
@@ -163,6 +170,7 @@ def test_exact_request_correlation_promotes_causal_delta() -> None:
         assert attribution[0]["child_database_field_id"] == (
             "field:ledger_entries:request_id"
         )
+        assert attribution[0]["mapping_decision_id"] == _RELATION_DECISION_ID
         assert draft["causal_scope_fingerprint"] == assertion[
             "causal_scope_fingerprint"
         ]
@@ -200,6 +208,27 @@ def test_explicit_field_id_never_downgrades_to_same_name() -> None:
     assert detail["causality_reason_code"] == (
         "DATABASE_RELATION_CAUSAL_EXACT_FIELD_BINDING_MISSING"
     )
+
+
+def test_nonempty_but_different_decision_id_is_not_authority() -> None:
+    assertion = _assertion(mapping_decision_id="decision:unrelated-field")
+    result = project_database_relation_delta_causality(
+        _pack(_experiment(assertion))
+    )
+
+    assert result["experiments"] == []
+    assert result["blocked_count"] == 1
+    detail = result["blocked_experiments"][0]["compile_receipt"][
+        "database_relation_causality_detail"
+    ]
+    assert detail["causality_reason_code"] == (
+        "DATABASE_RELATION_CAUSAL_MAPPING_DECISION_MISMATCH"
+    )
+    assert detail["causal_mapping_decision_id"] == (
+        "decision:unrelated-field"
+    )
+    assert detail["relation_mapping_decision_id"] == _RELATION_DECISION_ID
+    assert detail["automatic_authority_selection_allowed"] is False
 
 
 def test_multiple_matching_treatment_steps_block_without_winner() -> None:
