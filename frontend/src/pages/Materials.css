@@ -177,6 +177,22 @@
   gap: 10px;
 }
 
+.materials-card-actions .btn-danger {
+  border: 1px solid rgba(217, 31, 69, .28);
+  background: var(--danger-muted);
+  color: var(--danger);
+}
+
+.materials-card-actions .btn-danger:hover {
+  border-color: var(--danger);
+  background: #ffe5e9;
+}
+
+.materials-card-actions .btn-danger:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
 .materials-form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
