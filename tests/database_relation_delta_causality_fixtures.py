@@ -205,6 +205,10 @@ def relation_phase(
                         "child_database_field_name"
                     ],
                     "mapping_decision_id": causal["mapping_decision_id"],
+                    "relation_mapping_decision_id": causal[
+                        "mapping_decision_id"
+                    ],
+                    "relation_authority_match": True,
                     "attribution_mode": "EXACT_REQUEST_CORRELATION",
                     "timestamp_window_attribution_used": False,
                     "response_generated_identifier_used": False,
