@@ -34,13 +34,29 @@ def _root_phase(total: object, *, execution_id: str = "execution-1") -> dict:
 
 
 def _relation_phase(
-    aggregate: object,
+    aggregate_value: object,
     *,
     execution_id: str = "execution-1",
     identity: str = "identity-o-1",
+    request_aggregate: str = "SUM",
+    request_field_id: str = "field:order_lines:amount",
+    request_field_name: str = "amount",
+    request_alias: str = "related_value",
+    extra_requests: list[dict] | None = None,
+    relationship_id: str = "fk:order_lines:orders",
     client_side_filter_used: bool = False,
     raw_rows_retained: bool = False,
+    payload_oracle_verdict_emitted: bool = False,
 ) -> dict:
+    aggregate_requests = [
+        {
+            "aggregate": request_aggregate,
+            "database_field_id": request_field_id,
+            "database_field_name": request_field_name,
+            "alias": request_alias,
+        },
+        *(extra_requests or []),
+    ]
     return {
         "receipt_id": "relation-after-receipt",
         "campaign_id": "campaign-1",
@@ -52,7 +68,7 @@ def _relation_phase(
             "approved_database_relation_aggregate_snapshot": {
                 "relation_observer_ref": "relation-observer:order-lines",
                 "root_observer_ref": "observer:orders",
-                "database_relationship_id": "fk:order_lines:orders",
+                "database_relationship_id": relationship_id,
                 "parent_table_ref": "table:orders",
                 "child_table_ref": "table:order_lines",
                 "child_table_name": "order_lines",
@@ -63,11 +79,12 @@ def _relation_phase(
                     }
                 ],
                 "relation_parameter_fingerprints": [identity],
-                "aggregate_values": {"related_value": aggregate},
-                "aggregate_fingerprint": f"aggregate-{aggregate}",
+                "aggregate_requests": aggregate_requests,
+                "aggregate_values": {request_alias: aggregate_value},
+                "aggregate_fingerprint": f"aggregate-{aggregate_value}",
                 "client_side_filter_used": client_side_filter_used,
                 "raw_rows_retained": raw_rows_retained,
-                "oracle_verdict_emitted": False,
+                "oracle_verdict_emitted": payload_oracle_verdict_emitted,
             }
         },
         "draft_id": "draft:relation:after",
@@ -82,7 +99,9 @@ def _spec(**overrides: object) -> dict:
     return {
         "database_relation_observer_ref": "relation-observer:order-lines",
         "database_relation_draft_id": "draft:relation:after",
+        "database_relationship_id": "fk:order_lines:orders",
         "root_observer_contract_ref": "observer:orders",
+        "root_database_draft_id": "draft:orders:after",
         "root_table_ref": "table:orders",
         "root_database_field_id": "field:orders:total",
         "root_database_field_name": "total",
@@ -110,12 +129,16 @@ def test_root_total_equals_child_sum_passes() -> None:
     result = evaluate_database_relation_conservation(
         {
             "spec": _spec(),
-            "observations": _observations(_root_phase("30.00"), _relation_phase("30")),
+            "observations": _observations(
+                _root_phase("30.00"),
+                _relation_phase("30"),
+            ),
         }
     )
 
     assert result["passed"] is True
     assert result["reason_code"] == ""
+    assert result["actual"]["aggregate_request_match"] is True
     assert result["actual"]["root_value"] == "30"
     assert result["actual"]["aggregate_value"] == "30"
     assert result["actual"]["difference"] == "0"
@@ -126,13 +149,125 @@ def test_root_total_not_equal_child_sum_is_violation() -> None:
     result = evaluate_database_relation_conservation(
         {
             "spec": _spec(),
-            "observations": _observations(_root_phase("30"), _relation_phase("25")),
+            "observations": _observations(
+                _root_phase("30"),
+                _relation_phase("25"),
+            ),
         }
     )
 
     assert result["passed"] is False
     assert result["reason_code"] == "DATABASE_RELATION_CONSERVATION_VIOLATED"
     assert result["actual"]["difference"] == "5"
+
+
+def test_count_rows_request_can_be_verified_without_child_field() -> None:
+    result = evaluate_database_relation_conservation(
+        {
+            "spec": _spec(
+                aggregate="COUNT",
+                child_database_field_id="",
+                child_database_field_name="",
+            ),
+            "observations": _observations(
+                _root_phase(2),
+                _relation_phase(
+                    2,
+                    request_aggregate="COUNT",
+                    request_field_id="",
+                    request_field_name="",
+                ),
+            ),
+        }
+    )
+
+    assert result["passed"] is True
+    assert result["actual"]["aggregate_request_match"] is True
+
+
+def test_wrong_aggregate_function_cannot_impersonate_sum() -> None:
+    result = evaluate_database_relation_conservation(
+        {
+            "spec": _spec(),
+            "observations": _observations(
+                _root_phase("30"),
+                _relation_phase("30", request_aggregate="MAX"),
+            ),
+        }
+    )
+
+    assert result["passed"] is None
+    assert result["reason_code"] == (
+        "DATABASE_RELATION_AGGREGATE_REQUEST_SCOPE_MISMATCH"
+    )
+
+
+def test_wrong_child_field_cannot_impersonate_expected_aggregate() -> None:
+    result = evaluate_database_relation_conservation(
+        {
+            "spec": _spec(),
+            "observations": _observations(
+                _root_phase("30"),
+                _relation_phase(
+                    "30",
+                    request_field_id="field:order_lines:quantity",
+                    request_field_name="quantity",
+                ),
+            ),
+        }
+    )
+
+    assert result["passed"] is None
+    assert result["reason_code"] == (
+        "DATABASE_RELATION_AGGREGATE_REQUEST_SCOPE_MISMATCH"
+    )
+
+
+def test_extra_aggregate_request_invalidates_single_rule_scope() -> None:
+    result = evaluate_database_relation_conservation(
+        {
+            "spec": _spec(),
+            "observations": _observations(
+                _root_phase("30"),
+                _relation_phase(
+                    "30",
+                    extra_requests=[
+                        {
+                            "aggregate": "COUNT",
+                            "database_field_id": "",
+                            "database_field_name": "",
+                            "alias": "line_count",
+                        }
+                    ],
+                ),
+            ),
+        }
+    )
+
+    assert result["passed"] is None
+    assert result["reason_code"] == (
+        "DATABASE_RELATION_AGGREGATE_REQUEST_SCOPE_MISMATCH"
+    )
+
+
+def test_wrong_foreign_key_scope_is_indeterminate() -> None:
+    result = evaluate_database_relation_conservation(
+        {
+            "spec": _spec(),
+            "observations": _observations(
+                _root_phase("30"),
+                _relation_phase(
+                    "30",
+                    relationship_id="fk:other_lines:orders",
+                ),
+            ),
+        }
+    )
+
+    assert result["passed"] is None
+    assert result["reason_code"] == (
+        "DATABASE_RELATION_FOREIGN_KEY_SCOPE_MISMATCH"
+    )
 
 
 def test_cross_run_root_and_relation_receipts_are_indeterminate() -> None:
@@ -176,7 +311,9 @@ def test_client_side_filter_or_raw_child_rows_invalidates_evidence() -> None:
         }
     )
     assert filtered["passed"] is None
-    assert filtered["reason_code"] == "DATABASE_RELATION_AGGREGATE_EVIDENCE_POLICY_INVALID"
+    assert filtered["reason_code"] == (
+        "DATABASE_RELATION_AGGREGATE_EVIDENCE_POLICY_INVALID"
+    )
 
     raw_rows = evaluate_database_relation_conservation(
         {
@@ -188,14 +325,37 @@ def test_client_side_filter_or_raw_child_rows_invalidates_evidence() -> None:
         }
     )
     assert raw_rows["passed"] is None
-    assert raw_rows["reason_code"] == "DATABASE_RELATION_AGGREGATE_EVIDENCE_POLICY_INVALID"
+    assert raw_rows["reason_code"] == (
+        "DATABASE_RELATION_AGGREGATE_EVIDENCE_POLICY_INVALID"
+    )
+
+
+def test_relation_observer_cannot_claim_oracle_authority() -> None:
+    result = evaluate_database_relation_conservation(
+        {
+            "spec": _spec(),
+            "observations": _observations(
+                _root_phase("30"),
+                _relation_phase(
+                    "30",
+                    payload_oracle_verdict_emitted=True,
+                ),
+            ),
+        }
+    )
+
+    assert result["passed"] is None
+    assert result["reason_code"] == "DATABASE_RELATION_OBSERVER_AUTHORITY_INVALID"
 
 
 def test_non_numeric_or_invalid_tolerance_is_indeterminate_not_bug() -> None:
     non_numeric = evaluate_database_relation_conservation(
         {
             "spec": _spec(),
-            "observations": _observations(_root_phase("unknown"), _relation_phase("30")),
+            "observations": _observations(
+                _root_phase("unknown"),
+                _relation_phase("30"),
+            ),
         }
     )
     assert non_numeric["passed"] is None
@@ -204,7 +364,10 @@ def test_non_numeric_or_invalid_tolerance_is_indeterminate_not_bug() -> None:
     invalid_tolerance = evaluate_database_relation_conservation(
         {
             "spec": _spec(tolerance="not-a-number"),
-            "observations": _observations(_root_phase("30"), _relation_phase("30")),
+            "observations": _observations(
+                _root_phase("30"),
+                _relation_phase("30"),
+            ),
         }
     )
     assert invalid_tolerance["passed"] is None
