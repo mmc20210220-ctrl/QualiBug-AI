@@ -7,6 +7,7 @@ from benchmark_evaluator.scored_run_comparison import _fingerprint
 
 from .alignment import align_enterprise_understanding
 from .document_ground_truth import DOCUMENT_GROUND_TRUTH_KEY
+from .fact_slots import evaluate_business_fact_slots
 from .ground_truth import SUPPORTED_COLLECTIONS, validate_ground_truth
 from .ingestion_evidence import measure_ingestion_evidence
 from .metrics import calculate_benchmark_metrics
@@ -37,6 +38,7 @@ def run_benchmark(
     ground_truth_fingerprint = _fingerprint(validated)
     product_asset_fingerprint = _fingerprint(product_asset)
     ingestion_evidence = measure_ingestion_evidence(product_asset, validated)
+    fact_slot_measurement = evaluate_business_fact_slots(validated, product_asset)
     ingestion_summary = (
         ingestion_evidence.get("summary")
         if isinstance(ingestion_evidence.get("summary"), dict)
@@ -71,6 +73,15 @@ def run_benchmark(
             "counts": document_receipt.get("counts") or {},
             "validation_status": document_receipt.get("status") or "NOT_DECLARED",
         },
+        "business_fact_slot_ground_truth": {
+            "status": fact_slot_measurement.get("status"),
+            "annotated_fact_count": (
+                fact_slot_measurement.get("metrics", {}).get("annotated_fact_count")
+                if isinstance(fact_slot_measurement.get("metrics"), dict)
+                else 0
+            ),
+            "generated_from_product_output": False,
+        },
         "validation_receipt": validated.get("validation_receipt") or {},
         "ground_truth_fingerprint": ground_truth_fingerprint,
     }
@@ -91,6 +102,7 @@ def run_benchmark(
             "ground_truth_summary": ground_truth_summary,
             "alignment": {"alignments": [], "model_writeback_allowed": False},
             "metrics": {},
+            "business_fact_slot_measurement": fact_slot_measurement,
             "ingestion_evidence_measurement": ingestion_evidence,
             "next_ingestion_repair_target": next_ingestion_target,
             "root_cause_analysis": {
@@ -116,6 +128,7 @@ def run_benchmark(
             "ground_truth_summary": ground_truth_summary,
             "alignment": alignment,
             "metrics": metrics,
+            "business_fact_slot_measurement": fact_slot_measurement,
             "ingestion_evidence_measurement": ingestion_evidence,
             "next_ingestion_repair_target": next_ingestion_target,
             "root_cause_analysis": root_causes,
@@ -127,6 +140,11 @@ def run_benchmark(
     document_measurement = (
         ingestion_evidence.get("document_ground_truth_measurement")
         if isinstance(ingestion_evidence.get("document_ground_truth_measurement"), dict)
+        else {}
+    )
+    fact_slot_metrics = (
+        fact_slot_measurement.get("metrics")
+        if isinstance(fact_slot_measurement.get("metrics"), dict)
         else {}
     )
     workflow_receipt = {
@@ -142,9 +160,14 @@ def run_benchmark(
         "document_ground_truth_highest_impact_gap": document_measurement.get(
             "highest_impact_gap"
         ),
+        "business_fact_slot_measurement_status": fact_slot_measurement.get("status"),
+        "business_fact_slot_exact_accuracy": fact_slot_metrics.get("slot_exact_accuracy"),
+        "business_fact_exact_rate": fact_slot_metrics.get("exact_fact_rate"),
+        "p0_business_fact_exact_recall": fact_slot_metrics.get("p0_exact_fact_recall"),
         "next_ingestion_repair_target": next_ingestion_target,
         "product_ingestion_receipts_are_ground_truth": False,
         "document_ground_truth_generated_from_product_output": False,
+        "business_fact_ground_truth_generated_from_product_output": False,
         "hidden_ground_truth_entered_product_runtime": False,
         "model_writeback_allowed": False,
     }
