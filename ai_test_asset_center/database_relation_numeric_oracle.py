@@ -43,14 +43,41 @@ def _decimal_text(value: Decimal | None) -> str | None:
     return format(value.normalize(), "f") if value is not None else None
 
 
-def _reason(code: str, expected: dict[str, Any], actual: dict[str, Any]) -> dict[str, Any]:
-    return {"passed": None, "reason_code": code, "expected": expected, "actual": actual}
+def _reason(
+    code: str,
+    expected: dict[str, Any],
+    actual: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "passed": None,
+        "reason_code": code,
+        "expected": expected,
+        "actual": actual,
+    }
+
+
+def _normalized_relation_key(value: Any) -> list[dict[str, str]]:
+    return [
+        {
+            "child_database_field_name": _text(
+                _dict(raw).get("child_database_field_name")
+            ),
+            "parent_database_field_name": _text(
+                _dict(raw).get("parent_database_field_name")
+            ),
+        }
+        for raw in _list(value)
+        if isinstance(raw, dict)
+        and _text(raw.get("child_database_field_name"))
+        and _text(raw.get("parent_database_field_name"))
+    ]
 
 
 def _root_after(
     observations: dict[str, Any],
     *,
     contract_ref: str,
+    draft_id: str,
     table_ref: str,
     field_name: str,
 ) -> tuple[dict[str, Any], str]:
@@ -60,6 +87,7 @@ def _root_after(
         if (
             _text(row.get("observer_contract_ref")) == contract_ref
             and _text(row.get("phase")).upper() == "AFTER"
+            and _text(row.get("draft_id")) == draft_id
         ):
             rows.append(row)
     if len(rows) != 1:
@@ -68,7 +96,11 @@ def _root_after(
             if len(rows) < 1
             else "DATABASE_RELATION_ROOT_SNAPSHOT_AMBIGUOUS"
         )
-    return _snapshot_value(rows[0], field_name=field_name, expected_table_ref=table_ref)
+    return _snapshot_value(
+        rows[0],
+        field_name=field_name,
+        expected_table_ref=table_ref,
+    )
 
 
 def _relation_after(
@@ -84,7 +116,7 @@ def _relation_after(
         if (
             _text(row.get("relation_observer_contract_ref")) == relation_ref
             and _text(row.get("observation_phase")).upper() == "AFTER"
-            and (not draft_id or _text(row.get("draft_id")) == draft_id)
+            and _text(row.get("draft_id")) == draft_id
         ):
             matches.append(row)
     if len(matches) != 1:
@@ -94,7 +126,9 @@ def _relation_after(
             else "DATABASE_RELATION_AGGREGATE_SNAPSHOT_AMBIGUOUS"
         )
     receipt = matches[0]
-    payload = _dict(_dict(receipt.get("evidence")).get(RELATION_EVIDENCE_KEY))
+    payload = _dict(
+        _dict(receipt.get("evidence")).get(RELATION_EVIDENCE_KEY)
+    )
     aggregate_requests = [
         {
             "aggregate": _text(row.get("aggregate")).upper(),
@@ -114,23 +148,34 @@ def _relation_after(
         "execution_id": _text(receipt.get("execution_id")),
         "relation_observer_ref": _text(payload.get("relation_observer_ref")),
         "root_observer_ref": _text(payload.get("root_observer_ref")),
-        "database_relationship_id": _text(payload.get("database_relationship_id")),
+        "database_relationship_id": _text(
+            payload.get("database_relationship_id")
+        ),
         "parent_table_ref": _text(payload.get("parent_table_ref")),
         "child_table_ref": _text(payload.get("child_table_ref")),
         "child_table_name": _text(payload.get("child_table_name")),
-        "relation_key": _list(payload.get("relation_key")),
-        "relation_parameter_fingerprints": _list(payload.get("relation_parameter_fingerprints")),
+        "relation_key": _normalized_relation_key(payload.get("relation_key")),
+        "relation_parameter_fingerprints": _list(
+            payload.get("relation_parameter_fingerprints")
+        ),
         "aggregate_requests": aggregate_requests,
         "aggregate_alias": alias,
         "aggregate_value": _dict(payload.get("aggregate_values")).get(alias),
         "aggregate_fingerprint": _text(payload.get("aggregate_fingerprint")),
-        "client_side_filter_used": payload.get("client_side_filter_used") is True,
+        "client_side_filter_used": (
+            payload.get("client_side_filter_used") is True
+        ),
         "raw_rows_retained": payload.get("raw_rows_retained") is True,
-        "payload_oracle_verdict_emitted": payload.get("oracle_verdict_emitted"),
+        "payload_oracle_verdict_emitted": payload.get(
+            "oracle_verdict_emitted"
+        ),
     }
     if actual["source_observer_id"] != DIRECT_RELATION_OBSERVER_ID:
         return actual, "DATABASE_RELATION_AGGREGATE_SOURCE_INVALID"
-    if actual["phase_receipt_status"] != "OBSERVED" or not actual["phase_receipt_id"]:
+    if (
+        actual["phase_receipt_status"] != "OBSERVED"
+        or not actual["phase_receipt_id"]
+    ):
         return actual, "DATABASE_RELATION_AGGREGATE_RECEIPT_NOT_OBSERVED"
     if not actual["campaign_id"] or not actual["execution_id"]:
         return actual, "DATABASE_RELATION_AGGREGATE_LINEAGE_MISSING"
@@ -141,7 +186,10 @@ def _relation_after(
         return actual, "DATABASE_RELATION_OBSERVER_AUTHORITY_INVALID"
     if actual["relation_observer_ref"] != relation_ref:
         return actual, "DATABASE_RELATION_AGGREGATE_SCOPE_MISMATCH"
-    if not actual["relation_key"] or not actual["relation_parameter_fingerprints"]:
+    if (
+        not actual["relation_key"]
+        or not actual["relation_parameter_fingerprints"]
+    ):
         return actual, "DATABASE_RELATION_IDENTITY_SCOPE_MISSING"
     if actual["client_side_filter_used"] or actual["raw_rows_retained"]:
         return actual, "DATABASE_RELATION_AGGREGATE_EVIDENCE_POLICY_INVALID"
@@ -152,7 +200,12 @@ def _relation_after(
     return actual, ""
 
 
-def _compare(left: Decimal, right: Decimal, operator: str, tolerance: Decimal) -> bool:
+def _compare(
+    left: Decimal,
+    right: Decimal,
+    operator: str,
+    tolerance: Decimal,
+) -> bool:
     op = _text(operator).upper()
     if op in {"EQ", "EQUALS", "=="}:
         return abs(left - right) <= tolerance
@@ -169,13 +222,30 @@ def _compare(left: Decimal, right: Decimal, operator: str, tolerance: Decimal) -
     raise ValueError("database_relation_comparison_operator_unsupported")
 
 
-def evaluate_database_relation_conservation(envelope: dict[str, Any]) -> dict[str, Any]:
+def evaluate_database_relation_conservation(
+    envelope: dict[str, Any],
+) -> dict[str, Any]:
     env = _dict(envelope)
     spec = _dict(env.get("spec"))
     observations = _dict(env.get("observations"))
+    binding = _dict(spec.get("database_relation_binding"))
+
     relation_ref = _text(spec.get("database_relation_observer_ref"))
+    relation_draft_id = _text(spec.get("database_relation_draft_id"))
+    expected_relationship_id = _text(
+        spec.get("database_relationship_id")
+        or binding.get("database_relationship_id")
+    )
+    expected_relation_key = _normalized_relation_key(
+        spec.get("relation_key") or binding.get("relation_key")
+    )
     root_ref = _text(spec.get("root_observer_contract_ref"))
+    root_draft_id = _text(
+        spec.get("root_database_draft_id")
+        or binding.get("root_database_draft_id")
+    )
     root_table_ref = _text(spec.get("root_table_ref"))
+    root_field_id = _text(spec.get("root_database_field_id"))
     root_field_name = _text(spec.get("root_database_field_name"))
     child_table_ref = _text(spec.get("child_table_ref"))
     child_field_id = _text(spec.get("child_database_field_id"))
@@ -184,18 +254,17 @@ def evaluate_database_relation_conservation(envelope: dict[str, Any]) -> dict[st
     alias = _text(spec.get("aggregate_alias") or "related_value")
     operator = _text(spec.get("comparison_operator") or "EQ").upper()
     aggregate_on_left = spec.get("aggregate_on_left") is True
-    binding = _dict(spec.get("database_relation_binding"))
-    expected_relationship_id = _text(
-        spec.get("database_relationship_id")
-        or binding.get("database_relationship_id")
-    )
+
     expected = {
         "schema": ORACLE_SCHEMA,
         "database_relation_observer_ref": relation_ref,
+        "database_relation_draft_id": relation_draft_id,
         "database_relationship_id": expected_relationship_id,
+        "relation_key": expected_relation_key,
         "root_observer_contract_ref": root_ref,
+        "root_database_draft_id": root_draft_id,
         "root_table_ref": root_table_ref,
-        "root_database_field_id": _text(spec.get("root_database_field_id")),
+        "root_database_field_id": root_field_id,
         "root_database_field_name": root_field_name,
         "child_table_ref": child_table_ref,
         "child_database_field_id": child_field_id,
@@ -212,6 +281,7 @@ def evaluate_database_relation_conservation(envelope: dict[str, Any]) -> dict[st
         "relation_snapshot": {},
         "lineage_match": False,
         "identity_match": False,
+        "relation_key_match": False,
         "aggregate_request_match": False,
         "root_value": None,
         "aggregate_value": None,
@@ -223,28 +293,44 @@ def evaluate_database_relation_conservation(envelope: dict[str, Any]) -> dict[st
     if not all(
         (
             relation_ref,
+            relation_draft_id,
+            expected_relationship_id,
+            expected_relation_key,
             root_ref,
+            root_draft_id,
             root_table_ref,
+            root_field_id,
             root_field_name,
             child_table_ref,
             aggregate,
             alias,
         )
     ):
-        return _reason("DATABASE_RELATION_ASSERTION_SPEC_INCOMPLETE", expected, actual)
-    if aggregate != "COUNT" and not child_field_name:
-        return _reason("DATABASE_RELATION_ASSERTION_SPEC_INCOMPLETE", expected, actual)
+        return _reason(
+            "DATABASE_RELATION_ASSERTION_SPEC_INCOMPLETE",
+            expected,
+            actual,
+        )
+    if aggregate != "COUNT" and not all(
+        (child_field_id, child_field_name)
+    ):
+        return _reason(
+            "DATABASE_RELATION_ASSERTION_SPEC_INCOMPLETE",
+            expected,
+            actual,
+        )
 
     root_snapshot, root_reason = _root_after(
         observations,
         contract_ref=root_ref,
+        draft_id=root_draft_id,
         table_ref=root_table_ref,
         field_name=root_field_name,
     )
     relation_snapshot, relation_reason = _relation_after(
         observations,
         relation_ref=relation_ref,
-        draft_id=_text(spec.get("database_relation_draft_id")),
+        draft_id=relation_draft_id,
         alias=alias,
     )
     actual["root_snapshot"] = root_snapshot
@@ -252,18 +338,54 @@ def evaluate_database_relation_conservation(envelope: dict[str, Any]) -> dict[st
     if root_reason or relation_reason:
         return _reason(root_reason or relation_reason, expected, actual)
     if _text(relation_snapshot.get("root_observer_ref")) != root_ref:
-        return _reason("DATABASE_RELATION_ROOT_OBSERVER_SCOPE_MISMATCH", expected, actual)
+        return _reason(
+            "DATABASE_RELATION_ROOT_OBSERVER_SCOPE_MISMATCH",
+            expected,
+            actual,
+        )
     if (
         _text(relation_snapshot.get("parent_table_ref")) != root_table_ref
-        or _text(relation_snapshot.get("child_table_ref")) != child_table_ref
+        or _text(relation_snapshot.get("child_table_ref"))
+        != child_table_ref
     ):
-        return _reason("DATABASE_RELATION_TABLE_SCOPE_MISMATCH", expected, actual)
+        return _reason(
+            "DATABASE_RELATION_TABLE_SCOPE_MISMATCH",
+            expected,
+            actual,
+        )
     if (
-        expected_relationship_id
-        and _text(relation_snapshot.get("database_relationship_id"))
+        _text(relation_snapshot.get("database_relationship_id"))
         != expected_relationship_id
     ):
-        return _reason("DATABASE_RELATION_FOREIGN_KEY_SCOPE_MISMATCH", expected, actual)
+        return _reason(
+            "DATABASE_RELATION_FOREIGN_KEY_SCOPE_MISMATCH",
+            expected,
+            actual,
+        )
+
+    observed_relation_key = _normalized_relation_key(
+        relation_snapshot.get("relation_key")
+    )
+    root_identity_key = [
+        _text(value)
+        for value in _list(root_snapshot.get("identity_key"))
+        if _text(value)
+    ]
+    observed_parent_key = [
+        _text(row.get("parent_database_field_name"))
+        for row in observed_relation_key
+    ]
+    relation_key_match = bool(
+        observed_relation_key == expected_relation_key
+        and observed_parent_key == root_identity_key
+    )
+    actual["relation_key_match"] = relation_key_match
+    if not relation_key_match:
+        return _reason(
+            "DATABASE_RELATION_KEY_SCOPE_MISMATCH",
+            expected,
+            actual,
+        )
 
     requests = [
         _dict(row)
@@ -276,18 +398,30 @@ def evaluate_database_relation_conservation(envelope: dict[str, Any]) -> dict[st
         if _text(row.get("aggregate")).upper() == aggregate
         and _text(row.get("alias")) == alias
         and (
-            aggregate == "COUNT"
-            and not child_field_name
-            and not _text(row.get("database_field_name"))
+            (
+                aggregate == "COUNT"
+                and not child_field_id
+                and not child_field_name
+                and not _text(row.get("database_field_id"))
+                and not _text(row.get("database_field_name"))
+            )
             or (
-                _text(row.get("database_field_id")) == child_field_id
-                and _text(row.get("database_field_name")) == child_field_name
+                aggregate != "COUNT"
+                and _text(row.get("database_field_id")) == child_field_id
+                and _text(row.get("database_field_name"))
+                == child_field_name
             )
         )
     ]
-    actual["aggregate_request_match"] = len(request_matches) == 1 and len(requests) == 1
+    actual["aggregate_request_match"] = (
+        len(request_matches) == 1 and len(requests) == 1
+    )
     if not actual["aggregate_request_match"]:
-        return _reason("DATABASE_RELATION_AGGREGATE_REQUEST_SCOPE_MISMATCH", expected, actual)
+        return _reason(
+            "DATABASE_RELATION_AGGREGATE_REQUEST_SCOPE_MISMATCH",
+            expected,
+            actual,
+        )
 
     lineage_match = bool(
         _text(root_snapshot.get("campaign_id"))
@@ -297,24 +431,50 @@ def evaluate_database_relation_conservation(envelope: dict[str, Any]) -> dict[st
     )
     actual["lineage_match"] = lineage_match
     if not lineage_match:
-        return _reason("DATABASE_RELATION_RECEIPT_LINEAGE_MISMATCH", expected, actual)
-    root_identity = _list(root_snapshot.get("identity_parameter_fingerprints"))
-    relation_identity = _list(relation_snapshot.get("relation_parameter_fingerprints"))
-    identity_match = bool(root_identity and root_identity == relation_identity)
+        return _reason(
+            "DATABASE_RELATION_RECEIPT_LINEAGE_MISMATCH",
+            expected,
+            actual,
+        )
+    root_identity = _list(
+        root_snapshot.get("identity_parameter_fingerprints")
+    )
+    relation_identity = _list(
+        relation_snapshot.get("relation_parameter_fingerprints")
+    )
+    identity_match = bool(
+        root_identity and root_identity == relation_identity
+    )
     actual["identity_match"] = identity_match
     if not identity_match:
-        return _reason("DATABASE_RELATION_ROOT_IDENTITY_MISMATCH", expected, actual)
+        return _reason(
+            "DATABASE_RELATION_ROOT_IDENTITY_MISMATCH",
+            expected,
+            actual,
+        )
 
     root_value = _decimal(root_snapshot.get("field_value"))
     aggregate_value = _decimal(relation_snapshot.get("aggregate_value"))
     actual["root_value"] = _decimal_text(root_value)
     actual["aggregate_value"] = _decimal_text(aggregate_value)
     if root_value is None or aggregate_value is None:
-        return _reason("DATABASE_RELATION_NUMERIC_VALUE_INVALID", expected, actual)
+        return _reason(
+            "DATABASE_RELATION_NUMERIC_VALUE_INVALID",
+            expected,
+            actual,
+        )
     tolerance_raw = spec.get("tolerance")
-    tolerance = Decimal("0") if tolerance_raw in (None, "") else _decimal(tolerance_raw)
+    tolerance = (
+        Decimal("0")
+        if tolerance_raw in (None, "")
+        else _decimal(tolerance_raw)
+    )
     if tolerance is None or tolerance < 0:
-        return _reason("DATABASE_RELATION_TOLERANCE_INVALID", expected, actual)
+        return _reason(
+            "DATABASE_RELATION_TOLERANCE_INVALID",
+            expected,
+            actual,
+        )
 
     left = aggregate_value if aggregate_on_left else root_value
     right = root_value if aggregate_on_left else aggregate_value
@@ -325,10 +485,16 @@ def evaluate_database_relation_conservation(envelope: dict[str, Any]) -> dict[st
     try:
         passed = _compare(left, right, operator, tolerance)
     except ValueError:
-        return _reason("DATABASE_RELATION_COMPARISON_OPERATOR_UNSUPPORTED", expected, actual)
+        return _reason(
+            "DATABASE_RELATION_COMPARISON_OPERATOR_UNSUPPORTED",
+            expected,
+            actual,
+        )
     return {
         "passed": passed,
-        "reason_code": "" if passed else "DATABASE_RELATION_CONSERVATION_VIOLATED",
+        "reason_code": (
+            "" if passed else "DATABASE_RELATION_CONSERVATION_VIOLATED"
+        ),
         "expected": expected,
         "actual": actual,
     }
@@ -340,7 +506,10 @@ def install_database_relation_numeric_assertion() -> str:
     return register_assertion_kind(
         ASSERTION_KIND,
         evaluator=evaluate_database_relation_conservation,
-        required_evidence_keys=(_ROOT_RECEIPT_KEY, _RELATION_RECEIPT_KEY),
+        required_evidence_keys=(
+            _ROOT_RECEIPT_KEY,
+            _RELATION_RECEIPT_KEY,
+        ),
     )
 
 
