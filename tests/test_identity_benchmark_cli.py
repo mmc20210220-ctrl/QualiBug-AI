@@ -243,6 +243,17 @@ def test_invalid_enforced_policy_is_blocked_by_entry_authority() -> None:
     assert cli._quality_blocked(workspace) is True
 
 
+def test_report_only_failed_threshold_does_not_block() -> None:
+    workspace = _workspace(blocked=False)
+    workspace["identity_quality_gate"] = {
+        "status": "BLOCKED_IDENTITY_QUALITY_THRESHOLD",
+        "entry_allowed": True,
+        "enforced": False,
+    }
+
+    assert cli._quality_blocked(workspace) is False
+
+
 def test_status_can_fail_ci_on_blocked_gate(tmp_path: Path, monkeypatch, capsys) -> None:
     monkeypatch.setattr(
         workflow,
