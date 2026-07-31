@@ -1,9 +1,9 @@
 """Lineage and semantic-integrity gate for the cross-table delta evaluator.
 
 This module does not create another assertion kind or verdict engine. It verifies
-that the compiled rule, binding and BEFORE/AFTER relation receipts still describe
-the same complete semantics, then delegates numeric comparison to the existing
-relation-delta evaluator.
+that the compiled rule, approved bindings and BEFORE/AFTER relation receipts still
+describe the same complete semantics, then delegates numeric comparison to the
+existing relation-delta evaluator.
 """
 from __future__ import annotations
 
@@ -114,6 +114,15 @@ def evaluate_database_relation_delta_with_lineage(
     aggregate_on_left = spec.get("aggregate_on_left")
     left_coefficient = _decimal(spec.get("left_coefficient"))
     right_coefficient = _decimal(spec.get("right_coefficient"))
+    source_refs = [
+        dict(row)
+        for row in _list(spec.get("source_refs"))
+        if isinstance(row, dict) and row
+    ]
+    root_field_binding_id = _text(spec.get("root_field_binding_id"))
+    relation_mapping_decision_id = _text(
+        binding.get("relation_mapping_decision_id")
+    )
     recomputed_pair_id = semantic_relation_delta_pair_id(spec)
 
     expected = {
@@ -128,8 +137,15 @@ def evaluate_database_relation_delta_with_lineage(
         "aggregate_on_left": aggregate_on_left,
         "left_coefficient": spec.get("left_coefficient"),
         "right_coefficient": spec.get("right_coefficient"),
+        "source_refs": source_refs,
+        "root_field_binding_id": root_field_binding_id,
+        "relation_mapping_decision_id": relation_mapping_decision_id,
     }
     actual: dict[str, Any] = {
+        "source_evidence_present": bool(source_refs),
+        "approved_binding_ids_present": bool(
+            root_field_binding_id and relation_mapping_decision_id
+        ),
         "binding_match": False,
         "semantic_pair_match": False,
         "relation_pair_match": False,
@@ -151,6 +167,18 @@ def evaluate_database_relation_delta_with_lineage(
     if not explicit_fields_valid:
         return _reason(
             "DATABASE_RELATION_DELTA_ASSERTION_SPEC_INCOMPLETE",
+            expected=expected,
+            actual=actual,
+        )
+    if not source_refs:
+        return _reason(
+            "DATABASE_RELATION_DELTA_SOURCE_EVIDENCE_MISSING",
+            expected=expected,
+            actual=actual,
+        )
+    if not root_field_binding_id or not relation_mapping_decision_id:
+        return _reason(
+            "DATABASE_RELATION_DELTA_APPROVED_BINDING_MISSING",
             expected=expected,
             actual=actual,
         )
@@ -240,6 +268,8 @@ def evaluate_database_relation_delta_with_lineage(
     result_expected = _dict(result.get("expected"))
     result_actual = _dict(result.get("actual"))
     result_expected.update(expected)
+    result_actual["source_evidence_present"] = True
+    result_actual["approved_binding_ids_present"] = True
     result_actual["binding_match"] = True
     result_actual["semantic_pair_match"] = True
     result_actual["relation_pair_match"] = True
