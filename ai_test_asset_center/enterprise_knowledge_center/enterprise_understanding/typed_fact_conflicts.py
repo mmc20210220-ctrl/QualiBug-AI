@@ -15,6 +15,7 @@ from .._chinese_business_conflicts import (
 RECEIPT_SCHEMA = "qualibug.typed-business-fact-conflicts.v1"
 _DERIVATION = "typed_business_fact_conflict"
 _BLOCKED_STATUS = "BLOCKED_TYPED_BUSINESS_FACT_CONFLICTS"
+_ACTIVE_STATUSES = frozenset({"ACCEPTED", "CONFLICTING", "SUPERSEDED"})
 
 
 def _text(value: Any) -> str:
@@ -243,17 +244,19 @@ def reconcile_typed_fact_conflicts(
     root: Path,
 ) -> dict[str, Any]:
     ledger = _dict(asset.get("business_fact_ledger"))
-    facts = [
-        dict(row)
-        for row in _list(ledger.get("items"))
-        if isinstance(row, dict)
-        and _text(row.get("fact_id"))
-        and _text(row.get("status") or "ACCEPTED") in {"ACCEPTED", "CONFLICTING", "SUPERSEDED"}
+    all_facts = [
+        dict(row) for row in _list(ledger.get("items")) if isinstance(row, dict)
+    ]
+    active_facts = [
+        fact
+        for fact in all_facts
+        if _text(fact.get("fact_id"))
+        and _text(fact.get("status") or "ACCEPTED") in _ACTIVE_STATUSES
     ]
     conflicts = [
-        *_condition_conflicts(facts),
-        *_value_conflicts(facts, "FORMULA_CONSTRAINT", ("lhs", "rhs")),
-        *_value_conflicts(facts, "CARDINALITY_CONSTRAINT", ("maximum",)),
+        *_condition_conflicts(active_facts),
+        *_value_conflicts(active_facts, "FORMULA_CONSTRAINT", ("lhs", "rhs")),
+        *_value_conflicts(active_facts, "CARDINALITY_CONSTRAINT", ("maximum",)),
     ]
     conflicts = list({_text(row.get("conflict_id")): row for row in conflicts}.values())
     ids = {
@@ -262,12 +265,13 @@ def reconcile_typed_fact_conflicts(
         for participant in _list(conflict.get("facts"))
         if isinstance(participant, dict)
     }
-    for fact in facts:
+    for fact in all_facts:
         if _text(fact.get("fact_id")) in ids:
             fact["status"] = "CONFLICTING"
             fact["formal_promotion_allowed"] = False
-    ledger["items"] = facts
+    ledger["items"] = all_facts
     ledger["typed_unresolved_conflict_count"] = len(conflicts)
+    ledger["typed_conflict_reconciliation_preserved_all_facts"] = True
     asset["business_fact_ledger"] = ledger
     prior = [
         dict(row)
@@ -278,6 +282,10 @@ def reconcile_typed_fact_conflicts(
     asset["typed_business_fact_conflict_receipt"] = {
         "schema": RECEIPT_SCHEMA,
         "status": "BLOCKED" if conflicts else "PASS",
+        "fact_count_before_reconciliation": len(all_facts),
+        "active_fact_count": len(active_facts),
+        "fact_count_after_reconciliation": len(all_facts),
+        "all_fact_statuses_preserved": True,
         "conflict_count": len(conflicts),
         "conflicting_fact_count": len(ids),
         "automatic_resolution_allowed": False,
