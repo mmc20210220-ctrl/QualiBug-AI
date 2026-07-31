@@ -7,7 +7,9 @@ blocked before the trigger, even though its exact observer, adapter and assertio
 
 This module does not bypass preflight. It establishes a context only for one exact formal event
 experiment and lets the existing preflight continue through actor, operation, adapter, fixture,
-write-reversibility and cleanup checks unchanged.
+write-reversibility and cleanup checks unchanged. The executor facade may wrap that structural
+preflight for graph-target credentials; this installer binds below that wrapper so facade and
+core execute the same Event rule.
 """
 from __future__ import annotations
 
@@ -133,16 +135,26 @@ def _operation_matches_event_context(operation: dict[str, Any]) -> bool:
 
 
 def install_formal_event_execution_preflight() -> None:
-    """Install one context-scoped extension over the existing write preflight."""
+    """Install one context-scoped extension below every executor facade wrapper."""
     from . import experiment_executor as executor
     from . import experiment_runtime_support as support
 
     if getattr(executor, _INSTALL_MARKER, False):
         return
+
+    # ``experiment_executor`` may be the public facade. Its graph-aware preflight
+    # calls the module-global ``_original_preflight`` dynamically, while the core
+    # is reset to that graph-aware wrapper before every execution. Wrap the
+    # structural authority stored there instead of only replacing the public name.
+    structural_preflight = getattr(
+        executor,
+        "_original_preflight",
+        executor.preflight_experiment_executable,
+    )
     original_preflight = getattr(
         executor,
         _ORIGINAL_PREFLIGHT_MARKER,
-        executor.preflight_experiment_executable,
+        structural_preflight,
     )
     original_effect = getattr(
         support,
@@ -202,7 +214,18 @@ def install_formal_event_execution_preflight() -> None:
         response_bound_state_read_with_formal_event
     )
     support.preflight_experiment_executable = preflight_with_formal_event_effect
+
+    # Public direct callers use the same authority. For the facade/core split,
+    # replace the structural function consumed by ``_graph_aware_preflight``;
+    # the facade's normal hook sync will continue to install graph-aware routing
+    # on the core before transport.
     executor.preflight_experiment_executable = preflight_with_formal_event_effect
+    if hasattr(executor, "_original_preflight"):
+        executor._original_preflight = preflight_with_formal_event_effect
+    if hasattr(executor, "_core") and hasattr(executor, "_graph_aware_preflight"):
+        executor._core.preflight_experiment_executable = (
+            executor._graph_aware_preflight
+        )
     setattr(executor, _INSTALL_MARKER, True)
 
 
