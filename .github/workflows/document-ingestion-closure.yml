@@ -90,4 +90,5 @@ jobs:
             tests/test_enterprise_understanding_authorization_coordinate_edge.py \
             tests/test_enterprise_understanding_structure_first_facts.py \
             tests/test_enterprise_understanding_fact_slots.py \
+            tests/test_enterprise_understanding_fact_probe_policy.py \
             tests/test_source_occurrence_*.py
