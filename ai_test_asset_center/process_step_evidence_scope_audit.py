@@ -1,10 +1,10 @@
 """Independent exact-scope audit for process-step evidence receipts.
 
 The live ledger binds evidence. This module verifies the sealed result from the
-Execution Receipt Bundle: every observation, oracle, and cleanup receipt must
-name one recorded step, be referenced by that same step only, carry a successful
-typed semantic status when its schema defines one, and cover the steps required
-by its evidence class.
+Execution Receipt Bundle. Exact observation, oracle and cleanup receipts must
+name one recorded step and be referenced by that same step. Graph aggregate
+cleanup receipts are validated as aggregate sets and are never mistaken for
+single-step evidence.
 """
 from __future__ import annotations
 
@@ -30,6 +30,12 @@ TYPED_CLEANUP_EXECUTION_RECEIPT_SCHEMA = (
 )
 TYPED_CLEANUP_EQUIVALENCE_RECEIPT_SCHEMA = (
     "qualibug.cleanup-equivalence-receipt.v1"
+)
+GRAPH_CLEANUP_EXECUTION_SET_SCHEMA = (
+    "qualibug.process-graph-cleanup-execution-set.v1"
+)
+GRAPH_CLEANUP_EQUIVALENCE_SCHEMA = (
+    "qualibug.process-graph-cleanup-equivalence-receipt.v1"
 )
 
 
@@ -59,6 +65,14 @@ def _ids(value: Any) -> list[str]:
         if text and text not in out:
             out.append(text)
     return out
+
+
+def _payload(envelope: dict[str, Any]) -> dict[str, Any]:
+    return _dict(_dict(envelope).get("payload"))
+
+
+def _payload_schema(envelope: dict[str, Any]) -> str:
+    return _text(_payload(envelope).get("schema_version"))
 
 
 def _discover(
@@ -133,13 +147,75 @@ def _cleanup_verification_status_valid(payload: dict[str, Any]) -> bool:
     )
 
 
+def _graph_cleanup_execution_set_valid(payload: dict[str, Any]) -> bool:
+    write_ids = _ids(payload.get("write_step_ids"))
+    node_receipts = _dict(
+        payload.get("step_cleanup_execution_receipts_by_id")
+    )
+    if (
+        _text(payload.get("schema_version"))
+        != GRAPH_CLEANUP_EXECUTION_SET_SCHEMA
+        or not write_ids
+        or len(write_ids) != len(_list(payload.get("write_step_ids")))
+        or set(node_receipts) != set(write_ids)
+        or _text(payload.get("status")).upper() != "ACCEPTED"
+        or payload.get("succeeded") is not True
+        or not 200 <= _safe_int(payload.get("status_code")) < 300
+    ):
+        return False
+
+    expected_receipt_ids: list[str] = []
+    for step_id in write_ids:
+        row = _dict(node_receipts.get(step_id))
+        if (
+            _text(row.get("source_step_id")) != step_id
+            or not _text(row.get("receipt_id"))
+            or _text(row.get("schema_version"))
+            != TYPED_CLEANUP_EXECUTION_RECEIPT_SCHEMA
+            or not _cleanup_execution_status_valid(row)
+        ):
+            return False
+        expected_receipt_ids.append(_text(row.get("receipt_id")))
+    return _ids(payload.get("source_receipt_ids")) == expected_receipt_ids
+
+
+def _graph_cleanup_equivalence_valid(payload: dict[str, Any]) -> bool:
+    write_ids = _ids(payload.get("write_step_ids"))
+    node_receipts = _dict(payload.get("step_equivalence_receipts_by_id"))
+    if (
+        _text(payload.get("schema_version"))
+        != GRAPH_CLEANUP_EQUIVALENCE_SCHEMA
+        or not write_ids
+        or len(write_ids) != len(_list(payload.get("write_step_ids")))
+        or set(node_receipts) != set(write_ids)
+        or _text(payload.get("equivalence_status")).upper() != "EQUIVALENT"
+        or _safe_int(payload.get("not_equivalent_step_count")) != 0
+        or _safe_int(payload.get("indeterminate_step_count")) != 0
+    ):
+        return False
+
+    expected_receipt_ids: list[str] = []
+    for step_id in write_ids:
+        row = _dict(node_receipts.get(step_id))
+        if (
+            _text(row.get("source_step_id")) != step_id
+            or not _text(row.get("receipt_id"))
+            or _text(row.get("schema_version"))
+            != TYPED_CLEANUP_EQUIVALENCE_RECEIPT_SCHEMA
+            or not _cleanup_verification_status_valid(row)
+        ):
+            return False
+        expected_receipt_ids.append(_text(row.get("receipt_id")))
+    return _ids(payload.get("step_equivalence_receipt_ids")) == expected_receipt_ids
+
+
 def _semantic_status_valid(
     envelope: dict[str, Any],
     *,
     evidence_kind: str,
 ) -> bool:
     """Validate typed semantic status without constraining generic envelopes."""
-    payload = _dict(_dict(envelope).get("payload"))
+    payload = _payload(envelope)
     schema = _text(payload.get("schema_version"))
     if (
         evidence_kind == "observation"
@@ -257,7 +333,7 @@ def audit_process_step_evidence_scope(
     receipts_by_id: dict[str, dict[str, Any]],
     process_step_payloads: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Verify exact receipt lineage and per-step evidence coverage."""
+    """Verify aggregate cleanup sets and exact receipt lineage."""
 
     payloads = [
         dict(_dict(row))
@@ -307,14 +383,49 @@ def audit_process_step_evidence_scope(
         receipts_by_id,
         {ORACLE_TRACE_RECEIPT_TYPE},
     )
-    cleanup_execution_ids = _discover(
+    all_cleanup_execution_ids = _discover(
         receipts_by_id,
         {CLEANUP_EXECUTION_RECEIPT_TYPE},
     )
-    cleanup_verification_ids = _discover(
+    all_cleanup_verification_ids = _discover(
         receipts_by_id,
         {CLEANUP_VERIFICATION_RECEIPT_TYPE},
     )
+    aggregate_cleanup_execution_ids = [
+        rid
+        for rid in all_cleanup_execution_ids
+        if _payload_schema(_dict(receipts_by_id.get(rid)))
+        == GRAPH_CLEANUP_EXECUTION_SET_SCHEMA
+    ]
+    aggregate_cleanup_verification_ids = [
+        rid
+        for rid in all_cleanup_verification_ids
+        if _payload_schema(_dict(receipts_by_id.get(rid)))
+        == GRAPH_CLEANUP_EQUIVALENCE_SCHEMA
+    ]
+    cleanup_execution_ids = sorted(
+        set(all_cleanup_execution_ids)
+        - set(aggregate_cleanup_execution_ids)
+    )
+    cleanup_verification_ids = sorted(
+        set(all_cleanup_verification_ids)
+        - set(aggregate_cleanup_verification_ids)
+    )
+
+    invalid_aggregate_cleanup_execution_ids = [
+        rid
+        for rid in aggregate_cleanup_execution_ids
+        if not _graph_cleanup_execution_set_valid(
+            _payload(_dict(receipts_by_id.get(rid)))
+        )
+    ]
+    invalid_aggregate_cleanup_verification_ids = [
+        rid
+        for rid in aggregate_cleanup_verification_ids
+        if not _graph_cleanup_equivalence_valid(
+            _payload(_dict(receipts_by_id.get(rid)))
+        )
+    ]
 
     observation_owners_all = _owners_by_receipt(
         payloads,
@@ -444,11 +555,15 @@ def audit_process_step_evidence_scope(
     )
     invalid_semantic_status_receipt_ids = sorted(
         {
-            rid
-            for group in group_audits
-            for rid in _ids(
-                group.get("invalid_semantic_status_receipt_ids")
-            )
+            *invalid_aggregate_cleanup_execution_ids,
+            *invalid_aggregate_cleanup_verification_ids,
+            *(
+                rid
+                for group in group_audits
+                for rid in _ids(
+                    group.get("invalid_semantic_status_receipt_ids")
+                )
+            ),
         }
     )
 
@@ -502,6 +617,19 @@ def audit_process_step_evidence_scope(
         "oracle_trace": oracle_trace,
         "cleanup_execution": cleanup_execution,
         "cleanup_verification": cleanup_verification,
+        "aggregate_cleanup_execution_receipt_ids": (
+            aggregate_cleanup_execution_ids
+        ),
+        "aggregate_cleanup_verification_receipt_ids": (
+            aggregate_cleanup_verification_ids
+        ),
+        "invalid_aggregate_cleanup_execution_receipt_ids": (
+            invalid_aggregate_cleanup_execution_ids
+        ),
+        "invalid_aggregate_cleanup_verification_receipt_ids": (
+            invalid_aggregate_cleanup_verification_ids
+        ),
+        "aggregate_cleanup_receipts_excluded_from_step_scope": True,
         "observation_unknown_reference_ids": observation_unknown_refs,
         "oracle_unknown_reference_ids": oracle_unknown_refs,
         "cleanup_unknown_reference_ids": cleanup_unknown_refs,
