@@ -17,6 +17,7 @@ from typing import Any
 from benchmark_evaluator.scored_run_comparison import _fingerprint
 
 from .build_product_snapshot import _git_blob_sha
+from .fact_slot_document import validate_business_fact_slot_document
 from .fact_slots import evaluate_business_fact_slots
 from .ground_truth import load_ground_truth
 from .run_source_backed_workflow import run_source_backed_understanding_workflow
@@ -201,7 +202,10 @@ def run_chinese_explicit_fact_baseline(
     output = Path(output_dir).resolve()
     output.mkdir(parents=True, exist_ok=True)
     manifest = _write_source_manifest(product, output)
-    ground_truth = (product / GROUND_TRUTH_PATH.relative_to(Path(__file__).parent.parent.parent)).resolve()
+    ground_truth = (
+        product
+        / GROUND_TRUTH_PATH.relative_to(Path(__file__).parent.parent.parent)
+    ).resolve()
     if not ground_truth.is_file():
         ground_truth = GROUND_TRUTH_PATH.resolve()
 
@@ -230,7 +234,9 @@ def run_chinese_explicit_fact_baseline(
         _write_json(output / "chinese_explicit_fact_baseline_summary.json", summary)
         return summary
 
-    validated_ground_truth = load_ground_truth(ground_truth)
+    validated_ground_truth = validate_business_fact_slot_document(
+        load_ground_truth(ground_truth)
+    )
     product_asset = _read_json(asset_path)
     measurement = evaluate_business_fact_slots(validated_ground_truth, product_asset)
     measurement_path = output / "evaluation" / "business_fact_slot_measurement.json"
@@ -241,7 +247,10 @@ def run_chinese_explicit_fact_baseline(
         else {}
     )
     first_loss = _first_loss_analysis(measurement)
-    _write_json(output / "evaluation" / "explicit_fact_first_loss_analysis.json", first_loss)
+    _write_json(
+        output / "evaluation" / "explicit_fact_first_loss_analysis.json",
+        first_loss,
+    )
     threshold_status, threshold_checks = _threshold_status(metrics)
     summary = {
         "schema": "qualibug.chinese-explicit-fact-baseline-result.v1",
