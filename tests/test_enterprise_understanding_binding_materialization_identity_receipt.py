@@ -17,7 +17,7 @@ from ai_test_asset_center.binding_materialization_identity_receipt import (
 def _binding(
     target: str = "order_id",
     *,
-    value_fingerprint: str = "order-42-fingerprint",
+    value_fingerprint: str = "8f3c72a90b1d",
 ) -> dict:
     return {
         "target": target,
@@ -41,15 +41,16 @@ def test_identity_receipt_is_deterministic_and_redacted() -> None:
         "receipt_id": first["receipt_id"],
         "target": "order_id",
         "status": "BOUND",
-        "value_fingerprint": "order-42-fingerprint",
+        "value_fingerprint": "8f3c72a90b1d",
     }
     assert "order-42" not in repr(first)
+    assert "materialized_value" not in first
     assert validate_binding_materialization_identity_receipt(first) == first
 
 
 def test_identity_receipt_tamper_is_rejected() -> None:
     receipt = build_binding_materialization_identity_receipt(_binding())
-    receipt["value_fingerprint"] = "other-order-fingerprint"
+    receipt["value_fingerprint"] = "2c91fa7e4b60"
 
     with pytest.raises(
         BindingMaterializationIdentityError,
@@ -74,8 +75,8 @@ def test_sealing_preserves_input_and_attaches_final_identity() -> None:
 def test_duplicate_bound_target_is_rejected() -> None:
     result = {
         "binding_materialization_receipts": [
-            _binding(value_fingerprint="order-42-fingerprint"),
-            _binding(value_fingerprint="order-99-fingerprint"),
+            _binding(value_fingerprint="8f3c72a90b1d"),
+            _binding(value_fingerprint="2c91fa7e4b60"),
         ]
     }
 
@@ -93,7 +94,7 @@ def test_target_projection_requires_every_declared_identity() -> None:
                 _binding("order_id"),
                 _binding(
                     "customer_id",
-                    value_fingerprint="customer-7-fingerprint",
+                    value_fingerprint="4d70ca13f982",
                 ),
             ]
         }
