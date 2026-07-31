@@ -1,9 +1,11 @@
 """Public source-backed process protocol compiler.
 
-The existing core remains the graph normalization and topology authority. This
-facade removes only the legacy flat cleanup-plan projection: compensation scope
-stays on the execution graph until the final experiment compiler joins it with
-Behavior IR observers and the existing cleanup validator.
+The existing core remains the graph normalization and topology authority.
+Compensation remains visible on the direct protocol result for diagnostics and
+regression contracts, while the graph marks the final
+``process_graph_write_contract`` as the executable cleanup authority. The
+single-obligation facade removes the flat compatibility projection only while
+its legacy core assembles an experiment.
 """
 from __future__ import annotations
 
@@ -28,7 +30,7 @@ def _graph_owned_cleanup(result: dict[str, Any]) -> dict[str, Any]:
         for row in list(result.get("cleanup_plan") or [])
         if isinstance(row, dict)
     ]
-    graph["declared_cleanup_steps"] = declared_cleanup
+    graph["declared_cleanup_steps"] = deepcopy(declared_cleanup)
     graph["cleanup_authority"] = "process_graph_write_contract"
     treatment_plan = [
         deepcopy(row)
@@ -41,11 +43,8 @@ def _graph_owned_cleanup(result: dict[str, Any]) -> dict[str, Any]:
         **result,
         "execution_graph": graph,
         "treatment_plan": treatment_plan,
-        # The flat compatibility plan cannot safely express target system,
-        # source-step scope and observer authority. The final graph contract
-        # reconstructs and validates the executable cleanup plan once.
-        "cleanup_plan": [],
-        "graph_cleanup_projection": declared_cleanup,
+        "cleanup_plan": declared_cleanup,
+        "graph_cleanup_projection": deepcopy(declared_cleanup),
     }
 
 
