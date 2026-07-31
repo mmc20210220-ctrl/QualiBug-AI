@@ -8,6 +8,10 @@ from .schema import as_dict
 
 _FORMAL_FACT_RECEIPTS: tuple[tuple[str, str], ...] = (
     (
+        "typed_fact_authority_retirement_receipt",
+        "TYPED_FACT_AUTHORITY_RETIREMENT",
+    ),
+    (
         "explicit_fact_semantic_normalization_receipt",
         "EXPLICIT_FACT_SEMANTIC_NORMALIZATION",
     ),
@@ -27,16 +31,15 @@ def _apply_implicit_rule_governance(asset: dict[str, Any]) -> None:
     governed = enrich_asset_with_governed_implicit_rule_projection(asset)
     if governed is asset:
         return
-    # Preserve the caller-owned asset identity used by composition and persistence.
     asset.clear()
     asset.update(governed)
 
 
 def probe_generation_block_reason(asset: dict[str, Any]) -> str:
     """Return the first closed formal gate, or empty text when admission passes."""
-    # These receipts are mandatory in the formal composition root. Compatibility
-    # unit assets and explicitly migrated legacy assets may predate them; when a
-    # receipt is present its failure is authoritative and can never be bypassed.
+    # Compatibility unit assets and explicitly migrated legacy assets may predate a
+    # receipt. Once a formal receipt exists, however, its status is authoritative and
+    # can never be bypassed by a later open planning/runtime gate.
     lexicon = as_dict(asset.get("semantic_lexicon_contract"))
     if lexicon and not bool(lexicon.get("entry_allowed")):
         return "SEMANTIC_LEXICON_CONTRACT_CLOSED"
@@ -91,8 +94,6 @@ def build_gated_probes(
     compiler: Callable[[dict[str, Any], int], list[dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
     """Govern the final asset, then compile Probes only after all gates close."""
-    # This runs before the zero-budget return so a build that intentionally emits no
-    # Probes still persists source-version lifecycle and authority decisions.
     _apply_implicit_rule_governance(asset)
 
     limit = max(0, int(max_count))
