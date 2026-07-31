@@ -1,9 +1,11 @@
 """Governance closure around the existing implicit-rule projection authority.
 
 The underlying detector/validator/promoter remains
-``implicit_rule_projection.enrich_asset_with_implicit_rule_projection``.  This module
-adds only lifecycle and authority-decision governance after that single projection:
-source-version identity, stale preservation, and append-only counterexample decisions.
+``implicit_rule_projection.enrich_asset_with_implicit_rule_projection``. This module
+adds lifecycle and authority-decision governance after that single projection. Typed
+semantic upgrades are reconciled into the existing source-rule identity before the
+lifecycle ledger is evaluated, so every public governance entry point sees the same
+one-rule authority as the Enterprise Understanding integration boundary.
 """
 from __future__ import annotations
 
@@ -13,6 +15,9 @@ from typing import Any
 
 from .implicit_rule_authority_decisions import (
     apply_implicit_rule_authority_decisions,
+)
+from .implicit_rule_identity_reconciliation import (
+    reconcile_implicit_rule_identities,
 )
 from .implicit_rule_lifecycle import (
     annotate_rule_candidates_with_source_versions,
@@ -238,7 +243,7 @@ def _governance_gaps(
 def enrich_asset_with_governed_implicit_rule_projection(
     asset: dict[str, Any],
 ) -> dict[str, Any]:
-    """Run the existing projection, then close source and decision lifecycle."""
+    """Run projection, reconcile one rule identity, then close source/decision lifecycle."""
 
     before_rules = [
         dict(row)
@@ -247,7 +252,9 @@ def enrich_asset_with_governed_implicit_rule_projection(
     ]
     prior_derived_rules = _derived_rules(before_rules)
 
-    projected = enrich_asset_with_implicit_rule_projection(asset)
+    projected = reconcile_implicit_rule_identities(
+        enrich_asset_with_implicit_rule_projection(asset)
+    )
     projected_rules = [
         dict(row)
         for row in _list(projected.get("rule_library"))
@@ -298,6 +305,7 @@ def enrich_asset_with_governed_implicit_rule_projection(
     )
     gate["stale_rule_execution_allowed"] = False
     gate["raw_runtime_observation_authority_transition_allowed"] = False
+    gate["identity_reconciliation_before_lifecycle"] = True
     if _text(gate.get("status")) == "PASS" and stale_rows:
         gate["status"] = "PARTIAL_STALE_AUTHORITY"
     elif (
@@ -332,6 +340,7 @@ def enrich_asset_with_governed_implicit_rule_projection(
             "implicit_rule_counterexample_requires_content_addressed_evidence": True,
             "raw_runtime_observation_can_demote_rule": False,
             "implicit_rule_governance_reuses_existing_projection_authority": True,
+            "implicit_rule_identity_reconciliation_precedes_lifecycle": True,
         }
     )
     projected["governance"] = governance
