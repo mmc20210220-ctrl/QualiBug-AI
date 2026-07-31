@@ -77,3 +77,28 @@ def test_legacy_non_authorization_deliverable_remains_readable(monkeypatch) -> N
     index = formal_delivery_scope.validated_deliverable_gate_index(ledger)
 
     assert index["finding:1"]["status"] == "DELIVERABLE"
+
+
+def test_mixed_legacy_ledger_quarantines_only_authorization(monkeypatch) -> None:
+    authorization = _ledger(attempt_risk_family="authorization")["attempts"][0]
+    validation = deepcopy(
+        _ledger(attempt_risk_family="validation")["attempts"][0]
+    )
+    validation["finding_id"] = "finding:validation"
+    validation["attempt_fingerprint"] = "attempt-validation"
+    validation["gate_receipt"]["finding_id"] = "finding:validation"
+    validation["gate_receipt"]["receipt_id"] = "legacy-gate:validation"
+    validation["delivery_evidence_bundle"]["finding"][
+        "finding_id"
+    ] = "finding:validation"
+    ledger = {
+        "run_id": "run:1",
+        "campaign_id": "campaign:1",
+        "attempts": [authorization, validation],
+    }
+    _install_ledger(monkeypatch, ledger)
+
+    index = formal_delivery_scope.validated_deliverable_gate_index(ledger)
+
+    assert set(index) == {"finding:validation"}
+    assert index["finding:validation"]["status"] == "DELIVERABLE"
