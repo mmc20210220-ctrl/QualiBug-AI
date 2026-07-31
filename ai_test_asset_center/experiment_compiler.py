@@ -14,6 +14,12 @@ from .database_numeric_finding_bridge import (
 from .database_observer_experiment_projection import (
     project_database_observers_to_experiment_pack,
 )
+from .database_relation_delta_causality_finding_bridge import (
+    install_database_relation_causal_delta_finding_bridge,
+)
+from .database_relation_delta_causality_mainline import (
+    project_database_relation_delta_causality,
+)
 from .database_relation_delta_projection_gate import (
     project_database_relation_delta_assertions,
 )
@@ -56,6 +62,7 @@ install_database_state_transition_finding_bridge()
 install_database_numeric_finding_bridge()
 install_database_relation_numeric_finding_bridge()
 install_database_relation_delta_finding_bridge()
+install_database_relation_causal_delta_finding_bridge()
 install_runtime_materialization_operation_matching()
 
 
@@ -321,9 +328,12 @@ def compile_experiments(
     )
     state_bound = project_database_state_transition_assertions(relation_contract_bound)
     # Delta relations require exact BEFORE/AFTER root pairs and must bind before
-    # final-value relation rules or the legacy same-row numeric projector.
+    # causality, final-value relation rules or the legacy same-row numeric projector.
     relation_delta_bound = project_database_relation_delta_assertions(state_bound)
-    relation_numeric_bound = project_database_relation_numeric_assertions(
+    causal_delta_bound = project_database_relation_delta_causality(
         relation_delta_bound
+    )
+    relation_numeric_bound = project_database_relation_numeric_assertions(
+        causal_delta_bound
     )
     return project_database_numeric_assertions(relation_numeric_bound)
