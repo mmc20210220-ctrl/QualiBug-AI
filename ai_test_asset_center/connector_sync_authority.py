@@ -7,8 +7,10 @@ source-occurrence ingestion and lifecycle authorities.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -77,6 +79,43 @@ def _registry_path(project: str, root: Path) -> Path:
 
 def _run_path(project: str, connector: str, epoch: str, root: Path) -> Path:
     return _workspace(project, root) / "connector_sync_runs" / connector / f"{epoch}.json"
+
+
+def _lock_path(project: str, connector: str, root: Path) -> Path:
+    return _workspace(project, root) / "connector_sync_locks" / f"{connector}.lock"
+
+
+def _lock_epoch(project: str, connector: str, root: Path) -> str:
+    path = _lock_path(project, connector, root)
+    try:
+        return _text(path.read_text(encoding="utf-8"), 160)
+    except OSError:
+        return ""
+
+
+def _remove_sync_lock(project: str, connector: str, epoch: str, root: Path) -> None:
+    path = _lock_path(project, connector, root)
+    try:
+        if path.is_file() and (not epoch or _lock_epoch(project, connector, root) == epoch):
+            path.unlink()
+    except OSError:
+        pass
+
+
+@contextmanager
+def _sync_lock(project: str, connector: str, epoch: str, root: Path):
+    path = _lock_path(project, connector, root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError as exc:
+        raise ConnectorSyncError("connector_sync_lock_held") from exc
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(epoch)
+        yield
+    finally:
+        _remove_sync_lock(project, connector, epoch, root)
 
 
 def _registry_default(project: str) -> dict[str, Any]:
@@ -567,191 +606,206 @@ def sync_connector_snapshot_batch(
         raise ConnectorSyncError("connector_retirement_threshold_invalid")
 
     normalized = _normalize_items(connector, items)
-    registry = _load_connector_registry(project, resolved_root)
-    instance = _instance_by_id(registry, connector)
-    if instance is None:
-        raise ConnectorSyncError("connector_instance_not_registered")
-    if instance.get("status") != "ACTIVE":
-        raise ConnectorSyncError("connector_instance_not_active")
-    previous_hash = _cursor_hash(previous_cursor)
-    stored_hash = _text(instance.get("last_committed_cursor_fingerprint"), 128)
-    if stored_hash and previous_hash != stored_hash:
-        raise ConnectorSyncError("connector_sync_cursor_mismatch")
-    next_hash = _cursor_hash(next_cursor)
-    epoch = _identifier(sync_epoch_id, "sync_epoch_id") if sync_epoch_id else _new_epoch(project, connector)
-    before_refs = _active_refs(project, connector, resolved_root)
-    run = {
-        "schema": CONNECTOR_SYNC_RUN_SCHEMA,
-        "sync_epoch_id": epoch,
-        "project_id": project,
-        "connector_instance_id": connector,
-        "connector_type": instance.get("connector_type"),
-        "sync_mode": mode,
-        "deletion_policy": policy,
-        "status": "RUNNING",
-        "started_at_utc": _now(),
-        "started_by": clean_actor,
-        "item_count": len(normalized),
-        "previous_cursor_fingerprint": previous_hash,
-        "next_cursor_fingerprint": next_hash,
-        "cursor_checkpoint_committed": False,
-        "raw_cursor_values_persisted": False,
-        "source_content_persisted_in_run_receipt": False,
-    }
-    _start_run(project, connector, instance, registry, run, resolved_root)
+    epoch = _identifier(sync_epoch_id, "sync_epoch_id") if sync_epoch_id else _new_epoch(
+        project, connector
+    )
+    with _sync_lock(project, connector, epoch, resolved_root):
+        registry = _load_connector_registry(project, resolved_root)
+        instance = _instance_by_id(registry, connector)
+        if instance is None:
+            raise ConnectorSyncError("connector_instance_not_registered")
+        if instance.get("status") != "ACTIVE":
+            raise ConnectorSyncError("connector_instance_not_active")
+        previous_hash = _cursor_hash(previous_cursor)
+        stored_hash = _text(instance.get("last_committed_cursor_fingerprint"), 128)
+        if stored_hash and previous_hash != stored_hash:
+            raise ConnectorSyncError("connector_sync_cursor_mismatch")
+        next_hash = _cursor_hash(next_cursor)
+        before_refs = _active_refs(project, connector, resolved_root)
+        run = {
+            "schema": CONNECTOR_SYNC_RUN_SCHEMA,
+            "sync_epoch_id": epoch,
+            "project_id": project,
+            "connector_instance_id": connector,
+            "connector_type": instance.get("connector_type"),
+            "sync_mode": mode,
+            "deletion_policy": policy,
+            "status": "RUNNING",
+            "started_at_utc": _now(),
+            "started_by": clean_actor,
+            "item_count": len(normalized),
+            "previous_cursor_fingerprint": previous_hash,
+            "next_cursor_fingerprint": next_hash,
+            "cursor_checkpoint_committed": False,
+            "raw_cursor_values_persisted": False,
+            "source_content_persisted_in_run_receipt": False,
+        }
+        _start_run(project, connector, instance, registry, run, resolved_root)
 
-    successes: list[dict[str, Any]] = []
-    errors: list[dict[str, Any]] = []
-    seen_refs: set[str] = set()
-    retired: list[dict[str, Any]] = []
-    reconciliation: dict[str, Any] = {
-        "status": "NOT_REQUESTED",
-        "missing_count": 0,
-        "retired_count": 0,
-        "errors": [],
-    }
-    try:
-        for index, row in enumerate(normalized):
-            try:
-                receipt = ingest_connector_snapshot(
-                    project,
-                    root=resolved_root,
-                    connector_id=connector,
-                    source_id=_text(row.get("source_id") or row["_remote_resource_id"], 160),
-                    source_type=row["_source_type"],
-                    content=row.get("content"),
-                    remote_resource_id=row["_remote_resource_id"],
-                    resource_kind=row["_resource_kind"],
-                    remote_revision=_text(row.get("remote_revision"), 240),
-                    remote_updated_at=_text(row.get("remote_updated_at"), 80),
-                    retrieved_at=_text(row.get("retrieved_at"), 80),
-                    canonical_url=_text(row.get("canonical_url"), 1000),
-                    parent_remote_id=_text(row.get("parent_remote_id"), 1000),
-                    sync_epoch_id=epoch,
-                    sync_cursor=next_cursor,
-                    export_format=_text(row.get("export_format"), 80),
-                    declared_mime=_text(row.get("declared_mime"), 160),
-                    actor=clean_actor,
-                    filename=_text(row.get("filename"), 500),
-                )
-                occurrence = dict(receipt.get("source_occurrence") or {})
-                success = {
-                    "remote_resource_id": row["_remote_resource_id"],
-                    "resource_kind": row["_resource_kind"],
-                    "source_ref": receipt.get("source_ref") or row["_source_ref"],
-                    "source_occurrence_id": receipt.get("source_occurrence_id"),
-                    "canonical_source_id": receipt.get("canonical_source_id"),
-                    "content_hash": receipt.get("content_hash"),
-                    "occurrence_version": occurrence.get("version"),
-                    "observation_count": occurrence.get("observation_count"),
-                    "remote_revision": _text(row.get("remote_revision"), 240),
-                    "status": "INGESTED",
-                }
-                successes.append(success)
-                seen_refs.add(_text(success["source_ref"], 2000))
-            except Exception as exc:
-                errors.append(
-                    {
-                        "index": index,
-                        "remote_resource_id": row["_remote_resource_id"],
-                        "source_ref": row["_source_ref"],
-                        "code": (
-                            "CONNECTOR_SNAPSHOT_INGESTION_FAILED"
-                            if isinstance(exc, ConnectorSnapshotError)
-                            else "CONNECTOR_SYNC_ITEM_UNEXPECTED_FAILURE"
-                        ),
-                        "detail": str(exc)[:500] if isinstance(exc, ConnectorSnapshotError) else type(exc).__name__,
-                        "previous_snapshot_retained": True,
-                    }
-                )
-
-        if not errors and policy == "RETIRE_MISSING":
-            reconciliation = _retirement_plan(
-                before_refs, seen_refs, max_retire_count, float(max_retire_ratio)
-            )
-            if reconciliation["status"] == "ALLOWED":
-                retired, retirement_errors = _retire_missing(
-                    project, reconciliation, resolved_root, clean_actor
-                )
-                reconciliation.update(
-                    {
-                        "status": "PARTIAL" if retirement_errors else "COMPLETE",
-                        "retired_count": len(retired),
-                        "retired_source_occurrences": retired,
-                        "errors": retirement_errors,
-                    }
-                )
-                errors.extend(retirement_errors)
-        elif errors and policy == "RETIRE_MISSING":
-            reconciliation = {
-                "status": "SKIPPED_SYNC_INCOMPLETE",
-                "missing_count": 0,
-                "retired_count": 0,
-                "errors": [],
-                "previous_snapshots_retained": True,
-            }
-
-        status = (
-            "PARTIAL"
-            if errors and successes
-            else "FAILED"
-            if errors
-            else "BLOCKED"
-            if reconciliation.get("status") == "BLOCKED"
-            else "COMPLETE"
-        )
-        run.update(
-            {
-                "status": status,
-                "completed_at_utc": _now(),
-                "success_count": len(successes),
-                "failure_count": len(errors),
-                "successful_items": successes,
-                "errors": errors,
-                "seen_source_ref_count": len(seen_refs),
-                "seen_source_refs_digest": _short_hash(sorted(seen_refs), 32),
-                "previous_active_snapshot_count": len(before_refs),
-                "post_active_snapshot_count": len(_active_refs(project, connector, resolved_root)),
-                "retired_count": len(retired),
-                "deletion_reconciliation": reconciliation,
-                "previous_snapshots_retained_on_item_failure": True,
-                "raw_cursor_values_persisted": False,
-                "source_content_persisted_in_run_receipt": False,
-            }
-        )
-        receipt_path = _finish_run(project, connector, run, resolved_root, clean_actor, next_hash)
-        return {**run, "run_receipt_path": receipt_path}
-    except Exception as exc:
-        run.update(
-            {
-                "status": "FAILED",
-                "completed_at_utc": _now(),
-                "success_count": len(successes),
-                "failure_count": len(errors) + 1,
-                "successful_items": successes,
-                "errors": [
-                    *errors,
-                    {
-                        "code": "CONNECTOR_SYNC_COORDINATOR_FAILED",
-                        "detail": type(exc).__name__,
-                        "previous_cursor_checkpoint_preserved": True,
-                        "previous_snapshots_retained": True,
-                    },
-                ],
-                "retired_count": len(retired),
-                "cursor_checkpoint_committed": False,
-                "previous_snapshots_retained_on_item_failure": True,
-                "raw_cursor_values_persisted": False,
-                "source_content_persisted_in_run_receipt": False,
-            }
-        )
+        successes: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        seen_refs: set[str] = set()
+        retired: list[dict[str, Any]] = []
+        reconciliation: dict[str, Any] = {
+            "status": "NOT_REQUESTED",
+            "missing_count": 0,
+            "retired_count": 0,
+            "errors": [],
+        }
         try:
-            _finish_run(project, connector, run, resolved_root, clean_actor, next_hash)
-        except Exception:
-            pass
-        raise ConnectorSyncError(
-            f"connector_sync_coordinator_failed:{type(exc).__name__}:{exc}"
-        ) from exc
+            for index, row in enumerate(normalized):
+                try:
+                    receipt = ingest_connector_snapshot(
+                        project,
+                        root=resolved_root,
+                        connector_id=connector,
+                        source_id=_text(
+                            row.get("source_id") or row["_remote_resource_id"], 160
+                        ),
+                        source_type=row["_source_type"],
+                        content=row.get("content"),
+                        remote_resource_id=row["_remote_resource_id"],
+                        resource_kind=row["_resource_kind"],
+                        remote_revision=_text(row.get("remote_revision"), 240),
+                        remote_updated_at=_text(row.get("remote_updated_at"), 80),
+                        retrieved_at=_text(row.get("retrieved_at"), 80),
+                        canonical_url=_text(row.get("canonical_url"), 1000),
+                        parent_remote_id=_text(row.get("parent_remote_id"), 1000),
+                        sync_epoch_id=epoch,
+                        sync_cursor=next_cursor,
+                        export_format=_text(row.get("export_format"), 80),
+                        declared_mime=_text(row.get("declared_mime"), 160),
+                        actor=clean_actor,
+                        filename=_text(row.get("filename"), 500),
+                    )
+                    occurrence = dict(receipt.get("source_occurrence") or {})
+                    success = {
+                        "remote_resource_id": row["_remote_resource_id"],
+                        "resource_kind": row["_resource_kind"],
+                        "source_ref": receipt.get("source_ref") or row["_source_ref"],
+                        "source_occurrence_id": receipt.get("source_occurrence_id"),
+                        "canonical_source_id": receipt.get("canonical_source_id"),
+                        "content_hash": receipt.get("content_hash"),
+                        "occurrence_version": occurrence.get("version"),
+                        "observation_count": occurrence.get("observation_count"),
+                        "remote_revision": _text(row.get("remote_revision"), 240),
+                        "status": "INGESTED",
+                    }
+                    successes.append(success)
+                    seen_refs.add(_text(success["source_ref"], 2000))
+                except Exception as exc:
+                    errors.append(
+                        {
+                            "index": index,
+                            "remote_resource_id": row["_remote_resource_id"],
+                            "source_ref": row["_source_ref"],
+                            "code": (
+                                "CONNECTOR_SNAPSHOT_INGESTION_FAILED"
+                                if isinstance(exc, ConnectorSnapshotError)
+                                else "CONNECTOR_SYNC_ITEM_UNEXPECTED_FAILURE"
+                            ),
+                            "detail": (
+                                str(exc)[:500]
+                                if isinstance(exc, ConnectorSnapshotError)
+                                else type(exc).__name__
+                            ),
+                            "previous_snapshot_retained": True,
+                        }
+                    )
+
+            if not errors and policy == "RETIRE_MISSING":
+                reconciliation = _retirement_plan(
+                    before_refs, seen_refs, max_retire_count, float(max_retire_ratio)
+                )
+                if reconciliation["status"] == "ALLOWED":
+                    retired, retirement_errors = _retire_missing(
+                        project, reconciliation, resolved_root, clean_actor
+                    )
+                    reconciliation.update(
+                        {
+                            "status": "PARTIAL" if retirement_errors else "COMPLETE",
+                            "retired_count": len(retired),
+                            "retired_source_occurrences": retired,
+                            "errors": retirement_errors,
+                        }
+                    )
+                    errors.extend(retirement_errors)
+            elif errors and policy == "RETIRE_MISSING":
+                reconciliation = {
+                    "status": "SKIPPED_SYNC_INCOMPLETE",
+                    "missing_count": 0,
+                    "retired_count": 0,
+                    "errors": [],
+                    "previous_snapshots_retained": True,
+                }
+
+            status = (
+                "PARTIAL"
+                if errors and successes
+                else "FAILED"
+                if errors
+                else "BLOCKED"
+                if reconciliation.get("status") == "BLOCKED"
+                else "COMPLETE"
+            )
+            run.update(
+                {
+                    "status": status,
+                    "completed_at_utc": _now(),
+                    "success_count": len(successes),
+                    "failure_count": len(errors),
+                    "successful_items": successes,
+                    "errors": errors,
+                    "seen_source_ref_count": len(seen_refs),
+                    "seen_source_refs_digest": _short_hash(sorted(seen_refs), 32),
+                    "previous_active_snapshot_count": len(before_refs),
+                    "post_active_snapshot_count": len(
+                        _active_refs(project, connector, resolved_root)
+                    ),
+                    "retired_count": len(retired),
+                    "deletion_reconciliation": reconciliation,
+                    "previous_snapshots_retained_on_item_failure": True,
+                    "raw_cursor_values_persisted": False,
+                    "source_content_persisted_in_run_receipt": False,
+                }
+            )
+            receipt_path = _finish_run(
+                project, connector, run, resolved_root, clean_actor, next_hash
+            )
+            return {**run, "run_receipt_path": receipt_path}
+        except Exception as exc:
+            run.update(
+                {
+                    "status": "FAILED",
+                    "completed_at_utc": _now(),
+                    "success_count": len(successes),
+                    "failure_count": len(errors) + 1,
+                    "successful_items": successes,
+                    "errors": [
+                        *errors,
+                        {
+                            "code": "CONNECTOR_SYNC_COORDINATOR_FAILED",
+                            "detail": type(exc).__name__,
+                            "previous_cursor_checkpoint_preserved": True,
+                            "previous_snapshots_retained": True,
+                        },
+                    ],
+                    "retired_count": len(retired),
+                    "cursor_checkpoint_committed": False,
+                    "previous_snapshots_retained_on_item_failure": True,
+                    "raw_cursor_values_persisted": False,
+                    "source_content_persisted_in_run_receipt": False,
+                }
+            )
+            try:
+                _finish_run(
+                    project, connector, run, resolved_root, clean_actor, next_hash
+                )
+            except Exception:
+                pass
+            raise ConnectorSyncError(
+                f"connector_sync_coordinator_failed:{type(exc).__name__}:{exc}"
+            ) from exc
 
 
 def abort_connector_sync_run(
@@ -771,7 +825,11 @@ def abort_connector_sync_run(
     instance = _instance_by_id(registry, connector)
     if instance is None:
         raise ConnectorSyncError("connector_instance_not_registered")
-    epoch = _text(instance.get("active_sync_epoch_id"), 160)
+    registry_epoch = _text(instance.get("active_sync_epoch_id"), 160)
+    lock_epoch = _lock_epoch(project, connector, resolved_root)
+    if registry_epoch and lock_epoch and registry_epoch != lock_epoch:
+        raise ConnectorSyncError("connector_sync_lock_registry_mismatch")
+    epoch = registry_epoch or lock_epoch
     if not epoch:
         raise ConnectorSyncError("connector_sync_run_not_active")
     try:
@@ -818,6 +876,7 @@ def abort_connector_sync_run(
         }
     )
     _save_connector_registry(project, resolved_root, registry)
+    _remove_sync_lock(project, connector, epoch, resolved_root)
     return {**run, "run_receipt_path": path}
 
 
