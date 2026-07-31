@@ -1,14 +1,9 @@
 from __future__ import annotations
 
-"""Private-network HTTP entrypoint for the QualiBug pilot runtime.
+"""Private-network HTTP composition root for the QualiBug pilot runtime.
 
-The service binds to localhost by default. In private-cloud deployments, a
-trusted reverse proxy or enterprise SSO gateway should authenticate users and
-inject the actor/role headers documented below. The service never accepts raw
-credential values; connectors only receive secret references.
-
-Handler behavior lives in focused mixins; this module remains the composition
-root and compatibility re-export surface.
+Authentication and authorization are handled by the focused mixins. This module
+composes the canonical handler and owns the hardened HTTP server lifecycle.
 """
 
 import os
@@ -19,13 +14,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-_MAX_REQUEST_BODY = int(os.environ.get("QUALIBUG_MAX_REQUEST_BODY", str(10 * 1024 * 1024)))  # 10 MiB
-_HTTP_TIMEOUT = int(os.environ.get("QUALIBUG_HTTP_TIMEOUT", "30"))  # seconds
+_MAX_REQUEST_BODY = int(
+    os.environ.get("QUALIBUG_MAX_REQUEST_BODY", str(10 * 1024 * 1024))
+)
+_HTTP_TIMEOUT = int(os.environ.get("QUALIBUG_HTTP_TIMEOUT", "30"))
 _REQUEST_QUEUE_SIZE = int(os.environ.get("QUALIBUG_REQUEST_QUEUE_SIZE", "128"))
 
 from . import db_persistence as db_persist  # noqa: F401
-from .customer_delivery_gate import split_customer_delivery_tracks as _partition_delivery_tracks
-
+from .customer_delivery_gate import (
+    split_customer_delivery_tracks as _partition_delivery_tracks,
+)
 from .private_pilot_json_io import (  # noqa: F401
     _read_json_artifact,
     _read_json_object,
@@ -59,7 +57,7 @@ from .private_pilot_project_assets import (  # noqa: F401
     _truthy_env,
     _write_env_local,
 )
-from . import jwt_auth  # noqa: F401  token verification seam for the tenant auth chain
+from . import jwt_auth  # noqa: F401
 from .private_pilot_tenant_auth import (  # noqa: F401
     PROJECT_SCOPE_HEADER,
     TenantAuthenticationError,
@@ -118,11 +116,15 @@ from .private_pilot_command_center_helpers import (  # noqa: F401
     _ui_verification_stats,
 )
 from .private_pilot_command_center_builder import CommandCenterBuilderMixin
-from .private_pilot_command_center_understanding import UnderstandingCommandCenterProjectionMixin
+from .private_pilot_command_center_understanding import (
+    UnderstandingCommandCenterProjectionMixin,
+)
 from .private_pilot_credentials_handlers import CredentialsHandlerMixin
 from .private_pilot_http_routing import HttpRoutingMixin
 from .private_pilot_ingest_handlers import IngestHandlersMixin
-from .private_pilot_understanding_preflight import UnderstandingPreflightProjectionMixin
+from .private_pilot_understanding_preflight import (
+    UnderstandingPreflightProjectionMixin,
+)
 from .private_pilot_scan_handlers import ScanHandlersMixin
 from .private_pilot_report_loading import ReportLoadingMixin
 from .private_pilot_auth_scope import AuthScopeMixin
@@ -168,15 +170,30 @@ from .private_pilot_scan_prep import (  # noqa: F401
 )
 
 
-CONFIG_MANAGER_ROLES = {"project_owner", "qa_lead", "security_owner", "testops_admin", "admin"}
-KNOWLEDGE_MANAGER_ROLES = {"knowledge_admin", "project_owner", "qa_lead", "admin"}
-SETTINGS_MANAGER_ROLES = {"project_owner", "security_owner", "testops_admin", "admin"}
+CONFIG_MANAGER_ROLES = {
+    "project_owner",
+    "qa_lead",
+    "security_owner",
+    "testops_admin",
+    "admin",
+}
+KNOWLEDGE_MANAGER_ROLES = {
+    "knowledge_admin",
+    "project_owner",
+    "qa_lead",
+    "admin",
+}
+SETTINGS_MANAGER_ROLES = {
+    "project_owner",
+    "security_owner",
+    "testops_admin",
+    "admin",
+}
 
 _TENANT = _current_tenant()
 
 
 def _normalize_command_center_envelope(payload: dict[str, Any]) -> dict[str, Any]:
-    """Thin dispatcher — patches register post-hooks instead of replacing this."""
     return normalize_command_center_envelope(payload)
 
 
@@ -203,14 +220,13 @@ class PrivatePilotHandler(
         return
 
     def handle_one_request(self) -> None:
-        """Wrap the parent handler with a request-body size guard."""
-        # Must parse the request first to populate self.headers
+        """Parse one request, reject oversized bodies, then dispatch once."""
         try:
             self.raw_requestline = self.rfile.readline(65537)
             if len(self.raw_requestline) > 65536:
-                self.requestline = ''
-                self.request_version = ''
-                self.command = ''
+                self.requestline = ""
+                self.request_version = ""
+                self.command = ""
                 self.send_error(414)
                 return
             if not self.raw_requestline:
@@ -221,7 +237,6 @@ class PrivatePilotHandler(
         except Exception:
             self.close_connection = True
             return
-        # Now self.headers is available — check body size
         content_length = self.headers.get("Content-Length")
         if content_length is not None:
             try:
@@ -229,29 +244,36 @@ class PrivatePilotHandler(
             except (TypeError, ValueError):
                 self.send_error(400, "Bad Request: invalid Content-Length")
                 return
+            if length < 0:
+                self.send_error(400, "Bad Request: invalid Content-Length")
+                return
             if length > _MAX_REQUEST_BODY:
                 self.send_error(413, "Payload Too Large")
                 return
-        # Dispatch to do_GET/do_POST/etc.
-        mname = 'do_' + self.command
-        if not hasattr(self, mname):
+        method_name = "do_" + self.command
+        if not hasattr(self, method_name):
             self.send_error(501, "Unsupported method (%r)" % self.command)
             return
-        method = getattr(self, mname)
-        method()
+        getattr(self, method_name)()
         self.wfile.flush()
 
 
 class QualiBugHTTPServer(ThreadingHTTPServer):
-    """Production-hardened ThreadingHTTPServer with SO_REUSEADDR,
-    configurable request queue, and per-connection timeouts."""
+    """Threading HTTP server with bounded connections and safe shutdown."""
 
     allow_reuse_address = True
     daemon_threads = True
 
-    def __init__(self, server_address: tuple[str, int], handler_class: type[BaseHTTPRequestHandler]) -> None:
+    def __init__(
+        self,
+        server_address: tuple[str, int],
+        handler_class: type[BaseHTTPRequestHandler],
+    ) -> None:
         self.request_queue_size = _REQUEST_QUEUE_SIZE
         self.timeout = _HTTP_TIMEOUT
+        self._serve_thread_ident: int | None = None
+        self._shutdown_dispatch_lock = threading.Lock()
+        self._shutdown_dispatched = False
         super().__init__(server_address, handler_class)
 
     def server_bind(self) -> None:
@@ -263,11 +285,33 @@ class QualiBugHTTPServer(ThreadingHTTPServer):
             except OSError:
                 pass
 
-    def get_request(self) -> socket.socket:
-        conn, addr = super().get_request()
+    def get_request(self) -> tuple[socket.socket, Any]:
+        connection, address = super().get_request()
         if self.timeout and self.timeout > 0:
-            conn.settimeout(self.timeout)
-        return conn, addr
+            connection.settimeout(self.timeout)
+        return connection, address
+
+    def serve_forever(self, poll_interval: float = 0.5) -> None:
+        self._serve_thread_ident = threading.get_ident()
+        try:
+            super().serve_forever(poll_interval=poll_interval)
+        finally:
+            self._serve_thread_ident = None
+
+    def shutdown(self) -> None:
+        """Stop serving without ever waiting on the serving thread itself."""
+        if threading.get_ident() != self._serve_thread_ident:
+            return super().shutdown()
+        with self._shutdown_dispatch_lock:
+            if self._shutdown_dispatched:
+                return
+            self._shutdown_dispatched = True
+            shutdown_call = super().shutdown
+            threading.Thread(
+                target=shutdown_call,
+                name="qualibug-http-shutdown",
+                daemon=True,
+            ).start()
 
 
 _global_server: QualiBugHTTPServer | None = None
@@ -275,27 +319,44 @@ _shutdown_event = threading.Event()
 
 
 def _signal_handler(signum: int, frame: Any) -> None:
-    """Forward SIGTERM / SIGINT to the shutdown event so serve_forever exits."""
+    del signum, frame
     _shutdown_event.set()
 
 
-def run_private_pilot_service(root: Path | None = None, host: str | None = None, port: int | None = None) -> QualiBugHTTPServer:
+def run_private_pilot_service(
+    root: Path | None = None,
+    host: str | None = None,
+    port: int | None = None,
+) -> QualiBugHTTPServer:
     global _global_server
-    root = root or _root()
-    host = host or os.environ.get("QUALIBUG_BIND_HOST", "127.0.0.1")
-    if host in {"0.0.0.0", "::"} and os.environ.get("QUALIBUG_ALLOW_PUBLIC_BIND") != "1":
-        raise ValueError("Public binding is disabled by default. Set QUALIBUG_ALLOW_PUBLIC_BIND=1 only behind a trusted reverse proxy.")
-    selected_port = int(os.environ.get("QUALIBUG_PORT", "8088")) if port is None else int(port)
-    server = QualiBugHTTPServer((host, selected_port), PrivatePilotHandler)
-    server.qualibug_private_root = root
+    resolved_root = root or _root()
+    resolved_host = host or os.environ.get("QUALIBUG_BIND_HOST", "127.0.0.1")
+    if (
+        resolved_host in {"0.0.0.0", "::"}
+        and os.environ.get("QUALIBUG_ALLOW_PUBLIC_BIND") != "1"
+    ):
+        raise ValueError(
+            "Public binding is disabled by default. Set "
+            "QUALIBUG_ALLOW_PUBLIC_BIND=1 only behind a trusted reverse proxy."
+        )
+    selected_port = (
+        int(os.environ.get("QUALIBUG_PORT", "8088"))
+        if port is None
+        else int(port)
+    )
+    server = QualiBugHTTPServer(
+        (resolved_host, selected_port),
+        PrivatePilotHandler,
+    )
+    server.qualibug_private_root = resolved_root
     _global_server = server
     _dbg_report(
         hypothesis_id="A",
         msg="[DEBUG] private-pilot service bound",
         data={
             "pid": os.getpid(),
-            "root": str(root),
-            "host": host,
+            "root": str(resolved_root),
+            "host": resolved_host,
             "port": selected_port,
             "timeout": _HTTP_TIMEOUT,
             "request_queue_size": _REQUEST_QUEUE_SIZE,
