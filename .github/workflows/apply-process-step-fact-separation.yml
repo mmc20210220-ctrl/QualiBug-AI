@@ -3,6 +3,10 @@ name: Apply process-step fact separation
 on:
   issues:
     types: [opened]
+  push:
+    branches: [main]
+    paths:
+      - tools/.one_shot/process_step_fact_separation/TRIGGER
 
 permissions:
   contents: write
@@ -13,7 +17,9 @@ concurrency:
 
 jobs:
   refactor:
-    if: github.event.issue.title == 'RUN_PROCESS_STEP_FACT_SEPARATION_20260731'
+    if: >-
+      github.event_name == 'push' ||
+      github.event.issue.title == 'RUN_PROCESS_STEP_FACT_SEPARATION_20260731'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
