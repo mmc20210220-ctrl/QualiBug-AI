@@ -1,13 +1,13 @@
 """Normalize explicit Chinese fact coordinates at the existing compiler boundary.
 
 The compatibility extractor intentionally remains broad so old enterprise fixtures keep
-working.  Structure-first compilation turns those rows into the formal typed ledger.
+working. Structure-first compilation turns those rows into the formal typed ledger.
 This module closes the contract between both stages: it normalizes coordinates already
 stated in the same source span, but never discovers a new fact, chooses between
 conflicting source statements, or creates a second ledger.
 
-Normalization is deliberately limited to deterministic Chinese grammar that is visible
-in ``raw_statement``:
+Normalization is deliberately limited to deterministic Chinese grammar visible in
+``raw_statement``:
 
 * explicit role/object lexical heads are added as source-backed identity coordinates;
 * governed actions are separated from temporal anchors and downstream effects;
@@ -29,6 +29,7 @@ _ROLE_SUFFIXES = tuple(
     sorted(
         {
             "仓库管理员",
+            "财务人员",
             "管理员",
             "操作员",
             "审批人",
@@ -128,8 +129,10 @@ _MODAL_PIVOT_RE = re.compile(
 _TEMPORAL_TRIGGER_RE = re.compile(
     r"(?P<trigger>[^，,；;。]{1,48}?)(?:之后|以后|后|时)[，,]?"
 )
+# Requiring the explicit source preposition prevents actor/modality text before ``在``
+# from being absorbed into the temporal anchor.
 _WITHIN_WINDOW_RE = re.compile(
-    r"(?:在)?(?P<anchor>[^，,；;。]{1,24}?(?:之前|之后|以前|以后|前|后))"
+    r"在(?P<anchor>[^，,；;。]{1,24}?(?:之前|之后|以前|以后|前|后))"
     r"(?P<duration>\d+(?:\.\d+)?(?:天|日|小时|分钟|秒))"
     r"(?:内|以内|之内)"
 )
@@ -280,7 +283,9 @@ def _condition_coordinates(statement: str, fact: dict[str, Any]) -> tuple[list[s
     return rows, _text(fact.get("condition_combinator"))
 
 
-def _normalize_condition_frame(fact: dict[str, Any], conditions: list[str], combinator: str) -> None:
+def _normalize_condition_frame(
+    fact: dict[str, Any], conditions: list[str], combinator: str
+) -> None:
     fact["conditions"] = conditions
     fact["condition_combinator"] = combinator
     frame = dict(_dict(fact.get("condition_frame")))
@@ -323,7 +328,6 @@ def _normalized_time_window(statement: str) -> dict[str, Any] | None:
         return None
     match = matches[0]
     anchor = _text(match.group("anchor"))
-    anchor = re.sub(r"^(?:在)", "", anchor)
     duration = _text(match.group("duration"))
     if not anchor or not duration:
         return None
@@ -423,7 +427,10 @@ def normalize_explicit_business_fact_semantics(asset: dict[str, Any]) -> dict[st
             changed.append("state_effects")
 
         time_window = _normalized_time_window(statement)
-        if time_window is not None and _list(fact.get("time_window_constraints")) != [time_window]:
+        if (
+            time_window is not None
+            and _list(fact.get("time_window_constraints")) != [time_window]
+        ):
             fact["time_window_constraints"] = [time_window]
             changed.append("time_window_constraints")
 
