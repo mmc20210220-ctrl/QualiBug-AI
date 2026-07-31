@@ -183,7 +183,8 @@ def test_condition_state_and_temporal_slots_stay_on_canonical_authorities():
                 "status": "ACCEPTED",
                 "raw_statement": "只有审批通过才允许订单发货",
                 "subject": {
-                    "actor_refs": ["仓库员"],n                    "entity_refs": ["订单"],
+                    "actor_refs": ["仓库员"],
+                    "entity_refs": ["订单"],
                 },
                 "action": {"canonical": "发货", "operation_ref": "ship_order"},
                 "conditions": ["审批通过"],
