@@ -6,18 +6,21 @@ through ``super()``, detects a valid ledger containing quarantinable historical
 authorization attempts, and returns an in-memory migrated view. It never writes the
 scan artifact back to disk.
 
-A generally invalid old ledger is left untouched so the existing quality projection
-can report UNVERIFIABLE. An authorization-specific contradiction remains a hard
-MainlineContractError rather than being hidden as legacy compatibility. The command
-center receives the quarantine receipts and rerun queue as internal diagnostics only;
-these rows are never copied into defects, risks, or formal customer counts.
+A generally invalid old ledger or mainline contract is left untouched so the existing
+quality projection can report UNVERIFIABLE. An authorization-specific contradiction
+remains a hard MainlineContractError rather than being hidden as legacy compatibility.
+The command center receives quarantine receipts and rerun queue as internal
+diagnostics only; these rows are never copied into defects, risks, or formal counts.
 """
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
 
-from .discovery_mainline_contract import MainlineContractError
+from .discovery_mainline_contract import (
+    MainlineContractError,
+    validate_mainline_run_contract,
+)
 from .historical_authorization_artifact_migration import (
     HistoricalAuthorizationArtifactMigrationError,
     migrate_historical_authorization_scan_result,
@@ -54,6 +57,12 @@ class HistoricalAuthorizationReportMigrationMixin:
         )
         mainline = _dict(row.get("mainline_run") or v12.get("mainline_run"))
         if not ledger or not mainline:
+            return row
+        try:
+            validate_mainline_run_contract(mainline)
+        except MainlineContractError:
+            # The established stored-artifact projection already maps stale or
+            # incomplete mainline contracts to UNVERIFIABLE and zero formal count.
             return row
         old_registry = _dict(
             row.get("canonical_defect_registry")
