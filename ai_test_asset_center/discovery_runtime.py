@@ -38,6 +38,14 @@ from .discovery_runtime_planning import (  # noqa: E402,F401
 from .discovery_runtime_semantic_binding import (  # noqa: E402,F401
     build_discovery_plan,
 )
+from .formal_event_binding_receipt_bridge import (  # noqa: E402
+    install_formal_event_binding_receipt_bridge,
+)
+
+# The semantic-binding import registers the event observer and pre-cleanup wrapper first.
+# Identity is attached afterwards to the current registered handler, preserving that order.
+install_formal_event_binding_receipt_bridge()
+
 from .discovery_runtime_quality_projection import (  # noqa: E402,F401
     run_experiment_candidate,
 )
