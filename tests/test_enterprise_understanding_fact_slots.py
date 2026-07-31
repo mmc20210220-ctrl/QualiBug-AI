@@ -66,6 +66,15 @@ def test_fact_slot_measurement_requires_exact_typed_slots() -> None:
     assert result["metrics"]["exact_fact_count"] == 1
     assert result["metrics"]["slot_exact_accuracy"] == 1.0
     assert result["metrics"]["p0_exact_fact_recall"] == 1.0
+    assert result["metrics"]["source_locator_annotated_fact_count"] == 1
+    assert result["metrics"]["source_locator_exact_fact_count"] == 1
+    assert result["metrics"]["source_locator_exact_accuracy"] == 1.0
+    assert result["evidence_address_measurement_contract"][
+        "annotated_fact_denominator_includes_missing_facts"
+    ] is True
+    assert result["evidence_address_measurement_contract"][
+        "annotated_fact_denominator_includes_ambiguous_facts"
+    ] is True
     assert result["fuzzy_or_llm_alignment_used"] is False
     assert result["automatic_winner_used"] is False
 
@@ -79,9 +88,44 @@ def test_fact_slot_measurement_does_not_choose_between_duplicate_candidates() ->
     }
     result = evaluate_business_fact_slots(_ground_truth(), asset)
     assert result["metrics"]["ambiguous_fact_count"] == 1
+    assert result["metrics"]["source_locator_annotated_fact_count"] == 1
+    assert result["metrics"]["source_locator_exact_fact_count"] == 0
+    assert result["metrics"]["source_locator_ambiguous_fact_count"] == 1
+    assert result["metrics"]["source_locator_exact_accuracy"] == 0.0
     assert result["alignments"][0]["alignment_status"] == "AMBIGUOUS"
     assert result["alignments"][0]["candidate_id"] == ""
     assert set(result["alignments"][0]["candidate_ids"]) == {"fact:1", "fact:2"}
+
+
+def test_wrong_source_locator_is_not_hidden_by_other_exact_slots() -> None:
+    fact = _fact()
+    fact["source_spans"] = [
+        {"source_id": "source:rules", "locator": "rules.docx#paragraph=99"}
+    ]
+    result = evaluate_business_fact_slots(
+        _ground_truth(),
+        {"business_fact_ledger": {"items": [fact]}},
+    )
+
+    locator = result["alignments"][0]["slot_alignments"]["source_locators"]
+    assert locator["status"] == "WRONG"
+    assert result["metrics"]["source_locator_wrong_fact_count"] == 1
+    assert result["metrics"]["source_locator_exact_fact_count"] == 0
+    assert result["metrics"]["source_locator_exact_accuracy"] == 0.0
+    assert result["metrics"]["exact_fact_count"] == 0
+    assert result["metrics"]["partial_fact_count"] == 1
+
+
+def test_missing_fact_counts_as_missing_evidence_address() -> None:
+    result = evaluate_business_fact_slots(
+        _ground_truth(),
+        {"business_fact_ledger": {"items": []}},
+    )
+
+    assert result["metrics"]["missing_fact_count"] == 1
+    assert result["metrics"]["source_locator_annotated_fact_count"] == 1
+    assert result["metrics"]["source_locator_missing_fact_count"] == 1
+    assert result["metrics"]["source_locator_exact_accuracy"] == 0.0
 
 
 def test_fact_type_disambiguates_same_operation_and_object() -> None:
@@ -140,6 +184,7 @@ def test_complete_object_coordinates_disambiguate_relation_targets() -> None:
     assert result["metrics"]["ambiguous_fact_count"] == 0
     assert result["alignments"][0]["candidate_id"] == "fact:header"
     assert result["alignments"][0]["slot_alignments"]["object_refs"]["status"] == "EXACT"
+    assert result["metrics"]["source_locator_exact_accuracy"] is None
     assert result["candidate_selection_contract"][
         "ground_truth_objects_must_be_subset_of_candidate_objects"
     ] is True
