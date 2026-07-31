@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -14,10 +15,20 @@ CONNECTOR = "feishu-main"
 
 
 def _prepare_managed_sync(monkeypatch, observed: dict[str, object]) -> None:
+    @contextmanager
+    def fence(*args, **kwargs):
+        observed.setdefault("order", []).append("fence")
+        yield {"takeover": False}
+
+    monkeypatch.setattr(auto, "managed_connector_sync_fence", fence)
     monkeypatch.setattr(
         auto,
         "recover_managed_feishu_checkpoint",
-        lambda *a, **k: {"action": "CONSISTENT", "replay_required": False},
+        lambda *a, **k: {
+            "action": "CONSISTENT",
+            "replay_required": False,
+            "sync_lifecycle_recovery": {"action": "NO_ACTIVE_SYNC"},
+        },
     )
     monkeypatch.setattr(
         auto,
@@ -45,7 +56,7 @@ def _prepare_managed_sync(monkeypatch, observed: dict[str, object]) -> None:
     monkeypatch.setattr(auto, "clear_connector_checkpoint_journal", clear)
 
 
-def test_managed_sync_is_the_single_recoverable_checkpoint_commit_path(
+def test_managed_sync_is_the_single_recoverable_fenced_checkpoint_path(
     monkeypatch,
     tmp_path: Path,
 ):
@@ -85,6 +96,8 @@ def test_managed_sync_is_the_single_recoverable_checkpoint_commit_path(
 
     assert result["status"] == "COMPLETE"
     assert result["checkpoint_commit_protocol"] == "RECOVERABLE_TWO_STAGE"
+    assert result["sync_write_fencing"] == "MONOTONIC_REGISTRY_TOKEN"
+    assert result["stale_writer_blocked"] is True
     assert observed["validated"][:3] == (PROJECT, CONNECTOR, "old-cursor")
     assert observed["staged"][:4] == (
         PROJECT,
@@ -93,7 +106,7 @@ def test_managed_sync_is_the_single_recoverable_checkpoint_commit_path(
         next_cursor,
     )
     assert observed["committed"][:3] == (PROJECT, CONNECTOR, next_cursor)
-    assert observed["order"] == ["stage", "commit", "clear"]
+    assert observed["order"] == ["fence", "stage", "commit", "clear"]
 
 
 def test_managed_sync_never_advances_checkpoint_for_incomplete_run(
@@ -103,11 +116,7 @@ def test_managed_sync_never_advances_checkpoint_for_incomplete_run(
     observed: dict[str, object] = {}
     _prepare_managed_sync(monkeypatch, observed)
     monkeypatch.setattr(auto, "load_connector_sync_checkpoint", lambda *a, **k: "")
-    monkeypatch.setattr(
-        auto,
-        "validate_connector_checkpoint",
-        lambda *a, **k: None,
-    )
+    monkeypatch.setattr(auto, "validate_connector_checkpoint", lambda *a, **k: None)
     monkeypatch.setattr(
         auto,
         "sync_feishu_connector",
@@ -124,15 +133,15 @@ def test_managed_sync_never_advances_checkpoint_for_incomplete_run(
 
     result = auto.run_managed_feishu_sync(PROJECT, CONNECTOR, root=tmp_path)
     assert result["status"] == "PARTIAL"
+    assert result["sync_write_fencing"] == "MONOTONIC_REGISTRY_TOKEN"
     assert "stage" not in observed.get("order", [])
-    assert observed["order"] == ["clear"]
+    assert observed["order"] == ["fence", "clear"]
 
 
 def test_recovery_promotes_encrypted_staged_checkpoint(monkeypatch, tmp_path: Path):
     checkpoint = "feishu-snapshot-v1:" + "b" * 64
     fingerprint = hashlib.sha256(checkpoint.encode("utf-8")).hexdigest()
     observed: dict[str, object] = {}
-
     monkeypatch.setattr(
         recovery,
         "load_connector_sync_checkpoint",
@@ -148,19 +157,13 @@ def test_recovery_promotes_encrypted_staged_checkpoint(monkeypatch, tmp_path: Pa
         "_read",
         lambda *a, **k: {
             "attempt_id": "checkpoint_1",
-            "previous_checkpoint_fingerprint": hashlib.sha256(
-                b"old"
-            ).hexdigest(),
+            "previous_checkpoint_fingerprint": hashlib.sha256(b"old").hexdigest(),
             "checkpoint_ciphertext": "ciphertext",
             "checkpoint_fingerprint": fingerprint,
             "sync_epoch_id": "sync_1",
         },
     )
-    monkeypatch.setattr(
-        recovery,
-        "_decrypt_staged",
-        lambda journal: checkpoint,
-    )
+    monkeypatch.setattr(recovery, "_decrypt_staged", lambda journal: checkpoint)
 
     def commit(project, connector, value, **kwargs):
         observed["commit"] = (project, connector, value, kwargs)
@@ -231,12 +234,7 @@ def test_due_policy_hides_scheduler_decisions_from_users():
         "last_successful_sync_at_utc": auto._utc(now - 7 * 60 * 60),
         "last_failed_sync_at_utc": "",
     }
-    assert auto._due(
-        instance,
-        {},
-        now=now,
-        refresh_seconds=6 * 60 * 60,
-    )
+    assert auto._due(instance, {}, now=now, refresh_seconds=6 * 60 * 60)
     assert not auto._due(
         instance,
         {"next_attempt_unix": now + 60},
@@ -244,24 +242,20 @@ def test_due_policy_hides_scheduler_decisions_from_users():
         refresh_seconds=6 * 60 * 60,
     )
     instance["status"] = "PAUSED"
-    assert not auto._due(
-        instance,
-        {},
-        now=now,
-        refresh_seconds=6 * 60 * 60,
-    )
+    assert not auto._due(instance, {}, now=now, refresh_seconds=6 * 60 * 60)
 
 
-def test_sweep_retries_with_exponential_backoff_without_new_registry(
-    monkeypatch,
-    tmp_path: Path,
-):
-    auto._ATTEMPTS.clear()
+def _install_sweep_stubs(monkeypatch) -> None:
     monkeypatch.setattr(auto, "_project_ids", lambda root: [PROJECT])
     monkeypatch.setattr(
         auto,
-        "_configured_profiles",
-        lambda project, root: {CONNECTOR},
+        "_profile_index",
+        lambda project, root: {
+            CONNECTOR: {
+                "connector_instance_id": CONNECTOR,
+                "checkpoint_fingerprint": "",
+            }
+        },
     )
     monkeypatch.setattr(
         auto,
@@ -273,6 +267,7 @@ def test_sweep_retries_with_exponential_backoff_without_new_registry(
                     "connector_type": "feishu",
                     "status": "ACTIVE",
                     "active_sync_epoch_id": "",
+                    "last_committed_cursor_fingerprint": "",
                     "last_successful_sync_at_utc": "",
                     "last_failed_sync_at_utc": "",
                 }
@@ -291,6 +286,13 @@ def test_sweep_retries_with_exponential_backoff_without_new_registry(
         },
     )
 
+
+def test_sweep_retries_with_exponential_backoff_without_new_registry(
+    monkeypatch,
+    tmp_path: Path,
+):
+    auto._ATTEMPTS.clear()
+    _install_sweep_stubs(monkeypatch)
     calls: list[float] = []
 
     def fail(*args, **kwargs):
@@ -334,40 +336,7 @@ def test_sweep_retries_with_exponential_backoff_without_new_registry(
 
 def test_success_resets_retry_state(monkeypatch, tmp_path: Path):
     auto._ATTEMPTS.clear()
-    monkeypatch.setattr(auto, "_project_ids", lambda root: [PROJECT])
-    monkeypatch.setattr(
-        auto,
-        "_configured_profiles",
-        lambda project, root: {CONNECTOR},
-    )
-    monkeypatch.setattr(
-        auto,
-        "list_connector_instances",
-        lambda *a, **k: {
-            "connector_instances": [
-                {
-                    "connector_instance_id": CONNECTOR,
-                    "connector_type": "feishu",
-                    "status": "ACTIVE",
-                    "active_sync_epoch_id": "",
-                    "last_successful_sync_at_utc": "",
-                    "last_failed_sync_at_utc": "",
-                }
-            ]
-        },
-    )
-    monkeypatch.setattr(
-        auto,
-        "_policy",
-        lambda: {
-            "refresh_seconds": 3600,
-            "sweep_seconds": 10,
-            "initial_delay_seconds": 0,
-            "retry_base_seconds": 60,
-            "retry_max_seconds": 3600,
-        },
-    )
-
+    _install_sweep_stubs(monkeypatch)
     result = auto.run_connector_auto_sync_sweep(
         tmp_path,
         now=2_000.0,
@@ -381,6 +350,7 @@ def test_success_resets_retry_state(monkeypatch, tmp_path: Path):
     assert status["state"] == "healthy"
     assert status["failure_count"] == 0
     assert status["attention"] == ""
+    assert status["stale_writer_fencing_is_automatic"] is True
 
 
 def test_supervisor_is_idempotent_and_can_be_disabled(
@@ -426,6 +396,7 @@ def test_auto_sync_authority_creates_no_parallel_registry():
     assert "connector_sync_registry" not in source
     assert "source_registry" not in source
     assert "run_managed_feishu_sync" in source
+    assert "managed_connector_sync_fence" in source
     assert "connector_checkpoint_journal" in journal
     assert "new_registry" not in journal
     assert "plaintext_checkpoint_persisted" in journal
