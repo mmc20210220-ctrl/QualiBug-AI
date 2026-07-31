@@ -1,9 +1,9 @@
 """Semantic and receipt integrity gate for causal relation-delta assertions.
 
-This module registers the same causal assertion kind and operation-causality
-Observer as the base implementation. It adds deterministic causal-scope
-recomputation and content-addressed transport-receipt validation, then delegates to
-the existing causal delta evaluator. Contract Oracle remains the verdict authority.
+This module owns the one formal registration for the causal assertion kind and
+operation-causality Observer. If a weaker handler was registered earlier, the same
+registry entry is tightened in place; no second kind or Observer is created.
+Contract Oracle remains the verdict authority.
 """
 from __future__ import annotations
 
@@ -12,7 +12,12 @@ import json
 from copy import deepcopy
 from typing import Any
 
-from .assertion_dsl_base import register_assertion_kind, registered_assertion_kinds
+from .assertion_dsl_base import (
+    _REGISTERED_ASSERTION_EVALUATORS,
+    _REGISTERED_KIND_EVIDENCE_KEYS,
+    register_assertion_kind,
+    registered_assertion_kinds,
+)
 from .database_relation_delta_causality_oracle import (
     OBSERVER_ID,
     evaluate_database_relation_causal_delta as _evaluate_causal_delta,
@@ -22,6 +27,8 @@ from .database_relation_delta_causality_projection import (
     PROJECTION_SCHEMA,
 )
 from .observer_contracts_base import (
+    OBSERVER_REGISTRY,
+    _REGISTERED_OBSERVER_HANDLERS,
     _receipt,
     register_observer,
     registered_observer_ids,
@@ -30,6 +37,12 @@ from .operation_causality_receipt_integrity import (
     validate_operation_causality_transport_receipt,
 )
 from .operation_causality_runtime import TRANSPORT_KEY
+
+_REQUIRED_EVIDENCE_KEYS = (
+    "approved_database_observer_phase_receipts",
+    "approved_database_relation_phase_receipts",
+    TRANSPORT_KEY,
+)
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -216,31 +229,56 @@ def evaluate_database_relation_causal_delta_with_integrity(
     return output
 
 
-def install_database_relation_causal_delta_assertion() -> str:
-    if OBSERVER_ID not in registered_observer_ids():
-        register_observer(
-            OBSERVER_ID,
-            surface="operation_causality",
-            adapter="process_ledger",
-            handler=observe_operation_causality_with_integrity,
-            evidence_keys=(TRANSPORT_KEY,),
+def _install_or_tighten_observer() -> None:
+    if OBSERVER_ID in registered_observer_ids():
+        OBSERVER_REGISTRY[OBSERVER_ID] = {
+            "surface": "operation_causality",
+            "adapter": "process_ledger",
+            "implemented": True,
+            "evidence_keys": (TRANSPORT_KEY,),
+            "registered_at_runtime": True,
+        }
+        _REGISTERED_OBSERVER_HANDLERS[OBSERVER_ID] = (
+            observe_operation_causality_with_integrity
         )
+        return
+    register_observer(
+        OBSERVER_ID,
+        surface="operation_causality",
+        adapter="process_ledger",
+        handler=observe_operation_causality_with_integrity,
+        evidence_keys=(TRANSPORT_KEY,),
+    )
+
+
+def _install_or_tighten_assertion() -> str:
     if ASSERTION_KIND in registered_assertion_kinds():
+        _REGISTERED_ASSERTION_EVALUATORS[ASSERTION_KIND] = (
+            evaluate_database_relation_causal_delta_with_integrity
+        )
+        _REGISTERED_KIND_EVIDENCE_KEYS[ASSERTION_KIND] = (
+            _REQUIRED_EVIDENCE_KEYS
+        )
         return ASSERTION_KIND
     return register_assertion_kind(
         ASSERTION_KIND,
         evaluator=evaluate_database_relation_causal_delta_with_integrity,
-        required_evidence_keys=(
-            "approved_database_observer_phase_receipts",
-            "approved_database_relation_phase_receipts",
-            TRANSPORT_KEY,
-        ),
+        required_evidence_keys=_REQUIRED_EVIDENCE_KEYS,
     )
+
+
+def install_database_relation_causal_delta_assertion() -> str:
+    _install_or_tighten_observer()
+    return _install_or_tighten_assertion()
 
 
 # Close import-order bypasses without adding a second assertion kind.
 from . import database_relation_delta_causality_oracle as _base  # noqa: E402
 
+_base.observe_operation_causality = observe_operation_causality_with_integrity
+_base.evaluate_database_relation_causal_delta = (
+    evaluate_database_relation_causal_delta_with_integrity
+)
 _base.install_database_relation_causal_delta_assertion = (
     install_database_relation_causal_delta_assertion
 )
