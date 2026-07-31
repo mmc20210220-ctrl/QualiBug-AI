@@ -40,7 +40,7 @@ def test_materials_page_keeps_online_primary_and_upload_supplemental():
     assert "refreshKnowledgeConnector" in page
     assert "ingestKnowledge" in page
     assert "统一来源清单" in page
-    assert "Source Occurrence" in page
+    assert "统一企业知识库" in page
 
 
 def test_normal_user_path_is_two_steps_and_one_primary_action():
@@ -57,6 +57,15 @@ def test_normal_user_path_is_two_steps_and_one_primary_action():
     assert "删除策略" not in page
     assert "降级策略" not in page
     assert "同步游标" not in page
+    for term in (
+        "Source Occurrence",
+        "Sync Epoch",
+        "Checkpoint",
+        "Cursor",
+        "Snapshot Fingerprint",
+        "Retire Missing",
+    ):
+        assert term not in page
 
 
 def test_advanced_choices_are_kept_behind_disclosure():
@@ -64,7 +73,7 @@ def test_advanced_choices_are_kept_behind_disclosure():
     assert '<details className="materials-advanced">' in page
     assert "其他授权方式" in page
     assert "高级资料范围" in page
-    assert page.index("企业自建应用（推荐）") < page.index("Tenant Access Token")
+    assert '<option value="internal_app">企业自建应用（推荐）</option>' in page
 
 
 def test_frontend_connector_client_owns_safe_orchestration_and_friendly_errors():
