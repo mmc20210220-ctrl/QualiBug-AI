@@ -79,19 +79,21 @@ def test_repository_round_trip_and_composition_injection(tmp_path) -> None:
     assert receipt["ground_truth_fingerprint"]
 
 
-def test_every_explicit_snapshot_is_retained_and_retry_is_idempotent(tmp_path) -> None:
+def test_every_explicit_measurement_event_is_retained(tmp_path) -> None:
     first = _snapshot("snapshot:1", "2026-07-31T12:00:00Z")
     second = _snapshot("snapshot:2", "2026-07-31T12:05:00Z")
 
-    append_identity_benchmark_snapshot("project-a", first, tmp_path)
-    append_identity_benchmark_snapshot("project-a", first, tmp_path)
-    append_identity_benchmark_snapshot("project-a", second, tmp_path)
+    first_event = append_identity_benchmark_snapshot("project-a", first, tmp_path)
+    repeated_event = append_identity_benchmark_snapshot("project-a", first, tmp_path)
+    second_event = append_identity_benchmark_snapshot("project-a", second, tmp_path)
 
     history = load_identity_benchmark_history("project-a", tmp_path)
-    assert [row["snapshot_id"] for row in history["snapshots"]] == [
-        "snapshot:1",
-        "snapshot:2",
-    ]
+    assert len(history["snapshots"]) == 3
+    assert len({row["snapshot_id"] for row in history["snapshots"]}) == 3
+    assert first_event["requested_snapshot_id"] == "snapshot:1"
+    assert repeated_event["requested_snapshot_id"] == "snapshot:1"
+    assert repeated_event["same_result_event_ordinal"] == 2
+    assert second_event["measurement_event_sequence"] == 3
 
 
 def test_repository_snapshot_restore_is_transactional(tmp_path) -> None:
