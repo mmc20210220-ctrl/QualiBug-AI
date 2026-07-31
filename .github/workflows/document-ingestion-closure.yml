@@ -21,6 +21,11 @@ on:
       - "ai_test_asset_center/enterprise_source_registry_lifecycle.py"
       - "ai_test_asset_center/enterprise_knowledge_center/_document_ir_fact_evidence.py"
       - "ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/document_structure_gate.py"
+      - "benchmark_evaluator/enterprise_understanding/ingestion_evidence.py"
+      - "benchmark_evaluator/enterprise_understanding/runner.py"
+      - "benchmark_evaluator/enterprise_understanding/report.py"
+      - "benchmark_evaluator/enterprise_understanding/__init__.py"
+      - "benchmark_evaluator/enterprise_understanding/__main__.py"
       - "tests/test_enterprise_document_ingestion_closure.py"
       - "tests/test_enterprise_source_document_ir_bridge.py"
       - "tests/test_enterprise_source_runtime_bridge.py"
@@ -54,6 +59,7 @@ on:
       - "tests/test_office_visual_ocr_supplemental.py"
       - "tests/test_document_runtime_packaging.py"
       - "tests/test_generated_structure_label_authority.py"
+      - "tests/test_enterprise_understanding_ingestion_evidence.py"
       - "pyproject.toml"
       - "Dockerfile"
       - ".github/workflows/document-ingestion-closure.yml"
@@ -118,7 +124,12 @@ jobs:
             ai_test_asset_center/private_pilot_ingest_authority.py \
             ai_test_asset_center/enterprise_source_registry_lifecycle.py \
             ai_test_asset_center/enterprise_knowledge_center/_document_ir_fact_evidence.py \
-            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/document_structure_gate.py
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/document_structure_gate.py \
+            benchmark_evaluator/enterprise_understanding/ingestion_evidence.py \
+            benchmark_evaluator/enterprise_understanding/runner.py \
+            benchmark_evaluator/enterprise_understanding/report.py \
+            benchmark_evaluator/enterprise_understanding/__init__.py \
+            benchmark_evaluator/enterprise_understanding/__main__.py
 
       - name: Run focused closure tests
         run: |
@@ -155,4 +166,5 @@ jobs:
             tests/test_document_evidence_address_quality.py \
             tests/test_office_visual_ocr_supplemental.py \
             tests/test_document_runtime_packaging.py \
-            tests/test_generated_structure_label_authority.py
+            tests/test_generated_structure_label_authority.py \
+            tests/test_enterprise_understanding_ingestion_evidence.py
