@@ -33,7 +33,7 @@ def _span(block_id):
     ]
 
 
-def test_accepted_cardinality_and_formula_facts_enter_existing_rule_library():
+def test_cardinality_is_recognized_but_formula_is_the_only_executable_rule():
     asset = _base_asset()
     asset["business_fact_ledger"] = {
         "items": [
@@ -77,13 +77,14 @@ def test_accepted_cardinality_and_formula_facts_enter_existing_rule_library():
         for row in projected["rule_library"]
         if row.get("derivation") == "implicit_rule_entailment"
     }
+    validation = projected["implicit_rule_candidate_validation_receipt"]
+    cardinality = next(
+        row
+        for row in validation["pending"]
+        if row.get("logical_form") == "CARDINALITY"
+    )
 
-    assert {"CARDINALITY", "CONSERVATION_EQUATION"} <= set(accepted)
-    assert accepted["CARDINALITY"]["structured_expression"]["consequent"][
-        "operator"
-    ] == "cardinality"
-    assert accepted["CARDINALITY"]["operator"] == "cardinality"
-    assert accepted["CARDINALITY"]["kind"] == "cardinality"
+    assert set(accepted) == {"CONSERVATION_EQUATION"}
     assert accepted["CONSERVATION_EQUATION"]["structured_expression"][
         "consequent"
     ]["operator"] == "equation_holds"
@@ -96,10 +97,27 @@ def test_accepted_cardinality_and_formula_facts_enter_existing_rule_library():
         "raw": "订单总额=明细金额之和",
         "terms": ["订单总额", "明细金额之和"],
     }
+    assert cardinality["binding_readiness"] == (
+        "BLOCKED_ASSERTION_EVIDENCE_UNPRODUCIBLE"
+    )
+    assert cardinality["execution_capability"] == {
+        "status": "BLOCKED_ASSERTION_EVIDENCE_UNPRODUCIBLE",
+        "assertion_kind": "cardinality",
+        "missing_observation_key": "collection",
+        "authority": "assertion_dsl_kind_to_evidence_contract",
+    }
+    assert "binding_readiness_pass" in cardinality["pending_gates"]
     assert projected["implicit_rule_projection_gate"][
         "typed_fact_candidate_count"
     ] == 2
+    assert projected["implicit_rule_projection_gate"]["accepted_rule_count"] == 1
+    assert projected["implicit_rule_projection_gate"]["pending_rule_count"] == 1
     assert projected["implicit_rule_projection_gate"]["parallel_rule_ir_created"] is False
+    assert any(
+        row.get("kind") == "IMPLICIT_RULE_AUTHORITY_INSUFFICIENT"
+        and row.get("logical_form") == "CARDINALITY"
+        for row in projected["coverage_gaps"]
+    )
 
 
 def test_explicit_idempotency_fact_enters_rule_library_without_guessing():
