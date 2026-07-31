@@ -2,10 +2,10 @@
 
 The original exact-scope binder remains unchanged in
 ``process_step_receipt_scope_core``. This facade separates graph aggregate
-cleanup receipts, which belong to the Receipt Bundle, from exact per-step
-cleanup execution and verification receipts, which belong to ProcessStepLedger.
-It also materializes one exact invocation-lineage receipt per required executed
-step from the immutable Contract Oracle receipt. No total receipt is broadcast.
+cleanup receipts from exact per-step cleanup execution and verification
+receipts while carrying both layers into the Receipt Bundle. It also
+materializes one exact invocation-lineage receipt per required executed step
+from the immutable Contract Oracle receipt. No total receipt is broadcast.
 """
 from __future__ import annotations
 
@@ -399,7 +399,7 @@ def synchronize_scoped_receipts_from_observations(
     ledger: Any,
     observations: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Bind exact step receipts and keep graph aggregates bundle-scoped."""
+    """Bind exact step receipts and carry aggregate plus exact Bundle layers."""
 
     source = observations if isinstance(observations, dict) else {}
     oracle_invocations = _materialize_step_oracle_invocations(ledger, source)
@@ -414,6 +414,19 @@ def synchronize_scoped_receipts_from_observations(
         projected,
     )
     audit = _merge_conflict_audit(audit, partition)
+
+    formal_cleanup_execution = _core._deduplicate_receipts(
+        [
+            *partition["execution_aggregates"],
+            *partition["exact_execution"],
+        ]
+    )
+    formal_cleanup_verification = _core._deduplicate_receipts(
+        [
+            *partition["verification_aggregates"],
+            *partition["exact_verification"],
+        ]
+    )
 
     if isinstance(observations, dict):
         for key in (
@@ -441,25 +454,15 @@ def synchronize_scoped_receipts_from_observations(
             "process_step_cleanup_verification_receipts",
             partition["exact_verification"],
         )
-
-        if not partition["execution_aggregates"]:
-            _core._publish_rows(
-                observations,
-                "cleanup_execution_receipts",
-                partition["exact_execution"],
-            )
-        graph_cleanup_context = bool(
-            partition["execution_aggregates"]
-            or partition["verification_aggregates"]
+        _core._publish_rows(
+            observations,
+            "cleanup_execution_receipts",
+            formal_cleanup_execution,
         )
         _core._publish_rows(
             observations,
             "cleanup_verification_receipts",
-            (
-                partition["verification_aggregates"]
-                if graph_cleanup_context
-                else partition["exact_verification"]
-            ),
+            formal_cleanup_verification,
         )
 
     aggregate_ids = [
@@ -473,15 +476,23 @@ def synchronize_scoped_receipts_from_observations(
         if _receipt_schema(row) == PROCESS_STEP_ORACLE_INVOCATION_SCHEMA
         and _core.receipt_id(row)
     ]
+    bundle_execution_ids = [
+        _core.receipt_id(row)
+        for row in formal_cleanup_execution
+        if _core.receipt_id(row)
+    ]
+    bundle_verification_ids = [
+        _core.receipt_id(row)
+        for row in formal_cleanup_verification
+        if _core.receipt_id(row)
+    ]
     audit = {
         **audit,
         "materialized_oracle_invocation_receipt_ids": generated_oracle_ids,
         "materialized_oracle_invocation_receipt_count": len(generated_oracle_ids),
         "oracle_verdict_excluded_from_step_scope": True,
         "aggregate_cleanup_receipt_ids": aggregate_ids,
-        "aggregate_cleanup_receipt_count": len(
-            partition["aggregates"]
-        ),
+        "aggregate_cleanup_receipt_count": len(partition["aggregates"]),
         "aggregate_cleanup_execution_receipt_ids": [
             _core.receipt_id(row)
             for row in partition["execution_aggregates"]
@@ -503,6 +514,8 @@ def synchronize_scoped_receipts_from_observations(
             for row in partition["exact_verification"]
             if _core.receipt_id(row)
         ],
+        "bundle_cleanup_execution_receipt_ids": bundle_execution_ids,
+        "bundle_cleanup_verification_receipt_ids": bundle_verification_ids,
         "conflicting_cleanup_receipt_ids": list(
             partition["conflicting_receipt_ids"]
         ),
