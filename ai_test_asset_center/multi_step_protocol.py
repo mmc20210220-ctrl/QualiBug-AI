@@ -1,15 +1,13 @@
 """Public source-backed process protocol compiler.
 
 The existing core remains the graph normalization and topology authority.
-Compensation remains visible on the direct protocol result for diagnostics and
-regression contracts, while the graph marks the final
-``process_graph_write_contract`` as the executable cleanup authority. The
-single-obligation facade removes the flat compatibility projection only while
-its legacy core assembles an experiment.
+Compensation remains visible for diagnostics while the graph write contract is
+the executable cleanup authority. Observer-backed state waits and event
+transitions reuse the existing graph scheduler and bounded readback kernel.
 
-Observer-backed waits reuse the existing graph scheduler and bounded async
-readback executor. The facade resumes a core result blocked only for the known
-wait runtime gap after every wait contract is fully source-bound.
+When a compiled graph contains source-declared message/callback transitions,
+the protocol selects the existing Assertion DSL's combined process/async
+assertion. No event-specific experiment runner is introduced.
 """
 from __future__ import annotations
 
@@ -17,9 +15,18 @@ from copy import deepcopy
 from typing import Any
 
 from . import multi_step_protocol_core as _core
+from .process_graph_async_transition_observer import (
+    ASSERTION_KIND as ASYNC_ASSERTION_KIND,
+    OBSERVER_ID as ASYNC_OBSERVER_ID,
+    install_process_graph_async_transition_surface,
+)
 from .process_graph_wait_contract import (
     STATUS_COMPILED as WAIT_STATUS_COMPILED,
     compile_process_graph_wait_contracts,
+)
+from .process_step_observer import (
+    OBSERVER_ID as PROCESS_STEP_OBSERVER_ID,
+    install_process_step_surface,
 )
 
 for _name in dir(_core):
@@ -59,6 +66,26 @@ def _graph_owned_cleanup(result: dict[str, Any]) -> dict[str, Any]:
         "cleanup_plan": declared_cleanup,
         "graph_cleanup_projection": deepcopy(declared_cleanup),
     }
+
+
+def _async_contract_present(graph: dict[str, Any]) -> bool:
+    return int(
+        _core._dict(graph.get("wait_runtime_contract")).get(
+            "event_transition_count"
+        )
+        or 0
+    ) > 0
+
+
+def _async_protocol_observers() -> list[dict[str, str]]:
+    install_process_step_surface()
+    install_process_graph_async_transition_surface()
+    return [
+        {"observer_id": "http_response"},
+        {"observer_id": "after_state"},
+        {"observer_id": PROCESS_STEP_OBSERVER_ID},
+        {"observer_id": ASYNC_OBSERVER_ID},
+    ]
 
 
 def _resume_wait_capable_result(
@@ -113,6 +140,16 @@ def _resume_wait_capable_result(
         compiled_graph.get("source_refs")
     )
     family = _core._text(envelope.get("risk_family"))
+    event_transition = _async_contract_present(compiled_graph)
+    assertion_kind = ASYNC_ASSERTION_KIND if event_transition else "process_completion"
+    observers = (
+        _async_protocol_observers()
+        if event_transition
+        else [
+            {"observer_id": "http_response"},
+            {"observer_id": "after_state"},
+        ]
+    )
     return {
         "status": "COMPILED",
         "execution_graph": compiled_graph,
@@ -120,7 +157,7 @@ def _resume_wait_capable_result(
         "treatment_plan": treatment_plan,
         "cleanup_plan": cleanup_plan,
         "assertion": {
-            "kind": "process_completion",
+            "kind": assertion_kind,
             "expected_steps": list(
                 compiled_graph.get("topological_order") or []
             ),
@@ -128,11 +165,14 @@ def _resume_wait_capable_result(
             "execution_graph_id": _core._text(
                 compiled_graph.get("execution_graph_id")
             ),
+            "event_transition_count": int(
+                _core._dict(compiled_graph.get("wait_runtime_contract")).get(
+                    "event_transition_count"
+                )
+                or 0
+            ),
         },
-        "observers": [
-            {"observer_id": "http_response"},
-            {"observer_id": "after_state"},
-        ],
+        "observers": observers,
         "per_step_evidence": True,
         "requires_state_precondition": bool(prop.get("from_state")),
         "expected_order": expected_order,
@@ -158,9 +198,14 @@ def compile_state_chain_protocol(envelope: dict[str, Any]) -> dict[str, Any]:
     result = compile_multi_step_process_protocol(envelope)
     if result.get("status") != "COMPILED":
         return result
+    graph = _core._dict(result.get("execution_graph"))
     result["assertion"] = {
         **(result.get("assertion") or {}),
-        "kind": "step_sequence_order",
+        "kind": (
+            ASYNC_ASSERTION_KIND
+            if _async_contract_present(graph)
+            else "step_sequence_order"
+        ),
     }
     result["_registry_protocol_id"] = (
         f"state:{_core.TEMPLATE_STATE_CHAIN_PROCESS}"
@@ -188,7 +233,11 @@ def compile_sequence_verification_protocol(
         )
     result["assertion"] = {
         **(result.get("assertion") or {}),
-        "kind": "step_sequence_order",
+        "kind": (
+            ASYNC_ASSERTION_KIND
+            if _async_contract_present(graph)
+            else "step_sequence_order"
+        ),
     }
     result["_registry_protocol_id"] = (
         f"process:{_core.TEMPLATE_SEQUENCE_VERIFICATION}"
@@ -199,9 +248,9 @@ def compile_sequence_verification_protocol(
 def register_v150_multi_step_protocols() -> list[str]:
     """Register public wrappers in the existing protocol registry."""
     from .experiment_protocol_registry import register_family_protocol
-    from .process_step_observer import install_process_step_surface
 
     install_process_step_surface()
+    install_process_graph_async_transition_surface()
     return [
         register_family_protocol(
             "process",
@@ -235,11 +284,7 @@ def register_v150_multi_step_protocols() -> list[str]:
 
 __all__ = sorted(
     {
-        *[
-            name
-            for name in dir(_core)
-            if not name.startswith("__")
-        ],
+        *[name for name in dir(_core) if not name.startswith("__")],
         "compile_multi_step_process_protocol",
         "compile_state_chain_protocol",
         "compile_sequence_verification_protocol",
