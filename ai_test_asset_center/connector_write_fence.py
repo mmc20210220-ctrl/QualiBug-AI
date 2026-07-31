@@ -13,8 +13,10 @@ import threading
 from contextlib import contextmanager
 from typing import Any, Callable, Iterator
 
+from .connector_sync_authority import ConnectorSyncError
 
-class ConnectorWriteFenceRevoked(RuntimeError):
+
+class ConnectorWriteFenceRevoked(ConnectorSyncError):
     """The synchronization no longer owns the right to mutate durable state."""
 
 
