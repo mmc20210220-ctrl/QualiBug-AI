@@ -20,214 +20,190 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Patch exact closure anchors
+      - name: Patch unique closure boundaries
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
 
           path = Path('ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/closure.py')
-          source = path.read_text(encoding='utf-8')
+          lines = path.read_text(encoding='utf-8').splitlines()
 
-          def replace_once(old: str, new: str, label: str) -> None:
-              global source
-              count = source.count(old)
-              if count != 1:
-                  raise SystemExit(f'{label}: expected one exact anchor, found {count}')
-              source = source.replace(old, new, 1)
+          def unique_index(predicate, label):
+              matches = [index for index, line in enumerate(lines) if predicate(line)]
+              if len(matches) != 1:
+                  raise SystemExit(f'{label}: expected one match, found {len(matches)}')
+              return matches[0]
 
-          replace_once(
-              '''from .implementation_binding_governance import (
-              build_governed_behavior_implementation_bindings,
-          )
-          from .schema import (
-          ''',
-              '''from .implementation_binding_governance import (
-              build_governed_behavior_implementation_bindings,
-          )
-          from .process_graph_ir import build_business_process_graphs
-          from .schema import (
-          ''',
-              'process graph import',
-          )
-
-          replace_once(
-              '''    _project_implementation_binding_asset(
-              asset,
-              bindings=implementation_bindings,
-              unknowns=implementation_unknowns,
-              conflicts=implementation_conflicts,
-              gate=implementation_gate,
-          )
-
-              # Semantic understanding and implementation binding are separate gates. Missing
-          ''',
-              '''    _project_implementation_binding_asset(
-              asset,
-              bindings=implementation_bindings,
-              unknowns=implementation_unknowns,
-              conflicts=implementation_conflicts,
-              gate=implementation_gate,
-          )
-
-              process_graphs, process_graph_unknowns, process_graph_gate = (
-              build_business_process_graphs(model, behaviors, implementation_bindings)
-          )
-              model["process_graphs"] = process_graphs
-              model["process_graph_unknowns"] = process_graph_unknowns
-              model["process_graph_gate"] = process_graph_gate
-              model["business_behavior_ir"] = {
-              "schema": "qualibug.enterprise-business-behavior-ir.v1",
-              "behaviors": behaviors,
-              "process_graphs": process_graphs,
-              "behavior_gate": behavior_gate,
-              "process_graph_gate": process_graph_gate,
-              "semantic_authority": "enterprise_understanding",
-              "runtime_executability_claimed": False,
-          }
-              asset["business_process_graphs"] = process_graphs
-              asset["business_process_graph_gate"] = process_graph_gate
-              process_graph_metrics = as_dict(process_graph_gate.get("metrics"))
-              asset_summary = as_dict(asset.get("summary"))
-              asset_summary.update(
-              {
-                  "process_graph_status": process_graph_gate.get("status"),
-                  "process_graph_count": len(process_graphs),
-                  "compiled_process_graph_count": int(
-                      process_graph_metrics.get("compiled_process_graph_count") or 0
-                  ),
-                  "partial_process_graph_count": int(
-                      process_graph_metrics.get("partial_process_graph_count") or 0
-                  ),
-                  "process_graph_unknown_count": len(process_graph_unknowns),
-              }
-          )
-              asset["summary"] = asset_summary
-              asset_gaps = [
-              dict(row)
-              for row in as_list(asset.get("coverage_gaps"))
-              if isinstance(row, dict) and text(row.get("kind")) != "PROCESS_GRAPH_IR_PARTIAL"
-          ]
-              if text(process_graph_gate.get("status")) != "PASS":
-              asset_gaps.append(
-                  {
-                      "kind": "PROCESS_GRAPH_IR_PARTIAL",
-                      "gap_type": "understood_process_not_fully_bound_to_behavior_implementation",
-                      "source_id": "*",
-                      "process_graph_status": process_graph_gate.get("status"),
-                      "unknown_count": len(process_graph_unknowns),
-                      "semantic_understanding_is_not_changed": True,
-                      "runtime_executability_claimed": False,
-                  }
+          if 'from .process_graph_ir import build_business_process_graphs' not in lines:
+              import_index = unique_index(
+                  lambda line: line == 'from .schema import (',
+                  'schema import boundary',
               )
-              asset["coverage_gaps"] = asset_gaps
+              lines.insert(import_index, 'from .process_graph_ir import build_business_process_graphs')
 
-              # Semantic understanding and implementation binding are separate gates. Missing
-          ''',
-              'process graph projection',
+          projection_start = unique_index(
+              lambda line: line == '    _project_implementation_binding_asset(',
+              'implementation projection start',
           )
-
-          replace_once(
-              '''    unknowns = [
-              row
-              for row in [*as_list(model.get("unknowns")), *behavior_unknowns]
-              if isinstance(row, dict)
-          ]
-          ''',
-              '''    unknowns = [
-              row
-              for row in [
-                  *as_list(model.get("unknowns")),
-                  *behavior_unknowns,
-                  *process_graph_unknowns,
-              ]
-              if isinstance(row, dict)
-          ]
-          ''',
-              'unknown propagation',
-          )
-
-          replace_once(
-              '''    behavior_evidence = dedupe_evidence(
-              [
-                  evidence
-                  for behavior in behaviors
-                  for evidence in as_list(behavior.get("evidence"))
-                  if isinstance(evidence, dict)
-              ]
-          )
-              model["evidence_index"] = dedupe_evidence(
-              [*as_list(model.get("evidence_index")), *behavior_evidence]
-          )
-          ''',
-              '''    behavior_evidence = dedupe_evidence(
-              [
-                  evidence
-                  for behavior in behaviors
-                  for evidence in as_list(behavior.get("evidence"))
-                  if isinstance(evidence, dict)
-              ]
-          )
-              process_graph_evidence = dedupe_evidence(
-              [
-                  evidence
-                  for graph in process_graphs
-                  for evidence in as_list(graph.get("evidence"))
-                  if isinstance(evidence, dict)
-              ]
-          )
-              model["evidence_index"] = dedupe_evidence(
-              [
-                  *as_list(model.get("evidence_index")),
-                  *behavior_evidence,
-                  *process_graph_evidence,
-              ]
-          )
-          ''',
-              'process graph evidence',
-          )
-
-          replace_once(
-              '''        "implementation_binding_conflict_count": len(implementation_conflicts),
-              "implementation_binding_status": implementation_gate.get("status"),
-          }
-          ''',
-              '''        "implementation_binding_conflict_count": len(implementation_conflicts),
-              "implementation_binding_status": implementation_gate.get("status"),
-              "process_graph_count": len(process_graphs),
-              "compiled_process_graph_count": int(
-                  process_graph_metrics.get("compiled_process_graph_count") or 0
+          projection_end = next(
+              (
+                  index
+                  for index in range(projection_start + 1, len(lines))
+                  if lines[index] == '    )'
               ),
-              "partial_process_graph_count": int(
-                  process_graph_metrics.get("partial_process_graph_count") or 0
-              ),
-              "process_graph_unknown_count": len(process_graph_unknowns),
-              "process_graph_status": process_graph_gate.get("status"),
-          }
-          ''',
-              'source summary process graph metrics',
+              None,
           )
+          if projection_end is None:
+              raise SystemExit('implementation projection end not found')
+          if not any('process_graphs, process_graph_unknowns' in line for line in lines):
+              block = '''
 
-          replace_once(
-              '''    model["metrics"]["scenario_ready_binding_count"] = int(
-              implementation_metrics.get("scenario_ready_binding_count") or 0
-          )
-          ''',
-              '''    model["metrics"]["scenario_ready_binding_count"] = int(
-              implementation_metrics.get("scenario_ready_binding_count") or 0
-          )
-              model["metrics"]["process_graph_status"] = process_graph_gate.get("status")
-              model["metrics"]["compiled_process_graph_count"] = int(
-              process_graph_metrics.get("compiled_process_graph_count") or 0
-          )
-              model["metrics"]["partial_process_graph_count"] = int(
-              process_graph_metrics.get("partial_process_graph_count") or 0
-          )
-          ''',
-              'model process graph metrics',
-          )
+    process_graphs, process_graph_unknowns, process_graph_gate = (
+        build_business_process_graphs(model, behaviors, implementation_bindings)
+    )
+    model["process_graphs"] = process_graphs
+    model["process_graph_unknowns"] = process_graph_unknowns
+    model["process_graph_gate"] = process_graph_gate
+    model["business_behavior_ir"] = {
+        "schema": "qualibug.enterprise-business-behavior-ir.v1",
+        "behaviors": behaviors,
+        "process_graphs": process_graphs,
+        "behavior_gate": behavior_gate,
+        "process_graph_gate": process_graph_gate,
+        "semantic_authority": "enterprise_understanding",
+        "runtime_executability_claimed": False,
+    }
+    asset["business_process_graphs"] = process_graphs
+    asset["business_process_graph_gate"] = process_graph_gate
+    process_graph_metrics = as_dict(process_graph_gate.get("metrics"))
+    asset_summary = as_dict(asset.get("summary"))
+    asset_summary.update(
+        {
+            "process_graph_status": process_graph_gate.get("status"),
+            "process_graph_count": len(process_graphs),
+            "compiled_process_graph_count": int(
+                process_graph_metrics.get("compiled_process_graph_count") or 0
+            ),
+            "partial_process_graph_count": int(
+                process_graph_metrics.get("partial_process_graph_count") or 0
+            ),
+            "process_graph_unknown_count": len(process_graph_unknowns),
+        }
+    )
+    asset["summary"] = asset_summary
+    asset_gaps = [
+        dict(row)
+        for row in as_list(asset.get("coverage_gaps"))
+        if isinstance(row, dict) and text(row.get("kind")) != "PROCESS_GRAPH_IR_PARTIAL"
+    ]
+    if text(process_graph_gate.get("status")) != "PASS":
+        asset_gaps.append(
+            {
+                "kind": "PROCESS_GRAPH_IR_PARTIAL",
+                "gap_type": "understood_process_not_fully_bound_to_behavior_implementation",
+                "source_id": "*",
+                "process_graph_status": process_graph_gate.get("status"),
+                "unknown_count": len(process_graph_unknowns),
+                "semantic_understanding_is_not_changed": True,
+                "runtime_executability_claimed": False,
+            }
+        )
+    asset["coverage_gaps"] = asset_gaps
+'''.splitlines()
+              lines[projection_end + 1:projection_end + 1] = block
 
-          path.write_text(source, encoding='utf-8')
+          comment_index = unique_index(
+              lambda line: line.startswith('    # Semantic understanding and implementation binding'),
+              'semantic gate comment',
+          )
+          unknown_start = next(
+              index
+              for index in range(comment_index, len(lines))
+              if lines[index] == '    unknowns = ['
+          )
+          unknown_end = next(
+              index
+              for index in range(unknown_start + 1, len(lines))
+              if lines[index] == '    ]'
+          )
+          lines[unknown_start:unknown_end + 1] = '''    unknowns = [
+        row
+        for row in [
+            *as_list(model.get("unknowns")),
+            *behavior_unknowns,
+            *process_graph_unknowns,
+        ]
+        if isinstance(row, dict)
+    ]'''.splitlines()
+
+          behavior_evidence_start = unique_index(
+              lambda line: line == '    behavior_evidence = dedupe_evidence(',
+              'behavior evidence start',
+          )
+          model_evidence_start = next(
+              index
+              for index in range(behavior_evidence_start, len(lines))
+              if lines[index] == '    model["evidence_index"] = dedupe_evidence('
+          )
+          if not any(line == '    process_graph_evidence = dedupe_evidence(' for line in lines):
+              process_evidence = '''    process_graph_evidence = dedupe_evidence(
+        [
+            evidence
+            for graph in process_graphs
+            for evidence in as_list(graph.get("evidence"))
+            if isinstance(evidence, dict)
+        ]
+    )'''.splitlines()
+              lines[model_evidence_start:model_evidence_start] = process_evidence
+              model_evidence_start += len(process_evidence)
+          compact_evidence = '        [*as_list(model.get("evidence_index")), *behavior_evidence]'
+          if compact_evidence in lines:
+              compact_index = lines.index(compact_evidence)
+              lines[compact_index:compact_index + 1] = '''        [
+            *as_list(model.get("evidence_index")),
+            *behavior_evidence,
+            *process_graph_evidence,
+        ]'''.splitlines()
+          elif not any('*process_graph_evidence' in line for line in lines):
+              raise SystemExit('model evidence projection anchor not found')
+
+          summary_anchor = unique_index(
+              lambda line: line.strip() == '"implementation_binding_status": implementation_gate.get("status"),',
+              'source summary implementation status',
+          )
+          if not any('"process_graph_status": process_graph_gate.get("status")' in line for line in lines[summary_anchor:summary_anchor + 20]):
+              summary_lines = '''        "process_graph_count": len(process_graphs),
+        "compiled_process_graph_count": int(
+            process_graph_metrics.get("compiled_process_graph_count") or 0
+        ),
+        "partial_process_graph_count": int(
+            process_graph_metrics.get("partial_process_graph_count") or 0
+        ),
+        "process_graph_unknown_count": len(process_graph_unknowns),
+        "process_graph_status": process_graph_gate.get("status"),'''.splitlines()
+              lines[summary_anchor + 1:summary_anchor + 1] = summary_lines
+
+          scenario_metric = unique_index(
+              lambda line: line == '    model["metrics"]["scenario_ready_binding_count"] = int(',
+              'scenario metric start',
+          )
+          scenario_end = next(
+              index
+              for index in range(scenario_metric + 1, len(lines))
+              if lines[index] == '    )'
+          )
+          if not any('model["metrics"]["process_graph_status"]' in line for line in lines):
+              metric_lines = '''    model["metrics"]["process_graph_status"] = process_graph_gate.get("status")
+    model["metrics"]["compiled_process_graph_count"] = int(
+        process_graph_metrics.get("compiled_process_graph_count") or 0
+    )
+    model["metrics"]["partial_process_graph_count"] = int(
+        process_graph_metrics.get("partial_process_graph_count") or 0
+    )'''.splitlines()
+              lines[scenario_end + 1:scenario_end + 1] = metric_lines
+
+          path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
           PY
 
       - name: Validate syntax and focused behavior
