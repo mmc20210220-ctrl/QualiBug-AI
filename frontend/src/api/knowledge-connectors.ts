@@ -10,8 +10,21 @@ export type KnowledgeConnectorProfile = {
   configured_fields?: Record<string, boolean>;
   credentials_configured: boolean;
   checkpoint_configured: boolean;
-  checkpoint_fingerprint?: string;
   plaintext_returned?: boolean;
+};
+
+export type KnowledgeConnectorAutoSync = {
+  enabled: boolean;
+  state: 'scheduled' | 'running' | 'healthy' | 'retrying' | 'disabled' | string;
+  message: string;
+  last_attempt_at_utc?: string;
+  last_success_at_utc?: string;
+  next_attempt_at_utc?: string;
+  failure_count: number;
+  attention?: string;
+  refresh_interval_seconds?: number;
+  maintenance_required_by_user: boolean;
+  raw_error_returned?: boolean;
 };
 
 export type KnowledgeConnectorRecord = {
@@ -27,6 +40,7 @@ export type KnowledgeConnectorRecord = {
   last_failed_sync_at_utc?: string;
   last_sync_completed_at_utc?: string;
   connection_profile?: KnowledgeConnectorProfile;
+  auto_sync?: KnowledgeConnectorAutoSync;
 };
 
 export type KnowledgeConnectorInventory = {
@@ -38,6 +52,7 @@ export type KnowledgeConnectorInventory = {
     running_count?: number;
     profile_count?: number;
     credentials_configured_count?: number;
+    automatic_refresh_enabled?: boolean;
   };
   governance?: Record<string, unknown>;
 };
@@ -86,7 +101,6 @@ const asRecord = (value: unknown): JsonRecord => (
     ? value as JsonRecord
     : {}
 );
-
 const asArray = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
 const asString = (value: unknown): string => typeof value === 'string' ? value : '';
 const asBoolean = (value: unknown): boolean => value === true;
@@ -94,59 +108,28 @@ const asNumber = (value: unknown): number | undefined => typeof value === 'numbe
 
 function friendlyConnectorError(rawMessage: string, status: number): string {
   const message = rawMessage.toLowerCase();
-  if (
-    message.includes('already_running')
-    || message.includes('lock_held')
-    || message.includes('transaction_busy')
-  ) {
+  if (message.includes('already_running') || message.includes('lock_held') || message.includes('transaction_busy')) {
     return '资料正在更新，无需重复操作。系统完成后会自动显示最新状态。';
   }
-  if (
-    message.includes('checkpoint')
-    || message.includes('cursor_mismatch')
-    || message.includes('previous_cursor_required')
-  ) {
-    return '上次同步状态不完整，系统已保留原有资料。请点击“立即更新”重试；仍未恢复时重新授权即可。';
+  if (message.includes('checkpoint') || message.includes('cursor_mismatch') || message.includes('previous_cursor_required')) {
+    return '上次更新状态不完整，系统已保留原有资料并会自动重试。仍未恢复时，请重新授权。';
   }
-  if (
-    message.includes('permission')
-    || message.includes('forbidden')
-    || message.includes('code_1069902')
-    || message.includes('code_99991663')
-  ) {
-    return '飞书授权范围不足。请在飞书开放平台为应用补充知识库与云文档只读权限，然后点击“重新授权”。';
+  if (message.includes('permission') || message.includes('forbidden') || message.includes('code_1069902') || message.includes('code_99991663')) {
+    return '飞书授权范围不足。请在飞书开放平台补充知识库与云文档只读权限，然后重新授权。';
   }
-  if (
-    message.includes('credential')
-    || message.includes('profile')
-    || message.includes('app_secret')
-    || message.includes('access_token')
-    || message.includes('auth_mode')
-  ) {
+  if (message.includes('credential') || message.includes('profile') || message.includes('app_secret') || message.includes('access_token') || message.includes('auth_mode')) {
     return '飞书连接信息未通过验证。请检查 App ID 与 App Secret，或重新填写访问令牌。';
   }
-  if (
-    message.includes('rate')
-    || message.includes('99991400')
-    || status === 429
-  ) {
-    return '飞书暂时限制了访问频率，原有资料不受影响。稍后点击“立即更新”即可。';
+  if (message.includes('rate') || message.includes('99991400') || status === 429) {
+    return '飞书暂时限制了访问频率，原有资料不受影响，系统会自动重试。';
   }
-  if (
-    message.includes('transport_failed')
-    || message.includes('api_failed')
-    || message.includes('download_failed')
-    || status >= 500
-  ) {
-    return '暂时无法读取飞书资料，原有资料不受影响。请检查网络后点击“立即更新”。';
+  if (message.includes('transport_failed') || message.includes('api_failed') || message.includes('download_failed') || status >= 500) {
+    return '暂时无法读取飞书资料，原有资料不受影响，系统会自动重试。';
   }
-  if (
-    message.includes('unsupported')
-    || message.includes('export')
-  ) {
-    return '部分飞书资料暂时无法读取，系统没有覆盖原有资料。请确认文档权限或改用支持的文档格式。';
+  if (message.includes('unsupported') || message.includes('export')) {
+    return '部分飞书资料暂时无法读取，系统没有覆盖原有资料。请确认文档权限或格式。';
   }
-  return '在线资料操作未完成，原有资料不受影响。请重试；仍失败时重新授权。';
+  return '在线资料操作未完成，原有资料不受影响。系统会自动重试；仍失败时请重新授权。';
 }
 
 async function connectorRequest(path: string, init?: RequestInit): Promise<JsonRecord> {
@@ -154,9 +137,7 @@ async function connectorRequest(path: string, init?: RequestInit): Promise<JsonR
   if (!session) throw new Error('未登录或会话已失效，请重新登录。');
 
   const headers = new Headers(init?.headers);
-  if (init?.body && !headers.has('Content-Type')) {
-    headers.set('Content-Type', 'application/json');
-  }
+  if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   const token = currentToken();
   if (token) headers.set('Authorization', `Bearer ${token}`);
 
@@ -185,7 +166,7 @@ async function connectorRequest(path: string, init?: RequestInit): Promise<JsonR
 
 function projectConnectorPath(projectId: string, suffix = ''): string {
   const project = projectId.trim();
-  if (!project) throw new Error('请先选择客户项目。');
+  if (!project) throw new Error('未选择有效项目。');
   return `/api/v1/projects/${encodeURIComponent(project)}/knowledge-connectors${suffix}`;
 }
 
@@ -202,8 +183,24 @@ function toProfile(value: unknown): KnowledgeConnectorProfile {
     ),
     credentials_configured: asBoolean(row.credentials_configured),
     checkpoint_configured: asBoolean(row.checkpoint_configured),
-    checkpoint_fingerprint: asString(row.checkpoint_fingerprint) || undefined,
     plaintext_returned: asBoolean(row.plaintext_returned),
+  };
+}
+
+function toAutoSync(value: unknown): KnowledgeConnectorAutoSync {
+  const row = asRecord(value);
+  return {
+    enabled: asBoolean(row.enabled),
+    state: asString(row.state),
+    message: asString(row.message),
+    last_attempt_at_utc: asString(row.last_attempt_at_utc) || undefined,
+    last_success_at_utc: asString(row.last_success_at_utc) || undefined,
+    next_attempt_at_utc: asString(row.next_attempt_at_utc) || undefined,
+    failure_count: asNumber(row.failure_count) || 0,
+    attention: asString(row.attention) || undefined,
+    refresh_interval_seconds: asNumber(row.refresh_interval_seconds),
+    maintenance_required_by_user: asBoolean(row.maintenance_required_by_user),
+    raw_error_returned: asBoolean(row.raw_error_returned),
   };
 }
 
@@ -222,6 +219,7 @@ function toConnector(value: unknown): KnowledgeConnectorRecord {
     last_failed_sync_at_utc: asString(row.last_failed_sync_at_utc) || undefined,
     last_sync_completed_at_utc: asString(row.last_sync_completed_at_utc) || undefined,
     connection_profile: row.connection_profile ? toProfile(row.connection_profile) : undefined,
+    auto_sync: row.auto_sync ? toAutoSync(row.auto_sync) : undefined,
   };
 }
 
@@ -231,15 +229,14 @@ export async function listKnowledgeConnectors(projectId: string): Promise<Knowle
   const summary = asRecord(data.summary);
   return {
     project_id: asString(data.project_id) || projectId,
-    connectors: asArray(data.connectors)
-      .map(toConnector)
-      .filter((item) => Boolean(item.connector_instance_id)),
+    connectors: asArray(data.connectors).map(toConnector).filter((item) => Boolean(item.connector_instance_id)),
     summary: {
       connector_instance_count: asNumber(summary.connector_instance_count),
       active_count: asNumber(summary.active_count),
       running_count: asNumber(summary.running_count),
       profile_count: asNumber(summary.profile_count),
       credentials_configured_count: asNumber(summary.credentials_configured_count),
+      automatic_refresh_enabled: asBoolean(summary.automatic_refresh_enabled),
     },
     governance: asRecord(data.governance),
   };
@@ -254,9 +251,8 @@ export async function configureFeishuConnector(
     body: JSON.stringify(input),
   });
   const data = asRecord(payload.data);
-  const instance = asRecord(data.connector_instance);
   return toConnector({
-    ...instance,
+    ...asRecord(data.connector_instance),
     connection_profile: data.connection_profile,
   });
 }
@@ -268,7 +264,7 @@ async function connectorAction(
   body: JsonRecord = {},
 ): Promise<KnowledgeConnectorActionResult> {
   const connector = connectorId.trim();
-  if (!connector) throw new Error('在线资料源尚未配置。');
+  if (!connector) throw new Error('缺少在线资料源标识。');
   const payload = await connectorRequest(
     projectConnectorPath(projectId, `/${encodeURIComponent(connector)}/${action}`),
     { method: 'POST', body: JSON.stringify(body) },
@@ -276,28 +272,14 @@ async function connectorAction(
   return asRecord(payload.data) as KnowledgeConnectorActionResult;
 }
 
-export function testKnowledgeConnector(
-  projectId: string,
-  connectorId: string,
-): Promise<KnowledgeConnectorActionResult> {
+export function testKnowledgeConnector(projectId: string, connectorId: string): Promise<KnowledgeConnectorActionResult> {
   return connectorAction(projectId, connectorId, 'test');
 }
 
-export function syncKnowledgeConnector(
-  projectId: string,
-  connectorId: string,
-  options?: {
-    deletion_policy?: 'RETAIN' | 'RETIRE_MISSING';
-    allow_raw_text_fallback?: boolean;
-    max_retire_count?: number;
-    max_retire_ratio?: number;
-  },
-): Promise<KnowledgeConnectorActionResult> {
+export function syncKnowledgeConnector(projectId: string, connectorId: string): Promise<KnowledgeConnectorActionResult> {
   return connectorAction(projectId, connectorId, 'sync', {
-    deletion_policy: options?.deletion_policy || 'RETAIN',
-    allow_raw_text_fallback: options?.allow_raw_text_fallback === true,
-    max_retire_count: options?.max_retire_count ?? 100,
-    max_retire_ratio: options?.max_retire_ratio ?? 0.25,
+    deletion_policy: 'RETAIN',
+    allow_raw_text_fallback: false,
   });
 }
 
