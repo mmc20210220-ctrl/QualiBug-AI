@@ -10,6 +10,11 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from typing import Any
 
+from .document_ground_truth import (
+    DOCUMENT_GROUND_TRUTH_KEY,
+    evaluate_document_ground_truth,
+)
+
 INGESTION_EVIDENCE_SCHEMA = (
     "qualibug.enterprise-understanding-ingestion-evidence-measurement.v1"
 )
@@ -97,9 +102,7 @@ def _formal_blocks(item: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def _count_or_derived(
-    receipt: dict[str, Any], field: str, derived: int
-) -> int:
+def _count_or_derived(receipt: dict[str, Any], field: str, derived: int) -> int:
     return _integer(receipt.get(field)) if field in receipt else derived
 
 
@@ -111,9 +114,7 @@ def _source_measurement(item: dict[str, Any]) -> dict[str, Any]:
     blocks = _formal_blocks(item)
     gaps = _rows(item.get("unsupported_content"))
 
-    formal = _count_or_derived(
-        evidence, "formal_authority_block_count", len(blocks)
-    )
+    formal = _count_or_derived(evidence, "formal_authority_block_count", len(blocks))
     traceable_derived = sum(
         bool(_text(_dict(row.get("evidence_address")).get("source_locator")))
         for row in blocks
@@ -260,8 +261,7 @@ def _highest_impact_gap(
     if any(row["weak_address_authority_block_count"] for row in sources):
         return "DOCUMENT_EVIDENCE_ADDRESS_WEAK"
     if any(
-        row["source_hash_bound_block_count"]
-        != row["formal_authority_block_count"]
+        row["source_hash_bound_block_count"] != row["formal_authority_block_count"]
         for row in sources
     ):
         return "DOCUMENT_EVIDENCE_SOURCE_HASH_BINDING_INCOMPLETE"
@@ -272,14 +272,43 @@ def _highest_impact_gap(
     return "NONE"
 
 
-def measure_ingestion_evidence(product_asset: dict[str, Any]) -> dict[str, Any]:
-    """Measure persisted product receipts without self-certifying structure recall."""
+def _five_of_five_status(
+    receipt_integrity_pass: bool,
+    document_ground_truth: dict[str, Any],
+) -> str:
+    if not receipt_integrity_pass:
+        return "BLOCKED_BY_INGESTION_OR_EVIDENCE_GAPS"
+    status = _text(document_ground_truth.get("status"))
+    validation = _text(document_ground_truth.get("validation_status"))
+    if status == "NOT_DECLARED":
+        return "RECEIPT_INTEGRITY_PASS_DOCUMENT_GROUND_TRUTH_NOT_DECLARED"
+    if validation != "PASS":
+        return "RECEIPT_INTEGRITY_PASS_DOCUMENT_GROUND_TRUTH_INCOMPLETE"
+    if document_ground_truth.get("profile_five_of_five_pass"):
+        return "DECLARED_DOCUMENT_PROFILE_FIVE_OF_FIVE_PASS"
+    return "DOCUMENT_GROUND_TRUTH_GAPS_VISIBLE"
+
+
+def measure_ingestion_evidence(
+    product_asset: dict[str, Any],
+    ground_truth: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Measure product receipts and optional human structure Ground Truth."""
     assets = _structure_assets(product_asset)
     sources = [_source_measurement(row) for row in _rows(assets.get("items"))]
     active_source_ids = _active_source_ids(product_asset)
     measured_ids = {row["source_id"] for row in sources if row["source_id"]}
     missing_source_ids = sorted(active_source_ids - measured_ids)
-    highest_gap = _highest_impact_gap(active_source_ids, measured_ids, sources)
+    receipt_gap = _highest_impact_gap(active_source_ids, measured_ids, sources)
+    document_profile = (
+        _dict(ground_truth.get(DOCUMENT_GROUND_TRUTH_KEY))
+        if isinstance(ground_truth, dict)
+        and isinstance(ground_truth.get(DOCUMENT_GROUND_TRUTH_KEY), dict)
+        else None
+    )
+    document_ground_truth = evaluate_document_ground_truth(document_profile, product_asset)
+    ground_truth_gap = _text(document_ground_truth.get("highest_impact_gap")) or "NONE"
+    next_five_of_five_gap = receipt_gap if receipt_gap != "NONE" else ground_truth_gap
 
     expected_source_count = len(active_source_ids) or _integer(assets.get("source_count"))
     denominator = expected_source_count or len(sources)
@@ -302,7 +331,7 @@ def measure_ingestion_evidence(product_asset: dict[str, Any]) -> dict[str, Any]:
             gap_counts[reason] += 1
             affected_sources[reason].add(row["source_id"] or row["filename"])
     structure_loss = {
-        "highest_impact_gap": highest_gap,
+        "highest_impact_gap": receipt_gap,
         "missing_document_structure_source_ids": missing_source_ids,
         "critical_gap_source_count": sum(
             bool(row["critical_structure_gap_count"]) for row in sources
@@ -399,6 +428,12 @@ def measure_ingestion_evidence(product_asset: dict[str, Any]) -> dict[str, Any]:
         and not missing_source_ids
         and all(row["receipt_integrity_pass"] for row in sources)
     )
+    document_metrics = _dict(document_ground_truth.get("metrics"))
+    by_type = _dict(document_metrics.get("by_block_type"))
+    visual_measured = bool(
+        document_metrics.get("true_structure_recall_measured")
+        and any(name in by_type for name in ("IMAGE", "SHAPE", "DIAGRAM", "TABLE_REGION"))
+    )
     summary = {
         "declared_active_source_count": len(active_source_ids),
         "document_structure_source_count": len(sources),
@@ -422,19 +457,36 @@ def measure_ingestion_evidence(product_asset: dict[str, Any]) -> dict[str, Any]:
         "unsupported_content_count": sum(
             row["unsupported_content_count"] for row in sources
         ),
-        "highest_impact_gap": highest_gap,
+        "highest_impact_gap": receipt_gap,
+        "receipt_highest_impact_gap": receipt_gap,
+        "document_ground_truth_highest_impact_gap": ground_truth_gap,
+        "next_five_of_five_gap": next_five_of_five_gap,
         "receipt_integrity_gate_pass": receipt_integrity_pass,
-        "five_of_five_readiness_status": (
-            "RECEIPT_INTEGRITY_PASS_GROUND_TRUTH_RECALL_NOT_MEASURED"
-            if receipt_integrity_pass
-            else "BLOCKED_BY_INGESTION_OR_EVIDENCE_GAPS"
+        "five_of_five_readiness_status": _five_of_five_status(
+            receipt_integrity_pass, document_ground_truth
         ),
-        "human_structure_ground_truth_required_for_recall": True,
-        "structure_block_recall_measured": False,
-        "reading_order_accuracy_measured": False,
-        "table_reconstruction_recall_measured": False,
-        "visual_content_recall_measured": False,
+        "human_structure_ground_truth_required_for_recall": not bool(
+            document_metrics.get("true_structure_recall_measured")
+        ),
+        "structure_block_recall_measured": bool(
+            document_metrics.get("true_structure_recall_measured")
+        ),
+        "reading_order_accuracy_measured": bool(
+            document_metrics.get("true_structure_recall_measured")
+            and document_metrics.get("reading_order_pair_count")
+        ),
+        "table_reconstruction_recall_measured": bool(
+            document_metrics.get("true_structure_recall_measured")
+            and document_metrics.get("table_cell_recall") is not None
+        ),
+        "visual_content_recall_measured": visual_measured,
+        "strict_structure_element_recall": document_metrics.get(
+            "strict_structure_element_recall"
+        ),
+        "reading_order_accuracy": document_metrics.get("reading_order_accuracy"),
+        "table_cell_recall": document_metrics.get("table_cell_recall"),
         "product_receipts_are_not_ground_truth": True,
+        "universal_cross_industry_five_of_five_proven": False,
     }
     return {
         "schema": INGESTION_EVIDENCE_SCHEMA,
@@ -443,8 +495,9 @@ def measure_ingestion_evidence(product_asset: dict[str, Any]) -> dict[str, Any]:
         "evidence_address_analysis": evidence_analysis,
         "structure_loss_analysis": structure_loss,
         "format_coverage_analysis": format_analysis,
-        "measurement_authority": "EVALUATOR_READ_ONLY_PRODUCT_RECEIPTS",
-        "ground_truth_recall_authority": "HUMAN_ANNOTATED_CORPUS_REQUIRED",
+        "document_ground_truth_measurement": document_ground_truth,
+        "measurement_authority": "EVALUATOR_READ_ONLY_PRODUCT_RECEIPTS_AND_HUMAN_GROUND_TRUTH",
+        "ground_truth_recall_authority": "HUMAN_ANNOTATED_DOCUMENT_PROFILE",
         "model_writeback_allowed": False,
         "product_asset_rewritten": False,
     }
