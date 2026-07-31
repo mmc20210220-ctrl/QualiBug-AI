@@ -2,8 +2,8 @@
 
 The ProcessStepLedger remains the fact authority. This module only verifies
 that the bundle contains the exact sealed receipt set emitted by that ledger:
-one ledger identity, one ledger hash, valid per-step fact hashes, and balanced
-recorded/required/executed/accepted/completed/failed sets.
+one ledger identity, a reconstructable ledger hash, valid per-step fact hashes,
+and balanced recorded/required/executed/accepted/completed/failed sets.
 """
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from typing import Any
 
 from .process_step_execution import (
     PROCESS_STEP_FACT_MODEL_VERSION,
+    PROCESS_STEP_LEDGER_SCHEMA,
     PROCESS_STEP_RECEIPT_SCHEMA,
     _canonical_step_fact,
     _stable_hash,
@@ -18,6 +19,14 @@ from .process_step_execution import (
 
 PROCESS_STEP_BUNDLE_AUDIT_SCHEMA = "qualibug.process-step-bundle-audit.v1"
 
+_IDENTITY_FIELDS = (
+    "campaign_id",
+    "run_id",
+    "obligation_id",
+    "experiment_id",
+    "fixture_id",
+    "protocol_id",
+)
 _DECLARATION_FIELDS = (
     "ledger_recorded_step_ids",
     "ledger_required_step_ids",
@@ -42,6 +51,13 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _ids(value: Any) -> list[str]:
     out: list[str] = []
     for raw in _list(value):
@@ -57,10 +73,26 @@ def _declared_sets(payload: dict[str, Any]) -> dict[str, list[str]] | None:
     return {field: _ids(payload.get(field)) for field in _DECLARATION_FIELDS}
 
 
+def _sorted_rejections(value: Any) -> list[dict[str, Any]]:
+    rows = [dict(_dict(row)) for row in _list(value) if isinstance(row, dict)]
+    return sorted(
+        rows,
+        key=lambda row: (
+            _text(row.get("step_id")),
+            _text(row.get("field")),
+            _text(row.get("receipt_id")),
+            _text(row.get("reason_code")),
+        ),
+    )
+
+
 def _derived_sets(payloads: list[dict[str, Any]]) -> dict[str, list[str]]:
     ordered = sorted(
         payloads,
-        key=lambda row: (int(row.get("step_ordinal") or 0), _text(row.get("step_id"))),
+        key=lambda row: (
+            _safe_int(row.get("step_ordinal")),
+            _text(row.get("step_id")),
+        ),
     )
     recorded: list[str] = []
     attempted: list[str] = []
@@ -136,11 +168,14 @@ def audit_process_step_receipt_bundle(
     invalid_type_receipt_ids: list[str] = []
     incomplete_receipt_ids: list[str] = []
     receipt_identity_mismatch_ids: list[str] = []
+    payload_identity_mismatch_ids: list[str] = []
     step_fact_hash_mismatch_ids: list[str] = []
     duplicate_step_receipt_ids: list[str] = []
     declaration_missing_receipt_ids: list[str] = []
     declaration_mismatch_receipt_ids: list[str] = []
+    rejection_declaration_mismatch_receipt_ids: list[str] = []
     declared_reference: dict[str, list[str]] | None = None
+    declared_rejections: list[dict[str, Any]] | None = None
     declared_receipt_count: int | None = None
     ledger_ids: dict[str, list[str]] = {}
     ledger_hashes: dict[str, list[str]] = {}
@@ -169,6 +204,12 @@ def audit_process_step_receipt_bundle(
             continue
         if required_values["receipt_id"] != receipt_id:
             receipt_identity_mismatch_ids.append(receipt_id)
+        if any(
+            _text(payload.get(field)) != _text(envelope.get(field))
+            for field in _IDENTITY_FIELDS
+        ):
+            payload_identity_mismatch_ids.append(receipt_id)
+
         step_id = required_values["step_id"]
         if step_id in receipt_by_step_id:
             duplicate_step_receipt_ids.extend(
@@ -192,20 +233,32 @@ def audit_process_step_receipt_bundle(
         )
 
         declaration = _declared_sets(payload)
-        if declaration is None or not isinstance(payload.get("ledger_receipt_count"), int):
+        raw_rejections = payload.get("ledger_receipt_scope_rejections")
+        if (
+            declaration is None
+            or not isinstance(payload.get("ledger_receipt_count"), int)
+            or not isinstance(raw_rejections, list)
+        ):
             declaration_missing_receipt_ids.append(receipt_id)
         else:
+            rejections = _sorted_rejections(raw_rejections)
             if declared_reference is None:
                 declared_reference = declaration
+                declared_rejections = rejections
                 declared_receipt_count = int(payload.get("ledger_receipt_count"))
-            elif declaration != declared_reference or int(
-                payload.get("ledger_receipt_count")
-            ) != declared_receipt_count:
-                declaration_mismatch_receipt_ids.append(receipt_id)
+            else:
+                if (
+                    declaration != declared_reference
+                    or int(payload.get("ledger_receipt_count"))
+                    != declared_receipt_count
+                ):
+                    declaration_mismatch_receipt_ids.append(receipt_id)
+                if rejections != declared_rejections:
+                    rejection_declaration_mismatch_receipt_ids.append(receipt_id)
         payloads.append(payload)
 
-    ledger_identity_consistent = len(ledger_ids) == 1 and bool(ledger_ids)
-    ledger_hash_consistent = len(ledger_hashes) == 1 and bool(ledger_hashes)
+    ledger_identity_value_consistent = len(ledger_ids) == 1 and bool(ledger_ids)
+    ledger_hash_value_consistent = len(ledger_hashes) == 1 and bool(ledger_hashes)
     fact_model_consistent = (
         len(fact_model_versions) == 1
         and PROCESS_STEP_FACT_MODEL_VERSION in fact_model_versions
@@ -246,6 +299,72 @@ def audit_process_step_receipt_bundle(
     ) <= actual_recorded:
         invariant_errors.append("required_not_subset_of_recorded")
 
+    reconstructed_ledger_hash = ""
+    declared_ledger_hash = (
+        next(iter(ledger_hashes)) if ledger_hash_value_consistent else ""
+    )
+    if (
+        payloads
+        and declared_reference is not None
+        and declared_rejections is not None
+        and ledger_identity_value_consistent
+        and fact_model_consistent
+    ):
+        first = payloads[0]
+        canonical_rows = [
+            _canonical_step_fact(row)
+            for row in sorted(
+                payloads,
+                key=lambda row: (
+                    _safe_int(row.get("step_ordinal")),
+                    _text(row.get("step_id")),
+                ),
+            )
+        ]
+        reconstructed_snapshot = {
+            "schema_version": PROCESS_STEP_LEDGER_SCHEMA,
+            "fact_model_version": PROCESS_STEP_FACT_MODEL_VERSION,
+            "ledger_id": next(iter(ledger_ids)),
+            "campaign_id": _text(first.get("campaign_id")),
+            "run_id": _text(first.get("run_id")),
+            "obligation_id": _text(first.get("obligation_id")),
+            "experiment_id": _text(first.get("experiment_id")),
+            "fixture_id": _text(first.get("fixture_id")),
+            "protocol_id": _text(first.get("protocol_id")),
+            "required_step_ids": list(
+                declared_reference["ledger_required_step_ids"]
+            ),
+            "attempted_step_ids": list(
+                declared_reference["ledger_attempted_step_ids"]
+            ),
+            "executed_step_ids": list(
+                declared_reference["ledger_executed_step_ids"]
+            ),
+            "accepted_step_ids": list(
+                declared_reference["ledger_accepted_step_ids"]
+            ),
+            "completed_step_ids": list(
+                declared_reference["ledger_completed_step_ids"]
+            ),
+            "failed_step_ids": list(
+                declared_reference["ledger_failed_step_ids"]
+            ),
+            "rows": canonical_rows,
+            "receipt_scope_rejections": declared_rejections,
+        }
+        reconstructed_ledger_hash = _stable_hash(reconstructed_snapshot)
+    ledger_hash_content_valid = bool(
+        reconstructed_ledger_hash
+        and declared_ledger_hash
+        and reconstructed_ledger_hash == declared_ledger_hash
+    )
+    ledger_identity_consistent = (
+        ledger_identity_value_consistent and not payload_identity_mismatch_ids
+    )
+    ledger_hash_consistent = (
+        ledger_hash_value_consistent and ledger_hash_content_valid
+    )
+
     validation_errors: list[str] = []
     if not receipt_ids:
         validation_errors.append("process_step_receipts_missing")
@@ -259,22 +378,31 @@ def audit_process_step_receipt_bundle(
         validation_errors.append("process_step_receipt_identity_mismatch")
     if not ledger_identity_consistent:
         validation_errors.append("process_step_ledger_identity_mismatch")
-    if not ledger_hash_consistent:
+    if not ledger_hash_value_consistent:
         validation_errors.append("process_step_ledger_hash_mismatch")
+    elif not ledger_hash_content_valid:
+        validation_errors.append("process_step_ledger_hash_content_mismatch")
     if not fact_model_consistent:
         validation_errors.append("process_step_fact_model_mismatch")
     if step_fact_hash_mismatch_ids:
         validation_errors.append("process_step_fact_hash_mismatch")
-    if declaration_missing_receipt_ids or declaration_mismatch_receipt_ids:
+    if (
+        declaration_missing_receipt_ids
+        or declaration_mismatch_receipt_ids
+        or rejection_declaration_mismatch_receipt_ids
+    ):
         validation_errors.append("process_step_declaration_mismatch")
     if set_mismatch_fields or invariant_errors:
         validation_errors.append("process_step_set_mismatch")
 
     complete = not validation_errors
+    all_receipt_ids = sorted(set(receipt_ids))
     return {
         "schema_version": PROCESS_STEP_BUNDLE_AUDIT_SCHEMA,
         "complete": complete,
         "ledger_identity_consistent": ledger_identity_consistent,
+        "ledger_hash_value_consistent": ledger_hash_value_consistent,
+        "ledger_hash_content_valid": ledger_hash_content_valid,
         "ledger_hash_consistent": ledger_hash_consistent,
         "fact_model_consistent": fact_model_consistent,
         "step_fact_hashes_valid": not step_fact_hash_mismatch_ids,
@@ -286,6 +414,8 @@ def audit_process_step_receipt_bundle(
         "group_unknown_receipt_ids": group_unknown_receipt_ids,
         "process_step_ledger_ids": sorted(ledger_ids),
         "process_step_ledger_hashes": sorted(ledger_hashes),
+        "declared_process_step_ledger_hash": declared_ledger_hash,
+        "reconstructed_process_step_ledger_hash": reconstructed_ledger_hash,
         "fact_model_versions": sorted(fact_model_versions),
         "declared_step_sets": declared_reference or {},
         "derived_step_sets": derived,
@@ -295,19 +425,14 @@ def audit_process_step_receipt_bundle(
         "receipt_identity_mismatch_ids": sorted(
             set(receipt_identity_mismatch_ids)
         ),
+        "payload_identity_mismatch_ids": sorted(
+            set(payload_identity_mismatch_ids)
+        ),
         "duplicate_step_receipt_ids": sorted(set(duplicate_step_receipt_ids)),
-        "ledger_identity_mismatch_receipt_ids": sorted(
-            receipt_id
-            for ids in ledger_ids.values()
-            for receipt_id in ids
-        )
+        "ledger_identity_mismatch_receipt_ids": all_receipt_ids
         if not ledger_identity_consistent
         else [],
-        "ledger_hash_mismatch_receipt_ids": sorted(
-            receipt_id
-            for ids in ledger_hashes.values()
-            for receipt_id in ids
-        )
+        "ledger_hash_mismatch_receipt_ids": all_receipt_ids
         if not ledger_hash_consistent
         else [],
         "step_fact_hash_mismatch_receipt_ids": sorted(
@@ -318,6 +443,9 @@ def audit_process_step_receipt_bundle(
         ),
         "declaration_mismatch_receipt_ids": sorted(
             set(declaration_mismatch_receipt_ids)
+        ),
+        "rejection_declaration_mismatch_receipt_ids": sorted(
+            set(rejection_declaration_mismatch_receipt_ids)
         ),
         "set_mismatch_fields": sorted(set(set_mismatch_fields)),
         "invariant_errors": sorted(set(invariant_errors)),
