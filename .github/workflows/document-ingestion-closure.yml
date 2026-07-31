@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - "ai_test_asset_center/enterprise_material_formats.py"
+      - "ai_test_asset_center/policies/semantic_lexicon.json"
       - "ai_test_asset_center/enterprise_knowledge_center/document_ingestion/**"
       - "ai_test_asset_center/enterprise_knowledge_center/document_ir_tabular_semantics.py"
       - "ai_test_asset_center/enterprise_knowledge_center/archive_expansion.py"
@@ -16,8 +17,11 @@ on:
       - "ai_test_asset_center/enterprise_knowledge_center/_common.py"
       - "ai_test_asset_center/enterprise_knowledge_center/_crud.py"
       - "ai_test_asset_center/enterprise_knowledge_center/__init__.py"
+      - "ai_test_asset_center/enterprise_knowledge_center/composition.py"
       - "ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/builder.py"
       - "ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/gate.py"
+      - "ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/structured_fact_compiler.py"
+      - "ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/semantic_lexicon_contract.py"
       - "ai_test_asset_center/private_pilot_project_assets.py"
       - "ai_test_asset_center/private_pilot_ingest_authority.py"
       - "ai_test_asset_center/enterprise_source_registry_lifecycle.py"
@@ -27,6 +31,7 @@ on:
       - "benchmark_evaluator/enterprise_understanding/document_ground_truth.py"
       - "benchmark_evaluator/enterprise_understanding/ground_truth.py"
       - "benchmark_evaluator/enterprise_understanding/ingestion_evidence.py"
+      - "benchmark_evaluator/enterprise_understanding/fact_slots.py"
       - "benchmark_evaluator/enterprise_understanding/runner.py"
       - "benchmark_evaluator/enterprise_understanding/report.py"
       - "benchmark_evaluator/enterprise_understanding/run_source_backed_workflow.py"
@@ -73,6 +78,8 @@ on:
       - "tests/test_enterprise_understanding_source_reference_authority.py"
       - "tests/test_enterprise_understanding_product_source_references.py"
       - "tests/test_enterprise_understanding_actor_permission_contract.py"
+      - "tests/test_enterprise_understanding_structure_first_facts.py"
+      - "tests/test_enterprise_understanding_fact_slots.py"
       - "pyproject.toml"
       - "Dockerfile"
       - ".github/workflows/document-ingestion-closure.yml"
@@ -133,8 +140,11 @@ jobs:
             ai_test_asset_center/enterprise_knowledge_center/_common.py \
             ai_test_asset_center/enterprise_knowledge_center/_crud.py \
             ai_test_asset_center/enterprise_knowledge_center/__init__.py \
+            ai_test_asset_center/enterprise_knowledge_center/composition.py \
             ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/builder.py \
             ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/gate.py \
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/structured_fact_compiler.py \
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/semantic_lexicon_contract.py \
             ai_test_asset_center/private_pilot_project_assets.py \
             ai_test_asset_center/private_pilot_ingest_authority.py \
             ai_test_asset_center/enterprise_source_registry_lifecycle.py \
@@ -144,6 +154,7 @@ jobs:
             benchmark_evaluator/enterprise_understanding/document_ground_truth.py \
             benchmark_evaluator/enterprise_understanding/ground_truth.py \
             benchmark_evaluator/enterprise_understanding/ingestion_evidence.py \
+            benchmark_evaluator/enterprise_understanding/fact_slots.py \
             benchmark_evaluator/enterprise_understanding/runner.py \
             benchmark_evaluator/enterprise_understanding/report.py \
             benchmark_evaluator/enterprise_understanding/run_source_backed_workflow.py \
@@ -193,4 +204,6 @@ jobs:
             tests/test_enterprise_understanding_source_backed_workflow.py \
             tests/test_enterprise_understanding_source_reference_authority.py \
             tests/test_enterprise_understanding_product_source_references.py \
-            tests/test_enterprise_understanding_actor_permission_contract.py
+            tests/test_enterprise_understanding_actor_permission_contract.py \
+            tests/test_enterprise_understanding_structure_first_facts.py \
+            tests/test_enterprise_understanding_fact_slots.py
