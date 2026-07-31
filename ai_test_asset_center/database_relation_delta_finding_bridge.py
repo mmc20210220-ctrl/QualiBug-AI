@@ -98,6 +98,7 @@ def _relation_snapshot(raw: Any) -> dict[str, Any]:
     row = _dict(raw)
     return {
         "draft_id": _text(row.get("draft_id")),
+        "relation_pair_id": _text(row.get("relation_pair_id")),
         "phase": _text(row.get("phase")),
         "phase_receipt_id": _text(row.get("phase_receipt_id")),
         "receipt_id": _text(row.get("receipt_id")),
@@ -173,6 +174,7 @@ def build_database_relation_delta_finding_evidence(
         "difference": actual.get("difference"),
         "tolerance": actual.get("tolerance"),
         "lineage_match": actual.get("lineage_match") is True,
+        "relation_pair_match": actual.get("relation_pair_match") is True,
         "root_identity_match": actual.get("root_identity_match") is True,
         "relation_identity_match": actual.get("relation_identity_match") is True,
         "cross_observer_identity_match": actual.get("cross_observer_identity_match") is True,
@@ -226,6 +228,7 @@ def enrich_database_relation_delta_finding(
         "schema": FINDING_EVIDENCE_SCHEMA,
         "database_relationship_id": evidence_payload["database_relationship_id"],
         "relation_key": evidence_payload["relation_key"],
+        "relation_pair_id": evidence_payload["relation_pair_id"],
         "root_table_ref": evidence_payload["root_table_ref"],
         "root_database_field_id": evidence_payload["root_database_field_id"],
         "child_table_ref": evidence_payload["child_table_ref"],
@@ -243,6 +246,7 @@ def enrich_database_relation_delta_finding(
             "weighted_right_delta": evidence_payload["weighted_right_delta"],
             "difference": evidence_payload["difference"],
             "lineage_match": evidence_payload["lineage_match"],
+            "relation_pair_match": evidence_payload["relation_pair_match"],
             "cross_observer_identity_match": evidence_payload["cross_observer_identity_match"],
             "relation_scope_match": evidence_payload["relation_scope_match"],
             "aggregate_request_match": evidence_payload["aggregate_request_match"],
