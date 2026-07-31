@@ -31,8 +31,16 @@ def _source_item(
                 "block_id": f"{source_id}:block:{index}",
                 "type": "PARAGRAPH",
                 "region": "body",
+                "order": index,
                 "text": f"规则{index}",
+                "source_hash": f"hash:{source_id}",
                 "source_locator": f"{filename}#block={index};chars=0-3",
+                "evidence_address": {
+                    "source_id": source_id,
+                    "source_hash": f"hash:{source_id}",
+                    "source_locator": f"{filename}#block={index};chars=0-3",
+                    "address_kind": "EXACT_SOURCE_LOCATOR",
+                },
             }
             for index in range(1, formal + 1)
         ],
@@ -44,6 +52,7 @@ def _source_item(
             "status": evidence_status,
             "source_id": source_id,
             "filename": filename,
+            "source_hash": f"hash:{source_id}",
             "formal_authority_block_count": formal,
             "source_hash_bound_block_count": formal,
             "traceable_authority_block_count": traceable,
@@ -142,7 +151,10 @@ def test_exact_receipts_pass_integrity_but_do_not_self_certify_structure_recall(
     assert summary["exact_address_rate"] == 1.0
     assert summary["receipt_integrity_gate_pass"] is True
     assert summary["five_of_five_readiness_status"] == (
-        "RECEIPT_INTEGRITY_PASS_GROUND_TRUTH_RECALL_NOT_MEASURED"
+        "RECEIPT_INTEGRITY_PASS_DOCUMENT_GROUND_TRUTH_NOT_DECLARED"
+    )
+    assert summary["next_five_of_five_gap"] == (
+        "DOCUMENT_STRUCTURE_GROUND_TRUTH_NOT_DECLARED"
     )
     assert summary["structure_block_recall_measured"] is False
     assert summary["table_reconstruction_recall_measured"] is False
@@ -227,12 +239,16 @@ def test_existing_benchmark_emits_ingestion_outputs_without_mutating_product_ass
 
     assert result["ingestion_evidence_measurement"]["status"] == "PASS"
     assert result["workflow_receipt"]["product_ingestion_receipts_are_ground_truth"] is False
-    assert result["next_ingestion_repair_target"] == "NONE"
+    assert result["next_ingestion_repair_target"] == (
+        "DOCUMENT_STRUCTURE_GROUND_TRUTH_NOT_DECLARED"
+    )
     assert asset == before
     assert (tmp_path / "ingestion_metric_summary.json").exists()
     assert (tmp_path / "evidence_address_analysis.json").exists()
     assert (tmp_path / "structure_loss_analysis.json").exists()
     assert (tmp_path / "format_coverage_analysis.json").exists()
+    assert (tmp_path / "document_structure_ground_truth_alignment.json").exists()
+    assert (tmp_path / "document_structure_ground_truth_metrics.json").exists()
     report = (tmp_path / "report.md").read_text(encoding="utf-8")
     assert "多源接入与证据定位回执测量" in report
-    assert "不能由产品自证为100%" in report
+    assert "产品回执不能替代人工真值" in report
