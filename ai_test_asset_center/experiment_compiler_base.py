@@ -53,6 +53,49 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _blocked_copy(
+    experiment: dict[str, Any],
+    *,
+    reason_code: str,
+    detail: str,
+) -> dict[str, Any]:
+    blocked = deepcopy(experiment)
+    blocked["control_plan"] = []
+    blocked["treatment_plan"] = []
+    blocked["cleanup_plan"] = []
+    blocked["compile_receipt"] = {
+        "status": "BLOCKED",
+        "reason_code": reason_code,
+        "detail": detail,
+    }
+    return blocked
+
+
+def _block_multi_write_graph_equivalence(
+    experiment: dict[str, Any],
+) -> dict[str, Any]:
+    """Keep completion honest until equivalence is scoped per graph write step."""
+    write_step_ids = [
+        _text(value)
+        for value in _list(
+            _dict(experiment.get("process_graph_write_contract")).get(
+                "write_step_ids"
+            )
+        )
+        if _text(value)
+    ]
+    if len(write_step_ids) <= 1:
+        return experiment
+    return _blocked_copy(
+        experiment,
+        reason_code="BLOCKED_GRAPH_MULTI_WRITE_EQUIVALENCE_UNAVAILABLE",
+        detail=(
+            "per_source_step_cleanup_equivalence_not_available:"
+            + ",".join(write_step_ids)
+        ),
+    )
+
+
 def _block_uncovered_graph_precondition_writes(
     experiment: dict[str, Any], behavior_ir: dict[str, Any]
 ) -> dict[str, Any]:
@@ -69,20 +112,19 @@ def _block_uncovered_graph_precondition_writes(
         operation = _dict(operations.get(operation_ref))
         method = _text(row.get("method") or operation.get("method")).upper()
         if method in {"POST", "PUT", "PATCH", "DELETE"}:
-            uncovered.append(step_id or operation_ref or "unknown_precondition_write")
+            uncovered.append(
+                step_id or operation_ref or "unknown_precondition_write"
+            )
     if not uncovered:
         return experiment
-    blocked = deepcopy(experiment)
-    blocked["control_plan"] = []
-    blocked["treatment_plan"] = []
-    blocked["cleanup_plan"] = []
-    blocked["compile_receipt"] = {
-        "status": "BLOCKED",
-        "reason_code": "BLOCKED_STEP_CLEANUP_UNCOVERED",
-        "detail": "graph_precondition_writes_not_in_global_reverse_cleanup:"
-        + ",".join(uncovered),
-    }
-    return blocked
+    return _blocked_copy(
+        experiment,
+        reason_code="BLOCKED_STEP_CLEANUP_UNCOVERED",
+        detail=(
+            "graph_precondition_writes_not_in_global_reverse_cleanup:"
+            + ",".join(uncovered)
+        ),
+    )
 
 
 def _finalize_compiled_experiment(
@@ -94,6 +136,7 @@ def _finalize_compiled_experiment(
         experiment,
         behavior_ir,
     )
+    graph_safe = _block_multi_write_graph_equivalence(graph_safe)
     graph_safe = _block_uncovered_graph_precondition_writes(
         graph_safe,
         behavior_ir,
@@ -172,7 +215,8 @@ def compile_experiments(
                     for ir_id, ir_op in operations.items():
                         if (
                             isinstance(ir_op, dict)
-                            and _text(ir_op.get("method")).upper() == locator_method
+                            and _text(ir_op.get("method")).upper()
+                            == locator_method
                             and normalize_path_placeholders(
                                 _text(ir_op.get("path") or ir_op.get("raw_path"))
                             )
