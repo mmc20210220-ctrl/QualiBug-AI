@@ -11,6 +11,7 @@ on:
       - "tests/test_enterprise_understanding_explicit_fact_commit_status.py"
       - "tests/test_enterprise_understanding_ground_truth_quarantine.py"
       - "tests/test_enterprise_understanding_fact_probe_policy.py"
+      - "tests/test_enterprise_understanding_fact_slot_document.py"
       - "tests/test_enterprise_understanding_fact_slots.py"
       - "tests/test_enterprise_understanding_fact_slot_report.py"
       - "tests/test_enterprise_understanding_post_compile_governance.py"
@@ -70,6 +71,7 @@ jobs:
             tests/test_enterprise_understanding_explicit_fact_commit_status.py \
             tests/test_enterprise_understanding_ground_truth_quarantine.py \
             tests/test_enterprise_understanding_fact_probe_policy.py \
+            tests/test_enterprise_understanding_fact_slot_document.py \
             tests/test_enterprise_understanding_fact_slots.py \
             tests/test_enterprise_understanding_fact_slot_report.py \
             tests/test_enterprise_understanding_post_compile_governance.py \
