@@ -40,6 +40,7 @@
     "ai_test_asset_center.experiment_compiler_support": "core",
     "ai_test_asset_center.experiment_compiler_obligation": "core",
     "ai_test_asset_center.experiment_executor": "core",
+    "ai_test_asset_center.experiment_executor_core": "core",
     "ai_test_asset_center.contract_oracles": "core",
     "ai_test_asset_center.customer_delivery_gate": "core",
     "ai_test_asset_center.v12_pipeline": "compatibility",
