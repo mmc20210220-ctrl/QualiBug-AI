@@ -1,11 +1,16 @@
 """Derived migration view for stored historical authorization artifacts.
 
 The source attempt ledger, Gate receipts, findings, and replay evidence are never
-rewritten.  When the quarantine authority identifies unverifiable historical
+rewritten. When the quarantine authority identifies unverifiable historical
 authorization occurrences, this adapter rebuilds only the current canonical registry
-from the non-quarantined formal scope and seals a migration receipt.  The old registry
+from the non-quarantined formal scope and seals a migration receipt. The old registry
 is represented only by its fingerprint, so obsolete customer-visible claims remain
 auditable without being republished.
+
+When a stored artifact lacks a still-formal occurrence needed for registry rebuilding,
+the migration becomes REBUILD_BLOCKED: the obsolete registry is removed from the
+derived view and publication remains disabled. Present-but-contradictory evidence is
+still a hard error and is never converted into a compatibility result.
 """
 from __future__ import annotations
 
@@ -56,20 +61,30 @@ def _fingerprint(value: Any) -> str:
     return hashlib.sha256(_canonical(value).encode("utf-8")).hexdigest()
 
 
+def _finding_id(value: dict[str, Any]) -> str:
+    row = _dict(value)
+    return _text(row.get("finding_id") or row.get("id") or row.get("bug_id"))
+
+
 def _migration_receipt(
     *,
     quarantine: dict[str, Any],
     superseded_registry_fingerprint: str,
     rebuilt_registry_fingerprint: str,
     rebuilt_occurrence_count: int,
+    rebuild_reason: str = "",
 ) -> dict[str, Any]:
+    quarantined = int(quarantine.get("quarantine_count") or 0) > 0
+    status = (
+        "REBUILD_BLOCKED"
+        if _text(rebuild_reason)
+        else "MIGRATED"
+        if quarantined
+        else "CLEAR"
+    )
     payload = {
         "schema_version": MIGRATION_RECEIPT_SCHEMA,
-        "status": (
-            "MIGRATED"
-            if int(quarantine.get("quarantine_count") or 0) > 0
-            else "CLEAR"
-        ),
+        "status": status,
         "run_id": _text(quarantine.get("run_id")),
         "campaign_id": _text(quarantine.get("campaign_id")),
         "attempt_ledger_fingerprint": _text(
@@ -84,6 +99,7 @@ def _migration_receipt(
         "rebuilt_registry_fingerprint": _text(
             rebuilt_registry_fingerprint
         ),
+        "rebuild_reason": _text(rebuild_reason),
         "quarantined_finding_ids": list(
             quarantine.get("quarantined_finding_ids") or []
         ),
@@ -111,6 +127,7 @@ def validate_historical_authorization_artifact_migration_receipt(
         "quarantine_projection_fingerprint",
         "superseded_registry_fingerprint",
         "rebuilt_registry_fingerprint",
+        "rebuild_reason",
         "quarantined_finding_ids",
         "rebuilt_delivery_occurrence_count",
         "source_evidence_rewritten",
@@ -125,7 +142,8 @@ def validate_historical_authorization_artifact_migration_receipt(
         raise HistoricalAuthorizationArtifactMigrationError(
             "historical_authorization_migration_receipt_schema_invalid"
         )
-    if row.get("status") not in {"CLEAR", "MIGRATED"}:
+    status = _text(row.get("status")).upper()
+    if status not in {"CLEAR", "MIGRATED", "REBUILD_BLOCKED"}:
         raise HistoricalAuthorizationArtifactMigrationError(
             "historical_authorization_migration_receipt_status_invalid"
         )
@@ -141,11 +159,11 @@ def validate_historical_authorization_artifact_migration_receipt(
         raise HistoricalAuthorizationArtifactMigrationError(
             "historical_authorization_migration_ids_invalid"
         )
-    if row.get("status") == "MIGRATED" and not ids:
+    if status in {"MIGRATED", "REBUILD_BLOCKED"} and not ids:
         raise HistoricalAuthorizationArtifactMigrationError(
             "historical_authorization_migration_ids_missing"
         )
-    if row.get("status") == "CLEAR" and ids:
+    if status == "CLEAR" and ids:
         raise HistoricalAuthorizationArtifactMigrationError(
             "historical_authorization_migration_clear_with_ids"
         )
@@ -154,12 +172,27 @@ def validate_historical_authorization_artifact_migration_receipt(
         "campaign_id",
         "attempt_ledger_fingerprint",
         "quarantine_projection_fingerprint",
-        "rebuilt_registry_fingerprint",
     ):
         if not _text(row.get(field)):
             raise HistoricalAuthorizationArtifactMigrationError(
                 f"historical_authorization_migration_identity_missing:{field}"
             )
+    if status == "REBUILD_BLOCKED":
+        if (
+            not _text(row.get("rebuild_reason"))
+            or _text(row.get("rebuilt_registry_fingerprint"))
+            or int(row.get("rebuilt_delivery_occurrence_count") or 0) != 0
+        ):
+            raise HistoricalAuthorizationArtifactMigrationError(
+                "historical_authorization_migration_blocked_semantics_invalid"
+            )
+    elif (
+        _text(row.get("rebuild_reason"))
+        or not _text(row.get("rebuilt_registry_fingerprint"))
+    ):
+        raise HistoricalAuthorizationArtifactMigrationError(
+            "historical_authorization_migration_rebuilt_identity_invalid"
+        )
     unsigned = {
         key: value
         for key, value in row.items()
@@ -175,6 +208,32 @@ def validate_historical_authorization_artifact_migration_receipt(
             "historical_authorization_migration_receipt_fingerprint_invalid"
         )
     return dict(row)
+
+
+def _attach_migration_view(
+    result: dict[str, Any],
+    *,
+    quarantine: dict[str, Any],
+    migration: dict[str, Any],
+    rebuilt_registry: dict[str, Any] | None,
+) -> dict[str, Any]:
+    output = dict(result)
+    output["historical_authorization_quarantine"] = quarantine
+    output["historical_authorization_artifact_migration"] = migration
+    if rebuilt_registry is None:
+        output.pop("canonical_defect_registry", None)
+    else:
+        output["canonical_defect_registry"] = rebuilt_registry
+    if isinstance(output.get("v12"), dict):
+        nested = dict(output["v12"])
+        nested["historical_authorization_quarantine"] = quarantine
+        nested["historical_authorization_artifact_migration"] = migration
+        if rebuilt_registry is None:
+            nested.pop("canonical_defect_registry", None)
+        else:
+            nested["canonical_defect_registry"] = rebuilt_registry
+        output["v12"] = nested
+    return output
 
 
 def migrate_historical_authorization_scan_result(
@@ -228,10 +287,45 @@ def migrate_historical_authorization_scan_result(
             f"historical_authorization_quarantine_invalid:{exc}"
         ) from exc
 
-    # Lazy imports avoid a cycle: canonical_defect_registry -> formal_delivery_scope
-    # -> historical_authorization_quarantine.
+    # Lazy imports avoid cycles through canonical_defect_registry/formal_delivery_scope.
     from .canonical_defect_registry import build_canonical_defect_registry
     from .discovery_mainline_contract import validate_mainline_run_contract
+    from .formal_delivery_scope import validated_delivery_gate_finding_ids
+
+    try:
+        formal_occurrence_ids = set(
+            validated_delivery_gate_finding_ids(ledger)
+        )
+    except Exception as exc:
+        raise HistoricalAuthorizationArtifactMigrationError(
+            f"historical_authorization_formal_scope_invalid:{type(exc).__name__}:{exc}"
+        ) from exc
+    materialized_occurrence_ids = {
+        _finding_id(value) for value in occurrences if _finding_id(value)
+    }
+    missing_occurrences = sorted(
+        formal_occurrence_ids - materialized_occurrence_ids
+    )
+    if missing_occurrences:
+        migration = _migration_receipt(
+            quarantine=quarantine,
+            superseded_registry_fingerprint=old_registry_fingerprint,
+            rebuilt_registry_fingerprint="",
+            rebuilt_occurrence_count=0,
+            rebuild_reason=(
+                "FORMAL_DELIVERY_OCCURRENCES_MISSING:"
+                + ",".join(missing_occurrences)
+            ),
+        )
+        migration = validate_historical_authorization_artifact_migration_receipt(
+            migration
+        )
+        return _attach_migration_view(
+            result,
+            quarantine=quarantine,
+            migration=migration,
+            rebuilt_registry=None,
+        )
 
     try:
         validated_mainline = validate_mainline_run_contract(mainline)
@@ -258,16 +352,12 @@ def migrate_historical_authorization_scan_result(
     migration = validate_historical_authorization_artifact_migration_receipt(
         migration
     )
-    result["historical_authorization_quarantine"] = quarantine
-    result["historical_authorization_artifact_migration"] = migration
-    result["canonical_defect_registry"] = rebuilt_registry
-    if isinstance(result.get("v12"), dict):
-        nested = dict(result["v12"])
-        nested["historical_authorization_quarantine"] = quarantine
-        nested["historical_authorization_artifact_migration"] = migration
-        nested["canonical_defect_registry"] = rebuilt_registry
-        result["v12"] = nested
-    return result
+    return _attach_migration_view(
+        result,
+        quarantine=quarantine,
+        migration=migration,
+        rebuilt_registry=rebuilt_registry,
+    )
 
 
 __all__ = [
