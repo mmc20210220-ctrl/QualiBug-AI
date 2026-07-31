@@ -165,3 +165,45 @@ def test_typed_fact_projection_is_idempotent():
     assert twice_ids == once_ids
     assert len(twice["risk_domains"]) == len(once["risk_domains"])
     assert len(twice["oracle_library"]) == len(once["oracle_library"])
+
+
+def test_typed_fact_does_not_duplicate_an_existing_authoritative_rule():
+    asset = _base_asset()
+    asset["rule_library"] = [
+        {
+            "rule_id": "rule:explicit-formula",
+            "source_id": "prd-1",
+            "source_type": "business_requirement",
+            "statement": "订单总额=明细金额之和",
+            "risk_type": "conservation",
+        }
+    ]
+    asset["business_fact_ledger"] = {
+        "items": [
+            {
+                "fact_id": "fact:formula",
+                "fact_type": "DERIVED_VALUE",
+                "status": "ACCEPTED",
+                "raw_statement": "订单总额 = 明细金额之和",
+                "subject": {"entity_refs": ["订单总额"]},
+                "formula_constraints": [
+                    {
+                        "raw": "订单总额 = 明细金额之和",
+                        "lhs": "订单总额",
+                        "rhs": "明细金额之和",
+                    }
+                ],
+                "source_spans": _span("formula"),
+                "confidence": 1.0,
+            }
+        ]
+    }
+
+    projected = enrich_asset_with_implicit_rule_projection(asset)
+
+    assert [row["rule_id"] for row in projected["rule_library"]] == [
+        "rule:explicit-formula"
+    ]
+    assert projected["implicit_rule_projection_gate"][
+        "typed_fact_candidate_count"
+    ] == 0
