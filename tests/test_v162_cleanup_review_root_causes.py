@@ -123,7 +123,7 @@ def test_restore_fields_require_positive_primary_identity_match() -> None:
 
 
 def test_adapter_completed_evidence_emits_restoration_verified() -> None:
-    source = inspect.getsource(cleanup_mod.execute_experiment_cleanup_compensation)
+    source = inspect.getsource(cleanup_mod._core.execute_experiment_cleanup_compensation)
     start = source.index('adapter")) == "db_sql"')
     end = source.index("continue", start) + len("continue")
     block = source[start:end]

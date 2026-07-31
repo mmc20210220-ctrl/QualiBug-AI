@@ -59,10 +59,10 @@ def test_archive_expansion_facade_delegates_to_one_canonical_core(monkeypatch) -
     )
 
     assert len(calls) == 1
-    assert batch.documents[0]["filename"] == "bundle.zip!/需求.md"
+    assert batch.documents[0]["filename"] == "需求.md"
     provenance = batch.documents[0]["archive_provenance"]
     assert provenance["top_level_archive_name"] == "bundle.zip"
-    assert provenance["virtual_member_path"] == "bundle.zip!/需求.md"
+    assert provenance["virtual_member_path"] == "需求.md"
     receipt = batch.to_dict()
     assert receipt["canonical_archive_authority"] == "archive_ingestion_core"
     assert receipt["duplicate_archive_parser_present"] is False

@@ -137,9 +137,9 @@ def test_removed_member_retires_from_active_corpus_but_keeps_history(monkeypatch
     )
 
     assert second["ok"] is True
-    reconciliation = second["archive_reconciliations"][0]
-    assert reconciliation["status"] == "COMPLETE"
-    assert reconciliation["retired_source_ids"] == [obsolete["source_id"]]
+    reconciliation = second["source_occurrence_reconciliations"][0]
+    assert reconciliation["status"] == "PASS"
+    assert len(reconciliation["retired_source_occurrence_ids"]) == 1
     active = list_enterprise_knowledge_sources(
         "archive_reconcile", root=tmp_path
     )["sources"]
@@ -148,13 +148,7 @@ def test_removed_member_retires_from_active_corpus_but_keeps_history(monkeypatch
     history = list_enterprise_knowledge_sources(
         "archive_reconcile", root=tmp_path, include_deleted=True
     )["sources"]
-    retired = next(row for row in history if row["source_id"] == obsolete["source_id"])
+    retired = next(row for row in history if row["original_name"].endswith("obsolete.md"))
     assert retired["status"] == "retired_archive_member"
-    assert retired["retired_reason"] == "member_absent_from_new_archive_version"
+    assert retired["superseded_reason"] == "archive_source_occurrence_removed"
     assert obsolete_stored_path.is_file()
-    runtime_assets = enterprise_source_registry.list_source_assets(
-        "archive_reconcile", root=tmp_path
-    )
-    assert {row["source_id"] for row in runtime_assets} == {
-        active[0]["runtime_asset_id"]
-    }

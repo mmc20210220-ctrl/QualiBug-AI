@@ -6,20 +6,20 @@ import inspect
 class TestHardGateWiring:
     def test_compiler_calls_orchestrator(self):
         """compile_experiment_for_obligation calls prepare_experiment_v12."""
-        from ai_test_asset_center.experiment_compiler_obligation import compile_experiment_for_obligation
+        from ai_test_asset_center.experiment_compiler_obligation_core import compile_experiment_for_obligation
         src = inspect.getsource(compile_experiment_for_obligation)
         assert "prepare_experiment_v12" in src
 
     def test_compiler_blocks_on_orchestrator_verdict(self):
         """Compiler returns blocked_experiment when orchestrator verdict is BLOCKED."""
-        from ai_test_asset_center.experiment_compiler_obligation import compile_experiment_for_obligation
+        from ai_test_asset_center.experiment_compiler_obligation_core import compile_experiment_for_obligation
         src = inspect.getsource(compile_experiment_for_obligation)
         assert "BLOCKED" in src
         assert "blocked_experiment" in src
 
     def test_executor_validates_binding_provenance(self):
         """Executor validates runtime binding provenance."""
-        from ai_test_asset_center.experiment_executor import execute_one_experiment
+        from ai_test_asset_center.experiment_executor_core import execute_one_experiment
         src = inspect.getsource(execute_one_experiment)
         assert "BLOCKED_BINDING_GRAPH_INVALID" in src
 

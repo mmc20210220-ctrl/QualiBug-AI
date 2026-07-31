@@ -119,6 +119,7 @@ def authorization_attempt_requires_causal_delivery(
             _dict(finding.get("oracle")).get(
                 "authorization_causality_receipt_id"
             )
+        )
     )
 
 

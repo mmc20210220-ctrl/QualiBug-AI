@@ -114,7 +114,7 @@ class TestOracleIncompleteNotCompiled:
 class TestOracleRuntimeGate:
     def test_finalizer_blocks_empty_observations(self):
         """Finalizer code contains runtime oracle input validation."""
-        from ai_test_asset_center.experiment_outcome_finalizer import finalize_experiment_execution
+        from ai_test_asset_center.experiment_outcome_finalizer_core import finalize_experiment_execution
         src = inspect.getsource(finalize_experiment_execution)
         # Must check for observation data before calling oracle
         assert "BLOCKED_ORACLE_INPUT_INCOMPLETE" in src
@@ -141,7 +141,7 @@ class TestBindingGraphBlockedNotTransport:
 
     def test_executor_blocks_provenance_violations(self):
         """Executor returns BLOCKED_BINDING_GRAPH_INVALID for synthetic bindings."""
-        from ai_test_asset_center.experiment_executor import execute_one_experiment
+        from ai_test_asset_center.experiment_executor_core import execute_one_experiment
         src = inspect.getsource(execute_one_experiment)
         assert "BLOCKED_BINDING_GRAPH_INVALID" in src
         assert "_provenance_violations" in src
@@ -183,7 +183,7 @@ class TestSyntheticBindingNotTransport:
 
     def test_executor_detects_synthetic_values(self):
         """Executor detects qb_test_/qb-test- synthetic values."""
-        from ai_test_asset_center.experiment_executor import execute_one_experiment
+        from ai_test_asset_center.experiment_executor_core import execute_one_experiment
         src = inspect.getsource(execute_one_experiment)
         assert "qb_test_" in src
         assert "qb-test-" in src
@@ -191,7 +191,7 @@ class TestSyntheticBindingNotTransport:
 
     def test_forbidden_runtime_sources_defined(self):
         """Executor forbids degraded_synthetic/synthetic_value/random_placeholder/invented."""
-        from ai_test_asset_center.experiment_executor import execute_one_experiment
+        from ai_test_asset_center.experiment_executor_core import execute_one_experiment
         src = inspect.getsource(execute_one_experiment)
         assert "degraded_synthetic" in src
         assert "synthetic_value" in src
@@ -204,7 +204,7 @@ class TestSyntheticBindingNotTransport:
 class TestUnverifiedRuntimeBinding:
     def test_executor_checks_compile_graph_membership(self):
         """Executor verifies bindings exist in compile graph."""
-        from ai_test_asset_center.experiment_executor import execute_one_experiment
+        from ai_test_asset_center.experiment_executor_core import execute_one_experiment
         src = inspect.getsource(execute_one_experiment)
         assert "_compile_node_targets" in src
         assert "undeclared_runtime_binding" in src

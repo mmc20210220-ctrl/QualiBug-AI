@@ -894,7 +894,7 @@ def ingest_enterprise_knowledge_archives(
     stored_artifacts: list[dict[str, Any]] = []
     for artifact in expansion.transport_artifacts:
         target = transport_dir / (
-            f"{artifact['archive_hash']}_{_safe_slug(str(artifact['filename']))}"
+            f"{str(artifact['archive_hash'])[:16]}_{_safe_slug(str(artifact['filename']))}"
         )
         if not target.exists():
             target.write_bytes(bytes(artifact["data"]))
