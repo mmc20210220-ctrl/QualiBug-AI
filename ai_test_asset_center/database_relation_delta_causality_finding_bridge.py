@@ -121,6 +121,10 @@ def _relation_scope(raw: Any) -> dict[str, Any]:
         "child_database_field_id": _text(scope.get("child_database_field_id")),
         "child_database_field_name": _text(scope.get("child_database_field_name")),
         "mapping_decision_id": _text(scope.get("mapping_decision_id")),
+        "relation_mapping_decision_id": _text(
+            scope.get("relation_mapping_decision_id")
+        ),
+        "relation_authority_match": scope.get("relation_authority_match") is True,
         "attribution_mode": _text(scope.get("attribution_mode")),
         "causal_attribution_parameter_fingerprints": [
             _text(value)
@@ -160,14 +164,38 @@ def build_database_relation_causal_delta_finding_evidence(
             expected.get("child_database_field_name")
         ),
         "mapping_decision_id": _text(expected.get("mapping_decision_id")),
+        "causal_mapping_decision_id": _text(
+            expected.get("causal_mapping_decision_id")
+            or expected.get("mapping_decision_id")
+        ),
+        "bound_causal_mapping_decision_id": _text(
+            expected.get("bound_causal_mapping_decision_id")
+        ),
+        "relation_mapping_decision_id": _text(
+            expected.get("relation_mapping_decision_id")
+        ),
+        "authority_basis": _text(expected.get("authority_basis")),
+        "relation_authority_match": actual.get("relation_authority_match") is True,
+        "automatic_authority_selection_used": actual.get(
+            "automatic_authority_selection_used"
+        ) is True,
         "attribution_mode": _text(expected.get("attribution_mode")),
+        "causal_scope_semantic_match": actual.get(
+            "causal_scope_semantic_match"
+        ) is True,
+        "transport_receipt_integrity_valid": actual.get(
+            "transport_receipt_integrity_valid"
+        ) is True,
         "transport_scope_match": actual.get("transport_scope_match") is True,
         "relation_scope_match": actual.get("relation_scope_match") is True,
         "causal_value_fingerprint_match": actual.get(
             "causal_value_fingerprint_match"
         ) is True,
         "causal_lineage_match": actual.get("causal_lineage_match") is True,
-        "transport_receipt": _transport(actual.get("transport_receipt")),
+        "transport_receipt": _transport(
+            actual.get("validated_transport_receipt")
+            or actual.get("transport_receipt")
+        ),
         "relation_before_causal_scope": _relation_scope(
             actual.get("relation_before_causal_scope")
         ),
@@ -220,7 +248,14 @@ def enrich_database_relation_causal_delta_finding(
         "treatment_step_id": payload["treatment_step_id"],
         "value_source": payload["value_source"],
         "child_database_field_id": payload["child_database_field_id"],
-        "mapping_decision_id": payload["mapping_decision_id"],
+        "causal_mapping_decision_id": payload["causal_mapping_decision_id"],
+        "bound_causal_mapping_decision_id": payload[
+            "bound_causal_mapping_decision_id"
+        ],
+        "relation_mapping_decision_id": payload[
+            "relation_mapping_decision_id"
+        ],
+        "authority_basis": payload["authority_basis"],
         "transport_receipt": payload["transport_receipt"],
         "relation_before_causal_scope": payload[
             "relation_before_causal_scope"
@@ -229,6 +264,16 @@ def enrich_database_relation_causal_delta_finding(
             "relation_after_causal_scope"
         ],
         "actual": {
+            "relation_authority_match": payload["relation_authority_match"],
+            "automatic_authority_selection_used": payload[
+                "automatic_authority_selection_used"
+            ],
+            "causal_scope_semantic_match": payload[
+                "causal_scope_semantic_match"
+            ],
+            "transport_receipt_integrity_valid": payload[
+                "transport_receipt_integrity_valid"
+            ],
             "transport_scope_match": payload["transport_scope_match"],
             "relation_scope_match": payload["relation_scope_match"],
             "causal_value_fingerprint_match": payload[
@@ -253,7 +298,7 @@ def enrich_database_relation_causal_delta_finding(
     enriched["database_relation_causal_delta_evidence"] = payload
     quality = _dict(enriched.get("evidence_quality"))
     quality["database_evidence_strength"] = (
-        "EXACT_OPERATION_ATTRIBUTED_FK_SCOPED_AGGREGATE_DELTA"
+        "EXACT_OPERATION_ATTRIBUTED_APPROVED_RELATION_DELTA"
     )
     enriched["evidence_quality"] = quality
     enriched["gate_passed"] = finding.get("gate_passed") is True
