@@ -134,7 +134,6 @@ def connector_write_fence(
     try:
         assert_connector_write_fence()
         yield dict(context)
-        assert_connector_write_fence()
     finally:
         if stack and stack[-1] is context:
             stack.pop()
