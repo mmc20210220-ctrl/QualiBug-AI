@@ -64,6 +64,47 @@ def assess_understanding_model(
     traceable_entries = [row for row in formal_entries if as_list(row.get("evidence"))]
     operations = [row for row in as_list(model.get("operations")) if isinstance(row, dict)]
     bound_operations = [row for row in operations if as_list(row.get("object_refs"))]
+    actors = [row for row in as_list(model.get("actors")) if isinstance(row, dict)]
+    authorization_contracts = [
+        contract
+        for actor in actors
+        for contract in as_list(actor.get("authorization_contracts"))
+        if isinstance(contract, dict)
+    ]
+    authorization_unknowns = [
+        row
+        for row in as_list(model.get("authorization_unknowns"))
+        if isinstance(row, dict)
+    ]
+    authorization_allow = [
+        row for row in authorization_contracts if text(row.get("decision")) == "ALLOW"
+    ]
+    authorization_deny = [
+        row for row in authorization_contracts if text(row.get("decision")) == "DENY"
+    ]
+    authorization_unknown_contracts = [
+        row for row in authorization_contracts if text(row.get("decision")) == "UNKNOWN"
+    ]
+    declared_authorization_actors = [
+        row
+        for row in actors
+        if text(row.get("authorization_status")) in {"RESOLVED", "UNRESOLVED"}
+    ]
+    resolved_authorization_actors = [
+        row for row in actors if text(row.get("authorization_status")) == "RESOLVED"
+    ]
+    responsibility_only_actors = [
+        row
+        for row in actors
+        if as_list(row.get("responsibility_operation_refs"))
+        and text(row.get("authorization_status")) == "NOT_DECLARED"
+    ]
+    unspecified_scope_contracts = [
+        row
+        for row in authorization_contracts
+        if text(row.get("scope")).lower() in {"", "unspecified"}
+        or (isinstance(row.get("scope"), dict) and not row.get("scope"))
+    ]
     lifecycles = [row for row in as_list(model.get("lifecycles")) if isinstance(row, dict)]
     lifecycle_transitions = [
         transition
@@ -85,7 +126,7 @@ def assess_understanding_model(
 
     metrics = {
         "business_object_count": len(as_list(model.get("business_objects"))),
-        "actor_count": len(as_list(model.get("actors"))),
+        "actor_count": len(actors),
         "operation_count": len(operations),
         "object_relation_count": len(as_list(model.get("object_relations"))),
         "lifecycle_count": len(lifecycles),
@@ -97,6 +138,23 @@ def assess_understanding_model(
         "incomplete_behavior_count": len(incomplete_behaviors),
         "conflicted_behavior_count": len(conflicted_behaviors),
         "behavior_conflict_count": len(as_list(model.get("behavior_conflicts"))),
+        "authorization_contract_count": len(authorization_contracts),
+        "authorization_allow_count": len(authorization_allow),
+        "authorization_deny_count": len(authorization_deny),
+        "authorization_unknown_contract_count": len(authorization_unknown_contracts),
+        "authorization_unknown_count": len(authorization_unknowns),
+        "authorization_declared_actor_count": len(declared_authorization_actors),
+        "authorization_resolved_actor_count": len(resolved_authorization_actors),
+        "responsibility_only_actor_count": len(responsibility_only_actors),
+        "authorization_unspecified_scope_count": len(unspecified_scope_contracts),
+        "authorization_resolution_rate": ratio(
+            len(authorization_allow) + len(authorization_deny),
+            len(authorization_contracts),
+        ),
+        "actor_authorization_resolution_rate": ratio(
+            len(resolved_authorization_actors),
+            len(declared_authorization_actors),
+        ),
         "unknown_count": len(unknowns),
         "critical_unknown_count": len(critical_unknowns),
         "unresolved_conflict_count": len(conflicts),
@@ -116,6 +174,7 @@ def assess_understanding_model(
         metrics["operation_object_binding_rate"],
         metrics["lifecycle_transition_completeness"],
         metrics["behavior_source_traceability_rate"],
+        metrics["authorization_resolution_rate"],
         1.0 if not critical_unknowns else 0.0,
         1.0 if not conflicts else 0.0,
         1.0 if not structural_violations else 0.0,
@@ -150,6 +209,14 @@ def assess_understanding_model(
         blocking_reasons = []
 
     entry_allowed = status == "PASS"
+    if not authorization_contracts:
+        authorization_status = "NOT_DECLARED"
+    elif authorization_unknown_contracts or authorization_unknowns:
+        authorization_status = "PARTIAL_AUTHORIZATION_UNRESOLVED"
+    else:
+        authorization_status = "PASS"
+    authorization_entry_allowed = authorization_status in {"PASS", "NOT_DECLARED"}
+
     return {
         "schema": GATE_SCHEMA,
         "status": status,
@@ -157,6 +224,20 @@ def assess_understanding_model(
         "quality_claim": "MODEL_COMPLETENESS_PROJECTION_NOT_RECALL",
         "language_contract": "CHINESE_SOURCE_TEXT_IS_FACT_AUTHORITY",
         "metrics": metrics,
+        "authorization_gate": {
+            "schema": "qualibug.enterprise-authorization-gate.v1",
+            "status": authorization_status,
+            "entry_allowed": authorization_entry_allowed,
+            "unknown_never_authorizes": True,
+            "unknown_never_denies": True,
+            "responsibility_is_permission": False,
+            "unresolved": authorization_unknowns,
+            "required_operator_action": (
+                "resolve source-backed role/resource/action/decision coordinates before compiling authorization obligations"
+                if not authorization_entry_allowed
+                else ""
+            ),
+        },
         "blocking_reasons": blocking_reasons,
         "critical_unknowns": critical_unknowns,
         "unresolved_conflicts": conflicts,
