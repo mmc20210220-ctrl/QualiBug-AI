@@ -26,6 +26,10 @@ from .event_observer_runtime_projection import (
     project_event_observers_into_materializations,
     project_event_observers_into_runtime_plans,
 )
+from .event_observer_scenario_projection import (
+    project_event_requirements_to_execution_contracts,
+    project_event_requirements_to_scenarios,
+)
 from .runtime_materialization_security import (
     project_secure_runtime_materializations_to_asset,
 )
@@ -104,6 +108,10 @@ def project_governed_scenario_execution_contracts(
     asset["scenario_ir"] = scenarios
     model["scenario_ir"] = [dict(row) for row in scenarios]
 
+    # Event contracts are semantic expectations as well as observer definitions.
+    # Project their source-declared type/count/window before any execution contract
+    # is compiled so the oracle is visible at every downstream layer.
+    project_event_requirements_to_scenarios(asset, model)
     project_binding_identities_to_scenario_ir(asset, model)
     governance = as_dict(asset.get("governance"))
     governance.update(
@@ -122,6 +130,7 @@ def project_governed_scenario_execution_contracts(
     asset["governance"] = governance
 
     project_scenario_execution_contracts(asset, model)
+    project_event_requirements_to_execution_contracts(asset, model)
     project_binding_identities_to_execution_contracts(asset, model)
     close_execution_contract_binding_identities(asset, model)
 
@@ -159,6 +168,7 @@ def project_governed_scenario_execution_contracts(
             "approved_database_observer_phase_projection_follows_materialization": True,
             "formal_event_observer_projection_precedes_runtime_materialization": True,
             "formal_event_observer_assertion_draft_follows_materialization": True,
+            "formal_event_semantics_projected_before_execution_contract": True,
             "scenario_contract_runtime_plan_materialization_share_binding_ids": True,
             "formal_ui_contracts_reuse_source_ui_contract_authority": True,
             "formal_event_contracts_reuse_source_event_contract_authority": True,
