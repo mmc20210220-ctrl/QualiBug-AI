@@ -27,6 +27,9 @@ def _result() -> dict:
                 "exact_fact_rate": 0.5,
                 "slot_exact_accuracy": 0.8,
                 "p0_exact_fact_recall": 0.625,
+                "source_locator_annotated_fact_count": 12,
+                "source_locator_exact_fact_count": 11,
+                "source_locator_exact_accuracy": 11 / 12,
                 "missing_fact_count": 2,
                 "ambiguous_fact_count": 1,
             },
@@ -55,6 +58,8 @@ def test_fact_slot_measurement_is_a_first_class_benchmark_output(tmp_path) -> No
         (tmp_path / "business_fact_slot_alignments.json").read_text(encoding="utf-8")
     )
     assert measurement["metrics"]["annotated_fact_count"] == 12
+    assert measurement["metrics"]["source_locator_annotated_fact_count"] == 12
+    assert measurement["metrics"]["source_locator_exact_fact_count"] == 11
     assert measurement["ground_truth_generated_from_product_output"] is False
     assert alignments[0]["candidate_id"] == "fact:1"
 
@@ -66,3 +71,6 @@ def test_markdown_report_surfaces_explicit_fact_metrics() -> None:
     assert "显式事实召回率 | 75.0%" in report
     assert "槽位精确准确率 | 80.0%" in report
     assert "P0显式事实精确召回率 | 62.5%" in report
+    assert "精确地址标注事实数 | 12" in report
+    assert "精确地址命中事实数 | 11" in report
+    assert "事实级精确证据地址准确率 | 91.7%" in report
