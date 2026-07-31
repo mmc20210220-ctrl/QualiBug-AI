@@ -65,6 +65,7 @@ on:
       - "tests/test_process_step_semantic_view.py"
       - "tests/test_process_step_canonical_timeline.py"
       - "tests/test_process_step_graph_aggregate_scope.py"
+      - "tests/test_process_step_bundle_receipt_separation.py"
       - "tests/test_experiment_outcome_finalizer_exact_scope_facade.py"
       - "tests/test_finalizer_cleanup_verification_scope.py"
       - "tests/test_experiment_lifecycle_runtime.py"
@@ -173,6 +174,7 @@ jobs:
             tests/test_process_step_semantic_view.py \
             tests/test_process_step_canonical_timeline.py \
             tests/test_process_step_graph_aggregate_scope.py \
+            tests/test_process_step_bundle_receipt_separation.py \
             tests/test_experiment_outcome_finalizer_exact_scope_facade.py \
             tests/test_finalizer_cleanup_verification_scope.py \
             tests/test_experiment_lifecycle_runtime.py \
