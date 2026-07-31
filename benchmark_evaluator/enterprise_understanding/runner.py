@@ -7,6 +7,7 @@ from benchmark_evaluator.scored_run_comparison import _fingerprint
 
 from .alignment import align_enterprise_understanding
 from .document_ground_truth import DOCUMENT_GROUND_TRUTH_KEY
+from .fact_slot_document import validate_business_fact_slot_document
 from .fact_slots import evaluate_business_fact_slots
 from .ground_truth import SUPPORTED_COLLECTIONS, validate_ground_truth
 from .ingestion_evidence import measure_ingestion_evidence
@@ -33,7 +34,9 @@ def run_benchmark(
     *,
     output_dir: str | None = None,
 ) -> dict[str, Any]:
-    validated = validate_ground_truth(ground_truth)
+    validated = validate_business_fact_slot_document(
+        validate_ground_truth(ground_truth)
+    )
     model = _model(product_asset)
     ground_truth_fingerprint = _fingerprint(validated)
     product_asset_fingerprint = _fingerprint(product_asset)
@@ -79,6 +82,11 @@ def run_benchmark(
                 fact_slot_measurement.get("metrics", {}).get("annotated_fact_count")
                 if isinstance(fact_slot_measurement.get("metrics"), dict)
                 else 0
+            ),
+            "contract_validated": bool(
+                (validated.get("validation_receipt") or {}).get(
+                    "business_fact_slot_contract_validated"
+                )
             ),
             "generated_from_product_output": False,
         },
@@ -159,6 +167,11 @@ def run_benchmark(
         "document_ground_truth_measurement_status": document_measurement.get("status"),
         "document_ground_truth_highest_impact_gap": document_measurement.get(
             "highest_impact_gap"
+        ),
+        "business_fact_slot_contract_validated": bool(
+            (validated.get("validation_receipt") or {}).get(
+                "business_fact_slot_contract_validated"
+            )
         ),
         "business_fact_slot_measurement_status": fact_slot_measurement.get("status"),
         "business_fact_slot_exact_accuracy": fact_slot_metrics.get("slot_exact_accuracy"),
