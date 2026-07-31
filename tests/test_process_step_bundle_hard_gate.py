@@ -74,7 +74,11 @@ def _step_rows() -> list[dict]:
     return ProcessStepSemanticView(ledger, observations).all_rows()
 
 
-def _bundle(step_rows: list[dict]):
+def _bundle(
+    step_rows: list[dict],
+    *,
+    grouped_receipt_ids: list[str] | None = None,
+):
     step_receipts = [
         _envelope(PROCESS_STEP_RECEIPT_SCHEMA, row["receipt_id"], row)
         for row in step_rows
@@ -117,7 +121,11 @@ def _bundle(step_rows: list[dict]):
         receipts=receipts,
         compile_receipt_id="compile-1",
         fixture_provenance_receipt_ids=["fixture-r1"],
-        required_step_receipt_ids=[row["receipt_id"] for row in step_rows],
+        required_step_receipt_ids=(
+            grouped_receipt_ids
+            if grouped_receipt_ids is not None
+            else [row["receipt_id"] for row in step_rows]
+        ),
         transport_receipt_ids=["transport-1"],
         observation_receipt_ids=["observation-1"],
         oracle_invocation_receipt_ids=["oracle-1"],
@@ -171,6 +179,16 @@ def test_removed_step_is_detected_from_sealed_recorded_set() -> None:
     result = _lifecycle(bundle)
     assert result["lifecycle_state"] == "RECEIPT_INCOMPLETE"
     assert result["reason_code"] == "PROCESS_STEP_SET_MISMATCH"
+
+
+def test_ungrouped_step_envelope_cannot_hide_as_optional_extra_receipt() -> None:
+    rows = _step_rows()
+    bundle = _bundle(rows, grouped_receipt_ids=[rows[0]["receipt_id"]])
+
+    audit = bundle["process_step_audit"]
+    assert bundle["complete"] is False
+    assert "process_step_receipt_group_mismatch" in bundle["validation_errors"]
+    assert audit["group_missing_receipt_ids"] == [rows[1]["receipt_id"]]
 
 
 def test_mixed_ledger_id_is_identity_mismatch() -> None:
