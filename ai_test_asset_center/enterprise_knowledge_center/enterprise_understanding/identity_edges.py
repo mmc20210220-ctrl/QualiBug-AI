@@ -1,10 +1,10 @@
 """Source-declared identity edges; no fuzzy or industry-name authority."""
 from __future__ import annotations
 
-import re
 from collections import defaultdict
 from typing import Any
 
+from .identity_evidence_policy import classify_identity_fact
 from .identity_types import (
     HARD_IDENTITY_CLASSES,
     IDENTITY_EDGE_SCHEMA,
@@ -13,26 +13,9 @@ from .identity_types import (
 )
 from .schema import as_dict, as_list, dedupe_evidence, evidence_from_fact, stable_id, text
 
-_FORMULA = re.compile(r"[=＝+＋×*÷/<>]|(?:加|减|乘|除).*(?:金额|数量|单价)")
-
 
 def identity_evidence_class(fact: dict[str, Any]) -> str:
-    explicit = text(fact.get("identity_evidence_class"))
-    if explicit:
-        return explicit
-    statement = text(fact.get("raw_statement"))
-    alias = text(fact.get("alias"))
-    if _FORMULA.search(alias) or _FORMULA.search(statement):
-        return "DEFINITION"
-    if re.search(r"更名为|改称|原名|旧称|新名称", statement):
-        return "RENAMING"
-    if re.search(r"以下简称|简称为|简称|缩写|[（(][^()（）]{1,32}[）)]|aka|a\.k\.a", statement, re.I):
-        return "EXPLICIT_ABBREVIATION"
-    if re.search(r"又称|也称|又名|也叫|又叫|亦称|等同于|同义于|also known as|also called", statement, re.I):
-        return "EXPLICIT_ALIAS"
-    if re.search(r"是指|指的是|定义为|定义是|即为|即是", statement):
-        return "DEFINITION"
-    return "POSSIBLE_EQUIVALENCE"
+    return classify_identity_fact(fact)
 
 
 def _pick(
@@ -54,9 +37,74 @@ def _conflicting_aliases(facts: list[dict[str, Any]]) -> set[str]:
     for fact in facts:
         if not isinstance(fact, dict) or text(fact.get("kind")) != "TERM_ALIAS":
             continue
-        if text(fact.get("status")) == "ACCEPTED" and identity_evidence_class(fact) in HARD_IDENTITY_CLASSES:
+        if (
+            text(fact.get("status")) == "ACCEPTED"
+            and identity_evidence_class(fact) in HARD_IDENTITY_CLASSES
+        ):
             values[text(fact.get("alias"))].add(text(fact.get("canonical_term")))
     return {alias for alias, canonicals in values.items() if alias and len(canonicals) > 1}
+
+
+def _exact_occurrence_edges(
+    mentions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for mention in mentions:
+        if text(mention.get("mention_type")) != "BUSINESS_OBJECT":
+            continue
+        scope = as_dict(mention.get("scope"))
+        grouped[
+            (
+                text(mention.get("raw_label")),
+                text(scope.get("system")),
+                text(scope.get("module")),
+                text(scope.get("version")),
+            )
+        ].append(mention)
+
+    edges: list[dict[str, Any]] = []
+    for key, group in grouped.items():
+        ordered = sorted(group, key=lambda row: text(row.get("mention_id")))
+        for left, right in zip(ordered, ordered[1:]):
+            scope_declared = any(key[1:])
+            same_occurrence = (
+                text(left.get("source_id")) == text(right.get("source_id"))
+                and text(left.get("source_locator")) == text(right.get("source_locator"))
+            )
+            accepted = bool(scope_declared or same_occurrence)
+            edges.append(
+                {
+                    "schema": IDENTITY_EDGE_SCHEMA,
+                    "edge_id": stable_id(
+                        "identity_edge",
+                        left.get("mention_id"),
+                        right.get("mention_id"),
+                        "EXACT_LABEL_SAME_SCOPE",
+                    ),
+                    "left_mention_id": left.get("mention_id"),
+                    "right_mention_id": right.get("mention_id"),
+                    "relation": "SAME_AS",
+                    "evidence_class": "EXACT_LABEL_SAME_SCOPE",
+                    "authority": (
+                        "EXPLICIT_SCOPE_OR_SAME_OCCURRENCE"
+                        if accepted
+                        else "CANDIDATE_ONLY_SCOPE_MISSING"
+                    ),
+                    "status": "ACCEPTED" if accepted else "CANDIDATE_ONLY",
+                    "independent_evidence_family": "EXACT_LABEL_SAME_SCOPE",
+                    "scope": {"system": key[1], "module": key[2], "version": key[3]},
+                    "evidence": dedupe_evidence(
+                        [*as_list(left.get("evidence")), *as_list(right.get("evidence"))]
+                    ),
+                    "automatic_union_allowed": accepted,
+                    "reason_code": (
+                        "EXACT_LABEL_SCOPE_PROVEN"
+                        if accepted
+                        else "EXACT_LABEL_SCOPE_MISSING"
+                    ),
+                }
+            )
+    return edges
 
 
 def build_identity_edges(
@@ -125,45 +173,7 @@ def build_identity_edges(
             }
         )
 
-    exact: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
-    for mention in mentions:
-        if text(mention.get("mention_type")) != "BUSINESS_OBJECT":
-            continue
-        scope = as_dict(mention.get("scope"))
-        exact[
-            (
-                text(mention.get("raw_label")),
-                text(scope.get("system")),
-                text(scope.get("module")),
-                text(scope.get("version")),
-            )
-        ].append(mention)
-    for key, group in exact.items():
-        ordered = sorted(group, key=lambda row: text(row.get("mention_id")))
-        for left, right in zip(ordered, ordered[1:]):
-            edges.append(
-                {
-                    "schema": IDENTITY_EDGE_SCHEMA,
-                    "edge_id": stable_id(
-                        "identity_edge",
-                        left.get("mention_id"),
-                        right.get("mention_id"),
-                        "EXACT_LABEL_SAME_SCOPE",
-                    ),
-                    "left_mention_id": left.get("mention_id"),
-                    "right_mention_id": right.get("mention_id"),
-                    "relation": "SAME_AS",
-                    "evidence_class": "EXACT_LABEL_SAME_SCOPE",
-                    "authority": "SOURCE_OCCURRENCE_IDENTITY",
-                    "status": "ACCEPTED",
-                    "independent_evidence_family": "EXACT_LABEL_SAME_SCOPE",
-                    "scope": {"system": key[1], "module": key[2], "version": key[3]},
-                    "evidence": dedupe_evidence(
-                        [*as_list(left.get("evidence")), *as_list(right.get("evidence"))]
-                    ),
-                    "automatic_union_allowed": True,
-                }
-            )
+    edges.extend(_exact_occurrence_edges(mentions))
 
     for index, raw in enumerate(as_list(asset.get("data_tables"))):
         if not isinstance(raw, dict):
