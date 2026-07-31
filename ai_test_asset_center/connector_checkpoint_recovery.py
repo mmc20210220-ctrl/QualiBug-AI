@@ -47,6 +47,18 @@ CHECKPOINT_JOURNAL_SCHEMA = "qualibug.connector-checkpoint-commit-journal.v1"
 class ConnectorCheckpointRecoveryError(ConnectorProfileError):
     """A connector transaction could not be recovered without guessing."""
 
+    def __init__(self, message: str) -> None:
+        normalized = str(message or "connector_checkpoint_recovery_failed")
+        normalized = normalized.replace(
+            "connector_sync_owner_active",
+            "connector_sync_already_running_owner_active",
+        )
+        normalized = normalized.replace(
+            "connector_sync_owner_unverified",
+            "connector_sync_lock_held_owner_unverified",
+        )
+        super().__init__(normalized)
+
 
 def _text(value: Any, limit: int = 1000) -> str:
     return str(value or "").strip()[:limit]
@@ -410,7 +422,10 @@ def _recover_stale_sync_lifecycle(
     registry = _load_connector_registry(project, root)
     instance = _instance_by_id(registry, connector)
     if instance is None:
-        raise ConnectorSyncError("connector_instance_not_registered")
+        return {
+            "action": "NO_REGISTERED_INSTANCE",
+            "replay_required": False,
+        }
     registry_epoch = _text(instance.get("active_sync_epoch_id"), 160)
     lock_epoch = _lock_epoch(project, connector, root)
     ownership = inspect_connector_sync_ownership(
