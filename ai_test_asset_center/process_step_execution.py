@@ -292,8 +292,23 @@ class ProcessStepLedger:
     def timeline(self) -> list[dict[str, Any]]:
         return list(self._timeline_events)
 
-    def executed_step_ids(self) -> list[str]:
+    def recorded_step_ids(self) -> list[str]:
+        """All steps with an authoritative terminal/attempt row, including blocks."""
         return list(self._rows.keys())
+
+    def executed_step_ids(self) -> list[str]:
+        """Steps that actually reached the target and completed execution.
+
+        A BLOCKED/FAILED row is still an important lifecycle fact, but it is not
+        an executed business step and must never satisfy required==executed.
+        """
+        return [
+            step_id
+            for step_id, row in self._rows.items()
+            if bool(row.get("target_reached"))
+            and _text(row.get("final_status")) == "EXECUTED"
+            and int(row.get("status_code") or 0) > 0
+        ]
 
     def successful_write_step_ids(self) -> list[str]:
         """Step IDs where a write was successfully executed."""
@@ -302,6 +317,7 @@ class ProcessStepLedger:
             for step_id, row in self._rows.items()
             if row.get("final_status") == "EXECUTED"
             and int(row.get("status_code") or 0) < 400
+            and bool(row.get("target_reached"))
         ]
 
     def failed_step_ids(self) -> list[str]:
@@ -376,22 +392,37 @@ class ProcessStepLedger:
         }
 
 
-def step_ids_with_observation_evidence(ledger: ProcessStepLedger) -> list[str]:
-    """Step ids whose ledger row carries real observation evidence.
+def _independent_observation_receipt_ids(row: dict[str, Any]) -> list[str]:
+    """Return only receipts that independently observe business state.
 
-    Evidence is a named observation/observer receipt id, or a non-empty
-    ``response_receipt_id`` produced from the governed HTTP response body.
-    Never returns executed-step ids merely because the step ran.
+    A transport response proves that the target answered. It does not prove that
+    the business effect was observed. Older executor code copied the response
+    body hash into ``observer_receipt_ids``; exclude that alias at the authority
+    boundary so callers cannot turn response==observation into a self-proof.
     """
+    response_id = _text(row.get("response_receipt_id"))
+    out: list[str] = []
+    for rid in (
+        _text(row.get("before_state_receipt_id")),
+        _text(row.get("after_state_receipt_id")),
+    ):
+        if rid and rid != response_id and rid not in out:
+            out.append(rid)
+    for rid in list(row.get("observation_receipt_ids") or []) + list(
+        row.get("observer_receipt_ids") or []
+    ):
+        text = _text(rid)
+        if text and text != response_id and text not in out:
+            out.append(text)
+    return out
+
+
+def step_ids_with_observation_evidence(ledger: ProcessStepLedger) -> list[str]:
+    """Step ids carrying real, independent observation evidence."""
     out: list[str] = []
     for row in ledger.all_rows():
         sid = _text(row.get("step_id"))
-        if not sid:
-            continue
-        candidate_ids = list(row.get("observation_receipt_ids") or []) + list(
-            row.get("observer_receipt_ids") or []
-        )
-        if any(_text(rid) for rid in candidate_ids) or _text(row.get("response_receipt_id")):
+        if sid and _independent_observation_receipt_ids(row):
             out.append(sid)
     return out
 
@@ -442,6 +473,7 @@ def attach_ledger_refs_to_observations(
     target["required_step_ids"] = required
     target["planned_step_ids"] = list(required)
     target["executed_step_ids"] = executed
+    target["recorded_step_ids"] = list(ledger.recorded_step_ids())
     target["process_timeline"] = ledger.build_timeline_receipt()
     # Collect append-only receipt id sets from real step rows only.
     transport_ids: list[str] = []
@@ -455,12 +487,9 @@ def attach_ledger_refs_to_observations(
         ):
             if rid and rid not in transport_ids:
                 transport_ids.append(rid)
-        for rid in list(row.get("observation_receipt_ids") or []) + list(
-            row.get("observer_receipt_ids") or []
-        ):
-            text = _text(rid)
-            if text and text not in observation_ids:
-                observation_ids.append(text)
+        for rid in _independent_observation_receipt_ids(row):
+            if rid not in observation_ids:
+                observation_ids.append(rid)
         for rid in list(row.get("oracle_receipt_ids") or []):
             text = _text(rid)
             if text and text not in oracle_ids:
@@ -473,6 +502,8 @@ def attach_ledger_refs_to_observations(
         target["transport_receipt_ids"] = transport_ids
     if observation_ids:
         target["observation_receipt_ids"] = observation_ids
+    else:
+        target.pop("observation_receipt_ids", None)
     if oracle_ids:
         target["oracle_invocation_receipt_ids"] = oracle_ids
     if cleanup_ids:
@@ -495,6 +526,10 @@ def validate_required_actual_step_balance(
     evidence" — that must fail closed with an incomplete-evidence reason
     code, never silently default to the executed set (which would make the
     balance tautologically true).
+
+    ``cleanup_step_ids=None`` means cleanup is not part of this balance call.
+    Passing an explicit empty list means cleanup was required/checked and no
+    step has evidence; it must fail rather than silently bypass the gate.
     """
     required = [_text(s) for s in list(required_step_ids or []) if _text(s)]
     executed = [_text(s) for s in list(executed_step_ids or []) if _text(s)]
@@ -518,6 +553,7 @@ def validate_required_actual_step_balance(
         }
     observed = [_text(s) for s in list(observed_step_ids) if _text(s)]
     oracle = [_text(s) for s in list(oracle_step_ids) if _text(s)]
+    cleanup_provided = cleanup_step_ids is not None
     cleanup = [_text(s) for s in list(cleanup_step_ids or []) if _text(s)]
     req_set = set(required)
     exe_set = set(executed)
@@ -546,7 +582,7 @@ def validate_required_actual_step_balance(
             "reason_code": PROCESS_STEP_ORACLE_SET_INCOMPLETE,
             "missing_oracle": sorted(req_set - set(oracle)),
         }
-    if cleanup and (exe_set - set(cleanup)):
+    if cleanup_provided and (exe_set - set(cleanup)):
         return {
             "balanced": False,
             "reason_code": PROCESS_STEP_CLEANUP_SET_INCOMPLETE,
@@ -572,22 +608,50 @@ def evaluate_per_step_evidence_completeness(
     observed_step_ids: "list[str] | None" = None,
     cleanup_covered_step_ids: "list[str] | None" = None,
 ) -> dict[str, Any]:
-    """Verify planned = executed = observed for all measured steps.
+    """Verify planned = executed = independently observed for measured steps.
 
-    SPEC §22: Any measured step missing → PROCESS_EVIDENCE_INCOMPLETE.
+    Caller-provided step ids may narrow the scope but can never widen the
+    evidence authority beyond receipt ids already attached to the ledger.
+    This closes the historical self-proof where ``executed`` was passed back as
+    ``observed`` and accepted without an observation receipt.
     """
     executed = set(ledger.executed_step_ids())
-    observed = set(observed_step_ids or executed)
-    cleanup_covered = set(cleanup_covered_step_ids or [])
-    planned = set(planned_step_ids)
+    authoritative_observed = set(step_ids_with_observation_evidence(ledger))
+    declared_observed = (
+        {_text(s) for s in list(observed_step_ids or []) if _text(s)}
+        if observed_step_ids is not None
+        else None
+    )
+    observed = (
+        authoritative_observed
+        if declared_observed is None
+        else authoritative_observed & declared_observed
+    )
+    authoritative_cleanup = set(step_ids_with_cleanup_evidence(ledger))
+    declared_cleanup = (
+        {_text(s) for s in list(cleanup_covered_step_ids or []) if _text(s)}
+        if cleanup_covered_step_ids is not None
+        else None
+    )
+    cleanup_covered = (
+        authoritative_cleanup
+        if declared_cleanup is None
+        else authoritative_cleanup & declared_cleanup
+    )
+    planned = {_text(s) for s in list(planned_step_ids or []) if _text(s)}
 
     missing_execution = sorted(planned - executed)
     missing_observation = sorted(executed - observed)
-    missing_cleanup = sorted(executed - cleanup_covered) if cleanup_covered_step_ids is not None else []
+    missing_cleanup = (
+        sorted(executed - cleanup_covered)
+        if cleanup_covered_step_ids is not None
+        else []
+    )
 
     complete = (
         not missing_execution
         and not missing_observation
+        and not missing_cleanup
     )
 
     return {
