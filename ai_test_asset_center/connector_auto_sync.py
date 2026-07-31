@@ -1,7 +1,7 @@
 """Managed Feishu synchronization and automatic refresh supervisor.
 
-One application authority owns trusted synchronization, crash recovery, scheduling, retry
-backoff, and operator-safe status. It reuses the existing connector registry, encrypted
+One application authority owns trusted synchronization, crash recovery, fencing, scheduling,
+retry backoff, and operator-safe status. It reuses the existing connector registry, encrypted
 profile authority, Feishu adapter, and source ingestion pipeline.
 """
 from __future__ import annotations
@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .connector_checkpoint_recovery import (
-    ConnectorCheckpointRecoveryError,
     begin_connector_checkpoint_commit,
     clear_connector_checkpoint_journal,
     recover_connector_checkpoint_commit,
@@ -30,9 +29,9 @@ from .connector_connection_profiles import (
     resolve_connector_connection_profile,
 )
 from .connector_sync_authority import ConnectorSyncError, list_connector_instances
+from .connector_sync_fencing import managed_connector_sync_fence
 from .enterprise_knowledge_center._common import ROOT
 from .feishu_connector_adapter import (
-    FeishuConnectorError,
     _default_transport,
     _resolve_access_token,
     _snapshot_cursor,
@@ -125,11 +124,7 @@ def _utc(timestamp: float | None = None) -> str:
     )
 
 
-def _instance(
-    project: str,
-    connector: str,
-    root: Path,
-) -> dict[str, Any]:
+def _instance(project: str, connector: str, root: Path) -> dict[str, Any]:
     rows = list_connector_instances(
         project,
         root=root,
@@ -196,14 +191,9 @@ def _current_remote_checkpoint(
     sleeper: Callable[[float], None] = time.sleep,
 ) -> str:
     """Reconstruct the deterministic Feishu cursor without ingesting content."""
-
     instance = _instance(project, connector, root)
     profile_ref = _text(instance.get("connection_profile_ref"), 500)
-    profile = resolve_connector_connection_profile(
-        project,
-        profile_ref,
-        root=root,
-    )
+    profile = resolve_connector_connection_profile(project, profile_ref, root=root)
     client = transport or _default_transport
     access_token, _ = _resolve_access_token(
         profile,
@@ -316,62 +306,111 @@ def run_managed_feishu_sync(
     transport: Any = None,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
-    """Execute the only trusted Feishu sync path used by HTTP and automation."""
-
+    """Execute the only trusted, recoverable and fenced Feishu sync path."""
     resolved_root = (root or ROOT).resolve()
     project = _safe_project_id(project_id)
     connector = _text(connector_instance_id, 160)
     clean_actor = dict(actor or _AUTO_SYNC_ACTOR)
 
-    recover_managed_feishu_checkpoint(
+    with managed_connector_sync_fence(
         project,
         connector,
         root=resolved_root,
         actor=clean_actor,
-        timeout=timeout,
-        transport=transport,
-        sleeper=sleeper,
-    )
-    previous_cursor = load_connector_sync_checkpoint(
-        project,
-        connector,
-        root=resolved_root,
-    )
-    validate_connector_checkpoint(
-        project,
-        connector,
-        previous_cursor,
-        root=resolved_root,
-    )
-    intent = begin_connector_checkpoint_commit(
-        project,
-        connector,
-        previous_cursor,
-        root=resolved_root,
-        actor=clean_actor,
-    )
-    attempt_id = _text(intent.get("attempt_id"), 160)
-
-    try:
-        run = sync_feishu_connector(
+    ) as fence:
+        recovery = recover_managed_feishu_checkpoint(
             project,
-            connector_instance_id=connector,
-            resolve_connection_profile=_profile_resolver(project, resolved_root),
+            connector,
             root=resolved_root,
             actor=clean_actor,
-            previous_cursor=previous_cursor,
-            deletion_policy=deletion_policy,
-            max_retire_count=max_retire_count,
-            max_retire_ratio=max_retire_ratio,
-            max_nodes=max_nodes,
-            max_export_polls=max_export_polls,
-            export_poll_interval=export_poll_interval,
-            allow_raw_text_fallback=allow_raw_text_fallback,
             timeout=timeout,
             transport=transport,
             sleeper=sleeper,
         )
-        if run.get("status") != "COMPLETE":
+        previous_cursor = load_connector_sync_checkpoint(
+            project,
+            connector,
+            root=resolved_root,
+        )
+        validate_connector_checkpoint(
+            project,
+            connector,
+            previous_cursor,
+            root=resolved_root,
+        )
+        intent = begin_connector_checkpoint_commit(
+            project,
+            connector,
+            previous_cursor,
+            root=resolved_root,
+            actor=clean_actor,
+        )
+        attempt_id = _text(intent.get("attempt_id"), 160)
+
+        try:
+            run = sync_feishu_connector(
+                project,
+                connector_instance_id=connector,
+                resolve_connection_profile=_profile_resolver(project, resolved_root),
+                root=resolved_root,
+                actor=clean_actor,
+                previous_cursor=previous_cursor,
+                deletion_policy=deletion_policy,
+                max_retire_count=max_retire_count,
+                max_retire_ratio=max_retire_ratio,
+                max_nodes=max_nodes,
+                max_export_polls=max_export_polls,
+                export_poll_interval=export_poll_interval,
+                allow_raw_text_fallback=allow_raw_text_fallback,
+                timeout=timeout,
+                transport=transport,
+                sleeper=sleeper,
+            )
+            if run.get("status") != "COMPLETE":
+                clear_connector_checkpoint_journal(
+                    project,
+                    connector,
+                    root=resolved_root,
+                    actor=clean_actor,
+                    expected_attempt_id=attempt_id,
+                )
+                return {
+                    **run,
+                    "sync_write_fencing": "MONOTONIC_REGISTRY_TOKEN",
+                    "stale_writer_blocked": True,
+                }
+
+            checkpoint = _text(run.get("next_cursor"), 500)
+            epoch = _text(run.get("sync_epoch_id"), 160)
+            if not checkpoint or not epoch:
+                raise ConnectorProfileError(
+                    "connector_sync_checkpoint_missing_after_complete_run"
+                )
+            committed_fingerprint = _text(
+                run.get("committed_cursor_fingerprint"), 128
+            )
+            if committed_fingerprint and committed_fingerprint != _fingerprint(checkpoint):
+                raise ConnectorProfileError(
+                    "connector_sync_checkpoint_commit_mismatch"
+                )
+
+            stage_connector_checkpoint_result(
+                project,
+                connector,
+                attempt_id,
+                checkpoint,
+                sync_epoch_id=epoch,
+                root=resolved_root,
+                actor=clean_actor,
+            )
+            commit_connector_sync_checkpoint(
+                project,
+                connector,
+                checkpoint,
+                sync_epoch_id=epoch,
+                root=resolved_root,
+                actor=clean_actor,
+            )
             clear_connector_checkpoint_journal(
                 project,
                 connector,
@@ -379,61 +418,28 @@ def run_managed_feishu_sync(
                 actor=clean_actor,
                 expected_attempt_id=attempt_id,
             )
-            return run
-
-        checkpoint = _text(run.get("next_cursor"), 500)
-        epoch = _text(run.get("sync_epoch_id"), 160)
-        if not checkpoint or not epoch:
-            raise ConnectorProfileError(
-                "connector_sync_checkpoint_missing_after_complete_run"
+            return {
+                **run,
+                "checkpoint_commit_protocol": "RECOVERABLE_TWO_STAGE",
+                "checkpoint_recovery_required": False,
+                "sync_write_fencing": "MONOTONIC_REGISTRY_TOKEN",
+                "stale_writer_blocked": True,
+                "stale_owner_taken_over": bool(fence.get("takeover")),
+                "lifecycle_recovery_action": _text(
+                    dict(recovery.get("sync_lifecycle_recovery") or {}).get("action"),
+                    80,
+                ),
+            }
+        except Exception:
+            _clear_intent_if_registry_did_not_advance(
+                project,
+                connector,
+                previous_cursor,
+                attempt_id,
+                resolved_root,
+                clean_actor,
             )
-        committed_fingerprint = _text(
-            run.get("committed_cursor_fingerprint"), 128
-        )
-        if committed_fingerprint and committed_fingerprint != _fingerprint(checkpoint):
-            raise ConnectorProfileError(
-                "connector_sync_checkpoint_commit_mismatch"
-            )
-
-        stage_connector_checkpoint_result(
-            project,
-            connector,
-            attempt_id,
-            checkpoint,
-            sync_epoch_id=epoch,
-            root=resolved_root,
-            actor=clean_actor,
-        )
-        commit_connector_sync_checkpoint(
-            project,
-            connector,
-            checkpoint,
-            sync_epoch_id=epoch,
-            root=resolved_root,
-            actor=clean_actor,
-        )
-        clear_connector_checkpoint_journal(
-            project,
-            connector,
-            root=resolved_root,
-            actor=clean_actor,
-            expected_attempt_id=attempt_id,
-        )
-        return {
-            **run,
-            "checkpoint_commit_protocol": "RECOVERABLE_TWO_STAGE",
-            "checkpoint_recovery_required": False,
-        }
-    except Exception:
-        _clear_intent_if_registry_did_not_advance(
-            project,
-            connector,
-            previous_cursor,
-            attempt_id,
-            resolved_root,
-            clean_actor,
-        )
-        raise
+            raise
 
 
 def _project_ids(root: Path) -> list[str]:
@@ -453,10 +459,10 @@ def _project_ids(root: Path) -> list[str]:
     return sorted(set(projects))
 
 
-def _configured_profiles(project: str, root: Path) -> set[str]:
+def _profile_index(project: str, root: Path) -> dict[str, dict[str, Any]]:
     payload = list_connector_connection_profiles(project, root=root)
     return {
-        _text(row.get("connector_instance_id"), 160)
+        _text(row.get("connector_instance_id"), 160): dict(row)
         for row in payload.get("profiles") or []
         if isinstance(row, dict) and row.get("credentials_configured") is True
     }
@@ -464,6 +470,33 @@ def _configured_profiles(project: str, root: Path) -> set[str]:
 
 def _key(root: Path, project: str, connector: str) -> tuple[str, str, str]:
     return str(root.resolve()), project, connector
+
+
+def _recovery_pending(
+    root: Path,
+    project: str,
+    connector: str,
+    instance: dict[str, Any],
+    profile: dict[str, Any],
+) -> bool:
+    workspace = (
+        root
+        / "platform_workspace"
+        / project
+        / "enterprise_knowledge_center"
+    )
+    journal = workspace / "connector_checkpoint_journal" / f"{connector}.json"
+    ownership = workspace / "connector_sync_ownership" / f"{connector}.json"
+    registry_fingerprint = _text(
+        instance.get("last_committed_cursor_fingerprint"), 128
+    )
+    profile_fingerprint = _text(profile.get("checkpoint_fingerprint"), 128)
+    return bool(
+        instance.get("active_sync_epoch_id")
+        or journal.is_file()
+        or ownership.is_file()
+        or registry_fingerprint != profile_fingerprint
+    )
 
 
 def _due(
@@ -478,7 +511,7 @@ def _due(
         return False
     if _text(instance.get("connector_type"), 160).lower() != "feishu":
         return False
-    if instance.get("active_sync_epoch_id"):
+    if instance.get("active_sync_epoch_id") and not force:
         return False
     next_attempt = float(attempt.get("next_attempt_unix") or 0)
     if next_attempt and now < next_attempt:
@@ -498,9 +531,9 @@ def _failure_category(exc: Exception) -> str:
         return "AUTHORIZATION_REQUIRED"
     if "permission" in message or "forbidden" in message:
         return "PERMISSION_REQUIRED"
-    if "already_running" in message or "lock_held" in message:
+    if "already_running" in message or "lock_held" in message or "owner_active" in message:
         return "BUSY"
-    if "checkpoint" in message or "cursor" in message:
+    if "checkpoint" in message or "cursor" in message or "fence" in message:
         return "AUTO_RECOVERY"
     if "transport" in message or "api_failed" in message:
         return "REMOTE_UNAVAILABLE"
@@ -560,8 +593,7 @@ def run_connector_auto_sync_sweep(
     now: float | None = None,
     sync_runner: Callable[..., dict[str, Any]] = run_managed_feishu_sync,
 ) -> dict[str, Any]:
-    """Recover and refresh configured connectors in one bounded sequential sweep."""
-
+    """Refresh or recover configured connectors through the single managed sync path."""
     resolved_root = root.resolve()
     timestamp = time.time() if now is None else float(now)
     policy = _policy()
@@ -569,7 +601,7 @@ def run_connector_auto_sync_sweep(
 
     for project in _project_ids(resolved_root):
         try:
-            configured = _configured_profiles(project, resolved_root)
+            profiles = _profile_index(project, resolved_root)
             instances = list_connector_instances(
                 project,
                 root=resolved_root,
@@ -583,40 +615,29 @@ def run_connector_auto_sync_sweep(
             if not isinstance(raw, dict):
                 continue
             connector = _text(raw.get("connector_instance_id"), 160)
-            if not connector or connector not in configured:
+            profile = profiles.get(connector)
+            if not connector or not isinstance(profile, dict):
                 skipped += 1
                 continue
             key = _key(resolved_root, project, connector)
             with _STATE_LOCK:
                 attempt = dict(_ATTEMPTS.get(key) or {})
-
-            force_replay = False
-            if sync_runner is run_managed_feishu_sync:
-                try:
-                    recovery = recover_managed_feishu_checkpoint(
-                        project,
-                        connector,
-                        root=resolved_root,
-                        actor=_AUTO_SYNC_ACTOR,
-                    )
-                    force_replay = bool(recovery.get("replay_required"))
-                except Exception as exc:
-                    failed += 1
-                    _record_failure(
-                        key,
-                        exc,
-                        timestamp,
-                        retry_base_seconds=policy["retry_base_seconds"],
-                        retry_max_seconds=policy["retry_max_seconds"],
-                    )
-                    continue
-
+            force_recovery = (
+                sync_runner is run_managed_feishu_sync
+                and _recovery_pending(
+                    resolved_root,
+                    project,
+                    connector,
+                    raw,
+                    profile,
+                )
+            )
             if not _due(
                 raw,
                 attempt,
                 now=timestamp,
                 refresh_seconds=policy["refresh_seconds"],
-                force=force_replay,
+                force=force_recovery,
             ):
                 skipped += 1
                 continue
@@ -696,6 +717,7 @@ def connector_auto_sync_status(
         "maintenance_required_by_user": status == "retrying"
         and attention in {"AUTHORIZATION_REQUIRED", "PERMISSION_REQUIRED"},
         "checkpoint_recovery_is_automatic": True,
+        "stale_writer_fencing_is_automatic": True,
         "raw_error_returned": False,
     }
 
@@ -709,11 +731,8 @@ def _supervisor_loop(root: Path, stop_event: threading.Event) -> None:
         stop_event.wait(policy["sweep_seconds"])
 
 
-def ensure_connector_auto_sync_supervisor(
-    root: Path,
-) -> dict[str, Any]:
+def ensure_connector_auto_sync_supervisor(root: Path) -> dict[str, Any]:
     """Start one daemon supervisor per deployment root, idempotently."""
-
     global _ATEXIT_REGISTERED
     resolved_root = root.resolve()
     key = str(resolved_root)
