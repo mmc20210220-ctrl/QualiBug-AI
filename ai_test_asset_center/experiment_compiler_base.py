@@ -71,31 +71,6 @@ def _blocked_copy(
     return blocked
 
 
-def _block_multi_write_graph_equivalence(
-    experiment: dict[str, Any],
-) -> dict[str, Any]:
-    """Keep completion honest until equivalence is scoped per graph write step."""
-    write_step_ids = [
-        _text(value)
-        for value in _list(
-            _dict(experiment.get("process_graph_write_contract")).get(
-                "write_step_ids"
-            )
-        )
-        if _text(value)
-    ]
-    if len(write_step_ids) <= 1:
-        return experiment
-    return _blocked_copy(
-        experiment,
-        reason_code="BLOCKED_GRAPH_MULTI_WRITE_EQUIVALENCE_UNAVAILABLE",
-        detail=(
-            "per_source_step_cleanup_equivalence_not_available:"
-            + ",".join(write_step_ids)
-        ),
-    )
-
-
 def _block_uncovered_graph_precondition_writes(
     experiment: dict[str, Any], behavior_ir: dict[str, Any]
 ) -> dict[str, Any]:
@@ -136,7 +111,6 @@ def _finalize_compiled_experiment(
         experiment,
         behavior_ir,
     )
-    graph_safe = _block_multi_write_graph_equivalence(graph_safe)
     graph_safe = _block_uncovered_graph_precondition_writes(
         graph_safe,
         behavior_ir,
