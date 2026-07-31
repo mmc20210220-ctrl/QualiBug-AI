@@ -59,6 +59,7 @@ _RULE_READY_BINDING_STATES = frozenset(
     {"READY", "READY_FOR_IR_BINDING", "READY_AUTHORITATIVE_OPERATION_BOUND"}
 )
 _RULE_ACCEPTED_SCOPE_STATES = frozenset({"RESOLVED", "NOT_APPLICABLE"})
+_INVALID_RULE_SOURCE_IDS = frozenset({"unknown", "unspecified", "*"})
 
 
 def _text(value: Any) -> str:
@@ -88,6 +89,12 @@ def _source_identity(row: dict[str, Any], *, prefix: str = "") -> str:
 
 
 def _candidate_source_ids(candidate: dict[str, Any]) -> list[str]:
+    """Compatibility source inventory for generic semantic candidates.
+
+    Generic candidates historically permitted a locator-backed identity. Rule authority
+    is stricter and uses ``_explicit_rule_source_ids`` below, so a locator without a
+    source document can never authorize a business rule.
+    """
     source_ids: set[str] = set()
     direct = _source_identity(candidate, prefix="candidate")
     if direct:
@@ -102,6 +109,23 @@ def _candidate_source_ids(candidate: dict[str, Any]) -> list[str]:
     for value in _list(candidate.get("supporting_source_ids")):
         if _text(value):
             source_ids.add(_text(value))
+    return sorted(source_ids)
+
+
+def _explicit_rule_source_ids(candidate: dict[str, Any]) -> list[str]:
+    """Return only explicit document/contract source identities for rule authority."""
+    source_ids: set[str] = set()
+    for value in [candidate.get("source_id"), *_list(candidate.get("supporting_source_ids"))]:
+        source_id = _text(value)
+        if source_id and source_id.lower() not in _INVALID_RULE_SOURCE_IDS:
+            source_ids.add(source_id)
+    for field in ("source_refs", "supporting_evidence"):
+        for row in _list(candidate.get(field)):
+            if not isinstance(row, dict):
+                continue
+            source_id = _text(row.get("source_id"))
+            if source_id and source_id.lower() not in _INVALID_RULE_SOURCE_IDS:
+                source_ids.add(source_id)
     return sorted(source_ids)
 
 
@@ -151,7 +175,7 @@ def _rule_validation(candidate: dict[str, Any], context: dict[str, Any]) -> dict
     )
     if not supporting_fact_refs:
         return {"status": "REJECTED", "reason": "rule_supporting_fact_refs_missing"}
-    source_ids = _candidate_source_ids(candidate)
+    source_ids = _explicit_rule_source_ids(candidate)
     if not source_ids:
         return {"status": "REJECTED", "reason": "rule_source_identity_missing"}
 
@@ -226,7 +250,7 @@ def _rule_promoter(candidate: dict[str, Any]) -> dict[str, Any]:
     candidate_id = _text(candidate.get("candidate_id")) or _stable_id(
         "rulecand", candidate.get("logical_form"), statement, candidate.get("source_refs")
     )
-    source_ids = _candidate_source_ids(candidate)
+    source_ids = _explicit_rule_source_ids(candidate)
     rule_id = _text(candidate.get("rule_id")) or _stable_id(
         "implicit_rule", candidate.get("logical_form"), statement, source_ids
     )
@@ -306,6 +330,7 @@ def register_candidate_kind(
     promoter: CandidatePromoter | None = None,
 ) -> None:
     """Register one additive candidate type without shadowing built-in authority."""
+    global _ALLOWED_KINDS
     normalized = _text(kind).lower()
     if not normalized:
         raise ValueError("candidate_kind_empty")
@@ -320,6 +345,7 @@ def register_candidate_kind(
         "promoter": promoter,
         "builtin": False,
     }
+    _ALLOWED_KINDS = frozenset(_CANDIDATE_KIND_REGISTRY)
 
 
 def registered_candidate_kinds() -> tuple[str, ...]:
