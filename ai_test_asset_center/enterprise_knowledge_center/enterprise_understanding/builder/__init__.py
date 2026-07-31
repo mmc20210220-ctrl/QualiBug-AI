@@ -22,6 +22,7 @@ from ..business_object_recognition import (
 from ..identity_annotation_manifest import project_identity_annotation_manifest
 from ..identity_authority_projection import project_identity_authority_receipt
 from ..identity_benchmark import project_identity_benchmark
+from ..identity_benchmark_regression import project_identity_benchmark_regression
 from ..identity_evidence_policy import apply_identity_evidence_policy
 from ..identity_registry_governance import govern_identity_registry
 from ..identity_resolution import (
@@ -130,6 +131,10 @@ def _attach_identity_audit_receipts(
             "enterprise_identity_quality_gate_enforced": bool(
                 quality_gate.get("enforced")
             ),
+            "enterprise_identity_regression_gate_status": as_dict(
+                benchmark.get("regression")
+            ).get("status")
+            or "NOT_COMPARABLE",
             "enterprise_identity_annotation_manifest_count": int(
                 as_dict(model.get("identity_annotation_manifest")).get("mention_count")
                 or 0
@@ -159,6 +164,7 @@ def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any
     resolution = project_identity_authority_receipt(recognized_asset, resolution)
     resolution = project_identity_annotation_manifest(recognized_asset, resolution)
     resolution = project_identity_benchmark(recognized_asset, resolution)
+    resolution = project_identity_benchmark_regression(recognized_asset, resolution)
     _govern_identity_conflicts(resolution)
     publish_recognition_and_identity(asset, recognized_asset, resolution)
     _publish_identity_audit_receipts(asset, recognized_asset)
