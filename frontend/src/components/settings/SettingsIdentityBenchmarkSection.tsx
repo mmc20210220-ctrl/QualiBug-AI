@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ChangeEvent } from 'react';
 import {
   getIdentityBenchmarkWorkspace,
   importIdentityGroundTruth,
@@ -53,7 +53,7 @@ export function SettingsIdentityBenchmarkSection({ project }: Props) {
   const [undermerge, setUndermerge] = useState('0.05');
   const [silentErrors, setSilentErrors] = useState('0');
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     if (!project) {
       setWorkspace(null);
       return;
@@ -77,11 +77,11 @@ export function SettingsIdentityBenchmarkSection({ project }: Props) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [project]);
 
   useEffect(() => {
     void refresh();
-  }, [project]);
+  }, [refresh]);
 
   const benchmark = record(workspace?.benchmark);
   const metrics = record(benchmark.metrics);
@@ -90,6 +90,8 @@ export function SettingsIdentityBenchmarkSection({ project }: Props) {
   const manifest = workspace?.manifest || {};
   const measurementStatus = text(benchmark.status) || 'NOT_MEASURED';
   const qualityStatus = text(qualityGate.status) || 'NOT_CONFIGURED';
+  const groundTruthPresent = Boolean(groundTruth.present);
+  const qualityEnforced = Boolean(qualityGate.enforced);
   const canExport = Boolean(manifest.manifest_id && Array.isArray(manifest.mentions));
   const metricCards = useMemo(() => [
     { label: '精确率', value: percent(metrics.pairwise_precision) },
@@ -168,7 +170,7 @@ export function SettingsIdentityBenchmarkSection({ project }: Props) {
         </article>
         <article className="customer-summary-card tone-neutral">
           <span>Ground Truth</span>
-          <strong>{groundTruth.present ? '已导入' : '未导入'}</strong>
+          <strong>{groundTruthPresent ? '已导入' : '未导入'}</strong>
           <small>{Number(groundTruth.annotated_mention_count || 0)} 个 Mention</small>
         </article>
         <article className="customer-summary-card tone-neutral">
@@ -179,7 +181,7 @@ export function SettingsIdentityBenchmarkSection({ project }: Props) {
         <article className="customer-summary-card tone-neutral">
           <span>质量 Gate</span>
           <strong>{qualityStatus}</strong>
-          <small>{qualityGate.enforced ? '已强制执行' : '仅报告'}</small>
+          <small>{qualityEnforced ? '已强制执行' : '仅报告'}</small>
         </article>
       </div>
 
