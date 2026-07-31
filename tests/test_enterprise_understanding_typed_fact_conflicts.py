@@ -28,7 +28,7 @@ def _base(fact_id: str, fact_type: str, predicate: str = "审批") -> dict:
     }
 
 
-def test_condition_logic_conflict_is_fail_closed(tmp_path) -> None:
+def test_condition_logic_conflict_is_fail_closed_and_pending_facts_survive(tmp_path) -> None:
     left = _base("fact:and", "PERMISSION_RULE")
     right = _base("fact:or", "PERMISSION_RULE")
     for fact, combinator in ((left, "AND"), (right, "OR")):
@@ -37,9 +37,12 @@ def test_condition_logic_conflict_is_fail_closed(tmp_path) -> None:
             "combinator": combinator,
             "conditions": ["状态为待审批", "所属部门一致"],
         }
+    pending = _base("fact:pending", "BUSINESS_RULE", "提交")
+    pending["status"] = "PENDING"
+    pending["ambiguities"] = ["BUSINESS_SUBJECT_UNRESOLVED"]
     asset = {
         "project_id": "demo",
-        "business_fact_ledger": {"items": [left, right]},
+        "business_fact_ledger": {"items": [left, right, pending]},
         "cross_document_conflicts": [],
         "enterprise_comprehension_gate": {"status": "PASS", "entry_allowed": True},
         "coverage_gaps": [],
@@ -56,9 +59,19 @@ def test_condition_logic_conflict_is_fail_closed(tmp_path) -> None:
     assert conflicts[0]["kind"] == "CONDITION_LOGIC_CONTRADICTION"
     assert conflicts[0]["status"] == "UNRESOLVED"
     assert result["enterprise_comprehension_gate"]["entry_allowed"] is False
-    assert {
-        fact["status"] for fact in result["business_fact_ledger"]["items"]
-    } == {"CONFLICTING"}
+    statuses = {
+        fact["fact_id"]: fact["status"]
+        for fact in result["business_fact_ledger"]["items"]
+    }
+    assert statuses == {
+        "fact:and": "CONFLICTING",
+        "fact:or": "CONFLICTING",
+        "fact:pending": "PENDING",
+    }
+    receipt = result["typed_business_fact_conflict_receipt"]
+    assert receipt["fact_count_before_reconciliation"] == 3
+    assert receipt["fact_count_after_reconciliation"] == 3
+    assert receipt["all_fact_statuses_preserved"] is True
 
 
 def test_formula_and_cardinality_conflicts_use_typed_slots(tmp_path) -> None:
