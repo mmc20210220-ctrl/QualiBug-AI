@@ -178,7 +178,7 @@ def test_rebuild_failure_restores_previous_ground_truth_and_history(tmp_path, mo
     prior = _truth()
     prior["benchmark_id"] = "prior"
     save_identity_ground_truth("project-a", prior, tmp_path)
-    append_identity_benchmark_snapshot(
+    prior_event = append_identity_benchmark_snapshot(
         "project-a",
         {
             "schema": "qualibug.enterprise-identity-benchmark-snapshot.v1",
@@ -215,7 +215,7 @@ def test_rebuild_failure_restores_previous_ground_truth_and_history(tmp_path, mo
     assert [
         row["snapshot_id"]
         for row in load_identity_benchmark_history("project-a", tmp_path)["snapshots"]
-    ] == ["snapshot:prior"]
+    ] == [prior_event["snapshot_id"]]
     events = load_identity_benchmark_audit("project-a", tmp_path)["events"]
     assert events[-1]["event"] == "identity_ground_truth_import_rolled_back"
 
@@ -300,7 +300,7 @@ def test_manual_remeasurement_appends_versioned_snapshot(tmp_path, monkeypatch) 
 
 def test_manual_remeasurement_restores_history_when_snapshot_fails(tmp_path, monkeypatch) -> None:
     save_identity_ground_truth("project-a", _truth(), tmp_path)
-    append_identity_benchmark_snapshot(
+    prior_event = append_identity_benchmark_snapshot(
         "project-a",
         {
             "schema": "qualibug.enterprise-identity-benchmark-snapshot.v1",
@@ -329,4 +329,4 @@ def test_manual_remeasurement_restores_history_when_snapshot_fails(tmp_path, mon
     assert [
         row["snapshot_id"]
         for row in load_identity_benchmark_history("project-a", tmp_path)["snapshots"]
-    ] == ["snapshot:prior"]
+    ] == [prior_event["snapshot_id"]]
