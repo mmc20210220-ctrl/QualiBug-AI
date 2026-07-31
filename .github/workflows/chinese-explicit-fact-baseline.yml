@@ -8,6 +8,7 @@ on:
       - "ai_test_asset_center/enterprise_knowledge_center/**"
       - "benchmark_evaluator/enterprise_understanding/**"
       - "tests/test_enterprise_understanding_chinese_explicit_fact_baseline.py"
+      - "tests/test_enterprise_understanding_fact_probe_policy.py"
       - "tests/test_enterprise_understanding_fact_slots.py"
       - "tests/test_enterprise_understanding_fact_slot_report.py"
       - "tests/test_enterprise_understanding_post_compile_governance.py"
@@ -47,6 +48,7 @@ jobs:
         run: |
           pytest -q \
             tests/test_enterprise_understanding_chinese_explicit_fact_baseline.py \
+            tests/test_enterprise_understanding_fact_probe_policy.py \
             tests/test_enterprise_understanding_fact_slots.py \
             tests/test_enterprise_understanding_fact_slot_report.py \
             tests/test_enterprise_understanding_post_compile_governance.py
