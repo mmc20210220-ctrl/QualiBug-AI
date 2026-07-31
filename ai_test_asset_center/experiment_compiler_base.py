@@ -1,8 +1,8 @@
 """Compile TestObligations into frozen ExecutableExperiments.
 
 The existing single-obligation compiler remains the semantic authority. This
-module applies the final flow/readback freeze after that compiler returns, then
-keeps the batch compilation and public re-export surface.
+module applies final flow/readback and state-precondition freezes after that
+compiler returns, then keeps the batch compilation and public re-export surface.
 """
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from typing import Any
 from .real_id_resolver import normalize_path_placeholders
 from .validation_obligation_expander import expand_validation_obligation
 from .experiment_compile_freezer import freeze_compiled_experiment
+from .state_precondition_compile_freezer import freeze_state_precondition_fields
 from .experiment_compiler_support import (  # noqa: F401
     _actor_is_executable,
     _compensates_create_operation,
@@ -49,6 +50,18 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _finalize_compiled_experiment(
+    experiment: dict[str, Any],
+    *,
+    behavior_ir: dict[str, Any],
+) -> dict[str, Any]:
+    flow_frozen = freeze_compiled_experiment(
+        experiment,
+        behavior_ir=behavior_ir,
+    )
+    return freeze_state_precondition_fields(flow_frozen)
+
+
 def compile_experiment_for_obligation(
     obligation: dict[str, Any],
     *,
@@ -57,7 +70,7 @@ def compile_experiment_for_obligation(
     policy_version: str = "",
     available_adapters: "set[str] | frozenset[str] | None" = None,
 ) -> dict[str, Any]:
-    """Compile one obligation and freeze its final cross-plan requirements."""
+    """Compile one obligation and freeze final cross-plan requirements."""
     experiment = _compile_experiment_for_obligation(
         obligation,
         behavior_ir=behavior_ir,
@@ -65,7 +78,7 @@ def compile_experiment_for_obligation(
         policy_version=policy_version,
         available_adapters=available_adapters,
     )
-    return freeze_compiled_experiment(
+    return _finalize_compiled_experiment(
         experiment,
         behavior_ir=behavior_ir,
     )
@@ -139,8 +152,8 @@ def compile_experiments(
                 available_adapters=available_adapters,
             )
             # A custom compile_one callback must still pass through the same
-            # final freeze. The freezer is deterministic and idempotent.
-            experiment = freeze_compiled_experiment(
+            # deterministic final freezes. Both functions are idempotent.
+            experiment = _finalize_compiled_experiment(
                 experiment,
                 behavior_ir=behavior_ir,
             )
