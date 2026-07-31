@@ -223,6 +223,20 @@ class PrivatePilotHandler(
     def log_message(self, fmt: str, *args: object) -> None:
         return
 
+    def _require_connector_manager(
+        self,
+        actor: dict[str, Any],
+        action: str,
+    ) -> bool:
+        """Keep connector mutations on the same authority as knowledge sources."""
+        return bool(
+            self._require_role(
+                actor,
+                KNOWLEDGE_MANAGER_ROLES,
+                action,
+            )
+        )
+
     def handle_one_request(self) -> None:
         """Parse one request, enforce the shared outer body bound, dispatch once."""
         try:
