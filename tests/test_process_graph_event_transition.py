@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 
 from ai_test_asset_center.process_graph_wait_contract import (
     EVENT_DELIVERY_COUNT_ABOVE_MAXIMUM,
@@ -119,10 +120,7 @@ def _graph() -> dict:
 
 
 def _compiled_graph() -> dict:
-    result = compile_process_graph_wait_contracts(
-        _graph(),
-        behavior_ir=_ir(),
-    )
+    result = compile_process_graph_wait_contracts(_graph(), behavior_ir=_ir())
     assert result["status"] == STATUS_COMPILED, result
     return result["graph"]
 
@@ -151,10 +149,7 @@ def _execute(graph: dict, responses: list[dict]) -> dict:
         step=step,
         context={
             "base_url": "https://notifications.example.test",
-            "bindings": {
-                "order_id": "ORD-42",
-                "request_id": "REQ-1",
-            },
+            "bindings": {"order_id": "ORD-42", "request_id": "REQ-1"},
         },
         actors={"actor_1": {"role": "public"}},
         tokens={},
@@ -168,7 +163,6 @@ def test_event_transition_compiles_behind_existing_wait_contract() -> None:
     graph = _compiled_graph()
     wait = graph["wait_contracts_by_target"]["consume_notification"]
     event = wait["event_transition_contract"]
-
     assert wait["transition_kind"] == "event_delivery"
     assert event["delivery_kind"] == "message"
     assert event["delivery_semantics"] == "exactly_once"
@@ -181,9 +175,7 @@ def test_event_transition_compiles_behind_existing_wait_contract() -> None:
 def test_missing_stable_event_identity_blocks_compile() -> None:
     graph = _graph()
     del graph["wait_contracts"][0]["event_transition"]["event_id_field"]
-
     result = compile_process_graph_wait_contracts(graph, behavior_ir=_ir())
-
     assert result["status"] == STATUS_BLOCKED
     assert result["reason_code"] == EVENT_TRANSITION_INVALID
     assert "event_id_field" in result["detail"]
@@ -191,25 +183,29 @@ def test_missing_stable_event_identity_blocks_compile() -> None:
 
 def test_event_contract_drift_blocks_runtime_before_transport() -> None:
     graph = _compiled_graph()
-    graph["wait_contracts_by_target"]["consume_notification"][
-        "event_transition_contract"
-    ]["expected_event_type"] = "PaymentCaptured"
-
+    wait = graph["wait_contracts"][0]
+    wait["event_transition_contract"]["expected_event_type"] = "PaymentCaptured"
+    graph["wait_contracts_by_target"]["consume_notification"] = deepcopy(wait)
     ready, detail = compiled_wait_runtime_ready(graph)
-
     assert ready is False
-    assert detail == "event_transition_contract_drift"
+    assert detail == "wait_contract_fingerprint_drift"
+
+
+def test_wait_target_index_content_drift_is_rejected() -> None:
+    graph = _compiled_graph()
+    graph["wait_contracts_by_target"]["consume_notification"][
+        "observer_path_template"
+    ] = "/other"
+    assert compiled_wait_runtime_ready(graph) == (
+        False,
+        "wait_contract_target_index_content_mismatch",
+    )
 
 
 def test_same_event_seen_by_every_poll_is_one_delivery_not_duplicate() -> None:
     graph = _compiled_graph()
-    response = {
-        "status_code": 200,
-        "body": {"items": [_event("evt-1")]},
-    }
-
+    response = {"status_code": 200, "body": {"items": [_event("evt-1")]}}
     receipt = _execute(graph, [response, response, response])
-
     assert receipt["status"] == STATUS_CONVERGED
     assert receipt["semantic_status"] == "PASS"
     assert receipt["observed_matching_row_count"] == 3
@@ -223,7 +219,7 @@ def test_same_event_seen_by_every_poll_is_one_delivery_not_duplicate() -> None:
     assert "REQ-1" not in serialized
 
 
-def test_distinct_event_ids_prove_duplicate_delivery_violation() -> None:
+def test_distinct_event_ids_are_converged_observation_with_violation() -> None:
     graph = _compiled_graph()
     receipt = _execute(
         graph,
@@ -239,24 +235,22 @@ def test_distinct_event_ids_prove_duplicate_delivery_violation() -> None:
             },
         ],
     )
-
-    assert receipt["status"] == STATUS_BLOCKED
+    assert receipt["status"] == STATUS_CONVERGED
     assert receipt["semantic_status"] == "VIOLATION"
     assert receipt["reason_code"] == EVENT_DELIVERY_COUNT_ABOVE_MAXIMUM
     assert receipt["observed_unique_event_count"] == 2
     assert receipt["distinct_delivery_overflow_count"] == 1
+    assert receipt["converged"] is True
 
 
-def test_event_idempotency_key_must_match_source_binding() -> None:
+def test_event_idempotency_violation_is_not_harness_block() -> None:
     graph = _compiled_graph()
     response = {
         "status_code": 200,
         "body": {"items": [_event("evt-1", idempotency_key="OTHER")]},
     }
-
     receipt = _execute(graph, [response, response, response])
-
-    assert receipt["status"] == STATUS_BLOCKED
+    assert receipt["status"] == STATUS_CONVERGED
     assert receipt["semantic_status"] == "VIOLATION"
     assert receipt["reason_code"] == EVENT_IDEMPOTENCY_KEY_MISMATCH
     assert receipt["idempotency_mismatch_count"] == 1
