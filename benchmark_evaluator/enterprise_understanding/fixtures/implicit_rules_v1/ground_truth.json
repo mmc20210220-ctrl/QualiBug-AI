@@ -5,7 +5,7 @@
   "annotation_scope": "FROZEN_CLOSED_WORLD_IMPLICIT_RULE_CANDIDATE_UNIVERSE",
   "candidate_universe_complete": true,
   "ground_truth_generated_from_product_output": false,
-  "scope_statement": "人工逐条标注两个冻结来源版本中的真规则、废止规则与硬负例。该语料只验证评测合同和规则治理闭环，不代表全行业召回率。",
+  "scope_statement": "人工逐条标注两个冻结来源版本中的真规则、废止规则与硬负例。匹配使用现有正式规则结构字段，不使用产品候选或规则 ID，也不依赖模型生成标签。该语料只验证评测合同和规则治理闭环，不代表全行业召回率。",
   "source_snapshot": [
     {
       "path": "benchmark_evaluator/enterprise_understanding/fixtures/implicit_rules_v1/source_v1.md",
@@ -32,8 +32,7 @@
       "source_locators": ["source_v2.md#付款"],
       "match": {
         "logical_form": "IDEMPOTENCY",
-        "operator": "business_effect_count",
-        "statement": "同一付款请求不得重复成功扣款；重复提交时业务成功效果最多发生一次。"
+        "operator": "business_effect_count"
       }
     },
     {
@@ -50,8 +49,7 @@
       "source_locators": ["source_v1.md#订单", "source_v2.md#订单"],
       "match": {
         "logical_form": "CARDINALITY",
-        "operator": "count_eq",
-        "subject_refs": ["Order"]
+        "operator": "cardinality"
       }
     },
     {
@@ -67,8 +65,7 @@
       "source_locators": ["source_v2.md#库存"],
       "match": {
         "logical_form": "CONSERVATION_EQUATION",
-        "operator": "equals",
-        "subject_refs": ["Inventory"]
+        "operator": "equation_holds"
       }
     },
     {
