@@ -145,7 +145,7 @@ def test_recovery_promotes_encrypted_staged_checkpoint(monkeypatch, tmp_path: Pa
     )
     monkeypatch.setattr(
         recovery,
-        "_read_journal",
+        "_read",
         lambda *a, **k: {
             "attempt_id": "checkpoint_1",
             "previous_checkpoint_fingerprint": hashlib.sha256(
@@ -158,7 +158,7 @@ def test_recovery_promotes_encrypted_staged_checkpoint(monkeypatch, tmp_path: Pa
     )
     monkeypatch.setattr(
         recovery,
-        "_decrypt_journal_checkpoint",
+        "_decrypt_staged",
         lambda journal: checkpoint,
     )
 
@@ -196,7 +196,7 @@ def test_recovery_rolls_registry_back_for_safe_replay(monkeypatch, tmp_path: Pat
         "_registry_fingerprint",
         lambda *a, **k: ("new-registry-fingerprint", {}),
     )
-    monkeypatch.setattr(recovery, "_read_journal", lambda *a, **k: {})
+    monkeypatch.setattr(recovery, "_read", lambda *a, **k: {})
     monkeypatch.setattr(
         recovery,
         "_repair_registry_to_profile",
