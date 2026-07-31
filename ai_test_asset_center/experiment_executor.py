@@ -16,6 +16,7 @@ from typing import Any
 
 from . import experiment_executor_governance as _governance
 from .authorization_delivery_gate import (
+    AuthorizationDeliveryGateError,
     attach_authorization_delivery_evidence,
 )
 from .authorization_oracle_causality import (
@@ -98,10 +99,35 @@ def execute_one_experiment(
         behavior_ir=behavior_ir,
         account_rows=_governance._test_account_rows(root, project),
     )
-    return attach_authorization_delivery_evidence(
-        governed,
-        experiment=experiment,
-    )
+    try:
+        return attach_authorization_delivery_evidence(
+            governed,
+            experiment=experiment,
+        )
+    except AuthorizationDeliveryGateError as exc:
+        blocked = dict(governed)
+        blocked["finding"] = None
+        if str(blocked.get("status") or "").upper() not in {
+            "BLOCKED",
+            "HARNESS_FAILURE",
+        }:
+            blocked["status"] = "EXECUTED"
+        blocked["reason_code"] = "AUTHORIZATION_DELIVERY_EVIDENCE_INVALID"
+        blocked["detail"] = str(exc)
+        verdict = dict(
+            blocked.get("oracle_verdict")
+            if isinstance(blocked.get("oracle_verdict"), dict)
+            else {}
+        )
+        verdict.update({
+            "status": "INDETERMINATE",
+            "verdict": "blocked_experiment",
+            "customer_deliverable_candidate": False,
+            "authorization_delivery_gate": "INDETERMINATE",
+            "authorization_delivery_reason": str(exc),
+        })
+        blocked["oracle_verdict"] = verdict
+        return blocked
 
 
 __all__ = sorted(
