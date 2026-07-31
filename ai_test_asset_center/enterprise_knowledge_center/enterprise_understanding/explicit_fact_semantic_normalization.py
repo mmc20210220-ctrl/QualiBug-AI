@@ -9,7 +9,7 @@ conflicting source statements, or creates a second ledger.
 Normalization is deliberately limited to deterministic Chinese grammar visible in
 ``raw_statement``:
 
-* explicit role/object lexical heads are added as source-backed identity coordinates;
+* explicit role/object lexical heads use longest non-overlapping source mentions;
 * governed actions are separated from temporal anchors and downstream effects;
 * ``只有…才可以`` remains a conditional MAY permission rather than ONLY_IF modality;
 * source/target states are retained for ``从A变为B`` transitions;
@@ -58,8 +58,6 @@ _ENTITY_HEADS = tuple(
     sorted(
         {
             "采购订单",
-            "测试订单",
-            "已出库订单",
             "订单明细",
             "订单头",
             "结算单",
@@ -171,12 +169,20 @@ def _ordered_unique(values: Iterable[Any]) -> list[str]:
 
 
 def _explicit_refs(statement: str, vocabulary: Iterable[str]) -> list[str]:
-    """Return only vocabulary coordinates literally present in the source span."""
-    rows: list[tuple[int, int, str]] = []
+    """Return longest non-overlapping coordinates literally present in source."""
+    candidates: list[tuple[int, int, str]] = []
     for value in vocabulary:
         for match in re.finditer(re.escape(value), statement):
-            rows.append((match.start(), -len(value), value))
-    return _ordered_unique(value for _start, _length, value in sorted(rows))
+            candidates.append((match.start(), match.end(), value))
+    candidates.sort(key=lambda row: (row[0], -(row[1] - row[0]), row[2]))
+
+    selected: list[tuple[int, int, str]] = []
+    for start, end, value in candidates:
+        if any(start < used_end and end > used_start for used_start, used_end, _ in selected):
+            continue
+        selected.append((start, end, value))
+    selected.sort(key=lambda row: (row[0], row[1], row[2]))
+    return _ordered_unique(value for _start, _end, value in selected)
 
 
 def _action_matches(statement: str) -> list[dict[str, Any]]:
@@ -467,6 +473,7 @@ def normalize_explicit_business_fact_semantics(asset: dict[str, Any]) -> dict[st
         "new_fact_discovery_allowed": False,
         "source_statement_rewrite_allowed": False,
         "conflicting_source_value_selection_allowed": False,
+        "overlapping_identity_coordinate_emission_allowed": False,
         "automatic_winner_used": False,
     }
     governance = dict(_dict(asset.get("governance")))
@@ -475,6 +482,7 @@ def normalize_explicit_business_fact_semantics(asset: dict[str, Any]) -> dict[st
             "explicit_fact_coordinates_normalized_at_compiler_boundary": True,
             "explicit_fact_normalization_discovers_new_facts": False,
             "explicit_fact_normalization_selects_conflicting_values": False,
+            "explicit_fact_identity_mentions_are_longest_non_overlapping": True,
         }
     )
     asset["governance"] = governance
