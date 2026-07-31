@@ -1,0 +1,70 @@
+name: Apply lifecycle finalizer single exit
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: lifecycle-finalizer-single-exit-main
+  cancel-in-progress: false
+
+jobs:
+  refactor:
+    if: github.event.issue.title == 'RUN_LIFECYCLE_FINALIZER_SINGLE_EXIT_20260731'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Apply canonical single-exit refactor
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat \
+            tools/.one_shot/lifecycle_finalizer_single_exit/part-00 \
+            tools/.one_shot/lifecycle_finalizer_single_exit/tail-a \
+            tools/.one_shot/lifecycle_finalizer_single_exit/tail-b \
+            > /tmp/apply_lifecycle_finalizer_single_exit.py
+          python -m py_compile /tmp/apply_lifecycle_finalizer_single_exit.py
+          python /tmp/apply_lifecycle_finalizer_single_exit.py
+          python -m py_compile \
+            ai_test_asset_center/operational_receipts.py \
+            ai_test_asset_center/experiment_outcome_finalizer.py \
+            tests/test_experiment_outcome_single_exit.py
+
+      - name: Run focused lifecycle regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -e .
+          pytest -q \
+            tests/test_operational_lifecycle_authority.py \
+            tests/test_experiment_outcome_single_exit.py \
+            tests/test_v162_gate_a_receipt_authority.py
+
+      - name: Commit canonical refactor
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'qualibug-mainline-bot'
+          git config user.email 'qualibug-mainline-bot@users.noreply.github.com'
+          git rm -r tools/.one_shot/lifecycle_finalizer_single_exit
+          git rm .github/workflows/apply-lifecycle-finalizer-single-exit.yml
+          git add \
+            ai_test_asset_center/operational_receipts.py \
+            ai_test_asset_center/experiment_outcome_finalizer.py \
+            tests/test_experiment_outcome_single_exit.py
+          git diff --cached --check
+          git commit -m 'refactor(lifecycle): route all outcomes through one finalizer exit'
+          git pull --rebase origin main
+          git push origin HEAD:main
