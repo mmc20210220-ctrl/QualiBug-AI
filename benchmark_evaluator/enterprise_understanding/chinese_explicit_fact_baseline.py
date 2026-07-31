@@ -33,6 +33,7 @@ TARGETS = {
     "fact_recall": 0.95,
     "slot_exact_accuracy": 0.92,
     "p0_exact_fact_recall": 0.95,
+    "source_locator_exact_accuracy": 0.98,
 }
 _CRITICALITY_WEIGHT = {"P0": 4.0, "P1": 3.0, "P2": 2.0, "P3": 1.0}
 
