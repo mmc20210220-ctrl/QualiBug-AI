@@ -7,10 +7,10 @@ from ai_test_asset_center.contract_oracles import (
 from ai_test_asset_center.database_observer_experiment_runtime import (
     aggregate_database_observer_phase_receipts,
 )
-from ai_test_asset_center.database_relation_delta_causality_oracle import (
-    OBSERVER_ID,
-    observe_operation_causality,
+from ai_test_asset_center.database_relation_delta_causality_integrity import (
+    observe_operation_causality_with_integrity,
 )
+from ai_test_asset_center.database_relation_delta_causality_oracle import OBSERVER_ID
 from ai_test_asset_center.database_relation_delta_causality_projection import (
     ASSERTION_KIND,
 )
@@ -18,9 +18,9 @@ from ai_test_asset_center.database_relation_observer_experiment_runtime import (
     aggregate_database_relation_phase_receipts,
 )
 from ai_test_asset_center.non_http_observers import install_non_http_observers
-from tests.test_database_relation_delta_causality_oracle import (
-    _observations,
-    _spec,
+from tests.database_relation_delta_causality_fixtures import (
+    build_observations,
+    build_spec,
 )
 
 
@@ -101,9 +101,9 @@ def _experiment(assertion: dict) -> dict:
 
 
 def test_contract_oracle_owns_operation_attributed_delta_violation() -> None:
-    assertion = _spec()
+    assertion = build_spec()
     experiment = _experiment(assertion)
-    observations = _observations()
+    observations = build_observations(assertion)
     root_receipts = observations["approved_database_observer_phase_receipts"]
     relation_receipts = observations[
         "approved_database_relation_phase_receipts"
@@ -125,7 +125,7 @@ def test_contract_oracle_owns_operation_attributed_delta_violation() -> None:
             "execution_id": "execution-1",
         }
     )
-    causal_observer = observe_operation_causality(
+    causal_observer = observe_operation_causality_with_integrity(
         {
             "experiment": experiment,
             "observations": observations,
@@ -138,6 +138,7 @@ def test_contract_oracle_owns_operation_attributed_delta_violation() -> None:
     assert relation_aggregate["status"] == "OBSERVED"
     assert causal_observer["status"] == "OBSERVED"
     assert causal_observer["observer_id"] == OBSERVER_ID
+    assert causal_observer["evidence"]["integrity_failure_count"] == 0
     assert causal_observer["evidence"]["oracle_verdict_emitted"] is False
 
     treatment = build_contract_evidence_receipt(
@@ -183,6 +184,8 @@ def test_contract_oracle_owns_operation_attributed_delta_violation() -> None:
     assert failed["reason_code"] == (
         "DATABASE_RELATION_DELTA_CONSERVATION_VIOLATED"
     )
+    assert failed["actual"]["causal_scope_semantic_match"] is True
+    assert failed["actual"]["transport_receipt_integrity_valid"] is True
     assert failed["actual"]["transport_scope_match"] is True
     assert failed["actual"]["causal_value_fingerprint_match"] is True
     assert failed["actual"]["causal_lineage_match"] is True
