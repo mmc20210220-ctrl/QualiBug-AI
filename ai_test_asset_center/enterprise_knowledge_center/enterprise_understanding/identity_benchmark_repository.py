@@ -138,14 +138,27 @@ def append_identity_benchmark_snapshot(
         for row in as_list(history.get("snapshots"))
         if isinstance(row, dict)
     ]
-    if any(text(row.get("snapshot_id")) == text(snapshot.get("snapshot_id")) for row in rows):
-        return dict(snapshot)
-    rows.append(dict(snapshot))
+    row = dict(snapshot)
+    requested_id = text(row.get("snapshot_id"))
+    duplicate_count = sum(
+        1
+        for prior in rows
+        if text(prior.get("requested_snapshot_id") or prior.get("snapshot_id"))
+        == requested_id
+    )
+    row["requested_snapshot_id"] = requested_id
+    row["measurement_event_sequence"] = len(rows) + 1
+    if duplicate_count:
+        row["snapshot_id"] = hashlib.sha256(
+            f"{requested_id}:{len(rows) + 1}".encode("utf-8")
+        ).hexdigest()[:24]
+        row["same_result_event_ordinal"] = duplicate_count + 1
+    rows.append(row)
     history["snapshots"] = rows[-_MAX_HISTORY_SNAPSHOTS:]
-    history["updated_at_utc"] = text(snapshot.get("recorded_at_utc")) or _now()
+    history["updated_at_utc"] = text(row.get("recorded_at_utc")) or _now()
     path.parent.mkdir(parents=True, exist_ok=True)
     _write_json(path, history)
-    return dict(snapshot)
+    return row
 
 
 def snapshot_identity_benchmark_file(path: Path) -> bytes | None:
