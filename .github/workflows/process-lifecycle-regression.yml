@@ -11,6 +11,7 @@ on:
       - "ai_test_asset_center/experiment_lifecycle_runtime.py"
       - "ai_test_asset_center/experiment_plan_lifecycle_adapter.py"
       - "ai_test_asset_center/experiment_executor.py"
+      - "ai_test_asset_center/experiment_executor_governance.py"
       - "ai_test_asset_center/experiment_compiler_base.py"
       - "ai_test_asset_center/experiment_compiler_obligation.py"
       - "ai_test_asset_center/experiment_compiler_obligation_core.py"
@@ -69,6 +70,7 @@ on:
       - "tests/test_wait_flow_data_requirement.py"
       - "tests/test_graph_scoped_receipt_copy.py"
       - "tests/test_process_graph_rollback_contract.py"
+      - "tests/test_process_graph_write_rollback_integration.py"
       - "tests/test_process_graph_dependency_rollback.py"
       - "tests/test_process_graph_multi_write_equivalence.py"
       - "tests/test_experiment_cleanup_lifecycle_adapter.py"
@@ -103,6 +105,7 @@ jobs:
             ai_test_asset_center/experiment_lifecycle_runtime.py \
             ai_test_asset_center/experiment_plan_lifecycle_adapter.py \
             ai_test_asset_center/experiment_executor.py \
+            ai_test_asset_center/experiment_executor_governance.py \
             ai_test_asset_center/experiment_compiler_base.py \
             ai_test_asset_center/experiment_compiler_obligation.py \
             ai_test_asset_center/experiment_compiler_obligation_core.py \
@@ -164,6 +167,7 @@ jobs:
             tests/test_wait_flow_data_requirement.py \
             tests/test_graph_scoped_receipt_copy.py \
             tests/test_process_graph_rollback_contract.py \
+            tests/test_process_graph_write_rollback_integration.py \
             tests/test_process_graph_dependency_rollback.py \
             tests/test_process_graph_multi_write_equivalence.py \
             tests/test_experiment_cleanup_lifecycle_adapter.py \
