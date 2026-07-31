@@ -10,27 +10,6 @@
         "operationId": "submitPayment",
         "summary": "提交付款请求",
         "description": "同一付款请求不得重复成功扣款；重复提交时业务成功效果最多发生一次。",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": [
-                  "payment_request_id"
-                ],
-                "properties": {
-                  "payment_request_id": {
-                    "type": "string"
-                  },
-                  "amount": {
-                    "type": "number"
-                  }
-                }
-              }
-            }
-          }
-        },
         "responses": {
           "200": {
             "description": "付款处理结果"
