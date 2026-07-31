@@ -11,7 +11,11 @@ from pathlib import Path
 from typing import Any, Callable
 import uuid
 
-from .connector_write_fence import current_connector_write_fence
+from .connector_write_fence import (
+    ConnectorWriteFenceRevoked,
+    connector_write_fence,
+    current_connector_write_fence,
+)
 from .private_pilot_json_io import _read_json_object, _write_json_object_atomic
 from .real_project_onboarding import _safe_project_id
 
@@ -168,7 +172,7 @@ def heartbeat_connector_sync_ownership(
     }
 
 
-def _heartbeat_loop(
+def _heartbeat_iterations(
     root: Path,
     project: str,
     connector: str,
@@ -206,10 +210,55 @@ def _heartbeat_loop(
                 root=root,
                 active_epoch_id=epoch,
             )
-        except ConnectorSyncOwnershipError:
+        except (ConnectorSyncOwnershipError, ConnectorWriteFenceRevoked):
             return
         except Exception:
             continue
+
+
+def _heartbeat_loop(
+    root: Path,
+    project: str,
+    connector: str,
+    attempt: str,
+    owner_thread_id: int,
+    operation_code: Any,
+    stop_event: threading.Event,
+    epoch_provider: Callable[[], str] | None,
+    fencing_token: int,
+    validator: Callable[[str, str, int], None] | None,
+) -> None:
+    if fencing_token > 0 and callable(validator):
+        try:
+            with connector_write_fence(
+                project,
+                connector,
+                fencing_token,
+                validator=validator,
+            ):
+                _heartbeat_iterations(
+                    root,
+                    project,
+                    connector,
+                    attempt,
+                    owner_thread_id,
+                    operation_code,
+                    stop_event,
+                    epoch_provider,
+                )
+        except ConnectorWriteFenceRevoked:
+            return
+        return
+    _heartbeat_iterations(
+        root,
+        project,
+        connector,
+        attempt,
+        owner_thread_id,
+        operation_code,
+        stop_event,
+        epoch_provider,
+    )
 
 
 def begin_connector_sync_ownership(
@@ -230,6 +279,7 @@ def begin_connector_sync_ownership(
     operation_code = _operation_code(owner_thread_id)
     fence = current_connector_write_fence()
     fencing_token = int(fence.get("fencing_token") or 0)
+    validator = fence.get("validator") if callable(fence.get("validator")) else None
     now = time.time()
     payload = {
         "schema": SYNC_OWNERSHIP_SCHEMA,
@@ -284,6 +334,8 @@ def begin_connector_sync_ownership(
                 operation_code,
                 stop_event,
                 epoch_provider,
+                fencing_token,
+                validator,
             ),
             name=f"qualibug-sync-heartbeat-{connector}",
             daemon=True,
@@ -313,7 +365,6 @@ def fence_out_connector_sync_ownership(
     fencing_token: int,
     join_timeout: float = 2.0,
 ) -> dict[str, Any]:
-    """Invalidate an old heartbeat before the existing lifecycle recovery aborts it."""
     project = _safe_project_id(project_id)
     connector = _connector_id(connector_instance_id)
     takeover = _text(takeover_attempt_id, 160)
