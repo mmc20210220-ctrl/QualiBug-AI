@@ -1,10 +1,11 @@
 """Build two source versions through the existing product authorities.
 
 This product-only subprocess proves source-version lifecycle without receiving Ground
-Truth. Phase one ingests and builds one finalized asset. Phase two re-ingests changed
-bytes under the same stable source occurrence reference and calls the same composition
-root again. The source-occurrence authority performs supersession; the composition root
-carries only durable implicit-rule governance from the prior finalized asset.
+Truth. Phase one ingests and builds one finalized asset. Phase two re-ingests the same
+stable source-reference set: changed source bytes must supersede their prior occurrence,
+while unchanged supporting sources must reuse the same occurrence identity. The
+composition root carries only durable implicit-rule governance from the prior finalized
+asset.
 """
 from __future__ import annotations
 
@@ -102,6 +103,8 @@ def _ingest_phase(
 def _assert_version_transition(
     phase_one: dict[str, Any], phase_two: dict[str, Any]
 ) -> list[dict[str, Any]]:
+    """Validate changed-source supersession and unchanged-source identity reuse."""
+
     before = phase_one["occurrences_by_ref"]
     after = phase_two["occurrences_by_ref"]
     if set(before) != set(after):
@@ -122,6 +125,7 @@ def _assert_version_transition(
         for row in phase_two["source_receipts"]
     }
     transitions: list[dict[str, Any]] = []
+    changed_count = 0
     for source_ref in sorted(before):
         old = before[source_ref]
         new = after[source_ref]
@@ -129,38 +133,63 @@ def _assert_version_transition(
         new_version = int(new.get("version") or 0)
         old_occurrence = str(old.get("source_occurrence_id") or "")
         new_occurrence = str(new.get("source_occurrence_id") or "")
+        old_canonical = str(
+            old.get("canonical_source_id") or old.get("source_id") or ""
+        )
+        new_canonical = str(
+            new.get("canonical_source_id") or new.get("source_id") or ""
+        )
         old_blob = str(first_receipts[source_ref].get("blob_sha") or "")
         new_blob = str(second_receipts[source_ref].get("blob_sha") or "")
-        if old_blob == new_blob:
-            raise ProductPhaseError(
-                f"versioned_source_blob_did_not_change:{source_ref}"
-            )
-        if old_occurrence == new_occurrence:
-            raise ProductPhaseError(
-                f"versioned_source_occurrence_identity_did_not_change:{source_ref}"
-            )
-        if new_version <= old_version:
-            raise ProductPhaseError(
-                f"versioned_source_occurrence_version_did_not_advance:{source_ref}:{old_version}:{new_version}"
-            )
+        content_changed = old_blob != new_blob
+
+        if content_changed:
+            changed_count += 1
+            if old_occurrence == new_occurrence:
+                raise ProductPhaseError(
+                    f"versioned_source_occurrence_identity_did_not_change:{source_ref}"
+                )
+            if new_version <= old_version:
+                raise ProductPhaseError(
+                    f"versioned_source_occurrence_version_did_not_advance:{source_ref}:{old_version}:{new_version}"
+                )
+            transition_kind = "SUPERSEDED_BY_CHANGED_CONTENT"
+        else:
+            if old_occurrence != new_occurrence:
+                raise ProductPhaseError(
+                    f"unchanged_source_occurrence_identity_changed:{source_ref}"
+                )
+            if new_version != old_version:
+                raise ProductPhaseError(
+                    f"unchanged_source_occurrence_version_changed:{source_ref}:{old_version}:{new_version}"
+                )
+            if old_canonical != new_canonical:
+                raise ProductPhaseError(
+                    f"unchanged_source_canonical_identity_changed:{source_ref}"
+                )
+            transition_kind = "UNCHANGED_OCCURRENCE_REUSED"
+
         transitions.append(
             {
                 "source_ref": source_ref,
+                "transition_kind": transition_kind,
+                "content_changed": content_changed,
                 "phase_one_fixture_path": first_receipts[source_ref].get("path"),
                 "phase_two_fixture_path": second_receipts[source_ref].get("path"),
                 "phase_one_blob_sha": old_blob,
                 "phase_two_blob_sha": new_blob,
                 "phase_one_source_occurrence_id": old_occurrence,
                 "phase_two_source_occurrence_id": new_occurrence,
-                "phase_one_canonical_source_id": old.get("canonical_source_id")
-                or old.get("source_id"),
-                "phase_two_canonical_source_id": new.get("canonical_source_id")
-                or new.get("source_id"),
+                "phase_one_canonical_source_id": old_canonical,
+                "phase_two_canonical_source_id": new_canonical,
                 "phase_one_version": old_version,
                 "phase_two_version": new_version,
-                "source_occurrence_supersession_authority": True,
+                "source_occurrence_supersession_authority": content_changed,
+                "source_occurrence_reuse_authority": not content_changed,
             }
         )
+    if changed_count == 0:
+        raise ProductPhaseError("versioned_manifest_contains_no_changed_source")
     return transitions
 
 
@@ -262,6 +291,8 @@ def build_versioned_product_snapshot(
             "phase_two_prior_rule_library_was_reused_as_current_authority"
         )
 
+    changed_sources = [row for row in transitions if row.get("content_changed")]
+    unchanged_sources = [row for row in transitions if not row.get("content_changed")]
     receipt = {
         "schema_version": VERSIONED_PRODUCT_PHASE_SCHEMA,
         "product_phase_schema_version": PRODUCT_PHASE_RECEIPT_SCHEMA,
@@ -274,8 +305,11 @@ def build_versioned_product_snapshot(
         "phase_one_asset_fingerprint": _fingerprint(asset_one),
         "phase_two_asset_fingerprint": _fingerprint(asset_two),
         "source_version_transitions": transitions,
+        "changed_source_count": len(changed_sources),
+        "unchanged_source_count": len(unchanged_sources),
         "source_identity_authority": "SOURCE_OCCURRENCE_REGISTRY",
-        "source_occurrence_supersession_used": True,
+        "source_occurrence_supersession_used": bool(changed_sources),
+        "unchanged_source_occurrence_reuse_verified": bool(unchanged_sources),
         "composition_authority": (
             "ai_test_asset_center.enterprise_knowledge_center.composition."
             "build_enterprise_business_knowledge_asset"
