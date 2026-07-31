@@ -1,14 +1,20 @@
-"""Compile non-executable Scenario IR into Scenario Execution Contract v1.
+"""Compile canonical Scenario IR into non-executable execution requirements.
 
-The contract enumerates all runtime inputs, observations and safety obligations needed by a
-future executor. It never selects concrete credentials, creates request payloads, opens database
-connections, compiles executable assertions, mutates an enterprise system or reports a Bug.
+This compiler never reconstructs business semantics from legacy scenario projections. It
+accepts the canonical operation clause, condition expression and outcome contracts, then
+turns each predicate and each mandatory outcome into an explicit runtime requirement.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 import re
 from typing import Any, Iterable
 
+from .behavior_ir_logic_gate import (
+    condition_expression_complete,
+    iter_condition_predicates,
+    project_outcome_effects,
+)
 from .schema import as_dict, as_list, dedupe_evidence, stable_id, text, unique_text
 
 SCENARIO_EXECUTION_CONTRACT_SCHEMA = "qualibug.scenario-execution-contract.v1"
@@ -26,10 +32,10 @@ def _norm(value: Any) -> str:
     return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", text(value).lower())
 
 
-def _condition_value(slot: dict[str, Any]) -> dict[str, Any]:
-    value = as_dict(slot.get("value_candidate"))
+def _condition_value(predicate: dict[str, Any]) -> dict[str, Any]:
+    value = as_dict(predicate.get("value_candidate"))
     return {
-        "raw": value.get("raw") or slot.get("raw_value"),
+        "raw": value.get("raw") or predicate.get("raw_value"),
         "value_type": value.get("value_type") or "TEXT",
         "normalized_value": value.get("normalized_value"),
         "unit": value.get("unit"),
@@ -47,24 +53,44 @@ def _field_index(fields: Iterable[Any]) -> dict[str, str]:
     return result
 
 
+def _canonical_scenario_reasons(scenario: dict[str, Any]) -> list[str]:
+    reasons: list[str] = []
+    operation = as_dict(scenario.get("operation_clause"))
+    expression = as_dict(scenario.get("condition_expression"))
+    outcomes = _dicts(scenario.get("outcome_contracts"))
+    if text(operation.get("status")) != "CONFIRMED":
+        reasons.append("EXECUTION_CONTRACT_OPERATION_CLAUSE_MISSING")
+    if not condition_expression_complete(expression):
+        reasons.append("EXECUTION_CONTRACT_CONDITION_EXPRESSION_INCOMPLETE")
+    mandatory = [row for row in outcomes if bool(row.get("mandatory"))]
+    if not mandatory or any(
+        text(row.get("status")) != "CONFIRMED" for row in mandatory
+    ):
+        reasons.append("EXECUTION_CONTRACT_OUTCOME_CONTRACTS_INCOMPLETE")
+    if not text(scenario.get("canonical_semantics_version")):
+        reasons.append("EXECUTION_CONTRACT_CANONICAL_SEMANTICS_MISSING")
+    return unique_text(reasons)
+
+
 def _path_parameter_requirements(
     scenario: dict[str, Any], contract_fields: list[str]
 ) -> list[dict[str, Any]]:
     action = as_dict(scenario.get("action_entry"))
-    path = text(action.get("path"))
-    parameters = unique_text(_PATH_PARAMETER_RE.findall(path))
-    preconditions = _dicts(scenario.get("preconditions"))
+    parameters = unique_text(_PATH_PARAMETER_RE.findall(text(action.get("path"))))
+    predicates = iter_condition_predicates(
+        as_dict(scenario.get("condition_expression"))
+    )
     result: list[dict[str, Any]] = []
     for name in parameters:
         normalized = _norm(name)
         candidates = [
-            slot
-            for slot in preconditions
+            row
+            for row in predicates
             if normalized
             and normalized
             in {
-                _norm(slot.get("field_candidate")),
-                _norm(text(slot.get("field_candidate")).split(".")[-1]),
+                _norm(row.get("field_candidate")),
+                _norm(text(row.get("field_candidate")).split(".")[-1]),
             }
         ]
         source = candidates[0] if len(candidates) == 1 else {}
@@ -73,13 +99,21 @@ def _path_parameter_requirements(
                 "field": name,
                 "location": "PATH",
                 "required": True,
-                "source_slot_ref": source.get("slot_id"),
-                "semantic_value_requirement": _condition_value(source) if source else {},
+                "source_predicate_ref": source.get("predicate_id"),
+                "source_slot_ref": source.get("slot_ref"),
+                "semantic_value_requirement": (
+                    _condition_value(source) if source else {}
+                ),
                 "runtime_value_source": (
-                    "SOURCE_BACKED_PRECONDITION" if source else "RUNTIME_ENTITY_IDENTIFIER"
+                    "SOURCE_BACKED_CONDITION_PREDICATE"
+                    if source
+                    else "RUNTIME_ENTITY_IDENTIFIER"
                 ),
                 "runtime_value_materialized": False,
-                "contract_declared": name in contract_fields or _norm(name) in _field_index(contract_fields),
+                "contract_declared": (
+                    name in contract_fields
+                    or _norm(name) in _field_index(contract_fields)
+                ),
             }
         )
     return result
@@ -91,15 +125,17 @@ def _request_field_requirements(
     indexed = _field_index(contract_fields)
     request_fields: list[dict[str, Any]] = []
     setup_requirements: list[dict[str, Any]] = []
-    for slot in _dicts(scenario.get("preconditions")):
-        field = text(slot.get("field_candidate"))
+    for predicate in iter_condition_predicates(
+        as_dict(scenario.get("condition_expression"))
+    ):
+        field = text(predicate.get("field_candidate"))
         canonical = indexed.get(_norm(field.split(".")[-1]))
         requirement = {
-            "slot_ref": slot.get("slot_id"),
+            "predicate_ref": predicate.get("predicate_id"),
+            "slot_ref": predicate.get("slot_ref"),
             "field_candidate": field,
-            "operator": slot.get("operator_candidate"),
-            "semantic_value_requirement": _condition_value(slot),
-            "source_header_path": as_list(slot.get("header_path")),
+            "operator": predicate.get("operator_candidate"),
+            "semantic_value_requirement": _condition_value(predicate),
             "runtime_value_materialized": False,
         }
         if canonical:
@@ -108,7 +144,9 @@ def _request_field_requirements(
                     **requirement,
                     "field": canonical,
                     "location": "UNRESOLVED_CONTRACT_LOCATION",
-                    "derivation": "EXACT_PRECONDITION_TO_DECLARED_CONTRACT_FIELD",
+                    "derivation": (
+                        "EXACT_CONDITION_PREDICATE_TO_DECLARED_CONTRACT_FIELD"
+                    ),
                     "required": True,
                 }
             )
@@ -117,14 +155,18 @@ def _request_field_requirements(
                 {
                     **requirement,
                     "requirement_kind": "EXISTING_ENTITY_OR_SYSTEM_STATE",
-                    "derivation": "PRECONDITION_NOT_DECLARED_AS_ACTION_REQUEST_FIELD",
+                    "derivation": (
+                        "CONDITION_PREDICATE_NOT_DECLARED_AS_ACTION_REQUEST_FIELD"
+                    ),
                 }
             )
     return request_fields, setup_requirements
 
 
 def _credential_requirements(scenario: dict[str, Any]) -> list[dict[str, Any]]:
-    actors = unique_text(as_list(scenario.get("actor_refs")))
+    actors = unique_text(
+        as_list(as_dict(scenario.get("operation_clause")).get("actor_refs"))
+    )
     if not actors:
         return [
             {
@@ -147,58 +189,123 @@ def _credential_requirements(scenario: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def _oracle_plan(scenario: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
-    expected = as_dict(scenario.get("expected_outcome"))
+def _outcome_observer_map(
+    scenario: dict[str, Any],
+) -> dict[str, list[dict[str, Any]]]:
+    result: dict[str, list[dict[str, Any]]] = {}
     observers = as_dict(scenario.get("observer_plan"))
-    condition_observers = _dicts(observers.get("condition_observers"))
-    effect_observers = _dicts(observers.get("effect_observers"))
-    response_observers = _dicts(observers.get("response_observers"))
-    state_effects = _dicts(expected.get("state_effects"))
-    data_effects = _dicts(expected.get("data_effects"))
-    permission = text(expected.get("permission_decision")) or "UNSPECIFIED"
-    semantic_effects = unique_text(as_list(expected.get("expected_effects")))
+    for row in _dicts(observers.get("outcome_observers")):
+        outcome_ref = text(row.get("outcome_ref"))
+        if outcome_ref:
+            result.setdefault(outcome_ref, []).append(row)
+    return result
+
+
+def _oracle_plan(
+    scenario: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    outcomes = _dicts(scenario.get("outcome_contracts"))
+    mandatory = [row for row in outcomes if bool(row.get("mandatory"))]
+    observer_map = _outcome_observer_map(scenario)
     unresolved: list[str] = []
-    if permission in {"ALLOW", "DENY", "REQUIRE_APPROVAL", "REQUIRE_CONFIRMATION"} and not response_observers:
-        unresolved.append("EXECUTION_CONTRACT_PERMISSION_RESPONSE_OBSERVER_UNRESOLVED")
-    if (state_effects or data_effects or semantic_effects) and not (
-        effect_observers or response_observers
-    ):
-        unresolved.append("EXECUTION_CONTRACT_EFFECT_OBSERVER_UNRESOLVED")
+    assertions: list[dict[str, Any]] = []
+    for outcome in mandatory:
+        outcome_ref = text(outcome.get("outcome_id"))
+        observers = [
+            row
+            for row in observer_map.get(outcome_ref, [])
+            if text(row.get("status")) == "BOUND"
+        ]
+        if len(observers) != 1:
+            unresolved.append("EXECUTION_CONTRACT_OUTCOME_OBSERVER_UNRESOLVED")
+        assertions.append(
+            {
+                "outcome_ref": outcome_ref,
+                "outcome_type": outcome.get("outcome_type"),
+                "target_object_refs": unique_text(
+                    as_list(outcome.get("target_object_refs"))
+                ),
+                "field_ref": outcome.get("field_ref"),
+                "expected_decision": outcome.get("expected_decision"),
+                "from_value": outcome.get("from_value"),
+                "to_value": outcome.get("to_value"),
+                "operator": outcome.get("operator"),
+                "value_ref": outcome.get("value_ref"),
+                "statement": outcome.get("statement"),
+                "observation_phase": outcome.get("observation_phase"),
+                "observer_requirements": observers,
+                "observer_binding_complete": len(observers) == 1,
+                "concrete_assertion_compiled": False,
+            }
+        )
+
+    permission = next(
+        (
+            row
+            for row in mandatory
+            if text(row.get("outcome_type")) == "PERMISSION_DECISION"
+        ),
+        {},
+    )
+    state = [
+        row
+        for row in mandatory
+        if text(row.get("outcome_type")) == "STATE_TRANSITION"
+    ]
+    data = [
+        row
+        for row in mandatory
+        if text(row.get("outcome_type"))
+        not in {"PERMISSION_DECISION", "STATE_TRANSITION"}
+    ]
+    observers = as_dict(scenario.get("observer_plan"))
     return (
         {
-            "oracle_level": "SOURCE_BACKED_SEMANTIC_ORACLE_REQUIREMENTS",
-            "permission_decision_requirement": permission,
-            "semantic_effect_requirements": semantic_effects,
-            "state_effect_requirements": state_effects,
-            "data_effect_requirements": data_effects,
-            "condition_observers": condition_observers,
-            "effect_observers": effect_observers,
-            "response_observers": response_observers,
+            "oracle_level": "CANONICAL_OUTCOME_CONTRACT_REQUIREMENTS",
+            "outcome_contract_requirements": deepcopy(mandatory),
+            "outcome_assertion_requirements": assertions,
+            "permission_decision_requirement": text(
+                permission.get("expected_decision")
+            )
+            or "UNSPECIFIED",
+            "semantic_effect_requirements": project_outcome_effects(mandatory),
+            "state_effect_requirements": deepcopy(state),
+            "data_effect_requirements": deepcopy(data),
+            "condition_observers": _dicts(observers.get("condition_observers")),
+            "outcome_observers": _dicts(observers.get("outcome_observers")),
+            "effect_observers": _dicts(observers.get("effect_observers")),
+            "response_observers": _dicts(observers.get("response_observers")),
             "http_status_expectation": "UNRESOLVED_FROM_SOURCE_CONTRACT",
             "response_body_assertion_requirements": [],
             "database_assertion_requirements": [],
             "concrete_assertion_compiled": False,
+            "legacy_oracle_fields_are_projections": True,
+            "raw_text_oracle_reparse_allowed": False,
         },
-        unresolved,
+        unique_text(unresolved),
     )
 
 
 def _snapshot_plan(scenario: dict[str, Any]) -> dict[str, Any]:
     observers = as_dict(scenario.get("observer_plan"))
-    expected = as_dict(scenario.get("expected_outcome"))
     condition_observers = _dicts(observers.get("condition_observers"))
-    effect_observers = _dicts(observers.get("effect_observers"))
-    response_observers = _dicts(observers.get("response_observers"))
-    state_or_data_effect = bool(
-        as_list(expected.get("state_effects"))
-        or as_list(expected.get("data_effects"))
-        or as_list(expected.get("expected_effects"))
-    )
+    outcome_observers = _dicts(observers.get("outcome_observers"))
+    after_observers = [
+        row
+        for row in outcome_observers
+        if text(row.get("status")) == "BOUND"
+    ]
+    before_outcomes = [
+        row
+        for row in _dicts(scenario.get("outcome_contracts"))
+        if bool(row.get("mandatory"))
+        and text(row.get("observation_phase")) not in {"", "RESPONSE"}
+    ]
     return {
-        "before_snapshot_required": bool(condition_observers or (effect_observers and state_or_data_effect)),
-        "after_snapshot_required": bool(effect_observers or response_observers),
-        "before_observer_requirements": [*condition_observers, *effect_observers],
-        "after_observer_requirements": [*effect_observers, *response_observers],
+        "before_snapshot_required": bool(condition_observers or before_outcomes),
+        "after_snapshot_required": bool(after_observers),
+        "before_observer_requirements": condition_observers,
+        "after_observer_requirements": after_observers,
         "snapshot_consistency_scope": "SAME_SCENARIO_ENTITY_IDENTITY",
         "runtime_query_compiled": False,
         "before_snapshot_compiled": False,
@@ -209,7 +316,11 @@ def _snapshot_plan(scenario: dict[str, Any]) -> dict[str, Any]:
 def _cleanup_requirements(scenario: dict[str, Any]) -> dict[str, Any]:
     method = text(as_dict(scenario.get("action_entry")).get("method")).upper()
     write = method in _WRITE_METHODS
-    compensations = unique_text(as_list(scenario.get("compensations")))
+    compensations = unique_text(
+        row.get("statement")
+        for row in _dicts(scenario.get("outcome_contracts"))
+        if text(row.get("outcome_type")) == "COMPENSATION"
+    )
     if not write:
         strategy = "NOT_REQUIRED_READ_ONLY_ACTION"
     elif compensations:
@@ -227,24 +338,35 @@ def _cleanup_requirements(scenario: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _compile_contract(scenario: dict[str, Any]) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+def _compile_contract(
+    scenario: dict[str, Any],
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     unknowns: list[dict[str, Any]] = []
     scenario_id = text(scenario.get("scenario_id"))
     action = as_dict(scenario.get("action_entry"))
     if text(scenario.get("status")) != "PLANNABLE":
         return None, []
-    unresolved: list[str] = []
-    if not scenario_id or not bool(action.get("authoritative")) or not text(action.get("interface_id")):
+    unresolved = _canonical_scenario_reasons(scenario)
+    if (
+        not scenario_id
+        or not bool(action.get("authoritative"))
+        or not text(action.get("interface_id"))
+    ):
         unresolved.append("EXECUTION_CONTRACT_AUTHORITATIVE_ACTION_ENTRY_MISSING")
     contract_fields = unique_text(as_list(action.get("contract_fields")))
-    request_fields, setup_requirements = _request_field_requirements(scenario, contract_fields)
+    request_fields, setup_requirements = _request_field_requirements(
+        scenario, contract_fields
+    )
     path_parameters = _path_parameter_requirements(scenario, contract_fields)
     oracle, oracle_unknowns = _oracle_plan(scenario)
     unresolved.extend(oracle_unknowns)
-    contract_id = stable_id("scenario_execution_contract", scenario_id, action.get("interface_id"))
+    contract_id = stable_id(
+        "scenario_execution_contract", scenario_id, action.get("interface_id")
+    )
     evidence = dedupe_evidence(as_list(scenario.get("evidence")))
     if not evidence:
         unresolved.append("EXECUTION_CONTRACT_SOURCE_EVIDENCE_MISSING")
+    unresolved = unique_text(unresolved)
     contract = {
         "schema": SCENARIO_EXECUTION_CONTRACT_SCHEMA,
         "contract_id": contract_id,
@@ -252,6 +374,12 @@ def _compile_contract(scenario: dict[str, Any]) -> tuple[dict[str, Any] | None, 
         "behavior_ref": scenario.get("behavior_ref"),
         "implementation_binding_ref": scenario.get("implementation_binding_ref"),
         "scenario_type": scenario.get("scenario_type"),
+        "canonical_semantics_version": scenario.get("canonical_semantics_version"),
+        "operation_clause": deepcopy(as_dict(scenario.get("operation_clause"))),
+        "condition_expression": deepcopy(
+            as_dict(scenario.get("condition_expression"))
+        ),
+        "outcome_contracts": deepcopy(_dicts(scenario.get("outcome_contracts"))),
         "action_contract": {
             "interface_id": action.get("interface_id"),
             "method": action.get("method"),
@@ -274,7 +402,7 @@ def _compile_contract(scenario: dict[str, Any]) -> tuple[dict[str, Any] | None, 
         "snapshot_plan": _snapshot_plan(scenario),
         "cleanup_requirements": _cleanup_requirements(scenario),
         "evidence": evidence,
-        "unresolved_contract_semantics": unique_text(unresolved),
+        "unresolved_contract_semantics": unresolved,
         "status": "INCOMPLETE" if unresolved else "REQUIREMENTS_READY",
         "formal_execution_contract": not bool(unresolved),
         "execution_allowed": False,
@@ -287,11 +415,16 @@ def _compile_contract(scenario: dict[str, Any]) -> tuple[dict[str, Any] | None, 
         "snapshots_compiled": False,
         "cleanup_plan_compiled": False,
         "runtime_environment_validated": False,
+        "canonical_semantics_required": True,
+        "legacy_semantic_fields_are_authoritative": False,
+        "downstream_raw_text_reparse_allowed": False,
     }
-    for reason in unique_text(unresolved):
+    for reason in unresolved:
         unknowns.append(
             {
-                "unknown_id": stable_id("scenario_execution_contract_unknown", contract_id, reason),
+                "unknown_id": stable_id(
+                    "scenario_execution_contract_unknown", contract_id, reason
+                ),
                 "kind": reason,
                 "reason_code": reason,
                 "contract_ref": contract_id,
@@ -315,17 +448,23 @@ def build_scenario_execution_contracts(
             "entry_allowed": False,
             "execution_contract_ready": False,
             "execution_allowed": False,
-            "upstream_scenario_ir_status": text(scenario_gate.get("status")) or "NOT_BUILT",
+            "upstream_scenario_ir_status": text(scenario_gate.get("status"))
+            or "NOT_BUILT",
             "metrics": {
                 "execution_contract_count": 0,
                 "ready_execution_contract_count": 0,
                 "incomplete_execution_contract_count": 0,
+                "canonical_execution_contract_count": 0,
             },
-            "quality_claim": "EXECUTION_CONTRACT_NOT_BUILT_WHEN_SCENARIO_IR_GATE_CLOSED",
+            "quality_claim": (
+                "EXECUTION_CONTRACT_NOT_BUILT_WHEN_SCENARIO_IR_GATE_CLOSED"
+            ),
         }
     contracts: list[dict[str, Any]] = []
     unknowns: list[dict[str, Any]] = []
-    plannable_scenarios = [row for row in scenarios if text(row.get("status")) == "PLANNABLE"]
+    plannable_scenarios = [
+        row for row in scenarios if text(row.get("status")) == "PLANNABLE"
+    ]
     for scenario in plannable_scenarios:
         contract, rows = _compile_contract(scenario)
         unknowns.extend(rows)
@@ -338,8 +477,14 @@ def build_scenario_execution_contracts(
             if text(row.get("contract_id"))
         }.values()
     )
-    ready = sum(1 for row in contracts if text(row.get("status")) == "REQUIREMENTS_READY")
-    incomplete = sum(1 for row in contracts if text(row.get("status")) == "INCOMPLETE")
+    ready = sum(
+        1
+        for row in contracts
+        if text(row.get("status")) == "REQUIREMENTS_READY"
+    )
+    incomplete = sum(
+        1 for row in contracts if text(row.get("status")) == "INCOMPLETE"
+    )
     covered = {text(row.get("scenario_ref")) for row in contracts}
     if incomplete or len(covered) < len(plannable_scenarios):
         status = "BLOCKED_EXECUTION_CONTRACT_INCOMPLETE"
@@ -360,24 +505,59 @@ def build_scenario_execution_contracts(
             "incomplete_execution_contract_count": incomplete,
             "covered_scenario_count": len(covered),
             "plannable_scenario_count": len(plannable_scenarios),
+            "canonical_execution_contract_count": sum(
+                1
+                for row in contracts
+                if bool(row.get("operation_clause"))
+                and bool(row.get("condition_expression"))
+                and bool(as_list(row.get("outcome_contracts")))
+            ),
+            "mandatory_outcome_requirement_count": sum(
+                len(
+                    as_list(
+                        as_dict(row.get("oracle_plan")).get(
+                            "outcome_contract_requirements"
+                        )
+                    )
+                )
+                for row in contracts
+            ),
             "path_parameter_requirement_count": sum(
-                len(as_list(as_dict(row.get("request_contract")).get("path_parameter_requirements")))
+                len(
+                    as_list(
+                        as_dict(row.get("request_contract")).get(
+                            "path_parameter_requirements"
+                        )
+                    )
+                )
                 for row in contracts
             ),
             "request_field_requirement_count": sum(
-                len(as_list(as_dict(row.get("request_contract")).get("request_field_requirements")))
+                len(
+                    as_list(
+                        as_dict(row.get("request_contract")).get(
+                            "request_field_requirements"
+                        )
+                    )
+                )
                 for row in contracts
             ),
             "credential_requirement_count": sum(
-                len(as_list(row.get("credential_requirements"))) for row in contracts
+                len(as_list(row.get("credential_requirements")))
+                for row in contracts
             ),
             "test_data_requirement_count": sum(
-                len(as_list(row.get("test_data_requirements"))) for row in contracts
+                len(as_list(row.get("test_data_requirements")))
+                for row in contracts
             ),
             "write_cleanup_requirement_count": sum(
                 1
                 for row in contracts
-                if bool(as_dict(row.get("cleanup_requirements")).get("cleanup_required"))
+                if bool(
+                    as_dict(row.get("cleanup_requirements")).get(
+                        "cleanup_required"
+                    )
+                )
             ),
             "execution_contract_unknown_count": len(unknowns),
         },
@@ -388,7 +568,12 @@ def build_scenario_execution_contracts(
         "snapshots_compiled": False,
         "cleanup_plan_compiled": False,
         "runtime_environment_validated": False,
-        "quality_claim": "EXECUTION_REQUIREMENTS_CLOSURE_NOT_RUNTIME_EXECUTABILITY_OR_BUG_FINDING",
+        "canonical_semantics_required": True,
+        "legacy_semantic_fields_are_authoritative": False,
+        "downstream_raw_text_reparse_allowed": False,
+        "quality_claim": (
+            "EXECUTION_REQUIREMENTS_CLOSURE_NOT_RUNTIME_EXECUTABILITY_OR_BUG_FINDING"
+        ),
     }
     return contracts, unknowns, gate
 
@@ -398,12 +583,19 @@ def _relationships(contracts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for contract in contracts:
         contract_id = text(contract.get("contract_id"))
         scenario_id = text(contract.get("scenario_ref"))
-        interface_id = text(as_dict(contract.get("action_contract")).get("interface_id"))
+        interface_id = text(
+            as_dict(contract.get("action_contract")).get("interface_id")
+        )
         accepted = text(contract.get("status")) == "REQUIREMENTS_READY"
         if contract_id and scenario_id:
             edges.append(
                 {
-                    "edge_id": stable_id("edge", "scenario_ir_to_execution_contract", scenario_id, contract_id),
+                    "edge_id": stable_id(
+                        "edge",
+                        "scenario_ir_to_execution_contract",
+                        scenario_id,
+                        contract_id,
+                    ),
                     "from": scenario_id,
                     "to": contract_id,
                     "relation": "scenario_ir_to_execution_contract",
@@ -416,7 +608,12 @@ def _relationships(contracts: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if contract_id and interface_id:
             edges.append(
                 {
-                    "edge_id": stable_id("edge", "execution_contract_to_interface", contract_id, interface_id),
+                    "edge_id": stable_id(
+                        "edge",
+                        "execution_contract_to_interface",
+                        contract_id,
+                        interface_id,
+                    ),
                     "from": contract_id,
                     "to": interface_id,
                     "relation": "execution_contract_to_interface",
@@ -435,11 +632,18 @@ def _relationships(contracts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     )
 
 
-def project_scenario_execution_contracts(asset: dict[str, Any], model: dict[str, Any]) -> dict[str, Any]:
+def project_scenario_execution_contracts(
+    asset: dict[str, Any], model: dict[str, Any]
+) -> dict[str, Any]:
     contracts, unknowns, gate = build_scenario_execution_contracts(asset, model)
     relationships = _relationships(contracts)
     evidence = dedupe_evidence(
-        [row for contract in contracts for row in as_list(contract.get("evidence")) if isinstance(row, dict)]
+        [
+            row
+            for contract in contracts
+            for row in as_list(contract.get("evidence"))
+            if isinstance(row, dict)
+        ]
     )
     asset["scenario_execution_contracts"] = contracts
     asset["scenario_execution_contract_unknowns"] = unknowns
@@ -463,7 +667,9 @@ def project_scenario_execution_contracts(asset: dict[str, Any], model: dict[str,
     projected = {
         "scenario_execution_contract_status": gate.get("status"),
         "scenario_execution_contract_ready": bool(gate.get("entry_allowed")),
-        "scenario_execution_contract_count": int(metrics.get("execution_contract_count") or 0),
+        "scenario_execution_contract_count": int(
+            metrics.get("execution_contract_count") or 0
+        ),
         "scenario_execution_contract_incomplete_count": int(
             metrics.get("incomplete_execution_contract_count") or 0
         ),
@@ -508,8 +714,9 @@ def project_scenario_execution_contracts(asset: dict[str, Any], model: dict[str,
                 "scenario_execution_contract_metrics": dict(metrics),
                 "execution_allowed": False,
                 "operator_action": (
-                    "resolve authoritative action, observer or source-evidence requirements; "
-                    "do not invent request fields, credentials, assertions, snapshots or cleanup"
+                    "resolve canonical action, predicate, outcome-observer or "
+                    "source-evidence requirements; never reconstruct semantics "
+                    "from legacy fields"
                 ),
             }
         )
@@ -525,6 +732,10 @@ def project_scenario_execution_contracts(asset: dict[str, Any], model: dict[str,
             "concrete_assertion_generation_allowed": False,
             "write_execution_without_cleanup_allowed": False,
             "scenario_execution_contract_does_not_enable_execution": True,
+            "execution_contract_consumes_canonical_condition_expression": True,
+            "execution_contract_consumes_canonical_operation_clause": True,
+            "execution_contract_consumes_canonical_outcome_contracts": True,
+            "execution_contract_raw_text_reparse_allowed": False,
         }
     )
     asset["governance"] = governance
