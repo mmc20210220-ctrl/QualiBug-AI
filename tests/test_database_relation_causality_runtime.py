@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from copy import deepcopy
 from pathlib import Path
 
 from ai_test_asset_center import database_relation_observer_runtime as runtime
 from ai_test_asset_center.database_relation_causality_runtime import (
     install_database_relation_causality_runtime,
 )
+
+_RELATION_DECISION_ID = "decision:ledger-relation"
 
 
 def _database(path: Path) -> None:
@@ -63,13 +66,14 @@ def _contract() -> dict:
         "value_source": "request.body.request_id",
         "child_database_field_id": "field:ledger_entries:request_id",
         "child_database_field_name": "request_id",
-        "mapping_decision_id": "decision:ledger-request-id",
+        "mapping_decision_id": _RELATION_DECISION_ID,
         "attribution_mode": "EXACT_REQUEST_CORRELATION",
         "causal_scope_fingerprint": "causal-scope-1",
     }
     return {
         "schema": "qualibug.database-relation-observer-contract.v1",
         "relation_observer_id": "relation-observer:ledger",
+        "relation_mapping_decision_id": _RELATION_DECISION_ID,
         "root_observer_id": "observer:accounts",
         "database_relationship_id": "fk:ledger:accounts",
         "parent_table_id": "table:accounts",
@@ -89,7 +93,7 @@ def _contract() -> dict:
                 "parent_database_field_name": "",
                 "operator": "=",
                 "value_source": "request.body.request_id",
-                "mapping_decision_id": "decision:ledger-request-id",
+                "mapping_decision_id": _RELATION_DECISION_ID,
                 "operation_ref": "api:POST:/ledger",
             },
         ],
@@ -122,15 +126,9 @@ def _contract() -> dict:
     }
 
 
-def test_exact_operation_key_excludes_concurrent_rows(tmp_path: Path) -> None:
-    project = "causal_relation_runtime"
-    database = tmp_path / "ledger.sqlite3"
-    _database(database)
-    _config(tmp_path, project, database)
-    install_database_relation_causality_runtime()
-
-    receipt = runtime.execute_database_relation_observer_contract(
-        _contract(),
+def _execute(contract: dict, *, root: Path, project: str) -> dict:
+    return runtime.execute_database_relation_observer_contract(
+        contract,
         aggregate_requests=[
             {
                 "aggregate": "SUM",
@@ -145,7 +143,7 @@ def test_exact_operation_key_excludes_concurrent_rows(tmp_path: Path) -> None:
                 "alias": "related_scope_count",
             },
         ],
-        root=tmp_path,
+        root=root,
         project=project,
         runtime_values={
             "request.parameter.id": "a-1",
@@ -155,6 +153,16 @@ def test_exact_operation_key_excludes_concurrent_rows(tmp_path: Path) -> None:
         campaign_id="campaign-1",
         execution_id="execution-1",
     )
+
+
+def test_exact_operation_key_excludes_concurrent_rows(tmp_path: Path) -> None:
+    project = "causal_relation_runtime"
+    database = tmp_path / "ledger.sqlite3"
+    _database(database)
+    _config(tmp_path, project, database)
+    install_database_relation_causality_runtime()
+
+    receipt = _execute(_contract(), root=tmp_path, project=project)
 
     assert receipt["status"] == "OBSERVED"
     payload = receipt["evidence"][
@@ -176,8 +184,32 @@ def test_exact_operation_key_excludes_concurrent_rows(tmp_path: Path) -> None:
     assert scope["causal_scope_fingerprint"] == "causal-scope-1"
     assert scope["operation_ref"] == "api:POST:/ledger"
     assert scope["child_database_field_name"] == "request_id"
+    assert scope["mapping_decision_id"] == _RELATION_DECISION_ID
+    assert scope["relation_mapping_decision_id"] == _RELATION_DECISION_ID
+    assert scope["relation_authority_match"] is True
     assert scope["raw_causal_value_retained"] is False
     serialized = json.dumps(receipt)
     assert "req-1" not in serialized
     assert "other-request" not in serialized
     assert "999.00" not in serialized
+
+
+def test_unrelated_mapping_decision_refuses_query(tmp_path: Path) -> None:
+    project = "causal_relation_authority_refusal"
+    database = tmp_path / "ledger-authority.sqlite3"
+    _database(database)
+    _config(tmp_path, project, database)
+    install_database_relation_causality_runtime()
+    contract = deepcopy(_contract())
+    contract["relation_predicates"][1]["mapping_decision_id"] = (
+        "decision:unrelated"
+    )
+
+    receipt = _execute(contract, root=tmp_path, project=project)
+
+    assert receipt["status"] == "INDETERMINATE"
+    assert receipt["reason_code"] == (
+        "DATABASE_RELATION_CAUSAL_RELATION_AUTHORITY_MISMATCH"
+    )
+    assert receipt["evidence"]["write_attempted"] is False
+    assert receipt["evidence"]["raw_sql_retained"] is False
