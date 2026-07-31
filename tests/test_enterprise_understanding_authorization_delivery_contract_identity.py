@@ -54,6 +54,26 @@ def _result(contract: dict) -> dict:
     }
 
 
+def _lineage_result(*, finding_execution_id: str = "") -> dict:
+    finding = {
+        "campaign_id": "campaign:1",
+        "obligation_id": "obl:auth",
+        "experiment_id": "exp:auth",
+    }
+    if finding_execution_id:
+        finding["execution_id"] = finding_execution_id
+    return {
+        "finding": finding,
+        "authorization_causality_receipt": {
+            "status": "PASSED",
+            "campaign_id": "campaign:1",
+            "obligation_id": "obl:auth",
+            "experiment_id": "exp:auth",
+            "execution_id": "execution:1",
+        },
+    }
+
+
 def test_exact_compiled_contract_identity_is_accepted() -> None:
     contract = _contract()
 
@@ -76,6 +96,26 @@ def test_compiled_contract_drift_is_rejected() -> None:
         experiment_executor._verify_authorization_compile_identity(
             result,
             {"authorization_comparison_contract": changed},
+        )
+
+
+def test_missing_finding_execution_lineage_is_sealed_from_causal_receipt() -> None:
+    original = _lineage_result()
+    snapshot = deepcopy(original)
+
+    output = experiment_executor._seal_authorization_finding_lineage(original)
+
+    assert original == snapshot
+    assert output["finding"]["execution_id"] == "execution:1"
+
+
+def test_foreign_finding_execution_lineage_is_rejected() -> None:
+    with pytest.raises(
+        AuthorizationDeliveryGateError,
+        match="authorization_delivery_finding_lineage_mismatch:execution_id",
+    ):
+        experiment_executor._seal_authorization_finding_lineage(
+            _lineage_result(finding_execution_id="execution:other")
         )
 
 
