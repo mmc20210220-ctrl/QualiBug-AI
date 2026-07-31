@@ -259,7 +259,15 @@ def synchronize_scoped_receipts_from_observations(
             "oracle_verdict",
         ),
     )
-    oracle_trace_rows = _rows(source, ("oracle_trace_receipts",))
+    formal_oracle_trace_rows = _rows(source, ("oracle_trace_receipts",))
+    identified_raw_oracle_trace_rows = [
+        row
+        for row in _rows(source, ("oracle_trace",))
+        if receipt_id(row)
+    ]
+    oracle_trace_rows = _deduplicate_receipts(
+        [*formal_oracle_trace_rows, *identified_raw_oracle_trace_rows]
+    )
     oracle_rows = _deduplicate_receipts(
         [*oracle_invocation_rows, *oracle_trace_rows]
     )
