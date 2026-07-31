@@ -9,17 +9,20 @@ from .discovery_performance_loss_projection import (
     attach_formal_performance_loss_funnel,
 )
 from .discovery_ui_loss_projection import attach_formal_ui_loss_funnel
+from .formal_event_binding_evidence_projection import (
+    project_formal_event_binding_evidence,
+)
 from .formal_evidence_projection import (
     run_experiment_candidate as _run_with_formal_evidence,
 )
 
 
 def project_discovery_quality(result: dict[str, Any]) -> dict[str, Any]:
-    """Attach receipt-backed conversion measurement to one discovery result."""
+    """Attach durable identity evidence and receipt-backed conversion measurement."""
 
     if not isinstance(result, dict):
         raise TypeError("discovery_result_not_object")
-    projected = dict(result)
+    projected = project_formal_event_binding_evidence(dict(result))
     generic_funnel = build_discovery_loss_funnel(projected)
     with_ui = attach_formal_ui_loss_funnel(projected, generic_funnel)
     with_event = attach_formal_event_loss_funnel(projected, with_ui)
