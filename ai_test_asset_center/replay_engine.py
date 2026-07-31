@@ -1,475 +1,635 @@
-"""
-Replay Engine — 实时复现引擎。
+"""Replay engine for evidence-backed defect re-verification.
 
-POST /api/v1/projects/{id}/replay 接收 finding_id + 可选 base_url，
-从统一汇聚的 risks 中查找对应 finding 的 repro_method/repro_path/repro_params，
-通过 ssrf_guard.validate_url() 校验目标 URL，
-通过 multi_service_config.json 获取认证凭证，
-真实调用被测系统接口，返回请求/响应/diff 对比结果。
-
-支持并发复现（ThreadPoolExecutor, max_workers=4, timeout=30s）。
+Replay is constrained to the project's exact approved target. A result is
+tri-state: reproduced, not_reproduced, or inconclusive. Only an explicit,
+evaluable replay oracle may produce ``not_reproduced`` and therefore permit a
+defect to be closed by the HTTP lifecycle authority.
 """
 from __future__ import annotations
 
 import json
 import time
-import urllib.request
 import urllib.error
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from .credential_crypto import (
     decrypt as _decrypt_credential,
     is_encrypted as _is_encrypted_credential,
 )
+from .ssrf_guard import safe_urlopen
+from .target_policy import (
+    approved_target_authority,
+    build_target_policy_decision,
+    normalize_base_url,
+)
+
+
+_READ_ONLY_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+_WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_SENSITIVE_HEADER_PARTS = (
+    "authorization",
+    "cookie",
+    "token",
+    "api-key",
+    "apikey",
+    "secret",
+    "password",
+)
+_SAFE_RESPONSE_HEADERS = frozenset(
+    {"content-type", "content-length", "etag", "last-modified", "retry-after"}
+)
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _effective_port(url: str) -> int:
+    parsed = urlsplit(url)
+    return parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
+
+
+def _json_path(value: Any, path: str) -> Any:
+    current = value
+    for part in [item for item in str(path or "").split(".") if item]:
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+            continue
+        return None
+    return current
+
+
+def _normalized_body(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return " ".join(text.split())
+    return json.dumps(parsed, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 class ReplayEngine:
-    """实时复现引擎：真实调用被测系统接口重新触发 Bug。"""
+    """Re-execute one finding against its exact approved project target."""
 
     def __init__(self, root: Path, project_id: str):
-        self.root = root
-        self.project_id = project_id
-        self._config: dict | None = None
-        self._connector_config: dict | None = None
+        self.root = Path(root).resolve()
+        self.project_id = str(project_id)
+        self._config: dict[str, Any] | None = None
+        self._connector_config: dict[str, Any] | None = None
+        self._target_config: dict[str, Any] | None = None
 
-    # ── 配置加载 ──────────────────────────────────────────────────────
-
-    def _load_service_config(self) -> dict:
-        """从 multi_service_config.json 加载服务配置"""
-        if self._config is not None:
-            return self._config
-        config_path = self.root / "platform_workspace" / self.project_id / "multi_service_config.json"
-        if not config_path.exists():
-            self._config = {}
-            return self._config
+    def _load_json_object(self, path: Path, label: str) -> dict[str, Any]:
+        if not path.exists():
+            return {}
         try:
-            parsed = json.loads(config_path.read_text(encoding="utf-8"))
+            parsed = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError(f"invalid replay service config: {config_path}") from exc
+            raise ValueError(f"invalid {label}: {path}") from exc
         if not isinstance(parsed, dict):
-            raise ValueError(f"replay service config must be an object: {config_path}")
-        services = parsed.get("services", [])
-        if not isinstance(services, list) or any(not isinstance(item, dict) for item in services):
-            raise ValueError(f"replay service config services must be a list of objects: {config_path}")
-        self._config = parsed
-        return self._config
+            raise ValueError(f"{label} must be an object: {path}")
+        return parsed
 
-    def _load_connector_config(self) -> dict:
-        """Load and validate the connector registry used by replay."""
-        if self._connector_config is not None:
-            return self._connector_config
-        connector_path = (
-            self.root
-            / "platform_workspace"
-            / self.project_id
-            / "enterprise_pilot_runtime"
-            / "connector_registry.json"
+    def _load_service_config(self) -> dict[str, Any]:
+        if self._config is None:
+            path = self.root / "platform_workspace" / self.project_id / "multi_service_config.json"
+            parsed = self._load_json_object(path, "replay service config")
+            services = parsed.get("services", [])
+            if services and (
+                not isinstance(services, list)
+                or any(not isinstance(item, dict) for item in services)
+            ):
+                raise ValueError(
+                    f"replay service config services must be a list of objects: {path}"
+                )
+            self._config = parsed
+        return dict(self._config)
+
+    def _load_connector_config(self) -> dict[str, Any]:
+        if self._connector_config is None:
+            path = (
+                self.root
+                / "platform_workspace"
+                / self.project_id
+                / "enterprise_pilot_runtime"
+                / "connector_registry.json"
+            )
+            parsed = self._load_json_object(path, "replay connector config")
+            connectors = parsed.get("connectors", [])
+            if connectors and (
+                not isinstance(connectors, list)
+                or any(not isinstance(item, dict) for item in connectors)
+            ):
+                raise ValueError(
+                    f"replay connector config connectors must be a list of objects: {path}"
+                )
+            self._connector_config = parsed
+        return dict(self._connector_config)
+
+    def _load_target_config(self) -> dict[str, Any]:
+        if self._target_config is None:
+            path = (
+                self.root
+                / "platform_inputs"
+                / self.project_id
+                / "real_project_config.json"
+            )
+            self._target_config = self._load_json_object(path, "project target config")
+        return dict(self._target_config)
+
+    def _target_policy(self) -> dict[str, Any]:
+        config = self._load_target_config()
+        return build_target_policy_decision(
+            requested_base_url=config.get("base_url"),
+            approved_base_url=config.get("approved_base_url"),
+            environment_type=config.get("environment_type"),
+            environment_ref=config.get("environment_ref"),
+            execution_mode=config.get("execution_mode") or "safe_read_only",
+            runtime_status=config.get("runtime_status") or "approved",
         )
-        if not connector_path.exists():
-            self._connector_config = {}
-            return self._connector_config
+
+    def _approved_target(self) -> dict[str, Any]:
+        grant = approved_target_authority(self.project_id, self.root)
+        if not isinstance(grant, dict) or grant.get("approved") is not True:
+            reason = _text((grant or {}).get("reason_code")) or "PROJECT_TARGET_NOT_APPROVED"
+            raise ValueError(reason)
+        base_url = normalize_base_url(grant.get("base_url"))
+        host = _text(grant.get("host")).lower()
+        if not base_url or not host:
+            raise ValueError("PROJECT_TARGET_NOT_APPROVED")
+        return {**grant, "base_url": base_url, "host": host}
+
+    def _url_within_approved_base(self, url: str, approved_base_url: str) -> bool:
         try:
-            parsed = json.loads(connector_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError(f"invalid replay connector config: {connector_path}") from exc
-        if not isinstance(parsed, dict):
-            raise ValueError(f"replay connector config must be an object: {connector_path}")
-        connectors = parsed.get("connectors", [])
-        if not isinstance(connectors, list) or any(not isinstance(item, dict) for item in connectors):
-            raise ValueError(f"replay connector config connectors must be a list of objects: {connector_path}")
-        self._connector_config = parsed
-        return self._connector_config
+            candidate = urlsplit(url)
+            approved = urlsplit(approved_base_url)
+        except ValueError:
+            return False
+        if candidate.scheme.lower() != approved.scheme.lower():
+            return False
+        if (candidate.hostname or "").lower() != (approved.hostname or "").lower():
+            return False
+        if _effective_port(url) != _effective_port(approved_base_url):
+            return False
+        approved_path = (approved.path or "").rstrip("/")
+        candidate_path = candidate.path or "/"
+        if not approved_path:
+            return True
+        return candidate_path == approved_path or candidate_path.startswith(approved_path + "/")
 
-    def _get_base_url(self) -> str:
-        """获取被测系统的 base_url：优先 multi_service_config.json，其次 connector_registry.json"""
-        # 1. 先从 multi_service_config.json 获取
-        config = self._load_service_config()
-        services = config.get("services") or []
-        for svc in services:
-            if isinstance(svc, dict) and svc.get("base_url"):
-                return str(svc["base_url"]).rstrip("/")
-
-        # 2. 从 connector_registry.json 获取（endpoint_ref 字段）
-        conn_data = self._load_connector_config()
-        for conn in (conn_data.get("connectors") or []):
-            if conn.get("enabled", True):
-                endpoint = str(conn.get("endpoint_ref") or "").strip().rstrip("/")
-                if endpoint and endpoint.startswith("http"):
-                    return endpoint
-
-        # 3. Fallback: 本地开发默认地址
-        return ""
+    def _resolve_replay_url(self, path: str, base_url_override: str = "") -> tuple[str, dict[str, Any]]:
+        grant = self._approved_target()
+        approved_base = str(grant["base_url"])
+        override = normalize_base_url(base_url_override) if _text(base_url_override) else ""
+        if override and override != approved_base:
+            raise ValueError("REPLAY_TARGET_OVERRIDE_NOT_APPROVED")
+        raw_path = _text(path)
+        if not raw_path:
+            raise ValueError("REPLAY_PATH_MISSING")
+        if raw_path.startswith(("http://", "https://")):
+            full_url = raw_path
+        else:
+            full_url = approved_base.rstrip("/") + "/" + raw_path.lstrip("/")
+        if not self._url_within_approved_base(full_url, approved_base):
+            raise ValueError("REPLAY_URL_OUTSIDE_APPROVED_TARGET")
+        return full_url, grant
 
     def _get_auth_header(self) -> tuple[str, str]:
-        """获取认证 header (name, value)"""
-        # 1. 先从 multi_service_config.json 获取
         config = self._load_service_config()
-        services = config.get("services") or []
-        for svc in services:
-            if not isinstance(svc, dict):
-                continue
-            auth = svc.get("auth") or {}
-            bearer = auth.get("bearer_token") or ""
+        for service in config.get("services") or []:
+            auth = service.get("auth") if isinstance(service.get("auth"), dict) else {}
+            bearer = _text(auth.get("bearer_token"))
             if bearer:
                 if _is_encrypted_credential(bearer):
                     bearer = _decrypt_credential(bearer)
                 return "Authorization", f"Bearer {bearer}"
-            api_key = auth.get("api_key") or ""
+            api_key = _text(auth.get("api_key"))
             if api_key:
                 if _is_encrypted_credential(api_key):
                     api_key = _decrypt_credential(api_key)
                 return "X-API-Key", api_key
-
-        # 2. 从 connector_registry.json 获取凭证
-        conn_data = self._load_connector_config()
-        for conn in (conn_data.get("connectors") or []):
-            if not conn.get("enabled", True):
+        connector_data = self._load_connector_config()
+        for connector in connector_data.get("connectors") or []:
+            if connector.get("enabled", True) is not True:
                 continue
-            cred_ref = str(conn.get("credential_ref") or "").strip()
-            if cred_ref and _is_encrypted_credential(cred_ref):
-                token = _decrypt_credential(cred_ref)
-                return "Authorization", f"Bearer {token}"
+            credential = _text(connector.get("credential_ref"))
+            if credential and _is_encrypted_credential(credential):
+                return "Authorization", f"Bearer {_decrypt_credential(credential)}"
+        return "", ""
 
-        return "Authorization", ""
-
-    def _auto_login(self, base_url: str) -> tuple[str, str]:
-        """
-        自动登录获取认证 token。
-        1. 先从 scan_result.json 的 HAR 里提取已有 token
-        2. 如果没有或已过期，从 test_profile.test_credentials 读凭证自动登录
-        """
-        # 1. 从 HAR 提取已有 token
-        try:
-            scan_path = self.root / "platform_outputs" / self.project_id / "scan_result.json"
-            if scan_path.exists():
-                scan_data = json.loads(scan_path.read_text(encoding="utf-8"))
-                har_entries = (scan_data.get("auto_har") or {}).get("entries") or []
-                for entry in har_entries:
-                    req = entry.get("request") or {}
-                    resp = entry.get("response") or {}
-                    if (req.get("url", "").endswith("/api/auth/login")
-                            and resp.get("status") == 200):
-                        body = resp.get("body") or ""
-                        if isinstance(body, str):
-                            try:
-                                body_obj = json.loads(body)
-                                token = str(body_obj.get("token") or body_obj.get("access_token") or "")
-                                if token:
-                                    return "Authorization", f"Bearer {token}"
-                            except Exception:
-                                pass
-        except Exception:
-            pass
-
-        # 2. 从 test_profile.test_credentials 读凭证自动登录
-        creds = self._load_test_credentials()
-        buyer = creds.get("buyer") or {}
-        email = str(buyer.get("email") or "")
-        password = str(buyer.get("password") or "")
-        if email and password:
-            try:
-                login_url = f"{base_url}/api/auth/login"
-                login_body = json.dumps({"email": email, "password": password}).encode("utf-8")
-                req = urllib.request.Request(
-                    login_url, data=login_body,
-                    headers={"Content-Type": "application/json"},
-                    method="POST"
-                )
-                from .ssrf_guard import safe_urlopen
-                resp = safe_urlopen(req, timeout=10, allow_internal=True)
-                body = json.loads(resp.read().decode("utf-8"))
-                token = str(body.get("token") or body.get("access_token") or "")
-                if token:
-                    return "Authorization", f"Bearer {token}"
-            except Exception:
-                pass
-
-        return "Authorization", ""
-
-    def _load_test_credentials(self) -> dict:
-        """从 connector_registry.json 的 test_profile.test_credentials 读取凭证"""
-        connector_path = self.root / "platform_workspace" / self.project_id / "enterprise_pilot_runtime" / "connector_registry.json"
-        if not connector_path.exists():
+    def _load_test_credentials(self) -> dict[str, Any]:
+        profile = self._load_connector_config().get("test_profile")
+        if not isinstance(profile, dict):
             return {}
+        credentials = profile.get("test_credentials")
+        return dict(credentials) if isinstance(credentials, dict) else {}
+
+    def _open_approved(
+        self,
+        request: urllib.request.Request,
+        *,
+        grant: dict[str, Any],
+        timeout: float,
+    ) -> Any:
+        if not self._url_within_approved_base(request.full_url, str(grant["base_url"])):
+            raise ValueError("REPLAY_URL_OUTSIDE_APPROVED_TARGET")
+        return safe_urlopen(
+            request,
+            timeout=timeout,
+            allow_internal=False,
+            approved_host=str(grant["host"]),
+        )
+
+    def _auto_login(self, grant: dict[str, Any]) -> tuple[str, str]:
+        credentials = self._load_test_credentials()
+        buyer = credentials.get("buyer") if isinstance(credentials.get("buyer"), dict) else {}
+        email = _text(buyer.get("email"))
+        password = _text(buyer.get("password"))
+        if not email or not password:
+            return "", ""
+        login_url = str(grant["base_url"]).rstrip("/") + "/api/auth/login"
+        body = json.dumps({"email": email, "password": password}).encode("utf-8")
+        request = urllib.request.Request(
+            login_url,
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
         try:
-            conn_data = json.loads(connector_path.read_text(encoding="utf-8"))
-            test_profile = conn_data.get("test_profile") or {}
-            return test_profile.get("test_credentials") or {}
+            with self._open_approved(request, grant=grant, timeout=10) as response:
+                parsed = json.loads(response.read(200_000).decode("utf-8"))
         except Exception:
-            return {}
+            return "", ""
+        if not isinstance(parsed, dict):
+            return "", ""
+        token = _text(parsed.get("token") or parsed.get("access_token"))
+        return ("Authorization", f"Bearer {token}") if token else ("", "")
 
-    # ── Finding 查找 ──────────────────────────────────────────────────
-
-    def _find_finding(self, finding_id: str, risks: list[dict]) -> dict | None:
-        """从统一汇聚的 risks 列表中查找对应 finding"""
-        for r in risks:
-            if not isinstance(r, dict):
+    def _find_finding(self, finding_id: str, risks: list[dict[str, Any]]) -> dict[str, Any] | None:
+        for risk in risks:
+            if not isinstance(risk, dict):
                 continue
-            rid = str(r.get("id") or r.get("risk_id") or r.get("finding_id") or r.get("bug_id") or "")
-            if rid == finding_id:
-                return r
+            identity = _text(
+                risk.get("id")
+                or risk.get("risk_id")
+                or risk.get("finding_id")
+                or risk.get("bug_id")
+            )
+            if identity == finding_id:
+                return risk
         return None
 
-    # ── SSRF 校验 ─────────────────────────────────────────────────────
+    def _write_replay_allowed(self, finding: dict[str, Any]) -> tuple[bool, str]:
+        contract = finding.get("replay_contract")
+        if not isinstance(contract, dict):
+            return False, "REPLAY_WRITE_CONTRACT_MISSING"
+        if contract.get("approved_write") is not True:
+            return False, "REPLAY_WRITE_NOT_APPROVED"
+        policy = self._target_policy()
+        if policy.get("write_allowed") is not True:
+            return False, "REPLAY_TARGET_POLICY_BLOCKED"
+        return True, "APPROVED"
 
-    def _validate_replay_url(self, url: str) -> str:
-        """校验复现 URL 安全性。允许已注册的项目 base_url（即使内网地址）。"""
-        from .ssrf_guard import validate_url, SsrfBlockedError
+    @staticmethod
+    def _redacted_headers(headers: dict[str, str]) -> dict[str, str]:
+        result: dict[str, str] = {}
+        for key, value in headers.items():
+            lower = key.lower()
+            result[key] = "***" if any(part in lower for part in _SENSITIVE_HEADER_PARTS) else value
+        return result
 
-        # 先尝试标准校验（allow_internal 由环境变量 QUALIBUG_SSRF_ALLOW_INTERNAL 控制）
-        try:
-            return validate_url(url, allow_internal=True)
-        except SsrfBlockedError:
-            pass
+    @staticmethod
+    def _response_headers(headers: Any) -> dict[str, str]:
+        return {
+            str(key): str(value)
+            for key, value in dict(headers or {}).items()
+            if str(key).lower() in _SAFE_RESPONSE_HEADERS
+        }
 
-        # 如果标准校验失败，检查是否匹配已注册的项目 base_url
-        base_url = self._get_base_url()
-        if base_url and url.startswith(base_url):
-            return url  # 允许已注册的项目 base_url
-
-        raise SsrfBlockedError(f"URL '{url}' 被阻止：不是 http/https 协议或目标为内网地址且未匹配已注册的项目地址")
-
-    # ── 复现执行 ──────────────────────────────────────────────────────
-
-    def replay(self, finding_id: str, risks: list[dict], base_url_override: str = "") -> dict:
-        """
-        复现单条 finding。
-
-        Args:
-            finding_id: finding 的 ID
-            risks: 统一汇聚的 risks 列表（从 command-center 获取）
-            base_url_override: 可选的 base_url 覆盖
-
-        Returns:
-            ReplayResult 字典
-        """
-        finding = self._find_finding(finding_id, risks)
-        if not finding:
-            return {
-                "ok": False,
-                "finding_id": finding_id,
-                "error": f"未找到 finding: {finding_id}",
-            }
-
-        # 获取 method/path
-        method = str(finding.get("repro_method") or finding.get("_api_method") or finding.get("method") or "GET").upper()
-        path = str(finding.get("repro_path") or finding.get("_api_path") or finding.get("path") or "")
-
-        if not path:
-            return {
-                "ok": False,
-                "finding_id": finding_id,
-                "error": "该 finding 没有可复现的接口路径",
-            }
-
-        # 检查 path 是否含占位符（如 /api/orders/{id}/pay），无法直接复现
-        if "{" in path and "}" in path:
-            return {
-                "ok": False,
-                "finding_id": finding_id,
-                "error": f"接口路径含占位符 {path}，无法自动复现。请手动替换占位符为真实业务ID后执行。",
-            }
-
-        # 构建 URL
-        base_url = (base_url_override or self._get_base_url()).rstrip("/")
-        if path.startswith("http"):
-            full_url = path
-        else:
-            full_url = f"{base_url}{path}" if path.startswith("/") else f"{base_url}/{path}"
-
-        # SSRF 校验
-        try:
-            self._validate_replay_url(full_url)
-        except Exception as e:
-            return {
-                "ok": False,
-                "finding_id": finding_id,
-                "error": f"SSRF 安全校验失败: {e}",
-            }
-
-        # 获取认证 header
-        auth_header_name, auth_header_value = self._get_auth_header()
-
-        # 如果没有凭证，尝试自动登录获取 token
-        if not auth_header_value and base_url:
-            auth_header_name, auth_header_value = self._auto_login(base_url)
-
-        # 构建 headers
-        headers: dict[str, str] = {}
-        if auth_header_value:
-            headers[auth_header_name] = auth_header_value
-        if method in ("POST", "PUT", "PATCH"):
-            headers["Content-Type"] = "application/json"
-
-        # 请求体（如果有）— 从 har_evidence 或原始 evidence 获取
-        body = None
+    @staticmethod
+    def _request_body(finding: dict[str, Any], method: str) -> bytes | None:
+        if method not in _WRITE_METHODS:
+            return None
         har = finding.get("har_evidence") if isinstance(finding.get("har_evidence"), dict) else {}
         reproduction = finding.get("reproduction") if isinstance(finding.get("reproduction"), dict) else {}
-        if method in ("POST", "PUT", "PATCH"):
-            # 优先从 har_evidence.request_body 获取，其次从 reproduction 获取
-            body_str = har.get("request_body") or reproduction.get("request_body") or ""
-            if body_str:
-                body = body_str.encode("utf-8") if isinstance(body_str, str) else str(body_str).encode("utf-8")
+        value = har.get("request_body")
+        if value in (None, ""):
+            value = reproduction.get("request_body")
+        if value in (None, ""):
+            return None
+        if isinstance(value, bytes):
+            return value
+        if isinstance(value, (dict, list)):
+            return json.dumps(value, ensure_ascii=False).encode("utf-8")
+        return str(value).encode("utf-8")
 
-        # 记录请求信息
+    def replay(
+        self,
+        finding_id: str,
+        risks: list[dict[str, Any]],
+        base_url_override: str = "",
+    ) -> dict[str, Any]:
+        finding = self._find_finding(finding_id, risks)
+        if finding is None:
+            return {"ok": False, "finding_id": finding_id, "error": "FINDING_NOT_FOUND"}
+
+        method = _text(
+            finding.get("repro_method")
+            or finding.get("_api_method")
+            or finding.get("method")
+            or "GET"
+        ).upper()
+        if method not in _READ_ONLY_METHODS | _WRITE_METHODS:
+            return {"ok": False, "finding_id": finding_id, "error": "REPLAY_METHOD_UNSUPPORTED"}
+        path = _text(
+            finding.get("repro_path")
+            or finding.get("_api_path")
+            or finding.get("path")
+        )
+        if not path:
+            return {"ok": False, "finding_id": finding_id, "error": "REPLAY_PATH_MISSING"}
+        if "{" in path or "}" in path:
+            return {
+                "ok": False,
+                "finding_id": finding_id,
+                "error": "REPLAY_PATH_PLACEHOLDER_UNRESOLVED",
+            }
+        if method in _WRITE_METHODS:
+            allowed, reason = self._write_replay_allowed(finding)
+            if not allowed:
+                return {"ok": False, "finding_id": finding_id, "error": reason}
+
+        try:
+            full_url, grant = self._resolve_replay_url(path, base_url_override)
+        except Exception as exc:
+            return {"ok": False, "finding_id": finding_id, "error": str(exc)}
+
+        auth_name, auth_value = self._get_auth_header()
+        if not auth_value:
+            auth_name, auth_value = self._auto_login(grant)
+        headers: dict[str, str] = {}
+        if auth_name and auth_value:
+            headers[auth_name] = auth_value
+        body = self._request_body(finding, method)
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+
         request_info = {
             "method": method,
             "url": full_url,
-            "headers": {k: (v if "auth" not in k.lower() and "token" not in k.lower() else "***") for k, v in headers.items()},
-            "body": body.decode("utf-8") if body else "",
+            "headers": self._redacted_headers(headers),
+            "body_present": body is not None,
+            "body_bytes": len(body or b""),
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
-
-        # 真实调用被测系统接口
-        start = time.perf_counter()
+        started = time.perf_counter()
         try:
-            req = urllib.request.Request(full_url, data=body, headers=headers, method=method)
-
-            from .ssrf_guard import safe_urlopen
-            # 允许内网地址（已通过 _validate_replay_url 校验过）
-            resp = safe_urlopen(req, timeout=30, allow_internal=True)
-            duration_ms = int((time.perf_counter() - start) * 1000)
-
-            resp_status = resp.status
-            resp_headers = dict(resp.headers)
-            resp_body = resp.read().decode("utf-8", errors="replace")
-
-        except urllib.error.HTTPError as e:
-            duration_ms = int((time.perf_counter() - start) * 1000)
-            resp_status = e.code
-            resp_headers = dict(e.headers) if e.headers else {}
-            try:
-                resp_body = e.read().decode("utf-8", errors="replace")
-            except Exception:
-                resp_body = ""
-        except urllib.error.URLError as e:
+            request = urllib.request.Request(
+                full_url,
+                data=body,
+                headers=headers,
+                method=method,
+            )
+            with self._open_approved(request, grant=grant, timeout=30) as response:
+                status = int(response.status)
+                response_headers = self._response_headers(response.headers)
+                response_body = response.read(500_000).decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            status = int(exc.code)
+            response_headers = self._response_headers(exc.headers)
+            response_body = exc.read(500_000).decode("utf-8", errors="replace")
+        except urllib.error.URLError as exc:
             return {
                 "ok": False,
                 "finding_id": finding_id,
-                "error": f"连接失败: {e.reason}",
+                "error": f"REPLAY_CONNECTION_FAILED:{exc.reason}",
                 "request": request_info,
             }
-        except Exception as e:
+        except Exception as exc:
             return {
                 "ok": False,
                 "finding_id": finding_id,
-                "error": f"复现执行失败: {type(e).__name__}: {e}",
+                "error": f"REPLAY_EXECUTION_FAILED:{type(exc).__name__}:{exc}",
                 "request": request_info,
             }
 
         response_info = {
-            "status_code": resp_status,
-            "headers": resp_headers,
-            "body": resp_body[:5000],  # 限制长度
-            "duration_ms": duration_ms,
+            "status_code": status,
+            "headers": response_headers,
+            "body": response_body[:5000],
+            "body_truncated": len(response_body) > 5000,
+            "duration_ms": int((time.perf_counter() - started) * 1000),
         }
-
-        # 获取原始证据用于 diff 对比
-        original_evidence = self._extract_original_evidence(finding)
-
-        # 生成 diff 对比
-        diff = self._compute_diff(original_evidence, response_info)
-
-        # 判断是否成功复现
-        success = self._is_reproduced(finding, original_evidence, response_info)
-
+        original = self._extract_original_evidence(finding)
+        verdict, oracle = self._evaluate_replay(finding, original, response_info)
         return {
             "ok": True,
             "finding_id": finding_id,
             "request": request_info,
             "response": response_info,
-            "success": success,
-            "original_evidence": original_evidence,
-            "diff": diff,
+            "success": True if verdict == "reproduced" else False if verdict == "not_reproduced" else None,
+            "verdict": verdict,
+            "oracle": oracle,
+            "original_evidence": original,
+            "diff": self._compute_diff(original, response_info),
         }
 
-    # ── 批量复现 ──────────────────────────────────────────────────────
-
-    def replay_batch(self, finding_ids: list[str], risks: list[dict], max_workers: int = 4) -> list[dict]:
-        """批量复现多条 finding"""
-        results: list[dict] = []
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(self.replay, fid, risks): fid
-                for fid in finding_ids
-            }
-            for future in as_completed(futures, timeout=120):
-                fid = futures[future]
-                try:
-                    results.append(future.result())
-                except Exception as e:
-                    results.append({
-                        "ok": False,
-                        "finding_id": fid,
-                        "error": f"批量复现异常: {e}",
-                    })
+    def replay_batch(
+        self,
+        finding_ids: list[str],
+        risks: list[dict[str, Any]],
+        max_workers: int = 4,
+    ) -> list[dict[str, Any]]:
+        workers = max(1, min(int(max_workers or 1), 8))
+        results: list[dict[str, Any]] = []
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(self.replay, identity, risks): identity for identity in finding_ids}
+            try:
+                for future in as_completed(futures, timeout=120):
+                    identity = futures[future]
+                    try:
+                        results.append(future.result())
+                    except Exception as exc:
+                        results.append(
+                            {
+                                "ok": False,
+                                "finding_id": identity,
+                                "error": f"REPLAY_BATCH_FAILED:{type(exc).__name__}:{exc}",
+                            }
+                        )
+            except TimeoutError:
+                completed = {row.get("finding_id") for row in results if isinstance(row, dict)}
+                for identity in finding_ids:
+                    if identity not in completed:
+                        results.append(
+                            {"ok": False, "finding_id": identity, "error": "REPLAY_BATCH_TIMEOUT"}
+                        )
         return results
 
-    # ── 原始证据提取 ──────────────────────────────────────────────────
-
-    def _extract_original_evidence(self, finding: dict) -> dict:
-        """从 finding 中提取原始扫描证据"""
+    def _extract_original_evidence(self, finding: dict[str, Any]) -> dict[str, Any]:
         har = finding.get("har_evidence") if isinstance(finding.get("har_evidence"), dict) else {}
         evidence = finding.get("evidence") if isinstance(finding.get("evidence"), dict) else {}
-
+        raw_status = har.get("status_code") or evidence.get("status_code") or evidence.get("response_status")
+        try:
+            status = int(raw_status or 0)
+        except (TypeError, ValueError):
+            status = 0
         return {
-            "status_code": int(har.get("status_code") or evidence.get("status_code") or evidence.get("response_status") or 0),
-            "response_body_excerpt": str(har.get("response_body") or evidence.get("response") or evidence.get("actual") or "")[:1000],
-            "har_actor": str(har.get("actor") or ""),
+            "status_code": status,
+            "response_body_excerpt": _text(
+                har.get("response_body")
+                or evidence.get("response")
+                or evidence.get("actual")
+            )[:1000],
+            "har_actor": _text(har.get("actor")),
         }
 
-    # ── Diff 计算 ─────────────────────────────────────────────────────
+    def _explicit_oracle(self, finding: dict[str, Any]) -> dict[str, Any]:
+        for value in (
+            finding.get("replay_oracle"),
+            finding.get("oracle"),
+            (finding.get("reproduction") or {}).get("oracle")
+            if isinstance(finding.get("reproduction"), dict)
+            else None,
+        ):
+            if isinstance(value, dict) and value:
+                return dict(value)
+        return {}
 
-    def _compute_diff(self, original: dict, replay_response: dict) -> dict:
-        """计算原始证据与复现结果的差异"""
-        orig_status = original.get("status_code") or 0
-        replay_status = replay_response.get("status_code") or 0
+    def _evaluate_explicit_oracle(
+        self,
+        oracle: dict[str, Any],
+        response: dict[str, Any],
+    ) -> tuple[bool | None, list[dict[str, Any]]]:
+        checks: list[dict[str, Any]] = []
+        status = int(response.get("status_code") or 0)
+        body = str(response.get("body") or "")
+        expected_status = oracle.get("expected_status")
+        if expected_status is not None:
+            values = expected_status if isinstance(expected_status, list) else [expected_status]
+            expected: set[int] = set()
+            for value in values:
+                try:
+                    expected.add(int(value))
+                except (TypeError, ValueError):
+                    return None, [{"check": "expected_status", "evaluable": False}]
+            checks.append(
+                {
+                    "check": "expected_status",
+                    "expected": sorted(expected),
+                    "actual": status,
+                    "passed": status in expected,
+                }
+            )
+        contains = oracle.get("expected_body_contains")
+        if contains is not None:
+            values = contains if isinstance(contains, list) else [contains]
+            tokens = [str(value) for value in values if str(value)]
+            if not tokens:
+                return None, [{"check": "expected_body_contains", "evaluable": False}]
+            checks.append(
+                {
+                    "check": "expected_body_contains",
+                    "expected": tokens,
+                    "passed": all(token in body for token in tokens),
+                }
+            )
+        excludes = oracle.get("expected_body_not_contains")
+        if excludes is not None:
+            values = excludes if isinstance(excludes, list) else [excludes]
+            tokens = [str(value) for value in values if str(value)]
+            if not tokens:
+                return None, [{"check": "expected_body_not_contains", "evaluable": False}]
+            checks.append(
+                {
+                    "check": "expected_body_not_contains",
+                    "expected": tokens,
+                    "passed": all(token not in body for token in tokens),
+                }
+            )
+        expected_fields = oracle.get("expected_json_fields")
+        if expected_fields is not None:
+            if not isinstance(expected_fields, dict) or not expected_fields:
+                return None, [{"check": "expected_json_fields", "evaluable": False}]
+            try:
+                parsed_body = json.loads(body)
+            except Exception:
+                checks.append(
+                    {
+                        "check": "expected_json_fields",
+                        "expected": expected_fields,
+                        "passed": False,
+                        "reason": "response_not_json",
+                    }
+                )
+            else:
+                checks.append(
+                    {
+                        "check": "expected_json_fields",
+                        "expected": expected_fields,
+                        "passed": all(
+                            _json_path(parsed_body, path) == expected
+                            for path, expected in expected_fields.items()
+                        ),
+                    }
+                )
+        if not checks:
+            return None, []
+        return all(bool(check.get("passed")) for check in checks), checks
 
-        status_match = orig_status == replay_status
+    def _evaluate_replay(
+        self,
+        finding: dict[str, Any],
+        original: dict[str, Any],
+        response: dict[str, Any],
+    ) -> tuple[str, dict[str, Any]]:
+        explicit = self._explicit_oracle(finding)
+        if explicit:
+            matched, checks = self._evaluate_explicit_oracle(explicit, response)
+            if matched is True:
+                return "reproduced", {"basis": "explicit_replay_oracle", "checks": checks}
+            if matched is False:
+                return "not_reproduced", {"basis": "explicit_replay_oracle", "checks": checks}
+            return "inconclusive", {
+                "basis": "explicit_replay_oracle",
+                "checks": checks,
+                "reason": "oracle_not_evaluable",
+            }
 
-        orig_body = original.get("response_body_excerpt") or ""
-        replay_body = replay_response.get("body") or ""
-        body_match = orig_body.strip() == replay_body.strip() if orig_body and replay_body else False
-
-        key_differences: list[str] = []
-        if not status_match:
-            key_differences.append(f"状态码不一致：原始 {orig_status}，复现 {replay_status}")
-        if not body_match and orig_body and replay_body:
-            key_differences.append("响应体内容存在差异")
-        if not orig_body:
-            key_differences.append("原始扫描未记录响应体，无法做内容对比")
-        if not replay_body:
-            key_differences.append("复现请求未返回响应体")
-
-        return {
-            "status_match": status_match,
-            "body_match": body_match,
-            "key_differences": key_differences,
+        original_status = int(original.get("status_code") or 0)
+        original_body = _normalized_body(str(original.get("response_body_excerpt") or ""))
+        replay_status = int(response.get("status_code") or 0)
+        replay_body = _normalized_body(str(response.get("body") or ""))
+        if original_status and original_body and original_status == replay_status and original_body == replay_body:
+            return "reproduced", {
+                "basis": "exact_original_evidence_match",
+                "checks": [
+                    {"check": "status", "passed": True},
+                    {"check": "body", "passed": True},
+                ],
+            }
+        return "inconclusive", {
+            "basis": "insufficient_replay_oracle",
+            "reason": "status_only_or_non_exact_evidence_cannot_close_or_confirm_defect",
         }
 
-    # ── 复现判断 ──────────────────────────────────────────────────────
+    @staticmethod
+    def _compute_diff(original: dict[str, Any], replay_response: dict[str, Any]) -> dict[str, Any]:
+        original_status = int(original.get("status_code") or 0)
+        replay_status = int(replay_response.get("status_code") or 0)
+        original_body = _normalized_body(str(original.get("response_body_excerpt") or ""))
+        replay_body = _normalized_body(str(replay_response.get("body") or ""))
+        return {
+            "status_match": bool(original_status and original_status == replay_status),
+            "body_match": bool(original_body and replay_body and original_body == replay_body),
+            "original_status_available": bool(original_status),
+            "original_body_available": bool(original_body),
+        }
 
-    def _is_reproduced(self, finding: dict, original: dict, replay_response: dict) -> bool:
-        """
-        判断是否成功复现了 Bug。
-        逻辑：
-        - 如果原始证据有状态码，且复现状态码一致 → 复现成功（Bug 仍然存在）
-        - 如果原始证据没有状态码，但复现请求返回了错误状态码（4xx/5xx）→ 复现成功（Bug 触发了异常）
-        - 如果原始证据没有状态码，且复现请求返回 2xx → 无法确定（可能是正常行为，也可能是 Bug 未触发）
-        """
-        orig_status = original.get("status_code") or 0
-        replay_status = replay_response.get("status_code") or 0
 
-        # 如果原始证据有状态码，且复现状态码一致，则复现成功
-        if orig_status and replay_status and orig_status == replay_status:
-            return True
-
-        # 如果原始证据没有状态码（纯分析型 finding），看复现结果：
-        # - 返回 4xx/5xx → Bug 可能复现（异常被触发）
-        # - 返回 2xx → 无法确定（需要人工判断）
-        if not orig_status and replay_status:
-            return replay_status >= 400
-
-        return False
+__all__ = ["ReplayEngine"]
