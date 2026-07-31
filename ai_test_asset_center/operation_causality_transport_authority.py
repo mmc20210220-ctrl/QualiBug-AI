@@ -49,6 +49,39 @@ def _governance_receipt_ids(result: dict[str, Any]) -> dict[tuple[str, str], lis
     return output
 
 
+def _tighten_receipt(
+    row: dict[str, Any],
+    *,
+    candidates: list[str],
+) -> dict[str, Any]:
+    nonempty = [value for value in candidates if _text(value)]
+    exact_id = nonempty[0] if len(candidates) == 1 and len(nonempty) == 1 else ""
+    claimed_id = _text(row.get("transport_receipt_id"))
+    authority_valid = bool(exact_id and claimed_id == exact_id)
+    changed = claimed_id != exact_id
+
+    if not authority_valid:
+        row["status"] = "INDETERMINATE"
+        row["reason_code"] = (
+            "OPERATION_CAUSAL_GOVERNANCE_TRANSPORT_RECEIPT_MISSING"
+            if not exact_id
+            else "OPERATION_CAUSAL_GOVERNANCE_TRANSPORT_RECEIPT_MISMATCH"
+        )
+        row["transport_reached"] = bool(exact_id and int(row.get("status_code") or 0) > 0)
+        changed = True
+
+    # Never retain a body fingerprint or any other surrogate in a field whose
+    # semantics are an actual governance transport receipt.
+    if claimed_id != exact_id:
+        row["transport_receipt_id"] = exact_id
+        changed = True
+
+    if changed:
+        row.pop("receipt_id", None)
+        return seal_operation_causality_transport_receipt(row)
+    return row
+
+
 def install_operation_causality_transport_authority() -> None:
     """Tighten the existing transport finalizer in place."""
     from . import operation_causality_runtime as runtime
@@ -72,26 +105,9 @@ def install_operation_causality_transport_authority() -> None:
                 _text(row.get("operation_ref")),
                 _text(row.get("treatment_step_id")),
             )
-            candidates = governance.get(key, [])
-            exact_id = candidates[0] if len(candidates) == 1 else ""
-            claimed_id = _text(row.get("transport_receipt_id"))
-            valid = bool(
-                _text(row.get("status")) == "ATTRIBUTED"
-                and exact_id
-                and claimed_id == exact_id
+            tightened.append(
+                _tighten_receipt(row, candidates=governance.get(key, []))
             )
-            if _text(row.get("status")) == "ATTRIBUTED" and not valid:
-                row["status"] = "INDETERMINATE"
-                row["reason_code"] = (
-                    "OPERATION_CAUSAL_GOVERNANCE_TRANSPORT_RECEIPT_MISSING"
-                    if len(candidates) != 1 or not exact_id
-                    else "OPERATION_CAUSAL_GOVERNANCE_TRANSPORT_RECEIPT_MISMATCH"
-                )
-                row["transport_reached"] = False
-                row["transport_receipt_id"] = exact_id
-                row["receipt_id"] = ""
-                row = seal_operation_causality_transport_receipt(row)
-            tightened.append(row)
         if isinstance(observations, dict):
             observations[runtime.TRANSPORT_KEY] = tightened
         return tightened
