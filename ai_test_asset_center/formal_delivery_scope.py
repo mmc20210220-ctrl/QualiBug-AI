@@ -5,11 +5,17 @@ from __future__ import annotations
 This module deliberately sits below quality projection and canonical identity.
 It performs only the exact Gate-v2 + attempt-ledger join, preventing circular
 dependencies and preventing higher layers from inventing a second formal
-finding scope.
+finding scope. Authorization occurrences additionally consume the causal receipt
+already sealed into the Gate-v2 finding payload; no frontend or projection layer
+may infer authorization deliverability from mutable display flags.
 """
 
 from typing import Any
 
+from .authorization_delivery_gate import (
+    AuthorizationDeliveryGateError,
+    validate_authorization_delivery_finding,
+)
 from .customer_delivery_gate import LEGACY_CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
 from .customer_delivery_gate_v2 import (
     CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA,
@@ -50,6 +56,7 @@ def validated_deliverable_gate_index(
         raise MainlineContractError(
             f"formal_attempt_ledger_invalid:{exc}"
         ) from exc
+    campaign_id = _text(validated.get("campaign_id"))
     index: dict[str, dict[str, Any]] = {}
     for raw in _list(validated.get("attempts")):
         attempt = _dict(raw)
@@ -61,8 +68,13 @@ def validated_deliverable_gate_index(
         if not occurrence_id:
             raise MainlineContractError("formal_deliverable_gate_v2_missing")
         if schema_version == CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA:
+            evidence_bundle = _dict(attempt.get("delivery_evidence_bundle"))
+            bundled_finding = _dict(evidence_bundle.get("finding"))
             try:
-                validated_gate = validate_customer_delivery_gate_receipt_v2(gate)
+                validated_gate = validate_customer_delivery_gate_receipt_v2(
+                    gate,
+                    finding=bundled_finding or None,
+                )
             except DeliveryGateV2Error as exc:
                 raise MainlineContractError(
                     f"formal_deliverable_gate_invalid:{occurrence_id}:{exc}"
@@ -74,6 +86,16 @@ def validated_deliverable_gate_index(
                 raise MainlineContractError(
                     f"formal_deliverable_gate_identity_mismatch:{occurrence_id}"
                 )
+            try:
+                validate_authorization_delivery_finding(
+                    bundled_finding,
+                    attempt=attempt,
+                    campaign_id=campaign_id,
+                )
+            except AuthorizationDeliveryGateError as exc:
+                raise MainlineContractError(
+                    f"formal_authorization_delivery_invalid:{occurrence_id}:{exc}"
+                ) from exc
         elif (
             schema_version == LEGACY_CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
             and _text(gate.get("status")).upper() == "DELIVERABLE"
