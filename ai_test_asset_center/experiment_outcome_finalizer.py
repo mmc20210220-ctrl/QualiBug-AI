@@ -8,7 +8,9 @@ is not exposed to the core finalizer.
 
 Per-step cleanup equivalence receipts are created inside the historical core.
 A context-local hook binds those receipts to their exact source steps before the
-core assembles the Receipt Bundle and seals the final ledger hash.
+core assembles the Receipt Bundle and seals the final ledger hash. A lifecycle
+ledger that explicitly declares ``fixture_required=False`` may enter the same
+bundle validator with ``fixture_id=NOT_APPLICABLE``; no fixture receipt is made.
 """
 from __future__ import annotations
 
@@ -24,6 +26,7 @@ from .process_step_receipt_scope import (
 from .process_step_semantic_view import ProcessStepSemanticView
 
 
+_NOT_APPLICABLE = "NOT_APPLICABLE"
 _DERIVED_STEP_SNAPSHOT_FIELDS = (
     "process_step_receipts",
     "process_step_ledger_hash",
@@ -296,6 +299,22 @@ for _name in dir(_core):
         globals()[_name] = getattr(_core, _name)
 
 
+def _fixtureless_bundle_declared(
+    semantic_view: ProcessStepSemanticView,
+    observations: dict[str, Any],
+    fixture_receipts: list[dict[str, Any]],
+) -> bool:
+    ledger = semantic_view.source_ledger
+    return bool(
+        getattr(ledger, "fixture_required", True) is False
+        and _text(getattr(ledger, "fixture_id", "")) == _NOT_APPLICABLE
+        and observations.get("fixture_required") is False
+        and _text(observations.get("fixture_id")) == _NOT_APPLICABLE
+        and not fixture_receipts
+        and not _list(observations.get("fixture_provenance_receipts"))
+    )
+
+
 def finalize_experiment_execution(*args: Any, **kwargs: Any) -> dict[str, Any]:
     """Finalize through one exact-scoped process-step evidence authority."""
     _install_core_hooks()
@@ -321,6 +340,29 @@ def finalize_experiment_execution(*args: Any, **kwargs: Any) -> dict[str, Any]:
         semantic_view
     )
     observations["process_step_ledger_view"] = "exact_scope_finalizer"
+
+    fixture_receipts = [
+        row
+        for row in _list(kwargs.get("fixture_receipts"))
+        if isinstance(row, dict)
+    ]
+    fixtureless = _fixtureless_bundle_declared(
+        semantic_view,
+        observations,
+        fixture_receipts,
+    )
+    previous_force_present = "force_receipt_bundle" in observations
+    previous_force = observations.get("force_receipt_bundle")
+    if fixtureless:
+        observations["force_receipt_bundle"] = True
+        observations["fixtureless_bundle_activation"] = {
+            "status": "ACTIVATED",
+            "fixture_required": False,
+            "fixture_id": _NOT_APPLICABLE,
+            "synthetic_fixture_created": False,
+            "bundle_validation_bypassed": False,
+        }
+
     scope_token = _active_finalizer_scope.set(
         (observations, semantic_view)
     )
@@ -330,6 +372,10 @@ def finalize_experiment_execution(*args: Any, **kwargs: Any) -> dict[str, Any]:
         _active_finalizer_scope.reset(scope_token)
         observations["process_step_ledger"] = semantic_view
         observations["process_step_ledger_view"] = "semantic_completion"
+        if previous_force_present:
+            observations["force_receipt_bundle"] = previous_force
+        else:
+            observations.pop("force_receipt_bundle", None)
     return result
 
 
