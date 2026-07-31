@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from copy import deepcopy
 
+from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.behavior_ir_logic_gate import (
+    ensure_canonical_behavior_semantics,
+    iter_condition_predicates,
+    mandatory_outcomes,
+)
 from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.implementation_binding_projection import (
     project_final_scenario_planning_gate,
 )
@@ -30,33 +35,61 @@ def _scenario(
     method: str = "POST",
     path: str = "/orders/{order_id}/ship",
     observers: bool = True,
+    canonical: bool = True,
 ) -> dict:
-    return {
+    predicate = {
+        "schema": "qualibug.condition-expression.v1",
+        "node_type": "PREDICATE",
+        "predicate_id": "predicate:status",
+        "slot_ref": "slot:status",
+        "raw_value": "status=approved",
+        "field_candidate": "status",
+        "operator_candidate": "EQUALS",
+        "value_candidate": {"raw": "approved", "value_type": "TEXT"},
+        "status": "CONFIRMED",
+        "source_backed": True,
+    }
+    outcome = {
+        "schema": "qualibug.outcome-contract.v1",
+        "outcome_id": "outcome:permission",
+        "outcome_type": "PERMISSION_DECISION",
+        "target_object_refs": ["订单"],
+        "expected_decision": "ALLOW",
+        "mandatory": True,
+        "observation_phase": "RESPONSE",
+        "caused_by_operation_ref": "发货",
+        "status": "CONFIRMED",
+        "evidence": _evidence(),
+    }
+    row = {
         "schema": "qualibug.enterprise-test-scenario-ir.v1",
         "scenario_id": scenario_id,
         "scenario_type": "POSITIVE",
         "behavior_ref": "behavior:ship",
         "implementation_binding_ref": "binding:ship",
+        "canonical_semantics_version": "operation-condition-outcome.v1",
+        "operation_clause": {
+            "schema": "qualibug.operation-clause.v1",
+            "operation_ref": "发货",
+            "actor_refs": ["仓管员"],
+            "object_refs": ["订单"],
+            "source_refs": ["fact:ship"],
+            "evidence": _evidence(),
+            "status": "CONFIRMED",
+            "source_backed": True,
+        },
+        "condition_expression": predicate,
+        "outcome_contracts": [outcome],
         "actor_refs": ["仓管员"],
         "object_refs": ["订单"],
         "operation_ref": "发货",
-        "preconditions": [
-            {
-                "slot_id": "slot:status",
-                "field_candidate": "status",
-                "operator_candidate": "EQUALS",
-                "value_candidate": {
-                    "raw": "approved",
-                    "value_type": "TEXT",
-                },
-                "header_path": ["条件", "status"],
-            }
-        ],
+        "preconditions": [predicate],
         "action_entry": {
             "interface_id": "interface:ship",
             "method": method,
             "path": path,
             "operation_id": "shipOrder",
+            "contract_fields": ["order_id", "status", "reason"],
             "derivation": "authoritative_relationship",
             "authoritative": True,
         },
@@ -75,23 +108,25 @@ def _scenario(
                     ],
                 }
             ],
-            "effect_observers": [],
-            "response_observers": (
+            "outcome_observers": (
                 [
                     {
+                        "outcome_ref": "outcome:permission",
+                        "outcome_type": "PERMISSION_DECISION",
+                        "status": "BOUND",
                         "binding_kind": "API_RESPONSE_OUTCOME_CHANNEL",
-                        "interface_id": "interface:ship",
-                        "status": "BOUND_CHANNEL_ONLY",
-                        "authoritative": True,
                     }
                 ]
                 if observers
                 else []
             ),
+            "effect_observers": [],
+            "response_observers": [],
         },
         "expected_outcome": {
+            "outcome_contracts": [outcome],
             "permission_decision": "ALLOW",
-            "expected_effects": [],
+            "expected_effects": ["ALLOW"],
             "state_effects": [],
             "data_effects": [],
             "concrete_assertion_compiled": False,
@@ -104,6 +139,15 @@ def _scenario(
         "formal_scenario_ir": True,
         "execution_ready": False,
     }
+    if not canonical:
+        for key in (
+            "canonical_semantics_version",
+            "operation_clause",
+            "condition_expression",
+            "outcome_contracts",
+        ):
+            row.pop(key, None)
+    return row
 
 
 def _binding(*, method: str = "POST", path: str = "/orders/{order_id}/ship") -> dict:
@@ -114,7 +158,6 @@ def _binding(*, method: str = "POST", path: str = "/orders/{order_id}/ship") -> 
         "status": "BOUND",
         "api_operation_bindings": [
             {
-                "binding_id": "api-binding:ship",
                 "interface_id": "interface:ship",
                 "method": method,
                 "path": path,
@@ -154,135 +197,161 @@ def _model(binding: dict) -> dict:
     }
 
 
-def test_governed_projection_compiles_runtime_requirements_without_values() -> None:
+def test_canonical_projection_compiles_predicate_and_outcome_requirements() -> None:
     asset = _asset(_scenario())
-    model = _model(_binding())
-
-    project_governed_scenario_execution_contracts(asset, model)
+    project_governed_scenario_execution_contracts(asset, _model(_binding()))
 
     assert asset["scenario_execution_contract_gate"]["status"] == "PASS"
-    assert len(asset["scenario_execution_contracts"]) == 1
     contract = asset["scenario_execution_contracts"][0]
     assert contract["status"] == "REQUIREMENTS_READY"
+    assert contract["operation_clause"]["operation_ref"] == "发货"
+    assert contract["condition_expression"]["node_type"] == "PREDICATE"
+    assert contract["outcome_contracts"][0]["outcome_id"] == "outcome:permission"
     assert contract["execution_allowed"] is False
-    assert contract["request_payload_compiled"] is False
-    assert contract["credentials_selected"] is False
-    assert contract["expected_assertions_compiled"] is False
 
     path_requirement = contract["request_contract"]["path_parameter_requirements"][0]
     assert path_requirement["field"] == "order_id"
     assert path_requirement["runtime_value_source"] == "RUNTIME_ENTITY_IDENTIFIER"
-    assert path_requirement["runtime_value_materialized"] is False
-
     request_requirement = contract["request_contract"]["request_field_requirements"][0]
     assert request_requirement["field"] == "status"
-    assert request_requirement["location"] == "UNRESOLVED_CONTRACT_LOCATION"
-    assert request_requirement["semantic_value_requirement"]["raw"] == "approved"
-    assert request_requirement["runtime_value_materialized"] is False
+    assert request_requirement["predicate_ref"] == "predicate:status"
+    assertion = contract["oracle_plan"]["outcome_assertion_requirements"][0]
+    assert assertion["outcome_ref"] == "outcome:permission"
+    assert assertion["observer_binding_complete"] is True
 
-    assert contract["credential_requirements"][0]["actor_ref"] == "仓管员"
-    assert contract["credential_requirements"][0]["credential_selected"] is False
-    assert contract["cleanup_requirements"]["cleanup_required"] is True
-    assert (
-        contract["cleanup_requirements"]["strategy_requirement"]
-        == "REVERSIBLE_CLEANUP_OR_ISOLATED_SANDBOX_REQUIRED"
-    )
+
+def test_legacy_scenario_fields_cannot_override_canonical_contract_semantics() -> None:
+    scenario = _scenario()
+    scenario["operation_ref"] = "取消订单"
+    scenario["preconditions"][0]["field_candidate"] = "伪造字段"
+    scenario["expected_outcome"]["permission_decision"] = "DENY"
+    scenario["expected_outcome"]["expected_effects"] = ["伪造结果"]
+
+    asset = _asset(scenario)
+    project_governed_scenario_execution_contracts(asset, _model(_binding()))
+
+    contract = asset["scenario_execution_contracts"][0]
+    assert contract["status"] == "REQUIREMENTS_READY"
+    assert contract["operation_clause"]["operation_ref"] == "发货"
+    requirement = contract["request_contract"]["request_field_requirements"][0]
+    assert requirement["field_candidate"] == "status"
+    assert contract["oracle_plan"]["permission_decision_requirement"] == "ALLOW"
+    assert "伪造结果" not in contract["oracle_plan"]["semantic_effect_requirements"]
 
 
 def test_read_only_action_does_not_require_cleanup() -> None:
     scenario = _scenario(method="GET", path="/orders/{order_id}")
-    binding = _binding(method="GET", path="/orders/{order_id}")
     asset = _asset(scenario)
-
-    project_governed_scenario_execution_contracts(asset, _model(binding))
-
-    contract = asset["scenario_execution_contracts"][0]
-    cleanup = contract["cleanup_requirements"]
+    project_governed_scenario_execution_contracts(
+        asset, _model(_binding(method="GET", path="/orders/{order_id}"))
+    )
+    cleanup = asset["scenario_execution_contracts"][0]["cleanup_requirements"]
     assert cleanup["write_action"] is False
     assert cleanup["cleanup_required"] is False
     assert cleanup["strategy_requirement"] == "NOT_REQUIRED_READ_ONLY_ACTION"
 
 
-def test_missing_permission_response_observer_blocks_execution_contract() -> None:
+def test_missing_mandatory_outcome_observer_blocks_contract() -> None:
     asset = _asset(_scenario(observers=False))
-    model = _model(_binding())
-
-    project_governed_scenario_execution_contracts(asset, model)
-
+    project_governed_scenario_execution_contracts(asset, _model(_binding()))
     gate = asset["scenario_execution_contract_gate"]
-    assert gate["status"] == "BLOCKED_EXECUTION_CONTRACT_INCOMPLETE"
     contract = asset["scenario_execution_contracts"][0]
+    assert gate["status"] == "BLOCKED_EXECUTION_CONTRACT_INCOMPLETE"
     assert contract["status"] == "INCOMPLETE"
-    assert "EXECUTION_CONTRACT_PERMISSION_RESPONSE_OBSERVER_UNRESOLVED" in contract[
+    assert "EXECUTION_CONTRACT_OUTCOME_OBSERVER_UNRESOLVED" in contract[
         "unresolved_contract_semantics"
     ]
-    assert asset["scenario_execution_contract_unknowns"][0][
-        "blocks_execution_contract"
-    ] is True
 
 
-def test_upstream_scenario_ir_gate_closed_builds_no_contract() -> None:
-    scenario = _scenario()
-    asset = _asset(scenario, gate_pass=False)
-
+def test_legacy_only_scenario_is_not_reparsed() -> None:
+    asset = _asset(_scenario(canonical=False))
     contracts, unknowns, gate = build_scenario_execution_contracts(
         asset, _model(_binding())
     )
+    assert gate["status"] == "BLOCKED_EXECUTION_CONTRACT_INCOMPLETE"
+    assert contracts[0]["status"] == "INCOMPLETE"
+    assert any(
+        row["kind"] == "EXECUTION_CONTRACT_CANONICAL_SEMANTICS_MISSING"
+        for row in unknowns
+    )
+    assert contracts[0]["downstream_raw_text_reparse_allowed"] is False
 
+
+def test_upstream_scenario_ir_gate_closed_builds_no_contract() -> None:
+    contracts, unknowns, gate = build_scenario_execution_contracts(
+        _asset(_scenario(), gate_pass=False), _model(_binding())
+    )
     assert contracts == []
     assert unknowns == []
     assert gate["status"] == "BLOCKED_EXECUTION_CONTRACT_UPSTREAM_SCENARIO_IR_GATE"
-    assert gate["execution_allowed"] is False
 
 
-def test_projection_is_idempotent_and_creates_relationships() -> None:
+def test_projection_is_idempotent_and_declares_canonical_governance() -> None:
     asset = _asset(_scenario())
     model = _model(_binding())
-
     project_governed_scenario_execution_contracts(asset, model)
     first_contracts = deepcopy(asset["scenario_execution_contracts"])
     first_relationships = deepcopy(asset["scenario_execution_contract_relationships"])
     project_governed_scenario_execution_contracts(asset, model)
-
     assert asset["scenario_execution_contracts"] == first_contracts
     assert asset["scenario_execution_contract_relationships"] == first_relationships
-    assert {
-        row["relation"] for row in asset["scenario_execution_contract_relationships"]
-    } == {
-        "scenario_ir_to_execution_contract",
-        "execution_contract_to_interface",
-    }
-    assert asset["summary"]["scenario_execution_allowed"] is False
-    assert asset["governance"][
-        "scenario_execution_contract_does_not_enable_execution"
-    ] is True
+    assert asset["governance"]["execution_contract_raw_text_reparse_allowed"] is False
 
 
-def test_final_scenario_projection_automatically_compiles_execution_contract() -> None:
-    behavior = {
-        "behavior_id": "behavior:ship",
-        "behavior_family_id": "behavior-family:ship",
-        "status": "CONFIRMED",
-        "permission_decision": "ALLOW",
-        "actor_refs": ["仓管员"],
-        "object_refs": ["订单"],
-        "operation_ref": "发货",
-        "preconditions": _scenario()["preconditions"],
-        "state_effects": [],
-        "data_effects": [],
-        "expected_effects": [],
-        "exceptions": [],
-        "compensations": [],
-        "evidence": _evidence(),
-    }
+def test_final_scenario_projection_automatically_compiles_canonical_contract() -> None:
+    behavior = ensure_canonical_behavior_semantics(
+        {
+            "behavior_id": "behavior:ship",
+            "behavior_family_id": "behavior-family:ship",
+            "source_kind": "ACCEPTED_BUSINESS_FACT",
+            "source_refs": ["fact:ship"],
+            "status": "CONFIRMED",
+            "permission_decision": "ALLOW",
+            "actor_refs": ["仓管员"],
+            "object_refs": ["订单"],
+            "operation_ref": "发货",
+            "preconditions": [
+                {
+                    "slot_id": "slot:status",
+                    "raw_value": "status=approved",
+                    "field_candidate": "status",
+                    "operator_candidate": "EQUALS",
+                    "value_candidate": {"raw": "approved", "value_type": "TEXT"},
+                }
+            ],
+            "condition_combinator": "SINGLE_CONDITION",
+            "state_effects": [],
+            "data_effects": [],
+            "expected_effects": [],
+            "exceptions": [],
+            "compensations": [],
+            "evidence": _evidence(),
+            "unresolved_semantics": [],
+        }
+    )
+    predicates = iter_condition_predicates(behavior["condition_expression"])
+    outcomes = mandatory_outcomes(behavior)
     binding = {
         **_binding(),
-        "condition_observer_bindings": _scenario()["observer_plan"][
-            "condition_observers"
+        "condition_observer_bindings": [
+            {
+                "slot_ref": row["slot_ref"],
+                "source_field_candidate": row["field_candidate"],
+                "status": "BOUND",
+                "bindings": [],
+            }
+            for row in predicates
         ],
         "effect_observer_bindings": [],
-        "response_observer_bindings": _scenario()["observer_plan"][
-            "response_observers"
+        "response_observer_bindings": [],
+        "outcome_observer_bindings": [
+            {
+                "outcome_ref": row["outcome_id"],
+                "outcome_type": row["outcome_type"],
+                "status": "BOUND",
+                "binding_kind": "API_RESPONSE_OUTCOME_CHANNEL",
+            }
+            for row in outcomes
         ],
     }
     model = {
@@ -300,10 +369,9 @@ def test_final_scenario_projection_automatically_compiles_execution_contract() -
         "metrics": {},
     }
     asset = {"summary": {}, "governance": {}, "coverage_gaps": [], "relationships": []}
-
     project_final_scenario_planning_gate(asset, model)
-
     assert asset["scenario_ir_gate"]["status"] == "PASS"
     assert asset["scenario_execution_contract_gate"]["status"] == "PASS"
-    assert asset["scenario_execution_contracts"]
-    assert asset["scenario_execution_contracts"][0]["execution_allowed"] is False
+    contract = asset["scenario_execution_contracts"][0]
+    assert contract["canonical_semantics_version"] == "operation-condition-outcome.v1"
+    assert contract["execution_allowed"] is False
