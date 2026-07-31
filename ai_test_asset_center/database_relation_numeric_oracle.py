@@ -222,6 +222,29 @@ def _compare(
     raise ValueError("database_relation_comparison_operator_unsupported")
 
 
+def _aggregate_request_matches(
+    request: dict[str, Any],
+    *,
+    aggregate: str,
+    alias: str,
+    child_field_id: str,
+    child_field_name: str,
+) -> bool:
+    if (
+        _text(request.get("aggregate")).upper() != aggregate
+        or _text(request.get("alias")) != alias
+    ):
+        return False
+    request_field_id = _text(request.get("database_field_id"))
+    request_field_name = _text(request.get("database_field_name"))
+    if aggregate == "COUNT" and not child_field_id and not child_field_name:
+        return not request_field_id and not request_field_name
+    return (
+        request_field_id == child_field_id
+        and request_field_name == child_field_name
+    )
+
+
 def evaluate_database_relation_conservation(
     envelope: dict[str, Any],
 ) -> dict[str, Any]:
@@ -311,8 +334,9 @@ def evaluate_database_relation_conservation(
             expected,
             actual,
         )
-    if aggregate != "COUNT" and not all(
-        (child_field_id, child_field_name)
+    child_field_pair_complete = bool(child_field_id) == bool(child_field_name)
+    if not child_field_pair_complete or (
+        aggregate != "COUNT" and not child_field_id
     ):
         return _reason(
             "DATABASE_RELATION_ASSERTION_SPEC_INCOMPLETE",
@@ -395,22 +419,12 @@ def evaluate_database_relation_conservation(
     request_matches = [
         row
         for row in requests
-        if _text(row.get("aggregate")).upper() == aggregate
-        and _text(row.get("alias")) == alias
-        and (
-            (
-                aggregate == "COUNT"
-                and not child_field_id
-                and not child_field_name
-                and not _text(row.get("database_field_id"))
-                and not _text(row.get("database_field_name"))
-            )
-            or (
-                aggregate != "COUNT"
-                and _text(row.get("database_field_id")) == child_field_id
-                and _text(row.get("database_field_name"))
-                == child_field_name
-            )
+        if _aggregate_request_matches(
+            row,
+            aggregate=aggregate,
+            alias=alias,
+            child_field_id=child_field_id,
+            child_field_name=child_field_name,
         )
     ]
     actual["aggregate_request_match"] = (
