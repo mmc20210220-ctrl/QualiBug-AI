@@ -1,0 +1,85 @@
+from pathlib import Path
+
+path = Path('ai_test_asset_center/experiment_outcome_finalizer.py')
+source = path.read_text(encoding='utf-8')
+
+start = source.index('    finding = None\n')
+end_marker = '''    elif (\n        verdict.get("status") == "VIOLATION"'''
+end = source.index(end_marker, start)
+replacement = '''    finding = None
+    reason = ""
+    detail = ""
+
+    # Execution status is an operational fact. Terminal lifecycle state is
+    # derived once, at the single exit, by operational_receipts.
+    has_http = any(
+        isinstance(step, dict)
+        and isinstance(step.get("status_code"), int)
+        and step["status_code"] > 0
+        for step in steps_out
+    )
+    status = "EXECUTED" if has_http else "HARNESS_FAILURE"
+    harness_failure_reason = ""
+    if not has_http:
+        harness_failure_reason = _classify_harness_failure(
+            steps_out,
+            observations,
+            pre_transport_block_reasons,
+            cleanup_failures=cleanup_failures,
+        )
+
+    # These branches author facts only. None may return an outcome or assign a
+    # lifecycle state; all paths continue to the receipt-backed finalizer.
+    if pre_transport_block_reasons:
+        status = "BLOCKED"
+        reason = _pre_transport_reason_code(pre_transport_block_reasons)
+        detail = ",".join(dict.fromkeys(pre_transport_block_reasons))
+        observations["finalizer_block_reason"] = reason
+        import sys as _sys_diag
+
+        print(
+            f"[DIAG] {oid}: reason={reason}, details={detail[:500]}",
+            file=_sys_diag.stderr,
+        )
+    elif verdict.get("verdict") == "harness_failure" and not has_http:
+        status = "HARNESS_FAILURE"
+        reason = harness_failure_reason or "HARNESS_FAILURE"
+        detail = reason
+        observations["finalizer_block_reason"] = reason
+    elif (
+        cleanup_gate == "FAILED"
+        and verdict.get("customer_deliverable_candidate") is True
+    ):
+        status = "HARNESS_FAILURE"
+        reason = cleanup_gate_reason
+        detail = (
+            _text(cleanup_equivalence_receipt.get("detail"))
+            if cleanup_equivalence_receipt
+            else ""
+        )
+        observations["finalizer_block_reason"] = reason
+    elif (
+        cleanup_gate == "BLOCKED"
+        and verdict.get("customer_deliverable_candidate") is True
+    ):
+        status = "BLOCKED"
+        reason = cleanup_gate_reason
+        detail = (
+            _text(cleanup_equivalence_receipt.get("detail"))
+            if cleanup_equivalence_receipt
+            else ""
+        )
+        observations["finalizer_block_reason"] = reason
+    elif (
+        verdict.get("verdict") == "blocked_experiment"
+        or verdict.get("status") == "INDETERMINATE"
+    ):
+        field_traces = [
+            row
+            for row in _list(verdict.get("field_oracle_traces"))
+            if isinstance(row, dict)
+        ]
+        assertion_traces = [
+            row
+            for row in _list(verdict.get("assertions"))
+            if isinstance(row, dict)
