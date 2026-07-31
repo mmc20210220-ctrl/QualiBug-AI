@@ -66,6 +66,19 @@ def _govern_identity_conflicts(resolution: dict[str, Any]) -> None:
         conflict.setdefault("blocks_formal_understanding", True)
 
 
+def _publish_identity_audit_receipts(
+    asset: dict[str, Any], recognized_asset: dict[str, Any]
+) -> None:
+    for key in (
+        "identity_evidence_policy_receipt",
+        "enterprise_identity_registry_recompute_receipt",
+        "enterprise_identity_authority_projection_receipt",
+        "enterprise_identity_benchmark",
+    ):
+        if key in recognized_asset:
+            asset[key] = deepcopy(recognized_asset[key])
+
+
 def _attach_identity_audit_receipts(
     model: dict[str, Any],
     asset: dict[str, Any],
@@ -100,6 +113,7 @@ def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any
     resolution = project_identity_benchmark(recognized_asset, resolution)
     _govern_identity_conflicts(resolution)
     publish_recognition_and_identity(asset, recognized_asset, resolution)
+    _publish_identity_audit_receipts(asset, recognized_asset)
     projected_asset = project_asset_for_legacy_builder(recognized_asset, resolution)
     model = _legacy.build_enterprise_understanding_model(projected_asset)
     model = apply_identity_resolution_to_model(model, resolution)
