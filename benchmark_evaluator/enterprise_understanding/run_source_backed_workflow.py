@@ -28,6 +28,7 @@ _SENSITIVE_ENV_MARKERS = (
     "HIDDEN_BUG",
     "EXPECTED_BUG",
 )
+_SOURCE_IDENTITY_AUTHORITY = "SOURCE_INVENTORY_EXTERNAL_REF"
 
 
 class SourceBackedWorkflowError(RuntimeError):
@@ -59,6 +60,51 @@ def _write_receipt(path: Path, receipt: dict[str, Any]) -> None:
     )
 
 
+def _finish_blocked(
+    base_receipt: dict[str, Any],
+    path: Path,
+    *,
+    status: str,
+    reason_code: str,
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    base_receipt.update(
+        {
+            "status": status,
+            "reason_code": reason_code,
+            "ground_truth_loaded_after_product_phase": False,
+            "hidden_ground_truth_entered_product_runtime": False,
+            **dict(details or {}),
+        }
+    )
+    base_receipt["receipt_fingerprint"] = _fingerprint(base_receipt)
+    _write_receipt(path, base_receipt)
+    return base_receipt
+
+
+def _validate_product_phase_receipt(value: Any) -> tuple[dict[str, Any], str]:
+    if not isinstance(value, dict):
+        return {}, "PRODUCT_PHASE_RECEIPT_NOT_OBJECT"
+    receipt = dict(value)
+    if str(receipt.get("status") or "") != "PASS":
+        return receipt, "PRODUCT_PHASE_RECEIPT_NOT_PASS"
+    if receipt.get("source_manifest_external_refs_preserved") is not True:
+        return receipt, "PRODUCT_SOURCE_REFERENCES_NOT_PRESERVED"
+    if str(receipt.get("source_identity_authority") or "") != _SOURCE_IDENTITY_AUTHORITY:
+        return receipt, "PRODUCT_SOURCE_IDENTITY_AUTHORITY_INVALID"
+    source_ref_by_id = receipt.get("source_ref_by_source_id")
+    if not isinstance(source_ref_by_id, dict) or not source_ref_by_id:
+        return receipt, "PRODUCT_SOURCE_REFERENCE_MAP_MISSING"
+    if any(
+        not str(source_id or "").strip() or not str(source_ref or "").strip()
+        for source_id, source_ref in source_ref_by_id.items()
+    ):
+        return receipt, "PRODUCT_SOURCE_REFERENCE_MAP_INCOMPLETE"
+    if receipt.get("absolute_workspace_paths_persisted_as_identity") is not False:
+        return receipt, "PRODUCT_SOURCE_IDENTITY_LEAKS_WORKSPACE_PATH"
+    return receipt, ""
+
+
 def run_source_backed_understanding_workflow(
     *,
     project_id: str,
@@ -70,7 +116,7 @@ def run_source_backed_understanding_workflow(
     process_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
     environment: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Build from public sources in a child process, then score in the evaluator process."""
+    """Build from public sources, validate source identity, then start evaluator authority."""
     project = str(project_id or "").strip()
     if not project:
         raise SourceBackedWorkflowError("project_id_required")
@@ -136,41 +182,91 @@ def run_source_backed_understanding_workflow(
         "product_phase_stdout_tail": str(completed.stdout or "")[-1000:],
         "product_phase_stderr_tail": str(completed.stderr or "")[-1000:],
         "ground_truth_loaded_after_product_phase": False,
+        "source_identity_validated_before_ground_truth_load": False,
         "model_writeback_allowed_by_evaluator": False,
     }
     if completed.returncode != 0:
-        base_receipt.update(
-            {
-                "status": "BLOCKED_PRODUCT_PHASE_FAILED",
-                "reason_code": "PRODUCT_PHASE_FAILED_BEFORE_GROUND_TRUTH_LOAD",
-                "hidden_ground_truth_entered_product_runtime": False,
-            }
+        return _finish_blocked(
+            base_receipt,
+            workflow_receipt_path,
+            status="BLOCKED_PRODUCT_PHASE_FAILED",
+            reason_code="PRODUCT_PHASE_FAILED_BEFORE_GROUND_TRUTH_LOAD",
         )
-        base_receipt["receipt_fingerprint"] = _fingerprint(base_receipt)
-        _write_receipt(workflow_receipt_path, base_receipt)
-        return base_receipt
     if not asset_path.is_file() or not product_receipt_path.is_file():
-        base_receipt.update(
-            {
-                "status": "BLOCKED_PRODUCT_PHASE_ARTIFACT_MISSING",
-                "reason_code": "PRODUCT_PHASE_SUCCEEDED_WITHOUT_REQUIRED_ARTIFACTS",
-                "hidden_ground_truth_entered_product_runtime": False,
-            }
+        return _finish_blocked(
+            base_receipt,
+            workflow_receipt_path,
+            status="BLOCKED_PRODUCT_PHASE_ARTIFACT_MISSING",
+            reason_code="PRODUCT_PHASE_SUCCEEDED_WITHOUT_REQUIRED_ARTIFACTS",
         )
-        base_receipt["receipt_fingerprint"] = _fingerprint(base_receipt)
-        _write_receipt(workflow_receipt_path, base_receipt)
-        return base_receipt
 
-    ground_truth = load_ground_truth(ground_truth_file)
+    # Product governance is validated before any evaluator-private Ground Truth is opened.
+    raw_product_phase_receipt = _read_artifact(product_receipt_path)
+    product_phase_receipt, product_receipt_error = _validate_product_phase_receipt(
+        raw_product_phase_receipt
+    )
+    if product_receipt_error:
+        return _finish_blocked(
+            base_receipt,
+            workflow_receipt_path,
+            status="BLOCKED_PRODUCT_SOURCE_IDENTITY_INVALID",
+            reason_code=product_receipt_error,
+            details={
+                "product_phase_receipt_fingerprint": (
+                    product_phase_receipt.get("receipt_fingerprint")
+                    if product_phase_receipt
+                    else ""
+                ),
+                "source_identity_authority": product_phase_receipt.get(
+                    "source_identity_authority"
+                )
+                if product_phase_receipt
+                else "",
+                "source_manifest_external_refs_preserved": product_phase_receipt.get(
+                    "source_manifest_external_refs_preserved"
+                )
+                if product_phase_receipt
+                else False,
+            },
+        )
+
     product_asset = _read_artifact(asset_path)
     if not isinstance(product_asset, dict):
-        raise SourceBackedWorkflowError("product_asset_snapshot_not_object")
+        return _finish_blocked(
+            base_receipt,
+            workflow_receipt_path,
+            status="BLOCKED_PRODUCT_ASSET_INVALID",
+            reason_code="PRODUCT_ASSET_SNAPSHOT_NOT_OBJECT",
+            details={
+                "product_phase_receipt_fingerprint": product_phase_receipt.get(
+                    "receipt_fingerprint"
+                ),
+            },
+        )
+
+    base_receipt.update(
+        {
+            "source_identity_validated_before_ground_truth_load": True,
+            "source_identity_authority": product_phase_receipt.get(
+                "source_identity_authority"
+            ),
+            "source_manifest_external_refs_preserved": True,
+            "source_ref_count": len(
+                product_phase_receipt.get("source_ref_by_source_id") or {}
+            ),
+            "product_phase_receipt_fingerprint": product_phase_receipt.get(
+                "receipt_fingerprint"
+            ),
+        }
+    )
+
+    # Evaluator authority starts only here, after the product process and source identity pass.
+    ground_truth = load_ground_truth(ground_truth_file)
     benchmark = run_benchmark(
         ground_truth,
         product_asset,
         output_dir=str(evaluator_output),
     )
-    product_phase_receipt = _read_artifact(product_receipt_path)
     benchmark_workflow_receipt = (
         benchmark.get("workflow_receipt")
         if isinstance(benchmark.get("workflow_receipt"), dict)
@@ -184,11 +280,6 @@ def run_source_backed_understanding_workflow(
             "ground_truth_loaded_after_product_phase": True,
             "ground_truth_fingerprint": benchmark.get("ground_truth_fingerprint"),
             "product_asset_fingerprint": benchmark.get("product_asset_fingerprint"),
-            "product_phase_receipt_fingerprint": (
-                product_phase_receipt.get("receipt_fingerprint")
-                if isinstance(product_phase_receipt, dict)
-                else ""
-            ),
             "benchmark_result_fingerprint": benchmark.get("result_fingerprint"),
             "next_repair_target": benchmark.get("next_repair_target") or "",
             "next_ingestion_repair_target": benchmark.get(
