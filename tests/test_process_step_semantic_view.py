@@ -133,3 +133,23 @@ def test_unknown_step_identity_is_ignored() -> None:
     view = ProcessStepSemanticView(ledger, observations)
 
     assert view.executed_step_ids() == []
+
+
+def test_legacy_evidence_broadcast_is_a_side_effect_free_noop() -> None:
+    ledger = _ledger("step_1")
+    view = ProcessStepSemanticView(ledger, {})
+
+    assert view.append_receipt_ref(
+        "step_1",
+        "oracle_receipt_ids",
+        "oracle_unscoped",
+    ) is False
+    assert ledger.receipt_scope_rejections == []
+    assert ledger.get_step_row("step_1")["scoped_oracle_receipt_ids"] == []
+
+    assert view.append_receipt_ref(
+        "step_1",
+        "transport_receipt_id",
+        "transport_exact",
+    ) is True
+    assert ledger.get_step_row("step_1")["transport_receipt_id"] == "transport_exact"
