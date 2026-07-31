@@ -9,13 +9,18 @@ from __future__ import annotations
 import copy
 import hashlib
 import re
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from .connector_sync_authority import register_connector_instance
 from .credential_crypto import decrypt, encrypt, is_encrypted
 from .enterprise_knowledge_center._common import ROOT
 from .enterprise_knowledge_center._utils import _now, _require_manage_actor
+from .enterprise_knowledge_center.transaction_lock import (
+    KnowledgeTransactionBusy,
+    knowledge_transaction,
+)
 from .private_pilot_json_io import _read_json_object, _write_json_object_atomic
 from .real_project_onboarding import _safe_project_id
 
@@ -83,6 +88,7 @@ def _default_store(project: str) -> dict[str, Any]:
             "plaintext_returned_to_frontend": False,
             "connector_instance_stores_profile_reference_only": True,
             "operational_checkpoint_encrypted": True,
+            "project_knowledge_transaction_serialized": True,
         },
     }
 
@@ -120,6 +126,29 @@ def _profile_by_id(store: dict[str, Any], connector: str) -> dict[str, Any] | No
         ),
         None,
     )
+
+
+@contextmanager
+def _profile_transaction(
+    root: Path,
+    project: str,
+    *,
+    operation: str,
+    actor: dict[str, Any],
+) -> Iterator[None]:
+    try:
+        with knowledge_transaction(
+            root,
+            project,
+            operation=operation,
+            actor=actor,
+            wait_seconds=5.0,
+        ):
+            yield
+    except KnowledgeTransactionBusy as exc:
+        raise ConnectorProfileError(
+            "connector_profile_transaction_busy"
+        ) from exc
 
 
 def _require_encryption(root: Path) -> str:
@@ -302,36 +331,43 @@ def commit_connector_sync_checkpoint(
     value = str(checkpoint or "").strip()
     if not value:
         raise ConnectorProfileError("connector_checkpoint_required")
-    store = _load_store(project, resolved_root)
-    record = _profile_by_id(store, connector)
-    if record is None:
-        raise ConnectorProfileError("connector_profile_not_found")
-    record["checkpoint_ciphertext"] = _encrypted(value, "checkpoint")
-    record["checkpoint_fingerprint"] = hashlib.sha256(
-        value.encode("utf-8")
-    ).hexdigest()
-    record["checkpoint_sync_epoch_id"] = _identifier(
-        sync_epoch_id, "sync_epoch_id"
-    )
-    record["checkpoint_updated_at_utc"] = _now()
-    record["updated_at_utc"] = _now()
-    store["audit_events"].append(
-        {
-            "event": "commit_connector_sync_checkpoint",
-            "at_utc": _now(),
-            "actor": clean_actor,
-            "connector_instance_id": connector,
-            "sync_epoch_id": sync_epoch_id,
-            "checkpoint_fingerprint": record["checkpoint_fingerprint"],
-            "checkpoint_plaintext_persisted": False,
-        }
-    )
-    _save_store(project, resolved_root, store)
+    with _profile_transaction(
+        resolved_root,
+        project,
+        operation="commit_connector_sync_checkpoint",
+        actor=clean_actor,
+    ):
+        store = _load_store(project, resolved_root)
+        record = _profile_by_id(store, connector)
+        if record is None:
+            raise ConnectorProfileError("connector_profile_not_found")
+        record["checkpoint_ciphertext"] = _encrypted(value, "checkpoint")
+        record["checkpoint_fingerprint"] = hashlib.sha256(
+            value.encode("utf-8")
+        ).hexdigest()
+        record["checkpoint_sync_epoch_id"] = _identifier(
+            sync_epoch_id, "sync_epoch_id"
+        )
+        record["checkpoint_updated_at_utc"] = _now()
+        record["updated_at_utc"] = _now()
+        store["audit_events"].append(
+            {
+                "event": "commit_connector_sync_checkpoint",
+                "at_utc": _now(),
+                "actor": clean_actor,
+                "connector_instance_id": connector,
+                "sync_epoch_id": sync_epoch_id,
+                "checkpoint_fingerprint": record["checkpoint_fingerprint"],
+                "checkpoint_plaintext_persisted": False,
+            }
+        )
+        _save_store(project, resolved_root, store)
+        fingerprint = record["checkpoint_fingerprint"]
     return {
         "ok": True,
         "connector_instance_id": connector,
         "sync_epoch_id": sync_epoch_id,
-        "checkpoint_fingerprint": record["checkpoint_fingerprint"],
+        "checkpoint_fingerprint": fingerprint,
         "checkpoint_encrypted_at_rest": True,
         "checkpoint_plaintext_returned": False,
     }
@@ -359,76 +395,84 @@ def configure_feishu_connector(
     auth_mode = _normalized_auth_mode(profile.get("auth_mode"))
     profile_ref = connector_profile_ref(connector)
 
-    store = _load_store(project, resolved_root)
-    before_store = copy.deepcopy(store)
-    record = _profile_by_id(store, connector)
-    created = record is None
-    now = _now()
-    if record is None:
-        record = {
-            "schema": CONNECTOR_PROFILE_SCHEMA,
-            "connector_instance_id": connector,
-            "profile_ref": profile_ref,
-            "connector_type": "feishu",
-            "created_at_utc": now,
-            "created_by": clean_actor,
-            "checkpoint_ciphertext": "",
-            "checkpoint_fingerprint": "",
-            "checkpoint_sync_epoch_id": "",
-        }
-        store["profiles"].append(record)
-    record["auth_mode"] = auth_mode
-    record["encrypted_values"] = _build_encrypted_values(
-        profile,
-        auth_mode=auth_mode,
-        previous=record,
-    )
-    record["updated_at_utc"] = now
-    record["updated_by"] = clean_actor
-    record["plaintext_credentials_persisted"] = False
-    store["audit_events"].append(
-        {
-            "event": (
-                "create_connector_connection_profile"
-                if created
-                else "update_connector_connection_profile"
-            ),
-            "at_utc": now,
-            "actor": clean_actor,
-            "connector_instance_id": connector,
-            "profile_ref": profile_ref,
-            "auth_mode": auth_mode,
-            "plaintext_credentials_persisted": False,
-        }
-    )
-    _save_store(project, resolved_root, store)
-
-    try:
-        instance_receipt = register_connector_instance(
-            project,
-            root=resolved_root,
-            actor=clean_actor,
-            connector_instance_id=connector,
-            connector_type="feishu",
-            display_name=display_name,
-            resource_scope=resource_scope,
-            connection_profile_ref=profile_ref,
-            status=status,
-            metadata={"profile_storage": "encrypted_local_authority"},
+    with _profile_transaction(
+        resolved_root,
+        project,
+        operation="configure_feishu_connector",
+        actor=clean_actor,
+    ):
+        store = _load_store(project, resolved_root)
+        before_store = copy.deepcopy(store)
+        record = _profile_by_id(store, connector)
+        created = record is None
+        now = _now()
+        if record is None:
+            record = {
+                "schema": CONNECTOR_PROFILE_SCHEMA,
+                "connector_instance_id": connector,
+                "profile_ref": profile_ref,
+                "connector_type": "feishu",
+                "created_at_utc": now,
+                "created_by": clean_actor,
+                "checkpoint_ciphertext": "",
+                "checkpoint_fingerprint": "",
+                "checkpoint_sync_epoch_id": "",
+            }
+            store["profiles"].append(record)
+        record["auth_mode"] = auth_mode
+        record["encrypted_values"] = _build_encrypted_values(
+            profile,
+            auth_mode=auth_mode,
+            previous=record,
         )
-    except Exception:
-        _save_store(project, resolved_root, before_store)
-        raise
+        record["updated_at_utc"] = now
+        record["updated_by"] = clean_actor
+        record["plaintext_credentials_persisted"] = False
+        store["audit_events"].append(
+            {
+                "event": (
+                    "create_connector_connection_profile"
+                    if created
+                    else "update_connector_connection_profile"
+                ),
+                "at_utc": now,
+                "actor": clean_actor,
+                "connector_instance_id": connector,
+                "profile_ref": profile_ref,
+                "auth_mode": auth_mode,
+                "plaintext_credentials_persisted": False,
+            }
+        )
+        _save_store(project, resolved_root, store)
+
+        try:
+            instance_receipt = register_connector_instance(
+                project,
+                root=resolved_root,
+                actor=clean_actor,
+                connector_instance_id=connector,
+                connector_type="feishu",
+                display_name=display_name,
+                resource_scope=resource_scope,
+                connection_profile_ref=profile_ref,
+                status=status,
+                metadata={"profile_storage": "encrypted_local_authority"},
+            )
+        except Exception:
+            _save_store(project, resolved_root, before_store)
+            raise
+        masked = _masked_profile(record)
 
     return {
         "ok": True,
         "created": created,
         "connector_instance": instance_receipt["connector_instance"],
-        "connection_profile": _masked_profile(record),
+        "connection_profile": masked,
         "credential_storage": {
             "mode": "encrypted_at_rest",
             "plaintext_returned": False,
             "profile_reference_only_in_connector_registry": True,
+            "project_transaction_serialized": True,
         },
     }
 
