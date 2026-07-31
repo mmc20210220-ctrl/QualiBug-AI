@@ -21,6 +21,7 @@ on:
       - "tests/test_enterprise_understanding_typed_relation_projection.py"
       - "tests/test_enterprise_understanding_implicit_rule_*.py"
       - "tests/test_enterprise_understanding_versioned_product_snapshot.py"
+      - "tests/test_implicit_rule_*.py"
       - ".github/workflows/chinese-explicit-fact-baseline.yml"
       - "pyproject.toml"
 
@@ -84,7 +85,8 @@ jobs:
             tests/test_enterprise_understanding_typed_fact_authority.py \
             tests/test_enterprise_understanding_typed_relation_projection.py \
             tests/test_enterprise_understanding_implicit_rule_*.py \
-            tests/test_enterprise_understanding_versioned_product_snapshot.py
+            tests/test_enterprise_understanding_versioned_product_snapshot.py \
+            tests/test_implicit_rule_*.py
 
       - name: Run isolated explicit fact baseline
         id: explicit_fact_baseline
@@ -165,11 +167,81 @@ jobs:
               target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
             });
 
+      - name: Publish pending implicit rule status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: "pending",
+              context: "qualibug/implicit-rule-baseline",
+              description: "running isolated versioned implicit rule baseline",
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            });
+
       - name: Run isolated versioned implicit rule baseline
+        id: implicit_rule_baseline
+        continue-on-error: true
+        shell: bash
         run: |
+          set +e
           python -m benchmark_evaluator.enterprise_understanding.implicit_rule_baseline \
             --workspace-root "$RUNNER_TEMP/implicit-rule-workspace" \
             --output "$RUNNER_TEMP/implicit-rule-result"
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Publish final implicit rule status
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          BASELINE_EXIT_CODE: ${{ steps.implicit_rule_baseline.outputs.exit_code }}
+          BASELINE_SUMMARY_PATH: ${{ runner.temp }}/implicit-rule-result/implicit_rule_baseline_summary.json
+        with:
+          script: |
+            const fs = require("fs");
+            const exitCode = Number.parseInt(process.env.BASELINE_EXIT_CODE || "2", 10);
+            let summary = {};
+            try {
+              summary = JSON.parse(
+                fs.readFileSync(process.env.BASELINE_SUMMARY_PATH, "utf8")
+              );
+            } catch (_error) {
+              summary = {};
+            }
+            const metrics = summary.metrics || {};
+            const formatMetric = (value) => {
+              const number = Number(value);
+              return Number.isFinite(number) ? number.toFixed(3) : "n/a";
+            };
+            const resultStatus = String(
+              summary.status || (exitCode === 0 ? "MEASURED" : "BLOCKED")
+            ).toUpperCase();
+            const state = exitCode === 0 ? "success" : "error";
+            const next = summary.next_repair_target
+              ? ` next=${summary.next_repair_target}`
+              : "";
+            const description = (
+              `${resultStatus} cR=${formatMetric(metrics.candidate_recall)}` +
+              ` cP=${formatMetric(metrics.candidate_precision)}` +
+              ` rR=${formatMetric(metrics.promotion_recall)}` +
+              ` rP=${formatMetric(metrics.promotion_precision)}` +
+              ` stale=${formatMetric(metrics.stale_recall)}` +
+              ` exec=${formatMetric(metrics.executable_projection_recall)}` +
+              next
+            ).slice(0, 140);
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state,
+              context: "qualibug/implicit-rule-baseline",
+              description,
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            });
 
       - name: Print baseline summaries
         if: always()
@@ -202,14 +274,22 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Enforce explicit fact baseline result
+      - name: Enforce baseline results
         if: always()
         shell: bash
         env:
-          BASELINE_EXIT_CODE: ${{ steps.explicit_fact_baseline.outputs.exit_code }}
+          EXPLICIT_BASELINE_EXIT_CODE: ${{ steps.explicit_fact_baseline.outputs.exit_code }}
+          IMPLICIT_BASELINE_EXIT_CODE: ${{ steps.implicit_rule_baseline.outputs.exit_code }}
         run: |
-          code="${BASELINE_EXIT_CODE:-2}"
-          if ! [[ "$code" =~ ^[0-9]+$ ]]; then
-            code=2
+          explicit_code="${EXPLICIT_BASELINE_EXIT_CODE:-2}"
+          implicit_code="${IMPLICIT_BASELINE_EXIT_CODE:-2}"
+          if ! [[ "$explicit_code" =~ ^[0-9]+$ ]]; then
+            explicit_code=2
           fi
-          exit "$code"
+          if ! [[ "$implicit_code" =~ ^[0-9]+$ ]]; then
+            implicit_code=2
+          fi
+          if [ "$explicit_code" -ne 0 ]; then
+            exit "$explicit_code"
+          fi
+          exit "$implicit_code"
