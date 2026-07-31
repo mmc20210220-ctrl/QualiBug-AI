@@ -1,12 +1,15 @@
-"""Read-only semantic view over a ProcessStepLedger.
+"""Semantic finalization view over a ProcessStepLedger.
 
 Execution keeps the live ledger. Finalization receives this view, which binds
 observation, oracle, and cleanup receipts only when each receipt declares one
-exact recorded step. Semantic completion additionally requires an explicit
-boolean verdict. Transport execution and business completion remain separate.
+exact recorded step. It also normalizes an absent optional fixture identity to
+the formal ``NOT_APPLICABLE`` value before any receipt bundle is sealed.
+Semantic completion additionally requires an explicit boolean verdict.
+Transport execution and business completion remain separate.
 """
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 from .process_step_execution import ProcessStepLedger
@@ -18,6 +21,7 @@ from .process_step_receipt_scope import (
 from .process_step_semantic_projection import apply_semantic_verdict, project_step_sets
 
 
+_NOT_APPLICABLE = "NOT_APPLICABLE"
 _VERDICT_KEYS = (
     "target_reached",
     "target_state_reached",
@@ -97,7 +101,7 @@ def _candidates(observations: dict[str, Any]) -> list[tuple[str, dict[str, Any]]
 
 
 class ProcessStepSemanticView:
-    """Delegate raw ledger facts and expose strict, non-aliased step sets."""
+    """Expose strict, non-aliased step sets for final receipt sealing."""
 
     def __init__(
         self,
@@ -107,6 +111,41 @@ class ProcessStepSemanticView:
         self._ledger = ledger
         self._observations = observations if isinstance(observations, dict) else {}
         self._processed_receipts: set[str] = set()
+        self._normalize_optional_fixture_identity()
+
+    def _normalize_optional_fixture_identity(self) -> None:
+        """Seal fixture absence as an identity value, never an empty coordinate.
+
+        A fixtureless experiment is valid when its treatment creates disposable
+        state and its cleanup removes it. Canonical Receipt Envelopes require all
+        identity coordinates to be explicit, using ``NOT_APPLICABLE`` for an
+        optional coordinate. The execution ledger was historically created with
+        an empty fixture id, which made its payload disagree with the canonical
+        bundle envelope and made the reconstructed ledger hash diverge.
+
+        Normalization happens once, before this finalization view publishes any
+        process-step receipt. Existing real fixture identities are untouched.
+        """
+        if _text(getattr(self._ledger, "fixture_id", "")):
+            return
+        self._ledger.fixture_id = _NOT_APPLICABLE
+        raw_rows = getattr(self._ledger, "_rows", {})
+        if isinstance(raw_rows, dict):
+            for row in raw_rows.values():
+                if isinstance(row, dict) and not _text(row.get("fixture_id")):
+                    row["fixture_id"] = _NOT_APPLICABLE
+        seed = "|".join(
+            [
+                _text(getattr(self._ledger, "experiment_id", "")),
+                _NOT_APPLICABLE,
+                _text(getattr(self._ledger, "campaign_id", "")),
+                _text(getattr(self._ledger, "run_id", "")),
+                _text(getattr(self._ledger, "obligation_id", "")),
+                _text(getattr(self._ledger, "protocol_id", "")),
+            ]
+        )
+        digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:24]
+        self._ledger.ledger_id = f"psl_{digest}"
 
     @property
     def source_ledger(self) -> ProcessStepLedger:
