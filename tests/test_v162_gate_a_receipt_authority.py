@@ -27,6 +27,11 @@ from ai_test_asset_center.operational_receipts import (
     validate_canonical_receipt_envelope,
     validate_parent_receipt_chain,
 )
+from ai_test_asset_center.process_step_execution import (
+    PROCESS_STEP_RECEIPT_SCHEMA,
+    ProcessStepLedger,
+)
+from ai_test_asset_center.process_step_semantic_view import ProcessStepSemanticView
 
 
 COMMIT = "7a6895a34905bbc08d519d88c3187b825a4304cf"
@@ -35,8 +40,14 @@ DENOM = "0c692b5ee288abf4bf540b3d57d5395fee552c6163b3df56fe42d445033dd4cd"
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _env(receipt_type: str, receipt_id: str, *, payload: dict | None = None,
-         parent_receipt_ids: list[str] | None = None, **identity: str) -> dict:
+def _env(
+    receipt_type: str,
+    receipt_id: str,
+    *,
+    payload: dict | None = None,
+    parent_receipt_ids: list[str] | None = None,
+    **identity: str,
+) -> dict:
     """Create a valid, identity-bound Gate A canonical receipt."""
     values = {
         "campaign_id": "campaign-a",
@@ -56,6 +67,43 @@ def _env(receipt_type: str, receipt_id: str, *, payload: dict | None = None,
         parent_receipt_ids=parent_receipt_ids,
         **values,
     )
+
+
+def _sealed_step_rows(identity: dict[str, str], step_ids: list[str]) -> list[dict]:
+    """Build real process-step receipts from the canonical ledger authority."""
+    ledger = ProcessStepLedger(
+        identity["experiment_id"],
+        fixture_id=identity["fixture_id"],
+        campaign_id=identity["campaign_id"],
+        run_id=identity["run_id"],
+        obligation_id=identity["obligation_id"],
+        protocol_id=identity["protocol_id"],
+        required_step_ids=step_ids,
+    )
+    observer_receipts: list[dict] = []
+    for index, step_id in enumerate(step_ids, start=1):
+        ledger.record_step_execution(
+            step_id=step_id,
+            phase="treatment",
+            operation_ref=f"operation-{index}",
+            actor_ref="actor-a",
+            request_receipt_id=f"request-{index}",
+            response_receipt_id=f"response-{index}",
+            status_code=200,
+            final_status="EXECUTED",
+            mutation_occurred=True,
+        )
+        observer_receipts.append(
+            {
+                "receipt_id": f"observer-{index}",
+                "step_id": step_id,
+                "target_reached": True,
+            }
+        )
+    return ProcessStepSemanticView(
+        ledger,
+        observations={"observer_receipts": observer_receipts},
+    ).all_rows()
 
 
 def _full_bundle(*, entity: str = "entity-a") -> dict:
@@ -83,7 +131,6 @@ def _full_bundle(*, entity: str = "entity-a") -> dict:
     )
     definitions = (
         ("compile", "qualibug.compile-receipt.v1"),
-        ("step", "qualibug.process-step-receipt.v1"),
         ("transport", "qualibug.transport-receipt.v1"),
         ("observation", "qualibug.observation-receipt.v1"),
         ("oracle-inv", "qualibug.oracle-invocation-receipt.v1"),
@@ -92,14 +139,28 @@ def _full_bundle(*, entity: str = "entity-a") -> dict:
         ("cleanup-verify", "qualibug.cleanup-verification-receipt.v1"),
         ("restored", "qualibug.environment-restoration-receipt.v1"),
     )
-    receipts = {name: _env(schema, f"{name}-{entity}", **identity)
-                for name, schema in definitions}
-    all_receipts = [fixture, *receipts.values()]
+    receipts = {
+        name: _env(schema, f"{name}-{entity}", **identity)
+        for name, schema in definitions
+    }
+    step_rows = _sealed_step_rows(identity, [f"step-{entity}"])
+    step_receipts = [
+        _env(
+            PROCESS_STEP_RECEIPT_SCHEMA,
+            row["receipt_id"],
+            payload=row,
+            **identity,
+        )
+        for row in step_rows
+    ]
+    all_receipts = [fixture, receipts["compile"], *step_receipts]
+    all_receipts.extend(receipts[name] for name, _ in definitions if name != "compile")
     return build_execution_receipt_bundle(
-        bundle_id=f"bundle-{entity}", receipts=all_receipts,
+        bundle_id=f"bundle-{entity}",
+        receipts=all_receipts,
         compile_receipt_id=receipts["compile"]["receipt_id"],
         fixture_provenance_receipt_ids=[fixture["receipt_id"]],
-        required_step_receipt_ids=[receipts["step"]["receipt_id"]],
+        required_step_receipt_ids=[row["receipt_id"] for row in step_rows],
         transport_receipt_ids=[receipts["transport"]["receipt_id"]],
         observation_receipt_ids=[receipts["observation"]["receipt_id"]],
         oracle_invocation_receipt_ids=[receipts["oracle-inv"]["receipt_id"]],
@@ -112,21 +173,30 @@ def _full_bundle(*, entity: str = "entity-a") -> dict:
 
 
 def _derive(bundle: dict, **overrides: bool) -> dict:
-    flags = {"oracle_evaluated": True, "cleanup_verified": True,
-             "environment_restored": True}
+    flags = {
+        "oracle_evaluated": True,
+        "cleanup_verified": True,
+        "environment_restored": True,
+    }
     flags.update(overrides)
     return derive_true_completed_from_bundle(bundle, **flags)
 
 
 def _manifest() -> dict:
-    return json.loads((ROOT / "artifacts/spec_v1_6_2/"
-                       "v162_canonical_obligation_manifest.json").read_text(
-                           encoding="utf-8"))
+    return json.loads(
+        (
+            ROOT
+            / "artifacts/spec_v1_6_2/v162_canonical_obligation_manifest.json"
+        ).read_text(encoding="utf-8")
+    )
 
 
 # §24.1 — canonical envelope legality and tamper authority.
 def test_241_legal_envelope_validates() -> None:
-    assert validate_canonical_receipt_envelope(_env("legal.v1", "legal"))["status"] == RECEIPT_STATUS_VALID
+    assert (
+        validate_canonical_receipt_envelope(_env("legal.v1", "legal"))["status"]
+        == RECEIPT_STATUS_VALID
+    )
 
 
 def test_241_missing_receipt_id_is_rejected() -> None:
@@ -154,26 +224,34 @@ def test_241_parent_chain_break_is_rejected() -> None:
 
 def test_241_code_commit_mismatch_is_rejected() -> None:
     with pytest.raises(OperationalReceiptError, match="code_commit_sha_mismatch"):
-        validate_canonical_receipt_envelope(_env("legal.v1", "commit"), expected_code_commit_sha="other")
+        validate_canonical_receipt_envelope(
+            _env("legal.v1", "commit"), expected_code_commit_sha="other"
+        )
 
 
 def test_241_tree_hash_mismatch_is_rejected() -> None:
     with pytest.raises(OperationalReceiptError, match="tree_hash_mismatch"):
-        validate_canonical_receipt_envelope(_env("legal.v1", "tree"), expected_tree_hash="other")
+        validate_canonical_receipt_envelope(
+            _env("legal.v1", "tree"), expected_tree_hash="other"
+        )
 
 
 def test_241_tamper_detection_is_explicit() -> None:
     receipt = _env("legal.v1", "tampered")
     receipt["payload"]["evidence"] = "changed"
     audit = detect_receipt_tamper(receipt)
-    assert audit["status"] == RECEIPT_STATUS_TAMPERED and audit["tampered"] is True
+    assert audit["status"] == RECEIPT_STATUS_TAMPERED
+    assert audit["tampered"] is True
 
 
 def test_241_correction_retains_original_reference() -> None:
     original = _env("legal.v1", "original")
     correction = build_correction_receipt(
-        correction_receipt_id="correction", supersedes_receipt_id="original",
-        original_receipt=original, corrected_payload={"fixed": True}, reason_code="FIX",
+        correction_receipt_id="correction",
+        supersedes_receipt_id="original",
+        original_receipt=original,
+        corrected_payload={"fixed": True},
+        reason_code="FIX",
     )
     assert correction["receipt_type"] == CORRECTION_RECEIPT_SCHEMA
     assert correction["payload"]["original_retained"] is True
@@ -224,15 +302,26 @@ def test_242_missing_observation_receipt_blocks_completion() -> None:
 
 
 def test_242_oracle_not_evaluated_blocks_completion() -> None:
-    assert _derive(_full_bundle(), oracle_evaluated=False)["derived_terminal_status"] == "ORACLE_NOT_EVALUATED"
+    assert (
+        _derive(_full_bundle(), oracle_evaluated=False)["derived_terminal_status"]
+        == "ORACLE_NOT_EVALUATED"
+    )
 
 
 def test_242_cleanup_failure_blocks_completion() -> None:
-    assert _derive(_full_bundle(), cleanup_verified=False)["derived_terminal_status"] == "CLEANUP_FAILED"
+    assert (
+        _derive(_full_bundle(), cleanup_verified=False)["derived_terminal_status"]
+        == "CLEANUP_FAILED"
+    )
 
 
 def test_242_dirty_environment_blocks_completion() -> None:
-    assert _derive(_full_bundle(), environment_restored=False)["derived_terminal_status"] == "ENVIRONMENT_DIRTY"
+    assert (
+        _derive(_full_bundle(), environment_restored=False)[
+            "derived_terminal_status"
+        ]
+        == "ENVIRONMENT_DIRTY"
+    )
 
 
 def test_242_identity_mismatch_blocks_completion() -> None:
@@ -248,21 +337,33 @@ def test_242_protocol_mismatch_blocks_completion() -> None:
 
 
 def test_242_boolean_cannot_replace_receipt_bundle() -> None:
-    with pytest.raises(OperationalReceiptError, match="execution_receipt_bundle_schema_invalid"):
+    with pytest.raises(
+        OperationalReceiptError,
+        match="execution_receipt_bundle_schema_invalid",
+    ):
         _derive({"complete": True})
 
 
 def test_242_true_completed_assignment_is_finalizer_only() -> None:
     violations = []
     for path in (ROOT / "ai_test_asset_center").glob("*.py"):
-        if path.name in {"experiment_outcome_finalizer.py", "operational_receipts.py"}:
+        if path.name in {
+            "experiment_outcome_finalizer.py",
+            "operational_receipts.py",
+        }:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
-            if isinstance(node, ast.Assign) and any(
-                isinstance(target, ast.Name) and target.id == "lifecycle_state"
-                for target in node.targets
-            ) and isinstance(node.value, ast.Constant) and node.value.value == "TRUE_COMPLETED":
+            if (
+                isinstance(node, ast.Assign)
+                and any(
+                    isinstance(target, ast.Name)
+                    and target.id == "lifecycle_state"
+                    for target in node.targets
+                )
+                and isinstance(node.value, ast.Constant)
+                and node.value.value == "TRUE_COMPLETED"
+            ):
                 violations.append(path.name)
     assert violations == []
 
@@ -275,148 +376,331 @@ def test_243_fixture_identity_stable_through_cleanup() -> None:
 
 def test_243_fixture_identity_drift_is_rejected() -> None:
     with pytest.raises(OperationalReceiptError, match="fixture_identity_drift"):
-        build_fixture_provenance_receipt(receipt_id="drift", fixture_id="f", entity_id="e",
-            scope_id="s", create_identity="a", readback_identity="b", operation_identity="a",
-            observer_identity="a", cleanup_identity="a", code_commit_sha=COMMIT, tree_hash=TREE)
+        build_fixture_provenance_receipt(
+            receipt_id="drift",
+            fixture_id="f",
+            entity_id="e",
+            scope_id="s",
+            create_identity="a",
+            readback_identity="b",
+            operation_identity="a",
+            observer_identity="a",
+            cleanup_identity="a",
+            code_commit_sha=COMMIT,
+            tree_hash=TREE,
+        )
 
 
 def test_243_missing_fixture_scope_is_rejected() -> None:
     with pytest.raises(OperationalReceiptError, match="fixture_scope_missing"):
-        build_fixture_provenance_receipt(receipt_id="scope", fixture_id="f", entity_id="e",
-            scope_id="", create_identity="a", readback_identity="a", operation_identity="a",
-            observer_identity="a", cleanup_identity="a", code_commit_sha=COMMIT, tree_hash=TREE)
+        build_fixture_provenance_receipt(
+            receipt_id="scope",
+            fixture_id="f",
+            entity_id="e",
+            scope_id="",
+            create_identity="a",
+            readback_identity="a",
+            operation_identity="a",
+            observer_identity="a",
+            cleanup_identity="a",
+            code_commit_sha=COMMIT,
+            tree_hash=TREE,
+        )
 
 
 def test_243_customer_owned_fixture_is_rejected() -> None:
     with pytest.raises(OperationalReceiptError, match="customer_owned"):
-        build_fixture_provenance_receipt(receipt_id="customer", fixture_id="f", entity_id="e",
-            scope_id="s", create_identity="a", readback_identity="a", operation_identity="a",
-            observer_identity="a", cleanup_identity="a", ownership="customer_owned",
-            code_commit_sha=COMMIT, tree_hash=TREE)
+        build_fixture_provenance_receipt(
+            receipt_id="customer",
+            fixture_id="f",
+            entity_id="e",
+            scope_id="s",
+            create_identity="a",
+            readback_identity="a",
+            operation_identity="a",
+            observer_identity="a",
+            cleanup_identity="a",
+            ownership="customer_owned",
+            code_commit_sha=COMMIT,
+            tree_hash=TREE,
+        )
 
 
 def test_243_latest_record_fixture_is_rejected() -> None:
     with pytest.raises(OperationalReceiptError, match="customer_owned"):
-        build_fixture_provenance_receipt(receipt_id="latest", fixture_id="f", entity_id="e",
-            scope_id="s", create_identity="a", readback_identity="a", operation_identity="a",
-            observer_identity="a", cleanup_identity="a", ownership="latest_record",
-            code_commit_sha=COMMIT, tree_hash=TREE)
+        build_fixture_provenance_receipt(
+            receipt_id="latest",
+            fixture_id="f",
+            entity_id="e",
+            scope_id="s",
+            create_identity="a",
+            readback_identity="a",
+            operation_identity="a",
+            observer_identity="a",
+            cleanup_identity="a",
+            ownership="latest_record",
+            code_commit_sha=COMMIT,
+            tree_hash=TREE,
+        )
 
 
 def test_243_max_id_fixture_is_rejected() -> None:
     with pytest.raises(OperationalReceiptError, match="customer_owned"):
-        build_fixture_provenance_receipt(receipt_id="max", fixture_id="f", entity_id="e",
-            scope_id="s", create_identity="a", readback_identity="a", operation_identity="a",
-            observer_identity="a", cleanup_identity="a", ownership="max_id",
-            code_commit_sha=COMMIT, tree_hash=TREE)
+        build_fixture_provenance_receipt(
+            receipt_id="max",
+            fixture_id="f",
+            entity_id="e",
+            scope_id="s",
+            create_identity="a",
+            readback_identity="a",
+            operation_identity="a",
+            observer_identity="a",
+            cleanup_identity="a",
+            ownership="max_id",
+            code_commit_sha=COMMIT,
+            tree_hash=TREE,
+        )
 
 
 def test_243_multiple_entities_require_separate_provenance() -> None:
-    assert _full_bundle(entity="one")["fixture_id"] != _full_bundle(entity="two")["fixture_id"]
+    assert (
+        _full_bundle(entity="one")["fixture_id"]
+        != _full_bundle(entity="two")["fixture_id"]
+    )
 
 
 def test_243_incomplete_fixture_identity_is_rejected() -> None:
-    with pytest.raises(OperationalReceiptError, match="fixture_provenance_identity_incomplete"):
-        build_fixture_provenance_receipt(receipt_id="partial", fixture_id="f", entity_id="e",
-            scope_id="s", create_identity="a", readback_identity="", operation_identity="a",
-            observer_identity="a", cleanup_identity="a", code_commit_sha=COMMIT, tree_hash=TREE)
+    with pytest.raises(
+        OperationalReceiptError,
+        match="fixture_provenance_identity_incomplete",
+    ):
+        build_fixture_provenance_receipt(
+            receipt_id="partial",
+            fixture_id="f",
+            entity_id="e",
+            scope_id="s",
+            create_identity="a",
+            readback_identity="",
+            operation_identity="a",
+            observer_identity="a",
+            cleanup_identity="a",
+            code_commit_sha=COMMIT,
+            tree_hash=TREE,
+        )
 
 
 # §24.4 — receipt-backed metrics and ledger balance.
 def test_244_metric_requires_source_receipts() -> None:
     with pytest.raises(OperationalReceiptError, match="source_receipts_missing"):
-        build_report_metric_receipt(receipt_id="metric", metric_name="compiled", metric_value=1,
-            source_receipt_ids=[], denominator_manifest_hash=DENOM, ledger_hash="ledger")
+        build_report_metric_receipt(
+            receipt_id="metric",
+            metric_name="compiled",
+            metric_value=1,
+            source_receipt_ids=[],
+            denominator_manifest_hash=DENOM,
+            ledger_hash="ledger",
+        )
 
 
 def test_244_compiled_metric_has_source_receipt() -> None:
-    assert build_report_metric_receipt(receipt_id="compiled", metric_name="compiled", metric_value=1,
-        source_receipt_ids=["compile-a"], denominator_manifest_hash=DENOM, ledger_hash="ledger")["payload"]["metric_name"] == "compiled"
+    receipt = build_report_metric_receipt(
+        receipt_id="compiled",
+        metric_name="compiled",
+        metric_value=1,
+        source_receipt_ids=["compile-a"],
+        denominator_manifest_hash=DENOM,
+        ledger_hash="ledger",
+    )
+    assert receipt["payload"]["metric_name"] == "compiled"
 
 
 def test_244_real_executed_metric_has_source_receipt() -> None:
-    assert build_report_metric_receipt(receipt_id="executed", metric_name="real_executed", metric_value=1,
-        source_receipt_ids=["transport-a"], denominator_manifest_hash=DENOM, ledger_hash="ledger")["payload"]["metric_value"] == 1
+    receipt = build_report_metric_receipt(
+        receipt_id="executed",
+        metric_name="real_executed",
+        metric_value=1,
+        source_receipt_ids=["transport-a"],
+        denominator_manifest_hash=DENOM,
+        ledger_hash="ledger",
+    )
+    assert receipt["payload"]["metric_value"] == 1
 
 
 def test_244_oracle_metric_has_source_receipt() -> None:
-    assert build_report_metric_receipt(receipt_id="oracle", metric_name="oracle_evaluated", metric_value=1,
-        source_receipt_ids=["oracle-a"], denominator_manifest_hash=DENOM, ledger_hash="ledger")["payload"]["source_receipt_ids"] == ["oracle-a"]
+    receipt = build_report_metric_receipt(
+        receipt_id="oracle",
+        metric_name="oracle_evaluated",
+        metric_value=1,
+        source_receipt_ids=["oracle-a"],
+        denominator_manifest_hash=DENOM,
+        ledger_hash="ledger",
+    )
+    assert receipt["payload"]["source_receipt_ids"] == ["oracle-a"]
 
 
 def test_244_cleanup_metric_has_source_receipt() -> None:
-    assert build_report_metric_receipt(receipt_id="cleanup", metric_name="cleanup_verified", metric_value=1,
-        source_receipt_ids=["cleanup-a"], denominator_manifest_hash=DENOM, ledger_hash="ledger")["payload"]["metric_name"] == "cleanup_verified"
+    receipt = build_report_metric_receipt(
+        receipt_id="cleanup",
+        metric_name="cleanup_verified",
+        metric_value=1,
+        source_receipt_ids=["cleanup-a"],
+        denominator_manifest_hash=DENOM,
+        ledger_hash="ledger",
+    )
+    assert receipt["payload"]["metric_name"] == "cleanup_verified"
 
 
 def test_244_true_completed_metric_has_source_receipt() -> None:
-    assert build_report_metric_receipt(receipt_id="true", metric_name="true_completed", metric_value=1,
-        source_receipt_ids=["final-a"], denominator_manifest_hash=DENOM, ledger_hash="ledger")["payload"]["metric_name"] == "true_completed"
+    receipt = build_report_metric_receipt(
+        receipt_id="true",
+        metric_name="true_completed",
+        metric_value=1,
+        source_receipt_ids=["final-a"],
+        denominator_manifest_hash=DENOM,
+        ledger_hash="ledger",
+    )
+    assert receipt["payload"]["metric_name"] == "true_completed"
 
 
 def test_244_metric_ledger_balance_passes() -> None:
-    receipt = build_report_metric_receipt(receipt_id="balanced", metric_name="m", metric_value=1,
-        source_receipt_ids=["source"], denominator_manifest_hash=DENOM, ledger_hash="ledger")
-    assert audit_report_metric_ledger_balance([receipt], expected_ledger_hash="ledger")["balanced"] is True
+    receipt = build_report_metric_receipt(
+        receipt_id="balanced",
+        metric_name="m",
+        metric_value=1,
+        source_receipt_ids=["source"],
+        denominator_manifest_hash=DENOM,
+        ledger_hash="ledger",
+    )
+    assert (
+        audit_report_metric_ledger_balance(
+            [receipt], expected_ledger_hash="ledger"
+        )["balanced"]
+        is True
+    )
 
 
 def test_244_metric_ledger_balance_fails() -> None:
-    receipt = build_report_metric_receipt(receipt_id="unbalanced", metric_name="m", metric_value=1,
-        source_receipt_ids=["source"], denominator_manifest_hash=DENOM, ledger_hash="ledger")
+    receipt = build_report_metric_receipt(
+        receipt_id="unbalanced",
+        metric_name="m",
+        metric_value=1,
+        source_receipt_ids=["source"],
+        denominator_manifest_hash=DENOM,
+        ledger_hash="ledger",
+    )
     with pytest.raises(OperationalReceiptError, match="balance_mismatch"):
-        audit_report_metric_ledger_balance([receipt], expected_ledger_hash="other")
+        audit_report_metric_ledger_balance(
+            [receipt], expected_ledger_hash="other"
+        )
 
 
 def test_244_metric_requires_denominator_manifest() -> None:
-    with pytest.raises(OperationalReceiptError, match="denominator_manifest_missing"):
-        build_report_metric_receipt(receipt_id="no-denom", metric_name="m", metric_value=1,
-            source_receipt_ids=["source"], denominator_manifest_hash="", ledger_hash="ledger")
+    with pytest.raises(
+        OperationalReceiptError,
+        match="denominator_manifest_missing",
+    ):
+        build_report_metric_receipt(
+            receipt_id="no-denom",
+            metric_name="m",
+            metric_value=1,
+            source_receipt_ids=["source"],
+            denominator_manifest_hash="",
+            ledger_hash="ledger",
+        )
 
 
 def test_244_metric_id_set_hash_is_order_independent() -> None:
-    first = build_report_metric_receipt(receipt_id="ids-one", metric_name="m", metric_value=1,
-        source_receipt_ids=["b", "a"], denominator_manifest_hash=DENOM, ledger_hash="ledger")
-    second = build_report_metric_receipt(receipt_id="ids-two", metric_name="m", metric_value=1,
-        source_receipt_ids=["a", "b"], denominator_manifest_hash=DENOM, ledger_hash="ledger")
+    first = build_report_metric_receipt(
+        receipt_id="ids-one",
+        metric_name="m",
+        metric_value=1,
+        source_receipt_ids=["b", "a"],
+        denominator_manifest_hash=DENOM,
+        ledger_hash="ledger",
+    )
+    second = build_report_metric_receipt(
+        receipt_id="ids-two",
+        metric_name="m",
+        metric_value=1,
+        source_receipt_ids=["a", "b"],
+        denominator_manifest_hash=DENOM,
+        ledger_hash="ledger",
+    )
     assert first["payload"]["id_set_hash"] == second["payload"]["id_set_hash"]
 
 
 # §24.5 — oracle trace uniqueness.
 def test_245_unique_oracle_key_is_stable() -> None:
-    assert unique_oracle_evaluation_key(rule_id="r", experiment_id="e", fixture_id="f",
-        assertion_fingerprint="a", observation_pair_fingerprint="o") == unique_oracle_evaluation_key(
-            rule_id="r", experiment_id="e", fixture_id="f", assertion_fingerprint="a", observation_pair_fingerprint="o")
+    first = unique_oracle_evaluation_key(
+        rule_id="r",
+        experiment_id="e",
+        fixture_id="f",
+        assertion_fingerprint="a",
+        observation_pair_fingerprint="o",
+    )
+    second = unique_oracle_evaluation_key(
+        rule_id="r",
+        experiment_id="e",
+        fixture_id="f",
+        assertion_fingerprint="a",
+        observation_pair_fingerprint="o",
+    )
+    assert first == second
 
 
 def test_245_duplicate_evaluations_are_detected() -> None:
-    trace = {"rule_id": "r", "experiment_id": "e", "fixture_id": "f",
-             "assertion_fingerprint": "a", "observation_pair_fingerprint": "o"}
-    assert len(deduplicate_oracle_traces([trace, trace])["duplicate_evaluation_keys"]) == 1
+    trace = {
+        "rule_id": "r",
+        "experiment_id": "e",
+        "fixture_id": "f",
+        "assertion_fingerprint": "a",
+        "observation_pair_fingerprint": "o",
+    }
+    audit = deduplicate_oracle_traces([trace, trace])
+    assert len(audit["duplicate_evaluation_keys"]) == 1
 
 
 def test_245_polling_is_classified_not_counted() -> None:
     audit = deduplicate_oracle_traces([{"trace_kind": "polling"}])
-    assert audit["classification_counts"]["polling"] == 1 and audit["unique_evaluation_count"] == 0
+    assert audit["classification_counts"]["polling"] == 1
+    assert audit["unique_evaluation_count"] == 0
 
 
 def test_245_retry_is_classified_not_counted() -> None:
-    assert deduplicate_oracle_traces([{"trace_kind": "retry"}])["classification_counts"]["retry"] == 1
+    audit = deduplicate_oracle_traces([{"trace_kind": "retry"}])
+    assert audit["classification_counts"]["retry"] == 1
 
 
 def test_245_reproduction_is_classified_not_counted() -> None:
-    assert deduplicate_oracle_traces([{"trace_kind": "reproduction"}])["classification_counts"]["reproduction"] == 1
+    audit = deduplicate_oracle_traces([{"trace_kind": "reproduction"}])
+    assert audit["classification_counts"]["reproduction"] == 1
 
 
 def test_245_raw_trace_count_differs_from_unique_count() -> None:
-    trace = {"rule_id": "r", "experiment_id": "e", "fixture_id": "f", "assertion_fingerprint": "a", "observation_pair_fingerprint": "o"}
+    trace = {
+        "rule_id": "r",
+        "experiment_id": "e",
+        "fixture_id": "f",
+        "assertion_fingerprint": "a",
+        "observation_pair_fingerprint": "o",
+    }
     audit = deduplicate_oracle_traces([trace, trace])
-    assert audit["raw_trace_count"] == 2 and audit["unique_evaluation_count"] == 1
+    assert audit["raw_trace_count"] == 2
+    assert audit["unique_evaluation_count"] == 1
 
 
 def test_245_incomplete_oracle_key_fails_closed() -> None:
-    with pytest.raises(OperationalReceiptError, match="oracle_evaluation_key_incomplete"):
-        unique_oracle_evaluation_key(rule_id="", experiment_id="e", fixture_id="f",
-            assertion_fingerprint="a", observation_pair_fingerprint="o")
+    with pytest.raises(
+        OperationalReceiptError,
+        match="oracle_evaluation_key_incomplete",
+    ):
+        unique_oracle_evaluation_key(
+            rule_id="",
+            experiment_id="e",
+            fixture_id="f",
+            assertion_fingerprint="a",
+            observation_pair_fingerprint="o",
+        )
 
 
 # §24.6 — frozen denominator and terminal accounting.
@@ -426,7 +710,8 @@ def test_246_manifest_count_is_1498() -> None:
 
 def test_246_manifest_ids_are_unique() -> None:
     ids = _manifest()["canonical_obligation_manifest"]["obligation_ids"]
-    assert len(ids) == 1498 and len(ids) == len(set(ids))
+    assert len(ids) == 1498
+    assert len(ids) == len(set(ids))
 
 
 def test_246_unknown_mass_category_is_visible() -> None:
@@ -499,7 +784,9 @@ def test_248_raw_oracle_traces_are_not_unique_oracles() -> None:
 
 def test_248_no_receipt_history_is_excluded() -> None:
     history = [{"receipt_ids": []}, {"receipt_ids": ["r1"]}]
-    assert [row for row in history if row["receipt_ids"]] == [{"receipt_ids": ["r1"]}]
+    assert [row for row in history if row["receipt_ids"]] == [
+        {"receipt_ids": ["r1"]}
+    ]
 
 
 def test_248_half_coverage_is_749_over_1498() -> None:
@@ -517,25 +804,48 @@ def test_249_no_cleanup_cannot_be_true_completed() -> None:
 
 def test_249_no_readback_cannot_be_fixture_provenance() -> None:
     with pytest.raises(OperationalReceiptError, match="identity_incomplete"):
-        build_fixture_provenance_receipt(receipt_id="no-readback", fixture_id="f", entity_id="e",
-            scope_id="s", create_identity="x", readback_identity="", operation_identity="x",
-            observer_identity="x", cleanup_identity="x", code_commit_sha=COMMIT, tree_hash=TREE)
+        build_fixture_provenance_receipt(
+            receipt_id="no-readback",
+            fixture_id="f",
+            entity_id="e",
+            scope_id="s",
+            create_identity="x",
+            readback_identity="",
+            operation_identity="x",
+            observer_identity="x",
+            cleanup_identity="x",
+            code_commit_sha=COMMIT,
+            tree_hash=TREE,
+        )
 
 
 def test_249_customer_protection_rejects_customer_fixture() -> None:
     with pytest.raises(OperationalReceiptError):
-        build_fixture_provenance_receipt(receipt_id="protect", fixture_id="f", entity_id="e",
-            scope_id="s", create_identity="x", readback_identity="x", operation_identity="x",
-            observer_identity="x", cleanup_identity="x", ownership="customer",
-            code_commit_sha=COMMIT, tree_hash=TREE)
+        build_fixture_provenance_receipt(
+            receipt_id="protect",
+            fixture_id="f",
+            entity_id="e",
+            scope_id="s",
+            create_identity="x",
+            readback_identity="x",
+            operation_identity="x",
+            observer_identity="x",
+            cleanup_identity="x",
+            ownership="customer",
+            code_commit_sha=COMMIT,
+            tree_hash=TREE,
+        )
 
 
 def test_249_dirty_environment_is_visible() -> None:
-    assert _derive(_full_bundle(), environment_restored=False)["environment_restored"] is False
+    result = _derive(_full_bundle(), environment_restored=False)
+    assert result["environment_restored"] is False
 
 
 def test_249_operational_receipts_has_no_benchmark_hardcode() -> None:
-    text = (ROOT / "ai_test_asset_center/operational_receipts.py").read_text(encoding="utf-8")
+    text = (ROOT / "ai_test_asset_center/operational_receipts.py").read_text(
+        encoding="utf-8"
+    )
     assert "benchmark_mall_131" not in text
 
 
@@ -544,27 +854,48 @@ def test_249_no_operational_receipts_v2_module_exists() -> None:
 
 
 def test_249_assemble_bundle_roundtrip_is_complete() -> None:
-    identity = {"campaign_id": "c", "run_id": "r", "obligation_id": "o",
-                "experiment_id": "e", "fixture_id": "f", "protocol_id": "p"}
+    identity = {
+        "campaign_id": "c",
+        "run_id": "r",
+        "obligation_id": "o",
+        "experiment_id": "e",
+        "fixture_id": "f",
+        "protocol_id": "p",
+    }
     raw = lambda receipt_id: {"receipt_id": receipt_id}
+    step_rows = _sealed_step_rows(identity, ["step"])
     bundle = assemble_bundle_from_finalizer_observations(
-        bundle_id="roundtrip", code_commit_sha=COMMIT, tree_hash=TREE,
-        compile_receipt=raw("compile"), fixture_provenance_receipts=[raw("fixture")],
-        process_step_receipts=[raw("step")], transport_receipts=[raw("transport")],
-        observation_receipts=[raw("observation")], oracle_invocation_receipts=[raw("oracle")],
-        oracle_trace_receipts=[raw("trace")], cleanup_execution_receipts=[raw("cleanup-exec")],
+        bundle_id="roundtrip",
+        code_commit_sha=COMMIT,
+        tree_hash=TREE,
+        compile_receipt=raw("compile"),
+        fixture_provenance_receipts=[raw("fixture")],
+        process_step_receipts=step_rows,
+        transport_receipts=[raw("transport")],
+        observation_receipts=[raw("observation")],
+        oracle_invocation_receipts=[raw("oracle")],
+        oracle_trace_receipts=[raw("trace")],
+        cleanup_execution_receipts=[raw("cleanup-exec")],
         cleanup_verification_receipts=[raw("cleanup-verify")],
-        environment_restoration_receipt=raw("restored"), **identity,
+        environment_restoration_receipt=raw("restored"),
+        **identity,
     )
     assert bundle["complete"] is True
+    assert bundle["process_step_audit"]["complete"] is True
 
 
 # §25 — industry-neutral Entity A/B/C integration cases.
 def test_25_entity_a_true_completed_integration() -> None:
     bundle = _full_bundle(entity="entity-a")
-    final = build_execution_finalization_receipt(finalization_receipt_id="final-a", bundle=bundle,
-        oracle_evaluated=True, cleanup_verified=True, environment_restored=True,
-        code_commit_sha=COMMIT, tree_hash=TREE)
+    final = build_execution_finalization_receipt(
+        finalization_receipt_id="final-a",
+        bundle=bundle,
+        oracle_evaluated=True,
+        cleanup_verified=True,
+        environment_restored=True,
+        code_commit_sha=COMMIT,
+        tree_hash=TREE,
+    )
     assert final["lifecycle_state"] == "TRUE_COMPLETED"
 
 
