@@ -71,19 +71,21 @@ export function SettingsIdentityAnnotationWorkflow({ project }: Props) {
       const parsed = await Promise.all(
         files.map(async (file) => JSON.parse(await file.text()) as JsonRecord),
       );
-      const result = await compileIdentityAnnotationSubmissions(project, {
-        primary_submission: parsed[0],
-        secondary_submission: parsed[1],
-        adjudication_submission: parsed[2],
-      });
+      const submissions: {
+        primary_submission: JsonRecord;
+        secondary_submission?: JsonRecord;
+        adjudication_submission?: JsonRecord;
+      } = { primary_submission: parsed[0] };
+      if (parsed[1]) submissions.secondary_submission = parsed[1];
+      if (parsed[2]) submissions.adjudication_submission = parsed[2];
+      const result = await compileIdentityAnnotationSubmissions(project, submissions);
       const compilation = record(result.compilation);
       if (result.status === 'REVIEW_REQUIRED') {
         setReview(compilation);
         setStatus(`双人标注存在 ${Number(compilation.disagreement_count || 0)} 组分区分歧，Ground Truth 未导入。完成裁决后同时上传三个文件。`);
         return;
       }
-      const workspace = result.workspace || {};
-      const benchmark = record(workspace.benchmark);
+      const benchmark = record(result.workspace?.benchmark);
       const metrics = record(benchmark.metrics);
       setStatus(
         `标注已编译并导入。复核状态 ${text(compilation.review_status) || 'READY'}，` +
