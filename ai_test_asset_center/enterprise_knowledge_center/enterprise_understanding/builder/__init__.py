@@ -28,7 +28,7 @@ from ..identity_resolution import (
     resolve_enterprise_identities,
 )
 from ..identity_technical_projection import augment_technical_identity_projection
-from ..schema import as_list, stable_id, text
+from ..schema import as_dict, as_list, stable_id, text
 
 _PACKAGE = __package__.rsplit(".builder", 1)[0]
 _LEGACY_NAME = f"{_PACKAGE}._semantic_projection_builder_v1"
@@ -66,6 +66,28 @@ def _govern_identity_conflicts(resolution: dict[str, Any]) -> None:
         conflict.setdefault("blocks_formal_understanding", True)
 
 
+def _attach_identity_audit_receipts(
+    model: dict[str, Any],
+    asset: dict[str, Any],
+    resolution: dict[str, Any],
+) -> dict[str, Any]:
+    model["identity_registry_recompute_receipt"] = as_dict(
+        resolution.get("registry_recompute_receipt")
+        or asset.get("enterprise_identity_registry_recompute_receipt")
+    )
+    model["identity_authority_projection"] = as_dict(
+        resolution.get("authority_decision_projection")
+        or asset.get("enterprise_identity_authority_projection_receipt")
+    )
+    model["identity_benchmark"] = as_dict(
+        resolution.get("benchmark") or asset.get("enterprise_identity_benchmark")
+    )
+    model["identity_evidence_policy_receipt"] = as_dict(
+        asset.get("identity_evidence_policy_receipt")
+    )
+    return model
+
+
 def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any]:
     prior_registry = deepcopy(asset.get("enterprise_identity_registry") or {})
     apply_identity_evidence_policy(asset)
@@ -81,7 +103,8 @@ def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any
     projected_asset = project_asset_for_legacy_builder(recognized_asset, resolution)
     model = _legacy.build_enterprise_understanding_model(projected_asset)
     model = apply_identity_resolution_to_model(model, resolution)
-    return apply_recognition_to_model(model, recognition)
+    model = apply_recognition_to_model(model, recognition)
+    return _attach_identity_audit_receipts(model, recognized_asset, resolution)
 
 
 __all__ = ["build_enterprise_understanding_model"]
