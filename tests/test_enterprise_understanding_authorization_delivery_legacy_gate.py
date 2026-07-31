@@ -1,12 +1,9 @@
-"""Legacy delivery receipts cannot publish authorization occurrences."""
+"""Legacy authorization delivery is quarantined, not published or deleted."""
 from __future__ import annotations
 
 from copy import deepcopy
 
-import pytest
-
 from ai_test_asset_center import formal_delivery_scope
-from ai_test_asset_center.discovery_mainline_contract import MainlineContractError
 
 
 def _ledger(
@@ -20,16 +17,19 @@ def _ledger(
         else finding_risk_family
     )
     return {
+        "run_id": "run:1",
         "campaign_id": "campaign:1",
         "attempts": [
             {
                 "terminal_status": "DELIVERABLE",
                 "finding_id": "finding:1",
                 "risk_family": attempt_risk_family,
+                "attempt_fingerprint": "attempt-fingerprint",
                 "gate_receipt": {
                     "schema_version": "qualibug.customer-delivery-gate-receipt.v1",
                     "status": "DELIVERABLE",
                     "finding_id": "finding:1",
+                    "receipt_id": "legacy-gate:1",
                 },
                 "delivery_evidence_bundle": {
                     "finding": {
@@ -51,18 +51,14 @@ def _install_ledger(monkeypatch, ledger: dict) -> None:
     )
 
 
-def test_legacy_authorization_deliverable_is_rejected(monkeypatch) -> None:
+def test_legacy_authorization_deliverable_is_quarantined(monkeypatch) -> None:
     ledger = _ledger(attempt_risk_family="authorization")
     _install_ledger(monkeypatch, ledger)
 
-    with pytest.raises(
-        MainlineContractError,
-        match="formal_authorization_delivery_v2_required:finding:1",
-    ):
-        formal_delivery_scope.validated_deliverable_gate_index(ledger)
+    assert formal_delivery_scope.validated_deliverable_gate_index(ledger) == {}
 
 
-def test_legacy_authorization_finding_is_rejected_when_attempt_family_missing(
+def test_legacy_authorization_finding_is_quarantined_when_attempt_family_missing(
     monkeypatch,
 ) -> None:
     ledger = _ledger(
@@ -71,11 +67,7 @@ def test_legacy_authorization_finding_is_rejected_when_attempt_family_missing(
     )
     _install_ledger(monkeypatch, ledger)
 
-    with pytest.raises(
-        MainlineContractError,
-        match="formal_authorization_delivery_v2_required:finding:1",
-    ):
-        formal_delivery_scope.validated_deliverable_gate_index(ledger)
+    assert formal_delivery_scope.validated_deliverable_gate_index(ledger) == {}
 
 
 def test_legacy_non_authorization_deliverable_remains_readable(monkeypatch) -> None:
