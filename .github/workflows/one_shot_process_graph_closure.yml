@@ -1,0 +1,255 @@
+name: One-shot process graph closure
+
+on:
+  push:
+    paths:
+      - .github/workflows/one_shot_process_graph_closure.yml
+
+permissions:
+  contents: write
+
+jobs:
+  wire-process-graph-closure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Patch exact closure anchors
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/closure.py')
+          source = path.read_text(encoding='utf-8')
+
+          def replace_once(old: str, new: str, label: str) -> None:
+              global source
+              count = source.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected one exact anchor, found {count}')
+              source = source.replace(old, new, 1)
+
+          replace_once(
+              '''from .implementation_binding_governance import (
+              build_governed_behavior_implementation_bindings,
+          )
+          from .schema import (
+          ''',
+              '''from .implementation_binding_governance import (
+              build_governed_behavior_implementation_bindings,
+          )
+          from .process_graph_ir import build_business_process_graphs
+          from .schema import (
+          ''',
+              'process graph import',
+          )
+
+          replace_once(
+              '''    _project_implementation_binding_asset(
+              asset,
+              bindings=implementation_bindings,
+              unknowns=implementation_unknowns,
+              conflicts=implementation_conflicts,
+              gate=implementation_gate,
+          )
+
+              # Semantic understanding and implementation binding are separate gates. Missing
+          ''',
+              '''    _project_implementation_binding_asset(
+              asset,
+              bindings=implementation_bindings,
+              unknowns=implementation_unknowns,
+              conflicts=implementation_conflicts,
+              gate=implementation_gate,
+          )
+
+              process_graphs, process_graph_unknowns, process_graph_gate = (
+              build_business_process_graphs(model, behaviors, implementation_bindings)
+          )
+              model["process_graphs"] = process_graphs
+              model["process_graph_unknowns"] = process_graph_unknowns
+              model["process_graph_gate"] = process_graph_gate
+              model["business_behavior_ir"] = {
+              "schema": "qualibug.enterprise-business-behavior-ir.v1",
+              "behaviors": behaviors,
+              "process_graphs": process_graphs,
+              "behavior_gate": behavior_gate,
+              "process_graph_gate": process_graph_gate,
+              "semantic_authority": "enterprise_understanding",
+              "runtime_executability_claimed": False,
+          }
+              asset["business_process_graphs"] = process_graphs
+              asset["business_process_graph_gate"] = process_graph_gate
+              process_graph_metrics = as_dict(process_graph_gate.get("metrics"))
+              asset_summary = as_dict(asset.get("summary"))
+              asset_summary.update(
+              {
+                  "process_graph_status": process_graph_gate.get("status"),
+                  "process_graph_count": len(process_graphs),
+                  "compiled_process_graph_count": int(
+                      process_graph_metrics.get("compiled_process_graph_count") or 0
+                  ),
+                  "partial_process_graph_count": int(
+                      process_graph_metrics.get("partial_process_graph_count") or 0
+                  ),
+                  "process_graph_unknown_count": len(process_graph_unknowns),
+              }
+          )
+              asset["summary"] = asset_summary
+              asset_gaps = [
+              dict(row)
+              for row in as_list(asset.get("coverage_gaps"))
+              if isinstance(row, dict) and text(row.get("kind")) != "PROCESS_GRAPH_IR_PARTIAL"
+          ]
+              if text(process_graph_gate.get("status")) != "PASS":
+              asset_gaps.append(
+                  {
+                      "kind": "PROCESS_GRAPH_IR_PARTIAL",
+                      "gap_type": "understood_process_not_fully_bound_to_behavior_implementation",
+                      "source_id": "*",
+                      "process_graph_status": process_graph_gate.get("status"),
+                      "unknown_count": len(process_graph_unknowns),
+                      "semantic_understanding_is_not_changed": True,
+                      "runtime_executability_claimed": False,
+                  }
+              )
+              asset["coverage_gaps"] = asset_gaps
+
+              # Semantic understanding and implementation binding are separate gates. Missing
+          ''',
+              'process graph projection',
+          )
+
+          replace_once(
+              '''    unknowns = [
+              row
+              for row in [*as_list(model.get("unknowns")), *behavior_unknowns]
+              if isinstance(row, dict)
+          ]
+          ''',
+              '''    unknowns = [
+              row
+              for row in [
+                  *as_list(model.get("unknowns")),
+                  *behavior_unknowns,
+                  *process_graph_unknowns,
+              ]
+              if isinstance(row, dict)
+          ]
+          ''',
+              'unknown propagation',
+          )
+
+          replace_once(
+              '''    behavior_evidence = dedupe_evidence(
+              [
+                  evidence
+                  for behavior in behaviors
+                  for evidence in as_list(behavior.get("evidence"))
+                  if isinstance(evidence, dict)
+              ]
+          )
+              model["evidence_index"] = dedupe_evidence(
+              [*as_list(model.get("evidence_index")), *behavior_evidence]
+          )
+          ''',
+              '''    behavior_evidence = dedupe_evidence(
+              [
+                  evidence
+                  for behavior in behaviors
+                  for evidence in as_list(behavior.get("evidence"))
+                  if isinstance(evidence, dict)
+              ]
+          )
+              process_graph_evidence = dedupe_evidence(
+              [
+                  evidence
+                  for graph in process_graphs
+                  for evidence in as_list(graph.get("evidence"))
+                  if isinstance(evidence, dict)
+              ]
+          )
+              model["evidence_index"] = dedupe_evidence(
+              [
+                  *as_list(model.get("evidence_index")),
+                  *behavior_evidence,
+                  *process_graph_evidence,
+              ]
+          )
+          ''',
+              'process graph evidence',
+          )
+
+          replace_once(
+              '''        "implementation_binding_conflict_count": len(implementation_conflicts),
+              "implementation_binding_status": implementation_gate.get("status"),
+          }
+          ''',
+              '''        "implementation_binding_conflict_count": len(implementation_conflicts),
+              "implementation_binding_status": implementation_gate.get("status"),
+              "process_graph_count": len(process_graphs),
+              "compiled_process_graph_count": int(
+                  process_graph_metrics.get("compiled_process_graph_count") or 0
+              ),
+              "partial_process_graph_count": int(
+                  process_graph_metrics.get("partial_process_graph_count") or 0
+              ),
+              "process_graph_unknown_count": len(process_graph_unknowns),
+              "process_graph_status": process_graph_gate.get("status"),
+          }
+          ''',
+              'source summary process graph metrics',
+          )
+
+          replace_once(
+              '''    model["metrics"]["scenario_ready_binding_count"] = int(
+              implementation_metrics.get("scenario_ready_binding_count") or 0
+          )
+          ''',
+              '''    model["metrics"]["scenario_ready_binding_count"] = int(
+              implementation_metrics.get("scenario_ready_binding_count") or 0
+          )
+              model["metrics"]["process_graph_status"] = process_graph_gate.get("status")
+              model["metrics"]["compiled_process_graph_count"] = int(
+              process_graph_metrics.get("compiled_process_graph_count") or 0
+          )
+              model["metrics"]["partial_process_graph_count"] = int(
+              process_graph_metrics.get("partial_process_graph_count") or 0
+          )
+          ''',
+              'model process graph metrics',
+          )
+
+          path.write_text(source, encoding='utf-8')
+          PY
+
+      - name: Validate syntax and focused behavior
+        run: |
+          python -m py_compile \
+            ai_test_asset_center/multi_step_protocol.py \
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/process_graph_ir.py \
+            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/closure.py \
+            tests/test_v150_multi_step_protocol.py \
+            tests/test_enterprise_process_graph_ir.py
+          python -m pytest -q \
+            tests/test_v150_multi_step_protocol.py \
+            tests/test_enterprise_process_graph_ir.py
+
+      - name: Commit validated closure and remove one-shot workflow
+        shell: bash
+        run: |
+          rm .github/workflows/one_shot_process_graph_closure.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/closure.py
+          git add .github/workflows/one_shot_process_graph_closure.yml
+          git commit -m "feat(understanding): carry process graphs into behavior IR"
+          git pull --rebase origin main
+          git push origin HEAD:main
