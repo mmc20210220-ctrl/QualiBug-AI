@@ -11,6 +11,7 @@ from ai_test_asset_center.process_graph_runtime import (
     prepare_graph_runtime,
 )
 from ai_test_asset_center.process_graph_write_contract import (
+    GRAPH_WRITE_COMPENSATION_UNRESOLVED,
     GRAPH_WRITE_OBSERVER_UNRESOLVED,
     finalize_process_graph_write_contract,
 )
@@ -20,7 +21,11 @@ def _source_ref(name: str) -> list[dict]:
     return [{"source_id": "api", "kind": "api_operation", "locator": name}]
 
 
-def _ir(*, include_observer: bool = True) -> dict:
+def _ir(
+    *,
+    include_observer: bool = True,
+    include_compensation_relation: bool = True,
+) -> dict:
     operations = [
         {
             "id": "op-read-seed",
@@ -55,23 +60,28 @@ def _ir(*, include_observer: bool = True) -> dict:
                 "source_refs": _source_ref("GET /orders"),
             }
         )
-    return {
-        "operations": operations,
-        "actors": [{"id": "actor-writer", "role": "public"}],
-        "relations": [
+    relations = []
+    if include_compensation_relation:
+        relations.append(
             {
                 "id": "rel-delete-compensates-create",
                 "relation_type": "compensates",
                 "from_ref": "op-delete-order",
                 "to_ref": "op-create-order",
                 "operation_ref": "op-delete-order",
-                "source_refs": [{"source_id": "requirements", "locator": "order cleanup"}],
+                "source_refs": [
+                    {"source_id": "requirements", "locator": "order cleanup"}
+                ],
             }
-        ],
+        )
+    return {
+        "operations": operations,
+        "actors": [{"id": "actor-writer", "role": "public"}],
+        "relations": relations,
     }
 
 
-def _graph() -> dict:
+def _graph(*, system_ref: str = "orders") -> dict:
     return {
         "schema_version": "qualibug.process-execution-graph.v1",
         "execution_graph_id": "graph-order-create",
@@ -82,7 +92,7 @@ def _graph() -> dict:
                 "step_id": "read-seed",
                 "operation_ref": "op-read-seed",
                 "actor_ref": "actor-writer",
-                "system_ref": "orders",
+                "system_ref": system_ref,
                 "method": "GET",
                 "path": "/seed",
                 "output_binding_specs": [],
@@ -92,7 +102,7 @@ def _graph() -> dict:
                 "step_id": "create-order",
                 "operation_ref": "op-create-order",
                 "actor_ref": "actor-writer",
-                "system_ref": "orders",
+                "system_ref": system_ref,
                 "method": "POST",
                 "path": "/orders",
                 "compensation_operation_ref": "op-delete-order",
@@ -119,8 +129,8 @@ def _graph() -> dict:
     }
 
 
-def _experiment() -> dict:
-    graph = _graph()
+def _experiment(*, system_ref: str = "orders") -> dict:
+    graph = _graph(system_ref=system_ref)
     return {
         "experiment_id": "exp-graph-write",
         "obligation_id": "obl-graph-write",
@@ -139,12 +149,15 @@ def _experiment() -> dict:
             for node in graph["nodes"]
         ],
         "cleanup_plan": [],
+        "observers": [{"observer_id": "http_response"}],
         "safety_contract": {"governed_write": False},
-        "source_refs": [{"source_id": "requirements", "locator": "order flow"}],
+        "source_refs": [
+            {"source_id": "requirements", "locator": "order flow"}
+        ],
     }
 
 
-def _runtime_contract(*, write: bool = True) -> dict:
+def _primary_runtime_contract(*, write: bool = True) -> dict:
     return {
         "status": "approved",
         "system_ref": "orders",
@@ -158,74 +171,39 @@ def _runtime_contract(*, write: bool = True) -> dict:
     }
 
 
-def test_final_compiler_promotes_read_first_graph_to_governed_write() -> None:
-    result = finalize_process_graph_write_contract(_experiment(), _ir())
-
-    assert result["compile_receipt"]["status"] == "COMPILED", result["compile_receipt"]
-    assert result["safety_contract"]["governed_write"] is True
-    assert result["safety_contract"]["cleanup_authority"] == "process_graph_write_contract"
-    assert result["process_graph_write_contract"]["write_step_ids"] == ["create-order"]
-    assert result["process_graph_write_contract"]["cleanup_order"] == ["create-order"]
-    cleanup = result["cleanup_plan"][0]
-    assert cleanup["source_step_id"] == "create-order"
-    assert cleanup["operation_ref"] == "op-delete-order"
-    assert cleanup["system_ref"] == "orders"
-    assert cleanup["mode"] == "delete_created_resource"
-    assert cleanup["binding_specs"] == [
-        {
-            "target": "order_id",
-            "source": "write_response",
-            "canonical_field_id": "order_id",
-            "source_path": "$.order_id",
-        }
-    ]
-    assert result["write_reversibility_proof"]["proof_id"]
-
-
-def test_graph_write_without_unique_effect_observer_is_blocked() -> None:
-    result = finalize_process_graph_write_contract(
-        _experiment(),
-        _ir(include_observer=False),
-    )
-
-    assert result["compile_receipt"]["status"] == "BLOCKED"
-    assert result["compile_receipt"]["reason_code"] == GRAPH_WRITE_OBSERVER_UNRESOLVED
-    assert result["treatment_plan"] == []
+def _secondary_runtime_contract() -> dict:
+    return {
+        "status": "approved",
+        "system_ref": "erp",
+        "requested_base_url": "https://erp.test.example",
+        "approved_base_url": "https://erp.test.example",
+        "environment_type": "test",
+        "environment_ref": "erp-test",
+        "execution_mode": "approved_sandbox_write",
+        "approved_targets": {
+            "orders": {
+                "status": "approved",
+                "system_ref": "orders",
+                "requested_base_url": "https://orders.test.example",
+                "approved_base_url": "https://orders.test.example",
+                "environment_type": "test",
+                "environment_ref": "orders-test",
+                "execution_mode": "approved_sandbox_write",
+                "actor_token_keys": {
+                    "actor-writer": "orders:actor-writer"
+                },
+            }
+        },
+    }
 
 
-def test_runtime_allows_only_write_approved_graph_target() -> None:
-    compiled = finalize_process_graph_write_contract(_experiment(), _ir())
-    graph = compiled["execution_graph"]
-    ops = {row["id"]: row for row in _ir()["operations"]}
-
-    ready = prepare_graph_runtime(
-        graph=graph,
-        treatment_plan=compiled["treatment_plan"],
-        ops=ops,
-        base_url="https://orders.test.example",
-        runtime_contract=_runtime_contract(write=True),
-    )
-    assert ready["status"] == "READY", ready
-    assert ready["target_contexts"]["create-order"]["write_allowed"] is True
-
-    blocked = prepare_graph_runtime(
-        graph=graph,
-        treatment_plan=compiled["treatment_plan"],
-        ops=ops,
-        base_url="https://orders.test.example",
-        runtime_contract=_runtime_contract(write=False),
-    )
-    assert blocked["status"] == "BLOCKED"
-    assert blocked["reason_code"] == GRAPH_TARGET_NOT_APPROVED
-
-
-def _accepted_source_step() -> dict:
+def _accepted_source_step(*, system_ref: str = "orders") -> dict:
     return {
         "phase": "treatment",
         "step_id": "create-order",
         "operation_ref": "op-create-order",
         "actor_ref": "actor-writer",
-        "system_ref": "orders",
+        "system_ref": system_ref,
         "status_code": 201,
         "body": {"order_id": "ORD-9"},
         "governance_receipt": {
@@ -239,20 +217,112 @@ def _accepted_source_step() -> dict:
     }
 
 
-def test_graph_cleanup_uses_exact_system_path_and_restoration_proof(tmp_path: Path) -> None:
+def _cleanup_result(**kwargs):
+    return {
+        "accepted": True,
+        "before": {"status": 200, "body": [{"order_id": "ORD-9"}]},
+        "write": {"status": 204, "body": {}},
+        "after": {"status": 200, "body": []},
+        "audit_path": "audit.jsonl",
+        "audit_record": {"phase": "cleanup", "path": kwargs["path"]},
+    }
+
+
+def test_final_compiler_promotes_read_first_graph_to_governed_write() -> None:
+    result = finalize_process_graph_write_contract(_experiment(), _ir())
+
+    assert result["compile_receipt"]["status"] == "COMPILED", result["compile_receipt"]
+    assert result["safety_contract"]["governed_write"] is True
+    assert result["safety_contract"]["cleanup_authority"] == (
+        "process_graph_write_contract"
+    )
+    contract = result["process_graph_write_contract"]
+    assert contract["write_step_ids"] == ["create-order"]
+    assert contract["cleanup_order"] == ["create-order"]
+    cleanup = result["cleanup_plan"][0]
+    assert cleanup["source_step_id"] == "create-order"
+    assert cleanup["operation_ref"] == "op-delete-order"
+    assert cleanup["system_ref"] == "orders"
+    assert cleanup["action"] == "source_declared_compensation"
+    assert cleanup["mode"] == "compensating_transition"
+    assert cleanup["authority_relation_ref"] == (
+        "rel-delete-compensates-create"
+    )
+    assert cleanup["binding_specs"] == [
+        {
+            "target": "order_id",
+            "source": "write_response",
+            "canonical_field_id": "order_id",
+            "source_path": "$.order_id",
+        }
+    ]
+    after_state = next(
+        row for row in result["observers"] if row["observer_id"] == "after_state"
+    )
+    assert after_state["resolver_operations"] == [
+        {
+            "operation_ref": "op-list-orders",
+            "method": "GET",
+            "path": "/orders",
+            "source_declared": True,
+        }
+    ]
+    assert result["write_reversibility_proof"]["proof_status"] == "PROVEN"
+
+
+def test_graph_write_without_unique_effect_observer_is_blocked() -> None:
+    result = finalize_process_graph_write_contract(
+        _experiment(), _ir(include_observer=False)
+    )
+    assert result["compile_receipt"]["status"] == "BLOCKED"
+    assert result["compile_receipt"]["reason_code"] == (
+        GRAPH_WRITE_OBSERVER_UNRESOLVED
+    )
+    assert result["treatment_plan"] == []
+
+
+def test_graph_write_without_explicit_compensation_relation_is_blocked() -> None:
+    result = finalize_process_graph_write_contract(
+        _experiment(),
+        _ir(include_compensation_relation=False),
+    )
+    assert result["compile_receipt"]["status"] == "BLOCKED"
+    assert result["compile_receipt"]["reason_code"] == (
+        GRAPH_WRITE_COMPENSATION_UNRESOLVED
+    )
+    assert "explicit_compensator_relation_unresolved" in (
+        result["compile_receipt"]["detail"]
+    )
+
+
+def test_runtime_allows_only_write_approved_graph_target() -> None:
+    compiled = finalize_process_graph_write_contract(_experiment(), _ir())
+    ops = {row["id"]: row for row in _ir()["operations"]}
+
+    ready = prepare_graph_runtime(
+        graph=compiled["execution_graph"],
+        treatment_plan=compiled["treatment_plan"],
+        ops=ops,
+        base_url="https://orders.test.example",
+        runtime_contract=_primary_runtime_contract(write=True),
+    )
+    assert ready["status"] == "READY", ready
+    assert ready["target_contexts"]["create-order"]["write_allowed"] is True
+
+    blocked = prepare_graph_runtime(
+        graph=compiled["execution_graph"],
+        treatment_plan=compiled["treatment_plan"],
+        ops=ops,
+        base_url="https://orders.test.example",
+        runtime_contract=_primary_runtime_contract(write=False),
+    )
+    assert blocked["status"] == "BLOCKED"
+    assert blocked["reason_code"] == GRAPH_TARGET_NOT_APPROVED
+
+
+def test_graph_cleanup_uses_exact_path_and_restoration_proof(tmp_path: Path) -> None:
     exp = finalize_process_graph_write_contract(_experiment(), _ir())
     calls: list[dict] = []
-
-    def governed(**kwargs):
-        calls.append(kwargs)
-        return {
-            "accepted": True,
-            "before": {"status": 200, "body": [{"order_id": "ORD-9"}]},
-            "write": {"status": 204, "body": {}},
-            "after": {"status": 200, "body": []},
-            "audit_path": "audit.jsonl",
-            "audit_record": {"phase": "cleanup", "path": kwargs["path"]},
-        }
 
     result = execute_process_graph_cleanup(
         exp=exp,
@@ -272,8 +342,10 @@ def test_graph_cleanup_uses_exact_system_path_and_restoration_proof(tmp_path: Pa
         root=tmp_path,
         project="project",
         base_url="https://orders.test.example",
-        runtime_contract=_runtime_contract(write=True),
-        execute_governed_control_write=governed,
+        runtime_contract=_primary_runtime_contract(write=True),
+        execute_governed_control_write=lambda **kwargs: (
+            calls.append(kwargs) or _cleanup_result(**kwargs)
+        ),
         sandbox_write_allowed=lambda **kwargs: (True, ""),
     )
 
@@ -286,6 +358,54 @@ def test_graph_cleanup_uses_exact_system_path_and_restoration_proof(tmp_path: Pa
     assert receipt["status"] == "COMPLETED"
     assert receipt["evidence"]["source_step_id"] == "create-order"
     assert receipt["evidence"]["restoration_verified"] is True
+
+
+def test_graph_cleanup_uses_secondary_target_and_isolated_token(tmp_path: Path) -> None:
+    exp = finalize_process_graph_write_contract(
+        _experiment(system_ref="orders"),
+        _ir(),
+    )
+    calls: list[dict] = []
+
+    result = execute_process_graph_cleanup(
+        exp=exp,
+        steps_out=[_accepted_source_step(system_ref="orders")],
+        observations={},
+        contract_evidence_receipts=[],
+        request_bodies_for_cleanup={"create-order": {"sku": "SKU-1"}},
+        runtime_bindings={},
+        cleanup_failures=0,
+        actors={
+            "actor-writer": {
+                "id": "actor-writer",
+                "role": "writer",
+                "credential_secret_ref": "primary:actor-writer",
+            }
+        },
+        tokens={
+            "primary:actor-writer": "erp-token",
+            "orders:actor-writer": "orders-token",
+        },
+        eid="exp-graph-write",
+        oid="obl-graph-write",
+        resolved_campaign_id="campaign",
+        resolved_execution_id="execution",
+        campaign_id="campaign",
+        root=tmp_path,
+        project="project",
+        base_url="https://erp.test.example",
+        runtime_contract=_secondary_runtime_contract(),
+        execute_governed_control_write=lambda **kwargs: (
+            calls.append(kwargs) or _cleanup_result(**kwargs)
+        ),
+        sandbox_write_allowed=lambda **kwargs: (True, ""),
+    )
+
+    assert result["cleanup_failures"] == 0
+    assert len(calls) == 1
+    assert calls[0]["base_url"] == "https://orders.test.example"
+    assert calls[0]["actor_token"] == "orders-token"
+    assert calls[0]["actor_token"] != "erp-token"
 
 
 def test_graph_cleanup_never_guesses_missing_identity(tmp_path: Path) -> None:
@@ -313,7 +433,7 @@ def test_graph_cleanup_never_guesses_missing_identity(tmp_path: Path) -> None:
         root=tmp_path,
         project="project",
         base_url="https://orders.test.example",
-        runtime_contract=_runtime_contract(write=True),
+        runtime_contract=_primary_runtime_contract(write=True),
         execute_governed_control_write=lambda **kwargs: calls.append(kwargs),
         sandbox_write_allowed=lambda **kwargs: (True, ""),
     )
@@ -322,5 +442,7 @@ def test_graph_cleanup_never_guesses_missing_identity(tmp_path: Path) -> None:
     assert result["cleanup_failures"] == 1
     receipt = result["process_graph_cleanup_receipts"][0]
     assert receipt["status"] == "FAILED"
-    assert receipt["evidence"]["reason_code"] == GRAPH_CLEANUP_BINDING_UNRESOLVED
+    assert receipt["evidence"]["reason_code"] == (
+        GRAPH_CLEANUP_BINDING_UNRESOLVED
+    )
     assert receipt["evidence"]["request_reached_transport"] is False
