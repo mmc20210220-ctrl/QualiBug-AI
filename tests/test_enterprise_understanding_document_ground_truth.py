@@ -261,8 +261,7 @@ def test_exact_human_profile_measures_heading_table_and_reading_order() -> None:
 def test_duplicate_exact_candidates_are_ambiguous_and_no_winner_is_selected() -> None:
     profile = _profile()
     profile["scope_complete"] = False
-    profile["minimum_profile"] = {"elements": 1}
-    profile["sources"] = []
+    profile["minimum_profile"] = {"sources": 1, "elements": 1}
     profile["reading_order_pairs"] = []
     profile["elements"] = [
         {
