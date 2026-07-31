@@ -41,5 +41,42 @@ def test_frozen_implicit_rule_ground_truth_references_exact_git_blobs():
         row["ground_truth_id"]: row["expected_status"]
         for row in ground_truth["rules"]
     }
-    assert statuses["gt:implicit-v1:retired-cardinality"] == "STALE"
-    assert statuses["gt:implicit-v1:example-field-hard-negative"] == "ABSENT"
+    assert statuses == {
+        "gt:implicit-v1:idempotency": "ACTIVE",
+        "gt:implicit-v1:cardinality-pending": "PENDING_VALIDATION",
+        "gt:implicit-v1:retired-conservation": "STALE",
+        "gt:implicit-v1:example-field-hard-negative": "ABSENT",
+    }
+
+
+def test_frozen_statuses_follow_current_execution_capabilities():
+    ground_truth = load_implicit_rule_ground_truth(FIXTURE / "ground_truth.json")
+    by_id = {
+        row["ground_truth_id"]: row
+        for row in ground_truth["rules"]
+    }
+
+    assert by_id["gt:implicit-v1:idempotency"]["execution_required"] is True
+    assert by_id["gt:implicit-v1:cardinality-pending"]["execution_required"] is False
+    assert by_id["gt:implicit-v1:retired-conservation"]["execution_required"] is False
+    assert by_id["gt:implicit-v1:cardinality-pending"]["match"] == {
+        "logical_form": "cardinality",
+        "operator": "cardinality",
+    }
+    assert by_id["gt:implicit-v1:retired-conservation"]["match"] == {
+        "logical_form": "conservationequation",
+        "operator": "equationholds",
+    }
+
+
+def test_minimal_openapi_fixture_adds_no_unannotated_rule_candidates():
+    content = (FIXTURE / "payment_api.openapi.json").read_text(encoding="utf-8")
+
+    assert '"operationId": "submitPayment"' in content
+    assert (
+        '"description": "同一付款请求不得重复成功扣款；重复提交时业务成功效果最多发生一次。"'
+        in content
+    )
+    assert '"requestBody"' not in content
+    assert '"required"' not in content
+    assert '"properties"' not in content
