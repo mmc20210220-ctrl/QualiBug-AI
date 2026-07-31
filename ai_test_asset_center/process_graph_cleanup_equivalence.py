@@ -1,9 +1,9 @@
 """Strict public authority for process-graph cleanup equivalence.
 
 The existing per-step input builder and single-write comparison remain unchanged
-in ``process_graph_cleanup_equivalence_core``.  This facade seals their runtime
-scope and handles the one graph-specific semantic case: a formal write that is
-proven never to have reached transport needs no compensation.
+in ``process_graph_cleanup_equivalence_core``. This facade seals their runtime
+scope, handles formally proven zero-transport writes, and prevents unmeasured
+residual counts from being represented as observed facts.
 """
 from __future__ import annotations
 
@@ -27,6 +27,35 @@ def _receipt_step_id(receipt: dict[str, Any]) -> str:
         receipt.get("source_step_id")
         or _core._dict(receipt.get("evidence")).get("source_step_id")
     )
+
+
+def _seal_environment_truth(
+    execution_set: dict[str, Any],
+    *,
+    equivalence_status: str = "",
+) -> None:
+    """Mark graph residue counts as unmeasured instead of inventing cardinality."""
+    environment = _core._dict(
+        _core._dict(execution_set).get("environment_restoration_receipt")
+    )
+    if not environment:
+        return
+    environment.update(
+        {
+            "created_rows_remaining": 0,
+            "modified_rows_not_restored": 0,
+            "deleted_rows_not_restored": 0,
+            "residual_counts_measured": False,
+            "restoration_basis": (
+                "per_source_step_cleanup_equivalence"
+                if equivalence_status
+                else "pending_per_source_step_equivalence"
+            ),
+        }
+    )
+    for failure in _core._list(environment.get("cleanup_failures")):
+        if isinstance(failure, dict):
+            failure["residual_counts_measured"] = False
 
 
 def _scope_payload(execution_set: dict[str, Any]) -> dict[str, Any]:
@@ -146,6 +175,7 @@ def finalize_process_graph_cleanup_equivalence_inputs(
         environment["cleanup_execution_scope_fingerprint"] = (
             execution_set["scope_fingerprint"]
         )
+    _seal_environment_truth(execution_set)
     observations["cleanup_execution_receipt"] = execution_set
     observations["cleanup_execution_receipts"] = [execution_set]
     observations[
@@ -366,6 +396,10 @@ def _indeterminate_receipt(
         reason_codes=[receipt["detail"]],
         step_receipt_ids=[],
     )
+    _seal_environment_truth(
+        execution_set,
+        equivalence_status="INDETERMINATE",
+    )
     return receipt
 
 
@@ -405,6 +439,12 @@ def evaluate_process_graph_cleanup_equivalence(
             node_receipts[step_id] = replacement
             changed = True
     if not changed:
+        _seal_environment_truth(
+            execution_set,
+            equivalence_status=_core._text(
+                aggregate.get("equivalence_status")
+            ).upper(),
+        )
         return aggregate
 
     statuses = {
@@ -492,6 +532,10 @@ def evaluate_process_graph_cleanup_equivalence(
         equivalence_status=final_status,
         reason_codes=reasons,
         step_receipt_ids=receipt_ids,
+    )
+    _seal_environment_truth(
+        execution_set,
+        equivalence_status=final_status,
     )
     return aggregate
 
