@@ -2,7 +2,8 @@
 
 Tenant and project identity are mandatory dimensions of every customer-data
 query. Findings are stored once through the cumulative merge authority; scan
-persistence stores the scan envelope only.
+persistence stores the scan envelope only. Account usernames are globally
+unique and every JWT/cookie session is bound to a server-side session version.
 """
 from __future__ import annotations
 
@@ -13,14 +14,13 @@ import json
 import os
 import secrets
 import sqlite3
-import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 from .project_runtime_primitives import safe_project_id
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 DB_FILENAME = "qualibug.db"
 _PBKDF2_ITERATIONS = 200_000
 _ALLOWED_FINDING_STATUSES = frozenset({"open", "resolved", "falsified"})
@@ -54,6 +54,22 @@ def _conn(root: Path):
         db.close()
 
 
+def _ensure_unique_usernames(db: sqlite3.Connection) -> None:
+    duplicates = db.execute(
+        "SELECT username, COUNT(*) AS count FROM tenants "
+        "WHERE username <> '' GROUP BY username HAVING COUNT(*) > 1"
+    ).fetchall()
+    if duplicates:
+        names = ", ".join(str(row["username"]) for row in duplicates[:10])
+        raise RuntimeError(
+            "duplicate tenant usernames must be resolved before startup: " + names
+        )
+    db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_tenants_username "
+        "ON tenants(username) WHERE username <> ''"
+    )
+
+
 def init_db(root: Path) -> None:
     with _conn(root) as db:
         db.execute(
@@ -76,6 +92,11 @@ def init_db(root: Path) -> None:
             db.execute("ALTER TABLE tenants ADD COLUMN password_hash TEXT DEFAULT ''")
         if "role" not in tenant_columns:
             db.execute("ALTER TABLE tenants ADD COLUMN role TEXT DEFAULT 'admin'")
+        if "session_version" not in tenant_columns:
+            db.execute(
+                "ALTER TABLE tenants ADD COLUMN session_version INTEGER NOT NULL DEFAULT 1"
+            )
+        _ensure_unique_usernames(db)
         db.execute(
             """
             CREATE TABLE IF NOT EXISTS projects (
@@ -145,10 +166,12 @@ def init_db(root: Path) -> None:
             "CREATE INDEX IF NOT EXISTS idx_projects_tenant ON projects(tenant_id, id)"
         )
         db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_scans_tenant_project ON scans(tenant_id, project_id, finished_at)"
+            "CREATE INDEX IF NOT EXISTS idx_scans_tenant_project "
+            "ON scans(tenant_id, project_id, finished_at)"
         )
         db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_findings_tenant_project ON findings(tenant_id, project_id, status, created_at)"
+            "CREATE INDEX IF NOT EXISTS idx_findings_tenant_project "
+            "ON findings(tenant_id, project_id, status, created_at)"
         )
         db.execute("CREATE TABLE IF NOT EXISTS _meta (key TEXT PRIMARY KEY, value TEXT)")
         db.execute(
@@ -230,12 +253,7 @@ def create_tenant(
     role: str = "admin",
     provisioning_token: str = "",
 ) -> dict[str, Any]:
-    """Create one tenant under the deployment provisioning policy.
-
-    The first tenant account is always assigned the server-defined ``admin``
-    role. Caller-supplied role text is ignored so public registration cannot
-    self-assign an arbitrary authorization role.
-    """
+    """Create one tenant under the deployment provisioning policy."""
 
     del role
     try:
@@ -254,16 +272,11 @@ def create_tenant(
         allowed, reason = _tenant_provisioning_allowed(db, provisioning_token)
         if not allowed:
             return {"ok": False, "error": reason}
-        duplicate_username = db.execute(
-            "SELECT id FROM tenants WHERE username = ?",
-            (account_name,),
-        ).fetchone()
-        if duplicate_username:
-            return {"ok": False, "error": "USERNAME_EXISTS"}
         try:
             db.execute(
-                "INSERT INTO tenants (id, name, api_key_hash, username, password_hash, role) "
-                "VALUES (?, ?, ?, ?, ?, 'admin')",
+                "INSERT INTO tenants "
+                "(id, name, api_key_hash, username, password_hash, role, session_version) "
+                "VALUES (?, ?, ?, ?, ?, 'admin', 1)",
                 (
                     tenant,
                     display_name,
@@ -272,8 +285,12 @@ def create_tenant(
                     _password_hash(secret),
                 ),
             )
-        except sqlite3.IntegrityError:
-            return {"ok": False, "error": "TENANT_EXISTS"}
+        except sqlite3.IntegrityError as exc:
+            message = str(exc).lower()
+            return {
+                "ok": False,
+                "error": "USERNAME_EXISTS" if "username" in message else "TENANT_EXISTS",
+            }
     return {
         "ok": True,
         "tenant_id": tenant,
@@ -281,6 +298,7 @@ def create_tenant(
         "name": display_name,
         "username": account_name,
         "role": "admin",
+        "session_version": 1,
     }
 
 
@@ -295,14 +313,16 @@ def authenticate_tenant(
         row = None
         if password:
             candidate = db.execute(
-                "SELECT id, username, role, password_hash FROM tenants WHERE username = ?",
+                "SELECT id, username, role, password_hash, session_version "
+                "FROM tenants WHERE username = ?",
                 (identity,),
             ).fetchone()
             if candidate and _verify_password(password, candidate["password_hash"] or ""):
                 row = candidate
         else:
             row = db.execute(
-                "SELECT id, username, role FROM tenants WHERE api_key_hash = ?",
+                "SELECT id, username, role, session_version FROM tenants "
+                "WHERE api_key_hash = ?",
                 (hashlib.sha256(identity.encode()).hexdigest(),),
             ).fetchone()
         if not row:
@@ -311,7 +331,43 @@ def authenticate_tenant(
             "tenant_id": row["id"],
             "username": row["username"] or row["id"],
             "role": row["role"] or "viewer",
+            "session_version": int(row["session_version"] or 1),
         }
+
+
+def get_tenant_auth_state(root: Path, tenant_id: str) -> dict[str, Any] | None:
+    init_db(root)
+    with _conn(root) as db:
+        row = db.execute(
+            "SELECT id, username, role, session_version FROM tenants WHERE id = ?",
+            (tenant_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "tenant_id": row["id"],
+            "username": row["username"] or row["id"],
+            "role": row["role"] or "viewer",
+            "session_version": int(row["session_version"] or 1),
+        }
+
+
+def revoke_tenant_sessions(root: Path, tenant_id: str) -> int:
+    """Invalidate every outstanding JWT/cookie for one tenant."""
+
+    init_db(root)
+    with _conn(root) as db:
+        cursor = db.execute(
+            "UPDATE tenants SET session_version = session_version + 1 WHERE id = ?",
+            (tenant_id,),
+        )
+        if cursor.rowcount != 1:
+            raise KeyError(f"tenant not found: {tenant_id}")
+        row = db.execute(
+            "SELECT session_version FROM tenants WHERE id = ?",
+            (tenant_id,),
+        ).fetchone()
+        return int(row["session_version"])
 
 
 def reset_tenant_password(
@@ -322,7 +378,7 @@ def reset_tenant_password(
     new_password: str,
     current_password: str = "",
 ) -> dict[str, Any]:
-    """Change a password only after verifying the current password."""
+    """Change a password and revoke JWT, cookie and API-key sessions."""
 
     tid = str(tenant_id or "").strip()
     user = str(username or "").strip()
@@ -337,16 +393,37 @@ def reset_tenant_password(
     init_db(root)
     with _conn(root) as db:
         row = db.execute(
-            "SELECT id, username, password_hash FROM tenants WHERE id = ? AND username = ?",
+            "SELECT id, username, password_hash FROM tenants "
+            "WHERE id = ? AND username = ?",
             (tid, user),
         ).fetchone()
         if not row or not _verify_password(current, row["password_hash"] or ""):
             return {"ok": False, "error": "RESET_DENIED"}
+        revoked_api_key_hash = hashlib.sha256(
+            f"revoked:{tid}:{secrets.token_hex(32)}".encode()
+        ).hexdigest()
         db.execute(
-            "UPDATE tenants SET password_hash = ? WHERE id = ? AND username = ?",
-            (_password_hash(replacement), tid, user),
+            "UPDATE tenants SET password_hash = ?, api_key_hash = ?, "
+            "session_version = session_version + 1 "
+            "WHERE id = ? AND username = ?",
+            (
+                _password_hash(replacement),
+                revoked_api_key_hash,
+                tid,
+                user,
+            ),
         )
-    return {"ok": True, "tenant_id": tid, "username": user}
+        state = db.execute(
+            "SELECT session_version FROM tenants WHERE id = ?",
+            (tid,),
+        ).fetchone()
+    return {
+        "ok": True,
+        "tenant_id": tid,
+        "username": user,
+        "session_version": int(state["session_version"]),
+        "api_key_revoked": True,
+    }
 
 
 def verify_api_key(root: Path, api_key: str) -> str | None:
@@ -358,7 +435,7 @@ def list_tenants(root: Path) -> list[dict[str, Any]]:
     init_db(root)
     with _conn(root) as db:
         rows = db.execute(
-            "SELECT id, name, username, role, created_at, quota_scans "
+            "SELECT id, name, username, role, session_version, created_at, quota_scans "
             "FROM tenants ORDER BY created_at"
         ).fetchall()
         return [
@@ -367,6 +444,7 @@ def list_tenants(root: Path) -> list[dict[str, Any]]:
                 "name": row["name"],
                 "username": row["username"],
                 "role": row["role"] or "viewer",
+                "session_version": int(row["session_version"] or 1),
                 "created_at": row["created_at"],
                 "quota_scans": row["quota_scans"],
             }
@@ -795,11 +873,13 @@ __all__ = [
     "get_knowledge_doc_content",
     "get_knowledge_docs",
     "get_scan_history",
+    "get_tenant_auth_state",
     "init_db",
     "list_projects",
     "list_tenants",
     "merge_findings_cumulative",
     "reset_tenant_password",
+    "revoke_tenant_sessions",
     "save_knowledge_doc",
     "save_scan",
     "update_finding_status",
