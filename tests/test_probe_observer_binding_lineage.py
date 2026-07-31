@@ -35,6 +35,10 @@ def _asset(*, materialization_observer_ref: str = OBSERVER_REF) -> dict:
                             "template_kind": "SOURCE_EVENT_DELIVERY_OBSERVATION",
                             "observer_binding_ref": OBSERVER_REF,
                             "event_contract_ref": EVENT_CONTRACT_REF,
+                            "expected_event_type": "OrderCreated",
+                            "expected_min_count": 1,
+                            "expected_max_count": 1,
+                            "observation_window_ms": 3000,
                         }
                     ]
                 },
@@ -62,6 +66,10 @@ def _compiler(_asset: dict, _limit: int) -> list[dict]:
             "runtime_plan_ref": PLAN_ID,
             "runtime_materialization_ref": MATERIALIZATION_ID,
             "knowledge_lineage": {},
+            "expected": "permission=ALLOW",
+            "oracle_assertion": "permission=ALLOW",
+            "oracle_family": "business_rule_oracle",
+            "bug_signal": "generic",
             "evidence_requirements": ["runtime_plan", "runtime_materialization"],
         }
     ]
@@ -79,6 +87,22 @@ def test_formal_probe_carries_event_observer_and_contract_lineage() -> None:
         EVENT_CONTRACT_REF
     ]
     assert probe["knowledge_lineage"]["observer_identity_materialization_match"] is True
+    requirement = probe["formal_event_assertion_requirements"][0]
+    assert requirement == {
+        "observer_binding_ref": OBSERVER_REF,
+        "event_contract_ref": EVENT_CONTRACT_REF,
+        "expected_event_type": "OrderCreated",
+        "expected_min_count": 1,
+        "expected_max_count": 1,
+        "observation_window_ms": 3000,
+        "source_declared": True,
+    }
+    assert "event=OrderCreated,count=1,window_ms=3000" in probe["expected"]
+    assert "event=OrderCreated,count=1,window_ms=3000" in probe[
+        "oracle_assertion"
+    ]
+    assert probe["oracle_family"] == "event_delivery_consistency"
+    assert "事件类型" in probe["bug_signal"]
     assert "formal_event_contract" in probe["evidence_requirements"]
     assert "formal_event_observer_binding" in probe["evidence_requirements"]
     assert "event_observation_receipt" in probe["evidence_requirements"]
