@@ -93,12 +93,47 @@ def _attach_identity_audit_receipts(
         resolution.get("authority_decision_projection")
         or asset.get("enterprise_identity_authority_projection_receipt")
     )
-    model["identity_benchmark"] = as_dict(
+    benchmark = as_dict(
         resolution.get("benchmark") or asset.get("enterprise_identity_benchmark")
     )
+    model["identity_benchmark"] = benchmark
     model["identity_evidence_policy_receipt"] = as_dict(
         asset.get("identity_evidence_policy_receipt")
     )
+
+    identity_gate = as_dict(resolution.get("gate"))
+    quality_gate = as_dict(benchmark.get("quality_gate"))
+    model["identity_quality_gate"] = quality_gate
+    gate = dict(as_dict(model.get("gate")))
+    gate["identity_gate"] = identity_gate
+    gate["identity_quality_gate"] = quality_gate
+    model["gate"] = gate
+
+    measured = (
+        text(benchmark.get("status")) == "MEASURED"
+        and bool(benchmark.get("quality_claim_allowed"))
+    )
+    metrics = dict(as_dict(model.get("metrics")))
+    metrics.update(
+        {
+            "enterprise_identity_measurement_status": benchmark.get("status")
+            or "NOT_MEASURED",
+            "enterprise_identity_is_measured_precision_recall": measured,
+            "enterprise_identity_quality_gate_status": quality_gate.get("status")
+            or "NOT_CONFIGURED",
+            "enterprise_identity_quality_gate_enforced": bool(
+                quality_gate.get("enforced")
+            ),
+        }
+    )
+    if measured:
+        metrics.update(
+            {
+                f"enterprise_identity_{key}": value
+                for key, value in as_dict(benchmark.get("metrics")).items()
+            }
+        )
+    model["metrics"] = metrics
     return model
 
 
