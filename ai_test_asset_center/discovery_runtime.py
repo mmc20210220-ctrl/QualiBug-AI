@@ -41,10 +41,14 @@ from .discovery_runtime_semantic_binding import (  # noqa: E402,F401
 from .formal_event_binding_receipt_bridge import (  # noqa: E402
     install_formal_event_binding_receipt_bridge,
 )
+from .formal_event_verdict_reason_bridge import (  # noqa: E402
+    install_formal_event_verdict_reason_bridge,
+)
 
-# The semantic-binding import registers the event observer and pre-cleanup wrapper first.
-# Identity is attached afterwards to the current registered handler, preserving that order.
+# Semantic binding registers the event observer, assertion and pre-cleanup wrapper first.
+# These additive bridges then wrap the current registered authorities in that exact order.
 install_formal_event_binding_receipt_bridge()
+install_formal_event_verdict_reason_bridge()
 
 from .discovery_runtime_quality_projection import (  # noqa: E402,F401
     run_experiment_candidate,
