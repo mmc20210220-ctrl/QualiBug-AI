@@ -38,9 +38,6 @@ from .discovery_runtime_planning import (  # noqa: E402,F401
 from .discovery_runtime_semantic_binding import (  # noqa: E402,F401
     build_discovery_plan,
 )
-from .formal_event_execution_preflight import (  # noqa: E402
-    install_formal_event_execution_preflight,
-)
 from .formal_event_execution_outcome_bridge import (  # noqa: E402
     install_formal_event_execution_outcome_bridge,
 )
@@ -55,11 +52,11 @@ from .formal_event_verdict_reason_bridge import (  # noqa: E402
 )
 
 # Semantic binding registers the event observer, assertion and pre-cleanup wrapper first.
-# Execution preflight recognizes that exact registered observer as Event Contract evidence.
+# Write-state observation remains governed by the existing HTTP/DB authority; the Event
+# observer is an additional effect assertion, never a substitute for cleanup equivalence.
 # Receipt wrappers preserve durable identity and privacy-safe total cardinality; the verdict
 # wrapper explains violations, and the outcome wrapper keeps a measured timeout EXECUTED
 # without promoting it to a Bug.
-install_formal_event_execution_preflight()
 install_formal_event_binding_receipt_bridge()
 install_formal_event_observation_count_bridge()
 install_formal_event_verdict_reason_bridge()
