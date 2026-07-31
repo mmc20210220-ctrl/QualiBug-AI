@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .._common import ROOT, _safe_project_id
+from ..transaction_lock import knowledge_transaction
 from .identity_benchmark import (
     ANNOTATION_SCOPE,
     GROUND_TRUTH_SCHEMA,
@@ -60,6 +61,11 @@ def _asset(project: str, root: Path, *, rebuild: bool = False) -> dict[str, Any]
     asset = build(project, root) if rebuild else load(project, root)
     if not isinstance(asset, dict):
         asset = build(project, root)
+    if isinstance(asset, dict) and not rebuild:
+        manifest = as_dict(asset.get("enterprise_identity_annotation_manifest"))
+        resolution = as_dict(asset.get("enterprise_identity_resolution"))
+        if not text(manifest.get("manifest_id")) or not resolution:
+            asset = build(project, root)
     if not isinstance(asset, dict):
         raise RuntimeError("enterprise_identity_benchmark_asset_unavailable")
     return asset
@@ -124,6 +130,7 @@ def get_identity_benchmark_workspace(
             "ground_truth_requires_current_manifest": True,
             "ground_truth_is_closed_world": True,
             "rebuild_is_transactional": True,
+            "knowledge_transaction_lease_reused": True,
             "product_output_may_be_ground_truth": False,
         },
     }
@@ -156,72 +163,78 @@ def import_identity_ground_truth(
     if bool(payload.get("ground_truth_generated_from_product_output")):
         raise ValueError("product_output_cannot_be_identity_ground_truth")
 
-    current_asset = _asset(project, resolved_root)
-    manifest = _current_manifest(current_asset)
-    supplied_manifest_id = text(
-        manifest_id
-        or payload.get("manifest_id")
-        or payload.get("annotation_manifest_id")
-    )
-    current_manifest_id = text(manifest.get("manifest_id"))
-    if not supplied_manifest_id:
-        raise ValueError("identity_ground_truth_manifest_id_required")
-    if supplied_manifest_id != current_manifest_id:
-        raise ValueError("identity_ground_truth_manifest_stale")
-    payload["manifest_id"] = current_manifest_id
-
-    resolution = as_dict(current_asset.get("enterprise_identity_resolution"))
-    if not resolution:
-        raise ValueError("enterprise_identity_resolution_unavailable")
-    quality_policy = load_identity_quality_policy(project, resolved_root)
-    preflight = evaluate_identity_resolution(
-        resolution,
-        payload,
-        quality_policy=quality_policy,
-    )
-    if text(preflight.get("status")) != "MEASURED":
-        raise ValueError(
-            text(preflight.get("reason_code"))
-            or "identity_ground_truth_not_measurable"
+    with knowledge_transaction(
+        resolved_root,
+        project,
+        operation="import_identity_ground_truth",
+        actor=operator,
+    ):
+        current_asset = _asset(project, resolved_root)
+        manifest = _current_manifest(current_asset)
+        supplied_manifest_id = text(
+            manifest_id
+            or payload.get("manifest_id")
+            or payload.get("annotation_manifest_id")
         )
+        current_manifest_id = text(manifest.get("manifest_id"))
+        if not supplied_manifest_id:
+            raise ValueError("identity_ground_truth_manifest_id_required")
+        if supplied_manifest_id != current_manifest_id:
+            raise ValueError("identity_ground_truth_manifest_stale")
+        payload["manifest_id"] = current_manifest_id
 
-    path = identity_benchmark_paths(project, resolved_root)["ground_truth"]
-    previous = snapshot_identity_benchmark_file(path)
-    fingerprint = payload_fingerprint(payload)
-    save_identity_ground_truth(project, payload, resolved_root)
-    try:
-        fresh_asset = _asset(project, resolved_root, rebuild=rebuild)
-        benchmark = as_dict(fresh_asset.get("enterprise_identity_benchmark"))
-        if text(benchmark.get("status")) != "MEASURED":
-            raise RuntimeError("identity_ground_truth_rebuild_not_measured")
-    except Exception as exc:
-        restore_identity_benchmark_file(path, previous)
+        resolution = as_dict(current_asset.get("enterprise_identity_resolution"))
+        if not resolution:
+            raise ValueError("enterprise_identity_resolution_unavailable")
+        quality_policy = load_identity_quality_policy(project, resolved_root)
+        preflight = evaluate_identity_resolution(
+            resolution,
+            payload,
+            quality_policy=quality_policy,
+        )
+        if text(preflight.get("status")) != "MEASURED":
+            raise ValueError(
+                text(preflight.get("reason_code"))
+                or "identity_ground_truth_not_measurable"
+            )
+
+        path = identity_benchmark_paths(project, resolved_root)["ground_truth"]
+        previous = snapshot_identity_benchmark_file(path)
+        fingerprint = payload_fingerprint(payload)
+        save_identity_ground_truth(project, payload, resolved_root)
+        try:
+            fresh_asset = _asset(project, resolved_root, rebuild=rebuild)
+            benchmark = as_dict(fresh_asset.get("enterprise_identity_benchmark"))
+            if text(benchmark.get("status")) != "MEASURED":
+                raise RuntimeError("identity_ground_truth_rebuild_not_measured")
+        except Exception as exc:
+            restore_identity_benchmark_file(path, previous)
+            append_identity_benchmark_audit(
+                project,
+                {
+                    "event": "identity_ground_truth_import_rolled_back",
+                    "actor": operator,
+                    "manifest_id": current_manifest_id,
+                    "payload_fingerprint": fingerprint,
+                    "error_type": type(exc).__name__,
+                },
+                resolved_root,
+            )
+            raise
+
         append_identity_benchmark_audit(
             project,
             {
-                "event": "identity_ground_truth_import_rolled_back",
+                "event": "identity_ground_truth_imported",
                 "actor": operator,
                 "manifest_id": current_manifest_id,
                 "payload_fingerprint": fingerprint,
-                "error_type": type(exc).__name__,
+                "benchmark_id": benchmark.get("benchmark_id"),
+                "benchmark_status": benchmark.get("status"),
+                "quality_gate_status": as_dict(benchmark.get("quality_gate")).get("status"),
             },
             resolved_root,
         )
-        raise
-
-    append_identity_benchmark_audit(
-        project,
-        {
-            "event": "identity_ground_truth_imported",
-            "actor": operator,
-            "manifest_id": current_manifest_id,
-            "payload_fingerprint": fingerprint,
-            "benchmark_id": benchmark.get("benchmark_id"),
-            "benchmark_status": benchmark.get("status"),
-            "quality_gate_status": as_dict(benchmark.get("quality_gate")).get("status"),
-        },
-        resolved_root,
-    )
     return get_identity_benchmark_workspace(project, resolved_root)
 
 
@@ -257,40 +270,46 @@ def update_identity_quality_policy(
     if text(validation_gate.get("status")) == "INVALID_IDENTITY_QUALITY_POLICY":
         raise ValueError("identity_quality_policy_invalid")
 
-    path = identity_benchmark_paths(project, resolved_root)["quality_policy"]
-    previous = snapshot_identity_benchmark_file(path)
-    fingerprint = payload_fingerprint(payload)
-    save_identity_quality_policy(project, payload, resolved_root)
-    try:
-        _asset(project, resolved_root, rebuild=rebuild)
-    except Exception as exc:
-        restore_identity_benchmark_file(path, previous)
+    with knowledge_transaction(
+        resolved_root,
+        project,
+        operation="update_identity_quality_policy",
+        actor=operator,
+    ):
+        path = identity_benchmark_paths(project, resolved_root)["quality_policy"]
+        previous = snapshot_identity_benchmark_file(path)
+        fingerprint = payload_fingerprint(payload)
+        save_identity_quality_policy(project, payload, resolved_root)
+        try:
+            _asset(project, resolved_root, rebuild=rebuild)
+        except Exception as exc:
+            restore_identity_benchmark_file(path, previous)
+            append_identity_benchmark_audit(
+                project,
+                {
+                    "event": "identity_quality_policy_update_rolled_back",
+                    "actor": operator,
+                    "payload_fingerprint": fingerprint,
+                    "error_type": type(exc).__name__,
+                },
+                resolved_root,
+            )
+            raise
+
+        workspace = get_identity_benchmark_workspace(project, resolved_root)
         append_identity_benchmark_audit(
             project,
             {
-                "event": "identity_quality_policy_update_rolled_back",
+                "event": "identity_quality_policy_updated",
                 "actor": operator,
                 "payload_fingerprint": fingerprint,
-                "error_type": type(exc).__name__,
+                "quality_gate_status": as_dict(
+                    workspace.get("identity_quality_gate")
+                ).get("status"),
+                "enforced": bool(payload.get("enforce")),
             },
             resolved_root,
         )
-        raise
-
-    workspace = get_identity_benchmark_workspace(project, resolved_root)
-    append_identity_benchmark_audit(
-        project,
-        {
-            "event": "identity_quality_policy_updated",
-            "actor": operator,
-            "payload_fingerprint": fingerprint,
-            "quality_gate_status": as_dict(
-                workspace.get("identity_quality_gate")
-            ).get("status"),
-            "enforced": bool(payload.get("enforce")),
-        },
-        resolved_root,
-    )
     return get_identity_benchmark_workspace(project, resolved_root)
 
 
