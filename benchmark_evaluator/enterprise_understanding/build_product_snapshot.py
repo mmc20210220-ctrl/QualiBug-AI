@@ -29,6 +29,20 @@ def _git_blob_sha(data: bytes) -> str:
     return hashlib.sha1(header + data).hexdigest()
 
 
+def _portable_source_ref(value: Any) -> str:
+    """Return one workspace-independent source reference from the public manifest."""
+    reference = str(value or "").replace("\\", "/").strip()
+    if not reference:
+        raise ProductPhaseError("source_manifest_path_empty")
+    path = Path(reference)
+    if path.is_absolute() or reference.startswith("/"):
+        raise ProductPhaseError(f"source_manifest_path_not_portable:{reference}")
+    parts = [part for part in reference.split("/") if part]
+    if not parts or any(part in {".", ".."} for part in parts):
+        raise ProductPhaseError(f"source_manifest_path_not_portable:{reference}")
+    return "/".join(parts)
+
+
 def _load_manifest(path: Path) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -50,53 +64,69 @@ def _load_manifest(path: Path) -> dict[str, Any]:
 
 def _resolve_sources(
     manifest: dict[str, Any], product_root: Path
-) -> tuple[list[Path], dict[str, str], list[dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Resolve public sources into canonical ingestion envelopes.
+
+    ``external_ref`` is the stable source identity declared by the manifest. The absolute
+    workspace path is transport-only and is never persisted as enterprise source identity.
+    """
     excluded = {
-        str(value or "").replace("\\", "/").strip()
+        _portable_source_ref(value)
         for value in manifest.get("excluded_from_product_phase") or []
         if str(value or "").strip()
     }
-    paths: list[Path] = []
-    hints: dict[str, str] = {}
+    documents: list[dict[str, Any]] = []
     receipts: list[dict[str, Any]] = []
-    seen: set[Path] = set()
+    seen_paths: set[Path] = set()
+    seen_refs: set[str] = set()
     for index, raw in enumerate(manifest.get("sources") or []):
         if not isinstance(raw, dict):
             raise ProductPhaseError(f"source_manifest_entry_not_object:{index}")
-        relative = str(raw.get("path") or "").replace("\\", "/").strip()
+        source_ref = _portable_source_ref(raw.get("path"))
         source_type = str(raw.get("source_type") or "").strip()
         expected_sha = str(raw.get("blob_sha") or "").strip()
-        if not relative or not source_type or not expected_sha:
+        if not source_type or not expected_sha:
             raise ProductPhaseError(f"source_manifest_entry_incomplete:{index}")
-        if relative in excluded or "ground_truth" in relative.lower():
-            raise ProductPhaseError(f"ground_truth_path_in_product_sources:{relative}")
-        resolved = (product_root / relative).resolve()
+        if source_ref in excluded or "ground_truth" in source_ref.lower():
+            raise ProductPhaseError(f"ground_truth_path_in_product_sources:{source_ref}")
+        resolved = (product_root / source_ref).resolve()
         try:
             resolved.relative_to(product_root)
         except ValueError as exc:
-            raise ProductPhaseError(f"source_outside_product_root:{relative}") from exc
-        if resolved in seen:
-            raise ProductPhaseError(f"duplicate_source_path:{relative}")
+            raise ProductPhaseError(f"source_outside_product_root:{source_ref}") from exc
+        if resolved in seen_paths or source_ref in seen_refs:
+            raise ProductPhaseError(f"duplicate_source_path:{source_ref}")
         if not resolved.is_file():
-            raise ProductPhaseError(f"source_file_missing:{relative}")
+            raise ProductPhaseError(f"source_file_missing:{source_ref}")
         data = resolved.read_bytes()
         actual_sha = _git_blob_sha(data)
         if actual_sha != expected_sha:
             raise ProductPhaseError(
-                f"source_blob_sha_mismatch:{relative}:expected={expected_sha}:actual={actual_sha}"
+                f"source_blob_sha_mismatch:{source_ref}:expected={expected_sha}:actual={actual_sha}"
             )
-        seen.add(resolved)
-        paths.append(resolved)
-        hints[str(resolved)] = source_type
+        seen_paths.add(resolved)
+        seen_refs.add(source_ref)
+        documents.append(
+            {
+                "file_path": str(resolved),
+                "filename": resolved.name,
+                "source_type": source_type,
+                "external_ref": source_ref,
+                "tags": ["source-backed-benchmark"],
+            }
+        )
         receipts.append(
             {
-                "path": relative,
+                "path": source_ref,
+                "source_ref": source_ref,
                 "source_type": source_type,
                 "blob_sha": actual_sha,
                 "size": len(data),
+                "source_identity_authority": "SOURCE_MANIFEST_EXTERNAL_REF",
+                "absolute_workspace_path_persisted_as_identity": False,
             }
         )
-    return paths, hints, receipts
+    return documents, receipts
 
 
 def _assert_clean_project_workspace(workspace_root: Path, project_id: str) -> None:
@@ -114,13 +144,13 @@ def _assert_clean_project_workspace(workspace_root: Path, project_id: str) -> No
 def _default_product_authorities():
     # Delayed imports are deliberate: importing evaluator modules does not load product runtime.
     from ai_test_asset_center.enterprise_knowledge_center._crud import (
-        ingest_enterprise_knowledge_files,
+        ingest_enterprise_knowledge_documents,
     )
     from ai_test_asset_center.enterprise_knowledge_center.composition import (
         build_enterprise_business_knowledge_asset,
     )
 
-    return ingest_enterprise_knowledge_files, build_enterprise_business_knowledge_asset
+    return ingest_enterprise_knowledge_documents, build_enterprise_business_knowledge_asset
 
 
 def build_isolated_product_snapshot(
@@ -151,22 +181,44 @@ def build_isolated_product_snapshot(
         raise ProductPhaseError(
             f"source_manifest_project_mismatch:{manifest_project}:{project}"
         )
-    source_paths, source_type_hints, source_receipts = _resolve_sources(
-        manifest, product
-    )
+    source_documents, source_receipts = _resolve_sources(manifest, product)
     ingest, build = authorities or _default_product_authorities()
     ingest_receipt = ingest(
         project,
-        source_paths,
+        source_documents,
         root=workspace,
         actor={"name": "enterprise_understanding_evaluator", "role": "project_owner"},
-        source_type_hints=source_type_hints,
     )
     if not isinstance(ingest_receipt, dict) or not bool(ingest_receipt.get("ok")):
         raise ProductPhaseError(
             "public_source_ingest_failed:"
             + json.dumps(ingest_receipt, ensure_ascii=False, sort_keys=True, default=str)[:1000]
         )
+    created = [
+        dict(row)
+        for row in ingest_receipt.get("created") or []
+        if isinstance(row, dict)
+    ]
+    source_ref_by_id = {
+        str(row.get("source_id") or ""): str(row.get("external_ref") or "")
+        for row in created
+        if str(row.get("source_id") or "")
+    }
+    expected_refs = {row["source_ref"] for row in source_receipts}
+    persisted_refs = {value for value in source_ref_by_id.values() if value}
+    if persisted_refs != expected_refs:
+        raise ProductPhaseError(
+            "source_manifest_external_ref_not_preserved:"
+            + json.dumps(
+                {
+                    "expected": sorted(expected_refs),
+                    "persisted": sorted(persisted_refs),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+
     asset = build(project, workspace, {"probe_limit": 0})
     if not isinstance(asset, dict) or not isinstance(
         asset.get("enterprise_understanding_model"), dict
@@ -184,7 +236,11 @@ def build_isolated_product_snapshot(
         "source_manifest_path": str(manifest_file),
         "source_manifest_fingerprint": _fingerprint(manifest),
         "source_receipts": source_receipts,
-        "ingest_created_count": len(ingest_receipt.get("created") or []),
+        "source_ref_by_source_id": source_ref_by_id,
+        "source_identity_authority": "SOURCE_INVENTORY_EXTERNAL_REF",
+        "source_manifest_external_refs_preserved": True,
+        "absolute_workspace_paths_persisted_as_identity": False,
+        "ingest_created_count": len(created),
         "ingest_duplicate_count": len(ingest_receipt.get("duplicates") or []),
         "composition_authority": (
             "ai_test_asset_center.enterprise_knowledge_center.composition."
