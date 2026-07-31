@@ -17,6 +17,9 @@ from benchmark_evaluator.enterprise_understanding.run_source_backed_workflow imp
 )
 
 
+SOURCE_REF = "docs/BUSINESS_RULES.md"
+
+
 def _write_manifest(root: Path, source_path: str, source_type: str = "business_rules") -> Path:
     source = root / source_path
     data = source.read_bytes()
@@ -37,26 +40,45 @@ def _write_manifest(root: Path, source_path: str, source_type: str = "business_r
     return path
 
 
+def _valid_product_phase_receipt() -> dict:
+    return {
+        "status": "PASS",
+        "receipt_fingerprint": "product:fingerprint",
+        "source_manifest_external_refs_preserved": True,
+        "source_identity_authority": "SOURCE_INVENTORY_EXTERNAL_REF",
+        "source_ref_by_source_id": {"source:rules": SOURCE_REF},
+        "absolute_workspace_paths_persisted_as_identity": False,
+    }
+
+
 def test_product_phase_reuses_existing_ingest_and_composition_authorities(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     product_root = tmp_path / "product"
     workspace_root = tmp_path / "workspace"
-    source = product_root / "docs" / "BUSINESS_RULES.md"
+    source = product_root / SOURCE_REF
     source.parent.mkdir(parents=True)
     source.write_text("# 规则\n只有OPEN状态的工单可以被分配。", encoding="utf-8")
-    manifest = _write_manifest(product_root, "docs/BUSINESS_RULES.md")
+    manifest = _write_manifest(product_root, SOURCE_REF)
     calls: dict[str, object] = {}
 
-    def ingest(project, paths, *, root, actor, source_type_hints):
+    def ingest(project, documents, *, root, actor):
         calls["ingest"] = {
             "project": project,
-            "paths": [str(path) for path in paths],
+            "documents": [dict(row) for row in documents],
             "root": root,
             "actor": actor,
-            "hints": source_type_hints,
         }
-        return {"ok": True, "created": [{"source_id": "source:rules"}], "duplicates": []}
+        return {
+            "ok": True,
+            "created": [
+                {
+                    "source_id": "source:rules",
+                    "external_ref": SOURCE_REF,
+                }
+            ],
+            "duplicates": [],
+        }
 
     def build(project, root, options):
         calls["build"] = {"project": project, "root": root, "options": options}
@@ -74,6 +96,12 @@ def test_product_phase_reuses_existing_ingest_and_composition_authorities(
             json.dumps(
                 {
                     "asset_id": "asset:ticketsla",
+                    "source_inventory": [
+                        {
+                            "source_id": "source:rules",
+                            "external_ref": SOURCE_REF,
+                        }
+                    ],
                     "enterprise_understanding_model": {
                         "model_id": "model:ticketsla",
                         "business_objects": [],
@@ -107,10 +135,15 @@ def test_product_phase_reuses_existing_ingest_and_composition_authorities(
         "options": {"probe_limit": 0},
     }
     assert calls["ingest"]["actor"]["role"] == "project_owner"  # type: ignore[index]
+    documents = calls["ingest"]["documents"]  # type: ignore[index]
+    assert documents[0]["external_ref"] == SOURCE_REF  # type: ignore[index]
+    assert documents[0]["filename"] == "BUSINESS_RULES.md"  # type: ignore[index]
     assert calls["capture"]["project_id"] == "ticketsla_d"  # type: ignore[index]
     assert receipt["composition_authority"].endswith(
         "composition.build_enterprise_business_knowledge_asset"
     )
+    assert receipt["source_ref_by_source_id"] == {"source:rules": SOURCE_REF}
+    assert receipt["source_manifest_external_refs_preserved"] is True
     assert receipt["probe_limit"] == 0
     assert receipt["ground_truth_loaded"] is False
     assert receipt["ground_truth_path_received"] is False
@@ -146,13 +179,18 @@ def test_failed_product_phase_never_parses_ground_truth(tmp_path: Path) -> None:
             {
                 "schema": "qualibug.enterprise-understanding-source-manifest.v1",
                 "project_id": "ticketsla_d",
-                "sources": [{"path": "docs/rules.md", "source_type": "business_rules", "blob_sha": "x"}],
+                "sources": [
+                    {
+                        "path": "docs/rules.md",
+                        "source_type": "business_rules",
+                        "blob_sha": "x",
+                    }
+                ],
                 "product_phase_may_load_ground_truth": False,
             }
         ),
         encoding="utf-8",
     )
-    # Intentionally invalid JSON. The workflow must not parse it after product failure.
     ground_truth = tmp_path / "ground_truth.json"
     ground_truth.write_text("not-json", encoding="utf-8")
     captured: dict[str, object] = {}
@@ -179,6 +217,7 @@ def test_failed_product_phase_never_parses_ground_truth(tmp_path: Path) -> None:
 
     assert receipt["status"] == "BLOCKED_PRODUCT_PHASE_FAILED"
     assert receipt["ground_truth_loaded_after_product_phase"] is False
+    assert receipt["source_identity_validated_before_ground_truth_load"] is False
     assert receipt["hidden_ground_truth_entered_product_runtime"] is False
     assert str(ground_truth) not in "\n".join(captured["command"])  # type: ignore[arg-type]
     assert "QUALIBUG_HIDDEN_BUG_REGISTRY" not in captured["env"]  # type: ignore[operator]
@@ -191,7 +230,9 @@ def test_failed_product_phase_never_parses_ground_truth(tmp_path: Path) -> None:
     assert not (tmp_path / "output" / "evaluation").exists()
 
 
-def test_successful_product_phase_is_scored_only_after_child_exit(tmp_path: Path) -> None:
+def test_successful_product_phase_is_scored_only_after_identity_and_child_exit(
+    tmp_path: Path,
+) -> None:
     product_root = tmp_path / "product"
     product_root.mkdir()
     manifest = product_root / "manifest.json"
@@ -200,7 +241,13 @@ def test_successful_product_phase_is_scored_only_after_child_exit(tmp_path: Path
             {
                 "schema": "qualibug.enterprise-understanding-source-manifest.v1",
                 "project_id": "ticketsla_d",
-                "sources": [{"path": "docs/rules.md", "source_type": "business_rules", "blob_sha": "x"}],
+                "sources": [
+                    {
+                        "path": SOURCE_REF,
+                        "source_type": "business_rules",
+                        "blob_sha": "x",
+                    }
+                ],
                 "product_phase_may_load_ground_truth": False,
             }
         ),
@@ -219,7 +266,7 @@ def test_successful_product_phase_is_scored_only_after_child_exit(tmp_path: Path
                         "ground_truth_id": "gt:ticket",
                         "canonical_name": "Ticket",
                         "criticality": "P0",
-                        "source_refs": ["docs/rules.md"],
+                        "source_refs": [SOURCE_REF],
                         "annotation_status": "CONFIRMED",
                     }
                 ],
@@ -239,19 +286,27 @@ def test_successful_product_phase_is_scored_only_after_child_exit(tmp_path: Path
     )
 
     def runner(command, **kwargs):
+        del kwargs
         asset_path = Path(command[command.index("--asset-output") + 1])
         product_receipt_path = Path(command[command.index("--receipt-output") + 1])
         asset_path.parent.mkdir(parents=True, exist_ok=True)
         asset_path.write_text(
             json.dumps(
                 {
+                    "source_inventory": [
+                        {
+                            "source_id": "source:rules",
+                            "external_ref": SOURCE_REF,
+                            "status": "active",
+                        }
+                    ],
                     "enterprise_understanding_model": {
                         "business_objects": [
                             {
                                 "object_id": "object:ticket",
                                 "name": "Ticket",
                                 "status": "CONFIRMED",
-                                "evidence": [{"source_id": "docs/rules.md"}],
+                                "evidence": [{"source_id": SOURCE_REF}],
                             }
                         ],
                         "actors": [],
@@ -262,13 +317,13 @@ def test_successful_product_phase_is_scored_only_after_child_exit(tmp_path: Path
                         "business_behaviors": [],
                         "unknowns": [],
                         "conflicts": [],
-                    }
+                    },
                 }
             ),
             encoding="utf-8",
         )
         product_receipt_path.write_text(
-            json.dumps({"receipt_fingerprint": "product:fingerprint"}),
+            json.dumps(_valid_product_phase_receipt()),
             encoding="utf-8",
         )
         return subprocess.CompletedProcess(command, 0, stdout="PASS", stderr="")
@@ -285,6 +340,8 @@ def test_successful_product_phase_is_scored_only_after_child_exit(tmp_path: Path
     )
 
     assert receipt["status"] == "PASS"
+    assert receipt["source_identity_validated_before_ground_truth_load"] is True
+    assert receipt["source_identity_authority"] == "SOURCE_INVENTORY_EXTERNAL_REF"
     assert receipt["ground_truth_loaded_after_product_phase"] is True
     assert receipt["product_phase_command_contains_ground_truth"] is False
     assert receipt["hidden_ground_truth_entered_product_runtime"] is False
