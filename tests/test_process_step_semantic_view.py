@@ -158,17 +158,25 @@ def test_legacy_evidence_broadcast_is_a_side_effect_free_noop() -> None:
 def test_fixtureless_ledger_normalizes_optional_identity_before_seal() -> None:
     ledger = _ledger("step_1")
     original_ledger_id = ledger.ledger_id
-    observations: dict = {}
+    observations: dict = {
+        "process_step_ledger_id": original_ledger_id,
+        "process_step_ledger_hash": "stale-before-scope",
+        "process_step_receipts": [{"receipt_id": "stale-before-scope"}],
+    }
 
     view = ProcessStepSemanticView(ledger, observations)
-    rows = view.all_rows()
 
     assert ledger.fixture_id == "NOT_APPLICABLE"
     assert ledger.ledger_id != original_ledger_id
+    assert observations["process_step_ledger_id"] == ledger.ledger_id
+    assert "process_step_ledger_hash" not in observations
+    assert "process_step_receipts" not in observations
+
+    rows = view.all_rows()
+
     assert rows[0]["fixture_id"] == "NOT_APPLICABLE"
     assert rows[0]["process_step_ledger_id"] == ledger.ledger_id
     assert rows[0]["process_step_ledger_hash"] == ledger.compute_hash()
-    assert observations["process_step_ledger_id"] == ledger.ledger_id
     assert observations["process_step_ledger_hash"] == ledger.compute_hash()
 
 
