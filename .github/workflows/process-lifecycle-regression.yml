@@ -51,6 +51,7 @@ on:
       - "tests/test_flow_data_materialization.py"
       - "tests/test_flow_data_materializer_projection.py"
       - "tests/test_process_graph_wait_contract.py"
+      - "tests/test_wait_flow_data_requirement.py"
       - "tests/test_experiment_cleanup_lifecycle_adapter.py"
       - "tests/test_multi_write_cleanup_coverage.py"
       - "tests/test_async_readback_executor.py"
@@ -126,6 +127,7 @@ jobs:
             tests/test_flow_data_materialization.py \
             tests/test_flow_data_materializer_projection.py \
             tests/test_process_graph_wait_contract.py \
+            tests/test_wait_flow_data_requirement.py \
             tests/test_experiment_cleanup_lifecycle_adapter.py \
             tests/test_multi_write_cleanup_coverage.py \
             tests/test_async_readback_executor.py \
