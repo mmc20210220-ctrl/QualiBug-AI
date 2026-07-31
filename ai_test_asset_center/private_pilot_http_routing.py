@@ -1,8 +1,8 @@
 """Canonical HTTP routing for the private-pilot service.
 
-Public routes are limited to health, login and governed tenant bootstrap/password
-change. Every customer-data route authenticates one principal and authorizes the
-project from the server-side tenant/project registry before dispatch.
+Browser authentication uses an HttpOnly cookie. The token is never returned to
+production JavaScript. Session status and logout are first-class authenticated
+routes, and logout revokes every outstanding JWT/cookie version for the tenant.
 """
 from __future__ import annotations
 
@@ -43,6 +43,21 @@ class HttpRoutingMixin:
     def _init_request_context(self) -> None:
         self._qualibug_req_start = time.time()
         self._qualibug_corr_id = uuid.uuid4().hex[:12]
+
+    def _cookie_flags(self, *, max_age: int | None = None) -> str:
+        flags = ["HttpOnly", "SameSite=Strict", "Path=/"]
+        if os.environ.get("QUALIBUG_ALLOW_PUBLIC_BIND") == "1":
+            flags.append("Secure")
+        if max_age is not None:
+            flags.append(f"Max-Age={max_age}")
+        return "; ".join(flags)
+
+    def _clear_session_cookie(self) -> dict[str, str]:
+        return {
+            "Set-Cookie": (
+                "qualibug_token=; " + self._cookie_flags(max_age=0)
+            )
+        }
 
     def _authority_decision_error(
         self,
@@ -200,14 +215,11 @@ class HttpRoutingMixin:
 
     def _handle_project_list(self, root: Path) -> Any:
         tenant_id = self._request_tenant()
-        items = db_persist.list_projects(root, tenant_id)
-        return self._json({"ok": True, "data": items})
+        return self._json(
+            {"ok": True, "data": db_persist.list_projects(root, tenant_id)}
+        )
 
-    def _handle_command_center(
-        self,
-        project: str,
-        root: Path,
-    ) -> Any:
+    def _handle_command_center(self, project: str, root: Path) -> Any:
         trace_id = uuid.uuid4().hex
         started = time.perf_counter()
         try:
@@ -261,6 +273,18 @@ class HttpRoutingMixin:
         actor = self._require_actor()
         if actor is None or self._require_tenant(root) is None:
             return None
+        if parsed.path == "/api/auth/session":
+            principal = self._principal()
+            return self._json(
+                {
+                    "ok": True,
+                    "authenticated": True,
+                    "tenant_id": principal["tenant_id"],
+                    "username": principal["name"],
+                    "role": principal["role"],
+                    "auth_type": principal.get("auth_type", ""),
+                }
+            )
         route_project, route_parts = self._route_project(parsed)
         if parsed.path == "/api/v1/projects":
             return self._handle_project_list(root)
@@ -299,8 +323,9 @@ class HttpRoutingMixin:
             from .enterprise_pilot_runtime import load_connector_registry
 
             registry = load_connector_registry(project, root)
-            connectors = registry.get("connectors", [])
-            return self._json({"ok": True, "connectors": connectors})
+            return self._json(
+                {"ok": True, "connectors": registry.get("connectors", [])}
+            )
         if parsed.path == "/api/control-plane/overview":
             from .enterprise_testops_control_plane import (
                 build_enterprise_testops_control_plane,
@@ -366,11 +391,12 @@ class HttpRoutingMixin:
             return self._handle_get_project_metadata(project, root)
         if parsed.path == "/api/v1/scan/preflight":
             return self._handle_scan_preflight(project, root)
-        if parsed.path in {"/api/tenants/create", "/api/auth/password/reset"}:
-            return self._json(
-                {"ok": False, "error": "METHOD_NOT_ALLOWED"},
-                405,
-            )
+        if parsed.path in {
+            "/api/tenants/create",
+            "/api/auth/password/reset",
+            "/api/auth/logout",
+        }:
+            return self._json({"ok": False, "error": "METHOD_NOT_ALLOWED"}, 405)
         return self._json({"ok": False, "error": "NOT_FOUND"}, 404)
 
     def _handle_public_auth_post(self, parsed: Any, root: Path) -> Any:
@@ -394,19 +420,21 @@ class HttpRoutingMixin:
             token = jwt_auth.create_token(
                 _text(account.get("tenant_id")),
                 _text(account.get("role")) or "viewer",
+                username=_text(account.get("username")),
+                session_version=int(account.get("session_version") or 1),
             )
-            cookie_flags = "HttpOnly; SameSite=Strict; Path=/"
-            if os.environ.get("QUALIBUG_ALLOW_PUBLIC_BIND") == "1":
-                cookie_flags += "; Secure"
             return self._json(
                 {
                     "ok": True,
-                    "token": token,
                     "tenant_id": account["tenant_id"],
+                    "username": account.get("username") or "",
                     "role": account.get("role") or "viewer",
+                    "session_transport": "httponly_cookie",
                 },
                 extra_headers={
-                    "Set-Cookie": f"qualibug_token={token}; {cookie_flags}"
+                    "Set-Cookie": (
+                        f"qualibug_token={token}; {self._cookie_flags()}"
+                    )
                 },
             )
         if parsed.path == "/api/auth/password/reset":
@@ -421,11 +449,16 @@ class HttpRoutingMixin:
             )
             if result.get("ok") is not True:
                 error = _text(result.get("error")) or "RESET_DENIED"
-                status = 400 if error in {
-                    "MISSING_FIELDS",
-                    "PASSWORD_TOO_SHORT",
-                    "RESET_AUTH_REQUIRED",
-                } else 403
+                status = (
+                    400
+                    if error
+                    in {
+                        "MISSING_FIELDS",
+                        "PASSWORD_TOO_SHORT",
+                        "RESET_AUTH_REQUIRED",
+                    }
+                    else 403
+                )
                 return self._json(
                     {
                         "ok": False,
@@ -439,7 +472,10 @@ class HttpRoutingMixin:
                     "ok": True,
                     "tenant_id": result["tenant_id"],
                     "username": result["username"],
-                }
+                    "session_revoked": True,
+                    "api_key_revoked": result.get("api_key_revoked") is True,
+                },
+                extra_headers=self._clear_session_cookie(),
             )
         if parsed.path == "/api/tenants/create":
             tenant_id = _text(body.get("tenant_id"))
@@ -465,17 +501,18 @@ class HttpRoutingMixin:
             )
             if tenant_result.get("ok") is not True:
                 error = _text(tenant_result.get("error")) or "TENANT_CREATE_FAILED"
-                status = 403 if error in {
-                    "TENANT_PROVISIONING_DISABLED",
-                    "TENANT_BOOTSTRAP_TOKEN_REQUIRED",
-                } else 409 if error in {
-                    "TENANT_EXISTS",
-                    "USERNAME_EXISTS",
-                } else 400
-                return self._json(
-                    {"ok": False, "error": error},
-                    status,
+                status = (
+                    403
+                    if error
+                    in {
+                        "TENANT_PROVISIONING_DISABLED",
+                        "TENANT_BOOTSTRAP_TOKEN_REQUIRED",
+                    }
+                    else 409
+                    if error in {"TENANT_EXISTS", "USERNAME_EXISTS"}
+                    else 400
                 )
+                return self._json({"ok": False, "error": error}, status)
             project_result = db_persist.create_project(
                 root,
                 tenant_result["tenant_id"],
@@ -484,10 +521,7 @@ class HttpRoutingMixin:
             )
             if project_result.get("ok") is not True:
                 return self._json(
-                    {
-                        "ok": False,
-                        "error": "INITIAL_PROJECT_CREATE_FAILED",
-                    },
+                    {"ok": False, "error": "INITIAL_PROJECT_CREATE_FAILED"},
                     500,
                 )
             return self._json(
@@ -515,6 +549,13 @@ class HttpRoutingMixin:
         actor = self._require_actor()
         if actor is None or self._require_tenant(root) is None:
             return None
+        if parsed.path == "/api/auth/logout":
+            tenant_id = self._request_tenant()
+            db_persist.revoke_tenant_sessions(root, tenant_id)
+            return self._json(
+                {"ok": True, "logged_out": True},
+                extra_headers=self._clear_session_cookie(),
+            )
         try:
             body = self._body()
             route_project, route_parts = self._route_project(parsed)
@@ -533,12 +574,19 @@ class HttpRoutingMixin:
                     project, root, actor, body
                 )
             if parsed.path == "/api/v1/evaluations/submissions":
-                if not self._require_role(actor, _svc().CONFIG_MANAGER_ROLES, "evaluation submission"):
+                if not self._require_role(
+                    actor,
+                    _svc().CONFIG_MANAGER_ROLES,
+                    "evaluation submission",
+                ):
                     return None
                 from .campaign_api_contract import build_evaluation_submission
 
                 return self._json(
-                    {"ok": True, "data": build_evaluation_submission(root, project, body)},
+                    {
+                        "ok": True,
+                        "data": build_evaluation_submission(root, project, body),
+                    },
                     201,
                 )
             if (
@@ -546,7 +594,11 @@ class HttpRoutingMixin:
                 and route_parts[:3] == ["api", "v1", "projects"]
                 and route_parts[4] == "campaigns"
             ):
-                if not self._require_role(actor, _svc().CONFIG_MANAGER_ROLES, "campaign creation"):
+                if not self._require_role(
+                    actor,
+                    _svc().CONFIG_MANAGER_ROLES,
+                    "campaign creation",
+                ):
                     return None
                 from .campaign_api_contract import create_campaign
 
@@ -609,7 +661,11 @@ class HttpRoutingMixin:
                     return None
                 return self._handle_delete(project, body, root, actor)
             if parsed.path == "/api/environment/config":
-                if not self._require_role(actor, _svc().CONFIG_MANAGER_ROLES, "environment configuration"):
+                if not self._require_role(
+                    actor,
+                    _svc().CONFIG_MANAGER_ROLES,
+                    "environment configuration",
+                ):
                     return None
                 from .enterprise_testops_control_plane import save_environment_config
 
@@ -626,8 +682,7 @@ class HttpRoutingMixin:
                     / "enterprise_pilot_runtime"
                     / "enterprise_pilot_center.html"
                 )
-                if dashboard.exists():
-                    dashboard.unlink()
+                dashboard.unlink(missing_ok=True)
                 return self._json(result)
             if parsed.path == "/api/v1/scan":
                 return self._handle_v12_scan(project, root, actor, body)
@@ -642,11 +697,19 @@ class HttpRoutingMixin:
             if parsed.path == "/api/v1/spectrum/status":
                 return self._get_spectrum_status(project, root)
             if parsed.path == "/api/v1/db-test":
-                if not self._require_role(actor, _svc().CONFIG_MANAGER_ROLES, "database connection test"):
+                if not self._require_role(
+                    actor,
+                    _svc().CONFIG_MANAGER_ROLES,
+                    "database connection test",
+                ):
                     return None
                 return self._handle_db_test(body)
             if parsed.path == "/api/v1/replay":
-                if not self._require_role(actor, _svc().CONFIG_MANAGER_ROLES, "finding replay"):
+                if not self._require_role(
+                    actor,
+                    _svc().CONFIG_MANAGER_ROLES,
+                    "finding replay",
+                ):
                     return None
                 return self._handle_replay(project, root, body)
             if (
@@ -655,17 +718,29 @@ class HttpRoutingMixin:
             ):
                 return self._handle_regression_run(project, root, body)
             if parsed.path == "/api/v1/services/credentials":
-                if not self._require_role(actor, _svc().CONFIG_MANAGER_ROLES, "service credential update"):
+                if not self._require_role(
+                    actor,
+                    _svc().CONFIG_MANAGER_ROLES,
+                    "service credential update",
+                ):
                     return None
                 return self._handle_save_service_credentials(project, root, body)
             if parsed.path == "/api/v1/project/metadata":
-                if not self._require_role(actor, _svc().CONFIG_MANAGER_ROLES, "project metadata update"):
+                if not self._require_role(
+                    actor,
+                    _svc().CONFIG_MANAGER_ROLES,
+                    "project metadata update",
+                ):
                     return None
                 return self._handle_save_project_metadata(project, root, body)
             if parsed.path == "/api/settings/save":
                 return self._handle_settings_save(body)
             if parsed.path == "/api/connectors/register":
-                if not self._require_role(actor, _svc().CONFIG_MANAGER_ROLES, "connector registration"):
+                if not self._require_role(
+                    actor,
+                    _svc().CONFIG_MANAGER_ROLES,
+                    "connector registration",
+                ):
                     return None
                 result = operate_enterprise_pilot_runtime(
                     project,
@@ -674,13 +749,17 @@ class HttpRoutingMixin:
                     root,
                     actor,
                 )
+                if not isinstance(result, dict) or result.get("ok") is not True:
+                    return self._json(
+                        {
+                            "ok": False,
+                            "error": "CONNECTOR_REGISTRATION_FAILED",
+                            "result": result if isinstance(result, dict) else {},
+                        },
+                        500,
+                    )
                 return self._json(
-                    {
-                        "ok": bool(result.get("ok", True))
-                        if isinstance(result, dict)
-                        else True,
-                        "message": "Connector registered.",
-                    }
+                    {"ok": True, "message": "Connector registered.", "result": result}
                 )
             return self._json({"ok": False, "error": "NOT_FOUND"}, 404)
         except CampaignContractError as exc:
