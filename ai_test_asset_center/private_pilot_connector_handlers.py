@@ -6,6 +6,7 @@ unchanged to ``HttpRoutingMixin``.
 """
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -55,6 +56,76 @@ def _connector_route(path: str) -> tuple[str, list[str]] | None:
     return parts[3], parts[5:]
 
 
+def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
+    parsed = int(value if value not in (None, "") else default)
+    if not minimum <= parsed <= maximum:
+        raise ValueError(
+            f"connector integer option must be between {minimum} and {maximum}"
+        )
+    return parsed
+
+
+def _bounded_float(
+    value: Any,
+    default: float,
+    minimum: float,
+    maximum: float,
+) -> float:
+    parsed = float(value if value not in (None, "") else default)
+    if not minimum <= parsed <= maximum:
+        raise ValueError(
+            f"connector numeric option must be between {minimum} and {maximum}"
+        )
+    return parsed
+
+
+def _connector_instance_row(
+    project: str,
+    connector: str,
+    root: Path,
+) -> dict[str, Any]:
+    payload = list_connector_instances(
+        project,
+        root=root,
+        include_disabled=True,
+    )
+    row = next(
+        (
+            dict(item)
+            for item in payload.get("connector_instances") or []
+            if isinstance(item, dict)
+            and _text(item.get("connector_instance_id"), 160) == connector
+        ),
+        None,
+    )
+    if row is None:
+        raise ConnectorSyncError("connector_instance_not_registered")
+    return row
+
+
+def _validate_checkpoint_against_registry(
+    project: str,
+    connector: str,
+    checkpoint: str,
+    root: Path,
+) -> None:
+    instance = _connector_instance_row(project, connector, root)
+    expected = _text(instance.get("last_committed_cursor_fingerprint"), 128)
+    if not expected:
+        if checkpoint:
+            raise ConnectorProfileError(
+                "connector_checkpoint_exists_without_registry_commit"
+            )
+        return
+    if not checkpoint:
+        raise ConnectorProfileError(
+            "connector_checkpoint_missing_for_registry_commit"
+        )
+    actual = hashlib.sha256(checkpoint.encode("utf-8")).hexdigest()
+    if actual != expected:
+        raise ConnectorProfileError("connector_checkpoint_registry_mismatch")
+
+
 def _profile_index(project: str, root: Path) -> dict[str, dict[str, Any]]:
     payload = list_connector_connection_profiles(project, root=root)
     return {
@@ -95,7 +166,11 @@ def _connector_inventory(project: str, root: Path) -> dict[str, Any]:
             **dict(instances.get("summary") or {}),
             "profile_count": len(profiles),
             "credentials_configured_count": sum(
-                bool(row.get("connection_profile", {}).get("credentials_configured"))
+                bool(
+                    row.get("connection_profile", {}).get(
+                        "credentials_configured"
+                    )
+                )
                 for row in rows
             ),
         },
@@ -136,6 +211,10 @@ def _error_status(exc: Exception) -> int:
             "previous_cursor_required",
             "checkpoint_integrity",
             "checkpoint_decryption",
+            "checkpoint_registry_mismatch",
+            "checkpoint_missing_for_registry_commit",
+            "checkpoint_exists_without_registry_commit",
+            "checkpoint_commit_mismatch",
             "status_change_blocked",
         )
     ):
@@ -290,7 +369,9 @@ class KnowledgeConnectorHandlersMixin:
                 connector_instance_id=connector,
                 resolve_connection_profile=resolver,
                 root=root,
-                timeout=float(body.get("timeout") or 15.0),
+                timeout=_bounded_float(
+                    body.get("timeout"), 15.0, 1.0, 60.0
+                ),
             )
             return self._json({"ok": True, "data": result})
         if action == "sync":
@@ -298,6 +379,12 @@ class KnowledgeConnectorHandlersMixin:
                 project,
                 connector,
                 root=root,
+            )
+            _validate_checkpoint_against_registry(
+                project,
+                connector,
+                previous_cursor,
+                root,
             )
             run = sync_feishu_connector(
                 project,
@@ -308,23 +395,46 @@ class KnowledgeConnectorHandlersMixin:
                 previous_cursor=previous_cursor,
                 deletion_policy=_text(body.get("deletion_policy"), 32)
                 or "RETAIN",
-                max_retire_count=int(body.get("max_retire_count") or 100),
-                max_retire_ratio=float(body.get("max_retire_ratio") or 0.25),
-                max_nodes=int(body.get("max_nodes") or 5000),
-                max_export_polls=int(body.get("max_export_polls") or 20),
-                export_poll_interval=float(
-                    body.get("export_poll_interval") or 0.5
+                max_retire_count=_bounded_int(
+                    body.get("max_retire_count"), 100, 0, 10_000
+                ),
+                max_retire_ratio=_bounded_float(
+                    body.get("max_retire_ratio"), 0.25, 0.0, 1.0
+                ),
+                max_nodes=_bounded_int(
+                    body.get("max_nodes"), 5000, 1, 100_000
+                ),
+                max_export_polls=_bounded_int(
+                    body.get("max_export_polls"), 20, 1, 120
+                ),
+                export_poll_interval=_bounded_float(
+                    body.get("export_poll_interval"), 0.5, 0.0, 5.0
                 ),
                 allow_raw_text_fallback=bool(
                     body.get("allow_raw_text_fallback") is True
                 ),
-                timeout=float(body.get("timeout") or 15.0),
+                timeout=_bounded_float(
+                    body.get("timeout"), 15.0, 1.0, 60.0
+                ),
             )
             if run.get("status") == "COMPLETE":
                 checkpoint = _text(run.get("next_cursor"), 500)
                 if not checkpoint:
                     raise ConnectorProfileError(
                         "connector_sync_checkpoint_missing_after_complete_run"
+                    )
+                checkpoint_fingerprint = hashlib.sha256(
+                    checkpoint.encode("utf-8")
+                ).hexdigest()
+                committed_fingerprint = _text(
+                    run.get("committed_cursor_fingerprint"), 128
+                )
+                if (
+                    committed_fingerprint
+                    and committed_fingerprint != checkpoint_fingerprint
+                ):
+                    raise ConnectorProfileError(
+                        "connector_sync_checkpoint_commit_mismatch"
                     )
                 commit_connector_sync_checkpoint(
                     project,
@@ -366,7 +476,9 @@ class KnowledgeConnectorHandlersMixin:
         try:
             project = _safe_project_id(route[0])
         except ValueError:
-            return self._json({"ok": False, "error": "PROJECT_NOT_FOUND"}, 404)
+            return self._json(
+                {"ok": False, "error": "PROJECT_NOT_FOUND"}, 404
+            )
         if not self._require_project_scope(project):
             return None
         return self._handle_knowledge_connector_get(project, route[1], root)
@@ -384,10 +496,14 @@ class KnowledgeConnectorHandlersMixin:
         try:
             project = _safe_project_id(route[0])
         except ValueError:
-            return self._json({"ok": False, "error": "PROJECT_NOT_FOUND"}, 404)
+            return self._json(
+                {"ok": False, "error": "PROJECT_NOT_FOUND"}, 404
+            )
         if not self._require_project_scope(project):
             return None
-        if not self._require_connector_manager(actor, "knowledge connector operation"):
+        if not self._require_connector_manager(
+            actor, "knowledge connector operation"
+        ):
             return None
         try:
             body = self._body()
