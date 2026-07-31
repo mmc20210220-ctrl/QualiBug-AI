@@ -1,0 +1,169 @@
+
+# Backward-compatible ingress migration: legacy Behavior IR is projected once into
+# the canonical authority, so downstream never maintains two semantic interpreters.
+replace_once(
+    behavior_path,
+    '\n\ndef _outcome_type_for_data_effect(row: dict[str, Any]) -> str:\n',
+    '\n\ndef operation_clause_for_behavior(behavior: dict[str, Any]) -> dict[str, Any]:\n'
+    '    clause = as_dict(behavior.get("operation_clause"))\n'
+    '    if clause:\n'
+    '        return clause\n'
+    '    clause = build_operation_clause(\n'
+    '        operation=text(behavior.get("operation_ref")),\n'
+    '        actors=as_list(behavior.get("actor_refs")),\n'
+    '        objects=as_list(behavior.get("object_refs")),\n'
+    '        source_refs=as_list(behavior.get("source_refs")),\n'
+    '        evidence=[row for row in as_list(behavior.get("evidence")) if isinstance(row, dict)],\n'
+    '    )\n'
+    '    behavior["operation_clause"] = clause\n'
+    '    return clause\n'
+    '\n\ndef _outcome_type_for_data_effect(row: dict[str, Any]) -> str:\n',
+)
+replace_once(
+    behavior_path,
+    '\n\ndef iter_mandatory_outcomes(outcomes: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:\n',
+    '\n\ndef outcome_contracts_for_behavior(behavior: dict[str, Any]) -> list[dict[str, Any]]:\n'
+    '    existing = [\n'
+    '        dict(row)\n'
+    '        for row in as_list(behavior.get("outcome_contracts"))\n'
+    '        if isinstance(row, dict)\n'
+    '    ]\n'
+    '    if existing:\n'
+    '        return existing\n'
+    '    clause = operation_clause_for_behavior(behavior)\n'
+    '    legacy_fact = {\n'
+    '        "fact_id": behavior.get("behavior_id"),\n'
+    '        "state_effects": as_list(behavior.get("state_effects")),\n'
+    '        "data_effects": as_list(behavior.get("data_effects")),\n'
+    '        "postconditions": as_list(behavior.get("expected_effects")),\n'
+    '        "compensations": as_list(behavior.get("compensations")),\n'
+    '    }\n'
+    '    outcomes = build_outcome_contracts(\n'
+    '        legacy_fact,\n'
+    '        operation=text(clause.get("operation_ref")),\n'
+    '        objects=as_list(behavior.get("object_refs")),\n'
+    '        permission=text(behavior.get("permission_decision")),\n'
+    '        evidence=[row for row in as_list(behavior.get("evidence")) if isinstance(row, dict)],\n'
+    '    )\n'
+    '    behavior["outcome_contracts"] = outcomes\n'
+    '    behavior["expected_effects"] = project_outcome_effects(outcomes)\n'
+    '    return outcomes\n'
+    '\n\ndef iter_mandatory_outcomes(outcomes: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:\n',
+)
+replace_once(
+    behavior_path,
+    '    "build_operation_clause",\n',
+    '    "build_operation_clause",\n    "operation_clause_for_behavior",\n',
+)
+replace_once(
+    behavior_path,
+    '    "build_outcome_contracts",\n',
+    '    "build_outcome_contracts",\n    "outcome_contracts_for_behavior",\n',
+)
+
+# Use ingress migration in every formal consumer.
+for path in (governance_path, gate_path, binding_path):
+    content = read(path)
+    if 'outcome_contracts_for_behavior' not in content.split(')\n', 1)[0]:
+        # imports are patched explicitly below where needed
+        pass
+
+replace_once(
+    governance_path,
+    '    outcome_contracts_complete,\n    outcome_contracts_signature,\n',
+    '    outcome_contracts_complete,\n    outcome_contracts_for_behavior,\n    outcome_contracts_signature,\n',
+)
+governance_content = read(governance_path).replace(
+    'as_list(behavior.get("outcome_contracts"))',
+    'outcome_contracts_for_behavior(behavior)',
+)
+write(governance_path, governance_content)
+
+replace_once(
+    gate_path,
+    '    outcome_contracts_complete,\n',
+    '    operation_clause_for_behavior,\n    outcome_contracts_complete,\n    outcome_contracts_for_behavior,\n',
+)
+gate_content = read(gate_path).replace(
+    'as_list(behavior.get("outcome_contracts"))',
+    'outcome_contracts_for_behavior(behavior)',
+)
+gate_content = gate_content.replace(
+    '        operation_clause = behavior.get("operation_clause")\n'
+    '        if not isinstance(operation_clause, dict) or text(operation_clause.get("status")) != "CONFIRMED":',
+    '        operation_clause = operation_clause_for_behavior(behavior)\n'
+    '        if text(operation_clause.get("status")) != "CONFIRMED":',
+)
+write(gate_path, gate_content)
+
+replace_once(
+    binding_path,
+    '    iter_mandatory_outcomes,\n    outcome_contracts_complete,\n',
+    '    iter_mandatory_outcomes,\n    outcome_contracts_complete,\n    outcome_contracts_for_behavior,\n',
+)
+binding_content = read(binding_path).replace(
+    'iter_mandatory_outcomes(as_list(behavior.get("outcome_contracts")))',
+    'iter_mandatory_outcomes(outcome_contracts_for_behavior(behavior))',
+)
+binding_content = binding_content.replace(
+    'outcome_contracts_complete(as_list(behavior.get("outcome_contracts")))',
+    'outcome_contracts_complete(outcome_contracts_for_behavior(behavior))',
+)
+binding_content = binding_content.replace(
+    '"status": "BOUND" if api_bindings else "UNBOUND",',
+    '"status": "BOUND" if any(row.get("authoritative") for row in api_bindings) else "UNBOUND",',
+)
+binding_content = binding_content.replace(
+    '"reason_code": "" if api_bindings else "IMPLEMENTATION_PERMISSION_CHANNEL_UNRESOLVED",',
+    '"reason_code": ""\n'
+    '                        if any(row.get("authoritative") for row in api_bindings)\n'
+    '                        else "IMPLEMENTATION_PERMISSION_CHANNEL_UNRESOLVED",',
+)
+write(binding_path, binding_content)
+
+# Extend the focused suite with legacy-ingress proof.
+test_content = read("tests/test_operation_condition_outcome_authority.py")
+test_content = test_content.replace(
+    '    outcome_contracts_complete,\n)',
+    '    operation_clause_for_behavior,\n'
+    '    outcome_contracts_complete,\n'
+    '    outcome_contracts_for_behavior,\n'
+    ')',
+)
+test_content += r'''
+
+
+def test_legacy_behavior_is_projected_once_at_ingress() -> None:
+    behavior = {
+        "behavior_id": "legacy:ship",
+        "source_refs": ["fact:ship"],
+        "actor_refs": ["仓管员"],
+        "operation_ref": "发货",
+        "object_refs": ["订单"],
+        "preconditions": [_slot("legacy-status", "status", "approved")],
+        "condition_combinator": "SINGLE_CONDITION",
+        "permission_decision": "ALLOW",
+        "state_effects": [],
+        "data_effects": [],
+        "expected_effects": [],
+        "compensations": [],
+        "evidence": [{"source_id": "prd", "source_locator": "prd#ship"}],
+    }
+    clause = operation_clause_for_behavior(behavior)
+    outcomes = outcome_contracts_for_behavior(behavior)
+    assert clause["operation_ref"] == "发货"
+    assert outcomes[0]["outcome_type"] == "PERMISSION_DECISION"
+    assert outcome_contracts_complete(outcomes) is True
+    assert behavior["operation_clause"] is clause
+    assert behavior["outcome_contracts"] == outcomes
+'''
+write("tests/test_operation_condition_outcome_authority.py", test_content)
+
+for path in (
+    behavior_path,
+    governance_path,
+    gate_path,
+    binding_path,
+    "tests/test_operation_condition_outcome_authority.py",
+):
+    ast.parse(read(path), filename=path)
