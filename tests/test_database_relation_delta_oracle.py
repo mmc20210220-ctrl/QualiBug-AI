@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from ai_test_asset_center.database_relation_delta_oracle import (
-    evaluate_database_relation_delta_conservation,
+from ai_test_asset_center.database_relation_delta_lineage import (
+    evaluate_database_relation_delta_with_lineage as evaluate_database_relation_delta_conservation,
 )
 
 
@@ -54,6 +54,7 @@ def _relation_phase(
     field_id: str = "field:ledger_entries:amount",
     field_name: str = "amount",
     relationship_id: str = "fk:ledger:accounts",
+    relation_pair_id: str = "relation-pair-1",
     relation_key: list[dict] | None = None,
     extra_requests: list[dict] | None = None,
 ) -> dict:
@@ -108,6 +109,7 @@ def _relation_phase(
             }
         },
         "draft_id": draft_id,
+        "relation_pair_id": relation_pair_id,
         "relation_observer_contract_ref": "relation-observer:ledger",
         "root_observer_contract_ref": "observer:accounts",
         "observation_phase": phase,
@@ -195,6 +197,7 @@ def test_root_decrease_equals_child_sum_increase_with_explicit_sign() -> None:
 
     assert result["passed"] is True
     assert result["reason_code"] == ""
+    assert result["actual"]["relation_pair_match"] is True
     assert result["actual"]["root_delta"] == "-10"
     assert result["actual"]["relation_delta"] == "10"
     assert result["actual"]["weighted_left_delta"] == "10"
@@ -281,6 +284,32 @@ def test_cross_run_or_identity_drift_is_indeterminate() -> None:
     assert result["passed"] is None
     assert result["reason_code"] == (
         "DATABASE_RELATION_DELTA_RELATION_IDENTITY_MISMATCH"
+    )
+
+
+def test_pair_lineage_must_match_both_phases_and_rule() -> None:
+    missing = _observations()
+    missing["approved_database_relation_phase_receipts"][0][
+        "relation_pair_id"
+    ] = ""
+    result = evaluate_database_relation_delta_conservation(
+        {"spec": _spec(), "observations": missing}
+    )
+    assert result["passed"] is None
+    assert result["reason_code"] == (
+        "DATABASE_RELATION_DELTA_PAIR_LINEAGE_MISSING"
+    )
+
+    mismatch = _observations()
+    mismatch["approved_database_relation_phase_receipts"][1][
+        "relation_pair_id"
+    ] = "relation-pair-other"
+    result = evaluate_database_relation_delta_conservation(
+        {"spec": _spec(), "observations": mismatch}
+    )
+    assert result["passed"] is None
+    assert result["reason_code"] == (
+        "DATABASE_RELATION_DELTA_PAIR_LINEAGE_MISMATCH"
     )
 
 
