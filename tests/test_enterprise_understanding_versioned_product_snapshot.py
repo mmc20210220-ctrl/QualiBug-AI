@@ -3,13 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import benchmark_evaluator.enterprise_understanding.build_versioned_product_snapshot as versioned_module
 from benchmark_evaluator.enterprise_understanding.build_product_snapshot import (
     SOURCE_MANIFEST_SCHEMA,
     _git_blob_sha,
     _resolve_sources,
-)
-from benchmark_evaluator.enterprise_understanding import (
-    build_versioned_product_snapshot as versioned_module,
 )
 
 
