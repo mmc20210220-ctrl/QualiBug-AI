@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getProjectMetadata, saveProjectMetadata, type ProjectMetadata } from '../../api/client';
+import { SettingsIdentityAnnotationWorkflow } from './SettingsIdentityAnnotationWorkflow';
 import { SettingsIdentityBenchmarkSection } from './SettingsIdentityBenchmarkSection';
 import { SettingsVisualBaselineContractSection } from './SettingsVisualBaselineContractSection';
 import { SettingsVisualBaselineSection } from './SettingsVisualBaselineSection';
@@ -164,6 +165,7 @@ export function SettingsMetadataSection({ project }: SettingsMetadataSectionProp
           <SettingsVisualBaselineContractSection project={project} />
         </details>
       </details>
+      <SettingsIdentityAnnotationWorkflow project={project} />
       <SettingsIdentityBenchmarkSection project={project} />
     </>
   );
