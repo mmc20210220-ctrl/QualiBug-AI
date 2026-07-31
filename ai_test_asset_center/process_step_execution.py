@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 
 STEP_EXECUTION_SCHEMA = "qualibug.process-step-execution.v1"
 PROCESS_STEP_LEDGER_SCHEMA = "qualibug.process-step-ledger.v1"
+PROCESS_STEP_RECEIPT_SCHEMA = "qualibug.process-step-receipt.v1"
+PROCESS_STEP_FACT_MODEL_VERSION = "v1.1-execution-acceptance-effect-completion"
 TIMELINE_SCHEMA = "qualibug.process-timeline.v1"
 EVIDENCE_SCHEMA = "qualibug.per-step-evidence-completeness.v1"
 COMPLETION_ORACLE_SCHEMA = "qualibug.process-completion.v1"
@@ -108,6 +110,78 @@ def _unique_texts(values: list[Any] | None) -> list[str]:
         if text and text not in out:
             out.append(text)
     return out
+
+
+def _stable_hash(value: Any) -> str:
+    canonical = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _optional_bool(value: Any) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _canonical_step_fact(row: dict[str, Any]) -> dict[str, Any]:
+    """Return every lifecycle-relevant fact in a deterministic shape."""
+    return {
+        "step_id": _text(row.get("step_id")),
+        "step_ordinal": _safe_int(row.get("step_ordinal")),
+        "phase": _text(row.get("phase")),
+        "operation_id": _text(row.get("operation_id") or row.get("operation_ref")),
+        "actor_ref": _text(row.get("actor_ref")),
+        "runtime_identity": dict(_dict(row.get("runtime_identity"))),
+        "request_receipt_id": _text(row.get("request_receipt_id")),
+        "transport_receipt_id": _text(row.get("transport_receipt_id")),
+        "response_receipt_id": _text(row.get("response_receipt_id")),
+        "before_state_receipt_id": _text(row.get("before_state_receipt_id")),
+        "after_state_receipt_id": _text(row.get("after_state_receipt_id")),
+        "scoped_observation_receipt_ids": sorted(
+            _unique_texts(list(row.get("scoped_observation_receipt_ids") or []))
+        ),
+        "scoped_oracle_receipt_ids": sorted(
+            _unique_texts(list(row.get("scoped_oracle_receipt_ids") or []))
+        ),
+        "cleanup_contract_id": _text(row.get("cleanup_contract_id")),
+        "scoped_cleanup_receipt_ids": sorted(
+            _unique_texts(list(row.get("scoped_cleanup_receipt_ids") or []))
+        ),
+        "transport_attempted": row.get("transport_attempted") is True,
+        "transport_started": row.get("transport_started"),
+        "transport_completed": row.get("transport_completed"),
+        "transport_failed": row.get("transport_failed") is True,
+        "response_received": row.get("response_received") is True,
+        "status_code": _safe_int(row.get("status_code")),
+        "final_step_status": _text(
+            row.get("final_step_status") or row.get("final_status")
+        ).upper(),
+        "operation_accepted": _optional_bool(row.get("operation_accepted")),
+        "mutation_occurred": _optional_bool(row.get("mutation_occurred")),
+        "business_effect_observed": row.get("business_effect_observed") is True,
+        "target_state_observed": row.get("target_state_observed") is True,
+        "target_reached": _optional_bool(row.get("target_reached")),
+        "semantic_verdict_receipt_id": _text(
+            row.get("semantic_verdict_receipt_id")
+        ),
+        "semantic_verdict_source": _text(
+            row.get("semantic_verdict_source")
+        ).lower(),
+        "semantic_step_status": _text(row.get("semantic_step_status")),
+        "step_completed": row.get("step_completed") is True,
+        "step_failed": row.get("step_failed") is True,
+    }
 
 
 def _operation_accepted(status_code: int, final_status: str) -> bool:
@@ -341,12 +415,7 @@ class ProcessStepLedger:
         field: str,
         receipt_id: str,
     ) -> bool:
-        """Append scalar transport/state facts; reject unscoped evidence ids.
-
-        This legacy API cannot prove that a late observation, oracle, or cleanup
-        receipt belongs to the named step. Evidence list fields therefore fail
-        closed and callers must use :meth:`append_scoped_receipt_ref`.
-        """
+        """Append scalar transport/state facts; reject unscoped evidence ids."""
         normalized_step_id = _text(step_id)
         rid = _text(receipt_id)
         row = self._rows.get(normalized_step_id)
@@ -441,11 +510,82 @@ class ProcessStepLedger:
     def get_step_row(self, step_id: str) -> dict[str, Any] | None:
         return self._rows.get(step_id)
 
-    def all_rows(self) -> list[dict[str, Any]]:
-        return list(self._rows.values())
+    def _ordered_raw_rows(self) -> list[dict[str, Any]]:
+        return sorted(
+            self._rows.values(),
+            key=lambda row: (
+                _safe_int(row.get("step_ordinal")),
+                _text(row.get("step_id")),
+            ),
+        )
 
-    def timeline(self) -> list[dict[str, Any]]:
-        return list(self._timeline_events)
+    def build_fact_snapshot(self) -> dict[str, Any]:
+        rows = [_canonical_step_fact(row) for row in self._ordered_raw_rows()]
+        rejections = sorted(
+            self.receipt_scope_rejections,
+            key=lambda row: (
+                _text(row.get("step_id")),
+                _text(row.get("field")),
+                _text(row.get("receipt_id")),
+                _text(row.get("reason_code")),
+            ),
+        )
+        return {
+            "schema_version": PROCESS_STEP_LEDGER_SCHEMA,
+            "fact_model_version": PROCESS_STEP_FACT_MODEL_VERSION,
+            "ledger_id": self.ledger_id,
+            "campaign_id": self.campaign_id,
+            "run_id": self.run_id,
+            "obligation_id": self.obligation_id,
+            "experiment_id": self.experiment_id,
+            "fixture_id": self.fixture_id,
+            "protocol_id": self.protocol_id,
+            "required_step_ids": list(self._required_step_ids),
+            "attempted_step_ids": list(self.attempted_step_ids()),
+            "executed_step_ids": list(self.executed_step_ids()),
+            "accepted_step_ids": list(self.accepted_step_ids()),
+            "completed_step_ids": list(self.completed_step_ids()),
+            "failed_step_ids": list(self.failed_step_ids()),
+            "rows": rows,
+            "receipt_scope_rejections": rejections,
+        }
+
+    def step_fact_hash(self, step_id: str) -> str:
+        row = self._rows.get(_text(step_id))
+        if row is None:
+            return ""
+        return _stable_hash(_canonical_step_fact(row))
+
+    def compute_hash(self) -> str:
+        return _stable_hash(self.build_fact_snapshot())
+
+    @property
+    def ledger_hash(self) -> str:
+        return self.compute_hash()
+
+    def all_rows(self) -> list[dict[str, Any]]:
+        """Return immutable receipt-ready snapshots bound to the current ledger."""
+        ledger_hash = self.compute_hash()
+        required = set(self._required_step_ids)
+        out: list[dict[str, Any]] = []
+        for row in self._ordered_raw_rows():
+            step_id = _text(row.get("step_id"))
+            receipt_id = "psr_" + hashlib.sha256(
+                f"{self.ledger_id}|{step_id}".encode("utf-8")
+            ).hexdigest()[:24]
+            out.append(
+                {
+                    **dict(row),
+                    "receipt_schema_version": PROCESS_STEP_RECEIPT_SCHEMA,
+                    "receipt_id": receipt_id,
+                    "process_step_ledger_id": self.ledger_id,
+                    "process_step_ledger_hash": ledger_hash,
+                    "fact_model_version": PROCESS_STEP_FACT_MODEL_VERSION,
+                    "step_fact_hash": self.step_fact_hash(step_id),
+                    "required_step": step_id in required,
+                }
+            )
+        return out
 
     def recorded_step_ids(self) -> list[str]:
         return list(self._rows.keys())
@@ -500,66 +640,11 @@ class ProcessStepLedger:
             if bool(row.get("step_failed"))
         ]
 
-    def compute_hash(self) -> str:
-        payload = {
-            "schema_version": PROCESS_STEP_LEDGER_SCHEMA,
-            "ledger_id": self.ledger_id,
-            "campaign_id": self.campaign_id,
-            "run_id": self.run_id,
-            "obligation_id": self.obligation_id,
-            "experiment_id": self.experiment_id,
-            "fixture_id": self.fixture_id,
-            "protocol_id": self.protocol_id,
-            "required_step_ids": list(self._required_step_ids),
-            "rows": [
-                {
-                    "step_id": row.get("step_id"),
-                    "step_ordinal": row.get("step_ordinal"),
-                    "phase": row.get("phase"),
-                    "operation_id": (
-                        row.get("operation_id") or row.get("operation_ref")
-                    ),
-                    "request_receipt_id": row.get("request_receipt_id"),
-                    "transport_receipt_id": row.get("transport_receipt_id"),
-                    "response_receipt_id": row.get("response_receipt_id"),
-                    "scoped_observation_receipt_ids": list(
-                        row.get("scoped_observation_receipt_ids") or []
-                    ),
-                    "scoped_oracle_receipt_ids": list(
-                        row.get("scoped_oracle_receipt_ids") or []
-                    ),
-                    "scoped_cleanup_receipt_ids": list(
-                        row.get("scoped_cleanup_receipt_ids") or []
-                    ),
-                    "final_step_status": (
-                        row.get("final_step_status") or row.get("final_status")
-                    ),
-                    "operation_accepted": bool(row.get("operation_accepted")),
-                    "target_state_observed": bool(
-                        row.get("target_state_observed")
-                    ),
-                    "target_reached": row.get("target_reached"),
-                    "semantic_step_status": row.get("semantic_step_status"),
-                }
-                for row in self.all_rows()
-            ],
-            "receipt_scope_rejections": self.receipt_scope_rejections,
-        }
-        raw = json.dumps(
-            payload,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        )
-        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-    @property
-    def ledger_hash(self) -> str:
-        return self.compute_hash()
-
     def to_authority_dict(self) -> dict[str, Any]:
+        fact_snapshot = self.build_fact_snapshot()
         return {
             "schema_version": PROCESS_STEP_LEDGER_SCHEMA,
+            "fact_model_version": PROCESS_STEP_FACT_MODEL_VERSION,
             "process_step_ledger_id": self.ledger_id,
             "ledger_id": self.ledger_id,
             "campaign_id": self.campaign_id,
@@ -569,9 +654,15 @@ class ProcessStepLedger:
             "fixture_id": self.fixture_id,
             "protocol_id": self.protocol_id,
             "required_step_ids": list(self._required_step_ids),
-            "rows": [dict(row) for row in self.all_rows()],
+            "attempted_step_ids": list(self.attempted_step_ids()),
+            "executed_step_ids": list(self.executed_step_ids()),
+            "accepted_step_ids": list(self.accepted_step_ids()),
+            "completed_step_ids": list(self.completed_step_ids()),
+            "failed_step_ids": list(self.failed_step_ids()),
+            "rows": self.all_rows(),
             "receipt_scope_rejections": self.receipt_scope_rejections,
-            "ledger_hash": self.compute_hash(),
+            "fact_snapshot": fact_snapshot,
+            "ledger_hash": _stable_hash(fact_snapshot),
         }
 
     def build_timeline_receipt(self) -> dict[str, Any]:
@@ -640,6 +731,8 @@ def attach_ledger_refs_to_observations(
     target["accepted_step_ids"] = list(ledger.accepted_step_ids())
     target["completed_step_ids"] = list(ledger.completed_step_ids())
     target["recorded_step_ids"] = list(ledger.recorded_step_ids())
+    target["process_step_receipts"] = list(ledger.all_rows())
+    target["process_step_fact_model_version"] = PROCESS_STEP_FACT_MODEL_VERSION
     target["process_timeline"] = ledger.build_timeline_receipt()
     target["process_step_receipt_scope_rejections"] = (
         ledger.receipt_scope_rejections
@@ -769,9 +862,7 @@ def evaluate_per_step_evidence_completeness(
 ) -> dict[str, Any]:
     planned = set(_unique_texts(planned_step_ids))
     executed = set(ledger.executed_step_ids())
-    authoritative_observed = set(
-        step_ids_with_observation_evidence(ledger)
-    )
+    authoritative_observed = set(step_ids_with_observation_evidence(ledger))
     observed = (
         authoritative_observed
         if observed_step_ids is None
@@ -781,8 +872,7 @@ def evaluate_per_step_evidence_completeness(
     cleanup = (
         authoritative_cleanup
         if cleanup_covered_step_ids is None
-        else authoritative_cleanup
-        & set(_unique_texts(cleanup_covered_step_ids))
+        else authoritative_cleanup & set(_unique_texts(cleanup_covered_step_ids))
     )
     missing_execution = sorted(planned - executed)
     missing_observation = sorted(executed - observed)
@@ -791,11 +881,7 @@ def evaluate_per_step_evidence_completeness(
         if cleanup_covered_step_ids is not None
         else []
     )
-    complete = (
-        not missing_execution
-        and not missing_observation
-        and not missing_cleanup
-    )
+    complete = not missing_execution and not missing_observation and not missing_cleanup
     return {
         "schema_version": EVIDENCE_SCHEMA,
         "experiment_id": ledger.experiment_id,
@@ -807,9 +893,7 @@ def evaluate_per_step_evidence_completeness(
         "missing_observation": missing_observation,
         "missing_cleanup": missing_cleanup,
         "complete": complete,
-        "reason_code": (
-            "" if complete else PROCESS_EVIDENCE_INCOMPLETE_CODE
-        ),
+        "reason_code": "" if complete else PROCESS_EVIDENCE_INCOMPLETE_CODE,
     }
 
 
@@ -859,8 +943,7 @@ def build_reverse_cleanup_ledger(
     cleanup_covered = {
         _text(result.get("source_step_id"))
         for result in cleanup_results
-        if isinstance(result, dict)
-        and _text(result.get("source_step_id"))
+        if isinstance(result, dict) and _text(result.get("source_step_id"))
     }
     expected = set(_unique_texts(successful_write_step_ids))
     uncovered = sorted(expected - cleanup_covered)
@@ -875,9 +958,7 @@ def build_reverse_cleanup_ledger(
     return {
         "schema_version": REVERSE_CLEANUP_LEDGER_SCHEMA,
         "experiment_id": experiment_id,
-        "successful_write_step_ids": _unique_texts(
-            successful_write_step_ids
-        ),
+        "successful_write_step_ids": _unique_texts(successful_write_step_ids),
         "cleanup_order": [
             _text(result.get("cleanup_contract_id"))
             for result in cleanup_results
@@ -885,12 +966,8 @@ def build_reverse_cleanup_ledger(
         ],
         "cleanup_results": list(cleanup_results),
         "uncovered_steps": uncovered,
-        "environment_restoration_receipt_id": (
-            environment_restoration_receipt_id
-        ),
-        "final_status": (
-            final_status if all_verified else "CLEANUP_INCOMPLETE"
-        ),
+        "environment_restoration_receipt_id": environment_restoration_receipt_id,
+        "final_status": final_status if all_verified else "CLEANUP_INCOMPLETE",
         "all_writes_covered": not uncovered,
     }
 
