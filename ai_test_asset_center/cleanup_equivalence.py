@@ -11,6 +11,7 @@ matching ACCEPTED Cleanup Execution Receipt per source step.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 from . import cleanup_equivalence_core as _core
@@ -99,6 +100,107 @@ def _legacy_completed_graph_scope(
     return list(_list(row.get("source_receipt_ids"))) == expected_receipt_ids
 
 
+def _bind_graph_verification_outputs(
+    execution_set: dict[str, Any],
+    equivalence_receipt: dict[str, Any],
+) -> None:
+    """Bind per-step verification outputs onto their sealed execution set."""
+    execution = _dict(execution_set)
+    receipt = _dict(equivalence_receipt)
+    if (
+        _text(execution.get("schema_version"))
+        != _graph_core.GRAPH_CLEANUP_EXECUTION_SET_SCHEMA
+        or _text(receipt.get("schema_version"))
+        != _graph_core.GRAPH_CLEANUP_EQUIVALENCE_SCHEMA
+    ):
+        return
+    write_ids = [
+        _text(value)
+        for value in _list(execution.get("write_step_ids"))
+        if _text(value)
+    ]
+    step_receipts = _dict(
+        receipt.get("step_equivalence_receipts_by_id")
+    )
+    if (
+        not write_ids
+        or set(step_receipts) != set(write_ids)
+        or list(_list(receipt.get("write_step_ids"))) != write_ids
+        or _text(receipt.get("cleanup_execution_receipt_id"))
+        != _text(execution.get("receipt_id"))
+        or _text(receipt.get("proof_id"))
+        != _text(execution.get("proof_id"))
+        or _text(receipt.get("process_graph_write_contract_id"))
+        != _text(execution.get("process_graph_write_contract_id"))
+    ):
+        return
+
+    receipt_ids_by_id: dict[str, str] = {}
+    for step_id in write_ids:
+        row = _dict(step_receipts.get(step_id))
+        receipt_id = _text(row.get("receipt_id"))
+        if (
+            _text(row.get("source_step_id") or step_id) != step_id
+            or not receipt_id
+        ):
+            return
+        receipt_ids_by_id[step_id] = receipt_id
+
+    verification_payload = {
+        "cleanup_execution_receipt_id": _text(execution.get("receipt_id")),
+        "cleanup_execution_scope_fingerprint": _text(
+            execution.get("scope_fingerprint")
+        ),
+        "cleanup_equivalence_receipt_id": _text(receipt.get("receipt_id")),
+        "cleanup_equivalence_fingerprint": _text(receipt.get("fingerprint")),
+        "write_step_ids": write_ids,
+        "step_cleanup_verification_receipt_ids_by_id": receipt_ids_by_id,
+        "step_cleanup_verification_receipts_by_id": {
+            step_id: _dict(step_receipts.get(step_id))
+            for step_id in write_ids
+        },
+    }
+    verification_fingerprint = _graph_core._stable_hash(
+        verification_payload
+    )[:32]
+    execution.update(
+        {
+            "cleanup_equivalence_receipt_id": verification_payload[
+                "cleanup_equivalence_receipt_id"
+            ],
+            "cleanup_equivalence_fingerprint": verification_payload[
+                "cleanup_equivalence_fingerprint"
+            ],
+            "step_cleanup_verification_receipt_ids_by_id": dict(
+                receipt_ids_by_id
+            ),
+            "step_cleanup_verification_receipts_by_id": deepcopy(
+                verification_payload[
+                    "step_cleanup_verification_receipts_by_id"
+                ]
+            ),
+            "cleanup_verification_fingerprint": verification_fingerprint,
+        }
+    )
+    environment = _dict(
+        execution.get("environment_restoration_receipt")
+    )
+    if environment:
+        environment.update(
+            {
+                "aggregate_cleanup_equivalence_receipt_id": _text(
+                    receipt.get("receipt_id")
+                ),
+                "cleanup_verification_fingerprint": (
+                    verification_fingerprint
+                ),
+            }
+        )
+        execution["environment_restored"] = (
+            environment.get("environment_restored") is True
+        )
+
+
 def evaluate_cleanup_equivalence(
     *,
     proof: dict[str, Any],
@@ -124,10 +226,14 @@ def evaluate_cleanup_equivalence(
                 cleanup_execution_receipt
             )
         ):
-            return _graph_core.evaluate_process_graph_cleanup_equivalence(
+            result = _graph_core.evaluate_process_graph_cleanup_equivalence(
                 proof=proof,
                 cleanup_execution_receipt=cleanup_execution_receipt,
             )
+        _bind_graph_verification_outputs(
+            cleanup_execution_receipt,
+            result,
+        )
         return result
     return _core.evaluate_cleanup_equivalence(
         proof=proof,
