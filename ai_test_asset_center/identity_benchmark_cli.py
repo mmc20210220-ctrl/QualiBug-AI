@@ -68,12 +68,15 @@ def _submission_payload(paths: Sequence[str]) -> dict[str, Any]:
 
 
 def _actor(args: argparse.Namespace) -> dict[str, str]:
+    from .enterprise_knowledge_center._utils import _require_manage_actor
+
     name = str(getattr(args, "actor_name", "") or "").strip()
     if not name:
         raise ValueError("identity_benchmark_actor_name_required")
+    role = str(getattr(args, "actor_role", "") or "knowledge_admin").strip()
+    validated = _require_manage_actor({"name": name, "role": role})
     return {
-        "name": name,
-        "role": str(getattr(args, "actor_role", "") or "knowledge_admin").strip(),
+        **validated,
         "tenant_id": str(getattr(args, "tenant_id", "") or "").strip(),
     }
 
@@ -140,7 +143,7 @@ def _quality_blocked(workspace: dict[str, Any]) -> bool:
     status = str(gate.get("status") or "").strip().upper()
     if status.startswith("BLOCKED") or status in {"FAIL", "FAILED", "REJECTED"}:
         return True
-    for key in ("admission_allowed", "allowed", "passed", "ready"):
+    for key in ("entry_allowed", "admission_allowed", "allowed", "passed", "ready"):
         if key in gate and gate.get(key) is False:
             return True
     return False
@@ -181,6 +184,7 @@ def cmd_export(args: argparse.Namespace) -> int:
             project_id=args.project,
             output=str(target),
             task_package_id=package.get("task_package_id"),
+            batch_layout_id=package.get("batch_layout_id"),
             manifest_id=package.get("manifest_id"),
             task_count=int(package.get("task_count") or 0),
             batch_count=int(package.get("batch_count") or 0),
