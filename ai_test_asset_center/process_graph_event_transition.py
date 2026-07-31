@@ -1,13 +1,9 @@
 """Source-declared event delivery contracts for process-graph async edges.
 
-This module is not a scheduler and owns no transport authority. The existing
-process-graph wait facade invokes it only for a compile-frozen event transition.
-It reuses the approved target, actor, bounded async policy and read-only observer
-operation already governed by the wait contract.
-
-Raw event payloads, event ids, correlation values and idempotency values never
-enter receipts. Runtime receipts contain only counts, fingerprints and exact
-source-step/target-step scope.
+This module owns neither scheduling nor target selection. The existing graph
+wait gate invokes it for a compile-frozen message/callback transition. Runtime
+observes the entire bounded window, separates observation completeness from the
+business verdict, and emits only counts and content fingerprints.
 """
 from __future__ import annotations
 
@@ -26,7 +22,6 @@ from .runtime_binding_materializer import materialize_path
 
 CONTRACT_SCHEMA_VERSION = "qualibug.process-graph-event-transition.v1"
 RECEIPT_SCHEMA_VERSION = "qualibug.process-graph-event-transition-receipt.v1"
-
 STATUS_COMPILED = "COMPILED"
 STATUS_CONVERGED = "CONVERGED"
 STATUS_BLOCKED = "BLOCKED"
@@ -37,12 +32,8 @@ EVENT_OBSERVER_ACTOR_UNRESOLVED = "PROCESS_GRAPH_EVENT_OBSERVER_ACTOR_UNRESOLVED
 EVENT_OBSERVER_BINDING_UNRESOLVED = "PROCESS_GRAPH_EVENT_OBSERVER_BINDING_UNRESOLVED"
 EVENT_OBSERVATION_INCOMPLETE = "PROCESS_GRAPH_EVENT_OBSERVATION_INCOMPLETE"
 EVENT_COLLECTION_INVALID = "PROCESS_GRAPH_EVENT_COLLECTION_INVALID"
-EVENT_DELIVERY_COUNT_BELOW_MINIMUM = (
-    "PROCESS_GRAPH_EVENT_DELIVERY_COUNT_BELOW_MINIMUM"
-)
-EVENT_DELIVERY_COUNT_ABOVE_MAXIMUM = (
-    "PROCESS_GRAPH_EVENT_DELIVERY_COUNT_ABOVE_MAXIMUM"
-)
+EVENT_DELIVERY_COUNT_BELOW_MINIMUM = "PROCESS_GRAPH_EVENT_DELIVERY_COUNT_BELOW_MINIMUM"
+EVENT_DELIVERY_COUNT_ABOVE_MAXIMUM = "PROCESS_GRAPH_EVENT_DELIVERY_COUNT_ABOVE_MAXIMUM"
 EVENT_ID_REUSE_CONFLICT = "PROCESS_GRAPH_EVENT_ID_REUSE_CONFLICT"
 EVENT_IDEMPOTENCY_KEY_MISMATCH = "PROCESS_GRAPH_EVENT_IDEMPOTENCY_KEY_MISMATCH"
 EVENT_RETRY_LIMIT_EXCEEDED = "PROCESS_GRAPH_EVENT_RETRY_LIMIT_EXCEEDED"
@@ -100,17 +91,18 @@ def _extract(value: Any, path: str) -> tuple[bool, Any]:
 
 
 def _event_spec(raw_wait: dict[str, Any]) -> dict[str, Any]:
+    source = _dict(raw_wait)
     return deepcopy(
         _dict(
-            raw_wait.get("event_transition")
-            or raw_wait.get("event_contract")
-            or raw_wait.get("delivery_contract")
+            source.get("event_transition")
+            or source.get("event_contract")
+            or source.get("delivery_contract")
         )
     )
 
 
 def has_event_transition(raw_wait: dict[str, Any]) -> bool:
-    return bool(_event_spec(_dict(raw_wait)))
+    return bool(_event_spec(raw_wait))
 
 
 def compile_event_transition_contract(
@@ -119,25 +111,20 @@ def compile_event_transition_contract(
     compiled_wait: dict[str, Any],
     relation_type: str,
 ) -> tuple[dict[str, Any], str]:
-    """Freeze one source-declared event transition behind an existing wait."""
-    source = _dict(raw_wait)
-    event = _event_spec(source)
+    event = _event_spec(raw_wait)
     if not event:
         return {}, ""
-
     relation = _text(relation_type).upper()
     if relation not in _EVENT_RELATIONS:
         return {}, f"event_relation_invalid:{relation or '<empty>'}"
-
     kind = _text(
         event.get("delivery_kind")
         or event.get("transition_kind")
-        or source.get("transition_kind")
+        or _dict(raw_wait).get("transition_kind")
         or "event"
     ).lower()
     if kind not in _DELIVERY_KINDS:
         return {}, f"event_delivery_kind_invalid:{kind}"
-
     semantics = _text(
         event.get("delivery_semantics") or event.get("semantics")
     ).lower()
@@ -161,7 +148,6 @@ def compile_event_transition_contract(
     missing = [key for key, value in required.items() if not value]
     if missing:
         return {}, "event_fields_missing:" + ",".join(missing)
-
     try:
         minimum = int(event.get("expected_min_count"))
         maximum = int(event.get("expected_max_count"))
@@ -203,24 +189,12 @@ def compile_event_transition_contract(
         "relation_type": relation,
         "delivery_kind": kind,
         "delivery_semantics": semantics,
-        "observer_operation_ref": _text(
-            compiled_wait.get("observer_operation_ref")
-        ),
+        "observer_operation_ref": _text(compiled_wait.get("observer_operation_ref")),
         "observer_method": _text(compiled_wait.get("method")).upper(),
-        "observer_path_template": _text(
-            compiled_wait.get("path_template")
-        ),
+        "observer_path_template": _text(compiled_wait.get("path_template")),
         "actor_ref": _text(compiled_wait.get("actor_ref")),
         "system_ref": _text(compiled_wait.get("system_ref")),
-        "events_path": required["events_path"],
-        "event_id_field": required["event_id_field"],
-        "event_type_field": required["event_type_field"],
-        "correlation_field": required["correlation_field"],
-        "correlation_binding": required["correlation_binding"],
-        "correlation_query_parameter": required[
-            "correlation_query_parameter"
-        ],
-        "expected_event_type": required["expected_event_type"],
+        **required,
         "expected_min_count": minimum,
         "expected_max_count": maximum,
         "idempotency_key_binding": idempotency_binding,
@@ -228,9 +202,7 @@ def compile_event_transition_contract(
         "delivery_attempt_field": retry_field,
         "expected_max_delivery_attempt": retry_limit,
         "async_policy": policy,
-        "source_refs": _list(event.get("source_refs"))
-        or _list(source.get("source_refs"))
-        or _list(compiled_wait.get("source_refs")),
+        "source_refs": _list(event.get("source_refs")),
     }
     contract["contract_fingerprint"] = _fingerprint(contract)
     return contract, ""
@@ -245,20 +217,13 @@ def _event_rows(
         return [], EVENT_COLLECTION_INVALID
     if len(raw_events) > _MAX_EVENTS_PER_POLL:
         return [], EVENT_COLLECTION_INVALID
-
     rows: list[dict[str, Any]] = []
     for raw in raw_events:
         if not isinstance(raw, dict):
             continue
-        id_found, event_id = _extract(
-            raw, _text(contract.get("event_id_field"))
-        )
-        type_found, event_type = _extract(
-            raw, _text(contract.get("event_type_field"))
-        )
-        corr_found, correlation = _extract(
-            raw, _text(contract.get("correlation_field"))
-        )
+        id_found, event_id = _extract(raw, _text(contract.get("event_id_field")))
+        type_found, event_type = _extract(raw, _text(contract.get("event_type_field")))
+        corr_found, correlation = _extract(raw, _text(contract.get("correlation_field")))
         if not (
             id_found
             and type_found
@@ -268,14 +233,12 @@ def _event_rows(
             and _scalar(correlation)
         ):
             continue
-
         idempotency_value: Any = None
         idempotency_field = _text(contract.get("idempotency_key_field"))
         if idempotency_field:
             idem_found, idempotency_value = _extract(raw, idempotency_field)
             if not idem_found or not _scalar(idempotency_value):
                 idempotency_value = None
-
         delivery_attempt: int | None = None
         attempt_field = _text(contract.get("delivery_attempt_field"))
         if attempt_field:
@@ -284,7 +247,6 @@ def _event_rows(
                 delivery_attempt = int(raw_attempt) if attempt_found else None
             except (TypeError, ValueError):
                 delivery_attempt = None
-
         rows.append(
             {
                 "event_id": event_id,
@@ -298,6 +260,32 @@ def _event_rows(
     return rows, ""
 
 
+def _blocked_receipt(
+    contract: dict[str, Any],
+    reason_code: str,
+    *,
+    detail: str,
+) -> dict[str, Any]:
+    receipt = {
+        "schema_version": RECEIPT_SCHEMA_VERSION,
+        "status": STATUS_BLOCKED,
+        "semantic_status": "INDETERMINATE",
+        "reason_code": reason_code,
+        "detail": detail,
+        "wait_id": _text(contract.get("wait_id")),
+        "source_node_id": _text(contract.get("source_node_id")),
+        "target_node_id": _text(contract.get("target_node_id")),
+        "contract_fingerprint": _text(contract.get("contract_fingerprint")),
+        "attempt_count": 0,
+        "coverage_complete": False,
+        "observation_window_completed": False,
+        "converged": False,
+        "timed_out": False,
+    }
+    receipt["receipt_id"] = "event_wait_" + _fingerprint(receipt)[:24]
+    return receipt
+
+
 def execute_event_transition(
     *,
     contract: dict[str, Any],
@@ -308,7 +296,6 @@ def execute_event_transition(
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
-    """Observe one exact event transition for the full bounded policy window."""
     spec = _dict(contract)
     bindings = _dict(_dict(context).get("bindings"))
     correlation_key = _text(spec.get("correlation_binding"))
@@ -319,7 +306,6 @@ def execute_event_transition(
             EVENT_CORRELATION_UNRESOLVED,
             detail=correlation_key or "correlation_binding_missing",
         )
-
     idempotency_key = _text(spec.get("idempotency_key_binding"))
     expected_idempotency = bindings.get(idempotency_key) if idempotency_key else None
     if idempotency_key and not _scalar(expected_idempotency):
@@ -333,8 +319,7 @@ def execute_event_transition(
     actor = _dict(actors.get(actor_ref))
     token = _resolve_token(actor, tokens)
     if not actor or (
-        _text(actor.get("role")).lower() not in {"anonymous", "public"}
-        and not token
+        _text(actor.get("role")).lower() not in {"anonymous", "public"} and not token
     ):
         return _blocked_receipt(
             spec,
@@ -354,21 +339,21 @@ def execute_event_transition(
     request_path = path + separator + urlencode(
         {_text(spec.get("correlation_query_parameter")): str(correlation)}
     )
-
-    reader = read_once
-    if reader is None:
-        reader = lambda: _run_http_step(
+    reader = read_once or (
+        lambda: _run_http_step(
             base_url=_text(_dict(context).get("base_url")),
             method=_text(spec.get("observer_method")),
             path=request_path,
             token=token,
         )
+    )
 
     policy = normalize_async_policy(spec.get("async_policy"))
+    max_attempts = int(policy.get("max_attempts") or 1)
     started = monotonic()
     attempts: list[dict[str, Any]] = []
     events_by_id: dict[str, dict[str, Any]] = {}
-    event_id_fingerprints: dict[str, str] = {}
+    event_id_payloads: dict[str, str] = {}
     event_id_reuse_conflicts = 0
     idempotency_mismatches = 0
     retry_limit_violations = 0
@@ -377,7 +362,7 @@ def execute_event_transition(
     successful_polls = 0
     matching_rows_seen = 0
 
-    for attempt_number in range(1, int(policy.get("max_attempts") or 1) + 1):
+    for attempt_number in range(1, max_attempts + 1):
         response = _dict(reader())
         status_code = int(response.get("status_code") or response.get("status") or 0)
         rows: list[dict[str, Any]] = []
@@ -387,25 +372,24 @@ def execute_event_transition(
             rows, collection_error = _event_rows(response.get("body"), spec)
             if collection_error:
                 invalid_collection_count += 1
-        correlated_rows = [
+        correlated = [
             row
             for row in rows
             if str(row.get("correlation")) == str(correlation)
-            and _text(row.get("event_type"))
-            == _text(spec.get("expected_event_type"))
+            and _text(row.get("event_type")) == _text(spec.get("expected_event_type"))
         ]
-        matching_rows_seen += len(correlated_rows)
+        matching_rows_seen += len(correlated)
         newly_unique = 0
-        for row in correlated_rows:
+        for row in correlated:
             raw_id = str(row.get("event_id"))
             payload_fp = _text(row.get("payload_fingerprint"))
             if raw_id in events_by_id:
                 poll_replay_count += 1
-                if event_id_fingerprints.get(raw_id) != payload_fp:
+                if event_id_payloads.get(raw_id) != payload_fp:
                     event_id_reuse_conflicts += 1
                 continue
             events_by_id[raw_id] = row
-            event_id_fingerprints[raw_id] = payload_fp
+            event_id_payloads[raw_id] = payload_fp
             newly_unique += 1
             if idempotency_key and str(row.get("idempotency_value")) != str(
                 expected_idempotency
@@ -416,30 +400,28 @@ def execute_event_transition(
                 delivery_attempt = row.get("delivery_attempt")
                 if not isinstance(delivery_attempt, int) or delivery_attempt > retry_limit:
                     retry_limit_violations += 1
-
         attempts.append(
             {
                 "attempt": attempt_number,
                 "elapsed_ms": max(0, int((monotonic() - started) * 1000)),
                 "status_code": status_code,
                 "collection_valid": not collection_error,
-                "matching_row_count": len(correlated_rows),
+                "matching_row_count": len(correlated),
                 "new_unique_event_count": newly_unique,
                 "unique_event_count": len(events_by_id),
             }
         )
-        if attempt_number < int(policy.get("max_attempts") or 1):
+        if attempt_number < max_attempts:
             sleep(int(policy.get("poll_interval_ms") or 0) / 1000.0)
 
     unique_count = len(events_by_id)
     minimum = int(spec.get("expected_min_count") or 0)
     maximum = int(spec.get("expected_max_count") or 0)
     coverage_complete = bool(
-        len(attempts) == int(policy.get("max_attempts") or 1)
+        len(attempts) == max_attempts
         and successful_polls == len(attempts)
         and invalid_collection_count == 0
     )
-
     semantic_status = "PASS"
     reason_code = ""
     if not coverage_complete:
@@ -461,9 +443,12 @@ def execute_event_transition(
         semantic_status = "VIOLATION"
         reason_code = EVENT_DELIVERY_COUNT_ABOVE_MAXIMUM
 
+    # A measured violation is a completed observation and must reach the Oracle.
+    # Only unresolved/incomplete evidence blocks the target transport.
+    observation_complete = semantic_status in {"PASS", "VIOLATION"}
     receipt = {
         "schema_version": RECEIPT_SCHEMA_VERSION,
-        "status": STATUS_CONVERGED if semantic_status == "PASS" else STATUS_BLOCKED,
+        "status": STATUS_CONVERGED if observation_complete else STATUS_BLOCKED,
         "semantic_status": semantic_status,
         "reason_code": reason_code,
         "wait_id": _text(spec.get("wait_id")),
@@ -491,8 +476,7 @@ def execute_event_transition(
         "successful_poll_count": successful_polls,
         "attempt_count": len(attempts),
         "coverage_complete": coverage_complete,
-        "observation_window_completed": len(attempts)
-        == int(policy.get("max_attempts") or 1),
+        "observation_window_completed": len(attempts) == max_attempts,
         "correlation_fingerprint": _fingerprint(correlation),
         "idempotency_key_fingerprint": (
             _fingerprint(expected_idempotency) if idempotency_key else ""
@@ -501,35 +485,9 @@ def execute_event_transition(
             _fingerprint(value) for value in events_by_id
         ),
         "attempts": attempts,
-        "converged": semantic_status == "PASS",
+        "converged": observation_complete,
         "timed_out": semantic_status == "INDETERMINATE",
         "elapsed_ms": max(0, int((monotonic() - started) * 1000)),
-    }
-    receipt["receipt_id"] = "event_wait_" + _fingerprint(receipt)[:24]
-    return receipt
-
-
-def _blocked_receipt(
-    contract: dict[str, Any],
-    reason_code: str,
-    *,
-    detail: str,
-) -> dict[str, Any]:
-    receipt = {
-        "schema_version": RECEIPT_SCHEMA_VERSION,
-        "status": STATUS_BLOCKED,
-        "semantic_status": "INDETERMINATE",
-        "reason_code": reason_code,
-        "detail": detail,
-        "wait_id": _text(contract.get("wait_id")),
-        "source_node_id": _text(contract.get("source_node_id")),
-        "target_node_id": _text(contract.get("target_node_id")),
-        "contract_fingerprint": _text(contract.get("contract_fingerprint")),
-        "attempt_count": 0,
-        "coverage_complete": False,
-        "observation_window_completed": False,
-        "converged": False,
-        "timed_out": False,
     }
     receipt["receipt_id"] = "event_wait_" + _fingerprint(receipt)[:24]
     return receipt
