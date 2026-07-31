@@ -6,8 +6,9 @@ kernel one node at a time. A compile-frozen state wait or event transition is
 executed before business transport; delegation occurs only after convergence.
 
 The existing ProcessStepLedger records the async receipt before copied child
-transport events. Event receipts are a typed projection of the same scoped
-observer receipt, not a second ledger. Ordinary plans delegate unchanged.
+transport events. Event receipts are published to the existing exact-step
+observation receipt collection, not to a second ledger or Finalizer bridge.
+Ordinary plans delegate unchanged.
 """
 from __future__ import annotations
 
@@ -41,7 +42,6 @@ for _name in dir(_core):
 
 
 def _sync_core_hooks() -> None:
-    """Preserve existing monkeypatch/runtime injection points after the split."""
     for name in (
         "_http_request",
         "_run_http_step",
@@ -68,15 +68,43 @@ def _is_event_receipt(receipt: dict[str, Any]) -> bool:
     )
 
 
+def _append_unique_receipt(
+    observations: dict[str, Any],
+    key: str,
+    receipt: dict[str, Any],
+) -> None:
+    rows = observations.setdefault(key, [])
+    if not isinstance(rows, list):
+        rows = []
+        observations[key] = rows
+    receipt_id = str(receipt.get("receipt_id") or "").strip()
+    if receipt_id and any(
+        isinstance(row, dict)
+        and str(row.get("receipt_id") or "").strip() == receipt_id
+        for row in rows
+    ):
+        return
+    rows.append(receipt)
+
+
 def _append_async_receipt_projection(
     observations: dict[str, Any],
     receipt: dict[str, Any],
 ) -> None:
-    observations.setdefault("process_graph_wait_receipts", []).append(receipt)
+    _append_unique_receipt(observations, "process_graph_wait_receipts", receipt)
     if _is_event_receipt(receipt):
-        observations.setdefault(
-            "process_graph_async_transition_receipts", []
-        ).append(receipt)
+        _append_unique_receipt(
+            observations,
+            "process_graph_async_transition_receipts",
+            receipt,
+        )
+        # The exact-scope Finalizer already consumes this canonical collection
+        # and binds receipts by their explicit step_id.
+        _append_unique_receipt(
+            observations,
+            "process_step_observation_receipts",
+            receipt,
+        )
 
 
 def _new_wait_ledger(kwargs: dict[str, Any]) -> ProcessStepLedger:
@@ -225,14 +253,18 @@ def _blocked_wait_result(
 
 def _wait_step(kwargs: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     control = [
-        row for row in list(kwargs.get("control_plan") or [])
+        row
+        for row in list(kwargs.get("control_plan") or [])
         if isinstance(row, dict)
     ]
     treatment = [
-        row for row in list(kwargs.get("treatment_plan") or [])
+        row
+        for row in list(kwargs.get("treatment_plan") or [])
         if isinstance(row, dict)
     ]
-    waiting = [row for row in treatment if isinstance(row.get("wait_contract"), dict)]
+    waiting = [
+        row for row in treatment if isinstance(row.get("wait_contract"), dict)
+    ]
     if not waiting:
         return {}, {}
     if control or len(treatment) != 1 or len(waiting) != 1:
