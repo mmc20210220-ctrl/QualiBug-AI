@@ -4,9 +4,9 @@ The module owns one call graph:
 base source asset -> OpenAPI schema facts -> API artifact projection -> exact operation-schema
 binding -> database-model facts -> cross-source contract alignment -> operation-scoped storage
 candidates -> durable table/field mapping authority -> root database observers -> exact FK relation
-candidates -> durable relation authority -> child collection observers -> implicit rule projection ->
-enterprise understanding -> structure-first atomic fact compilation -> downstream binding ->
-governed Jobs -> final Probe admission -> source-occurrence evidence views ->
+candidates -> durable relation authority -> child collection observers -> enterprise understanding
+(source fact reconciliation -> implicit rule projection -> model) -> structure-first atomic fact compilation
+-> downstream binding -> governed Jobs -> final Probe admission -> source-occurrence evidence views ->
 one final persistence receipt.
 """
 from __future__ import annotations
@@ -67,7 +67,6 @@ from .enterprise_understanding.semantic_lexicon_contract import (
 from .enterprise_understanding.structured_fact_compiler import (
     compile_structure_first_business_facts,
 )
-from .implicit_rule_projection import enrich_asset_with_implicit_rule_projection
 from .job_asset_pipeline import enrich_job_assets_with_governance
 from .job_behavior_projection import refresh_job_behavior_projection
 from .openapi_schema_fact_asset_projection import enrich_asset_with_openapi_schema_facts
@@ -241,17 +240,13 @@ def build_enterprise_business_knowledge_asset(
     )
     asset = enrich_asset_with_database_relation_observer_contracts(asset)
 
-    # Rule inference is a projection over the facts already accepted above. It uses the
-    # existing candidate validation state machine and writes accepted rows into the
-    # existing rule library; no second Rule IR or execution path is created.
-    asset = enrich_asset_with_implicit_rule_projection(asset)
-
     # The shared language policy is a formal runtime dependency. A missing or malformed
     # lexicon blocks comprehension instead of silently degrading to an empty vocabulary.
     asset = apply_semantic_lexicon_contract(asset)
 
     # Existing Chinese-first parsing remains the compatibility parser. It creates the
-    # current ledger and conflict/context assets through the existing authority.
+    # current ledger and conflict/context assets through the existing authority. The
+    # understanding boundary derives implicit rules only after those conflicts resolve.
     asset = enrich_asset_with_enterprise_understanding(
         asset, parsed_sources=parsed_sources
     )
@@ -262,8 +257,8 @@ def build_enterprise_business_knowledge_asset(
     asset = compile_structure_first_business_facts(asset, parsed_sources)
 
     # Rebuild cognition from the upgraded ledger without rerunning source extraction.
-    # The second call has no parsed_sources and therefore only projects the current,
-    # already-governed fact authority into the understanding model and gates.
+    # The second call reprojects implicit rules idempotently from the final fact ledger,
+    # then builds the authoritative model and gates.
     asset = enrich_asset_with_enterprise_understanding(asset, parsed_sources=None)
 
     # Downstream rule/oracle projection is still needed before Job projection, but
@@ -330,7 +325,8 @@ def build_enterprise_business_knowledge_asset(
             "database_relation_candidate_projection_precedes_enterprise_understanding": True,
             "database_relation_authority_precedes_enterprise_understanding": True,
             "database_relation_observer_projection_precedes_enterprise_understanding": True,
-            "implicit_rule_projection_precedes_enterprise_understanding": True,
+            "implicit_rule_projection_runs_inside_understanding_boundary": True,
+            "implicit_rule_projection_runs_after_conflict_reconciliation": True,
             "implicit_rule_projection_uses_existing_rule_library": True,
             "semantic_lexicon_contract_precedes_formal_comprehension": True,
             "structure_first_fact_compilation_uses_existing_ledger": True,
