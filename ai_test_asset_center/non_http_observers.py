@@ -9,6 +9,13 @@ from .database_observer_experiment_runtime import (
     PHASE_AGGREGATE_OBSERVER_ID,
     install_experiment_database_observer,
 )
+from .database_relation_numeric_oracle import (
+    install_database_relation_numeric_assertion,
+)
+from .database_relation_observer_experiment_runtime import (
+    install_database_relation_phase_execution,
+    install_database_relation_phase_observer,
+)
 from .database_state_transition_oracle import (
     install_database_state_transition_assertion,
 )
@@ -22,9 +29,6 @@ from .observer_contracts_base import (
 _PROCESS_OBSERVER_ID = "process_timeline"
 _COMPILER_MARKER = "_qualibug_process_timeline_observer_installed"
 _ORIGINAL_COMPILER_MARKER = "_qualibug_original_compile_observer_requirements"
-# Temporal protocols always use the sequential plan executor, which creates a
-# ProcessStepLedger. Pure concurrency barriers have their own barrier_timeline
-# and must not be forced to provide a different ledger they may never create.
 _PROCESS_LEDGER_FAMILIES = frozenset({"temporal"})
 _DATABASE_PHASE_RECEIPT_KEY = "approved_database_observer_phase_receipts"
 
@@ -73,11 +77,7 @@ def _process_timeline_handler(envelope: dict[str, Any]) -> dict[str, Any]:
     timestamps = []
     statuses = []
     for row in timeline:
-        event_id = _text(
-            row.get("step_id")
-            or row.get("event_id")
-            or row.get("id")
-        )
+        event_id = _text(row.get("step_id") or row.get("event_id") or row.get("id"))
         if event_id:
             event_ids.append(event_id)
         for key in (
@@ -103,12 +103,8 @@ def _process_timeline_handler(envelope: dict[str, Any]) -> dict[str, Any]:
             statuses.append(status)
 
     evidence = {
-        "process_step_ledger_id": _text(
-            observations.get("process_step_ledger_id")
-        ),
-        "process_step_ledger_hash": _text(
-            observations.get("process_step_ledger_hash")
-        ),
+        "process_step_ledger_id": _text(observations.get("process_step_ledger_id")),
+        "process_step_ledger_hash": _text(observations.get("process_step_ledger_hash")),
         "timeline_event_count": len(timeline),
         "timeline_event_ids": event_ids,
         "timeline_statuses": statuses,
@@ -119,8 +115,7 @@ def _process_timeline_handler(envelope: dict[str, Any]) -> dict[str, Any]:
         "executed_step_ids": executed_ids,
         "transport_receipt_ids": transport_receipt_ids,
         "required_steps_executed": (
-            bool(required_ids)
-            and set(required_ids).issubset(set(executed_ids))
+            bool(required_ids) and set(required_ids).issubset(set(executed_ids))
         ),
     }
     if not timeline:
@@ -167,14 +162,10 @@ def install_non_http_observers() -> None:
             ),
         )
 
-    # The formal handler aggregates true BEFORE/AFTER receipts produced by the existing
-    # Experiment Executor. It never re-queries the database during finalization.
+    # Root row phase receipts are produced by the existing Experiment Executor.
     install_experiment_database_observer()
-    # Phase receipts are emitted by the aggregate Observer pipeline before Assertion DSL
-    # evaluation. Declare the standard key explicitly so the kind-to-evidence compile gate
-    # can prove that the database assertions are structurally satisfiable.
     aggregate_contract = _dict(OBSERVER_REGISTRY.get(PHASE_AGGREGATE_OBSERVER_ID))
-    evidence_keys = tuple(
+    aggregate_contract["evidence_keys"] = tuple(
         dict.fromkeys(
             [
                 *[
@@ -186,12 +177,17 @@ def install_non_http_observers() -> None:
             ]
         )
     )
-    aggregate_contract["evidence_keys"] = evidence_keys
     OBSERVER_REGISTRY[PHASE_AGGREGATE_OBSERVER_ID] = aggregate_contract
-    # Assertion registration happens only after the aggregate Observer has declared the
-    # evidence key it produces. The Assertion DSL rejects structurally unproducible kinds.
+
+    # FK-scoped relation aggregation has a separate direct Observer and phase aggregate.
+    # The phase wrapper extends the same executor and never runs a query in Finalizer.
+    install_database_relation_phase_observer()
+    install_database_relation_phase_execution()
+
+    # Assertion registration happens only after all required evidence keys are declared.
     install_database_state_transition_assertion()
     install_database_numeric_assertions()
+    install_database_relation_numeric_assertion()
 
     if hasattr(_experiment_compiler, _ORIGINAL_COMPILER_MARKER):
         original_compile = getattr(
@@ -219,9 +215,7 @@ def install_non_http_observers() -> None:
         required = list(observer_ids or [])
         if (
             _text(risk_family) in _PROCESS_LEDGER_FAMILIES
-            and _PROCESS_OBSERVER_ID not in {
-                _text(value) for value in required
-            }
+            and _PROCESS_OBSERVER_ID not in {_text(value) for value in required}
         ):
             required.append(_PROCESS_OBSERVER_ID)
         return original_compile(
