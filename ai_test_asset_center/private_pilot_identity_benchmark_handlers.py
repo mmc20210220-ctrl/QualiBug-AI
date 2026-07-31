@@ -24,6 +24,8 @@ def _route(path: str) -> tuple[str, str]:
         return parts[3], "workspace"
     if len(parts) == 6 and parts[5] in {
         "manifest",
+        "annotation-package",
+        "annotation-compile",
         "ground-truth",
         "quality-policy",
         "run",
@@ -116,18 +118,35 @@ class IdentityBenchmarkHttpMixin:
 
     def do_GET(self) -> None:  # noqa: N802
         raw_project, action = _route(_text(getattr(self, "path", "")))
-        if not raw_project or action not in {"workspace", "manifest"}:
+        if not raw_project or action not in {
+            "workspace",
+            "manifest",
+            "annotation-package",
+        }:
             return super().do_GET()
         self._init_request_context()
         context = self._identity_benchmark_context(raw_project)
         if context is None:
             return None
         project, root, _actor = context
-        from .enterprise_knowledge_center.enterprise_understanding.identity_benchmark_workflow import (
-            get_identity_benchmark_workspace,
-        )
-
         try:
+            if action == "annotation-package":
+                from .enterprise_knowledge_center.enterprise_understanding.identity_annotation_operator import (
+                    get_identity_annotation_task_package,
+                )
+
+                return self._json(
+                    {
+                        "ok": True,
+                        "project_id": project,
+                        "data": get_identity_annotation_task_package(project, root),
+                    }
+                )
+
+            from .enterprise_knowledge_center.enterprise_understanding.identity_benchmark_workflow import (
+                get_identity_benchmark_workspace,
+            )
+
             workspace = get_identity_benchmark_workspace(project, root)
         except Exception as exc:
             return self._identity_benchmark_error(exc, project=project)
@@ -144,6 +163,7 @@ class IdentityBenchmarkHttpMixin:
     def do_POST(self) -> None:  # noqa: N802
         raw_project, action = _route(_text(getattr(self, "path", "")))
         if not raw_project or action not in {
+            "annotation-compile",
             "ground-truth",
             "quality-policy",
             "run",
@@ -158,6 +178,20 @@ class IdentityBenchmarkHttpMixin:
             body = self._body()
             if not isinstance(body, dict):
                 raise ValueError("identity_benchmark_request_body_must_be_object")
+            if action == "annotation-compile":
+                from .enterprise_knowledge_center.enterprise_understanding.identity_annotation_operator import (
+                    compile_and_import_identity_annotations,
+                )
+
+                result = compile_and_import_identity_annotations(
+                    project,
+                    body,
+                    actor=actor,
+                    root=root,
+                )
+                status = 201 if result.get("ground_truth_imported") is True else 200
+                return self._json({"ok": True, "data": result}, status)
+
             if action == "run":
                 from .enterprise_knowledge_center.enterprise_understanding.identity_benchmark_workflow import (
                     run_identity_benchmark,
