@@ -21,6 +21,12 @@ def _bundle(**overrides):
         "invalid_receipt_ids": [],
         "identity_mismatch_receipt_ids": [],
         "protocol_mismatch_receipt_ids": [],
+        "process_step_audit": {"complete": True},
+        "process_step_ledger_identity_mismatch_receipt_ids": [],
+        "process_step_ledger_hash_mismatch_receipt_ids": [],
+        "process_step_fact_hash_mismatch_receipt_ids": [],
+        "process_step_set_mismatch_fields": [],
+        "process_step_invariant_errors": [],
     }
     value.update(overrides)
     return value
@@ -123,6 +129,49 @@ def test_identity_mismatch_is_terminal():
         receipt_bundle=_bundle(identity_mismatch_receipt_ids=["receipt-1"])
     )
     assert result["lifecycle_state"] == "IDENTITY_MISMATCH"
+
+
+def test_process_ledger_identity_mismatch_is_terminal():
+    result = _derive(
+        receipt_bundle=_bundle(
+            process_step_ledger_identity_mismatch_receipt_ids=["step-1"]
+        )
+    )
+    assert result["lifecycle_state"] == "IDENTITY_MISMATCH"
+    assert result["reason_code"] == "PROCESS_STEP_LEDGER_IDENTITY_MISMATCH"
+
+
+def test_process_ledger_hash_mismatch_is_receipt_incomplete():
+    result = _derive(
+        receipt_bundle=_bundle(
+            complete=False,
+            process_step_ledger_hash_mismatch_receipt_ids=["step-1"],
+        )
+    )
+    assert result["lifecycle_state"] == "RECEIPT_INCOMPLETE"
+    assert result["reason_code"] == "PROCESS_STEP_LEDGER_HASH_MISMATCH"
+
+
+def test_process_step_fact_hash_mismatch_is_receipt_incomplete():
+    result = _derive(
+        receipt_bundle=_bundle(
+            complete=False,
+            process_step_fact_hash_mismatch_receipt_ids=["step-1"],
+        )
+    )
+    assert result["lifecycle_state"] == "RECEIPT_INCOMPLETE"
+    assert result["reason_code"] == "PROCESS_STEP_FACT_HASH_MISMATCH"
+
+
+def test_process_step_set_mismatch_is_receipt_incomplete():
+    result = _derive(
+        receipt_bundle=_bundle(
+            complete=False,
+            process_step_set_mismatch_fields=["ledger_recorded_step_ids"],
+        )
+    )
+    assert result["lifecycle_state"] == "RECEIPT_INCOMPLETE"
+    assert result["reason_code"] == "PROCESS_STEP_SET_MISMATCH"
 
 
 def test_protocol_mismatch_is_terminal():
