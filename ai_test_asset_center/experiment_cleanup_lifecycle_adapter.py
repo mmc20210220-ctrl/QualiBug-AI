@@ -29,6 +29,11 @@ PROJECTION_SCHEMA_VERSION = "qualibug.precondition-cleanup-projection.v1"
 _SHADOW_MARKER = "_precondition_cleanup_shadow"
 _CLEANUP_AUTHORITY = "experiment_cleanup_executor_core"
 
+# Preserve the established test/integration injection point. Production defaults
+# to the same core function; replacing this symbol never creates another cleanup
+# authority.
+_execute_cleanup = _core.execute_experiment_cleanup_compensation
+
 
 def _precondition_plan_by_step_id(exp: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {
@@ -122,7 +127,7 @@ def _ordinary_cleanup(kwargs: dict[str, Any]) -> dict[str, Any]:
     )
 
     result = _dict(
-        _core.execute_experiment_cleanup_compensation(
+        _execute_cleanup(
             **{
                 **kwargs,
                 "steps_out": projected_steps,
