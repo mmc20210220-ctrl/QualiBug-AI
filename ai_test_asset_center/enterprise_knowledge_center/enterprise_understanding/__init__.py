@@ -43,6 +43,11 @@ from .probe_policy import (
     probe_generation_allowed,
     probe_generation_block_reason,
 )
+from .process_graph_ir import (
+    PROCESS_GRAPH_GATE_SCHEMA,
+    PROCESS_GRAPH_SCHEMA,
+    build_business_process_graphs,
+)
 from .runtime_materialization import (
     RUNTIME_MATERIALIZATION_GATE_SCHEMA,
     RUNTIME_MATERIALIZATION_SCHEMA,
@@ -91,6 +96,8 @@ __all__ = [
     "BEHAVIOR_SCHEMA",
     "BEHAVIOR_ROW_LEDGER_SCHEMA",
     "BEHAVIOR_GATE_SCHEMA",
+    "PROCESS_GRAPH_SCHEMA",
+    "PROCESS_GRAPH_GATE_SCHEMA",
     "IMPLEMENTATION_BINDING_SCHEMA",
     "IMPLEMENTATION_BINDING_GATE_SCHEMA",
     "SCENARIO_PLANNING_GATE_SCHEMA",
@@ -107,6 +114,7 @@ __all__ = [
     "build_business_behavior_ir",
     "build_governed_business_behavior_ir",
     "build_business_behavior_ir_v1",
+    "build_business_process_graphs",
     "build_behavior_implementation_bindings",
     "build_governed_behavior_implementation_bindings",
     "build_final_scenario_planning_gate",
