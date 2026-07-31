@@ -1,0 +1,30 @@
+
+)
+
+
+# Remove the no-longer-used intermediate finalization import and keep bundle
+# assembly separate from the single finalization call.
+source = source.replace(
+    '''        from .operational_receipts import (\n            NOT_APPLICABLE as _NA,\n            assemble_bundle_from_finalizer_observations as _assemble_bundle,\n            build_execution_finalization_receipt as _build_finalization,\n        )''',
+    '''        from .operational_receipts import (\n            NOT_APPLICABLE as _NA,\n            assemble_bundle_from_finalizer_observations as _assemble_bundle,\n        )''',
+    1,
+)
+source = source.replace(
+    '''    _fixture_required = bool(\n        fixture_receipts\n        or _dict(exp.get("fixture_contract"))\n        or _list(exp.get("fixture_requirements"))\n        or _text(exp.get("fixture_id"))\n    )\n    _precondition_required = bool(\n        observations.get("state_precondition_required")\n        or _dict(exp.get("state_precondition"))\n        or _dict(exp.get("state_precondition_plan"))\n    )''',
+    '''    _fixture_required = bool(\n        fixture_receipts\n        or exp.get("fixture_contract")\n        or exp.get("fixture_requirements")\n        or _text(exp.get("fixture_id"))\n    )\n    _precondition_required = bool(\n        observations.get("state_precondition_required")\n        or exp.get("state_precondition")\n        or exp.get("state_precondition_plan")\n    )''',
+    1,
+)
+path.write_text(source, encoding='utf-8')
+
+# Phase-aware reducer precedence: a BLOCKED operational status after all
+# required business steps belongs to Oracle, not partial execution. Cleanup
+# failures must reach the cleanup terminal rather than generic harness failure.
+op_path = Path('ai_test_asset_center/operational_receipts.py')
+op_source = op_path.read_text(encoding='utf-8')
+old_harness = '''            elif status in {"HARNESS_FAILURE", "HARNESS_FAILED"}:\n                lifecycle_state = LIFECYCLE_HARNESS_FAILED\n                reason_code = block_reason or status'''
+new_harness = '''            elif (\n                status in {"HARNESS_FAILURE", "HARNESS_FAILED"}\n                and "CLEANUP" not in block_reason\n                and "ENVIRONMENT" not in block_reason\n            ):\n                lifecycle_state = LIFECYCLE_HARNESS_FAILED\n                reason_code = block_reason or status'''
+if old_harness not in op_source:
+    raise RuntimeError('operational harness precedence block not found')
+op_source = op_source.replace(old_harness, new_harness, 1)
+old_partial = '''                    not required_steps_declared\n                    or not all_required_steps_executed\n                    or status in {"BLOCKED", "DEFERRED"}\n                ):'''
+new_partial = '''                    not required_steps_declared\n                    or not all_required_steps_executed\n                    or status == "DEFERRED"\n                    or (status == "BLOCKED" and not all_required_steps_executed)\n                ):'''
