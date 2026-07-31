@@ -1,0 +1,183 @@
+"""Authenticated HTTP surface for the enterprise identity benchmark workflow."""
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+from urllib.parse import unquote, urlparse
+
+from .private_pilot_debug_client import _dbg_report
+from .real_project_onboarding import _safe_project_id
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _route(path: str) -> tuple[str, str]:
+    parts = [unquote(part) for part in urlparse(path).path.split("/") if part]
+    if len(parts) < 5 or parts[:3] != ["api", "v1", "projects"]:
+        return "", ""
+    if parts[4] != "identity-benchmark":
+        return "", ""
+    if len(parts) == 5:
+        return parts[3], "workspace"
+    if len(parts) == 6 and parts[5] in {"manifest", "ground-truth", "quality-policy"}:
+        return parts[3], parts[5]
+    return "", ""
+
+
+class IdentityBenchmarkHttpMixin:
+    """Route identity annotation requests before the canonical general router."""
+
+    def _identity_benchmark_error(self, exc: Exception, *, project: str) -> Any:
+        detail = _text(exc)
+        if isinstance(exc, PermissionError):
+            return self._json(
+                {"ok": False, "error": "FORBIDDEN", "message": detail}, 403
+            )
+        if isinstance(exc, KeyError):
+            return self._json(
+                {
+                    "ok": False,
+                    "error": "IDENTITY_BENCHMARK_NOT_FOUND",
+                    "message": detail,
+                },
+                404,
+            )
+        if isinstance(exc, ValueError):
+            return self._json(
+                {
+                    "ok": False,
+                    "error": "IDENTITY_BENCHMARK_BAD_REQUEST",
+                    "message": detail,
+                },
+                400,
+            )
+        _dbg_report(
+            hypothesis_id="IDENTITY_BENCHMARK_API",
+            msg="[ERROR] identity benchmark route failed",
+            data={
+                "project_id": project,
+                "path": _text(getattr(self, "path", "")),
+                "exc_type": type(exc).__name__,
+            },
+            trace_id=_text(getattr(self, "_qualibug_corr_id", "")),
+        )
+        return self._json(
+            {
+                "ok": False,
+                "error": "IDENTITY_BENCHMARK_INTERNAL_ERROR",
+                "message": "身份标注与评测资源暂时不可用。",
+            },
+            500,
+        )
+
+    def _identity_benchmark_context(
+        self, raw_project: str
+    ) -> tuple[str, Path, dict[str, Any]] | None:
+        root = self._root()
+        actor = self._require_actor()
+        if actor is None or self._require_tenant(root) is None:
+            return None
+        try:
+            project = _safe_project_id(raw_project)
+        except ValueError:
+            self._json({"ok": False, "error": "PROJECT_NOT_FOUND"}, 404)
+            return None
+        if not self._require_project_scope(project):
+            return None
+        if not self._require_known_project(project, root):
+            return None
+        from . import private_pilot_service as service
+
+        if not self._require_role(
+            actor,
+            service.KNOWLEDGE_MANAGER_ROLES,
+            "enterprise identity benchmark",
+        ):
+            return None
+        return project, root, actor
+
+    def do_GET(self) -> None:  # noqa: N802
+        raw_project, action = _route(_text(getattr(self, "path", "")))
+        if not raw_project or action not in {"workspace", "manifest"}:
+            return super().do_GET()
+        self._init_request_context()
+        context = self._identity_benchmark_context(raw_project)
+        if context is None:
+            return None
+        project, root, _actor = context
+        from .enterprise_knowledge_center.enterprise_understanding.identity_benchmark_workflow import (
+            get_identity_benchmark_workspace,
+        )
+
+        try:
+            workspace = get_identity_benchmark_workspace(project, root)
+        except Exception as exc:
+            return self._identity_benchmark_error(exc, project=project)
+        if action == "manifest":
+            return self._json(
+                {
+                    "ok": True,
+                    "project_id": project,
+                    "data": workspace.get("manifest") or {},
+                }
+            )
+        return self._json({"ok": True, "data": workspace})
+
+    def do_POST(self) -> None:  # noqa: N802
+        raw_project, action = _route(_text(getattr(self, "path", "")))
+        if not raw_project or action not in {"ground-truth", "quality-policy"}:
+            return super().do_POST()
+        self._init_request_context()
+        context = self._identity_benchmark_context(raw_project)
+        if context is None:
+            return None
+        project, root, actor = context
+        try:
+            body = self._body()
+            if not isinstance(body, dict):
+                raise ValueError("identity_benchmark_request_body_must_be_object")
+            if action == "ground-truth":
+                from .enterprise_knowledge_center.enterprise_understanding.identity_benchmark_workflow import (
+                    import_identity_ground_truth,
+                )
+
+                payload = body.get("ground_truth") or body.get("payload") or body
+                if not isinstance(payload, dict):
+                    raise ValueError("identity_ground_truth_payload_required")
+                result = import_identity_ground_truth(
+                    project,
+                    payload,
+                    manifest_id=_text(
+                        body.get("manifest_id")
+                        or body.get("annotation_manifest_id")
+                        or payload.get("manifest_id")
+                        or payload.get("annotation_manifest_id")
+                    ),
+                    actor=actor,
+                    root=root,
+                    rebuild=True,
+                )
+                return self._json({"ok": True, "data": result}, 201)
+
+            from .enterprise_knowledge_center.enterprise_understanding.identity_benchmark_workflow import (
+                update_identity_quality_policy,
+            )
+
+            payload = body.get("quality_policy") or body.get("payload") or body
+            if not isinstance(payload, dict):
+                raise ValueError("identity_quality_policy_payload_required")
+            result = update_identity_quality_policy(
+                project,
+                payload,
+                actor=actor,
+                root=root,
+                rebuild=True,
+            )
+            return self._json({"ok": True, "data": result}, 201)
+        except Exception as exc:
+            return self._identity_benchmark_error(exc, project=project)
+
+
+__all__ = ["IdentityBenchmarkHttpMixin"]
