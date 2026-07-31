@@ -33,15 +33,25 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _plan_step_ids(rows: list[Any], phase: str) -> list[str]:
+    result: list[str] = []
+    for index, raw in enumerate(rows, 1):
+        step = _dict(raw)
+        step_id = _text(step.get("step_id") or step.get("id"))
+        if not step_id:
+            operation_ref = _text(step.get("operation_ref"))
+            step_id = f"{phase}:{operation_ref or 'operation'}:{index}"
+        if step_id not in result:
+            result.append(step_id)
+    return result
+
+
 def _required_step_ids(experiment: dict[str, Any]) -> list[str]:
     required: list[str] = []
     for phase in ("control", "treatment"):
-        for index, raw in enumerate(_list(experiment.get(f"{phase}_plan")), 1):
-            step = _dict(raw)
-            step_id = _text(step.get("step_id") or step.get("id"))
-            if not step_id:
-                operation_ref = _text(step.get("operation_ref"))
-                step_id = f"{phase}:{operation_ref or 'operation'}:{index}"
+        for step_id in _plan_step_ids(
+            _list(experiment.get(f"{phase}_plan")), phase
+        ):
             if step_id not in required:
                 required.append(step_id)
     return required
@@ -69,6 +79,9 @@ def new_experiment_lifecycle_ledger(
         protocol_id=_text(exp.get("protocol_id") or protocol.get("protocol_id")),
         required_step_ids=_required_step_ids(exp),
     )
+    ledger.precondition_step_ids = _plan_step_ids(
+        _list(exp.get("precondition_plan")), "precondition"
+    )
     ledger.record_timeline_event(
         step_id="experiment",
         phase="lifecycle",
@@ -87,6 +100,32 @@ def _finalizer_inputs_sealed(ledger: ProcessStepLedger) -> bool:
     )
 
 
+def _precondition_projection(ledger: ProcessStepLedger) -> dict[str, Any]:
+    required = [
+        _text(step_id)
+        for step_id in list(getattr(ledger, "precondition_step_ids", []) or [])
+        if _text(step_id)
+    ]
+    completed = {
+        _text(event.get("step_id"))
+        for event in ledger.timeline()
+        if isinstance(event, dict)
+        and _text(event.get("phase")) in {"precondition", "fixture"}
+        and _text(event.get("event_type")) == EVENT_STEP_COMPLETED
+        and _text(event.get("step_id"))
+    }
+    missing = [step_id for step_id in required if step_id not in completed]
+    return {
+        "required": bool(required),
+        "required_step_ids": required,
+        "completed_step_ids": [
+            step_id for step_id in required if step_id in completed
+        ],
+        "missing_step_ids": missing,
+        "established": not missing,
+    }
+
+
 def attach_lifecycle_ledger(
     observations: dict[str, Any],
     ledger: ProcessStepLedger,
@@ -102,6 +141,9 @@ def attach_lifecycle_ledger(
     target["pending_semantic_step_ids"] = projection[
         "pending_semantic_step_ids"
     ]
+    precondition = _precondition_projection(ledger)
+    target["state_precondition_receipt"] = precondition
+    target["state_precondition_established"] = precondition["established"]
     if _finalizer_inputs_sealed(ledger):
         target["process_step_ledger"] = ProcessStepSemanticView(
             ledger,
@@ -224,6 +266,10 @@ def _attach_projection_to_result(
     row["pending_semantic_step_ids"] = projection[
         "pending_semantic_step_ids"
     ]
+    row["state_precondition_receipt"] = _precondition_projection(ledger)
+    row["state_precondition_established"] = row[
+        "state_precondition_receipt"
+    ]["established"]
     return row
 
 
