@@ -28,7 +28,9 @@ install_database_relation_phase_execution()
 
 def _database(path: Path) -> None:
     connection = sqlite3.connect(path)
-    connection.execute("CREATE TABLE orders (id TEXT PRIMARY KEY, total NUMERIC NOT NULL)")
+    connection.execute(
+        "CREATE TABLE orders (id TEXT PRIMARY KEY, total NUMERIC NOT NULL)"
+    )
     connection.execute(
         "CREATE TABLE order_lines (id TEXT PRIMARY KEY, order_id TEXT NOT NULL, amount NUMERIC NOT NULL)"
     )
@@ -157,6 +159,20 @@ def _relation_contract() -> dict:
 
 
 def _experiment() -> dict:
+    relation_key = [
+        {
+            "child_database_field_name": "order_id",
+            "parent_database_field_name": "id",
+        }
+    ]
+    aggregate_requests = [
+        {
+            "aggregate": "SUM",
+            "database_field_id": "field:order_lines:amount",
+            "database_field_name": "amount",
+            "alias": "related_value",
+        }
+    ]
     return {
         "experiment_id": "experiment:order-total",
         "obligation_id": "obligation:order-total",
@@ -200,14 +216,7 @@ def _experiment() -> dict:
                 "root_observer_contract_ref": "observer:orders",
                 "observation_phase": "AFTER",
                 "database_relation_observer_contract": _relation_contract(),
-                "aggregate_requests": [
-                    {
-                        "aggregate": "SUM",
-                        "database_field_id": "field:order_lines:amount",
-                        "database_field_name": "amount",
-                        "alias": "related_value",
-                    }
-                ],
+                "aggregate_requests": aggregate_requests,
                 "identity_value_sources": ["request.parameter.id"],
                 "database_connection_ref": "",
                 "required": True,
@@ -221,7 +230,10 @@ def _experiment() -> dict:
                 "require_control": False,
                 "database_relation_observer_ref": "relation-observer:order-lines",
                 "database_relation_draft_id": "draft:relation:after",
+                "database_relationship_id": "fk:order_lines:orders",
+                "relation_key": relation_key,
                 "root_observer_contract_ref": "observer:orders",
+                "root_database_draft_id": "draft:orders:after",
                 "root_table_ref": "table:orders",
                 "root_database_field_id": "field:orders:total",
                 "root_database_field_name": "total",
@@ -245,7 +257,9 @@ def _experiment() -> dict:
     }
 
 
-def test_real_sqlite_root_and_child_aggregate_reach_contract_oracle(tmp_path: Path) -> None:
+def test_real_sqlite_root_and_child_aggregate_reach_contract_oracle(
+    tmp_path: Path,
+) -> None:
     project = "relation_runtime_integration"
     database = tmp_path / "orders.sqlite3"
     _database(database)
@@ -279,6 +293,14 @@ def test_real_sqlite_root_and_child_aggregate_reach_contract_oracle(tmp_path: Pa
         "approved_database_relation_aggregate_snapshot"
     ]
     assert str(relation_payload["aggregate_values"]["related_value"]) == "25"
+    assert relation_payload["aggregate_requests"] == [
+        {
+            "aggregate": "SUM",
+            "database_field_id": "field:order_lines:amount",
+            "database_field_name": "amount",
+            "alias": "related_value",
+        }
+    ]
     assert relation_payload["raw_rows_retained"] is False
     assert relation_payload["oracle_verdict_emitted"] is False
 
@@ -328,6 +350,8 @@ def test_real_sqlite_root_and_child_aggregate_reach_contract_oracle(tmp_path: Pa
     assert result["verdict"] == "customer_deliverable_defect_candidate"
     assertion = result["failed_assertions"][0]
     assert assertion["kind"] == ASSERTION_KIND
+    assert assertion["actual"]["relation_key_match"] is True
+    assert assertion["actual"]["aggregate_request_match"] is True
     assert assertion["actual"]["root_value"] == "30"
     assert assertion["actual"]["aggregate_value"] == "25"
     assert assertion["actual"]["difference"] == "5"
