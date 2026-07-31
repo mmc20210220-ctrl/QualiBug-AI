@@ -172,7 +172,8 @@ def test_command_center_exposes_internal_rerun_queue_without_touching_defects(
         **_payload(),
         "historical_authorization_quarantine": quarantine,
         "historical_authorization_artifact_migration": {
-            "status": "MIGRATED"
+            "status": "MIGRATED",
+            "rebuild_reason": "",
         },
     }
     monkeypatch.setattr(
@@ -195,6 +196,9 @@ def test_command_center_exposes_internal_rerun_queue_without_touching_defects(
     ]
     assert data["historical_authorization_quarantine_summary"] == {
         "status": "QUARANTINED",
+        "migration_status": "MIGRATED",
+        "registry_rebuild_reason": "",
+        "canonical_registry_rebuilt": True,
         "quarantine_count": 1,
         "rerun_required_count": 1,
         "manual_recompile_required_count": 0,
