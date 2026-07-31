@@ -9,11 +9,65 @@ from __future__ import annotations
 
 from typing import Any
 
+from .event_observer_implementation_projection import project_formal_event_observers
 from .schema import as_dict, as_list, text
 
 SCENARIO_PLANNING_GATE_SCHEMA = "qualibug.business-behavior-scenario-planning-gate.v1"
 _SEMANTIC_SCENARIO_GAP = "BLOCKED_SCENARIO_PLANNING_SEMANTIC_GATE"
 _PARTIAL_PASS = "PARTIAL_PASS_SCENARIO_PLANNING"
+
+
+def _project_event_observer_authority(
+    asset: dict[str, Any], model: dict[str, Any]
+) -> None:
+    bindings, unknowns, conflicts, gate = project_formal_event_observers(
+        asset,
+        as_list(model.get("business_behaviors")),
+        as_list(model.get("behavior_implementation_bindings")),
+        as_list(model.get("implementation_binding_unknowns")),
+        as_list(model.get("implementation_binding_conflicts")),
+        as_dict(model.get("implementation_binding_gate")),
+    )
+    model["behavior_implementation_bindings"] = bindings
+    model["implementation_binding_unknowns"] = unknowns
+    model["implementation_binding_conflicts"] = conflicts
+    model["implementation_binding_gate"] = gate
+    asset["behavior_implementation_bindings"] = [dict(row) for row in bindings]
+    asset["implementation_binding_unknowns"] = [dict(row) for row in unknowns]
+    asset["implementation_binding_conflicts"] = [dict(row) for row in conflicts]
+    asset["implementation_binding_gate"] = dict(gate)
+
+    metrics = as_dict(gate.get("metrics"))
+    summary = dict(as_dict(asset.get("summary")))
+    summary.update(
+        {
+            "implementation_binding_status": gate.get("status"),
+            "implementation_binding_ready": bool(gate.get("entry_allowed")),
+            "scenario_ready_binding_count": int(
+                metrics.get("scenario_ready_binding_count") or 0
+            ),
+            "formal_event_contract_count": int(
+                metrics.get("formal_event_contract_count") or 0
+            ),
+            "formal_event_observer_binding_count": int(
+                metrics.get("formal_event_observer_binding_count") or 0
+            ),
+            "formal_event_contract_bound_count": int(
+                metrics.get("formal_event_contract_bound_count") or 0
+            ),
+        }
+    )
+    asset["summary"] = summary
+    governance = dict(as_dict(asset.get("governance")))
+    governance.update(
+        {
+            "formal_event_observer_binding_enabled": True,
+            "formal_event_observer_reuses_existing_event_contract_authority": True,
+            "formal_event_contract_is_effect_observer_not_action_surface": True,
+            "event_topic_or_broker_inference_allowed": False,
+        }
+    )
+    asset["governance"] = governance
 
 
 def build_final_scenario_planning_gate(model: dict[str, Any]) -> dict[str, Any]:
@@ -119,6 +173,7 @@ def project_final_scenario_planning_gate(
     asset: dict[str, Any], model: dict[str, Any]
 ) -> dict[str, Any]:
     """Expose final gates, Scenario IR and non-executable execution requirements."""
+    _project_event_observer_authority(asset, model)
     scenario_gate = build_final_scenario_planning_gate(model)
     asset["scenario_planning_gate"] = scenario_gate
 
