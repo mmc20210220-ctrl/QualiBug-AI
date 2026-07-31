@@ -6,6 +6,7 @@ bindings are ready, before any measured control/treatment step.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 from .experiment_fixture_materializer_core import (
@@ -76,7 +77,20 @@ def materialize_experiment_fixtures(**kwargs: Any) -> dict[str, Any]:
     if precondition.get("established") is True:
         return state
 
-    state["status"] = "precondition_blocked"
+    # Preserve accepted precondition writes in ``steps_out`` so the existing
+    # cleanup authority can compensate them, but clear the measured plans before
+    # the executor reaches barrier/control/treatment dispatch.
+    state["precondition_blocked"] = True
     state["precondition_reason_code"] = _text(precondition.get("reason_code"))
     state["precondition_detail"] = _text(precondition.get("detail"))
+    exp["blocked_measured_plans"] = {
+        "control_plan": deepcopy(_list(exp.get("control_plan"))),
+        "treatment_plan": deepcopy(_list(exp.get("treatment_plan"))),
+        "reason_code": state["precondition_reason_code"],
+    }
+    exp["control_plan"] = []
+    exp["treatment_plan"] = []
+    exp["execution_precondition_blocked"] = deepcopy(precondition)
+    # Remain on the normal execution path only to run cleanup and Finalizer.
+    state["status"] = "ready"
     return state
