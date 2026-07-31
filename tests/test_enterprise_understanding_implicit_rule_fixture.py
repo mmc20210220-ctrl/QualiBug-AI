@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 from benchmark_evaluator.enterprise_understanding.implicit_rules import (
@@ -70,13 +71,17 @@ def test_frozen_statuses_follow_current_execution_capabilities():
 
 
 def test_minimal_openapi_fixture_adds_no_unannotated_rule_candidates():
-    content = (FIXTURE / "payment_api.openapi.json").read_text(encoding="utf-8")
+    path = FIXTURE / "payment_api.openapi.json"
+    content = path.read_text(encoding="utf-8")
+    document = json.loads(content)
+    operation = document["paths"]["/payments"]["post"]
 
-    assert '"operationId": "submitPayment"' in content
-    assert (
-        '"description": "同一付款请求不得重复成功扣款；重复提交时业务成功效果最多发生一次。"'
-        in content
+    assert operation["operationId"] == "submitPayment"
+    assert operation["description"] == (
+        "同一付款请求不得重复成功扣款；重复提交时业务成功效果最多发生一次。"
     )
-    assert '"requestBody"' not in content
+    assert "同一付款请求" not in content
+    assert "不得重复" not in content
+    assert "requestBody" not in operation
     assert '"required"' not in content
     assert '"properties"' not in content
