@@ -1,8 +1,8 @@
 """Fixture materialization followed by frozen data proof and preconditions.
 
 The core fixture materializer remains the sole data/setup executor. This wrapper
-first proves its result against the compile-frozen FlowDataRequirement, then
-executes the already-frozen precondition plan, all before measured business
+projects the frozen FlowDataRequirement into the core's supported node schema,
+proves the result, then executes compiled preconditions before measured business
 steps. Any block preserves cleanup context and clears measurement plans.
 """
 from __future__ import annotations
@@ -17,6 +17,9 @@ from .experiment_precondition_executor import execute_precondition_plan
 from .flow_data_materialization import (
     STATUS_VALID as FLOW_DATA_VALID,
     validate_flow_data_materialization,
+)
+from .flow_data_materializer_projection import (
+    project_flow_data_materializer_dag,
 )
 
 
@@ -63,11 +66,26 @@ def _block_measurement(
 
 
 def materialize_experiment_fixtures(**kwargs: Any) -> dict[str, Any]:
-    state = _dict(_materialize_experiment_fixtures(**kwargs))
+    exp = _dict(kwargs.get("exp"))
+    projected_exp, projection_receipt = project_flow_data_materializer_dag(exp)
+    state = _dict(
+        _materialize_experiment_fixtures(
+            **{
+                **kwargs,
+                "exp": projected_exp,
+            }
+        )
+    )
+    state["flow_data_materializer_projection_receipt"] = projection_receipt
     if _text(state.get("status")) != "ready":
+        terminal_result = _dict(state.get("result"))
+        if terminal_result:
+            terminal_result["flow_data_materializer_projection_receipt"] = (
+                projection_receipt
+            )
+            state["result"] = terminal_result
         return state
 
-    exp = _dict(kwargs.get("exp"))
     flow_data_receipt = validate_flow_data_materialization(exp, state)
     state["flow_data_materialization_receipt"] = flow_data_receipt
     exp["flow_data_materialization_receipt"] = deepcopy(flow_data_receipt)
@@ -84,6 +102,9 @@ def materialize_experiment_fixtures(**kwargs: Any) -> dict[str, Any]:
             "receipt_id": _text(flow_data_receipt.get("requirement_id")),
             "requirement_fingerprint": _text(
                 flow_data_receipt.get("requirement_fingerprint")
+            ),
+            "projection_fingerprint": _text(
+                projection_receipt.get("projection_fingerprint")
             ),
             "required_target_count": int(
                 flow_data_receipt.get("required_target_count") or 0
