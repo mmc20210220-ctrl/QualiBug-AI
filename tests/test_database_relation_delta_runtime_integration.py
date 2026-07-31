@@ -14,6 +14,11 @@ from ai_test_asset_center.database_observer_experiment_runtime import (
 )
 from ai_test_asset_center.database_relation_delta_experiment_projection import (
     ASSERTION_KIND,
+    _stable_id,
+)
+from ai_test_asset_center.database_relation_delta_projection_gate import (
+    SEMANTIC_PAIR_SCHEMA,
+    semantic_relation_delta_pair_id,
 )
 from ai_test_asset_center.database_relation_observer_experiment_runtime import (
     aggregate_database_relation_phase_receipts,
@@ -177,10 +182,13 @@ def _relation_requests() -> list[dict]:
 
 
 def _assertion() -> dict:
-    return {
+    row = {
         "assertion_id": "assert:balance-ledger-delta",
         "kind": ASSERTION_KIND,
         "source_assertion_kind": "conservation",
+        "source_refs": [
+            {"kind": "business_rule", "locator": "BR-BALANCE-LEDGER"}
+        ],
         "require_control": False,
         "database_relation_observer_ref": "relation-observer:ledger",
         "database_relationship_id": "fk:ledger:accounts",
@@ -190,13 +198,11 @@ def _assertion() -> dict:
                 "parent_database_field_name": "id",
             }
         ],
-        "relation_pair_id": "pair-1",
-        "relation_before_draft_id": "draft:relation:before",
-        "relation_after_draft_id": "draft:relation:after",
         "root_observer_contract_ref": "observer:accounts",
         "root_before_draft_id": "draft:accounts:before",
         "root_after_draft_id": "draft:accounts:after",
         "root_table_ref": "table:accounts",
+        "root_field_binding_id": "binding:accounts:balance",
         "root_database_field_id": "field:accounts:balance",
         "root_database_field_name": "balance",
         "child_table_ref": "table:ledger_entries",
@@ -209,19 +215,56 @@ def _assertion() -> dict:
         "aggregate_on_left": False,
         "left_coefficient": -1,
         "right_coefficient": 1,
+        "comparison_phase_pair": "BEFORE_AFTER",
         "tolerance": "0",
+        "database_relation_delta_binding": {
+            "relation_mapping_decision_id": "decision:ledger",
+        },
     }
+    pair_id = semantic_relation_delta_pair_id(row)
+    before_id = _stable_id(
+        "database_relation_observer_execution_draft",
+        row["database_relation_observer_ref"],
+        row["assertion_id"],
+        "BEFORE",
+        pair_id,
+    )
+    after_id = _stable_id(
+        "database_relation_observer_execution_draft",
+        row["database_relation_observer_ref"],
+        row["assertion_id"],
+        "AFTER",
+        pair_id,
+    )
+    row.update(
+        {
+            "relation_pair_id": pair_id,
+            "relation_before_draft_id": before_id,
+            "relation_after_draft_id": after_id,
+        }
+    )
+    row["database_relation_delta_binding"].update(
+        {
+            "semantic_pair_schema": SEMANTIC_PAIR_SCHEMA,
+            "relation_pair_id": pair_id,
+            "relation_before_draft_id": before_id,
+            "relation_after_draft_id": after_id,
+            "pair_covers_complete_assertion_semantics": True,
+        }
+    )
+    return row
 
 
 def _experiment() -> dict:
     root_contract = _root_contract()
     relation_contract = _relation_contract()
+    assertion = _assertion()
     return {
         "experiment_id": "experiment:balance-ledger",
         "obligation_id": "obligation:balance-ledger",
         "campaign_id": "campaign-1",
         "execution_id": "execution-1",
-        "source_refs": [{"kind": "business_rule", "locator": "BR-BALANCE-LEDGER"}],
+        "source_refs": assertion["source_refs"],
         "control_plan": [],
         "treatment_plan": [
             {
@@ -240,7 +283,7 @@ def _experiment() -> dict:
         "database_observer_execution_drafts": [
             {
                 "schema": "qualibug.database-observer-execution-draft.v1",
-                "draft_id": "draft:accounts:before",
+                "draft_id": assertion["root_before_draft_id"],
                 "observer_handler_id": "approved_database_readback",
                 "observer_contract_ref": "observer:accounts",
                 "observation_phase": "BEFORE",
@@ -251,7 +294,7 @@ def _experiment() -> dict:
             },
             {
                 "schema": "qualibug.database-observer-execution-draft.v1",
-                "draft_id": "draft:accounts:after",
+                "draft_id": assertion["root_after_draft_id"],
                 "observer_handler_id": "approved_database_readback",
                 "observer_contract_ref": "observer:accounts",
                 "observation_phase": "AFTER",
@@ -264,8 +307,8 @@ def _experiment() -> dict:
         "database_relation_observer_execution_drafts": [
             {
                 "schema": "qualibug.database-relation-observer-execution-draft.v1",
-                "draft_id": "draft:relation:before",
-                "relation_pair_id": "pair-1",
+                "draft_id": assertion["relation_before_draft_id"],
+                "relation_pair_id": assertion["relation_pair_id"],
                 "observer_handler_id": "approved_database_relation_aggregate",
                 "relation_observer_contract_ref": "relation-observer:ledger",
                 "root_observer_contract_ref": "observer:accounts",
@@ -278,8 +321,8 @@ def _experiment() -> dict:
             },
             {
                 "schema": "qualibug.database-relation-observer-execution-draft.v1",
-                "draft_id": "draft:relation:after",
-                "relation_pair_id": "pair-1",
+                "draft_id": assertion["relation_after_draft_id"],
+                "relation_pair_id": assertion["relation_pair_id"],
                 "observer_handler_id": "approved_database_relation_aggregate",
                 "relation_observer_contract_ref": "relation-observer:ledger",
                 "root_observer_contract_ref": "observer:accounts",
@@ -291,7 +334,7 @@ def _experiment() -> dict:
                 "required": True,
             },
         ],
-        "assertions": [_assertion()],
+        "assertions": [assertion],
         "field_oracle_runtime_contract": {
             "schema_version": "qualibug.field-oracle-runtime-contract.v1",
             "status": "RESOLVED",
@@ -309,6 +352,7 @@ def test_real_sqlite_before_after_relation_delta_reaches_contract_oracle(
     _database(database)
     _config(tmp_path, project, database)
     experiment = _experiment()
+    assertion = experiment["assertions"][0]
     observations: dict = {}
 
     before_summary = phase_runtime.execute_database_observer_phase(
@@ -357,6 +401,10 @@ def test_real_sqlite_before_after_relation_delta_reaches_contract_oracle(
     assert after_summary["status"] == "OBSERVED"
     assert len(observations["approved_database_observer_phase_receipts"]) == 2
     assert len(observations["approved_database_relation_phase_receipts"]) == 2
+    assert {
+        row["relation_pair_id"]
+        for row in observations["approved_database_relation_phase_receipts"]
+    } == {assertion["relation_pair_id"]}
 
     relation_payloads = {
         row["observation_phase"]: row["evidence"][
@@ -417,6 +465,9 @@ def test_real_sqlite_before_after_relation_delta_reaches_contract_oracle(
     assert result["verdict"] == "customer_deliverable_defect_candidate"
     failed = result["failed_assertions"][0]
     assert failed["kind"] == ASSERTION_KIND
+    assert failed["actual"]["binding_match"] is True
+    assert failed["actual"]["semantic_pair_match"] is True
+    assert failed["actual"]["relation_pair_match"] is True
     assert failed["actual"]["root_before"] == "100"
     assert failed["actual"]["root_after"] == "85"
     assert failed["actual"]["root_delta"] == "-15"
