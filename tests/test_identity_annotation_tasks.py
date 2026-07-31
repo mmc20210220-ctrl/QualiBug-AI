@@ -231,6 +231,63 @@ def test_adjudication_resolves_double_blind_disagreement() -> None:
     assert result["disagreement_count"] > 0
 
 
+def test_nested_product_prediction_fields_are_rejected() -> None:
+    package = build_identity_annotation_task_package(_asset())
+    primary = _submission(
+        package,
+        name="annotator-a",
+        groups={"mention:a": "A1", "mention:b": "A1", "mention:c": "A2"},
+    )
+    primary["annotations"][0]["review_context"] = {
+        "predicted_entity_id": "entity:copied-from-product"
+    }
+
+    with pytest.raises(
+        ValueError, match="product_prediction_fields_cannot_be_identity_annotation"
+    ):
+        compile_identity_annotation_submissions(package, primary)
+
+
+def test_adjudicator_must_be_independent_and_explicit() -> None:
+    package = build_identity_annotation_task_package(_asset())
+    primary = _submission(
+        package,
+        name="annotator-a",
+        groups={"mention:a": "A1", "mention:b": "A1", "mention:c": "A2"},
+    )
+    secondary = _submission(
+        package,
+        name="annotator-b",
+        groups={"mention:a": "B1", "mention:b": "B2", "mention:c": "B3"},
+    )
+    wrong_role = _submission(
+        package,
+        name="reviewer",
+        groups={"mention:a": "R1", "mention:b": "R1", "mention:c": "R2"},
+    )
+    with pytest.raises(ValueError, match="identity_adjudicator_role_required"):
+        compile_identity_annotation_submissions(
+            package,
+            primary,
+            secondary_submission=secondary,
+            adjudication_submission=wrong_role,
+        )
+
+    same_person = _submission(
+        package,
+        name="ANNOTATOR-A",
+        role="ADJUDICATOR",
+        groups={"mention:a": "R1", "mention:b": "R1", "mention:c": "R2"},
+    )
+    with pytest.raises(ValueError, match="identity_adjudicator_must_be_independent"):
+        compile_identity_annotation_submissions(
+            package,
+            primary,
+            secondary_submission=secondary,
+            adjudication_submission=same_person,
+        )
+
+
 def test_incomplete_submission_is_rejected_before_ground_truth_compilation() -> None:
     package = build_identity_annotation_task_package(_asset())
     incomplete = _submission(
