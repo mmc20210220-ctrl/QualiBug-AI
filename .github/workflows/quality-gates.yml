@@ -56,6 +56,7 @@ jobs:
           python -c "import ast; ast.parse(open('ai_test_asset_center/process_graph_cleanup_executor.py').read()); print('process_graph_cleanup_executor.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/process_graph_cleanup_executor_core.py').read()); print('process_graph_cleanup_executor_core.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/process_graph_cleanup_equivalence.py').read()); print('process_graph_cleanup_equivalence.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/process_graph_cleanup_equivalence_core.py').read()); print('process_graph_cleanup_equivalence_core.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/cleanup_equivalence.py').read()); print('cleanup_equivalence.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/cleanup_equivalence_core.py').read()); print('cleanup_equivalence_core.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/experiment_plan_executor.py').read()); print('experiment_plan_executor.py OK')"
@@ -114,6 +115,8 @@ jobs:
             tests/test_process_graph_write_rollback_integration.py \
             tests/test_process_graph_dependency_rollback.py \
             tests/test_process_graph_multi_write_equivalence.py \
+            tests/test_process_graph_cleanup_equivalence_scope.py \
+            tests/test_process_graph_environment_receipt_truth.py \
             tests/test_experiment_cleanup_lifecycle_adapter.py \
             tests/test_architecture_extraction_contracts.py \
             tests/test_identity_annotation_tasks.py \
