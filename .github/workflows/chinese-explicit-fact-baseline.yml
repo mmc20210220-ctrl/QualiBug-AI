@@ -12,6 +12,7 @@ on:
       - "tests/test_enterprise_understanding_fact_slots.py"
       - "tests/test_enterprise_understanding_fact_slot_report.py"
       - "tests/test_enterprise_understanding_post_compile_governance.py"
+      - "tests/test_enterprise_understanding_implicit_rule_*.py"
       - ".github/workflows/chinese-explicit-fact-baseline.yml"
       - "pyproject.toml"
 
@@ -44,14 +45,15 @@ jobs:
             ai_test_asset_center/enterprise_knowledge_center \
             benchmark_evaluator/enterprise_understanding
 
-      - name: Run focused scoring and fact-contract tests
+      - name: Run focused evaluator contracts
         run: |
           pytest -q \
             tests/test_enterprise_understanding_chinese_explicit_fact_baseline.py \
             tests/test_enterprise_understanding_fact_probe_policy.py \
             tests/test_enterprise_understanding_fact_slots.py \
             tests/test_enterprise_understanding_fact_slot_report.py \
-            tests/test_enterprise_understanding_post_compile_governance.py
+            tests/test_enterprise_understanding_post_compile_governance.py \
+            tests/test_enterprise_understanding_implicit_rule_*.py
 
       - name: Run isolated source-backed baseline
         run: |
