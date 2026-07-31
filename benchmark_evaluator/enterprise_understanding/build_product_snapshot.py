@@ -1,8 +1,9 @@
 """Build one evaluator product snapshot through the existing product authorities.
 
 This module is executed as a dedicated product-only subprocess. It reads one public source
-manifest, calls the existing knowledge ingestion API and the single explicit composition root,
-then captures the persisted finalized asset. It never accepts or loads a Ground Truth path.
+manifest, calls the canonical source-occurrence ingestion root and the single explicit
+composition root, then captures the persisted finalized asset. It never accepts or loads a
+Ground Truth path.
 """
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ from benchmark_evaluator.scored_run_comparison import _fingerprint
 from .capture_product_asset import capture_finalized_product_asset
 
 SOURCE_MANIFEST_SCHEMA = "qualibug.enterprise-understanding-source-manifest.v1"
-PRODUCT_PHASE_RECEIPT_SCHEMA = "qualibug.enterprise-understanding-product-phase.v1"
+PRODUCT_PHASE_RECEIPT_SCHEMA = "qualibug.enterprise-understanding-product-phase.v2"
 
 
 class ProductPhaseError(RuntimeError):
@@ -65,11 +66,7 @@ def _load_manifest(path: Path) -> dict[str, Any]:
 def _resolve_sources(
     manifest: dict[str, Any], product_root: Path
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Resolve public sources into canonical ingestion envelopes.
-
-    ``external_ref`` is the stable source identity declared by the manifest. The absolute
-    workspace path is transport-only and is never persisted as enterprise source identity.
-    """
+    """Resolve public sources into canonical ingestion envelopes."""
     excluded = {
         _portable_source_ref(value)
         for value in manifest.get("excluded_from_product_phase") or []
@@ -136,14 +133,12 @@ def _assert_clean_project_workspace(workspace_root: Path, project_id: str) -> No
     )
     dirty = [str(path) for path in candidates if path.exists()]
     if dirty:
-        raise ProductPhaseError(
-            "product_phase_workspace_not_clean:" + ",".join(dirty)
-        )
+        raise ProductPhaseError("product_phase_workspace_not_clean:" + ",".join(dirty))
 
 
 def _default_product_authorities():
-    # Delayed imports are deliberate: importing evaluator modules does not load product runtime.
-    from ai_test_asset_center.enterprise_knowledge_center._crud import (
+    # Delayed imports keep evaluator package import declarative.
+    from ai_test_asset_center.enterprise_knowledge_center.source_occurrence_authority import (
         ingest_enterprise_knowledge_documents,
     )
     from ai_test_asset_center.enterprise_knowledge_center.composition import (
@@ -151,6 +146,17 @@ def _default_product_authorities():
     )
 
     return ingest_enterprise_knowledge_documents, build_enterprise_business_knowledge_asset
+
+
+def _occurrence_rows(ingest_receipt: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        dict(row)
+        for row in [
+            *(ingest_receipt.get("source_occurrences") or []),
+            *(ingest_receipt.get("duplicate_source_occurrences") or []),
+        ]
+        if isinstance(row, dict)
+    ]
 
 
 def build_isolated_product_snapshot(
@@ -178,9 +184,7 @@ def build_isolated_product_snapshot(
     manifest = _load_manifest(manifest_file)
     manifest_project = str(manifest.get("project_id") or "").strip()
     if manifest_project and manifest_project != project:
-        raise ProductPhaseError(
-            f"source_manifest_project_mismatch:{manifest_project}:{project}"
-        )
+        raise ProductPhaseError(f"source_manifest_project_mismatch:{manifest_project}:{project}")
     source_documents, source_receipts = _resolve_sources(manifest, product)
     ingest, build = authorities or _default_product_authorities()
     ingest_receipt = ingest(
@@ -194,30 +198,33 @@ def build_isolated_product_snapshot(
             "public_source_ingest_failed:"
             + json.dumps(ingest_receipt, ensure_ascii=False, sort_keys=True, default=str)[:1000]
         )
-    created = [
-        dict(row)
-        for row in ingest_receipt.get("created") or []
-        if isinstance(row, dict)
-    ]
-    source_ref_by_id = {
-        str(row.get("source_id") or ""): str(row.get("external_ref") or "")
-        for row in created
-        if str(row.get("source_id") or "")
+
+    occurrences = _occurrence_rows(ingest_receipt)
+    occurrence_ref_by_id = {
+        str(row.get("source_occurrence_id") or ""): str(row.get("source_ref") or "")
+        for row in occurrences
+        if str(row.get("source_occurrence_id") or "")
+    }
+    canonical_source_by_occurrence = {
+        str(row.get("source_occurrence_id") or ""): str(
+            row.get("canonical_source_id") or row.get("source_id") or ""
+        )
+        for row in occurrences
+        if str(row.get("source_occurrence_id") or "")
     }
     expected_refs = {row["source_ref"] for row in source_receipts}
-    persisted_refs = {value for value in source_ref_by_id.values() if value}
+    persisted_refs = {value for value in occurrence_ref_by_id.values() if value}
     if persisted_refs != expected_refs:
         raise ProductPhaseError(
-            "source_manifest_external_ref_not_preserved:"
+            "source_manifest_occurrences_not_preserved:"
             + json.dumps(
-                {
-                    "expected": sorted(expected_refs),
-                    "persisted": sorted(persisted_refs),
-                },
+                {"expected": sorted(expected_refs), "persisted": sorted(persisted_refs)},
                 ensure_ascii=False,
                 sort_keys=True,
             )
         )
+    if any(not value for value in canonical_source_by_occurrence.values()):
+        raise ProductPhaseError("source_occurrence_canonical_source_mapping_incomplete")
 
     asset = build(project, workspace, {"probe_limit": 0})
     if not isinstance(asset, dict) or not isinstance(
@@ -236,12 +243,26 @@ def build_isolated_product_snapshot(
         "source_manifest_path": str(manifest_file),
         "source_manifest_fingerprint": _fingerprint(manifest),
         "source_receipts": source_receipts,
-        "source_ref_by_source_id": source_ref_by_id,
-        "source_identity_authority": "SOURCE_INVENTORY_EXTERNAL_REF",
+        "source_occurrence_ref_by_id": occurrence_ref_by_id,
+        "canonical_source_id_by_occurrence_id": canonical_source_by_occurrence,
+        "source_identity_authority": "SOURCE_OCCURRENCE_REGISTRY",
         "source_manifest_external_refs_preserved": True,
+        "content_identity_separate_from_source_occurrence": True,
+        "interpretation_identity_separate_from_content_identity": True,
+        "same_interpretation_content_parsed_once": True,
         "absolute_workspace_paths_persisted_as_identity": False,
-        "ingest_created_count": len(created),
+        "ingest_created_count": len(ingest_receipt.get("created") or []),
         "ingest_duplicate_count": len(ingest_receipt.get("duplicates") or []),
+        "source_occurrence_created_count": len(
+            ingest_receipt.get("source_occurrences") or []
+        ),
+        "source_occurrence_duplicate_count": len(
+            ingest_receipt.get("duplicate_source_occurrences") or []
+        ),
+        "content_asset_count": int(ingest_receipt.get("content_asset_count") or 0),
+        "interpretation_asset_count": int(
+            ingest_receipt.get("interpretation_asset_count") or 0
+        ),
         "composition_authority": (
             "ai_test_asset_center.enterprise_knowledge_center.composition."
             "build_enterprise_business_knowledge_asset"
