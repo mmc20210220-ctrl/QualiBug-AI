@@ -239,6 +239,8 @@ def _compile_event_experiment() -> tuple[dict[str, Any], dict[str, Any]]:
         row.get("observer_id") == events.OBSERVER_ID
         for row in experiment["observers"]
     )
+    assert not experiment.get("disposable_fixture_contract")
+    assert not (experiment.get("fixture_dag") or {}).get("nodes")
     return model, experiment
 
 
@@ -388,7 +390,9 @@ def test_compiled_post_event_runs_before_cleanup_and_restores_environment(
         if row.get("observer_id") == events.OBSERVER_ID
     ]
     assert len(event_receipts) == 1
-    event_evidence = event_receipts[0]["evidence"][events.EVIDENCE_KEY]
+    event_receipt = event_receipts[0]
+    assert event_receipt["evidence"]["step_id"] == "treatment_1"
+    event_evidence = event_receipt["evidence"][events.EVIDENCE_KEY]
     assert event_evidence["observation_phase"] == "pre_cleanup"
     assert event_evidence["observed_total_count"] == 0
     assert event_evidence["coverage_complete"] is True
@@ -399,6 +403,35 @@ def test_compiled_post_event_runs_before_cleanup_and_restores_environment(
     )
     equivalence = result["cleanup_equivalence_receipt"]
     assert equivalence["equivalence_status"] == "EQUIVALENT"
+    assert result["environment_restored"] is True
+
+    bundle = result["execution_receipt_bundle"]
+    assert bundle["fixture_id"] == "NOT_APPLICABLE"
+    assert bundle["fixture_provenance_receipt_ids"] == []
+    assert bundle["complete"] is True
+    assert bundle["validation_errors"] == []
+    process_audit = bundle["process_step_audit"]
+    assert process_audit["complete"] is True
+    assert process_audit["step_evidence_scopes_complete"] is True
+    scope = process_audit["evidence_scope_audit"]
+    assert scope["complete"] is True
+    assert scope["unbound_receipt_ids"] == []
+    assert scope["broadcast_receipt_ids"] == []
+    for key in (
+        "observation",
+        "oracle_invocation",
+        "oracle_trace",
+        "cleanup_execution",
+        "cleanup_verification",
+    ):
+        owners = set(scope[key]["exact_owner_by_receipt"].values())
+        assert owners == {"treatment_1"}
+
+    finalization = result["execution_finalization_receipt"]
+    assert finalization["true_completed"] is True
+    assert finalization["derived_terminal_status"] == "TRUE_COMPLETED"
+    assert result["lifecycle_state"] == "TRUE_COMPLETED"
+
     assert result["finding"] is not None
     assert result["finding"]["risk_family"] == events.RISK_FAMILY
     assert result["finding"]["category"] == events.ASSERTION_KIND
