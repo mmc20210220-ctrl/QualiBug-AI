@@ -58,7 +58,9 @@ def test_second_pass_classifies_identity_and_reapplies_conflicts(tmp_path) -> No
     assert result["governance"]["business_fact_two_pass_identity_governance"] is True
 
 
-def test_atomic_cardinality_value_reaches_existing_rule_candidate_contract(tmp_path) -> None:
+def test_atomic_cardinality_value_reaches_existing_rule_and_formal_slot_contract(
+    tmp_path,
+) -> None:
     fact = {
         "fact_id": "fact:cardinality",
         "kind": "RULE",
@@ -110,17 +112,73 @@ def test_atomic_cardinality_value_reaches_existing_rule_candidate_contract(tmp_p
         root=tmp_path,
     )
 
-    normalized = result["business_fact_ledger"]["items"][0]
-    assert normalized["value"] == {
+    expected = {
         "cardinality": "EXACTLY_ONE",
         "minimum": 1,
         "maximum": "1",
     }
-    assert result["typed_fact_value_projection_receipt"]["status"] == "PASS"
+    normalized = result["business_fact_ledger"]["items"][0]
+    assert normalized["value"] == expected
+    assert normalized["quantity_constraints"] == [expected]
+    assert normalized["typed_value_projection"][
+        "formal_quantity_constraint_projected"
+    ] is True
+    receipt = result["typed_fact_value_projection_receipt"]
+    assert receipt["status"] == "PASS"
+    assert receipt["formal_quantity_constraint_projected_fact_count"] == 1
+    assert result["governance"][
+        "cardinality_value_and_quantity_constraint_share_one_authority"
+    ] is True
     candidates = derive_rule_candidates_from_business_facts(result)
     assert len(candidates) == 1
     assert candidates[0]["logical_form"] == "CARDINALITY"
     assert candidates[0]["consequent"]["maximum"] == "1"
+
+
+def test_existing_top_level_cardinality_value_also_closes_formal_slot(tmp_path) -> None:
+    fact = {
+        "fact_id": "fact:top-level-cardinality",
+        "kind": "RULE",
+        "fact_type": "CARDINALITY_CONSTRAINT",
+        "status": "ACCEPTED",
+        "raw_statement": "每个采购订单可以包含多个订单明细。",
+        "subject": {"actor_refs": [], "entity_refs": ["采购订单"]},
+        "object": {"entity_refs": ["订单明细"]},
+        "value": {
+            "cardinality": "ONE_TO_MANY",
+            "minimum": 0,
+            "maximum": "MANY",
+        },
+        "source_spans": [
+            {
+                "source_id": "source:rules",
+                "locator": "rules.docx#paragraph=4",
+                "quote": "每个采购订单可以包含多个订单明细。",
+                "quote_hash": "sha256:many",
+                "document_block_id": "block:many",
+                "address_kind": "EXACT_SOURCE_LOCATOR",
+            }
+        ],
+    }
+    asset = {
+        "project_id": "demo",
+        "business_fact_ledger": {"items": [fact]},
+        "cross_document_conflicts": [],
+        "enterprise_comprehension_gate": {"status": "PASS", "entry_allowed": True},
+        "coverage_gaps": [],
+    }
+
+    result = govern_compiled_business_facts(
+        asset,
+        project_id="demo",
+        root=tmp_path,
+    )
+
+    normalized = result["business_fact_ledger"]["items"][0]
+    assert normalized["quantity_constraints"] == [fact["value"]]
+    assert result["typed_fact_value_projection_receipt"][
+        "formal_quantity_constraint_projected_fact_count"
+    ] == 1
 
 
 def test_multiple_atomic_values_are_never_auto_selected(tmp_path) -> None:
@@ -147,7 +205,7 @@ def test_multiple_atomic_values_are_never_auto_selected(tmp_path) -> None:
         "source_spans": [
             {
                 "source_id": "source:rules",
-                "locator": "rules.docx#paragraph=4",
+                "locator": "rules.docx#paragraph=5",
                 "quote": "资料对关联数量存在两个声明。",
                 "quote_hash": "sha256:ambiguous",
                 "document_block_id": "block:ambiguous",
