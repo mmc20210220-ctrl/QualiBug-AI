@@ -16,7 +16,6 @@ from typing import Any, Iterable
 
 SCHEMA_VERSION = "qualibug.binding-materialization-identity-receipt.v1"
 _PROOF_FIELDS = {
-    "schema_version",
     "receipt_id",
     "target",
     "status",
@@ -68,11 +67,16 @@ def _payload(value: dict[str, Any]) -> dict[str, str]:
             "binding_materialization_value_fingerprint_missing"
         )
     return {
-        "schema_version": SCHEMA_VERSION,
         "target": target,
         "status": status,
         "value_fingerprint": value_fingerprint,
     }
+
+
+def _receipt_id(payload: dict[str, str]) -> str:
+    return "binding_materialization_" + hashlib.sha256(
+        _canonical({"schema_version": SCHEMA_VERSION, **payload}).encode("utf-8")
+    ).hexdigest()[:24]
 
 
 def build_binding_materialization_identity_receipt(
@@ -81,10 +85,8 @@ def build_binding_materialization_identity_receipt(
     """Build one receipt without exposing the materialized runtime value."""
     payload = _payload(value)
     return {
+        "receipt_id": _receipt_id(payload),
         **payload,
-        "receipt_id": "binding_materialization_" + hashlib.sha256(
-            _canonical(payload).encode("utf-8")
-        ).hexdigest()[:24],
     }
 
 
