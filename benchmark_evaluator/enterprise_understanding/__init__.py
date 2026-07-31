@@ -10,16 +10,22 @@ from .ground_truth import (
     load_ground_truth,
     validate_ground_truth,
 )
+from .ingestion_evidence import (
+    INGESTION_EVIDENCE_SCHEMA,
+    measure_ingestion_evidence,
+)
 from .metrics import calculate_benchmark_metrics
 from .root_cause import analyse_miss_root_causes
 from .runner import run_benchmark
 
 __all__ = [
     "GROUND_TRUTH_SCHEMA",
+    "INGESTION_EVIDENCE_SCHEMA",
     "GroundTruthValidationError",
     "load_ground_truth",
     "validate_ground_truth",
     "align_enterprise_understanding",
+    "measure_ingestion_evidence",
     "calculate_benchmark_metrics",
     "analyse_miss_root_causes",
     "run_benchmark",
