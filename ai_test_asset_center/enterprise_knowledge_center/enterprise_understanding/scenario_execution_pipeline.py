@@ -30,6 +30,10 @@ from .event_observer_scenario_projection import (
     project_event_requirements_to_execution_contracts,
     project_event_requirements_to_scenarios,
 )
+from .observer_binding_identity_projection import (
+    project_observer_identities_to_materializations,
+    project_observer_identities_to_runtime_plans,
+)
 from .runtime_materialization_security import (
     project_secure_runtime_materializations_to_asset,
 )
@@ -137,20 +141,23 @@ def project_governed_scenario_execution_contracts(
     project_governed_runtime_plans_to_asset(asset, model)
     project_event_observers_into_runtime_plans(asset, model)
     project_binding_identities_to_runtime_plans(asset, model)
+    project_observer_identities_to_runtime_plans(asset, model)
     close_runtime_plan_binding_identities(asset, model)
 
     # Approved database and source-event observers extend the same runtime plan.
-    # Re-project both after the DB observer replacement so neither extension can
-    # erase or reselect the other's exact identity.
+    # Generic action/field projection runs first; observer identity is compiled
+    # afterwards so an additive observer ref can never be erased.
     project_database_observers_into_runtime_plans(asset, model)
     project_event_observers_into_runtime_plans(asset, model)
     project_binding_identities_to_runtime_plans(asset, model)
+    project_observer_identities_to_runtime_plans(asset, model)
     close_runtime_plan_binding_identities(asset, model)
 
     project_secure_runtime_materializations_to_asset(asset, model)
     project_database_observer_runtime_materializations(asset, model)
     project_event_observers_into_materializations(asset, model)
     project_binding_identities_to_materializations(asset, model)
+    project_observer_identities_to_materializations(asset, model)
     close_materialization_binding_identities(asset, model)
 
     # A copied reference cannot validate itself. The final authority compares every
@@ -169,6 +176,7 @@ def project_governed_scenario_execution_contracts(
             "formal_event_observer_projection_precedes_runtime_materialization": True,
             "formal_event_observer_assertion_draft_follows_materialization": True,
             "formal_event_semantics_projected_before_execution_contract": True,
+            "observer_identity_projection_follows_action_field_projection": True,
             "scenario_contract_runtime_plan_materialization_share_binding_ids": True,
             "formal_ui_contracts_reuse_source_ui_contract_authority": True,
             "formal_event_contracts_reuse_source_event_contract_authority": True,
