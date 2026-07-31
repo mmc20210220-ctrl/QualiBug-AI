@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ChangeEvent } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { getKnowledgeAsset, ingestKnowledge } from '../api/client';
 import {
@@ -447,7 +447,7 @@ export function Materials() {
                 <input
                   className="form-input"
                   value={appId}
-                  onChange={(event) => setAppId(event.target.value)}
+                  onChange={(event: ChangeEvent<HTMLInputElement>) => setAppId(event.target.value)}
                   placeholder={editingId ? '留空保持当前值' : 'cli_xxx'}
                   autoComplete="off"
                 />
@@ -458,7 +458,7 @@ export function Materials() {
                   className="form-input"
                   type="password"
                   value={appSecret}
-                  onChange={(event) => setAppSecret(event.target.value)}
+                  onChange={(event: ChangeEvent<HTMLInputElement>) => setAppSecret(event.target.value)}
                   placeholder={editingId ? '留空保持当前值' : '输入应用密钥'}
                   autoComplete="new-password"
                 />
@@ -474,7 +474,7 @@ export function Materials() {
                   className="form-input"
                   type="password"
                   value={authMode === 'tenant_access_token' ? tenantToken : userToken}
-                  onChange={(event) => (
+                  onChange={(event: ChangeEvent<HTMLInputElement>) => (
                     authMode === 'tenant_access_token'
                       ? setTenantToken(event.target.value)
                       : setUserToken(event.target.value)
@@ -493,7 +493,7 @@ export function Materials() {
               <select
                 className="form-input"
                 value={authMode}
-                onChange={(event) => setAuthMode(event.target.value as AuthMode)}
+                onChange={(event: ChangeEvent<HTMLSelectElement>) => setAuthMode(event.target.value as AuthMode)}
               >
                 <option value="internal_app">企业自建应用（推荐）</option>
                 <option value="tenant_access_token">Tenant Access Token</option>
@@ -535,7 +535,7 @@ export function Materials() {
               <input
                 className="form-input form-input-mono"
                 value={spaceId}
-                onChange={(event) => setSpaceId(event.target.value)}
+                onChange={(event: ChangeEvent<HTMLInputElement>) => setSpaceId(event.target.value)}
                 placeholder="填写飞书知识空间 ID"
               />
             </label>
@@ -549,7 +549,7 @@ export function Materials() {
                 className="form-input form-input-mono"
                 value={advancedScope}
                 onFocus={() => setScopeMode('advanced')}
-                onChange={(event) => {
+                onChange={(event: ChangeEvent<HTMLInputElement>) => {
                   setScopeMode('advanced');
                   setAdvancedScope(event.target.value);
                 }}
@@ -578,7 +578,7 @@ export function Materials() {
           </div>
         </div>
         <div className="materials-upload-row">
-          <select className="form-input" value={uploadType} onChange={(event) => setUploadType(event.target.value)}>
+          <select className="form-input" value={uploadType} onChange={(event: ChangeEvent<HTMLSelectElement>) => setUploadType(event.target.value)}>
             <option value="prd">需求 / PRD</option>
             <option value="openapi">OpenAPI / 接口文档</option>
             <option value="historical_bug">历史缺陷</option>
@@ -590,7 +590,7 @@ export function Materials() {
             id="materials-upload-file"
             className="form-input"
             type="file"
-            onChange={(event) => setUploadFile(event.target.files?.[0] || null)}
+            onChange={(event: ChangeEvent<HTMLInputElement>) => setUploadFile(event.target.files?.[0] || null)}
           />
           <button className="btn btn-secondary" type="button" onClick={() => void uploadSupplement()} disabled={uploading}>
             {uploading ? '上传中…' : '上传补充'}
