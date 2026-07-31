@@ -60,6 +60,20 @@ _RULE_READY_BINDING_STATES = frozenset(
 )
 _RULE_ACCEPTED_SCOPE_STATES = frozenset({"RESOLVED", "NOT_APPLICABLE"})
 _INVALID_RULE_SOURCE_IDS = frozenset({"unknown", "unspecified", "*"})
+_RULE_RUNTIME_KIND_BY_LOGICAL_FORM = {
+    "REQUIRED_FIELD": "validation_required",
+    "UNIQUENESS": "validation_uniqueness",
+    "DOMAIN_MEMBERSHIP": "validation_domain_membership",
+    "VALUE_BOUND": "validation_value_bound",
+    "REFERENTIAL_INTEGRITY": "data_integrity_reference",
+    "PERMISSION_BOUNDARY": "authorization",
+    "CARDINALITY": "cardinality",
+    "CONSERVATION_EQUATION": "conservation",
+    "STATE_PRECONDITION": "state_precondition",
+    "FORBIDDEN_STATE_TRANSITION": "forbidden_state_transition",
+    "TEMPORAL_WINDOW": "temporal_window",
+    "IDEMPOTENCY": "idempotency",
+}
 
 
 def _text(value: Any) -> str:
@@ -245,6 +259,99 @@ def _rule_validation(candidate: dict[str, Any], context: dict[str, Any]) -> dict
     }
 
 
+def _runtime_operand(value: Any) -> dict[str, Any]:
+    row = dict(value) if isinstance(value, dict) else {"value": value}
+    field_ref = _text(row.get("field_ref"))
+    if field_ref and not _text(row.get("field_id") or row.get("field")):
+        row["field_id"] = field_ref
+    target_ref = _text(row.get("target_ref"))
+    if target_ref and not _text(row.get("entity_ref")):
+        row["entity_ref"] = target_ref
+    return row
+
+
+def _rule_runtime_projection(
+    candidate: dict[str, Any],
+    structured_expression: dict[str, Any],
+) -> dict[str, Any]:
+    """Adapt one accepted rule into the existing rule-library runtime contract.
+
+    ``structured_expression`` is the lossless authority representation. The existing
+    Behavior IR compiler consumes top-level ``kind/operator/operands/equation`` fields,
+    so this adapter projects the same semantics into those compatibility fields instead
+    of letting accepted rules collapse back to prose.
+    """
+    logical_form = _text(
+        structured_expression.get("logical_form") or candidate.get("logical_form")
+    ).upper()
+    consequent = _dict(structured_expression.get("consequent"))
+    risk_type = _text(candidate.get("risk_type")).lower()
+    kind = _RULE_RUNTIME_KIND_BY_LOGICAL_FORM.get(
+        logical_form,
+        risk_type or logical_form.lower() or "business_rule",
+    )
+    if logical_form == "PERMISSION_BOUNDARY" and risk_type:
+        kind = risk_type
+
+    raw_operands = _list(candidate.get("operands")) or _list(
+        structured_expression.get("operands")
+    )
+    operands = [_runtime_operand(value) for value in raw_operands]
+    equation: dict[str, Any] = _dict(candidate.get("equation"))
+    operator = _text(
+        candidate.get("operator")
+        or structured_expression.get("operator")
+        or consequent.get("operator")
+        or "must_hold"
+    )
+
+    if logical_form == "CONSERVATION_EQUATION":
+        lhs = _text(consequent.get("lhs"))
+        rhs = _text(consequent.get("rhs"))
+        if not operands:
+            operands = [
+                {"field": value, "field_id": value}
+                for value in (lhs, rhs)
+                if value
+            ]
+        if not equation and lhs and rhs:
+            equation = {
+                "operator": operator,
+                "lhs": lhs,
+                "rhs": rhs,
+                "raw": consequent.get("raw"),
+                "terms": [value for value in (lhs, rhs) if value],
+            }
+    elif not operands and consequent:
+        operands = [_runtime_operand(consequent)]
+
+    subject_refs = [
+        _text(value)
+        for value in _list(candidate.get("subject_refs"))
+        if _text(value)
+    ]
+    entity = subject_refs[0] if subject_refs else ""
+    first_source = next(
+        (
+            row
+            for row in _list(candidate.get("source_refs"))
+            if isinstance(row, dict) and _text(row.get("source_id"))
+        ),
+        {},
+    )
+    return {
+        "kind": kind,
+        "operator": operator,
+        "operands": operands,
+        "equation": equation,
+        "entity": entity,
+        "business_object": entity,
+        "source_locator": _text(
+            first_source.get("source_locator") or first_source.get("locator")
+        ),
+    }
+
+
 def _rule_promoter(candidate: dict[str, Any]) -> dict[str, Any]:
     statement = _text(candidate.get("statement") or candidate.get("name"))
     candidate_id = _text(candidate.get("candidate_id")) or _stable_id(
@@ -265,6 +372,7 @@ def _rule_promoter(candidate: dict[str, Any]) -> dict[str, Any]:
             "temporal_window": candidate.get("temporal_window"),
             "aggregation": candidate.get("aggregation"),
         }
+    runtime_projection = _rule_runtime_projection(candidate, structured_expression)
     semantic_contract = dict(candidate.get("semantic_contract") or {})
     semantic_contract.update(
         {
@@ -272,6 +380,12 @@ def _rule_promoter(candidate: dict[str, Any]) -> dict[str, Any]:
             "authority": "validated_rule_candidate",
             "candidate_id": candidate_id,
             "authority_gate": dict(candidate.get("authority_gate") or {}),
+            "runtime_projection": {
+                "authority": "existing_rule_library_contract",
+                "kind": runtime_projection["kind"],
+                "operator": runtime_projection["operator"],
+                "structured_expression_preserved": True,
+            },
         }
     )
     return {
@@ -279,10 +393,16 @@ def _rule_promoter(candidate: dict[str, Any]) -> dict[str, Any]:
         "source_id": source_ids[0] if len(source_ids) == 1 else "multi_source_rule_entailment",
         "source_ids": source_ids,
         "source_type": "derived_rule_entailment",
+        "source_locator": runtime_projection["source_locator"],
         "statement": statement,
         "expected": statement,
-        "kind": _text(candidate.get("risk_type") or candidate.get("logical_form")).lower(),
+        "kind": runtime_projection["kind"],
         "risk_type": _text(candidate.get("risk_type") or "business_logic"),
+        "operator": runtime_projection["operator"],
+        "operands": runtime_projection["operands"],
+        "equation": runtime_projection["equation"],
+        "entity": runtime_projection["entity"],
+        "business_object": runtime_projection["business_object"],
         "severity": _text(candidate.get("severity") or "P1"),
         "derivation": "implicit_rule_entailment",
         "confidence": float(candidate.get("confidence") or 0.8),
