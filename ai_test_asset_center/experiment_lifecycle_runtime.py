@@ -17,6 +17,7 @@ from .process_step_execution import (
     ProcessStepLedger,
     attach_ledger_refs_to_observations,
 )
+from .process_step_semantic_projection import project_step_sets
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -80,7 +81,18 @@ def attach_lifecycle_ledger(
     observations: dict[str, Any],
     ledger: ProcessStepLedger,
 ) -> dict[str, Any]:
-    return attach_ledger_refs_to_observations(observations, ledger)
+    target = attach_ledger_refs_to_observations(observations, ledger)
+    projection = project_step_sets(ledger)
+    target["process_step_semantic_projection"] = projection
+    target["recorded_step_ids"] = projection["recorded_step_ids"]
+    target["accepted_step_ids"] = projection["accepted_step_ids"]
+    target["executed_step_ids"] = projection["completed_step_ids"]
+    target["completed_step_ids"] = projection["completed_step_ids"]
+    target["failed_step_ids"] = projection["failed_step_ids"]
+    target["pending_semantic_step_ids"] = projection[
+        "pending_semantic_step_ids"
+    ]
+    return target
 
 
 def record_stage_event(
@@ -182,6 +194,23 @@ def record_stage_rows(
         )
 
 
+def _attach_projection_to_result(
+    ledger: ProcessStepLedger,
+    row: dict[str, Any],
+) -> dict[str, Any]:
+    projection = project_step_sets(ledger)
+    row["process_step_semantic_projection"] = projection
+    row["recorded_step_ids"] = projection["recorded_step_ids"]
+    row["accepted_step_ids"] = projection["accepted_step_ids"]
+    row["executed_step_ids"] = projection["completed_step_ids"]
+    row["completed_step_ids"] = projection["completed_step_ids"]
+    row["failed_step_ids"] = projection["failed_step_ids"]
+    row["pending_semantic_step_ids"] = projection[
+        "pending_semantic_step_ids"
+    ]
+    return row
+
+
 def terminal_result_with_lifecycle(
     ledger: ProcessStepLedger,
     result: dict[str, Any],
@@ -202,10 +231,8 @@ def terminal_result_with_lifecycle(
     row["process_step_ledger_id"] = ledger.ledger_id
     row["process_step_ledger_hash"] = ledger.compute_hash()
     row["required_step_ids"] = ledger.required_step_ids
-    row["recorded_step_ids"] = ledger.recorded_step_ids()
-    row["executed_step_ids"] = ledger.executed_step_ids()
     row["process_timeline"] = ledger.build_timeline_receipt()
-    return row
+    return _attach_projection_to_result(ledger, row)
 
 
 def attach_lifecycle_to_result(
@@ -217,7 +244,5 @@ def attach_lifecycle_to_result(
     row.setdefault("process_step_ledger_id", ledger.ledger_id)
     row.setdefault("process_step_ledger_hash", ledger.compute_hash())
     row.setdefault("required_step_ids", ledger.required_step_ids)
-    row.setdefault("recorded_step_ids", ledger.recorded_step_ids())
-    row.setdefault("executed_step_ids", ledger.executed_step_ids())
     row.setdefault("process_timeline", ledger.build_timeline_receipt())
-    return row
+    return _attach_projection_to_result(ledger, row)
