@@ -9,6 +9,9 @@ from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.a
 from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.behavior_ir import (
     build_business_behavior_ir,
 )
+from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.builder import (
+    build_enterprise_understanding_model,
+)
 from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.implementation_binding_governance import (
     _behavior_semantic_ready,
 )
@@ -64,6 +67,22 @@ def _behavior(fact: dict) -> tuple[dict, dict]:
     assert unknowns == []
     assert len(behaviors) == 1
     return behaviors[0], gate
+
+
+def _understanding_model(fact: dict) -> dict:
+    return build_enterprise_understanding_model(
+        {
+            "asset_id": "asset:responsibility-authorization-boundary",
+            "business_fact_ledger": {"items": [fact]},
+        }
+    )
+
+
+def _only_actor(model: dict) -> dict:
+    actors = model["actors"]
+    assert len(actors) == 1
+    assert actors[0]["name"] == "仓库员"
+    return actors[0]
 
 
 def test_required_business_action_is_responsibility_not_allow() -> None:
@@ -185,12 +204,65 @@ def test_explicit_unknown_is_fail_closed_without_text_fallback() -> None:
 
 
 def test_approval_is_governance_not_actor_authorization() -> None:
-    behavior, gate = _behavior(
-        _fact("仓库员登记入库单前必须经过主管审批", modality="MUST")
-    )
+    fact = _fact("仓库员登记入库单前必须经过主管审批", modality="MUST")
+    behavior, gate = _behavior(fact)
 
     assert behavior["permission_decision"] == "REQUIRE_APPROVAL"
     assert behavior["authorization_semantic_kind"] == "GOVERNANCE"
     assert behavior["authorization_semantics_explicit"] is False
     assert gate["metrics"]["authorization_behavior_count"] == 0
     assert gate["metrics"]["governance_decision_behavior_count"] == 1
+
+    actor = _only_actor(_understanding_model(fact))
+    assert actor["authorization_contracts"] == []
+    assert actor["permissions"] == []
+    assert actor["restrictions"] == []
+    assert actor["permission_unknowns"] == []
+    assert actor["authorization_status"] == "NOT_DECLARED"
+    assert actor["responsibility_operation_refs"]
+
+
+def test_actor_model_keeps_business_prohibition_out_of_restrictions() -> None:
+    model = _understanding_model(
+        _fact("仓库员不得重复登记入库单", modality="MUST_NOT")
+    )
+    actor = _only_actor(model)
+
+    assert actor["authorization_contracts"] == []
+    assert actor["permissions"] == []
+    assert actor["restrictions"] == []
+    assert actor["permission_unknowns"] == []
+    assert actor["authorization_status"] == "NOT_DECLARED"
+    assert actor["responsibility_operation_refs"]
+    assert model["authorization_unknowns"] == []
+    assert model["authorization_model"]["responsibility_is_permission"] is False
+    assert model["authorization_model"]["workflow_governance_is_actor_permission"] is False
+
+
+def test_actor_model_preserves_explicit_unknown_only_as_unknown() -> None:
+    fact = _fact(
+        "仓库员允许执行受控登记",
+        modality="MAY",
+        authorization_semantics={
+            "decision": "UNKNOWN",
+            "source_backed": True,
+        },
+    )
+    model = _understanding_model(fact)
+    actor = _only_actor(model)
+
+    assert actor["permissions"] == []
+    assert actor["restrictions"] == []
+    assert len(actor["authorization_contracts"]) == 1
+    assert len(actor["permission_unknowns"]) == 1
+    contract = actor["permission_unknowns"][0]
+    assert contract["decision"] == "UNKNOWN"
+    assert contract["declared_decision"] == "UNKNOWN"
+    assert contract["derivation"] == "explicit_authorization_semantics"
+    assert actor["authorization_status"] == "UNRESOLVED"
+    assert actor["status"] == "PARTIAL"
+    assert len(model["authorization_unknowns"]) == 1
+    assert model["authorization_unknowns"][0]["reason_code"] == "FACT_AUTHORIZATION_DECISION_UNRESOLVED"
+    assert model["authorization_model"]["unknown_is_allow"] is False
+    assert model["authorization_model"]["unknown_is_deny"] is False
+    assert model["authorization_model"]["explicit_unknown_can_fallback_to_text"] is False
