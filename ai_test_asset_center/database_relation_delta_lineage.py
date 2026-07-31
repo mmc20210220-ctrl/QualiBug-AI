@@ -1,8 +1,9 @@
-"""Lineage gate for the existing cross-table delta assertion evaluator.
+"""Lineage and semantic-integrity gate for the cross-table delta evaluator.
 
-This module does not create another assertion kind or verdict engine. It freezes
-the BEFORE/AFTER relation receipts to the exact relation_pair_id emitted by the
-projection, then delegates numeric comparison to database_relation_delta_oracle.
+This module does not create another assertion kind or verdict engine. It verifies
+that the compiled rule, binding and BEFORE/AFTER relation receipts still describe
+the same complete semantics, then delegates numeric comparison to the existing
+relation-delta evaluator.
 """
 from __future__ import annotations
 
@@ -11,7 +12,12 @@ from typing import Any
 from .assertion_dsl_base import register_assertion_kind, registered_assertion_kinds
 from .database_relation_delta_experiment_projection import ASSERTION_KIND
 from .database_relation_delta_oracle import (
+    _decimal,
     evaluate_database_relation_delta_conservation as _evaluate_delta,
+)
+from .database_relation_delta_projection_gate import (
+    SEMANTIC_PAIR_SCHEMA,
+    semantic_relation_delta_pair_id,
 )
 
 _RELATION_RECEIPT_KEY = "approved_database_relation_phase_receipts"
@@ -100,31 +106,87 @@ def evaluate_database_relation_delta_with_lineage(
     observations = _dict(env.get("observations"))
     binding = _dict(spec.get("database_relation_delta_binding"))
     relation_ref = _text(spec.get("database_relation_observer_ref"))
-    expected_pair_id = _text(
-        spec.get("relation_pair_id") or binding.get("relation_pair_id")
-    )
-    before_draft_id = _text(
-        spec.get("relation_before_draft_id")
-        or binding.get("relation_before_draft_id")
-    )
-    after_draft_id = _text(
-        spec.get("relation_after_draft_id")
-        or binding.get("relation_after_draft_id")
-    )
+    expected_pair_id = _text(spec.get("relation_pair_id"))
+    before_draft_id = _text(spec.get("relation_before_draft_id"))
+    after_draft_id = _text(spec.get("relation_after_draft_id"))
+    comparison_phase_pair = _text(spec.get("comparison_phase_pair")).upper()
+    comparison_operator = _text(spec.get("comparison_operator")).upper()
+    aggregate_on_left = spec.get("aggregate_on_left")
+    left_coefficient = _decimal(spec.get("left_coefficient"))
+    right_coefficient = _decimal(spec.get("right_coefficient"))
+    recomputed_pair_id = semantic_relation_delta_pair_id(spec)
+
     expected = {
         "database_relation_observer_ref": relation_ref,
+        "semantic_pair_schema": SEMANTIC_PAIR_SCHEMA,
         "relation_pair_id": expected_pair_id,
+        "recomputed_relation_pair_id": recomputed_pair_id,
         "relation_before_draft_id": before_draft_id,
         "relation_after_draft_id": after_draft_id,
+        "comparison_phase_pair": "BEFORE_AFTER",
+        "comparison_operator": comparison_operator,
+        "aggregate_on_left": aggregate_on_left,
+        "left_coefficient": spec.get("left_coefficient"),
+        "right_coefficient": spec.get("right_coefficient"),
     }
     actual: dict[str, Any] = {
+        "binding_match": False,
+        "semantic_pair_match": False,
         "relation_pair_match": False,
         "relation_before_lineage": {},
         "relation_after_lineage": {},
     }
-    if not all((relation_ref, expected_pair_id, before_draft_id, after_draft_id)):
+
+    explicit_fields_valid = bool(
+        relation_ref
+        and expected_pair_id
+        and before_draft_id
+        and after_draft_id
+        and comparison_phase_pair == "BEFORE_AFTER"
+        and comparison_operator
+        and isinstance(aggregate_on_left, bool)
+        and "left_coefficient" in spec
+        and "right_coefficient" in spec
+    )
+    if not explicit_fields_valid:
         return _reason(
             "DATABASE_RELATION_DELTA_ASSERTION_SPEC_INCOMPLETE",
+            expected=expected,
+            actual=actual,
+        )
+    if left_coefficient is None or right_coefficient is None:
+        return _reason(
+            "DATABASE_RELATION_DELTA_COEFFICIENT_INVALID",
+            expected=expected,
+            actual=actual,
+        )
+    if left_coefficient == 0 and right_coefficient == 0:
+        return _reason(
+            "DATABASE_RELATION_DELTA_VACUOUS_COEFFICIENTS",
+            expected=expected,
+            actual=actual,
+        )
+
+    binding_match = bool(
+        _text(binding.get("semantic_pair_schema")) == SEMANTIC_PAIR_SCHEMA
+        and binding.get("pair_covers_complete_assertion_semantics") is True
+        and _text(binding.get("relation_pair_id")) == expected_pair_id
+        and _text(binding.get("relation_before_draft_id")) == before_draft_id
+        and _text(binding.get("relation_after_draft_id")) == after_draft_id
+    )
+    actual["binding_match"] = binding_match
+    if not binding_match:
+        return _reason(
+            "DATABASE_RELATION_DELTA_BINDING_MISMATCH",
+            expected=expected,
+            actual=actual,
+        )
+
+    semantic_pair_match = recomputed_pair_id == expected_pair_id
+    actual["semantic_pair_match"] = semantic_pair_match
+    if not semantic_pair_match:
+        return _reason(
+            "DATABASE_RELATION_DELTA_SEMANTIC_PAIR_MISMATCH",
             expected=expected,
             actual=actual,
         )
@@ -177,7 +239,9 @@ def evaluate_database_relation_delta_with_lineage(
     result = dict(result)
     result_expected = _dict(result.get("expected"))
     result_actual = _dict(result.get("actual"))
-    result_expected["relation_pair_id"] = expected_pair_id
+    result_expected.update(expected)
+    result_actual["binding_match"] = True
+    result_actual["semantic_pair_match"] = True
     result_actual["relation_pair_match"] = True
     result_actual["relation_before_lineage"] = before
     result_actual["relation_after_lineage"] = after
@@ -207,6 +271,15 @@ def install_database_relation_delta_assertion() -> str:
             _RELATION_RECEIPT_KEY,
         ),
     )
+
+
+# Close the latent bypass where another module later imports the base installer.
+# Both names now install the same lineage-gated evaluator; no second kind is added.
+from . import database_relation_delta_oracle as _base_oracle  # noqa: E402
+
+_base_oracle.install_database_relation_delta_assertion = (
+    install_database_relation_delta_assertion
+)
 
 
 __all__ = [
