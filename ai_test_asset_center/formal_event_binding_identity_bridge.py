@@ -65,6 +65,24 @@ def _action_ref(row: dict[str, Any]) -> str:
     )
 
 
+def _linked_action_surface_refs(
+    asset: dict[str, Any], implementation_ref: str
+) -> set[str]:
+    rows = [
+        *_rows(asset.get("binding_identity_relationships")),
+        *_rows(asset.get("relationships")),
+    ]
+    return {
+        _text(row.get("to"))
+        for row in rows
+        if _text(row.get("relation"))
+        == "implementation_binding_to_action_surface"
+        and _text(row.get("from")) == implementation_ref
+        and _text(row.get("status") or "accepted") == "accepted"
+        and _text(row.get("to"))
+    }
+
+
 def _binding_identity(
     *,
     asset: dict[str, Any],
@@ -95,10 +113,13 @@ def _binding_identity(
     if not observer_ref or not implementation_ref or not interface_id:
         return {}, "FORMAL_EVENT_OBSERVER_BINDING_IDENTITY_INCOMPLETE"
 
+    linked_surface_refs = _linked_action_surface_refs(asset, implementation_ref)
+    if not linked_surface_refs:
+        return {}, "FORMAL_EVENT_ACTION_SURFACE_RELATION_NOT_FOUND"
     surfaces = [
         row
         for row in _rows(graph.get("action_surface_bindings"))
-        if _text(row.get("implementation_binding_ref")) == implementation_ref
+        if _text(row.get("action_surface_binding_id")) in linked_surface_refs
         and _text(row.get("interface_id")) == interface_id
         and _text(row.get("surface_kind")) == "HTTP_API"
         and bool(row.get("authoritative"))
