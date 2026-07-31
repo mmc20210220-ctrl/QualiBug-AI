@@ -9,7 +9,7 @@ from .database_observer_experiment_runtime import (
     PHASE_AGGREGATE_OBSERVER_ID,
     install_experiment_database_observer,
 )
-from .database_relation_delta_oracle import (
+from .database_relation_delta_lineage import (
     install_database_relation_delta_assertion,
 )
 from .database_relation_numeric_oracle import (
