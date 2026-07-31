@@ -106,13 +106,29 @@ def attach_runtime_observer_lineage(
         event_contract_refs = unique_text(
             row.get("event_contract_ref") for row in event_requirements
         )
+        event_contracts = [
+            dict(contract)
+            for contract in [as_dict(row.get("event_contract")) for row in templates]
+            if contract
+        ]
         probe["observer_binding_refs"] = observer_refs
         probe["formal_event_contract_refs"] = event_contract_refs
         probe["formal_event_assertion_requirements"] = event_requirements
+        probe["source_event_contracts"] = event_contracts
+        probe["event_observer_execution_handoff_ready"] = len(event_contracts) == 1
+        if len(event_contracts) == 1:
+            # Existing formal_event_surface consumes this exact singular contract.
+            probe["source_event_contract"] = dict(event_contracts[0])
+            probe["event_observer_execution_mode"] = "SINGLE_FORMAL_CONTRACT"
+        elif len(event_contracts) > 1:
+            # Preserve every contract but do not pretend the singular adapter can
+            # execute a multi-observer bundle without an explicit orchestration layer.
+            probe["event_observer_execution_mode"] = "MULTI_CONTRACT_DRAFT_ONLY"
         lineage = dict(as_dict(probe.get("knowledge_lineage")))
         lineage["observer_binding_refs"] = observer_refs
         lineage["formal_event_contract_refs"] = event_contract_refs
         lineage["observer_identity_materialization_match"] = True
+        lineage["event_observer_execution_handoff_ready"] = len(event_contracts) == 1
         probe["knowledge_lineage"] = lineage
         evidence = unique_text(
             [
