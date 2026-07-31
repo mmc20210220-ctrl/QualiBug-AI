@@ -1,11 +1,10 @@
 """Public process-graph write-contract authority.
 
 The existing topology, operation, observer and compensation normalization stays
-in ``process_graph_write_contract_core``. This facade changes only the final
-proof scope: every graph write receives its own ordinary
-WriteReversibilityProof, those proofs are frozen into one graph proof set, and
-the existing topology is projected into a rollback dependency contract.
-Read-only graphs and all established exports remain unchanged.
+in ``process_graph_write_contract_core``. Single-write graphs preserve the
+established ordinary WriteReversibilityProof schema. Multi-write graphs receive
+one ordinary proof per write, one rollback-bound aggregate proof set, and one
+frozen rollback dependency contract.
 """
 from __future__ import annotations
 
@@ -27,11 +26,50 @@ for _name in dir(_core):
         globals()[_name] = getattr(_core, _name)
 
 
+def _finalize_single_write_proof(
+    experiment: dict[str, Any],
+    behavior_ir: dict[str, Any],
+) -> dict[str, Any]:
+    """Keep the third-batch single-write proof and downstream schema stable."""
+    exp = deepcopy(experiment)
+    validation = _core.validate_cleanup_plan(
+        exp,
+        behavior_ir,
+        phase="compile",
+    )
+    if not validation.get("valid"):
+        return _core._blocked(
+            exp,
+            _core._text(validation.get("reason_code"))
+            or _core.GRAPH_WRITE_CONTRACT_INVALID,
+            _core._text(validation.get("detail"))
+            or "graph_cleanup_validation_failed",
+        )
+    proof = _core._dict(validation.get("proof"))
+    exp["write_reversibility_proof"] = proof
+    exp["cleanup_coverage_contract"] = _core._dict(
+        validation.get("coverage")
+    )
+    exp["compile_receipt"].update(
+        {
+            "write_reversibility_proof_id": _core._text(
+                proof.get("proof_id")
+            ),
+            "write_reversibility_fingerprint": _core._text(
+                proof.get("fingerprint")
+            ),
+            "cleanup_semantic_validated": True,
+            "graph_step_reversibility_proof_count": 1,
+        }
+    )
+    return exp
+
+
 def finalize_process_graph_write_contract(
     experiment: dict[str, Any],
     behavior_ir: dict[str, Any],
 ) -> dict[str, Any]:
-    """Freeze graph write safety, rollback dependencies and per-node proofs."""
+    """Freeze graph write safety, rollback dependencies and proof scope."""
     exp = deepcopy(experiment)
     if _core._text(_core._dict(exp.get("compile_receipt")).get("status")) != "COMPILED":
         return exp
@@ -135,6 +173,8 @@ def finalize_process_graph_write_contract(
         }
     )
     exp["compile_receipt"] = receipt
+    if len(write_step_ids) == 1:
+        return _finalize_single_write_proof(exp, behavior_ir)
     return finalize_process_graph_reversibility(exp, behavior_ir)
 
 
