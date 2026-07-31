@@ -7,7 +7,7 @@ from ai_test_asset_center.process_step_execution import ProcessStepLedger
 
 
 def _graph():
-    graph = {
+    return {
         "execution_graph_id": "graph_order_payment",
         "process_id": "order_payment",
         "nodes": [
@@ -51,7 +51,6 @@ def _graph():
         "topological_order": ["read_order", "read_payment"],
         "wait_contracts": [],
     }
-    return graph
 
 
 def _plan():
@@ -152,9 +151,7 @@ def _call(monkeypatch, *, first_status=200, tokens=None):
             "process_step_ledger": ledger,
         }
 
-    monkeypatch.setattr(
-        plan_executor, "_execute_sequential_plans", fake_sequential
-    )
+    monkeypatch.setattr(plan_executor, "_delegate_sequential", fake_sequential)
     observations = {}
     result = plan_executor.execute_non_barrier_plans(
         control_plan=[],
@@ -264,9 +261,7 @@ def test_non_graph_plan_delegates_to_original_kernel(monkeypatch):
     def fake_sequential(**_kwargs):
         return sentinel
 
-    monkeypatch.setattr(
-        plan_executor, "_execute_sequential_plans", fake_sequential
-    )
+    monkeypatch.setattr(plan_executor, "_delegate_sequential", fake_sequential)
     result = plan_executor.execute_non_barrier_plans(
         control_plan=[],
         treatment_plan=[{"step_id": "legacy", "operation_ref": "op_legacy"}],
