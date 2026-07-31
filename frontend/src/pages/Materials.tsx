@@ -340,7 +340,7 @@ export function Materials() {
           <div>
             <span className="settings-hero-kicker">主要采集方式</span>
             <h2>飞书在线资料</h2>
-            <p>用户只负责授权和选择范围，分页、格式导出、版本、恢复和安全策略由系统处理。</p>
+            <p>用户只负责授权和选择范围，资料更新、版本维护和异常恢复由系统处理。</p>
           </div>
           <button className="btn btn-secondary" type="button" onClick={() => void refresh()} disabled={loading}>
             {loading ? '刷新中…' : '刷新状态'}
@@ -603,7 +603,7 @@ export function Materials() {
           <div>
             <span className="settings-hero-kicker">统一来源清单</span>
             <h2>已纳入理解的资料</h2>
-            <p>在线与上传资料统一进入 Source Occurrence 主链，系统自动去重并保留来源证据。</p>
+            <p>在线与上传资料会合并为统一企业知识库，系统自动去重并保留来源证据。</p>
           </div>
         </div>
         {sources.length === 0 ? (
