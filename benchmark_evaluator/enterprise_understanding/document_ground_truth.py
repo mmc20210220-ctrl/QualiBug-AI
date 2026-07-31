@@ -7,7 +7,6 @@ product output, uses fuzzy matching, or writes alignments back into product stat
 from __future__ import annotations
 
 import hashlib
-import re
 from collections import Counter, defaultdict
 from typing import Any
 
@@ -54,12 +53,8 @@ def _ratio(numerator: int | float, denominator: int | float) -> float | None:
     return round(float(numerator) / float(denominator), 4) if denominator else None
 
 
-def _normalized_text(value: Any) -> str:
-    return re.sub(r"\s+", " ", _text(value))
-
-
 def _text_hash(value: Any) -> str:
-    return hashlib.sha256(_normalized_text(value).encode("utf-8")).hexdigest()
+    return hashlib.sha256(_text(value).encode("utf-8")).hexdigest()
 
 
 def _require(row: dict[str, Any], field: str, context: str) -> str:
@@ -113,7 +108,7 @@ def _normalize_element(row: dict[str, Any], index: int) -> dict[str, Any]:
     computed_hash = _text_hash(raw_text) if _text(raw_text) else ""
     if declared_hash and computed_hash and declared_hash != computed_hash:
         raise DocumentGroundTruthValidationError(
-            f"{context}: text_hash does not match normalized text"
+            f"{context}: text_hash does not match exact text"
         )
     result["source_locator"] = locator
     result["text_hash"] = declared_hash or computed_hash
@@ -164,9 +159,13 @@ def validate_document_ground_truth(value: Any) -> dict[str, Any] | None:
             f"{DOCUMENT_GROUND_TRUTH_KEY}.schema must equal {DOCUMENT_GROUND_TRUTH_SCHEMA}"
         )
     normalized = dict(value)
-    sources = [_normalize_source(row, index) for index, row in enumerate(_rows(value.get("sources")))]
+    sources = [
+        _normalize_source(row, index)
+        for index, row in enumerate(_rows(value.get("sources")))
+    ]
     elements = [
-        _normalize_element(row, index) for index, row in enumerate(_rows(value.get("elements")))
+        _normalize_element(row, index)
+        for index, row in enumerate(_rows(value.get("elements")))
     ]
     order_pairs = [
         _normalize_order_pair(row, index)
@@ -184,17 +183,25 @@ def validate_document_ground_truth(value: Any) -> dict[str, Any] | None:
 
     element_by_id = {_text(row.get("ground_truth_id")): row for row in elements}
     deterministic_keys: set[tuple[str, str, str]] = set()
+    locator_keys: set[tuple[str, str]] = set()
     for row in elements:
-        key = (
-            _text(row.get("source_id")),
-            _text(row.get("source_locator")),
-            _text(row.get("text_hash")),
-        )
+        source_id = _text(row.get("source_id"))
+        locator = _text(row.get("source_locator"))
+        text_hash = _text(row.get("text_hash"))
+        key = (source_id, locator, text_hash)
         if key in deterministic_keys:
             raise DocumentGroundTruthValidationError(
                 "duplicate document element deterministic identity: " + ":".join(key)
             )
         deterministic_keys.add(key)
+        if locator:
+            locator_key = (source_id, locator)
+            if locator_key in locator_keys:
+                raise DocumentGroundTruthValidationError(
+                    "one exact source locator cannot identify multiple Ground Truth elements: "
+                    + ":".join(locator_key)
+                )
+            locator_keys.add(locator_key)
     for index, row in enumerate(order_pairs):
         context = f"{DOCUMENT_GROUND_TRUTH_KEY}.reading_order_pairs[{index}]"
         before = element_by_id.get(_text(row.get("before_element_id")))
@@ -204,7 +211,10 @@ def validate_document_ground_truth(value: Any) -> dict[str, Any] | None:
                 f"{context}: referenced element does not exist"
             )
         source_id = _text(row.get("source_id"))
-        if _text(before.get("source_id")) != source_id or _text(after.get("source_id")) != source_id:
+        if (
+            _text(before.get("source_id")) != source_id
+            or _text(after.get("source_id")) != source_id
+        ):
             raise DocumentGroundTruthValidationError(
                 f"{context}: order pair and both elements must share source_id"
             )
@@ -239,7 +249,11 @@ def validate_document_ground_truth(value: Any) -> dict[str, Any] | None:
         for row in [*sources, *elements, *order_pairs]
         if _text(row.get("annotation_status")) != "CONFIRMED"
     ]
-    status = "PASS" if not shortfalls and not incomplete_ids else "BENCHMARK_GROUND_TRUTH_INCOMPLETE"
+    status = (
+        "PASS"
+        if not shortfalls and not incomplete_ids
+        else "BENCHMARK_GROUND_TRUTH_INCOMPLETE"
+    )
     normalized.update(
         {
             "schema": DOCUMENT_GROUND_TRUTH_SCHEMA,
@@ -286,12 +300,18 @@ def _candidate_blocks(item: dict[str, Any]) -> list[dict[str, Any]]:
                 "source_id": source_id,
                 "block_id": _text(row.get("block_id")),
                 "block_type": _text(row.get("type")).upper(),
-                "source_locator": _text(row.get("source_locator") or evidence.get("source_locator")),
+                "source_locator": _text(
+                    row.get("source_locator") or evidence.get("source_locator")
+                ),
                 "text_hash": text_hash,
                 "order": row.get("order"),
                 "address_kind": _text(evidence.get("address_kind")).upper(),
                 **{
-                    field: row.get(field) if row.get(field) not in (None, "") else evidence.get(field)
+                    field: (
+                        row.get(field)
+                        if row.get(field) not in (None, "")
+                        else evidence.get(field)
+                    )
                     for field in _COORDINATE_FIELDS
                 },
             }
@@ -299,7 +319,19 @@ def _candidate_blocks(item: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
-def _source_alignment(expected: dict[str, Any], items: list[dict[str, Any]]) -> dict[str, Any]:
+def _item_format(item: dict[str, Any]) -> str:
+    structure = _dict(item.get("structure_receipt"))
+    ingestion = _dict(item.get("ingestion_pipeline_receipt"))
+    return _text(
+        item.get("format")
+        or structure.get("detected_format")
+        or ingestion.get("detected_format")
+    ).lower()
+
+
+def _source_alignment(
+    expected: dict[str, Any], items: list[dict[str, Any]]
+) -> dict[str, Any]:
     source_id = _text(expected.get("source_id"))
     candidates = [row for row in items if _text(row.get("source_id")) == source_id]
     if not candidates:
@@ -321,10 +353,12 @@ def _source_alignment(expected: dict[str, Any], items: list[dict[str, Any]]) -> 
         actual_slots = {
             "filename": _text(candidate.get("filename") or evidence.get("filename")),
             "source_hash": _text(evidence.get("source_hash")).lower(),
-            "expected_format": _text(candidate.get("format")).lower(),
+            "expected_format": _item_format(candidate),
         }
         mismatches = [
-            key for key, value in expected_slots.items() if value and actual_slots.get(key) != value
+            key
+            for key, value in expected_slots.items()
+            if value and actual_slots.get(key) != value
         ]
         status = "EXACT_MATCH" if not mismatches else "PARTIAL_MATCH"
     return {
@@ -336,14 +370,16 @@ def _source_alignment(expected: dict[str, Any], items: list[dict[str, Any]]) -> 
         "candidate": {
             "source_id": _text(candidate.get("source_id")),
             "filename": _text(candidate.get("filename")),
-            "format": _text(candidate.get("format")).lower(),
+            "format": _item_format(candidate),
         }
         if candidate
         else {},
     }
 
 
-def _element_candidates(expected: dict[str, Any], blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _element_candidates(
+    expected: dict[str, Any], blocks: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     source_id = _text(expected.get("source_id"))
     locator = _text(expected.get("source_locator"))
     text_hash = _text(expected.get("text_hash")).lower()
@@ -359,24 +395,26 @@ def _element_candidates(expected: dict[str, Any], blocks: list[dict[str, Any]]) 
     return result
 
 
-def _element_alignment(expected: dict[str, Any], blocks: list[dict[str, Any]]) -> dict[str, Any]:
+def _element_alignment(
+    expected: dict[str, Any], blocks: list[dict[str, Any]]
+) -> dict[str, Any]:
     candidates = _element_candidates(expected, blocks)
+    base = {
+        "ground_truth_id": expected.get("ground_truth_id"),
+        "source_id": expected.get("source_id"),
+        "block_type": expected.get("block_type"),
+        "criticality": expected.get("criticality"),
+    }
     if not candidates:
         return {
-            "ground_truth_id": expected.get("ground_truth_id"),
-            "source_id": expected.get("source_id"),
-            "block_type": expected.get("block_type"),
-            "criticality": expected.get("criticality"),
+            **base,
             "alignment_status": "MISSING",
             "mismatched_slots": ["deterministic_identity"],
             "candidate": {},
         }
     if len(candidates) > 1:
         return {
-            "ground_truth_id": expected.get("ground_truth_id"),
-            "source_id": expected.get("source_id"),
-            "block_type": expected.get("block_type"),
-            "criticality": expected.get("criticality"),
+            **base,
             "alignment_status": "AMBIGUOUS",
             "mismatched_slots": ["multiple_deterministic_candidates"],
             "candidate_keys": [row.get("candidate_key") for row in candidates],
@@ -386,19 +424,22 @@ def _element_alignment(expected: dict[str, Any], blocks: list[dict[str, Any]]) -
     mismatches: list[str] = []
     if candidate.get("block_type") != expected.get("block_type"):
         mismatches.append("block_type")
-    if expected.get("address_kind") and candidate.get("address_kind") != expected.get("address_kind"):
+    if (
+        expected.get("address_kind")
+        and candidate.get("address_kind") != expected.get("address_kind")
+    ):
         mismatches.append("address_kind")
-    if expected.get("order") not in (None, "") and candidate.get("order") != expected.get("order"):
+    if (
+        expected.get("order") not in (None, "")
+        and candidate.get("order") != expected.get("order")
+    ):
         mismatches.append("order")
     for field in _COORDINATE_FIELDS:
         expected_value = expected.get(field)
         if expected_value not in (None, "") and candidate.get(field) != expected_value:
             mismatches.append(field)
     return {
-        "ground_truth_id": expected.get("ground_truth_id"),
-        "source_id": expected.get("source_id"),
-        "block_type": expected.get("block_type"),
-        "criticality": expected.get("criticality"),
+        **base,
         "alignment_status": "EXACT_MATCH" if not mismatches else "PARTIAL_MATCH",
         "mismatched_slots": mismatches,
         "candidate": candidate,
@@ -412,9 +453,10 @@ def _order_alignment(
     after = element_by_id.get(_text(expected.get("after_element_id")), {})
     candidate_before = _dict(before.get("candidate"))
     candidate_after = _dict(after.get("candidate"))
-    if before.get("alignment_status") not in {"EXACT_MATCH", "PARTIAL_MATCH"} or after.get(
-        "alignment_status"
-    ) not in {"EXACT_MATCH", "PARTIAL_MATCH"}:
+    if (
+        before.get("alignment_status") not in {"EXACT_MATCH", "PARTIAL_MATCH"}
+        or after.get("alignment_status") not in {"EXACT_MATCH", "PARTIAL_MATCH"}
+    ):
         status = "MISSING"
     else:
         try:
@@ -476,11 +518,15 @@ def _ground_truth_gap(
             "reason_code": reason,
             "count": data["count"],
             "criticality_weighted_impact": round(data["weighted_impact"], 2),
-            "ground_truth_ids": sorted(value for value in data["ground_truth_ids"] if value),
+            "ground_truth_ids": sorted(
+                value for value in data["ground_truth_ids"] if value
+            ),
         }
         for reason, data in impacts.items()
     ]
-    ranked.sort(key=lambda row: (-row["criticality_weighted_impact"], row["reason_code"]))
+    ranked.sort(
+        key=lambda row: (-row["criticality_weighted_impact"], row["reason_code"])
+    )
     return (ranked[0]["reason_code"] if ranked else "NONE", ranked)
 
 
@@ -516,10 +562,14 @@ def evaluate_document_ground_truth(
     items = _structure_items(product_asset)
     blocks = [block for item in items for block in _candidate_blocks(item)]
     confirmed_sources = [
-        row for row in _rows(profile.get("sources")) if row.get("annotation_status") == "CONFIRMED"
+        row
+        for row in _rows(profile.get("sources"))
+        if row.get("annotation_status") == "CONFIRMED"
     ]
     confirmed_elements = [
-        row for row in _rows(profile.get("elements")) if row.get("annotation_status") == "CONFIRMED"
+        row
+        for row in _rows(profile.get("elements"))
+        if row.get("annotation_status") == "CONFIRMED"
     ]
     confirmed_pairs = [
         row
@@ -538,18 +588,26 @@ def evaluate_document_ground_truth(
         candidate_key = _text(_dict(row.get("candidate")).get("candidate_key"))
         if candidate_key and candidate_usage[candidate_key] > 1:
             row["alignment_status"] = "AMBIGUOUS"
-            row["mismatched_slots"] = ["candidate_reused_by_multiple_ground_truth_elements"]
+            row["mismatched_slots"] = [
+                "candidate_reused_by_multiple_ground_truth_elements"
+            ]
 
     element_by_id = {
         _text(row.get("ground_truth_id")): row for row in element_alignments
     }
-    order_alignments = [_order_alignment(row, element_by_id) for row in confirmed_pairs]
+    order_alignments = [
+        _order_alignment(row, element_by_id) for row in confirmed_pairs
+    ]
     highest_gap, gap_distribution = _ground_truth_gap(
         source_alignments, element_alignments, order_alignments
     )
 
-    exact_sources = sum(row.get("alignment_status") == "EXACT_MATCH" for row in source_alignments)
-    exact_elements = sum(row.get("alignment_status") == "EXACT_MATCH" for row in element_alignments)
+    exact_sources = sum(
+        row.get("alignment_status") == "EXACT_MATCH" for row in source_alignments
+    )
+    exact_elements = sum(
+        row.get("alignment_status") == "EXACT_MATCH" for row in element_alignments
+    )
     covered_elements = sum(
         row.get("alignment_status") in {"EXACT_MATCH", "PARTIAL_MATCH"}
         for row in element_alignments
@@ -559,31 +617,36 @@ def evaluate_document_ground_truth(
         for row in element_alignments
         if row.get("alignment_status") in {"EXACT_MATCH", "PARTIAL_MATCH"}
     ]
-    correct_type = sum("block_type" not in row.get("mismatched_slots", []) for row in unique_matched)
+    correct_type = sum(
+        "block_type" not in row.get("mismatched_slots", []) for row in unique_matched
+    )
     address_measurable = [
         row
         for expected, row in zip(confirmed_elements, element_alignments)
         if expected.get("address_kind")
-        or any(expected.get(field) not in (None, "") for field in _COORDINATE_FIELDS)
-    ]
-    address_correct = sum(
-        row.get("alignment_status") == "EXACT_MATCH"
-        or not any(
-            slot in {"address_kind", *_COORDINATE_FIELDS}
-            for slot in row.get("mismatched_slots", [])
+        or any(
+            expected.get(field) not in (None, "") for field in _COORDINATE_FIELDS
         )
+    ]
+    address_slots = {"address_kind", *_COORDINATE_FIELDS}
+    address_correct = sum(
+        not any(slot in address_slots for slot in row.get("mismatched_slots", []))
         for row in address_measurable
         if row.get("alignment_status") in {"EXACT_MATCH", "PARTIAL_MATCH"}
     )
     table_rows = [
         row for row in element_alignments if row.get("block_type") == "TABLE_CELL"
     ]
-    exact_order = sum(row.get("alignment_status") == "EXACT_MATCH" for row in order_alignments)
+    exact_order = sum(
+        row.get("alignment_status") == "EXACT_MATCH" for row in order_alignments
+    )
     by_type: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in element_alignments:
         by_type[_text(row.get("block_type")) or "UNKNOWN"].append(row)
 
-    validation_status = _text(_dict(profile.get("validation_receipt")).get("status"))
+    validation_status = _text(
+        _dict(profile.get("validation_receipt")).get("status")
+    )
     true_measured = bool(confirmed_elements and validation_status == "PASS")
     metrics = {
         "true_structure_recall_measured": true_measured,
@@ -599,12 +662,20 @@ def evaluate_document_ground_truth(
         "structure_element_ambiguous_count": sum(
             row.get("alignment_status") == "AMBIGUOUS" for row in element_alignments
         ),
-        "strict_structure_element_recall": _ratio(exact_elements, len(element_alignments)),
-        "coverage_structure_element_recall": _ratio(covered_elements, len(element_alignments)),
+        "strict_structure_element_recall": _ratio(
+            exact_elements, len(element_alignments)
+        ),
+        "coverage_structure_element_recall": _ratio(
+            covered_elements, len(element_alignments)
+        ),
         "block_type_accuracy": _ratio(correct_type, len(unique_matched)),
-        "exact_evidence_address_accuracy": _ratio(address_correct, len(address_measurable)),
+        "exact_evidence_address_accuracy": _ratio(
+            address_correct, len(address_measurable)
+        ),
         "table_cell_recall": _ratio(
-            sum(row.get("alignment_status") == "EXACT_MATCH" for row in table_rows),
+            sum(
+                row.get("alignment_status") == "EXACT_MATCH" for row in table_rows
+            ),
             len(table_rows),
         ),
         "reading_order_pair_count": len(order_alignments),
@@ -616,7 +687,10 @@ def evaluate_document_ground_truth(
                     row.get("alignment_status") == "EXACT_MATCH" for row in rows
                 ),
                 "strict_recall": _ratio(
-                    sum(row.get("alignment_status") == "EXACT_MATCH" for row in rows),
+                    sum(
+                        row.get("alignment_status") == "EXACT_MATCH"
+                        for row in rows
+                    ),
                     len(rows),
                 ),
             }
@@ -628,7 +702,9 @@ def evaluate_document_ground_truth(
         and profile.get("scope_complete")
         and highest_gap == "NONE"
         and metrics["strict_structure_element_recall"] == 1.0
-        and (metrics["reading_order_accuracy"] in {None, 1.0})
+        and metrics["source_recall"] in {None, 1.0}
+        and metrics["exact_evidence_address_accuracy"] in {None, 1.0}
+        and metrics["reading_order_accuracy"] in {None, 1.0}
     )
     return {
         "status": "PASS" if profile_pass else "PARTIAL",
