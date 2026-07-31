@@ -135,11 +135,12 @@ class HistoricalAuthorizationReportMigrationMixin:
             ] = migration
         migration_status = _text(migration.get("status"))
         rebuild_reason = _text(migration.get("rebuild_reason"))
+        other_publication_preserved = migration_status == "MIGRATED"
         diagnostics = {
             "status": _text(quarantine.get("status")),
             "migration_status": migration_status or "UNKNOWN",
             "registry_rebuild_reason": rebuild_reason,
-            "canonical_registry_rebuilt": migration_status == "MIGRATED",
+            "canonical_registry_rebuilt": other_publication_preserved,
             "quarantine_count": int(
                 quarantine.get("quarantine_count") or 0
             ),
@@ -149,7 +150,10 @@ class HistoricalAuthorizationReportMigrationMixin:
             "manual_recompile_required_count": int(
                 quarantine.get("manual_recompile_required_count") or 0
             ),
-            "customer_defect_publication_allowed": False,
+            "quarantined_authorization_publication_allowed": False,
+            "other_formal_defect_publication_preserved": (
+                other_publication_preserved
+            ),
             "scope": "internal_historical_authorization_remediation",
         }
         projected_data[
