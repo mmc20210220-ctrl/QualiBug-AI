@@ -4,6 +4,7 @@
   "scope_complete": false,
   "explicit_fact_scope_complete": true,
   "annotation_authority": "manual_source_backed_fixture_review",
+  "source_locator_authority": "generic_text_document_ir_exact_line_char",
   "minimum_profile": {
     "business_rules": 12
   },
@@ -28,6 +29,7 @@
         "combinator": "AND",
         "conditions": ["订单状态为待审批", "所属部门一致"]
       },
+      "source_locators": ["source_rules.md#line=3;chars=17-48"],
       "source_refs": ["benchmark_evaluator/enterprise_understanding/fixtures/chinese_explicit_fact_baseline_v1/source_rules.md"]
     },
     {
@@ -43,6 +45,7 @@
           "to_state": "已审批"
         }
       ],
+      "source_locators": ["source_rules.md#line=5;chars=51-91"],
       "source_refs": ["benchmark_evaluator/enterprise_understanding/fixtures/chinese_explicit_fact_baseline_v1/source_rules.md"]
     },
     {
@@ -52,6 +55,7 @@
       "operation": "生成",
       "object_refs": ["出库单"],
       "fact_type": "DATA_EFFECT",
+      "source_locators": ["source_rules.md#line=5;chars=51-91"],
       "source_refs": ["benchmark_evaluator/enterprise_understanding/fixtures/chinese_explicit_fact_baseline_v1/source_rules.md"]
     },
     {
@@ -61,6 +65,7 @@
       "operation": "扣减",
       "object_refs": ["库存"],
       "fact_type": "DATA_EFFECT",
+      "source_locators": ["source_rules.md#line=5;chars=51-91"],
       "source_refs": ["benchmark_evaluator/enterprise_understanding/fixtures/chinese_explicit_fact_baseline_v1/source_rules.md"]
     },
     {
@@ -70,6 +75,7 @@
       "operation": "发送",
       "object_refs": ["发货通知"],
       "fact_type": "DATA_EFFECT",
+      "source_locators": ["source_rules.md#line=5;chars=51-91"],
       "source_refs": ["benchmark_evaluator/enterprise_understanding/fixtures/chinese_explicit_fact_baseline_v1/source_rules.md"]
     },
     {
@@ -82,6 +88,7 @@
       "actor_refs": ["仓库管理员"],
       "modality": "MUST_NOT",
       "exception_scope": ["测试订单"],
+      "source_locators": ["source_rules.md#line=7;chars=94-115"],
       "source_refs": ["benchmark_evaluator/enterprise_understanding/fixtures/chinese_explicit_fact_baseline_v1/source_rules.md"]
     },
     {
@@ -100,6 +107,7 @@
           "relation": "WITHIN"
         }
       ],
+      "source_locators": ["source_rules.md#line=9;chars=118-139"],
       "source_refs": ["benchmark_evaluator/enterprise_understanding/fixtures/chinese_explicit_fact_baseline_v1/source_rules.md"]
     },
     {
@@ -109,6 +117,7 @@
       "operation": "COMPOSED_OF",
       "object_refs": ["采购订单", "订单头"],
       "fact_type": "OBJECT_RELATION",
+      "source_locators": ["source_rules.md#line=11;chars=142-157"],
       "source_refs": ["benchmark_evaluator/enterprise_understanding/fixtures/chinese_explicit_fact_baseline_v1/source_rules.md"]
     },
     {
@@ -118,6 +127,7 @@
       "operation": "COMPOSED_OF",
       "object_refs": ["采购订单", "订单明细"],
       "fact_type": "OBJECT_RELATION",
+      "source_locators": ["source_rules.md#line=11;chars=142-157"],
       "source_refs": ["benchmark_evaluator/enterprise_understanding/fixtures/chinese_explicit_fact_baseline_v1/source_rules.md"]
     },
     {
@@ -134,6 +144,7 @@
           "maximum": "1"
         }
       ],
+      "source_locators": ["source_rules.md#line=13;chars=160-173"],
       "source_refs": ["benchmark_evaluator/enterprise_understanding/fixtures/chinese_explicit_fact_baseline_v1/source_rules.md"]
     },
     {
@@ -150,6 +161,7 @@
           "maximum": "MANY"
         }
       ],
+      "source_locators": ["source_rules.md#line=15;chars=176-192"],
       "source_refs": ["benchmark_evaluator/enterprise_understanding/fixtures/chinese_explicit_fact_baseline_v1/source_rules.md"]
     },
     {
@@ -167,6 +179,7 @@
           "source_backed": true
         }
       ],
+      "source_locators": ["source_rules.md#line=17;chars=195-213"],
       "source_refs": ["benchmark_evaluator/enterprise_understanding/fixtures/chinese_explicit_fact_baseline_v1/source_rules.md"]
     }
   ],
