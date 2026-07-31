@@ -1,17 +1,9 @@
-"""Planning the governed steps that establish a declared source state.
+"""Planning governed steps that establish a declared source state.
 
 A state obligation says "from A, operation X must reach B". Establishing A is the
-experiment's own job, and nothing did it: ``experiment_compiler_support`` strips the
-``entity_in_state:*`` fixtures a state obligation requests and substitutes the literal
-``unknown_state``, which the state_transition evaluator then degrades from "did the declared
-transition happen" into "did anything change at all". The strongest state assertion in the
-product silently became the weakest one.
-
-The BFS here is re-implemented rather than imported from ``precondition_reachability.py``,
-and the reason is verified, not stylistic: that module's ``analyze`` returns
-``reachable=True`` with an empty path whenever the goal carries no state condition
-(precondition_reachability.py:318-324) — a claim that the precondition holds when nothing was
-checked. The tests below pin the inversion: an absent, unresolved or unreachable goal BLOCKS.
+experiment's own job. ``state_precondition_planner`` is the compiler-facing adapter;
+``precondition_reachability`` is the single graph-search authority. The tests below
+pin both the fail-closed behavior and the absence of a second planner-owned BFS.
 """
 
 from __future__ import annotations
@@ -20,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from ai_test_asset_center.precondition_reachability import ReachabilityAnalyzer
 from ai_test_asset_center.state_precondition_planner import (
     MAX_PRECONDITION_PATH_STEPS,
     REASON_ACTOR_MISSING,
@@ -80,11 +73,7 @@ def test_relation_types_other_than_transitions_are_ignored() -> None:
 
 
 def test_edge_naming_an_unknown_operation_is_not_an_edge() -> None:
-    """A half-resolved transition is not one anyone can execute.
-
-    Same three-way requirement obligation_compiler_base applies before emitting a state
-    obligation: from-state, to-state and operation must all resolve.
-    """
+    """A half-resolved transition is not one anyone can execute."""
     behavior_ir = _ir([("A", "B", "ghost-op")], operations=[])
     assert build_transition_graph(behavior_ir) == {}
 
@@ -108,15 +97,27 @@ def test_shortest_declared_path_is_planned() -> None:
     assert result["status"] == STATUS_PLANNED
     assert [step["operation_ref"] for step in result["steps"]] == ["op-pay", "op-ship"]
     assert [step["step_id"] for step in result["steps"]] == ["precondition_1", "precondition_2"]
+    assert result["detail"]["reachability_authority"] == "precondition_reachability"
+
+
+def test_shared_reachability_is_called_for_path_search(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, str]] = []
+    original = ReachabilityAnalyzer.analyze
+
+    def wrapped(self, goal, current_state, available_actors, existing_entities=None):
+        calls.append((current_state, goal.required_conditions[0]["expected_expression"]))
+        return original(self, goal, current_state, available_actors, existing_entities)
+
+    monkeypatch.setattr(ReachabilityAnalyzer, "analyze", wrapped)
+    result = plan_state_precondition(
+        behavior_ir=_ir(LINEAR), from_state="SHIPPED", actors=["actor-1"]
+    )
+
+    assert result["status"] == STATUS_PLANNED
+    assert calls == [("created", "shipped")]
 
 
 def test_steps_are_fixture_phase_not_measured() -> None:
-    """Establishment must stay OUTSIDE the measured window.
-
-    _main_governed_write_steps keeps only phase in {control, treatment}. If establishment ran
-    as a control step, before_state would snapshot the state BEFORE the precondition existed
-    and a correctly-run experiment would report STATE_PRECONDITION_NOT_MET.
-    """
     result = plan_state_precondition(
         behavior_ir=_ir(LINEAR), from_state="SHIPPED", actors=["actor-1"]
     )
@@ -155,7 +156,6 @@ def test_explicit_start_state_is_honoured() -> None:
 # ── every refusal is explicit ───────────────────────────────────────────────
 
 def test_goal_absent_from_the_graph_blocks() -> None:
-    """The inversion. The older module would have reported success with an empty path."""
     result = plan_state_precondition(
         behavior_ir=_ir(LINEAR), from_state="REFUNDED", actors=["actor-1"]
     )
@@ -164,10 +164,6 @@ def test_goal_absent_from_the_graph_blocks() -> None:
 
 
 def test_unknown_state_placeholder_blocks() -> None:
-    """unknown_state is the literal substituted when a state could not be resolved.
-
-    Planning a path to it would be planning a path to nothing.
-    """
     result = plan_state_precondition(
         behavior_ir=_ir(LINEAR), from_state="unknown_state", actors=["actor-1"]
     )
@@ -193,7 +189,6 @@ def test_unreachable_goal_blocks() -> None:
 
 
 def test_graph_with_no_entry_state_blocks() -> None:
-    """Every state transitioned into means the source declares no creatable entry point."""
     result = plan_state_precondition(
         behavior_ir=_ir([("A", "B", "op1"), ("B", "A", "op2")]),
         from_state="B", actors=["actor-1"],
@@ -203,7 +198,6 @@ def test_graph_with_no_entry_state_blocks() -> None:
 
 
 def test_missing_actor_blocks_rather_than_planning_an_unexecutable_path() -> None:
-    """Each step is a governed write and needs an identity."""
     result = plan_state_precondition(
         behavior_ir=_ir(LINEAR), from_state="SHIPPED", actors=[]
     )
@@ -220,7 +214,6 @@ def test_empty_graph_blocks() -> None:
 
 
 def test_path_longer_than_the_bound_blocks() -> None:
-    """A long speculative chain of governed writes is not evidence-gathering."""
     length = MAX_PRECONDITION_PATH_STEPS + 3
     edges = [(f"S{i}", f"S{i + 1}", f"op-{i}") for i in range(length)]
     result = plan_state_precondition(
@@ -231,7 +224,6 @@ def test_path_longer_than_the_bound_blocks() -> None:
 
 
 def test_no_outcome_is_silently_successful() -> None:
-    """Every BLOCKED result names its reason. A blank refusal is not actionable."""
     for kwargs in (
         {"from_state": "REFUNDED", "actors": ["a"]},
         {"from_state": "unknown_state", "actors": ["a"]},
@@ -245,11 +237,6 @@ def test_no_outcome_is_silently_successful() -> None:
 
 @pytest.mark.parametrize("state", ["SHIPPED", "shipped", "Shipped", " shipped "])
 def test_goal_matching_uses_the_evaluator_state_token(state: str) -> None:
-    """The planner must compare states the way the assertion evaluator does.
-
-    Otherwise a path planned for 'SHIPPED' would establish a state the evaluator then reads
-    as different.
-    """
     result = plan_state_precondition(
         behavior_ir=_ir(LINEAR), from_state=state, actors=["actor-1"]
     )
