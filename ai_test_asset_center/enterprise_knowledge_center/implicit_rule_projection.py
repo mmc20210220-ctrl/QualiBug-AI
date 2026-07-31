@@ -1,11 +1,12 @@
 """Project implicit business rules into the existing rule-library mainline.
 
 This stage does not ask a model to invent rules and does not create a parallel IR.
-It derives conservative candidates from already-ingested formal constraints and
-independent cross-source facts, validates them through ``_candidate_validation``,
-and promotes only accepted candidates into ``rule_library``. The existing Behavior
-IR compiler then turns those rows into invariants and the existing obligation/
-experiment/oracle chain remains the sole execution authority.
+It derives conservative candidates from already-ingested formal constraints,
+accepted typed business facts and independent cross-source facts, validates them
+through ``_candidate_validation``, and promotes only accepted candidates into
+``rule_library``. The existing Behavior IR compiler then turns those rows into
+invariants and the existing obligation/experiment/oracle chain remains the sole
+execution authority.
 
 The projection is intentionally idempotent. The enterprise cognition boundary can
 run twice when a structure-first compiler upgrades the same fact ledger; every run
@@ -24,12 +25,20 @@ from ._candidate_validation import (
     promote_validated_candidates,
     validate_and_promote_candidates,
 )
+from .implicit_rule_fact_entailment import (
+    derive_rule_candidates_from_business_facts,
+    uncovered_rule_candidate_spans,
+)
 
 SCHEMA_VERSION = "qualibug.implicit-rule-projection.v1"
 _INVALID_SOURCE_IDS = frozenset({"", "unknown", "unspecified", "*"})
 _DERIVATION = "implicit_rule_entailment"
 _IMPLICIT_GAP_KINDS = frozenset(
-    {"IMPLICIT_RULE_AUTHORITY_INSUFFICIENT", "IMPLICIT_RULE_CONFLICTED"}
+    {
+        "IMPLICIT_RULE_AUTHORITY_INSUFFICIENT",
+        "IMPLICIT_RULE_CONFLICTED",
+        "IMPLICIT_RULE_SOURCE_SPAN_UNCOVERED",
+    }
 )
 
 
@@ -781,7 +790,6 @@ def _partition_existing_rules(
         if not isinstance(rule, dict):
             continue
         if _text(rule.get("derivation")) == _DERIVATION:
-            # Recomputed from the current fact ledger below.
             continue
         if _text(rule.get("source_id")) != "industry_inference" and _text(
             rule.get("source_type")
@@ -836,7 +844,6 @@ def _partition_existing_rules(
 
 
 def _prior_proposal_candidates(asset: dict[str, Any]) -> list[dict[str, Any]]:
-    """Carry non-authoritative priors across a second idempotent projection pass."""
     return [
         dict(row)
         for row in _list(asset.get("implicit_rule_candidates"))
@@ -969,9 +976,7 @@ def _project_risks_and_oracles(
                 "assertion": rule.get("statement"),
                 "linked_interfaces": list(rule.get("operation_refs") or []),
                 "linked_tables": list(rule.get("table_refs") or []),
-                "execution_policy": (
-                    "read_only_evidence_or_governed_sandbox"
-                ),
+                "execution_policy": "read_only_evidence_or_governed_sandbox",
                 "evidence_requirements": list(
                     rule.get("observation_requirements") or []
                 ),
@@ -991,11 +996,15 @@ def enrich_asset_with_implicit_rule_projection(asset: dict[str, Any]) -> dict[st
         if isinstance(row, dict)
     ]
     retained_rules, industry_candidates = _partition_existing_rules(existing_rules)
+    typed_fact_candidates = derive_rule_candidates_from_business_facts(asset)
+    uncovered_spans = uncovered_rule_candidate_spans(asset)
+    critical_uncovered_spans = [row for row in uncovered_spans if row.get("critical")]
     candidates = _dedupe_candidates(
         [
             *_schema_rule_candidates(asset),
             *_api_schema_rule_candidates(asset),
             *_permission_rule_candidates(asset),
+            *typed_fact_candidates,
             *industry_candidates,
             *_prior_proposal_candidates(asset),
         ]
@@ -1026,6 +1035,7 @@ def enrich_asset_with_implicit_rule_projection(asset: dict[str, Any]) -> dict[st
         len(receipt.validated),
         len(receipt.pending),
         len(receipt.conflicted),
+        len(uncovered_spans),
     )
     for row in receipt.validated:
         row["promotion_receipt_id"] = receipt_id
@@ -1086,8 +1096,17 @@ def enrich_asset_with_implicit_rule_projection(asset: dict[str, Any]) -> dict[st
                 "conflict_reason": row.get("reason")
                 or row.get("conflict_reason"),
                 "conflict_sources": list(row.get("conflict_sources") or []),
+                "operator_action": "resolve source authority conflict before execution",
+            }
+        )
+    for row in uncovered_spans:
+        gaps.append(
+            {
+                "kind": "IMPLICIT_RULE_SOURCE_SPAN_UNCOVERED",
+                "gap_type": "source_span_has_rule_signal_but_no_compiled_fact",
+                **row,
                 "operator_action": (
-                    "resolve source authority conflict before execution"
+                    "extend the existing structure-first fact compiler for this source-backed span"
                 ),
             }
         )
@@ -1105,37 +1124,43 @@ def enrich_asset_with_implicit_rule_projection(asset: dict[str, Any]) -> dict[st
     status = (
         "BLOCKED_CONFLICTED"
         if receipt.conflicted
+        else "BLOCKED_SOURCE_SPAN_COVERAGE"
+        if critical_uncovered_spans
         else "PARTIAL_PENDING_AUTHORITY"
-        if receipt.pending
+        if receipt.pending or uncovered_spans
         else "PASS"
     )
     asset["implicit_rule_projection_gate"] = {
         "schema": SCHEMA_VERSION,
         "receipt_id": receipt_id,
         "status": status,
-        "entry_allowed": not bool(receipt.conflicted),
+        "entry_allowed": not bool(receipt.conflicted or critical_uncovered_spans),
         "candidate_count": len(candidates),
         "accepted_rule_count": len(accepted_rules),
+        "typed_fact_candidate_count": len(typed_fact_candidates),
         "pending_rule_count": len(receipt.pending),
         "conflicted_rule_count": len(receipt.conflicted),
         "rejected_rule_count": len(receipt.rejected),
+        "uncovered_rule_span_count": len(uncovered_spans),
+        "critical_uncovered_rule_span_count": len(critical_uncovered_spans),
         "logical_form_distribution": dict(sorted(counts.items())),
         "industry_prior_direct_authority_allowed": False,
         "runtime_convention_direct_authority_allowed": False,
         "pending_rule_execution_allowed": False,
-        "behavior_ir_authority": (
-            "existing_rule_library_to_invariant_compiler"
-        ),
+        "behavior_ir_authority": "existing_rule_library_to_invariant_compiler",
         "parallel_rule_ir_created": False,
         "reprojection_is_idempotent": True,
+        "span_coverage_authority": "business_fact_candidate_ledger",
     }
     summary = dict(asset.get("summary") or {})
     summary.update(
         {
             "implicit_rule_candidate_count": len(candidates),
             "implicit_rule_accepted_count": len(accepted_rules),
+            "implicit_rule_typed_fact_candidate_count": len(typed_fact_candidates),
             "implicit_rule_pending_count": len(receipt.pending),
             "implicit_rule_conflicted_count": len(receipt.conflicted),
+            "implicit_rule_uncovered_span_count": len(uncovered_spans),
             "implicit_rule_projection_status": status,
         }
     )
@@ -1148,6 +1173,8 @@ def enrich_asset_with_implicit_rule_projection(asset: dict[str, Any]) -> dict[st
             "implicit_rules_create_parallel_behavior_ir": False,
             "implicit_rule_projection_is_idempotent": True,
             "implicit_rule_authority_requires_explicit_source_identity": True,
+            "implicit_rule_span_coverage_uses_existing_candidate_ledger": True,
+            "implicit_rule_typed_facts_use_existing_business_fact_ledger": True,
             "industry_prior_may_propose_but_not_authorize_rule": True,
             "runtime_convention_may_propose_but_not_authorize_rule": True,
             "rule_authority_uses_hard_gates_not_average_confidence": True,
