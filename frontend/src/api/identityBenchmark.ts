@@ -45,14 +45,15 @@ function errorMessage(status: number, payload: ApiEnvelope<unknown>): string {
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const session = await getSession();
   if (!session) throw new Error('未登录或会话已失效，请重新登录。');
+  const headers = new Headers(init?.headers);
+  if (init?.body && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
   const response = await fetch(url, {
     ...init,
     credentials: 'include',
     cache: 'no-store',
-    headers: {
-      ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
-      ...(init?.headers || {}),
-    },
+    headers,
   });
   let payload: ApiEnvelope<T> = {};
   try {
