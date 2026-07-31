@@ -3,7 +3,8 @@
 The receipt is built only after the complete Gate-v2 evidence bundle and the
 obligation-attempt ledger have been revalidated.  It contains no request or
 response bodies, so it can cross persistence and evaluator boundaries without
-rewriting the signed evidence chain.
+rewriting the signed evidence chain. Historical authorization attempts remain in
+the source ledger but cannot enter this authority without current causal proof.
 """
 from __future__ import annotations
 
@@ -23,6 +24,10 @@ from .discovery_mainline_contract import (
     validate_mainline_run_contract,
 )
 from .formal_delivery_scope import formal_customer_deliverable_findings
+from .historical_authorization_quarantine import (
+    HistoricalAuthorizationQuarantineError,
+    classify_historical_authorization_attempt,
+)
 from .obligation_attempt_ledger import (
     ObligationAttemptLedgerError,
     validate_obligation_attempt_ledger,
@@ -171,7 +176,7 @@ def build_formal_delivery_authority_receipt(
     findings: list[dict[str, Any]],
     obligation_attempt_ledger: dict[str, Any],
 ) -> dict[str, Any]:
-    """Revalidate the full authority chain and emit a compact audit receipt."""
+    """Revalidate the formal, non-quarantined chain and emit an audit receipt."""
 
     try:
         mainline = validate_mainline_run_contract(mainline_run)
@@ -216,6 +221,18 @@ def build_formal_delivery_authority_receipt(
         if _text(attempt.get("terminal_status")).upper() != "DELIVERABLE":
             continue
         finding_id = _text(attempt.get("finding_id"))
+        try:
+            quarantine = classify_historical_authorization_attempt(
+                attempt,
+                run_id=mainline["run_id"],
+                campaign_id=mainline["campaign_id"],
+            )
+        except HistoricalAuthorizationQuarantineError as exc:
+            raise FormalDeliveryAuthorityError(
+                f"formal_authority_historical_authorization_invalid:{finding_id}:{exc}"
+            ) from exc
+        if quarantine:
+            continue
         finding = finding_by_id.get(finding_id)
         if finding is None:
             raise FormalDeliveryAuthorityError(
