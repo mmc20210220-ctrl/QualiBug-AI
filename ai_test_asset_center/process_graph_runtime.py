@@ -31,6 +31,9 @@ GRAPH_TARGET_ACTOR_CREDENTIAL_UNRESOLVED = (
 GRAPH_SECONDARY_WRITE_CLEANUP_UNAVAILABLE = (
     "PROCESS_GRAPH_SECONDARY_WRITE_CLEANUP_NOT_AVAILABLE"
 )
+GRAPH_NODE_COMPENSATION_UNRESOLVED = (
+    "PROCESS_GRAPH_NODE_COMPENSATION_UNRESOLVED"
+)
 GRAPH_PREDECESSOR_NOT_SUCCEEDED = "PROCESS_GRAPH_PREDECESSOR_NOT_SUCCEEDED"
 GRAPH_INPUT_BINDING_UNRESOLVED = "PROCESS_GRAPH_INPUT_BINDING_UNRESOLVED"
 GRAPH_INPUT_BINDING_CONFLICT = "PROCESS_GRAPH_INPUT_BINDING_CONFLICT"
@@ -338,6 +341,17 @@ def prepare_graph_runtime(
         operation_ref = _text(node.get("operation_ref"))
         operation = _dict(ops.get(operation_ref))
         method = _text(node.get("method") or operation.get("method")).upper()
+        if method in _WRITE_METHODS:
+            compensation_ref = _text(node.get("compensation_operation_ref"))
+            if not compensation_ref or compensation_ref not in ops:
+                return {
+                    "status": "BLOCKED",
+                    "reason_code": GRAPH_NODE_COMPENSATION_UNRESOLVED,
+                    "detail": (
+                        f"{node_id}:{operation_ref}:"
+                        f"{compensation_ref or 'missing_compensation_operation_ref'}"
+                    ),
+                }
         system_ref = _text(node.get("system_ref"))
         contract, primary, error = _target_contract(
             runtime_contract,
@@ -621,6 +635,7 @@ __all__ = [
     "GRAPH_TARGET_NOT_APPROVED",
     "GRAPH_TARGET_ACTOR_CREDENTIAL_UNRESOLVED",
     "GRAPH_SECONDARY_WRITE_CLEANUP_UNAVAILABLE",
+    "GRAPH_NODE_COMPENSATION_UNRESOLVED",
     "GRAPH_PREDECESSOR_NOT_SUCCEEDED",
     "GRAPH_INPUT_BINDING_UNRESOLVED",
     "GRAPH_INPUT_BINDING_CONFLICT",
