@@ -126,6 +126,7 @@
     "ai_test_asset_center.connector_sync_authority": "core",
     "ai_test_asset_center.feishu_connector_adapter": "core",
     "ai_test_asset_center.connector_connection_profiles": "core",
+    "ai_test_asset_center.connector_checkpoint_recovery": "core",
     "ai_test_asset_center.connector_auto_sync": "core",
     "ai_test_asset_center.private_pilot_connector_handlers": "core"
   },
