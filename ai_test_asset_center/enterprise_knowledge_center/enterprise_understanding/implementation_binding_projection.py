@@ -9,6 +9,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from .event_contract_implementation_authority import (
+    apply_event_contract_validation_failures,
+    prepare_formal_event_contract_authority,
+)
 from .event_observer_evidence_projection import project_event_observer_evidence
 from .event_observer_implementation_projection import project_formal_event_observers
 from .schema import as_dict, as_list, text
@@ -21,6 +25,7 @@ _PARTIAL_PASS = "PARTIAL_PASS_SCENARIO_PLANNING"
 def _project_event_observer_authority(
     asset: dict[str, Any], model: dict[str, Any]
 ) -> None:
+    validation_unknowns = prepare_formal_event_contract_authority(asset, model)
     bindings, unknowns, conflicts, gate = project_formal_event_observers(
         asset,
         as_list(model.get("business_behaviors")),
@@ -28,6 +33,13 @@ def _project_event_observer_authority(
         as_list(model.get("implementation_binding_unknowns")),
         as_list(model.get("implementation_binding_conflicts")),
         as_dict(model.get("implementation_binding_gate")),
+    )
+    bindings, unknowns, conflicts, gate = apply_event_contract_validation_failures(
+        bindings,
+        unknowns,
+        conflicts,
+        gate,
+        validation_unknowns,
     )
     bindings = project_event_observer_evidence(bindings)
     event_evidence_count = sum(
@@ -64,6 +76,13 @@ def _project_event_observer_authority(
             "formal_event_contract_bound_count": int(
                 metrics.get("formal_event_contract_bound_count") or 0
             ),
+            "formal_event_contract_validation_failure_count": int(
+                metrics.get("formal_event_contract_validation_failure_count") or 0
+            ),
+            "formal_event_contract_validation_blocked_binding_count": int(
+                metrics.get("formal_event_contract_validation_blocked_binding_count")
+                or 0
+            ),
             "formal_event_observer_evidence_count": event_evidence_count,
         }
     )
@@ -74,6 +93,8 @@ def _project_event_observer_authority(
             "formal_event_observer_binding_enabled": True,
             "formal_event_observer_reuses_existing_event_contract_authority": True,
             "formal_event_contract_is_effect_observer_not_action_surface": True,
+            "formal_event_contract_validation_reuses_existing_overlay_authority": True,
+            "invalid_formal_event_contract_cannot_satisfy_effect_observer": True,
             "formal_event_evidence_uses_enterprise_source_locator_contract": True,
             "event_topic_or_broker_inference_allowed": False,
         }
