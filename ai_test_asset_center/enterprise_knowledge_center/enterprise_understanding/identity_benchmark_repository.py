@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -143,16 +144,16 @@ def append_identity_benchmark_snapshot(
     duplicate_count = sum(
         1
         for prior in rows
-        if text(prior.get("requested_snapshot_id") or prior.get("snapshot_id"))
-        == requested_id
+        if text(prior.get("requested_snapshot_id")) == requested_id
     )
+    event_nonce = uuid.uuid4().hex
     row["requested_snapshot_id"] = requested_id
+    row["snapshot_id"] = "identity_snapshot_event:" + hashlib.sha256(
+        f"{project}:{requested_id}:{event_nonce}".encode("utf-8")
+    ).hexdigest()[:24]
     row["measurement_event_sequence"] = len(rows) + 1
-    if duplicate_count:
-        row["snapshot_id"] = hashlib.sha256(
-            f"{requested_id}:{len(rows) + 1}".encode("utf-8")
-        ).hexdigest()[:24]
-        row["same_result_event_ordinal"] = duplicate_count + 1
+    row["same_result_event_ordinal"] = duplicate_count + 1
+    row["snapshot_event_id_is_result_independent"] = True
     rows.append(row)
     history["snapshots"] = rows[-_MAX_HISTORY_SNAPSHOTS:]
     history["updated_at_utc"] = text(row.get("recorded_at_utc")) or _now()
