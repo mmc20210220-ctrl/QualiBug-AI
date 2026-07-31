@@ -10,10 +10,17 @@ The central rule is governed-operation binding: role and object coordinates belo
 the operation governed by the modality/trigger, not to every noun or verb in the whole
 sentence. Formal relation/cardinality/formula facts already carry compiler-owned
 subject/object coordinates and therefore bypass this compatibility normalization.
+
+Two source-grammar contracts are also closed here because the compatibility parser may
+split them before structure compilation: actor-exclusive permissions with qualified
+objects, and one unambiguous IF/ELSE pair sharing the same exact source locator. Pairing
+only annotates existing facts; it never creates a missing branch or chooses among
+multiple candidates.
 """
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from typing import Any, Iterable
 
 from .structured_fact_compiler import _semantic_signature
@@ -114,7 +121,9 @@ _ACTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
         ("关闭", r"关闭"),
     )
 )
-_NEGATIVE_RE = re.compile(r"不得|严禁|禁止|不允许|不可|不能|无权|拒绝|禁止再")
+# Negative *modality* markers only. ``拒绝`` is an operation: ``必须拒绝`` is a
+# positive obligation to reject, while ``不得拒绝`` is already covered by 不得.
+_NEGATIVE_RE = re.compile(r"不得|严禁|禁止|不允许|不可|不能|无权|禁止再")
 _MUST_RE = re.compile(r"必须|应当|务必|需要|需(?=[由在对将把于])")
 _MAY_RE = re.compile(r"可以|允许|有权|可(?=[由在对将把于进行查看修改删除提交撤回审批开具])")
 _ONLY_IF_RE = re.compile(r"只有.+?才|仅当.+?才|除非|只能|仅能")
@@ -137,9 +146,17 @@ _STATE_FROM_TO_RE = re.compile(
     r"(?=，|,|并且|并|且|。|；|;|$)"
 )
 _ONLY_IF_FRAME_RE = re.compile(r"(?:只有|仅当)(?P<body>.+?)才")
+_ONLY_ACTOR_PERMISSION_RE = re.compile(
+    r"(?:只有|仅)(?P<actor>[^，,；;。]{1,24}?)(?:才)?(?:可以|允许|有权)"
+)
+_IF_BRANCH_RE = re.compile(r"^(?:如果|若|一旦)(?P<condition>.+?)(?:时)?[，,]?则")
+_ELSE_BRANCH_RE = re.compile(r"^否则")
+_STATE_INVARIANT_RE = re.compile(
+    r"(?P<value>(?:保持|保留|维持)[^，,；;。]{1,24}?状态不变)"
+)
 _AND_RE = re.compile(r"并且|同时满足|以及|(?<![并])且(?![不])")
 _OR_RE = re.compile(r"或者|或则|任一条件|其中之一")
-_CLAUSE_BOUNDARY_RE = re.compile(r"[，,；;。]|并且|以及|(?<![并])且(?![不])")
+_PUNCTUATION_BOUNDARY_RE = re.compile(r"[，,；;。]")
 
 
 def _text(value: Any) -> str:
@@ -197,6 +214,16 @@ def _source_backed_vocabulary(
         and any(_text(value).endswith(head) for head in head_values)
     ]
     return _ordered_unique([*existing_values, *head_values])
+
+
+def _only_actor_role(statement: str) -> str:
+    match = _ONLY_ACTOR_PERMISSION_RE.search(statement)
+    if not match:
+        return ""
+    actor = _text(match.group("actor")).strip(" ，,")
+    if not actor or not any(actor.endswith(head) for head in _ROLE_HEADS):
+        return ""
+    return actor
 
 
 def _action_matches(statement: str) -> list[dict[str, Any]]:
@@ -270,20 +297,23 @@ def _governed_entities(
         existing_entities,
         _ENTITY_HEADS,
     )
+    # Object qualifiers often contain AND (本人创建且尚未审批的订单), so conjunctions
+    # cannot be treated as an object boundary. Side-effect clauses are already separated
+    # by punctuation or represented as formal DATA_EFFECT facts.
     suffix = statement[end:]
-    suffix_clause = _CLAUSE_BOUNDARY_RE.split(suffix, maxsplit=1)[0]
+    suffix_clause = _PUNCTUATION_BOUNDARY_RE.split(suffix, maxsplit=1)[0]
     refs = _explicit_refs(suffix_clause, vocabulary)
     if refs:
         return refs
 
     prefix = statement[:start]
-    prefix_clause = re.split(r"[，,；;。]", prefix)[-1]
+    prefix_clause = _PUNCTUATION_BOUNDARY_RE.split(prefix)[-1]
     refs = _explicit_refs(prefix_clause, vocabulary)
     return refs[-1:] if refs else []
 
 
 def _modality(statement: str) -> tuple[str, str]:
-    """Explicit action modality wins; 只有/仅当 remains the condition frame."""
+    """Explicit modal markers determine modality; operation polarity is separate."""
     if _NEGATIVE_RE.search(statement):
         return "MUST_NOT", "NEGATIVE"
     if _MUST_RE.search(statement):
@@ -302,7 +332,52 @@ def _clean_condition(value: Any) -> str:
     return item.strip(" ，,；;。")
 
 
-def _condition_coordinates(statement: str, fact: dict[str, Any]) -> tuple[list[str], str]:
+def _qualified_object_conditions(
+    statement: str,
+    action: dict[str, Any],
+    entities: list[str],
+) -> tuple[list[str], str]:
+    """Project explicit qualifiers between an action and its actor-exclusive object."""
+    if not _ONLY_ACTOR_PERMISSION_RE.search(statement) or not action or not entities:
+        return [], ""
+    action_end = int(action.get("end", -1))
+    if action_end < 0:
+        return [], ""
+    candidates: list[tuple[int, str]] = []
+    for entity in entities:
+        for match in re.finditer(re.escape(entity), statement[action_end:]):
+            candidates.append((action_end + match.start(), entity))
+    if not candidates:
+        return [], ""
+    object_start, _entity = max(candidates, key=lambda row: row[0])
+    qualifier = statement[action_end:object_start].strip(" ，,；;。")
+    qualifier = re.sub(r"^(?:把|将|对|向|给)", "", qualifier)
+    qualifier = re.sub(r"的$", "", qualifier).strip(" ，,；;。")
+    if not qualifier:
+        return [], ""
+    has_and = bool(_AND_RE.search(qualifier))
+    has_or = bool(_OR_RE.search(qualifier))
+    if has_and and has_or:
+        return [qualifier], "UNRESOLVED"
+    if has_and:
+        rows = [re.sub(r"的$", "", _clean_condition(row)) for row in _AND_RE.split(qualifier)]
+        values = _ordered_unique(row for row in rows if row)
+        return values, "AND" if len(values) > 1 else "SINGLE_CONDITION"
+    if has_or:
+        rows = [re.sub(r"的$", "", _clean_condition(row)) for row in _OR_RE.split(qualifier)]
+        values = _ordered_unique(row for row in rows if row)
+        return values, "OR" if len(values) > 1 else "SINGLE_CONDITION"
+    value = re.sub(r"的$", "", _clean_condition(qualifier))
+    return ([value] if value else []), ("SINGLE_CONDITION" if value else "")
+
+
+def _condition_coordinates(
+    statement: str,
+    fact: dict[str, Any],
+    *,
+    action: dict[str, Any],
+    entities: list[str],
+) -> tuple[list[str], str]:
     match = _ONLY_IF_FRAME_RE.search(statement)
     if match:
         body = _clean_condition(match.group("body"))
@@ -318,8 +393,17 @@ def _condition_coordinates(statement: str, fact: dict[str, Any]) -> tuple[list[s
             return _ordered_unique(row for row in rows if row), "OR"
         return ([body] if body else []), ("SINGLE_CONDITION" if body else "")
 
+    qualified, qualified_combinator = _qualified_object_conditions(
+        statement,
+        action,
+        entities,
+    )
     existing = [_clean_condition(row) for row in _list(fact.get("conditions"))]
-    rows = _ordered_unique(row for row in existing if row)
+    rows = _ordered_unique([*(row for row in existing if row), *qualified])
+    if qualified:
+        if len(rows) <= 1:
+            return rows, "SINGLE_CONDITION"
+        return rows, qualified_combinator or "UNRESOLVED"
     return rows, _text(fact.get("condition_combinator"))
 
 
@@ -380,6 +464,15 @@ def _normalized_time_window(statement: str) -> dict[str, Any] | None:
     }
 
 
+def _normalized_postconditions(statement: str, existing: Iterable[Any]) -> list[str]:
+    rows = [_text(row) for row in existing if _text(row)]
+    for match in _STATE_INVARIANT_RE.finditer(statement):
+        value = _text(match.group("value"))
+        if value and value not in rows:
+            rows.append(value)
+    return rows
+
+
 def _normalized_fact_type(fact: dict[str, Any]) -> str:
     if _list(fact.get("state_effects")):
         return "STATE_TRANSITION"
@@ -415,6 +508,85 @@ def _normalize_primary_claim(
     return changed
 
 
+def _source_locator(fact: dict[str, Any]) -> str:
+    for span in _list(fact.get("source_spans")):
+        if not isinstance(span, dict):
+            continue
+        locator = _text(span.get("locator") or span.get("source_locator"))
+        if locator:
+            return locator
+    return ""
+
+
+def _pair_split_if_else_frames(facts: list[dict[str, Any]]) -> tuple[int, list[str]]:
+    """Pair one unique split IF and ELSE fact sharing one exact source locator."""
+    by_locator: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for fact in facts:
+        if _text(fact.get("fact_type")).upper() in _FORMAL_TYPED_COORDINATES:
+            continue
+        locator = _source_locator(fact)
+        if locator:
+            by_locator[locator].append(fact)
+
+    paired_groups = 0
+    changed_ids: list[str] = []
+    for rows in by_locator.values():
+        then_rows = [row for row in rows if _IF_BRANCH_RE.search(_text(row.get("raw_statement")))]
+        else_rows = [row for row in rows if _ELSE_BRANCH_RE.search(_text(row.get("raw_statement")))]
+        if len(then_rows) != 1 or len(else_rows) != 1:
+            continue
+        then_fact = then_rows[0]
+        else_fact = else_rows[0]
+        then_statement = _text(then_fact.get("raw_statement"))
+        else_statement = _text(else_fact.get("raw_statement"))
+        match = _IF_BRANCH_RE.search(then_statement)
+        condition = _clean_condition(match.group("condition")) if match else ""
+        conditions = [condition] if condition else list(_list(then_fact.get("conditions")))
+        combinator = "SINGLE_CONDITION" if len(conditions) == 1 else _text(
+            then_fact.get("condition_combinator")
+        )
+        paired_statement = f"{then_statement}；{else_statement}"
+        for index, (fact, branch) in enumerate(((then_fact, "THEN"), (else_fact, "ELSE"))):
+            fact["conditions"] = list(conditions)
+            fact["condition_combinator"] = combinator
+            fact["trigger"] = {"raw": conditions[0]} if conditions else {}
+            frame = dict(_dict(fact.get("condition_frame")))
+            frame.update(
+                {
+                    "kind": "IF_THEN_ELSE",
+                    "combinator": combinator,
+                    "conditions": list(conditions),
+                    "branch": branch,
+                    "branch_index": index,
+                    "parent_conditions": [],
+                    "paired_statement": paired_statement,
+                    "source_backed": True,
+                }
+            )
+            fact["condition_frame"] = frame
+            normalization = dict(_dict(fact.get("explicit_semantic_normalization")))
+            normalized_fields = set(_list(normalization.get("normalized_fields")))
+            normalized_fields.add("if_then_else_frame")
+            normalization.update(
+                {
+                    "status": "PASS",
+                    "normalized_fields": sorted(_text(row) for row in normalized_fields if _text(row)),
+                    "source_backed": True,
+                    "governed_operation_binding": True,
+                    "split_branch_pairing": True,
+                    "new_fact_discovered": False,
+                    "automatic_winner_used": False,
+                }
+            )
+            fact["explicit_semantic_normalization"] = normalization
+            fact["semantic_signature"] = _semantic_signature(fact)
+            fact_id = _text(fact.get("fact_id"))
+            if fact_id:
+                changed_ids.append(fact_id)
+        paired_groups += 1
+    return paired_groups, changed_ids
+
+
 def normalize_explicit_business_fact_semantics(asset: dict[str, Any]) -> dict[str, Any]:
     ledger = _dict(asset.get("business_fact_ledger"))
     facts = [dict(row) for row in _list(ledger.get("items")) if isinstance(row, dict)]
@@ -442,12 +614,13 @@ def normalize_explicit_business_fact_semantics(asset: dict[str, Any]) -> dict[st
             _ROLE_HEADS,
         )
         exception_scopes = set(_text(row) for row in _list(fact.get("exception_scope")))
+        only_actor = _only_actor_role(statement)
         explicit_actors = [
             row
             for row in _explicit_refs(statement, actor_vocabulary)
             if row not in exception_scopes
         ]
-        actors = explicit_actors or existing_actors
+        actors = [only_actor] if only_actor else (explicit_actors or existing_actors)
         if actors != _list(subject.get("actor_refs")):
             subject["actor_refs"] = actors
             changed.append("actor_refs")
@@ -491,7 +664,12 @@ def normalize_explicit_business_fact_semantics(asset: dict[str, Any]) -> dict[st
             fact["polarity"] = polarity
             changed.append("polarity")
 
-        conditions, combinator = _condition_coordinates(statement, fact)
+        conditions, combinator = _condition_coordinates(
+            statement,
+            fact,
+            action=action_coordinate,
+            entities=entities,
+        )
         before_frame = (
             list(_list(fact.get("conditions"))),
             _text(fact.get("condition_combinator")),
@@ -518,6 +696,14 @@ def normalize_explicit_business_fact_semantics(asset: dict[str, Any]) -> dict[st
         ):
             fact["time_window_constraints"] = [time_window]
             changed.append("time_window_constraints")
+
+        postconditions = _normalized_postconditions(
+            statement,
+            _list(fact.get("postconditions")),
+        )
+        if postconditions != _list(fact.get("postconditions")):
+            fact["postconditions"] = postconditions
+            changed.append("postconditions")
 
         fact_type = _normalized_fact_type(fact)
         if fact_type != current_type:
@@ -549,6 +735,13 @@ def normalize_explicit_business_fact_semantics(asset: dict[str, Any]) -> dict[st
         for field in set(changed):
             field_counts[field] = field_counts.get(field, 0) + 1
 
+    paired_groups, paired_ids = _pair_split_if_else_frames(facts)
+    normalized_ids = _ordered_unique([*normalized_ids, *paired_ids])
+    if paired_groups:
+        field_counts["if_then_else_frame"] = field_counts.get("if_then_else_frame", 0) + (
+            paired_groups * 2
+        )
+
     ledger["items"] = facts
     asset["business_fact_ledger"] = ledger
     asset["explicit_fact_semantic_normalization_receipt"] = {
@@ -557,10 +750,15 @@ def normalize_explicit_business_fact_semantics(asset: dict[str, Any]) -> dict[st
         "normalized_fact_count": len(normalized_ids),
         "normalized_fact_ids": normalized_ids,
         "formal_typed_fact_count_left_on_compiler_coordinates": skipped_formal_typed,
+        "paired_if_then_else_group_count": paired_groups,
+        "paired_if_then_else_fact_count": paired_groups * 2,
         "normalized_field_counts": dict(sorted(field_counts.items())),
         "existing_ledger_reused": True,
         "existing_source_backed_identity_vocabulary_reused": True,
         "governed_operation_binding": True,
+        "qualified_object_conditions_compiled": True,
+        "split_if_else_pairing_requires_one_unique_pair_per_locator": True,
+        "negative_operation_is_not_negative_modality": True,
         "new_fact_discovery_allowed": False,
         "source_statement_rewrite_allowed": False,
         "conflicting_source_value_selection_allowed": False,
@@ -574,6 +772,9 @@ def normalize_explicit_business_fact_semantics(asset: dict[str, Any]) -> dict[st
             "explicit_fact_coordinates_normalized_at_compiler_boundary": True,
             "explicit_fact_identity_is_bound_to_governed_operation": True,
             "explicit_fact_normalization_reuses_source_backed_identity_vocabulary": True,
+            "explicit_fact_qualified_object_conditions_are_source_backed": True,
+            "explicit_fact_split_if_else_pairing_is_locator_scoped": True,
+            "explicit_fact_negative_operation_is_separate_from_modality": True,
             "explicit_fact_normalization_discovers_new_facts": False,
             "explicit_fact_normalization_selects_conflicting_values": False,
             "explicit_fact_identity_mentions_are_longest_non_overlapping": True,
