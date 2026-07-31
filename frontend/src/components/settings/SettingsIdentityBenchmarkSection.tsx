@@ -217,15 +217,15 @@ export function SettingsIdentityBenchmarkSection({ project }: Props) {
       <details className="settings-auth-section settings-mt-10">
         <summary><strong>身份质量阈值</strong> <span className="muted">可选择仅报告或正式阻断</span></summary>
         <label className="settings-compact-row settings-mt-10">
-          <input type="checkbox" checked={enforce} onChange={(event) => setEnforce(event.target.checked)} />
+          <input type="checkbox" checked={enforce} onChange={(event: ChangeEvent<HTMLInputElement>) => setEnforce(event.target.checked)} />
           <span>低于阈值时阻断正式企业理解与后续规划</span>
         </label>
         <div className="settings-grid settings-mt-10">
-          <label className="form-group"><span className="form-label">最低精确率</span><input className="form-input" value={precision} onChange={(event) => setPrecision(event.target.value)} /></label>
-          <label className="form-group"><span className="form-label">最低召回率</span><input className="form-input" value={recall} onChange={(event) => setRecall(event.target.value)} /></label>
-          <label className="form-group"><span className="form-label">最大过度融合率</span><input className="form-input" value={overmerge} onChange={(event) => setOvermerge(event.target.value)} /></label>
-          <label className="form-group"><span className="form-label">最大漏融合率</span><input className="form-input" value={undermerge} onChange={(event) => setUndermerge(event.target.value)} /></label>
-          <label className="form-group"><span className="form-label">最大静默错误数</span><input className="form-input" value={silentErrors} onChange={(event) => setSilentErrors(event.target.value)} /></label>
+          <label className="form-group"><span className="form-label">最低精确率</span><input className="form-input" value={precision} onChange={(event: ChangeEvent<HTMLInputElement>) => setPrecision(event.target.value)} /></label>
+          <label className="form-group"><span className="form-label">最低召回率</span><input className="form-input" value={recall} onChange={(event: ChangeEvent<HTMLInputElement>) => setRecall(event.target.value)} /></label>
+          <label className="form-group"><span className="form-label">最大过度融合率</span><input className="form-input" value={overmerge} onChange={(event: ChangeEvent<HTMLInputElement>) => setOvermerge(event.target.value)} /></label>
+          <label className="form-group"><span className="form-label">最大漏融合率</span><input className="form-input" value={undermerge} onChange={(event: ChangeEvent<HTMLInputElement>) => setUndermerge(event.target.value)} /></label>
+          <label className="form-group"><span className="form-label">最大静默错误数</span><input className="form-input" value={silentErrors} onChange={(event: ChangeEvent<HTMLInputElement>) => setSilentErrors(event.target.value)} /></label>
         </div>
         <button className="btn btn-secondary settings-btn-compact settings-mt-10" disabled={!project || saving} onClick={handlePolicySave}>
           {saving ? '处理中…' : '保存身份质量策略'}
