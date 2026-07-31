@@ -19,6 +19,10 @@ def probe_generation_block_reason(asset: dict[str, Any]) -> str:
     if facts and str(facts.get("status") or "").upper() != "PASS":
         return "STRUCTURE_FIRST_BUSINESS_FACT_COMPILATION_CLOSED"
 
+    rules = as_dict(asset.get("implicit_rule_projection_gate"))
+    if rules and not bool(rules.get("entry_allowed")):
+        return "IMPLICIT_RULE_PROJECTION_GATE_CLOSED"
+
     comprehension = as_dict(asset.get("enterprise_comprehension_gate"))
     if comprehension and not bool(comprehension.get("entry_allowed")):
         return "ENTERPRISE_COMPREHENSION_GATE_CLOSED"
