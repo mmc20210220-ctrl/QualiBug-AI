@@ -31,14 +31,33 @@ All command output is JSON.
 
 | Code | Meaning |
 |---:|---|
-| `0` | Command completed and no enforced identity quality Gate blocked the result |
-| `1` | Invalid input, stale package, missing project asset or execution failure |
+| `0` | Command completed and the authoritative Gate still allows downstream entry |
+| `1` | Invalid input, unauthorized operator role, stale package, missing project asset or execution failure |
 | `2` | Double-blind submissions disagree and independent adjudication is required |
-| `3` | Ground Truth was imported or measured, but the enforced identity quality Gate is blocked |
+| `3` | Ground Truth was imported or measured, but the enforced identity quality Gate denies downstream entry |
+
+The final authority is the backend Gate field `entry_allowed`. A threshold may have a
+`BLOCKED_*` reporting status while policy enforcement is disabled; when
+`entry_allowed=true`, the CLI does not return exit code `3`. This preserves the difference
+between report-only diagnostics and an enforced release/admission block.
 
 An imported result and a passing quality result are deliberately separate states. Exit
 code `3` prevents an Agent or CI job from treating a successfully persisted but
 low-quality identity model as ready for downstream business understanding.
+
+## Write-authorized operator roles
+
+`import` and `remeasure` reuse the existing knowledge-management authorization contract.
+The accepted `--actor-role` values are:
+
+- `knowledge_admin`
+- `project_owner`
+- `qa_lead`
+- `admin`
+
+Other roles fail before Ground Truth persistence or benchmark mutation begins. `export`,
+`validate` and `status` are read/compile operations in the local CLI; HTTP access remains
+subject to the existing authenticated tenant, project-scope and role checks.
 
 ## 1. Export the current blind task package
 
@@ -150,6 +169,7 @@ The command delegates to the existing authority:
 
 ```text
 compile closed-world human partition
+→ validate knowledge-management actor role
 → acquire project knowledge transaction lease
 → verify current Manifest
 → persist Ground Truth
@@ -169,7 +189,7 @@ qualibug-identity-benchmark status \
   --project customer-a
 ```
 
-Return exit code `3` when CI must stop on a blocked Gate:
+Return exit code `3` when CI must stop on an enforced blocked Gate:
 
 ```bash
 qualibug-identity-benchmark status \
@@ -204,8 +224,9 @@ This rebuilds through the same enterprise knowledge Composition Root and records
 measurement event. Only a prior snapshot with the same Manifest ID and external Ground
 Truth fingerprint is eligible as a regression baseline.
 
-The command returns exit code `3` when the resulting enforced identity quality Gate is
-blocked.
+The command returns exit code `3` only when the resulting authoritative
+`entry_allowed=false`. A report-only threshold miss remains visible in JSON but exits
+successfully.
 
 ## Recommended real-project sequence
 
