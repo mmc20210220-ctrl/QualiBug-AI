@@ -14,6 +14,7 @@ from .._chinese_business_conflicts import (
 
 RECEIPT_SCHEMA = "qualibug.typed-business-fact-conflicts.v1"
 _DERIVATION = "typed_business_fact_conflict"
+_BLOCKED_STATUS = "BLOCKED_TYPED_BUSINESS_FACT_CONFLICTS"
 
 
 def _text(value: Any) -> str:
@@ -179,6 +180,62 @@ def _value_conflicts(facts: list[dict[str, Any]], kind: str, fields: tuple[str, 
     return rows
 
 
+def _typed_conflicts(asset: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        dict(row)
+        for row in _list(asset.get("cross_document_conflicts"))
+        if isinstance(row, dict) and _text(row.get("derivation")) == _DERIVATION
+    ]
+
+
+def _finalize_after_authority(asset: dict[str, Any]) -> dict[str, Any]:
+    typed = _typed_conflicts(asset)
+    unresolved = [row for row in typed if _text(row.get("status")) != "RESOLVED"]
+    receipt = _dict(asset.get("typed_business_fact_conflict_receipt"))
+    receipt.update(
+        {
+            "status": "BLOCKED" if unresolved else "PASS",
+            "unresolved_conflict_count": len(unresolved),
+            "resolved_conflict_count": len(typed) - len(unresolved),
+        }
+    )
+    asset["typed_business_fact_conflict_receipt"] = receipt
+
+    gaps = [
+        dict(row)
+        for row in _list(asset.get("coverage_gaps"))
+        if isinstance(row, dict)
+        and _text(row.get("kind")) != _BLOCKED_STATUS
+    ]
+    gate = _dict(asset.get("enterprise_comprehension_gate"))
+    if unresolved:
+        gaps.append(
+            {
+                "kind": _BLOCKED_STATUS,
+                "gap_type": "typed_business_fact_conflict",
+                "source_id": "*",
+                "conflict_ids": [_text(row.get("conflict_id")) for row in unresolved],
+                "operator_action": "resolve typed fact source authority explicitly",
+            }
+        )
+    elif _text(gate.get("status")) == _BLOCKED_STATUS:
+        other_unresolved = [
+            row
+            for row in _list(asset.get("cross_document_conflicts"))
+            if isinstance(row, dict)
+            and _text(row.get("derivation")) != _DERIVATION
+            and _text(row.get("status")) != "RESOLVED"
+        ]
+        upstream_allowed = bool(gate.get("entry_allowed_before_typed_conflicts", True))
+        if not other_unresolved and upstream_allowed:
+            gate["status"] = _text(gate.get("status_before_typed_conflicts")) or "PASS"
+            gate["entry_allowed"] = True
+            gate["required_operator_action"] = ""
+    asset["coverage_gaps"] = gaps
+    asset["enterprise_comprehension_gate"] = gate
+    return asset
+
+
 def reconcile_typed_fact_conflicts(
     asset: dict[str, Any],
     *,
@@ -228,33 +285,22 @@ def reconcile_typed_fact_conflicts(
         "exception_and_scope_coordinates_compared": True,
         "formula_and_cardinality_compared": True,
     }
-    gaps = [
-        dict(row)
-        for row in _list(asset.get("coverage_gaps"))
-        if isinstance(row, dict)
-        and _text(row.get("kind")) != "BLOCKED_TYPED_BUSINESS_FACT_CONFLICTS"
-    ]
     if conflicts:
         gate = _dict(asset.get("enterprise_comprehension_gate"))
-        gate["status"] = "BLOCKED_TYPED_BUSINESS_FACT_CONFLICTS"
+        gate["status_before_typed_conflicts"] = _text(gate.get("status")) or "PASS"
+        gate["entry_allowed_before_typed_conflicts"] = bool(
+            gate.get("entry_allowed", True)
+        )
+        gate["status"] = _BLOCKED_STATUS
         gate["entry_allowed"] = False
         gate["required_operator_action"] = "resolve typed fact source authority explicitly"
         asset["enterprise_comprehension_gate"] = gate
-        gaps.append(
-            {
-                "kind": "BLOCKED_TYPED_BUSINESS_FACT_CONFLICTS",
-                "gap_type": "typed_business_fact_conflict",
-                "source_id": "*",
-                "conflict_ids": [_text(row.get("conflict_id")) for row in conflicts],
-                "operator_action": gate["required_operator_action"],
-            }
-        )
-    asset["coverage_gaps"] = gaps
-    return apply_authority_decisions_to_conflicts(
+    governed = apply_authority_decisions_to_conflicts(
         asset,
         project_id=project_id,
         root=root,
     )
+    return _finalize_after_authority(governed)
 
 
 __all__ = ["RECEIPT_SCHEMA", "reconcile_typed_fact_conflicts"]
