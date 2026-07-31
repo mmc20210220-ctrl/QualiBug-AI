@@ -1,6 +1,11 @@
 name: Apply source occurrence history ledger
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "tools/.one_shot/source_occurrence_history/bundle.b64"
+      - ".github/workflows/apply-source-occurrence-history-ledger.yml"
   issues:
     types: [opened]
 
@@ -14,7 +19,7 @@ concurrency:
 
 jobs:
   apply:
-    if: github.event.issue.title == 'APPLY_SOURCE_OCCURRENCE_HISTORY_LEDGER_20260731'
+    if: github.event_name == 'push' || github.event.issue.title == 'APPLY_SOURCE_OCCURRENCE_HISTORY_LEDGER_20260731'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
