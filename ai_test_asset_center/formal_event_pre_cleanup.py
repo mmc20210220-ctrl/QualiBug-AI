@@ -44,6 +44,37 @@ def _requires_event_observer(exp: dict[str, Any]) -> bool:
     )
 
 
+def _event_trigger_step_id(exp: dict[str, Any]) -> str:
+    """Return the unique formal Event trigger step identity, never a position guess."""
+    matches = [
+        _text(row.get("step_id"))
+        for row in _list(_dict(exp).get("treatment_plan"))
+        if isinstance(row, dict)
+        and (
+            _text(row.get("protocol_step")) == "event_trigger"
+            or _text(row.get("intent")) == "trigger_source_declared_event"
+        )
+        and _text(row.get("step_id"))
+    ]
+    unique = list(dict.fromkeys(matches))
+    return unique[0] if len(unique) == 1 else ""
+
+
+def _event_trigger_match_count(exp: dict[str, Any]) -> int:
+    return len(
+        [
+            row
+            for row in _list(_dict(exp).get("treatment_plan"))
+            if isinstance(row, dict)
+            and (
+                _text(row.get("protocol_step")) == "event_trigger"
+                or _text(row.get("intent")) == "trigger_source_declared_event"
+            )
+            and _text(row.get("step_id"))
+        ]
+    )
+
+
 def _event_assertion(exp: dict[str, Any]) -> dict[str, Any]:
     """Return the unique assertion owned by the formal event surface.
 
@@ -93,15 +124,34 @@ def _pre_observe_event(
     existing = _dict(observations.get(_PRE_RECEIPT_KEY))
     if existing:
         return existing
+    step_id = _event_trigger_step_id(exp)
     assertion = _event_assertion(exp)
-    if not assertion:
+    if not step_id:
+        from .observer_contracts_base import build_observer_receipt
+
+        receipt = build_observer_receipt(
+            observer_id=_surface.OBSERVER_ID,
+            status="INDETERMINATE",
+            reason_code="EVENT_TRIGGER_STEP_IDENTITY_NOT_UNIQUE",
+            evidence={
+                "matching_event_trigger_step_count": _event_trigger_match_count(exp),
+            },
+            campaign_id=campaign_id,
+            execution_id=execution_id,
+        )
+    elif not assertion:
         from .observer_contracts_base import build_observer_receipt
 
         receipt = build_observer_receipt(
             observer_id=_surface.OBSERVER_ID,
             status="INDETERMINATE",
             reason_code="EVENT_ASSERTION_IDENTITY_NOT_UNIQUE",
-            evidence={"matching_assertion_count": 0},
+            evidence={
+                "matching_assertion_count": 0,
+                "step_id": step_id,
+            },
+            campaign_id=campaign_id,
+            execution_id=execution_id,
         )
     else:
         try:
@@ -128,16 +178,15 @@ def _pre_observe_event(
             if event_evidence:
                 event_evidence["observation_phase"] = "pre_cleanup"
                 evidence[_surface.EVIDENCE_KEY] = event_evidence
-                receipt = observers.build_observer_receipt(
-                    observer_id=_surface.OBSERVER_ID,
-                    status=_text(validated.get("status")),
-                    reason_code=_text(validated.get("reason_code")),
-                    evidence=evidence,
-                    campaign_id=_text(validated.get("campaign_id")),
-                    execution_id=_text(validated.get("execution_id")),
-                )
-            else:
-                receipt = validated
+            evidence["step_id"] = step_id
+            receipt = observers.build_observer_receipt(
+                observer_id=_surface.OBSERVER_ID,
+                status=_text(validated.get("status")),
+                reason_code=_text(validated.get("reason_code")),
+                evidence=evidence,
+                campaign_id=_text(validated.get("campaign_id")) or campaign_id,
+                execution_id=_text(validated.get("execution_id")) or execution_id,
+            )
         except Exception as exc:  # noqa: BLE001 - cleanup must still proceed
             from .observer_contracts_base import build_observer_receipt
 
@@ -145,7 +194,12 @@ def _pre_observe_event(
                 observer_id=_surface.OBSERVER_ID,
                 status="INDETERMINATE",
                 reason_code="EVENT_PRE_CLEANUP_OBSERVER_FAILED",
-                evidence={"error_type": type(exc).__name__},
+                evidence={
+                    "error_type": type(exc).__name__,
+                    "step_id": step_id,
+                },
+                campaign_id=campaign_id,
+                execution_id=execution_id,
             )
     receipt = copy.deepcopy(_dict(receipt))
     evidence = _dict(receipt.get("evidence"))
