@@ -1,0 +1,85 @@
+unified = '''    # ── Single-authority lifecycle finalization ──
+    # Always finalize, including blocked and failed paths. When formal receipts
+    # are unavailable, build an explicit incomplete bundle instead of skipping
+    # finalization or fabricating completion evidence.
+    from .operational_receipts import (
+        NOT_APPLICABLE as _NA_FINAL,
+        build_execution_finalization_receipt as _build_finalization_once,
+        build_execution_receipt_bundle as _build_incomplete_bundle,
+    )
+
+    if not _execution_receipt_bundle:
+        _execution_receipt_bundle = _build_incomplete_bundle(
+            bundle_id=f"erb_{eid}",
+            campaign_id=_text(resolved_campaign_id or campaign_id or _NA_FINAL),
+            run_id=_text(resolved_execution_id or observations.get("run_id") or _NA_FINAL),
+            obligation_id=_text(oid or _NA_FINAL),
+            experiment_id=_text(eid or _NA_FINAL),
+            fixture_id=_text(
+                observations.get("fixture_id")
+                or (_dict(fixture_receipts[0]).get("fixture_id") if fixture_receipts else "")
+                or _NA_FINAL
+            ),
+            protocol_id=_text(
+                exp.get("protocol_id")
+                or _dict(exp.get("protocol")).get("protocol_id")
+                or observations.get("protocol_id")
+                or _NA_FINAL
+            ),
+            receipts=[],
+        )
+
+    _fixture_required = bool(
+        fixture_receipts
+        or _dict(exp.get("fixture_contract"))
+        or _list(exp.get("fixture_requirements"))
+        or _text(exp.get("fixture_id"))
+    )
+    _precondition_required = bool(
+        observations.get("state_precondition_required")
+        or _dict(exp.get("state_precondition"))
+        or _dict(exp.get("state_precondition_plan"))
+    )
+    _required_steps_declared = bool(_required_steps or _planned_steps)
+    _all_required_steps_executed = bool(_required_steps) and set(
+        _required_steps
+    ) <= set(_executed_steps)
+    _observation_required = bool(
+        _list(exp.get("assertions"))
+        or _list(exp.get("observer_requirements"))
+    )
+    _observation_completed = (not _observation_required) or bool(
+        [
+            receipt
+            for receipt in observer_receipts
+            if _text(receipt.get("status")).upper() == "OBSERVED"
+        ]
+        or oracle_trace
+        or _before_states
+        or _after_states
+    )
+    _oracle_indeterminate = bool(
+        _text(verdict.get("status")).upper() in {"INDETERMINATE", "BLOCKED"}
+        or _text(verdict.get("verdict")) == "blocked_experiment"
+    )
+    _cleanup_required = bool(is_governed_write)
+    _cleanup_execution_evidence = bool(
+        _list(observations.get("cleanup_execution_receipts"))
+        or _dict(observations.get("cleanup_execution_receipt"))
+        or _dict(observations.get("cleanup_result"))
+    )
+    _cleanup_verification_evidence = bool(
+        _list(observations.get("cleanup_verification_receipts"))
+        or _dict(observations.get("cleanup_verification"))
+        or cleanup_equivalence_receipt
+    )
+    _compile_succeeded = not (
+        "COMPILE" in _text(observations.get("finalizer_block_reason")).upper()
+        or _text(observations.get("compile_status")).upper()
+        in {"FAILED", "BLOCKED", "ERROR"}
+    )
+    _lifecycle_facts = {
+        "execution_status": status,
+        "compile_succeeded": _compile_succeeded,
+        "fixture_required": _fixture_required,
+        "fixture_materialized": (not _fixture_required) or bool(fixture_receipts),
