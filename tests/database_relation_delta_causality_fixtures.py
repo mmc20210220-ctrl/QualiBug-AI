@@ -17,6 +17,8 @@ from ai_test_asset_center.operation_causality_receipt_integrity import (
     seal_operation_causality_transport_receipt,
 )
 
+_RELATION_DECISION_ID = "decision:relation"
+
 
 def _fingerprint(value: object) -> str:
     material = json.dumps(
@@ -38,7 +40,7 @@ def build_spec() -> dict:
         "value_source": "request.body.request_id",
         "child_database_field_id": "field:ledger_entries:request_id",
         "child_database_field_name": "request_id",
-        "mapping_decision_id": "decision:ledger-request-id",
+        "mapping_decision_id": _RELATION_DECISION_ID,
         "source_refs": [
             {"kind": "business_rule", "locator": "BR-LEDGER-REQUEST-ID"}
         ],
@@ -85,7 +87,7 @@ def build_spec() -> dict:
         "causal_attribution_contract": causal,
         "causal_attribution_required": True,
         "database_relation_delta_binding": {
-            "relation_mapping_decision_id": "decision:relation",
+            "relation_mapping_decision_id": _RELATION_DECISION_ID,
         },
     }
     pair_id = semantic_relation_delta_pair_id(row)
