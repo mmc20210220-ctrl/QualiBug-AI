@@ -21,21 +21,37 @@ def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
 def _stamp(receipt: dict[str, Any]) -> dict[str, Any]:
-    projected = copy.deepcopy(_dict(receipt))
-    evidence = dict(_dict(projected.get("evidence")))
-    observation = dict(_dict(evidence.get(_surface.EVIDENCE_KEY)))
-    if observation:
-        observation.update({
-            "count_semantics": "unique_stable_event_ids_within_full_window",
-            "duplicate_physical_delivery_of_same_event_id_provable": False,
-            "ordering_contract_supported": False,
-            "direct_broker_protocol_supported": False,
-            "observation_adapter": "approved_target_relative_http_get",
-        })
-        evidence[_surface.EVIDENCE_KEY] = observation
-        projected["evidence"] = evidence
-    return projected
+    from .observer_contracts_base import (
+        build_observer_receipt,
+        validate_observer_receipt,
+    )
+
+    validated = validate_observer_receipt(_dict(receipt))
+    evidence = copy.deepcopy(_dict(validated.get("evidence")))
+    observation = copy.deepcopy(_dict(evidence.get(_surface.EVIDENCE_KEY)))
+    if not observation:
+        return validated
+    observation.update({
+        "count_semantics": "unique_stable_event_ids_within_full_window",
+        "duplicate_physical_delivery_of_same_event_id_provable": False,
+        "ordering_contract_supported": False,
+        "direct_broker_protocol_supported": False,
+        "observation_adapter": "approved_target_relative_http_get",
+    })
+    evidence[_surface.EVIDENCE_KEY] = observation
+    return build_observer_receipt(
+        observer_id=_text(validated.get("observer_id")),
+        status=_text(validated.get("status")),
+        reason_code=_text(validated.get("reason_code")),
+        evidence=evidence,
+        campaign_id=_text(validated.get("campaign_id")),
+        execution_id=_text(validated.get("execution_id")),
+    )
 
 
 def install_formal_event_capability_guard() -> None:
