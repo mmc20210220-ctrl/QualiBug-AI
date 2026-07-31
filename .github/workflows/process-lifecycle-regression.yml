@@ -1,0 +1,57 @@
+name: Process lifecycle regression
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ai_test_asset_center/process_step_execution.py"
+      - "ai_test_asset_center/experiment_lifecycle_runtime.py"
+      - "ai_test_asset_center/experiment_plan_lifecycle_adapter.py"
+      - "ai_test_asset_center/experiment_executor.py"
+      - "ai_test_asset_center/cleanup_plan_validator.py"
+      - "ai_test_asset_center/async_readback_executor.py"
+      - "ai_test_asset_center/governed_async_readback.py"
+      - "ai_test_asset_center/sandbox_write_executor.py"
+      - "tests/test_process_step_ledger_authority.py"
+      - "tests/test_experiment_lifecycle_runtime.py"
+      - "tests/test_multi_write_cleanup_coverage.py"
+      - "tests/test_async_readback_executor.py"
+      - "tests/test_governed_async_readback.py"
+      - ".github/workflows/process-lifecycle-regression.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  focused-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install project test dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+      - name: Compile changed lifecycle modules
+        run: |
+          python -m py_compile \
+            ai_test_asset_center/process_step_execution.py \
+            ai_test_asset_center/experiment_lifecycle_runtime.py \
+            ai_test_asset_center/experiment_plan_lifecycle_adapter.py \
+            ai_test_asset_center/experiment_executor.py \
+            ai_test_asset_center/cleanup_plan_validator.py \
+            ai_test_asset_center/async_readback_executor.py \
+            ai_test_asset_center/governed_async_readback.py \
+            ai_test_asset_center/sandbox_write_executor.py
+      - name: Run focused lifecycle regressions
+        run: |
+          python -m pytest -q \
+            tests/test_process_step_ledger_authority.py \
+            tests/test_experiment_lifecycle_runtime.py \
+            tests/test_multi_write_cleanup_coverage.py \
+            tests/test_async_readback_executor.py \
+            tests/test_governed_async_readback.py \
+            tests/test_state_precondition_planner.py
