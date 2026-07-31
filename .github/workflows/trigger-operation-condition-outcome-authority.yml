@@ -1,4 +1,4 @@
-name: Trigger operation condition outcome authority
+name: Diagnose operation condition outcome authority
 
 on:
   issues:
@@ -8,64 +8,67 @@ permissions:
   contents: write
 
 concurrency:
-  group: operation-condition-outcome-authority-main
+  group: diagnose-operation-condition-outcome-authority-main
   cancel-in-progress: false
 
 jobs:
-  refactor:
-    if: github.event.issue.title == 'RUN_OPERATION_CONDITION_OUTCOME_AUTHORITY_20260731'
+  diagnose:
+    if: github.event.issue.title == 'DIAGNOSE_OPERATION_CONDITION_OUTCOME_AUTHORITY_20260731'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Checkout main
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Assemble and apply one-shot migration
+      - name: Capture migration and regression diagnostics
         shell: bash
         run: |
-          set -euo pipefail
+          set +e
           mapfile -t parts < <(find tools/.one_shot/operation_condition_outcome -maxdepth 1 -type f -name 'part-*' | sort)
-          test "${#parts[@]}" -eq 6
-          cat "${parts[@]}" > /tmp/apply_operation_condition_outcome.py
-          python -m py_compile /tmp/apply_operation_condition_outcome.py
-          python /tmp/apply_operation_condition_outcome.py
-
-      - name: Install project
-        run: python -m pip install -e .
-
-      - name: Run focused authority regression
-        run: |
-          pytest -q \
-            tests/test_operation_condition_outcome_authority.py \
-            tests/test_business_behavior_ir.py \
-            tests/test_business_behavior_ir_logic_gate.py \
-            tests/test_behavior_implementation_binding.py \
-            tests/test_behavior_implementation_binding_governance.py
-
-      - name: Commit canonical authority refactor
-        shell: bash
-        run: |
-          set -euo pipefail
+          {
+            echo "part_count=${#parts[@]}"
+            printf '%s\n' "${parts[@]}"
+          } > /tmp/diagnostic.log
+          if [ "${#parts[@]}" -eq 6 ]; then
+            cat "${parts[@]}" > /tmp/apply_operation_condition_outcome.py
+            python -m py_compile /tmp/apply_operation_condition_outcome.py >> /tmp/diagnostic.log 2>&1
+            compile_status=$?
+            echo "compile_status=${compile_status}" >> /tmp/diagnostic.log
+            if [ "${compile_status}" -eq 0 ]; then
+              python /tmp/apply_operation_condition_outcome.py >> /tmp/diagnostic.log 2>&1
+              migration_status=$?
+              echo "migration_status=${migration_status}" >> /tmp/diagnostic.log
+              if [ "${migration_status}" -eq 0 ]; then
+                python -m pip install -e . >> /tmp/diagnostic.log 2>&1
+                install_status=$?
+                echo "install_status=${install_status}" >> /tmp/diagnostic.log
+                if [ "${install_status}" -eq 0 ]; then
+                  pytest -q \
+                    tests/test_operation_condition_outcome_authority.py \
+                    tests/test_business_behavior_ir.py \
+                    tests/test_business_behavior_ir_logic_gate.py \
+                    tests/test_behavior_implementation_binding.py \
+                    tests/test_behavior_implementation_binding_governance.py \
+                    >> /tmp/diagnostic.log 2>&1
+                  echo "pytest_status=$?" >> /tmp/diagnostic.log
+                fi
+              fi
+            fi
+          else
+            echo "unexpected_part_count" >> /tmp/diagnostic.log
+          fi
+          git diff --stat >> /tmp/diagnostic.log 2>&1
+          git reset --hard HEAD
+          cp /tmp/diagnostic.log tools/.one_shot/operation_condition_outcome/diagnostic.log
           git config user.name "qualibug-mainline-bot"
           git config user.email "qualibug-mainline-bot@users.noreply.github.com"
-          git rm -r tools/.one_shot/operation_condition_outcome
-          git rm .github/workflows/apply-operation-condition-outcome-authority.yml
-          git rm .github/workflows/trigger-operation-condition-outcome-authority.yml
-          git add \
-            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/behavior_ir.py \
-            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/behavior_ir_governance.py \
-            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/behavior_ir_logic_gate.py \
-            ai_test_asset_center/enterprise_knowledge_center/enterprise_understanding/implementation_binding.py \
-            tests/test_operation_condition_outcome_authority.py
-          git diff --cached --check
-          git commit -m "refactor(understanding): make operation condition outcomes canonical"
+          git add tools/.one_shot/operation_condition_outcome/diagnostic.log
+          git commit -m "diagnostic(understanding): capture canonical behavior authority failure"
           git pull --rebase origin main
           git push origin HEAD:main
