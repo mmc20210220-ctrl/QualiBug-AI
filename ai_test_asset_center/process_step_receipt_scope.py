@@ -147,6 +147,20 @@ def _rows(observations: dict[str, Any], keys: tuple[str, ...]) -> list[dict[str,
     return _deduplicate_receipts(out)
 
 
+def _publish_rows(
+    observations: dict[str, Any],
+    key: str,
+    rows: list[dict[str, Any]],
+) -> None:
+    """Preserve an existing list identity so Finalizer local aliases see updates."""
+
+    existing = observations.get(key)
+    if isinstance(existing, list):
+        existing[:] = rows
+    else:
+        observations[key] = list(rows)
+
+
 def _bind_group(
     *,
     ledger: ProcessStepLedger,
@@ -224,7 +238,7 @@ def synchronize_scoped_receipts_from_observations(
     ledger: ProcessStepLedger,
     observations: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Bind only exact-scoped evidence receipts already present in observations."""
+    """Normalize and bind only exact-scoped evidence already observed."""
 
     source = observations if isinstance(observations, dict) else {}
     observation_rows = _rows(
@@ -235,27 +249,54 @@ def synchronize_scoped_receipts_from_observations(
             "process_step_observation_receipts",
         ),
     )
-    oracle_rows = _rows(
+    oracle_invocation_rows = _rows(
         source,
         (
             "process_step_oracle_receipts",
             "oracle_invocation_receipts",
-            "oracle_trace_receipts",
             "oracle_receipts",
             "assertion_receipts",
             "oracle_verdict",
         ),
     )
-    cleanup_rows = _rows(
+    oracle_trace_rows = _rows(source, ("oracle_trace_receipts",))
+    oracle_rows = _deduplicate_receipts(
+        [*oracle_invocation_rows, *oracle_trace_rows]
+    )
+    cleanup_execution_rows = _rows(
+        source,
+        ("cleanup_execution_receipts", "cleanup_execution_receipt"),
+    )
+    cleanup_verification_rows = _rows(
         source,
         (
-            "cleanup_execution_receipts",
-            "cleanup_execution_receipt",
             "cleanup_verification_receipts",
             "cleanup_verification",
             "cleanup_equivalence_receipt",
         ),
     )
+    cleanup_rows = _deduplicate_receipts(
+        [*cleanup_execution_rows, *cleanup_verification_rows]
+    )
+
+    if isinstance(observations, dict):
+        _publish_rows(observations, "observer_receipts", observation_rows)
+        _publish_rows(
+            observations,
+            "oracle_invocation_receipts",
+            oracle_invocation_rows,
+        )
+        _publish_rows(observations, "oracle_trace_receipts", oracle_trace_rows)
+        _publish_rows(
+            observations,
+            "cleanup_execution_receipts",
+            cleanup_execution_rows,
+        )
+        _publish_rows(
+            observations,
+            "cleanup_verification_receipts",
+            cleanup_verification_rows,
+        )
 
     observation_audit = _bind_group(
         ledger=ledger,
