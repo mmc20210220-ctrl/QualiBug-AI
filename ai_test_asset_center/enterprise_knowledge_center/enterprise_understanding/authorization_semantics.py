@@ -28,6 +28,37 @@ _DECISION_ALIASES = {
     "APPROVAL_REQUIRED": "REQUIRE_APPROVAL",
     "CONFIRMATION_REQUIRED": "REQUIRE_CONFIRMATION",
 }
+# Only identity/resource ownership coordinates make a scoped actor statement an
+# authorization boundary. Time, quantity and process-phase scopes remain business rules.
+_IDENTITY_SCOPE_KEYS = frozenset(
+    {
+        "organization",
+        "organization_scope",
+        "org",
+        "org_scope",
+        "tenant",
+        "tenant_scope",
+        "data_scope",
+        "resource_scope",
+        "ownership",
+        "owner_scope",
+        "department",
+        "department_scope",
+        "warehouse",
+        "warehouse_scope",
+        "project",
+        "project_scope",
+        "region",
+        "region_scope",
+        "self_only",
+        "own_data_only",
+        "本人",
+        "本组织",
+        "本部门",
+        "本租户",
+        "本仓库",
+    }
+)
 _EXPLICIT_AUTH_ALLOW_RE = re.compile(
     r"(?:有权|拥有权限|授予权限|授权(?:给|由|可)?|允许|准许|permit|authori[sz]ed|has\s+permission)",
     re.I,
@@ -60,6 +91,14 @@ def _fact_actor_refs(fact: dict[str, Any]) -> list[str]:
     ]
 
 
+def _identity_scope_declared(scope: dict[str, Any]) -> bool:
+    for raw_key, raw_value in scope.items():
+        key = text(raw_key).lower()
+        if key in _IDENTITY_SCOPE_KEYS and text(raw_value):
+            return True
+    return False
+
+
 def _resolved(
     decision: str,
     *,
@@ -86,12 +125,13 @@ def resolve_fact_authorization(fact: dict[str, Any]) -> dict[str, Any]:
     - explicit ``authorization_semantics`` is authoritative;
     - explicit unknown/invalid decisions remain UNKNOWN and block authorization projection;
     - generic MUST/MUST_NOT responsibility or prohibition is not authorization;
-    - actor-scoped data boundaries may express authorization when modality is directional;
+    - actor-scoped identity/data boundaries may express authorization when modality is directional;
+    - time, quantity and process scopes never become authorization by themselves;
     - approval/confirmation are workflow governance, not Actor ALLOW/DENY contracts.
     """
     explicit_raw = fact.get("authorization_semantics")
     explicit = as_dict(explicit_raw)
-    if isinstance(explicit_raw, dict) and explicit:
+    if isinstance(explicit_raw, dict):
         decision = _normalized_decision(explicit.get("decision") or explicit.get("effect"))
         if decision in _AUTHORIZATION_DECISIONS:
             return _resolved(
@@ -164,15 +204,15 @@ def resolve_fact_authorization(fact: dict[str, Any]) -> dict[str, Any]:
 
     modality = text(fact.get("modality")).upper()
     scope = as_dict(fact.get("scope"))
-    scoped_boundary = bool(any(text(value) for value in scope.values()))
-    if scoped_boundary and modality in {"MUST_NOT", "FORBIDDEN", "PROHIBITED", "DENY"}:
+    identity_boundary = _identity_scope_declared(scope)
+    if identity_boundary and modality in {"MUST_NOT", "FORBIDDEN", "PROHIBITED", "DENY"}:
         return _resolved(
             "DENY",
             semantic_kind="AUTHORIZATION",
             derivation="actor_scoped_authorization_boundary",
             authority_declared=True,
         )
-    if scoped_boundary and modality in {"MAY", "CAN", "ALLOW", "PERMITTED", "ONLY_IF"}:
+    if identity_boundary and modality in {"MAY", "CAN", "ALLOW", "PERMITTED", "ONLY_IF"}:
         return _resolved(
             "ALLOW",
             semantic_kind="AUTHORIZATION",
