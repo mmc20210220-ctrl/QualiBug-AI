@@ -33,6 +33,7 @@ on:
       - "ai_test_asset_center/process_graph_cleanup_executor.py"
       - "ai_test_asset_center/process_graph_cleanup_executor_core.py"
       - "ai_test_asset_center/process_graph_cleanup_equivalence.py"
+      - "ai_test_asset_center/process_graph_cleanup_equivalence_core.py"
       - "ai_test_asset_center/cleanup_equivalence.py"
       - "ai_test_asset_center/cleanup_equivalence_core.py"
       - "ai_test_asset_center/process_graph_wait_contract.py"
@@ -73,6 +74,7 @@ on:
       - "tests/test_process_graph_write_rollback_integration.py"
       - "tests/test_process_graph_dependency_rollback.py"
       - "tests/test_process_graph_multi_write_equivalence.py"
+      - "tests/test_process_graph_cleanup_equivalence_scope.py"
       - "tests/test_experiment_cleanup_lifecycle_adapter.py"
       - "tests/test_multi_write_cleanup_coverage.py"
       - "tests/test_async_readback_executor.py"
@@ -127,6 +129,7 @@ jobs:
             ai_test_asset_center/process_graph_cleanup_executor.py \
             ai_test_asset_center/process_graph_cleanup_executor_core.py \
             ai_test_asset_center/process_graph_cleanup_equivalence.py \
+            ai_test_asset_center/process_graph_cleanup_equivalence_core.py \
             ai_test_asset_center/cleanup_equivalence.py \
             ai_test_asset_center/cleanup_equivalence_core.py \
             ai_test_asset_center/process_graph_wait_contract.py \
@@ -170,6 +173,7 @@ jobs:
             tests/test_process_graph_write_rollback_integration.py \
             tests/test_process_graph_dependency_rollback.py \
             tests/test_process_graph_multi_write_equivalence.py \
+            tests/test_process_graph_cleanup_equivalence_scope.py \
             tests/test_experiment_cleanup_lifecycle_adapter.py \
             tests/test_multi_write_cleanup_coverage.py \
             tests/test_async_readback_executor.py \
