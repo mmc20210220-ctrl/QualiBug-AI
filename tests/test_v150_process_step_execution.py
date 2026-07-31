@@ -62,8 +62,8 @@ class TestProcessStepLedger:
 
     def test_executed_step_ids(self):
         ledger = ProcessStepLedger(experiment_id="exp_1")
-        ledger.record_step_execution(step_id="s1", phase="treatment", operation_ref="op1", actor_ref="a1")
-        ledger.record_step_execution(step_id="s2", phase="treatment", operation_ref="op2", actor_ref="a1")
+        ledger.record_step_execution(step_id="s1", phase="treatment", operation_ref="op1", actor_ref="a1", status_code=200)
+        ledger.record_step_execution(step_id="s2", phase="treatment", operation_ref="op2", actor_ref="a1", status_code=201)
         assert ledger.executed_step_ids() == ["s1", "s2"]
 
     def test_successful_write_step_ids(self):
@@ -100,8 +100,8 @@ class TestProcessStepLedger:
 class TestEvidenceCompleteness:
     def test_complete(self):
         ledger = ProcessStepLedger(experiment_id="exp_1")
-        ledger.record_step_execution(step_id="s1", phase="treatment", operation_ref="op1", actor_ref="a1")
-        ledger.record_step_execution(step_id="s2", phase="treatment", operation_ref="op2", actor_ref="a1")
+        ledger.record_step_execution(step_id="s1", phase="treatment", operation_ref="op1", actor_ref="a1", status_code=200, after_state_receipt_id="obs_1")
+        ledger.record_step_execution(step_id="s2", phase="treatment", operation_ref="op2", actor_ref="a1", status_code=200, after_state_receipt_id="obs_2")
         result = evaluate_per_step_evidence_completeness(
             planned_step_ids=["s1", "s2"],
             ledger=ledger,
@@ -122,8 +122,8 @@ class TestEvidenceCompleteness:
 
     def test_missing_observation(self):
         ledger = ProcessStepLedger(experiment_id="exp_1")
-        ledger.record_step_execution(step_id="s1", phase="treatment", operation_ref="op1", actor_ref="a1")
-        ledger.record_step_execution(step_id="s2", phase="treatment", operation_ref="op2", actor_ref="a1")
+        ledger.record_step_execution(step_id="s1", phase="treatment", operation_ref="op1", actor_ref="a1", status_code=200, after_state_receipt_id="obs_1")
+        ledger.record_step_execution(step_id="s2", phase="treatment", operation_ref="op2", actor_ref="a1", status_code=200)
         result = evaluate_per_step_evidence_completeness(
             planned_step_ids=["s1", "s2"],
             ledger=ledger,
@@ -139,8 +139,8 @@ class TestEvidenceCompleteness:
 class TestProcessCompletion:
     def test_all_completed(self):
         ledger = ProcessStepLedger(experiment_id="exp_1")
-        ledger.record_step_execution(step_id="s1", phase="treatment", operation_ref="op1", actor_ref="a1", status_code=200)
-        ledger.record_step_execution(step_id="s2", phase="treatment", operation_ref="op2", actor_ref="a1", status_code=201)
+        ledger.record_step_execution(step_id="s1", phase="treatment", operation_ref="op1", actor_ref="a1", status_code=200, target_reached=True, after_state_receipt_id="obs_1")
+        ledger.record_step_execution(step_id="s2", phase="treatment", operation_ref="op2", actor_ref="a1", status_code=201, target_reached=True, after_state_receipt_id="obs_2")
         result = evaluate_process_completion(
             expected_step_ids=["s1", "s2"],
             ledger=ledger,
@@ -319,8 +319,8 @@ class TestProcessStepObserver:
 
     def test_observe_with_steps(self):
         envelope = {"observations": {"process_timeline": [
-            {"step_id": "s1", "phase": "treatment", "step_ordinal": 1, "status_code": 200, "operation_ref": "op1", "actor_ref": "a1"},
-            {"step_id": "s2", "phase": "treatment", "step_ordinal": 2, "status_code": 201, "operation_ref": "op2", "actor_ref": "a1"},
+            {"step_id": "s1", "phase": "treatment", "step_ordinal": 1, "status_code": 200, "operation_ref": "op1", "actor_ref": "a1", "event_type": "TRANSPORT_COMPLETED"},
+            {"step_id": "s2", "phase": "treatment", "step_ordinal": 2, "status_code": 201, "operation_ref": "op2", "actor_ref": "a1", "event_type": "TRANSPORT_COMPLETED"},
         ]}}
         receipt = observe_process_steps(envelope)
         assert receipt["status"] == "OBSERVED"

@@ -35,7 +35,7 @@ from ..schema import as_dict, as_list, stable_id, text
 
 _PACKAGE = __package__.rsplit(".builder", 1)[0]
 _LEGACY_NAME = f"{_PACKAGE}._semantic_projection_builder_v1"
-_LEGACY_PATH = Path(__file__).resolve().parents[1] / "builder.py"
+_LEGACY_PATH = Path(__file__).resolve().parents[1] / "builder_legacy_v1.py"
 _spec = importlib.util.spec_from_file_location(_LEGACY_NAME, _LEGACY_PATH)
 if _spec is None or _spec.loader is None:  # pragma: no cover - import contract failure
     raise ImportError(f"cannot load semantic projection builder: {_LEGACY_PATH}")

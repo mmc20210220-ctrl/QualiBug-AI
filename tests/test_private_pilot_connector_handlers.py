@@ -5,12 +5,12 @@ import json
 
 import pytest
 
+from ai_test_asset_center.connector_auto_sync import validate_connector_checkpoint
 from ai_test_asset_center.connector_connection_profiles import ConnectorProfileError
 from ai_test_asset_center.private_pilot_connector_handlers import (
     KnowledgeConnectorHandlersMixin,
     _connector_route,
     _sanitize_sync_response,
-    _validate_checkpoint_against_registry,
 )
 
 PROJECT = "enterprise-project"
@@ -49,29 +49,19 @@ def test_sync_response_never_returns_checkpoint_or_source_content():
     assert sanitized["source_content_returned"] is False
 
 
-def test_sync_action_uses_server_checkpoint_and_commits_new_checkpoint(
+def test_sync_action_delegates_to_managed_sync_and_sanitizes_response(
     tmp_path,
     monkeypatch,
 ):
+    """Handler delegates to run_managed_feishu_sync and sanitizes the response."""
     import ai_test_asset_center.private_pilot_connector_handlers as handlers
 
     observed = {}
-    old_checkpoint = "feishu-snapshot-v1:" + "1" * 64
     new_checkpoint = "feishu-snapshot-v1:" + "2" * 64
 
-    monkeypatch.setattr(
-        handlers,
-        "load_connector_sync_checkpoint",
-        lambda project, connector, root: old_checkpoint,
-    )
-    monkeypatch.setattr(
-        handlers,
-        "_validate_checkpoint_against_registry",
-        lambda *args, **kwargs: None,
-    )
-
-    def fake_sync(project, **kwargs):
+    def fake_managed_sync(project, connector, **kwargs):
         observed["project"] = project
+        observed["connector"] = connector
         observed.update(kwargs)
         return {
             "status": "COMPLETE",
@@ -80,22 +70,7 @@ def test_sync_action_uses_server_checkpoint_and_commits_new_checkpoint(
             "success_count": 2,
         }
 
-    monkeypatch.setattr(handlers, "sync_feishu_connector", fake_sync)
-
-    def fake_commit(project, connector, checkpoint, **kwargs):
-        observed["committed"] = {
-            "project": project,
-            "connector": connector,
-            "checkpoint": checkpoint,
-            **kwargs,
-        }
-        return {"ok": True}
-
-    monkeypatch.setattr(
-        handlers,
-        "commit_connector_sync_checkpoint",
-        fake_commit,
-    )
+    monkeypatch.setattr(handlers, "run_managed_feishu_sync", fake_managed_sync)
 
     result = DummyHandler()._handle_knowledge_connector_action(
         PROJECT,
@@ -110,52 +85,31 @@ def test_sync_action_uses_server_checkpoint_and_commits_new_checkpoint(
     )
 
     assert observed["project"] == PROJECT
-    assert observed["previous_cursor"] == old_checkpoint
-    assert observed["committed"]["checkpoint"] == new_checkpoint
-    assert observed["committed"]["sync_epoch_id"] == "sync_epoch_2"
+    assert observed["connector"] == CONNECTOR
     assert result["status"] == 200
     assert result["body"]["ok"] is True
+    # Checkpoint and cursor must never leak to client
     serialized = json.dumps(result["body"], ensure_ascii=False, sort_keys=True)
-    assert old_checkpoint not in serialized
     assert new_checkpoint not in serialized
+    assert result["body"]["data"]["next_cursor_returned_to_client"] is False
 
 
-def test_non_complete_sync_does_not_advance_encrypted_checkpoint(
+def test_non_complete_sync_returns_409_and_sanitizes_cursor(
     tmp_path,
     monkeypatch,
 ):
+    """Handler returns 409 for failed sync and never leaks cursor."""
     import ai_test_asset_center.private_pilot_connector_handlers as handlers
 
     monkeypatch.setattr(
         handlers,
-        "load_connector_sync_checkpoint",
-        lambda project, connector, root: "",
-    )
-    monkeypatch.setattr(
-        handlers,
-        "_validate_checkpoint_against_registry",
-        lambda *args, **kwargs: None,
-    )
-    monkeypatch.setattr(
-        handlers,
-        "sync_feishu_connector",
+        "run_managed_feishu_sync",
         lambda *args, **kwargs: {
             "status": "FAILED",
             "sync_epoch_id": "sync_failed",
             "next_cursor": "must-not-commit",
             "errors": [{"code": "FEISHU_EXPORT_FAILED"}],
         },
-    )
-    committed = False
-
-    def fail_if_committed(*args, **kwargs):
-        nonlocal committed
-        committed = True
-
-    monkeypatch.setattr(
-        handlers,
-        "commit_connector_sync_checkpoint",
-        fail_if_committed,
     )
 
     result = DummyHandler()._handle_knowledge_connector_action(
@@ -167,7 +121,6 @@ def test_non_complete_sync_does_not_advance_encrypted_checkpoint(
         ACTOR,
     )
 
-    assert committed is False
     assert result["status"] == 409
     assert result["body"]["ok"] is False
     assert "must-not-commit" not in json.dumps(result["body"])
@@ -182,11 +135,12 @@ def test_private_pilot_handler_composes_connector_router_before_canonical_router
 
 
 def test_checkpoint_registry_mismatch_blocks_before_remote_sync(tmp_path, monkeypatch):
-    import ai_test_asset_center.private_pilot_connector_handlers as handlers
+    """validate_connector_checkpoint raises on fingerprint mismatch."""
+    import ai_test_asset_center.connector_auto_sync as auto
 
     checkpoint = "feishu-snapshot-v1:" + "9" * 64
     monkeypatch.setattr(
-        handlers,
+        auto,
         "list_connector_instances",
         lambda project, root, include_disabled: {
             "connector_instances": [
@@ -204,9 +158,9 @@ def test_checkpoint_registry_mismatch_blocks_before_remote_sync(tmp_path, monkey
         ConnectorProfileError,
         match="checkpoint_registry_mismatch",
     ):
-        _validate_checkpoint_against_registry(
+        validate_connector_checkpoint(
             PROJECT,
             CONNECTOR,
             checkpoint,
-            tmp_path,
+            root=tmp_path,
         )

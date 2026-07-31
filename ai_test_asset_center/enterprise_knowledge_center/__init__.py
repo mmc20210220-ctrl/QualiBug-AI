@@ -244,6 +244,9 @@ from ._api import (  # noqa: F401
     _structurize_rule_causal_chains,
 )
 
+# Public API alias for external consumers (private_pilot_project_assets, tests).
+classify_enterprise_knowledge_source = _classify_source
+
 # Preserve broad historical star-import compatibility, including explicitly imported
 # underscore symbols, without maintaining another hand-written authority list.
 __all__ = sorted(name for name in globals() if not name.startswith("__"))

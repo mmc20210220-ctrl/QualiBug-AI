@@ -14,7 +14,7 @@ from typing import Any, Iterable
 
 _PACKAGE = __package__.rsplit("._chinese_business_comprehension", 1)[0]
 _LEGACY_NAME = f"{_PACKAGE}._chinese_business_comprehension_extractor_v1"
-_LEGACY_PATH = Path(__file__).resolve().parents[1] / "_chinese_business_comprehension.py"
+_LEGACY_PATH = Path(__file__).resolve().parents[1] / "_chinese_business_comprehension_extractor_v1.py"
 _spec = importlib.util.spec_from_file_location(_LEGACY_NAME, _LEGACY_PATH)
 if _spec is None or _spec.loader is None:  # pragma: no cover
     raise ImportError(f"cannot load Chinese business extractor: {_LEGACY_PATH}")

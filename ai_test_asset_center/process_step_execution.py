@@ -507,6 +507,10 @@ class ProcessStepLedger:
         self._timeline_events.append(event)
         return event
 
+    def timeline(self) -> list[dict[str, Any]]:
+        """Return recorded timeline events in insertion order."""
+        return list(self._timeline_events)
+
     def get_step_row(self, step_id: str) -> dict[str, Any] | None:
         return self._rows.get(step_id)
 
