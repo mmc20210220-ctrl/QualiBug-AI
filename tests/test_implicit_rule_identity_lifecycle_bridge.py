@@ -8,19 +8,28 @@ from ai_test_asset_center.enterprise_knowledge_center.implicit_rule_governance i
 
 
 FORMULA = "期末库存 = 期初库存 + 入库数量 - 出库数量"
+IDEMPOTENCY = "同一付款请求不得重复成功扣款；重复提交时业务成功效果最多发生一次。"
+STABLE_REF = "online-docs/implicit-rules/business-rules.md"
 
 
-def _base(*, source_hash: str, source_version_id: str) -> dict:
+def _base(
+    *,
+    source_hash: str,
+    source_version_id: str,
+    source_id: str = "rules.md",
+    source_refs: list[str] | None = None,
+) -> dict:
+    source = {
+        "source_id": source_id,
+        "status": "active",
+        "content_hash": source_hash,
+        "source_version_id": source_version_id,
+        "source_type": "business_rules",
+    }
+    if source_refs:
+        source["source_refs"] = list(source_refs)
     return {
-        "source_inventory": [
-            {
-                "source_id": "rules.md",
-                "status": "active",
-                "content_hash": source_hash,
-                "source_version_id": source_version_id,
-                "source_type": "business_rules",
-            }
-        ],
+        "source_inventory": [source],
         "field_dictionary": [],
         "data_tables": [],
         "interfaces": [],
@@ -35,9 +44,9 @@ def _base(*, source_hash: str, source_version_id: str) -> dict:
     }
 
 
-def _formula_fact() -> dict:
+def _formula_fact(source_id: str = "rules.md") -> dict:
     return {
-        "fact_id": "fact:inventory-conservation",
+        "fact_id": f"fact:inventory-conservation:{source_id}",
         "fact_type": "DERIVED_VALUE",
         "status": "ACCEPTED",
         "raw_statement": FORMULA,
@@ -51,9 +60,28 @@ def _formula_fact() -> dict:
         ],
         "source_spans": [
             {
-                "source_id": "rules.md",
+                "source_id": source_id,
                 "locator": "rules.md#inventory",
                 "document_block_id": "inventory",
+            }
+        ],
+        "confidence": 1.0,
+    }
+
+
+def _idempotency_fact(source_id: str) -> dict:
+    return {
+        "fact_id": f"fact:payment-idempotency:{source_id}",
+        "fact_type": "BUSINESS_RULE",
+        "status": "ACCEPTED",
+        "raw_statement": IDEMPOTENCY,
+        "subject": {"entity_refs": ["付款请求"]},
+        "action": {"canonical": "付款"},
+        "source_spans": [
+            {
+                "source_id": source_id,
+                "locator": "rules.md#payment",
+                "document_block_id": "payment",
             }
         ],
         "confidence": 1.0,
@@ -123,3 +151,93 @@ def test_source_prose_rule_is_typed_active_then_stale_without_executable_residue
     assert second["implicit_rule_projection_gate"][
         "stale_rule_execution_allowed"
     ] is False
+
+
+def test_same_semantic_rule_keeps_one_active_authority_across_content_versions():
+    source_v1 = "canonical:rules:content-v1"
+    first_input = _base(
+        source_hash="hash-v1",
+        source_version_id="srcv-v1",
+        source_id=source_v1,
+        source_refs=[STABLE_REF],
+    )
+    first_input["rule_library"] = [
+        {
+            "rule_id": "rule:parser:v1:payment",
+            "source_id": source_v1,
+            "source_type": "business_rules",
+            "source_locator": "line:3",
+            "statement": IDEMPOTENCY,
+            "rule_type": "idempotency",
+            "risk_type": "idempotency",
+            "severity": "P0",
+        }
+    ]
+    first_input["business_fact_ledger"] = {
+        "items": [_idempotency_fact(source_v1)]
+    }
+
+    first = enrich_asset_with_governed_implicit_rule_projection(first_input)
+    first_rule = first["rule_library"][0]
+    durable_rule_id = first_rule["rule_id"]
+
+    assert durable_rule_id.startswith("implicit_rule:")
+    assert durable_rule_id != "rule:parser:v1:payment"
+    assert first_rule["stable_source_refs"] == [STABLE_REF]
+    assert first_rule["source_rule_origin"]["rule_id"] == (
+        "rule:parser:v1:payment"
+    )
+    assert first_rule["rule_identity_authority"] == (
+        "SOURCE_OCCURRENCE_REF_TYPED_SEMANTICS"
+    )
+    assert first["implicit_rule_lifecycle_ledger"]["active_rule_count"] == 1
+    assert first["implicit_rule_lifecycle_ledger"]["stale_rule_count"] == 0
+
+    source_v2 = "canonical:rules:content-v2"
+    second_input = _base(
+        source_hash="hash-v2",
+        source_version_id="srcv-v2",
+        source_id=source_v2,
+        source_refs=[STABLE_REF],
+    )
+    second_input["rule_library"] = [
+        {
+            "rule_id": "rule:parser:v2:payment",
+            "source_id": source_v2,
+            "source_type": "business_rules",
+            "source_locator": "line:3",
+            "statement": IDEMPOTENCY,
+            "rule_type": "idempotency",
+            "risk_type": "idempotency",
+            "severity": "P0",
+        }
+    ]
+    second_input["business_fact_ledger"] = {
+        "items": [_idempotency_fact(source_v2)]
+    }
+    second_input["implicit_rule_lifecycle_ledger"] = deepcopy(
+        first["implicit_rule_lifecycle_ledger"]
+    )
+
+    second = enrich_asset_with_governed_implicit_rule_projection(second_input)
+
+    assert len(second["rule_library"]) == 1
+    second_rule = second["rule_library"][0]
+    assert second_rule["rule_id"] == durable_rule_id
+    assert second_rule["source_rule_origin"]["rule_id"] == (
+        "rule:parser:v2:payment"
+    )
+    assert second_rule["stable_source_refs"] == [STABLE_REF]
+    lifecycle = second["implicit_rule_lifecycle_ledger"]
+    assert lifecycle["active_rule_count"] == 1
+    assert lifecycle["stale_rule_count"] == 0
+    item = next(row for row in lifecycle["items"] if row["rule_id"] == durable_rule_id)
+    assert item["status"] == "ACTIVE"
+    assert item["execution_allowed"] is True
+    assert all(
+        row.get("rule_id") != "rule:parser:v1:payment"
+        for row in lifecycle["items"]
+    )
+    assert second["implicit_rule_identity_reconciliation_receipt"][
+        "stable_rule_identity_count"
+    ] == 1
