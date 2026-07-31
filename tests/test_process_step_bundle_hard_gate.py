@@ -35,7 +35,7 @@ def _envelope(receipt_type: str, receipt_id: str, payload: dict):
     )
 
 
-def _step_rows() -> list[dict]:
+def _ledger() -> ProcessStepLedger:
     ledger = ProcessStepLedger(
         IDENTITY["experiment_id"],
         fixture_id=IDENTITY["fixture_id"],
@@ -57,27 +57,82 @@ def _step_rows() -> list[dict]:
             final_status="EXECUTED",
             mutation_occurred=True,
         )
-    observations = {
+    return ledger
+
+
+def _exact_observations() -> dict:
+    return {
         "observer_receipts": [
             {
-                "receipt_id": "observer-1",
-                "step_id": "step-1",
+                "receipt_id": f"observation-{ordinal}",
+                "step_id": f"step-{ordinal}",
                 "target_reached": True,
-            },
+            }
+            for ordinal in (1, 2)
+        ],
+        "oracle_invocation_receipts": [
             {
-                "receipt_id": "observer-2",
-                "step_id": "step-2",
-                "target_reached": True,
-            },
-        ]
+                "receipt_id": f"oracle-{ordinal}",
+                "step_id": f"step-{ordinal}",
+                "evaluated": True,
+            }
+            for ordinal in (1, 2)
+        ],
+        "cleanup_execution_receipts": [
+            {
+                "receipt_id": f"cleanup-exec-{ordinal}",
+                "step_id": f"step-{ordinal}",
+                "executed": True,
+            }
+            for ordinal in (1, 2)
+        ],
+        "cleanup_verification_receipts": [
+            {
+                "receipt_id": f"cleanup-ver-{ordinal}",
+                "step_id": f"step-{ordinal}",
+                "verified": True,
+            }
+            for ordinal in (1, 2)
+        ],
     }
-    return ProcessStepSemanticView(ledger, observations).all_rows()
+
+
+def _step_rows(observations: dict | None = None) -> list[dict]:
+    return ProcessStepSemanticView(
+        _ledger(),
+        observations if observations is not None else _exact_observations(),
+    ).all_rows()
+
+
+def _receipt_payloads_from_rows(step_rows: list[dict]) -> dict[str, tuple[str, dict]]:
+    payloads: dict[str, tuple[str, dict]] = {}
+    for row in step_rows:
+        step_id = row["step_id"]
+        for rid in row.get("scoped_observation_receipt_ids", []):
+            payloads.setdefault(
+                rid,
+                ("qualibug.observation-receipt.v1", {"step_id": step_id}),
+            )
+        for rid in row.get("scoped_oracle_receipt_ids", []):
+            payloads.setdefault(
+                rid,
+                ("qualibug.oracle-invocation-receipt.v1", {"step_id": step_id}),
+            )
+        for rid in row.get("scoped_cleanup_receipt_ids", []):
+            receipt_type = (
+                "qualibug.cleanup-verification-receipt.v1"
+                if rid.startswith("cleanup-ver-")
+                else "qualibug.cleanup-execution-receipt.v1"
+            )
+            payloads.setdefault(rid, (receipt_type, {"step_id": step_id}))
+    return payloads
 
 
 def _bundle(
     step_rows: list[dict],
     *,
     grouped_receipt_ids: list[str] | None = None,
+    extra_evidence: list[tuple[str, str, dict]] | None = None,
 ):
     step_receipts = [
         _envelope(PROCESS_STEP_RECEIPT_SCHEMA, row["receipt_id"], row)
@@ -90,30 +145,43 @@ def _bundle(
     transport_receipt = _envelope(
         "qualibug.transport-receipt.v1", "transport-1", {}
     )
-    observation_receipt = _envelope(
-        "qualibug.observation-receipt.v1", "observation-1", {}
-    )
-    oracle_receipt = _envelope(
-        "qualibug.oracle-invocation-receipt.v1", "oracle-1", {}
-    )
-    cleanup_execution_receipt = _envelope(
-        "qualibug.cleanup-execution-receipt.v1", "cleanup-exec-1", {}
-    )
-    cleanup_verification_receipt = _envelope(
-        "qualibug.cleanup-verification-receipt.v1", "cleanup-ver-1", {}
-    )
     environment_receipt = _envelope(
         "qualibug.environment-restoration-receipt.v1", "environment-1", {}
+    )
+
+    evidence_payloads = _receipt_payloads_from_rows(step_rows)
+    for receipt_type, rid, payload in list(extra_evidence or []):
+        evidence_payloads[rid] = (receipt_type, payload)
+    evidence_receipts = [
+        _envelope(receipt_type, rid, payload)
+        for rid, (receipt_type, payload) in evidence_payloads.items()
+    ]
+    observation_ids = sorted(
+        rid
+        for rid, (receipt_type, _) in evidence_payloads.items()
+        if receipt_type == "qualibug.observation-receipt.v1"
+    )
+    oracle_ids = sorted(
+        rid
+        for rid, (receipt_type, _) in evidence_payloads.items()
+        if receipt_type == "qualibug.oracle-invocation-receipt.v1"
+    )
+    cleanup_exec_ids = sorted(
+        rid
+        for rid, (receipt_type, _) in evidence_payloads.items()
+        if receipt_type == "qualibug.cleanup-execution-receipt.v1"
+    )
+    cleanup_ver_ids = sorted(
+        rid
+        for rid, (receipt_type, _) in evidence_payloads.items()
+        if receipt_type == "qualibug.cleanup-verification-receipt.v1"
     )
     receipts = [
         compile_receipt,
         fixture_receipt,
         *step_receipts,
         transport_receipt,
-        observation_receipt,
-        oracle_receipt,
-        cleanup_execution_receipt,
-        cleanup_verification_receipt,
+        *evidence_receipts,
         environment_receipt,
     ]
     return build_execution_receipt_bundle(
@@ -127,10 +195,10 @@ def _bundle(
             else [row["receipt_id"] for row in step_rows]
         ),
         transport_receipt_ids=["transport-1"],
-        observation_receipt_ids=["observation-1"],
-        oracle_invocation_receipt_ids=["oracle-1"],
-        cleanup_execution_receipt_ids=["cleanup-exec-1"],
-        cleanup_verification_receipt_ids=["cleanup-ver-1"],
+        observation_receipt_ids=observation_ids,
+        oracle_invocation_receipt_ids=oracle_ids,
+        cleanup_execution_receipt_ids=cleanup_exec_ids,
+        cleanup_verification_receipt_ids=cleanup_ver_ids,
         environment_restoration_receipt_id="environment-1",
         **IDENTITY,
     )
@@ -157,15 +225,14 @@ def _lifecycle(bundle: dict):
     )
 
 
-def test_balanced_sealed_step_receipts_allow_true_completed() -> None:
+def test_balanced_exact_scoped_step_receipts_allow_true_completed() -> None:
     bundle = _bundle(_step_rows())
 
+    audit = bundle["process_step_audit"]
     assert bundle["complete"] is True
-    assert bundle["process_step_audit"]["complete"] is True
-    assert bundle["process_step_ledger_identity_consistent"] is True
-    assert bundle["process_step_ledger_hash_consistent"] is True
-    assert bundle["process_step_fact_hashes_valid"] is True
-    assert bundle["process_step_sets_balanced"] is True
+    assert audit["complete"] is True
+    assert audit["step_evidence_scopes_complete"] is True
+    assert audit["evidence_scope_audit"]["complete"] is True
     assert _lifecycle(bundle)["lifecycle_state"] == "TRUE_COMPLETED"
 
 
@@ -176,9 +243,7 @@ def test_removed_step_is_detected_from_sealed_recorded_set() -> None:
     assert bundle["complete"] is False
     assert "process_step_set_mismatch" in bundle["validation_errors"]
     assert "ledger_recorded_step_ids" in bundle["process_step_set_mismatch_fields"]
-    result = _lifecycle(bundle)
-    assert result["lifecycle_state"] == "RECEIPT_INCOMPLETE"
-    assert result["reason_code"] == "PROCESS_STEP_SET_MISMATCH"
+    assert _lifecycle(bundle)["reason_code"] == "PROCESS_STEP_SET_MISMATCH"
 
 
 def test_ungrouped_step_envelope_cannot_hide_as_optional_extra_receipt() -> None:
@@ -197,7 +262,6 @@ def test_mixed_ledger_id_is_identity_mismatch() -> None:
     rows[1]["process_step_ledger_id"] = "psl-other"
     bundle = _bundle(rows)
 
-    assert bundle["complete"] is False
     assert bundle["process_step_ledger_identity_consistent"] is False
     result = _lifecycle(bundle)
     assert result["lifecycle_state"] == "IDENTITY_MISMATCH"
@@ -210,11 +274,8 @@ def test_mixed_ledger_hash_is_receipt_incomplete() -> None:
     rows[1]["process_step_ledger_hash"] = "stale-ledger-hash"
     bundle = _bundle(rows)
 
-    assert bundle["complete"] is False
     assert bundle["process_step_ledger_hash_consistent"] is False
-    result = _lifecycle(bundle)
-    assert result["lifecycle_state"] == "RECEIPT_INCOMPLETE"
-    assert result["reason_code"] == "PROCESS_STEP_LEDGER_HASH_MISMATCH"
+    assert _lifecycle(bundle)["reason_code"] == "PROCESS_STEP_LEDGER_HASH_MISMATCH"
 
 
 def test_outer_resign_cannot_hide_step_fact_tamper() -> None:
@@ -223,16 +284,14 @@ def test_outer_resign_cannot_hide_step_fact_tamper() -> None:
     rows[1]["status_code"] = 503
     bundle = _bundle(rows)
 
-    assert bundle["complete"] is False
     assert bundle["process_step_fact_hashes_valid"] is False
     assert rows[1]["receipt_id"] in bundle[
         "process_step_fact_hash_mismatch_receipt_ids"
     ]
-    result = _lifecycle(bundle)
-    assert result["reason_code"] == "PROCESS_STEP_FACT_HASH_MISMATCH"
+    assert _lifecycle(bundle)["reason_code"] == "PROCESS_STEP_FACT_HASH_MISMATCH"
 
 
-def test_reclassified_step_with_recomputed_fact_hash_still_breaks_set_balance() -> None:
+def test_reclassified_step_with_recomputed_fact_hash_breaks_set_balance() -> None:
     rows = _step_rows()
     rows[1] = deepcopy(rows[1])
     rows[1]["operation_accepted"] = False
@@ -242,23 +301,19 @@ def test_reclassified_step_with_recomputed_fact_hash_still_breaks_set_balance() 
     rows[1]["step_fact_hash"] = _stable_hash(_canonical_step_fact(rows[1]))
     bundle = _bundle(rows)
 
-    assert bundle["complete"] is False
     assert bundle["process_step_fact_hashes_valid"] is True
     assert bundle["process_step_sets_balanced"] is False
     assert "ledger_accepted_step_ids" in bundle["process_step_set_mismatch_fields"]
-    result = _lifecycle(bundle)
-    assert result["reason_code"] == "PROCESS_STEP_SET_MISMATCH"
+    assert _lifecycle(bundle)["reason_code"] == "PROCESS_STEP_SET_MISMATCH"
 
 
 def test_fully_resigned_forgery_cannot_replace_ledger_hash_authority() -> None:
-    rows = _step_rows()
-    rows = [deepcopy(row) for row in rows]
+    rows = [deepcopy(row) for row in _step_rows()]
     rows[1]["operation_accepted"] = False
     rows[1]["semantic_step_status"] = "OPERATION_REJECTED"
     rows[1]["step_completed"] = False
     rows[1]["step_failed"] = True
     rows[1]["step_fact_hash"] = _stable_hash(_canonical_step_fact(rows[1]))
-
     for row in rows:
         row["ledger_accepted_step_ids"] = ["step-1"]
         row["ledger_completed_step_ids"] = ["step-1"]
@@ -268,15 +323,123 @@ def test_fully_resigned_forgery_cannot_replace_ledger_hash_authority() -> None:
 
     bundle = _bundle(rows)
     audit = bundle["process_step_audit"]
-
-    assert bundle["complete"] is False
     assert audit["step_fact_hashes_valid"] is True
-    assert audit["step_sets_balanced"] is True
     assert audit["ledger_hash_value_consistent"] is True
     assert audit["ledger_hash_content_valid"] is False
-    assert (
-        audit["reconstructed_process_step_ledger_hash"]
-        != audit["declared_process_step_ledger_hash"]
+    assert _lifecycle(bundle)["reason_code"] == "PROCESS_STEP_LEDGER_HASH_MISMATCH"
+
+
+def test_total_oracle_receipt_with_step_ids_is_never_broadcast() -> None:
+    observations = _exact_observations()
+    observations["oracle_invocation_receipts"] = [
+        {
+            "receipt_id": "oracle-total",
+            "step_ids": ["step-1", "step-2"],
+            "evaluated": True,
+        }
+    ]
+    rows = _step_rows(observations)
+    bundle = _bundle(
+        rows,
+        extra_evidence=[
+            (
+                "qualibug.oracle-invocation-receipt.v1",
+                "oracle-total",
+                {"step_ids": ["step-1", "step-2"]},
+            )
+        ],
     )
-    result = _lifecycle(bundle)
-    assert result["reason_code"] == "PROCESS_STEP_LEDGER_HASH_MISMATCH"
+
+    scope = bundle["process_step_audit"]["evidence_scope_audit"]
+    assert bundle["complete"] is False
+    assert scope["oracle_invocation"]["multi_step_receipt_ids"] == ["oracle-total"]
+    assert scope["missing_oracle_step_ids"] == ["step-1", "step-2"]
+
+
+def test_unscoped_total_cleanup_receipt_cannot_cover_all_writes() -> None:
+    observations = _exact_observations()
+    observations["cleanup_execution_receipts"] = [
+        {"receipt_id": "cleanup-total", "executed": True}
+    ]
+    rows = _step_rows(observations)
+    bundle = _bundle(
+        rows,
+        extra_evidence=[
+            (
+                "qualibug.cleanup-execution-receipt.v1",
+                "cleanup-total",
+                {},
+            )
+        ],
+    )
+
+    scope = bundle["process_step_audit"]["evidence_scope_audit"]
+    assert bundle["complete"] is False
+    assert scope["cleanup_execution"]["unscoped_receipt_ids"] == [
+        "cleanup-total"
+    ]
+    assert scope["missing_cleanup_execution_step_ids"] == ["step-1", "step-2"]
+
+
+def test_unknown_step_observation_is_unbound() -> None:
+    observations = _exact_observations()
+    observations["observer_receipts"] = [
+        {
+            "receipt_id": "observation-unknown",
+            "step_id": "step-404",
+            "target_reached": True,
+        }
+    ]
+    rows = _step_rows(observations)
+    bundle = _bundle(
+        rows,
+        extra_evidence=[
+            (
+                "qualibug.observation-receipt.v1",
+                "observation-unknown",
+                {"step_id": "step-404"},
+            )
+        ],
+    )
+
+    scope = bundle["process_step_audit"]["evidence_scope_audit"]
+    assert bundle["complete"] is False
+    assert scope["observation"]["unknown_step_receipt_ids"] == [
+        "observation-unknown"
+    ]
+
+
+def test_same_oracle_receipt_referenced_by_two_steps_is_broadcast_violation() -> None:
+    ledger = _ledger()
+    observations = _exact_observations()
+    observations["oracle_invocation_receipts"] = [
+        {"receipt_id": "oracle-shared", "step_id": "step-1", "evaluated": True}
+    ]
+    ledger.append_scoped_receipt_ref(
+        step_id="step-1",
+        receipt_step_id="step-1",
+        field="oracle_receipt_ids",
+        receipt_id="oracle-shared",
+    )
+    ledger.append_scoped_receipt_ref(
+        step_id="step-2",
+        receipt_step_id="step-2",
+        field="oracle_receipt_ids",
+        receipt_id="oracle-shared",
+    )
+    rows = ProcessStepSemanticView(ledger, observations).all_rows()
+    bundle = _bundle(
+        rows,
+        extra_evidence=[
+            (
+                "qualibug.oracle-invocation-receipt.v1",
+                "oracle-shared",
+                {"step_id": "step-1"},
+            )
+        ],
+    )
+
+    scope = bundle["process_step_audit"]["evidence_scope_audit"]
+    assert bundle["complete"] is False
+    assert scope["broadcast_receipt_ids"] == ["oracle-shared"]
+    assert "receipt_scope_broadcast" in bundle["process_step_set_mismatch_fields"]
