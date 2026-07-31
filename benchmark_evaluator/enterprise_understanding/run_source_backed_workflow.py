@@ -14,7 +14,6 @@ import shutil
 import stat
 import subprocess
 import sys
-import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
@@ -82,13 +81,13 @@ def _finish_blocked(
 
 @contextmanager
 def _quarantine_ground_truth(path: Path) -> Iterator[dict[str, Any]]:
-    """Remove the current answer key from the product-visible filesystem lifecycle.
+    """Remove the answer key path while retaining bytes only in the evaluator parent.
 
-    The evaluator parent keeps one private byte-for-byte copy in an undisclosed temporary
-    directory. The original path is absent for the whole product subprocess and restored
-    before evaluator loading. Re-creation of the original path by the product phase is a
-    fail-closed boundary violation. The private temporary path is never returned or
-    persisted in a receipt.
+    No private disk copy is created. The parent process keeps the original bytes in
+    memory, removes the original path for the whole product subprocess lifecycle, and
+    restores it before evaluator loading. Re-creation of that path by product code is a
+    fail-closed boundary violation, but restoration always happens first so a failed
+    benchmark cannot damage the frozen Ground Truth fixture.
     """
     if path.is_symlink():
         raise SourceBackedWorkflowError("ground_truth_symlink_not_allowed")
@@ -100,36 +99,31 @@ def _quarantine_ground_truth(path: Path) -> Iterator[dict[str, Any]]:
         "ground_truth_original_path_absent_during_product_phase": False,
         "ground_truth_recreated_by_product_phase": False,
         "ground_truth_restored_after_product_phase": False,
+        "ground_truth_private_bytes_held_in_parent_memory": True,
+        "ground_truth_private_disk_copy_created": False,
         "ground_truth_private_quarantine_path_disclosed_to_product": False,
         "product_phase_filesystem_ground_truth_access_allowed": False,
     }
-    with tempfile.TemporaryDirectory(prefix="qualibug-evaluator-private-") as private_root:
-        private_path = Path(private_root) / "private_input.bin"
-        private_path.write_bytes(data)
-        os.chmod(private_path, 0o600)
-        path.unlink()
-        if path.exists():
-            raise SourceBackedWorkflowError("ground_truth_quarantine_failed")
-        state["ground_truth_original_path_absent_during_product_phase"] = True
-        try:
-            yield state
-        finally:
-            recreated = path.exists()
-            state["ground_truth_recreated_by_product_phase"] = recreated
-            if recreated:
-                if path.is_dir():
-                    shutil.rmtree(path)
-                else:
-                    path.unlink()
-            restored = private_path.read_bytes()
-            if hashlib.sha256(restored).hexdigest() != content_sha256:
-                raise SourceBackedWorkflowError("ground_truth_private_copy_changed")
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(restored)
-            os.chmod(path, original_mode)
-            if hashlib.sha256(path.read_bytes()).hexdigest() != content_sha256:
-                raise SourceBackedWorkflowError("ground_truth_restore_fingerprint_mismatch")
-            state["ground_truth_restored_after_product_phase"] = True
+    path.unlink()
+    if path.exists():
+        raise SourceBackedWorkflowError("ground_truth_quarantine_failed")
+    state["ground_truth_original_path_absent_during_product_phase"] = True
+    try:
+        yield state
+    finally:
+        recreated = path.exists()
+        state["ground_truth_recreated_by_product_phase"] = recreated
+        if recreated:
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        os.chmod(path, original_mode)
+        if hashlib.sha256(path.read_bytes()).hexdigest() != content_sha256:
+            raise SourceBackedWorkflowError("ground_truth_restore_fingerprint_mismatch")
+        state["ground_truth_restored_after_product_phase"] = True
 
 
 def _validate_product_phase_receipt(value: Any) -> tuple[dict[str, Any], str]:
