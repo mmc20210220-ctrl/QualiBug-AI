@@ -4,10 +4,13 @@ The live ledger binds evidence. This module verifies the sealed result from the
 Execution Receipt Bundle. Exact observation, oracle and cleanup receipts must
 name one recorded step and be referenced by that same step. Graph aggregate
 cleanup receipts are validated as aggregate sets and are never mistaken for
-single-step evidence.
+single-step evidence. Typed HTTP observations are also checked against the
+Observer subject set sealed by the Compile Receipt.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 from .process_step_receipt_scope import extract_receipt_step_scope
@@ -16,11 +19,13 @@ PROCESS_STEP_EVIDENCE_SCOPE_AUDIT_SCHEMA = (
     "qualibug.process-step-evidence-scope-audit.v1"
 )
 
+COMPILE_RECEIPT_TYPE = "qualibug.compile-receipt.v1"
 OBSERVATION_RECEIPT_TYPE = "qualibug.observation-receipt.v1"
 ORACLE_INVOCATION_RECEIPT_TYPE = "qualibug.oracle-invocation-receipt.v1"
 ORACLE_TRACE_RECEIPT_TYPE = "qualibug.oracle-trace-receipt.v1"
 CLEANUP_EXECUTION_RECEIPT_TYPE = "qualibug.cleanup-execution-receipt.v1"
 CLEANUP_VERIFICATION_RECEIPT_TYPE = "qualibug.cleanup-verification-receipt.v1"
+OBSERVER_SUBJECT_BINDING_SCHEMA = "qualibug.observer-subject-binding.v1"
 TYPED_OBSERVER_RECEIPT_SCHEMA = "qualibug.observer-receipt.v1"
 PROCESS_STEP_ORACLE_INVOCATION_SCHEMA = (
     "qualibug.process-step-oracle-invocation.v1"
@@ -65,6 +70,17 @@ def _ids(value: Any) -> list[str]:
         if text and text not in out:
             out.append(text)
     return out
+
+
+def _stable_hash(value: Any) -> str:
+    raw = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def _payload(envelope: dict[str, Any]) -> dict[str, Any]:
@@ -328,12 +344,131 @@ def _covered_steps(group: dict[str, Any]) -> set[str]:
     }
 
 
+def _audit_compiled_observer_subjects(
+    *,
+    receipts_by_id: dict[str, dict[str, Any]],
+    observation_receipt_ids: list[str],
+    observation_audit: dict[str, Any],
+    known_step_ids: list[str],
+) -> dict[str, Any]:
+    compile_ids = _discover(receipts_by_id, {COMPILE_RECEIPT_TYPE})
+    typed_http_receipt_ids = [
+        rid
+        for rid in observation_receipt_ids
+        if (
+            _payload_schema(_dict(receipts_by_id.get(rid)))
+            == TYPED_OBSERVER_RECEIPT_SCHEMA
+            and _text(
+                _payload(_dict(receipts_by_id.get(rid))).get("observer_id")
+            )
+            == "http_response"
+        )
+    ]
+    exact_owners = _dict(observation_audit.get("exact_owner_by_receipt"))
+    actual_http_step_ids = sorted(
+        {
+            _text(exact_owners.get(rid))
+            for rid in typed_http_receipt_ids
+            if _text(exact_owners.get(rid))
+        }
+    )
+
+    binding_receipt: dict[str, Any] = {}
+    compile_receipt_id = ""
+    if len(compile_ids) == 1:
+        compile_receipt_id = compile_ids[0]
+        binding_receipt = _dict(
+            _payload(_dict(receipts_by_id.get(compile_receipt_id))).get(
+                "observer_subject_binding_receipt"
+            )
+        )
+
+    declared = bool(binding_receipt)
+    stored_hash = _text(binding_receipt.get("binding_hash"))
+    recomputed_hash = ""
+    if declared:
+        recomputed_hash = _stable_hash(
+            {
+                key: value
+                for key, value in binding_receipt.items()
+                if key != "binding_hash"
+            }
+        )
+
+    bindings = [
+        dict(row)
+        for row in _list(binding_receipt.get("bindings"))
+        if isinstance(row, dict)
+    ]
+    http_bindings = [
+        row
+        for row in bindings
+        if _text(row.get("observer_id")) == "http_response"
+    ]
+    expected_http_step_ids = (
+        _ids(http_bindings[0].get("subject_step_ids"))
+        if len(http_bindings) == 1
+        else []
+    )
+    missing_http_step_ids = sorted(
+        set(expected_http_step_ids) - set(actual_http_step_ids)
+    )
+    unexpected_http_step_ids = sorted(
+        set(actual_http_step_ids) - set(expected_http_step_ids)
+    )
+    unknown_declared_step_ids = sorted(
+        set(expected_http_step_ids) - set(known_step_ids)
+    )
+
+    declaration_valid = bool(
+        declared
+        and len(compile_ids) == 1
+        and _text(binding_receipt.get("schema_version"))
+        == OBSERVER_SUBJECT_BINDING_SCHEMA
+        and binding_receipt.get("complete") is True
+        and _safe_int(binding_receipt.get("binding_count")) == len(bindings)
+        and stored_hash
+        and stored_hash == recomputed_hash
+        and len(http_bindings) == 1
+        and _text(http_bindings[0].get("scope_mode")) == "per_plan_step"
+        and expected_http_step_ids
+        and not unknown_declared_step_ids
+    )
+    required = bool(typed_http_receipt_ids or declared)
+    complete = bool(
+        (not required)
+        or (
+            declaration_valid
+            and not missing_http_step_ids
+            and not unexpected_http_step_ids
+        )
+    )
+    return {
+        "schema_version": OBSERVER_SUBJECT_BINDING_SCHEMA,
+        "complete": complete,
+        "required": required,
+        "declared": declared,
+        "declaration_valid": declaration_valid,
+        "compile_receipt_ids": compile_ids,
+        "compile_receipt_id": compile_receipt_id,
+        "stored_binding_hash": stored_hash,
+        "recomputed_binding_hash": recomputed_hash,
+        "typed_http_observation_receipt_ids": typed_http_receipt_ids,
+        "expected_http_step_ids": expected_http_step_ids,
+        "actual_http_step_ids": actual_http_step_ids,
+        "missing_http_step_ids": missing_http_step_ids,
+        "unexpected_http_step_ids": unexpected_http_step_ids,
+        "unknown_declared_step_ids": unknown_declared_step_ids,
+        "compile_subject_authority_enforced": required,
+    }
+
+
 def audit_process_step_evidence_scope(
     *,
     receipts_by_id: dict[str, dict[str, Any]],
     process_step_payloads: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Verify aggregate cleanup sets and exact receipt lineage."""
+    """Verify compiled Observer scope, aggregate cleanup and exact lineage."""
 
     payloads = [
         dict(_dict(row))
@@ -449,6 +584,12 @@ def audit_process_step_evidence_scope(
         ),
         known_step_ids=known_step_ids,
         evidence_kind="observation",
+    )
+    observer_subject_binding = _audit_compiled_observer_subjects(
+        receipts_by_id=receipts_by_id,
+        observation_receipt_ids=observation_ids,
+        observation_audit=observation,
+        known_step_ids=known_step_ids,
     )
     oracle_invocation = _audit_group(
         receipts_by_id=receipts_by_id,
@@ -584,6 +725,11 @@ def audit_process_step_evidence_scope(
             "process_step_evidence_status_invalid"
         )
         set_mismatch_fields.append("evidence_status")
+    if not observer_subject_binding.get("complete", True):
+        validation_errors.append(
+            "compiled_observer_subject_scope_mismatch"
+        )
+        set_mismatch_fields.append("observer_subject_scope")
     if missing_observation_step_ids:
         validation_errors.append(
             "process_step_observation_scope_incomplete"
@@ -613,6 +759,7 @@ def audit_process_step_evidence_scope(
         "required_executed_step_ids": required_executed_step_ids,
         "cleanup_required_step_ids": cleanup_required_step_ids,
         "observation": observation,
+        "observer_subject_binding": observer_subject_binding,
         "oracle_invocation": oracle_invocation,
         "oracle_trace": oracle_trace,
         "cleanup_execution": cleanup_execution,
