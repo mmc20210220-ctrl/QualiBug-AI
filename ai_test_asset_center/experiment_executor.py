@@ -23,7 +23,6 @@ from .cleanup_plan_validator import (
     validate_cleanup_plan as _original_validate_cleanup_plan,
 )
 from .experiment_runtime_support import (
-    _jwt_expired,
     _parse_test_accounts_md,
     _resolve_token as _original_resolve_token,
     load_actor_tokens as _original_load_actor_tokens,
