@@ -110,10 +110,24 @@ def test_task_package_is_blind_and_contains_bounded_source_context() -> None:
     }
     assert package["contains_product_cluster_suggestions"] is False
     assert package["contains_predicted_entity_ids"] is False
+    assert package["source_context_is_redacted"] is True
     encoded = json.dumps(package, ensure_ascii=False)
     for forbidden in ('"entity_id"', '"cluster_id"', '"predicted_entity_id"', '"canonical_label"', '"comparison_keys"'):
         assert forbidden not in encoded
     assert package["tasks"][0]["context"][0]["quote"]
+
+
+def test_source_context_is_redacted_and_bounded_before_export() -> None:
+    asset = _asset()
+    secret = "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
+    asset["enterprise_identity_resolution"]["mentions"][0]["evidence"][0]["quote"] = (
+        f"Authorization: Bearer {secret} " + "x" * 1200
+    )
+    package = build_identity_annotation_task_package(asset)
+    quote = package["tasks"][0]["context"][0]["quote"]
+    assert secret not in quote
+    assert "Bearer [REDACTED]" in quote
+    assert len(quote) <= 800
 
 
 def test_single_submission_compiles_closed_world_ground_truth() -> None:
