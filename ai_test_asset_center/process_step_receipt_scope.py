@@ -4,10 +4,13 @@ The original exact-scope binder remains unchanged in
 ``process_step_receipt_scope_core``. This facade separates graph aggregate
 cleanup receipts, which belong to the Receipt Bundle, from exact per-step
 cleanup execution and verification receipts, which belong to ProcessStepLedger.
-No step identity is inferred from aggregate ``write_step_ids``.
+It also materializes one exact invocation-lineage receipt per required executed
+step from the immutable Contract Oracle receipt. No total receipt is broadcast.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 from . import process_step_receipt_scope_core as _core
@@ -18,12 +21,26 @@ for _name in dir(_core):
         globals()[_name] = getattr(_core, _name)
 
 
+PROCESS_STEP_ORACLE_INVOCATION_SCHEMA = (
+    "qualibug.process-step-oracle-invocation.v1"
+)
 _GRAPH_AGGREGATE_SCHEMAS = frozenset(
     {
         "qualibug.process-graph-cleanup-execution-set.v1",
         "qualibug.process-graph-cleanup-equivalence-receipt.v1",
     }
 )
+
+
+def _stable_hash(value: Any) -> str:
+    raw = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def _receipt_schema(receipt: dict[str, Any]) -> str:
@@ -54,6 +71,101 @@ def _raw_rows(
                 if isinstance(row, dict)
             )
     return rows
+
+
+def _required_executed_step_ids(ledger: Any) -> list[str]:
+    required = [
+        _core._text(value)
+        for value in list(getattr(ledger, "required_step_ids", []) or [])
+        if _core._text(value)
+    ]
+    executed = {
+        _core._text(value)
+        for value in (
+            ledger.executed_step_ids()
+            if hasattr(ledger, "executed_step_ids")
+            else []
+        )
+        if _core._text(value)
+    }
+    return [step_id for step_id in required if step_id in executed]
+
+
+def _build_step_oracle_invocation(
+    *,
+    step_id: str,
+    oracle_receipt: dict[str, Any],
+) -> dict[str, Any]:
+    oracle_status = _core._text(oracle_receipt.get("status")).upper()
+    payload = {
+        "schema_version": PROCESS_STEP_ORACLE_INVOCATION_SCHEMA,
+        "step_id": _core._text(step_id),
+        "source_oracle_receipt_id": _core.receipt_id(oracle_receipt),
+        "oracle_status": oracle_status,
+        "oracle_verdict": _core._text(oracle_receipt.get("verdict")),
+        "evaluated": oracle_status in {"PROPERTY_HELD", "VIOLATION"},
+        "activation_receipt_id": _core._text(
+            oracle_receipt.get("activation_receipt_id")
+        ),
+        "assertion_receipt_ids": [
+            _core._text(value)
+            for value in _core._list(
+                oracle_receipt.get("assertion_receipt_ids")
+            )
+            if _core._text(value)
+        ],
+    }
+    return {
+        **payload,
+        "receipt_id": "poi_" + _stable_hash(payload)[:24],
+    }
+
+
+def _materialize_step_oracle_invocations(
+    ledger: Any,
+    source: dict[str, Any],
+) -> list[dict[str, Any]]:
+    existing = _core._deduplicate_receipts(
+        _raw_rows(
+            source,
+            (
+                "oracle_invocation_receipts",
+                "process_step_oracle_receipts",
+            ),
+        )
+    )
+    targets = _required_executed_step_ids(ledger)
+    if not targets:
+        return existing
+
+    covered: set[str] = set()
+    for row in existing:
+        scope = _core.extract_receipt_step_scope(
+            row,
+            known_step_ids=targets,
+        )
+        if scope.get("status") == "EXACT":
+            covered.add(_core._text(scope.get("step_id")))
+
+    oracle_receipt = _core._dict(source.get("oracle_verdict"))
+    if not _core.receipt_id(oracle_receipt):
+        return existing
+
+    generated = [
+        _build_step_oracle_invocation(
+            step_id=step_id,
+            oracle_receipt=oracle_receipt,
+        )
+        for step_id in targets
+        if step_id not in covered
+    ]
+    materialized = _core._deduplicate_receipts([*existing, *generated])
+    _core._publish_rows(
+        source,
+        "oracle_invocation_receipts",
+        materialized,
+    )
+    return materialized
 
 
 def _nested_receipts(
@@ -211,6 +323,7 @@ def _projection(
     exact_verification: list[dict[str, Any]],
 ) -> dict[str, Any]:
     projected = dict(source)
+    projected.pop("oracle_verdict", None)
     for key in (
         "observer_receipts",
         "oracle_invocation_receipts",
@@ -286,9 +399,10 @@ def synchronize_scoped_receipts_from_observations(
     ledger: Any,
     observations: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Bind only exact per-step receipts; keep graph aggregates bundle-scoped."""
+    """Bind exact step receipts and keep graph aggregates bundle-scoped."""
 
     source = observations if isinstance(observations, dict) else {}
+    oracle_invocations = _materialize_step_oracle_invocations(ledger, source)
     partition = _partition_cleanup_receipts(source)
     projected = _projection(
         source,
@@ -353,8 +467,17 @@ def synchronize_scoped_receipts_from_observations(
         for row in partition["aggregates"]
         if _core.receipt_id(row)
     ]
+    generated_oracle_ids = [
+        _core.receipt_id(row)
+        for row in oracle_invocations
+        if _receipt_schema(row) == PROCESS_STEP_ORACLE_INVOCATION_SCHEMA
+        and _core.receipt_id(row)
+    ]
     audit = {
         **audit,
+        "materialized_oracle_invocation_receipt_ids": generated_oracle_ids,
+        "materialized_oracle_invocation_receipt_count": len(generated_oracle_ids),
+        "oracle_verdict_excluded_from_step_scope": True,
         "aggregate_cleanup_receipt_ids": aggregate_ids,
         "aggregate_cleanup_receipt_count": len(
             partition["aggregates"]
@@ -399,6 +522,7 @@ __all__ = sorted(
             for name in dir(_core)
             if not name.startswith("__")
         ],
+        "PROCESS_STEP_ORACLE_INVOCATION_SCHEMA",
         "synchronize_scoped_receipts_from_observations",
     }
 )
