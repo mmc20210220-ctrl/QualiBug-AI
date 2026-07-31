@@ -14,6 +14,9 @@ from .discovery_mainline_contract import (
     build_mainline_run_contract,
     validate_mainline_run_contract,
 )
+from .implicit_rule_runtime_evolution import (
+    project_implicit_rule_runtime_evolution,
+)
 
 
 @dataclass(frozen=True)
@@ -64,6 +67,10 @@ def _plan_contract(plan: Any) -> MainlineRunContract:
         else getattr(plan, "mainline_run", None)
     )
     return validate_mainline_run_contract(value)
+
+
+def _plan_value(plan: Any, field: str) -> Any:
+    return plan.get(field) if isinstance(plan, dict) else getattr(plan, field, None)
 
 
 def _freeze_contract(inputs: DiscoveryMainlineInputs) -> MainlineRunContract:
@@ -201,5 +208,12 @@ def run_discovery_mainline(
 
     result = runner(inputs, campaign, plan)
     assert_result_matches_authority(result, contract)
+    result["implicit_rule_runtime_evolution"] = (
+        project_implicit_rule_runtime_evolution(
+            behavior_ir=_plan_value(plan, "behavior_ir"),
+            obligations=_plan_value(plan, "obligations"),
+            obligation_attempt_ledger=result.get("obligation_attempt_ledger"),
+        )
+    )
     result["mainline_runner_receipt"] = receipt
     return result
