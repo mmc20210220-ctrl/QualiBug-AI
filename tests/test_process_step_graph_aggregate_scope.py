@@ -203,6 +203,7 @@ def test_nested_receipt_without_exact_scope_is_not_exempted() -> None:
             "receipt_id": "nested-missing-scope",
         }
     }
+    execution_set["step_cleanup_verification_receipts_by_id"] = {}
     observations = {
         "cleanup_execution_receipt": execution_set,
         "cleanup_execution_receipts": [execution_set],
