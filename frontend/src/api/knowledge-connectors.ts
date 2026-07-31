@@ -24,6 +24,8 @@ export type KnowledgeConnectorAutoSync = {
   attention?: string;
   refresh_interval_seconds?: number;
   maintenance_required_by_user: boolean;
+  checkpoint_recovery_is_automatic?: boolean;
+  stale_writer_fencing_is_automatic?: boolean;
   raw_error_returned?: boolean;
 };
 
@@ -85,6 +87,7 @@ export type KnowledgeConnectorActionResult = {
   cursor_checkpoint_committed?: boolean;
   checkpoint_storage?: string;
   next_cursor_returned_to_client?: boolean;
+  fencing_token_returned_to_client?: boolean;
   source_content_returned?: boolean;
   errors?: Array<Record<string, unknown>>;
   [key: string]: unknown;
@@ -108,7 +111,15 @@ const asNumber = (value: unknown): number | undefined => typeof value === 'numbe
 
 function friendlyConnectorError(rawMessage: string, status: number): string {
   const message = rawMessage.toLowerCase();
-  if (message.includes('already_running') || message.includes('lock_held') || message.includes('transaction_busy')) {
+  if (
+    message.includes('already_running')
+    || message.includes('lock_held')
+    || message.includes('owner_active')
+    || message.includes('owner_unverified')
+    || message.includes('fence_revoked')
+    || message.includes('fence_transaction_busy')
+    || message.includes('transaction_busy')
+  ) {
     return '资料正在更新，无需重复操作。系统完成后会自动显示最新状态。';
   }
   if (message.includes('checkpoint') || message.includes('cursor_mismatch') || message.includes('previous_cursor_required')) {
@@ -200,6 +211,8 @@ function toAutoSync(value: unknown): KnowledgeConnectorAutoSync {
     attention: asString(row.attention) || undefined,
     refresh_interval_seconds: asNumber(row.refresh_interval_seconds),
     maintenance_required_by_user: asBoolean(row.maintenance_required_by_user),
+    checkpoint_recovery_is_automatic: asBoolean(row.checkpoint_recovery_is_automatic),
+    stale_writer_fencing_is_automatic: asBoolean(row.stale_writer_fencing_is_automatic),
     raw_error_returned: asBoolean(row.raw_error_returned),
   };
 }
@@ -260,7 +273,7 @@ export async function configureFeishuConnector(
 async function connectorAction(
   projectId: string,
   connectorId: string,
-  action: 'test' | 'sync' | 'abort',
+  action: 'test' | 'sync',
   body: JsonRecord = {},
 ): Promise<KnowledgeConnectorActionResult> {
   const connector = connectorId.trim();
@@ -298,12 +311,4 @@ export function refreshKnowledgeConnector(
   connectorId: string,
 ): Promise<KnowledgeConnectorActionResult> {
   return syncKnowledgeConnector(projectId, connectorId);
-}
-
-export function abortKnowledgeConnector(
-  projectId: string,
-  connectorId: string,
-  reason: string,
-): Promise<KnowledgeConnectorActionResult> {
-  return connectorAction(projectId, connectorId, 'abort', { reason });
 }
