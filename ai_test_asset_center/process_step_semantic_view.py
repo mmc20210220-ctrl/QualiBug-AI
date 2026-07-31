@@ -143,6 +143,23 @@ class ProcessStepSemanticView:
                 target_reached=verdict,
             )
 
+    def compute_hash(self) -> str:
+        """Seal only after all exact-scoped semantic receipts are projected."""
+        self._synchronize()
+        return self._ledger.compute_hash()
+
+    @property
+    def ledger_hash(self) -> str:
+        return self.compute_hash()
+
+    def all_rows(self) -> list[dict[str, Any]]:
+        self._synchronize()
+        return self._ledger.all_rows()
+
+    def to_authority_dict(self) -> dict[str, Any]:
+        self._synchronize()
+        return self._ledger.to_authority_dict()
+
     def attempted_step_ids(self) -> list[str]:
         self._synchronize()
         return project_step_sets(self._ledger)["attempted_step_ids"]
@@ -168,6 +185,7 @@ class ProcessStepSemanticView:
         return self._ledger.successful_write_step_ids()
 
     def recorded_step_ids(self) -> list[str]:
+        self._synchronize()
         return project_step_sets(self._ledger)["recorded_step_ids"]
 
     def semantic_projection(self) -> dict[str, list[str]]:
