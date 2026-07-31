@@ -123,6 +123,7 @@ jobs:
               `${resultStatus} recall=${formatMetric(metrics.fact_recall)}` +
               ` slots=${formatMetric(metrics.slot_exact_accuracy)}` +
               ` p0=${formatMetric(metrics.p0_exact_fact_recall)}` +
+              ` evidence=${formatMetric(metrics.source_locator_exact_accuracy)}` +
               loss
             ).slice(0, 140);
             await github.rest.repos.createCommitStatus({
