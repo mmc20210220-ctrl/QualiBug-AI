@@ -18,6 +18,42 @@ for _name in dir(_core):
         globals()[_name] = getattr(_core, _name)
 
 
+def _legacy_projection_input(frozen: dict) -> dict:
+    """Normalize stored V1.5 contract fields for read-only coverage projection."""
+    projection_source = deepcopy(frozen)
+    contract = deepcopy(
+        _dict(projection_source.get("disposable_fixture_contract"))
+    )
+    if not contract:
+        return projection_source
+
+    create_plan = [
+        row
+        for row in _list(contract.get("create_plan"))
+        if isinstance(row, dict)
+    ]
+    create_operation_ref = _text(
+        contract.get("create_operation_ref")
+        or contract.get("create_operation_id")
+        or (
+            _dict(create_plan[0]).get("operation_ref")
+            if create_plan
+            else ""
+        )
+    )
+    entity_ref = _text(
+        contract.get("entity_ref")
+        or contract.get("entity_id")
+        or contract.get("primary_entity_id")
+    )
+    if create_operation_ref:
+        contract["create_operation_ref"] = create_operation_ref
+    if entity_ref:
+        contract["entity_ref"] = entity_ref
+    projection_source["disposable_fixture_contract"] = contract
+    return projection_source
+
+
 def freeze_compiled_experiment(
     experiment: dict,
     *,
@@ -33,7 +69,7 @@ def freeze_compiled_experiment(
         return frozen
 
     requirement = build_flow_data_requirement(
-        frozen,
+        _legacy_projection_input(frozen),
         behavior_ir=behavior_ir,
     )
     if _text(requirement.get("status")) != FLOW_DATA_FROZEN:
