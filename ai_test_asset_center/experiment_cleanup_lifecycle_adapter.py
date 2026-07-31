@@ -1,39 +1,28 @@
 """Lifecycle adapter for the existing experiment cleanup authority.
 
-The cleanup executor predates compiled state-precondition execution and therefore
-recognises governed writes only in the measured ``control``/``treatment`` phases.
-This adapter does not implement another cleanup engine. It creates temporary
-``treatment`` projections for real precondition write receipts, invokes the
-existing cleanup executor unchanged, and removes those projections from the
-returned runtime timeline.
-
-The original precondition rows and the real cleanup rows remain authoritative.
+Ordinary experiments delegate to the existing cleanup core with the established
+precondition-write projection.  Experiments carrying a resolved process-graph
+write contract execute system-aware graph compensation first, then reuse the
+same core for fixture cleanup and lifecycle aggregation.  No second public
+cleanup entry point is introduced.
 """
 from __future__ import annotations
 
 from copy import deepcopy
 from typing import Any
 
-try:
-    from .experiment_cleanup_executor_core import (
-        execute_experiment_cleanup_compensation as _execute_cleanup,
-    )
-    _CLEANUP_AUTHORITY = "experiment_cleanup_executor_core"
-except ModuleNotFoundError:
-    # Transition compatibility only. Before the facade publishes the core path,
-    # direct adapter tests may still bind the current public cleanup executor.
-    # Once the facade exists this branch is unreachable, avoiding import cycles.
-    from .experiment_cleanup_executor import (
-        execute_experiment_cleanup_compensation as _execute_cleanup,
-    )
-    _CLEANUP_AUTHORITY = "experiment_cleanup_executor"
-
+from . import experiment_cleanup_executor_core as _core
 from .experiment_runtime_support import _dict, _list, _request_example, _text
+from .process_graph_cleanup_executor import (
+    execute_process_graph_cleanup,
+    finalize_process_graph_cleanup_result,
+)
 from .runtime_binding_materializer import materialize_body_template
 
 
 PROJECTION_SCHEMA_VERSION = "qualibug.precondition-cleanup-projection.v1"
 _SHADOW_MARKER = "_precondition_cleanup_shadow"
+_CLEANUP_AUTHORITY = "experiment_cleanup_executor_core"
 
 
 def _precondition_plan_by_step_id(exp: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -67,12 +56,7 @@ def _project_precondition_steps(
     runtime_bindings: dict[str, Any],
     request_bodies_for_cleanup: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, Any], list[str]]:
-    """Return cleanup input with temporary measured-phase projections.
-
-    Projection is deliberately structural: it changes only the phase consumed by
-    the legacy cleanup filters. The governance receipt, actor, operation, path,
-    response and semantic receipt are copied without reinterpretation.
-    """
+    """Return cleanup input with temporary measured-phase projections."""
     plan_by_step = _precondition_plan_by_step_id(exp)
     projected_steps = list(steps_out)
     cleanup_bodies = dict(request_bodies_for_cleanup)
@@ -113,8 +97,7 @@ def _project_precondition_steps(
     return projected_steps, cleanup_bodies, projected_ids
 
 
-def execute_experiment_cleanup_compensation(**kwargs: Any) -> dict[str, Any]:
-    """Invoke the existing cleanup executor with precondition-write visibility."""
+def _ordinary_cleanup(kwargs: dict[str, Any]) -> dict[str, Any]:
     original_steps = [
         row for row in _list(kwargs.get("steps_out")) if isinstance(row, dict)
     ]
@@ -134,7 +117,7 @@ def execute_experiment_cleanup_compensation(**kwargs: Any) -> dict[str, Any]:
     )
 
     result = _dict(
-        _execute_cleanup(
+        _core.execute_experiment_cleanup_compensation(
             **{
                 **kwargs,
                 "steps_out": projected_steps,
@@ -159,6 +142,89 @@ def execute_experiment_cleanup_compensation(**kwargs: Any) -> dict[str, Any]:
     }
     result["observations"] = observations
     return result
+
+
+def _graph_cleanup(kwargs: dict[str, Any]) -> dict[str, Any]:
+    exp = _dict(kwargs.get("exp"))
+    graph_result = execute_process_graph_cleanup(
+        exp=exp,
+        steps_out=[
+            row for row in _list(kwargs.get("steps_out")) if isinstance(row, dict)
+        ],
+        observations=_dict(kwargs.get("observations")),
+        contract_evidence_receipts=[
+            row
+            for row in _list(kwargs.get("contract_evidence_receipts"))
+            if isinstance(row, dict)
+        ],
+        request_bodies_for_cleanup=_dict(
+            kwargs.get("request_bodies_for_cleanup")
+        ),
+        runtime_bindings=_dict(kwargs.get("runtime_bindings")),
+        cleanup_failures=int(kwargs.get("cleanup_failures") or 0),
+        actors=_dict(kwargs.get("actors")),
+        tokens={
+            _text(key): _text(value)
+            for key, value in _dict(kwargs.get("tokens")).items()
+            if _text(key)
+        },
+        eid=_text(kwargs.get("eid")),
+        oid=_text(kwargs.get("oid")),
+        resolved_campaign_id=_text(kwargs.get("resolved_campaign_id")),
+        resolved_execution_id=_text(kwargs.get("resolved_execution_id")),
+        campaign_id=_text(kwargs.get("campaign_id")),
+        root=kwargs.get("root"),
+        project=_text(kwargs.get("project")),
+        base_url=_text(kwargs.get("base_url")),
+        runtime_contract=_dict(kwargs.get("runtime_contract")),
+        execute_governed_control_write=_core.execute_governed_control_write,
+        sandbox_write_allowed=_core.sandbox_write_allowed,
+    )
+
+    # The graph helper already compensates every business write. Reuse the
+    # established core only for fixture cleanup and activation aggregation.
+    legacy_exp = deepcopy(exp)
+    legacy_exp["cleanup_plan"] = []
+    legacy_exp["safety_contract"] = {
+        **_dict(legacy_exp.get("safety_contract")),
+        "governed_write": False,
+        "graph_cleanup_already_executed": True,
+    }
+    core_result = _ordinary_cleanup(
+        {
+            **kwargs,
+            "exp": legacy_exp,
+            "steps_out": graph_result["steps_out"],
+            "observations": graph_result["observations"],
+            "contract_evidence_receipts": graph_result[
+                "contract_evidence_receipts"
+            ],
+            "cleanup_failures": graph_result["cleanup_failures"],
+        }
+    )
+    finalized = finalize_process_graph_cleanup_result(
+        exp=exp,
+        result=core_result,
+        resolved_campaign_id=_text(kwargs.get("resolved_campaign_id")),
+    )
+    observations = _dict(finalized.get("observations"))
+    observations["cleanup_authority"] = "process_graph_write_contract"
+    observations["process_graph_write_contract_id"] = _text(
+        _dict(exp.get("process_graph_write_contract")).get("contract_id")
+    )
+    finalized["observations"] = observations
+    return finalized
+
+
+def execute_experiment_cleanup_compensation(**kwargs: Any) -> dict[str, Any]:
+    """Dispatch one cleanup call through its compiled authority."""
+    contract = _dict(_dict(kwargs.get("exp")).get("process_graph_write_contract"))
+    if (
+        _text(contract.get("status")) == "RESOLVED"
+        and bool(_list(contract.get("write_step_ids")))
+    ):
+        return _graph_cleanup(dict(kwargs))
+    return _ordinary_cleanup(dict(kwargs))
 
 
 __all__ = [
