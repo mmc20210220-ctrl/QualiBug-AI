@@ -5,8 +5,9 @@ base source asset -> OpenAPI schema facts -> API artifact projection -> exact op
 binding -> database-model facts -> cross-source contract alignment -> operation-scoped storage
 candidates -> durable table/field mapping authority -> root database observers -> exact FK relation
 candidates -> durable relation authority -> child collection observers -> implicit rule projection ->
-enterprise understanding -> downstream binding -> governed Jobs -> final Probe admission -> source-occurrence
-evidence views -> one final persistence receipt.
+enterprise understanding -> structure-first atomic fact compilation -> downstream binding ->
+governed Jobs -> final Probe admission -> source-occurrence evidence views ->
+one final persistence receipt.
 """
 from __future__ import annotations
 
@@ -59,6 +60,12 @@ from .enterprise_understanding.interface_runtime_contracts import (
 from .enterprise_understanding.probe_policy import (
     build_gated_probes,
     probe_generation_block_reason,
+)
+from .enterprise_understanding.semantic_lexicon_contract import (
+    apply_semantic_lexicon_contract,
+)
+from .enterprise_understanding.structured_fact_compiler import (
+    compile_structure_first_business_facts,
 )
 from .implicit_rule_projection import enrich_asset_with_implicit_rule_projection
 from .job_asset_pipeline import enrich_job_assets_with_governance
@@ -178,6 +185,9 @@ def _persist_final(
             "source_occurrence_projection_status": (
                 asset.get("source_occurrence_projection_receipt") or {}
             ).get("status"),
+            "structure_first_business_fact_status": (
+                asset.get("structure_first_business_fact_compilation_receipt") or {}
+            ).get("status"),
         }
     )
     _save_registry(project_id, root, registry)
@@ -236,9 +246,25 @@ def build_enterprise_business_knowledge_asset(
     # existing rule library; no second Rule IR or execution path is created.
     asset = enrich_asset_with_implicit_rule_projection(asset)
 
+    # The shared language policy is a formal runtime dependency. A missing or malformed
+    # lexicon blocks comprehension instead of silently degrading to an empty vocabulary.
+    asset = apply_semantic_lexicon_contract(asset)
+
+    # Existing Chinese-first parsing remains the compatibility parser. It creates the
+    # current ledger and conflict/context assets through the existing authority.
     asset = enrich_asset_with_enterprise_understanding(
         asset, parsed_sources=parsed_sources
     )
+
+    # Compile the same source-backed facts through Document Structure IR addresses,
+    # atomize multi-predicate statements, add typed non-modal facts, and upgrade the
+    # single existing ledger. This is not a second product path.
+    asset = compile_structure_first_business_facts(asset, parsed_sources)
+
+    # Rebuild cognition from the upgraded ledger without rerunning source extraction.
+    # The second call has no parsed_sources and therefore only projects the current,
+    # already-governed fact authority into the understanding model and gates.
+    asset = enrich_asset_with_enterprise_understanding(asset, parsed_sources=None)
 
     # Downstream rule/oracle projection is still needed before Job projection, but
     # Probe compilation remains deferred to the final stage.
@@ -306,6 +332,10 @@ def build_enterprise_business_knowledge_asset(
             "database_relation_observer_projection_precedes_enterprise_understanding": True,
             "implicit_rule_projection_precedes_enterprise_understanding": True,
             "implicit_rule_projection_uses_existing_rule_library": True,
+            "semantic_lexicon_contract_precedes_formal_comprehension": True,
+            "structure_first_fact_compilation_uses_existing_ledger": True,
+            "structure_first_fact_compilation_precedes_downstream_binding": True,
+            "understanding_model_rebuilt_from_typed_atomic_ledger": True,
             "database_mapping_authority_reapplied_on_every_build": True,
             "database_relation_authority_reapplied_on_every_build": True,
             "source_occurrence_projection_runs_after_business_and_probe_compilation": True,
