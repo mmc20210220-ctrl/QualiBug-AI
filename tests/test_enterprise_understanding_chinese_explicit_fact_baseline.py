@@ -16,7 +16,9 @@ from benchmark_evaluator.enterprise_understanding.chinese_explicit_fact_baseline
     FIXTURE_ROOT,
     PROJECT_ID,
     TARGETS,
+    _baseline_exit_code,
     _first_loss_analysis,
+    _quality_result_status,
     _threshold_status,
 )
 from benchmark_evaluator.enterprise_understanding.fact_slot_document import (
@@ -156,6 +158,17 @@ def test_frozen_ground_truth_is_valid_and_source_backed() -> None:
     assert receipt["business_fact_ground_truth_generated_from_product_output"] is False
     assert ground_truth["scope_complete"] is False
     assert ground_truth["explicit_fact_scope_complete"] is True
+
+
+def test_isolated_baseline_exit_status_requires_quality_targets() -> None:
+    assert _quality_result_status("PASS", "PASS") == "PASS"
+    assert _quality_result_status("PASS", "BELOW_TARGET") == "BELOW_TARGET"
+    assert _quality_result_status("NOT_MEASURED", "NOT_MEASURED") == "NOT_MEASURED"
+
+    assert _baseline_exit_code({"status": "PASS"}) == 0
+    assert _baseline_exit_code({"status": "BELOW_TARGET"}) == 3
+    assert _baseline_exit_code({"status": "BLOCKED"}) == 2
+    assert _baseline_exit_code({"status": "NOT_MEASURED"}) == 2
 
 
 def test_frozen_baseline_runs_existing_fact_mainline_without_quality_self_label(
