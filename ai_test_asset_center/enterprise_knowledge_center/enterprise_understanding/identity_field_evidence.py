@@ -427,7 +427,14 @@ def _dedupe_conflicts(conflicts: Iterable[dict[str, Any]]) -> list[dict[str, Any
             or stable_id(
                 "enterprise_identity_conflict",
                 row.get("kind"),
+                row.get("reason_code"),
                 row.get("artifact_ref"),
+                row.get("identity_key_ref"),
+                row.get("identity_key_refs"),
+                row.get("alias"),
+                row.get("label"),
+                row.get("labels"),
+                row.get("prior_entity_id"),
                 row.get("candidate_entity_ids"),
             ): row
             for row in conflicts
@@ -591,10 +598,7 @@ def augment_identity_field_evidence(
     bound_names: dict[str, set[str]] = defaultdict(set)
     for artifact_ref, owners in by_artifact.items():
         for field in fields_by_artifact.get(artifact_ref, []):
-            if (
-                bool(field.get("is_identity_field"))
-                and not as_list(field.get("identity_key_refs"))
-            ):
+            if bool(field.get("is_identity_field")):
                 name = _normalized(field.get("technical_field_name"))
                 if name:
                     bound_names[name].update(
