@@ -241,3 +241,14 @@ def execute_governed_control_write(
     receipt["audit_record"] = audit_record
     receipt["audit_path"] = str(audit_path)
     return receipt
+
+
+# Preserve the proven governed-write implementation and extend only its
+# post-write readback phase. The lambda resolves the facade transport at call
+# time so existing tests/consumers that substitute ``_http_request`` still work.
+from .governed_async_readback import wrap_governed_write as _wrap_governed_write
+
+execute_governed_control_write = _wrap_governed_write(
+    execute_governed_control_write,
+    lambda *args, **kwargs: _http_request(*args, **kwargs),
+)
