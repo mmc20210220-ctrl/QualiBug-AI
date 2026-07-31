@@ -67,6 +67,7 @@ on:
       - "tests/test_enterprise_understanding_ingestion_evidence_fail_closed.py"
       - "tests/test_enterprise_understanding_document_ground_truth.py"
       - "tests/test_enterprise_understanding_source_backed_ingestion_target.py"
+      - "tests/test_enterprise_understanding_source_backed_workflow.py"
       - "tests/test_enterprise_understanding_source_reference_authority.py"
       - "tests/test_enterprise_understanding_product_source_references.py"
       - "pyproject.toml"
@@ -184,5 +185,6 @@ jobs:
             tests/test_enterprise_understanding_ingestion_evidence_fail_closed.py \
             tests/test_enterprise_understanding_document_ground_truth.py \
             tests/test_enterprise_understanding_source_backed_ingestion_target.py \
+            tests/test_enterprise_understanding_source_backed_workflow.py \
             tests/test_enterprise_understanding_source_reference_authority.py \
             tests/test_enterprise_understanding_product_source_references.py
