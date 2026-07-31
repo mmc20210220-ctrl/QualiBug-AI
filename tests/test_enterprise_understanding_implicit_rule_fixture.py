@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from ai_test_asset_center.enterprise_knowledge_center._parsing import _parse_source
 from benchmark_evaluator.enterprise_understanding.implicit_rules import (
     load_implicit_rule_ground_truth,
 )
@@ -17,6 +18,7 @@ FIXTURE = (
     / "fixtures"
     / "implicit_rules_v1"
 )
+IDEMPOTENCY = "同一付款请求不得重复成功扣款；重复提交时业务成功效果最多发生一次。"
 
 
 def _git_blob_sha(path: Path) -> str:
@@ -77,11 +79,28 @@ def test_minimal_openapi_fixture_adds_no_unannotated_rule_candidates():
     operation = document["paths"]["/payments"]["post"]
 
     assert operation["operationId"] == "submitPayment"
-    assert operation["description"] == (
-        "同一付款请求不得重复成功扣款；重复提交时业务成功效果最多发生一次。"
-    )
+    assert operation["description"] == IDEMPOTENCY
     assert "同一付款请求" not in content
     assert "不得重复" not in content
     assert "requestBody" not in operation
     assert '"required"' not in content
     assert '"properties"' not in content
+
+
+def test_openapi_parser_decodes_operation_prose_without_creating_text_rule():
+    path = FIXTURE / "payment_api.openapi.json"
+    parsed = _parse_source(
+        path.read_bytes(),
+        path.name,
+        "openapi",
+        "source:payment-api",
+    )
+
+    assert IDEMPOTENCY not in parsed["text"]
+    assert parsed["rules"] == []
+    assert len(parsed["operations"]) == 1
+    operation = parsed["operations"][0]
+    assert operation["interface_id"] == "api:POST:/payments"
+    assert operation["operation_id"] == "submitPayment"
+    assert operation["openapi_description"] == IDEMPOTENCY
+    assert operation["description"] == IDEMPOTENCY
