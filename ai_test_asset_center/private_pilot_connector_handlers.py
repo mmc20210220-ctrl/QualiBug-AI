@@ -1,23 +1,24 @@
 """Private-pilot HTTP surface for enterprise knowledge connectors.
 
-This mixin is composed before the canonical HTTP router. It intercepts only the
-project-scoped ``knowledge-connectors`` resource and delegates every other route
-unchanged to ``HttpRoutingMixin``.
+The HTTP layer owns authentication and request shaping only. Trusted sync execution,
+checkpoint validation, automatic refresh, and retry policy live in connector_auto_sync.
 """
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
+from .connector_auto_sync import (
+    connector_auto_sync_status,
+    ensure_connector_auto_sync_supervisor,
+    run_managed_feishu_sync,
+    test_managed_feishu_connection,
+)
 from .connector_connection_profiles import (
     ConnectorProfileError,
-    commit_connector_sync_checkpoint,
     configure_feishu_connector,
     list_connector_connection_profiles,
-    load_connector_sync_checkpoint,
-    resolve_connector_connection_profile,
 )
 from .connector_sync_authority import (
     ConnectorSyncError,
@@ -25,11 +26,7 @@ from .connector_sync_authority import (
     list_connector_instances,
     load_connector_sync_run,
 )
-from .feishu_connector_adapter import (
-    FeishuConnectorError,
-    sync_feishu_connector,
-    test_feishu_connector_connection,
-)
+from .feishu_connector_adapter import FeishuConnectorError
 from .real_project_onboarding import _safe_project_id
 
 _ROUTE_MARKER = "knowledge-connectors"
@@ -79,53 +76,6 @@ def _bounded_float(
     return parsed
 
 
-def _connector_instance_row(
-    project: str,
-    connector: str,
-    root: Path,
-) -> dict[str, Any]:
-    payload = list_connector_instances(
-        project,
-        root=root,
-        include_disabled=True,
-    )
-    row = next(
-        (
-            dict(item)
-            for item in payload.get("connector_instances") or []
-            if isinstance(item, dict)
-            and _text(item.get("connector_instance_id"), 160) == connector
-        ),
-        None,
-    )
-    if row is None:
-        raise ConnectorSyncError("connector_instance_not_registered")
-    return row
-
-
-def _validate_checkpoint_against_registry(
-    project: str,
-    connector: str,
-    checkpoint: str,
-    root: Path,
-) -> None:
-    instance = _connector_instance_row(project, connector, root)
-    expected = _text(instance.get("last_committed_cursor_fingerprint"), 128)
-    if not expected:
-        if checkpoint:
-            raise ConnectorProfileError(
-                "connector_checkpoint_exists_without_registry_commit"
-            )
-        return
-    if not checkpoint:
-        raise ConnectorProfileError(
-            "connector_checkpoint_missing_for_registry_commit"
-        )
-    actual = hashlib.sha256(checkpoint.encode("utf-8")).hexdigest()
-    if actual != expected:
-        raise ConnectorProfileError("connector_checkpoint_registry_mismatch")
-
-
 def _profile_index(project: str, root: Path) -> dict[str, dict[str, Any]]:
     payload = list_connector_connection_profiles(project, root=root)
     return {
@@ -157,6 +107,11 @@ def _connector_inventory(project: str, root: Path) -> dict[str, Any]:
                 "plaintext_returned": False,
             },
         )
+        row["auto_sync"] = connector_auto_sync_status(
+            root,
+            project,
+            connector,
+        )
         rows.append(row)
     return {
         "schema": "qualibug.knowledge-connector-inventory.v1",
@@ -173,11 +128,16 @@ def _connector_inventory(project: str, root: Path) -> dict[str, Any]:
                 )
                 for row in rows
             ),
+            "automatic_refresh_enabled": any(
+                bool(row.get("auto_sync", {}).get("enabled")) for row in rows
+            ),
         },
         "governance": {
             **dict(instances.get("governance") or {}),
             "credentials_returned_to_frontend": False,
             "connection_profiles_masked": True,
+            "automatic_refresh_uses_existing_sync_authority": True,
+            "second_connector_registry_created": False,
         },
     }
 
@@ -216,6 +176,7 @@ def _error_status(exc: Exception) -> int:
             "checkpoint_exists_without_registry_commit",
             "checkpoint_commit_mismatch",
             "status_change_blocked",
+            "transaction_busy",
         )
     ):
         return 409
@@ -235,6 +196,14 @@ def _error_status(exc: Exception) -> int:
 
 class KnowledgeConnectorHandlersMixin:
     """Authenticated project-scoped online knowledge connector HTTP routes."""
+
+    def setup(self) -> None:
+        super().setup()
+        try:
+            ensure_connector_auto_sync_supervisor(self._root())
+        except Exception:
+            # Background refresh must never prevent the request handler from serving.
+            pass
 
     def _knowledge_connector_error(self, exc: Exception) -> Any:
         return self._json(
@@ -260,7 +229,7 @@ class KnowledgeConnectorHandlersMixin:
         return bool(
             self._require_role(
                 actor,
-                _service().CONFIG_MANAGER_ROLES,
+                _service().KNOWLEDGE_MANAGER_ROLES,
                 action,
             )
         )
@@ -338,20 +307,11 @@ class KnowledgeConnectorHandlersMixin:
             display_name=_text(body.get("display_name"), 240),
             status=_text(body.get("status"), 32) or "ACTIVE",
         )
+        ensure_connector_auto_sync_supervisor(root)
         return self._json(
             {"ok": True, "data": result},
             201 if result["created"] else 200,
         )
-
-    def _profile_resolver(self, project: str, root: Path):
-        def resolve(profile_ref: str) -> dict[str, str]:
-            return resolve_connector_connection_profile(
-                project,
-                profile_ref,
-                root=root,
-            )
-
-        return resolve
 
     def _handle_knowledge_connector_action(
         self,
@@ -362,12 +322,10 @@ class KnowledgeConnectorHandlersMixin:
         root: Path,
         actor: dict[str, Any],
     ) -> Any:
-        resolver = self._profile_resolver(project, root)
         if action == "test":
-            result = test_feishu_connector_connection(
+            result = test_managed_feishu_connection(
                 project,
-                connector_instance_id=connector,
-                resolve_connection_profile=resolver,
+                connector,
                 root=root,
                 timeout=_bounded_float(
                     body.get("timeout"), 15.0, 1.0, 60.0
@@ -375,24 +333,11 @@ class KnowledgeConnectorHandlersMixin:
             )
             return self._json({"ok": True, "data": result})
         if action == "sync":
-            previous_cursor = load_connector_sync_checkpoint(
+            run = run_managed_feishu_sync(
                 project,
                 connector,
-                root=root,
-            )
-            _validate_checkpoint_against_registry(
-                project,
-                connector,
-                previous_cursor,
-                root,
-            )
-            run = sync_feishu_connector(
-                project,
-                connector_instance_id=connector,
-                resolve_connection_profile=resolver,
                 root=root,
                 actor=actor,
-                previous_cursor=previous_cursor,
                 deletion_policy=_text(body.get("deletion_policy"), 32)
                 or "RETAIN",
                 max_retire_count=_bounded_int(
@@ -417,33 +362,6 @@ class KnowledgeConnectorHandlersMixin:
                     body.get("timeout"), 15.0, 1.0, 60.0
                 ),
             )
-            if run.get("status") == "COMPLETE":
-                checkpoint = _text(run.get("next_cursor"), 500)
-                if not checkpoint:
-                    raise ConnectorProfileError(
-                        "connector_sync_checkpoint_missing_after_complete_run"
-                    )
-                checkpoint_fingerprint = hashlib.sha256(
-                    checkpoint.encode("utf-8")
-                ).hexdigest()
-                committed_fingerprint = _text(
-                    run.get("committed_cursor_fingerprint"), 128
-                )
-                if (
-                    committed_fingerprint
-                    and committed_fingerprint != checkpoint_fingerprint
-                ):
-                    raise ConnectorProfileError(
-                        "connector_sync_checkpoint_commit_mismatch"
-                    )
-                commit_connector_sync_checkpoint(
-                    project,
-                    connector,
-                    checkpoint,
-                    sync_epoch_id=_text(run.get("sync_epoch_id"), 160),
-                    root=root,
-                    actor=actor,
-                )
             return self._json(
                 {
                     "ok": run.get("status") == "COMPLETE",
@@ -535,4 +453,9 @@ class KnowledgeConnectorHandlersMixin:
             return self._knowledge_connector_error(exc)
 
 
-__all__ = ["KnowledgeConnectorHandlersMixin"]
+__all__ = [
+    "KnowledgeConnectorHandlersMixin",
+    "_connector_inventory",
+    "_connector_route",
+    "_sanitize_sync_response",
+]
