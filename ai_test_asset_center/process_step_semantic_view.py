@@ -1,8 +1,9 @@
 """Read-only semantic view over a ProcessStepLedger.
 
 Execution keeps the live ledger. Finalization receives this view, which
-projects completion from receipts that contain both an exact step identity and
-an explicit boolean semantic verdict.
+projects facts from receipts that contain both an exact step identity and an
+explicit boolean semantic verdict. Transport execution and business completion
+remain separate public sets.
 """
 from __future__ import annotations
 
@@ -100,7 +101,7 @@ def _candidates(observations: dict[str, Any]) -> list[tuple[str, dict[str, Any]]
 
 
 class ProcessStepSemanticView:
-    """Delegate raw ledger facts and expose strict semantic step sets."""
+    """Delegate raw ledger facts and expose strict, non-aliased step sets."""
 
     def __init__(
         self,
@@ -142,9 +143,21 @@ class ProcessStepSemanticView:
                 target_reached=verdict,
             )
 
+    def attempted_step_ids(self) -> list[str]:
+        self._synchronize()
+        return project_step_sets(self._ledger)["attempted_step_ids"]
+
     def executed_step_ids(self) -> list[str]:
         self._synchronize()
+        return project_step_sets(self._ledger)["executed_step_ids"]
+
+    def completed_step_ids(self) -> list[str]:
+        self._synchronize()
         return project_step_sets(self._ledger)["completed_step_ids"]
+
+    def accepted_step_ids(self) -> list[str]:
+        self._synchronize()
+        return project_step_sets(self._ledger)["accepted_step_ids"]
 
     def failed_step_ids(self) -> list[str]:
         self._synchronize()
@@ -152,7 +165,7 @@ class ProcessStepSemanticView:
 
     def successful_write_step_ids(self) -> list[str]:
         self._synchronize()
-        return project_step_sets(self._ledger)["accepted_step_ids"]
+        return self._ledger.successful_write_step_ids()
 
     def recorded_step_ids(self) -> list[str]:
         return project_step_sets(self._ledger)["recorded_step_ids"]
