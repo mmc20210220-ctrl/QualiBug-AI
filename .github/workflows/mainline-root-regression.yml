@@ -1,0 +1,54 @@
+name: Mainline Root Regression
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mainline-root-regression-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  root-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install package and test runtime
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest
+      - name: Compile mainline authorities
+        run: |
+          python -m py_compile \
+            ai_test_asset_center/project_runtime_primitives.py \
+            ai_test_asset_center/private_pilot_project_assets.py \
+            ai_test_asset_center/private_pilot_tenant_auth.py \
+            ai_test_asset_center/private_pilot_auth_scope.py \
+            ai_test_asset_center/private_pilot_service.py \
+            ai_test_asset_center/private_pilot_entrypoint.py \
+            ai_test_asset_center/private_pilot_http_routing.py \
+            ai_test_asset_center/private_pilot_scan_handlers.py \
+            ai_test_asset_center/private_pilot_ingest_handlers.py \
+            ai_test_asset_center/private_pilot_ops_handlers.py \
+            ai_test_asset_center/replay_engine.py \
+            ai_test_asset_center/ssrf_guard.py \
+            ai_test_asset_center/db_persistence.py \
+            ai_test_asset_center/enterprise_knowledge_center/_crud.py
+      - name: Run P0 root regression suite
+        env:
+          QUALIBUG_JWT_SECRET: ci-mainline-root-secret
+          QUALIBUG_LOCAL_DEV_ACTOR: '1'
+          QUALIBUG_ALLOW_PUBLIC_BIND: '0'
+        run: |
+          pytest -q \
+            tests/test_p0_root_security_boundaries.py \
+            tests/test_p0_atomic_mainline_contracts.py
