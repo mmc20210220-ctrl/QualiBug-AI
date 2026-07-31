@@ -43,6 +43,16 @@ def render_markdown_report(result: dict[str, Any]) -> str:
         if isinstance(fact_slots.get("metrics"), dict)
         else {}
     )
+    implicit_rules = (
+        result.get("implicit_rule_measurement")
+        if isinstance(result.get("implicit_rule_measurement"), dict)
+        else {}
+    )
+    implicit_rule_metrics = (
+        implicit_rules.get("metrics")
+        if isinstance(implicit_rules.get("metrics"), dict)
+        else {}
+    )
     ingestion = (
         result.get("ingestion_evidence_measurement")
         if isinstance(result.get("ingestion_evidence_measurement"), dict)
@@ -80,6 +90,7 @@ def render_markdown_report(result: dict[str, Any]) -> str:
         f"- Ground Truth指纹：`{_text(result.get('ground_truth_fingerprint'))}`",
         f"- 产品资产指纹：`{_text(result.get('product_asset_fingerprint'))}`",
         f"- 最高影响根因：`{_text(root_causes.get('highest_impact_root_cause')) or '无'}`",
+        f"- 隐式规则下一修复点：`{_text(result.get('next_implicit_rule_repair_target')) or '无'}`",
         f"- 文档接入/证据下一修复点：`{_text(result.get('next_ingestion_repair_target')) or '无'}`",
         "- 指标权威：Evaluator侧人工来源化Ground Truth；产品不能自评真伪。",
         "",
@@ -116,6 +127,30 @@ def render_markdown_report(result: dict[str, Any]) -> str:
         f"| 缺失事实 | {int(fact_slot_metrics.get('missing_fact_count') or 0)} |",
         f"| 歧义事实 | {int(fact_slot_metrics.get('ambiguous_fact_count') or 0)} |",
         "",
+        "## 隐式规则治理质量测量",
+        "",
+        f"- 测量状态：`{_text(implicit_rules.get('status')) or 'NOT_MEASURED'}`",
+        f"- 下一修复点：`{_text(implicit_rules.get('next_repair_target')) or '无'}`",
+        "",
+        "| 指标 | 结果 |",
+        "|---|---:|",
+        f"| 候选发现精确率 | {_percent(implicit_rule_metrics.get('candidate_precision'))} |",
+        f"| 候选发现召回率 | {_percent(implicit_rule_metrics.get('candidate_recall'))} |",
+        f"| 权威晋升精确率 | {_percent(implicit_rule_metrics.get('promotion_precision'))} |",
+        f"| 权威晋升召回率 | {_percent(implicit_rule_metrics.get('promotion_recall'))} |",
+        f"| 误晋升率 | {_percent(implicit_rule_metrics.get('overpromotion_rate'))} |",
+        f"| P0/P1加权误晋升率 | {_percent(implicit_rule_metrics.get('criticality_weighted_overpromotion_rate'))} |",
+        f"| 生命周期准确率 | {_percent(implicit_rule_metrics.get('lifecycle_accuracy'))} |",
+        f"| STALE精确率 | {_percent(implicit_rule_metrics.get('stale_precision'))} |",
+        f"| STALE召回率 | {_percent(implicit_rule_metrics.get('stale_recall'))} |",
+        f"| 来源版本可追溯率 | {_percent(implicit_rule_metrics.get('source_version_traceability_rate'))} |",
+        f"| 权威接口绑定召回率 | {_percent(implicit_rule_metrics.get('authoritative_operation_binding_recall'))} |",
+        f"| Oracle投影召回率 | {_percent(implicit_rule_metrics.get('oracle_projection_recall'))} |",
+        f"| 可执行投影召回率 | {_percent(implicit_rule_metrics.get('executable_projection_recall'))} |",
+        f"| 运行观察召回率 | {_percent(implicit_rule_metrics.get('runtime_observation_recall'))} |",
+        f"| 误晋升规则数 | {int(implicit_rule_metrics.get('promotion_false_positive_count') or 0)} |",
+        f"| 漏发现规则数 | {int(implicit_rule_metrics.get('candidate_false_negative_count') or 0)} |",
+        "",
         "## 多源接入与证据定位回执测量",
         "",
         "| 指标 | 结果 |",
@@ -151,6 +186,13 @@ def render_markdown_report(result: dict[str, Any]) -> str:
         lines.extend(
             [
                 "> 中文显式事实槽位准确率尚不可测：必须声明并通过人工来源化槽位 Ground Truth。产品事实不能反向生成真值。",
+                "",
+            ]
+        )
+    if not implicit_rule_metrics:
+        lines.extend(
+            [
+                "> 隐式规则Precision/Recall尚不可测：必须冻结完整候选宇宙，并由人工逐条标注真规则、硬负例、预期生命周期和执行要求。产品候选与运行结果不能反向生成真值。",
                 "",
             ]
         )
@@ -214,6 +256,11 @@ def write_benchmark_outputs(result: dict[str, Any], output_dir: str | Path) -> d
         if isinstance(result.get("business_fact_slot_measurement"), dict)
         else {}
     )
+    implicit_rules = (
+        result.get("implicit_rule_measurement")
+        if isinstance(result.get("implicit_rule_measurement"), dict)
+        else {}
+    )
     ingestion = (
         result.get("ingestion_evidence_measurement")
         if isinstance(result.get("ingestion_evidence_measurement"), dict)
@@ -232,6 +279,13 @@ def write_benchmark_outputs(result: dict[str, Any], output_dir: str | Path) -> d
         "metric_summary.json": metrics,
         "business_fact_slot_measurement.json": fact_slots,
         "business_fact_slot_alignments.json": fact_slots.get("alignments") or [],
+        "implicit_rule_measurement.json": implicit_rules,
+        "implicit_rule_metrics.json": implicit_rules.get("metrics") or {},
+        "implicit_rule_alignments.json": implicit_rules.get("alignments") or [],
+        "implicit_rule_false_promotions.json": implicit_rules.get("false_promotions") or [],
+        "implicit_rule_missed_rules.json": implicit_rules.get("missed_rules") or [],
+        "implicit_rule_lifecycle_errors.json": implicit_rules.get("lifecycle_errors") or [],
+        "implicit_rule_execution_bridge_gaps.json": implicit_rules.get("execution_bridge_gaps") or [],
         "ingestion_metric_summary.json": ingestion.get("summary") or {},
         "evidence_address_analysis.json": ingestion.get("evidence_address_analysis") or {},
         "structure_loss_analysis.json": ingestion.get("structure_loss_analysis") or {},
