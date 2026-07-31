@@ -22,6 +22,7 @@ def probe_generation_block_reason(asset: dict[str, Any]) -> str:
 
     required = (
         ("scenario_ir_gate", "SCENARIO_IR_GATE"),
+        ("binding_identity_gate", "BINDING_IDENTITY_GATE"),
         ("scenario_execution_contract_gate", "SCENARIO_EXECUTION_CONTRACT_GATE"),
         ("runtime_plan_gate", "RUNTIME_PLAN_GATE"),
         ("runtime_materialization_gate", "RUNTIME_MATERIALIZATION_GATE"),
