@@ -15,11 +15,12 @@ Authority boundaries are deliberate:
   already represent as the same executable fact: cardinality, formula/conservation and
   explicit idempotency/effect-cardinality rules.
 
-A fact whose original statement already exists as an authoritative source rule is
-suppressed so structure compilation cannot duplicate the same invariant and obligation.
-A source-grounded semantic rule may still remain pending when the current runtime cannot
-produce the evidence needed to evaluate it; semantic recognition never implies executable
-coverage.
+A prose rule with the same source statement is not automatically equivalent to one typed
+runtime invariant. If the source rule already carries the same logical form and operator,
+the candidate is suppressed. Otherwise the candidate targets that existing rule identity
+for an in-place semantic upgrade, so one source rule does not become two executable rules.
+A previous implicit projection identity wins over a prose target during the second
+composition pass, which keeps one deterministic rule ID inside the same build.
 """
 from __future__ import annotations
 
@@ -28,7 +29,7 @@ import json
 import re
 from typing import Any, Iterable
 
-FACT_DERIVATION_SCHEMA = "qualibug.implicit-rule-fact-entailment.v2"
+FACT_DERIVATION_SCHEMA = "qualibug.implicit-rule-fact-entailment.v3"
 CANONICAL_BEHAVIOR_OWNED_SLOTS = frozenset(
     {
         "action",
@@ -47,6 +48,15 @@ _IDEMPOTENCY_RE = re.compile(
     r"重复提交不得|重复请求不得|重复调用不得|idempoten|exactly once|at most once",
     re.I,
 )
+_RULE_FAMILIES_BY_LOGICAL_FORM = {
+    "CARDINALITY": {"cardinality", "data_integrity", "business_rule"},
+    "CONSERVATION_EQUATION": {
+        "conservation",
+        "data_conservation",
+        "business_rule",
+    },
+    "IDEMPOTENCY": {"idempotency"},
+}
 
 
 def _text(value: Any) -> str:
@@ -223,19 +233,189 @@ def _candidate(
     }
 
 
-def _authoritative_statement_keys(asset: dict[str, Any]) -> set[str]:
+def _rule_source_ids(rule: dict[str, Any]) -> set[str]:
     return {
-        key
-        for rule in _list(asset.get("rule_library"))
-        if isinstance(rule, dict)
-        and _text(rule.get("derivation")) != "implicit_rule_entailment"
-        and _text(rule.get("source_id")) != "industry_inference"
-        and _text(rule.get("source_type")) != "derived_inference"
-        for key in [
-            _statement_key(rule.get("statement") or rule.get("expected"))
+        value
+        for value in [
+            _text(rule.get("source_id")),
+            *[_text(item) for item in _list(rule.get("source_ids"))],
+            *[
+                _text(item.get("source_id"))
+                for item in _list(rule.get("source_refs"))
+                if isinstance(item, dict)
+            ],
         ]
-        if key
+        if value and value not in {"multi_source_rule_entailment", "industry_inference"}
     }
+
+
+def _candidate_source_ids(candidate: dict[str, Any]) -> set[str]:
+    return {
+        value
+        for value in [
+            *[_text(item) for item in _list(candidate.get("supporting_source_ids"))],
+            *[
+                _text(item.get("source_id"))
+                for item in _list(candidate.get("source_refs"))
+                if isinstance(item, dict)
+            ],
+        ]
+        if value
+    }
+
+
+def _rule_semantic_signature(rule: dict[str, Any]) -> tuple[str, str]:
+    structured = _dict(rule.get("structured_expression"))
+    consequent = _dict(structured.get("consequent"))
+    logical_form = _text(
+        rule.get("logical_form") or structured.get("logical_form")
+    ).upper()
+    operator = _text(
+        rule.get("operator")
+        or structured.get("operator")
+        or consequent.get("operator")
+    ).lower()
+    return logical_form, operator
+
+
+def _candidate_semantic_signature(candidate: dict[str, Any]) -> tuple[str, str]:
+    consequent = _dict(candidate.get("consequent"))
+    return (
+        _text(candidate.get("logical_form")).upper(),
+        _text(candidate.get("operator") or consequent.get("operator")).lower(),
+    )
+
+
+def _rule_family(rule: dict[str, Any]) -> set[str]:
+    return {
+        _text(rule.get(field)).lower()
+        for field in ("rule_type", "risk_type", "kind")
+        if _text(rule.get(field))
+    }
+
+
+def _statement_relation(candidate: dict[str, Any], rule: dict[str, Any]) -> str:
+    candidate_key = _statement_key(candidate.get("statement"))
+    rule_key = _statement_key(rule.get("statement") or rule.get("expected"))
+    if not candidate_key or not rule_key:
+        return ""
+    if candidate_key == rule_key:
+        return "EXACT_STATEMENT"
+    if len(rule_key) >= 8 and rule_key in candidate_key:
+        logical_form = _text(candidate.get("logical_form")).upper()
+        families = _RULE_FAMILIES_BY_LOGICAL_FORM.get(logical_form, set())
+        if families.intersection(_rule_family(rule)):
+            return "SOURCE_RULE_CLAUSE_WITHIN_TYPED_FACT"
+    return ""
+
+
+def _eligible_existing_rules(
+    asset: dict[str, Any], candidate: dict[str, Any]
+) -> list[tuple[dict[str, Any], str]]:
+    candidate_sources = _candidate_source_ids(candidate)
+    rows: list[tuple[dict[str, Any], str]] = []
+    for rule in _list(asset.get("rule_library")):
+        if not isinstance(rule, dict):
+            continue
+        if _text(rule.get("source_id")) == "industry_inference" or _text(
+            rule.get("source_type")
+        ) == "derived_inference":
+            continue
+        rule_sources = _rule_source_ids(rule)
+        if candidate_sources and rule_sources and not candidate_sources.intersection(rule_sources):
+            continue
+        relation = _statement_relation(candidate, rule)
+        if relation:
+            rows.append((rule, relation))
+    return rows
+
+
+def _govern_existing_rule_identity(
+    asset: dict[str, Any], candidate: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Suppress typed equivalents or target one prose rule for in-place upgrade."""
+
+    candidate_signature = _candidate_semantic_signature(candidate)
+    matches = _eligible_existing_rules(asset, candidate)
+    previous_typed = [
+        (rule, relation)
+        for rule, relation in matches
+        if _text(rule.get("derivation")) == "implicit_rule_entailment"
+        and _rule_semantic_signature(rule) == candidate_signature
+        and _text(rule.get("rule_id"))
+    ]
+    if previous_typed:
+        selected, relation = sorted(
+            previous_typed,
+            key=lambda item: _text(item[0].get("rule_id")),
+        )[0]
+        governed = dict(candidate)
+        governed["rule_id"] = _text(selected.get("rule_id"))
+        governed["authority_upgrade_target"] = {
+            "rule_id": governed["rule_id"],
+            "match_kind": "PREVIOUS_TYPED_PROJECTION_IDENTITY",
+            "source_statement_relation": relation,
+            "source_rule_derivation": "implicit_rule_entailment",
+        }
+        governed["derivation_basis"] = list(
+            dict.fromkeys(
+                [*governed.get("derivation_basis", []), "typed_projection_identity_reuse"]
+            )
+        )
+        return governed
+
+    authoritative_typed = [
+        rule
+        for rule, _relation in matches
+        if _text(rule.get("derivation")) != "implicit_rule_entailment"
+        and _rule_semantic_signature(rule) == candidate_signature
+    ]
+    if authoritative_typed:
+        return None
+
+    source_targets = [
+        (rule, relation)
+        for rule, relation in matches
+        if _text(rule.get("derivation")) != "implicit_rule_entailment"
+        and _text(rule.get("rule_id"))
+    ]
+    exact_targets = [
+        item for item in source_targets if item[1] == "EXACT_STATEMENT"
+    ]
+    selected_targets = exact_targets or source_targets
+    if len(selected_targets) == 1:
+        selected, relation = selected_targets[0]
+        governed = dict(candidate)
+        governed["rule_id"] = _text(selected.get("rule_id"))
+        governed["authority_upgrade_target"] = {
+            "rule_id": governed["rule_id"],
+            "match_kind": "SOURCE_RULE_TYPED_SEMANTIC_UPGRADE",
+            "source_statement_relation": relation,
+            "source_rule_type": _text(selected.get("rule_type")),
+            "source_rule_risk_type": _text(selected.get("risk_type")),
+            "source_rule_source_id": _text(selected.get("source_id")),
+            "source_rule_source_type": _text(selected.get("source_type")),
+            "source_rule_source_locator": _text(selected.get("source_locator")),
+        }
+        governed["derivation_basis"] = list(
+            dict.fromkeys(
+                [*governed.get("derivation_basis", []), "typed_semantic_upgrade"]
+            )
+        )
+        return governed
+    if len(selected_targets) > 1:
+        governed = dict(candidate)
+        governed["binding_readiness"] = "BLOCKED_SOURCE_RULE_UPGRADE_AMBIGUOUS"
+        governed["execution_capability"] = {
+            "status": "BLOCKED_SOURCE_RULE_UPGRADE_AMBIGUOUS",
+            "reason_code": "MULTIPLE_SOURCE_RULE_IDENTITIES_MATCH_TYPED_FACT",
+            "matching_rule_ids": sorted(
+                {_text(rule.get("rule_id")) for rule, _ in selected_targets}
+            ),
+            "authority": "existing_rule_library_identity",
+        }
+        return governed
+    return candidate
 
 
 def _cardinality_candidates(
@@ -320,7 +500,9 @@ def _idempotency_candidates(
 ) -> Iterable[dict[str, Any]]:
     statement = _text(fact.get("raw_statement") or fact.get("statement"))
     action = _dict(fact.get("action"))
-    action_name = _text(action.get("canonical") or action.get("raw") or fact.get("predicate"))
+    action_name = _text(
+        action.get("canonical") or action.get("raw") or fact.get("predicate")
+    )
     if not subjects or not action_name or not _IDEMPOTENCY_RE.search(statement):
         return []
     row = _candidate(
@@ -354,28 +536,29 @@ def _idempotency_candidates(
     return [row] if row else []
 
 
-def derive_rule_candidates_from_business_facts(asset: dict[str, Any]) -> list[dict[str, Any]]:
+def derive_rule_candidates_from_business_facts(
+    asset: dict[str, Any],
+) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     ledger = _dict(asset.get("business_fact_ledger"))
-    authoritative_statements = _authoritative_statement_keys(asset)
     for fact in _list(ledger.get("items")):
         if not isinstance(fact, dict) or _text(fact.get("status")) != "ACCEPTED":
-            continue
-        fact_statement = _text(fact.get("raw_statement") or fact.get("statement"))
-        if _statement_key(fact_statement) in authoritative_statements:
             continue
         subjects = _entity_refs(fact.get("subject"))
         objects = _entity_refs(fact.get("object"))
         actors = _actor_refs(fact.get("subject"))
         operations = _operation_refs(fact)
+        produced: list[dict[str, Any]] = []
         for producer in (
             lambda: _cardinality_candidates(fact, subjects, objects),
             lambda: _formula_candidates(fact, subjects),
             lambda: _idempotency_candidates(fact, subjects, actors, operations),
         ):
-            candidates.extend(
-                row for row in producer() if isinstance(row, dict)
-            )
+            produced.extend(row for row in producer() if isinstance(row, dict))
+        for row in produced:
+            governed = _govern_existing_rule_identity(asset, row)
+            if governed is not None:
+                candidates.append(governed)
     return list(
         {
             _text(row.get("candidate_id")): row
