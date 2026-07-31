@@ -12,6 +12,7 @@ from benchmark_evaluator.enterprise_understanding.document_ground_truth import (
 
 SOURCE_REF = "projects/ticketsla_d/input/BUSINESS_RULES.md"
 LOCATOR = "BUSINESS_RULES.md#line=1;chars=0-12"
+TEXT_HASH = "db9d8eb4b9f5819a1e4907d106952d5a87c8d633f7148de1d67c990a1512ed0c"
 
 
 def _asset(source_id: str, *, duplicate_ref: bool = False) -> dict:
@@ -35,7 +36,7 @@ def _asset(source_id: str, *, duplicate_ref: bool = False) -> dict:
                     "type": "HEADING",
                     "order": 1,
                     "text": "业务规则",
-                    "text_hash": "92aa7522f7d1d70a68d5079c7026d5d4672c60846e707144bf950ea94e9e0e55",
+                    "text_hash": TEXT_HASH,
                     "source_locator": LOCATOR,
                     "evidence_address": {
                         "address_kind": "EXACT_SOURCE_LOCATOR",
@@ -98,7 +99,7 @@ def _profile() -> dict:
                 "source_ref": SOURCE_REF,
                 "block_type": "HEADING",
                 "source_locator": LOCATOR,
-                "text_hash": "92aa7522f7d1d70a68d5079c7026d5d4672c60846e707144bf950ea94e9e0e55",
+                "text_hash": TEXT_HASH,
                 "address_kind": "EXACT_SOURCE_LOCATOR",
                 "order": 1,
                 "criticality": "P0",
