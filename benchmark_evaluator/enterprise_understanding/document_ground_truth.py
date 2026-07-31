@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 from collections import Counter, defaultdict
+from pathlib import PurePosixPath
 from typing import Any
 
 DOCUMENT_GROUND_TRUTH_SCHEMA = "qualibug.document-ingestion-ground-truth-profile.v1"
@@ -64,6 +65,48 @@ def _require(row: dict[str, Any], field: str, context: str) -> str:
     return value
 
 
+def _normalize_source_ref(value: Any, *, context: str) -> str:
+    reference = _text(value).replace("\\", "/")
+    if not reference:
+        return ""
+    if "://" in reference:
+        if any(ord(char) < 32 for char in reference):
+            raise DocumentGroundTruthValidationError(
+                f"{context}: source_ref contains control characters"
+            )
+        return reference
+    if reference.startswith("/") or PurePosixPath(reference).is_absolute():
+        raise DocumentGroundTruthValidationError(
+            f"{context}: source_ref must be workspace-independent"
+        )
+    parts = [part for part in reference.split("/") if part]
+    if not parts or any(part in {".", ".."} for part in parts):
+        raise DocumentGroundTruthValidationError(
+            f"{context}: source_ref must be a portable relative path or URI"
+        )
+    return "/".join(parts)
+
+
+def _normalize_source_selector(result: dict[str, Any], context: str) -> dict[str, Any]:
+    source_id = _text(result.get("source_id"))
+    source_ref = _normalize_source_ref(result.get("source_ref"), context=context)
+    if bool(source_id) == bool(source_ref):
+        raise DocumentGroundTruthValidationError(
+            f"{context}: declare exactly one of source_ref or source_id"
+        )
+    result["source_id"] = source_id
+    result["source_ref"] = source_ref
+    result["source_identity_kind"] = "SOURCE_REF" if source_ref else "SOURCE_ID"
+    return result
+
+
+def _source_key(row: dict[str, Any]) -> tuple[str, str]:
+    source_ref = _text(row.get("source_ref"))
+    if source_ref:
+        return ("SOURCE_REF", source_ref)
+    return ("SOURCE_ID", _text(row.get("source_id")))
+
+
 def _normalize_common(row: dict[str, Any], context: str) -> dict[str, Any]:
     result = dict(row)
     _require(result, "ground_truth_id", context)
@@ -84,8 +127,7 @@ def _normalize_common(row: dict[str, Any], context: str) -> dict[str, Any]:
 
 def _normalize_source(row: dict[str, Any], index: int) -> dict[str, Any]:
     context = f"{DOCUMENT_GROUND_TRUTH_KEY}.sources[{index}]"
-    result = _normalize_common(row, context)
-    _require(result, "source_id", context)
+    result = _normalize_source_selector(_normalize_common(row, context), context)
     if result["annotation_status"] == "CONFIRMED" and not (
         _text(result.get("filename")) or _text(result.get("source_hash"))
     ):
@@ -99,8 +141,7 @@ def _normalize_source(row: dict[str, Any], index: int) -> dict[str, Any]:
 
 def _normalize_element(row: dict[str, Any], index: int) -> dict[str, Any]:
     context = f"{DOCUMENT_GROUND_TRUTH_KEY}.elements[{index}]"
-    result = _normalize_common(row, context)
-    _require(result, "source_id", context)
+    result = _normalize_source_selector(_normalize_common(row, context), context)
     result["block_type"] = _require(result, "block_type", context).upper()
     locator = _text(result.get("source_locator"))
     declared_hash = _text(result.get("text_hash")).lower()
@@ -135,8 +176,7 @@ def _normalize_element(row: dict[str, Any], index: int) -> dict[str, Any]:
 
 def _normalize_order_pair(row: dict[str, Any], index: int) -> dict[str, Any]:
     context = f"{DOCUMENT_GROUND_TRUTH_KEY}.reading_order_pairs[{index}]"
-    result = _normalize_common(row, context)
-    _require(result, "source_id", context)
+    result = _normalize_source_selector(_normalize_common(row, context), context)
     _require(result, "before_element_id", context)
     _require(result, "after_element_id", context)
     if result["before_element_id"] == result["after_element_id"]:
@@ -181,21 +221,35 @@ def validate_document_ground_truth(value: Any) -> dict[str, Any] | None:
             )
         seen_ids.add(identity)
 
+    source_keys: set[tuple[str, str]] = set()
+    for row in sources:
+        key = _source_key(row)
+        if key in source_keys:
+            raise DocumentGroundTruthValidationError(
+                f"duplicate document source identity: {key[0]}:{key[1]}"
+            )
+        source_keys.add(key)
+
     element_by_id = {_text(row.get("ground_truth_id")): row for row in elements}
-    deterministic_keys: set[tuple[str, str, str]] = set()
-    locator_keys: set[tuple[str, str]] = set()
+    deterministic_keys: set[tuple[str, str, str, str]] = set()
+    locator_keys: set[tuple[str, str, str]] = set()
     for row in elements:
-        source_id = _text(row.get("source_id"))
+        source_kind, source_value = _source_key(row)
+        if (source_kind, source_value) not in source_keys:
+            raise DocumentGroundTruthValidationError(
+                "document element references undeclared source identity: "
+                f"{source_kind}:{source_value}"
+            )
         locator = _text(row.get("source_locator"))
         text_hash = _text(row.get("text_hash"))
-        key = (source_id, locator, text_hash)
+        key = (source_kind, source_value, locator, text_hash)
         if key in deterministic_keys:
             raise DocumentGroundTruthValidationError(
                 "duplicate document element deterministic identity: " + ":".join(key)
             )
         deterministic_keys.add(key)
         if locator:
-            locator_key = (source_id, locator)
+            locator_key = (source_kind, source_value, locator)
             if locator_key in locator_keys:
                 raise DocumentGroundTruthValidationError(
                     "one exact source locator cannot identify multiple Ground Truth elements: "
@@ -210,13 +264,14 @@ def validate_document_ground_truth(value: Any) -> dict[str, Any] | None:
             raise DocumentGroundTruthValidationError(
                 f"{context}: referenced element does not exist"
             )
-        source_id = _text(row.get("source_id"))
-        if (
-            _text(before.get("source_id")) != source_id
-            or _text(after.get("source_id")) != source_id
-        ):
+        source_key = _source_key(row)
+        if source_key not in source_keys:
             raise DocumentGroundTruthValidationError(
-                f"{context}: order pair and both elements must share source_id"
+                f"{context}: order pair references undeclared source identity"
+            )
+        if _source_key(before) != source_key or _source_key(after) != source_key:
+            raise DocumentGroundTruthValidationError(
+                f"{context}: order pair and both elements must share source identity"
             )
 
     minimums = _dict(value.get("minimum_profile"))
@@ -267,12 +322,19 @@ def validate_document_ground_truth(value: Any) -> dict[str, Any] | None:
                 "shortfalls": shortfalls,
                 "incomplete_annotation_ids": incomplete_ids,
                 "ground_truth_id_count": len(seen_ids),
+                "source_reference_authority": "SOURCE_REF_OR_LEGACY_SOURCE_ID_EXACTLY_ONE",
+                "runtime_source_id_required_in_human_ground_truth": False,
                 "generated_from_product_output": False,
                 "model_writeback_allowed": False,
             },
         }
     )
     return normalized
+
+
+def _source_inventory(product_asset: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = _rows(product_asset.get("source_inventory"))
+    return rows if rows else _rows(product_asset.get("sources"))
 
 
 def _structure_items(product_asset: dict[str, Any]) -> list[dict[str, Any]]:
@@ -283,12 +345,34 @@ def _structure_items(product_asset: dict[str, Any]) -> list[dict[str, Any]]:
                 "document_structure_assets"
             )
         )
-    return _rows(assets.get("items"))
+    inventory_by_id = {
+        _text(row.get("source_id")): row
+        for row in _source_inventory(product_asset)
+        if _text(row.get("source_id"))
+    }
+    result: list[dict[str, Any]] = []
+    for raw in _rows(assets.get("items")):
+        row = dict(raw)
+        inventory = _dict(inventory_by_id.get(_text(row.get("source_id"))))
+        row["_source_ref"] = _text(
+            inventory.get("external_ref")
+            or inventory.get("source_origin_ref")
+            or row.get("source_ref")
+        ).replace("\\", "/")
+        row["_inventory_filename"] = _text(
+            inventory.get("original_name") or inventory.get("filename")
+        )
+        row["_inventory_source_hash"] = _text(
+            inventory.get("content_hash") or inventory.get("source_hash")
+        ).lower()
+        result.append(row)
+    return result
 
 
 def _candidate_blocks(item: dict[str, Any]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     source_id = _text(item.get("source_id"))
+    source_ref = _text(item.get("_source_ref"))
     for index, row in enumerate(_rows(item.get("blocks")), start=1):
         evidence = _dict(row.get("evidence_address"))
         text_hash = _text(row.get("text_hash")).lower()
@@ -298,6 +382,7 @@ def _candidate_blocks(item: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 "candidate_key": f"{source_id}:{_text(row.get('block_id')) or index}",
                 "source_id": source_id,
+                "source_ref": source_ref,
                 "block_id": _text(row.get("block_id")),
                 "block_type": _text(row.get("type")).upper(),
                 "source_locator": _text(
@@ -324,24 +409,33 @@ def _item_format(item: dict[str, Any]) -> str:
     ingestion = _dict(item.get("ingestion_pipeline_receipt"))
     return _text(
         item.get("format")
+        or structure.get("format")
         or structure.get("detected_format")
         or ingestion.get("detected_format")
     ).lower()
 
 
+def _matches_source_selector(candidate: dict[str, Any], expected: dict[str, Any]) -> bool:
+    source_ref = _text(expected.get("source_ref"))
+    if source_ref:
+        return _text(candidate.get("_source_ref")) == source_ref
+    return _text(candidate.get("source_id")) == _text(expected.get("source_id"))
+
+
 def _source_alignment(
     expected: dict[str, Any], items: list[dict[str, Any]]
 ) -> dict[str, Any]:
+    candidates = [row for row in items if _matches_source_selector(row, expected)]
     source_id = _text(expected.get("source_id"))
-    candidates = [row for row in items if _text(row.get("source_id")) == source_id]
+    source_ref = _text(expected.get("source_ref"))
     if not candidates:
         status = "MISSING"
         candidate = {}
-        mismatches = ["source_id"]
+        mismatches = ["source_ref" if source_ref else "source_id"]
     elif len(candidates) > 1:
         status = "AMBIGUOUS"
         candidate = {}
-        mismatches = ["duplicate_product_source_id"]
+        mismatches = ["duplicate_product_source_reference"]
     else:
         candidate = candidates[0]
         evidence = _dict(candidate.get("evidence_closure_receipt"))
@@ -351,8 +445,16 @@ def _source_alignment(
             "expected_format": _text(expected.get("expected_format")).lower(),
         }
         actual_slots = {
-            "filename": _text(candidate.get("filename") or evidence.get("filename")),
-            "source_hash": _text(evidence.get("source_hash")).lower(),
+            "filename": _text(
+                candidate.get("filename")
+                or evidence.get("filename")
+                or candidate.get("_inventory_filename")
+            ),
+            "source_hash": _text(
+                evidence.get("source_hash")
+                or candidate.get("source_hash")
+                or candidate.get("_inventory_source_hash")
+            ).lower(),
             "expected_format": _item_format(candidate),
         }
         mismatches = [
@@ -364,12 +466,17 @@ def _source_alignment(
     return {
         "ground_truth_id": expected.get("ground_truth_id"),
         "source_id": source_id,
+        "source_ref": source_ref,
+        "source_identity_kind": expected.get("source_identity_kind"),
         "criticality": expected.get("criticality"),
         "alignment_status": status,
         "mismatched_slots": mismatches,
         "candidate": {
             "source_id": _text(candidate.get("source_id")),
-            "filename": _text(candidate.get("filename")),
+            "source_ref": _text(candidate.get("_source_ref")),
+            "filename": _text(
+                candidate.get("filename") or candidate.get("_inventory_filename")
+            ),
             "format": _item_format(candidate),
         }
         if candidate
@@ -380,12 +487,16 @@ def _source_alignment(
 def _element_candidates(
     expected: dict[str, Any], blocks: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    source_id = _text(expected.get("source_id"))
     locator = _text(expected.get("source_locator"))
     text_hash = _text(expected.get("text_hash")).lower()
+    source_ref = _text(expected.get("source_ref"))
+    source_id = _text(expected.get("source_id"))
     result: list[dict[str, Any]] = []
     for candidate in blocks:
-        if candidate.get("source_id") != source_id:
+        if source_ref:
+            if candidate.get("source_ref") != source_ref:
+                continue
+        elif candidate.get("source_id") != source_id:
             continue
         if locator and candidate.get("source_locator") != locator:
             continue
@@ -402,6 +513,8 @@ def _element_alignment(
     base = {
         "ground_truth_id": expected.get("ground_truth_id"),
         "source_id": expected.get("source_id"),
+        "source_ref": expected.get("source_ref"),
+        "source_identity_kind": expected.get("source_identity_kind"),
         "block_type": expected.get("block_type"),
         "criticality": expected.get("criticality"),
     }
@@ -470,6 +583,8 @@ def _order_alignment(
     return {
         "ground_truth_id": expected.get("ground_truth_id"),
         "source_id": expected.get("source_id"),
+        "source_ref": expected.get("source_ref"),
+        "source_identity_kind": expected.get("source_identity_kind"),
         "criticality": expected.get("criticality"),
         "before_element_id": expected.get("before_element_id"),
         "after_element_id": expected.get("after_element_id"),
@@ -554,6 +669,8 @@ def evaluate_document_ground_truth(
             "element_alignments": [],
             "reading_order_alignments": [],
             "gap_distribution": [],
+            "source_reference_resolution_authority": "SOURCE_INVENTORY_EXTERNAL_REF",
+            "runtime_source_id_required_in_human_ground_truth": False,
             "product_output_generated_ground_truth": False,
             "fuzzy_or_llm_alignment_used": False,
             "automatic_winner_used": False,
@@ -718,6 +835,8 @@ def evaluate_document_ground_truth(
         "gap_distribution": gap_distribution,
         "profile_five_of_five_pass": profile_pass,
         "universal_cross_industry_five_of_five_proven": False,
+        "source_reference_resolution_authority": "SOURCE_INVENTORY_EXTERNAL_REF",
+        "runtime_source_id_required_in_human_ground_truth": False,
         "product_output_generated_ground_truth": False,
         "fuzzy_or_llm_alignment_used": False,
         "automatic_winner_used": False,
