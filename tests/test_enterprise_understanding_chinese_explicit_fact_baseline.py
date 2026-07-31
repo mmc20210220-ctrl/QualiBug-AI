@@ -142,11 +142,15 @@ def test_frozen_ground_truth_is_valid_and_source_backed() -> None:
     receipt = ground_truth["validation_receipt"]
     assert receipt["status"] == "PASS"
     assert receipt["business_fact_slot_contract_validated"] is True
-    assert receipt["business_fact_slot_annotation_count"] == 12
-    assert receipt["confirmed_business_fact_slot_annotation_count"] == 12
+    assert receipt["business_fact_slot_annotation_count"] == 16
+    assert receipt["confirmed_business_fact_slot_annotation_count"] == 16
     assert receipt["business_fact_ground_truth_generated_from_product_output"] is False
+    assert receipt["explicit_fact_scope_complete"] is True
+    assert receipt["explicit_fact_scope_locator_count"] == 10
+    assert receipt["all_annotated_fact_locators_inside_explicit_scope"] is True
     assert ground_truth["scope_complete"] is False
     assert ground_truth["explicit_fact_scope_complete"] is True
+    assert len(ground_truth["explicit_fact_scope_locators"]) == 10
     assert ground_truth["source_locator_authority"] == (
         "generic_text_document_ir_exact_line_char"
     )
@@ -155,7 +159,7 @@ def test_frozen_ground_truth_is_valid_and_source_backed() -> None:
         for row in ground_truth["business_rules"]
         if isinstance(row, dict) and row.get("source_locators")
     ]
-    assert len(locator_rows) == 12
+    assert len(locator_rows) == 16
     assert all(
         len(row["source_locators"]) == 1
         and row["source_locators"][0].startswith("source_rules.md#line=")
@@ -172,6 +176,13 @@ def test_isolated_baseline_exit_status_requires_quality_targets() -> None:
     assert _baseline_exit_code({"status": "BELOW_TARGET"}) == 3
     assert _baseline_exit_code({"status": "BLOCKED"}) == 2
     assert _baseline_exit_code({"status": "NOT_MEASURED"}) == 2
+    assert set(TARGETS) == {
+        "fact_recall",
+        "slot_exact_accuracy",
+        "p0_exact_fact_recall",
+        "source_locator_exact_accuracy",
+        "accepted_fact_precision",
+    }
 
 
 def test_frozen_baseline_runs_existing_fact_mainline_without_quality_self_label(
@@ -185,6 +196,8 @@ def test_frozen_baseline_runs_existing_fact_mainline_without_quality_self_label(
     }
     assert "source_rules.md#line=3;chars=17-48" in locators
     assert "source_rules.md#line=17;chars=195-213" in locators
+    assert "source_rules.md#line=19;chars=216-248" in locators
+    assert "source_rules.md#line=21;chars=251-287" in locators
 
     asset = build_chinese_first_comprehension(_asset(), [source])
     asset = compile_structure_first_business_facts(asset, [source])
@@ -199,16 +212,28 @@ def test_frozen_baseline_runs_existing_fact_mainline_without_quality_self_label(
     measurement = evaluate_business_fact_slots(ground_truth, asset)
 
     assert measurement["status"] == "PASS"
-    assert measurement["metrics"]["annotated_fact_count"] == 12
+    assert measurement["metrics"]["annotated_fact_count"] == 16
     assert measurement["metrics"]["measured_slot_count"] > 0
-    assert measurement["metrics"]["source_locator_annotated_fact_count"] == 12
-    assert measurement["metrics"]["source_locator_exact_fact_count"] == 12
+    assert measurement["metrics"]["source_locator_annotated_fact_count"] == 16
+    assert measurement["metrics"]["source_locator_exact_fact_count"] == 16
     assert measurement["metrics"]["source_locator_exact_accuracy"] == 1.0
+    assert measurement["metrics"]["accepted_fact_scope_complete"] is True
+    assert measurement["metrics"]["accepted_fact_scope_locator_count"] == 10
+    assert measurement["metrics"]["accepted_fact_precision"] == 1.0
+    assert measurement["metrics"]["false_accepted_fact_count"] == 0
+    assert measurement["metrics"]["false_accepted_rate"] == 0.0
+    assert measurement["false_accepted_facts"] == []
     assert measurement["evidence_address_measurement_contract"][
         "annotated_fact_denominator_includes_missing_facts"
     ] is True
     assert measurement["evidence_address_measurement_contract"][
         "annotated_fact_denominator_includes_ambiguous_facts"
+    ] is True
+    assert measurement["accepted_fact_precision_contract"][
+        "accepted_scope_uses_declared_exact_source_locators"
+    ] is True
+    assert measurement["accepted_fact_precision_contract"][
+        "unannotated_scope_blocks_remain_in_precision_scope"
     ] is True
     assert measurement["fuzzy_or_llm_alignment_used"] is False
     assert measurement["automatic_winner_used"] is False
@@ -220,7 +245,11 @@ def test_frozen_baseline_runs_existing_fact_mainline_without_quality_self_label(
     assert normalization["status"] == "PASS"
     assert normalization["existing_ledger_reused"] is True
     assert normalization["existing_source_backed_identity_vocabulary_reused"] is True
+    assert normalization["grammar_fragment_identity_reuse_allowed"] is False
     assert normalization["governed_operation_binding"] is True
+    assert normalization["qualified_object_conditions_compiled"] is True
+    assert normalization["split_if_else_pairing_prefers_exact_structure_locator"] is True
+    assert normalization["negative_operation_is_not_negative_modality"] is True
     assert normalization["new_fact_discovery_allowed"] is False
     assert normalization["overlapping_identity_coordinate_emission_allowed"] is False
     assert normalization["formal_typed_coordinate_reinterpretation_allowed"] is False
@@ -286,17 +315,72 @@ def test_frozen_baseline_runs_existing_fact_mainline_without_quality_self_label(
     assert _dict(composed_of_header.get("object")).get("entity_refs") == ["订单头"]
     assert "explicit_semantic_normalization" not in composed_of_header
 
+    belongs_to = _typed_fact(
+        asset,
+        fact_type="OBJECT_RELATION",
+        predicate="BELONGS_TO",
+        object_ref="组织",
+    )
+    assert _dict(belongs_to.get("subject")).get("entity_refs") == ["订单"]
+    assert _dict(belongs_to.get("object")).get("entity_refs") == ["组织"]
+
+    withdrawal = _parent_fact(asset, "只有订单创建人可以撤回")
+    withdrawal_subject = _dict(withdrawal.get("subject"))
+    assert withdrawal["fact_type"] == "PERMISSION_RULE"
+    assert withdrawal["modality"] == "MAY"
+    assert withdrawal["action"]["canonical"] == "撤回"
+    assert withdrawal_subject.get("actor_refs") == ["订单创建人"]
+    assert withdrawal_subject.get("entity_refs") == ["订单"]
+    assert _dict(withdrawal.get("object")).get("entity_refs") == ["订单"]
+    assert withdrawal["condition_frame"]["kind"] == "ALL"
+    assert withdrawal["condition_frame"]["combinator"] == "AND"
+    assert withdrawal["condition_frame"]["conditions"] == [
+        "本人创建",
+        "尚未审批",
+    ]
+
+    then_branch = _parent_fact(asset, "如果库存充足则系统允许订单出库")
+    then_subject = _dict(then_branch.get("subject"))
+    then_frame = _dict(then_branch.get("condition_frame"))
+    assert then_branch["fact_type"] == "PERMISSION_RULE"
+    assert then_branch["modality"] == "MAY"
+    assert then_branch["action"]["canonical"] == "发货"
+    assert then_subject.get("actor_refs") == ["系统"]
+    assert then_subject.get("entity_refs") == ["订单"]
+    assert _dict(then_branch.get("object")).get("entity_refs") == ["订单"]
+    assert then_frame["kind"] == "IF_THEN_ELSE"
+    assert then_frame["conditions"] == ["库存充足"]
+    assert then_frame["branch"] == "THEN"
+    assert then_frame["branch_index"] == 0
+
+    else_branch = _parent_fact(asset, "否则系统必须拒绝出库")
+    else_subject = _dict(else_branch.get("subject"))
+    else_frame = _dict(else_branch.get("condition_frame"))
+    assert else_branch["fact_type"] == "BUSINESS_RULE"
+    assert else_branch["modality"] == "MUST"
+    assert else_branch["polarity"] == "POSITIVE"
+    assert else_branch["action"]["canonical"] == "驳回"
+    assert else_subject.get("actor_refs") == ["系统"]
+    assert else_subject.get("entity_refs") == ["订单"]
+    assert _dict(else_branch.get("object")).get("entity_refs") == ["订单"]
+    assert else_frame["kind"] == "IF_THEN_ELSE"
+    assert else_frame["conditions"] == ["库存充足"]
+    assert else_frame["branch"] == "ELSE"
+    assert else_frame["branch_index"] == 1
+    assert "保留订单状态不变" in _list(else_branch.get("postconditions"))
+
     first_loss = _first_loss_analysis(measurement)
     assert first_loss["schema"] == (
         "qualibug.chinese-explicit-fact-first-loss-analysis.v1"
     )
     assert first_loss["repair_policy"].startswith("FIX_ONLY_THE_HIGHEST_IMPACT")
-    assert len(first_loss["alignments"]) == 12
+    assert len(first_loss["alignments"]) == 16
 
     threshold_status, checks = _threshold_status(measurement["metrics"])
     assert threshold_status == "PASS", {
         "metrics": measurement["metrics"],
         "first_loss": first_loss,
+        "false_accepted_facts": measurement["false_accepted_facts"],
     }
     assert set(checks) == set(TARGETS)
     for metric, target in TARGETS.items():
