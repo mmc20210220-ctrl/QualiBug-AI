@@ -1,5 +1,10 @@
+from pathlib import Path
+
 import ai_test_asset_center.experiment_compiler_obligation as compiler
 import ai_test_asset_center.experiment_outcome_finalizer as finalizer
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _experiment(*, observers, control=None, treatment=None):
@@ -182,3 +187,27 @@ def test_blocked_minimal_experiment_does_not_forge_subject_binding() -> None:
     assert "observer_subject_binding_hash" not in experiment[
         "compile_receipt"
     ]
+
+
+def test_main_compiler_imports_public_obligation_facade() -> None:
+    source = (
+        ROOT / "ai_test_asset_center/experiment_compiler_base.py"
+    ).read_text(encoding="utf-8")
+
+    assert "from .experiment_compiler_obligation import" in source
+    assert "experiment_compiler_obligation_core" not in source
+
+
+def test_no_mainline_module_imports_obligation_core_directly() -> None:
+    violations: list[str] = []
+    for path in (ROOT / "ai_test_asset_center").glob("*.py"):
+        if path.name in {
+            "experiment_compiler_obligation.py",
+            "experiment_compiler_obligation_core.py",
+        }:
+            continue
+        source = path.read_text(encoding="utf-8")
+        if "experiment_compiler_obligation_core" in source:
+            violations.append(path.name)
+
+    assert violations == []
