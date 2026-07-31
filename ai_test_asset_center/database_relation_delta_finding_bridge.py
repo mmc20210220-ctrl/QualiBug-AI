@@ -7,6 +7,7 @@ from copy import deepcopy
 from typing import Any
 
 from .database_relation_delta_experiment_projection import ASSERTION_KIND
+from .database_relation_delta_projection_gate import SEMANTIC_PAIR_SCHEMA
 
 FINDING_EVIDENCE_SCHEMA = "qualibug.database-relation-delta-finding-evidence.v1"
 _INSTALL_MARKER = "__qualibug_database_relation_delta_finding_bridge_v1__"
@@ -141,10 +142,16 @@ def build_database_relation_delta_finding_evidence(
         "assertion_kind": _text(assertion.get("kind")),
         "assertion_status": _text(assertion.get("status")),
         "reason_code": _text(assertion.get("reason_code")),
+        "semantic_pair_schema": _text(
+            expected.get("semantic_pair_schema") or SEMANTIC_PAIR_SCHEMA
+        ),
         "database_relation_observer_ref": _text(expected.get("database_relation_observer_ref")),
         "database_relationship_id": _text(expected.get("database_relationship_id")),
         "relation_key": _clean(_list(expected.get("relation_key"))),
         "relation_pair_id": _text(expected.get("relation_pair_id")),
+        "recomputed_relation_pair_id": _text(
+            expected.get("recomputed_relation_pair_id")
+        ),
         "relation_before_draft_id": _text(expected.get("relation_before_draft_id")),
         "relation_after_draft_id": _text(expected.get("relation_after_draft_id")),
         "root_observer_contract_ref": _text(expected.get("root_observer_contract_ref")),
@@ -173,6 +180,8 @@ def build_database_relation_delta_finding_evidence(
         "weighted_right_delta": actual.get("weighted_right_delta"),
         "difference": actual.get("difference"),
         "tolerance": actual.get("tolerance"),
+        "binding_match": actual.get("binding_match") is True,
+        "semantic_pair_match": actual.get("semantic_pair_match") is True,
         "lineage_match": actual.get("lineage_match") is True,
         "relation_pair_match": actual.get("relation_pair_match") is True,
         "root_identity_match": actual.get("root_identity_match") is True,
@@ -226,9 +235,13 @@ def enrich_database_relation_delta_finding(
     raw = _dict(enriched.get("raw_evidence"))
     raw["db_snapshot"] = {
         "schema": FINDING_EVIDENCE_SCHEMA,
+        "semantic_pair_schema": evidence_payload["semantic_pair_schema"],
         "database_relationship_id": evidence_payload["database_relationship_id"],
         "relation_key": evidence_payload["relation_key"],
         "relation_pair_id": evidence_payload["relation_pair_id"],
+        "recomputed_relation_pair_id": evidence_payload[
+            "recomputed_relation_pair_id"
+        ],
         "root_table_ref": evidence_payload["root_table_ref"],
         "root_database_field_id": evidence_payload["root_database_field_id"],
         "child_table_ref": evidence_payload["child_table_ref"],
@@ -245,6 +258,8 @@ def enrich_database_relation_delta_finding(
             "weighted_left_delta": evidence_payload["weighted_left_delta"],
             "weighted_right_delta": evidence_payload["weighted_right_delta"],
             "difference": evidence_payload["difference"],
+            "binding_match": evidence_payload["binding_match"],
+            "semantic_pair_match": evidence_payload["semantic_pair_match"],
             "lineage_match": evidence_payload["lineage_match"],
             "relation_pair_match": evidence_payload["relation_pair_match"],
             "cross_observer_identity_match": evidence_payload["cross_observer_identity_match"],
@@ -268,7 +283,9 @@ def enrich_database_relation_delta_finding(
     enriched["category"] = ASSERTION_KIND
     enriched["database_relation_delta_evidence"] = evidence_payload
     quality = _dict(enriched.get("evidence_quality"))
-    quality["database_evidence_strength"] = "EXACT_FK_SCOPED_ROOT_AND_AGGREGATE_DELTA"
+    quality["database_evidence_strength"] = (
+        "EXACT_FK_SCOPED_ROOT_AND_AGGREGATE_DELTA_WITH_SEMANTIC_PAIR"
+    )
     enriched["evidence_quality"] = quality
     enriched["gate_passed"] = finding.get("gate_passed") is True
     enriched["customer_delivery_status"] = finding.get("customer_delivery_status", "candidate")
