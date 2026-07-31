@@ -5,6 +5,7 @@ import json
 import re
 from typing import Any
 
+from .credential_identity import govern_runtime_plan_credentials
 from .runtime_plan import project_runtime_plans_to_asset
 from .schema import as_dict, as_list, stable_id, text, unique_text
 
@@ -193,6 +194,17 @@ def _refresh_projection(asset: dict[str, Any], model: dict[str, Any]) -> None:
         if text(row.get("reason_code"))
         == "RUNTIME_PLAN_REQUEST_FIELD_CONTRACT_CONFLICT"
     )
+    credential_identity_mismatch_count = sum(
+        1
+        for row in unknowns
+        if text(row.get("reason_code"))
+        in {
+            "RUNTIME_PLAN_CREDENTIAL_IDENTITY_COORDINATE_MISMATCH",
+            "RUNTIME_PLAN_AUTHORIZATION_IDENTITY_SCOPE_AMBIGUOUS",
+            "RUNTIME_PLAN_AUTHORIZATION_CONTRACT_UNRESOLVED",
+            "RUNTIME_PLAN_CREDENTIAL_REQUIREMENT_UNRESOLVED",
+        }
+    )
     metrics = dict(as_dict(gate.get("metrics")))
     metrics.update(
         {
@@ -202,6 +214,10 @@ def _refresh_projection(asset: dict[str, Any], model: dict[str, Any]) -> None:
             "runtime_plan_unknown_count": len(unknowns),
             "request_media_type_selection_requirement_count": media_selection_count,
             "request_field_contract_conflict_count": contract_conflict_count,
+            "credential_identity_mismatch_count": credential_identity_mismatch_count,
+            "credential_identity_governed_plan_count": sum(
+                1 for row in plans if bool(row.get("credential_identity_governed"))
+            ),
         }
     )
     gate["metrics"] = metrics
@@ -262,27 +278,36 @@ def _refresh_projection(asset: dict[str, Any], model: dict[str, Any]) -> None:
         for row in as_list(asset.get("coverage_gaps"))
         if isinstance(row, dict)
     ]
-    # Preserve the compiler's original gap and operator action for ordinary causes such as
-    # unresolved locations or missing Oracle templates. Replace it only when this governance
-    # layer discovered a source-contract conflict requiring a more specific resolution.
-    if status == "BLOCKED_RUNTIME_PLAN_INCOMPLETE" and contract_conflict_count:
+    if status == "BLOCKED_RUNTIME_PLAN_INCOMPLETE" and (
+        contract_conflict_count or credential_identity_mismatch_count
+    ):
         gaps = [
             row
             for row in gaps
             if text(row.get("kind")) != "RUNTIME_PLAN_INCOMPLETE"
         ]
+        if credential_identity_mismatch_count:
+            gap_type = "runtime_plan_credential_identity_not_closed"
+            operator_action = (
+                "declare one active test account whose actor, tenant/organization and "
+                "ownership coordinates exactly match the Actor Authorization Contract; "
+                "do not select credentials by role or source order"
+            )
+        else:
+            gap_type = "runtime_plan_request_contract_conflict"
+            operator_action = (
+                "resolve conflicting source-declared request schemas; do not select a "
+                "media type or contract variant by order"
+            )
         gaps.append(
             {
                 "kind": "RUNTIME_PLAN_INCOMPLETE",
-                "gap_type": "runtime_plan_request_contract_conflict",
+                "gap_type": gap_type,
                 "source_id": "*",
                 "runtime_plan_status": status,
                 "runtime_plan_metrics": metrics,
                 "execution_allowed": False,
-                "operator_action": (
-                    "resolve conflicting source-declared request schemas; do not select a "
-                    "media type or contract variant by order"
-                ),
+                "operator_action": operator_action,
             }
         )
     asset["coverage_gaps"] = gaps
@@ -291,7 +316,7 @@ def _refresh_projection(asset: dict[str, Any], model: dict[str, Any]) -> None:
 def project_governed_runtime_plans_to_asset(
     asset: dict[str, Any], model: dict[str, Any]
 ) -> dict[str, Any]:
-    """Compile Runtime Plans and apply source-contract conflict governance."""
+    """Compile Runtime Plans and apply source-contract and credential governance."""
     project_runtime_plans_to_asset(asset, model)
     interfaces = {
         text(row.get("interface_id")): row
@@ -319,6 +344,7 @@ def project_governed_runtime_plans_to_asset(
     asset["runtime_plan_unknowns"] = all_unknowns
     model["runtime_plans"] = [dict(row) for row in governed]
     model["runtime_plan_unknowns"] = [dict(row) for row in all_unknowns]
+    govern_runtime_plan_credentials(asset, model)
     _refresh_projection(asset, model)
     governance = dict(as_dict(asset.get("governance")))
     governance.update(
@@ -326,6 +352,9 @@ def project_governed_runtime_plans_to_asset(
             "runtime_plan_request_contract_variants_governed": True,
             "runtime_plan_does_not_select_media_type_by_source_order": True,
             "runtime_plan_conflicting_request_schemas_block": True,
+            "runtime_plan_credential_identity_coordinates_governed": True,
+            "runtime_plan_credential_selection_by_role_order_allowed": False,
+            "runtime_plan_authorization_scope_requires_exact_account_match": True,
         }
     )
     asset["governance"] = governance
