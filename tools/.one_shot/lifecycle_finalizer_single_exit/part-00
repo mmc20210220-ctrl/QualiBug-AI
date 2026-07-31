@@ -1,0 +1,282 @@
+from pathlib import Path
+
+path = Path('ai_test_asset_center/experiment_outcome_finalizer.py')
+source = path.read_text(encoding='utf-8')
+
+start = source.index('    finding = None\n')
+end_marker = '''    elif (\n        verdict.get("status") == "VIOLATION"'''
+end = source.index(end_marker, start)
+replacement = '''    finding = None
+    reason = ""
+    detail = ""
+
+    # Execution status is an operational fact. Terminal lifecycle state is
+    # derived once, at the single exit, by operational_receipts.
+    has_http = any(
+        isinstance(step, dict)
+        and isinstance(step.get("status_code"), int)
+        and step["status_code"] > 0
+        for step in steps_out
+    )
+    status = "EXECUTED" if has_http else "HARNESS_FAILURE"
+    harness_failure_reason = ""
+    if not has_http:
+        harness_failure_reason = _classify_harness_failure(
+            steps_out,
+            observations,
+            pre_transport_block_reasons,
+            cleanup_failures=cleanup_failures,
+        )
+
+    # These branches author facts only. None may return an outcome or assign a
+    # lifecycle state; all paths continue to the receipt-backed finalizer.
+    if pre_transport_block_reasons:
+        status = "BLOCKED"
+        reason = _pre_transport_reason_code(pre_transport_block_reasons)
+        detail = ",".join(dict.fromkeys(pre_transport_block_reasons))
+        observations["finalizer_block_reason"] = reason
+        import sys as _sys_diag
+
+        print(
+            f"[DIAG] {oid}: reason={reason}, details={detail[:500]}",
+            file=_sys_diag.stderr,
+        )
+    elif verdict.get("verdict") == "harness_failure" and not has_http:
+        status = "HARNESS_FAILURE"
+        reason = harness_failure_reason or "HARNESS_FAILURE"
+        detail = reason
+        observations["finalizer_block_reason"] = reason
+    elif (
+        cleanup_gate == "FAILED"
+        and verdict.get("customer_deliverable_candidate") is True
+    ):
+        status = "HARNESS_FAILURE"
+        reason = cleanup_gate_reason
+        detail = (
+            _text(cleanup_equivalence_receipt.get("detail"))
+            if cleanup_equivalence_receipt
+            else ""
+        )
+        observations["finalizer_block_reason"] = reason
+    elif (
+        cleanup_gate == "BLOCKED"
+        and verdict.get("customer_deliverable_candidate") is True
+    ):
+        status = "BLOCKED"
+        reason = cleanup_gate_reason
+        detail = (
+            _text(cleanup_equivalence_receipt.get("detail"))
+            if cleanup_equivalence_receipt
+            else ""
+        )
+        observations["finalizer_block_reason"] = reason
+    elif (
+        verdict.get("verdict") == "blocked_experiment"
+        or verdict.get("status") == "INDETERMINATE"
+    ):
+        field_traces = [
+            row
+            for row in _list(verdict.get("field_oracle_traces"))
+            if isinstance(row, dict)
+        ]
+        assertion_traces = [
+            row
+            for row in _list(verdict.get("assertions"))
+            if isinstance(row, dict)
+            and isinstance(row.get("field_oracle_trace"), dict)
+        ]
+        if field_traces or assertion_traces:
+            # The experiment reached Oracle evaluation, but the semantic result
+            # remains indeterminate. Preserve traces without claiming completion.
+            status = "EXECUTED"
+            reason = _text(verdict.get("status")) or "INDETERMINATE"
+            detail = ",".join(
+                [
+                    _text(item.get("reason_code"))
+                    for item in (_list(verdict.get("assertions")) + field_traces)
+                    if isinstance(item, dict) and _text(item.get("reason_code"))
+                ][:8]
+            ) or ",".join(_list(verdict.get("missing_requirements"))[:8])
+        else:
+            status = "BLOCKED"
+            reason = "BLOCKED_MISSING_OBSERVER"
+            detail = ",".join(_list(verdict.get("missing_requirements"))[:8])
+        observations["finalizer_block_reason"] = reason
+'''
+source = source[:start] + replacement + source[end:]
+
+# Remove the legacy lifecycle pre-authoring block. Keep one placeholder which is
+# assigned only from operational_receipts at the single exit.
+start_marker = '    # ── V1.3.0-A: Lifecycle State + Environment Restoration Gate ──\n'
+end_marker = '    # ── V1.5.0 diagnostic formula (not authority for TRUE_COMPLETED) ──\n'
+start = source.index(start_marker)
+end = source.index(end_marker, start)
+source = source[:start] + '''    # Lifecycle state is intentionally not authored here. The v1.5 formula
+    # below remains diagnostic only; operational_receipts owns the terminal state.
+    _lifecycle_state = ""
+    _lifecycle_derivation: dict[str, Any] = {}
+
+''' + source[end:]
+
+# Remove the v1.5 diagnostic override of lifecycle state.
+old = '''        # Diagnostic terminal only — TRUE_COMPLETED requires receipt bundle below.
+        if (
+            _v150_true_completion.get("terminal_state")
+            and _v150_true_completion.get("terminal_state") != "TRUE_COMPLETED"
+        ):
+            _lifecycle_state = _v150_true_completion["terminal_state"]
+'''
+new = '''        # Diagnostic only. It cannot author or overwrite lifecycle_state.
+        observations["v150_true_completion"] = dict(_v150_true_completion)
+'''
+if old not in source:
+    raise RuntimeError('v150 override block not found')
+source = source.replace(old, new, 1)
+
+# Preserve a semantic block reason when the ledger is absent; do not overwrite
+# it with a secondary receipt-infrastructure symptom.
+old = '''    if _process_ledger is None and not observations.get("force_receipt_bundle"):
+        from .process_step_execution import (
+            FORMAL_MAINLINE_PROCESS_STEP_LEDGER_NOT_PROPAGATED as _LEDGER_NOT_PROP,
+        )
+        _finalizer_block_reason = _LEDGER_NOT_PROP
+        observations["finalizer_block_reason"] = _LEDGER_NOT_PROP
+'''
+new = '''    if _process_ledger is None and not observations.get("force_receipt_bundle"):
+        from .process_step_execution import (
+            FORMAL_MAINLINE_PROCESS_STEP_LEDGER_NOT_PROPAGATED as _LEDGER_NOT_PROP,
+        )
+        if not _finalizer_block_reason:
+            _finalizer_block_reason = _LEDGER_NOT_PROP
+            observations["finalizer_block_reason"] = _LEDGER_NOT_PROP
+'''
+if old not in source:
+    raise RuntimeError('ledger absent block not found')
+source = source.replace(old, new, 1)
+
+# The existing block assembles the receipt bundle only. Finalization is deferred
+# to the single exit, after all operational facts are frozen.
+call_start = source.index('                _finalization_receipt = _build_finalization(\n')
+call_end_marker = '            elif not _finalizer_block_reason:\n'
+call_end = source.index(call_end_marker, call_start)
+source = source[:call_start] + '''                # Bundle assembled. Authoritative finalization is deferred to
+                # the single exit after lifecycle facts are frozen.
+''' + source[call_end:]
+
+# Insert unconditional bundle fallback + single lifecycle finalization before
+# finding filtering. This makes blocked, failed, and incomplete paths observable
+# through the same authority and return schema.
+insert_marker = '    # ── P0-12: Finding filter reason ──\n'
+insert_at = source.index(insert_marker)
+unified = '''    # ── Single-authority lifecycle finalization ──
+    # Always finalize, including blocked and failed paths. When formal receipts
+    # are unavailable, build an explicit incomplete bundle instead of skipping
+    # finalization or fabricating completion evidence.
+    from .operational_receipts import (
+        NOT_APPLICABLE as _NA_FINAL,
+        build_execution_finalization_receipt as _build_finalization_once,
+        build_execution_receipt_bundle as _build_incomplete_bundle,
+    )
+
+    if not _execution_receipt_bundle:
+        _execution_receipt_bundle = _build_incomplete_bundle(
+            bundle_id=f"erb_{eid}",
+            campaign_id=_text(resolved_campaign_id or campaign_id or _NA_FINAL),
+            run_id=_text(resolved_execution_id or observations.get("run_id") or _NA_FINAL),
+            obligation_id=_text(oid or _NA_FINAL),
+            experiment_id=_text(eid or _NA_FINAL),
+            fixture_id=_text(
+                observations.get("fixture_id")
+                or (_dict(fixture_receipts[0]).get("fixture_id") if fixture_receipts else "")
+                or _NA_FINAL
+            ),
+            protocol_id=_text(
+                exp.get("protocol_id")
+                or _dict(exp.get("protocol")).get("protocol_id")
+                or observations.get("protocol_id")
+                or _NA_FINAL
+            ),
+            receipts=[],
+        )
+
+    _fixture_required = bool(
+        fixture_receipts
+        or _dict(exp.get("fixture_contract"))
+        or _list(exp.get("fixture_requirements"))
+        or _text(exp.get("fixture_id"))
+    )
+    _precondition_required = bool(
+        observations.get("state_precondition_required")
+        or _dict(exp.get("state_precondition"))
+        or _dict(exp.get("state_precondition_plan"))
+    )
+    _required_steps_declared = bool(_required_steps or _planned_steps)
+    _all_required_steps_executed = bool(_required_steps) and set(
+        _required_steps
+    ) <= set(_executed_steps)
+    _observation_required = bool(
+        _list(exp.get("assertions"))
+        or _list(exp.get("observer_requirements"))
+    )
+    _observation_completed = (not _observation_required) or bool(
+        [
+            receipt
+            for receipt in observer_receipts
+            if _text(receipt.get("status")).upper() == "OBSERVED"
+        ]
+        or oracle_trace
+        or _before_states
+        or _after_states
+    )
+    _oracle_indeterminate = bool(
+        _text(verdict.get("status")).upper() in {"INDETERMINATE", "BLOCKED"}
+        or _text(verdict.get("verdict")) == "blocked_experiment"
+    )
+    _cleanup_required = bool(is_governed_write)
+    _cleanup_execution_evidence = bool(
+        _list(observations.get("cleanup_execution_receipts"))
+        or _dict(observations.get("cleanup_execution_receipt"))
+        or _dict(observations.get("cleanup_result"))
+    )
+    _cleanup_verification_evidence = bool(
+        _list(observations.get("cleanup_verification_receipts"))
+        or _dict(observations.get("cleanup_verification"))
+        or cleanup_equivalence_receipt
+    )
+    _compile_succeeded = not (
+        "COMPILE" in _text(observations.get("finalizer_block_reason")).upper()
+        or _text(observations.get("compile_status")).upper()
+        in {"FAILED", "BLOCKED", "ERROR"}
+    )
+    _lifecycle_facts = {
+        "execution_status": status,
+        "compile_succeeded": _compile_succeeded,
+        "fixture_required": _fixture_required,
+        "fixture_materialized": (not _fixture_required) or bool(fixture_receipts),
+        "state_precondition_required": _precondition_required,
+        "state_precondition_established": bool(
+            observations.get(
+                "state_precondition_established",
+                not _precondition_required,
+            )
+        ),
+        "required_steps_declared": _required_steps_declared,
+        "all_required_steps_executed": _all_required_steps_executed,
+        "observation_completed": _observation_completed,
+        "oracle_evaluated": _oracle_evaluated,
+        "oracle_indeterminate": _oracle_indeterminate,
+        "cleanup_required": _cleanup_required,
+        "cleanup_executed": (not _cleanup_required) or _cleanup_execution_evidence,
+        "cleanup_verified": (not _cleanup_required)
+        or (
+            cleanup_gate == "PASSED"
+            and _cleanup_verification_evidence
+            and cleanup_failures == 0
+        ),
+        "environment_restored": bool(_env_restored),
+        "finalizer_block_reason": _text(
+            observations.get("finalizer_block_reason")
+            or _finalizer_block_reason
+            or reason
+        ),
+    }
