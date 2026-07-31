@@ -4,6 +4,8 @@ from copy import deepcopy
 
 from ai_test_asset_center.database_relation_delta_experiment_projection import (
     ASSERTION_KIND,
+)
+from ai_test_asset_center.database_relation_delta_projection_gate import (
     project_database_relation_delta_assertions,
 )
 
@@ -180,8 +182,15 @@ def test_exact_delta_rule_creates_relation_before_and_after_drafts() -> None:
     assert assertion["left_coefficient"] == -1
     assert assertion["right_coefficient"] == 1
     assert assertion["scope_count_alias"] == "related_scope_count"
+    assert assertion["database_relation_delta_binding"][
+        "pair_covers_complete_assertion_semantics"
+    ] is True
     drafts = experiment["database_relation_observer_execution_drafts"]
     assert {row["observation_phase"] for row in drafts} == {"BEFORE", "AFTER"}
+    assert {row["draft_id"] for row in drafts} == {
+        assertion["relation_before_draft_id"],
+        assertion["relation_after_draft_id"],
+    }
     for draft in drafts:
         assert draft["relation_pair_id"] == assertion["relation_pair_id"]
         assert draft["aggregate_requests"] == [
@@ -200,12 +209,57 @@ def test_exact_delta_rule_creates_relation_before_and_after_drafts() -> None:
         ]
         assert draft["oracle_verdict_emitted"] is False
         assert draft["mutation_allowed"] is False
+    assert experiment["compile_receipt"][
+        "database_relation_delta_semantic_pair_count"
+    ] == 1
     assert "approved_database_relation_phase_aggregate" in {
         row["observer_id"] for row in experiment["observers"]
     }
     assert "before_state" not in {
         row["observer_id"] for row in experiment["observers"]
     }
+
+
+def test_semantic_pair_changes_when_rule_semantics_change() -> None:
+    baseline = project_database_relation_delta_assertions(
+        _pack(_experiment())
+    )["experiments"][0]
+    baseline_assertion = baseline["assertions"][0]
+
+    coefficient_changed = _experiment()
+    coefficient_changed["assertions"][0]["structured_expression"]["left"][
+        "coefficient"
+    ] = -2
+    coefficient_result = project_database_relation_delta_assertions(
+        _pack(coefficient_changed)
+    )["experiments"][0]
+    coefficient_assertion = coefficient_result["assertions"][0]
+
+    operator_changed = _experiment()
+    operator_changed["assertions"][0]["structured_expression"][
+        "operator"
+    ] = "LTE"
+    operator_result = project_database_relation_delta_assertions(
+        _pack(operator_changed)
+    )["experiments"][0]
+    operator_assertion = operator_result["assertions"][0]
+
+    assert coefficient_assertion["assertion_id"] == baseline_assertion["assertion_id"]
+    assert operator_assertion["assertion_id"] == baseline_assertion["assertion_id"]
+    assert len(
+        {
+            baseline_assertion["relation_pair_id"],
+            coefficient_assertion["relation_pair_id"],
+            operator_assertion["relation_pair_id"],
+        }
+    ) == 3
+    assert len(
+        {
+            baseline_assertion["relation_before_draft_id"],
+            coefficient_assertion["relation_before_draft_id"],
+            operator_assertion["relation_before_draft_id"],
+        }
+    ) == 3
 
 
 def test_missing_root_before_draft_remains_visible_gap() -> None:
