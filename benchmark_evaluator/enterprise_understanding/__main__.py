@@ -15,6 +15,10 @@ from .business_object_types import (
 from .fact_slot_document import validate_business_fact_slot_document
 from .fact_slot_ground_truth import FactSlotGroundTruthValidationError
 from .ground_truth import GroundTruthValidationError, load_ground_truth
+from .implicit_rules import (
+    ImplicitRuleGroundTruthValidationError,
+    load_implicit_rule_ground_truth,
+)
 from .runner import run_benchmark
 
 
@@ -31,6 +35,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--business-object-ground-truth",
         help="optional evaluator-side closed-world business-object type Ground Truth JSON",
+    )
+    parser.add_argument(
+        "--implicit-rule-ground-truth",
+        help="optional evaluator-side frozen closed-world implicit-rule Ground Truth JSON",
     )
     parser.add_argument("--asset", required=True, help="immutable product knowledge asset JSON")
     parser.add_argument("--output", required=True, help="evaluator output directory")
@@ -59,6 +67,18 @@ def main(argv: list[str] | None = None) -> int:
             raise BusinessObjectGroundTruthValidationError(
                 "--project must equal business-object Ground Truth project_id"
             )
+        implicit_rule_ground_truth = (
+            load_implicit_rule_ground_truth(args.implicit_rule_ground_truth)
+            if args.implicit_rule_ground_truth
+            else None
+        )
+        if implicit_rule_ground_truth and (
+            str(implicit_rule_ground_truth.get("project_id") or "").strip()
+            != args.project.strip()
+        ):
+            raise ImplicitRuleGroundTruthValidationError(
+                "--project must equal implicit-rule Ground Truth project_id"
+            )
         asset = _read_artifact(Path(args.asset))
         if not isinstance(asset, dict):
             raise GroundTruthValidationError("product asset root must be a JSON object")
@@ -66,11 +86,13 @@ def main(argv: list[str] | None = None) -> int:
             ground_truth,
             asset,
             business_object_ground_truth=business_object_ground_truth,
+            implicit_rule_ground_truth=implicit_rule_ground_truth,
             output_dir=args.output,
         )
     except (
         GroundTruthValidationError,
         BusinessObjectGroundTruthValidationError,
+        ImplicitRuleGroundTruthValidationError,
         FactSlotGroundTruthValidationError,
         ComparisonError,
         OSError,
@@ -83,10 +105,14 @@ def main(argv: list[str] | None = None) -> int:
         "ground_truth_fingerprint": result.get("ground_truth_fingerprint"),
         "product_asset_fingerprint": result.get("product_asset_fingerprint"),
         "next_repair_target": result.get("next_repair_target"),
+        "next_implicit_rule_repair_target": result.get(
+            "next_implicit_rule_repair_target"
+        ),
         "next_business_object_repair_target": result.get(
             "next_business_object_repair_target"
         ),
         "next_ingestion_repair_target": result.get("next_ingestion_repair_target"),
+        "implicit_rule_measurement": result.get("implicit_rule_measurement"),
         "business_object_type_measurement": result.get(
             "business_object_type_measurement"
         ),
