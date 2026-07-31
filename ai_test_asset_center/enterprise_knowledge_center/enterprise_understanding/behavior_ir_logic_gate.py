@@ -21,6 +21,9 @@ _LOGIC_CODES = {
     "BEHAVIOR_MANDATORY_OUTCOME_UNRESOLVED",
 }
 _TEMPORAL_SUFFIXES = ("之前", "之后", "以前", "以后", "期间", "以内", "之内", "前", "后", "时")
+_FORMAL_PERMISSION_DECISIONS = frozenset(
+    {"ALLOW", "DENY", "REQUIRE_APPROVAL", "REQUIRE_CONFIRMATION"}
+)
 
 
 def _dicts(value: Any) -> list[dict[str, Any]]:
@@ -349,22 +352,41 @@ def build_outcome_contracts(behavior: dict[str, Any]) -> list[dict[str, Any]]:
                 }
             )
 
-    permission = text(behavior.get("permission_decision"))
+    permission = text(behavior.get("permission_decision")).upper()
     if permission not in {"", "UNSPECIFIED", "CONFLICTED"}:
-        rows.append(
-            {
-                "schema": OUTCOME_CONTRACT_SCHEMA,
-                "outcome_id": stable_id("outcome", behavior_id, "permission"),
-                "outcome_type": "PERMISSION_DECISION",
-                "target_object_refs": objects,
-                "expected_decision": permission,
-                "mandatory": True,
-                "observation_phase": "RESPONSE",
-                "caused_by_operation_ref": operation,
-                "status": "CONFIRMED",
-                "evidence": evidence,
-            }
+        authorization_status = text(
+            behavior.get("authorization_semantics_status")
+        ).upper()
+        permission_confirmed = bool(
+            permission in _FORMAL_PERMISSION_DECISIONS
+            and authorization_status != "UNRESOLVED"
         )
+        permission_reason = (
+            ""
+            if permission_confirmed
+            else text(behavior.get("authorization_resolution_reason"))
+            or "PERMISSION_DECISION_UNRESOLVED"
+        )
+        row = {
+            "schema": OUTCOME_CONTRACT_SCHEMA,
+            "outcome_id": stable_id("outcome", behavior_id, "permission"),
+            "outcome_type": "PERMISSION_DECISION",
+            "target_object_refs": objects,
+            "expected_decision": permission,
+            "declared_decision": permission,
+            "authorization_semantic_kind": text(
+                behavior.get("authorization_semantic_kind")
+            )
+            or "AUTHORIZATION",
+            "mandatory": True,
+            "observation_phase": "RESPONSE",
+            "caused_by_operation_ref": operation,
+            "status": "CONFIRMED" if permission_confirmed else "UNRESOLVED",
+            "evidence": evidence,
+        }
+        if permission_reason:
+            row["reason_code"] = permission_reason
+        rows.append(row)
 
     for index, raw in enumerate(unique_text(as_list(behavior.get("compensations")))):
         rows.append(
