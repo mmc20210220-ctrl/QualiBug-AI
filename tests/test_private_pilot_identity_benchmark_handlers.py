@@ -68,6 +68,10 @@ def test_route_matches_only_project_identity_benchmark_paths() -> None:
         "acme",
         "ground-truth",
     )
+    assert _route("/api/v1/projects/acme/identity-benchmark/run") == (
+        "acme",
+        "run",
+    )
     assert _route("/api/v1/projects/acme/authority-decisions") == ("", "")
 
 
@@ -140,6 +144,37 @@ def test_ground_truth_post_delegates_to_transactional_workflow(
     assert captured["project"] == "acme"
     assert captured["manifest_id"] == "manifest:1"
     assert captured["rebuild"] is True
+    assert captured["actor"]["name"] == "qa"
+
+
+def test_run_post_remeasures_through_transactional_workflow(
+    tmp_path, monkeypatch
+) -> None:
+    from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding import (
+        identity_benchmark_workflow as workflow,
+    )
+
+    captured = {}
+
+    def fake_run(project, **kwargs):
+        captured.update({"project": project, **kwargs})
+        return {
+            "benchmark": {"status": "MEASURED"},
+            "history": {"snapshot_count": 2},
+        }
+
+    monkeypatch.setattr(workflow, "run_identity_benchmark", fake_run)
+    handler = _Handler(
+        "/api/v1/projects/acme/identity-benchmark/run",
+        tmp_path,
+        {},
+    )
+
+    handler.do_POST()
+
+    assert handler.response[0] == 201
+    assert handler.response[1]["data"]["history"]["snapshot_count"] == 2
+    assert captured["project"] == "acme"
     assert captured["actor"]["name"] == "qa"
 
 
