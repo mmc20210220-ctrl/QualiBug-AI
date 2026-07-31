@@ -11,6 +11,7 @@ from .document_ground_truth import DOCUMENT_GROUND_TRUTH_KEY
 from .fact_slot_document import validate_business_fact_slot_document
 from .fact_slots import evaluate_business_fact_slots
 from .ground_truth import SUPPORTED_COLLECTIONS, validate_ground_truth
+from .implicit_rules import evaluate_implicit_rules
 from .ingestion_evidence import measure_ingestion_evidence
 from .metrics import calculate_benchmark_metrics
 from .report import write_benchmark_outputs
@@ -54,11 +55,18 @@ def _business_object_repair_target(measurement: dict[str, Any]) -> str:
     return ""
 
 
+def _implicit_rule_repair_target(measurement: dict[str, Any]) -> str:
+    if str(measurement.get("status") or "").strip() != "MEASURED":
+        return ""
+    return str(measurement.get("next_repair_target") or "").strip()
+
+
 def run_benchmark(
     ground_truth: dict[str, Any],
     product_asset: dict[str, Any],
     *,
     business_object_ground_truth: dict[str, Any] | None = None,
+    implicit_rule_ground_truth: dict[str, Any] | None = None,
     output_dir: str | None = None,
 ) -> dict[str, Any]:
     validated = validate_business_fact_slot_document(validate_ground_truth(ground_truth))
@@ -70,13 +78,24 @@ def run_benchmark(
     business_object_measurement = evaluate_business_object_types(
         business_object_ground_truth, product_asset
     )
+    implicit_rule_measurement = evaluate_implicit_rules(
+        implicit_rule_ground_truth, product_asset
+    )
     business_object_metrics = (
         business_object_measurement.get("metrics")
         if isinstance(business_object_measurement.get("metrics"), dict)
         else {}
     )
+    implicit_rule_metrics = (
+        implicit_rule_measurement.get("metrics")
+        if isinstance(implicit_rule_measurement.get("metrics"), dict)
+        else {}
+    )
     business_object_repair_target = _business_object_repair_target(
         business_object_measurement
+    )
+    implicit_rule_repair_target = _implicit_rule_repair_target(
+        implicit_rule_measurement
     )
     ingestion_summary = (
         ingestion_evidence.get("summary")
@@ -141,11 +160,27 @@ def run_benchmark(
             or {},
             "generated_from_product_output": False,
         },
+        "implicit_rule_ground_truth": {
+            "declared": bool(implicit_rule_ground_truth),
+            "status": implicit_rule_measurement.get("status"),
+            "reason_code": implicit_rule_measurement.get("reason_code"),
+            "validation_receipt": implicit_rule_measurement.get(
+                "ground_truth_validation_receipt"
+            )
+            or {},
+            "generated_from_product_output": False,
+            "product_rule_ids_used_as_truth": False,
+        },
         "validation_receipt": validated.get("validation_receipt") or {},
         "ground_truth_fingerprint": ground_truth_fingerprint,
         "business_object_ground_truth_fingerprint": (
             _fingerprint(business_object_ground_truth)
             if business_object_ground_truth
+            else ""
+        ),
+        "implicit_rule_ground_truth_fingerprint": (
+            _fingerprint(implicit_rule_ground_truth)
+            if implicit_rule_ground_truth
             else ""
         ),
     }
@@ -157,8 +192,10 @@ def run_benchmark(
     common_measurements = {
         "business_fact_slot_measurement": fact_slot_measurement,
         "business_object_type_measurement": business_object_measurement,
+        "implicit_rule_measurement": implicit_rule_measurement,
         "ingestion_evidence_measurement": ingestion_evidence,
         "next_business_object_repair_target": business_object_repair_target,
+        "next_implicit_rule_repair_target": implicit_rule_repair_target,
     }
     if not model_available:
         status = "BENCHMARK_ENTERPRISE_UNDERSTANDING_MODEL_MISSING"
@@ -174,6 +211,11 @@ def run_benchmark(
             "metrics": {},
             **common_measurements,
             "next_ingestion_repair_target": next_ingestion_target,
+            "next_repair_target": (
+                implicit_rule_repair_target
+                or business_object_repair_target
+                or "SOURCE_NOT_PARSED"
+            ),
             "root_cause_analysis": {
                 "highest_impact_root_cause": "SOURCE_NOT_PARSED",
                 "repair_policy": "BUILD_THE_EXISTING_ENTERPRISE_UNDERSTANDING_MAINLINE_ASSET",
@@ -205,7 +247,8 @@ def run_benchmark(
             "next_ingestion_repair_target": next_ingestion_target,
             "root_cause_analysis": root_causes,
             "next_repair_target": (
-                business_object_repair_target
+                implicit_rule_repair_target
+                or business_object_repair_target
                 or root_causes.get("highest_impact_root_cause")
                 or ""
             ),
@@ -231,6 +274,11 @@ def run_benchmark(
         "business_object_ground_truth_fingerprint": (
             _fingerprint(business_object_ground_truth)
             if business_object_ground_truth
+            else ""
+        ),
+        "implicit_rule_ground_truth_fingerprint": (
+            _fingerprint(implicit_rule_ground_truth)
+            if implicit_rule_ground_truth
             else ""
         ),
         "product_asset_fingerprint": product_asset_fingerprint,
@@ -275,13 +323,43 @@ def run_benchmark(
         "business_object_silent_error_count": business_object_metrics.get(
             "silent_object_error_count"
         ),
+        "implicit_rule_measurement_status": implicit_rule_measurement.get("status"),
+        "implicit_rule_quality_claim_allowed": bool(
+            implicit_rule_measurement.get("quality_claim_allowed")
+        ),
+        "implicit_rule_candidate_precision": implicit_rule_metrics.get(
+            "candidate_precision"
+        ),
+        "implicit_rule_candidate_recall": implicit_rule_metrics.get(
+            "candidate_recall"
+        ),
+        "implicit_rule_promotion_precision": implicit_rule_metrics.get(
+            "promotion_precision"
+        ),
+        "implicit_rule_promotion_recall": implicit_rule_metrics.get(
+            "promotion_recall"
+        ),
+        "implicit_rule_overpromotion_rate": implicit_rule_metrics.get(
+            "overpromotion_rate"
+        ),
+        "implicit_rule_lifecycle_accuracy": implicit_rule_metrics.get(
+            "lifecycle_accuracy"
+        ),
+        "implicit_rule_stale_precision": implicit_rule_metrics.get("stale_precision"),
+        "implicit_rule_stale_recall": implicit_rule_metrics.get("stale_recall"),
+        "implicit_rule_executable_projection_recall": implicit_rule_metrics.get(
+            "executable_projection_recall"
+        ),
+        "next_implicit_rule_repair_target": implicit_rule_repair_target,
         "next_business_object_repair_target": business_object_repair_target,
         "next_ingestion_repair_target": next_ingestion_target,
         "product_ingestion_receipts_are_ground_truth": False,
         "document_ground_truth_generated_from_product_output": False,
         "business_fact_ground_truth_generated_from_product_output": False,
         "business_object_ground_truth_generated_from_product_output": False,
+        "implicit_rule_ground_truth_generated_from_product_output": False,
         "business_object_ground_truth_entered_product_runtime": False,
+        "implicit_rule_ground_truth_entered_product_runtime": False,
         "hidden_ground_truth_entered_product_runtime": False,
         "model_writeback_allowed": False,
     }
