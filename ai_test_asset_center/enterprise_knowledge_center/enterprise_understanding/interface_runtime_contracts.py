@@ -1,8 +1,10 @@
 """Preserve source-declared OpenAPI runtime contract metadata without retaining secrets.
 
-The existing parser remains the authority for interface identity.  This additive wrapper keeps
+The existing parser remains the authority for interface identity. This additive wrapper keeps
 parameter locations, request-body field paths, response contracts and security scheme names so a
-later Runtime Plan compiler does not have to guess Query/Header/Path/Body placement.
+later Runtime Plan compiler does not have to guess Query/Header/Path/Body placement. Operation
+summary and description are also preserved as one exact source excerpt so the existing
+``exact_source_section`` relationship authority can bind a source rule without token similarity.
 """
 from __future__ import annotations
 
@@ -90,7 +92,9 @@ def _schema_fields(
             )
 
     required_names = {text(value) for value in required if text(value)}
-    required_names |= {text(value) for value in as_list(schema.get("required")) if text(value)}
+    required_names |= {
+        text(value) for value in as_list(schema.get("required")) if text(value)
+    }
     properties = as_dict(schema.get("properties"))
     for name, property_value in properties.items():
         property_schema = _resolve_local_ref(document, property_value)
@@ -107,7 +111,9 @@ def _schema_fields(
             "media_type": media_type,
             "source": "OPENAPI_SCHEMA_PROPERTY",
         }
-        rows.append({key: value for key, value in row.items() if value not in ("", [], None)})
+        rows.append(
+            {key: value for key, value in row.items() if value not in ("", [], None)}
+        )
         rows.extend(
             _schema_fields(
                 document,
@@ -163,7 +169,10 @@ def _parameter_contract(
             location="BODY",
             required=as_list(schema.get("required")),
         )
-    return ({key: value for key, value in row.items() if value not in ("", [], None)}, body_fields)
+    return (
+        {key: value for key, value in row.items() if value not in ("", [], None)},
+        body_fields,
+    )
 
 
 def _request_body_contract(
@@ -188,7 +197,9 @@ def _request_body_contract(
     return fields, unique_text(media_types), bool(request_body.get("required"))
 
 
-def _response_contracts(document: dict[str, Any], responses_value: Any) -> list[dict[str, Any]]:
+def _response_contracts(
+    document: dict[str, Any], responses_value: Any
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for status, raw in as_dict(responses_value).items():
         response = _resolve_local_ref(document, raw)
@@ -196,7 +207,9 @@ def _response_contracts(document: dict[str, Any], responses_value: Any) -> list[
         media_types = unique_text(content.keys())
         fields: list[dict[str, Any]] = []
         for media_type, media in content.items():
-            schema = as_dict(_resolve_local_ref(document, as_dict(media).get("schema")))
+            schema = as_dict(
+                _resolve_local_ref(document, as_dict(media).get("schema"))
+            )
             fields.extend(
                 _schema_fields(
                     document,
@@ -225,7 +238,9 @@ def _response_contracts(document: dict[str, Any], responses_value: Any) -> list[
     return rows
 
 
-def _security_requirements(document: dict[str, Any], operation: dict[str, Any]) -> list[dict[str, Any]]:
+def _security_requirements(
+    document: dict[str, Any], operation: dict[str, Any]
+) -> list[dict[str, Any]]:
     selected = operation.get("security")
     if selected is None:
         selected = document.get("security")
@@ -251,15 +266,37 @@ def _security_requirements(document: dict[str, Any], operation: dict[str, Any]) 
     return rows
 
 
+def _operation_source_excerpt(
+    row: dict[str, Any], operation: dict[str, Any]
+) -> str:
+    """Preserve exact operation prose for the existing exact-source linker."""
+
+    parts = unique_text(
+        [
+            text(row.get("source_excerpt")),
+            text(operation.get("summary")),
+            text(operation.get("description")),
+        ]
+    )
+    return "\n".join(parts)
+
+
 def enrich_openapi_runtime_contracts(
     openapi: dict[str, Any], rows: Iterable[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    by_id = {text(row.get("interface_id")): dict(row) for row in rows if isinstance(row, dict)}
+    by_id = {
+        text(row.get("interface_id")): dict(row)
+        for row in rows
+        if isinstance(row, dict)
+    }
     for path, path_item_value in as_dict(openapi.get("paths")).items():
         path_item = as_dict(path_item_value)
         path_parameters = as_list(path_item.get("parameters"))
         for method, operation_value in path_item.items():
-            if text(method).lower() not in _HTTP_METHODS or not isinstance(operation_value, dict):
+            if (
+                text(method).lower() not in _HTTP_METHODS
+                or not isinstance(operation_value, dict)
+            ):
                 continue
             operation = dict(operation_value)
             interface_id = f"api:{text(method).upper()}:{path}"
@@ -300,6 +337,7 @@ def enrich_openapi_runtime_contracts(
                         "source": "OPENAPI_PATH_TEMPLATE",
                     }
                 )
+            source_excerpt = _operation_source_excerpt(row, operation)
             row.update(
                 {
                     "runtime_contract_schema": OPENAPI_RUNTIME_CONTRACT_SCHEMA,
@@ -310,7 +348,16 @@ def enrich_openapi_runtime_contracts(
                     "response_contracts": _response_contracts(
                         openapi, operation.get("responses")
                     ),
-                    "security_requirements": _security_requirements(openapi, operation),
+                    "security_requirements": _security_requirements(
+                        openapi, operation
+                    ),
+                    "openapi_summary": text(operation.get("summary")),
+                    "openapi_description": text(operation.get("description")),
+                    "source_excerpt": source_excerpt,
+                    "source_excerpt_authority": (
+                        "OPENAPI_OPERATION_SUMMARY_DESCRIPTION"
+                    ),
+                    "source_excerpt_exact_source_declared": bool(source_excerpt),
                     "request_contract_locations_preserved": True,
                     "credential_values_retained": False,
                 }
