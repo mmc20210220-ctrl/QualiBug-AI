@@ -17,6 +17,10 @@ from urllib.parse import quote, urlsplit, urlunsplit
 from .enterprise_knowledge_center.source_occurrence_authority import (
     ingest_enterprise_knowledge_documents,
 )
+from .enterprise_knowledge_center.source_occurrence_observation import (
+    SourceOccurrenceObservationError,
+    record_source_occurrence_observation,
+)
 
 
 class ConnectorSnapshotError(ValueError):
@@ -214,6 +218,41 @@ def _canonical_result(
     )
 
 
+def _observation_metadata(
+    *,
+    connector: str,
+    requested_source_id: str,
+    remote_id: str,
+    resource_kind: str,
+    remote_revision: str,
+    remote_updated_at: str,
+    retrieved_at: str,
+    canonical_url: str,
+    parent_remote_id: str,
+    sync_epoch_id: str,
+    sync_cursor_fingerprint: str,
+    export_format: str,
+    declared_mime: str,
+) -> dict[str, Any]:
+    return {
+        "source_origin": "connector_snapshot",
+        "connector_id": connector,
+        "connector_instance_id": connector,
+        "requested_source_id": requested_source_id,
+        "remote_resource_id": remote_id,
+        "resource_kind": _safe_resource_kind(resource_kind),
+        "remote_revision": _text(remote_revision, 240),
+        "remote_updated_at": _text(remote_updated_at, 80),
+        "retrieved_at": _text(retrieved_at, 80),
+        "canonical_url": canonical_url,
+        "parent_remote_id": _text(parent_remote_id, 1000),
+        "sync_epoch_id": _text(sync_epoch_id, 240),
+        "sync_cursor_fingerprint": sync_cursor_fingerprint,
+        "export_format": _text(export_format, 80),
+        "declared_mime": _text(declared_mime, 160),
+    }
+
+
 def ingest_connector_snapshot(
     project_id: str,
     *,
@@ -311,6 +350,35 @@ def ingest_connector_snapshot(
         )
 
     occurrence = _current_occurrence(result, source_ref)
+    occurrence_identity = _text(occurrence.get("source_occurrence_id"), 300) or source_ref
+    try:
+        observation = record_source_occurrence_observation(
+            project_id,
+            occurrence_identity,
+            metadata=_observation_metadata(
+                connector=connector,
+                requested_source_id=requested_source_id,
+                remote_id=remote_id,
+                resource_kind=resource_kind,
+                remote_revision=remote_revision,
+                remote_updated_at=remote_updated_at,
+                retrieved_at=retrieved_at,
+                canonical_url=safe_canonical_url,
+                parent_remote_id=parent_remote_id,
+                sync_epoch_id=sync_epoch_id,
+                sync_cursor_fingerprint=cursor_fingerprint,
+                export_format=export_format,
+                declared_mime=declared_mime,
+            ),
+            root=root,
+            actor=effective_actor,
+        )
+    except SourceOccurrenceObservationError as exc:
+        raise ConnectorSnapshotError(
+            f"connector_snapshot_observation_failed:{exc}"
+        ) from exc
+    occurrence = dict(observation.get("source_occurrence") or occurrence)
+
     canonical_source_id = _text(occurrence.get("canonical_source_id"), 200)
     canonical = _canonical_result(result, canonical_source_id)
     runtime_manifest = dict(canonical.get("runtime_source_manifest") or {})
@@ -336,6 +404,7 @@ def ingest_connector_snapshot(
         "external_ref": source_ref,
         "source_ref": source_ref,
         "source_occurrence": occurrence,
+        "source_occurrence_observation": observation,
         "source_occurrence_id": _text(
             occurrence.get("source_occurrence_id"), 200
         ),
