@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 import uuid
 
+from .connector_write_fence import current_connector_write_fence
 from .private_pilot_json_io import _read_json_object, _write_json_object_atomic
 from .real_project_onboarding import _safe_project_id
 
@@ -227,6 +228,8 @@ def begin_connector_sync_ownership(
     path = _path(root, project, connector)
     owner_thread_id = int(threading.get_ident())
     operation_code = _operation_code(owner_thread_id)
+    fence = current_connector_write_fence()
+    fencing_token = int(fence.get("fencing_token") or 0)
     now = time.time()
     payload = {
         "schema": SYNC_OWNERSHIP_SCHEMA,
@@ -240,6 +243,7 @@ def begin_connector_sync_ownership(
         "process_start_marker": _process_marker(os.getpid()),
         "hostname": socket.gethostname()[:240],
         "active_sync_epoch_id": "",
+        "fencing_token": fencing_token,
         "started_unix": now,
         "started_at_utc": _utc(now),
         "last_heartbeat_unix": now,
@@ -294,8 +298,66 @@ def begin_connector_sync_ownership(
         "ok": True,
         "attempt_id": attempt,
         "pid": os.getpid(),
+        "fencing_token": fencing_token,
         "heartbeat_started": True,
         "plaintext_credentials_persisted": False,
+    }
+
+
+def fence_out_connector_sync_ownership(
+    project_id: str,
+    connector_instance_id: str,
+    *,
+    root: Path,
+    takeover_attempt_id: str,
+    fencing_token: int,
+    join_timeout: float = 2.0,
+) -> dict[str, Any]:
+    """Invalidate an old heartbeat before the existing lifecycle recovery aborts it."""
+    project = _safe_project_id(project_id)
+    connector = _connector_id(connector_instance_id)
+    takeover = _text(takeover_attempt_id, 160)
+    token = int(fencing_token)
+    if not takeover or token <= 0:
+        raise ConnectorSyncOwnershipError("connector_sync_fence_takeover_invalid")
+    path = _path(root, project, connector)
+    key = str(path)
+    with _LOCAL_LOCK:
+        payload = _read_json_object(path)
+        if not payload:
+            return {"ok": True, "fenced_out": False, "state": "MISSING"}
+        previous_attempt = _text(payload.get("attempt_id"), 160)
+        entry = _HEARTBEATS.pop(key, None)
+        if isinstance(entry, dict):
+            stop_event = entry.get("stop_event")
+            if isinstance(stop_event, threading.Event):
+                stop_event.set()
+        now = time.time()
+        payload.update(
+            {
+                "state": "FENCED_OUT",
+                "previous_attempt_id": previous_attempt,
+                "attempt_id": takeover,
+                "fencing_token": token,
+                "fenced_out_at_utc": _utc(now),
+                "last_heartbeat_unix": now,
+                "last_heartbeat_at_utc": _utc(now),
+                "updated_at_utc": _utc(now),
+            }
+        )
+        _write_json_object_atomic(path, payload)
+    thread = entry.get("thread") if isinstance(entry, dict) else None
+    if isinstance(thread, threading.Thread) and thread is not threading.current_thread():
+        thread.join(max(0.0, float(join_timeout)))
+    return {
+        "ok": True,
+        "fenced_out": True,
+        "previous_attempt_id": previous_attempt,
+        "attempt_id": takeover,
+        "fencing_token": token,
+        "thread_alive": bool(
+            isinstance(thread, threading.Thread) and thread.is_alive()
+        ),
     }
 
 
@@ -391,11 +453,16 @@ def inspect_connector_sync_ownership(
         and not _thread_alive(owner_thread_id)
     )
     declared_thread_exit = payload.get("state") == "OWNER_THREAD_EXITED"
+    fenced_out = payload.get("state") == "FENCED_OUT"
     heartbeat_stale = not heartbeat or (
         time.time() - heartbeat > max(10, int(stale_after_seconds))
     )
-    owner_dead = bool(not alive or reused or local_thread_dead or declared_thread_exit)
-    if not alive:
+    owner_dead = bool(
+        not alive or reused or local_thread_dead or declared_thread_exit or fenced_out
+    )
+    if fenced_out:
+        state = "FENCED_OUT"
+    elif not alive:
         state = "DEAD_PROCESS"
     elif reused:
         state = "REUSED_PROCESS_ID"
@@ -412,6 +479,7 @@ def inspect_connector_sync_ownership(
         "owner_dead": owner_dead,
         "heartbeat_stale": heartbeat_stale,
         "process_id_reused": reused,
+        "fenced_out": fenced_out,
     }
 
 
@@ -419,6 +487,7 @@ __all__ = [
     "SYNC_OWNERSHIP_SCHEMA",
     "ConnectorSyncOwnershipError",
     "begin_connector_sync_ownership",
+    "fence_out_connector_sync_ownership",
     "heartbeat_connector_sync_ownership",
     "inspect_connector_sync_ownership",
     "read_connector_sync_ownership",
