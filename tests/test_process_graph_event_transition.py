@@ -17,11 +17,41 @@ from ai_test_asset_center.process_graph_wait_contract import (
 
 
 def _ir() -> dict:
-    return {"operations": [{"id": "op_submit", "method": "POST", "path": "/orders", "system_ref": "orders"}, {"id": "op_consume", "method": "GET", "path": "/notifications/{order_id}", "system_ref": "notifications"}, {"id": "op_event_observer", "method": "GET", "path": "/test-observers/events", "system_ref": "notifications"}]}
+    return {
+        "operations": [
+            {"id": "op_submit", "method": "POST", "path": "/orders", "system_ref": "orders"},
+            {"id": "op_consume", "method": "GET", "path": "/notifications/{order_id}", "system_ref": "notifications"},
+            {"id": "op_event_observer", "method": "GET", "path": "/test-observers/events", "system_ref": "notifications"},
+        ]
+    }
 
 
 def _graph() -> dict:
-    return {"execution_graph_id": "graph_event_1", "process_id": "process_event_1", "nodes": [{"node_id": "submit_order", "step_id": "submit_order", "operation_ref": "op_submit", "actor_ref": "actor_1", "system_ref": "orders", "method": "POST", "path": "/orders"}, {"node_id": "consume_notification", "step_id": "consume_notification", "operation_ref": "op_consume", "actor_ref": "actor_1", "system_ref": "notifications", "method": "GET", "path": "/notifications/{order_id}"}], "edges": [{"edge_id": "edge_event_1", "source_node_id": "submit_order", "target_node_id": "consume_notification", "relation_type": "MESSAGE"}], "topological_order": ["submit_order", "consume_notification"], "wait_contracts": [{"wait_id": "wait_order_created", "source_node_id": "submit_order", "target_node_id": "consume_notification", "observer_operation_ref": "op_event_observer", "actor_ref": "actor_1", "system_ref": "notifications", "predicate": {"status_codes": [200]}, "async_policy": {"enabled": True, "expected_max_delay_ms": 10, "poll_interval_ms": 1, "max_attempts": 3, "required_stable_observations": 1, "terminal_condition": "source_declared_event_delivery"}, "event_transition": {"delivery_kind": "message", "delivery_semantics": "exactly_once", "events_path": "$.items", "event_id_field": "$.event_id", "event_type_field": "$.event_type", "correlation_field": "$.aggregate_id", "correlation_binding": "order_id", "correlation_query_parameter": "aggregate_id", "expected_event_type": "OrderCreated", "expected_min_count": 1, "expected_max_count": 1, "idempotency_key_binding": "request_id", "idempotency_key_field": "$.idempotency_key", "delivery_attempt_field": "$.delivery_attempt", "expected_max_delivery_attempt": 2, "source_refs": [{"kind": "formal_event_contract", "locator": "events:OrderCreated"}]}}]}
+    return {
+        "execution_graph_id": "graph_event_1",
+        "process_id": "process_event_1",
+        "nodes": [
+            {"node_id": "submit_order", "step_id": "submit_order", "operation_ref": "op_submit", "actor_ref": "actor_1", "system_ref": "orders", "method": "POST", "path": "/orders"},
+            {"node_id": "consume_notification", "step_id": "consume_notification", "operation_ref": "op_consume", "actor_ref": "actor_1", "system_ref": "notifications", "method": "GET", "path": "/notifications/{order_id}"},
+        ],
+        "edges": [
+            {"edge_id": "edge_event_1", "source_node_id": "submit_order", "target_node_id": "consume_notification", "relation_type": "MESSAGE"}
+        ],
+        "topological_order": ["submit_order", "consume_notification"],
+        "wait_contracts": [
+            {
+                "wait_id": "wait_order_created",
+                "source_node_id": "submit_order",
+                "target_node_id": "consume_notification",
+                "observer_operation_ref": "op_event_observer",
+                "actor_ref": "actor_1",
+                "system_ref": "notifications",
+                "predicate": {"status_codes": [200]},
+                "async_policy": {"enabled": True, "expected_max_delay_ms": 10, "poll_interval_ms": 1, "max_attempts": 3, "required_stable_observations": 1, "terminal_condition": "source_declared_event_delivery"},
+                "event_transition": {"delivery_kind": "message", "delivery_semantics": "exactly_once", "events_path": "$.items", "event_id_field": "$.event_id", "event_type_field": "$.event_type", "correlation_field": "$.aggregate_id", "correlation_binding": "order_id", "correlation_query_parameter": "aggregate_id", "expected_event_type": "OrderCreated", "expected_min_count": 1, "expected_max_count": 1, "idempotency_key_binding": "request_id", "idempotency_key_field": "$.idempotency_key", "delivery_attempt_field": "$.delivery_attempt", "expected_max_delivery_attempt": 2, "source_refs": [{"kind": "formal_event_contract", "locator": "events:OrderCreated"}]},
+            }
+        ],
+    }
 
 
 def _compiled_graph() -> dict:
