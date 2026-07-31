@@ -77,6 +77,7 @@ def _publish_identity_audit_receipts(
         "identity_evidence_policy_receipt",
         "enterprise_identity_registry_recompute_receipt",
         "enterprise_identity_authority_projection_receipt",
+        "enterprise_identity_field_evidence",
         "enterprise_identity_annotation_manifest",
         "enterprise_identity_benchmark",
     ):
@@ -97,6 +98,11 @@ def _attach_identity_audit_receipts(
         resolution.get("authority_decision_projection")
         or asset.get("enterprise_identity_authority_projection_receipt")
     )
+    field_evidence = as_dict(
+        resolution.get("identity_field_evidence")
+        or asset.get("enterprise_identity_field_evidence")
+    )
+    model["identity_field_evidence"] = field_evidence
     model["identity_annotation_manifest"] = as_dict(
         resolution.get("annotation_manifest")
         or asset.get("enterprise_identity_annotation_manifest")
@@ -139,6 +145,18 @@ def _attach_identity_audit_receipts(
             "enterprise_identity_annotation_manifest_count": int(
                 as_dict(model.get("identity_annotation_manifest")).get("mention_count")
                 or 0
+            ),
+            "enterprise_identity_field_binding_count": int(
+                field_evidence.get("field_binding_count") or 0
+            ),
+            "enterprise_identity_cross_technical_key_binding_count": int(
+                field_evidence.get("cross_technical_binding_count") or 0
+            ),
+            "enterprise_identity_field_candidate_count": int(
+                field_evidence.get("candidate_only_count") or 0
+            ),
+            "enterprise_identity_field_conflict_count": int(
+                field_evidence.get("field_conflict_count") or 0
             ),
         }
     )
