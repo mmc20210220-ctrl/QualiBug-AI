@@ -25,6 +25,35 @@ export type IdentityAnnotationManifest = {
   required_annotation_output_schema?: string;
 };
 
+export type IdentityAnnotationTaskPackage = {
+  schema?: string;
+  task_package_id?: string;
+  manifest_id?: string;
+  annotation_scope?: string;
+  task_count?: number;
+  batch_count?: number;
+  batch_size?: number;
+  tasks?: Array<Record<string, unknown>>;
+  batches?: Array<Record<string, unknown>>;
+  submission_template?: Record<string, unknown>;
+  instructions?: Record<string, unknown>;
+  review_modes?: string[];
+  contains_product_cluster_suggestions?: boolean;
+  contains_predicted_entity_ids?: boolean;
+  contains_similarity_candidates?: boolean;
+};
+
+export type IdentityAnnotationImportResult = {
+  schema?: string;
+  status?: 'IMPORTED' | 'REVIEW_REQUIRED' | string;
+  project_id?: string;
+  task_package_id?: string;
+  manifest_id?: string;
+  compilation?: Record<string, unknown>;
+  workspace?: IdentityBenchmarkWorkspace;
+  ground_truth_imported?: boolean;
+};
+
 export type IdentityBenchmarkWorkspace = {
   schema?: string;
   project_id?: string;
@@ -90,6 +119,24 @@ export function getIdentityBenchmarkWorkspace(project: string): Promise<Identity
 
 export function getIdentityAnnotationManifest(project: string): Promise<IdentityAnnotationManifest> {
   return request<IdentityAnnotationManifest>(projectPath(project, '/manifest'));
+}
+
+export function getIdentityAnnotationTaskPackage(project: string): Promise<IdentityAnnotationTaskPackage> {
+  return request<IdentityAnnotationTaskPackage>(projectPath(project, '/annotation-package'));
+}
+
+export function compileIdentityAnnotationSubmissions(
+  project: string,
+  submissions: {
+    primary_submission: Record<string, unknown>;
+    secondary_submission?: Record<string, unknown>;
+    adjudication_submission?: Record<string, unknown>;
+  },
+): Promise<IdentityAnnotationImportResult> {
+  return request<IdentityAnnotationImportResult>(projectPath(project, '/annotation-compile'), {
+    method: 'POST',
+    body: JSON.stringify(submissions),
+  });
 }
 
 export function importIdentityGroundTruth(
