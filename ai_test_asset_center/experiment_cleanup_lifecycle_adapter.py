@@ -2,7 +2,7 @@
 
 The cleanup executor predates compiled state-precondition execution and therefore
 recognises governed writes only in the measured ``control``/``treatment`` phases.
-This adapter does not implement another cleanup engine.  It creates temporary
+This adapter does not implement another cleanup engine. It creates temporary
 ``treatment`` projections for real precondition write receipts, invokes the
 existing cleanup executor unchanged, and removes those projections from the
 returned runtime timeline.
@@ -14,9 +14,20 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from .experiment_cleanup_executor_core import (
-    execute_experiment_cleanup_compensation as _execute_cleanup,
-)
+try:
+    from .experiment_cleanup_executor_core import (
+        execute_experiment_cleanup_compensation as _execute_cleanup,
+    )
+    _CLEANUP_AUTHORITY = "experiment_cleanup_executor_core"
+except ModuleNotFoundError:
+    # Transition compatibility only. Before the facade publishes the core path,
+    # direct adapter tests may still bind the current public cleanup executor.
+    # Once the facade exists this branch is unreachable, avoiding import cycles.
+    from .experiment_cleanup_executor import (
+        execute_experiment_cleanup_compensation as _execute_cleanup,
+    )
+    _CLEANUP_AUTHORITY = "experiment_cleanup_executor"
+
 from .experiment_runtime_support import _dict, _list, _request_example, _text
 from .runtime_binding_materializer import materialize_body_template
 
@@ -59,7 +70,7 @@ def _project_precondition_steps(
     """Return cleanup input with temporary measured-phase projections.
 
     Projection is deliberately structural: it changes only the phase consumed by
-    the legacy cleanup filters.  The governance receipt, actor, operation, path,
+    the legacy cleanup filters. The governance receipt, actor, operation, path,
     response and semantic receipt are copied without reinterpretation.
     """
     plan_by_step = _precondition_plan_by_step_id(exp)
@@ -144,7 +155,7 @@ def execute_experiment_cleanup_compensation(**kwargs: Any) -> dict[str, Any]:
         "projected_step_ids": list(dict.fromkeys(projected_ids)),
         "projected_step_count": len(set(projected_ids)),
         "shadow_rows_persisted": False,
-        "cleanup_authority": "experiment_cleanup_executor_core",
+        "cleanup_authority": _CLEANUP_AUTHORITY,
     }
     result["observations"] = observations
     return result
