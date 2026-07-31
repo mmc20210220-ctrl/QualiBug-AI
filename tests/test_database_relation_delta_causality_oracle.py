@@ -1,272 +1,24 @@
 from __future__ import annotations
 
-import hashlib
-import json
 from copy import deepcopy
 
-from ai_test_asset_center.database_relation_delta_causality_oracle import (
-    evaluate_database_relation_causal_delta,
+from ai_test_asset_center.database_relation_delta_causality_integrity import (
+    evaluate_database_relation_causal_delta_with_integrity,
 )
-from ai_test_asset_center.database_relation_delta_causality_projection import (
-    ASSERTION_KIND,
+from ai_test_asset_center.operation_causality_receipt_integrity import (
+    seal_operation_causality_transport_receipt,
 )
-from ai_test_asset_center.database_relation_delta_projection_gate import (
-    SEMANTIC_PAIR_SCHEMA,
-    semantic_relation_delta_pair_id,
+from tests.database_relation_delta_causality_fixtures import (
+    build_observations,
+    build_spec,
+    transport_receipt,
 )
-
-
-def _fingerprint(value: object) -> str:
-    material = json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    )
-    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:20]
-
-
-def _root_phase(value: str, phase: str, draft_id: str) -> dict:
-    return {
-        "receipt_id": f"root-{phase.lower()}",
-        "campaign_id": "campaign-1",
-        "execution_id": "execution-1",
-        "observer_id": "approved_database_readback",
-        "status": "OBSERVED",
-        "reason_code": "",
-        "evidence": {
-            "approved_database_snapshot": {
-                "database_table_ref": "table:accounts",
-                "database_table_name": "accounts",
-                "identity_key": ["id"],
-                "identity_parameter_fingerprints": ["identity-a-1"],
-                "match_status": "MATCHED_ONE",
-                "row_count": 1,
-                "rows": [{"id": "a-1", "balance": value}],
-                "row_fingerprint": f"root-{phase}-{value}",
-                "oracle_verdict_emitted": False,
-            }
-        },
-        "draft_id": draft_id,
-        "observer_contract_ref": "observer:accounts",
-        "observation_phase": phase,
-        "oracle_verdict_emitted": False,
-    }
-
-
-def _relation_phase(
-    value: str,
-    count: int,
-    phase: str,
-    draft_id: str,
-    *,
-    pair_id: str,
-    causal_value: str = "req-1",
-) -> dict:
-    causal_fp = _fingerprint(causal_value)
-    return {
-        "receipt_id": f"relation-{phase.lower()}",
-        "phase_receipt_id": f"relation-phase-{phase.lower()}",
-        "campaign_id": "campaign-1",
-        "execution_id": "execution-1",
-        "observer_id": "approved_database_relation_aggregate",
-        "status": "OBSERVED",
-        "reason_code": "",
-        "evidence": {
-            "approved_database_relation_aggregate_snapshot": {
-                "relation_observer_ref": "relation-observer:ledger",
-                "root_observer_ref": "observer:accounts",
-                "database_relationship_id": "fk:ledger:accounts",
-                "parent_table_ref": "table:accounts",
-                "child_table_ref": "table:ledger_entries",
-                "child_table_name": "ledger_entries",
-                "relation_key": [
-                    {
-                        "child_database_field_name": "account_id",
-                        "parent_database_field_name": "id",
-                    }
-                ],
-                "relation_parameter_fingerprints": ["identity-a-1"],
-                "aggregate_requests": [
-                    {
-                        "aggregate": "SUM",
-                        "database_field_id": "field:ledger_entries:amount",
-                        "database_field_name": "amount",
-                        "alias": "related_value",
-                    },
-                    {
-                        "aggregate": "COUNT",
-                        "database_field_id": "",
-                        "database_field_name": "",
-                        "alias": "related_scope_count",
-                    },
-                ],
-                "aggregate_values": {
-                    "related_value": value,
-                    "related_scope_count": count,
-                },
-                "aggregate_fingerprint": f"aggregate-{phase}-{value}-{count}",
-                "causal_attribution_applied": True,
-                "causal_attribution_predicate_count": 1,
-                "causal_attribution_scope": {
-                    "schema": "qualibug.database-relation-causal-attribution-scope.v1",
-                    "causal_scope_fingerprint": "causal-scope-1",
-                    "operation_ref": "api:POST:/ledger",
-                    "value_source": "request.body.request_id",
-                    "child_database_field_id": "field:ledger_entries:request_id",
-                    "child_database_field_name": "request_id",
-                    "mapping_decision_id": "decision:ledger-request-id",
-                    "attribution_mode": "EXACT_REQUEST_CORRELATION",
-                    "timestamp_window_attribution_used": False,
-                    "response_generated_identifier_used": False,
-                    "raw_causal_value_retained": False,
-                },
-                "causal_attribution_parameter_fingerprints": [causal_fp],
-                "client_side_filter_used": False,
-                "raw_rows_retained": False,
-                "oracle_verdict_emitted": False,
-            }
-        },
-        "draft_id": draft_id,
-        "relation_pair_id": pair_id,
-        "relation_observer_contract_ref": "relation-observer:ledger",
-        "root_observer_contract_ref": "observer:accounts",
-        "observation_phase": phase,
-        "oracle_verdict_emitted": False,
-    }
-
-
-def _spec() -> dict:
-    spec = {
-        "assertion_id": "assert:causal-balance-ledger",
-        "kind": ASSERTION_KIND,
-        "source_assertion_kind": "conservation",
-        "source_refs": [
-            {"kind": "business_rule", "locator": "BR-BALANCE-LEDGER"}
-        ],
-        "database_relation_observer_ref": "relation-observer:ledger",
-        "database_relationship_id": "fk:ledger:accounts",
-        "relation_key": [
-            {
-                "child_database_field_name": "account_id",
-                "parent_database_field_name": "id",
-            }
-        ],
-        "relation_before_draft_id": "draft:relation:before",
-        "relation_after_draft_id": "draft:relation:after",
-        "root_observer_contract_ref": "observer:accounts",
-        "root_before_draft_id": "draft:accounts:before",
-        "root_after_draft_id": "draft:accounts:after",
-        "root_table_ref": "table:accounts",
-        "root_field_binding_id": "binding:accounts:balance",
-        "root_database_field_id": "field:accounts:balance",
-        "root_database_field_name": "balance",
-        "child_table_ref": "table:ledger_entries",
-        "child_database_field_id": "field:ledger_entries:amount",
-        "child_database_field_name": "amount",
-        "aggregate": "SUM",
-        "aggregate_alias": "related_value",
-        "scope_count_alias": "related_scope_count",
-        "comparison_operator": "EQ",
-        "aggregate_on_left": False,
-        "left_coefficient": -1,
-        "right_coefficient": 1,
-        "tolerance": "0",
-        "comparison_phase_pair": "BEFORE_AFTER",
-        "causal_scope_fingerprint": "causal-scope-1",
-        "causal_attribution_contract": {
-            "status": "BOUND",
-            "causal_scope_fingerprint": "causal-scope-1",
-            "operation_ref": "api:POST:/ledger",
-            "treatment_step_id": "treatment-1",
-            "value_source": "request.body.request_id",
-            "child_database_field_id": "field:ledger_entries:request_id",
-            "child_database_field_name": "request_id",
-            "mapping_decision_id": "decision:ledger-request-id",
-            "attribution_mode": "EXACT_REQUEST_CORRELATION",
-        },
-        "database_relation_delta_binding": {
-            "relation_mapping_decision_id": "decision:relation",
-            "causal_attribution_schema": "qualibug.operation-causal-attribution.v1",
-            "causal_scope_fingerprint": "causal-scope-1",
-            "causal_mapping_decision_id": "decision:ledger-request-id",
-            "causal_value_source": "request.body.request_id",
-            "causal_operation_ref": "api:POST:/ledger",
-            "causal_scope_exact": True,
-        },
-    }
-    pair_id = semantic_relation_delta_pair_id(spec)
-    spec["relation_pair_id"] = pair_id
-    spec["database_relation_delta_binding"].update(
-        {
-            "semantic_pair_schema": SEMANTIC_PAIR_SCHEMA,
-            "pair_covers_complete_assertion_semantics": True,
-            "relation_pair_id": pair_id,
-            "relation_before_draft_id": spec["relation_before_draft_id"],
-            "relation_after_draft_id": spec["relation_after_draft_id"],
-        }
-    )
-    return spec
-
-
-def _transport(causal_value: str = "req-1") -> dict:
-    fp = _fingerprint(causal_value)
-    return {
-        "schema": "qualibug.operation-causality-transport-receipt.v1",
-        "receipt_id": "causal-transport-1",
-        "causal_scope_fingerprint": "causal-scope-1",
-        "operation_ref": "api:POST:/ledger",
-        "treatment_step_id": "treatment-1",
-        "value_source": "request.body.request_id",
-        "preflight_value_fingerprint": fp,
-        "transport_value_fingerprint": fp,
-        "source_value_fingerprint_match": True,
-        "request_semantics_fingerprint": "semantics-1",
-        "transport_receipt_id": "transport-1",
-        "status_code": 201,
-        "campaign_id": "campaign-1",
-        "execution_id": "execution-1",
-        "status": "ATTRIBUTED",
-        "reason_code": "",
-        "transport_reached": True,
-        "raw_causal_value_retained": False,
-        "timestamp_window_attribution_used": False,
-    }
-
-
-def _observations() -> dict:
-    spec = _spec()
-    pair_id = spec["relation_pair_id"]
-    return {
-        "approved_database_observer_phase_receipts": [
-            _root_phase("100", "BEFORE", "draft:accounts:before"),
-            _root_phase("85", "AFTER", "draft:accounts:after"),
-        ],
-        "approved_database_relation_phase_receipts": [
-            _relation_phase(
-                "20",
-                1,
-                "BEFORE",
-                "draft:relation:before",
-                pair_id=pair_id,
-            ),
-            _relation_phase(
-                "30",
-                2,
-                "AFTER",
-                "draft:relation:after",
-                pair_id=pair_id,
-            ),
-        ],
-        "operation_causality_transport_receipts": [_transport()],
-    }
 
 
 def test_causal_scope_allows_existing_delta_violation() -> None:
-    spec = _spec()
-    result = evaluate_database_relation_causal_delta(
-        {"spec": spec, "observations": _observations()}
+    spec = build_spec()
+    result = evaluate_database_relation_causal_delta_with_integrity(
+        {"spec": spec, "observations": build_observations(spec)}
     )
 
     assert result["passed"] is False
@@ -279,16 +31,19 @@ def test_causal_scope_allows_existing_delta_violation() -> None:
     assert actual["transport_scope_match"] is True
     assert actual["causal_value_fingerprint_match"] is True
     assert actual["causal_lineage_match"] is True
+    assert actual["causal_scope_semantic_match"] is True
+    assert actual["transport_receipt_integrity_valid"] is True
     assert actual["timestamp_window_attribution_used"] is False
 
 
 def test_transport_and_relation_correlation_mismatch_is_indeterminate() -> None:
-    observations = _observations()
+    spec = build_spec()
+    observations = build_observations(spec)
     observations["operation_causality_transport_receipts"] = [
-        _transport("different-request")
+        transport_receipt(spec, "different-request")
     ]
-    result = evaluate_database_relation_causal_delta(
-        {"spec": _spec(), "observations": observations}
+    result = evaluate_database_relation_causal_delta_with_integrity(
+        {"spec": spec, "observations": observations}
     )
 
     assert result["passed"] is None
@@ -298,12 +53,18 @@ def test_transport_and_relation_correlation_mismatch_is_indeterminate() -> None:
 
 
 def test_cross_execution_causality_receipt_is_indeterminate() -> None:
-    observations = _observations()
-    observations["operation_causality_transport_receipts"][0][
-        "execution_id"
-    ] = "execution-2"
-    result = evaluate_database_relation_causal_delta(
-        {"spec": _spec(), "observations": observations}
+    spec = build_spec()
+    observations = build_observations(spec)
+    receipt = deepcopy(
+        observations["operation_causality_transport_receipts"][0]
+    )
+    receipt.pop("receipt_id")
+    receipt["execution_id"] = "execution-2"
+    observations["operation_causality_transport_receipts"] = [
+        seal_operation_causality_transport_receipt(receipt)
+    ]
+    result = evaluate_database_relation_causal_delta_with_integrity(
+        {"spec": spec, "observations": observations}
     )
 
     assert result["passed"] is None
@@ -313,15 +74,16 @@ def test_cross_execution_causality_receipt_is_indeterminate() -> None:
 
 
 def test_timestamp_window_cannot_impersonate_exact_correlation() -> None:
-    observations = _observations()
+    spec = build_spec()
+    observations = build_observations(spec)
     scope = observations["approved_database_relation_phase_receipts"][1][
         "evidence"
     ]["approved_database_relation_aggregate_snapshot"][
         "causal_attribution_scope"
     ]
     scope["timestamp_window_attribution_used"] = True
-    result = evaluate_database_relation_causal_delta(
-        {"spec": _spec(), "observations": observations}
+    result = evaluate_database_relation_causal_delta_with_integrity(
+        {"spec": spec, "observations": observations}
     )
 
     assert result["passed"] is None
@@ -331,12 +93,13 @@ def test_timestamp_window_cannot_impersonate_exact_correlation() -> None:
 
 
 def test_duplicate_transport_receipts_do_not_select_winner() -> None:
-    observations = _observations()
-    duplicate = deepcopy(observations["operation_causality_transport_receipts"][0])
-    duplicate["receipt_id"] = "causal-transport-2"
-    observations["operation_causality_transport_receipts"].append(duplicate)
-    result = evaluate_database_relation_causal_delta(
-        {"spec": _spec(), "observations": observations}
+    spec = build_spec()
+    observations = build_observations(spec)
+    observations["operation_causality_transport_receipts"].append(
+        deepcopy(observations["operation_causality_transport_receipts"][0])
+    )
+    result = evaluate_database_relation_causal_delta_with_integrity(
+        {"spec": spec, "observations": observations}
     )
 
     assert result["passed"] is None
