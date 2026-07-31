@@ -1,9 +1,8 @@
 """Private-pilot HTTP surface for enterprise knowledge connectors.
 
 The HTTP layer owns authentication, public projection, and request shaping only. Trusted sync
-execution, checkpoint validation, fencing, automatic refresh, and retry policy live in the
-managed connector application service. Stranded-run abort remains an internal recovery action
-and is never exposed as an unfenced HTTP mutation.
+execution, fenced configuration, checkpoint validation, automatic refresh, and retry policy live
+in connector application services. Stranded-run abort remains an internal recovery action.
 """
 from __future__ import annotations
 
@@ -16,9 +15,9 @@ from .connector_auto_sync import (
     run_managed_feishu_sync,
     test_managed_feishu_connection,
 )
+from .connector_configuration_service import configure_managed_feishu_connector
 from .connector_connection_profiles import (
     ConnectorProfileError,
-    configure_feishu_connector,
     list_connector_connection_profiles,
 )
 from .connector_sync_authority import (
@@ -320,7 +319,7 @@ class KnowledgeConnectorHandlersMixin:
                 )
                 if key in body
             }
-        result = configure_feishu_connector(
+        result = configure_managed_feishu_connector(
             project,
             connector_instance_id=connector,
             resource_scope=_text(body.get("resource_scope"), 1000),
@@ -330,10 +329,15 @@ class KnowledgeConnectorHandlersMixin:
             display_name=_text(body.get("display_name"), 240),
             status=_text(body.get("status"), 32) or "ACTIVE",
         )
-        public_result = dict(result)
-        public_result["connector_instance"] = _public_connector_instance(
-            dict(result.get("connector_instance") or {})
-        )
+        public_result = {
+            "ok": bool(result.get("ok")),
+            "created": bool(result.get("created")),
+            "connector_instance": _public_connector_instance(
+                dict(result.get("connector_instance") or {})
+            ),
+            "connection_profile": dict(result.get("connection_profile") or {}),
+            "credential_storage": dict(result.get("credential_storage") or {}),
+        }
         return self._json(
             {"ok": True, "data": public_result},
             201 if result["created"] else 200,
