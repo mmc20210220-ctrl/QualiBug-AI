@@ -1348,6 +1348,7 @@ def build_enterprise_understanding_model(asset: dict[str, Any]) -> dict[str, Any
                 "responsibility_is_permission": False,
                 "unknown_is_allow": False,
                 "unknown_is_deny": False,
+                "formal_decision_requires_complete_coordinate": True,
                 "mixed_allow_and_deny_rows_are_split": True,
                 "automatic_inference_allowed": False,
             },
@@ -1813,23 +1814,38 @@ def _authorization_contract(
     resources = unique_text(resource_refs)
     action_values = unique_text(actions)
     evidence_rows = dedupe_evidence(evidence)
+    declared_decision = text(decision).upper() or "UNKNOWN"
+    coordinate_complete = bool(resources and action_values)
+    resolved_decision = (
+        declared_decision
+        if declared_decision in {"ALLOW", "DENY"} and coordinate_complete
+        else "UNKNOWN"
+    )
+    if resolved_decision != "UNKNOWN":
+        resolution_reason = ""
+    elif declared_decision == "UNKNOWN":
+        resolution_reason = "ACTOR_AUTHORIZATION_DECISION_UNRESOLVED"
+    else:
+        resolution_reason = "ACTOR_AUTHORIZATION_COORDINATE_INCOMPLETE"
     return {
         "authorization_contract_id": stable_id(
             "authorization_contract",
-            decision,
+            resolved_decision,
             resources,
             action_values,
             scope,
             source_ref,
-            derivation,
         ),
-        "decision": decision,
+        "decision": resolved_decision,
+        "declared_decision": declared_decision,
         "resource_refs": resources,
         "actions": action_values,
         "scope": scope,
         "conditions": unique_text(conditions),
         "source_ref": source_ref,
         "derivation": derivation,
+        "coordinate_complete": coordinate_complete,
+        "resolution_reason": resolution_reason,
         "evidence": evidence_rows,
         "automatic_inference_allowed": False,
     }
@@ -2048,7 +2064,33 @@ def _build_actors(
                     ]
                 )
 
+    known_unknown_contract_ids = {
+        text(
+            as_dict(as_dict(row.get("details")).get("authorization_contract")).get(
+                "authorization_contract_id"
+            )
+        )
+        for row in authorization_unknowns
+        if isinstance(row, dict)
+    }
     for row in actors.values():
+        actor_name = text(row.get("name"))
+        for contract in as_list(row.get("permission_unknowns")):
+            if not isinstance(contract, dict):
+                continue
+            contract_id = text(contract.get("authorization_contract_id"))
+            if contract_id in known_unknown_contract_ids:
+                continue
+            authorization_unknowns.append(
+                _authorization_unknown(
+                    actor_name=actor_name,
+                    contract=contract,
+                    reason_code=text(contract.get("resolution_reason"))
+                    or "ACTOR_AUTHORIZATION_UNRESOLVED",
+                )
+            )
+            known_unknown_contract_ids.add(contract_id)
+
         counts = {
             "ALLOW": len(as_list(row.get("permissions"))),
             "DENY": len(as_list(row.get("restrictions"))),
