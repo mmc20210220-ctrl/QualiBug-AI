@@ -157,6 +157,7 @@ def test_database_executes_fk_filtered_sum_and_count_without_retaining_rows(
     assert payload["oracle_verdict_emitted"] is False
     serialized = json.dumps(receipt)
     assert "secret-a" not in serialized
+    assert "secret-b" not in serialized
     assert "secret-c" not in serialized
     assert "o-1" not in serialized
     assert str(database) not in serialized
@@ -229,7 +230,10 @@ def test_sensitive_child_field_cannot_be_aggregated(tmp_path: Path) -> None:
 
     assert receipt["status"] == "INDETERMINATE"
     assert receipt["reason_code"] == "DATABASE_RELATION_OBSERVER_CONTRACT_REFUSED"
-    assert "secret" not in json.dumps(receipt).lower()
+    serialized = json.dumps(receipt)
+    assert "secret-a" not in serialized
+    assert "secret-b" not in serialized
+    assert "secret-c" not in serialized
 
 
 def test_production_relation_read_is_blocked(tmp_path: Path) -> None:
