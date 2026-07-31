@@ -1,9 +1,9 @@
 """Governed runtime facade for source-backed process execution graphs.
 
-The existing synchronous graph core remains the dependency, binding-ledger and
-node-outcome authority.  This facade adds only graph-write target authorization:
-a write node can run when the final compiler attached a resolved write contract
-and the exact target policy grants writes.  Reads delegate unchanged.
+The existing graph core remains the dependency, binding-ledger and node-outcome
+authority. This facade adds graph-write target authorization and admits only
+compile-frozen observer-backed waits. Reads without waits still delegate
+unchanged to the mature core.
 """
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from copy import deepcopy
 from typing import Any
 
 from . import process_graph_read_runtime as _core
+from .process_graph_wait_contract import compiled_wait_runtime_ready
 from .target_policy import normalize_base_url
 
 GRAPH_RUNTIME_SCHEMA = _core.GRAPH_RUNTIME_SCHEMA
@@ -125,9 +126,16 @@ def prepare_graph_runtime(
     base_url: str,
     runtime_contract: dict[str, Any],
 ) -> dict[str, Any]:
-    """Validate one synchronous graph before any node reaches transport."""
+    """Validate one governed graph before any node reaches transport."""
     write_contracts = _dict(graph.get("write_contracts_by_node"))
-    if not write_contracts:
+    wait_contracts = _list(graph.get("wait_contracts"))
+    async_edges = [
+        _dict(edge)
+        for edge in _list(graph.get("edges"))
+        if isinstance(edge, dict)
+        and _text(edge.get("relation_type")).upper() in _ASYNC_RELATIONS
+    ]
+    if not write_contracts and not wait_contracts and not async_edges:
         return _core.prepare_graph_runtime(
             graph=graph,
             treatment_plan=treatment_plan,
@@ -162,26 +170,18 @@ def prepare_graph_runtime(
                 f"unexpected={sorted(plan_ids - set(nodes))}"
             ),
         }
-    if _list(graph.get("wait_contracts")):
+    wait_ready, wait_error = compiled_wait_runtime_ready(graph)
+    if not wait_ready:
         return {
             "status": "BLOCKED",
-            "reason_code": GRAPH_RUNTIME_WAIT_UNSUPPORTED,
-            "detail": "source_declared_wait_contract_requires_observer_scheduler",
+            "reason_code": (
+                GRAPH_RUNTIME_ASYNC_UNSUPPORTED
+                if async_edges
+                else GRAPH_RUNTIME_WAIT_UNSUPPORTED
+            ),
+            "detail": wait_error or "compiled_wait_runtime_not_ready",
         }
-    async_edges = sorted(
-        {
-            _text(edge.get("relation_type")).upper()
-            for edge in _list(graph.get("edges"))
-            if isinstance(edge, dict)
-            and _text(edge.get("relation_type")).upper() in _ASYNC_RELATIONS
-        }
-    )
-    if async_edges:
-        return {
-            "status": "BLOCKED",
-            "reason_code": GRAPH_RUNTIME_ASYNC_UNSUPPORTED,
-            "detail": ",".join(async_edges),
-        }
+
     predecessors, error = _core._predecessors(graph, set(nodes))
     if error:
         return {
@@ -252,6 +252,9 @@ def prepare_graph_runtime(
             "path": path,
             "write_node": is_write,
             "write_contract": deepcopy(_dict(write_contracts.get(node_id))),
+            "wait_contract": deepcopy(
+                _dict(_dict(graph.get("wait_contracts_by_target")).get(node_id))
+            ),
         }
 
     return {
@@ -276,6 +279,12 @@ def prepare_graph_runtime(
             "consumptions": [],
             "unresolved": [],
         },
+        "wait_runtime_contract": deepcopy(
+            _dict(graph.get("wait_runtime_contract"))
+        ),
+        "wait_contracts_by_target": deepcopy(
+            _dict(graph.get("wait_contracts_by_target"))
+        ),
     }
 
 
