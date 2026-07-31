@@ -8,6 +8,8 @@ from pathlib import Path
 
 from benchmark_evaluator.scored_run_comparison import ComparisonError, _read_artifact
 
+from .fact_slot_document import validate_business_fact_slot_document
+from .fact_slot_ground_truth import FactSlotGroundTruthValidationError
 from .ground_truth import GroundTruthValidationError, load_ground_truth
 from .runner import run_benchmark
 
@@ -30,7 +32,9 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        ground_truth = load_ground_truth(args.ground_truth)
+        ground_truth = validate_business_fact_slot_document(
+            load_ground_truth(args.ground_truth)
+        )
         if str(ground_truth.get("project_id") or "").strip() != args.project.strip():
             raise GroundTruthValidationError(
                 "--project must equal ground_truth.project_id; evaluator scope cannot silently switch"
@@ -39,7 +43,12 @@ def main(argv: list[str] | None = None) -> int:
         if not isinstance(asset, dict):
             raise GroundTruthValidationError("product asset root must be a JSON object")
         result = run_benchmark(ground_truth, asset, output_dir=args.output)
-    except (GroundTruthValidationError, ComparisonError, OSError) as exc:
+    except (
+        GroundTruthValidationError,
+        FactSlotGroundTruthValidationError,
+        ComparisonError,
+        OSError,
+    ) as exc:
         sys.stderr.write(f"enterprise-understanding benchmark input error: {exc}\n")
         return 2
     summary = {
