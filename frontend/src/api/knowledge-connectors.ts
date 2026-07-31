@@ -75,6 +75,12 @@ export type KnowledgeConnectorActionResult = {
   [key: string]: unknown;
 };
 
+export type ConnectFeishuKnowledgeResult = {
+  connector: KnowledgeConnectorRecord;
+  connection: KnowledgeConnectorActionResult;
+  sync: KnowledgeConnectorActionResult;
+};
+
 const asRecord = (value: unknown): JsonRecord => (
   value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as JsonRecord
@@ -85,6 +91,63 @@ const asArray = (value: unknown): unknown[] => Array.isArray(value) ? value : []
 const asString = (value: unknown): string => typeof value === 'string' ? value : '';
 const asBoolean = (value: unknown): boolean => value === true;
 const asNumber = (value: unknown): number | undefined => typeof value === 'number' ? value : undefined;
+
+function friendlyConnectorError(rawMessage: string, status: number): string {
+  const message = rawMessage.toLowerCase();
+  if (
+    message.includes('already_running')
+    || message.includes('lock_held')
+    || message.includes('transaction_busy')
+  ) {
+    return '资料正在更新，无需重复操作。系统完成后会自动显示最新状态。';
+  }
+  if (
+    message.includes('checkpoint')
+    || message.includes('cursor_mismatch')
+    || message.includes('previous_cursor_required')
+  ) {
+    return '上次同步状态不完整，系统已保留原有资料。请点击“立即更新”重试；仍未恢复时重新授权即可。';
+  }
+  if (
+    message.includes('permission')
+    || message.includes('forbidden')
+    || message.includes('code_1069902')
+    || message.includes('code_99991663')
+  ) {
+    return '飞书授权范围不足。请在飞书开放平台为应用补充知识库与云文档只读权限，然后点击“重新授权”。';
+  }
+  if (
+    message.includes('credential')
+    || message.includes('profile')
+    || message.includes('app_secret')
+    || message.includes('access_token')
+    || message.includes('auth_mode')
+  ) {
+    return '飞书连接信息未通过验证。请检查 App ID 与 App Secret，或重新填写访问令牌。';
+  }
+  if (
+    message.includes('rate')
+    || message.includes('99991400')
+    || status === 429
+  ) {
+    return '飞书暂时限制了访问频率，原有资料不受影响。稍后点击“立即更新”即可。';
+  }
+  if (
+    message.includes('transport_failed')
+    || message.includes('api_failed')
+    || message.includes('download_failed')
+    || status >= 500
+  ) {
+    return '暂时无法读取飞书资料，原有资料不受影响。请检查网络后点击“立即更新”。';
+  }
+  if (
+    message.includes('unsupported')
+    || message.includes('export')
+  ) {
+    return '部分飞书资料暂时无法读取，系统没有覆盖原有资料。请确认文档权限或改用支持的文档格式。';
+  }
+  return '在线资料操作未完成，原有资料不受影响。请重试；仍失败时重新授权。';
+}
 
 async function connectorRequest(path: string, init?: RequestInit): Promise<JsonRecord> {
   const session = await getSession();
@@ -109,20 +172,20 @@ async function connectorRequest(path: string, init?: RequestInit): Promise<JsonR
     try {
       payload = asRecord(JSON.parse(raw));
     } catch {
-      if (!response.ok) throw new Error(`API ${response.status}: ${raw.slice(0, 200)}`);
-      throw new Error('在线资料源接口返回了无效 JSON。');
+      if (!response.ok) throw new Error(friendlyConnectorError(raw.slice(0, 200), response.status));
+      throw new Error('在线资料服务返回异常，请刷新页面后重试。');
     }
   }
   if (!response.ok) {
     const message = asString(payload.message) || asString(payload.error) || `API ${response.status}`;
-    throw new Error(message);
+    throw new Error(friendlyConnectorError(message, response.status));
   }
   return payload;
 }
 
 function projectConnectorPath(projectId: string, suffix = ''): string {
   const project = projectId.trim();
-  if (!project) throw new Error('未选择有效项目。');
+  if (!project) throw new Error('请先选择客户项目。');
   return `/api/v1/projects/${encodeURIComponent(project)}/knowledge-connectors${suffix}`;
 }
 
@@ -205,7 +268,7 @@ async function connectorAction(
   body: JsonRecord = {},
 ): Promise<KnowledgeConnectorActionResult> {
   const connector = connectorId.trim();
-  if (!connector) throw new Error('缺少在线资料源标识。');
+  if (!connector) throw new Error('在线资料源尚未配置。');
   const payload = await connectorRequest(
     projectConnectorPath(projectId, `/${encodeURIComponent(connector)}/${action}`),
     { method: 'POST', body: JSON.stringify(body) },
@@ -236,6 +299,23 @@ export function syncKnowledgeConnector(
     max_retire_count: options?.max_retire_count ?? 100,
     max_retire_ratio: options?.max_retire_ratio ?? 0.25,
   });
+}
+
+export async function connectFeishuKnowledge(
+  projectId: string,
+  input: ConfigureFeishuConnectorInput,
+): Promise<ConnectFeishuKnowledgeResult> {
+  const connector = await configureFeishuConnector(projectId, input);
+  const connection = await testKnowledgeConnector(projectId, input.connector_instance_id);
+  const sync = await syncKnowledgeConnector(projectId, input.connector_instance_id);
+  return { connector, connection, sync };
+}
+
+export function refreshKnowledgeConnector(
+  projectId: string,
+  connectorId: string,
+): Promise<KnowledgeConnectorActionResult> {
+  return syncKnowledgeConnector(projectId, connectorId);
 }
 
 export function abortKnowledgeConnector(
