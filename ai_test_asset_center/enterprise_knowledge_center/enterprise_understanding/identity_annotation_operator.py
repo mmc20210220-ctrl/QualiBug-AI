@@ -48,10 +48,15 @@ def _asset(project: str, root: Path) -> dict[str, Any]:
 def get_identity_annotation_task_package(
     project_id: str,
     root: Path | None = None,
+    *,
+    batch_size: int = 40,
 ) -> dict[str, Any]:
     project = _safe_project_id(project_id)
     resolved_root = root or ROOT
-    return build_identity_annotation_task_package(_asset(project, resolved_root))
+    return build_identity_annotation_task_package(
+        _asset(project, resolved_root),
+        batch_size=batch_size,
+    )
 
 
 def compile_and_import_identity_annotations(
