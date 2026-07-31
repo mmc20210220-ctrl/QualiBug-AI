@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from ai_test_asset_center import database_observer_experiment_runtime as phase_runtime
+from ai_test_asset_center import experiment_plan_executor as plan_runtime
 from ai_test_asset_center.non_http_observers import install_non_http_observers
 from tests.test_database_relation_delta_causality_runtime_integration import (
     _config,
@@ -59,3 +62,22 @@ def test_before_refusal_clears_private_causal_runtime_state(
     assert relation_receipt["reason_code"] == (
         "DATABASE_RELATION_CAUSAL_CONTRACT_REFUSED"
     )
+
+
+def test_plan_exception_clears_private_state_before_reraising() -> None:
+    observations = {
+        "_operation_causality_runtime_values": {
+            "causal-scope-1": {"value": "req-1"}
+        },
+        "operation_causality_assertions": [{"assertion_id": "assert-1"}],
+        "operation_causality_experiment": {
+            "treatment_plan": [{"body": {"request_id": "req-1"}}]
+        },
+    }
+
+    with pytest.raises(TypeError):
+        plan_runtime.execute_non_barrier_plans(observations=observations)
+
+    assert "_operation_causality_runtime_values" not in observations
+    assert "operation_causality_assertions" not in observations
+    assert "operation_causality_experiment" not in observations
