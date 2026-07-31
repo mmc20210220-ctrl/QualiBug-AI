@@ -13,6 +13,7 @@ from ai_test_asset_center.enterprise_knowledge_center import (
     ingest_enterprise_knowledge_documents,
     list_enterprise_knowledge_sources,
 )
+from ai_test_asset_center.enterprise_knowledge_center._utils import _load_registry
 
 
 def _connector_actor() -> dict[str, str]:
@@ -42,11 +43,26 @@ def test_connector_snapshot_uses_source_occurrence_authority(tmp_path):
     assert receipt["source_occurrence_id"].startswith("occurrence:")
     assert receipt["canonical_source_id"].startswith("src_")
     assert receipt["canonical_url"] == "https://docs.example.com/doccnA123"
-    assert receipt["sync_cursor_fingerprint"] == hashlib.sha256(
-        b"opaque-cursor-value"
-    ).hexdigest()
+    cursor_fingerprint = hashlib.sha256(b"opaque-cursor-value").hexdigest()
+    assert receipt["sync_cursor_fingerprint"] == cursor_fingerprint
     assert "sync_cursor" not in receipt
     assert receipt["raw_sync_cursor_persisted"] is False
+
+    metadata = receipt["source_occurrence"]["source_metadata"]
+    assert metadata["remote_revision"] == "17"
+    assert metadata["sync_epoch_id"] == "sync-20260731-001"
+    assert metadata["sync_cursor_fingerprint"] == cursor_fingerprint
+    assert metadata["canonical_url"] == "https://docs.example.com/doccnA123"
+    assert "sync_cursor" not in metadata
+    assert receipt["source_occurrence"]["observation_count"] == 1
+
+    registry = _load_registry("enterprise-project", tmp_path)
+    persisted = next(
+        row
+        for row in registry["source_occurrences"]
+        if row["source_occurrence_id"] == receipt["source_occurrence_id"]
+    )
+    assert persisted["source_metadata"] == metadata
 
     inventory = list_enterprise_knowledge_sources(
         "enterprise-project",
@@ -80,6 +96,46 @@ def test_connector_binary_export_reuses_existing_document_pipeline(tmp_path):
     assert receipt["content_hash"]
     assert receipt["source_occurrence"]["format_identity"] == "json"
     assert receipt["created"][0]["parse"]["parse_status"] != "failed"
+    assert receipt["source_occurrence"]["source_metadata"]["export_format"] == "json"
+
+
+def test_same_content_resync_updates_observation_without_new_identity(tmp_path):
+    content = "# 库存规则\n库存不得为负数。"
+    first = ingest_connector_snapshot(
+        "enterprise-project",
+        root=tmp_path,
+        connector_id="feishu-prod",
+        source_id="inventory-prd",
+        source_type="prd",
+        content=content,
+        remote_resource_id="doc-inventory",
+        remote_revision="1",
+        sync_epoch_id="sync-1",
+        actor=_connector_actor(),
+        filename="库存规则.md",
+    )
+    second = ingest_connector_snapshot(
+        "enterprise-project",
+        root=tmp_path,
+        connector_id="feishu-prod",
+        source_id="inventory-prd",
+        source_type="prd",
+        content=content,
+        remote_resource_id="doc-inventory",
+        remote_revision="2",
+        sync_epoch_id="sync-2",
+        actor=_connector_actor(),
+        filename="库存规则.md",
+    )
+
+    assert first["source_occurrence_id"] == second["source_occurrence_id"]
+    assert second["source_occurrence"]["observation_count"] == 2
+    assert second["source_occurrence"]["source_metadata"]["remote_revision"] == "2"
+    assert second["source_occurrence"]["source_metadata"]["sync_epoch_id"] == "sync-2"
+
+    registry = _load_registry("enterprise-project", tmp_path)
+    assert len(registry["source_occurrences"]) == 1
+    assert len(registry["content_assets"]) == 1
 
 
 def test_same_online_resource_creates_version_lineage_across_rename(tmp_path):
