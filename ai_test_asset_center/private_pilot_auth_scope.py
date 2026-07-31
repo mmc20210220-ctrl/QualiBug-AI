@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlparse
 from . import db_persistence as db_persist
 from .private_pilot_debug_client import _dbg_report
 from .private_pilot_project_assets import _known_project_exists, _root
+from .private_pilot_request_limits import MAX_JSON_BODY_BYTES, content_length
 from .private_pilot_tenant_auth import (
     TenantAuthenticationError,
     _principal_from_headers,
@@ -113,7 +114,9 @@ class AuthScopeMixin:
             return dict(cached)
         principal = _principal_from_headers(dict(self.headers), root=self._root())
         if principal.get("auth_type") == "local_development":
-            server_host = str(getattr(self.server, "server_address", ("", 0))[0] or "")
+            server_host = str(
+                getattr(self.server, "server_address", ("", 0))[0] or ""
+            )
             if server_host not in {"127.0.0.1", "localhost", "::1"}:
                 raise TenantAuthenticationError(
                     "local development authentication is restricted to loopback binding"
@@ -141,20 +144,16 @@ class AuthScopeMixin:
             return None
 
     def _body(self) -> dict[str, Any]:
-        try:
-            size = int(self.headers.get("Content-Length", "0") or 0)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("Invalid Content-Length header.") from exc
-        if size < 0:
-            raise ValueError("Invalid Content-Length header.")
+        size = content_length(self.headers)
         if not size:
             return {}
-        max_body = 2_000_000
-        if size > max_body:
-            raise ValueError("Request body exceeds the private service limit.")
+        if size > MAX_JSON_BODY_BYTES:
+            raise ValueError(
+                f"JSON request body exceeds {MAX_JSON_BODY_BYTES} byte limit."
+            )
         raw = self.rfile.read(size)
-        if not raw:
-            return {}
+        if len(raw) != size:
+            raise ValueError("Request body ended before Content-Length bytes were read.")
         try:
             parsed = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -214,8 +213,6 @@ class AuthScopeMixin:
         }
 
     def _require_project_scope(self, project: str) -> bool:
-        """Authorize a project from the server-side tenant/project registry."""
-
         try:
             safe_project = _safe_project_id(project)
             principal = self._principal()
@@ -275,9 +272,6 @@ class AuthScopeMixin:
         return False
 
 
-# The core router is complete but the final handler class has not yet been
-# composed, which is the safe point for the first-class visual baseline route
-# extension used by the existing service architecture.
 from .private_pilot_visual_baseline_http_patch import (  # noqa: E402
     install_visual_baseline_http_patch,
 )
