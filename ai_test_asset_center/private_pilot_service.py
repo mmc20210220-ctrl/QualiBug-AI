@@ -133,6 +133,9 @@ from .private_pilot_understanding_preflight import (
     UnderstandingPreflightProjectionMixin,
 )
 from .private_pilot_scan_handlers import ScanHandlersMixin
+from .private_pilot_historical_authorization_migration import (
+    HistoricalAuthorizationReportMigrationMixin,
+)
 from .private_pilot_report_loading import ReportLoadingMixin
 from .private_pilot_auth_scope import AuthScopeMixin
 from .private_pilot_llm_health import LlmHealthMixin
@@ -216,6 +219,7 @@ class PrivatePilotHandler(
     PageRenderMixin,
     FindingUtilsMixin,
     LlmHealthMixin,
+    HistoricalAuthorizationReportMigrationMixin,
     ReportLoadingMixin,
     UnderstandingCommandCenterProjectionMixin,
     CommandCenterBuilderMixin,
