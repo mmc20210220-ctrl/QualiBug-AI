@@ -9,6 +9,7 @@ from ai_test_asset_center.process_graph_wait_contract import (
     EVENT_TRANSITION_INVALID,
     STATUS_BLOCKED,
     STATUS_COMPILED,
+    STATUS_CONVERGED,
     compile_process_graph_wait_contracts,
     execute_process_graph_wait,
 )
@@ -16,12 +17,7 @@ from ai_test_asset_center.process_graph_wait_contract import (
 
 IR = {
     "operations": [
-        {
-            "id": "op_source",
-            "method": "POST",
-            "path": "/jobs",
-            "system_ref": "jobs",
-        },
+        {"id": "op_source", "method": "POST", "path": "/jobs", "system_ref": "jobs"},
         {
             "id": "op_target",
             "method": "GET",
@@ -116,9 +112,7 @@ def _graph() -> dict:
 def test_event_semantics_require_their_own_source_refs() -> None:
     graph = _graph()
     graph["wait_contracts"][0]["event_transition"]["source_refs"] = []
-
     result = compile_process_graph_wait_contracts(graph, behavior_ir=IR)
-
     assert result["status"] == STATUS_BLOCKED
     assert result["reason_code"] == EVENT_TRANSITION_INVALID
     assert "event_source_refs_missing" in result["detail"]
@@ -129,9 +123,7 @@ def test_duplicate_edge_identity_blocks_event_contract() -> None:
     duplicate = deepcopy(graph["edges"][0])
     duplicate["edge_id"] = "edge_callback_duplicate"
     graph["edges"].append(duplicate)
-
     result = compile_process_graph_wait_contracts(graph, behavior_ir=IR)
-
     assert result["status"] == STATUS_BLOCKED
     assert result["reason_code"] == EVENT_TRANSITION_INVALID
     assert "event_edge_identity_ambiguous" in result["detail"]
@@ -139,7 +131,6 @@ def test_duplicate_edge_identity_blocks_event_contract() -> None:
 
 def test_event_contract_fingerprint_binds_edge_and_base_wait() -> None:
     result = compile_process_graph_wait_contracts(_graph(), behavior_ir=IR)
-
     assert result["status"] == STATUS_COMPILED
     event = result["graph"]["wait_contracts_by_target"]["consume"][
         "event_transition_contract"
@@ -149,7 +140,7 @@ def test_event_contract_fingerprint_binds_edge_and_base_wait() -> None:
     assert event["source_refs"][0]["source_id"] == "callback_spec"
 
 
-def test_declared_retry_limit_violation_is_measured() -> None:
+def test_declared_retry_limit_violation_is_measured_for_oracle() -> None:
     result = compile_process_graph_wait_contracts(_graph(), behavior_ir=IR)
     assert result["status"] == STATUS_COMPILED
     graph = result["graph"]
@@ -184,7 +175,6 @@ def test_declared_retry_limit_violation_is_measured() -> None:
         ]
     )
     ticks = iter([0.0, 0.0, 0.001, 0.002])
-
     receipt = execute_process_graph_wait(
         graph=graph,
         step=next(row for row in graph["nodes"] if row["node_id"] == "consume"),
@@ -198,8 +188,7 @@ def test_declared_retry_limit_violation_is_measured() -> None:
         sleep=lambda _: None,
         monotonic=lambda: next(ticks),
     )
-
-    assert receipt["status"] == STATUS_BLOCKED
+    assert receipt["status"] == STATUS_CONVERGED
     assert receipt["semantic_status"] == "VIOLATION"
     assert receipt["reason_code"] == EVENT_RETRY_LIMIT_EXCEEDED
     assert receipt["retry_limit_violation_count"] == 1
