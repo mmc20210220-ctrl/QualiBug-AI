@@ -6,6 +6,9 @@ from typing import Any
 from ai_test_asset_center.enterprise_knowledge_center._chinese_business_comprehension import (
     build_chinese_first_comprehension,
 )
+from ai_test_asset_center.enterprise_knowledge_center.document_ingestion import (
+    build_document_structure_ir,
+)
 from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.post_compile_fact_governance import (
     govern_compiled_business_facts,
 )
@@ -35,32 +38,18 @@ from benchmark_evaluator.enterprise_understanding.ground_truth import (
 def _source() -> dict:
     path = FIXTURE_ROOT / "source_rules.md"
     text = path.read_text(encoding="utf-8")
-    blocks = []
-    order = 0
-    for paragraph in [row.strip() for row in text.split("\n\n") if row.strip()]:
-        order += 1
-        block_type = "HEADING" if paragraph.startswith("#") else "PARAGRAPH"
-        blocks.append(
-            {
-                "block_id": f"block:{order}",
-                "type": block_type,
-                "region": "body",
-                "order": order,
-                "text": paragraph.lstrip("# ") if block_type == "HEADING" else paragraph,
-                "source_locator": f"source_rules.md#paragraph={order}",
-                "evidence_address": {"address_kind": "EXACT_SOURCE_LOCATOR"},
-            }
-        )
+    source_id = "source:chinese-explicit-fact-baseline-v1"
+    document_structure = build_document_structure_ir(
+        text.encode("utf-8"),
+        filename=path.name,
+        source_id=source_id,
+    )
     return {
-        "source_id": "source:chinese-explicit-fact-baseline-v1",
-        "filename": "source_rules.md",
+        "source_id": source_id,
+        "filename": path.name,
         "source_locator": "source_rules.md#document",
         "text": text,
-        "document_structure": {
-            "schema": "qualibug.document-structure-ir.v1",
-            "plain_text": text,
-            "blocks": blocks,
-        },
+        "document_structure": document_structure,
     }
 
 
@@ -158,6 +147,20 @@ def test_frozen_ground_truth_is_valid_and_source_backed() -> None:
     assert receipt["business_fact_ground_truth_generated_from_product_output"] is False
     assert ground_truth["scope_complete"] is False
     assert ground_truth["explicit_fact_scope_complete"] is True
+    assert ground_truth["source_locator_authority"] == (
+        "generic_text_document_ir_exact_line_char"
+    )
+    locator_rows = [
+        row
+        for row in ground_truth["business_rules"]
+        if isinstance(row, dict) and row.get("source_locators")
+    ]
+    assert len(locator_rows) == 12
+    assert all(
+        len(row["source_locators"]) == 1
+        and row["source_locators"][0].startswith("source_rules.md#line=")
+        for row in locator_rows
+    )
 
 
 def test_isolated_baseline_exit_status_requires_quality_targets() -> None:
@@ -175,6 +178,14 @@ def test_frozen_baseline_runs_existing_fact_mainline_without_quality_self_label(
     tmp_path: Path,
 ) -> None:
     source = _source()
+    locators = {
+        str(row.get("source_locator") or "")
+        for row in source["document_structure"].get("blocks") or []
+        if isinstance(row, dict) and row.get("source_locator")
+    }
+    assert "source_rules.md#line=3;chars=17-48" in locators
+    assert "source_rules.md#line=17;chars=195-213" in locators
+
     asset = build_chinese_first_comprehension(_asset(), [source])
     asset = compile_structure_first_business_facts(asset, [source])
     asset = govern_compiled_business_facts(
@@ -190,6 +201,15 @@ def test_frozen_baseline_runs_existing_fact_mainline_without_quality_self_label(
     assert measurement["status"] == "PASS"
     assert measurement["metrics"]["annotated_fact_count"] == 12
     assert measurement["metrics"]["measured_slot_count"] > 0
+    assert measurement["metrics"]["source_locator_annotated_fact_count"] == 12
+    assert measurement["metrics"]["source_locator_exact_fact_count"] == 12
+    assert measurement["metrics"]["source_locator_exact_accuracy"] == 1.0
+    assert measurement["evidence_address_measurement_contract"][
+        "annotated_fact_denominator_includes_missing_facts"
+    ] is True
+    assert measurement["evidence_address_measurement_contract"][
+        "annotated_fact_denominator_includes_ambiguous_facts"
+    ] is True
     assert measurement["fuzzy_or_llm_alignment_used"] is False
     assert measurement["automatic_winner_used"] is False
     assert measurement["ground_truth_generated_from_product_output"] is False
