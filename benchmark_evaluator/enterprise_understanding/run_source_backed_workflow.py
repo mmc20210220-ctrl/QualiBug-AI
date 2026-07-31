@@ -7,12 +7,16 @@ and immutable snapshot all pass; only then may evaluator Ground Truth be loaded.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import stat
 import subprocess
 import sys
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterator, Mapping
 
 from benchmark_evaluator.scored_run_comparison import _fingerprint, _read_artifact
 
@@ -73,6 +77,59 @@ def _finish_blocked(
     base_receipt["receipt_fingerprint"] = _fingerprint(base_receipt)
     _write_receipt(path, base_receipt)
     return base_receipt
+
+
+@contextmanager
+def _quarantine_ground_truth(path: Path) -> Iterator[dict[str, Any]]:
+    """Remove the current answer key from the product-visible filesystem lifecycle.
+
+    The evaluator parent keeps one private byte-for-byte copy in an undisclosed temporary
+    directory. The original path is absent for the whole product subprocess and restored
+    before evaluator loading. Re-creation of the original path by the product phase is a
+    fail-closed boundary violation. The private temporary path is never returned or
+    persisted in a receipt.
+    """
+    if path.is_symlink():
+        raise SourceBackedWorkflowError("ground_truth_symlink_not_allowed")
+    data = path.read_bytes()
+    original_mode = stat.S_IMODE(path.stat().st_mode)
+    content_sha256 = hashlib.sha256(data).hexdigest()
+    state: dict[str, Any] = {
+        "ground_truth_content_sha256": content_sha256,
+        "ground_truth_original_path_absent_during_product_phase": False,
+        "ground_truth_recreated_by_product_phase": False,
+        "ground_truth_restored_after_product_phase": False,
+        "ground_truth_private_quarantine_path_disclosed_to_product": False,
+        "product_phase_filesystem_ground_truth_access_allowed": False,
+    }
+    with tempfile.TemporaryDirectory(prefix="qualibug-evaluator-private-") as private_root:
+        private_path = Path(private_root) / "private_input.bin"
+        private_path.write_bytes(data)
+        os.chmod(private_path, 0o600)
+        path.unlink()
+        if path.exists():
+            raise SourceBackedWorkflowError("ground_truth_quarantine_failed")
+        state["ground_truth_original_path_absent_during_product_phase"] = True
+        try:
+            yield state
+        finally:
+            recreated = path.exists()
+            state["ground_truth_recreated_by_product_phase"] = recreated
+            if recreated:
+                if path.is_dir():
+                    raise SourceBackedWorkflowError(
+                        "product_phase_recreated_ground_truth_path_as_directory"
+                    )
+                path.unlink()
+            restored = private_path.read_bytes()
+            if hashlib.sha256(restored).hexdigest() != content_sha256:
+                raise SourceBackedWorkflowError("ground_truth_private_copy_changed")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(restored)
+            os.chmod(path, original_mode)
+            if hashlib.sha256(path.read_bytes()).hexdigest() != content_sha256:
+                raise SourceBackedWorkflowError("ground_truth_restore_fingerprint_mismatch")
+            state["ground_truth_restored_after_product_phase"] = True
 
 
 def _validate_product_phase_receipt(value: Any) -> tuple[dict[str, Any], str]:
@@ -169,14 +226,17 @@ def run_source_backed_understanding_workflow(
     if str(ground_truth_file) in command_text or "ground_truth" in manifest.name.lower():
         raise SourceBackedWorkflowError("ground_truth_path_leaked_into_product_command")
     product_env, removed_env_keys = _product_environment(environment)
-    completed = process_runner(
-        command,
-        cwd=str(product),
-        env=product_env,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    quarantine_state: dict[str, Any]
+    with _quarantine_ground_truth(ground_truth_file) as quarantine_state:
+        completed = process_runner(
+            command,
+            cwd=str(product),
+            env=product_env,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
     base_receipt: dict[str, Any] = {
         "schema_version": SOURCE_BACKED_WORKFLOW_SCHEMA,
         "project_id": project,
@@ -194,7 +254,22 @@ def run_source_backed_understanding_workflow(
         "ground_truth_loaded_after_product_phase": False,
         "source_identity_validated_before_ground_truth_load": False,
         "model_writeback_allowed_by_evaluator": False,
+        **quarantine_state,
     }
+    if quarantine_state.get("ground_truth_recreated_by_product_phase"):
+        return _finish_blocked(
+            base_receipt,
+            workflow_receipt_path,
+            status="BLOCKED_PRODUCT_PHASE_PRIVATE_INPUT_PATH_TAMPERED",
+            reason_code="PRODUCT_PHASE_RECREATED_GROUND_TRUTH_PATH",
+        )
+    if quarantine_state.get("ground_truth_restored_after_product_phase") is not True:
+        return _finish_blocked(
+            base_receipt,
+            workflow_receipt_path,
+            status="BLOCKED_EVALUATOR_PRIVATE_INPUT_RESTORE_FAILED",
+            reason_code="GROUND_TRUTH_NOT_RESTORED_AFTER_PRODUCT_PHASE",
+        )
     if completed.returncode != 0:
         return _finish_blocked(
             base_receipt,
