@@ -6,8 +6,8 @@ binding -> database-model facts -> cross-source contract alignment -> operation-
 candidates -> durable table/field mapping authority -> root database observers -> exact FK relation
 candidates -> durable relation authority -> child collection observers -> enterprise understanding
 (source fact reconciliation -> implicit rule projection -> model) -> structure-first atomic fact compilation
--> downstream binding -> governed Jobs -> final Probe admission -> source-occurrence evidence views ->
-one final persistence receipt.
+-> second-pass identity/conflict governance -> downstream binding -> governed Jobs -> final Probe
+admission -> source-occurrence evidence views -> one final persistence receipt.
 """
 from __future__ import annotations
 
@@ -56,6 +56,9 @@ from .enterprise_understanding.integration import (
 )
 from .enterprise_understanding.interface_runtime_contracts import (
     install_interface_runtime_contract_parser,
+)
+from .enterprise_understanding.post_compile_fact_governance import (
+    govern_compiled_business_facts,
 )
 from .enterprise_understanding.probe_policy import (
     build_gated_probes,
@@ -187,6 +190,9 @@ def _persist_final(
             "structure_first_business_fact_status": (
                 asset.get("structure_first_business_fact_compilation_receipt") or {}
             ).get("status"),
+            "identity_second_pass_status": (
+                asset.get("identity_evidence_policy_receipt") or {}
+            ).get("classified_fact_count"),
         }
     )
     _save_registry(project_id, root, registry)
@@ -255,6 +261,15 @@ def build_enterprise_business_knowledge_asset(
     # atomize multi-predicate statements, add typed non-modal facts, and upgrade the
     # single existing ledger. This is not a second product path.
     asset = compile_structure_first_business_facts(asset, parsed_sources)
+
+    # Two-pass identity governance operates only on the final compiled ledger. It
+    # classifies source-backed alias evidence and re-applies the existing durable
+    # conflict authority; it never creates another identity engine.
+    asset = govern_compiled_business_facts(
+        asset,
+        project_id=project,
+        root=resolved_root,
+    )
 
     # Rebuild cognition from the upgraded ledger without rerunning source extraction.
     # The second call reprojects implicit rules idempotently from the final fact ledger,
@@ -331,6 +346,8 @@ def build_enterprise_business_knowledge_asset(
             "semantic_lexicon_contract_precedes_formal_comprehension": True,
             "structure_first_fact_compilation_uses_existing_ledger": True,
             "structure_first_fact_compilation_precedes_downstream_binding": True,
+            "second_pass_identity_governance_uses_existing_ledger": True,
+            "second_pass_conflict_governance_uses_existing_authority": True,
             "understanding_model_rebuilt_from_typed_atomic_ledger": True,
             "database_mapping_authority_reapplied_on_every_build": True,
             "database_relation_authority_reapplied_on_every_build": True,
