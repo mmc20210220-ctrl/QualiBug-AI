@@ -11,6 +11,14 @@ on:
       - "ai_test_asset_center/experiment_lifecycle_runtime.py"
       - "ai_test_asset_center/experiment_plan_lifecycle_adapter.py"
       - "ai_test_asset_center/experiment_executor.py"
+      - "ai_test_asset_center/experiment_compile_freezer.py"
+      - "ai_test_asset_center/experiment_precondition_executor.py"
+      - "ai_test_asset_center/experiment_fixture_materializer.py"
+      - "ai_test_asset_center/experiment_fixture_materializer_core.py"
+      - "ai_test_asset_center/experiment_fixture_materializer_with_preconditions.py"
+      - "ai_test_asset_center/experiment_cleanup_executor.py"
+      - "ai_test_asset_center/experiment_cleanup_executor_core.py"
+      - "ai_test_asset_center/experiment_cleanup_lifecycle_adapter.py"
       - "ai_test_asset_center/cleanup_plan_validator.py"
       - "ai_test_asset_center/async_readback_executor.py"
       - "ai_test_asset_center/governed_async_readback.py"
@@ -20,6 +28,8 @@ on:
       - "tests/test_process_step_semantic_view.py"
       - "tests/test_process_step_canonical_timeline.py"
       - "tests/test_experiment_lifecycle_runtime.py"
+      - "tests/test_experiment_compile_freezer.py"
+      - "tests/test_experiment_cleanup_lifecycle_adapter.py"
       - "tests/test_multi_write_cleanup_coverage.py"
       - "tests/test_async_readback_executor.py"
       - "tests/test_governed_async_readback.py"
@@ -51,6 +61,14 @@ jobs:
             ai_test_asset_center/experiment_lifecycle_runtime.py \
             ai_test_asset_center/experiment_plan_lifecycle_adapter.py \
             ai_test_asset_center/experiment_executor.py \
+            ai_test_asset_center/experiment_compile_freezer.py \
+            ai_test_asset_center/experiment_precondition_executor.py \
+            ai_test_asset_center/experiment_fixture_materializer.py \
+            ai_test_asset_center/experiment_fixture_materializer_core.py \
+            ai_test_asset_center/experiment_fixture_materializer_with_preconditions.py \
+            ai_test_asset_center/experiment_cleanup_executor.py \
+            ai_test_asset_center/experiment_cleanup_executor_core.py \
+            ai_test_asset_center/experiment_cleanup_lifecycle_adapter.py \
             ai_test_asset_center/cleanup_plan_validator.py \
             ai_test_asset_center/async_readback_executor.py \
             ai_test_asset_center/governed_async_readback.py \
@@ -63,6 +81,8 @@ jobs:
             tests/test_process_step_semantic_view.py \
             tests/test_process_step_canonical_timeline.py \
             tests/test_experiment_lifecycle_runtime.py \
+            tests/test_experiment_compile_freezer.py \
+            tests/test_experiment_cleanup_lifecycle_adapter.py \
             tests/test_multi_write_cleanup_coverage.py \
             tests/test_async_readback_executor.py \
             tests/test_governed_async_readback.py \
