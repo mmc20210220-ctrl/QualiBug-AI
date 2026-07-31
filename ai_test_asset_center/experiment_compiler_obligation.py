@@ -2,10 +2,11 @@
 
 The existing semantic compiler remains in ``experiment_compiler_obligation_core``.
 This facade supplies final FlowDataRequirement authority, binds Observer subjects
-inside the compiled Experiment Contract, persists the one canonical Process
-Graph extracted from treatment steps, and isolates one legacy compatibility
-projection for graph cleanup. Runtime consumes these compiled identities; it
-does not infer a different Observer subject or graph after execution.
+inside the compiled Experiment Contract and Compile Receipt, persists the one
+canonical Process Graph extracted from treatment steps, and isolates one legacy
+compatibility projection for graph cleanup. Runtime consumes these compiled
+identities; it does not infer a different Observer subject or graph after
+execution.
 """
 from __future__ import annotations
 
@@ -209,6 +210,9 @@ def _subject_bound_make_experiment(
                 "observer_subject_binding_complete": binding_receipt[
                     "complete"
                 ],
+                "observer_subject_binding_receipt": deepcopy(
+                    binding_receipt
+                ),
             }
         )
     result = _ORIGINAL_MAKE_EXPERIMENT(
