@@ -2,12 +2,15 @@
 
 This is not an authority or a parallel Rule IR. It only converts exact, accepted
 cardinality and formula facts from the existing business-fact ledger into candidate
-shape. Promotion remains owned by ``_candidate_validation``.
+shape. Promotion remains owned by ``_candidate_validation``. Facts whose original
+statement is already represented by an authoritative source rule are suppressed so
+structure compilation cannot duplicate the same invariant and obligation.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any
 
 FACT_DERIVATION_SCHEMA = "qualibug.implicit-rule-fact-entailment.v1"
@@ -23,6 +26,10 @@ def _dict(value: Any) -> dict[str, Any]:
 
 def _list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
+
+
+def _statement_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", _text(value).casefold())
 
 
 def _stable_id(*parts: Any) -> str:
@@ -112,11 +119,30 @@ def _candidate(
     }
 
 
+def _authoritative_statement_keys(asset: dict[str, Any]) -> set[str]:
+    return {
+        key
+        for rule in _list(asset.get("rule_library"))
+        if isinstance(rule, dict)
+        and _text(rule.get("derivation")) != "implicit_rule_entailment"
+        and _text(rule.get("source_id")) != "industry_inference"
+        and _text(rule.get("source_type")) != "derived_inference"
+        for key in [
+            _statement_key(rule.get("statement") or rule.get("expected"))
+        ]
+        if key
+    }
+
+
 def derive_rule_candidates_from_business_facts(asset: dict[str, Any]) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     ledger = _dict(asset.get("business_fact_ledger"))
+    authoritative_statements = _authoritative_statement_keys(asset)
     for fact in _list(ledger.get("items")):
         if not isinstance(fact, dict) or _text(fact.get("status")) != "ACCEPTED":
+            continue
+        fact_statement = _text(fact.get("raw_statement") or fact.get("statement"))
+        if _statement_key(fact_statement) in authoritative_statements:
             continue
         subjects = _entity_refs(fact.get("subject"))
         objects = _entity_refs(fact.get("object"))
