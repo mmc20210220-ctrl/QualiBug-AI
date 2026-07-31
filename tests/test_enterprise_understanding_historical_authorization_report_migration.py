@@ -202,7 +202,8 @@ def test_command_center_exposes_internal_rerun_queue_without_touching_defects(
         "quarantine_count": 1,
         "rerun_required_count": 1,
         "manual_recompile_required_count": 0,
-        "customer_defect_publication_allowed": False,
+        "quarantined_authorization_publication_allowed": False,
+        "other_formal_defect_publication_preserved": True,
         "scope": "internal_historical_authorization_remediation",
     }
 
