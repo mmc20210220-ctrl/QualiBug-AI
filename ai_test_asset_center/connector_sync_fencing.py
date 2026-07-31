@@ -1,9 +1,9 @@
 """Monotonic fencing-token authority for managed connector synchronization.
 
 The token lives on the existing connector instance registry record. Issuance is serialized by
-the existing project knowledge transaction. A healthy progressing owner cannot be displaced; an
-owner whose call stack has stopped making progress beyond the takeover threshold is assigned a
-newer token and marked FENCED_OUT before recovery continues.
+the existing project knowledge transaction. Normal synchronization cannot displace a progressing
+owner. Explicit configuration replacement may request a forced takeover: the previous writer is
+revoked first, then existing recovery safely aborts its RUNNING epoch before configuration writes.
 """
 from __future__ import annotations
 
@@ -91,12 +91,14 @@ def acquire_connector_sync_fence(
     *,
     root: Path | None = None,
     actor: dict[str, Any] | None = None,
+    force_takeover: bool = False,
 ) -> dict[str, Any]:
     resolved_root = (root or ROOT).resolve()
     project = _safe_project_id(project_id)
     connector = _text(connector_instance_id, 160)
     clean_actor = _require_manage_actor(actor)
     takeover_attempt = "fence_" + uuid.uuid4().hex
+    force = bool(force_takeover)
     try:
         with knowledge_transaction(
             resolved_root,
@@ -112,7 +114,7 @@ def acquire_connector_sync_fence(
                 stale_after_seconds=_takeover_seconds(),
             )
             progressing = ownership.get("progress_stale") is not True
-            if ownership.get("owner_alive") is True and progressing:
+            if ownership.get("owner_alive") is True and progressing and not force:
                 raise ConnectorSyncFenceError(
                     "connector_sync_already_running_owner_active"
                 )
@@ -133,7 +135,7 @@ def acquire_connector_sync_fence(
             token = current + 1
             taken_over = bool(
                 ownership.get("owner_alive") is True
-                and ownership.get("progress_stale") is True
+                and (ownership.get("progress_stale") is True or force)
             )
             instance["fencing_generation"] = token
             instance["last_fencing_token_issued_at_utc"] = _now()
@@ -145,6 +147,7 @@ def acquire_connector_sync_fence(
                     "connector_sync_fencing_token_authority": "CONNECTOR_INSTANCE_REGISTRY",
                     "stale_connector_threads_cannot_commit_writes": True,
                     "fencing_token_issuance_project_transaction_serialized": True,
+                    "explicit_reconfiguration_uses_fenced_takeover": True,
                     "second_fencing_registry_created": False,
                 }
             )
@@ -157,6 +160,7 @@ def acquire_connector_sync_fence(
                     "previous_fencing_token": current,
                     "fencing_token": token,
                     "takeover": taken_over,
+                    "forced_takeover": force,
                     "previous_owner_state": _text(ownership.get("state"), 80),
                     "previous_owner_progress_stale": bool(
                         ownership.get("progress_stale")
@@ -192,6 +196,7 @@ def acquire_connector_sync_fence(
         "fencing_token": token,
         "previous_fencing_token": current,
         "takeover": taken_over,
+        "forced_takeover": force,
         "takeover_attempt_id": takeover_attempt,
         "previous_owner_state": _text(ownership.get("state"), 80),
         "previous_owner_progress_stale": bool(ownership.get("progress_stale")),
@@ -208,6 +213,7 @@ def managed_connector_sync_fence(
     *,
     root: Path | None = None,
     actor: dict[str, Any] | None = None,
+    force_takeover: bool = False,
 ) -> Iterator[dict[str, Any]]:
     resolved_root = (root or ROOT).resolve()
     lease = acquire_connector_sync_fence(
@@ -215,6 +221,7 @@ def managed_connector_sync_fence(
         connector_instance_id,
         root=resolved_root,
         actor=actor,
+        force_takeover=force_takeover,
     )
     project = lease["project_id"]
     connector = lease["connector_instance_id"]
