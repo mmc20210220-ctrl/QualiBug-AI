@@ -12,7 +12,7 @@ from typing import Any
 
 from .identity_annotation_manifest import MANIFEST_SCHEMA
 from .identity_benchmark import ANNOTATION_SCOPE, GROUND_TRUTH_SCHEMA
-from .schema import as_dict, as_list, stable_id, text, unique_text
+from .schema import as_dict, as_list, stable_id, text
 
 TASK_PACKAGE_SCHEMA = "qualibug.enterprise-identity-annotation-task-package.v1"
 SUBMISSION_SCHEMA = "qualibug.enterprise-identity-annotation-submission.v1"
@@ -30,6 +30,16 @@ _FORBIDDEN_PREDICTION_FIELDS = frozenset(
         "comparison_keys",
     }
 )
+
+
+def _contains_forbidden_prediction_field(value: Any) -> bool:
+    if isinstance(value, list):
+        return any(_contains_forbidden_prediction_field(row) for row in value)
+    if not isinstance(value, dict):
+        return False
+    if _FORBIDDEN_PREDICTION_FIELDS.intersection(value):
+        return True
+    return any(_contains_forbidden_prediction_field(row) for row in value.values())
 
 
 def _bounded(value: Any, limit: int = 800) -> str:
@@ -112,25 +122,24 @@ def build_identity_annotation_task_package(
             continue
         mention = as_dict(mention_index.get(mention_ref))
         batch_number = position // size + 1
-        task = {
-            "task_id": stable_id("identity_annotation_task", manifest_id, mention_ref),
-            "batch_id": f"identity-annotation-batch:{batch_number:04d}",
-            "mention_ref": mention_ref,
-            "raw_label": raw.get("raw_label"),
-            "source_id": raw.get("source_id"),
-            "source_locator": raw.get("source_locator"),
-            "role": raw.get("role"),
-            "scope": as_dict(raw.get("scope")),
-            "source_kind": raw.get("source_kind"),
-            "artifact_type": raw.get("artifact_type"),
-            "context": _context_rows(mention),
-            "annotation_status": "UNLABELED",
-            "annotation_cluster_ref": "",
-            "annotation_note": "",
-        }
-        if _FORBIDDEN_PREDICTION_FIELDS.intersection(task):  # pragma: no cover
-            raise AssertionError("identity_annotation_task_prediction_leak")
-        tasks.append(task)
+        tasks.append(
+            {
+                "task_id": stable_id("identity_annotation_task", manifest_id, mention_ref),
+                "batch_id": f"identity-annotation-batch:{batch_number:04d}",
+                "mention_ref": mention_ref,
+                "raw_label": raw.get("raw_label"),
+                "source_id": raw.get("source_id"),
+                "source_locator": raw.get("source_locator"),
+                "role": raw.get("role"),
+                "scope": as_dict(raw.get("scope")),
+                "source_kind": raw.get("source_kind"),
+                "artifact_type": raw.get("artifact_type"),
+                "context": _context_rows(mention),
+                "annotation_status": "UNLABELED",
+                "annotation_cluster_ref": "",
+                "annotation_note": "",
+            }
+        )
 
     batches: list[dict[str, Any]] = []
     for start in range(0, len(tasks), size):
@@ -170,7 +179,7 @@ def build_identity_annotation_task_package(
             for row in tasks
         ],
     }
-    return {
+    package = {
         "schema": TASK_PACKAGE_SCHEMA,
         "task_package_id": package_id,
         "manifest_id": manifest_id,
@@ -196,11 +205,16 @@ def build_identity_annotation_task_package(
         "required_submission_schema": SUBMISSION_SCHEMA,
         "compiled_ground_truth_schema": GROUND_TRUTH_SCHEMA,
     }
+    if _contains_forbidden_prediction_field(package):  # pragma: no cover
+        raise AssertionError("identity_annotation_task_prediction_leak")
+    return package
 
 
 def _validate_submission(
     package: dict[str, Any], submission: dict[str, Any]
 ) -> tuple[dict[str, str], dict[str, str]]:
+    if _contains_forbidden_prediction_field(submission):
+        raise ValueError("product_prediction_fields_cannot_be_identity_annotation")
     if text(submission.get("schema")) != SUBMISSION_SCHEMA:
         raise ValueError("identity_annotation_submission_schema_invalid")
     if text(submission.get("task_package_id")) != text(package.get("task_package_id")):
@@ -251,7 +265,7 @@ def _validate_submission(
         raise ValueError("identity_annotation_submission_incomplete")
     return assignments, {
         "name": annotator_name,
-        "role": text(annotator.get("role") or "ANNOTATOR"),
+        "role": text(annotator.get("role") or "ANNOTATOR").upper(),
     }
 
 
@@ -358,7 +372,7 @@ def compile_identity_annotation_submissions(
         secondary, secondary_annotator = _validate_submission(
             package, secondary_submission
         )
-        if secondary_annotator["name"] == primary_annotator["name"]:
+        if secondary_annotator["name"].casefold() == primary_annotator["name"].casefold():
             raise ValueError("identity_double_blind_annotators_must_differ")
         annotators.append(secondary_annotator)
         disagreements = _disagreements(primary, secondary)
@@ -380,6 +394,11 @@ def compile_identity_annotation_submissions(
             selected, adjudicator = _validate_submission(
                 package, as_dict(adjudication_submission)
             )
+            if adjudicator["role"] != "ADJUDICATOR":
+                raise ValueError("identity_adjudicator_role_required")
+            existing_names = {row["name"].casefold() for row in annotators}
+            if adjudicator["name"].casefold() in existing_names:
+                raise ValueError("identity_adjudicator_must_be_independent")
             annotators.append(adjudicator)
             review_status = "ADJUDICATED"
         else:
