@@ -15,6 +15,7 @@ on:
       - "ai_test_asset_center/experiment_compile_freezer_core.py"
       - "ai_test_asset_center/flow_data_requirement.py"
       - "ai_test_asset_center/flow_data_materialization.py"
+      - "ai_test_asset_center/flow_data_materializer_projection.py"
       - "ai_test_asset_center/experiment_precondition_executor.py"
       - "ai_test_asset_center/experiment_fixture_materializer.py"
       - "ai_test_asset_center/experiment_fixture_materializer_core.py"
@@ -33,6 +34,7 @@ on:
       - "tests/test_experiment_lifecycle_runtime.py"
       - "tests/test_experiment_compile_freezer.py"
       - "tests/test_flow_data_materialization.py"
+      - "tests/test_flow_data_materializer_projection.py"
       - "tests/test_experiment_cleanup_lifecycle_adapter.py"
       - "tests/test_multi_write_cleanup_coverage.py"
       - "tests/test_async_readback_executor.py"
@@ -69,6 +71,7 @@ jobs:
             ai_test_asset_center/experiment_compile_freezer_core.py \
             ai_test_asset_center/flow_data_requirement.py \
             ai_test_asset_center/flow_data_materialization.py \
+            ai_test_asset_center/flow_data_materializer_projection.py \
             ai_test_asset_center/experiment_precondition_executor.py \
             ai_test_asset_center/experiment_fixture_materializer.py \
             ai_test_asset_center/experiment_fixture_materializer_core.py \
@@ -90,6 +93,7 @@ jobs:
             tests/test_experiment_lifecycle_runtime.py \
             tests/test_experiment_compile_freezer.py \
             tests/test_flow_data_materialization.py \
+            tests/test_flow_data_materializer_projection.py \
             tests/test_experiment_cleanup_lifecycle_adapter.py \
             tests/test_multi_write_cleanup_coverage.py \
             tests/test_async_readback_executor.py \
