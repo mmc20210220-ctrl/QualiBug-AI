@@ -2,14 +2,13 @@
 
 Execution keeps the live ledger. Finalization receives this view, which binds
 observation, oracle, and cleanup receipts only when each receipt declares one
-exact recorded step. It also normalizes an absent optional fixture identity to
-the formal ``NOT_APPLICABLE`` value before any receipt bundle is sealed.
+exact recorded step. Fixture applicability and identity are established before
+ledger creation by the lifecycle authority, never guessed during finalization.
 Semantic completion additionally requires an explicit boolean verdict.
 Transport execution and business completion remain separate.
 """
 from __future__ import annotations
 
-import hashlib
 from typing import Any
 
 from .process_step_execution import ProcessStepLedger
@@ -21,7 +20,6 @@ from .process_step_receipt_scope import (
 from .process_step_semantic_projection import apply_semantic_verdict, project_step_sets
 
 
-_NOT_APPLICABLE = "NOT_APPLICABLE"
 _VERDICT_KEYS = (
     "target_reached",
     "target_state_reached",
@@ -111,49 +109,6 @@ class ProcessStepSemanticView:
         self._ledger = ledger
         self._observations = observations if isinstance(observations, dict) else {}
         self._processed_receipts: set[str] = set()
-        self._normalize_optional_fixture_identity()
-
-    def _normalize_optional_fixture_identity(self) -> None:
-        """Seal fixture absence as an identity value, never an empty coordinate.
-
-        A fixtureless experiment is valid when its treatment creates disposable
-        state and its cleanup removes it. Canonical Receipt Envelopes require all
-        identity coordinates to be explicit, using ``NOT_APPLICABLE`` for an
-        optional coordinate. The execution ledger was historically created with
-        an empty fixture id, which made its payload disagree with the canonical
-        bundle envelope and made the reconstructed ledger hash diverge.
-
-        Normalization happens once, before this finalization view publishes any
-        process-step receipt. Existing real fixture identities are untouched.
-        """
-        if _text(getattr(self._ledger, "fixture_id", "")):
-            return
-        self._ledger.fixture_id = _NOT_APPLICABLE
-        raw_rows = getattr(self._ledger, "_rows", {})
-        if isinstance(raw_rows, dict):
-            for row in raw_rows.values():
-                if isinstance(row, dict) and not _text(row.get("fixture_id")):
-                    row["fixture_id"] = _NOT_APPLICABLE
-        seed = "|".join(
-            [
-                _text(getattr(self._ledger, "experiment_id", "")),
-                _NOT_APPLICABLE,
-                _text(getattr(self._ledger, "campaign_id", "")),
-                _text(getattr(self._ledger, "run_id", "")),
-                _text(getattr(self._ledger, "obligation_id", "")),
-                _text(getattr(self._ledger, "protocol_id", "")),
-            ]
-        )
-        digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:24]
-        self._ledger.ledger_id = f"psl_{digest}"
-        # ``attach_lifecycle_ledger`` populated an old identity/hash snapshot
-        # before wrapping this ledger. Publish the normalized id immediately,
-        # but deliberately remove hash/row snapshots: exact-scoped Event,
-        # Oracle and Cleanup receipts are attached inside the Finalizer. The
-        # first requested hash must therefore be computed only after that sync.
-        self._observations["process_step_ledger_id"] = self._ledger.ledger_id
-        self._observations.pop("process_step_ledger_hash", None)
-        self._observations.pop("process_step_receipts", None)
 
     @property
     def source_ledger(self) -> ProcessStepLedger:
@@ -170,14 +125,11 @@ class ProcessStepSemanticView:
     ) -> bool:
         """Keep legacy Finalizer broadcasts from mutating exact-scope authority.
 
-        The old Finalizer still calls ``append_receipt_ref`` for observation,
-        oracle and cleanup evidence after evaluating a result. The underlying
-        ledger intentionally records those calls as identity violations because
-        the receipt did not repeat its own step identity. This semantic view
-        already synchronizes exact-scoped receipts through
-        ``append_scoped_receipt_ref``; therefore the legacy broadcast is a
-        compatibility no-op, not a second authority and not a rejection event.
-        Scalar transport/state receipts continue to delegate unchanged.
+        The historical core still calls ``append_receipt_ref`` for observation,
+        oracle and cleanup evidence. Exact-scoped synchronization already owns
+        those fields through ``append_scoped_receipt_ref``; the legacy broadcast
+        is therefore a compatibility no-op, not a second authority and not a
+        rejection event. Scalar transport/state receipts delegate unchanged.
         """
         if _text(field) in _LEGACY_UNSCOPED_EVIDENCE_FIELDS:
             return False
