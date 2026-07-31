@@ -7,6 +7,7 @@ import pytest
 
 from ai_test_asset_center import canonical_defect_registry as canonical_registry
 from ai_test_asset_center import discovery_mainline_contract as mainline_contract
+from ai_test_asset_center import formal_delivery_scope
 from ai_test_asset_center import historical_authorization_artifact_migration as migration
 from ai_test_asset_center.historical_authorization_artifact_migration import (
     HistoricalAuthorizationArtifactMigrationError,
@@ -71,18 +72,7 @@ def _scan_result() -> dict:
     }
 
 
-def test_migration_rebuilds_only_derived_registry_and_preserves_source(
-    monkeypatch,
-) -> None:
-    source = _scan_result()
-    snapshot = deepcopy(source)
-    quarantine = _quarantine_projection()
-    rebuilt = {
-        "registry_fingerprint": "e" * 64,
-        "delivery_occurrence_count": 1,
-        "delivery_occurrence_finding_ids": ["finding:valid"],
-    }
-
+def _install_common_mocks(monkeypatch, quarantine: dict) -> None:
     monkeypatch.setattr(
         migration,
         "build_historical_authorization_quarantine_projection",
@@ -97,6 +87,26 @@ def test_migration_rebuilds_only_derived_registry_and_preserves_source(
         mainline_contract,
         "validate_mainline_run_contract",
         lambda value: deepcopy(value),
+    )
+
+
+def test_migration_rebuilds_only_derived_registry_and_preserves_source(
+    monkeypatch,
+) -> None:
+    source = _scan_result()
+    snapshot = deepcopy(source)
+    quarantine = _quarantine_projection()
+    rebuilt = {
+        "registry_fingerprint": "e" * 64,
+        "delivery_occurrence_count": 1,
+        "delivery_occurrence_finding_ids": ["finding:valid"],
+    }
+
+    _install_common_mocks(monkeypatch, quarantine)
+    monkeypatch.setattr(
+        formal_delivery_scope,
+        "validated_delivery_gate_finding_ids",
+        lambda ledger: ["finding:valid"],
     )
     monkeypatch.setattr(
         canonical_registry,
@@ -115,9 +125,49 @@ def test_migration_rebuilds_only_derived_registry_and_preserves_source(
     assert output["historical_authorization_quarantine"] == quarantine
     receipt = output["historical_authorization_artifact_migration"]
     assert receipt["status"] == "MIGRATED"
+    assert receipt["rebuild_reason"] == ""
     assert receipt["superseded_registry_fingerprint"] == "b" * 64
     assert receipt["rebuilt_registry_fingerprint"] == "e" * 64
     assert receipt["quarantined_finding_ids"] == ["finding:auth"]
+    assert receipt["source_evidence_rewritten"] is False
+    assert validate_historical_authorization_artifact_migration_receipt(
+        receipt
+    ) == receipt
+
+
+def test_missing_formal_occurrence_removes_old_registry_and_blocks_rebuild(
+    monkeypatch,
+) -> None:
+    source = _scan_result()
+    snapshot = deepcopy(source)
+    quarantine = _quarantine_projection()
+    calls: list[str] = []
+
+    _install_common_mocks(monkeypatch, quarantine)
+    monkeypatch.setattr(
+        formal_delivery_scope,
+        "validated_delivery_gate_finding_ids",
+        lambda ledger: ["finding:not-materialized"],
+    )
+    monkeypatch.setattr(
+        canonical_registry,
+        "build_canonical_defect_registry",
+        lambda **kwargs: calls.append("registry-built") or {},
+    )
+
+    output = migrate_historical_authorization_scan_result(source)
+
+    assert source == snapshot
+    assert calls == []
+    assert "canonical_defect_registry" not in output
+    assert "canonical_defect_registry" not in output["v12"]
+    receipt = output["historical_authorization_artifact_migration"]
+    assert receipt["status"] == "REBUILD_BLOCKED"
+    assert receipt["rebuilt_registry_fingerprint"] == ""
+    assert receipt["rebuilt_delivery_occurrence_count"] == 0
+    assert receipt["rebuild_reason"] == (
+        "FORMAL_DELIVERY_OCCURRENCES_MISSING:finding:not-materialized"
+    )
     assert receipt["source_evidence_rewritten"] is False
     assert validate_historical_authorization_artifact_migration_receipt(
         receipt
@@ -147,20 +197,11 @@ def test_migration_receipt_tamper_is_rejected(monkeypatch) -> None:
         "registry_fingerprint": "e" * 64,
         "delivery_occurrence_count": 1,
     }
+    _install_common_mocks(monkeypatch, quarantine)
     monkeypatch.setattr(
-        migration,
-        "build_historical_authorization_quarantine_projection",
-        lambda ledger, superseded_registry_fingerprint="": deepcopy(quarantine),
-    )
-    monkeypatch.setattr(
-        migration,
-        "validate_historical_authorization_quarantine_projection",
-        lambda value: deepcopy(value),
-    )
-    monkeypatch.setattr(
-        mainline_contract,
-        "validate_mainline_run_contract",
-        lambda value: deepcopy(value),
+        formal_delivery_scope,
+        "validated_delivery_gate_finding_ids",
+        lambda ledger: ["finding:valid"],
     )
     monkeypatch.setattr(
         canonical_registry,
