@@ -100,6 +100,11 @@ def _assertion_receipt() -> dict:
         "status": "VIOLATION",
         "reason_code": "DATABASE_RELATION_DELTA_CONSERVATION_VIOLATED",
         "expected": {
+            "source_refs": [
+                {"kind": "business_rule", "locator": "BR-BALANCE-LEDGER"}
+            ],
+            "root_field_binding_id": "binding:accounts:balance",
+            "relation_mapping_decision_id": "decision:ledger",
             "semantic_pair_schema": SEMANTIC_PAIR_SCHEMA,
             "database_relation_observer_ref": "relation-observer:ledger",
             "database_relationship_id": "fk:ledger:accounts",
@@ -129,6 +134,8 @@ def _assertion_receipt() -> dict:
             "aggregate_on_left": False,
         },
         "actual": {
+            "source_evidence_present": True,
+            "approved_binding_ids_present": True,
             "root_before": "100",
             "root_after": "85",
             "root_delta": "-15",
@@ -172,6 +179,13 @@ def test_delta_finding_evidence_is_exact_and_secret_free() -> None:
         _assertion_receipt()
     )
 
+    assert evidence["source_refs"] == [
+        {"kind": "business_rule", "locator": "BR-BALANCE-LEDGER"}
+    ]
+    assert evidence["source_evidence_present"] is True
+    assert evidence["root_field_binding_id"] == "binding:accounts:balance"
+    assert evidence["relation_mapping_decision_id"] == "decision:ledger"
+    assert evidence["approved_binding_ids_present"] is True
     assert evidence["semantic_pair_schema"] == SEMANTIC_PAIR_SCHEMA
     assert evidence["relation_pair_id"] == "pair-1"
     assert evidence["recomputed_relation_pair_id"] == "pair-1"
@@ -235,6 +249,11 @@ def test_enrichment_replaces_legacy_snapshot_without_upgrading_delivery() -> Non
     )
     assert finding["raw_evidence"]["legacy_http_body_used_as_db_snapshot"] is False
     snapshot = finding["raw_evidence"]["db_snapshot"]
+    assert snapshot["source_refs"] == [
+        {"kind": "business_rule", "locator": "BR-BALANCE-LEDGER"}
+    ]
+    assert snapshot["root_field_binding_id"] == "binding:accounts:balance"
+    assert snapshot["relation_mapping_decision_id"] == "decision:ledger"
     assert snapshot["semantic_pair_schema"] == SEMANTIC_PAIR_SCHEMA
     assert snapshot["relation_pair_id"] == "pair-1"
     assert snapshot["recomputed_relation_pair_id"] == "pair-1"
