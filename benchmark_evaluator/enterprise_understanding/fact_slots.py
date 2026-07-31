@@ -29,6 +29,13 @@ _SLOT_FIELDS = (
     "formula_constraints",
     "source_locators",
 )
+# ``operation`` and ``object_refs`` are the existing coarse alignment contract. They
+# remain measured once a row opts into slot-level Ground Truth, but they must not make
+# every legacy benchmark row look slot-annotated. At least one new semantic slot must
+# be explicitly declared before this evaluator leaves NOT_MEASURED.
+_ANNOTATION_TRIGGER_FIELDS = tuple(
+    field for field in _SLOT_FIELDS if field != "object_refs"
+)
 
 
 def _text(value: Any) -> str:
@@ -210,7 +217,10 @@ def _annotated_rows(ground_truth: dict[str, Any]) -> list[tuple[str, dict[str, A
         for row in _rows(ground_truth.get(collection)):
             if _text(row.get("annotation_status") or "CONFIRMED") != "CONFIRMED":
                 continue
-            if any(_expected_slot(row, field) is not None for field in _SLOT_FIELDS):
+            if any(
+                _expected_slot(row, field) is not None
+                for field in _ANNOTATION_TRIGGER_FIELDS
+            ):
                 result.append((collection, row))
     return result
 
@@ -230,7 +240,7 @@ def evaluate_business_fact_slots(
         return {
             "schema": FACT_SLOT_MEASUREMENT_SCHEMA,
             "status": "NOT_MEASURED",
-            "reason": "no confirmed business rule/behavior Ground Truth rows declare slot fields",
+            "reason": "no confirmed business rule/behavior Ground Truth rows declare extended slot fields",
             "metrics": {},
             "alignments": [],
             "fuzzy_or_llm_alignment_used": False,
