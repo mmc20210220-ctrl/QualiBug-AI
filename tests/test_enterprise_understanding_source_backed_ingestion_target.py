@@ -10,6 +10,8 @@ from benchmark_evaluator.enterprise_understanding.run_source_backed_workflow imp
 
 
 SOURCE_REF = "projects/source-backed-document-demo/input/rules.md"
+OCCURRENCE_ID = "occurrence:rules"
+CANONICAL_SOURCE_ID = "source:rules"
 
 
 def _write_json(path: Path, value: dict) -> None:
@@ -27,7 +29,7 @@ def _ground_truth() -> dict:
                 "ground_truth_id": "gt:object:ticket",
                 "canonical_name": "工单",
                 "criticality": "P0",
-                "source_refs": ["source:rules"],
+                "source_refs": [CANONICAL_SOURCE_ID],
                 "annotation_status": "CONFIRMED",
             }
         ],
@@ -49,7 +51,9 @@ def _asset() -> dict:
     return {
         "source_inventory": [
             {
-                "source_id": "source:rules",
+                "source_id": OCCURRENCE_ID,
+                "source_occurrence_id": OCCURRENCE_ID,
+                "canonical_source_id": CANONICAL_SOURCE_ID,
                 "external_ref": SOURCE_REF,
                 "status": "active",
             }
@@ -58,7 +62,10 @@ def _asset() -> dict:
             "source_count": 1,
             "items": [
                 {
-                    "source_id": "source:rules",
+                    "source_id": OCCURRENCE_ID,
+                    "source_occurrence_id": OCCURRENCE_ID,
+                    "canonical_source_id": CANONICAL_SOURCE_ID,
+                    "source_ref": SOURCE_REF,
                     "filename": "rules.md",
                     "format": "markdown",
                     "blocks": [
@@ -71,6 +78,10 @@ def _asset() -> dict:
                             "source_hash": "sha256:rules",
                             "source_locator": locator,
                             "evidence_address": {
+                                "source_id": OCCURRENCE_ID,
+                                "source_occurrence_id": OCCURRENCE_ID,
+                                "canonical_source_id": CANONICAL_SOURCE_ID,
+                                "source_ref": SOURCE_REF,
                                 "source_locator": locator,
                                 "address_kind": "EXACT_SOURCE_LOCATOR",
                             },
@@ -79,7 +90,10 @@ def _asset() -> dict:
                     "structure_receipt": {"status": "COMPLETE"},
                     "evidence_closure_receipt": {
                         "status": "PASS",
-                        "source_id": "source:rules",
+                        "source_id": OCCURRENCE_ID,
+                        "source_occurrence_id": OCCURRENCE_ID,
+                        "canonical_source_id": CANONICAL_SOURCE_ID,
+                        "source_ref": SOURCE_REF,
                         "filename": "rules.md",
                         "source_hash": "sha256:rules",
                         "formal_authority_block_count": 1,
@@ -101,7 +115,7 @@ def _asset() -> dict:
                     "object_id": "object:ticket",
                     "name": "工单",
                     "status": "CONFIRMED",
-                    "evidence": [{"source_id": "source:rules"}],
+                    "evidence": [{"source_id": CANONICAL_SOURCE_ID}],
                 }
             ],
             "actors": [],
@@ -121,9 +135,17 @@ def _valid_product_receipt() -> dict:
         "status": "PASS",
         "receipt_fingerprint": "receipt:1",
         "source_manifest_external_refs_preserved": True,
-        "source_identity_authority": "SOURCE_INVENTORY_EXTERNAL_REF",
-        "source_ref_by_source_id": {"source:rules": SOURCE_REF},
+        "source_identity_authority": "SOURCE_OCCURRENCE_REGISTRY",
+        "source_occurrence_ref_by_id": {OCCURRENCE_ID: SOURCE_REF},
+        "canonical_source_id_by_occurrence_id": {
+            OCCURRENCE_ID: CANONICAL_SOURCE_ID
+        },
+        "content_identity_separate_from_source_occurrence": True,
+        "interpretation_identity_separate_from_content_identity": True,
+        "same_interpretation_content_parsed_once": True,
         "absolute_workspace_paths_persisted_as_identity": False,
+        "content_asset_count": 1,
+        "interpretation_asset_count": 1,
     }
 
 
@@ -173,8 +195,9 @@ def test_source_backed_receipt_surfaces_document_ground_truth_target(tmp_path) -
 
     assert receipt["status"] == "PASS"
     assert receipt["source_identity_validated_before_ground_truth_load"] is True
-    assert receipt["source_identity_authority"] == "SOURCE_INVENTORY_EXTERNAL_REF"
-    assert receipt["source_ref_count"] == 1
+    assert receipt["source_identity_authority"] == "SOURCE_OCCURRENCE_REGISTRY"
+    assert receipt["source_occurrence_count"] == 1
+    assert receipt["canonical_source_count"] == 1
     assert receipt["ground_truth_loaded_after_product_phase"] is True
     assert receipt["hidden_ground_truth_entered_product_runtime"] is False
     assert receipt["next_ingestion_repair_target"] == (
@@ -187,7 +210,7 @@ def test_source_backed_receipt_surfaces_document_ground_truth_target(tmp_path) -
     assert (output / "evaluation" / "ingestion_metric_summary.json").exists()
 
 
-def test_invalid_product_source_identity_blocks_before_ground_truth_is_opened(
+def test_invalid_product_occurrence_identity_blocks_before_ground_truth_is_opened(
     tmp_path,
 ) -> None:
     product_root = tmp_path / "product"
@@ -240,7 +263,7 @@ def test_invalid_product_source_identity_blocks_before_ground_truth_is_opened(
     )
 
     assert receipt["status"] == "BLOCKED_PRODUCT_SOURCE_IDENTITY_INVALID"
-    assert receipt["reason_code"] == "PRODUCT_SOURCE_REFERENCES_NOT_PRESERVED"
+    assert receipt["reason_code"] == "PRODUCT_SOURCE_OCCURRENCES_NOT_PRESERVED"
     assert receipt["source_identity_validated_before_ground_truth_load"] is False
     assert receipt["ground_truth_loaded_after_product_phase"] is False
     assert receipt["hidden_ground_truth_entered_product_runtime"] is False
