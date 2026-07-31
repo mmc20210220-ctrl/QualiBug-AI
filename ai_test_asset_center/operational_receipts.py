@@ -1,11 +1,11 @@
 """Receipt-backed operational accounting for discovery execution attempts.
 
-Only explicit HTTP-step and governed-write receipts are counted.  This module
+Only explicit HTTP-step and governed-write receipts are counted. This module
 never walks arbitrary result JSON looking for status-like fields.
 
-V1.6.2 Gate A: Canonical Receipt Envelope, Execution Receipt Bundle, and
-Finalization Receipt derivation also live here so receipt authority stays on
-the existing operational-receipt spine (no parallel *_v2 ledger).
+Canonical Receipt Envelope, Execution Receipt Bundle, lifecycle reduction, and
+Finalization Receipt derivation live on this existing authority spine. There is
+no parallel lifecycle ledger and callers cannot author terminal states.
 """
 from __future__ import annotations
 
@@ -15,19 +15,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 
-EXECUTION_OPERATIONAL_RECEIPT_SCHEMA = (
-    "qualibug.execution-operational-receipt.v1"
-)
-EXECUTION_OPERATIONAL_SUMMARY_SCHEMA = (
-    "qualibug.execution-operational-summary.v1"
-)
-
-# ── V1.6.2 Canonical Receipt Envelope ──────────────────────────────────────
+EXECUTION_OPERATIONAL_RECEIPT_SCHEMA = "qualibug.execution-operational-receipt.v1"
+EXECUTION_OPERATIONAL_SUMMARY_SCHEMA = "qualibug.execution-operational-summary.v1"
 CANONICAL_RECEIPT_ENVELOPE_SCHEMA = "qualibug.canonical-receipt-envelope.v1"
 EXECUTION_RECEIPT_BUNDLE_SCHEMA = "qualibug.execution-receipt-bundle.v1"
-EXECUTION_FINALIZATION_RECEIPT_SCHEMA = (
-    "qualibug.execution-finalization-receipt.v1"
-)
+EXECUTION_FINALIZATION_RECEIPT_SCHEMA = "qualibug.execution-finalization-receipt.v1"
+EXECUTION_LIFECYCLE_DERIVATION_SCHEMA = "qualibug.execution-lifecycle-derivation.v1"
 FIXTURE_PROVENANCE_RECEIPT_SCHEMA = "qualibug.fixture-provenance-receipt.v1"
 REPORT_METRIC_RECEIPT_SCHEMA = "qualibug.report-metric-receipt.v1"
 CORRECTION_RECEIPT_SCHEMA = "qualibug.correction-receipt.v1"
@@ -37,12 +30,14 @@ RECEIPT_STATUS_VALID = "VALID"
 RECEIPT_STATUS_INVALID = "INVALID"
 RECEIPT_STATUS_INCOMPLETE = "INCOMPLETE"
 RECEIPT_STATUS_TAMPERED = "TAMPERED"
-_RECEIPT_STATUSES = frozenset({
-    RECEIPT_STATUS_VALID,
-    RECEIPT_STATUS_INVALID,
-    RECEIPT_STATUS_INCOMPLETE,
-    RECEIPT_STATUS_TAMPERED,
-})
+_RECEIPT_STATUSES = frozenset(
+    {
+        RECEIPT_STATUS_VALID,
+        RECEIPT_STATUS_INVALID,
+        RECEIPT_STATUS_INCOMPLETE,
+        RECEIPT_STATUS_TAMPERED,
+    }
+)
 
 _IDENTITY_FIELDS = (
     "campaign_id",
@@ -84,19 +79,64 @@ _TRUE_COMPLETED_REQUIRED_GROUPS = (
     "environment_restoration_receipt_id",
 )
 
+# Keep the existing public derivation version for receipt compatibility.
 DERIVATION_VERSION = "v1.6.2-receipt-bundle-finalizer"
-_EXECUTION_STATUSES = frozenset({
-    "EXECUTED",
-    "BLOCKED",
-    "DEFERRED",
-    "HARNESS_FAILURE",
-    "HARNESS_FAILED",
-    "DELIVERABLE",
-    # V1.6.1: write executed and oracle may have evaluated, but cleanup/restoration
-    # did not complete. Must remain a first-class operational status so Field Oracle
-    # Traces are not lost behind an OperationalReceiptError abort.
-    "EXECUTED_BUT_NOT_RESTORED",
-})
+LIFECYCLE_DERIVATION_VERSION = "v1.7.0-single-authority-reducer"
+
+# Canonical lifecycle states. Intermediate states are exported for reporting,
+# while terminal derivation always uses one of the terminal states below.
+LIFECYCLE_PLANNED = "PLANNED"
+LIFECYCLE_COMPILED = "COMPILED"
+LIFECYCLE_FIXTURE_MATERIALIZED = "FIXTURE_MATERIALIZED"
+LIFECYCLE_PRECONDITION_ESTABLISHED = "PRECONDITION_ESTABLISHED"
+LIFECYCLE_BUSINESS_STEPS_EXECUTED = "BUSINESS_STEPS_EXECUTED"
+LIFECYCLE_OBSERVATION_COMPLETED = "OBSERVATION_COMPLETED"
+LIFECYCLE_ORACLE_EVALUATED = "ORACLE_EVALUATED"
+LIFECYCLE_CLEANUP_EXECUTED = "CLEANUP_EXECUTED"
+LIFECYCLE_CLEANUP_VERIFIED = "CLEANUP_VERIFIED"
+LIFECYCLE_ENVIRONMENT_RESTORED = "ENVIRONMENT_RESTORED"
+LIFECYCLE_TRUE_COMPLETED = "TRUE_COMPLETED"
+
+LIFECYCLE_COMPILE_BLOCKED = "COMPILE_BLOCKED"
+LIFECYCLE_FIXTURE_BLOCKED = "FIXTURE_BLOCKED"
+LIFECYCLE_PRECONDITION_UNREACHABLE = "PRECONDITION_UNREACHABLE"
+LIFECYCLE_PARTIAL_EXECUTION = "PARTIAL_EXECUTION"
+LIFECYCLE_HARNESS_FAILED = "HARNESS_FAILED"
+LIFECYCLE_ORACLE_INDETERMINATE = "ORACLE_INDETERMINATE"
+LIFECYCLE_CLEANUP_FAILED = "CLEANUP_FAILED"
+LIFECYCLE_ENVIRONMENT_DIRTY = "ENVIRONMENT_DIRTY"
+LIFECYCLE_RECEIPT_INCOMPLETE = "RECEIPT_INCOMPLETE"
+LIFECYCLE_IDENTITY_MISMATCH = "IDENTITY_MISMATCH"
+LIFECYCLE_PROTOCOL_MISMATCH = "PROTOCOL_MISMATCH"
+
+TERMINAL_LIFECYCLE_STATES = frozenset(
+    {
+        LIFECYCLE_TRUE_COMPLETED,
+        LIFECYCLE_COMPILE_BLOCKED,
+        LIFECYCLE_FIXTURE_BLOCKED,
+        LIFECYCLE_PRECONDITION_UNREACHABLE,
+        LIFECYCLE_PARTIAL_EXECUTION,
+        LIFECYCLE_HARNESS_FAILED,
+        LIFECYCLE_ORACLE_INDETERMINATE,
+        LIFECYCLE_CLEANUP_FAILED,
+        LIFECYCLE_ENVIRONMENT_DIRTY,
+        LIFECYCLE_RECEIPT_INCOMPLETE,
+        LIFECYCLE_IDENTITY_MISMATCH,
+        LIFECYCLE_PROTOCOL_MISMATCH,
+    }
+)
+
+_EXECUTION_STATUSES = frozenset(
+    {
+        "EXECUTED",
+        "BLOCKED",
+        "DEFERRED",
+        "HARNESS_FAILURE",
+        "HARNESS_FAILED",
+        "DELIVERABLE",
+        "EXECUTED_BUT_NOT_RESTORED",
+    }
+)
 _CLEANUP_PHASES = frozenset({"cleanup", "fixture_cleanup"})
 _CLEANUP_STATUSES = frozenset({"COMPLETED", "FAILED", "NOT_REQUIRED"})
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
@@ -141,6 +181,31 @@ def _fingerprint(value: Any) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _stable_hash(value: Any) -> str:
+    return _fingerprint(value)
+
+
+def _normalize_id_list(value: Any) -> list[str]:
+    out: list[str] = []
+    for item in _list(value):
+        text = _text(item)
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
+def _require_identity_value(value: Any, field: str) -> str:
+    text = _text(value)
+    if not text:
+        raise OperationalReceiptError(f"{field}_missing_use_NOT_APPLICABLE")
+    return text
+
+
+# ---------------------------------------------------------------------------
+# Explicit operational accounting
+# ---------------------------------------------------------------------------
+
+
 def validate_execution_operational_receipt(
     receipt: dict[str, Any],
 ) -> dict[str, Any]:
@@ -152,6 +217,8 @@ def validate_execution_operational_receipt(
     execution_status = _text(value.get("execution_status")).upper()
     if execution_status not in _EXECUTION_STATUSES:
         raise OperationalReceiptError("operational_execution_status_invalid")
+    value["execution_status"] = execution_status
+
     for field in (
         "scenario_attempt_count",
         "http_request_attempt_count",
@@ -162,6 +229,7 @@ def validate_execution_operational_receipt(
         "accepted_cleanup_write_count",
     ):
         value[field] = _non_negative_int(value.get(field), field)
+
     if value["scenario_attempt_count"] != 1:
         raise OperationalReceiptError("scenario_attempt_count_must_equal_one")
     if value["production_http_request_count"] > value["http_request_attempt_count"]:
@@ -181,6 +249,7 @@ def validate_execution_operational_receipt(
     cleanup_status = _text(cleanup.get("status")).upper()
     if cleanup_status not in _CLEANUP_STATUSES:
         raise OperationalReceiptError("cleanup_outcome_status_invalid")
+    cleanup["status"] = cleanup_status
     for field in ("attempted_count", "completed_count", "failure_count"):
         cleanup[field] = _non_negative_int(cleanup.get(field), f"cleanup_{field}")
     if cleanup["completed_count"] > cleanup["attempted_count"]:
@@ -194,11 +263,7 @@ def validate_execution_operational_receipt(
     claimed = _text(value.get("receipt_fingerprint"))
     if not claimed:
         raise OperationalReceiptError("operational_receipt_fingerprint_missing")
-    unsigned = {
-        key: item
-        for key, item in value.items()
-        if key != "receipt_fingerprint"
-    }
+    unsigned = {key: item for key, item in value.items() if key != "receipt_fingerprint"}
     if claimed != _fingerprint(unsigned):
         raise OperationalReceiptError("operational_receipt_fingerprint_mismatch")
     return value
@@ -216,6 +281,7 @@ def build_execution_operational_receipt(
     normalized_status = _text(execution_status).upper()
     if normalized_status not in _EXECUTION_STATUSES:
         raise OperationalReceiptError("operational_execution_status_invalid")
+
     http_attempts = 0
     write_request_attempts = 0
     production_requests = 0
@@ -237,14 +303,14 @@ def build_execution_operational_receipt(
                 governance.get("production_http_requests"),
                 "governance_production_http_requests",
             )
-            if production > attempts:
-                raise OperationalReceiptError(
-                    "governance_production_http_requests_exceed_attempts"
-                )
             write_attempts = _non_negative_int(
                 governance.get("write_request_attempt_count"),
                 "governance_write_request_attempt_count",
             )
+            if production > attempts:
+                raise OperationalReceiptError(
+                    "governance_production_http_requests_exceed_attempts"
+                )
             if write_attempts > attempts:
                 raise OperationalReceiptError(
                     "governance_write_request_attempts_exceed_http_attempts"
@@ -254,10 +320,6 @@ def build_execution_operational_receipt(
             production_requests += production
             accepted = governance.get("accepted") is True
             method = _text(governance.get("method") or step.get("method")).upper()
-            # Adapter DB cleanup is not HTTP transport. Counting it as an accepted
-            # write with write_request_attempt_count=0 trips
-            # accepted_write_count_exceeds_write_attempts — which only surfaces once
-            # decrypt/field-restore actually succeed (FAILED receipts stay accepted=False).
             is_adapter_cleanup = method.startswith("ADAPTER_")
             if phase in _CLEANUP_PHASES:
                 if attempts or is_adapter_cleanup:
@@ -270,8 +332,6 @@ def build_execution_operational_receipt(
                 accepted_non_cleanup += 1
             continue
 
-        # A direct HTTP adapter step is one request attempt.  A blocked or
-        # unresolved plan row has no status_code field and therefore no request.
         status_code = int(step.get("status_code") or 0)
         if _text(step.get("method")) and _text(step.get("path")) and status_code > 0:
             http_attempts += 1
@@ -285,6 +345,7 @@ def build_execution_operational_receipt(
         cleanup_status = "COMPLETED"
     else:
         cleanup_status = "NOT_REQUIRED"
+
     return build_execution_operational_receipt_from_counts(
         receipt_id=receipt_id,
         execution_status=normalized_status,
@@ -331,20 +392,16 @@ def build_execution_operational_receipt_from_counts(
         "receipt_id": _text(receipt_id),
         "execution_status": _text(execution_status).upper(),
         "scenario_attempt_count": _non_negative_int(
-            scenario_attempt_count,
-            "scenario_attempt_count",
+            scenario_attempt_count, "scenario_attempt_count"
         ),
         "http_request_attempt_count": _non_negative_int(
-            http_request_attempt_count,
-            "http_request_attempt_count",
+            http_request_attempt_count, "http_request_attempt_count"
         ),
         "write_request_attempt_count": _non_negative_int(
-            write_request_attempt_count,
-            "write_request_attempt_count",
+            write_request_attempt_count, "write_request_attempt_count"
         ),
         "production_http_request_count": _non_negative_int(
-            production_http_request_count,
-            "production_http_request_count",
+            production_http_request_count, "production_http_request_count"
         ),
         "accepted_write_count": accepted_non_cleanup + accepted_cleanup,
         "accepted_non_cleanup_write_count": accepted_non_cleanup,
@@ -352,16 +409,13 @@ def build_execution_operational_receipt_from_counts(
         "cleanup_outcome": {
             "status": _text(cleanup_status).upper(),
             "attempted_count": _non_negative_int(
-                cleanup_attempted_count,
-                "cleanup_attempted_count",
+                cleanup_attempted_count, "cleanup_attempted_count"
             ),
             "completed_count": _non_negative_int(
-                cleanup_completed_count,
-                "cleanup_completed_count",
+                cleanup_completed_count, "cleanup_completed_count"
             ),
             "failure_count": _non_negative_int(
-                cleanup_failure_count,
-                "cleanup_failure_count",
+                cleanup_failure_count, "cleanup_failure_count"
             ),
         },
     }
@@ -387,8 +441,7 @@ def aggregate_execution_operational_receipts(
         if row["execution_status"] == "EXECUTED"
     )
     cleanup_failures = sum(
-        _dict(row.get("cleanup_outcome")).get("failure_count", 0)
-        for row in rows
+        _dict(row.get("cleanup_outcome")).get("failure_count", 0) for row in rows
     )
     return {
         "schema_version": EXECUTION_OPERATIONAL_SUMMARY_SCHEMA,
@@ -419,29 +472,9 @@ def aggregate_execution_operational_receipts(
     }
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# V1.6.2 Gate A — Canonical Receipt Envelope / Bundle / Finalization
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-def _stable_hash(value: Any) -> str:
-    return _fingerprint(value)
-
-
-def _require_identity_value(value: Any, field: str) -> str:
-    text = _text(value)
-    if not text:
-        raise OperationalReceiptError(f"{field}_missing_use_NOT_APPLICABLE")
-    return text
-
-
-def _normalize_id_list(value: Any) -> list[str]:
-    out: list[str] = []
-    for item in _list(value):
-        text = _text(item)
-        if text and text not in out:
-            out.append(text)
-    return out
+# ---------------------------------------------------------------------------
+# Canonical receipt envelope and bundle
+# ---------------------------------------------------------------------------
 
 
 def build_canonical_receipt_envelope(
@@ -464,7 +497,7 @@ def build_canonical_receipt_envelope(
     status: str = RECEIPT_STATUS_VALID,
     produced_at: str | None = None,
 ) -> dict[str, Any]:
-    """Build a unified Canonical Receipt Envelope (SPEC V1.6.2 §7.1)."""
+    """Build a unified Canonical Receipt Envelope."""
 
     if not _text(receipt_type):
         raise OperationalReceiptError("receipt_type_missing")
@@ -484,25 +517,28 @@ def build_canonical_receipt_envelope(
         "fixture_id": _require_identity_value(fixture_id, "fixture_id"),
         "protocol_id": _require_identity_value(protocol_id, "protocol_id"),
     }
-    payload_hash = _stable_hash(payload)
     envelope: dict[str, Any] = {
         "schema_version": CANONICAL_RECEIPT_ENVELOPE_SCHEMA,
         "receipt_type": _text(receipt_type),
         "receipt_id": _text(receipt_id),
         **identity,
-        "producer_module": _text(producer_module) or "ai_test_asset_center.operational_receipts",
+        "producer_module": _text(producer_module)
+        or "ai_test_asset_center.operational_receipts",
         "producer_version": _text(producer_version) or DERIVATION_VERSION,
-        "code_commit_sha": _require_identity_value(code_commit_sha, "code_commit_sha"),
+        "code_commit_sha": _require_identity_value(
+            code_commit_sha, "code_commit_sha"
+        ),
         "tree_hash": _require_identity_value(tree_hash, "tree_hash"),
         "parent_receipt_ids": _normalize_id_list(parent_receipt_ids),
         "source_contract_ids": _normalize_id_list(source_contract_ids),
         "payload": dict(payload),
-        "payload_hash": payload_hash,
-        "produced_at": _text(produced_at) or datetime.now(timezone.utc).isoformat(),
+        "payload_hash": _stable_hash(payload),
+        "produced_at": _text(produced_at)
+        or datetime.now(timezone.utc).isoformat(),
         "status": normalized_status,
     }
     envelope["receipt_hash"] = _stable_hash(
-        {k: v for k, v in envelope.items() if k != "receipt_hash"}
+        {key: value for key, value in envelope.items() if key != "receipt_hash"}
     )
     return validate_canonical_receipt_envelope(envelope)
 
@@ -513,7 +549,7 @@ def validate_canonical_receipt_envelope(
     expected_code_commit_sha: str | None = None,
     expected_tree_hash: str | None = None,
 ) -> dict[str, Any]:
-    """Validate envelope integrity, hash, and required identity fields."""
+    """Validate envelope integrity, hashes, and required identity fields."""
 
     value = dict(_dict(receipt))
     if value.get("schema_version") != CANONICAL_RECEIPT_ENVELOPE_SCHEMA:
@@ -530,6 +566,7 @@ def validate_canonical_receipt_envelope(
     for field in ("code_commit_sha", "tree_hash"):
         if not _text(value.get(field)):
             raise OperationalReceiptError(f"{field}_missing_use_NOT_APPLICABLE")
+
     status = _text(value.get("status")).upper()
     if status not in _RECEIPT_STATUSES:
         raise OperationalReceiptError("receipt_status_invalid")
@@ -538,19 +575,16 @@ def validate_canonical_receipt_envelope(
     value["source_contract_ids"] = _normalize_id_list(value.get("source_contract_ids"))
 
     claimed_payload_hash = _text(value.get("payload_hash"))
-    actual_payload_hash = _stable_hash(value.get("payload"))
     if not claimed_payload_hash:
         raise OperationalReceiptError("payload_hash_missing")
-    if claimed_payload_hash != actual_payload_hash:
-        value["status"] = RECEIPT_STATUS_TAMPERED
+    if claimed_payload_hash != _stable_hash(value.get("payload")):
         raise OperationalReceiptError("payload_hash_mismatch")
 
     claimed_receipt_hash = _text(value.get("receipt_hash"))
     if not claimed_receipt_hash:
         raise OperationalReceiptError("receipt_hash_missing")
-    unsigned = {k: v for k, v in value.items() if k != "receipt_hash"}
+    unsigned = {key: item for key, item in value.items() if key != "receipt_hash"}
     if claimed_receipt_hash != _stable_hash(unsigned):
-        value["status"] = RECEIPT_STATUS_TAMPERED
         raise OperationalReceiptError("receipt_hash_mismatch")
 
     if expected_code_commit_sha is not None:
@@ -567,7 +601,7 @@ def validate_canonical_receipt_envelope(
 def validate_parent_receipt_chain(
     receipts: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Fail closed when a parent_receipt_id is not present in the set."""
+    """Fail closed when a parent receipt is not present in the supplied set."""
 
     rows = [validate_canonical_receipt_envelope(row) for row in _list(receipts)]
     by_id = {_text(row.get("receipt_id")): row for row in rows}
@@ -580,10 +614,12 @@ def validate_parent_receipt_chain(
             if not pid or pid == NOT_APPLICABLE:
                 continue
             if pid not in by_id:
-                broken.append({
-                    "receipt_id": _text(row.get("receipt_id")),
-                    "missing_parent_receipt_id": pid,
-                })
+                broken.append(
+                    {
+                        "receipt_id": _text(row.get("receipt_id")),
+                        "missing_parent_receipt_id": pid,
+                    }
+                )
     if broken:
         raise OperationalReceiptError(
             f"parent_chain_broken:{json.dumps(broken, sort_keys=True)}"
@@ -614,7 +650,9 @@ def detect_receipt_tamper(receipt: dict[str, Any]) -> dict[str, Any]:
         return {
             "receipt_id": _text(value.get("receipt_id")),
             "tampered": tampered or "hash" in reason,
-            "status": RECEIPT_STATUS_TAMPERED if tampered else RECEIPT_STATUS_INVALID,
+            "status": (
+                RECEIPT_STATUS_TAMPERED if tampered else RECEIPT_STATUS_INVALID
+            ),
             "reason_code": reason,
         }
 
@@ -627,7 +665,7 @@ def build_correction_receipt(
     corrected_payload: dict[str, Any],
     reason_code: str,
 ) -> dict[str, Any]:
-    """Append-only correction: original receipt must remain retained by caller."""
+    """Append-only correction; callers retain the original receipt."""
 
     original = validate_canonical_receipt_envelope(original_receipt)
     if _text(original.get("receipt_id")) != _text(supersedes_receipt_id):
@@ -684,7 +722,7 @@ def build_execution_receipt_bundle(
     cleanup_verification_receipt_ids: list[str] | None = None,
     environment_restoration_receipt_id: str = "",
 ) -> dict[str, Any]:
-    """Assemble and validate an Execution Receipt Bundle (SPEC §8.2)."""
+    """Assemble and validate an Execution Receipt Bundle."""
 
     if not _text(bundle_id):
         raise OperationalReceiptError("bundle_id_missing")
@@ -695,17 +733,25 @@ def build_execution_receipt_bundle(
 
     groups = {
         "compile_receipt_id": _text(compile_receipt_id),
-        "fixture_provenance_receipt_ids": _normalize_id_list(fixture_provenance_receipt_ids),
+        "fixture_provenance_receipt_ids": _normalize_id_list(
+            fixture_provenance_receipt_ids
+        ),
         "required_step_receipt_ids": _normalize_id_list(required_step_receipt_ids),
         "transport_receipt_ids": _normalize_id_list(transport_receipt_ids),
         "observation_receipt_ids": _normalize_id_list(observation_receipt_ids),
-        "oracle_invocation_receipt_ids": _normalize_id_list(oracle_invocation_receipt_ids),
+        "oracle_invocation_receipt_ids": _normalize_id_list(
+            oracle_invocation_receipt_ids
+        ),
         "oracle_trace_receipt_ids": _normalize_id_list(oracle_trace_receipt_ids),
-        "cleanup_execution_receipt_ids": _normalize_id_list(cleanup_execution_receipt_ids),
+        "cleanup_execution_receipt_ids": _normalize_id_list(
+            cleanup_execution_receipt_ids
+        ),
         "cleanup_verification_receipt_ids": _normalize_id_list(
             cleanup_verification_receipt_ids
         ),
-        "environment_restoration_receipt_id": _text(environment_restoration_receipt_id),
+        "environment_restoration_receipt_id": _text(
+            environment_restoration_receipt_id
+        ),
     }
 
     required_ids: list[str] = []
@@ -736,11 +782,11 @@ def build_execution_receipt_bundle(
     identity_mismatch_receipt_ids: list[str] = []
     protocol_mismatch_receipt_ids: list[str] = []
     invalid_receipt_ids: list[str] = []
+
     for rid, row in by_id.items():
         if row.get("status") != RECEIPT_STATUS_VALID:
             invalid_receipt_ids.append(rid)
         row_identity = _identity_tuple(row)
-        # Compare only concrete (non-NOT_APPLICABLE) positions on both sides.
         for idx, field in enumerate(_IDENTITY_FIELDS):
             expected = expected_identity[idx]
             actual = row_identity[idx]
@@ -761,25 +807,14 @@ def build_execution_receipt_bundle(
     if invalid_receipt_ids:
         validation_errors.append("invalid_receipts")
 
+    # Extra receipts are allowed. Required coverage must be complete and valid.
     complete = (
-        not missing_receipt_ids
+        bool(required_ids)
+        and not missing_receipt_ids
         and identity_consistent
         and protocol_consistent
         and not invalid_receipt_ids
-        and required_set_hash == actual_set_hash
-        and bool(required_ids)
     )
-    if required_set_hash != actual_set_hash and not missing_receipt_ids:
-        # Extra receipts are allowed only when required set is fully covered;
-        # completeness for TRUE_COMPLETED still requires exact required coverage.
-        complete = (
-            not missing_receipt_ids
-            and identity_consistent
-            and protocol_consistent
-            and not invalid_receipt_ids
-            and bool(required_ids)
-        )
-
     bundle = {
         "schema_version": EXECUTION_RECEIPT_BUNDLE_SCHEMA,
         "bundle_id": _text(bundle_id),
@@ -798,14 +833,216 @@ def build_execution_receipt_bundle(
         "validation_errors": validation_errors,
         "missing_receipt_ids": missing_receipt_ids,
         "invalid_receipt_ids": sorted(set(invalid_receipt_ids)),
-        "identity_mismatch_receipt_ids": sorted(set(identity_mismatch_receipt_ids)),
-        "protocol_mismatch_receipt_ids": sorted(set(protocol_mismatch_receipt_ids)),
+        "identity_mismatch_receipt_ids": sorted(
+            set(identity_mismatch_receipt_ids)
+        ),
+        "protocol_mismatch_receipt_ids": sorted(
+            set(protocol_mismatch_receipt_ids)
+        ),
         "receipts": validated,
     }
     bundle["bundle_hash"] = _stable_hash(
-        {k: v for k, v in bundle.items() if k not in {"receipts", "bundle_hash"}}
+        {
+            key: value
+            for key, value in bundle.items()
+            if key not in {"receipts", "bundle_hash"}
+        }
     )
     return bundle
+
+
+# ---------------------------------------------------------------------------
+# Single lifecycle authority
+# ---------------------------------------------------------------------------
+
+
+def _bundle_facts(bundle: dict[str, Any] | None) -> dict[str, Any]:
+    value = dict(_dict(bundle))
+    if not value:
+        return {
+            "provided": False,
+            "schema_valid": False,
+            "structurally_complete": False,
+            "missing_receipt_ids": [],
+            "invalid_receipt_ids": [],
+            "identity_mismatch_receipt_ids": [],
+            "protocol_mismatch_receipt_ids": [],
+        }
+    schema_valid = value.get("schema_version") == EXECUTION_RECEIPT_BUNDLE_SCHEMA
+    return {
+        "provided": True,
+        "schema_valid": schema_valid,
+        "structurally_complete": bool(value.get("complete")) if schema_valid else False,
+        "missing_receipt_ids": _normalize_id_list(value.get("missing_receipt_ids")),
+        "invalid_receipt_ids": _normalize_id_list(value.get("invalid_receipt_ids")),
+        "identity_mismatch_receipt_ids": _normalize_id_list(
+            value.get("identity_mismatch_receipt_ids")
+        ),
+        "protocol_mismatch_receipt_ids": _normalize_id_list(
+            value.get("protocol_mismatch_receipt_ids")
+        ),
+    }
+
+
+def derive_execution_lifecycle(
+    *,
+    execution_status: str,
+    compile_succeeded: bool = True,
+    fixture_required: bool = True,
+    fixture_materialized: bool = False,
+    state_precondition_required: bool = True,
+    state_precondition_established: bool = False,
+    required_steps_declared: bool = False,
+    all_required_steps_executed: bool = False,
+    observation_completed: bool = False,
+    oracle_evaluated: bool = False,
+    oracle_indeterminate: bool = False,
+    cleanup_required: bool = False,
+    cleanup_executed: bool = False,
+    cleanup_verified: bool = False,
+    environment_restored: bool = False,
+    receipt_bundle: dict[str, Any] | None = None,
+    finalizer_block_reason: str = "",
+) -> dict[str, Any]:
+    """Reduce lifecycle facts exactly once using fail-closed precedence.
+
+    Callers provide facts; this function alone authors ``lifecycle_state``.
+    Receipt completeness is mandatory for TRUE_COMPLETED and can never be
+    overridden by transport status, oracle status, or legacy lifecycle fields.
+    """
+
+    status = _text(execution_status).upper()
+    block_reason = _text(finalizer_block_reason).upper()
+    bundle = _bundle_facts(receipt_bundle)
+    fixture_ok = (not fixture_required) or bool(fixture_materialized)
+    precondition_ok = (
+        (not state_precondition_required) or bool(state_precondition_established)
+    )
+    cleanup_execution_ok = (not cleanup_required) or bool(cleanup_executed)
+    cleanup_verification_ok = (not cleanup_required) or bool(cleanup_verified)
+
+    facts = {
+        "execution_status": status,
+        "compile_succeeded": bool(compile_succeeded),
+        "fixture_required": bool(fixture_required),
+        "fixture_materialized": bool(fixture_materialized),
+        "state_precondition_required": bool(state_precondition_required),
+        "state_precondition_established": bool(state_precondition_established),
+        "required_steps_declared": bool(required_steps_declared),
+        "all_required_steps_executed": bool(all_required_steps_executed),
+        "observation_completed": bool(observation_completed),
+        "oracle_evaluated": bool(oracle_evaluated),
+        "oracle_indeterminate": bool(oracle_indeterminate),
+        "cleanup_required": bool(cleanup_required),
+        "cleanup_executed": bool(cleanup_executed),
+        "cleanup_verified": bool(cleanup_verified),
+        "environment_restored": bool(environment_restored),
+        "finalizer_block_reason": block_reason,
+        "receipt_bundle": bundle,
+    }
+
+    lifecycle_state: str
+    reason_code: str
+    completed_phase = LIFECYCLE_PLANNED
+
+    if not compile_succeeded or "COMPILE" in block_reason:
+        lifecycle_state = LIFECYCLE_COMPILE_BLOCKED
+        reason_code = block_reason or "COMPILE_NOT_SUCCEEDED"
+    else:
+        completed_phase = LIFECYCLE_COMPILED
+        if not fixture_ok or "FIXTURE" in block_reason:
+            lifecycle_state = LIFECYCLE_FIXTURE_BLOCKED
+            reason_code = block_reason or "FIXTURE_NOT_MATERIALIZED"
+        else:
+            completed_phase = LIFECYCLE_FIXTURE_MATERIALIZED
+            if not precondition_ok or "PRECONDITION" in block_reason:
+                lifecycle_state = LIFECYCLE_PRECONDITION_UNREACHABLE
+                reason_code = block_reason or "STATE_PRECONDITION_NOT_ESTABLISHED"
+            elif status in {"HARNESS_FAILURE", "HARNESS_FAILED"}:
+                lifecycle_state = LIFECYCLE_HARNESS_FAILED
+                reason_code = block_reason or status
+            else:
+                completed_phase = LIFECYCLE_PRECONDITION_ESTABLISHED
+                if (
+                    not required_steps_declared
+                    or not all_required_steps_executed
+                    or status in {"BLOCKED", "DEFERRED"}
+                ):
+                    lifecycle_state = LIFECYCLE_PARTIAL_EXECUTION
+                    reason_code = block_reason or (
+                        "REQUIRED_STEPS_NOT_DECLARED"
+                        if not required_steps_declared
+                        else "REQUIRED_STEPS_NOT_EXECUTED"
+                    )
+                else:
+                    completed_phase = LIFECYCLE_BUSINESS_STEPS_EXECUTED
+                    if not observation_completed:
+                        lifecycle_state = LIFECYCLE_RECEIPT_INCOMPLETE
+                        reason_code = block_reason or "OBSERVATION_NOT_COMPLETED"
+                    else:
+                        completed_phase = LIFECYCLE_OBSERVATION_COMPLETED
+                        if oracle_indeterminate or not oracle_evaluated:
+                            lifecycle_state = LIFECYCLE_ORACLE_INDETERMINATE
+                            reason_code = block_reason or (
+                                "ORACLE_INDETERMINATE"
+                                if oracle_indeterminate
+                                else "ORACLE_NOT_EVALUATED"
+                            )
+                        else:
+                            completed_phase = LIFECYCLE_ORACLE_EVALUATED
+                            if not cleanup_execution_ok:
+                                lifecycle_state = LIFECYCLE_CLEANUP_FAILED
+                                reason_code = block_reason or "CLEANUP_NOT_EXECUTED"
+                            elif not cleanup_verification_ok:
+                                lifecycle_state = LIFECYCLE_CLEANUP_FAILED
+                                reason_code = block_reason or "CLEANUP_NOT_VERIFIED"
+                            else:
+                                completed_phase = (
+                                    LIFECYCLE_CLEANUP_VERIFIED
+                                    if cleanup_required
+                                    else LIFECYCLE_ORACLE_EVALUATED
+                                )
+                                if not environment_restored:
+                                    lifecycle_state = LIFECYCLE_ENVIRONMENT_DIRTY
+                                    reason_code = (
+                                        block_reason or "ENVIRONMENT_NOT_RESTORED"
+                                    )
+                                elif bundle["identity_mismatch_receipt_ids"]:
+                                    lifecycle_state = LIFECYCLE_IDENTITY_MISMATCH
+                                    reason_code = "PROCESS_RECEIPT_IDENTITY_MISMATCH"
+                                elif bundle["protocol_mismatch_receipt_ids"]:
+                                    lifecycle_state = LIFECYCLE_PROTOCOL_MISMATCH
+                                    reason_code = "PROCESS_RECEIPT_PROTOCOL_MISMATCH"
+                                elif (
+                                    not bundle["provided"]
+                                    or not bundle["schema_valid"]
+                                    or not bundle["structurally_complete"]
+                                    or bundle["missing_receipt_ids"]
+                                    or bundle["invalid_receipt_ids"]
+                                ):
+                                    lifecycle_state = LIFECYCLE_RECEIPT_INCOMPLETE
+                                    reason_code = block_reason or (
+                                        "EXECUTION_RECEIPT_BUNDLE_NOT_ACTIVATED"
+                                        if not bundle["provided"]
+                                        else "EXECUTION_RECEIPT_BUNDLE_INCOMPLETE"
+                                    )
+                                else:
+                                    completed_phase = LIFECYCLE_ENVIRONMENT_RESTORED
+                                    lifecycle_state = LIFECYCLE_TRUE_COMPLETED
+                                    reason_code = ""
+
+    return {
+        "schema_version": EXECUTION_LIFECYCLE_DERIVATION_SCHEMA,
+        "lifecycle_state": lifecycle_state,
+        "derived_terminal_status": lifecycle_state,
+        "reason_code": reason_code,
+        "completed_phase": completed_phase,
+        "true_completed": lifecycle_state == LIFECYCLE_TRUE_COMPLETED,
+        "terminal": lifecycle_state in TERMINAL_LIFECYCLE_STATES,
+        "authority_module": "ai_test_asset_center.operational_receipts",
+        "derivation_version": LIFECYCLE_DERIVATION_VERSION,
+        "facts": facts,
+    }
 
 
 def derive_true_completed_from_bundle(
@@ -815,46 +1052,59 @@ def derive_true_completed_from_bundle(
     cleanup_verified: bool,
     environment_restored: bool,
 ) -> dict[str, Any]:
-    """Derive terminal status from a validated Execution Receipt Bundle only."""
+    """Backward-compatible bundle API delegated to the lifecycle reducer."""
 
     value = dict(_dict(bundle))
     if value.get("schema_version") != EXECUTION_RECEIPT_BUNDLE_SCHEMA:
         raise OperationalReceiptError("execution_receipt_bundle_schema_invalid")
 
-    missing = _normalize_id_list(value.get("missing_receipt_ids"))
-    invalid = _normalize_id_list(value.get("invalid_receipt_ids"))
-    identity_mismatch = _normalize_id_list(value.get("identity_mismatch_receipt_ids"))
-    protocol_mismatch = _normalize_id_list(value.get("protocol_mismatch_receipt_ids"))
-    bundle_valid = bool(value.get("complete")) and not missing and not invalid
-
-    if identity_mismatch:
-        derived = "IDENTITY_MISMATCH"
-    elif protocol_mismatch:
-        derived = "PROTOCOL_MISMATCH"
-    elif not bundle_valid or missing or invalid:
-        derived = "RECEIPT_INCOMPLETE"
-    elif not oracle_evaluated:
-        derived = "ORACLE_NOT_EVALUATED"
-    elif not cleanup_verified:
-        derived = "CLEANUP_FAILED"
-    elif not environment_restored:
-        derived = "ENVIRONMENT_DIRTY"
-    else:
-        derived = "TRUE_COMPLETED"
-
+    lifecycle = derive_execution_lifecycle(
+        execution_status="EXECUTED",
+        compile_succeeded=True,
+        fixture_required=False,
+        fixture_materialized=True,
+        state_precondition_required=False,
+        state_precondition_established=True,
+        required_steps_declared=True,
+        all_required_steps_executed=True,
+        observation_completed=True,
+        oracle_evaluated=oracle_evaluated,
+        oracle_indeterminate=False,
+        cleanup_required=True,
+        cleanup_executed=True,
+        cleanup_verified=cleanup_verified,
+        environment_restored=environment_restored,
+        receipt_bundle=value,
+    )
+    bundle_facts = lifecycle["facts"]["receipt_bundle"]
+    compatibility_terminal = lifecycle["lifecycle_state"]
+    if (
+        compatibility_terminal == LIFECYCLE_ORACLE_INDETERMINATE
+        and not oracle_evaluated
+    ):
+        # Preserve the v1.6.2 public result while the canonical lifecycle uses
+        # the normalized ORACLE_INDETERMINATE terminal.
+        compatibility_terminal = "ORACLE_NOT_EVALUATED"
     return {
-        "receipt_bundle_valid": bundle_valid and derived == "TRUE_COMPLETED",
-        "bundle_structurally_complete": bool(value.get("complete")),
-        "missing_receipt_ids": missing,
-        "invalid_receipt_ids": invalid,
-        "identity_mismatch_receipt_ids": identity_mismatch,
-        "protocol_mismatch_receipt_ids": protocol_mismatch,
+        "receipt_bundle_valid": lifecycle["true_completed"],
+        "bundle_structurally_complete": bundle_facts["structurally_complete"],
+        "missing_receipt_ids": bundle_facts["missing_receipt_ids"],
+        "invalid_receipt_ids": bundle_facts["invalid_receipt_ids"],
+        "identity_mismatch_receipt_ids": bundle_facts[
+            "identity_mismatch_receipt_ids"
+        ],
+        "protocol_mismatch_receipt_ids": bundle_facts[
+            "protocol_mismatch_receipt_ids"
+        ],
         "oracle_evaluated": bool(oracle_evaluated),
         "cleanup_verified": bool(cleanup_verified),
         "environment_restored": bool(environment_restored),
-        "derived_terminal_status": derived,
-        "true_completed": derived == "TRUE_COMPLETED",
+        "derived_terminal_status": compatibility_terminal,
+        "lifecycle_state": compatibility_terminal,
+        "reason_code": lifecycle["reason_code"],
+        "true_completed": lifecycle["true_completed"],
         "derivation_version": DERIVATION_VERSION,
+        "lifecycle_derivation": lifecycle,
     }
 
 
@@ -867,25 +1117,98 @@ def build_execution_finalization_receipt(
     environment_restored: bool,
     code_commit_sha: str = NOT_APPLICABLE,
     tree_hash: str = NOT_APPLICABLE,
+    lifecycle_facts: dict[str, Any] | None = None,
+    execution_status: str = "EXECUTED",
+    finalizer_block_reason: str = "",
 ) -> dict[str, Any]:
-    """Finalizer-only finalization receipt (SPEC §8.3)."""
+    """Build the only authoritative execution finalization receipt."""
 
     if not _text(finalization_receipt_id):
         raise OperationalReceiptError("finalization_receipt_id_missing")
-    derivation = derive_true_completed_from_bundle(
-        bundle,
-        oracle_evaluated=oracle_evaluated,
-        cleanup_verified=cleanup_verified,
-        environment_restored=environment_restored,
-    )
+
+    facts = dict(_dict(lifecycle_facts))
+    if facts:
+        derivation = derive_execution_lifecycle(
+            execution_status=_text(
+                facts.get("execution_status") or execution_status
+            ),
+            compile_succeeded=facts.get("compile_succeeded", True) is True,
+            fixture_required=facts.get("fixture_required", True) is True,
+            fixture_materialized=facts.get("fixture_materialized", False) is True,
+            state_precondition_required=(
+                facts.get("state_precondition_required", True) is True
+            ),
+            state_precondition_established=(
+                facts.get("state_precondition_established", False) is True
+            ),
+            required_steps_declared=(
+                facts.get("required_steps_declared", False) is True
+            ),
+            all_required_steps_executed=(
+                facts.get("all_required_steps_executed", False) is True
+            ),
+            observation_completed=facts.get("observation_completed", False) is True,
+            oracle_evaluated=bool(
+                facts.get("oracle_evaluated", oracle_evaluated)
+            ),
+            oracle_indeterminate=facts.get("oracle_indeterminate", False) is True,
+            cleanup_required=facts.get("cleanup_required", False) is True,
+            cleanup_executed=facts.get("cleanup_executed", False) is True,
+            cleanup_verified=bool(
+                facts.get("cleanup_verified", cleanup_verified)
+            ),
+            environment_restored=bool(
+                facts.get("environment_restored", environment_restored)
+            ),
+            receipt_bundle=bundle,
+            finalizer_block_reason=_text(
+                facts.get("finalizer_block_reason") or finalizer_block_reason
+            ),
+        )
+        bundle_state = _bundle_facts(bundle)
+        compatibility = {
+            "receipt_bundle_valid": derivation["true_completed"],
+            "bundle_structurally_complete": bundle_state["structurally_complete"],
+            "missing_receipt_ids": bundle_state["missing_receipt_ids"],
+            "invalid_receipt_ids": bundle_state["invalid_receipt_ids"],
+            "identity_mismatch_receipt_ids": bundle_state[
+                "identity_mismatch_receipt_ids"
+            ],
+            "protocol_mismatch_receipt_ids": bundle_state[
+                "protocol_mismatch_receipt_ids"
+            ],
+            "oracle_evaluated": bool(
+                facts.get("oracle_evaluated", oracle_evaluated)
+            ),
+            "cleanup_verified": bool(
+                facts.get("cleanup_verified", cleanup_verified)
+            ),
+            "environment_restored": bool(
+                facts.get("environment_restored", environment_restored)
+            ),
+            "derived_terminal_status": derivation["lifecycle_state"],
+            "lifecycle_state": derivation["lifecycle_state"],
+            "reason_code": derivation["reason_code"],
+            "true_completed": derivation["true_completed"],
+            "derivation_version": DERIVATION_VERSION,
+            "lifecycle_derivation": derivation,
+        }
+    else:
+        compatibility = derive_true_completed_from_bundle(
+            bundle,
+            oracle_evaluated=oracle_evaluated,
+            cleanup_verified=cleanup_verified,
+            environment_restored=environment_restored,
+        )
+
     payload = {
         "schema_version": EXECUTION_FINALIZATION_RECEIPT_SCHEMA,
         "finalization_receipt_id": _text(finalization_receipt_id),
         "execution_receipt_bundle_id": _text(bundle.get("bundle_id")),
-        **derivation,
+        **compatibility,
     }
     payload["finalization_hash"] = _stable_hash(
-        {k: v for k, v in payload.items() if k != "finalization_hash"}
+        {key: value for key, value in payload.items() if key != "finalization_hash"}
     )
     envelope = build_canonical_receipt_envelope(
         receipt_type=EXECUTION_FINALIZATION_RECEIPT_SCHEMA,
@@ -905,15 +1228,22 @@ def build_execution_finalization_receipt(
         if _text(bundle.get("bundle_id"))
         else [],
         source_contract_ids=[],
-        status=RECEIPT_STATUS_VALID
-        if derivation["true_completed"]
-        else RECEIPT_STATUS_INCOMPLETE,
+        status=(
+            RECEIPT_STATUS_VALID
+            if compatibility["true_completed"]
+            else RECEIPT_STATUS_INCOMPLETE
+        ),
     )
     return {
         **payload,
         "envelope": envelope,
-        "lifecycle_state": derivation["derived_terminal_status"],
+        "lifecycle_state": compatibility["derived_terminal_status"],
     }
+
+
+# ---------------------------------------------------------------------------
+# Provenance, metrics, and oracle trace utilities
+# ---------------------------------------------------------------------------
 
 
 def build_fixture_provenance_receipt(
@@ -937,7 +1267,7 @@ def build_fixture_provenance_receipt(
     code_commit_sha: str = NOT_APPLICABLE,
     tree_hash: str = NOT_APPLICABLE,
 ) -> dict[str, Any]:
-    """Lifecycle fixture provenance with identity/scope stability checks."""
+    """Lifecycle fixture provenance with identity and scope stability checks."""
 
     identities = {
         "create_identity": _text(create_identity),
@@ -948,13 +1278,18 @@ def build_fixture_provenance_receipt(
     }
     if not all(identities.values()):
         raise OperationalReceiptError("fixture_provenance_identity_incomplete")
-    unique = set(identities.values())
-    identity_stable = len(unique) == 1
-    ownership_norm = _text(ownership).lower()
-    if ownership_norm in {"customer", "customer_owned", "latest_record", "max_id"}:
-        raise OperationalReceiptError("customer_owned_or_heuristic_fixture_forbidden")
-    if not identity_stable:
+    if len(set(identities.values())) != 1:
         raise OperationalReceiptError("fixture_identity_drift")
+    ownership_norm = _text(ownership).lower()
+    if ownership_norm in {
+        "customer",
+        "customer_owned",
+        "latest_record",
+        "max_id",
+    }:
+        raise OperationalReceiptError(
+            "customer_owned_or_heuristic_fixture_forbidden"
+        )
     if not _text(scope_id):
         raise OperationalReceiptError("fixture_scope_missing")
 
@@ -1000,24 +1335,26 @@ def build_report_metric_receipt(
     code_commit_sha: str = NOT_APPLICABLE,
     tree_hash: str = NOT_APPLICABLE,
 ) -> dict[str, Any]:
-    """Formal report metric must bind to receipt IDs + sealed denominator."""
+    """Formal metrics bind to receipt IDs and a sealed denominator."""
 
+    source_ids = _normalize_id_list(source_receipt_ids)
     if not _text(metric_name):
         raise OperationalReceiptError("report_metric_name_missing")
-    if not _normalize_id_list(source_receipt_ids):
+    if not source_ids:
         raise OperationalReceiptError("report_metric_source_receipts_missing")
     if not _text(denominator_manifest_hash):
         raise OperationalReceiptError("report_metric_denominator_manifest_missing")
     if not _text(ledger_hash):
         raise OperationalReceiptError("report_metric_ledger_hash_missing")
+
     payload = {
         "schema_version": REPORT_METRIC_RECEIPT_SCHEMA,
         "metric_name": _text(metric_name),
         "metric_value": metric_value,
-        "source_receipt_ids": _normalize_id_list(source_receipt_ids),
+        "source_receipt_ids": source_ids,
         "denominator_manifest_hash": _text(denominator_manifest_hash),
         "ledger_hash": _text(ledger_hash),
-        "id_set_hash": _stable_hash(sorted(_normalize_id_list(source_receipt_ids))),
+        "id_set_hash": _stable_hash(sorted(source_ids)),
     }
     return build_canonical_receipt_envelope(
         receipt_type=REPORT_METRIC_RECEIPT_SCHEMA,
@@ -1033,7 +1370,7 @@ def build_report_metric_receipt(
         producer_version=DERIVATION_VERSION,
         code_commit_sha=code_commit_sha,
         tree_hash=tree_hash,
-        parent_receipt_ids=_normalize_id_list(source_receipt_ids),
+        parent_receipt_ids=source_ids,
     )
 
 
@@ -1042,19 +1379,21 @@ def audit_report_metric_ledger_balance(
     *,
     expected_ledger_hash: str,
 ) -> dict[str, Any]:
-    """Fail closed when formal metric receipts disagree with ledger hash."""
+    """Fail closed when formal metric receipts disagree with the ledger hash."""
 
     rows = [validate_canonical_receipt_envelope(row) for row in _list(metric_receipts)]
     mismatches: list[dict[str, Any]] = []
     for row in rows:
         payload = _dict(row.get("payload"))
         if _text(payload.get("ledger_hash")) != _text(expected_ledger_hash):
-            mismatches.append({
-                "receipt_id": _text(row.get("receipt_id")),
-                "metric_name": _text(payload.get("metric_name")),
-                "observed_ledger_hash": _text(payload.get("ledger_hash")),
-                "expected_ledger_hash": _text(expected_ledger_hash),
-            })
+            mismatches.append(
+                {
+                    "receipt_id": _text(row.get("receipt_id")),
+                    "metric_name": _text(payload.get("metric_name")),
+                    "observed_ledger_hash": _text(payload.get("ledger_hash")),
+                    "expected_ledger_hash": _text(expected_ledger_hash),
+                }
+            )
     if mismatches:
         raise OperationalReceiptError(
             f"formal_report_receipt_balance_mismatch:{len(mismatches)}"
@@ -1076,7 +1415,7 @@ def unique_oracle_evaluation_key(
     assertion_fingerprint: str,
     observation_pair_fingerprint: str,
 ) -> str:
-    """Canonical unique evaluation key for oracle traces (raw traces ≠ unique)."""
+    """Canonical unique evaluation key for oracle traces."""
 
     payload = {
         "rule_id": _text(rule_id),
@@ -1097,10 +1436,18 @@ def deduplicate_oracle_traces(
 
     raw = [dict(_dict(row)) for row in _list(traces)]
     unique: dict[str, dict[str, Any]] = {}
-    classified = {"evaluation": 0, "polling": 0, "retry": 0, "reproduction": 0, "other": 0}
+    classified = {
+        "evaluation": 0,
+        "polling": 0,
+        "retry": 0,
+        "reproduction": 0,
+        "other": 0,
+    }
     duplicates: list[str] = []
     for row in raw:
-        kind = _text(row.get("trace_kind") or row.get("kind") or "evaluation").lower()
+        kind = _text(
+            row.get("trace_kind") or row.get("kind") or "evaluation"
+        ).lower()
         if kind not in classified:
             kind = "other"
         classified[kind] += 1
@@ -1124,9 +1471,6 @@ def deduplicate_oracle_traces(
             duplicates.append(key)
             continue
         unique[key] = row
-    if duplicates:
-        # Detected, not silently collapsed without audit.
-        pass
     return {
         "schema_version": "qualibug.oracle-trace-dedup-audit.v1",
         "raw_trace_count": len(raw),
@@ -1136,6 +1480,11 @@ def deduplicate_oracle_traces(
         "unique_evaluation_keys": sorted(unique.keys()),
         "raw_traces_do_not_count_as_unique": True,
     }
+
+
+# ---------------------------------------------------------------------------
+# Finalizer adapter: heterogeneous evidence -> canonical bundle
+# ---------------------------------------------------------------------------
 
 
 def assemble_bundle_from_finalizer_observations(
@@ -1160,7 +1509,7 @@ def assemble_bundle_from_finalizer_observations(
     cleanup_verification_receipts: list[dict[str, Any]],
     environment_restoration_receipt: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Wrap heterogeneous finalizer evidence into enveloped receipts + bundle."""
+    """Wrap heterogeneous finalizer evidence into canonical envelopes."""
 
     def _ensure_envelope(
         receipt_type: str,
@@ -1192,106 +1541,93 @@ def assemble_bundle_from_finalizer_observations(
     receipts: list[dict[str, Any]] = []
     compile_id = ""
     if compile_receipt:
-        env = _ensure_envelope(
+        envelope = _ensure_envelope(
             "qualibug.compile-receipt.v1",
             dict(compile_receipt),
             f"compile_{experiment_id}",
         )
-        receipts.append(env)
-        compile_id = _text(env.get("receipt_id"))
+        receipts.append(envelope)
+        compile_id = _text(envelope.get("receipt_id"))
+
+    def _append_many(
+        rows: list[dict[str, Any]],
+        *,
+        receipt_type: str,
+        fallback_prefix: str,
+    ) -> list[str]:
+        ids: list[str] = []
+        for index, row in enumerate(_list(rows)):
+            envelope = _ensure_envelope(
+                receipt_type,
+                dict(_dict(row)),
+                f"{fallback_prefix}_{experiment_id}_{index}",
+            )
+            receipts.append(envelope)
+            ids.append(_text(envelope.get("receipt_id")))
+        return ids
 
     fixture_ids: list[str] = []
-    for idx, row in enumerate(_list(fixture_provenance_receipts)):
-        env = _ensure_envelope(
+    for index, row in enumerate(_list(fixture_provenance_receipts)):
+        raw = dict(_dict(row))
+        receipt_type = (
             FIXTURE_PROVENANCE_RECEIPT_SCHEMA
-            if _text(row.get("receipt_type")).endswith("fixture-provenance-receipt.v1")
-            or "fixture" in _text(row.get("schema_version"))
-            else "qualibug.fixture-materialization-receipt.v1",
-            dict(row),
-            f"fixture_{experiment_id}_{idx}",
+            if _text(raw.get("receipt_type")).endswith(
+                "fixture-provenance-receipt.v1"
+            )
+            or "fixture" in _text(raw.get("schema_version"))
+            else "qualibug.fixture-materialization-receipt.v1"
         )
-        receipts.append(env)
-        fixture_ids.append(_text(env.get("receipt_id")))
+        envelope = _ensure_envelope(
+            receipt_type, raw, f"fixture_{experiment_id}_{index}"
+        )
+        receipts.append(envelope)
+        fixture_ids.append(_text(envelope.get("receipt_id")))
 
-    step_ids: list[str] = []
-    for idx, row in enumerate(_list(process_step_receipts)):
-        env = _ensure_envelope(
-            "qualibug.process-step-receipt.v1",
-            dict(row),
-            f"step_{experiment_id}_{idx}",
-        )
-        receipts.append(env)
-        step_ids.append(_text(env.get("receipt_id")))
-
-    transport_ids: list[str] = []
-    for idx, row in enumerate(_list(transport_receipts)):
-        env = _ensure_envelope(
-            "qualibug.transport-receipt.v1",
-            dict(row),
-            f"transport_{experiment_id}_{idx}",
-        )
-        receipts.append(env)
-        transport_ids.append(_text(env.get("receipt_id")))
-
-    observation_ids: list[str] = []
-    for idx, row in enumerate(_list(observation_receipts)):
-        env = _ensure_envelope(
-            "qualibug.observation-receipt.v1",
-            dict(row),
-            f"obs_{experiment_id}_{idx}",
-        )
-        receipts.append(env)
-        observation_ids.append(_text(env.get("receipt_id")))
-
-    oracle_inv_ids: list[str] = []
-    for idx, row in enumerate(_list(oracle_invocation_receipts)):
-        env = _ensure_envelope(
-            "qualibug.oracle-invocation-receipt.v1",
-            dict(row),
-            f"oracle_inv_{experiment_id}_{idx}",
-        )
-        receipts.append(env)
-        oracle_inv_ids.append(_text(env.get("receipt_id")))
-
-    oracle_trace_ids: list[str] = []
-    for idx, row in enumerate(_list(oracle_trace_receipts)):
-        env = _ensure_envelope(
-            "qualibug.oracle-trace-receipt.v1",
-            dict(row),
-            f"oracle_trace_{experiment_id}_{idx}",
-        )
-        receipts.append(env)
-        oracle_trace_ids.append(_text(env.get("receipt_id")))
-
-    cleanup_exec_ids: list[str] = []
-    for idx, row in enumerate(_list(cleanup_execution_receipts)):
-        env = _ensure_envelope(
-            "qualibug.cleanup-execution-receipt.v1",
-            dict(row),
-            f"cleanup_exec_{experiment_id}_{idx}",
-        )
-        receipts.append(env)
-        cleanup_exec_ids.append(_text(env.get("receipt_id")))
-
-    cleanup_ver_ids: list[str] = []
-    for idx, row in enumerate(_list(cleanup_verification_receipts)):
-        env = _ensure_envelope(
-            "qualibug.cleanup-verification-receipt.v1",
-            dict(row),
-            f"cleanup_ver_{experiment_id}_{idx}",
-        )
-        receipts.append(env)
-        cleanup_ver_ids.append(_text(env.get("receipt_id")))
+    step_ids = _append_many(
+        process_step_receipts,
+        receipt_type="qualibug.process-step-receipt.v1",
+        fallback_prefix="step",
+    )
+    transport_ids = _append_many(
+        transport_receipts,
+        receipt_type="qualibug.transport-receipt.v1",
+        fallback_prefix="transport",
+    )
+    observation_ids = _append_many(
+        observation_receipts,
+        receipt_type="qualibug.observation-receipt.v1",
+        fallback_prefix="obs",
+    )
+    oracle_inv_ids = _append_many(
+        oracle_invocation_receipts,
+        receipt_type="qualibug.oracle-invocation-receipt.v1",
+        fallback_prefix="oracle_inv",
+    )
+    oracle_trace_ids = _append_many(
+        oracle_trace_receipts,
+        receipt_type="qualibug.oracle-trace-receipt.v1",
+        fallback_prefix="oracle_trace",
+    )
+    cleanup_exec_ids = _append_many(
+        cleanup_execution_receipts,
+        receipt_type="qualibug.cleanup-execution-receipt.v1",
+        fallback_prefix="cleanup_exec",
+    )
+    cleanup_ver_ids = _append_many(
+        cleanup_verification_receipts,
+        receipt_type="qualibug.cleanup-verification-receipt.v1",
+        fallback_prefix="cleanup_ver",
+    )
 
     env_rest_id = ""
     if environment_restoration_receipt:
-        env = _ensure_envelope(
+        envelope = _ensure_envelope(
             "qualibug.environment-restoration-receipt.v1",
             dict(environment_restoration_receipt),
             f"env_restore_{experiment_id}",
         )
-        receipts.append(env)
-        env_rest_id = _text(env.get("receipt_id"))
+        receipts.append(envelope)
+        env_rest_id = _text(envelope.get("receipt_id"))
 
     return build_execution_receipt_bundle(
         bundle_id=bundle_id,
