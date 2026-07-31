@@ -8,6 +8,8 @@ on:
       - "ai_test_asset_center/enterprise_material_formats.py"
       - "ai_test_asset_center/policies/semantic_lexicon.json"
       - "ai_test_asset_center/enterprise_knowledge_center/**"
+      - "ai_test_asset_center/implicit_rule_runtime_evolution.py"
+      - "ai_test_asset_center/discovery_mainline.py"
       - "ai_test_asset_center/enterprise_source_registry_lifecycle.py"
       - "ai_test_asset_center/private_pilot_project_assets.py"
       - "ai_test_asset_center/private_pilot_ingest_authority.py"
@@ -63,6 +65,9 @@ jobs:
           python -m compileall -q \
             ai_test_asset_center/enterprise_knowledge_center \
             benchmark_evaluator/enterprise_understanding
+          python -m py_compile \
+            ai_test_asset_center/implicit_rule_runtime_evolution.py \
+            ai_test_asset_center/discovery_mainline.py
 
       - name: Run document ingestion closure
         run: |
