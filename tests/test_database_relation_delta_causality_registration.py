@@ -4,9 +4,11 @@ from ai_test_asset_center.assertion_dsl_base import (
     _REGISTERED_ASSERTION_EVALUATORS,
     _REGISTERED_KIND_EVIDENCE_KEYS,
 )
-from ai_test_asset_center.database_relation_delta_causality_integrity import (
-    evaluate_database_relation_causal_delta_with_integrity,
+from ai_test_asset_center.database_relation_delta_causality_authority import (
+    evaluate_database_relation_causal_delta_with_authority,
     install_database_relation_causal_delta_assertion,
+)
+from ai_test_asset_center.database_relation_delta_causality_integrity import (
     observe_operation_causality_with_integrity,
 )
 from ai_test_asset_center.database_relation_delta_causality_oracle import OBSERVER_ID
@@ -38,7 +40,7 @@ def test_existing_weak_registration_is_tightened_without_second_kind() -> None:
 
     assert result == ASSERTION_KIND
     assert _REGISTERED_ASSERTION_EVALUATORS[ASSERTION_KIND] is (
-        evaluate_database_relation_causal_delta_with_integrity
+        evaluate_database_relation_causal_delta_with_authority
     )
     assert _REGISTERED_KIND_EVIDENCE_KEYS[ASSERTION_KIND] == (
         "approved_database_observer_phase_receipts",
