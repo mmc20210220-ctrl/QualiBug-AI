@@ -1,0 +1,67 @@
+name: Chinese explicit fact baseline
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "ai_test_asset_center/enterprise_knowledge_center/**"
+      - "benchmark_evaluator/enterprise_understanding/**"
+      - "tests/test_enterprise_understanding_chinese_explicit_fact_baseline.py"
+      - ".github/workflows/chinese-explicit-fact-baseline.yml"
+      - "pyproject.toml"
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install product and evaluator dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Compile baseline authorities
+        run: |
+          python -m compileall -q \
+            ai_test_asset_center/enterprise_knowledge_center \
+            benchmark_evaluator/enterprise_understanding
+
+      - name: Run fast baseline contract tests
+        run: |
+          pytest -q tests/test_enterprise_understanding_chinese_explicit_fact_baseline.py
+
+      - name: Run isolated source-backed baseline
+        run: |
+          python -m benchmark_evaluator.enterprise_understanding.chinese_explicit_fact_baseline \
+            --workspace-root "$RUNNER_TEMP/chinese-explicit-fact-workspace" \
+            --output "$RUNNER_TEMP/chinese-explicit-fact-result"
+
+      - name: Print baseline summary
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/chinese-explicit-fact-result/chinese_explicit_fact_baseline_summary.json" ]; then
+            cat "$RUNNER_TEMP/chinese-explicit-fact-result/chinese_explicit_fact_baseline_summary.json"
+          fi
+
+      - name: Upload baseline evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chinese-explicit-fact-baseline-${{ github.sha }}
+          path: ${{ runner.temp }}/chinese-explicit-fact-result
+          if-no-files-found: error
+          retention-days: 30
