@@ -146,6 +146,17 @@ class ProcessStepSemanticView:
         )
         digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:24]
         self._ledger.ledger_id = f"psl_{digest}"
+        # ``attach_lifecycle_ledger`` populated these keys before wrapping the
+        # ledger. Publish the normalized identity immediately so the Finalizer's
+        # first live-vs-observed identity check sees one authority, not a stale
+        # pre-normalization snapshot.
+        self._observations.update(
+            {
+                "process_step_ledger_id": self._ledger.ledger_id,
+                "process_step_ledger_hash": self._ledger.compute_hash(),
+                "process_step_receipts": list(self._ledger.all_rows()),
+            }
+        )
 
     @property
     def source_ledger(self) -> ProcessStepLedger:
