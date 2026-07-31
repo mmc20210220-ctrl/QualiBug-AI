@@ -49,6 +49,16 @@ def render_markdown_report(result: dict[str, Any]) -> str:
         if isinstance(ingestion.get("structure_loss_analysis"), dict)
         else {}
     )
+    document_ground_truth = (
+        ingestion.get("document_ground_truth_measurement")
+        if isinstance(ingestion.get("document_ground_truth_measurement"), dict)
+        else {}
+    )
+    document_metrics = (
+        document_ground_truth.get("metrics")
+        if isinstance(document_ground_truth.get("metrics"), dict)
+        else {}
+    )
     false_confirmation = metrics.get("false_confirmation_metrics") if isinstance(metrics.get("false_confirmation_metrics"), dict) else {}
     bug_metrics = metrics.get("bug_dependency_metrics") if isinstance(metrics.get("bug_dependency_metrics"), dict) else {}
     weighted = metrics.get("critical_rule_weighted_recall") if isinstance(metrics.get("critical_rule_weighted_recall"), dict) else {}
@@ -60,7 +70,7 @@ def render_markdown_report(result: dict[str, Any]) -> str:
         f"- Ground Truth指纹：`{_text(result.get('ground_truth_fingerprint'))}`",
         f"- 产品资产指纹：`{_text(result.get('product_asset_fingerprint'))}`",
         f"- 最高影响根因：`{_text(root_causes.get('highest_impact_root_cause')) or '无'}`",
-        f"- 文档接入/证据下一修复点：`{_text(ingestion_summary.get('highest_impact_gap')) or '无'}`",
+        f"- 文档接入/证据下一修复点：`{_text(result.get('next_ingestion_repair_target')) or '无'}`",
         "- 指标权威：Evaluator侧人工来源化Ground Truth；产品不能自评真伪。",
         "",
         "## 核心指标",
@@ -89,15 +99,44 @@ def render_markdown_report(result: dict[str, Any]) -> str:
         f"| 活跃来源结构覆盖率 | {_percent(ingestion_summary.get('source_structure_coverage_rate'))} |",
         f"| 接入接受率 | {_percent(ingestion_summary.get('ingestion_acceptance_rate'))} |",
         f"| 结构完整率 | {_percent(ingestion_summary.get('structure_complete_rate'))} |",
+        f"| 正式块来源哈希绑定率 | {_percent(evidence_address.get('source_hash_binding_rate'))} |",
         f"| 正式块来源可追溯率 | {_percent(evidence_address.get('source_traceability_rate'))} |",
         f"| 正式块精确地址率 | {_percent(evidence_address.get('exact_address_rate'))} |",
         f"| 未解决关键结构缺口 | {int(ingestion_summary.get('critical_structure_gap_count') or 0)} |",
         f"| 静默丢失风险来源 | {int(structure_loss.get('silent_loss_risk_source_count') or 0)} |",
         f"| 回执完整性门禁 | {'通过' if ingestion_summary.get('receipt_integrity_gate_pass') else '未通过'} |",
         "",
-        "> 上述接入与地址指标来自产品持久化回执，只能证明回执闭环质量；标题、表格、阅读顺序、图片等真实结构召回率仍需人工标注语料，不能由产品自证为100%。",
+        "## 人工Ground Truth真实结构测量",
+        "",
+        f"- Profile状态：`{_text(document_ground_truth.get('status')) or 'NOT_DECLARED'}`",
+        f"- Profile最高影响缺口：`{_text(document_ground_truth.get('highest_impact_gap')) or '无'}`",
+        f"- Profile范围完整：`{bool(document_ground_truth.get('scope_complete'))}`",
+        "",
+        "| 指标 | 结果 |",
+        "|---|---:|",
+        f"| 标注来源召回率 | {_percent(document_metrics.get('source_recall'))} |",
+        f"| 结构元素严格召回率 | {_percent(document_metrics.get('strict_structure_element_recall'))} |",
+        f"| 结构元素覆盖召回率 | {_percent(document_metrics.get('coverage_structure_element_recall'))} |",
+        f"| 结构块类型准确率 | {_percent(document_metrics.get('block_type_accuracy'))} |",
+        f"| 精确证据地址准确率 | {_percent(document_metrics.get('exact_evidence_address_accuracy'))} |",
+        f"| 表格单元格召回率 | {_percent(document_metrics.get('table_cell_recall'))} |",
+        f"| 阅读顺序准确率 | {_percent(document_metrics.get('reading_order_accuracy'))} |",
         "",
     ]
+    if not document_metrics.get("true_structure_recall_measured"):
+        lines.extend(
+            [
+                "> 真实结构召回率尚不可测：必须在同一Evaluator Ground Truth中声明并完成人工文档结构标注。产品回执不能替代人工真值。",
+                "",
+            ]
+        )
+    elif document_ground_truth.get("profile_five_of_five_pass"):
+        lines.extend(
+            [
+                "> 当前声明的文档Profile已达到5/5门槛；该结论只适用于已声明语料范围，不代表全行业通用覆盖已经证明。",
+                "",
+            ]
+        )
     if false_confirmation.get("status") != "MEASURABLE":
         lines.extend([
             "> 假确定率不可测：Ground Truth必须验证通过并声明 `scope_complete=true`。",
@@ -144,6 +183,11 @@ def write_benchmark_outputs(result: dict[str, Any], output_dir: str | Path) -> d
         if isinstance(result.get("ingestion_evidence_measurement"), dict)
         else {}
     )
+    document_ground_truth = (
+        ingestion.get("document_ground_truth_measurement")
+        if isinstance(ingestion.get("document_ground_truth_measurement"), dict)
+        else {}
+    )
     alignments = _rows(alignment.get("alignments"))
     files: dict[str, Any] = {
         "workflow_receipt.json": result.get("workflow_receipt") or {},
@@ -154,6 +198,17 @@ def write_benchmark_outputs(result: dict[str, Any], output_dir: str | Path) -> d
         "evidence_address_analysis.json": ingestion.get("evidence_address_analysis") or {},
         "structure_loss_analysis.json": ingestion.get("structure_loss_analysis") or {},
         "format_coverage_analysis.json": ingestion.get("format_coverage_analysis") or {},
+        "document_structure_ground_truth_alignment.json": {
+            "status": document_ground_truth.get("status"),
+            "validation_status": document_ground_truth.get("validation_status"),
+            "scope_complete": document_ground_truth.get("scope_complete"),
+            "highest_impact_gap": document_ground_truth.get("highest_impact_gap"),
+            "source_alignments": document_ground_truth.get("source_alignments") or [],
+            "element_alignments": document_ground_truth.get("element_alignments") or [],
+            "reading_order_alignments": document_ground_truth.get("reading_order_alignments") or [],
+            "gap_distribution": document_ground_truth.get("gap_distribution") or [],
+        },
+        "document_structure_ground_truth_metrics.json": document_ground_truth.get("metrics") or {},
         "missed_objects.json": [row for row in alignments if row.get("collection") == "business_objects" and row.get("alignment_status") != "EXACT_MATCH"],
         "missed_operations.json": [row for row in alignments if row.get("collection") == "operations" and row.get("alignment_status") != "EXACT_MATCH"],
         "missed_rules.json": [row for row in alignments if row.get("collection") in {"business_rules", "business_behaviors"} and row.get("alignment_status") != "EXACT_MATCH"],
