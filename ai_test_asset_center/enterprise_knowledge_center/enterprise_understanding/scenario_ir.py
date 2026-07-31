@@ -41,6 +41,11 @@ _BUSINESS_REJECTION_MODALITIES = {
     "PROHIBITED",
     "DENY",
 }
+_UNRESOLVED_PERMISSION_DECISIONS = {
+    "UNKNOWN",
+    "UNRESOLVED",
+    "CONFLICTED",
+}
 
 
 def _dicts(value: Any) -> list[dict[str, Any]]:
@@ -80,9 +85,14 @@ def _state_outcomes(behavior: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _scenario_type(behavior: dict[str, Any]) -> tuple[str, list[str]]:
     permission = _permission_outcome(behavior)
-    decision = text(permission.get("expected_decision"))
+    decision = text(permission.get("expected_decision")).upper()
+    permission_status = text(permission.get("status")).upper()
     modality = text(behavior.get("business_modality")).upper()
     authorization_explicit = bool(behavior.get("authorization_semantics_explicit"))
+    authorization_kind = text(
+        permission.get("authorization_semantic_kind")
+        or behavior.get("authorization_semantic_kind")
+    ).upper()
     actors = unique_text(
         as_list(as_dict(behavior.get("operation_clause")).get("actor_refs"))
     )
@@ -90,6 +100,15 @@ def _scenario_type(behavior: dict[str, Any]) -> tuple[str, list[str]]:
     if _state_outcomes(behavior):
         dimensions.append("STATE_TRANSITION")
 
+    if permission and (
+        permission_status != "CONFIRMED"
+        or decision in _UNRESOLVED_PERMISSION_DECISIONS
+    ):
+        if authorization_explicit or authorization_kind == "AUTHORIZATION":
+            dimensions.append("AUTHORIZATION_UNRESOLVED")
+            return "INCOMPLETE_AUTHORIZATION", unique_text(dimensions)
+        dimensions.append("OUTCOME_UNRESOLVED")
+        return "INCOMPLETE_OUTCOME", unique_text(dimensions)
     if decision == "DENY" and authorization_explicit:
         if actors:
             dimensions.extend(["REJECTION", "AUTHORIZATION"])
@@ -613,6 +632,11 @@ def build_scenario_ir_v1(
                 for row in scenarios
                 if text(row.get("scenario_type")) == "UNAUTHORIZED"
             ),
+            "incomplete_authorization_scenario_count": sum(
+                1
+                for row in scenarios
+                if text(row.get("scenario_type")) == "INCOMPLETE_AUTHORIZATION"
+            ),
             "boundary_scenario_count": sum(
                 1
                 for row in scenarios
@@ -708,6 +732,7 @@ def project_scenario_ir_to_asset(
             "unauthorized_scenario_requires_explicit_denied_actor": True,
             "business_rejection_is_not_authorization_denial": True,
             "business_rejection_preserved_after_authorization_separation": True,
+            "unresolved_authorization_is_not_positive_scenario": True,
             "scenario_ir_carries_canonical_condition_expression": True,
             "scenario_ir_carries_canonical_operation_clause": True,
             "scenario_ir_carries_canonical_outcome_contracts": True,
