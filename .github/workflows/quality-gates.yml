@@ -118,6 +118,7 @@ jobs:
             tests/test_process_graph_async_transition_oracle.py \
             tests/test_process_graph_experiment_contract.py \
             tests/test_process_graph_event_finalizer_scope.py \
+            tests/test_compiled_http_observer_bundle_scope.py \
             tests/test_experiment_cleanup_lifecycle_adapter.py \
             tests/test_architecture_extraction_contracts.py \
             tests/test_identity_annotation_tasks.py \
