@@ -41,6 +41,7 @@ jobs:
           python -c "import ast; ast.parse(open('ai_test_asset_center/enterprise_delivery_package.py').read()); print('enterprise_delivery_package.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/release_gate.py').read()); print('release_gate.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/__main__.py').read()); print('__main__.py OK')"
+          python -c "import ast; ast.parse(open('ai_test_asset_center/identity_benchmark_cli.py').read()); print('identity_benchmark_cli.py OK')"
           python -c "import ast; ast.parse(open('backend/main.py').read()); print('backend/main.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/stage_reason_all_v2.py').read()); print('stage_reason_all_v2.py OK')"
           python -c "import ast; ast.parse(open('ai_test_asset_center/business_state_graph.py').read()); print('business_state_graph.py OK')"
@@ -120,8 +121,10 @@ jobs:
             tests/test_experiment_cleanup_lifecycle_adapter.py \
             tests/test_architecture_extraction_contracts.py \
             tests/test_identity_annotation_tasks.py \
+            tests/test_identity_annotation_package_identity.py \
             tests/test_identity_annotation_operator.py \
             tests/test_identity_annotation_http_contract.py \
+            tests/test_identity_benchmark_cli.py \
             tests/test_identity_benchmark_regression.py \
             tests/test_identity_benchmark_repository.py \
             tests/test_identity_benchmark_workflow.py \
