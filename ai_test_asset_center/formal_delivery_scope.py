@@ -7,19 +7,13 @@ It performs only the exact Gate-v2 + attempt-ledger join, preventing circular
 dependencies and preventing higher layers from inventing a second formal
 finding scope. Authorization occurrences additionally consume the causal receipt
 already sealed into the Gate-v2 finding payload; no frontend or projection layer
-may infer authorization deliverability from mutable display flags.
+may infer authorization deliverability from mutable display flags. Historical
+authorization attempts that predate that proof are retained in the immutable ledger
+but excluded through a separate content-addressed quarantine authority.
 """
 
 from typing import Any
 
-from .authorization_delivery_gate import (
-    AuthorizationDeliveryGateError,
-    validate_authorization_delivery_finding,
-)
-from .binding_materialization_identity_receipt import (
-    BindingMaterializationIdentityError,
-    validate_binding_materialization_identity_receipt,
-)
 from .customer_delivery_gate import LEGACY_CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
 from .customer_delivery_gate_v2 import (
     CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA,
@@ -27,12 +21,14 @@ from .customer_delivery_gate_v2 import (
     validate_customer_delivery_gate_receipt_v2,
 )
 from .discovery_mainline_contract import MainlineContractError
+from .historical_authorization_quarantine import (
+    HistoricalAuthorizationQuarantineError,
+    classify_historical_authorization_attempt,
+)
 from .obligation_attempt_ledger import (
     ObligationAttemptLedgerError,
     validate_obligation_attempt_ledger,
 )
-
-_AUTHORIZATION_FAMILIES = frozenset({"authorization", "isolation", "visibility"})
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -45,29 +41,6 @@ def _list(value: Any) -> list[Any]:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
-
-
-def _authorization_attempt(attempt: dict[str, Any]) -> bool:
-    row = _dict(attempt)
-    if _text(row.get("risk_family")).lower() in _AUTHORIZATION_FAMILIES:
-        return True
-    bundle = _dict(row.get("delivery_evidence_bundle"))
-    if any(
-        _text(_dict(value).get("observer_id")) == "authorization_comparison"
-        for value in _list(bundle.get("observer_receipts"))
-    ):
-        return True
-    finding = _dict(bundle.get("finding"))
-    if _text(finding.get("risk_family")).lower() in _AUTHORIZATION_FAMILIES:
-        return True
-    return bool(
-        _dict(finding.get("authorization_causality_receipt"))
-        or _text(
-            _dict(finding.get("oracle")).get(
-                "authorization_causality_receipt_id"
-            )
-        )
-    )
 
 
 def finding_id(item: dict[str, Any]) -> str:
@@ -85,6 +58,7 @@ def validated_deliverable_gate_index(
         raise MainlineContractError(
             f"formal_attempt_ledger_invalid:{exc}"
         ) from exc
+    run_id = _text(validated.get("run_id"))
     campaign_id = _text(validated.get("campaign_id"))
     index: dict[str, dict[str, Any]] = {}
     for raw in _list(validated.get("attempts")):
@@ -96,6 +70,18 @@ def validated_deliverable_gate_index(
         schema_version = gate.get("schema_version")
         if not occurrence_id:
             raise MainlineContractError("formal_deliverable_gate_v2_missing")
+        try:
+            quarantine = classify_historical_authorization_attempt(
+                attempt,
+                run_id=run_id,
+                campaign_id=campaign_id,
+            )
+        except HistoricalAuthorizationQuarantineError as exc:
+            raise MainlineContractError(
+                f"historical_authorization_quarantine_invalid:{occurrence_id}:{exc}"
+            ) from exc
+        if quarantine:
+            continue
         if schema_version == CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA:
             evidence_bundle = _dict(attempt.get("delivery_evidence_bundle"))
             bundled_finding = _dict(evidence_bundle.get("finding"))
@@ -115,36 +101,11 @@ def validated_deliverable_gate_index(
                 raise MainlineContractError(
                     f"formal_deliverable_gate_identity_mismatch:{occurrence_id}"
                 )
-            try:
-                for proof in _list(
-                    bundled_finding.get(
-                        "authorization_causality_binding_proofs"
-                    )
-                ):
-                    validate_binding_materialization_identity_receipt(
-                        _dict(proof)
-                    )
-                validate_authorization_delivery_finding(
-                    bundled_finding,
-                    attempt=attempt,
-                    campaign_id=campaign_id,
-                )
-            except (
-                AuthorizationDeliveryGateError,
-                BindingMaterializationIdentityError,
-            ) as exc:
-                raise MainlineContractError(
-                    f"formal_authorization_delivery_invalid:{occurrence_id}:{exc}"
-                ) from exc
         elif (
             schema_version == LEGACY_CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
             and _text(gate.get("status")).upper() == "DELIVERABLE"
             and _text(gate.get("finding_id")) == occurrence_id
         ):
-            if _authorization_attempt(attempt):
-                raise MainlineContractError(
-                    f"formal_authorization_delivery_v2_required:{occurrence_id}"
-                )
             validated_gate = dict(gate)
         else:
             raise MainlineContractError("formal_deliverable_gate_v2_missing")
@@ -161,7 +122,7 @@ def formal_customer_deliverable_findings(
     *,
     obligation_attempt_ledger: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Join findings to the exact validated DELIVERABLE occurrence set."""
+    """Join findings to the exact validated, non-quarantined occurrence set."""
 
     gate_by_finding_id = validated_deliverable_gate_index(
         obligation_attempt_ledger
@@ -212,6 +173,6 @@ def formal_customer_deliverable_findings(
 def validated_delivery_gate_finding_ids(
     ledger: dict[str, Any] | None,
 ) -> list[str]:
-    """Return the exact occurrence IDs proven by Gate-v2 attempts."""
+    """Return exact occurrence IDs proven and not historically quarantined."""
 
     return sorted(validated_deliverable_gate_index(ledger))
