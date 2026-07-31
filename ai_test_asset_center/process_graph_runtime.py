@@ -38,6 +38,9 @@ _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _ASYNC_RELATIONS = frozenset(
     {"AWAITS", "NOTIFIES", "TRIGGERS", "MESSAGE", "ASYNC_MESSAGE"}
 )
+_PRE_TRANSPORT_BLOCK_STATUSES = frozenset(
+    {"BLOCKED", "BLOCKED_REQUEST", "BLOCKED_WRITE"}
+)
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -54,7 +57,51 @@ def _text(value: Any) -> str:
 
 extract_execution_graph = _core.extract_execution_graph
 graph_step_context = _core.graph_step_context
-record_graph_step_outcome = _core.record_graph_step_outcome
+
+
+def record_graph_step_outcome(
+    *,
+    runtime: dict[str, Any],
+    graph: dict[str, Any],
+    step: dict[str, Any],
+    observation: dict[str, Any] | None = None,
+    blocked_reason: str = "",
+) -> dict[str, Any]:
+    """Preserve explicit zero-transport blocks before delegating outcome logic."""
+    obs = _dict(observation)
+    status = _text(obs.get("status")).upper()
+    reason = _text(
+        blocked_reason
+        or obs.get("reason_code")
+        or obs.get("reason")
+    )
+    if reason and (
+        status in _PRE_TRANSPORT_BLOCK_STATUSES
+        or _text(obs.get("skipped_reason")).upper().startswith("BLOCKED_")
+        or (
+            int(obs.get("status_code") or obs.get("status_code_value") or 0) == 0
+            and obs.get("request_reached_transport") is False
+        )
+    ):
+        result = _core.record_graph_step_outcome(
+            runtime=runtime,
+            graph=graph,
+            step=step,
+            blocked_reason=reason,
+        )
+        return {
+            **result,
+            "reason_code": reason,
+            "detail": _text(obs.get("detail")),
+            "request_reached_transport": False,
+        }
+    return _core.record_graph_step_outcome(
+        runtime=runtime,
+        graph=graph,
+        step=step,
+        observation=observation,
+        blocked_reason=blocked_reason,
+    )
 
 
 def resolve_graph_target_context(
