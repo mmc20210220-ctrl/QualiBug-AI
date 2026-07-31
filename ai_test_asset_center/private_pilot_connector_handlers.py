@@ -11,7 +11,6 @@ from urllib.parse import unquote, urlparse
 
 from .connector_auto_sync import (
     connector_auto_sync_status,
-    ensure_connector_auto_sync_supervisor,
     run_managed_feishu_sync,
     test_managed_feishu_connection,
 )
@@ -167,6 +166,8 @@ def _error_status(exc: Exception) -> int:
         for token in (
             "already_running",
             "lock_held",
+            "owner_active",
+            "owner_unverified",
             "cursor_mismatch",
             "previous_cursor_required",
             "checkpoint_integrity",
@@ -196,14 +197,6 @@ def _error_status(exc: Exception) -> int:
 
 class KnowledgeConnectorHandlersMixin:
     """Authenticated project-scoped online knowledge connector HTTP routes."""
-
-    def setup(self) -> None:
-        super().setup()
-        try:
-            ensure_connector_auto_sync_supervisor(self._root())
-        except Exception:
-            # Background refresh must never prevent the request handler from serving.
-            pass
 
     def _knowledge_connector_error(self, exc: Exception) -> Any:
         return self._json(
@@ -307,7 +300,6 @@ class KnowledgeConnectorHandlersMixin:
             display_name=_text(body.get("display_name"), 240),
             status=_text(body.get("status"), 32) or "ACTIVE",
         )
-        ensure_connector_auto_sync_supervisor(root)
         return self._json(
             {"ok": True, "data": result},
             201 if result["created"] else 200,
