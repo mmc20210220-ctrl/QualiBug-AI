@@ -3,9 +3,6 @@ name: Apply source occurrence history ledger
 on:
   push:
     branches: [main]
-    paths:
-      - "tools/.one_shot/source_occurrence_history/bundle.b64"
-      - ".github/workflows/apply-source-occurrence-history-ledger.yml"
   issues:
     types: [opened]
 
