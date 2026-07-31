@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
+from .enterprise_knowledge_center.transaction_lock import KnowledgeTransactionBusy
 from .private_pilot_debug_client import _dbg_report
 from .real_project_onboarding import _safe_project_id
 
@@ -34,6 +35,16 @@ class IdentityBenchmarkHttpMixin:
         if isinstance(exc, PermissionError):
             return self._json(
                 {"ok": False, "error": "FORBIDDEN", "message": detail}, 403
+            )
+        if isinstance(exc, KnowledgeTransactionBusy):
+            return self._json(
+                {
+                    "ok": False,
+                    "error": "IDENTITY_BENCHMARK_TRANSACTION_BUSY",
+                    "message": "该项目正在执行另一项知识变更，请稍后重试。",
+                    "retryable": True,
+                },
+                409,
             )
         if isinstance(exc, KeyError):
             return self._json(
