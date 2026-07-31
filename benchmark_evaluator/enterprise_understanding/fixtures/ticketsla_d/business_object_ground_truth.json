@@ -1,0 +1,194 @@
+{
+  "schema": "qualibug.enterprise-business-object-ground-truth.v1",
+  "project_id": "ticketsla_d",
+  "benchmark_id": "ticketsla-business-object-types-v1",
+  "annotation_version": "1.0.0",
+  "annotation_scope": "CLOSED_WORLD_SOURCE_LABELS",
+  "scope_statement": "人工按冻结的 BUSINESS_RULES.md、TEST_ACCOUNTS.md 与 openapi.yaml 标注业务对象晋升决策。Customer/Agent 同时具有对象与角色语义，按对象晋升真值计分并保留 ACTOR 上下文角色。任何产品候选未出现在本清单时评测必须返回 NOT_MEASURED。",
+  "ground_truth_generated_from_product_output": false,
+  "source_snapshot": [
+    {
+      "path": "projects/ticketsla_d/input/BUSINESS_RULES.md",
+      "blob_sha": "b31f5b1a5da7c16a64767996a836839b8c262745",
+      "authority": "public_enterprise_business_source"
+    },
+    {
+      "path": "projects/ticketsla_d/input/TEST_ACCOUNTS.md",
+      "blob_sha": "fbb81d2cc690bcae0cf11cc168e2a0276bb0a45c",
+      "authority": "public_test_environment_source"
+    },
+    {
+      "path": "projects/ticketsla_d/input/openapi.yaml",
+      "blob_sha": "33a386809c6f9d75107e864aefa3ae32e5b98560",
+      "authority": "public_interface_contract"
+    }
+  ],
+  "labels": [
+    {
+      "ground_truth_id": "gt:ticketsla:object-type:ticket",
+      "canonical_label": "Ticket",
+      "aliases": ["工单"],
+      "expected_business_object": true,
+      "semantic_roles": ["BUSINESS_OBJECT", "TECHNICAL_ARTIFACT"],
+      "criticality": "P0",
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L9-L12", "projects/ticketsla_d/input/openapi.yaml#L20-L58"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:object-type:sla",
+      "canonical_label": "SLA",
+      "aliases": ["服务等级协议"],
+      "expected_business_object": true,
+      "semantic_roles": ["BUSINESS_OBJECT", "TECHNICAL_ARTIFACT"],
+      "criticality": "P0",
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L13-L14", "projects/ticketsla_d/input/openapi.yaml#L60-L79"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:object-type:assignment",
+      "canonical_label": "Assignment",
+      "aliases": ["工单分配记录", "分配记录"],
+      "expected_business_object": true,
+      "semantic_roles": ["BUSINESS_OBJECT"],
+      "criticality": "P1",
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L15"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:object-type:escalation",
+      "canonical_label": "Escalation",
+      "aliases": ["工单升级记录", "升级记录"],
+      "expected_business_object": true,
+      "semantic_roles": ["BUSINESS_OBJECT", "TECHNICAL_ARTIFACT"],
+      "criticality": "P1",
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L16", "projects/ticketsla_d/input/openapi.yaml#L175-L195"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:object-type:comment",
+      "canonical_label": "Comment",
+      "aliases": ["工单评论", "评论"],
+      "expected_business_object": true,
+      "semantic_roles": ["BUSINESS_OBJECT", "TECHNICAL_ARTIFACT"],
+      "criticality": "P1",
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L17", "projects/ticketsla_d/input/openapi.yaml#L133-L151"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:object-type:attachment",
+      "canonical_label": "Attachment",
+      "aliases": ["工单附件", "附件"],
+      "expected_business_object": true,
+      "semantic_roles": ["BUSINESS_OBJECT", "TECHNICAL_ARTIFACT"],
+      "criticality": "P1",
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L18", "projects/ticketsla_d/input/openapi.yaml#L153-L173"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:object-type:customer",
+      "canonical_label": "Customer",
+      "aliases": ["CUSTOMER", "客户"],
+      "expected_business_object": true,
+      "semantic_roles": ["BUSINESS_OBJECT", "ACTOR", "TECHNICAL_ARTIFACT"],
+      "criticality": "P0",
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L19", "projects/ticketsla_d/input/BUSINESS_RULES.md#L28", "projects/ticketsla_d/input/openapi.yaml#L114-L131"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:object-type:agent",
+      "canonical_label": "Agent",
+      "aliases": ["AGENT", "客服代理", "代理"],
+      "expected_business_object": true,
+      "semantic_roles": ["BUSINESS_OBJECT", "ACTOR", "TECHNICAL_ARTIFACT"],
+      "criticality": "P0",
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L20", "projects/ticketsla_d/input/BUSINESS_RULES.md#L29", "projects/ticketsla_d/input/openapi.yaml#L81-L98"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:object-type:team",
+      "canonical_label": "Team",
+      "aliases": ["客服团队", "团队"],
+      "expected_business_object": true,
+      "semantic_roles": ["BUSINESS_OBJECT", "TECHNICAL_ARTIFACT"],
+      "criticality": "P1",
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L21", "projects/ticketsla_d/input/openapi.yaml#L100-L112"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:object-type:notification",
+      "canonical_label": "Notification",
+      "aliases": ["通知"],
+      "expected_business_object": true,
+      "semantic_roles": ["BUSINESS_OBJECT"],
+      "criticality": "P2",
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L22"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:object-type:actor-only",
+      "labels": ["SUPERVISOR", "主管", "ADMIN", "管理员"],
+      "expected_business_object": false,
+      "semantic_roles": ["ACTOR"],
+      "criticality": "P0",
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L30-L31", "projects/ticketsla_d/input/TEST_ACCOUNTS.md#L17-L36"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:object-type:actions",
+      "labels": [
+        "healthCheck", "listTickets", "createTicket", "getTicket", "updateTicket", "assignTicket", "startTicket", "resolveTicket", "closeTicket", "reopenTicket", "escalateTicket", "transferTicket", "getTicketComments", "addComment", "getTicketAttachments", "addAttachment", "deleteAttachment", "mergeTickets", "bulkAssignTickets", "listSLAs", "createSLA", "getSLA", "updateSLA", "listTeams", "createTeam", "getTeam", "addTeamMember", "removeTeamMember", "listAgents", "getAgent", "listCustomers", "createCustomer", "getCustomer", "updateCustomer", "listEscalations", "listNotifications",
+        "健康检查", "获取工单列表", "创建工单", "获取工单详情", "更新工单", "分配工单", "开始处理工单", "解决工单", "关闭工单", "重开工单", "升级工单", "转移工单", "获取工单评论", "添加评论", "获取工单附件", "上传附件", "删除附件", "合并工单", "批量分配工单", "获取SLA列表", "创建SLA", "获取SLA详情", "更新SLA", "获取团队列表", "创建团队", "获取团队详情", "添加团队成员", "移除团队成员", "获取代理列表", "获取代理详情", "获取客户列表", "创建客户", "获取客户详情", "更新客户", "获取升级记录列表", "获取通知列表"
+      ],
+      "expected_business_object": false,
+      "semantic_roles": ["ACTION"],
+      "criticality": "P1",
+      "source_refs": ["projects/ticketsla_d/input/openapi.yaml"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:object-type:states",
+      "labels": ["OPEN", "ASSIGNED", "IN_PROGRESS", "RESOLVED", "CLOSED", "ACTIVE", "BREACHED", "EXPIRED", "PENDING", "ESCALATED", "AVAILABLE", "BUSY", "OFFLINE"],
+      "expected_business_object": false,
+      "semantic_roles": ["STATE"],
+      "criticality": "P0",
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L35-L48", "projects/ticketsla_d/input/BUSINESS_RULES.md#L145-L164", "projects/ticketsla_d/input/openapi.yaml#L20-L195"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:object-type:fields",
+      "labels": ["id", "title", "description", "customer_id", "tenant", "priority", "status", "category", "sla_id", "assigned_agent", "created_at", "updated_at", "resolved_at", "closed_at", "version", "name", "response_time_hours", "resolution_time_hours", "team_id", "max_tickets", "current_tickets", "members", "email", "tier", "ticket_id", "author_id", "author_name", "content", "filename", "size", "uploaded_by", "escalated_by", "reason", "agent_id", "resolution", "source_ticket_id", "target_ticket_id", "ticket_ids", "ticketId", "attachmentId", "slaId", "teamId", "memberId", "agentId", "customerId"],
+      "expected_business_object": false,
+      "semantic_roles": ["FIELD"],
+      "criticality": "P1",
+      "source_locators": ["projects/ticketsla_d/input/openapi.yaml#L20-L195", "projects/ticketsla_d/input/openapi.yaml#L215-L1050"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:object-type:technical-collections",
+      "labels": ["tickets", "slas", "assignments", "escalations", "comments", "attachments", "customers", "agents", "teams", "notifications", "BearerAuth"],
+      "expected_business_object": false,
+      "semantic_roles": ["TECHNICAL_ARTIFACT"],
+      "criticality": "P1",
+      "source_refs": ["projects/ticketsla_d/input/openapi.yaml"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:object-type:enumerations",
+      "labels": ["LOW", "MEDIUM", "HIGH", "CRITICAL", "GOLD", "SILVER", "BRONZE"],
+      "expected_business_object": false,
+      "semantic_roles": ["OTHER_NON_OBJECT"],
+      "criticality": "P2",
+      "source_locators": ["projects/ticketsla_d/input/BUSINESS_RULES.md#L166-L180", "projects/ticketsla_d/input/openapi.yaml#L20-L131"],
+      "annotation_status": "CONFIRMED"
+    },
+    {
+      "ground_truth_id": "gt:ticketsla:object-type:environment-labels",
+      "labels": ["TicketSLA", "TicketSLA Management API", "ACME", "Globex", "Bearer Token", "GET", "POST", "PUT", "DELETE"],
+      "expected_business_object": false,
+      "semantic_roles": ["OTHER_NON_OBJECT"],
+      "criticality": "P3",
+      "source_refs": ["projects/ticketsla_d/input/BUSINESS_RULES.md", "projects/ticketsla_d/input/TEST_ACCOUNTS.md", "projects/ticketsla_d/input/openapi.yaml"],
+      "annotation_status": "CONFIRMED"
+    }
+  ]
+}
