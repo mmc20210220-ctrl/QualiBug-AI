@@ -1,281 +1,69 @@
-"""Exact per-step scope binding for observation, oracle, and cleanup receipts.
+"""Public exact-step receipt scope over aggregate-aware cleanup evidence.
 
-A receipt can satisfy one process-step evidence gate only when it carries one
-explicit step identity that resolves to a recorded ledger step. Missing scope,
-multi-step scope, unknown scope, and reused receipt ids remain unbound. There is
-no fallback to all executed steps.
+The original exact-scope binder remains unchanged in
+``process_step_receipt_scope_core``. This facade separates graph aggregate
+cleanup receipts, which belong to the Receipt Bundle, from exact per-step
+cleanup execution and verification receipts, which belong to ProcessStepLedger.
+No step identity is inferred from aggregate ``write_step_ids``.
 """
 from __future__ import annotations
 
 from typing import Any
 
-from .process_step_execution import ProcessStepLedger
-
-PROCESS_STEP_RECEIPT_SCOPE_BINDING_SCHEMA = (
-    "qualibug.process-step-receipt-scope-binding.v1"
-)
-
-_STEP_ID_FIELDS = (
-    "step_id",
-    "source_step_id",
-    "subject_step_id",
-    "receipt_step_id",
-)
-_STEP_ID_LIST_FIELDS = (
-    "step_ids",
-    "source_step_ids",
-    "subject_step_ids",
-    "receipt_step_ids",
-)
+from . import process_step_receipt_scope_core as _core
 
 
-def _dict(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
+for _name in dir(_core):
+    if not _name.startswith("__"):
+        globals()[_name] = getattr(_core, _name)
 
 
-def _list(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else []
-
-
-def _text(value: Any) -> str:
-    return str(value or "").strip()
-
-
-def _unique(values: list[Any]) -> list[str]:
-    out: list[str] = []
-    for value in values:
-        text = _text(value)
-        if text and text not in out:
-            out.append(text)
-    return out
-
-
-def receipt_id(receipt: dict[str, Any]) -> str:
-    value = _dict(receipt)
-    payload = _dict(value.get("payload"))
-    return _text(
-        value.get("receipt_id")
-        or value.get("id")
-        or value.get("verification_id")
-        or payload.get("receipt_id")
-        or payload.get("id")
-        or payload.get("verification_id")
-    )
-
-
-def _scope_sources(receipt: dict[str, Any]) -> list[dict[str, Any]]:
-    value = _dict(receipt)
-    payload = _dict(value.get("payload"))
-    sources = [
-        value,
-        payload,
-        _dict(value.get("evidence")),
-        _dict(payload.get("evidence")),
-        _dict(value.get("verdict")),
-        _dict(payload.get("verdict")),
-        _dict(value.get("cleanup_result")),
-        _dict(payload.get("cleanup_result")),
-    ]
-    return [source for source in sources if source]
-
-
-def extract_receipt_step_scope(
-    receipt: dict[str, Any],
-    *,
-    known_step_ids: list[str] | None = None,
-) -> dict[str, Any]:
-    """Resolve one explicit step identity without inferring from execution sets."""
-
-    scalar_ids: list[str] = []
-    list_ids: list[str] = []
-    for source in _scope_sources(receipt):
-        scalar_ids.extend(_text(source.get(field)) for field in _STEP_ID_FIELDS)
-        for field in _STEP_ID_LIST_FIELDS:
-            list_ids.extend(_text(item) for item in _list(source.get(field)))
-
-    scalar = _unique(scalar_ids)
-    listed = _unique(list_ids)
-    declared = _unique(scalar + listed)
-    known = set(_unique(list(known_step_ids or [])))
-
-    if listed or len(declared) > 1:
-        status = "MULTI_STEP_SCOPE_FORBIDDEN"
-        step_id = ""
-    elif not declared:
-        status = "STEP_SCOPE_MISSING"
-        step_id = ""
-    else:
-        step_id = declared[0]
-        status = "EXACT"
-        if known and step_id not in known:
-            status = "STEP_SCOPE_UNKNOWN"
-
-    return {
-        "receipt_id": receipt_id(receipt),
-        "status": status,
-        "step_id": step_id,
-        "declared_step_ids": declared,
-        "explicit_scalar_step_ids": scalar,
-        "explicit_list_step_ids": listed,
+_GRAPH_AGGREGATE_SCHEMAS = frozenset(
+    {
+        "qualibug.process-graph-cleanup-execution-set.v1",
+        "qualibug.process-graph-cleanup-equivalence-receipt.v1",
     }
+)
 
 
-def _deduplicate_receipts(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for row in rows:
-        value = _dict(row)
-        if not value:
-            continue
-        rid = receipt_id(value)
-        key = rid or f"anonymous:{len(out)}"
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(value)
-    return out
+def _receipt_schema(receipt: dict[str, Any]) -> str:
+    row = _core._dict(receipt)
+    payload = _core._dict(row.get("payload"))
+    return _core._text(
+        row.get("schema_version") or payload.get("schema_version")
+    )
 
 
-def _rows(observations: dict[str, Any], keys: tuple[str, ...]) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    for key in keys:
-        value = observations.get(key)
-        if isinstance(value, dict):
-            out.append(value)
-        else:
-            out.extend(row for row in _list(value) if isinstance(row, dict))
-    return _deduplicate_receipts(out)
+def _is_graph_aggregate(receipt: dict[str, Any]) -> bool:
+    return _receipt_schema(receipt) in _GRAPH_AGGREGATE_SCHEMAS
 
 
-def _publish_rows(
-    observations: dict[str, Any],
-    key: str,
-    rows: list[dict[str, Any]],
-) -> None:
-    """Preserve an existing list identity so Finalizer local aliases see updates."""
-
-    existing = observations.get(key)
-    if isinstance(existing, list):
-        existing[:] = rows
-    else:
-        observations[key] = list(rows)
-
-
-def _bind_group(
-    *,
-    ledger: ProcessStepLedger,
-    rows: list[dict[str, Any]],
-    field: str,
-    evidence_kind: str,
-) -> dict[str, Any]:
-    known = list(ledger.recorded_step_ids())
-    bound: list[dict[str, str]] = []
-    unbound: list[dict[str, Any]] = []
-    duplicate_receipt_ids: list[str] = []
-    bound_receipt_owner: dict[str, str] = {}
-
-    for row in rows:
-        scope = extract_receipt_step_scope(row, known_step_ids=known)
-        rid = _text(scope.get("receipt_id"))
-        step_id = _text(scope.get("step_id"))
-        if not rid:
-            unbound.append(
-                {
-                    **scope,
-                    "evidence_kind": evidence_kind,
-                    "status": "RECEIPT_ID_MISSING",
-                }
+def _nested_receipts(
+    aggregates: list[dict[str, Any]],
+    *mapping_fields: str,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for aggregate in aggregates:
+        for field in mapping_fields:
+            mapping = _core._dict(
+                _core._dict(aggregate).get(field)
             )
-            continue
-        previous_owner = bound_receipt_owner.get(rid)
-        if previous_owner and previous_owner != step_id:
-            duplicate_receipt_ids.append(rid)
-            unbound.append(
-                {
-                    **scope,
-                    "evidence_kind": evidence_kind,
-                    "status": "RECEIPT_REUSED_ACROSS_STEPS",
-                    "previous_step_id": previous_owner,
-                }
+            rows.extend(
+                value
+                for _, value in sorted(mapping.items())
+                if isinstance(value, dict)
             )
-            continue
-        if scope.get("status") != "EXACT":
-            unbound.append({**scope, "evidence_kind": evidence_kind})
-            continue
-        if not ledger.append_scoped_receipt_ref(
-            step_id=step_id,
-            receipt_step_id=step_id,
-            field=field,
-            receipt_id=rid,
-        ):
-            unbound.append(
-                {
-                    **scope,
-                    "evidence_kind": evidence_kind,
-                    "status": "LEDGER_SCOPE_BINDING_REJECTED",
-                }
-            )
-            continue
-        bound_receipt_owner[rid] = step_id
-        bound.append(
-            {
-                "receipt_id": rid,
-                "step_id": step_id,
-                "evidence_kind": evidence_kind,
-            }
-        )
-
-    return {
-        "evidence_kind": evidence_kind,
-        "bound": bound,
-        "unbound": unbound,
-        "duplicate_receipt_ids": sorted(set(duplicate_receipt_ids)),
-        "complete": not unbound and not duplicate_receipt_ids,
-    }
+    return _core._deduplicate_receipts(rows)
 
 
-def synchronize_scoped_receipts_from_observations(
-    ledger: ProcessStepLedger,
-    observations: dict[str, Any] | None,
-) -> dict[str, Any]:
-    """Normalize and bind only exact-scoped evidence already observed."""
-
-    source = observations if isinstance(observations, dict) else {}
-    observation_rows = _rows(
-        source,
-        (
-            "observer_receipts",
-            "observation_receipts",
-            "process_step_observation_receipts",
-        ),
-    )
-    oracle_invocation_rows = _rows(
-        source,
-        (
-            "process_step_oracle_receipts",
-            "oracle_invocation_receipts",
-            "oracle_receipts",
-            "assertion_receipts",
-            "oracle_verdict",
-        ),
-    )
-    formal_oracle_trace_rows = _rows(source, ("oracle_trace_receipts",))
-    identified_raw_oracle_trace_rows = [
-        row
-        for row in _rows(source, ("oracle_trace",))
-        if receipt_id(row)
-    ]
-    oracle_trace_rows = _deduplicate_receipts(
-        [*formal_oracle_trace_rows, *identified_raw_oracle_trace_rows]
-    )
-    oracle_rows = _deduplicate_receipts(
-        [*oracle_invocation_rows, *oracle_trace_rows]
-    )
-    cleanup_execution_rows = _rows(
+def _partition_cleanup_receipts(
+    source: dict[str, Any],
+) -> dict[str, list[dict[str, Any]]]:
+    execution_rows = _core._rows(
         source,
         ("cleanup_execution_receipts", "cleanup_execution_receipt"),
     )
-    cleanup_verification_rows = _rows(
+    verification_rows = _core._rows(
         source,
         (
             "cleanup_verification_receipts",
@@ -283,68 +71,206 @@ def synchronize_scoped_receipts_from_observations(
             "cleanup_equivalence_receipt",
         ),
     )
-    cleanup_rows = _deduplicate_receipts(
-        [*cleanup_execution_rows, *cleanup_verification_rows]
+    execution_aggregates = [
+        row for row in execution_rows if _is_graph_aggregate(row)
+    ]
+    verification_aggregates = [
+        row for row in verification_rows if _is_graph_aggregate(row)
+    ]
+    aggregates = _core._deduplicate_receipts(
+        [*execution_aggregates, *verification_aggregates]
+    )
+
+    explicit_execution = _core._rows(
+        source,
+        (
+            "process_step_cleanup_execution_receipts",
+            "process_graph_step_cleanup_execution_receipts",
+            "process_graph_cleanup_receipts",
+        ),
+    )
+    explicit_verification = _core._rows(
+        source,
+        (
+            "process_step_cleanup_verification_receipts",
+            "process_graph_step_cleanup_verification_receipts",
+        ),
+    )
+    nested_execution = _nested_receipts(
+        aggregates,
+        "step_cleanup_execution_receipts_by_id",
+    )
+    nested_verification = _nested_receipts(
+        aggregates,
+        "step_cleanup_verification_receipts_by_id",
+        "step_equivalence_receipts_by_id",
+    )
+
+    exact_execution = _core._deduplicate_receipts(
+        [
+            *[
+                row
+                for row in execution_rows
+                if not _is_graph_aggregate(row)
+            ],
+            *explicit_execution,
+            *nested_execution,
+        ]
+    )
+    exact_verification = _core._deduplicate_receipts(
+        [
+            *[
+                row
+                for row in verification_rows
+                if not _is_graph_aggregate(row)
+            ],
+            *explicit_verification,
+            *nested_verification,
+        ]
+    )
+    return {
+        "execution_aggregates": execution_aggregates,
+        "verification_aggregates": verification_aggregates,
+        "aggregates": aggregates,
+        "exact_execution": exact_execution,
+        "exact_verification": exact_verification,
+    }
+
+
+def _projection(
+    source: dict[str, Any],
+    *,
+    exact_execution: list[dict[str, Any]],
+    exact_verification: list[dict[str, Any]],
+) -> dict[str, Any]:
+    projected = dict(source)
+    for key in (
+        "observer_receipts",
+        "oracle_invocation_receipts",
+        "oracle_trace_receipts",
+    ):
+        value = source.get(key)
+        projected[key] = (
+            list(value)
+            if isinstance(value, list)
+            else [value]
+            if isinstance(value, dict)
+            else []
+        )
+    projected["cleanup_execution_receipts"] = list(exact_execution)
+    projected.pop("cleanup_execution_receipt", None)
+    projected["cleanup_verification_receipts"] = list(exact_verification)
+    projected.pop("cleanup_verification", None)
+    projected.pop("cleanup_equivalence_receipt", None)
+    return projected
+
+
+def synchronize_scoped_receipts_from_observations(
+    ledger: Any,
+    observations: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Bind only exact per-step receipts; keep graph aggregates bundle-scoped."""
+
+    source = observations if isinstance(observations, dict) else {}
+    partition = _partition_cleanup_receipts(source)
+    projected = _projection(
+        source,
+        exact_execution=partition["exact_execution"],
+        exact_verification=partition["exact_verification"],
+    )
+    audit = _core.synchronize_scoped_receipts_from_observations(
+        ledger,
+        projected,
     )
 
     if isinstance(observations, dict):
-        _publish_rows(observations, "observer_receipts", observation_rows)
-        _publish_rows(
-            observations,
+        for key in (
+            "observer_receipts",
             "oracle_invocation_receipts",
-            oracle_invocation_rows,
-        )
-        _publish_rows(observations, "oracle_trace_receipts", oracle_trace_rows)
-        _publish_rows(
+            "oracle_trace_receipts",
+        ):
+            _core._publish_rows(
+                observations,
+                key,
+                [
+                    row
+                    for row in _core._list(projected.get(key))
+                    if isinstance(row, dict)
+                ],
+            )
+
+        _core._publish_rows(
             observations,
-            "cleanup_execution_receipts",
-            cleanup_execution_rows,
+            "process_step_cleanup_execution_receipts",
+            partition["exact_execution"],
         )
-        _publish_rows(
+        _core._publish_rows(
             observations,
-            "cleanup_verification_receipts",
-            cleanup_verification_rows,
+            "process_step_cleanup_verification_receipts",
+            partition["exact_verification"],
         )
 
-    observation_audit = _bind_group(
-        ledger=ledger,
-        rows=observation_rows,
-        field="observation_receipt_ids",
-        evidence_kind="observation",
-    )
-    oracle_audit = _bind_group(
-        ledger=ledger,
-        rows=oracle_rows,
-        field="oracle_receipt_ids",
-        evidence_kind="oracle",
-    )
-    cleanup_audit = _bind_group(
-        ledger=ledger,
-        rows=cleanup_rows,
-        field="cleanup_receipt_ids",
-        evidence_kind="cleanup",
-    )
-    unbound = [
-        *observation_audit["unbound"],
-        *oracle_audit["unbound"],
-        *cleanup_audit["unbound"],
+        if not partition["execution_aggregates"]:
+            _core._publish_rows(
+                observations,
+                "cleanup_execution_receipts",
+                partition["exact_execution"],
+            )
+        if not partition["verification_aggregates"]:
+            _core._publish_rows(
+                observations,
+                "cleanup_verification_receipts",
+                partition["exact_verification"],
+            )
+
+    aggregate_ids = [
+        _core.receipt_id(row)
+        for row in partition["aggregates"]
+        if _core.receipt_id(row)
     ]
     audit = {
-        "schema_version": PROCESS_STEP_RECEIPT_SCOPE_BINDING_SCHEMA,
-        "ledger_id": ledger.ledger_id,
-        "known_step_ids": list(ledger.recorded_step_ids()),
-        "observation": observation_audit,
-        "oracle": oracle_audit,
-        "cleanup": cleanup_audit,
-        "unbound_receipts": unbound,
-        "complete": (
-            observation_audit["complete"]
-            and oracle_audit["complete"]
-            and cleanup_audit["complete"]
+        **audit,
+        "aggregate_cleanup_receipt_ids": aggregate_ids,
+        "aggregate_cleanup_receipt_count": len(
+            partition["aggregates"]
         ),
-        "broadcast_fallback_forbidden": True,
+        "aggregate_cleanup_execution_receipt_ids": [
+            _core.receipt_id(row)
+            for row in partition["execution_aggregates"]
+            if _core.receipt_id(row)
+        ],
+        "aggregate_cleanup_verification_receipt_ids": [
+            _core.receipt_id(row)
+            for row in partition["verification_aggregates"]
+            if _core.receipt_id(row)
+        ],
+        "aggregate_cleanup_receipts_excluded_from_step_scope": True,
+        "step_cleanup_execution_receipt_ids": [
+            _core.receipt_id(row)
+            for row in partition["exact_execution"]
+            if _core.receipt_id(row)
+        ],
+        "step_cleanup_verification_receipt_ids": [
+            _core.receipt_id(row)
+            for row in partition["exact_verification"]
+            if _core.receipt_id(row)
+        ],
     }
     if isinstance(observations, dict):
         observations["process_step_receipt_scope_binding"] = audit
-        observations["unbound_process_step_receipts"] = unbound
+        observations["unbound_process_step_receipts"] = list(
+            audit.get("unbound_receipts") or []
+        )
     return audit
+
+
+__all__ = sorted(
+    {
+        *[
+            name
+            for name in dir(_core)
+            if not name.startswith("__")
+        ],
+        "synchronize_scoped_receipts_from_observations",
+    }
+)
