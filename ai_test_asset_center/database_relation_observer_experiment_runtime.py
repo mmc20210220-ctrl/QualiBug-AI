@@ -133,17 +133,20 @@ def execute_database_relation_observer_phase(
             campaign_id=campaign_id,
             execution_id=execution_id,
         )
+        relation_pair_id = _text(draft.get("relation_pair_id"))
         receipt = {
             **receipt,
             "source_observer_id": DIRECT_RELATION_OBSERVER_ID,
             "phase_receipt_id": _fingerprint(
                 {
                     "draft_id": draft.get("draft_id"),
+                    "relation_pair_id": relation_pair_id,
                     "phase": target,
                     "receipt_id": receipt.get("receipt_id"),
                 }
             )[:32],
             "draft_id": draft.get("draft_id"),
+            "relation_pair_id": relation_pair_id,
             "relation_observer_contract_ref": draft.get(
                 "relation_observer_contract_ref"
             ),
@@ -252,6 +255,7 @@ def aggregate_database_relation_phase_receipts(
             duplicates.append(
                 {
                     "draft_id": key[0],
+                    "relation_pair_id": _text(draft.get("relation_pair_id")),
                     "phase": key[1],
                     "receipt_count": len(matches),
                     "receipt_ids": sorted(
@@ -264,12 +268,19 @@ def aggregate_database_relation_phase_receipts(
             continue
         receipt = matches[0] if matches else {}
         if not receipt or _text(receipt.get("status")).upper() != "OBSERVED":
-            missing.append({"draft_id": key[0], "phase": key[1]})
+            missing.append(
+                {
+                    "draft_id": key[0],
+                    "relation_pair_id": _text(draft.get("relation_pair_id")),
+                    "phase": key[1],
+                }
+            )
             continue
         payload = _dict(_dict(receipt.get("evidence")).get(EVIDENCE_KEY))
         snapshots.append(
             {
                 "draft_id": key[0],
+                "relation_pair_id": _text(receipt.get("relation_pair_id")),
                 "phase": key[1],
                 "relation_observer_contract_ref": draft.get(
                     "relation_observer_contract_ref"
@@ -278,6 +289,7 @@ def aggregate_database_relation_phase_receipts(
                     "root_observer_contract_ref"
                 ),
                 "receipt_id": receipt.get("receipt_id"),
+                "phase_receipt_id": receipt.get("phase_receipt_id"),
                 "source_observer_id": DIRECT_RELATION_OBSERVER_ID,
                 "snapshot": payload,
                 "snapshot_fingerprint": payload.get("aggregate_fingerprint"),
