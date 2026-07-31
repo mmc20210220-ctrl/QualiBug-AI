@@ -16,10 +16,6 @@ from .connector_sync_authority import register_connector_instance
 from .credential_crypto import decrypt, encrypt, is_encrypted
 from .enterprise_knowledge_center._common import ROOT
 from .enterprise_knowledge_center._utils import _now, _require_manage_actor
-from .private_pilot_credentials_patch import (
-    CredentialEncryptionUnavailableError,
-    ensure_local_credential_encryption_key,
-)
 from .private_pilot_json_io import _read_json_object, _write_json_object_atomic
 from .real_project_onboarding import _safe_project_id
 
@@ -127,6 +123,13 @@ def _profile_by_id(store: dict[str, Any], connector: str) -> dict[str, Any] | No
 
 
 def _require_encryption(root: Path) -> str:
+    # Lazy import avoids a package-composition cycle:
+    # private_pilot_service -> connector handlers -> profile authority.
+    from .private_pilot_credentials_patch import (
+        CredentialEncryptionUnavailableError,
+        ensure_local_credential_encryption_key,
+    )
+
     try:
         return ensure_local_credential_encryption_key(root)
     except CredentialEncryptionUnavailableError as exc:
