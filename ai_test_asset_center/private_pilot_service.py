@@ -123,6 +123,7 @@ from .private_pilot_command_center_understanding import (
 from .private_pilot_connector_handlers import KnowledgeConnectorHandlersMixin
 from .private_pilot_credentials_handlers import CredentialsHandlerMixin
 from .private_pilot_http_routing import HttpRoutingMixin
+from .private_pilot_identity_benchmark_handlers import IdentityBenchmarkHttpMixin
 from .private_pilot_ingest_handlers import IngestHandlersMixin
 from .private_pilot_understanding_preflight import (
     UnderstandingPreflightProjectionMixin,
@@ -199,6 +200,7 @@ def _normalize_command_center_envelope(payload: dict[str, Any]) -> dict[str, Any
 
 
 class PrivatePilotHandler(
+    IdentityBenchmarkHttpMixin,
     KnowledgeConnectorHandlersMixin,
     HttpRoutingMixin,
     CredentialsHandlerMixin,
