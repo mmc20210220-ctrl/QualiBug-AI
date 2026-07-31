@@ -24,7 +24,11 @@ def test_explicit_fact_workflow_publishes_readable_commit_status() -> None:
     assert "slot_exact_accuracy" in text
     assert "p0_exact_fact_recall" in text
     assert "source_locator_exact_accuracy" in text
+    assert "accepted_fact_precision" in text
+    assert "false_accepted_fact_count" in text
     assert "evidence=${formatMetric" in text
+    assert "precision=${formatMetric" in text
+    assert "false=${falseAccepted}" in text
 
 
 def test_explicit_fact_quality_exit_code_remains_ci_authority() -> None:
