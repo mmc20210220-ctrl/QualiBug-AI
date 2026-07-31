@@ -22,6 +22,7 @@ on:
       - "ai_test_asset_center/database_relation_numeric_oracle.py"
       - "ai_test_asset_center/database_relation_numeric_finding_bridge.py"
       - "ai_test_asset_center/database_relation_delta_experiment_projection.py"
+      - "ai_test_asset_center/database_relation_delta_projection_gate.py"
       - "ai_test_asset_center/database_relation_delta_oracle.py"
       - "ai_test_asset_center/database_relation_delta_lineage.py"
       - "ai_test_asset_center/database_relation_delta_finding_bridge.py"
@@ -82,6 +83,7 @@ on:
       - "tests/test_database_relation_numeric_finding_bridge.py"
       - "tests/test_database_relation_numeric_runtime_integration.py"
       - "tests/test_database_relation_delta_experiment_projection.py"
+      - "tests/test_database_relation_delta_projection_gate.py"
       - "tests/test_database_relation_delta_oracle.py"
       - "tests/test_database_relation_delta_contract_oracle.py"
       - "tests/test_database_relation_delta_finding_bridge.py"
@@ -135,6 +137,7 @@ jobs:
             ai_test_asset_center/database_relation_numeric_oracle.py \
             ai_test_asset_center/database_relation_numeric_finding_bridge.py \
             ai_test_asset_center/database_relation_delta_experiment_projection.py \
+            ai_test_asset_center/database_relation_delta_projection_gate.py \
             ai_test_asset_center/database_relation_delta_oracle.py \
             ai_test_asset_center/database_relation_delta_lineage.py \
             ai_test_asset_center/database_relation_delta_finding_bridge.py \
@@ -199,6 +202,7 @@ jobs:
             tests/test_database_relation_numeric_finding_bridge.py \
             tests/test_database_relation_numeric_runtime_integration.py \
             tests/test_database_relation_delta_experiment_projection.py \
+            tests/test_database_relation_delta_projection_gate.py \
             tests/test_database_relation_delta_oracle.py \
             tests/test_database_relation_delta_contract_oracle.py \
             tests/test_database_relation_delta_finding_bridge.py \
