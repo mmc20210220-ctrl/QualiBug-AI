@@ -5,13 +5,22 @@ This module preserves its public surface while making one authority change:
 Observation, Oracle, and Cleanup receipts are synchronized through the
 ProcessStepSemanticView, and the legacy unscoped ``append_receipt_ref`` fallback
 is not exposed to the core finalizer.
+
+Per-step cleanup equivalence receipts are created inside the historical core.
+A context-local hook binds those receipts to their exact source steps before the
+core assembles the Receipt Bundle and seals the final ledger hash.
 """
 from __future__ import annotations
 
+from contextvars import ContextVar
 from typing import Any
 
 from . import experiment_outcome_finalizer_core as _core
-from .process_step_receipt_scope import synchronize_scoped_receipts_from_observations
+from .process_step_receipt_scope import (
+    extract_receipt_step_scope,
+    receipt_id as _scope_receipt_id,
+    synchronize_scoped_receipts_from_observations,
+)
 from .process_step_semantic_view import ProcessStepSemanticView
 
 
@@ -66,10 +75,24 @@ def _merge_receipt_rows(*groups: Any) -> list[dict[str, Any]]:
     return merged
 
 
-def _invalidate_derived_step_snapshot(observations: dict[str, Any]) -> None:
-    """Force all derived step facts to be resealed after final evidence exists."""
+def _invalidate_derived_step_snapshot(
+    observations: dict[str, Any],
+) -> None:
+    """Force derived step facts to be resealed after final evidence exists."""
     for field in _DERIVED_STEP_SNAPSHOT_FIELDS:
         observations.pop(field, None)
+
+
+def _publish_receipt_rows(
+    observations: dict[str, Any],
+    key: str,
+    rows: list[dict[str, Any]],
+) -> None:
+    existing = observations.get(key)
+    if isinstance(existing, list):
+        existing[:] = rows
+    else:
+        observations[key] = list(rows)
 
 
 class _ExactScopeFinalizerLedger:
@@ -90,6 +113,9 @@ class _ExactScopeFinalizerLedger:
 
 _ORIGINAL_OBSERVER_ATTR = "_qualibug_exact_scope_original_observer"
 _ORIGINAL_ORACLE_ATTR = "_qualibug_exact_scope_original_oracle"
+_ORIGINAL_CLEANUP_EQUIVALENCE_ATTR = (
+    "_qualibug_exact_scope_original_cleanup_equivalence"
+)
 if not hasattr(_core, _ORIGINAL_OBSERVER_ATTR):
     setattr(
         _core,
@@ -102,6 +128,12 @@ if not hasattr(_core, _ORIGINAL_ORACLE_ATTR):
         _ORIGINAL_ORACLE_ATTR,
         _core.evaluate_contract_oracle,
     )
+if not hasattr(_core, _ORIGINAL_CLEANUP_EQUIVALENCE_ATTR):
+    setattr(
+        _core,
+        _ORIGINAL_CLEANUP_EQUIVALENCE_ATTR,
+        _core.evaluate_cleanup_equivalence,
+    )
 _original_observe_experiment_requirements = getattr(
     _core,
     _ORIGINAL_OBSERVER_ATTR,
@@ -110,9 +142,22 @@ _original_evaluate_contract_oracle = getattr(
     _core,
     _ORIGINAL_ORACLE_ATTR,
 )
+_original_evaluate_cleanup_equivalence = getattr(
+    _core,
+    _ORIGINAL_CLEANUP_EQUIVALENCE_ATTR,
+)
+
+_FinalizerScope = tuple[dict[str, Any], ProcessStepSemanticView]
+_active_finalizer_scope: ContextVar[_FinalizerScope | None] = ContextVar(
+    "qualibug_active_exact_scope_finalizer",
+    default=None,
+)
 
 
-def _observe_experiment_requirements_exact(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+def _observe_experiment_requirements_exact(
+    *args: Any,
+    **kwargs: Any,
+) -> list[dict[str, Any]]:
     observations = kwargs.get("observations")
     existing = _dict(observations) if isinstance(observations, dict) else {}
     generated = _original_observe_experiment_requirements(*args, **kwargs)
@@ -126,7 +171,10 @@ def _observe_experiment_requirements_exact(*args: Any, **kwargs: Any) -> list[di
     return merged
 
 
-def _evaluate_contract_oracle_exact(*args: Any, **kwargs: Any) -> dict[str, Any]:
+def _evaluate_contract_oracle_exact(
+    *args: Any,
+    **kwargs: Any,
+) -> dict[str, Any]:
     verdict = _original_evaluate_contract_oracle(*args, **kwargs)
     evidence = kwargs.get("evidence")
     if isinstance(evidence, dict):
@@ -134,9 +182,111 @@ def _evaluate_contract_oracle_exact(*args: Any, **kwargs: Any) -> dict[str, Any]
     return verdict
 
 
+def _evaluate_cleanup_equivalence_exact(
+    *args: Any,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Bind graph step verification before the core seals its receipt bundle."""
+    receipt = _original_evaluate_cleanup_equivalence(*args, **kwargs)
+    context = _active_finalizer_scope.get()
+    if context is None:
+        return receipt
+
+    observations, semantic_view = context
+    step_receipts = _dict(
+        _dict(receipt).get("step_equivalence_receipts_by_id")
+    )
+    if not step_receipts:
+        return receipt
+
+    rows = [
+        dict(row)
+        for _, row in sorted(step_receipts.items())
+        if isinstance(row, dict)
+    ]
+    merged = _merge_receipt_rows(
+        observations.get("cleanup_verification_receipts"),
+        rows,
+    )
+    _publish_receipt_rows(
+        observations,
+        "cleanup_verification_receipts",
+        merged,
+    )
+
+    source_ledger = semantic_view.source_ledger
+    known_step_ids = list(source_ledger.recorded_step_ids())
+    bound: list[dict[str, str]] = []
+    unbound: list[dict[str, Any]] = []
+    seen_receipt_ids: set[str] = set()
+    for row in rows:
+        scope = extract_receipt_step_scope(
+            row,
+            known_step_ids=known_step_ids,
+        )
+        receipt_id = _scope_receipt_id(row)
+        step_id = _text(scope.get("step_id"))
+        if (
+            not receipt_id
+            or receipt_id in seen_receipt_ids
+            or scope.get("status") != "EXACT"
+        ):
+            unbound.append(
+                {
+                    **scope,
+                    "receipt_id": receipt_id,
+                    "evidence_kind": "cleanup_verification",
+                    "status": (
+                        "RECEIPT_REUSED"
+                        if receipt_id in seen_receipt_ids
+                        else _text(scope.get("status"))
+                        or "RECEIPT_ID_MISSING"
+                    ),
+                }
+            )
+            continue
+        seen_receipt_ids.add(receipt_id)
+        if not semantic_view.append_scoped_receipt_ref(
+            step_id=step_id,
+            field="cleanup_receipt_ids",
+            receipt_id=receipt_id,
+            receipt_step_id=step_id,
+        ):
+            unbound.append(
+                {
+                    **scope,
+                    "evidence_kind": "cleanup_verification",
+                    "status": "LEDGER_SCOPE_BINDING_REJECTED",
+                }
+            )
+            continue
+        bound.append(
+            {
+                "receipt_id": receipt_id,
+                "step_id": step_id,
+                "evidence_kind": "cleanup_verification",
+            }
+        )
+
+    observations["process_step_cleanup_verification_binding"] = {
+        "bound": bound,
+        "unbound": unbound,
+        "complete": bool(rows) and not unbound and len(bound) == len(rows),
+        "broadcast_fallback_forbidden": True,
+    }
+    _invalidate_derived_step_snapshot(observations)
+    semantic_view.compute_hash()
+    return receipt
+
+
 def _install_core_hooks() -> None:
-    _core.observe_experiment_requirements = _observe_experiment_requirements_exact
+    _core.observe_experiment_requirements = (
+        _observe_experiment_requirements_exact
+    )
     _core.evaluate_contract_oracle = _evaluate_contract_oracle_exact
+    _core.evaluate_cleanup_equivalence = (
+        _evaluate_cleanup_equivalence_exact
+    )
 
 
 _install_core_hooks()
@@ -167,11 +317,17 @@ def finalize_experiment_execution(*args: Any, **kwargs: Any) -> dict[str, Any]:
         observations,
     )
     _invalidate_derived_step_snapshot(observations)
-    observations["process_step_ledger"] = _ExactScopeFinalizerLedger(semantic_view)
+    observations["process_step_ledger"] = _ExactScopeFinalizerLedger(
+        semantic_view
+    )
     observations["process_step_ledger_view"] = "exact_scope_finalizer"
+    scope_token = _active_finalizer_scope.set(
+        (observations, semantic_view)
+    )
     try:
         result = _core.finalize_experiment_execution(*args, **kwargs)
     finally:
+        _active_finalizer_scope.reset(scope_token)
         observations["process_step_ledger"] = semantic_view
         observations["process_step_ledger_view"] = "semantic_completion"
     return result
@@ -187,5 +343,6 @@ __all__ = sorted(
         "_name",
         "_original_observe_experiment_requirements",
         "_original_evaluate_contract_oracle",
+        "_original_evaluate_cleanup_equivalence",
     }
 )
