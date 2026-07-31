@@ -38,6 +38,9 @@ from .operation_causality_runtime import install_operation_causality_runtime
 from .operation_causality_runtime_attachment import (
     install_operation_causality_attachment,
 )
+from .operation_causality_transport_authority import (
+    install_operation_causality_transport_authority,
+)
 
 _PROCESS_OBSERVER_ID = "process_timeline"
 _COMPILER_MARKER = "_qualibug_process_timeline_observer_installed"
@@ -199,6 +202,7 @@ def install_non_http_observers() -> None:
     install_database_relation_phase_execution()
     install_database_relation_causality_runtime()
     install_operation_causality_runtime()
+    install_operation_causality_transport_authority()
     install_operation_causality_attachment()
 
     # Assertion registration happens only after all required evidence keys are declared.
