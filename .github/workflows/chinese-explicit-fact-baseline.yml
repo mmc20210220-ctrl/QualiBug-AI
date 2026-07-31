@@ -13,6 +13,7 @@ on:
       - "tests/test_enterprise_understanding_fact_slot_report.py"
       - "tests/test_enterprise_understanding_post_compile_governance.py"
       - "tests/test_enterprise_understanding_implicit_rule_*.py"
+      - "tests/test_enterprise_understanding_versioned_product_snapshot.py"
       - ".github/workflows/chinese-explicit-fact-baseline.yml"
       - "pyproject.toml"
 
@@ -22,7 +23,7 @@ permissions:
 jobs:
   measure:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
 
     steps:
       - name: Checkout exact commit
@@ -53,26 +54,45 @@ jobs:
             tests/test_enterprise_understanding_fact_slots.py \
             tests/test_enterprise_understanding_fact_slot_report.py \
             tests/test_enterprise_understanding_post_compile_governance.py \
-            tests/test_enterprise_understanding_implicit_rule_*.py
+            tests/test_enterprise_understanding_implicit_rule_*.py \
+            tests/test_enterprise_understanding_versioned_product_snapshot.py
 
-      - name: Run isolated source-backed baseline
+      - name: Run isolated explicit fact baseline
         run: |
           python -m benchmark_evaluator.enterprise_understanding.chinese_explicit_fact_baseline \
             --workspace-root "$RUNNER_TEMP/chinese-explicit-fact-workspace" \
             --output "$RUNNER_TEMP/chinese-explicit-fact-result"
 
-      - name: Print baseline summary
+      - name: Run isolated versioned implicit rule baseline
+        run: |
+          python -m benchmark_evaluator.enterprise_understanding.implicit_rule_baseline \
+            --workspace-root "$RUNNER_TEMP/implicit-rule-workspace" \
+            --output "$RUNNER_TEMP/implicit-rule-result"
+
+      - name: Print baseline summaries
         if: always()
         run: |
           if [ -f "$RUNNER_TEMP/chinese-explicit-fact-result/chinese_explicit_fact_baseline_summary.json" ]; then
             cat "$RUNNER_TEMP/chinese-explicit-fact-result/chinese_explicit_fact_baseline_summary.json"
           fi
+          if [ -f "$RUNNER_TEMP/implicit-rule-result/implicit_rule_baseline_summary.json" ]; then
+            cat "$RUNNER_TEMP/implicit-rule-result/implicit_rule_baseline_summary.json"
+          fi
 
-      - name: Upload baseline evidence
+      - name: Upload explicit fact baseline evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: chinese-explicit-fact-baseline-${{ github.sha }}
           path: ${{ runner.temp }}/chinese-explicit-fact-result
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload implicit rule baseline evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: implicit-rule-baseline-${{ github.sha }}
+          path: ${{ runner.temp }}/implicit-rule-result
           if-no-files-found: error
           retention-days: 30
