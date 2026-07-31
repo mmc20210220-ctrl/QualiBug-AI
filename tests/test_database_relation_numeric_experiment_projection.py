@@ -110,8 +110,18 @@ def _assertion(*, child_field_id: str = "field:order_lines:amount") -> dict:
     }
 
 
+def _root_draft(draft_id: str = "draft:orders:after") -> dict:
+    return {
+        "schema": "qualibug.database-observer-execution-draft.v1",
+        "draft_id": draft_id,
+        "observer_contract_ref": "observer:orders",
+        "observation_phase": "AFTER",
+        "database_observer_contract": _root_contract(),
+        "required": True,
+    }
+
+
 def _experiment(assertion: dict | None = None) -> dict:
-    root = _root_contract()
     return {
         "experiment_id": "experiment:order-total",
         "obligation_id": "obligation:order-total",
@@ -121,16 +131,7 @@ def _experiment(assertion: dict | None = None) -> dict:
             {"observer_id": "after_state", "adapter": "http_api"},
             {"observer_id": "approved_database_phase_aggregate", "adapter": "db_sql"},
         ],
-        "database_observer_execution_drafts": [
-            {
-                "schema": "qualibug.database-observer-execution-draft.v1",
-                "draft_id": "draft:orders:after",
-                "observer_contract_ref": "observer:orders",
-                "observation_phase": "AFTER",
-                "database_observer_contract": root,
-                "required": True,
-            }
-        ],
+        "database_observer_execution_drafts": [_root_draft()],
         "database_relation_observer_contracts": [_relation_contract()],
         "assertions": [assertion or _assertion()],
         "field_oracle_runtime_contract": {
@@ -156,12 +157,25 @@ def test_exact_root_field_child_field_and_relation_create_after_aggregate_draft(
     experiment = result["experiments"][0]
     assertion = experiment["assertions"][0]
     assert assertion["kind"] == ASSERTION_KIND
+    assert assertion["root_database_draft_id"] == "draft:orders:after"
+    assert assertion["database_relationship_id"] == (
+        "fk:relation-observer:order-lines"
+    )
+    assert assertion["relation_key"] == [
+        {
+            "child_database_field_name": "order_id",
+            "parent_database_field_name": "id",
+        }
+    ]
     assert assertion["root_database_field_id"] == "field:orders:total"
     assert assertion["child_database_field_id"] == "field:order_lines:amount"
     assert assertion["aggregate"] == "SUM"
     assert assertion["comparison_operator"] == "EQ"
-    assert assertion["database_relation_binding"]["automatic_relation_mapping"] is False
-    assert assertion["database_relation_binding"]["client_side_filtering"] is False
+    binding = assertion["database_relation_binding"]
+    assert binding["root_database_draft_id"] == "draft:orders:after"
+    assert binding["relation_key"] == assertion["relation_key"]
+    assert binding["automatic_relation_mapping"] is False
+    assert binding["client_side_filtering"] is False
     drafts = experiment["database_relation_observer_execution_drafts"]
     assert len(drafts) == 1
     assert drafts[0]["schema"] == DRAFT_SCHEMA
@@ -177,7 +191,9 @@ def test_exact_root_field_child_field_and_relation_create_after_aggregate_draft(
     assert "approved_database_relation_phase_aggregate" in {
         row["observer_id"] for row in experiment["observers"]
     }
-    assert experiment["compile_receipt"]["database_relation_numeric_assertion_fingerprint"]
+    assert experiment["compile_receipt"][
+        "database_relation_numeric_assertion_fingerprint"
+    ]
 
 
 def test_explicit_child_field_id_never_downgrades_to_matching_name() -> None:
@@ -214,9 +230,32 @@ def test_two_exact_approved_relations_block_without_automatic_winner() -> None:
     assert detail["automatic_winner_allowed"] is False
 
 
+def test_two_exact_root_after_drafts_block_without_automatic_winner() -> None:
+    experiment = _experiment()
+    experiment["database_observer_execution_drafts"].append(
+        _root_draft("draft:orders:after:copy")
+    )
+
+    result = project_database_relation_numeric_assertions(_pack(experiment))
+
+    assert result["experiments"] == []
+    assert result["blocked_count"] == 1
+    detail = result["blocked_experiments"][0]["compile_receipt"][
+        "database_relation_oracle_detail"
+    ]
+    assert detail["candidate_count"] == 2
+    assert detail["candidate_root_draft_ids"] == [
+        "draft:orders:after",
+        "draft:orders:after:copy",
+    ]
+    assert detail["automatic_winner_allowed"] is False
+
+
 def test_entity_scope_mismatch_does_not_select_relation_by_field_name_only() -> None:
     assertion = deepcopy(_assertion())
-    assertion["structured_expression"]["right"]["source_entity_name"] = "ledger_entries"
+    assertion["structured_expression"]["right"]["source_entity_name"] = (
+        "ledger_entries"
+    )
 
     result = project_database_relation_numeric_assertions(
         _pack(_experiment(assertion))
