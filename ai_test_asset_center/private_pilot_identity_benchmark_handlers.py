@@ -22,7 +22,12 @@ def _route(path: str) -> tuple[str, str]:
         return "", ""
     if len(parts) == 5:
         return parts[3], "workspace"
-    if len(parts) == 6 and parts[5] in {"manifest", "ground-truth", "quality-policy"}:
+    if len(parts) == 6 and parts[5] in {
+        "manifest",
+        "ground-truth",
+        "quality-policy",
+        "run",
+    }:
         return parts[3], parts[5]
     return "", ""
 
@@ -138,7 +143,11 @@ class IdentityBenchmarkHttpMixin:
 
     def do_POST(self) -> None:  # noqa: N802
         raw_project, action = _route(_text(getattr(self, "path", "")))
-        if not raw_project or action not in {"ground-truth", "quality-policy"}:
+        if not raw_project or action not in {
+            "ground-truth",
+            "quality-policy",
+            "run",
+        }:
             return super().do_POST()
         self._init_request_context()
         context = self._identity_benchmark_context(raw_project)
@@ -149,6 +158,18 @@ class IdentityBenchmarkHttpMixin:
             body = self._body()
             if not isinstance(body, dict):
                 raise ValueError("identity_benchmark_request_body_must_be_object")
+            if action == "run":
+                from .enterprise_knowledge_center.enterprise_understanding.identity_benchmark_workflow import (
+                    run_identity_benchmark,
+                )
+
+                result = run_identity_benchmark(
+                    project,
+                    actor=actor,
+                    root=root,
+                )
+                return self._json({"ok": True, "data": result}, 201)
+
             if action == "ground-truth":
                 from .enterprise_knowledge_center.enterprise_understanding.identity_benchmark_workflow import (
                     import_identity_ground_truth,
