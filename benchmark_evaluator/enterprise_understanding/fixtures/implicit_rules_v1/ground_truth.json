@@ -5,7 +5,7 @@
   "annotation_scope": "FROZEN_CLOSED_WORLD_IMPLICIT_RULE_CANDIDATE_UNIVERSE",
   "candidate_universe_complete": true,
   "ground_truth_generated_from_product_output": false,
-  "scope_statement": "人工逐条标注两个冻结规则来源版本中的真规则、废止规则与硬负例，并冻结一个不随版本变化的 OpenAPI 接口来源。接口 description 逐字包含幂等规则，执行桥只能使用现有 exact_source_section 权威，不使用 token 相似度。CARDINALITY 因当前 collection 观察证据不可生产而预期停留在 PENDING_VALIDATION；可晋升的守恒公式在 v2 被撤销后预期进入 STALE。匹配使用现有正式规则结构字段，不使用产品候选或规则 ID，也不依赖模型生成标签。该语料只验证评测合同和规则治理闭环，不代表全行业召回率。",
+  "scope_statement": "人工逐条标注两个冻结规则来源版本中的真规则、废止规则与硬负例，并冻结一个不随版本变化的 OpenAPI 接口来源。OpenAPI 原始 JSON 使用 Unicode 转义，解析后的 operation description 逐字包含幂等规则，但原始接口文件不会作为第二份中文业务规则语料进入事实候选宇宙。执行桥只能使用现有 exact_source_section 权威，不使用 token 相似度。CARDINALITY 因当前 collection 观察证据不可生产而预期停留在 PENDING_VALIDATION；可晋升的守恒公式在 v2 被撤销后预期进入 STALE。匹配使用现有正式规则结构字段，不使用产品候选或规则 ID，也不依赖模型生成标签。该语料只验证评测合同和规则治理闭环，不代表全行业召回率。",
   "source_snapshot": [
     {
       "path": "benchmark_evaluator/enterprise_understanding/fixtures/implicit_rules_v1/source_v1.md",
@@ -19,7 +19,7 @@
     },
     {
       "path": "benchmark_evaluator/enterprise_understanding/fixtures/implicit_rules_v1/payment_api.openapi.json",
-      "blob_sha": "9793ce74f7aa4ea1bce19b8b711a32f21f905e6f",
+      "blob_sha": "1a75b47dcc21689a601fac61fbd6311625495db4",
       "authority": "unchanged_exact_interface_contract"
     }
   ],
