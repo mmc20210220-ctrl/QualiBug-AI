@@ -55,42 +55,35 @@ function sourceRows(payload: unknown): KnowledgeSource[] {
 }
 
 function formatTime(value?: string): string {
-  if (!value) return '尚未更新';
+  if (!value) return '尚未完成首次更新';
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleString('zh-CN', { hour12: false });
 }
 
 function connectorTone(connector: KnowledgeConnectorRecord): string {
-  if (connector.active_sync_epoch_id) return 'warning';
-  if (connector.last_failed_sync_epoch_id && !connector.last_successful_sync_epoch_id) return 'danger';
+  if (connector.active_sync_epoch_id || connector.auto_sync?.state === 'running') return 'warning';
+  if (connector.auto_sync?.maintenance_required_by_user) return 'danger';
+  if (connector.auto_sync?.state === 'retrying') return 'warning';
   if (connector.last_successful_sync_epoch_id) return 'success';
   return 'neutral';
 }
 
 function connectorLabel(connector: KnowledgeConnectorRecord): string {
-  if (connector.active_sync_epoch_id) return '正在更新';
-  if (connector.last_failed_sync_epoch_id && !connector.last_successful_sync_epoch_id) return '需要重新授权';
-  if (connector.last_successful_sync_epoch_id) return '已连接';
-  return connector.connection_profile?.credentials_configured ? '等待首次更新' : '需要授权';
+  if (connector.active_sync_epoch_id || connector.auto_sync?.state === 'running') return '正在自动更新';
+  if (connector.auto_sync?.message) return connector.auto_sync.message;
+  if (connector.last_successful_sync_epoch_id) return '自动更新正常';
+  return '等待首次更新';
 }
 
-function scopeDraft(resourceScope: string): {
-  mode: ScopeMode;
-  spaceId: string;
-  advancedScope: string;
-} {
+function scopeDraft(resourceScope: string): { mode: ScopeMode; spaceId: string; advanced: string } {
   if (!resourceScope || resourceScope === 'wiki-all-accessible') {
-    return { mode: 'all', spaceId: '', advancedScope: '' };
+    return { mode: 'all', spaceId: '', advanced: '' };
   }
   if (resourceScope.startsWith('wiki-space:')) {
-    return {
-      mode: 'space',
-      spaceId: resourceScope.slice('wiki-space:'.length),
-      advancedScope: '',
-    };
+    return { mode: 'space', spaceId: resourceScope.slice('wiki-space:'.length), advanced: '' };
   }
-  return { mode: 'advanced', spaceId: '', advancedScope: resourceScope };
+  return { mode: 'advanced', spaceId: '', advanced: resourceScope };
 }
 
 export function Materials() {
@@ -107,7 +100,6 @@ export function Materials() {
 
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState('');
-  const [originalAuthMode, setOriginalAuthMode] = useState<AuthMode>('internal_app');
   const [scopeMode, setScopeMode] = useState<ScopeMode>('all');
   const [spaceId, setSpaceId] = useState('');
   const [advancedScope, setAdvancedScope] = useState('');
@@ -131,11 +123,11 @@ export function Materials() {
     setLoading(true);
     setLoadError('');
     try {
-      const [connectorInventory, asset] = await Promise.all([
+      const [inventory, asset] = await Promise.all([
         listKnowledgeConnectors(project),
         getKnowledgeAsset(project),
       ]);
-      setConnectors(connectorInventory.connectors);
+      setConnectors(inventory.connectors);
       setSources(sourceRows(asset));
     } catch (error: unknown) {
       setLoadError(error instanceof Error ? error.message : '企业资料加载失败');
@@ -159,7 +151,6 @@ export function Materials() {
 
   const resetForm = () => {
     setEditingId('');
-    setOriginalAuthMode('internal_app');
     setScopeMode('all');
     setSpaceId('');
     setAdvancedScope('');
@@ -177,16 +168,16 @@ export function Materials() {
 
   const openEditForm = (connector: KnowledgeConnectorRecord) => {
     const scope = scopeDraft(connector.resource_scope);
-    const currentAuth = connector.connection_profile?.auth_mode;
-    const nextAuth: AuthMode = currentAuth === 'tenant_access_token' || currentAuth === 'user_access_token'
-      ? currentAuth
-      : 'internal_app';
     setEditingId(connector.connector_instance_id);
-    setOriginalAuthMode(nextAuth);
     setScopeMode(scope.mode);
     setSpaceId(scope.spaceId);
-    setAdvancedScope(scope.advancedScope);
-    setAuthMode(nextAuth);
+    setAdvancedScope(scope.advanced);
+    setAuthMode(
+      connector.connection_profile?.auth_mode === 'tenant_access_token'
+        || connector.connection_profile?.auth_mode === 'user_access_token'
+        ? connector.connection_profile.auth_mode
+        : 'internal_app',
+    );
     setAppId('');
     setAppSecret('');
     setTenantToken('');
@@ -194,44 +185,43 @@ export function Materials() {
     setFormOpen(true);
   };
 
-  const resourceScope = (): string => {
-    if (scopeMode === 'all') return 'wiki-all-accessible';
-    if (scopeMode === 'space') return `wiki-space:${spaceId.trim()}`;
-    return advancedScope.trim();
-  };
-
   const profilePayload = (): ConfigureFeishuConnectorInput['connection_profile'] => {
-    const preserveExisting = Boolean(editingId && authMode === originalAuthMode);
     if (authMode === 'tenant_access_token') {
       return {
         auth_mode: authMode,
-        tenant_access_token: tenantToken.trim() || (preserveExisting ? MASKED_SECRET : undefined),
+        tenant_access_token: tenantToken.trim() || (editingId ? MASKED_SECRET : undefined),
       };
     }
     if (authMode === 'user_access_token') {
       return {
         auth_mode: authMode,
-        user_access_token: userToken.trim() || (preserveExisting ? MASKED_SECRET : undefined),
+        user_access_token: userToken.trim() || (editingId ? MASKED_SECRET : undefined),
       };
     }
     return {
       auth_mode: authMode,
-      app_id: appId.trim() || (preserveExisting ? MASKED_SECRET : undefined),
-      app_secret: appSecret.trim() || (preserveExisting ? MASKED_SECRET : undefined),
+      app_id: appId.trim() || (editingId ? MASKED_SECRET : undefined),
+      app_secret: appSecret.trim() || (editingId ? MASKED_SECRET : undefined),
     };
   };
 
   const credentialsReady = (): boolean => {
-    if (editingId && authMode === originalAuthMode) return true;
-    if (authMode === 'internal_app') return Boolean(appId.trim() && appSecret.trim());
+    if (editingId) return true;
     if (authMode === 'tenant_access_token') return Boolean(tenantToken.trim());
-    return Boolean(userToken.trim());
+    if (authMode === 'user_access_token') return Boolean(userToken.trim());
+    return Boolean(appId.trim() && appSecret.trim());
+  };
+
+  const resourceScope = (): string => {
+    if (scopeMode === 'all') return 'wiki-all-accessible';
+    if (scopeMode === 'space') return spaceId.trim() ? `wiki-space:${spaceId.trim()}` : '';
+    return advancedScope.trim();
   };
 
   const saveAndStart = async () => {
     if (!project) return;
     const scope = resourceScope();
-    if (!scope || (scopeMode === 'space' && !spaceId.trim())) {
+    if (!scope) {
       toast.show('请选择同步全部知识库，或填写一个飞书知识空间 ID。', 'warning');
       return;
     }
@@ -242,7 +232,7 @@ export function Materials() {
 
     const connectorId = editingId || DEFAULT_CONNECTOR_ID;
     setSaving(true);
-    setOperation((current) => ({ ...current, [connectorId]: '正在连接飞书并同步资料…' }));
+    setOperation((current) => ({ ...current, [connectorId]: '正在连接飞书并读取资料…' }));
     try {
       const result = await connectFeishuKnowledge(project, {
         connector_instance_id: connectorId,
@@ -255,7 +245,7 @@ export function Materials() {
       setFormOpen(false);
       resetForm();
       await refresh();
-      toast.show(`飞书资料已连接，并同步 ${count} 份资料。后续可点击“立即更新”，版本与异常恢复由系统处理。`, 'success');
+      toast.show(`飞书资料已连接，并读取 ${count} 份资料。后续由系统自动更新。`, 'success');
     } catch (error: unknown) {
       await refresh();
       toast.show(error instanceof Error ? error.message : '飞书资料连接未完成，请重试。', 'danger');
@@ -265,17 +255,17 @@ export function Materials() {
     }
   };
 
-  const updateNow = async (connector: KnowledgeConnectorRecord) => {
+  const checkNow = async (connector: KnowledgeConnectorRecord) => {
     const id = connector.connector_instance_id;
-    setOperation((current) => ({ ...current, [id]: '正在读取飞书最新资料…' }));
+    setOperation((current) => ({ ...current, [id]: '正在检查飞书最新资料…' }));
     try {
       const result = await refreshKnowledgeConnector(project, id);
       const count = result.materialized_resource_count ?? result.success_count ?? 0;
       await refresh();
-      toast.show(`资料已更新，共处理 ${count} 份在线资料。`, 'success');
+      toast.show(`检查完成，共处理 ${count} 份在线资料。`, 'success');
     } catch (error: unknown) {
       await refresh();
-      toast.show(error instanceof Error ? error.message : '资料更新未完成，请重试。', 'danger');
+      toast.show(error instanceof Error ? error.message : '检查未完成，系统仍会自动重试。', 'danger');
     } finally {
       setOperation((current) => ({ ...current, [id]: '' }));
     }
@@ -318,7 +308,7 @@ export function Materials() {
         <div>
           <span className="panel-kicker">Enterprise Materials</span>
           <h1>企业资料</h1>
-          <p>连接一次，系统自动读取、识别和去重；后续只需点击“立即更新”。</p>
+          <p>连接一次，系统自动读取、识别、去重、更新和恢复；日常无需维护。</p>
           <div className="page-summary-strip">
             <span className="summary-pill strong">在线来源 {connectors.length}</span>
             <span className="summary-pill">在线资料 {onlineSources.length}</span>
@@ -338,9 +328,9 @@ export function Materials() {
       <section className="materials-primary-card">
         <div className="materials-section-heading">
           <div>
-            <span className="settings-hero-kicker">主要采集方式</span>
+            <span className="settings-hero-kicker">自动维护</span>
             <h2>飞书在线资料</h2>
-            <p>用户只负责授权和选择范围，资料解析、版本维护和异常恢复由系统处理。</p>
+            <p>系统定期检查更新，遇到临时故障自动重试；只有授权失效时才需要你处理。</p>
           </div>
           <button className="btn btn-secondary" type="button" onClick={() => void refresh()} disabled={loading}>
             {loading ? '刷新中…' : '刷新状态'}
@@ -350,16 +340,18 @@ export function Materials() {
         {connectors.length === 0 ? (
           <div className="materials-empty-state">
             <strong>尚未连接飞书资料</strong>
-            <span>填写 App ID 与 App Secret，保存后系统会自动验证并完成首次同步。</span>
-            <button className="btn btn-primary" type="button" onClick={openCreateForm}>
-              开始连接
-            </button>
+            <span>填写授权并选择范围，系统会自动验证并完成首次读取。</span>
+            <button className="btn btn-primary" type="button" onClick={openCreateForm}>开始连接</button>
           </div>
         ) : (
           <div className="materials-connector-grid">
             {connectors.map((connector) => {
               const busy = Boolean(operation[connector.connector_instance_id]);
-              const running = Boolean(connector.active_sync_epoch_id);
+              const running = Boolean(connector.active_sync_epoch_id) || connector.auto_sync?.state === 'running';
+              const needsHelp = Boolean(
+                connector.auto_sync?.maintenance_required_by_user
+                || !connector.connection_profile?.credentials_configured,
+              );
               return (
                 <article className="materials-connector-card" key={connector.connector_instance_id}>
                   <div className="materials-connector-top">
@@ -367,7 +359,9 @@ export function Materials() {
                       <span className="materials-source-kind">飞书知识库</span>
                       <h3>{connector.display_name || DEFAULT_CONNECTOR_NAME}</h3>
                       <span className="materials-simple-scope">
-                        {connector.resource_scope === 'wiki-all-accessible' ? '同步全部可访问知识库' : '同步指定资料范围'}
+                        {connector.resource_scope === 'wiki-all-accessible'
+                          ? '读取全部可访问知识库'
+                          : '读取指定资料范围'}
                       </span>
                     </div>
                     <span className={`status status-${connectorTone(connector)}`}>
@@ -377,43 +371,54 @@ export function Materials() {
 
                   <div className="materials-connector-meta">
                     <div>
-                      <span>授权状态</span>
-                      <strong>{connector.connection_profile?.credentials_configured ? '已安全保存' : '需要重新授权'}</strong>
+                      <span>自动更新</span>
+                      <strong>{connector.auto_sync?.enabled === false ? '已关闭' : '已开启'}</strong>
                     </div>
                     <div>
-                      <span>最近更新</span>
+                      <span>最近完成</span>
                       <strong>{formatTime(connector.last_successful_sync_at_utc)}</strong>
                     </div>
                     <div>
-                      <span>版本与恢复</span>
-                      <strong>自动处理</strong>
+                      <span>异常处理</span>
+                      <strong>{needsHelp ? '需要重新授权' : '系统自动恢复'}</strong>
                     </div>
                   </div>
 
-                  {(operation[connector.connector_instance_id] || running) && (
+                  {(operation[connector.connector_instance_id] || running || connector.auto_sync?.state === 'retrying') && (
                     <div className="materials-operation-note">
-                      {operation[connector.connector_instance_id] || '系统正在更新资料，请稍候…'}
+                      {operation[connector.connector_instance_id]
+                        || connector.auto_sync?.message
+                        || '系统正在自动更新资料…'}
                     </div>
                   )}
 
-                  <div className="materials-card-actions">
-                    <button
-                      className="btn btn-secondary"
-                      type="button"
-                      onClick={() => openEditForm(connector)}
-                      disabled={busy || running}
-                    >
-                      重新授权
-                    </button>
-                    <button
-                      className="btn btn-primary"
-                      type="button"
-                      onClick={() => void updateNow(connector)}
-                      disabled={busy || running || connector.status !== 'ACTIVE'}
-                    >
-                      {running ? '正在更新' : '立即更新'}
-                    </button>
-                  </div>
+                  {needsHelp && (
+                    <div className="materials-card-actions">
+                      <button
+                        className="btn btn-primary"
+                        type="button"
+                        onClick={() => openEditForm(connector)}
+                        disabled={busy || running}
+                      >
+                        重新授权
+                      </button>
+                    </div>
+                  )}
+
+                  <details className="materials-advanced">
+                    <summary>遇到问题时</summary>
+                    <div className="materials-advanced-field">
+                      <p>系统会自动更新和重试。只有需要立即确认最新资料时，才手动检查一次。</p>
+                      <button
+                        className="btn btn-secondary"
+                        type="button"
+                        onClick={() => void checkNow(connector)}
+                        disabled={busy || running || connector.status !== 'ACTIVE'}
+                      >
+                        现在检查一次
+                      </button>
+                    </div>
+                  </details>
                 </article>
               );
             })}
@@ -427,7 +432,7 @@ export function Materials() {
             <div>
               <span className="settings-hero-kicker">两步完成</span>
               <h2>{editingId ? '重新授权飞书' : '连接飞书资料'}</h2>
-              <p>保存后系统会自动验证连接并同步资料，不需要再做其他配置。</p>
+              <p>保存后自动验证并读取资料，后续更新和重试由系统处理。</p>
             </div>
             <button className="btn btn-ghost" type="button" onClick={() => setFormOpen(false)}>关闭</button>
           </div>
@@ -436,36 +441,35 @@ export function Materials() {
             <span className="materials-step-number">1</span>
             <div>
               <h3>填写飞书授权</h3>
-              <p>推荐使用企业自建应用。密钥只加密保存，不会在页面回显。</p>
+              <p>推荐使用企业自建应用，只需要 App ID 与 App Secret。</p>
             </div>
           </div>
 
-          {authMode === 'internal_app' ? (
-            <div className="materials-form-grid">
-              <label className="form-group">
-                <span className="form-label">App ID</span>
-                <input
-                  className="form-input"
-                  value={appId}
-                  onChange={(event: ChangeEvent<HTMLInputElement>) => setAppId(event.target.value)}
-                  placeholder={editingId ? '留空保持当前值' : 'cli_xxx'}
-                  autoComplete="off"
-                />
-              </label>
-              <label className="form-group">
-                <span className="form-label">App Secret</span>
-                <input
-                  className="form-input"
-                  type="password"
-                  value={appSecret}
-                  onChange={(event: ChangeEvent<HTMLInputElement>) => setAppSecret(event.target.value)}
-                  placeholder={editingId ? '留空保持当前值' : '输入应用密钥'}
-                  autoComplete="new-password"
-                />
-              </label>
-            </div>
-          ) : (
-            <div className="materials-form-grid">
+          <div className="materials-form-grid">
+            {authMode === 'internal_app' ? (
+              <>
+                <label className="form-group">
+                  <span className="form-label">App ID</span>
+                  <input
+                    className="form-input"
+                    value={appId}
+                    onChange={(event: ChangeEvent<HTMLInputElement>) => setAppId(event.target.value)}
+                    placeholder={editingId ? '留空保持当前值' : 'cli_xxx'}
+                  />
+                </label>
+                <label className="form-group">
+                  <span className="form-label">App Secret</span>
+                  <input
+                    className="form-input"
+                    type="password"
+                    value={appSecret}
+                    onChange={(event: ChangeEvent<HTMLInputElement>) => setAppSecret(event.target.value)}
+                    placeholder={editingId ? '留空保持当前值' : '输入应用密钥'}
+                    autoComplete="new-password"
+                  />
+                </label>
+              </>
+            ) : (
               <label className="form-group materials-form-wide">
                 <span className="form-label">
                   {authMode === 'tenant_access_token' ? 'Tenant Access Token' : 'User Access Token'}
@@ -483,13 +487,12 @@ export function Materials() {
                   autoComplete="new-password"
                 />
               </label>
-            </div>
-          )}
+            )}
+          </div>
 
           <details className="materials-advanced">
             <summary>其他授权方式</summary>
-            <label className="form-group materials-advanced-field">
-              <span className="form-label">授权方式</span>
+            <div className="materials-advanced-field">
               <select
                 className="form-input"
                 value={authMode}
@@ -499,14 +502,14 @@ export function Materials() {
                 <option value="tenant_access_token">Tenant Access Token</option>
                 <option value="user_access_token">User Access Token</option>
               </select>
-            </label>
+            </div>
           </details>
 
           <div className="materials-step">
             <span className="materials-step-number">2</span>
             <div>
               <h3>选择资料范围</h3>
-              <p>大多数企业直接选择全部知识库；需要隔离时再指定空间。</p>
+              <p>默认读取应用有权限访问的全部知识库。</p>
             </div>
           </div>
 
@@ -517,7 +520,7 @@ export function Materials() {
               onClick={() => setScopeMode('all')}
             >
               <strong>全部可访问知识库</strong>
-              <span>推荐，后续新增资料也会自动纳入。</span>
+              <span>推荐。权限变化后系统会自动按最新范围读取。</span>
             </button>
             <button
               className={`materials-choice${scopeMode === 'space' ? ' active' : ''}`}
@@ -525,7 +528,7 @@ export function Materials() {
               onClick={() => setScopeMode('space')}
             >
               <strong>指定一个知识空间</strong>
-              <span>只同步一个明确的飞书知识空间。</span>
+              <span>仅读取一个明确的飞书知识空间。</span>
             </button>
           </div>
 
@@ -533,18 +536,18 @@ export function Materials() {
             <label className="form-group materials-scope-field">
               <span className="form-label">知识空间 ID</span>
               <input
-                className="form-input form-input-mono"
+                className="form-input"
                 value={spaceId}
                 onChange={(event: ChangeEvent<HTMLInputElement>) => setSpaceId(event.target.value)}
-                placeholder="填写飞书知识空间 ID"
+                placeholder="space_id"
               />
             </label>
           )}
 
-          <details className="materials-advanced" open={scopeMode === 'advanced'}>
+          <details className="materials-advanced">
             <summary>高级资料范围</summary>
             <div className="materials-advanced-field">
-              <p>仅用于多个空间或指定节点。普通使用无需填写。</p>
+              <p>仅用于多空间或指定节点场景，普通接入无需填写。</p>
               <input
                 className="form-input form-input-mono"
                 value={advancedScope}
@@ -559,11 +562,9 @@ export function Materials() {
           </details>
 
           <div className="materials-form-actions">
-            <button className="btn btn-secondary" type="button" onClick={() => setFormOpen(false)}>
-              取消
-            </button>
+            <button className="btn btn-secondary" type="button" onClick={() => setFormOpen(false)}>取消</button>
             <button className="btn btn-primary" type="button" onClick={() => void saveAndStart()} disabled={saving}>
-              {saving ? '正在连接并同步…' : editingId ? '保存并更新资料' : '保存并开始同步'}
+              {saving ? '正在连接并读取…' : editingId ? '保存并重新读取' : '保存并开始读取'}
             </button>
           </div>
         </section>
@@ -572,28 +573,27 @@ export function Materials() {
       <section className="materials-secondary-card">
         <div className="materials-section-heading">
           <div>
-            <span className="settings-hero-kicker">补充采集方式</span>
-            <h2>上传补充资料</h2>
-            <p>仅用于飞书中没有的 PRD、接口文档、历史缺陷、数据库说明或设计稿。</p>
+            <span className="settings-hero-kicker">补充方式</span>
+            <h2>离线资料上传</h2>
+            <p>用于补充飞书里没有的 PRD、接口文档、历史缺陷、数据库说明或设计稿。</p>
           </div>
         </div>
         <div className="materials-upload-row">
-          <select className="form-input" value={uploadType} onChange={(event: ChangeEvent<HTMLSelectElement>) => setUploadType(event.target.value)}>
+          <select className="form-input" value={uploadType} onChange={(event) => setUploadType(event.target.value)}>
             <option value="prd">需求 / PRD</option>
             <option value="openapi">OpenAPI / 接口文档</option>
             <option value="historical_bug">历史缺陷</option>
             <option value="database_schema">数据库结构</option>
             <option value="ui_ux">原型 / 设计稿</option>
-            <option value="other_document">其他资料</option>
           </select>
           <input
             id="materials-upload-file"
             className="form-input"
             type="file"
-            onChange={(event: ChangeEvent<HTMLInputElement>) => setUploadFile(event.target.files?.[0] || null)}
+            onChange={(event) => setUploadFile(event.target.files?.[0] || null)}
           />
           <button className="btn btn-secondary" type="button" onClick={() => void uploadSupplement()} disabled={uploading}>
-            {uploading ? '上传中…' : '上传补充'}
+            {uploading ? '上传中…' : '补充上传'}
           </button>
         </div>
       </section>
@@ -601,30 +601,26 @@ export function Materials() {
       <section className="materials-inventory-card">
         <div className="materials-section-heading">
           <div>
-            <span className="settings-hero-kicker">统一来源清单</span>
-            <h2>已纳入理解的资料</h2>
-            <p>在线与上传资料会合并为统一企业知识库，系统自动去重并保留来源证据。</p>
+            <span className="settings-hero-kicker">统一企业知识库</span>
+            <h2>已接入资料</h2>
+            <p>飞书资料和上传文件统一进入同一企业知识主链。</p>
           </div>
         </div>
         {sources.length === 0 ? (
-          <div className="materials-empty-state compact">尚无企业资料。</div>
+          <div className="materials-empty-state compact">尚无资料。</div>
         ) : (
           <div className="materials-source-list">
             {sources.map((source) => {
               const online = source.source_ref.startsWith('connector://');
               return (
                 <article className="materials-source-row" key={source.source_id || source.source_ref}>
-                  <span className={`materials-source-icon ${online ? 'online' : 'upload'}`}>
-                    {online ? '云' : '件'}
-                  </span>
+                  <span className={`materials-source-icon ${online ? 'online' : 'upload'}`}>{online ? '云' : '文'}</span>
                   <div className="materials-source-copy">
-                    <strong>{source.original_name || source.source_ref || source.source_id}</strong>
-                    <span>{online ? '在线资料' : '上传补充'} · {source.source_type || '自动识别'}</span>
-                    <code>{source.source_ref || source.source_id}</code>
+                    <strong>{source.original_name || source.source_id || '企业资料'}</strong>
+                    <span>{online ? '飞书在线资料' : '离线补充资料'} · {source.source_type || '自动识别'}</span>
+                    <code>{source.source_ref}</code>
                   </div>
-                  <span className="status status-neutral">
-                    {source.version ? `版本 ${source.version}` : source.status}
-                  </span>
+                  <span className="status status-success">{source.status === 'active' ? '可用' : source.status}</span>
                 </article>
               );
             })}
