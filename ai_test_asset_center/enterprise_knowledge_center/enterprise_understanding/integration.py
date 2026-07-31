@@ -218,7 +218,7 @@ def enrich_asset_with_enterprise_understanding(
     *,
     parsed_sources: Iterable[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Attach document structure/context, reconcile conflicts, then compile cognition."""
+    """Attach source context, reconcile facts, derive rules, then compile cognition."""
     source_rows = list(parsed_sources or [])
     if parsed_sources is not None:
         from .._chinese_business_comprehension import build_chinese_first_comprehension
@@ -238,8 +238,17 @@ def enrich_asset_with_enterprise_understanding(
         # formats that do not yet emit rich structure blocks.
         asset = apply_chinese_document_context(asset, source_rows)
         # Either context stage may promote previously pending facts. Re-run the
-        # existing conflict authority before promoted facts enter the model.
+        # existing conflict authority before any derived rule enters the model.
         asset = reconcile_chinese_business_fact_conflicts(asset)
+
+    # This is the only correct rule-entailment boundary: all technical declarations
+    # already exist, Chinese source spans are attached, and conflicts have been
+    # reconciled, but the Enterprise Understanding Model has not yet been frozen.
+    # The projection writes accepted candidates into the existing rule_library, which
+    # the existing Behavior IR compiler consumes as invariants.
+    from ..implicit_rule_projection import enrich_asset_with_implicit_rule_projection
+
+    asset = enrich_asset_with_implicit_rule_projection(asset)
 
     model = build_enterprise_understanding_model(asset)
     model = apply_minimum_understanding_closure(model, asset)
@@ -388,6 +397,10 @@ def enrich_asset_with_enterprise_understanding(
             "field_or_entity_inventory_alone_cannot_pass_understanding_gate": True,
             "document_context_resolves_before_understanding_model": parsed_sources is not None,
             "document_context_promotions_are_conflict_reconciled": parsed_sources is not None,
+            "implicit_rule_projection_runs_after_conflict_reconciliation": True,
+            "implicit_rule_projection_runs_before_understanding_model": True,
+            "implicit_rules_enter_existing_rule_library": True,
+            "implicit_rules_create_parallel_behavior_ir": False,
             "document_adapter_registry_enabled": parsed_sources is not None,
             "document_parsing_planner_enabled": parsed_sources is not None,
             "document_deferred_supplemental_planning_enabled": parsed_sources is not None,
