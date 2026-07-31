@@ -1,26 +1,28 @@
 """Public experiment execution facade.
 
-The existing implementation remains in ``experiment_executor_core``.  This
-module preserves the established public/re-export and monkeypatch surface while
-adapting one preflight boundary for process graphs: credential existence for an
-actor used only by graph nodes is validated by the graph target authority,
-which has the exact per-system runtime contract.  Actors used before graph
-scheduling (fixture, binding, control or state-precondition work) still pass the
-original single-target credential preflight.
+The existing implementation remains in ``experiment_executor_core``. This module preserves
+the established public/re-export and monkeypatch surface while adapting two execution
+boundaries: graph-only credentials remain owned by the graph target authority, and an actor
+with an account-qualified identity may never fall back to another token that merely shares
+its role.
 
-No credential value is invented for execution.  The compatibility marker is
-used only in a private copy passed to the structural preflight; the core retains
-and transports the caller's original token map.  The graph runtime then resolves
-every target-specific credential before any graph request reaches transport.
+No credential value is invented for execution. Compatibility markers exist only in a private
+copy passed to structural preflight; the core retains and transports the caller's original
+token map. The graph runtime resolves every target-specific credential before transport.
 """
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 from pathlib import Path
 from typing import Any
 
 from . import experiment_executor_core as _core
 from .experiment_runtime_support import (
+    _jwt_expired,
+    _parse_test_accounts_md,
+    _resolve_token as _original_resolve_token,
+    load_actor_tokens as _original_load_actor_tokens,
     preflight_experiment_executable as _original_preflight,
 )
 
@@ -94,27 +96,164 @@ def _pregraph_actor_refs(experiment: dict[str, Any]) -> set[str]:
     return refs
 
 
+def _test_account_rows(root: Path, project: str) -> list[dict[str, Any]]:
+    path = Path(root) / "platform_inputs" / str(project) / "test_accounts.json"
+    rows: list[dict[str, Any]] = []
+    if path.exists():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8") or "{}")
+        except (OSError, json.JSONDecodeError):
+            payload = {}
+        if isinstance(payload, dict):
+            rows = list(
+                payload.get("accounts")
+                or payload.get("actors")
+                or payload.get("users")
+                or []
+            )
+            if not rows:
+                rows = [
+                    {
+                        **(value if isinstance(value, dict) else {}),
+                        "account_ref": key,
+                    }
+                    for key, value in payload.items()
+                    if isinstance(value, dict)
+                    and key not in {"schema", "schema_version", "meta"}
+                ]
+        elif isinstance(payload, list):
+            rows = payload
+    if rows:
+        return [row for row in rows if isinstance(row, dict)]
+    return [dict(row) for row in _parse_test_accounts_md(root, project)]
+
+
+def _ambiguous_roles(root: Path, project: str) -> set[str]:
+    counts: dict[str, int] = {}
+    for row in _test_account_rows(root, project):
+        role = _text(row.get("role") or row.get("name") or row.get("id"))
+        status = _text(
+            row.get("status")
+            or row.get("account_status")
+            or row.get("state")
+            or "active"
+        ).upper()
+        if not role or status in {"DISABLED", "LOCKED", "INACTIVE", "REVOKED"}:
+            continue
+        counts[role] = counts.get(role, 0) + 1
+    return {role for role, count in counts.items() if count > 1}
+
+
+def _identity_safe_load_actor_tokens(
+    root: Path, project: str, *, base_url: str = ""
+) -> dict[str, str]:
+    """Load existing tokens but remove aliases shared by multiple active accounts."""
+    tokens = dict(
+        _original_load_actor_tokens(root, project, base_url=base_url)
+    )
+    for role in _ambiguous_roles(root, project):
+        for alias in (
+            role,
+            f"secret_ref:test_accounts:{role}",
+            f"secret_ref:context:{role}",
+            f"secret_ref:actor:{role}",
+        ):
+            tokens.pop(alias, None)
+    return tokens
+
+
+def _actor_secret(actor: dict[str, Any]) -> str:
+    return _text(
+        actor.get("credential_secret_ref")
+        or actor.get("secret_ref")
+        or actor.get("credential_ref")
+    )
+
+
+def _actor_requires_exact_secret(actor: dict[str, Any]) -> bool:
+    role = _text(actor.get("role"))
+    secret = _actor_secret(actor)
+    role_aliases = {
+        role,
+        f"secret_ref:test_accounts:{role}",
+        f"secret_ref:context:{role}",
+        f"secret_ref:actor:{role}",
+    }
+    has_account_coordinate = bool(
+        _text(
+            actor.get("account_ref")
+            or actor.get("account_id")
+            or actor.get("principal_ref")
+            or actor.get("principal_id")
+        )
+        or _dict(actor.get("identity_coordinates"))
+        or _dict(actor.get("credential_identity_coordinates"))
+        or _text(actor.get("identity_match_status")) == "EXACT"
+    )
+    return bool(has_account_coordinate or (secret and secret not in role_aliases))
+
+
+def _strict_resolve_token(actor: dict[str, Any], tokens: dict[str, str]) -> str:
+    """An account-qualified actor may use only its declared secret reference."""
+    role = _text(actor.get("role"))
+    if role.lower() in {"anonymous", "public"}:
+        return ""
+    secret = _actor_secret(actor)
+    if _actor_requires_exact_secret(actor):
+        return tokens.get(secret) or ""
+    return _original_resolve_token(actor, tokens)
+
+
+def _exact_secret_preflight(
+    experiment: dict[str, Any],
+    *,
+    behavior_ir: dict[str, Any],
+    actor_tokens: dict[str, str],
+    deferred_actor_refs: set[str],
+) -> tuple[bool, str, str]:
+    actors = {
+        _text(row.get("id") or row.get("actor_id")): row
+        for row in _list(_dict(behavior_ir).get("actors"))
+        if isinstance(row, dict)
+        and _text(row.get("id") or row.get("actor_id"))
+    }
+    required_refs = _pregraph_actor_refs(experiment)
+    for key in ("control_plan", "treatment_plan"):
+        for step in _list(_dict(experiment).get(key)):
+            if isinstance(step, dict):
+                required_refs.update(_actor_refs(step))
+    for actor_ref in sorted(required_refs - deferred_actor_refs):
+        actor = _dict(actors.get(actor_ref))
+        if not actor or not _actor_requires_exact_secret(actor):
+            continue
+        secret = _actor_secret(actor)
+        if not secret or secret not in actor_tokens:
+            return (
+                False,
+                "BLOCKED_MISSING_ACTOR",
+                f"exact_credential_unresolved:{actor_ref}",
+            )
+    return True, "", ""
+
+
 def _graph_aware_preflight(
     experiment: dict[str, Any],
     *,
     behavior_ir: dict[str, Any],
     actor_tokens: dict[str, str],
 ) -> tuple[bool, str, str]:
-    """Run original structural preflight, deferring graph-only token lookup.
-
-    The sentinel exists only in copied preflight inputs.  It can never reach the
-    transport path because ``experiment_executor_core.execute_one_experiment``
-    retains the caller's original ``actor_tokens`` object for all later phases.
-    """
+    """Run structural preflight with graph deferral and exact-account enforcement."""
     exp = _dict(experiment)
     graph_refs = _graph_actor_refs(exp)
-    if not graph_refs:
-        return _original_preflight(
-            exp,
-            behavior_ir=behavior_ir,
-            actor_tokens=actor_tokens,
-        )
     deferrable = graph_refs - _pregraph_actor_refs(exp)
+    exact_ok, exact_reason, exact_detail = _exact_secret_preflight(
+        exp,
+        behavior_ir=behavior_ir,
+        actor_tokens=actor_tokens,
+        deferred_actor_refs=deferrable,
+    )
+    if not exact_ok:
+        return exact_ok, exact_reason, exact_detail
     if not deferrable:
         return _original_preflight(
             exp,
@@ -132,9 +271,7 @@ def _graph_aware_preflight(
         actor_ref = _text(actor.get("id") or actor.get("actor_id"))
         role = _text(actor.get("role"))
         if actor_ref in deferrable and role.lower() not in {"anonymous", "public"}:
-            secret = _text(
-                actor.get("credential_secret_ref") or actor.get("secret_ref")
-            )
+            secret = _actor_secret(actor)
             if not secret:
                 secret = f"graph_target_preflight:{actor_ref}"
                 actor["credential_secret_ref"] = secret
@@ -151,22 +288,25 @@ def _graph_aware_preflight(
     )
 
 
-# The copied core resolves this module global at call time.  Only its private
-# preflight lookup is replaced; the public symbol below remains the original
-# runtime-support function for compatibility and architecture identity tests.
 _core.preflight_experiment_executable = _graph_aware_preflight
+_core._resolve_token = _strict_resolve_token
+_core.load_actor_tokens = _identity_safe_load_actor_tokens
 _execute_one_core = _core.execute_one_experiment
 
 for _name in dir(_core):
     if not _name.startswith("__"):
         globals()[_name] = getattr(_core, _name)
 
-# Preserve public identity required by the established extraction contract.
+# Preserve the established public structural preflight identity. The private core
+# path remains graph-aware and account-strict.
 preflight_experiment_executable = _original_preflight
+load_actor_tokens = _identity_safe_load_actor_tokens
+_resolve_token = _strict_resolve_token
 
 _HOOK_NAMES = (
     "_http_request",
     "_run_http_step",
+    "_resolve_token",
     "execute_governed_control_write",
     "sandbox_write_allowed",
     "materialize_experiment_fixtures",
@@ -186,9 +326,8 @@ def _sync_core_hooks() -> None:
         value = globals().get(name)
         if value is not None and hasattr(_core, name):
             setattr(_core, name, value)
-    # Never replace the graph-aware private preflight with the public legacy
-    # symbol during hook synchronization.
     _core.preflight_experiment_executable = _graph_aware_preflight
+    _core._resolve_token = _strict_resolve_token
 
 
 def execute_one_experiment(
@@ -203,7 +342,7 @@ def execute_one_experiment(
     execution_id: str,
     actor_tokens: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Execute through the unchanged core with graph-aware preflight routing."""
+    """Execute through the unchanged core with governed credential routing."""
     _sync_core_hooks()
     return _execute_one_core(
         experiment,
@@ -228,5 +367,7 @@ __all__ = sorted(
         "_name",
         "_execute_one_core",
         "_original_preflight",
+        "_original_resolve_token",
+        "_original_load_actor_tokens",
     }
 )
