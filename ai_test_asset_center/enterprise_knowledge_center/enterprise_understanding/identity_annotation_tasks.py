@@ -47,6 +47,26 @@ def _bounded(value: Any, limit: int = 800) -> str:
     return raw if len(raw) <= limit else raw[:limit] + "…"
 
 
+def _progress(total: int, completed: int, *, status: str = "") -> dict[str, Any]:
+    bounded_total = max(0, int(total))
+    bounded_completed = max(0, min(int(completed), bounded_total))
+    return {
+        "total_task_count": bounded_total,
+        "completed_task_count": bounded_completed,
+        "remaining_task_count": bounded_total - bounded_completed,
+        "completion_rate": (
+            round(bounded_completed / bounded_total, 6) if bounded_total else 1.0
+        ),
+        "status": status or (
+            "COMPLETE"
+            if bounded_completed == bounded_total
+            else "IN_PROGRESS"
+            if bounded_completed
+            else "NOT_STARTED"
+        ),
+    }
+
+
 def _context_rows(mention: dict[str, Any], *, maximum: int = 3) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
@@ -153,6 +173,7 @@ def build_identity_annotation_task_package(
                 "task_count": len(rows),
                 "task_refs": [row["task_id"] for row in rows],
                 "mention_refs": [row["mention_ref"] for row in rows],
+                "progress": _progress(len(rows), 0),
             }
         )
 
@@ -169,6 +190,7 @@ def build_identity_annotation_task_package(
         "annotation_scope": ANNOTATION_SCOPE,
         "generated_from_product_output": False,
         "annotator": {"name": "", "role": "ANNOTATOR"},
+        "progress": _progress(len(tasks), 0),
         "annotations": [
             {
                 "mention_ref": row["mention_ref"],
@@ -187,6 +209,7 @@ def build_identity_annotation_task_package(
         "task_count": len(tasks),
         "batch_size": size,
         "batch_count": len(batches),
+        "progress": _progress(len(tasks), 0),
         "tasks": tasks,
         "batches": batches,
         "submission_template": submission_template,
@@ -238,6 +261,7 @@ def _validate_submission(
         if isinstance(row, dict) and text(row.get("mention_ref"))
     }
     assignments: dict[str, str] = {}
+    seen_refs: set[str] = set()
     duplicate_refs: list[str] = []
     incomplete_refs: list[str] = []
     for raw in as_list(submission.get("annotations")):
@@ -246,9 +270,10 @@ def _validate_submission(
         mention_ref = text(raw.get("mention_ref"))
         if not mention_ref:
             continue
-        if mention_ref in assignments:
+        if mention_ref in seen_refs:
             duplicate_refs.append(mention_ref)
             continue
+        seen_refs.add(mention_ref)
         status = text(raw.get("annotation_status") or "CONFIRMED").upper()
         cluster_ref = text(raw.get("annotation_cluster_ref") or raw.get("cluster_ref"))
         if status != "CONFIRMED" or not cluster_ref:
@@ -257,8 +282,8 @@ def _validate_submission(
         assignments[mention_ref] = cluster_ref
     if duplicate_refs:
         raise ValueError("identity_annotation_submission_duplicate_mentions")
-    unknown = sorted(set(assignments) - expected)
-    missing = sorted(expected - set(assignments))
+    unknown = sorted(seen_refs - expected)
+    missing = sorted(expected - seen_refs)
     if unknown:
         raise ValueError("identity_annotation_submission_unknown_mentions")
     if missing or incomplete_refs:
@@ -362,16 +387,23 @@ def compile_identity_annotation_submissions(
     """Compile one or two blind submissions, or return an adjudication queue."""
     if text(package.get("schema")) != TASK_PACKAGE_SCHEMA:
         raise ValueError("identity_annotation_task_package_schema_invalid")
+    if adjudication_submission and not secondary_submission:
+        raise ValueError("identity_adjudication_requires_secondary_submission")
     primary, primary_annotator = _validate_submission(package, primary_submission)
+    if primary_annotator["role"] == "ADJUDICATOR":
+        raise ValueError("identity_primary_annotator_role_invalid")
     annotators = [primary_annotator]
     disagreements: list[dict[str, Any]] = []
     selected = primary
     review_status = "SINGLE_ANNOTATOR"
+    total = len(primary)
 
     if secondary_submission:
         secondary, secondary_annotator = _validate_submission(
             package, secondary_submission
         )
+        if secondary_annotator["role"] == "ADJUDICATOR":
+            raise ValueError("identity_secondary_annotator_role_invalid")
         if secondary_annotator["name"].casefold() == primary_annotator["name"].casefold():
             raise ValueError("identity_double_blind_annotators_must_differ")
         annotators.append(secondary_annotator)
@@ -385,6 +417,7 @@ def compile_identity_annotation_submissions(
                 "annotation_scope": ANNOTATION_SCOPE,
                 "review_status": "DOUBLE_BLIND_DISAGREED",
                 "annotators": annotators,
+                "progress": _progress(total, total, status="AWAITING_ADJUDICATION"),
                 "disagreement_count": len(disagreements),
                 "disagreements": disagreements,
                 "ground_truth": {},
@@ -402,6 +435,8 @@ def compile_identity_annotation_submissions(
             annotators.append(adjudicator)
             review_status = "ADJUDICATED"
         else:
+            if adjudication_submission:
+                raise ValueError("identity_adjudication_not_required")
             review_status = "DOUBLE_BLIND_AGREED"
 
     ground_truth = _ground_truth(
@@ -419,6 +454,7 @@ def compile_identity_annotation_submissions(
         "annotation_scope": ANNOTATION_SCOPE,
         "review_status": review_status,
         "annotators": annotators,
+        "progress": _progress(total, total),
         "annotated_mention_count": len(selected),
         "cluster_count": len(as_list(ground_truth.get("clusters"))),
         "disagreement_count": len(disagreements),
