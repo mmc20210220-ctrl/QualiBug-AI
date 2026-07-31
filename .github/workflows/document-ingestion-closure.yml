@@ -19,6 +19,7 @@ on:
       - "tests/test_source_registry_lifecycle.py"
       - "tests/test_source_occurrence_*.py"
       - "tests/test_enterprise_understanding_*.py"
+      - "tests/test_implicit_rule_*.py"
       - "tests/test_api_artifact_document_adapter.py"
       - "tests/test_openapi_schema_projection.py"
       - "tests/test_tabular_semantics_ingestion_bridge.py"
@@ -91,4 +92,5 @@ jobs:
             tests/test_enterprise_understanding_structure_first_facts.py \
             tests/test_enterprise_understanding_fact_slots.py \
             tests/test_enterprise_understanding_fact_probe_policy.py \
+            tests/test_implicit_rule_*.py \
             tests/test_source_occurrence_*.py
