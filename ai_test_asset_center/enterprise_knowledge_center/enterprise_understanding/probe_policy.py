@@ -8,7 +8,7 @@ from .schema import as_dict
 
 
 def _apply_implicit_rule_governance(asset: dict[str, Any]) -> None:
-    """Close source/decision lifecycle before any final Probe admission decision."""
+    """Close source/decision lifecycle before final Probe compilation/persistence."""
     from ..implicit_rule_governance import (
         enrich_asset_with_governed_implicit_rule_projection,
     )
@@ -23,11 +23,6 @@ def _apply_implicit_rule_governance(asset: dict[str, Any]) -> None:
 
 def probe_generation_block_reason(asset: dict[str, Any]) -> str:
     """Return the first closed formal gate, or empty text when admission passes."""
-    # The final admission boundary is also the final implicit-rule governance boundary.
-    # It reuses the existing projector, removes stale/rejected rules from the active
-    # library and preserves their history before the asset is persisted or compiled.
-    _apply_implicit_rule_governance(asset)
-
     # These receipts are mandatory in the formal composition root. Compatibility
     # unit assets and explicitly migrated legacy assets may predate them; when a
     # receipt is present its failure is authoritative and can never be bypassed.
@@ -79,7 +74,11 @@ def build_gated_probes(
     *,
     compiler: Callable[[dict[str, Any], int], list[dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Compile Probes only after gates and observer identities close."""
+    """Govern the final asset, then compile Probes only after all gates close."""
+    # This runs before the zero-budget return so a build that intentionally emits no
+    # Probes still persists source-version lifecycle and authority decisions.
+    _apply_implicit_rule_governance(asset)
+
     limit = max(0, int(max_count))
     if limit == 0 or not probe_generation_allowed(asset):
         return []
