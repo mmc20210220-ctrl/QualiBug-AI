@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { getKnowledgeAsset, ingestKnowledge } from '../api/client';
 import {
+  abortKnowledgeConnector,
   configureFeishuConnector,
   listKnowledgeConnectors,
   syncKnowledgeConnector,
@@ -149,14 +150,14 @@ export function Materials() {
   };
 
   const openEditForm = (connector: KnowledgeConnectorRecord) => {
+    const configuredMode = connector.connection_profile?.auth_mode;
     setEditingId(connector.connector_instance_id);
     setConnectorId(connector.connector_instance_id);
     setDisplayName(connector.display_name || '飞书企业资料');
     setResourceScope(connector.resource_scope || 'wiki-all-accessible');
     setAuthMode(
-      connector.connection_profile?.auth_mode === 'tenant_access_token'
-        || connector.connection_profile?.auth_mode === 'user_access_token'
-        ? connector.connection_profile.auth_mode
+      configuredMode === 'tenant_access_token' || configuredMode === 'user_access_token'
+        ? configuredMode
         : 'internal_app',
     );
     setAppId('');
@@ -214,21 +215,29 @@ export function Materials() {
 
   const runOperation = async (
     connector: KnowledgeConnectorRecord,
-    action: 'test' | 'sync',
+    action: 'test' | 'sync' | 'abort',
   ) => {
     const id = connector.connector_instance_id;
-    setOperation((current) => ({ ...current, [id]: action === 'test' ? '正在验证连接…' : '正在同步资料…' }));
+    const message = action === 'test'
+      ? '正在验证连接…'
+      : action === 'sync'
+        ? '正在同步资料…'
+        : '正在中止同步…';
+    setOperation((current) => ({ ...current, [id]: message }));
     try {
       if (action === 'test') {
         await testKnowledgeConnector(project, id);
         toast.show(`${connector.display_name || id} 连接验证通过。`, 'success');
-      } else {
+      } else if (action === 'sync') {
         const result = await syncKnowledgeConnector(project, id, {
           deletion_policy: 'RETAIN',
           allow_raw_text_fallback: false,
         });
         const count = result.materialized_resource_count ?? result.success_count ?? 0;
         toast.show(`同步完成，已处理 ${count} 份在线资料。`, 'success');
+      } else {
+        await abortKnowledgeConnector(project, id, 'operator aborted from enterprise materials page');
+        toast.show(`${connector.display_name || id} 的遗留同步已中止。`, 'warning');
       }
       await refresh();
     } catch (error: unknown) {
@@ -311,6 +320,7 @@ export function Materials() {
             {connectors.map((connector) => {
               const tone = connectorTone(connector);
               const busy = Boolean(operation[connector.connector_instance_id]);
+              const running = Boolean(connector.active_sync_epoch_id);
               return (
                 <article className="materials-connector-card" key={connector.connector_instance_id}>
                   <div className="materials-connector-top">
@@ -320,7 +330,7 @@ export function Materials() {
                       <code>{connector.resource_scope || '未配置资料范围'}</code>
                     </div>
                     <span className={`status status-${tone}`}>
-                      {connector.active_sync_epoch_id ? '同步中' : connector.status === 'ACTIVE' ? '已启用' : connector.status}
+                      {running ? '同步中' : connector.status === 'ACTIVE' ? '已启用' : connector.status}
                     </span>
                   </div>
                   <div className="materials-connector-meta">
@@ -332,9 +342,13 @@ export function Materials() {
                     <div className="materials-operation-note">{operation[connector.connector_instance_id]}</div>
                   )}
                   <div className="materials-card-actions">
-                    <button className="btn btn-secondary" type="button" onClick={() => openEditForm(connector)} disabled={busy}>编辑</button>
-                    <button className="btn btn-secondary" type="button" onClick={() => void runOperation(connector, 'test')} disabled={busy}>测试连接</button>
-                    <button className="btn btn-primary" type="button" onClick={() => void runOperation(connector, 'sync')} disabled={busy || connector.status !== 'ACTIVE'}>立即同步</button>
+                    <button className="btn btn-secondary" type="button" onClick={() => openEditForm(connector)} disabled={busy || running}>编辑</button>
+                    <button className="btn btn-secondary" type="button" onClick={() => void runOperation(connector, 'test')} disabled={busy || running}>测试连接</button>
+                    {running ? (
+                      <button className="btn btn-danger" type="button" onClick={() => void runOperation(connector, 'abort')} disabled={busy}>中止同步</button>
+                    ) : (
+                      <button className="btn btn-primary" type="button" onClick={() => void runOperation(connector, 'sync')} disabled={busy || connector.status !== 'ACTIVE'}>立即同步</button>
+                    )}
                   </div>
                 </article>
               );
