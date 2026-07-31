@@ -24,6 +24,7 @@ def _record(
     final: str = "EXECUTED",
     response: bool = True,
     mutation: bool | None = None,
+    operation_accepted: bool | None = None,
 ):
     return ledger.record_step_execution(
         step_id="step-1",
@@ -35,6 +36,7 @@ def _record(
         status_code=status,
         final_status=final,
         mutation_occurred=mutation,
+        operation_accepted=operation_accepted,
     )
 
 
@@ -52,6 +54,19 @@ def test_http_rejection_is_executed_not_accepted_or_completed() -> None:
     assert row["step_failed"] is True
     assert ledger.executed_step_ids() == ["step-1"]
     assert ledger.completed_step_ids() == []
+
+
+def test_explicit_rejection_is_not_overridden_by_http_success() -> None:
+    ledger = _ledger()
+    row = _record(ledger, status=200, operation_accepted=False)
+
+    assert row["response_received"] is True
+    assert row["operation_accepted"] is False
+    assert row["semantic_step_status"] == "OPERATION_REJECTED"
+    projection = project_step_sets(ledger)
+    assert projection["executed_step_ids"] == ["step-1"]
+    assert projection["accepted_step_ids"] == []
+    assert projection["completed_step_ids"] == []
 
 
 def test_accepted_without_observation_is_not_business_completion() -> None:
