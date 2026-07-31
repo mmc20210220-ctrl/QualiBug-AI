@@ -240,6 +240,7 @@ def synchronize_scoped_receipts_from_observations(
         (
             "process_step_oracle_receipts",
             "oracle_invocation_receipts",
+            "oracle_trace_receipts",
             "oracle_receipts",
             "assertion_receipts",
             "oracle_verdict",
