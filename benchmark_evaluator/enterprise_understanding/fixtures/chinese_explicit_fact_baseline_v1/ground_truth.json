@@ -3,10 +3,22 @@
   "project_id": "chinese_explicit_fact_baseline_v1",
   "scope_complete": false,
   "explicit_fact_scope_complete": true,
+  "explicit_fact_scope_locators": [
+    "source_rules.md#line=3;chars=17-48",
+    "source_rules.md#line=5;chars=51-91",
+    "source_rules.md#line=7;chars=94-115",
+    "source_rules.md#line=9;chars=118-139",
+    "source_rules.md#line=11;chars=142-157",
+    "source_rules.md#line=13;chars=160-173",
+    "source_rules.md#line=15;chars=176-192",
+    "source_rules.md#line=17;chars=195-213",
+    "source_rules.md#line=19;chars=216-248",
+    "source_rules.md#line=21;chars=251-287"
+  ],
   "annotation_authority": "manual_source_backed_fixture_review",
   "source_locator_authority": "generic_text_document_ir_exact_line_char",
   "minimum_profile": {
-    "business_rules": 12
+    "business_rules": 16
   },
   "business_objects": [],
   "actors": [],
@@ -180,6 +192,72 @@
         }
       ],
       "source_locators": ["source_rules.md#line=17;chars=195-213"],
+      "source_refs": ["benchmark_evaluator/enterprise_understanding/fixtures/chinese_explicit_fact_baseline_v1/source_rules.md"]
+    },
+    {
+      "ground_truth_id": "gt:relation:order-organization",
+      "annotation_status": "CONFIRMED",
+      "criticality": "P1",
+      "operation": "BELONGS_TO",
+      "object_refs": ["订单", "组织"],
+      "fact_type": "OBJECT_RELATION",
+      "source_locators": ["source_rules.md#line=19;chars=216-248"],
+      "source_refs": ["benchmark_evaluator/enterprise_understanding/fixtures/chinese_explicit_fact_baseline_v1/source_rules.md"]
+    },
+    {
+      "ground_truth_id": "gt:permission:withdraw-own-unapproved-order",
+      "annotation_status": "CONFIRMED",
+      "criticality": "P0",
+      "operation": "撤回",
+      "object_refs": ["订单"],
+      "fact_type": "PERMISSION_RULE",
+      "actor_refs": ["订单创建人"],
+      "modality": "MAY",
+      "condition_frame": {
+        "kind": "ALL",
+        "combinator": "AND",
+        "conditions": ["本人创建", "尚未审批"]
+      },
+      "source_locators": ["source_rules.md#line=19;chars=216-248"],
+      "source_refs": ["benchmark_evaluator/enterprise_understanding/fixtures/chinese_explicit_fact_baseline_v1/source_rules.md"]
+    },
+    {
+      "ground_truth_id": "gt:branch:allow-outbound-when-stock-sufficient",
+      "annotation_status": "CONFIRMED",
+      "criticality": "P0",
+      "operation": "发货",
+      "object_refs": ["订单"],
+      "fact_type": "PERMISSION_RULE",
+      "actor_refs": ["系统"],
+      "modality": "MAY",
+      "condition_frame": {
+        "kind": "IF_THEN_ELSE",
+        "combinator": "SINGLE_CONDITION",
+        "conditions": ["库存充足"],
+        "branch": "THEN",
+        "branch_index": 0
+      },
+      "source_locators": ["source_rules.md#line=21;chars=251-287"],
+      "source_refs": ["benchmark_evaluator/enterprise_understanding/fixtures/chinese_explicit_fact_baseline_v1/source_rules.md"]
+    },
+    {
+      "ground_truth_id": "gt:branch:reject-outbound-otherwise",
+      "annotation_status": "CONFIRMED",
+      "criticality": "P0",
+      "operation": "驳回",
+      "object_refs": ["订单"],
+      "fact_type": "BUSINESS_RULE",
+      "actor_refs": ["系统"],
+      "modality": "MUST",
+      "condition_frame": {
+        "kind": "IF_THEN_ELSE",
+        "combinator": "SINGLE_CONDITION",
+        "conditions": ["库存充足"],
+        "branch": "ELSE",
+        "branch_index": 1
+      },
+      "postconditions": ["保留订单状态不变"],
+      "source_locators": ["source_rules.md#line=21;chars=251-287"],
       "source_refs": ["benchmark_evaluator/enterprise_understanding/fixtures/chinese_explicit_fact_baseline_v1/source_rules.md"]
     }
   ],
