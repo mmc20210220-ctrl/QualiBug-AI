@@ -1,14 +1,15 @@
 """Deep audit of process-step receipts inside an execution receipt bundle.
 
-The ProcessStepLedger remains the fact authority. This module only verifies
-that the bundle contains the exact sealed receipt set emitted by that ledger:
-one ledger identity, a reconstructable ledger hash, valid per-step fact hashes,
-and balanced recorded/required/executed/accepted/completed/failed sets.
+The ProcessStepLedger remains the fact authority. This module verifies that the
+bundle contains the exact sealed receipt set emitted by that ledger: one ledger
+identity, a reconstructable ledger hash, valid per-step fact hashes, balanced
+step sets, and exact observation/oracle/cleanup receipt lineage.
 """
 from __future__ import annotations
 
 from typing import Any
 
+from .process_step_evidence_scope_audit import audit_process_step_evidence_scope
 from .process_step_execution import (
     PROCESS_STEP_FACT_MODEL_VERSION,
     PROCESS_STEP_LEDGER_SCHEMA,
@@ -147,7 +148,7 @@ def audit_process_step_receipt_bundle(
     receipts_by_id: dict[str, dict[str, Any]],
     process_step_receipt_ids: list[str],
 ) -> dict[str, Any]:
-    """Fail closed on mixed, stale, tampered, missing, or reclassified steps."""
+    """Fail closed on mixed, stale, tampered, unscoped, or incomplete steps."""
 
     grouped_receipt_ids = _ids(process_step_receipt_ids)
     discovered_receipt_ids = sorted(
@@ -299,6 +300,14 @@ def audit_process_step_receipt_bundle(
     ) <= actual_recorded:
         invariant_errors.append("required_not_subset_of_recorded")
 
+    evidence_scope_audit = audit_process_step_evidence_scope(
+        receipts_by_id=receipts_by_id,
+        process_step_payloads=payloads,
+    )
+    for field in _ids(evidence_scope_audit.get("set_mismatch_fields")):
+        if field not in set_mismatch_fields:
+            set_mismatch_fields.append(field)
+
     reconstructed_ledger_hash = ""
     declared_ledger_hash = (
         next(iter(ledger_hashes)) if ledger_hash_value_consistent else ""
@@ -392,6 +401,9 @@ def audit_process_step_receipt_bundle(
         or rejection_declaration_mismatch_receipt_ids
     ):
         validation_errors.append("process_step_declaration_mismatch")
+    for error in _ids(evidence_scope_audit.get("validation_errors")):
+        if error not in validation_errors:
+            validation_errors.append(error)
     if set_mismatch_fields or invariant_errors:
         validation_errors.append("process_step_set_mismatch")
 
@@ -406,7 +418,13 @@ def audit_process_step_receipt_bundle(
         "ledger_hash_consistent": ledger_hash_consistent,
         "fact_model_consistent": fact_model_consistent,
         "step_fact_hashes_valid": not step_fact_hash_mismatch_ids,
-        "step_sets_balanced": not set_mismatch_fields and not invariant_errors,
+        "step_sets_balanced": (
+            not set_mismatch_fields
+            and not invariant_errors
+            and evidence_scope_audit.get("complete") is True
+        ),
+        "step_evidence_scopes_complete": evidence_scope_audit.get("complete") is True,
+        "evidence_scope_audit": evidence_scope_audit,
         "grouped_process_step_receipt_ids": grouped_receipt_ids,
         "discovered_process_step_receipt_ids": discovered_receipt_ids,
         "process_step_receipt_ids": receipt_ids,
@@ -446,6 +464,24 @@ def audit_process_step_receipt_bundle(
         ),
         "rejection_declaration_mismatch_receipt_ids": sorted(
             set(rejection_declaration_mismatch_receipt_ids)
+        ),
+        "receipt_scope_broadcast_ids": _ids(
+            evidence_scope_audit.get("broadcast_receipt_ids")
+        ),
+        "unbound_evidence_receipt_ids": _ids(
+            evidence_scope_audit.get("unbound_receipt_ids")
+        ),
+        "missing_observation_step_ids": _ids(
+            evidence_scope_audit.get("missing_observation_step_ids")
+        ),
+        "missing_oracle_step_ids": _ids(
+            evidence_scope_audit.get("missing_oracle_step_ids")
+        ),
+        "missing_cleanup_execution_step_ids": _ids(
+            evidence_scope_audit.get("missing_cleanup_execution_step_ids")
+        ),
+        "missing_cleanup_verification_step_ids": _ids(
+            evidence_scope_audit.get("missing_cleanup_verification_step_ids")
         ),
         "set_mismatch_fields": sorted(set(set_mismatch_fields)),
         "invariant_errors": sorted(set(invariant_errors)),
