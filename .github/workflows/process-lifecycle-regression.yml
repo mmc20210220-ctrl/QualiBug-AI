@@ -11,6 +11,10 @@ on:
       - "ai_test_asset_center/experiment_lifecycle_runtime.py"
       - "ai_test_asset_center/experiment_plan_lifecycle_adapter.py"
       - "ai_test_asset_center/experiment_executor.py"
+      - "ai_test_asset_center/experiment_compiler_obligation.py"
+      - "ai_test_asset_center/experiment_compiler_obligation_core.py"
+      - "ai_test_asset_center/disposable_fixture_contract.py"
+      - "ai_test_asset_center/disposable_fixture_contract_core.py"
       - "ai_test_asset_center/experiment_compile_freezer.py"
       - "ai_test_asset_center/experiment_compile_freezer_core.py"
       - "ai_test_asset_center/flow_data_requirement.py"
@@ -33,6 +37,7 @@ on:
       - "tests/test_process_step_canonical_timeline.py"
       - "tests/test_experiment_lifecycle_runtime.py"
       - "tests/test_experiment_compile_freezer.py"
+      - "tests/test_fixture_data_authority.py"
       - "tests/test_flow_data_materialization.py"
       - "tests/test_flow_data_materializer_projection.py"
       - "tests/test_experiment_cleanup_lifecycle_adapter.py"
@@ -67,6 +72,10 @@ jobs:
             ai_test_asset_center/experiment_lifecycle_runtime.py \
             ai_test_asset_center/experiment_plan_lifecycle_adapter.py \
             ai_test_asset_center/experiment_executor.py \
+            ai_test_asset_center/experiment_compiler_obligation.py \
+            ai_test_asset_center/experiment_compiler_obligation_core.py \
+            ai_test_asset_center/disposable_fixture_contract.py \
+            ai_test_asset_center/disposable_fixture_contract_core.py \
             ai_test_asset_center/experiment_compile_freezer.py \
             ai_test_asset_center/experiment_compile_freezer_core.py \
             ai_test_asset_center/flow_data_requirement.py \
@@ -92,6 +101,7 @@ jobs:
             tests/test_process_step_canonical_timeline.py \
             tests/test_experiment_lifecycle_runtime.py \
             tests/test_experiment_compile_freezer.py \
+            tests/test_fixture_data_authority.py \
             tests/test_flow_data_materialization.py \
             tests/test_flow_data_materializer_projection.py \
             tests/test_experiment_cleanup_lifecycle_adapter.py \
