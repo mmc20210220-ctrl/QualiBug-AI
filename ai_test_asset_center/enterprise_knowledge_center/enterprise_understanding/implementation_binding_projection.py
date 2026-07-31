@@ -43,9 +43,6 @@ def build_final_scenario_planning_gate(model: dict[str, Any]) -> dict[str, Any]:
     elif implementation_full_ready:
         status = "PASS"
     elif partial_admission_ready:
-        # Readiness is owned by each governed behavior binding. One unresolved or
-        # conflicted behavior must remain blocked and visible, but it must not erase
-        # independently closed behaviors from the planning mainline.
         status = _PARTIAL_PASS
     elif implementation_status.startswith("BLOCKED"):
         status = implementation_status
@@ -197,7 +194,7 @@ def project_final_scenario_planning_gate(
     )
     asset["governance"] = governance
 
-    from .scenario_execution_contract_projection import (
+    from .scenario_execution_pipeline import (
         project_governed_scenario_execution_contracts,
     )
     from .scenario_ir import project_scenario_ir_to_asset
