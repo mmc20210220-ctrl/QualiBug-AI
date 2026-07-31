@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .event_observer_evidence_projection import project_event_observer_evidence
 from .event_observer_implementation_projection import project_formal_event_observers
 from .schema import as_dict, as_list, text
 
@@ -28,6 +29,15 @@ def _project_event_observer_authority(
         as_list(model.get("implementation_binding_conflicts")),
         as_dict(model.get("implementation_binding_gate")),
     )
+    bindings = project_event_observer_evidence(bindings)
+    event_evidence_count = sum(
+        int(row.get("formal_event_observer_evidence_count") or 0)
+        for row in bindings
+    )
+    metrics = dict(as_dict(gate.get("metrics")))
+    metrics["formal_event_observer_evidence_count"] = event_evidence_count
+    gate = {**gate, "metrics": metrics}
+
     model["behavior_implementation_bindings"] = bindings
     model["implementation_binding_unknowns"] = unknowns
     model["implementation_binding_conflicts"] = conflicts
@@ -37,7 +47,6 @@ def _project_event_observer_authority(
     asset["implementation_binding_conflicts"] = [dict(row) for row in conflicts]
     asset["implementation_binding_gate"] = dict(gate)
 
-    metrics = as_dict(gate.get("metrics"))
     summary = dict(as_dict(asset.get("summary")))
     summary.update(
         {
@@ -55,6 +64,7 @@ def _project_event_observer_authority(
             "formal_event_contract_bound_count": int(
                 metrics.get("formal_event_contract_bound_count") or 0
             ),
+            "formal_event_observer_evidence_count": event_evidence_count,
         }
     )
     asset["summary"] = summary
@@ -64,6 +74,7 @@ def _project_event_observer_authority(
             "formal_event_observer_binding_enabled": True,
             "formal_event_observer_reuses_existing_event_contract_authority": True,
             "formal_event_contract_is_effect_observer_not_action_surface": True,
+            "formal_event_evidence_uses_enterprise_source_locator_contract": True,
             "event_topic_or_broker_inference_allowed": False,
         }
     )
