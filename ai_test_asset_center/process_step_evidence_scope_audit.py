@@ -21,6 +21,9 @@ ORACLE_TRACE_RECEIPT_TYPE = "qualibug.oracle-trace-receipt.v1"
 CLEANUP_EXECUTION_RECEIPT_TYPE = "qualibug.cleanup-execution-receipt.v1"
 CLEANUP_VERIFICATION_RECEIPT_TYPE = "qualibug.cleanup-verification-receipt.v1"
 TYPED_OBSERVER_RECEIPT_SCHEMA = "qualibug.observer-receipt.v1"
+PROCESS_STEP_ORACLE_INVOCATION_SCHEMA = (
+    "qualibug.process-step-oracle-invocation.v1"
+)
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -86,11 +89,22 @@ def _semantic_status_valid(
 ) -> bool:
     """Validate typed semantic status without constraining generic envelopes."""
     payload = _dict(_dict(envelope).get("payload"))
+    schema = _text(payload.get("schema_version"))
     if (
         evidence_kind == "observation"
-        and _text(payload.get("schema_version")) == TYPED_OBSERVER_RECEIPT_SCHEMA
+        and schema == TYPED_OBSERVER_RECEIPT_SCHEMA
     ):
         return _text(payload.get("status")).upper() == "OBSERVED"
+    if (
+        evidence_kind == "oracle_invocation"
+        and schema == PROCESS_STEP_ORACLE_INVOCATION_SCHEMA
+    ):
+        return bool(
+            payload.get("evaluated") is True
+            and _text(payload.get("oracle_status")).upper()
+            in {"PROPERTY_HELD", "VIOLATION"}
+            and _text(payload.get("source_oracle_receipt_id"))
+        )
     return True
 
 
