@@ -169,3 +169,74 @@ def test_batch_receipt_id_cannot_replace_per_rule_runtime_evidence_id():
         "receipt_id"
     ]
     assert any(row.get("rule_id") == rule_id for row in result["rule_library"])
+
+
+def test_authoritative_empty_inventory_cannot_be_overridden_by_stale_sources_view():
+    first, rule_id, _receipt = _rule_and_receipt()
+    removed = deepcopy(first)
+    removed["source_inventory"] = []
+    removed["sources"] = [
+        {
+            "source_id": "prd-1",
+            "status": "active",
+            "content_hash": "prd-v1",
+            "source_version_id": "srcv-prd-v1",
+        }
+    ]
+    removed["business_fact_ledger"] = {"items": []}
+
+    result = enrich_asset_with_governed_implicit_rule_projection(removed)
+
+    stale = next(
+        row
+        for row in result["implicit_rule_lifecycle_ledger"]["items"]
+        if row["rule_id"] == rule_id
+    )
+    assert stale["status"] == "STALE"
+    assert stale["reason"] == "SOURCE_DEACTIVATED"
+    assert result["sources"] == removed["sources"]
+    ingress = result["implicit_rule_governance_ingress_receipt"]
+    assert ingress["source_membership_authority_field"] == "source_inventory"
+    assert ingress["canonical_active_source_count"] == 0
+    assert ingress["lower_source_views_may_readd_deactivated_sources"] is False
+
+
+def test_lower_source_view_may_only_fill_missing_version_identity():
+    asset = _asset()
+    asset["source_inventory"] = [
+        {"source_id": "prd-1", "status": "active"}
+    ]
+    asset["sources"] = [
+        {
+            "source_id": "prd-1",
+            "status": "active",
+            "content_hash": "supplemented-prd-hash",
+            "source_version_id": "supplemented-prd-version",
+        },
+        {
+            "source_id": "unapproved-extra-source",
+            "status": "active",
+            "content_hash": "must-not-enter-membership",
+            "source_version_id": "must-not-enter-membership",
+        },
+    ]
+
+    result = enrich_asset_with_governed_implicit_rule_projection(asset)
+
+    rule = next(
+        row
+        for row in result["rule_library"]
+        if row.get("derivation") == "implicit_rule_entailment"
+    )
+    assert rule["source_version_refs"] == [
+        {
+            "source_id": "prd-1",
+            "source_hash": "supplemented-prd-hash",
+            "source_version_id": "supplemented-prd-version",
+        }
+    ]
+    assert result["sources"] == asset["sources"]
+    ingress = result["implicit_rule_governance_ingress_receipt"]
+    assert ingress["source_membership_authority_field"] == "source_inventory"
+    assert ingress["canonical_active_source_count"] == 1
+    assert ingress["lower_source_views_may_fill_missing_version_identity"] is True
