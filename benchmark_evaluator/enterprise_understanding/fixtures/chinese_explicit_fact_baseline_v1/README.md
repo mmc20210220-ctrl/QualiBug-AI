@@ -26,10 +26,20 @@ python -m benchmark_evaluator.enterprise_understanding.chinese_explicit_fact_bas
 - `evaluation/explicit_fact_first_loss_analysis.json`
 - 原 source-backed workflow 的产品资产、来源身份回执及 Evaluator 报告
 
-初始基线只要求可重复测量，不用低分阻断 CI。达到以下目标后才允许将其升级为发布门禁：
+## 质量门槛
+
+完整来源接入基线必须同时达到：
 
 - 显式事实召回率 `>= 95%`
 - 槽位精确准确率 `>= 92%`
 - P0 显式事实精确召回率 `>= 95%`
 
-修复始终从 `highest_impact_first_loss` 指向的现有主链模块开始，禁止在下游伪造结果或新增第二套事实/评测权威。
+“完成测量”不等于“质量通过”。命令退出码是正式 CI 权威：
+
+- `0`：产品阶段完成、Evaluator 完成，并且全部质量门槛通过；
+- `3`：完成了真实测量，但至少一个质量指标低于门槛；
+- `2`：产品接入、来源隔离或测量阶段被阻断，未形成有效质量结论。
+
+即使退出码为 `2` 或 `3`，工作流也必须打印摘要并上传已有工件，以便从 `highest_impact_first_loss` 定位首次丢失阶段。不得因为失败而丢弃产品资产、槽位对齐或首失分析证据。
+
+修复始终从 `highest_impact_first_loss` 指向的现有主链模块开始，禁止在下游伪造结果、把 `MEASURED` 解释为成功，或新增第二套事实/评测权威。
